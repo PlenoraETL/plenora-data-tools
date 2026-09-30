@@ -807,8 +807,8 @@ fn main() {
 
     let range_config = AssertRange {
         column: "num".into(),
-        min: Some(0.0),
-        max: Some(10_000.0),
+        min: Some(0.0.into()),
+        max: Some(10_000.0.into()),
         inclusive_min: None,
         inclusive_max: None,
         allow_null: false,

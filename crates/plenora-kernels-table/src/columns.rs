@@ -238,12 +238,10 @@ const ALIGN_DECIMAL_SCALE: i8 = 10;
 /// parte intera e frazionaria solo cifre, al massimo 10 decimali (nessun
 /// arrotondamento: piu' cifre della scala -> errore).
 ///
-/// I segni iniziali si tolgono tutti e conta solo il primo carattere
-/// (`"--5"` vale -5, `"+-5"` vale 5): limite dichiarato nella scheda di
-/// `table.align_schema`.
+/// Un segno solo (`crate::separa_segno`): `"--5"`, `"+-5"` e `"-+5"` si
+/// rifiutano.
 fn parse_align_decimal(text: &str) -> Option<i128> {
-    let negative = text.starts_with('-');
-    let digits = text.trim_start_matches(['-', '+']);
+    let (negative, digits) = crate::separa_segno(text);
     let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
     if whole.is_empty() && fraction.is_empty() {
         return None;
@@ -353,11 +351,17 @@ fn align_default_column(value: &Value, align_type: AlignType, rows: usize) -> Re
             Arc::new(Date32Array::from(vec![days; rows]))
         }
         AlignType::Timestamp => {
+            // Il lettore centrale (`temporale::leggi_iso`): un secondo
+            // intercalare e una frazione oltre il nanosecondo si rifiutano,
+            // serve un offset (l'istante), e una parte sotto il millisecondo
+            // si rifiuta invece di scartarla.
             let text = string()?;
-            let timestamp =
-                chrono::DateTime::parse_from_rfc3339(text.trim()).map_err(|_| invalid())?;
+            let istante = crate::temporale::leggi_iso(text.trim())
+                .and_then(|momento| momento.istante)
+                .filter(|istante| istante.timestamp_subsec_nanos() % 1_000_000 == 0)
+                .ok_or_else(invalid)?;
             Arc::new(TimestampMillisecondArray::from(vec![
-                timestamp
+                istante
                     .timestamp_millis();
                 rows
             ]))
@@ -1417,6 +1421,58 @@ mod tests {
                 .value(0),
             b"abc"
         );
+    }
+
+    /// Regressione (classe «segni ripetuti»): il `default` di `Decimal128`
+    /// toglieva tutti i segni iniziali e contava il primo (`"--5"` valeva
+    /// -5, `"+-5"` valeva 5). Ora un segno solo, come per gli interi e i
+    /// float dello stesso `default`.
+    #[test]
+    fn align_schema_default_rifiuta_i_segni_ripetuti() {
+        for tipo in ["Decimal128", "Int64", "UInt64", "Float64"] {
+            for testo in ["--5", "+-5", "-+5", "++5"] {
+                assert!(
+                    check_align_default(&json!(testo), align_type(tipo)).is_err(),
+                    "{tipo}: {testo} accettato"
+                );
+            }
+        }
+        for testo in ["-5", "+5", "5"] {
+            check_align_default(&json!(testo), align_type("Decimal128")).expect("un segno solo");
+        }
+        let colonna = align_default_column(&json!("-5"), align_type("Decimal128"), 1).expect("-5");
+        let decimale = colonna
+            .as_any()
+            .downcast_ref::<Decimal128Array>()
+            .expect("Decimal128");
+        assert_eq!(decimale.value(0), -50_000_000_000_i128);
+    }
+
+    /// Regressione (revisione Codex): il `default` `Timestamp` passa dal
+    /// lettore centrale: secondo intercalare, frazione oltre il nanosecondo e
+    /// parte sotto il millisecondo si rifiutano; senza offset anche.
+    #[test]
+    fn align_schema_default_timestamp_dal_lettore_centrale() {
+        for testo in [
+            "2016-12-31T23:59:60Z",
+            "1970-01-01T00:00:00.0000000001Z",
+            "1970-01-01T00:00:00.0005Z",
+            "1970-01-01T00:00:00",
+        ] {
+            assert!(
+                check_align_default(&json!(testo), align_type("Timestamp")).is_err(),
+                "{testo}"
+            );
+        }
+        check_align_default(
+            &json!("2026-07-25T00:00:00.123+02:00"),
+            align_type("Timestamp"),
+        )
+        .expect("rfc 3339 al millisecondo");
+    }
+
+    fn align_type(nome: &str) -> AlignType {
+        serde_json::from_value(json!(nome)).expect("tipo di align_schema")
     }
 
     #[test]

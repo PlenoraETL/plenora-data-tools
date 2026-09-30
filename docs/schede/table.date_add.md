@@ -10,19 +10,22 @@ giorno del mese (31 gennaio più un mese è 29 febbraio 2024).
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `column` | stringa | obbligatorio | colonna leggibile come testo | colonna da leggere |
-| `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura |
+| `column` | stringa | obbligatorio | colonna temporale o leggibile come testo | colonna da leggere |
+| `input_format` | stringa | assente | formato `chrono` non vuoto, al più `max_string_bytes` byte; obbligatorio per un testo, rifiutato per una colonna temporale; `null` non ammesso | formato di lettura di un testo |
 | `output_format` | stringa | `"%Y-%m-%d %H:%M:%S"` | formato `chrono` non vuoto, al più `max_string_bytes` byte, senza fuso, che scrive al più `max_string_bytes` byte per valore | formato di scrittura |
 | `amount` | intero | obbligatorio | intero a 64 bit che almeno una data sopporta | quantità da aggiungere, con segno |
 | `unit` | stringa | obbligatorio | `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` | unità di `amount` |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
 | `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 
-Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
-`dictionary<utf8>` con chiavi `int32`. Una colonna non testuale si legge
-con la sua resa testuale: `date32` come `AAAA-MM-GG`, `timestamp(ms)` come
-RFC 3339.
+Una colonna temporale (`date32`, `timestamp` in secondi, millisecondi,
+microsecondi o nanosecondi, con o senza fuso) si legge dal valore nativo,
+senza `input_format` (scritto, si rifiuta): vale l'ora locale della
+colonna (del suo fuso; senza fuso, il valore com'è), e una data è la sua
+mezzanotte ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
+`input_format` obbligatorio; leggibili come testo: `utf8`, `int64`,
+`uint64`, `float64`, `bool`, `decimal128` con scala da 0 a 38, `binary`,
+`dictionary<utf8>` con chiavi `int32`.
 
 La lettura deve consumare tutto il testo della cella; un formato senza
 campi orari legge una data e la pone a mezzanotte. Il valore non ha fuso:
@@ -58,7 +61,8 @@ Invariato.
 
 In validazione, `InvalidPlan`:
 
-- `column` assente o non leggibile come testo;
+- `column` assente o non leggibile come testo; `input_format` assente con
+  una colonna di testo, o scritto con una colonna temporale;
 - un formato vuoto, oltre `max_string_bytes`, con un campo non
   riconosciuto, o `output_format` con campi di fuso (`%z`, `%:z`, `%Z`,
   `%+`);

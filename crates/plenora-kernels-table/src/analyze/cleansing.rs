@@ -176,7 +176,20 @@ pub(in crate::analyze) fn analyze_type_cast(
 ) -> Result<DataContract> {
     let config: cleansing::TypeCast = typed(op, config)?;
     let input = &inputs[0];
-    require_scalar_string(op, input, &config.column)?;
+    // Una colonna temporale (Date32, Timestamp di ogni unita') si converte
+    // dal valore nativo, con i target che il kernel ammette
+    // (`verifica_cast_temporale`); ogni altra colonna si legge come testo.
+    let campo = field_of(op, input, &config.column)?;
+    if crate::temporale::tipo_temporale(campo.data_type()) {
+        con_op(
+            op,
+            crate::temporale::verifica_tipo_temporale(campo.data_type(), &config.column)
+                .map_err(|errore| PlenoraError::InvalidPlan(errore.to_string())),
+        )?;
+        con_op(op, cleansing::verifica_cast_temporale(&config))?;
+    } else {
+        require_scalar_string(op, input, &config.column)?;
+    }
     check_type_cast_parameters(op, &config)?;
     // Vuoto e' il parser multi-formato di default.
     if !config.date_format.is_empty() {

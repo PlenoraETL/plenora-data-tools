@@ -23,6 +23,7 @@ use super::compare::row_key;
 use super::grouping::{visit_key_ids, BinaryKeyEncoder};
 use super::{aggregate, distinct, AggFunction, Aggregate, Aggregation, Distinct, Keep};
 use crate::test_support::assert_batches_identical;
+use plenora_core::PlenoraError;
 
 /// Generatore xorshift64 a seme fisso.
 struct Xorshift(u64);
@@ -422,9 +423,23 @@ fn assert_aggregate_and_distinct_parity(batch: &RecordBatch, subset: &[&str]) {
         group_by: group_by.clone(),
         aggregations: aggregations(),
     };
-    let reference = super::tests::aggregate_reference(batch, &config).expect("riferimento");
-    let fast = aggregate(batch, &config).expect("aggregate");
-    assert_batches_identical(&fast, &reference);
+    let ripetute = group_by
+        .iter()
+        .enumerate()
+        .any(|(indice, nome)| group_by[..indice].contains(nome));
+    if ripetute {
+        // Una chiave ripetuta darebbe due colonne d'uscita con lo stesso
+        // nome: `aggregate` la rifiuta (lo fa gia' l'analisi); `distinct`
+        // sotto la accetta, perche' non produce colonne.
+        assert!(matches!(
+            aggregate(batch, &config),
+            Err(PlenoraError::InvalidPlan(_))
+        ));
+    } else {
+        let reference = super::tests::aggregate_reference(batch, &config).expect("riferimento");
+        let fast = aggregate(batch, &config).expect("aggregate");
+        assert_batches_identical(&fast, &reference);
+    }
     for keep in [Keep::First, Keep::Last, Keep::False] {
         let config = Distinct {
             subset: group_by.clone(),

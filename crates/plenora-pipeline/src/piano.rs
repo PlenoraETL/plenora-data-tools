@@ -199,6 +199,9 @@ impl Pipeline {
             )));
         }
         plenora_core::json::ensure_no_duplicate_keys(testo)?;
+        // Ogni numero del piano vale quello che si legge: estremi, bordi e
+        // soglie esatti (`NumeroConfig`) non ricevono un double arrotondato.
+        plenora_core::json::ensure_numbers_exact(testo)?;
         let letto: modello::PipelineJson = serde_json::from_str(testo)
             .map_err(|errore| PlenoraError::InvalidPlan(format!("piano non valido: {errore}")))?;
         Ok(Self {

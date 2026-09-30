@@ -3,13 +3,13 @@
 
 use plenora_core::arrow::schema::DataType;
 use plenora_core::contract::{DataContract, FieldAllocator};
-use plenora_core::Result;
+use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::dates::check_format_text;
 use super::helpers::{
-    analyze_append, check_output_name, check_rows, con_op, contract_error, require_scalar_string,
-    sorted_only, typed,
+    analyze_append, check_output_name, check_rows, con_op, contract_error, field_of,
+    require_scalar_string, sorted_only, typed,
 };
 use crate::{utility, Limits};
 
@@ -74,7 +74,19 @@ pub(in crate::analyze) fn analyze_date_extract(
     )?;
     con_op(op, config.verifica_parti())?;
     let input = &inputs[0];
-    require_scalar_string(op, input, &config.column)?;
+    // Una colonna temporale si legge dal valore nativo, senza `date_format`;
+    // ogni altra come testo. La regola del kernel.
+    let campo = field_of(op, input, &config.column)?;
+    if crate::temporale::tipo_temporale(campo.data_type()) {
+        con_op(
+            op,
+            crate::temporale::verifica_tipo_temporale(campo.data_type(), &config.column)
+                .map_err(|errore| PlenoraError::InvalidPlan(errore.to_string())),
+        )?;
+        con_op(op, utility::verifica_date_extract_temporale(&config))?;
+    } else {
+        require_scalar_string(op, input, &config.column)?;
+    }
     if let Some(format) = &config.date_format {
         check_format_text(op, format, limits, "date_format")?;
         con_op(
@@ -82,28 +94,11 @@ pub(in crate::analyze) fn analyze_date_extract(
             crate::dates::validate_format_items(format, "date_format"),
         )?;
     }
-    let prefix = if config.prefix.is_empty() {
-        format!("{}_", config.column)
-    } else {
-        config.prefix.clone()
-    };
-    let mut produced = Vec::with_capacity(config.parts.len());
-    for part in &config.parts {
-        let suffix = match part {
-            utility::DatePart::Year => "year",
-            utility::DatePart::Month => "month",
-            utility::DatePart::Day => "day",
-            utility::DatePart::Quarter => "quarter",
-            utility::DatePart::Weekday => "weekday",
-            utility::DatePart::Week => "week",
-            utility::DatePart::Hour => "hour",
-            utility::DatePart::Minute => "minute",
-            utility::DatePart::Second => "second",
-        };
-        let name = format!("{prefix}{suffix}");
-        check_output_name(op, &name)?;
-        produced.push((name, DataType::Int64, true));
-    }
+    // Nomi con la regola del kernel: validi e distinti.
+    let produced = con_op(op, utility::nomi_date_extract(&config))?
+        .into_iter()
+        .map(|name| (name, DataType::Int64, true))
+        .collect::<Vec<_>>();
     analyze_append(input, fields, &produced)
 }
 

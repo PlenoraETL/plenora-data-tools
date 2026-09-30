@@ -9,8 +9,8 @@ nomi IANA (`Europe/Rome`, `UTC`, `America/New_York`).
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `column` | stringa | obbligatorio | colonna leggibile come testo | colonna da leggere |
-| `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura |
+| `column` | stringa | obbligatorio | colonna temporale o leggibile come testo | colonna da leggere |
+| `input_format` | stringa | assente | formato `chrono` non vuoto, al più `max_string_bytes` byte; obbligatorio per un testo, rifiutato per una colonna temporale; `null` non ammesso | formato di lettura di un testo |
 | `output_format` | stringa | `"%Y-%m-%d %H:%M:%S"` | formato `chrono` non vuoto, al più `max_string_bytes` byte, che scrive al più `max_string_bytes` byte per valore | formato di scrittura; ammette `%z`, `%:z`, `%Z`, `%+` |
 | `source_timezone` | stringa | obbligatorio | nome IANA noto a `chrono-tz` | fuso dei valori letti |
 | `target_timezone` | stringa | obbligatorio | nome IANA noto a `chrono-tz` | fuso dei valori scritti |
@@ -18,16 +18,22 @@ nomi IANA (`Europe/Rome`, `UTC`, `America/New_York`).
 | `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 | `ambiguous` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un'ora locale ambigua o inesistente rifiuta sempre la riga, nessun valore avrebbe effetto |
 
-Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
-`dictionary<utf8>` con chiavi `int32`. Una colonna non testuale si legge
-con la sua resa testuale: `date32` come `AAAA-MM-GG`, `timestamp(ms)` come
-RFC 3339.
+Una colonna temporale (`date32`, `timestamp` in secondi, millisecondi,
+microsecondi o nanosecondi, con o senza fuso) si legge dal valore nativo,
+senza `input_format` (scritto, si rifiuta): vale l'ora locale della
+colonna (del suo fuso; senza fuso, il valore com'è), e una data è la sua
+mezzanotte ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
+`input_format` obbligatorio; leggibili come testo: `utf8`, `int64`,
+`uint64`, `float64`, `bool`, `decimal128` con scala da 0 a 38, `binary`,
+`dictionary<utf8>` con chiavi `int32`.
 
 La lettura deve consumare tutto il testo della cella; un formato senza
-campi orari legge una data e la pone a mezzanotte. Un eventuale offset nel
-testo letto non conta: il valore è sempre ora locale di
-`source_timezone`. Un'ora locale che nel fuso di partenza si ripete (il
+campi orari legge una data e la pone a mezzanotte. Un valore con un
+istante si converte dall'istante: una colonna `timestamp` con fuso (che
+dev'essere `source_timezone`, altrimenti il piano si rifiuta) o un testo
+letto con un offset (`%z`/`%:z`: l'offset letto prevale su
+`source_timezone`). Ogni altro valore (testo senza offset, `date32` a
+mezzanotte, `timestamp` senza fuso) è ora locale di `source_timezone`. Un'ora locale che nel fuso di partenza si ripete (il
 ritorno all'ora solare) o non esiste (il passaggio all'ora legale) rifiuta
 sempre la riga, come un valore non leggibile: per questo `ambiguous` e
 `invalid` non si accettano.
@@ -60,7 +66,9 @@ Invariato.
 
 In validazione, `InvalidPlan`:
 
-- `column` assente o non leggibile come testo;
+- `column` assente o non leggibile come testo; `input_format` assente con
+  una colonna di testo, o scritto con una colonna temporale; una colonna
+  `timestamp` con un fuso diverso da `source_timezone`;
 - `source_timezone` o `target_timezone` non riconosciuti;
 - un formato vuoto, oltre `max_string_bytes`, con un campo non
   riconosciuto, o che non si sa scrivere per un valore con fuso;

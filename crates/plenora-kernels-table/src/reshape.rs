@@ -11,7 +11,9 @@ use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde::Deserialize;
 
 use crate::aggregation::{canonical_key_order, visit_key_ids, BinaryKeyEncoder};
-use crate::float64_source::Float64Source;
+use crate::float64_source::{
+    prendi_righe, tipo_estremo, tipo_somma, ColonnaEsatta, Float64Source, SommaEsatta,
+};
 use crate::hashing::FastHasher;
 use crate::interning::KeyInterner;
 use crate::Limits;
@@ -476,15 +478,17 @@ pub enum PivotAgg {
     First,
     /// La cella di `value_col` nell'ultima riga, null compreso.
     Last,
-    /// Massimo `Float64` dei valori non nulli (NaN ignorati salvo che siano
-    /// tutti NaN).
+    /// Massimo dei valori non nulli: su interi e `Decimal128` la cella
+    /// massima nel tipo d'ingresso, altrimenti `Float64` (NaN ignorati salvo
+    /// che siano tutti NaN).
     Max,
-    /// Minimo `Float64` dei valori non nulli (NaN ignorati salvo che siano
-    /// tutti NaN).
+    /// Minimo dei valori non nulli, come [`PivotAgg::Max`].
     Min,
-    /// Somma `Float64` dei valori non nulli.
+    /// Somma dei valori non nulli: esatta ed `Int64` sul dominio intero
+    /// (errore oltre `i64`), altrimenti `Float64`.
     Sum,
-    /// Media `Float64` dei valori non nulli.
+    /// Media `Float64` dei valori non nulli (dalla somma esatta sul dominio
+    /// intero).
     Mean,
     /// Numero `Int64` di valori non nulli.
     Count,
@@ -518,6 +522,20 @@ pub struct Pivot {
     /// fuori dal mapping non producono colonne.
     #[serde(default)]
     pub mapping: BTreeMap<String, String>,
+}
+
+/// Tipo delle colonne pivot per l'aggregazione `funzione` su una
+/// `value_col` di tipo `data_type`: autorita' di kernel e analisi.
+#[must_use]
+pub fn tipo_pivot(funzione: &PivotAgg, data_type: &DataType) -> DataType {
+    match funzione {
+        PivotAgg::First | PivotAgg::Last => data_type.clone(),
+        PivotAgg::Count => DataType::Int64,
+        PivotAgg::Concat => DataType::Utf8,
+        PivotAgg::Sum => tipo_somma(data_type),
+        PivotAgg::Min | PivotAgg::Max => tipo_estremo(data_type),
+        PivotAgg::Mean => DataType::Float64,
+    }
 }
 
 impl Pivot {
@@ -637,8 +655,13 @@ enum StatoCelle {
     /// `concat`: il testo unito e se un valore e' gia' stato scritto (un
     /// testo vuoto non basta a dirlo: il valore puo' essere `""`).
     Testo(Vec<(String, bool)>),
-    /// `sum`/`mean`/`min`/`max`: somma (seme `-0.0`), estremo, conteggio.
+    /// `sum`/`mean`/`min`/`max` in `f64`: somma (seme `-0.0`), estremo,
+    /// conteggio.
     Numero(Vec<(f64, f64, usize)>),
+    /// `sum`/`mean` sul dominio intero: somma esatta.
+    Somma(Vec<SommaEsatta>),
+    /// `min`/`max` su interi e decimali: riga e valore esatto dell'estremo.
+    Estremo(Vec<Option<(usize, i128)>>),
 }
 
 /// Un valore distinto della colonna pivot.
@@ -661,6 +684,8 @@ fn nuova_cella(stato: &mut StatoCelle, row: usize) {
         StatoCelle::Conta(conti) => conti.push(0),
         StatoCelle::Testo(testi) => testi.push((String::new(), false)),
         StatoCelle::Numero(numeri) => numeri.push((-0.0, 0.0, 0)),
+        StatoCelle::Somma(somme) => somme.push(SommaEsatta::default()),
+        StatoCelle::Estremo(estremi) => estremi.push(None),
     }
 }
 
@@ -680,6 +705,7 @@ fn aggiungi_valore(
     source: &ArrayRef,
     text: &TextColumn<'_>,
     numeric: &Float64Source<'_>,
+    esatta: Option<&ColonnaEsatta<'_>>,
     value: &mut String,
     limits: &Limits,
 ) -> Result<()> {
@@ -728,6 +754,21 @@ fn aggiungi_valore(
                 }
                 *sum += value;
                 *count += 1;
+            }
+        }
+        StatoCelle::Somma(somme) => {
+            if let Some(valore) = esatta.and_then(|esatta| esatta.value(row)) {
+                somme[cella].aggiungi(valore)?;
+            }
+        }
+        StatoCelle::Estremo(estremi) => {
+            if let Some(valore) = esatta.and_then(|esatta| esatta.value(row)) {
+                estremi[cella] = ColonnaEsatta::aggiorna(
+                    estremi[cella],
+                    row,
+                    valore,
+                    matches!(function, PivotAgg::Max),
+                );
             }
         }
     }
@@ -813,6 +854,34 @@ fn colonna_pivot(
                 .collect::<Result<Vec<_>>>()?;
             (DataType::Float64, Arc::new(Float64Array::from(values)))
         }
+        StatoCelle::Somma(somme) => {
+            if matches!(function, PivotAgg::Sum) {
+                let values = per_chiave
+                    .iter()
+                    .map(|cella| {
+                        cella
+                            .map(|cella| &somme[cella])
+                            .filter(|somma| somma.valori() > 0)
+                            .map(SommaEsatta::in_int64)
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                (DataType::Int64, Arc::new(Int64Array::from(values)))
+            } else {
+                let values = per_chiave
+                    .iter()
+                    .map(|cella| cella.and_then(|cella| somme[cella].media()))
+                    .collect::<Vec<_>>();
+                (DataType::Float64, Arc::new(Float64Array::from(values)))
+            }
+        }
+        StatoCelle::Estremo(estremi) => {
+            let righe = per_chiave
+                .iter()
+                .map(|cella| cella.and_then(|cella| estremi[cella]).map(|(riga, _)| riga))
+                .collect::<Vec<_>>();
+            (source.data_type().clone(), prendi_righe(source, &righe)?)
+        }
     })
 }
 
@@ -832,9 +901,11 @@ fn colonna_pivot(
 /// d'uscita e' fissato dalla config, ed e' quello che l'analisi dichiara;
 /// senza, dipende dai dati e l'analisi rifiuta l'operazione (`Unsupported`).
 ///
-/// Un intero oltre `2^53` **non** e' un errore: le aggregazioni numeriche
-/// di `pivot` producono un `Float64` per contratto, quindi la conversione
-/// arrotonda.
+/// Tipi delle colonne pivot: [`tipo_pivot`]. Sul dominio intero `sum` e'
+/// esatta (`Int64`) e `mean` parte dalla somma esatta; `min`/`max` su interi
+/// e decimali tengono il tipo d'ingresso. Negli altri casi le aggregazioni
+/// numeriche producono un `Float64` per contratto, e un valore oltre la
+/// precisione del double arrotonda.
 ///
 /// # Errors
 ///
@@ -845,7 +916,8 @@ fn colonna_pivot(
 ///   colonna d'uscita non valido (vuoto o di soli spazi) o uguale a una
 ///   colonna indice (senza `mapping` il nome viene dai dati);
 /// - `ResourceLimit`: righe oltre `max_rows` o colonne oltre `max_columns`,
-///   indici o conteggi non rappresentabili.
+///   indici o conteggi non rappresentabili;
+/// - `DataMapping`: una somma intera oltre la gamma di `Int64`.
 // Pipeline lineare: lunga per costruzione, spezzarla peggiora la
 // leggibilita'.
 #[allow(clippy::too_many_lines)]
@@ -876,10 +948,18 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
     let value_source = batch.column(value_index);
     let value_text = TextColumn::new(value_source);
     let value_numeric = Float64Source::new(value_source);
+    if matches!(config.aggr_func, PivotAgg::Sum) {
+        crate::float64_source::verifica_somma(value_source.data_type())?;
+    }
+    // Letture esatte: somme sul dominio intero, estremi su interi e decimali.
+    let value_esatta = ColonnaEsatta::new(value_source);
+    let intera = matches!(value_esatta, Some(ColonnaEsatta::Intera(_)));
     let mut stato = match config.aggr_func {
         PivotAgg::First | PivotAgg::Last => StatoCelle::Riga(Vec::new()),
         PivotAgg::Count => StatoCelle::Conta(Vec::new()),
         PivotAgg::Concat => StatoCelle::Testo(Vec::new()),
+        PivotAgg::Sum | PivotAgg::Mean if intera => StatoCelle::Somma(Vec::new()),
+        PivotAgg::Min | PivotAgg::Max if value_esatta.is_some() => StatoCelle::Estremo(Vec::new()),
         PivotAgg::Sum | PivotAgg::Mean | PivotAgg::Min | PivotAgg::Max => {
             StatoCelle::Numero(Vec::new())
         }
@@ -936,6 +1016,7 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
                 value_source,
                 &value_text,
                 &value_numeric,
+                value_esatta.as_ref(),
                 &mut value,
                 limits,
             ) {
@@ -1040,6 +1121,9 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
         fields.push(Field::new(&output, data_type, true));
         columns.push(values);
     }
+    // Nomi tutti distinti, la regola di `aggregate` e `transpose`: il
+    // controllo per colonna qui sopra copre le chiavi, questo l'intero schema.
+    crate::verifica_nomi_distinti("pivot", fields.iter().map(|field| field.name().as_str()))?;
     // I metadati dello schema d'ingresso si conservano, come in `melt`
     // e `aggregate`.
     Ok(RecordBatch::try_new(
@@ -1059,8 +1143,10 @@ pub struct Transpose {
     /// colonne d'uscita, e il suo nome la prima colonna (senza: `col_0`).
     #[serde(default, deserialize_with = "crate::mai_null")]
     pub id_column: Option<String>,
-    /// Nomi delle colonne d'uscita per posizione di riga; una voce vuota o
-    /// mancante lascia il nome da `id_column` o `col_<riga + 1>`.
+    /// Nomi delle colonne d'uscita per posizione di riga; una voce mancante
+    /// (lista piu' corta delle righe) lascia il nome da `id_column` o
+    /// `col_<riga + 1>`. Ogni voce e' un nome valido: una voce vuota si
+    /// rifiuta ([`Transpose::verifica_nomi`]), non vale «assente».
     #[serde(default)]
     pub output_columns: Vec<String>,
     /// Colonne dati di tipi diversi (default
@@ -1070,21 +1156,39 @@ pub struct Transpose {
     pub type_policy: Option<HeterogeneousTypePolicy>,
 }
 
+impl Transpose {
+    /// Le regole su `output_columns`, uguali per l'analisi e per il kernel:
+    /// ogni voce e' un nome valido (`validate_output_name`: una voce vuota
+    /// si rifiuta, non vale «assente») e le voci sono distinte.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan`: una voce non valida o ripetuta.
+    pub fn verifica_nomi(&self) -> Result<()> {
+        for nome in &self.output_columns {
+            validate_output_name(nome)?;
+        }
+        crate::verifica_nomi_distinti("transpose", self.output_columns.iter().map(String::as_str))
+    }
+}
+
 /// `table.transpose`: le colonne dati diventano righe, le righe colonne.
 ///
 /// La prima colonna elenca i nomi delle colonne dati; con `id_column` i nomi
 /// delle colonne di output arrivano dai suoi valori. Tipi eterogenei solo
 /// con `type_policy='string'`; batch senza righe restituito invariato. I
-/// nomi ripetuti non si rifiutano, e i metadati non si conservano. Lo
-/// schema d'uscita dipende dai dati: l'analisi rifiuta l'operazione
-/// (`Unsupported`).
+/// nomi d'uscita sono tutti distinti (`crate::verifica_nomi_distinti`): due
+/// righe con lo stesso nome, da `id_column` o da `output_columns`, si
+/// rifiutano. I metadati non si conservano. Lo schema d'uscita dipende dai
+/// dati: l'analisi rifiuta l'operazione (`Unsupported`).
 ///
 /// # Errors
 ///
 /// - `Schema`: colonna `id_column` assente; una cella che non si converte
 ///   in testo (`id_column`, o le colonne dati con la conversione);
 /// - `InvalidPlan`: colonne dati eterogenee senza `type_policy='string'`,
-///   nome di colonna d'uscita non valido;
+///   nome di colonna d'uscita non valido o ripetuto, voce di
+///   `output_columns` vuota ([`Transpose::verifica_nomi`]);
 /// - `ResourceLimit`: colonne dati oltre `max_rows` o righe piu' una oltre
 ///   `max_columns`, valore testuale oltre `max_string_bytes`, indice oltre
 ///   `u64`.
@@ -1092,6 +1196,7 @@ pub struct Transpose {
 // leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Result<RecordBatch> {
+    config.verifica_nomi()?;
     if batch.num_rows() == 0 {
         return Ok(batch.clone());
     }
@@ -1152,7 +1257,6 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
         let name = config
             .output_columns
             .get(row)
-            .filter(|name| !name.is_empty())
             .cloned()
             .unwrap_or(default_name);
         validate_output_name(&name)?;
@@ -1195,6 +1299,10 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
             columns.push(Arc::new(StringArray::from(values)));
         }
     }
+    crate::verifica_nomi_distinti(
+        "transpose",
+        fields.iter().map(|field| field.name().as_str()),
+    )?;
     Ok(RecordBatch::try_new(
         Arc::new(Schema::new(fields)),
         columns,
@@ -2217,6 +2325,97 @@ mod tests {
                     .collect::<Result<Vec<_>>>()?;
                 (DataType::Utf8, Arc::new(StringArray::from(values)))
             }
+            PivotAgg::Min | PivotAgg::Max
+                if crate::float64_source::estremo_esatto(source.data_type()) =>
+            {
+                // Estremo esatto con il comparatore del sort, a pari valore
+                // la prima riga, nel tipo d'ingresso.
+                let indices = groups
+                    .iter()
+                    .map(|rows| {
+                        let Some(rows) = rows else { return Ok(None) };
+                        let mut scelta: Option<usize> = None;
+                        for row in rows.iter().filter(|row| !source.is_null(**row)) {
+                            let meglio = match scelta {
+                                None => true,
+                                Some(corrente) => {
+                                    let ordine = crate::aggregation::compare_cells_typed(
+                                        source, *row, source, corrente,
+                                    )?;
+                                    if matches!(function, PivotAgg::Max) {
+                                        ordine == std::cmp::Ordering::Greater
+                                    } else {
+                                        ordine == std::cmp::Ordering::Less
+                                    }
+                                }
+                            };
+                            if meglio {
+                                scelta = Some(*row);
+                            }
+                        }
+                        Ok(scelta.map(|row| u32::try_from(row).expect("indice in u32")))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                (
+                    source.data_type().clone(),
+                    plenora_core::arrow::select::take::take(
+                        source.as_ref(),
+                        &UInt32Array::from(indices),
+                        None,
+                    )?,
+                )
+            }
+            PivotAgg::Sum | PivotAgg::Mean
+                if crate::float64_source::dominio_intero(source.data_type()) =>
+            {
+                // Somma esatta in i128 dei valori esatti di
+                // `scalar_as_numero`; la media dalla somma esatta.
+                let somme = groups
+                    .iter()
+                    .map(|rows| {
+                        let Some(rows) = rows else { return Ok(None) };
+                        let mut valori = Vec::new();
+                        for row in *rows {
+                            match crate::scalar_as_numero(source.as_ref(), *row)? {
+                                Some((_, crate::NumericBound::I64(intero))) => {
+                                    valori.push(i128::from(intero));
+                                }
+                                Some((_, crate::NumericBound::U64(intero))) => {
+                                    valori.push(i128::from(intero));
+                                }
+                                Some(_) => panic!("valore non intero nel dominio intero"),
+                                None => {}
+                            }
+                        }
+                        Ok((!valori.is_empty())
+                            .then(|| (valori.iter().sum::<i128>(), valori.len())))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                if matches!(function, PivotAgg::Sum) {
+                    let values = somme
+                        .iter()
+                        .map(|somma| {
+                            somma
+                                .map(|(somma, _)| {
+                                    i64::try_from(somma).map_err(|_| {
+                                        PlenoraError::DataMapping(
+                                            "somma intera oltre la gamma di Int64".into(),
+                                        )
+                                    })
+                                })
+                                .transpose()
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    (DataType::Int64, Arc::new(Int64Array::from(values)))
+                } else {
+                    #[allow(clippy::cast_precision_loss)]
+                    let values = somme
+                        .iter()
+                        .map(|somma| somma.map(|(somma, valori)| somma as f64 / valori as f64))
+                        .collect::<Vec<_>>();
+                    (DataType::Float64, Arc::new(Float64Array::from(values)))
+                }
+            }
             PivotAgg::Sum | PivotAgg::Mean | PivotAgg::Min | PivotAgg::Max => {
                 let values = groups
                     .iter()
@@ -3046,12 +3245,16 @@ mod tests {
                 ])),
             ],
         );
-        for function in [
-            PivotAgg::Sum,
-            PivotAgg::Mean,
-            PivotAgg::Count,
-            PivotAgg::First,
-        ] {
+        // La somma di date si rifiuta (`verifica_somma`), prima dei dati.
+        assert!(matches!(
+            pivot(
+                &batch,
+                &pivot_config("d", "p", "v", PivotAgg::Sum),
+                &Limits::default()
+            ),
+            Err(PlenoraError::InvalidPlan(_))
+        ));
+        for function in [PivotAgg::Mean, PivotAgg::Count, PivotAgg::First] {
             let config = pivot_config("d", "p", "v", function.clone());
             let fast = pivot(&batch, &config, &Limits::default()).expect("pivot fast");
             let reference =

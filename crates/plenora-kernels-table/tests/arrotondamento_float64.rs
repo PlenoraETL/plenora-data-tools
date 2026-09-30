@@ -1,10 +1,13 @@
-//! Le operazioni con risultato `Float64` per contratto **arrotondano**.
+//! Le operazioni con risultato `Float64` per contratto **arrotondano**; le
+//! somme di interi **no**.
 //!
-//! E' una deroga dichiarata alla regola «esatto o errore» (vedi
-//! `scalar_as_f64_rounded`): in quelle operazioni il double e' il tipo del
-//! risultato, non un passaggio intermedio, e pretendere l'esattezza
-//! rifiuterebbe input legittimi. Un valore oltre 2^53 perde precisione
-//! **senza errore**.
+//! L'arrotondamento e' una deroga dichiarata alla regola «esatto o errore»
+//! (vedi `scalar_as_f64_rounded`): dove il double e' il tipo del risultato
+//! (medie, somme di decimali e di testo numerico) un valore oltre la
+//! precisione del double la perde **senza errore**. Una somma sul dominio
+//! intero (`Int64`, `UInt64`, `Date32`, `Timestamp(ms)`) invece e' esatta:
+//! si accumula in `i128` ed esce `Int64`, e oltre la gamma di `Int64` e' un
+//! errore (README, «Somme intere esatte e tipi delle riduzioni»).
 //!
 //! Gli attesi qui sono letterali, calcolati dalla regola IEEE 754 e non da
 //! `scalar_as_f64_rounded`: un oracolo che chiedesse al codice quale sia la
@@ -64,9 +67,66 @@ fn colonna_f64(batch: &RecordBatch, nome: &str) -> Vec<Option<f64>> {
         .collect()
 }
 
+fn colonna_i64(batch: &RecordBatch, nome: &str) -> Vec<Option<i64>> {
+    let indice = batch.schema().index_of(nome).expect("colonna presente");
+    let valori = batch
+        .column(indice)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("colonna Int64")
+        .clone();
+    valori.iter().collect()
+}
+
 // ---------------------------------------------------------------------------
 // I quattro chiamanti, ciascuno sul proprio percorso
 // ---------------------------------------------------------------------------
+
+/// Una somma sul dominio intero, dai quattro chiamanti: `Int64` esatto.
+fn somme_intere(valori: &ArrayRef) -> Vec<plenora_core::Result<Vec<Option<i64>>>> {
+    let ingresso = batch("v", Arc::clone(valori), true);
+    let aggregata = serde_json::from_value(serde_json::json!({
+        "group_by": ["g"],
+        "aggregations": [{"column": "v", "function": "sum", "alias": "out"}],
+    }))
+    .expect("config aggregate");
+    let mobile = serde_json::from_value(serde_json::json!({
+        "column": "v", "function": "sum", "window": 1, "min_periods": 1, "output_column": "out",
+    }))
+    .expect("config rolling_window");
+    let cumulata = serde_json::from_value(serde_json::json!({
+        "column": "v", "function": "cumsum", "output_column": "out",
+    }))
+    .expect("config window_function");
+    vec![
+        aggregate(&ingresso, &aggregata).map(|uscita| colonna_i64(&uscita, "out")),
+        rolling_window(&ingresso, &mobile).map(|uscita| colonna_i64(&uscita, "out")),
+        window_function(&ingresso, &cumulata).map(|uscita| colonna_i64(&uscita, "out")),
+        pivot_interi(Arc::clone(valori), "sum"),
+    ]
+}
+
+fn pivot_interi(valori: ArrayRef, aggregazione: &str) -> plenora_core::Result<Vec<Option<i64>>> {
+    let righe = valori.len();
+    let ingresso = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Utf8, false),
+            Field::new("p", DataType::Utf8, false),
+            Field::new("v", valori.data_type().clone(), true),
+        ])),
+        vec![
+            Arc::new(StringArray::from(vec!["r"; righe])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["c"; righe])) as ArrayRef,
+            valori,
+        ],
+    )
+    .expect("batch pivot");
+    let config = serde_json::from_value(serde_json::json!({
+        "index_col": "i", "pivot_col": "p", "value_col": "v", "aggr_func": aggregazione,
+    }))
+    .expect("config pivot");
+    pivot(&ingresso, &config, &Limits::default()).map(|uscita| colonna_i64(&uscita, "c"))
+}
 
 fn somma_aggregata(valori: ArrayRef) -> plenora_core::Result<Vec<Option<f64>>> {
     let ingresso = batch("v", valori, true);
@@ -76,30 +136,6 @@ fn somma_aggregata(valori: ArrayRef) -> plenora_core::Result<Vec<Option<f64>>> {
     }))
     .expect("config aggregate");
     aggregate(&ingresso, &config).map(|uscita| colonna_f64(&uscita, "out"))
-}
-
-fn somma_mobile(valori: ArrayRef) -> plenora_core::Result<Vec<Option<f64>>> {
-    let ingresso = batch("v", valori, true);
-    let config = serde_json::from_value(serde_json::json!({
-        "column": "v",
-        "function": "sum",
-        "window": 1,
-        "min_periods": 1,
-        "output_column": "out",
-    }))
-    .expect("config rolling_window");
-    rolling_window(&ingresso, &config).map(|uscita| colonna_f64(&uscita, "out"))
-}
-
-fn somma_cumulata(valori: ArrayRef) -> plenora_core::Result<Vec<Option<f64>>> {
-    let ingresso = batch("v", valori, true);
-    let config = serde_json::from_value(serde_json::json!({
-        "column": "v",
-        "function": "cumsum",
-        "output_column": "out",
-    }))
-    .expect("config window_function");
-    window_function(&ingresso, &config).map(|uscita| colonna_f64(&uscita, "out"))
 }
 
 fn somma_pivotata(valori: ArrayRef) -> plenora_core::Result<Vec<Option<f64>>> {
@@ -137,71 +173,61 @@ fn pivotata_con(valori: ArrayRef, aggregazione: &str) -> plenora_core::Result<Ve
 }
 
 // ---------------------------------------------------------------------------
-// Int64 oltre 2^53: arrotondamento, non rifiuto
+// Dominio intero: somma esatta, non arrotondata
 // ---------------------------------------------------------------------------
 
-/// L'attesa: 2^53 + 1 non ha un `f64` proprio e cade su 2^53. Il valore e'
-/// scritto per esteso, non calcolato dal codice sotto prova.
+/// Il double di 2^53 + 1: non ne ha uno proprio e cade su 2^53. Scritto per
+/// esteso, non calcolato dal codice sotto prova.
 const ATTESO_DUE_53_PIU_1: f64 = 9_007_199_254_740_992.0;
 
-fn interi_oltre_soglia() -> ArrayRef {
-    Arc::new(Int64Array::from(vec![DUE_53_PIU_1]))
+/// 2^53 + 1 non ha un `f64` proprio: la somma in double lo portava a 2^53.
+/// Ora resta 2^53 + 1, in `Int64`, in tutti e quattro i chiamanti.
+#[test]
+fn la_somma_degli_interi_oltre_due_53_e_esatta() {
+    let valori: ArrayRef = Arc::new(Int64Array::from(vec![DUE_53_PIU_1]));
+    for esito in somme_intere(&valori) {
+        assert_eq!(esito.expect("somma esatta"), vec![Some(DUE_53_PIU_1)]);
+    }
 }
 
+/// Gli estremi e il confine restano quelli scritti: `i64::MAX` non sale a
+/// 2^63, `i64::MIN` resta `i64::MIN`.
 #[test]
-fn aggregate_arrotonda_gli_interi_oltre_due_53() {
-    assert_eq!(
-        somma_aggregata(interi_oltre_soglia()).expect("aggregate non deve rifiutare"),
-        vec![Some(ATTESO_DUE_53_PIU_1)]
-    );
+fn gli_estremi_int64_restano_esatti() {
+    for valore in [DUE_53, DUE_53_PIU_1, i64::MAX, i64::MIN] {
+        let valori: ArrayRef = Arc::new(Int64Array::from(vec![valore]));
+        for esito in somme_intere(&valori) {
+            assert_eq!(esito.expect("somma esatta"), vec![Some(valore)], "{valore}");
+        }
+    }
 }
 
+/// Oltre la gamma di `Int64` la somma e' un errore, mai un valore saturato
+/// o arrotondato.
 #[test]
-fn rolling_window_arrotonda_gli_interi_oltre_due_53() {
-    assert_eq!(
-        somma_mobile(interi_oltre_soglia()).expect("rolling_window non deve rifiutare"),
-        vec![Some(ATTESO_DUE_53_PIU_1)]
-    );
-}
-
-#[test]
-fn window_function_arrotonda_gli_interi_oltre_due_53() {
-    assert_eq!(
-        somma_cumulata(interi_oltre_soglia()).expect("window_function non deve rifiutare"),
-        vec![Some(ATTESO_DUE_53_PIU_1)]
-    );
-}
-
-#[test]
-fn pivot_arrotonda_gli_interi_oltre_due_53() {
-    assert_eq!(
-        somma_pivotata(interi_oltre_soglia()).expect("pivot non deve rifiutare"),
-        vec![Some(ATTESO_DUE_53_PIU_1)]
-    );
-}
-
-/// Gli estremi e il confine, con gli attesi scritti a mano.
-///
-/// `i64::MAX` non e' rappresentabile e sale a 2^63; `i64::MIN` e' una potenza
-/// di due e resta esatto; 2^53 e' l'ultimo intero con un double proprio.
-#[test]
-fn gli_estremi_int64_arrotondano_verso_il_double_piu_vicino() {
-    for (valore, atteso) in [
-        (DUE_53, 9_007_199_254_740_992.0_f64),
-        (DUE_53_PIU_1, 9_007_199_254_740_992.0),
-        (i64::MAX, 9_223_372_036_854_775_808.0),
-        (i64::MIN, -9_223_372_036_854_775_808.0),
-    ] {
-        let ottenuto = somma_aggregata(Arc::new(Int64Array::from(vec![valore])))
-            .unwrap_or_else(|errore| panic!("{valore} rifiutato: {errore}"));
-        assert_eq!(ottenuto, vec![Some(atteso)], "valore {valore}");
+fn la_somma_oltre_int64_e_un_errore() {
+    let valori: ArrayRef = Arc::new(Int64Array::from(vec![i64::MAX, 1]));
+    let esiti = somme_intere(&valori);
+    // `aggregate`, `window_function` (cumulata) e `pivot` sommano le due
+    // righe; `rolling_window` con finestra 1 no.
+    for (indice, esito) in esiti.into_iter().enumerate() {
+        if indice == 1 {
+            assert!(esito.is_ok());
+            continue;
+        }
+        assert!(
+            matches!(esito, Err(PlenoraError::DataMapping(_))),
+            "chiamante {indice}: {esito:?}"
+        );
     }
 }
 
 #[test]
 fn int64_null_resta_null() {
     let valori: ArrayRef = Arc::new(Int64Array::from(vec![None::<i64>]));
-    assert_eq!(somma_aggregata(valori).expect("null ammesso"), vec![None]);
+    for esito in somme_intere(&valori) {
+        assert_eq!(esito.expect("null ammesso"), vec![None]);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -209,23 +235,22 @@ fn int64_null_resta_null() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn uint64_arrotonda_e_conserva_i_null() {
+fn uint64_somma_esatta_e_conserva_i_null() {
     use plenora_core::arrow::array::UInt64Array;
 
     let oltre: ArrayRef = Arc::new(UInt64Array::from(vec![9_007_199_254_740_993_u64]));
-    assert_eq!(
-        somma_aggregata(oltre).expect("uint64 oltre 2^53 non deve essere rifiutato"),
-        vec![Some(9_007_199_254_740_992.0)]
-    );
-
+    for esito in somme_intere(&oltre) {
+        assert_eq!(esito.expect("somma esatta"), vec![Some(DUE_53_PIU_1)]);
+    }
+    // `u64::MAX` non sta in `Int64`, il tipo delle somme intere: errore.
     let massimo: ArrayRef = Arc::new(UInt64Array::from(vec![u64::MAX]));
-    assert_eq!(
-        somma_aggregata(massimo).expect("u64::MAX non deve essere rifiutato"),
-        vec![Some(18_446_744_073_709_551_616.0)]
-    );
-
+    for esito in somme_intere(&massimo) {
+        assert!(matches!(esito, Err(PlenoraError::DataMapping(_))));
+    }
     let nullo: ArrayRef = Arc::new(UInt64Array::from(vec![None::<u64>]));
-    assert_eq!(somma_aggregata(nullo).expect("null ammesso"), vec![None]);
+    for esito in somme_intere(&nullo) {
+        assert_eq!(esito.expect("null ammesso"), vec![None]);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -258,15 +283,16 @@ fn float64_conserva_null_zero_negativo_e_nan() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn il_percorso_generico_arrotonda_timestamp_decimal_e_testo() {
+fn il_percorso_generico_arrotonda_decimal_e_testo_non_il_timestamp() {
+    // La somma di istanti non ha un significato: si rifiuta in tutti e
+    // quattro i chiamanti, invece di rendere millisecondi sommati.
     let timestamp: ArrayRef = Arc::new(
         TimestampMillisecondArray::from(vec![DUE_53_PIU_1])
             .with_data_type(DataType::Timestamp(TimeUnit::Millisecond, None)),
     );
-    assert_eq!(
-        somma_aggregata(timestamp).expect("timestamp oltre 2^53 non deve essere rifiutato"),
-        vec![Some(ATTESO_DUE_53_PIU_1)]
-    );
+    for esito in somme_intere(&timestamp) {
+        assert!(matches!(esito, Err(PlenoraError::InvalidPlan(_))));
+    }
 
     // 12345 con scala 2 vale 123.45, che in binario non e' esatto: e' il
     // caso che la semantica dichiarata ammette.
@@ -316,28 +342,35 @@ fn testo_non_numerico_e_tipo_non_convertibile_restano_errori_di_schema() {
 // I due percorsi dello stesso accessore devono concordare
 // ---------------------------------------------------------------------------
 
-/// Confronto differenziale, **secondario**: gli attesi qui sopra non vengono
-/// da qui. Serve a dire che il percorso veloce (Int64/UInt64 nativi) e quello
-/// generico dello stesso accessore rispondono la stessa cosa, che oltre
-/// 2^53 non e' affatto scontato.
+/// Confronto differenziale, **secondario**: la media di un solo intero e'
+/// il suo double, cioe' cio' che rende l'accessore generico. Oltre 2^53 non
+/// e' scontato: la media parte dalla somma esatta e arrotonda una volta.
 #[test]
-fn il_percorso_veloce_e_quello_generico_concordano() {
+fn la_media_di_un_intero_e_il_suo_double() {
     use plenora_kernels_table::scalar_as_f64_rounded;
 
     let valori = Arc::new(Int64Array::from(vec![DUE_53_PIU_1, i64::MAX, i64::MIN]));
-    let generico: Vec<Option<f64>> = (0..valori.len())
-        .map(|riga| {
-            scalar_as_f64_rounded(valori.as_ref(), riga).expect("il percorso generico non rifiuta")
-        })
-        .collect();
-    for (riga, atteso) in generico.iter().enumerate() {
-        let una: ArrayRef = Arc::new(Int64Array::from(vec![valori.value(riga)]));
-        assert_eq!(
-            somma_aggregata(una).expect("il percorso veloce non deve rifiutare"),
-            vec![*atteso],
-            "riga {riga}: i due percorsi divergono"
+    for riga in 0..valori.len() {
+        let atteso =
+            scalar_as_f64_rounded(valori.as_ref(), riga).expect("il percorso generico non rifiuta");
+        let ingresso = batch(
+            "v",
+            Arc::new(Int64Array::from(vec![valori.value(riga)])),
+            true,
         );
+        let config = serde_json::from_value(serde_json::json!({
+            "group_by": ["g"],
+            "aggregations": [{"column": "v", "function": "mean", "alias": "out"}],
+        }))
+        .expect("config aggregate");
+        let media = aggregate(&ingresso, &config).expect("media");
+        assert_eq!(colonna_f64(&media, "out"), vec![atteso], "riga {riga}");
     }
+    // L'atteso della prima riga, scritto a mano: il double di 2^53 + 1.
+    let atteso = scalar_as_f64_rounded(valori.as_ref(), 0)
+        .expect("generico")
+        .expect("valore");
+    assert_eq!(atteso.to_bits(), ATTESO_DUE_53_PIU_1.to_bits());
 }
 
 // ---------------------------------------------------------------------------
@@ -348,26 +381,6 @@ fn il_percorso_veloce_e_quello_generico_concordano() {
 // deve pero' attraversare l'accessore per conto proprio: e' l'unico modo di
 // accorgersi se una di esse smettesse di usarlo, o lo usasse diversamente.
 // Questi coprono `pivot` su UInt64, Float64, percorso generico ed errori.
-
-#[test]
-fn pivot_arrotonda_gli_uint64_e_conserva_i_null() {
-    use plenora_core::arrow::array::UInt64Array;
-
-    let oltre: ArrayRef = Arc::new(UInt64Array::from(vec![9_007_199_254_740_993_u64]));
-    assert_eq!(
-        somma_pivotata(oltre).expect("uint64 oltre 2^53 non deve essere rifiutato"),
-        vec![Some(9_007_199_254_740_992.0)]
-    );
-
-    let massimo: ArrayRef = Arc::new(UInt64Array::from(vec![u64::MAX]));
-    assert_eq!(
-        somma_pivotata(massimo).expect("u64::MAX non deve essere rifiutato"),
-        vec![Some(18_446_744_073_709_551_616.0)]
-    );
-
-    let nullo: ArrayRef = Arc::new(UInt64Array::from(vec![None::<u64>]));
-    assert_eq!(somma_pivotata(nullo).expect("null ammesso"), vec![None]);
-}
 
 #[test]
 fn pivot_conserva_null_zero_negativo_e_nan() {

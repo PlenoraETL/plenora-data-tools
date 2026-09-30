@@ -34,10 +34,15 @@ righe della cella in ordine d'ingresso:
 - `concat`: `utf8`, i testi delle celle non nulle uniti da `,`; solo null
   dà il testo vuoto; il testo di una cella non supera `max_string_bytes`
   byte;
-- `sum`, `mean`, `min`, `max`: `float64` sulla cella letta come `f64`
-  (tipi numerici di [`table.aggregate`](#tableaggregate)); i null si
-  saltano, solo null dà null; `min` e `max` ignorano i NaN salvo che siano
-  tutti NaN, `sum` e `mean` no.
+- `sum`, `mean`, `min`, `max` (tipi numerici di
+  [`table.aggregate`](#tableaggregate)): i null si saltano, solo null dà
+  null. Sulle colonne intere (`int64`, `uint64`) `sum` è esatta ed esce
+  `int64` (oltre `int64` è un errore); `sum` su `date32` o `timestamp` si
+  rifiuta; `mean` su interi, date e istanti parte dalla somma esatta; `min`
+  e `max` sulle colonne intere e `decimal128` rendono la cella estrema nel
+  tipo di `value_col`. Altrove l'uscita è `float64` sulla cella letta come
+  `f64`; `min` e `max` ignorano i NaN salvo che siano tutti NaN, `sum` e
+  `mean` no.
 
 Una combinazione chiave-valore che non compare nei dati è null, anche con
 `count`.
@@ -104,13 +109,15 @@ In esecuzione (dal runner con `mapping`, o chiamando il kernel):
   valore pivot vuoto o di soli spazi, o uguale a una colonna indice;
 - `ResourceLimit`: righe oltre `max_rows` o colonne oltre `max_columns`;
   più di `u32::MAX` righe; con `concat`, il testo di una cella oltre
-  `max_string_bytes` byte.
+  `max_string_bytes` byte;
+- `DataMapping`: `sum` su una colonna intera oltre la gamma di `int64`.
 
 ### Limiti e deviazioni
 
 Senza `mapping` il runner non esegue l'operazione (lo schema dipende dai
-dati); `table.transpose` ha lo stesso limite. `sum` e `mean` arrotondano
-un intero oltre `2^53` o un `decimal128`, perché il risultato è `float64`.
+dati); `table.transpose` ha lo stesso limite. Su `decimal128` e testo
+`sum` e `mean` arrotondano, perché il risultato è `float64`; su una colonna
+intera `mean` arrotonda una volta, dopo la somma esatta ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
 L'hash delle chiavi non ha seme
 ([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
 

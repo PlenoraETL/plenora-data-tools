@@ -618,6 +618,156 @@ chiavi tutte distinte), senza contarle.
 **Condizione di rientro.** Contabilità esplicita delle strutture di chiavi,
 con errore `ResourceLimit` oltre il budget.
 
+### Letterali JSON oltre `u64`
+
+**Regola.** I numeri della config che decidono (estremi di
+`table.assert_range`, bordi espliciti di `table.bin`, `tolerance` di
+`table.asof_join`, valori di `table.filter` e `table.conditional`) si
+leggono esatti: un intero JSON resta un intero `i64` o `u64`, un decimale
+resta un decimale esatto (`NumeroConfig`, `NumericBound::parse`). Il
+double serve solo dove il contratto è un double. `serde_json` è compilato
+senza `arbitrary_precision`, quindi un intero oltre `i64`/`u64` o un
+decimale oltre la precisione del double arriva già arrotondato:
+`Pipeline::from_json` rifiuta (`InvalidPlan`) ogni numero del piano il cui
+valore decimale esatto non è quello del double letto
+(`plenora_core::json::ensure_numbers_exact`): `9007199254740993.0` e
+`0.30000000000000001` si rifiutano, `0.1`, `2.5` e `1e3` passano. Il
+valore letto si ricostruisce esatto dalla forma che `serde_json` riscrive,
+esponente compreso (`NumericBound::parse`: `1e-7` è un decimale, non un
+double): un intero oltre `u64` come `100000000000000000000` passa il
+controllo perché il suo double lo rappresenta, e torna l'intero esatto.
+
+**Ambito.** I piani letti da `Pipeline::from_json` (runner e piani da
+file).
+
+**Hazard.** Chi chiama i kernel direttamente con una config già
+deserializzata (`serde_json::Value`, struct) non passa dal controllo: il
+testo del numero è già perso, e un numero arrotondato dal suo lettore JSON
+arriva come double. Un letterale scritto come **stringa** passa da
+`NumericBound::parse` e resta esatto dove l'operazione accetta stringhe
+(`table.filter`, `table.conditional`).
+
+**Condizione di rientro.** `arbitrary_precision` di `serde_json`, con il
+testo del numero conservato fino al parse esatto anche per l'API diretta.
+
+### Nomi delle colonne d'uscita
+
+**Regola.** Due regole, dichiarate e uguali in analisi e nel kernel:
+
+- le colonne che un passo **produce insieme** hanno nomi tutti distinti
+  (`verifica_nomi_distinti`): chiavi e aggregazioni di `table.aggregate`
+  (compresa la colonna `count` implicita), colonne indice e pivot di
+  `table.pivot`, colonne di `table.transpose` (anche quando il nome viene
+  dai dati di `id_column`), parti di `table.split_column`. Un nome ripetuto
+  è `InvalidPlan`; prima una colonna sostituiva l'altra e spariva senza
+  errore;
+- un passo che **aggiunge** una colonna all'ingresso (`window_function`,
+  `rolling_window`, `formula`, `conditional`, `concat_columns`,
+  `split_column`, `bin`, `statistics`, `add_row_number`, …) sostituisce al
+  suo posto una colonna dell'ingresso con lo stesso nome: è una
+  sostituzione voluta, scritta nella scheda di ogni operazione.
+
+`table.melt` risolve le collisioni dei suoi due nomi con un suffisso
+(`resolve_melt_names`), come dice la sua scheda.
+
+**Ambito.** Le operazioni tabellari elencate.
+
+**Hazard.** Con la seconda regola un nome d'uscita scritto per sbaglio
+uguale a una colonna d'ingresso la sostituisce: il contratto dichiarato lo
+mostra (la colonna cambia tipo o identità), ma nessun errore lo segnala.
+
+**Condizione di rientro.** Un parametro esplicito di sovrascrittura per
+ogni operazione che aggiunge colonne, con errore in sua assenza.
+
+### Somme intere esatte e tipi delle riduzioni
+
+**Regola.** Una somma di interi non passa da `f64`. Sul dominio intero
+(`int64`, `uint64`; `date32` in giorni e `timestamp(ms)` in millisecondi
+per media e dispersione) `sum` di `table.aggregate`, `table.pivot`,
+`table.rolling_window`, `table.statistics` e `cumsum` di
+`table.window_function` sommano in `i128` ed escono `int64`; una somma
+fuori dalla gamma di `int64` è `DataMapping`, mai un valore saturato o
+arrotondato. Una somma di date o istanti (`date32`, `timestamp`) non ha un
+significato e si rifiuta in validazione (`InvalidPlan`); la loro media
+resta, come istante in `float64` nell'unità della colonna.
+La varianza (e la deviazione) sul dominio intero si calcola dagli scarti
+esatti `(n x - S) / n` (`float64_source::varianza_intera`): valori uguali
+oltre `2^53` hanno varianza zero. La somma di un gruppo senza valori
+resta null (semantica SQL). Le riduzioni che scelgono una cella la rendono
+nel tipo d'ingresso: `first`/`last` di `aggregate` e `pivot`, `lag`/`lead`
+di `window_function`, e `min`/`max` sugli interi e su `decimal128` (scelti
+sul valore esatto). Il tipo d'uscita di ogni riduzione ha un'autorità sola
+per kernel e analisi (`float64_source::tipo_somma`, `tipo_estremo` e i
+`tipo_uscita*` delle operazioni).
+
+**Ambito.** `plenora-kernels-table`: le operazioni elencate.
+
+**Hazard.** Restano `float64` per contratto, con l'arrotondamento
+dichiarato:
+
+- media, varianza, deviazione e `pct_change` sul dominio intero: partono
+  dalla somma, dagli scarti o dalla differenza esatta e arrotondano al
+  double alla fine; i valori interpolati dei quantili usano i valori
+  arrotondati oltre `2^53`. Non coincidono con il vecchio calcolo in `f64`
+  quando le somme parziali passano `2^53` (`[2^53, 1, -2^53]` ha media 1/3,
+  il `f64` sequenziale dava 0): il valore nuovo è quello corretto;
+- ogni riduzione numerica su `decimal128` e sul testo numerico (`sum`
+  compresa): la cella si legge come il double più vicino;
+- l'aritmetica di `table.formula` e `table.expression`, anche fra colonne
+  `int64` (schede delle due operazioni).
+
+**Condizione di rientro.** Somme `decimal128` esatte (`decimal128(38, s)`
+in uscita) e aritmetica intera nelle formule, con errore di gamma.
+
+### Colonne temporali e formati di data
+
+**Regola.** Le operazioni su date (`table.type_cast` verso `date`,
+`datetime`, `date32`, `timestamp_millis` e testo; `table.date_extract`,
+`table.date_format`, `table.date_add`, `table.date_diff`,
+`table.timezone_convert`) leggono una colonna temporale (`date32`;
+`timestamp` in secondi, millisecondi, microsecondi o nanosecondi, con o
+senza fuso) dal valore nativo, senza passare dal testo
+(`crates/plenora-kernels-table/src/temporale.rs`): l'ora locale del fuso
+della colonna (senza fuso, il valore com'è) e l'istante. Un formato di
+lettura scritto per una colonna temporale si rifiuta. Un testo si legge
+con il formato dichiarato o, senza, con i soli formati ISO 8601 (RFC 3339
+con offset, data e ora con `T` o spazio e frazione, data sola): giorno e
+mese non si indovinano mai, e `01/02/2024` si legge solo con un formato
+esplicito. Un offset letto dà l'istante (`timestamp_millis`, `date_diff`,
+`timezone_convert`); per `date`, `datetime` e le parti vale l'ora scritta.
+Nessuna frazione di secondo si tronca in silenzio: `datetime` la scrive,
+`timestamp_millis` rifiuta la riga se è sotto il millisecondo, e un testo
+con cifre significative oltre il nanosecondo si rifiuta prima della
+lettura (chrono le scarterebbe). Un secondo intercalare (`23:59:60`) si
+rifiuta: un istante Arrow/POSIX non lo rappresenta, e chrono lo farebbe
+cadere sul secondo dopo. `%s` è sempre un istante UTC. L'ora locale di un
+istante si calcola con l'offset in aritmetica controllata: oltre
+l'intervallo di chrono è un errore, non un panico.
+
+**Ambito.** Le operazioni elencate.
+
+**Hazard.** Fuori da queste operazioni un `timestamp` si legge ancora solo
+in millisecondi: il profilo testuale di chiavi, raggruppamenti, filtri e
+confronti (`text_convertible`, `scalar_compare_supported`), il dominio
+numerico (`dominio_numerico`) e `date_trunc` di `table.expression`
+rifiutano in validazione le altre unità. La conversione esplicita è
+`table.type_cast` verso `timestamp_millis`, esatta o rifiutata riga per
+riga. Inoltre:
+
+- `date_add` sposta l'ora locale della colonna, non l'istante: con unità
+  orarie su un `timestamp` con fuso può scrivere un'ora locale che nel
+  cambio d'ora non esiste, senza errore;
+- un `timestamp` senza fuso vale come istante UTC in `date_diff`, come ora
+  locale di `source_timezone` in `timezone_convert` (la semantica
+  dichiarata dell'operazione);
+- un fuso Arrow a offset fisso (`+01:00`) non è un nome IANA: la colonna
+  si rifiuta con `Schema`;
+- `%Z` in un formato di lettura si legge ma non dà un offset: il nome del
+  fuso non conta.
+
+**Condizione di rientro.** Profilo testuale, dominio numerico e
+comparatori estesi a ogni unità, con oracolo differenziale per unità.
+
 ### `geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a GEOS verificata, non dimostrata
 
 **Regola.** Le tre operazioni girano sui kernel Rust del laboratorio

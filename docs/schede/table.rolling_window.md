@@ -3,8 +3,8 @@
 Calcola per ogni riga un'aggregazione (somma, media, minimo, massimo,
 deviazione standard) della colonna `column` sulle ultime `window` righe
 della sua partizione, riga corrente compresa, e la aggiunge come colonna
-`float64`. Con `order_column` le righe si riordinano prima su quella
-colonna.
+(`float64`, o del tipo detto sotto). Con `order_column` le righe si
+riordinano prima su quella colonna.
 
 ### Parametri
 
@@ -21,15 +21,22 @@ colonna.
 
 La finestra si misura in righe, non in valori: una cella nulla occupa il
 suo posto e non conta fra i valori. Con meno di `min_periods` valori non
-nulli nella finestra il risultato è null. `sum` somma in ordine di riga;
-`mean` è la somma divisa per i valori; `min` e `max` ignorano i NaN salvo
-che la finestra abbia solo NaN, `sum` e `mean` no; `stddev` divide per
-`valori - ddof` e dà null con `valori <= ddof`.
+nulli nella finestra il risultato è null. Sulle colonne intere (`int64`,
+`uint64`) `sum` è esatta ed esce `int64` (una somma oltre `int64` è un
+errore); `sum` su `date32` o `timestamp` si rifiuta in validazione. Su
+interi, date e istanti `mean` parte dalla somma esatta e `stddev` dagli
+scarti esatti; altrove `sum` somma in `f64` in ordine di riga. `mean` è la somma
+divisa per i valori. `min` e `max` sulle colonne intere e `decimal128`
+rendono la cella estrema nel tipo della colonna; altrove ignorano i NaN
+salvo che la finestra abbia solo NaN, `sum` e `mean` no. `stddev` divide
+per `valori - ddof` e dà null con `valori <= ddof`.
 
 ### Schema
 
-L'ingresso più la colonna `output_column`, `float64` nullabile, senza
-metadati di campo, in coda; se il nome esiste già, la colonna è sostituita
+L'ingresso più la colonna `output_column`, nullabile, senza metadati di
+campo, in coda: `int64` con `sum` su una colonna intera, il tipo di
+`column` con `min`/`max` su una colonna intera o `decimal128`, `float64`
+altrimenti; se il nome esiste già, la colonna è sostituita
 al suo posto. Gli altri metadati si conservano. Il contratto dichiara
 l'uscita ordinata in ascendente su `order_column` se c'è (altrimenti
 conserva l'ordinamento dell'ingresso) e conserva il conteggio.
@@ -64,15 +71,19 @@ In esecuzione:
   `group_by` che non si converte in testo; una chiave di dizionario di
   `order_column` fuori dal proprio dizionario;
 - `DataMapping`: un risultato di `sum`, `mean` o `stddev` non finito
-  calcolato da valori finiti (overflow di `f64`);
+  calcolato da valori finiti (overflow di `f64`); con `sum` su una colonna
+  intera, una somma oltre la gamma di `int64`;
 - `ResourceLimit`: più di `u32::MAX` righe con `order_column`.
 
 ### Limiti e deviazioni
 
-La cella si legge come `f64`: un intero oltre `2^53` o un `decimal128` si
-arrotondano senza errore, perché il risultato è `float64`. Un `NaN` o un
-infinito già nei dati si propagano senza errore; solo l'overflow di un
-calcolo su valori finiti si rifiuta.
+Su `decimal128` e testo numerico `sum`, `mean` e `stddev` leggono la cella
+come `f64` e arrotondano senza errore, perché il risultato è `float64`;
+sulle colonne intere `mean` e `stddev` arrotondano alla fine del calcolo
+esatto
+([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
+Un `NaN` o un infinito già nei dati si propagano senza errore; solo
+l'overflow di un calcolo su valori finiti si rifiuta.
 
 ### Complessità
 
@@ -83,7 +94,8 @@ calcolano in parallelo, con lo stesso risultato. Nessuna variante spilled.
 
 ### Esempio
 
-Somma mobile su due righe: il null occupa il suo posto ma non conta.
+Somma mobile su due righe: il null occupa il suo posto ma non conta, e
+la somma di una colonna intera resta `int64`, esatta.
 
 ```json
 {
@@ -97,7 +109,7 @@ Somma mobile su due righe: il null occupa il suo posto ma non conta.
   "uscita": {"colonne": [
     {"nome": "giorno", "tipo": "int64", "valori": [1, 2, 3, 4]},
     {"nome": "vendite", "tipo": "int64", "valori": [1, 2, null, 4]},
-    {"nome": "somma_2", "tipo": "float64", "valori": [1.0, 3.0, 2.0, 4.0]}
+    {"nome": "somma_2", "tipo": "int64", "valori": [1, 3, 2, 4]}
   ]}
 }
 ```

@@ -7,8 +7,8 @@ use serde_json::Value;
 
 use super::helpers::{
     analyze_append, check_json_text, check_name_list, check_output_name, check_text_len, con_op,
-    contract_error, map_row_count, require_numeric, require_scalar_string, round_scaled, typed,
-    unsupported,
+    contract_error, field_of, map_row_count, require_numeric, require_scalar_string, round_scaled,
+    typed, unsupported,
 };
 use crate::{analysis, Limits};
 
@@ -62,7 +62,12 @@ pub(in crate::analyze) fn analyze_bin(
             if !(3..=101).contains(&edges.len()) {
                 return contract_error(op, "edges fuori da 3..=101");
             }
-            if edges.windows(2).any(|pair| pair[0] >= pair[1]) {
+            // Sul valore esatto, come il kernel: due bordi interi distinti
+            // oltre 2^53 non sono uguali.
+            if edges.windows(2).any(|pair| {
+                crate::compare_bounds(pair[0].esatto(), pair[1].esatto())
+                    != Some(std::cmp::Ordering::Less)
+            }) {
                 return contract_error(op, "edges non strettamente crescenti");
             }
             edges.len() - 1
@@ -157,29 +162,21 @@ pub(in crate::analyze) fn analyze_statistics(
     if let Some(group_by) = &config.group_by {
         require_scalar_string(op, input, group_by)?;
     }
-    let prefix = if config.output_prefix.is_empty() {
-        format!("{}_", config.column)
-    } else {
-        config.output_prefix.clone()
-    };
+    // Nomi e tipi del kernel (`nomi_uscita`, `Stat::tipo_uscita`).
+    let nomi = con_op(op, config.nomi_uscita())?;
+    let tipo_ingresso = field_of(op, input, &config.column)?.data_type().clone();
+    if config
+        .stats
+        .iter()
+        .any(|stat| matches!(stat, analysis::Stat::Sum))
+    {
+        con_op(op, crate::float64_source::verifica_somma(&tipo_ingresso))?;
+    }
     let produced: Vec<(String, DataType, bool)> = config
         .stats
         .iter()
-        .map(|stat| {
-            let suffix = match stat {
-                analysis::Stat::Count => "count",
-                analysis::Stat::Min => "min",
-                analysis::Stat::Max => "max",
-                analysis::Stat::Sum => "sum",
-                analysis::Stat::Mean => "mean",
-                analysis::Stat::Median => "median",
-                analysis::Stat::Std => "std",
-                analysis::Stat::Var => "var",
-                analysis::Stat::Q25 => "q25",
-                analysis::Stat::Q75 => "q75",
-            };
-            (format!("{prefix}{suffix}"), DataType::Float64, true)
-        })
+        .zip(nomi)
+        .map(|(stat, nome)| (nome, stat.tipo_uscita(&tipo_ingresso), true))
         .collect();
     // Statistiche broadcast per riga: righe invariate.
     analyze_append(input, fields, &produced)

@@ -1,30 +1,21 @@
 use std::sync::Arc;
 
-use chrono::format::{Fixed, Item, Numeric, Parsed, StrftimeItems};
+use chrono::format::{Fixed, Item, Numeric, StrftimeItems};
 use chrono::{
     DateTime, Datelike, LocalResult, Months, NaiveDate, NaiveDateTime, TimeDelta, TimeZone,
 };
 use chrono_tz::Tz;
-use plenora_core::arrow::array::{Array, Float64Array, RecordBatch, StringArray};
+use plenora_core::arrow::array::{Array, ArrayRef, Float64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
 
+use crate::temporale::{ColonnaTemporale, Momento};
 use crate::utility::InvalidDatePolicy;
 use crate::{column_index, reject_rows, replace_or_append, scalar_as_string, RowRejection};
 use plenora_core::{PlenoraError, Result};
 
 fn default_output_format() -> String {
     "%Y-%m-%d %H:%M:%S".into()
-}
-
-fn parse(value: &str, format: &str) -> Option<NaiveDateTime> {
-    NaiveDateTime::parse_from_str(value, format)
-        .ok()
-        .or_else(|| {
-            NaiveDate::parse_from_str(value, format)
-                .ok()
-                .and_then(|date| date.and_hms_opt(0, 0, 0))
-        })
 }
 
 // ---------------------------------------------------------------------------
@@ -39,6 +30,245 @@ fn parse(value: &str, format: &str) -> Option<NaiveDateTime> {
 /// invariata: stessi item che chrono ri-parserizzerebbe a ogni riga).
 pub(crate) fn compile_items(format: &str) -> Vec<Item<'_>> {
     StrftimeItems::new(format).collect()
+}
+
+/// Un formato strftime di config e' riconosciuto da chrono.
+///
+/// Un item non riconosciuto (`%Q`, `%` finale) non fa mai combaciare il
+/// parsing e manda in errore la scrittura: si rifiuta come errore di piano
+/// invece di scartare ogni riga o, nei cast con `coerce`, di ignorarlo.
+///
+/// # Errors
+///
+/// `InvalidPlan` se il formato contiene item non riconosciuti.
+pub fn validate_format_items(format: &str, label: &str) -> Result<()> {
+    if StrftimeItems::new(format).any(|item| matches!(item, Item::Error)) {
+        return Err(PlenoraError::InvalidPlan(format!(
+            "{label} non riconosciuto"
+        )));
+    }
+    Ok(())
+}
+
+/// La regola di `input_format` delle operazioni su date.
+///
+/// Del kernel e dell'analisi: obbligatorio per una colonna letta come
+/// testo, rifiutato per una colonna temporale (`Date32`, `Timestamp` di ogni unita'), che si
+/// legge dal valore nativo e non ha un testo da interpretare.
+///
+/// # Errors
+///
+/// `InvalidPlan` per `input_format` assente con un testo o scritto con una
+/// colonna temporale; gli errori di [`validate_format_items`].
+pub fn verifica_input_format(temporale: bool, input_format: Option<&str>) -> Result<()> {
+    match (temporale, input_format) {
+        (true, Some(_)) => Err(PlenoraError::InvalidPlan(
+            "input_format legge un testo e non si applica a una colonna temporale".into(),
+        )),
+        (false, None) => Err(PlenoraError::InvalidPlan(
+            "input_format obbligatorio per una colonna letta come testo".into(),
+        )),
+        (false, Some(formato)) => validate_format_items(formato, "input_format"),
+        (true, None) => Ok(()),
+    }
+}
+
+/// Una cella letta da [`Lettore::momento`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Letto {
+    /// Cella nulla.
+    Nullo,
+    /// Testo che il formato non legge.
+    Illeggibile,
+    /// Valore letto.
+    Valore(Momento),
+}
+
+/// Lettura della colonna d'ingresso di `date_format`, `date_add`,
+/// `date_diff` e `timezone_convert`: una colonna temporale dal valore
+/// nativo (l'ora locale del suo fuso e l'istante), un testo con
+/// `input_format` (l'ora scritta e, se il formato legge un offset,
+/// l'istante).
+pub(crate) enum Lettore<'a> {
+    /// Colonna temporale.
+    Temporale(ColonnaTemporale<'a>),
+    /// Colonna letta come testo, con gli item del formato.
+    Testo {
+        array: &'a ArrayRef,
+        items: Vec<Item<'a>>,
+    },
+}
+
+impl<'a> Lettore<'a> {
+    /// # Errors
+    ///
+    /// [`verifica_input_format`]; `Schema` per un fuso Arrow non valido.
+    pub(crate) fn new(array: &'a ArrayRef, input_format: Option<&'a str>) -> Result<Self> {
+        let temporale = ColonnaTemporale::new(array)?;
+        verifica_input_format(temporale.is_some(), input_format)?;
+        Ok(match (temporale, input_format) {
+            (Some(temporale), _) => Self::Temporale(temporale),
+            (None, formato) => Self::Testo {
+                array,
+                items: compile_items(formato.unwrap_or_default()),
+            },
+        })
+    }
+
+    /// Il valore della riga ([`Letto`]).
+    ///
+    /// # Errors
+    ///
+    /// Gli errori di lettura della colonna (`scalar_as_string`, valore
+    /// temporale fuori intervallo).
+    pub(crate) fn momento(&self, row: usize) -> Result<Letto> {
+        let letto = |momento: Option<Momento>| momento.map_or(Letto::Illeggibile, Letto::Valore);
+        match self {
+            Self::Temporale(temporale) => {
+                Ok(temporale.momento(row)?.map_or(Letto::Nullo, Letto::Valore))
+            }
+            Self::Testo { array, items } => {
+                if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
+                    if values.is_null(row) {
+                        return Ok(Letto::Nullo);
+                    }
+                    return Ok(letto(crate::temporale::leggi_con_items(
+                        values.value(row),
+                        items,
+                    )));
+                }
+                Ok(
+                    scalar_as_string(array.as_ref(), row)?.map_or(Letto::Nullo, |valore| {
+                        letto(crate::temporale::leggi_con_items(&valore, items))
+                    }),
+                )
+            }
+        }
+    }
+
+    /// Colonna temporale con un fuso: il suo valore e' un istante.
+    pub(crate) const fn fuso_della_colonna(&self) -> Option<Tz> {
+        match self {
+            Self::Temporale(temporale) => temporale.fuso(),
+            Self::Testo { .. } => None,
+        }
+    }
+}
+
+/// Scrive un valore temporale formattato, senza panico.
+///
+/// `to_string()` su un formato chrono va in panico quando chrono rende
+/// `fmt::Error` (item che chiede un fuso a un valore che non lo ha, anni
+/// fuori dall'intervallo di RFC 2822); `write!` su una `String` lo rende
+/// come errore.
+fn scrivi_formattato(valore: impl std::fmt::Display) -> Result<String> {
+    use std::fmt::Write as _;
+    let mut testo = String::new();
+    write!(testo, "{valore}").map_err(|_| {
+        PlenoraError::DataMapping("valore temporale non rappresentabile con output_format".into())
+    })?;
+    Ok(testo)
+}
+
+/// Un `output_format` compilato e verificato per il tipo di valore che lo
+/// scrive.
+///
+/// Rifiuta con errore di piano, prima di leggere i dati, ogni formato che
+/// chrono non saprebbe scrivere per quel tipo: item non riconosciuti e, per i
+/// valori senza fuso, gli item di offset e di fuso (`%z`, `%Z`, `%:z`,
+/// `%+`), che chrono scrive solo per un valore con fuso. Per riga resta un
+/// errore esplicito, mai un panico ne' un testo sbagliato: il secolo (`%C`)
+/// fuori dagli anni 0..=9999, che chrono scriverebbe con un carattere non
+/// numerico al posto delle decine, e gli anni fuori dall'intervallo di
+/// RFC 2822.
+pub(crate) struct FormatoUscita<'a> {
+    items: Vec<Item<'a>>,
+    /// Il formato scrive il secolo civile a due cifre (`%C`, anno / 100).
+    secolo_civile: bool,
+    /// Il formato scrive il secolo dell'anno ISO a due cifre (item chrono
+    /// `IsoYearDiv100`, senza specificatore strftime ma costruibile).
+    secolo_iso: bool,
+}
+
+impl<'a> FormatoUscita<'a> {
+    fn compila(format: &'a str) -> Result<Self> {
+        validate_format_items(format, "output_format")?;
+        let items = compile_items(format);
+        let secolo_civile = items
+            .iter()
+            .any(|item| matches!(item, Item::Numeric(Numeric::YearDiv100, _)));
+        let secolo_iso = items
+            .iter()
+            .any(|item| matches!(item, Item::Numeric(Numeric::IsoYearDiv100, _)));
+        Ok(Self {
+            items,
+            secolo_civile,
+            secolo_iso,
+        })
+    }
+
+    /// Istante di prova per scoprire, prima dei dati, gli item che chrono
+    /// non sa scrivere per il tipo del valore: il risultato non dipende
+    /// dall'istante se non per gli anni, e il 2000 e' dentro ogni intervallo.
+    fn campione() -> Result<NaiveDateTime> {
+        NaiveDate::from_ymd_opt(2000, 1, 1)
+            .and_then(|date| date.and_hms_opt(0, 0, 0))
+            .ok_or_else(|| PlenoraError::Internal("istante di prova non costruibile".into()))
+    }
+
+    /// Per valori senza fuso (`NaiveDateTime`).
+    pub(crate) fn senza_fuso(format: &'a str) -> Result<Self> {
+        let formato = Self::compila(format)?;
+        if formato.scrivi_senza_fuso(&Self::campione()?).is_err() {
+            return Err(PlenoraError::InvalidPlan(
+                "output_format richiede un fuso orario o un offset, che il valore non ha".into(),
+            ));
+        }
+        Ok(formato)
+    }
+
+    /// Per valori con il fuso `fuso`.
+    pub(crate) fn con_fuso(format: &'a str, fuso: Tz) -> Result<Self> {
+        let formato = Self::compila(format)?;
+        let campione = fuso.from_utc_datetime(&Self::campione()?);
+        if formato.scrivi_con_fuso(&campione).is_err() {
+            return Err(PlenoraError::InvalidPlan(
+                "output_format non applicabile ai valori con fuso".into(),
+            ));
+        }
+        Ok(formato)
+    }
+
+    /// Ogni secolo si controlla sul proprio anno: `%C` sul civile, il
+    /// secolo ISO sull'anno ISO. 0000-01-01 ha anno civile 0 (secolo "00")
+    /// e anno ISO -1.
+    fn controlla_secolo(&self, anno: i32, anno_iso: i32) -> Result<()> {
+        let fuori = |anno: i32| !(0..=9999).contains(&anno);
+        if (self.secolo_civile && fuori(anno)) || (self.secolo_iso && fuori(anno_iso)) {
+            return Err(PlenoraError::DataMapping(
+                "anno fuori da 0..=9999: il secolo di output_format non e' rappresentabile".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn scrivi_senza_fuso(&self, valore: &NaiveDateTime) -> Result<String> {
+        self.controlla_secolo(valore.year(), valore.iso_week().year())?;
+        scrivi_formattato(valore.format_with_items(self.items.iter()))
+    }
+
+    pub(crate) fn scrivi_con_fuso(&self, valore: &DateTime<Tz>) -> Result<String> {
+        // L'ora locale oltre l'intervallo di chrono: `year()` e la scrittura
+        // andrebbero in panico sommando l'offset senza controllo.
+        crate::temporale::ora_locale(&valore.with_timezone(&chrono::Utc), valore.timezone())
+            .ok_or_else(|| {
+                PlenoraError::DataMapping(
+                    "valore temporale fuori intervallo nel fuso d'uscita".into(),
+                )
+            })?;
+        self.controlla_secolo(valore.year(), valore.iso_week().year())?;
+        scrivi_formattato(valore.format_with_items(self.items.iter()))
+    }
 }
 
 /// Byte scritti al massimo da un valore formattato con `format`.
@@ -145,153 +375,6 @@ fn larghezza_misurata(campo: &Fixed) -> Option<usize> {
 /// per eccesso.
 pub const BYTE_PER_CAMPO: usize = 64;
 
-/// Parsing con item precompilati, semantica identica a `parse`: prima il
-/// ramo `NaiveDateTime::parse_from_str` (campi orario di default a
-/// mezzanotte), poi il fallback `NaiveDate::parse_from_str`.
-pub(crate) fn parse_with_items(value: &str, items: &[Item<'_>]) -> Option<NaiveDateTime> {
-    let mut parsed = Parsed::new();
-    if chrono::format::parse(&mut parsed, value, items.iter()).is_ok() {
-        // Stessa risoluzione di `NaiveDateTime::parse_from_str`
-        // (`to_naive_datetime_with_offset(0)`; chrono e' pinnato a 0.4.45).
-        if let Ok(datetime) = parsed.to_naive_datetime_with_offset(0) {
-            return Some(datetime);
-        }
-    }
-    let mut parsed = Parsed::new();
-    if chrono::format::parse(&mut parsed, value, items.iter()).is_ok() {
-        if let Ok(date) = parsed.to_naive_date() {
-            return date.and_hms_opt(0, 0, 0);
-        }
-    }
-    None
-}
-
-/// Un formato strftime di config e' riconosciuto da chrono.
-///
-/// Un item non riconosciuto (`%Q`, `%` finale) non fa mai combaciare il
-/// parsing e manda in errore la scrittura: si rifiuta come errore di piano
-/// invece di scartare ogni riga o, nei cast con `coerce`, di ignorarlo.
-///
-/// # Errors
-///
-/// `InvalidPlan` se il formato contiene item non riconosciuti.
-pub fn validate_format_items(format: &str, label: &str) -> Result<()> {
-    if StrftimeItems::new(format).any(|item| matches!(item, Item::Error)) {
-        return Err(PlenoraError::InvalidPlan(format!(
-            "{label} non riconosciuto"
-        )));
-    }
-    Ok(())
-}
-
-/// Scrive un valore temporale formattato, senza panico.
-///
-/// `to_string()` su un formato chrono va in panico quando chrono rende
-/// `fmt::Error` (item che chiede un fuso a un valore che non lo ha, anni
-/// fuori dall'intervallo di RFC 2822); `write!` su una `String` lo rende
-/// come errore.
-fn scrivi_formattato(valore: impl std::fmt::Display) -> Result<String> {
-    use std::fmt::Write as _;
-    let mut testo = String::new();
-    write!(testo, "{valore}").map_err(|_| {
-        PlenoraError::DataMapping("valore temporale non rappresentabile con output_format".into())
-    })?;
-    Ok(testo)
-}
-
-/// Un `output_format` compilato e verificato per il tipo di valore che lo
-/// scrive.
-///
-/// Rifiuta con errore di piano, prima di leggere i dati, ogni formato che
-/// chrono non saprebbe scrivere per quel tipo: item non riconosciuti e, per i
-/// valori senza fuso, gli item di offset e di fuso (`%z`, `%Z`, `%:z`,
-/// `%+`), che chrono scrive solo per un valore con fuso. Per riga resta un
-/// errore esplicito, mai un panico ne' un testo sbagliato: il secolo (`%C`)
-/// fuori dagli anni 0..=9999, che chrono scriverebbe con un carattere non
-/// numerico al posto delle decine, e gli anni fuori dall'intervallo di
-/// RFC 2822.
-pub(crate) struct FormatoUscita<'a> {
-    items: Vec<Item<'a>>,
-    /// Il formato scrive il secolo civile a due cifre (`%C`, anno / 100).
-    secolo_civile: bool,
-    /// Il formato scrive il secolo dell'anno ISO a due cifre (item chrono
-    /// `IsoYearDiv100`, senza specificatore strftime ma costruibile).
-    secolo_iso: bool,
-}
-
-impl<'a> FormatoUscita<'a> {
-    fn compila(format: &'a str) -> Result<Self> {
-        validate_format_items(format, "output_format")?;
-        let items = compile_items(format);
-        let secolo_civile = items
-            .iter()
-            .any(|item| matches!(item, Item::Numeric(Numeric::YearDiv100, _)));
-        let secolo_iso = items
-            .iter()
-            .any(|item| matches!(item, Item::Numeric(Numeric::IsoYearDiv100, _)));
-        Ok(Self {
-            items,
-            secolo_civile,
-            secolo_iso,
-        })
-    }
-
-    /// Istante di prova per scoprire, prima dei dati, gli item che chrono
-    /// non sa scrivere per il tipo del valore: il risultato non dipende
-    /// dall'istante se non per gli anni, e il 2000 e' dentro ogni intervallo.
-    fn campione() -> Result<NaiveDateTime> {
-        NaiveDate::from_ymd_opt(2000, 1, 1)
-            .and_then(|date| date.and_hms_opt(0, 0, 0))
-            .ok_or_else(|| PlenoraError::Internal("istante di prova non costruibile".into()))
-    }
-
-    /// Per valori senza fuso (`NaiveDateTime`).
-    pub(crate) fn senza_fuso(format: &'a str) -> Result<Self> {
-        let formato = Self::compila(format)?;
-        if formato.scrivi_senza_fuso(&Self::campione()?).is_err() {
-            return Err(PlenoraError::InvalidPlan(
-                "output_format richiede un fuso orario o un offset, che il valore non ha".into(),
-            ));
-        }
-        Ok(formato)
-    }
-
-    /// Per valori con il fuso `fuso`.
-    pub(crate) fn con_fuso(format: &'a str, fuso: Tz) -> Result<Self> {
-        let formato = Self::compila(format)?;
-        let campione = fuso.from_utc_datetime(&Self::campione()?);
-        if formato.scrivi_con_fuso(&campione).is_err() {
-            return Err(PlenoraError::InvalidPlan(
-                "output_format non applicabile ai valori con fuso".into(),
-            ));
-        }
-        Ok(formato)
-    }
-
-    /// Ogni secolo si controlla sul proprio anno: `%C` sul civile, il
-    /// secolo ISO sull'anno ISO. 0000-01-01 ha anno civile 0 (secolo "00")
-    /// e anno ISO -1.
-    fn controlla_secolo(&self, anno: i32, anno_iso: i32) -> Result<()> {
-        let fuori = |anno: i32| !(0..=9999).contains(&anno);
-        if (self.secolo_civile && fuori(anno)) || (self.secolo_iso && fuori(anno_iso)) {
-            return Err(PlenoraError::DataMapping(
-                "anno fuori da 0..=9999: il secolo di output_format non e' rappresentabile".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn scrivi_senza_fuso(&self, valore: &NaiveDateTime) -> Result<String> {
-        self.controlla_secolo(valore.year(), valore.iso_week().year())?;
-        scrivi_formattato(valore.format_with_items(self.items.iter()))
-    }
-
-    pub(crate) fn scrivi_con_fuso(&self, valore: &DateTime<Tz>) -> Result<String> {
-        self.controlla_secolo(valore.year(), valore.iso_week().year())?;
-        scrivi_formattato(valore.format_with_items(self.items.iter()))
-    }
-}
-
 /// Riga non leggibile dopo la prevalidazione per riga: irraggiungibile.
 fn invalid<T>(operation: &str) -> Result<Option<T>> {
     Err(PlenoraError::Internal(format!(
@@ -304,11 +387,15 @@ fn invalid<T>(operation: &str) -> Result<Option<T>> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DateFormat {
-    /// Colonna da leggere, come testo.
+    /// Colonna da leggere: una colonna temporale (`Date32`, `Timestamp` di
+    /// ogni unita') dal valore nativo, ogni altra come testo.
     pub column: String,
-    /// Formato strftime di lettura; deve consumare tutto il testo. Senza
-    /// campi orari la data si pone a mezzanotte.
-    pub input_format: String,
+    /// Formato strftime di lettura di un testo; deve consumare tutto il
+    /// testo, e senza campi orari la data si pone a mezzanotte. Obbligatorio
+    /// per un testo, rifiutato per una colonna temporale
+    /// ([`verifica_input_format`]).
+    #[serde(default, deserialize_with = "crate::mai_null")]
+    pub input_format: Option<String>,
     /// Formato strftime di scrittura, senza campi di fuso; default
     /// `%Y-%m-%d %H:%M:%S`.
     #[serde(default = "default_output_format")]
@@ -354,15 +441,19 @@ pub fn verifica_politiche(
 /// Riformatta la colonna `column` da `input_format` a `output_format`
 /// nella colonna `output_column`.
 ///
-/// Fast path su colonne Utf8 (item strftime precompilati), percorso
-/// generico riga-per-riga sugli altri tipi Arrow. I valori non parsabili
-/// sono sempre rifiutati con diagnostica row-scoped; `invalid` scritto si
-/// rifiuta ([`verifica_politiche`]).
+/// Una colonna temporale (`Date32`, `Timestamp` di ogni unita', con o senza
+/// fuso) si legge dal valore nativo, senza `input_format`: si scrive l'ora
+/// locale della colonna (del suo fuso; senza fuso, il valore com'e'). Un
+/// testo si legge con `input_format` (item strftime precompilati; con un
+/// offset, si scrive l'ora scritta). I valori non parsabili sono sempre
+/// rifiutati con diagnostica row-scoped; `invalid` scritto si rifiuta
+/// ([`verifica_politiche`]).
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: formato con item non riconosciuti, o `output_format`
-///   con item di fuso o di offset;
+///   con item di fuso o di offset; `input_format` assente per un testo o
+///   scritto per una colonna temporale ([`verifica_input_format`]);
 /// - `DataMapping`: uno o piu' valori non parsabili, con row diagnostics
 ///   (`conversion.invalid_datetime`); senza diagnostica, un valore che
 ///   `output_format` non sa scrivere (secolo `%C` fuori da 0..=9999);
@@ -371,54 +462,34 @@ pub fn verifica_politiche(
 ///   `replace_or_append`.
 pub fn date_format(batch: &RecordBatch, config: &DateFormat) -> Result<RecordBatch> {
     verifica_politiche(config.invalid.as_ref(), None)?;
-    validate_format_items(&config.input_format, "input_format")?;
     let uscita = FormatoUscita::senza_fuso(&config.output_format)?;
     let index = column_index(batch, &config.column)?;
-    let source = batch.column(index);
-    let mut rejections = Vec::new();
-    for row in 0..batch.num_rows() {
-        if scalar_as_string(source.as_ref(), row)?
-            .is_some_and(|value| parse(&value, &config.input_format).is_none())
-        {
-            rejections.push(RowRejection {
-                row,
-                cause: "conversion.invalid_datetime",
-                column: Some(&config.column),
-            });
-        }
-    }
+    let lettore = Lettore::new(batch.column(index), config.input_format.as_deref())?;
+    let celle = (0..batch.num_rows())
+        .map(|row| lettore.momento(row))
+        .collect::<Result<Vec<_>>>()?;
+    let rejections = celle
+        .iter()
+        .enumerate()
+        .filter(|(_, letto)| matches!(letto, Letto::Illeggibile))
+        .map(|(row, _)| RowRejection {
+            row,
+            cause: "conversion.invalid_datetime",
+            column: Some(&config.column),
+        })
+        .collect::<Vec<_>>();
     reject_rows(
         &rejections,
         "valori temporali rifiutati; consultare row_diagnostics",
     )?;
-    let values = if let Some(column) = source.as_any().downcast_ref::<StringArray>() {
-        let input_items = compile_items(&config.input_format);
-        let mut values = Vec::with_capacity(column.len());
-        for row in 0..column.len() {
-            if column.is_null(row) {
-                values.push(None);
-                continue;
-            }
-            let parsed = parse_with_items(column.value(row), &input_items);
-            values.push(match parsed {
-                Some(value) => Some(uscita.scrivi_senza_fuso(&value)?),
-                None => invalid("date_format")?,
-            });
-        }
-        values
-    } else {
-        (0..batch.num_rows())
-            .map(|row| {
-                let Some(value) = scalar_as_string(source.as_ref(), row)? else {
-                    return Ok(None);
-                };
-                parse(&value, &config.input_format).map_or_else(
-                    || invalid("date_format"),
-                    |value| uscita.scrivi_senza_fuso(&value).map(Some),
-                )
-            })
-            .collect::<Result<Vec<_>>>()?
-    };
+    let values = celle
+        .iter()
+        .map(|letto| match letto {
+            Letto::Nullo => Ok(None),
+            Letto::Valore(momento) => uscita.scrivi_senza_fuso(&momento.locale).map(Some),
+            Letto::Illeggibile => invalid("date_format"),
+        })
+        .collect::<Result<Vec<_>>>()?;
     replace_or_append(
         batch,
         &config.output_column,
@@ -453,10 +524,14 @@ pub enum DateUnit {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DateAdd {
-    /// Colonna da leggere, come testo.
+    /// Colonna da leggere: una colonna temporale dal valore nativo, ogni
+    /// altra come testo.
     pub column: String,
-    /// Formato strftime di lettura; deve consumare tutto il testo.
-    pub input_format: String,
+    /// Formato strftime di lettura di un testo; deve consumare tutto il
+    /// testo. Obbligatorio per un testo, rifiutato per una colonna temporale
+    /// ([`verifica_input_format`]).
+    #[serde(default, deserialize_with = "crate::mai_null")]
+    pub input_format: Option<String>,
     /// Formato strftime di scrittura, senza campi di fuso; default
     /// `%Y-%m-%d %H:%M:%S`.
     #[serde(default = "default_output_format")]
@@ -515,21 +590,12 @@ fn shift(value: NaiveDateTime, amount: i64, unit: &DateUnit) -> Option<NaiveDate
 ///
 /// `InvalidPlan` se `amount` in `unit` non e' applicabile a nessuna data.
 pub fn verifica_amount(amount: i64, unit: &DateUnit) -> Result<()> {
-    // Gli estremi di ogni rappresentazione: chrono ammette il secondo
-    // intercalare (`23:59:60`, nanosecondi oltre 10^9), e da quello del
-    // giorno massimo uno spostamento all'indietro arriva piu' lontano che da
-    // `NaiveDateTime::MAX` (23:59:59.999999999). Si rifiuta solo cio' che
-    // fallisce da tutti.
-    let intercalare = |data: NaiveDate| data.and_hms_nano_opt(23, 59, 59, 1_999_999_999);
-    let estremi = [
-        Some(NaiveDateTime::MIN),
-        Some(NaiveDateTime::MAX),
-        intercalare(NaiveDate::MIN),
-        intercalare(NaiveDate::MAX),
-    ];
+    // Gli estremi dei valori leggibili: il secondo intercalare (`23:59:60`)
+    // si rifiuta in lettura (`temporale`), quindi gli estremi sono quelli di
+    // `NaiveDateTime`. Si rifiuta solo cio' che fallisce da entrambi.
+    let estremi = [NaiveDateTime::MIN, NaiveDateTime::MAX];
     if estremi
         .into_iter()
-        .flatten()
         .all(|partenza| shift(partenza, amount, unit).is_none())
     {
         return Err(PlenoraError::InvalidPlan(
@@ -544,12 +610,15 @@ pub fn verifica_amount(amount: i64, unit: &DateUnit) -> Result<()> {
 ///
 /// Anni e mesi usano aritmetica di calendario (`Months`), le altre
 /// unita' durate fisse; valori non parsabili e overflow di data o delta sono
-/// sempre rifiutati con diagnostica row-scoped.
+/// sempre rifiutati con diagnostica row-scoped. Una colonna temporale si
+/// legge dal valore nativo (l'ora locale del suo fuso), un testo con
+/// `input_format` (l'ora scritta).
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: formato con item non riconosciuti, o `output_format`
-///   con item di fuso o di offset;
+///   con item di fuso o di offset; `input_format` assente per un testo o
+///   scritto per una colonna temporale;
 /// - `DataMapping`: valore non parsabile (`conversion.invalid_datetime`),
 ///   oppure data risultante o delta fuori range
 ///   (`conversion.datetime_range`), con row diagnostics; senza diagnostica,
@@ -559,81 +628,67 @@ pub fn verifica_amount(amount: i64, unit: &DateUnit) -> Result<()> {
 ///   `replace_or_append`.
 pub fn date_add(batch: &RecordBatch, config: &DateAdd) -> Result<RecordBatch> {
     verifica_politiche(config.invalid.as_ref(), None)?;
-    validate_format_items(&config.input_format, "input_format")?;
     let uscita = FormatoUscita::senza_fuso(&config.output_format)?;
     let index = column_index(batch, &config.column)?;
-    let source = batch.column(index);
-    let mut rejections = Vec::new();
-    for row in 0..batch.num_rows() {
-        let Some(value) = scalar_as_string(source.as_ref(), row)? else {
-            continue;
-        };
-        let cause = match parse(&value, &config.input_format) {
-            None => "conversion.invalid_datetime",
-            Some(value) if shift(value, config.amount, &config.unit).is_none() => {
-                "conversion.datetime_range"
+    let lettore = Lettore::new(batch.column(index), config.input_format.as_deref())?;
+    // Delta precomputato per le unita' a durata fissa (mai ricalcolato per
+    // riga); anni e mesi restano sull'aritmetica di calendario per riga.
+    let fixed_delta = match config.unit {
+        DateUnit::Years | DateUnit::Months => None,
+        DateUnit::Weeks => Some(TimeDelta::try_weeks(config.amount)),
+        DateUnit::Days => Some(TimeDelta::try_days(config.amount)),
+        DateUnit::Hours => Some(TimeDelta::try_hours(config.amount)),
+        DateUnit::Minutes => Some(TimeDelta::try_minutes(config.amount)),
+        DateUnit::Seconds => Some(TimeDelta::try_seconds(config.amount)),
+    };
+    let shift_row = |value: NaiveDateTime| -> Option<NaiveDateTime> {
+        match fixed_delta {
+            Some(delta) => delta.and_then(|delta| value.checked_add_signed(delta)),
+            None if matches!(config.unit, DateUnit::Years) => {
+                shift_months(value, config.amount, 12)
             }
-            Some(_) => continue,
+            None => shift_months(value, config.amount, 1),
+        }
+    };
+    let mut rejections = Vec::new();
+    let mut valori_spostati = Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        let risultato = match lettore.momento(row)? {
+            Letto::Nullo => None,
+            Letto::Illeggibile => {
+                rejections.push(RowRejection {
+                    row,
+                    cause: "conversion.invalid_datetime",
+                    column: Some(&config.column),
+                });
+                None
+            }
+            Letto::Valore(momento) => {
+                let dopo = shift_row(momento.locale);
+                if dopo.is_none() {
+                    rejections.push(RowRejection {
+                        row,
+                        cause: "conversion.datetime_range",
+                        column: Some(&config.column),
+                    });
+                }
+                dopo
+            }
         };
-        rejections.push(RowRejection {
-            row,
-            cause,
-            column: Some(&config.column),
-        });
+        valori_spostati.push(risultato);
     }
     reject_rows(
         &rejections,
         "valori temporali rifiutati; consultare row_diagnostics",
     )?;
-    let values = if let Some(column) = source.as_any().downcast_ref::<StringArray>() {
-        let input_items = compile_items(&config.input_format);
-        // Delta precomputato per le unita' a durata fissa (mai ricalcolato
-        // per riga); anni/mesi restano sul percorso `Months` per-riga.
-        let fixed_delta = match config.unit {
-            DateUnit::Years | DateUnit::Months => None,
-            DateUnit::Weeks => Some(TimeDelta::try_weeks(config.amount)),
-            DateUnit::Days => Some(TimeDelta::try_days(config.amount)),
-            DateUnit::Hours => Some(TimeDelta::try_hours(config.amount)),
-            DateUnit::Minutes => Some(TimeDelta::try_minutes(config.amount)),
-            DateUnit::Seconds => Some(TimeDelta::try_seconds(config.amount)),
-        };
-        let shift_row = |value: NaiveDateTime| -> Option<NaiveDateTime> {
-            match fixed_delta {
-                Some(delta) => delta.and_then(|delta| value.checked_add_signed(delta)),
-                None if matches!(config.unit, DateUnit::Years) => {
-                    shift_months(value, config.amount, 12)
-                }
-                None => shift_months(value, config.amount, 1),
-            }
-        };
-        let mut values = Vec::with_capacity(column.len());
-        for row in 0..column.len() {
-            if column.is_null(row) {
-                values.push(None);
-                continue;
-            }
-            let shifted = parse_with_items(column.value(row), &input_items).and_then(shift_row);
-            values.push(match shifted {
-                Some(value) => Some(uscita.scrivi_senza_fuso(&value)?),
-                None => invalid("date_add")?,
-            });
-        }
-        values
-    } else {
-        (0..batch.num_rows())
-            .map(|row| {
-                let Some(value) = scalar_as_string(source.as_ref(), row)? else {
-                    return Ok(None);
-                };
-                let shifted = parse(&value, &config.input_format)
-                    .and_then(|value| shift(value, config.amount, &config.unit));
-                shifted.map_or_else(
-                    || invalid("date_add"),
-                    |value| uscita.scrivi_senza_fuso(&value).map(Some),
-                )
-            })
-            .collect::<Result<Vec<_>>>()?
-    };
+    let values = valori_spostati
+        .iter()
+        .map(|risultato| {
+            risultato
+                .map(|valore| uscita.scrivi_senza_fuso(&valore))
+                .transpose()
+        })
+        .collect::<Result<Vec<_>>>()?;
     replace_or_append(
         batch,
         &config.output_column,
@@ -662,12 +717,15 @@ pub enum DiffUnit {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DateDiff {
-    /// Colonna dell'istante iniziale, letta come testo.
+    /// Colonna dell'istante iniziale: temporale dal valore nativo, ogni
+    /// altra come testo.
     pub start_column: String,
-    /// Colonna dell'istante finale, letta come testo.
+    /// Colonna dell'istante finale, come `start_column`.
     pub end_column: String,
-    /// Formato strftime di lettura di entrambe le colonne.
-    pub input_format: String,
+    /// Formato strftime di lettura dei testi: obbligatorio per colonne di
+    /// testo, rifiutato per colonne temporali ([`verifica_input_format`]).
+    #[serde(default, deserialize_with = "crate::mai_null")]
+    pub input_format: Option<String>,
     /// Unita' della differenza.
     pub unit: DiffUnit,
     /// Colonna d'uscita (`Float64` nullable).
@@ -690,8 +748,8 @@ pub struct DateDiff {
 /// conteggio esatto non entra in un double. «Fuori scala» riguarda solo i
 /// nanosecondi oltre `i64` (circa 292 anni).
 #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: l'output e' Float64 per contratto.
-fn diff_value(start: NaiveDateTime, end: NaiveDateTime, divisor: f64, _row: usize) -> Result<f64> {
-    end.signed_duration_since(start)
+fn diff_value(delta: TimeDelta, divisor: f64, _row: usize) -> Result<f64> {
+    delta
         .num_nanoseconds()
         .map(|nanoseconds| nanoseconds as f64 / 1_000_000_000.0 / divisor)
         .ok_or_else(|| PlenoraError::InvalidPlan("date_diff: intervallo fuori scala".into()))
@@ -700,12 +758,16 @@ fn diff_value(start: NaiveDateTime, end: NaiveDateTime, divisor: f64, _row: usiz
 /// Differenza `end_column - start_column` in unita' frazionarie
 /// (`unit`), scritta come Float64 in `output_column`.
 ///
-/// Un estremo null propaga null; un estremo non parsabile o un intervallo fuori
-/// scala rifiuta sempre l'output con diagnostica row-scoped.
+/// Due istanti (colonne `Timestamp` di ogni unita', o testi con un offset)
+/// si sottraggono come istanti; date e ore senza offset come ore locali.
+/// Un estremo null propaga null; un estremo non parsabile o un intervallo
+/// fuori scala rifiuta sempre l'output con diagnostica row-scoped.
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `input_format` con item non riconosciuti;
+/// - `InvalidPlan`: `input_format` con item non riconosciuti, assente per
+///   un testo o scritto per colonne temporali; colonne di generi diversi
+///   ([`verifica_generi_date_diff`]);
 /// - `DataMapping`: valore non parsabile (`conversion.invalid_datetime`,
 ///   sulla colonna iniziale se e' quella a non leggersi) oppure intervallo
 ///   fuori scala, cioe' nanosecondi oltre `i64`
@@ -715,89 +777,60 @@ fn diff_value(start: NaiveDateTime, end: NaiveDateTime, divisor: f64, _row: usiz
 ///   `replace_or_append`.
 pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> {
     verifica_politiche(config.invalid.as_ref(), None)?;
-    validate_format_items(&config.input_format, "input_format")?;
     let start_index = column_index(batch, &config.start_column)?;
     let end_index = column_index(batch, &config.end_column)?;
+    verifica_generi_date_diff(
+        batch.column(start_index).data_type(),
+        batch.column(end_index).data_type(),
+    )?;
     let divisor = match config.unit {
         DiffUnit::Days => 86_400.0,
         DiffUnit::Hours => 3_600.0,
         DiffUnit::Minutes => 60.0,
         DiffUnit::Seconds => 1.0,
     };
-    let start_source = batch.column(start_index);
-    let end_source = batch.column(end_index);
+    let inizio = Lettore::new(batch.column(start_index), config.input_format.as_deref())?;
+    let fine = Lettore::new(batch.column(end_index), config.input_format.as_deref())?;
     let mut rejections = Vec::new();
+    let mut coppie = Vec::with_capacity(batch.num_rows());
     for row in 0..batch.num_rows() {
-        let start = scalar_as_string(start_source.as_ref(), row)?;
-        let end = scalar_as_string(end_source.as_ref(), row)?;
-        let (Some(start), Some(end)) = (start, end) else {
-            continue;
-        };
-        let parsed_start = parse(&start, &config.input_format);
-        let parsed_end = parse(&end, &config.input_format);
-        let (cause, column) = match (parsed_start, parsed_end) {
-            (None, _) => (
+        let (cause, column) = match (inizio.momento(row)?, fine.momento(row)?) {
+            (Letto::Nullo, _) | (_, Letto::Nullo) => {
+                coppie.push(None);
+                continue;
+            }
+            (Letto::Illeggibile, _) => (
                 "conversion.invalid_datetime",
                 Some(config.start_column.as_str()),
             ),
-            (_, None) => (
+            (_, Letto::Illeggibile) => (
                 "conversion.invalid_datetime",
                 Some(config.end_column.as_str()),
             ),
-            (Some(start), Some(end))
-                if end.signed_duration_since(start).num_nanoseconds().is_none() =>
-            {
-                ("conversion.datetime_range", None)
-            }
-            (Some(_), Some(_)) => continue,
+            (Letto::Valore(start), Letto::Valore(end)) => match durata(&start, &end) {
+                Some(delta) if delta.num_nanoseconds().is_some() => {
+                    coppie.push(Some(delta));
+                    continue;
+                }
+                _ => ("conversion.datetime_range", None),
+            },
         };
+        coppie.push(None);
         rejections.push(RowRejection { row, cause, column });
     }
     reject_rows(
         &rejections,
         "valori temporali rifiutati; consultare row_diagnostics",
     )?;
-    let values = if let (Some(starts), Some(ends)) = (
-        start_source.as_any().downcast_ref::<StringArray>(),
-        end_source.as_any().downcast_ref::<StringArray>(),
-    ) {
-        let input_items = compile_items(&config.input_format);
-        let mut values = Vec::with_capacity(batch.num_rows());
-        for row in 0..batch.num_rows() {
-            if starts.is_null(row) || ends.is_null(row) {
-                values.push(None);
-                continue;
-            }
-            let parsed = parse_with_items(starts.value(row), &input_items)
-                .zip(parse_with_items(ends.value(row), &input_items));
-            values.push(match parsed {
-                Some((start, end)) => Some(diff_value(start, end, divisor, row)?),
-                None => invalid("date_diff")?,
-            });
-        }
-        values
-    } else {
-        (0..batch.num_rows())
-            .map(|row| {
-                let start = scalar_as_string(start_source.as_ref(), row)?;
-                let end = scalar_as_string(end_source.as_ref(), row)?;
-                if start.is_none() || end.is_none() {
-                    return Ok(None);
-                }
-                let parsed = start
-                    .as_deref()
-                    .and_then(|value| parse(value, &config.input_format))
-                    .zip(
-                        end.as_deref()
-                            .and_then(|value| parse(value, &config.input_format)),
-                    );
-                parsed.map_or_else(
-                    || invalid("date_diff"),
-                    |(start, end)| diff_value(start, end, divisor, row).map(Some),
-                )
-            })
-            .collect::<Result<Vec<_>>>()?
-    };
+    let values = coppie
+        .iter()
+        .enumerate()
+        .map(|(row, delta)| {
+            delta
+                .map(|delta| diff_value(delta, divisor, row))
+                .transpose()
+        })
+        .collect::<Result<Vec<_>>>()?;
     replace_or_append(
         batch,
         &config.output_column,
@@ -805,6 +838,43 @@ pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> 
         true,
         Arc::new(Float64Array::from(values)),
     )
+}
+
+/// Le due colonne di `date_diff` sono dello stesso genere.
+///
+/// Entrambe istanti (`Timestamp`), entrambe date (`Date32`), o entrambe
+/// testo. Un istante e
+/// una data non hanno una differenza scritta: si rifiuta. La chiamano il
+/// kernel e l'analisi.
+///
+/// # Errors
+///
+/// `InvalidPlan` per colonne di generi diversi.
+pub fn verifica_generi_date_diff(inizio: &DataType, fine: &DataType) -> Result<()> {
+    let genere = |tipo: &DataType| match tipo {
+        DataType::Timestamp(_, _) => 1,
+        DataType::Date32 => 2,
+        _ => 0,
+    };
+    if genere(inizio) != genere(fine) {
+        return Err(PlenoraError::InvalidPlan(
+            "date_diff: start_column e end_column devono essere entrambe istanti, date o testo"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// La durata `end - start`: fra gli istanti se entrambi ne hanno uno (due
+/// `Timestamp`, due testi con offset), fra le ore locali altrimenti. `None`
+/// se uno solo ha l'istante (irraggiungibile con colonne dello stesso
+/// genere e lo stesso formato).
+fn durata(start: &Momento, end: &Momento) -> Option<TimeDelta> {
+    match (start.istante, end.istante) {
+        (Some(start), Some(end)) => Some(end.signed_duration_since(start)),
+        (None, None) => Some(end.locale.signed_duration_since(start.locale)),
+        _ => None,
+    }
 }
 
 /// Politica sulle ore locali ambigue di `table.timezone_convert`.
@@ -830,16 +900,22 @@ pub enum AmbiguousPolicy {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TimezoneConvert {
-    /// Colonna da leggere, come testo.
+    /// Colonna da leggere: una colonna temporale dal valore nativo, ogni
+    /// altra come testo.
     pub column: String,
-    /// Formato strftime di lettura; il valore letto e' ora locale di
-    /// `source_timezone`.
-    pub input_format: String,
+    /// Formato strftime di lettura di un testo; il valore letto e' ora
+    /// locale di `source_timezone`, salvo un offset letto dal formato, che
+    /// da' l'istante. Obbligatorio per un testo, rifiutato per una colonna
+    /// temporale ([`verifica_input_format`]).
+    #[serde(default, deserialize_with = "crate::mai_null")]
+    pub input_format: Option<String>,
     /// Formato strftime di scrittura, anche con campi di fuso; default
     /// `%Y-%m-%d %H:%M:%S`.
     #[serde(default = "default_output_format")]
     pub output_format: String,
-    /// Fuso dei valori letti, nome IANA (`chrono-tz`).
+    /// Fuso dei valori letti, nome IANA (`chrono-tz`); con una colonna
+    /// `Timestamp` con fuso dev'essere quel fuso
+    /// ([`verifica_fuso_sorgente`]).
     pub source_timezone: String,
     /// Fuso dei valori scritti, nome IANA (`chrono-tz`).
     pub target_timezone: String,
@@ -855,18 +931,15 @@ pub struct TimezoneConvert {
     pub ambiguous: Option<AmbiguousPolicy>,
 }
 
-fn localize(timezone: Tz, value: NaiveDateTime) -> Result<Option<chrono::DateTime<Tz>>> {
-    match timezone.from_local_datetime(&value) {
-        LocalResult::Single(value) => Ok(Some(value)),
-        LocalResult::Ambiguous(_, _) | LocalResult::None => Err(PlenoraError::Internal(
-            "prevalidazione row-scoped incoerente in timezone_convert".into(),
-        )),
-    }
-}
-
 /// Converte la colonna `column` da `source_timezone` a
 /// `target_timezone`, riscritta con `output_format` nella colonna
 /// `output_column`.
+///
+/// Un valore con un istante (colonna `Timestamp` con fuso, che dev'essere
+/// `source_timezone`; testo con un offset letto da `input_format`) si
+/// converte dall'istante; ogni altro (testo senza offset, `Date32` a
+/// mezzanotte, `Timestamp` senza fuso) e' l'ora locale di
+/// `source_timezone`.
 ///
 /// Ore ambigue/inesistenti e valori non parsabili sono sempre rifiutati con
 /// diagnostica row-scoped, senza scelta o null sintetico: `ambiguous` e
@@ -874,9 +947,11 @@ fn localize(timezone: Tz, value: NaiveDateTime) -> Result<Option<chrono::DateTim
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `source_timezone` o `target_timezone` non valida;
-///   formato con item non riconosciuti o che non si sa scrivere per un
-///   valore con fuso;
+/// - `InvalidPlan`: `source_timezone` o `target_timezone` non valida, o
+///   `source_timezone` diversa dal fuso della colonna; formato con item non
+///   riconosciuti o che non si sa scrivere per un valore con fuso;
+///   `input_format` assente per un testo o scritto per una colonna
+///   temporale;
 /// - `DataMapping`: ora ambigua (`conversion.ambiguous_local_time`) o
 ///   inesistente (`conversion.nonexistent_local_time`) o valore non
 ///   parsabile (`conversion.invalid_datetime`), con row diagnostics; senza
@@ -887,7 +962,6 @@ fn localize(timezone: Tz, value: NaiveDateTime) -> Result<Option<chrono::DateTim
 pub fn timezone_convert(batch: &RecordBatch, config: &TimezoneConvert) -> Result<RecordBatch> {
     verifica_politiche(config.invalid.as_ref(), config.ambiguous.as_ref())?;
     let index = column_index(batch, &config.column)?;
-    let source = batch.column(index);
     let source_tz: Tz = config
         .source_timezone
         .parse()
@@ -896,26 +970,40 @@ pub fn timezone_convert(batch: &RecordBatch, config: &TimezoneConvert) -> Result
         .target_timezone
         .parse()
         .map_err(|_| PlenoraError::InvalidPlan("target_timezone non valida".into()))?;
-    validate_format_items(&config.input_format, "input_format")?;
+    verifica_fuso_sorgente(batch.column(index).data_type(), source_tz)?;
+    let lettore = Lettore::new(batch.column(index), config.input_format.as_deref())?;
     let uscita = FormatoUscita::con_fuso(&config.output_format, target_tz)?;
+    // L'istante di ogni riga: quello del valore se lo ha (colonna con fuso,
+    // testo con offset), altrimenti l'ora locale in `source_timezone`, che
+    // nel cambio d'ora puo' essere ambigua o inesistente.
+    let colonna_con_fuso = lettore.fuso_della_colonna().is_some();
+    let testo = matches!(lettore, Lettore::Testo { .. });
     let mut rejections = Vec::new();
+    let mut convertiti = Vec::with_capacity(batch.num_rows());
     for row in 0..batch.num_rows() {
-        let Some(value) = scalar_as_string(source.as_ref(), row)? else {
-            continue;
+        let cause = match lettore.momento(row)? {
+            Letto::Nullo => {
+                convertiti.push(None);
+                continue;
+            }
+            Letto::Illeggibile => "conversion.invalid_datetime",
+            Letto::Valore(Momento {
+                istante: Some(noto),
+                ..
+            }) if colonna_con_fuso || testo => {
+                convertiti.push(Some(noto));
+                continue;
+            }
+            Letto::Valore(momento) => match source_tz.from_local_datetime(&momento.locale) {
+                LocalResult::Single(valore) => {
+                    convertiti.push(Some(valore.with_timezone(&chrono::Utc)));
+                    continue;
+                }
+                LocalResult::Ambiguous(_, _) => "conversion.ambiguous_local_time",
+                LocalResult::None => "conversion.nonexistent_local_time",
+            },
         };
-        let Some(parsed) = parse(&value, &config.input_format) else {
-            rejections.push(RowRejection {
-                row,
-                cause: "conversion.invalid_datetime",
-                column: Some(&config.column),
-            });
-            continue;
-        };
-        let cause = match source_tz.from_local_datetime(&parsed) {
-            LocalResult::Single(_) => continue,
-            LocalResult::Ambiguous(_, _) => "conversion.ambiguous_local_time",
-            LocalResult::None => "conversion.nonexistent_local_time",
-        };
+        convertiti.push(None);
         rejections.push(RowRejection {
             row,
             cause,
@@ -926,46 +1014,14 @@ pub fn timezone_convert(batch: &RecordBatch, config: &TimezoneConvert) -> Result
         &rejections,
         "valori temporali rifiutati; consultare row_diagnostics",
     )?;
-    let values = if let Some(column) = source.as_any().downcast_ref::<StringArray>() {
-        let input_items = compile_items(&config.input_format);
-        let mut values = Vec::with_capacity(column.len());
-        for row in 0..column.len() {
-            if column.is_null(row) {
-                values.push(None);
-                continue;
-            }
-            let Some(parsed) = parse_with_items(column.value(row), &input_items) else {
-                values.push(invalid("timezone_convert")?);
-                continue;
-            };
-            let localized = localize(source_tz, parsed)?;
-            values.push(match localized {
-                Some(value) => Some(uscita.scrivi_con_fuso(&value.with_timezone(&target_tz))?),
-                None => invalid("timezone_convert")?,
-            });
-        }
-        values
-    } else {
-        (0..batch.num_rows())
-            .map(|row| {
-                let Some(value) = scalar_as_string(source.as_ref(), row)? else {
-                    return Ok(None);
-                };
-                let Some(parsed) = parse(&value, &config.input_format) else {
-                    return invalid("timezone_convert");
-                };
-                let localized = localize(source_tz, parsed)?;
-                localized.map_or_else(
-                    || invalid("timezone_convert"),
-                    |value| {
-                        uscita
-                            .scrivi_con_fuso(&value.with_timezone(&target_tz))
-                            .map(Some)
-                    },
-                )
-            })
-            .collect::<Result<Vec<_>>>()?
-    };
+    let values = convertiti
+        .iter()
+        .map(|convertito| {
+            convertito
+                .map(|valore| uscita.scrivi_con_fuso(&valore.with_timezone(&target_tz)))
+                .transpose()
+        })
+        .collect::<Result<Vec<_>>>()?;
     replace_or_append(
         batch,
         &config.output_column,
@@ -973,6 +1029,28 @@ pub fn timezone_convert(batch: &RecordBatch, config: &TimezoneConvert) -> Result
         true,
         Arc::new(StringArray::from(values)),
     )
+}
+
+/// Con una colonna `Timestamp` con fuso il valore e' un istante in quel
+/// fuso: un `source_timezone` diverso direbbe un'altra cosa e sarebbe
+/// ignorato, quindi si rifiuta. La chiamano il kernel e l'analisi.
+///
+/// # Errors
+///
+/// `InvalidPlan` se la colonna ha un fuso diverso da `source_timezone`;
+/// `Schema` per un fuso Arrow non valido.
+pub fn verifica_fuso_sorgente(data_type: &DataType, source_timezone: Tz) -> Result<()> {
+    if let DataType::Timestamp(_, Some(fuso)) = data_type {
+        let fuso: Tz = fuso
+            .parse()
+            .map_err(|_| PlenoraError::Schema("timezone Arrow non valida".into()))?;
+        if fuso != source_timezone {
+            return Err(PlenoraError::InvalidPlan(
+                "timezone_convert: source_timezone diverso dal fuso della colonna".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1076,6 +1154,19 @@ mod tests {
     // `timezone_convert_hand_written_rome_transitions`.
     // -----------------------------------------------------------------------
 
+    /// Lettura di riferimento di un testo con un formato, indipendente da
+    /// `temporale::leggi_con_items`: `parse_from_str` di chrono, data e ora
+    /// e poi sola data a mezzanotte (l'ora scritta, offset scartato).
+    fn parse(value: &str, format: &str) -> Option<NaiveDateTime> {
+        NaiveDateTime::parse_from_str(value, format)
+            .ok()
+            .or_else(|| {
+                NaiveDate::parse_from_str(value, format)
+                    .ok()
+                    .and_then(|date| date.and_hms_opt(0, 0, 0))
+            })
+    }
+
     /// Esito per riga dell'oracolo: valore (o null) oppure rifiuto con causa
     /// e colonna.
     type RowOutcome<'a, T> = std::result::Result<Option<T>, (&'static str, Option<&'a str>)>;
@@ -1131,12 +1222,24 @@ mod tests {
         // chrono non sa scrivere un offset o un nome di fuso per un
         // NaiveDateTime: `to_string()` sul formato andava in panico.
         for formato in ["%z", "%Z", "%:z", "%#z", "%+", "%Y-%m-%d %z"] {
-            for batch in [date_testuali(&["2020-01-01"]), date_native()] {
+            // Il testo con il suo formato, la colonna Date32 senza (si legge
+            // dal valore nativo).
+            for (batch, ingresso) in [
+                (date_testuali(&["2020-01-01"]), Some("%Y-%m-%d")),
+                (date_native(), None),
+            ] {
+                // `input_format` si omette per la colonna temporale: `null`
+                // si rifiuta come ogni parametro facoltativo.
+                let con_ingresso = |mut valore: serde_json::Value| {
+                    if let Some(ingresso) = ingresso {
+                        valore["input_format"] = serde_json::json!(ingresso);
+                    }
+                    valore
+                };
                 let esito = date_format(
                     &batch,
-                    &config(serde_json::json!({
-                        "column": "d", "input_format": "%Y-%m-%d",
-                        "output_format": formato, "output_column": "o"})),
+                    &config(con_ingresso(serde_json::json!({
+                        "column": "d", "output_format": formato, "output_column": "o"}))),
                 );
                 assert!(
                     matches!(esito, Err(PlenoraError::InvalidPlan(_))),
@@ -1144,9 +1247,9 @@ mod tests {
                 );
                 let esito = date_add(
                     &batch,
-                    &config(serde_json::json!({
-                        "column": "d", "input_format": "%Y-%m-%d", "amount": 1,
-                        "unit": "days", "output_format": formato, "output_column": "o"})),
+                    &config(con_ingresso(serde_json::json!({
+                        "column": "d", "amount": 1,
+                        "unit": "days", "output_format": formato, "output_column": "o"}))),
                 );
                 assert!(
                     matches!(esito, Err(PlenoraError::InvalidPlan(_))),
@@ -1168,6 +1271,169 @@ mod tests {
             .and_then(|c| c.as_any().downcast_ref::<StringArray>())
             .expect("o");
         assert_eq!(uscita.value(0), "2020-01-01 13:00 +0100 CET");
+    }
+
+    /// Regressione (difetto 3): le operazioni su date leggono le colonne
+    /// temporali dal valore nativo, per ogni unita' e fuso. Prima un
+    /// `Timestamp` passava dal suo testo RFC 3339 (`...+00:00`), che un
+    /// formato come `%Y-%m-%d %H:%M:%S` non legge, e un `Timestamp` in
+    /// microsecondi non si leggeva affatto. Valori attesi scritti a mano.
+    #[test]
+    #[allow(clippy::too_many_lines, clippy::float_cmp)] // Valori scritti a mano, esatti.
+    fn le_operazioni_su_date_leggono_le_colonne_temporali_senza_testo() {
+        use plenora_core::arrow::array::{Date32Array, TimestampMicrosecondArray};
+        let micro = 1_706_696_430_123_456_i64; // 2024-01-31T10:20:30.123456Z
+        let colonna = |fuso: Option<&str>| -> RecordBatch {
+            let array = TimestampMicrosecondArray::from(vec![Some(micro), None])
+                .with_timezone_opt(fuso.map(ToOwned::to_owned));
+            let tipo = array.data_type().clone();
+            single_column_batch("d", Arc::new(array), tipo, true)
+        };
+        let testo = |batch: &RecordBatch| -> Vec<Option<String>> {
+            batch
+                .column_by_name("o")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .expect("o")
+                .iter()
+                .map(|valore| valore.map(ToOwned::to_owned))
+                .collect()
+        };
+        let formato = date_format(
+            &colonna(Some("Europe/Rome")),
+            &config(serde_json::json!({
+                "column": "d", "output_format": "%Y-%m-%d %H:%M:%S%.6f", "output_column": "o"})),
+        )
+        .expect("date_format nativo");
+        assert_eq!(
+            testo(&formato),
+            vec![Some("2024-01-31 11:20:30.123456".to_owned()), None]
+        );
+        let aggiunto = date_add(
+            &colonna(None),
+            &config(serde_json::json!({
+                "column": "d", "amount": 1, "unit": "days", "output_column": "o"})),
+        )
+        .expect("date_add nativo");
+        assert_eq!(
+            testo(&aggiunto),
+            vec![Some("2024-02-01 10:20:30".to_owned()), None]
+        );
+        let convertito = timezone_convert(
+            &colonna(Some("Europe/Rome")),
+            &config(serde_json::json!({
+                "column": "d", "source_timezone": "Europe/Rome",
+                "target_timezone": "UTC", "output_column": "o"})),
+        )
+        .expect("timezone_convert nativo");
+        assert_eq!(
+            testo(&convertito),
+            vec![Some("2024-01-31 10:20:30".to_owned()), None]
+        );
+        // Un source_timezone diverso dal fuso della colonna si rifiuta.
+        assert!(matches!(
+            timezone_convert(
+                &colonna(Some("Europe/Rome")),
+                &config(serde_json::json!({
+                    "column": "d", "source_timezone": "UTC",
+                    "target_timezone": "UTC", "output_column": "o"})),
+            ),
+            Err(PlenoraError::InvalidPlan(_))
+        ));
+        // input_format con una colonna temporale: rifiutato, non ignorato;
+        // senza, con un testo: obbligatorio.
+        assert!(matches!(
+            date_format(
+                &colonna(None),
+                &config(serde_json::json!({
+                    "column": "d", "input_format": "%Y-%m-%d", "output_column": "o"})),
+            ),
+            Err(PlenoraError::InvalidPlan(_))
+        ));
+        assert!(matches!(
+            date_format(
+                &date_testuali(&["2024-01-31"]),
+                &config(serde_json::json!({"column": "d", "output_column": "o"})),
+            ),
+            Err(PlenoraError::InvalidPlan(_))
+        ));
+        // date_diff: due istanti si sottraggono come istanti, due date come
+        // giorni; un istante e una data no.
+        let due = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Date32, true),
+                Field::new("b", DataType::Date32, true),
+                Field::new(
+                    "t",
+                    DataType::Timestamp(
+                        plenora_core::arrow::schema::TimeUnit::Microsecond,
+                        Some("Europe/Rome".into()),
+                    ),
+                    true,
+                ),
+            ])),
+            vec![
+                Arc::new(Date32Array::from(vec![19_753])),
+                Arc::new(Date32Array::from(vec![19_755])),
+                Arc::new(TimestampMicrosecondArray::from(vec![micro]).with_timezone("Europe/Rome")),
+            ],
+        )
+        .expect("batch");
+        let giorni = date_diff(
+            &due,
+            &config(serde_json::json!({
+                "start_column": "a", "end_column": "b", "unit": "days", "output_column": "o"})),
+        )
+        .expect("date_diff su date");
+        assert_eq!(
+            giorni
+                .column_by_name("o")
+                .and_then(|c| c.as_any().downcast_ref::<Float64Array>())
+                .expect("o")
+                .value(0),
+            2.0
+        );
+        assert!(matches!(
+            date_diff(
+                &due,
+                &config(serde_json::json!({
+                    "start_column": "a", "end_column": "t", "unit": "days", "output_column": "o"})),
+            ),
+            Err(PlenoraError::InvalidPlan(_))
+        ));
+    }
+
+    /// Regressione: con un formato che legge l'offset, `date_diff` sottrae gli
+    /// istanti. Prima l'offset si scartava: 10:00+01:00 e 10:00+02:00
+    /// davano zero ore invece di -1.
+    #[test]
+    #[allow(clippy::float_cmp)] // -1 ora e' esatto in f64.
+    fn date_diff_sottrae_gli_istanti_dei_testi_con_offset() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("s", DataType::Utf8, true),
+                Field::new("e", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["2024-01-31 10:00:00 +01:00"])),
+                Arc::new(StringArray::from(vec!["2024-01-31 10:00:00 +02:00"])),
+            ],
+        )
+        .expect("batch");
+        let uscita = date_diff(
+            &batch,
+            &config(serde_json::json!({
+                "start_column": "s", "end_column": "e", "input_format": "%Y-%m-%d %H:%M:%S %:z",
+                "unit": "hours", "output_column": "o"})),
+        )
+        .expect("date_diff");
+        assert_eq!(
+            uscita
+                .column_by_name("o")
+                .and_then(|c| c.as_any().downcast_ref::<Float64Array>())
+                .expect("o")
+                .value(0),
+            -1.0
+        );
     }
 
     #[test]
@@ -1415,9 +1681,11 @@ mod tests {
                 let Some(value) = scalar_as_string(batch.column(index).as_ref(), row)? else {
                     return Ok(Ok(None));
                 };
-                Ok(parse(&value, &config.input_format)
-                    .map(|value| Some(value.format(&config.output_format).to_string()))
-                    .ok_or(("conversion.invalid_datetime", Some(config.column.as_str()))))
+                Ok(
+                    parse(&value, config.input_format.as_deref().unwrap_or_default())
+                        .map(|value| Some(value.format(&config.output_format).to_string()))
+                        .ok_or(("conversion.invalid_datetime", Some(config.column.as_str()))),
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         replace_or_append(
@@ -1437,7 +1705,8 @@ mod tests {
                     return Ok(Ok(None));
                 };
                 let column = Some(config.column.as_str());
-                let Some(value) = parse(&value, &config.input_format) else {
+                let Some(value) = parse(&value, config.input_format.as_deref().unwrap_or_default())
+                else {
                     return Ok(Err(("conversion.invalid_datetime", column)));
                 };
                 Ok(shift(value, config.amount, &config.unit)
@@ -1471,13 +1740,15 @@ mod tests {
                 let (Some(start), Some(end)) = (start, end) else {
                     return Ok(Ok(None));
                 };
-                let Some(start) = parse(&start, &config.input_format) else {
+                let Some(start) = parse(&start, config.input_format.as_deref().unwrap_or_default())
+                else {
                     return Ok(Err((
                         "conversion.invalid_datetime",
                         Some(config.start_column.as_str()),
                     )));
                 };
-                let Some(end) = parse(&end, &config.input_format) else {
+                let Some(end) = parse(&end, config.input_format.as_deref().unwrap_or_default())
+                else {
                     return Ok(Err((
                         "conversion.invalid_datetime",
                         Some(config.end_column.as_str()),
@@ -1518,7 +1789,9 @@ mod tests {
                     return Ok(Ok(None));
                 };
                 let column = Some(config.column.as_str());
-                let Some(parsed) = parse(&value, &config.input_format) else {
+                let Some(parsed) =
+                    parse(&value, config.input_format.as_deref().unwrap_or_default())
+                else {
                     return Ok(Err(("conversion.invalid_datetime", column)));
                 };
                 Ok(match source.from_local_datetime(&parsed) {
@@ -1672,7 +1945,7 @@ mod tests {
         );
         let add = DateAdd {
             column: "ts".into(),
-            input_format: "%Y-%m-%d %H:%M:%S".into(),
+            input_format: Some("%Y-%m-%d %H:%M:%S".into()),
             output_format: "%Y-%m-%d %H:%M:%S".into(),
             amount: 1,
             unit: DateUnit::Days,
@@ -1687,7 +1960,7 @@ mod tests {
 
         let timezone = TimezoneConvert {
             column: "ts".into(),
-            input_format: "%Y-%m-%d %H:%M:%S".into(),
+            input_format: Some("%Y-%m-%d %H:%M:%S".into()),
             output_format: "%Y-%m-%d %H:%M:%S".into(),
             source_timezone: "Europe/Rome".into(),
             target_timezone: "UTC".into(),
@@ -1726,7 +1999,7 @@ mod tests {
             &DateDiff {
                 start_column: "start".into(),
                 end_column: "end".into(),
-                input_format: "%Y-%m-%d %H:%M:%S".into(),
+                input_format: Some("%Y-%m-%d %H:%M:%S".into()),
                 unit: DiffUnit::Days,
                 output_column: "out".into(),
                 invalid: None,
@@ -1739,7 +2012,7 @@ mod tests {
     fn format_config(invalid: Option<InvalidDatePolicy>) -> DateFormat {
         DateFormat {
             column: "ts".into(),
-            input_format: "%Y-%m-%d %H:%M:%S".into(),
+            input_format: Some("%Y-%m-%d %H:%M:%S".into()),
             output_format: "%d/%m/%Y %H:%M:%S".into(),
             output_column: "out".into(),
             invalid,
@@ -1782,7 +2055,7 @@ mod tests {
         {
             let invalid = None;
             let config = DateFormat {
-                input_format: "%Y-%m-%d".into(),
+                input_format: Some("%Y-%m-%d".into()),
                 ..format_config(invalid)
             };
             assert_same_output(
@@ -1832,7 +2105,7 @@ mod tests {
             for amount in [7, -30, 90_061, 0] {
                 let config = DateAdd {
                     column: "ts".into(),
-                    input_format: "%Y-%m-%d %H:%M:%S".into(),
+                    input_format: Some("%Y-%m-%d %H:%M:%S".into()),
                     output_format: "%Y-%m-%d %H:%M:%S".into(),
                     amount,
                     unit: date_unit(unit_code),
@@ -1853,7 +2126,7 @@ mod tests {
             // non parsabile resta `invalid_datetime`.
             let config = DateAdd {
                 column: "ts".into(),
-                input_format: "%Y-%m-%d %H:%M:%S".into(),
+                input_format: Some("%Y-%m-%d %H:%M:%S".into()),
                 output_format: "%Y-%m-%d %H:%M:%S".into(),
                 amount: i64::MAX,
                 unit: date_unit(unit_code),
@@ -1937,7 +2210,7 @@ mod tests {
                 let config = DateDiff {
                     start_column: "start".into(),
                     end_column: "end".into(),
-                    input_format: "%Y-%m-%d %H:%M:%S".into(),
+                    input_format: Some("%Y-%m-%d %H:%M:%S".into()),
                     unit: diff_unit(unit_code),
                     output_column: "out".into(),
                     invalid: None,
@@ -1976,7 +2249,7 @@ mod tests {
             {
                 let config = TimezoneConvert {
                     column: "ts".into(),
-                    input_format: "%Y-%m-%d %H:%M:%S".into(),
+                    input_format: Some("%Y-%m-%d %H:%M:%S".into()),
                     output_format: "%Y-%m-%d %H:%M:%S".into(),
                     source_timezone: "Europe/Rome".into(),
                     target_timezone: "UTC".into(),
@@ -2013,7 +2286,7 @@ mod tests {
         // sono ore ordinarie in America/New_York, quindi tutte valide.
         let config = TimezoneConvert {
             column: "ts".into(),
-            input_format: "%Y-%m-%d %H:%M:%S".into(),
+            input_format: Some("%Y-%m-%d %H:%M:%S".into()),
             output_format: "%Y-%m-%d %H:%M:%S".into(),
             source_timezone: "America/New_York".into(),
             target_timezone: "Asia/Tokyo".into(),
@@ -2030,7 +2303,7 @@ mod tests {
             source_timezone: "Marte/Olympus".into(),
             ..TimezoneConvert {
                 column: "ts".into(),
-                input_format: "%Y-%m-%d %H:%M:%S".into(),
+                input_format: Some("%Y-%m-%d %H:%M:%S".into()),
                 output_format: "%Y-%m-%d %H:%M:%S".into(),
                 source_timezone: String::new(),
                 target_timezone: "UTC".into(),
@@ -2053,7 +2326,7 @@ mod tests {
         let batch = utf8_batch(vec![Some(value)]);
         let config = DateAdd {
             column: "ts".into(),
-            input_format: "%Y-%m-%d %H:%M:%S".into(),
+            input_format: Some("%Y-%m-%d %H:%M:%S".into()),
             output_format: "%Y-%m-%d %H:%M:%S".into(),
             amount,
             unit,
@@ -2131,7 +2404,7 @@ mod tests {
         ]);
         let config = TimezoneConvert {
             column: "ts".into(),
-            input_format: "%Y-%m-%d %H:%M:%S".into(),
+            input_format: Some("%Y-%m-%d %H:%M:%S".into()),
             output_format: "%Y-%m-%d %H:%M:%S".into(),
             source_timezone: "Europe/Rome".into(),
             target_timezone: "UTC".into(),

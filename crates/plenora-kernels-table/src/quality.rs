@@ -21,7 +21,7 @@ use serde::Deserialize;
 use crate::aggregation::visit_key_ids_where;
 use crate::{
     column_index, reject_rows, replace_or_append, scalar_as_string, scalar_compare,
-    validate_output_name, NumericBound, RowRejection,
+    validate_output_name, NumericBound, NumeroConfig, RowRejection,
 };
 use plenora_core::{PlenoraError, Result};
 
@@ -355,14 +355,15 @@ pub struct AssertRange {
     /// `Decimal128`, `Date32` (giorni dall'epoca), `Timestamp(ms)`
     /// (millisecondi dall'epoca) o `Utf8` letto come numero.
     pub column: String,
-    /// Estremo inferiore. Si legge dal JSON come `f64`: un intero oltre
-    /// 2^53 arriva gia' arrotondato. L'analisi del contratto pretende almeno
-    /// uno fra `min` e `max`, finiti, con `min <= max`.
+    /// Estremo inferiore, letto esatto ([`NumeroConfig`]): un intero JSON
+    /// resta intero anche oltre 2^53, un decimale posizionale resta
+    /// decimale. L'analisi del contratto pretende almeno uno fra `min` e
+    /// `max`, finiti, con `min <= max` sul valore esatto.
     #[serde(default, deserialize_with = "crate::mai_null")]
-    pub min: Option<f64>,
+    pub min: Option<NumeroConfig>,
     /// Estremo superiore; come `min`.
     #[serde(default, deserialize_with = "crate::mai_null")]
-    pub max: Option<f64>,
+    pub max: Option<NumeroConfig>,
     /// Estremo `min` incluso (assente: incluso). Senza `min` non ha effetto,
     /// e l'analisi dei contratti lo rifiuta.
     #[serde(default, deserialize_with = "crate::mai_null")]
@@ -392,9 +393,13 @@ impl AssertRange {
                 "assert_range richiede min o max".into(),
             ));
         }
-        if self.min.is_some_and(|value| !value.is_finite())
-            || self.max.is_some_and(|value| !value.is_finite())
-            || self.min.zip(self.max).is_some_and(|(min, max)| min > max)
+        // `min <= max` sul valore esatto, come confronta il kernel: sui double
+        // due interi distinti oltre 2^53 sarebbero uguali.
+        if self.min.is_some_and(|value| !value.double().is_finite())
+            || self.max.is_some_and(|value| !value.double().is_finite())
+            || self.min.zip(self.max).is_some_and(|(min, max)| {
+                crate::compare_bounds(min.esatto(), max.esatto()) == Some(Ordering::Greater)
+            })
         {
             return Err(PlenoraError::InvalidPlan(
                 "estremi di assert_range non validi".into(),
@@ -414,19 +419,28 @@ impl AssertRange {
 /// true se il valore viola i limiti configurati; `compare` confronta il
 /// valore con un estremo (`None` = confronto con NaN: nessuna violazione,
 /// come i confronti IEEE storici).
-fn range_outside(config: &AssertRange, compare: &mut dyn FnMut(f64) -> Option<Ordering>) -> bool {
+fn range_outside(
+    config: &AssertRange,
+    compare: &mut dyn FnMut(NumericBound) -> Option<Ordering>,
+) -> bool {
     let below = config.min.is_some_and(|min| {
         if config.inclusive_min.unwrap_or(true) {
-            compare(min) == Some(Ordering::Less)
+            compare(min.esatto()) == Some(Ordering::Less)
         } else {
-            matches!(compare(min), Some(Ordering::Less | Ordering::Equal))
+            matches!(
+                compare(min.esatto()),
+                Some(Ordering::Less | Ordering::Equal)
+            )
         }
     });
     let above = config.max.is_some_and(|max| {
         if config.inclusive_max.unwrap_or(true) {
-            compare(max) == Some(Ordering::Greater)
+            compare(max.esatto()) == Some(Ordering::Greater)
         } else {
-            matches!(compare(max), Some(Ordering::Greater | Ordering::Equal))
+            matches!(
+                compare(max.esatto()),
+                Some(Ordering::Greater | Ordering::Equal)
+            )
         }
     });
     below || above
@@ -484,19 +498,18 @@ pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordB
             Some(true)
         } else {
             let mut esito = Ok(false);
-            let fuori = range_outside(config, &mut |bound| match scalar_compare(
-                array,
-                row,
-                NumericBound::F64(bound),
-            ) {
-                Ok(ordering) => ordering,
-                Err(error) => {
-                    if esito.is_ok() {
-                        esito = Err(error);
+            let fuori = range_outside(
+                config,
+                &mut |bound| match scalar_compare(array, row, bound) {
+                    Ok(ordering) => ordering,
+                    Err(error) => {
+                        if esito.is_ok() {
+                            esito = Err(error);
+                        }
+                        None
                     }
-                    None
-                }
-            });
+                },
+            );
             esito?;
             Some(fuori)
         };
@@ -724,8 +737,8 @@ mod tests {
         );
         let config = AssertRange {
             column: "i".into(),
-            min: Some(9_007_199_254_740_992.0),
-            max: Some(9_007_199_254_740_992.0),
+            min: Some(9_007_199_254_740_992_i64.into()),
+            max: Some(9_007_199_254_740_992_i64.into()),
             inclusive_min: None,
             inclusive_max: None,
             allow_null: true,
@@ -762,11 +775,99 @@ mod tests {
         assert!(assert_range(&uints_ok, &config_u64_min()).is_ok());
     }
 
+    /// Regressione: gli estremi si leggono esatti dal JSON. Come `f64`,
+    /// `max = 2^53 + 1` arrivava come 2^53 e rifiutava il valore 2^53 + 1,
+    /// che e' dentro; `min = 2^53 + 1` lasciava passare 2^53, che e' fuori.
+    #[test]
+    fn assert_range_legge_gli_estremi_interi_esatti_dal_json() {
+        let config = |testo: &str| -> AssertRange {
+            serde_json::from_str(testo).expect("config assert_range")
+        };
+        let ints = single_column_batch(
+            "i",
+            Arc::new(Int64Array::from(vec![Some(9_007_199_254_740_993)])),
+            DataType::Int64,
+            true,
+        );
+        let dentro = [
+            r#"{"column": "i", "max": 9007199254740993}"#,
+            r#"{"column": "i", "min": 9007199254740993}"#,
+        ];
+        for testo in dentro {
+            assert!(assert_range(&ints, &config(testo)).is_ok(), "{testo}");
+        }
+        let fuori = r#"{"column": "i", "min": 9007199254740994}"#;
+        assert!(assert_range(&ints, &config(fuori)).is_err());
+        let limite = single_column_batch(
+            "i",
+            Arc::new(Int64Array::from(vec![Some(9_007_199_254_740_992)])),
+            DataType::Int64,
+            true,
+        );
+        let sopra = r#"{"column": "i", "min": 9007199254740993}"#;
+        assert!(assert_range(&limite, &config(sopra)).is_err());
+        // u64 oltre i64::MAX: l'estremo resta u64 esatto.
+        let uints = single_column_batch(
+            "u",
+            Arc::new(UInt64Array::from(vec![Some(u64::MAX)])),
+            DataType::UInt64,
+            true,
+        );
+        let sotto_max = r#"{"column": "u", "max": 18446744073709551614}"#;
+        let al_max = r#"{"column": "u", "max": 18446744073709551615}"#;
+        assert!(assert_range(&uints, &config(sotto_max)).is_err());
+        assert!(assert_range(&uints, &config(al_max)).is_ok());
+        // Un decimale posizionale resta decimale: 0.1 non e' il double 0.1.
+        let decimali = single_column_batch(
+            "d",
+            Arc::new(
+                plenora_core::arrow::array::Decimal128Array::from(vec![Some(
+                    1_000_000_000_000_000_001_i128,
+                )])
+                .with_precision_and_scale(38, 19)
+                .expect("decimal"),
+            ),
+            DataType::Decimal128(38, 19),
+            true,
+        );
+        let un_decimo = r#"{"column": "d", "max": 0.1}"#;
+        assert!(assert_range(&decimali, &config(un_decimo)).is_err());
+        // Esponente (revisione Codex): `0.0000001` riscritto da serde_json come
+        // `1e-7` resta un decimale esatto, e il Decimal128 1e-7 e' dentro.
+        let piccolo = single_column_batch(
+            "d",
+            Arc::new(
+                plenora_core::arrow::array::Decimal128Array::from(vec![Some(1_i128)])
+                    .with_precision_and_scale(10, 7)
+                    .expect("decimal"),
+            ),
+            DataType::Decimal128(10, 7),
+            true,
+        );
+        for testo in [
+            r#"{"column": "d", "max": 0.0000001}"#,
+            r#"{"column": "d", "max": 1e-7, "min": 1e-7}"#,
+        ] {
+            assert!(assert_range(&piccolo, &config(testo)).is_ok(), "{testo}");
+        }
+        // Intero oltre u64: arriva come double 1e20, riletto esatto.
+        let interi = single_column_batch(
+            "i",
+            Arc::new(Int64Array::from(vec![Some(i64::MAX)])),
+            DataType::Int64,
+            true,
+        );
+        let oltre = r#"{"column": "i", "min": 100000000000000000000}"#;
+        assert!(assert_range(&interi, &config(oltre)).is_err());
+        let sotto = r#"{"column": "i", "max": 100000000000000000000, "min": 1.5e3}"#;
+        assert!(assert_range(&interi, &config(sotto)).is_ok());
+    }
+
     fn config_u64() -> AssertRange {
         AssertRange {
             column: "u".into(),
             min: None,
-            max: Some(9_007_199_254_740_992.0),
+            max: Some(9_007_199_254_740_992_i64.into()),
             inclusive_min: None,
             inclusive_max: None,
             allow_null: false,
@@ -776,7 +877,7 @@ mod tests {
     fn config_u64_min() -> AssertRange {
         AssertRange {
             column: "u".into(),
-            min: Some(9.0),
+            min: Some(9_i64.into()),
             max: None,
             inclusive_min: None,
             inclusive_max: None,

@@ -66,9 +66,13 @@ In esecuzione:
 
 ### Limiti e deviazioni
 
-`min` e `max` si leggono dal JSON come `f64`: un estremo intero oltre `2^53`
-(`9007199254740993`) diventa il double più vicino prima di ogni confronto.
-Il confronto con la cella resta esatto, ma contro l'estremo arrotondato.
+`min` e `max` si leggono esatti dal JSON: un intero resta intero anche
+oltre `2^53` (`9007199254740993` è quel numero, non il double più vicino),
+un decimale resta decimale, anche con esponente (`0.1` è un decimo, `1e-7`
+un decimo di milionesimo, non il double più vicino). Un numero che il
+double non rappresenta come è scritto (`9007199254740993.0`, un intero
+oltre `u64` non riletto esatto) si rifiuta nel piano
+([README, «Letterali JSON oltre `u64`»](../README.md#letterali-json-oltre-u64)).
 Il testo non numerico in una colonna `utf8` fallisce solo in esecuzione
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
 

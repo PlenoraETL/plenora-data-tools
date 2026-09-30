@@ -12,10 +12,12 @@ use serde::Deserialize;
 
 use plenora_core::{PlenoraError, Result};
 
-use crate::float64_source::Float64Source;
+use crate::float64_source::{
+    prendi_righe, varianza_intera, ColonnaEsatta, ColonnaIntera, Float64Source, SommaEsatta,
+};
 use crate::{
-    column_index, ordine_esatto, replace_or_append, scalar_as_numero, scalar_as_string,
-    select_rows, validate_output_name, NumericBound,
+    column_index, ordine_esatto, replace_or_append, scalar_as_numero, select_rows,
+    validate_output_name, NumericBound,
 };
 
 use super::grouping::{
@@ -46,32 +48,39 @@ pub(super) fn conteggio_gruppo(righe: usize) -> Result<i64> {
 /// Funzione di un'aggregazione di `table.aggregate` (in JSON in
 /// minuscolo: `"count"`, `"sum"`, ...).
 ///
-/// Le funzioni numeriche leggono la cella come `f64` arrotondando (interi
-/// oltre `2^53`, `Decimal128`, testo numerico) e rendono `Float64`
-/// nullabile: null con `skip_null` falso e un null nel gruppo, o senza
-/// valori.
+/// Le funzioni numeriche rendono null con `skip_null` falso e un null nel
+/// gruppo, o senza valori. Sul dominio intero (`Int64`, `UInt64`, `Date32`,
+/// `Timestamp(ms)`) `sum` e' esatta (`i128`) ed esce `Int64`, e media,
+/// varianza e deviazione partono dalla somma esatta; `min` e `max` su
+/// interi e `Decimal128` scelgono la cella col confronto esatto e tengono il
+/// tipo d'ingresso. Altrove la cella si legge come `f64`, arrotondando
+/// (`Decimal128`, testo numerico), e l'uscita e' `Float64`.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AggFunction {
     /// Celle non nulle del gruppo (null logico dei dizionari compreso),
     /// `Int64` non nullabile; qualunque tipo di colonna.
     Count,
-    /// Somma in ordine d'ingresso (da `-0.0`); un NaN la rende NaN.
+    /// Somma: esatta ed `Int64` sul dominio intero (errore oltre `i64`),
+    /// altrimenti `Float64` in ordine d'ingresso (da `-0.0`), e un NaN la
+    /// rende NaN.
     Sum,
     /// Sinonimo di [`AggFunction::Mean`]; il nome d'uscita di default usa
     /// `mean`.
     Avg,
-    /// Somma divisa per il numero di valori.
+    /// Somma divisa per il numero di valori (`Float64`).
     Mean,
-    /// Minimo con `f64::min`: i NaN si ignorano salvo che siano tutti NaN.
+    /// Minimo: sul dominio intero e su `Decimal128` la cella minima, nel
+    /// tipo d'ingresso; altrimenti `f64::min` (`Float64`), e i NaN si
+    /// ignorano salvo che siano tutti NaN.
     Min,
-    /// Massimo con `f64::max`: i NaN si ignorano salvo che siano tutti NaN.
+    /// Massimo, come [`AggFunction::Min`].
     Max,
-    /// Testo della cella nella prima riga del gruppo (null compreso),
-    /// `Utf8`.
+    /// La cella nella prima riga del gruppo (null compreso), nel tipo
+    /// d'ingresso.
     First,
-    /// Testo della cella nell'ultima riga del gruppo (null compreso),
-    /// `Utf8`.
+    /// La cella nell'ultima riga del gruppo (null compreso), nel tipo
+    /// d'ingresso.
     Last,
     /// Testi delle celle in ordine d'ingresso uniti da `separator`, `Utf8`.
     Concat,
@@ -192,83 +201,6 @@ impl Aggregation {
     }
 }
 
-impl Aggregation {
-    /// Nome della funzione nel nome d'uscita `<column>_<funzione>`.
-    #[must_use]
-    pub const fn nome_funzione(&self) -> &'static str {
-        match self.function {
-            AggFunction::Count => "count",
-            AggFunction::Sum => "sum",
-            AggFunction::Avg | AggFunction::Mean => "mean",
-            AggFunction::Min => "min",
-            AggFunction::Max => "max",
-            AggFunction::First => "first",
-            AggFunction::Last => "last",
-            AggFunction::Concat => "concat",
-            AggFunction::Nunique => "nunique",
-            AggFunction::Variance => "variance",
-            AggFunction::Stddev => "stddev",
-            AggFunction::Quantile => "quantile",
-        }
-    }
-}
-
-impl Aggregate {
-    /// Nomi delle colonne aggregate, nell'ordine d'uscita: `alias`, o
-    /// `column`, o `<column>_<funzione>` se `column` compare in piu'
-    /// aggregazioni; `count` senza aggregazioni.
-    ///
-    /// Un nome ripetuto, o uguale a una colonna di `group_by`, farebbe
-    /// sparire in silenzio la colonna scritta prima (l'uscita tiene l'ultima
-    /// con quel nome): si rifiuta. La chiamano il kernel (anche per la
-    /// variante spilled, che lo chiama per partizione) e l'analisi dei
-    /// contratti.
-    ///
-    /// # Errors
-    ///
-    /// `InvalidPlan` per un nome d'uscita ripetuto o uguale a una chiave.
-    pub fn nomi_uscita(&self) -> Result<Vec<String>> {
-        let mut ripetizioni: HashMap<&str, usize> = HashMap::new();
-        for aggregation in &self.aggregations {
-            *ripetizioni.entry(aggregation.column.as_str()).or_insert(0) += 1;
-        }
-        let nomi: Vec<String> = if self.aggregations.is_empty() {
-            vec!["count".to_owned()]
-        } else {
-            self.aggregations
-                .iter()
-                .map(|aggregation| {
-                    if !aggregation.alias.is_empty() {
-                        aggregation.alias.clone()
-                    } else if ripetizioni
-                        .get(aggregation.column.as_str())
-                        .is_some_and(|volte| *volte > 1)
-                    {
-                        format!("{}_{}", aggregation.column, aggregation.nome_funzione())
-                    } else {
-                        aggregation.column.clone()
-                    }
-                })
-                .collect()
-        };
-        let mut visti = std::collections::HashSet::new();
-        for nome in &nomi {
-            if self.group_by.contains(nome) {
-                return Err(PlenoraError::InvalidPlan(format!(
-                    "nome d'uscita {nome} uguale a una colonna di group_by: la chiave \
-                     sparirebbe"
-                )));
-            }
-            if !visti.insert(nome.as_str()) {
-                return Err(PlenoraError::InvalidPlan(format!(
-                    "nome d'uscita {nome} ripetuto: una aggregazione sparirebbe"
-                )));
-            }
-        }
-        Ok(nomi)
-    }
-}
-
 /// Config di `table.aggregate`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -279,6 +211,88 @@ pub struct Aggregate {
     /// produce una colonna `count` con le righe di ogni gruppo.
     #[serde(default)]
     pub aggregations: Vec<Aggregation>,
+}
+
+impl AggFunction {
+    /// Il nome della funzione nei nomi d'uscita di default
+    /// (`<column>_<funzione>`): `avg` vale `mean`.
+    #[must_use]
+    pub const fn nome(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::Sum => "sum",
+            Self::Avg | Self::Mean => "mean",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::First => "first",
+            Self::Last => "last",
+            Self::Concat => "concat",
+            Self::Nunique => "nunique",
+            Self::Variance => "variance",
+            Self::Stddev => "stddev",
+            Self::Quantile => "quantile",
+        }
+    }
+}
+
+impl Aggregate {
+    /// I nomi delle colonne aggregate, nell'ordine di `aggregations` (senza
+    /// aggregazioni, `count`): `alias`, o `column`, o `<column>_<funzione>`
+    /// se `column` compare in piu' aggregazioni.
+    ///
+    /// Autorita' unica per il kernel e l'analisi: ogni nome e' valido, e le
+    /// chiavi di `group_by` con i nomi aggregati sono **tutti distinti**
+    /// ([`crate::verifica_nomi_distinti`]). Prima due aggregazioni con lo
+    /// stesso nome, o un alias uguale a una chiave, sostituivano la colonna
+    /// precedente e una spariva senza errore.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan`: un nome non valido (`validate_output_name`), uguale a
+    /// una chiave di `group_by` o ripetuto (anche fra le chiavi).
+    pub fn nomi_uscita(&self) -> Result<Vec<String>> {
+        let mut occorrenze: HashMap<&str, usize> = HashMap::new();
+        for aggregation in &self.aggregations {
+            *occorrenze.entry(aggregation.column.as_str()).or_insert(0) += 1;
+        }
+        let nomi = if self.aggregations.is_empty() {
+            vec!["count".to_owned()]
+        } else {
+            self.aggregations
+                .iter()
+                .map(|aggregation| {
+                    if !aggregation.alias.is_empty() {
+                        aggregation.alias.clone()
+                    } else if occorrenze
+                        .get(aggregation.column.as_str())
+                        .is_some_and(|volte| *volte > 1)
+                    {
+                        format!("{}_{}", aggregation.column, aggregation.function.nome())
+                    } else {
+                        aggregation.column.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        for nome in &nomi {
+            validate_output_name(nome)?;
+        }
+        // Due messaggi distinti per i due casi, senza nomi: la chiave che
+        // sparirebbe e l'aggregazione che sparirebbe.
+        if nomi.iter().any(|nome| self.group_by.contains(nome)) {
+            return Err(PlenoraError::InvalidPlan(
+                "aggregate: nome d'uscita uguale a una colonna di group_by: la chiave                  sparirebbe"
+                    .into(),
+            ));
+        }
+        if crate::verifica_nomi_distinti("aggregate", nomi.iter().map(String::as_str)).is_err() {
+            return Err(PlenoraError::InvalidPlan(
+                "aggregate: nome d'uscita ripetuto: una aggregazione sparirebbe".into(),
+            ));
+        }
+        crate::verifica_nomi_distinti("aggregate", self.group_by.iter().map(String::as_str))?;
+        Ok(nomi)
+    }
 }
 
 /// Riduzione Sum/Avg/Min/Max/Variance/Stddev di un gruppo senza materializzarlo.
@@ -473,6 +487,133 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
     }))
 }
 
+/// Tipo d'uscita di un'aggregazione sulla colonna di tipo `data_type`:
+/// l'autorita' di kernel e analisi.
+#[must_use]
+pub fn tipo_uscita(function: AggFunction, data_type: &DataType) -> DataType {
+    match function {
+        AggFunction::Count | AggFunction::Nunique => DataType::Int64,
+        AggFunction::Concat => DataType::Utf8,
+        AggFunction::First | AggFunction::Last => data_type.clone(),
+        AggFunction::Sum => crate::float64_source::tipo_somma(data_type),
+        AggFunction::Min | AggFunction::Max => crate::float64_source::tipo_estremo(data_type),
+        AggFunction::Avg
+        | AggFunction::Mean
+        | AggFunction::Variance
+        | AggFunction::Stddev
+        | AggFunction::Quantile => DataType::Float64,
+    }
+}
+
+/// I valori interi esatti di un gruppo; `None` se `skip_null` e' falso e il
+/// gruppo ha un null (il risultato e' null). Con `distinct` i valori
+/// distinti, in ordine crescente.
+fn valori_interi(
+    interi: &ColonnaIntera<'_>,
+    rows: &[usize],
+    aggregation: &Aggregation,
+) -> Option<Vec<i128>> {
+    let mut letti = Vec::with_capacity(rows.len());
+    for row in rows {
+        match interi.value(*row) {
+            Some(numero) => letti.push(numero),
+            None if !aggregation.skip_null() => return None,
+            None => {}
+        }
+    }
+    if aggregation.distinct() {
+        letti.sort_unstable();
+        letti.dedup();
+    }
+    Some(letti)
+}
+
+/// Somma esatta di un gruppo del dominio intero, come `Int64`.
+///
+/// # Errors
+///
+/// `DataMapping` se la somma esce dalla gamma di `i64`.
+fn somma_intera(
+    interi: &ColonnaIntera<'_>,
+    rows: &[usize],
+    aggregation: &Aggregation,
+) -> Result<Option<i64>> {
+    let Some(valori) = valori_interi(interi, rows, aggregation) else {
+        return Ok(None);
+    };
+    if valori.is_empty() {
+        return Ok(None);
+    }
+    let mut somma = SommaEsatta::default();
+    for valore in valori {
+        somma.aggiungi(valore)?;
+    }
+    somma.in_int64().map(Some)
+}
+
+/// Media, varianza e deviazione di un gruppo del dominio intero: la media
+/// dalla somma esatta, la varianza dagli scarti esatti
+/// ([`varianza_intera`]), arrotondate una volta al double.
+///
+/// # Errors
+///
+/// `DataMapping` se la somma esce da `i128`; `ResourceLimit` per dimensioni
+/// non rappresentabili.
+fn statistica_intera(
+    interi: &ColonnaIntera<'_>,
+    rows: &[usize],
+    aggregation: &Aggregation,
+) -> Result<Option<f64>> {
+    let Some(valori) = valori_interi(interi, rows, aggregation) else {
+        return Ok(None);
+    };
+    let mut somma = SommaEsatta::default();
+    for valore in &valori {
+        somma.aggiungi(*valore)?;
+    }
+    let Some(media) = somma.media() else {
+        return Ok(None);
+    };
+    match aggregation.function {
+        AggFunction::Avg | AggFunction::Mean => Ok(Some(media)),
+        AggFunction::Variance | AggFunction::Stddev => {
+            // Scarti esatti dalla media esatta (`varianza_intera`).
+            Ok(
+                varianza_intera(&valori, aggregation.ddof())?.map(|variance| {
+                    if matches!(aggregation.function, AggFunction::Stddev) {
+                        variance.sqrt()
+                    } else {
+                        variance
+                    }
+                }),
+            )
+        }
+        _ => Err(PlenoraError::Internal(
+            "funzione fuori dal percorso delle statistiche intere".into(),
+        )),
+    }
+}
+
+/// La riga dell'estremo (`min`, `max`) di un gruppo sul valore esatto
+/// ([`ColonnaEsatta`]), a pari valore la prima; `None` se il gruppo non ha
+/// valori o se `skip_null` e' falso e ha un null.
+fn riga_estremo(
+    colonna: &ColonnaEsatta<'_>,
+    rows: &[usize],
+    aggregation: &Aggregation,
+) -> Option<usize> {
+    let massimo = matches!(aggregation.function, AggFunction::Max);
+    let mut estremo = None;
+    for row in rows {
+        match colonna.value(*row) {
+            Some(valore) => estremo = ColonnaEsatta::aggiorna(estremo, *row, valore, massimo),
+            None if !aggregation.skip_null() => return None,
+            None => {}
+        }
+    }
+    estremo.map(|(riga, _)| riga)
+}
+
 /// `table.aggregate`: una riga per chiave di gruppo distinta di `group_by`,
 /// con le aggregazioni di `config.aggregations` (vuoto: solo la colonna
 /// `count` con le righe di ogni gruppo).
@@ -481,28 +622,33 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
 /// null e' un gruppo; `-0.0` e `0.0` distinti; un NaN solo). I gruppi escono
 /// nell'ordine lessicografico delle loro chiavi testuali (`row_key`): null
 /// prima, poi la stringa `<lunghezza>:<testo>` byte per byte, colonna per
-/// colonna. Le righe di un gruppo si riducono in ordine d'ingresso. Un nome
-/// d'uscita ripetuto o uguale a una chiave si rifiuta
-/// ([`Aggregate::nomi_uscita`]). Con `Limits::default()`:
-/// [`aggregate_con_limiti`] con i limiti del chiamante.
+/// colonna. Le righe di un gruppo si riducono in ordine d'ingresso. Le
+/// chiavi e le colonne aggregate hanno nomi tutti distinti
+/// ([`Aggregate::nomi_uscita`]): un nome ripetuto si rifiuta. Con
+/// `Limits::default()`: [`aggregate_con_limiti`] con i limiti del chiamante.
 ///
-/// Un intero oltre `2^53` **non** e' un errore nelle aggregazioni a
-/// risultato `Float64`: li' la conversione arrotonda, perche' il double e'
-/// il tipo del risultato.
+/// Tipi d'uscita: [`tipo_uscita`]. Sul dominio intero `sum` e' esatta ed
+/// esce `Int64`, `min`/`max` su interi e decimali e `first`/`last` tengono
+/// il tipo d'ingresso. Nelle aggregazioni a risultato `Float64` (media,
+/// varianza, quantile; ogni funzione su `Decimal128` e testo) un valore
+/// oltre la precisione del double arrotonda, perche' il double e' il tipo
+/// del risultato; la media sul dominio intero parte dalla somma esatta.
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: `group_by` vuoto; un parametro scritto per una funzione
 ///   che non lo usa ([`Aggregation::verifica_parametri`]); funzione
 ///   `quantile` senza il parametro `quantile` o con valore fuori `[0, 1]`;
-///   nome d'uscita non valido (`validate_output_name`);
+///   nome d'uscita non valido (`validate_output_name`) o ripetuto, anche
+///   uguale a una chiave di `group_by` ([`Aggregate::nomi_uscita`]);
 /// - `ResourceLimit`: conteggi e dimensioni di gruppo non rappresentabili
 ///   (`i64`/`f64`), indice di riga oltre `u32::MAX` (`select_rows`);
 /// - `Schema`: una colonna di `group_by` o delle aggregazioni assente dallo
 ///   schema; gli errori di `scalar_as_string` (chiavi, `first`, `last`,
 ///   `concat`, `nunique`) e della lettura numerica (testo non numerico,
 ///   tipo non numerico);
-/// - `DataMapping` (`arrow error: …`): errori Arrow di `select_rows` e `replace_or_append`;
+/// - `DataMapping`: una somma intera oltre la gamma di `Int64`; errori
+///   Arrow (`arrow error: …`) di `select_rows`, `take` e `replace_or_append`;
 /// - `Internal`: invarianti interne del raggruppamento.
 pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch> {
     aggregate_con_limiti(batch, config, &crate::Limits::default())
@@ -549,6 +695,7 @@ pub fn aggregate_con_limiti(
             ));
         }
     }
+    // I nomi dopo i parametri, come nell'analisi.
     let nomi = config.nomi_uscita()?;
     // Raggruppamento: fast path nativo per colonna singola
     // Int64/UInt64/Utf8 (nessuna stringa di chiave), chiavi binarie con la
@@ -640,7 +787,9 @@ pub fn aggregate_con_limiti(
     }
     for (aggregation, name) in config.aggregations.iter().zip(&nomi) {
         let index = column_index(batch, &aggregation.column)?;
-        validate_output_name(name)?;
+        if matches!(aggregation.function, AggFunction::Sum) {
+            crate::float64_source::verifica_somma(batch.column(index).data_type())?;
+        }
         match aggregation.function {
             AggFunction::Count => {
                 let column = batch.column(index);
@@ -692,22 +841,28 @@ pub fn aggregate_con_limiti(
                 )?;
             }
             AggFunction::First | AggFunction::Last => {
+                // La cella com'e', nel tipo d'ingresso: il testo di un
+                // istante o di un decimale non e' il valore. I tipi ammessi
+                // restano quelli leggibili come testo, come nell'analisi.
                 let column = batch.column(index);
+                crate::validate_text_convertible(column.data_type(), &aggregation.column)?;
                 let first = matches!(aggregation.function, AggFunction::First);
-                let values = map_groups(&groups, parallel, |rows| {
-                    let row = if first {
-                        rows[0]
-                    } else {
-                        *rows.last().unwrap_or(&rows[0])
-                    };
-                    scalar_as_string(column.as_ref(), row)
-                })?;
+                let righe = groups
+                    .iter()
+                    .map(|rows| {
+                        Some(if first {
+                            rows[0]
+                        } else {
+                            *rows.last().unwrap_or(&rows[0])
+                        })
+                    })
+                    .collect::<Vec<_>>();
                 result = replace_or_append(
                     &result,
                     name,
-                    DataType::Utf8,
+                    column.data_type().clone(),
                     true,
-                    Arc::new(StringArray::from(values)),
+                    prendi_righe(column, &righe)?,
                 )?;
             }
             AggFunction::Concat => {
@@ -744,6 +899,55 @@ pub fn aggregate_con_limiti(
                     DataType::Utf8,
                     true,
                     Arc::new(StringArray::from(values)),
+                )?;
+            }
+            AggFunction::Sum if ColonnaIntera::new(batch.column(index)).is_some() => {
+                let column = batch.column(index);
+                let interi = ColonnaIntera::new(column)
+                    .ok_or_else(|| PlenoraError::Internal("colonna intera scomparsa".into()))?;
+                let values = map_groups(&groups, parallel, |rows| {
+                    somma_intera(&interi, rows, aggregation)
+                })?;
+                result = replace_or_append(
+                    &result,
+                    name,
+                    DataType::Int64,
+                    true,
+                    Arc::new(Int64Array::from(values)),
+                )?;
+            }
+            AggFunction::Avg | AggFunction::Mean | AggFunction::Variance | AggFunction::Stddev
+                if ColonnaIntera::new(batch.column(index)).is_some() =>
+            {
+                let column = batch.column(index);
+                let interi = ColonnaIntera::new(column)
+                    .ok_or_else(|| PlenoraError::Internal("colonna intera scomparsa".into()))?;
+                let values = map_groups(&groups, parallel, |rows| {
+                    statistica_intera(&interi, rows, aggregation)
+                })?;
+                result = replace_or_append(
+                    &result,
+                    name,
+                    DataType::Float64,
+                    true,
+                    Arc::new(Float64Array::from(values)),
+                )?;
+            }
+            AggFunction::Min | AggFunction::Max
+                if ColonnaEsatta::new(batch.column(index)).is_some() =>
+            {
+                let column = batch.column(index);
+                let esatta = ColonnaEsatta::new(column)
+                    .ok_or_else(|| PlenoraError::Internal("colonna esatta scomparsa".into()))?;
+                let righe = map_groups(&groups, parallel, |rows| {
+                    Ok(riga_estremo(&esatta, rows, aggregation))
+                })?;
+                result = replace_or_append(
+                    &result,
+                    name,
+                    column.data_type().clone(),
+                    true,
+                    prendi_righe(column, &righe)?,
                 )?;
             }
             _ => {

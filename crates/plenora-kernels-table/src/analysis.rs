@@ -17,7 +17,7 @@ use crate::hashing::FastHasher;
 use crate::Limits;
 use crate::{
     column_index, compare_bounds, replace_or_append, scalar_as_f64_rounded, scalar_as_numero,
-    scalar_as_string, select_rows, validate_output_name, NumericBound,
+    scalar_as_string, select_rows, validate_output_name, NumericBound, NumeroConfig,
 };
 use plenora_core::diagnostics::{
     RowDiagnosticExample, RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
@@ -213,8 +213,9 @@ pub enum Bins {
     /// Classi di uguale ampiezza fra minimo e massimo dei valori finiti,
     /// da 2 a 100.
     Count(usize),
-    /// Bordi espliciti, da 3 a 101, strettamente crescenti.
-    Edges(Vec<f64>),
+    /// Bordi espliciti, da 3 a 101, strettamente crescenti, letti esatti
+    /// ([`NumeroConfig`]): un bordo intero oltre 2^53 resta quello scritto.
+    Edges(Vec<NumeroConfig>),
 }
 
 const fn default_bins() -> Bins {
@@ -357,20 +358,32 @@ pub fn bin_con_limiti(batch: &RecordBatch, config: &Bin, limits: &Limits) -> Res
         .iter()
         .map(|numero| numero.map(|(valore, _)| valore))
         .collect::<Vec<_>>();
-    let edges = match &config.bins {
-        Bins::Count(count) => equal_width_edges(&numeric, *count)?,
+    // Bordi come valori esatti (per decidere la classe) e come testi (per le
+    // etichette): con `Count` sono i double calcolati, con `Edges` i
+    // letterali del piano, che un double arrotonderebbe oltre 2^53.
+    let (edges, testi_bordi): (Vec<NumericBound>, Vec<String>) = match &config.bins {
+        Bins::Count(count) => equal_width_edges(&numeric, *count)?
+            .into_iter()
+            .map(|bordo| (NumericBound::F64(bordo), bordo.to_string()))
+            .unzip(),
         Bins::Edges(edges) => {
             if edges.len() < 3
                 || edges.len() > 101
-                || edges
-                    .windows(2)
-                    .any(|v| !matches!(v[0].partial_cmp(&v[1]), Some(std::cmp::Ordering::Less)))
+                || edges.windows(2).any(|v| {
+                    !matches!(
+                        compare_bounds(v[0].esatto(), v[1].esatto()),
+                        Some(Ordering::Less)
+                    )
+                })
             {
                 return Err(PlenoraError::InvalidPlan(
                     "bordi bin non strettamente crescenti".into(),
                 ));
             }
-            edges.clone()
+            edges
+                .iter()
+                .map(|bordo| (bordo.esatto(), bordo.testo()))
+                .unzip()
         }
     };
     let count = edges.len() - 1;
@@ -391,7 +404,7 @@ pub fn bin_con_limiti(batch: &RecordBatch, config: &Bin, limits: &Limits) -> Res
     // Etichette una volta per classe, non una `format!` per riga: stesso
     // testo (`Display` dei due bordi) di quando si formattava per riga.
     let etichette = config.labels.clone().unwrap_or_else(|| {
-        edges
+        testi_bordi
             .windows(2)
             .map(|bordi| format!("({}, {}]", bordi[0], bordi[1]))
             .collect()
@@ -405,7 +418,7 @@ pub fn bin_con_limiti(batch: &RecordBatch, config: &Bin, limits: &Limits) -> Res
     // allora resta la scansione di ogni classe.
     let crescenti = edges
         .windows(2)
-        .all(|bordi| matches!(bordi[0].partial_cmp(&bordi[1]), Some(Ordering::Less)));
+        .all(|bordi| matches!(compare_bounds(bordi[0], bordi[1]), Some(Ordering::Less)));
     let mut values = StringBuilder::with_capacity(celle.len(), 0);
     for numero in celle {
         let classe = numero.and_then(|(_, esatto)| {
@@ -476,11 +489,11 @@ fn celle_numeriche(source: &ArrayRef) -> Result<Vec<Option<(f64, NumericBound)>>
 /// estremi aperti). E' la definizione, valida su bordi qualsiasi.
 fn classe_per_scansione(
     esatto: NumericBound,
-    edges: &[f64],
+    edges: &[NumericBound],
     esterni_aperti: bool,
 ) -> Option<usize> {
     let count = edges.len().saturating_sub(1);
-    let rispetto = |bordo: f64| compare_bounds(esatto, NumericBound::F64(bordo));
+    let rispetto = |bordo: NumericBound| compare_bounds(esatto, bordo);
     (0..count).find(|index| {
         let primo = *index == 0;
         let ultimo = *index + 1 == count;
@@ -512,8 +525,12 @@ fn classe_per_scansione(
 ///
 /// `Indefinita` se un confronto non e' definito (`esatto` NaN) o se non ci
 /// sono bordi: allora decide la scansione.
-fn classe_per_bisezione(esatto: NumericBound, edges: &[f64], esterni_aperti: bool) -> Bisezione {
-    let rispetto = |bordo: f64| compare_bounds(esatto, NumericBound::F64(bordo));
+fn classe_per_bisezione(
+    esatto: NumericBound,
+    edges: &[NumericBound],
+    esterni_aperti: bool,
+) -> Bisezione {
+    let rispetto = |bordo: NumericBound| compare_bounds(esatto, bordo);
     let (Some(count), Some(primo), Some(ultimo)) = (
         edges.len().checked_sub(1),
         edges.first().and_then(|bordo| rispetto(*bordo)),
@@ -1464,13 +1481,16 @@ pub fn flatten_json(
 pub enum Stat {
     /// Numero di valori non nulli.
     Count,
-    /// Minimo (ordinamento `total_cmp`).
+    /// Minimo: su interi e `Decimal128` la cella minima nel tipo
+    /// d'ingresso, altrimenti il primo in ordinamento `total_cmp`.
     Min,
-    /// Massimo (ordinamento `total_cmp`).
+    /// Massimo, come [`Stat::Min`].
     Max,
-    /// Somma in `f64`, nell'ordine delle righe.
+    /// Somma: esatta ed `Int64` sul dominio intero (errore oltre `i64`),
+    /// altrimenti in `f64` nell'ordine delle righe.
     Sum,
-    /// Somma diviso numero di valori.
+    /// Somma diviso numero di valori (dalla somma esatta sul dominio
+    /// intero).
     Mean,
     /// Quantile 0,5 con interpolazione lineare.
     Median,
@@ -1483,6 +1503,72 @@ pub enum Stat {
     Q25,
     /// Quantile 0,75 con interpolazione lineare.
     Q75,
+}
+
+impl Stat {
+    /// Il suffisso del nome d'uscita (`<prefisso><suffisso>`).
+    #[must_use]
+    pub const fn suffisso(&self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Sum => "sum",
+            Self::Mean => "mean",
+            Self::Median => "median",
+            Self::Std => "std",
+            Self::Var => "var",
+            Self::Q25 => "q25",
+            Self::Q75 => "q75",
+        }
+    }
+
+    /// Tipo della colonna d'uscita sulla colonna di tipo `data_type`:
+    /// autorita' di kernel e analisi. `sum` e' `Int64` sul dominio intero,
+    /// `min`/`max` tengono il tipo d'ingresso su interi e decimali, il resto
+    /// e' `Float64`.
+    #[must_use]
+    pub fn tipo_uscita(&self, data_type: &DataType) -> DataType {
+        match self {
+            Self::Sum => crate::float64_source::tipo_somma(data_type),
+            Self::Min | Self::Max => crate::float64_source::tipo_estremo(data_type),
+            Self::Count
+            | Self::Mean
+            | Self::Median
+            | Self::Std
+            | Self::Var
+            | Self::Q25
+            | Self::Q75 => DataType::Float64,
+        }
+    }
+}
+
+impl Statistics {
+    /// I nomi d'uscita, uno per statistica: `<prefisso><suffisso>`, con
+    /// prefisso `<column>_` se `output_prefix` e' vuoto. Validi e distinti
+    /// (una statistica ripetuta si rifiuta, come ogni coppia di colonne
+    /// prodotte insieme). La chiamano il kernel e l'analisi.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per un nome non valido o ripetuto.
+    pub fn nomi_uscita(&self) -> Result<Vec<String>> {
+        let prefisso = if self.output_prefix.is_empty() {
+            format!("{}_", self.column)
+        } else {
+            self.output_prefix.clone()
+        };
+        let nomi = self
+            .stats
+            .iter()
+            .map(|stat| format!("{prefisso}{}", stat.suffisso()))
+            .collect::<Vec<_>>();
+        for nome in &nomi {
+            validate_output_name(nome)?;
+        }
+        crate::verifica_nomi_distinti("statistics", nomi.iter().map(String::as_str))?;
+        Ok(nomi)
+    }
 }
 
 fn default_stats() -> Vec<Stat> {
@@ -1571,7 +1657,7 @@ fn quantile(sorted: &[f64], q: f64) -> Option<f64> {
 ///
 /// Replica bit per bit il percorso generico: stesse operazioni f64 nello
 /// stesso ordine.
-fn group_statistics(values: &[f64], stats: &[Stat]) -> Vec<Option<f64>> {
+fn group_statistics(values: &[f64], stats: &[Stat], media_esatta: Option<f64>) -> Vec<Option<f64>> {
     let count = values.len().to_f64();
     if values.is_empty() {
         return stats
@@ -1591,7 +1677,9 @@ fn group_statistics(values: &[f64], stats: &[Stat]) -> Vec<Option<f64>> {
         return stats.iter().map(|_| None).collect();
     };
     let sum: f64 = values.iter().sum();
-    let mean = sum / len;
+    // Sul dominio intero la media viene dalla somma esatta: la somma in f64
+    // arrotonda a ogni passo oltre 2^53.
+    let mean = media_esatta.unwrap_or(sum / len);
     let sorted = stats
         .iter()
         .any(|stat| {
@@ -1637,18 +1725,29 @@ fn group_statistics(values: &[f64], stats: &[Stat]) -> Vec<Option<f64>> {
 /// ...) sui valori di `column`, opzionalmente per gruppi di `group_by`.
 ///
 /// Ogni riga riceve le statistiche del proprio gruppo; un gruppo senza
-/// valori non nulli ha tutte le statistiche nulle, `count` compreso. I
-/// valori passano da `scalar_as_f64_rounded` (arrotondamento dichiarato:
-/// l'uscita e' `Float64` per contratto).
+/// valori non nulli ha tutte le statistiche nulle, `count` compreso. Tipi
+/// d'uscita: [`Stat::tipo_uscita`]. Sul dominio intero `sum` e' esatta
+/// (`Int64`), la media parte dalla somma esatta, varianza e deviazione dagli
+/// scarti esatti;
+/// `min`/`max` su interi e decimali tengono la cella esatta. Il resto passa
+/// da `scalar_as_f64_rounded` (arrotondamento dichiarato: l'uscita e'
+/// `Float64` per contratto). Le statistiche sono distinte
+/// ([`Statistics::nomi_uscita`]).
 ///
 /// # Errors
 ///
 /// - `Schema`: colonna `column` o `group_by` assente dallo schema; valore
 ///   non convertibile in numero o gruppo non convertibile in testo (gli
 ///   errori di `scalar_as_f64_rounded` e `scalar_as_string`); gli errori di
-///   `replace_or_append`.
+///   `replace_or_append`;
+/// - `InvalidPlan`: statistica ripetuta o nome d'uscita non valido;
+/// - `DataMapping`: una somma intera oltre la gamma di `Int64`.
+// Letture, statistiche per gruppo e colonne d'uscita per tipo: una passata
+// lineare, lunga per costruzione.
+#[allow(clippy::too_many_lines)]
 pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatch> {
     config.verifica_parametri()?;
+    let nomi = config.nomi_uscita()?;
     let value_index = column_index(batch, &config.column)?;
     let group_index = config
         .group_by
@@ -1687,47 +1786,105 @@ pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatc
     }
     // Gruppi con tutti i valori null: il percorso generico non li inserisce
     // nella mappa, quindi ogni statistica (Count incluso) e' null.
+    // Letture esatte per gruppo: somma sul dominio intero, riga degli
+    // estremi su interi e decimali.
+    let value_column = batch.column(value_index);
+    if config.stats.iter().any(|stat| matches!(stat, Stat::Sum)) {
+        crate::float64_source::verifica_somma(value_column.data_type())?;
+    }
+    let esatta = crate::float64_source::ColonnaEsatta::new(value_column);
+    let intera = matches!(
+        esatta,
+        Some(crate::float64_source::ColonnaEsatta::Intera(_))
+    );
+    let mut somme = vec![crate::float64_source::SommaEsatta::default(); groups.len()];
+    let mut interi_del_gruppo: Vec<Vec<i128>> = vec![Vec::new(); groups.len()];
+    let mut minimi: Vec<Option<(usize, i128)>> = vec![None; groups.len()];
+    let mut massimi: Vec<Option<(usize, i128)>> = vec![None; groups.len()];
+    if let Some(esatta) = &esatta {
+        for (row, gruppo) in row_group.iter().enumerate() {
+            let Some(valore) = esatta.value(row) else {
+                continue;
+            };
+            if intera {
+                somme[*gruppo].aggiungi(valore)?;
+                interi_del_gruppo[*gruppo].push(valore);
+            }
+            minimi[*gruppo] =
+                crate::float64_source::ColonnaEsatta::aggiorna(minimi[*gruppo], row, valore, false);
+            massimi[*gruppo] =
+                crate::float64_source::ColonnaEsatta::aggiorna(massimi[*gruppo], row, valore, true);
+        }
+    }
     let group_stats: Vec<Vec<Option<f64>>> = groups
         .iter()
-        .map(|values| {
+        .zip(&somme)
+        .map(|(values, somma)| {
             if values.is_empty() {
                 vec![None; config.stats.len()]
             } else {
-                group_statistics(values, &config.stats)
+                group_statistics(values, &config.stats, somma.media().filter(|_| intera))
             }
         })
         .collect();
-    let prefix = if config.output_prefix.is_empty() {
-        format!("{}_", config.column)
-    } else {
-        config.output_prefix.clone()
-    };
     let mut result = batch.clone();
-    for (position, stat) in config.stats.iter().enumerate() {
-        let suffix = match stat {
-            Stat::Count => "count",
-            Stat::Min => "min",
-            Stat::Max => "max",
-            Stat::Sum => "sum",
-            Stat::Mean => "mean",
-            Stat::Median => "median",
-            Stat::Std => "std",
-            Stat::Var => "var",
-            Stat::Q25 => "q25",
-            Stat::Q75 => "q75",
+    for ((position, stat), name) in config.stats.iter().enumerate().zip(&nomi) {
+        let tipo = stat.tipo_uscita(value_column.data_type());
+        let values: ArrayRef = match stat {
+            Stat::Sum if intera => Arc::new(Int64Array::from(
+                row_group
+                    .iter()
+                    .map(|&id| {
+                        let del_gruppo = &somme[id];
+                        (del_gruppo.valori() > 0)
+                            .then(|| del_gruppo.in_int64())
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )),
+            Stat::Min | Stat::Max if esatta.is_some() => {
+                let estremi = if matches!(stat, Stat::Min) {
+                    &minimi
+                } else {
+                    &massimi
+                };
+                let righe = row_group
+                    .iter()
+                    .map(|&id| estremi[id].map(|(riga, _)| riga))
+                    .collect::<Vec<_>>();
+                crate::float64_source::prendi_righe(value_column, &righe)?
+            }
+            // Varianza campionaria degli interi dagli scarti esatti.
+            Stat::Var | Stat::Std if intera => {
+                let per_gruppo = interi_del_gruppo
+                    .iter()
+                    .map(|valori| {
+                        crate::float64_source::varianza_intera(valori, 1).map(|varianza| {
+                            varianza.map(|varianza| {
+                                if matches!(stat, Stat::Std) {
+                                    varianza.sqrt()
+                                } else {
+                                    varianza
+                                }
+                            })
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Arc::new(Float64Array::from(
+                    row_group
+                        .iter()
+                        .map(|&id| per_gruppo[id])
+                        .collect::<Vec<_>>(),
+                ))
+            }
+            _ => Arc::new(Float64Array::from(
+                row_group
+                    .iter()
+                    .map(|&id| group_stats[id][position])
+                    .collect::<Vec<_>>(),
+            )),
         };
-        let name = format!("{prefix}{suffix}");
-        let values = row_group
-            .iter()
-            .map(|&id| group_stats[id][position])
-            .collect::<Vec<_>>();
-        result = replace_or_append(
-            &result,
-            &name,
-            DataType::Float64,
-            true,
-            Arc::new(Float64Array::from(values)),
-        )?;
+        result = replace_or_append(&result, name, tipo, true, values)?;
     }
     Ok(result)
 }
@@ -1898,6 +2055,12 @@ mod tests {
     // ------------------------------------------------------------------
 
     fn oracle_statistic(values: &[f64], stat: &Stat) -> Option<f64> {
+        oracle_statistic_con_media(values, stat, None)
+    }
+
+    /// Come `oracle_statistic`, con la media data (dalla somma esatta sul
+    /// dominio intero) invece di quella della somma in f64.
+    fn oracle_statistic_con_media(values: &[f64], stat: &Stat, media: Option<f64>) -> Option<f64> {
         if matches!(stat, Stat::Count) {
             return values.len().to_f64();
         }
@@ -1905,7 +2068,7 @@ mod tests {
             return None;
         }
         let sum: f64 = values.iter().sum();
-        let mean = sum / values.len().to_f64()?;
+        let mean = media.unwrap_or(sum / values.len().to_f64()?);
         let mut sorted = values.to_vec();
         sorted.sort_by(f64::total_cmp);
         Some(match stat {
@@ -1932,6 +2095,8 @@ mod tests {
         })
     }
 
+    // Oracolo: un ramo per famiglia di tipo d'uscita, lungo per costruzione.
+    #[allow(clippy::too_many_lines)]
     fn oracle_statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatch> {
         // Regola condivisa sulla config (`stats` vuoto o ripetuto), non
         // oracolata.
@@ -1943,13 +2108,36 @@ mod tests {
             .map(|name| column_index(batch, name))
             .transpose()?;
         let mut groups: HashMap<Option<String>, Vec<f64>> = HashMap::new();
+        // Sul dominio intero: gli interi esatti (i128) e le righe di ogni
+        // gruppo; sui tipi a estremo esatto, le righe per scegliere gli
+        // estremi con il comparatore del sort.
+        let colonna = batch.column(value_index);
+        if config.stats.iter().any(|stat| matches!(stat, Stat::Sum)) {
+            crate::float64_source::verifica_somma(colonna.data_type())?;
+        }
+        let su_interi = crate::float64_source::dominio_intero(colonna.data_type());
+        let esatta = crate::float64_source::estremo_esatto(colonna.data_type());
+        let mut esatti_del_gruppo: HashMap<Option<String>, Vec<i128>> = HashMap::new();
+        let mut righe: HashMap<Option<String>, Vec<usize>> = HashMap::new();
         for row in 0..batch.num_rows() {
             let key = group_index
                 .map(|index| scalar_as_string(batch.column(index).as_ref(), row))
                 .transpose()?
                 .flatten();
             if let Some(value) = scalar_as_f64_rounded(batch.column(value_index).as_ref(), row)? {
-                groups.entry(key).or_default().push(value);
+                groups.entry(key.clone()).or_default().push(value);
+                righe.entry(key.clone()).or_default().push(row);
+                if su_interi {
+                    let valore_esatto = match crate::scalar_as_numero(colonna.as_ref(), row)? {
+                        Some((_, NumericBound::I64(intero))) => i128::from(intero),
+                        Some((_, NumericBound::U64(intero))) => i128::from(intero),
+                        _ => panic!("valore non intero nel dominio intero"),
+                    };
+                    esatti_del_gruppo
+                        .entry(key)
+                        .or_default()
+                        .push(valore_esatto);
+                }
             }
         }
         let prefix = if config.output_prefix.is_empty() {
@@ -1972,17 +2160,108 @@ mod tests {
                 Stat::Q75 => "q75",
             };
             let name = format!("{prefix}{suffix}");
-            let values = (0..batch.num_rows())
+            let chiavi = (0..batch.num_rows())
                 .map(|row| {
-                    let key = group_index
+                    group_index
                         .map(|index| scalar_as_string(batch.column(index).as_ref(), row))
-                        .transpose()?
-                        .flatten();
-                    Ok(groups
-                        .get(&key)
-                        .and_then(|values| oracle_statistic(values, stat)))
+                        .transpose()
+                        .map(Option::flatten)
                 })
                 .collect::<Result<Vec<_>>>()?;
+            if matches!(stat, Stat::Sum) && su_interi {
+                let values = chiavi
+                    .iter()
+                    .map(|key| {
+                        esatti_del_gruppo
+                            .get(key)
+                            .map(|valori| {
+                                i64::try_from(valori.iter().sum::<i128>()).map_err(|_| {
+                                    PlenoraError::DataMapping(
+                                        "somma intera oltre la gamma di Int64".into(),
+                                    )
+                                })
+                            })
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                result = replace_or_append(
+                    &result,
+                    &name,
+                    DataType::Int64,
+                    true,
+                    Arc::new(Int64Array::from(values)),
+                )?;
+                continue;
+            }
+            if matches!(stat, Stat::Min | Stat::Max) && esatta {
+                let mut indici = Vec::new();
+                for key in &chiavi {
+                    let mut scelta: Option<usize> = None;
+                    for riga in righe.get(key).into_iter().flatten() {
+                        let meglio = match scelta {
+                            None => true,
+                            Some(corrente) => {
+                                let ordine = crate::aggregation::compare_cells_typed(
+                                    colonna, *riga, colonna, corrente,
+                                )?;
+                                if matches!(stat, Stat::Max) {
+                                    ordine == Ordering::Greater
+                                } else {
+                                    ordine == Ordering::Less
+                                }
+                            }
+                        };
+                        if meglio {
+                            scelta = Some(*riga);
+                        }
+                    }
+                    indici.push(scelta.map(|riga| u32::try_from(riga).expect("u32")));
+                }
+                let values = plenora_core::arrow::select::take::take(
+                    colonna.as_ref(),
+                    &plenora_core::arrow::array::UInt32Array::from(indici),
+                    None,
+                )?;
+                result =
+                    replace_or_append(&result, &name, colonna.data_type().clone(), true, values)?;
+                continue;
+            }
+            let values = chiavi
+                .iter()
+                .map(|key| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let media = esatti_del_gruppo
+                        .get(key)
+                        .filter(|_| su_interi)
+                        .map(|valori| valori.iter().sum::<i128>() as f64 / valori.len() as f64);
+                    if su_interi && matches!(stat, Stat::Var | Stat::Std) {
+                        // Scarti esatti (n x - S) / n, divisore n - 1.
+                        let valori = esatti_del_gruppo.get(key)?;
+                        if valori.len() < 2 {
+                            return None;
+                        }
+                        let n = valori.len() as i128;
+                        let totale = valori.iter().sum::<i128>();
+                        #[allow(clippy::cast_precision_loss)]
+                        let varianza = valori
+                            .iter()
+                            .map(|valore| {
+                                let scarto = (*valore * n - totale) as f64 / valori.len() as f64;
+                                scarto * scarto
+                            })
+                            .sum::<f64>()
+                            / (valori.len() - 1) as f64;
+                        return Some(if matches!(stat, Stat::Std) {
+                            varianza.sqrt()
+                        } else {
+                            varianza
+                        });
+                    }
+                    groups
+                        .get(key)
+                        .and_then(|values| oracle_statistic_con_media(values, stat, media))
+                })
+                .collect::<Vec<_>>();
             result = replace_or_append(
                 &result,
                 &name,
@@ -2206,6 +2485,112 @@ mod tests {
         ]
     }
 
+    /// Oracolo di `statistics` sul dominio intero e sui decimali: `sum`
+    /// esatta in `Int64` (oltre 2^53 il double sbaglierebbe), media, varianza
+    /// e deviazione dalla somma esatta, `min`/`max` nel tipo d'ingresso; e
+    /// valori scritti a mano per la somma oltre 2^53 e oltre `i64::MAX`.
+    #[test]
+    fn statistics_oracle_sul_dominio_intero() {
+        let interi = vec![
+            Some(9_007_199_254_740_993_i64),
+            Some(1),
+            None,
+            Some(-9_007_199_254_740_993),
+            Some(9_007_199_254_740_993),
+            Some(3),
+            Some(-2),
+        ];
+        let gruppi = vec![
+            Some("a"),
+            Some("a"),
+            Some("a"),
+            None,
+            Some("b"),
+            Some("b"),
+            None,
+        ];
+        let colonne: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(interi.clone())),
+            Arc::new(plenora_core::arrow::array::UInt64Array::from(
+                interi
+                    .iter()
+                    .map(|valore| valore.map(i64::unsigned_abs))
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(
+                plenora_core::arrow::array::TimestampMillisecondArray::from(interi.clone())
+                    .with_timezone("Europe/Rome"),
+            ),
+            Arc::new(
+                plenora_core::arrow::array::Decimal128Array::from(
+                    interi
+                        .iter()
+                        .map(|valore| valore.map(|valore| i128::from(valore) * 100 + 5))
+                        .collect::<Vec<_>>(),
+                )
+                .with_precision_and_scale(38, 2)
+                .expect("decimal"),
+            ),
+        ];
+        for colonna in colonne {
+            let batch = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("num", colonna.data_type().clone(), true),
+                    Field::new("grp", DataType::Utf8, true),
+                ])),
+                vec![colonna, Arc::new(StringArray::from(gruppi.clone()))],
+            )
+            .expect("batch");
+            for group_by in [Some("grp".to_owned()), None] {
+                assert_statistics_equiv(
+                    &batch,
+                    &Statistics {
+                        column: "num".into(),
+                        group_by,
+                        stats: all_stats(),
+                        output_prefix: String::new(),
+                    },
+                );
+            }
+        }
+        let somma = |valori: Vec<Option<i64>>| {
+            let batch = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new("num", DataType::Int64, true)])),
+                vec![Arc::new(Int64Array::from(valori))],
+            )
+            .expect("batch");
+            statistics(
+                &batch,
+                &Statistics {
+                    column: "num".into(),
+                    group_by: None,
+                    stats: vec![Stat::Sum, Stat::Min],
+                    output_prefix: String::new(),
+                },
+            )
+        };
+        let uscita = somma(vec![Some(9_007_199_254_740_993), Some(1)]).expect("somma");
+        let colonna_somma = uscita
+            .column_by_name("num_sum")
+            .expect("num_sum")
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("Int64")
+            .clone();
+        assert_eq!(colonna_somma.value(0), 9_007_199_254_740_994);
+        assert_eq!(
+            uscita
+                .column_by_name("num_min")
+                .expect("num_min")
+                .data_type(),
+            &DataType::Int64
+        );
+        assert!(matches!(
+            somma(vec![Some(i64::MAX), Some(1)]),
+            Err(PlenoraError::DataMapping(_))
+        ));
+    }
+
     /// Un Int64 oltre 2^53 cade nella classe del suo valore, non in quella del
     /// double vicino: 2^53 + 1 sta in (2^53, 2^53 + 2], non in (0, 2^53].
     #[test]
@@ -2224,7 +2609,7 @@ mod tests {
         let bordi = vec![0.0, base as f64, (base + 2) as f64];
         let config = Bin {
             column: "n".into(),
-            bins: Bins::Edges(bordi),
+            bins: Bins::Edges(bordi.into_iter().map(NumeroConfig::from).collect()),
             labels: Some(vec!["bassa".into(), "alta".into()]),
             output_column: Some("classe".into()),
         };
@@ -2242,6 +2627,46 @@ mod tests {
             "2^53 e' il bordo superiore della prima"
         );
         assert_eq!(classi.value(1), "alta", "2^53 + 1 supera il bordo 2^53");
+    }
+
+    /// Regressione: i bordi espliciti si leggono esatti dal JSON. Come `f64`,
+    /// `9007199254740993` diventava 2^53 e i bordi non erano piu' crescenti
+    /// (piano rifiutato), o una classe si spostava; ora il bordo e' quello
+    /// scritto, anche nell'etichetta.
+    #[test]
+    fn bin_legge_i_bordi_interi_esatti_dal_json() {
+        let base = 1_i64 << 53;
+        let batch = RecordBatch::try_new(
+            Arc::new(plenora_core::arrow::schema::Schema::new(vec![
+                plenora_core::arrow::schema::Field::new("n", DataType::Int64, true),
+            ])),
+            vec![Arc::new(plenora_core::arrow::array::Int64Array::from(
+                vec![Some(base), Some(base + 1), Some(base + 2)],
+            ))],
+        )
+        .expect("fixture");
+        let config: Bin = serde_json::from_value(serde_json::json!({
+            "column": "n",
+            "bins": [0, 9_007_199_254_740_992_i64, 9_007_199_254_740_993_i64, 9_007_199_254_740_994_i64],
+            "output_column": "classe"
+        }))
+        .expect("config");
+        let risultato = bin(&batch, &config).expect("bordi crescenti sul valore esatto");
+        let classi = risultato
+            .column_by_name("classe")
+            .expect("classe")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("utf8")
+            .clone();
+        assert_eq!(
+            classi.iter().collect::<Vec<_>>(),
+            vec![
+                Some("(0, 9007199254740992]"),
+                Some("(9007199254740992, 9007199254740993]"),
+                Some("(9007199254740993, 9007199254740994]"),
+            ]
+        );
     }
 
     /// Con `Count` il massimo esatto resta nell'ultima classe anche se il suo
@@ -2316,7 +2741,6 @@ mod tests {
             all_stats(),
             vec![Stat::Sum, Stat::Q25],
             vec![Stat::Var, Stat::Std],
-            vec![Stat::Mean, Stat::Mean],
             vec![],
             vec![Stat::Count],
         ] {
@@ -2332,6 +2756,20 @@ mod tests {
                 );
             }
         }
+        // Una statistica ripetuta darebbe due colonne con lo stesso nome:
+        // si rifiuta (prima la seconda sostituiva la prima).
+        assert!(matches!(
+            statistics(
+                &batch,
+                &Statistics {
+                    column: "num".into(),
+                    group_by: None,
+                    stats: vec![Stat::Mean, Stat::Mean],
+                    output_prefix: String::new(),
+                },
+            ),
+            Err(PlenoraError::InvalidPlan(_))
+        ));
     }
 
     #[test]
@@ -2415,7 +2853,7 @@ mod tests {
             vec![1e308, 1e308, -1e308],
         ];
         for values in groups {
-            let fast = group_statistics(&values, &all_stats());
+            let fast = group_statistics(&values, &all_stats(), None);
             let oracle = all_stats()
                 .iter()
                 .map(|stat| oracle_statistic(&values, stat))

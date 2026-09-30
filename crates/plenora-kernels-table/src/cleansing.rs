@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{
     builder::{
@@ -462,7 +462,13 @@ fn fill_array(array: &dyn Array, method: &FillMethod, value: &Value) -> Result<A
     if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
         let fixed = match value {
             Value::Null => None,
-            Value::Number(n) => n.as_i64(),
+            // Un numero non intero o fuori da `i64` e' un errore: come
+            // assente (`as_i64` a `None`) la colonna restava com'era, senza
+            // riempimento e senza errore.
+            Value::Number(n) => Some(
+                n.as_i64()
+                    .ok_or_else(|| PlenoraError::InvalidPlan("fill int non valido".into()))?,
+            ),
             Value::String(s) => Some(
                 s.parse()
                     .map_err(|_| PlenoraError::InvalidPlan("fill int non valido".into()))?,
@@ -506,9 +512,8 @@ fn fill_array(array: &dyn Array, method: &FillMethod, value: &Value) -> Result<A
 /// Tipo e metadati di campo restano; le colonne trattate diventano
 /// nullable. Si riempie solo il null (un `NaN` resta).
 ///
-/// Chiamato senza l'analisi, un `value` numerico non intero su una colonna
-/// `Int64` vale come assente e la colonna resta com'e': e' l'analisi a
-/// rifiutarlo.
+/// Un `value` numerico non intero o fuori da `i64` su una colonna `Int64` si
+/// rifiuta, anche chiamato senza l'analisi.
 ///
 /// # Errors
 ///
@@ -708,75 +713,82 @@ fn cast_failure<T>(errors: CastErrors, message: &str) -> Result<Option<T>> {
     }
 }
 
+/// Il testo di una cella letto come data o data e ora: con `format` vuoto i
+/// soli formati ISO 8601 (`crate::temporale::leggi_iso`: nessun ordine
+/// giorno/mese da indovinare, offset RFC 3339 ammesso), altrimenti quel
+/// formato, che con `serve_ora` deve leggere anche l'ora.
+fn leggi_testo_temporale(
+    value: &str,
+    format: &str,
+    serve_ora: bool,
+) -> Option<crate::temporale::Momento> {
+    if format.is_empty() {
+        return crate::temporale::leggi_iso(value);
+    }
+    let items = crate::dates::compile_items(format);
+    let (momento, ha_ora) = crate::temporale::leggi_con_items_e_ora(value, &items)?;
+    // Un formato di sola data non legge un'ora: per `datetime` e
+    // `timestamp_millis` resta un rifiuto. La lettura e' una sola, con
+    // l'offset letto (una seconda ricostruzione in UTC rifiutava un `%s`
+    // coerente con i campi e l'offset).
+    (!serve_ora || ha_ora).then_some(momento)
+}
+
+/// `date` (`AAAA-MM-GG`) o `datetime` (`AAAA-MM-GGTHH:MM:SS`, con la
+/// frazione di secondo quando c'e') dal testo: l'ora locale scritta.
 fn parse_date(value: &str, format: &str, datetime: bool) -> Option<String> {
-    if !format.is_empty() {
-        if datetime {
-            return NaiveDateTime::parse_from_str(value, format)
-                .ok()
-                .map(|v| v.format("%Y-%m-%dT%H:%M:%S").to_string());
-        }
-        return NaiveDate::parse_from_str(value, format)
-            .ok()
-            .map(|v| v.format("%Y-%m-%d").to_string());
-    }
-    let date_formats = ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"];
-    if datetime {
-        for pattern in [
-            "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%d %H:%M:%S",
-            "%d/%m/%Y %H:%M:%S",
-        ] {
-            if let Ok(value) = NaiveDateTime::parse_from_str(value, pattern) {
-                return Some(value.format("%Y-%m-%dT%H:%M:%S").to_string());
-            }
-        }
-    }
-    date_formats
-        .iter()
-        .find_map(|pattern| NaiveDate::parse_from_str(value, pattern).ok())
-        .map(|v| {
-            if datetime {
-                format!("{}T00:00:00", v.format("%Y-%m-%d"))
-            } else {
-                v.format("%Y-%m-%d").to_string()
-            }
-        })
+    let momento = leggi_testo_temporale(value, format, datetime)?;
+    Some(if datetime {
+        crate::temporale::testo_datetime(&momento.locale)
+    } else {
+        momento.locale.format("%Y-%m-%d").to_string()
+    })
+}
+
+/// Giorni dall'epoca della data locale di un momento.
+fn giorni_dall_epoca(locale: &NaiveDateTime) -> Option<i32> {
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)?;
+    i32::try_from(locale.date().signed_duration_since(epoch).num_days()).ok()
 }
 
 fn parse_date32(value: &str, format: &str) -> Option<i32> {
-    let normalized = parse_date(value, format, false)?;
-    let date = NaiveDate::parse_from_str(&normalized, "%Y-%m-%d").ok()?;
-    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)?;
-    i32::try_from(date.signed_duration_since(epoch).num_days()).ok()
+    giorni_dall_epoca(&leggi_testo_temporale(value, format, false)?.locale)
+}
+
+/// Millisecondi di un momento: l'istante se c'e' (un offset nel testo, un
+/// `Timestamp`), altrimenti l'ora locale nel fuso `timezone` (un'ora
+/// ambigua o inesistente nel cambio d'ora non ha un istante) o in UTC.
+///
+/// `None` anche se l'istante ha una parte sotto il millisecondo: il
+/// millisecondo non la tiene, e troncarla sarebbe un valore diverso da
+/// quello letto.
+fn millisecondi_di(momento: &crate::temporale::Momento, timezone: Option<&str>) -> Option<i64> {
+    let istante = match momento.istante {
+        Some(istante) => istante,
+        None => match timezone {
+            Some(name) => {
+                let zone = name.parse::<chrono_tz::Tz>().ok()?;
+                match zone.from_local_datetime(&momento.locale) {
+                    LocalResult::Single(value) => value.with_timezone(&Utc),
+                    LocalResult::Ambiguous(_, _) | LocalResult::None => return None,
+                }
+            }
+            None => Utc.from_utc_datetime(&momento.locale),
+        },
+    };
+    (istante.timestamp_subsec_nanos() % 1_000_000 == 0).then(|| istante.timestamp_millis())
 }
 
 fn parse_timestamp_millis(value: &str, format: &str, timezone: Option<&str>) -> Option<i64> {
-    if format.is_empty() {
-        if let Ok(timestamp) = DateTime::parse_from_rfc3339(value) {
-            return Some(timestamp.timestamp_millis());
-        }
-    }
-    let normalized = parse_date(value, format, true)?;
-    let naive = NaiveDateTime::parse_from_str(&normalized, "%Y-%m-%dT%H:%M:%S").ok()?;
-    let timestamp = if let Some(name) = timezone {
-        let zone = name.parse::<chrono_tz::Tz>().ok()?;
-        match zone.from_local_datetime(&naive) {
-            LocalResult::Single(value) => value.with_timezone(&Utc),
-            LocalResult::Ambiguous(_, _) | LocalResult::None => return None,
-        }
-    } else {
-        Utc.from_utc_datetime(&naive)
-    };
-    Some(timestamp.timestamp_millis())
+    millisecondi_di(&leggi_testo_temporale(value, format, true)?, timezone)
 }
 
 fn parse_decimal128(value: &str, precision: u8, scale: i8) -> Option<i128> {
     let scale = u32::try_from(scale).ok()?;
     let value = value.trim();
-    let (negative, unsigned) = value
-        .strip_prefix('-')
-        .map_or((false, value), |rest| (true, rest));
-    let unsigned = unsigned.strip_prefix('+').unwrap_or(unsigned);
+    // Un segno solo: `"-+5"` e `"+-5"` si rifiutano (il resto non e' di
+    // sole cifre), come nei `parse` della libreria standard.
+    let (negative, unsigned) = crate::separa_segno(value);
     let mut pieces = unsigned.split('.');
     let whole = pieces.next()?;
     let fraction = pieces.next().unwrap_or("");
@@ -1397,6 +1409,18 @@ pub fn type_cast_with_source_offset(
     }
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
+    // Una colonna temporale (Date32, Timestamp di ogni unita') si converte
+    // dal valore nativo, non dal suo testo.
+    if let Some(temporale) = crate::temporale::ColonnaTemporale::new(source)? {
+        let array = type_cast_temporale(&temporale, source, config, source_offset)?;
+        return replace_or_append(
+            batch,
+            &config.column,
+            array.data_type().clone(),
+            true,
+            array,
+        );
+    }
     if matches!(config.errori(), CastErrors::Coerce | CastErrors::Raise) {
         if let Some(report) = cast_row_diagnostics(source, &config.column, config, source_offset)? {
             return Err(PlenoraError::DataMapping(
@@ -1424,18 +1448,30 @@ fn cast_row_diagnostics(
     config: &TypeCast,
     source_offset: u64,
 ) -> Result<Option<RowDiagnostics>> {
+    diagnostica_cast(source.len(), column, source_offset, |row| {
+        if source.is_null(row) {
+            return Ok(None);
+        }
+        Ok(scalar_as_string(source.as_ref(), row)?
+            .and_then(|value| string_cast_rejection(&value, config)))
+    })
+}
+
+/// La diagnostica per riga di `type_cast`: la causa di ogni riga rifiutata
+/// (`causa`), i conteggi e i primi esempi, con gli indici spostati di
+/// `source_offset`. `None` se nessuna riga e' rifiutata.
+fn diagnostica_cast(
+    righe: usize,
+    column: &str,
+    source_offset: u64,
+    mut causa_di: impl FnMut(usize) -> Result<Option<&'static str>>,
+) -> Result<Option<RowDiagnostics>> {
     const EXAMPLES_LIMIT: u64 = 10;
     let mut observed_total = 0_u64;
     let mut counts = BTreeMap::new();
     let mut examples = Vec::new();
-    for row in 0..source.len() {
-        if source.is_null(row) {
-            continue;
-        }
-        let Some(value) = scalar_as_string(source.as_ref(), row)? else {
-            continue;
-        };
-        let Some(cause) = string_cast_rejection(&value, config) else {
+    for row in 0..righe {
+        let Some(cause) = causa_di(row)? else {
             continue;
         };
         observed_total = observed_total.checked_add(1).ok_or_else(|| {
@@ -1483,6 +1519,169 @@ fn cast_row_diagnostics(
         diagnostic_state_counts: None,
         write_outcome: None,
     }))
+}
+
+/// I target di `type_cast` che una colonna temporale ammette.
+///
+/// Il testo (`str`, `binary_utf8`, `dictionary_utf8`), le date e le ore
+/// (`date`, `datetime`, `date32`, `timestamp_millis`). Un numero o un
+/// booleano da un
+/// istante non ha un significato scritto: si rifiuta in analisi e nel
+/// kernel. Autorita' unica di entrambi.
+///
+/// # Errors
+///
+/// `InvalidPlan` per un target numerico o booleano, o per un `date_format`
+/// (che legge un testo, e qui non c'e').
+pub fn verifica_cast_temporale(config: &TypeCast) -> Result<()> {
+    if matches!(
+        config.target_type,
+        TargetType::Int
+            | TargetType::Float
+            | TargetType::Bool
+            | TargetType::Decimal128
+            | TargetType::Uint64
+    ) {
+        return Err(PlenoraError::InvalidPlan(
+            "type_cast: una colonna temporale si converte solo in testo, date o istanti".into(),
+        ));
+    }
+    if !config.date_format.is_empty() {
+        return Err(PlenoraError::InvalidPlan(
+            "type_cast: date_format legge un testo e non si applica a una colonna temporale".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// `type_cast` di una colonna temporale dal valore nativo, per ogni unita' e
+/// fuso: il testo come il profilo scalare, la data e l'ora **locali** della
+/// colonna (del suo fuso; senza fuso, il valore com'e') per `date`,
+/// `datetime` e `date32`, l'istante per `timestamp_millis` (una data e' la
+/// sua mezzanotte nel fuso `timezone`, o in UTC).
+///
+/// Un istante con una parte sotto il millisecondo non entra in
+/// `timestamp_millis` senza perderla: la riga si rifiuta
+/// (`conversion.timestamp_precision`), come un'ora ambigua o inesistente
+/// di una data (`conversion.invalid_timestamp`).
+// Prevalidazione e costruzione per target: una sequenza lineare, lunga per
+// costruzione.
+#[allow(clippy::too_many_lines)]
+fn type_cast_temporale(
+    temporale: &crate::temporale::ColonnaTemporale<'_>,
+    source: &ArrayRef,
+    config: &TypeCast,
+    source_offset: u64,
+) -> Result<ArrayRef> {
+    verifica_cast_temporale(config)?;
+    let timezone = config.timezone.as_deref();
+    // Le cause per riga, prima di costruire: stesso contratto del testo.
+    let causa = |row: usize| -> Result<Option<&'static str>> {
+        let Some(momento) = temporale.momento(row)? else {
+            return Ok(None);
+        };
+        Ok(match config.target_type {
+            TargetType::TimestampMillis if millisecondi_di(&momento, timezone).is_none() => {
+                Some(if momento.istante.is_some() {
+                    "conversion.timestamp_precision"
+                } else {
+                    "conversion.invalid_timestamp"
+                })
+            }
+            TargetType::Date | TargetType::Date32
+                if giorni_dall_epoca(&momento.locale).is_none() =>
+            {
+                Some("conversion.invalid_date")
+            }
+            _ => None,
+        })
+    };
+    if let Some(report) = diagnostica_cast(source.len(), &config.column, source_offset, causa)? {
+        if matches!(config.errori(), CastErrors::Ignore) {
+            return Err(PlenoraError::InvalidPlan(
+                "errors=ignore non puo' garantire un tipo Arrow omogeneo; usare coerce o raise"
+                    .into(),
+            ));
+        }
+        return Err(PlenoraError::DataMapping(
+            "conversione rifiutata; consultare row_diagnostics".to_owned(),
+        )
+        .with_row_diagnostics(report));
+    }
+    let momenti = (0..source.len())
+        .map(|row| temporale.momento(row))
+        .collect::<Result<Vec<_>>>()?;
+    let rese_testuali = || -> Result<Vec<Option<String>>> {
+        (0..source.len()).map(|row| temporale.testo(row)).collect()
+    };
+    let interna = || PlenoraError::Internal("prevalidazione temporale incoerente".into());
+    Ok(match config.target_type {
+        TargetType::Str => Arc::new(StringArray::from(rese_testuali()?)),
+        TargetType::BinaryUtf8 => {
+            let mut builder = BinaryBuilder::new();
+            for testo in rese_testuali()? {
+                match testo {
+                    Some(testo) => builder.append_value(testo),
+                    None => builder.append_null(),
+                }
+            }
+            Arc::new(builder.finish())
+        }
+        TargetType::DictionaryUtf8 => {
+            let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+            for testo in rese_testuali()? {
+                match testo {
+                    Some(testo) => {
+                        builder.append(testo)?;
+                    }
+                    None => builder.append_null(),
+                }
+            }
+            Arc::new(builder.finish())
+        }
+        TargetType::Date => Arc::new(StringArray::from(
+            momenti
+                .iter()
+                .map(|momento| momento.map(|momento| momento.locale.format("%Y-%m-%d").to_string()))
+                .collect::<Vec<_>>(),
+        )),
+        TargetType::Datetime => Arc::new(StringArray::from(
+            momenti
+                .iter()
+                .map(|momento| {
+                    momento.map(|momento| crate::temporale::testo_datetime(&momento.locale))
+                })
+                .collect::<Vec<_>>(),
+        )),
+        TargetType::Date32 => Arc::new(Date32Array::from(
+            momenti
+                .iter()
+                .map(|momento| {
+                    momento
+                        .map(|momento| giorni_dall_epoca(&momento.locale).ok_or_else(interna))
+                        .transpose()
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )),
+        TargetType::TimestampMillis => Arc::new(
+            TimestampMillisecondArray::from(
+                momenti
+                    .iter()
+                    .map(|momento| {
+                        momento
+                            .map(|momento| millisecondi_di(&momento, timezone).ok_or_else(interna))
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )
+            .with_timezone_opt(timezone.map(ToOwned::to_owned)),
+        ),
+        TargetType::Int
+        | TargetType::Float
+        | TargetType::Bool
+        | TargetType::Decimal128
+        | TargetType::Uint64 => return Err(interna()),
+    })
 }
 
 fn string_cast_rejection(value: &str, config: &TypeCast) -> Option<&'static str> {
@@ -1783,7 +1982,10 @@ mod tests {
         if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
             let fixed = match value {
                 Value::Null => None,
-                Value::Number(n) => n.as_i64(),
+                Value::Number(n) => Some(
+                    n.as_i64()
+                        .ok_or_else(|| PlenoraError::InvalidPlan("fill int non valido".into()))?,
+                ),
                 Value::String(s) => Some(
                     s.parse()
                         .map_err(|_| PlenoraError::InvalidPlan("fill int non valido".into()))?,
@@ -2044,6 +2246,30 @@ mod tests {
         }
     }
 
+    /// Regressione: su una colonna `Int64` un `value` numerico non intero o
+    /// fuori da `i64` valeva come assente e la colonna restava con i suoi
+    /// null, senza errore. Ora si rifiuta anche senza l'analisi.
+    #[test]
+    fn fill_int_rifiuta_un_numero_non_intero_invece_di_ignorarlo() {
+        let array: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), None]));
+        for valore in [
+            serde_json::json!(1.5),
+            serde_json::json!(9_223_372_036_854_775_808_u64),
+            serde_json::json!(1e300),
+        ] {
+            assert!(
+                matches!(
+                    fill_array(array.as_ref(), &FillMethod::Value, &valore),
+                    Err(PlenoraError::InvalidPlan(_))
+                ),
+                "{valore}"
+            );
+        }
+        let pieno = fill_array(array.as_ref(), &FillMethod::Value, &serde_json::json!(7))
+            .expect("intero valido");
+        assert_eq!(pieno.null_count(), 0);
+    }
+
     #[test]
     fn fill_unsupported_types_keep_the_schema_error() {
         let array: ArrayRef = Arc::new(UInt64Array::from(vec![Some(1_u64), None]));
@@ -2221,105 +2447,170 @@ mod tests {
         }
     }
 
+    /// Le colonne temporali si convertono dal valore nativo, non dal testo
+    /// (regressione: `datetime` su un `Timestamp` falliva su ogni riga,
+    /// perche' il testo RFC 3339 con `+00:00` non era un formato di
+    /// default, e un `Timestamp` in microsecondi non si leggeva affatto).
+    ///
+    /// Oracolo: per `str`, `binary_utf8`, `dictionary_utf8` su `Date32` e
+    /// `Timestamp(ms)` il percorso testuale di prima (`generic_type_cast_entry`,
+    /// che passa da `scalar_as_string`); per date e istanti valori scritti a
+    /// mano, su ogni unita' e con e senza fuso.
     #[test]
-    fn cast_fallback_combinations_match_generic_through_public_entry() {
-        let sources: Vec<ArrayRef> = vec![
+    #[allow(clippy::too_many_lines)] // Una matrice di tipi e target scritta a mano.
+    fn type_cast_da_colonne_temporali_senza_passare_dal_testo() {
+        use plenora_core::arrow::array::{
+            TimestampMicrosecondArray, TimestampNanosecondArray, TimestampSecondArray,
+        };
+        let ms = 1_706_696_430_123_i64; // 2024-01-31T10:20:30.123Z
+        let date_ms: Vec<ArrayRef> = vec![
             Arc::new(Date32Array::from(vec![
                 Some(0),
-                Some(19000),
+                Some(19_753),
                 Some(-1),
                 None,
             ])),
             Arc::new(TimestampMillisecondArray::from(vec![
                 Some(0),
-                Some(1_700_000_000_000),
+                Some(ms),
                 Some(-1),
                 None,
             ])),
+            Arc::new(
+                TimestampMillisecondArray::from(vec![Some(0), Some(ms), None])
+                    .with_timezone("Europe/Rome"),
+            ),
         ];
-        let (mut accepted, mut rejected) = (0_usize, 0_usize);
-        for source in sources {
+        for source in &date_ms {
             let batch = single_batch(source.clone());
-            for target in all_targets() {
+            for target in [
+                TargetType::Str,
+                TargetType::BinaryUtf8,
+                TargetType::DictionaryUtf8,
+            ] {
+                let config = cast_config(target, CastErrors::Raise);
+                assert_eq!(
+                    type_cast(&batch, &config).expect("testo"),
+                    generic_type_cast_entry(&batch, &config).expect("percorso testuale"),
+                    "{target:?}"
+                );
+            }
+            // Un numero o un booleano da una data non ha un significato
+            // scritto: errore di piano, non righe rifiutate.
+            for target in [
+                TargetType::Int,
+                TargetType::Float,
+                TargetType::Bool,
+                TargetType::Uint64,
+                TargetType::Decimal128,
+            ] {
                 for errors in all_errors() {
-                    let config = cast_config(target, errors);
-                    let production = type_cast(&batch, &config);
-                    let generic = generic_type_cast_entry(&batch, &config);
-                    match (production, generic) {
-                        (Ok(production), Ok(generic)) => {
-                            accepted += 1;
-                            assert_eq!(production, generic);
-                        }
-                        (Err(production), Err(generic)) => {
-                            if production.row_diagnostics().is_some() {
-                                rejected += 1;
-                            }
-                            assert_eq!(production.category(), generic.category());
-                            assert_eq!(production.to_string(), generic.to_string());
-                            assert_eq!(production.row_diagnostics(), generic.row_diagnostics());
-                        }
-                        (production, generic) => panic!(
-                            "fallback {:?}: produzione/generico divergono (prod ok={}, gen ok={})",
-                            config.target_type,
-                            production.is_ok(),
-                            generic.is_ok()
-                        ),
-                    }
+                    assert!(matches!(
+                        type_cast(&batch, &cast_config(target, errors)),
+                        Err(PlenoraError::InvalidPlan(_))
+                    ));
                 }
             }
+            // `date_format` legge un testo: con una colonna temporale si
+            // rifiuta invece di essere ignorato.
+            let mut con_formato = cast_config(TargetType::Date, CastErrors::Raise);
+            con_formato.date_format = "%Y-%m-%d".into();
+            assert!(matches!(
+                type_cast(&batch, &con_formato),
+                Err(PlenoraError::InvalidPlan(_))
+            ));
         }
-        // La matrice raggiunge entrambi i rami: conversioni riuscite e rifiuti
-        // row-scoped.
-        assert!(accepted > 0, "nessuna conversione riuscita confrontata");
-        assert!(rejected > 0, "nessun rifiuto row-scoped confrontato");
 
-        // Rifiuto esplicito: le date non sono interi, ogni riga non nulla e'
-        // rifiutata con la sua causa, per `coerce` come per `raise`.
-        let dates = single_batch(Arc::new(Date32Array::from(vec![
-            Some(0),
-            None,
-            Some(19000),
-            Some(-1),
-        ])));
-        for errors in [CastErrors::Coerce, CastErrors::Raise] {
-            let error = type_cast(&dates, &cast_config(TargetType::Int, errors))
-                .expect_err("date convertite in interi");
-            let report = error.row_diagnostics().expect("diagnostica row-scoped");
-            assert_eq!(report.completeness, RowDiagnosticsCompleteness::Complete);
-            assert_eq!(report.observed_total, 3);
+        let cast = |array: ArrayRef, target: TargetType, timezone: Option<&str>| {
+            let mut config = cast_config(target, CastErrors::Raise);
+            config.timezone = timezone.map(ToOwned::to_owned);
+            type_cast(&single_batch(array), &config)
+        };
+        let unita: Vec<(ArrayRef, &str, i64)> = vec![
+            (
+                Arc::new(TimestampSecondArray::from(vec![ms / 1000])),
+                "2024-01-31T10:20:30",
+                1_706_696_430_000,
+            ),
+            (
+                Arc::new(TimestampMillisecondArray::from(vec![ms])),
+                "2024-01-31T10:20:30.123",
+                ms,
+            ),
+            (
+                Arc::new(TimestampMicrosecondArray::from(vec![ms * 1000])),
+                "2024-01-31T10:20:30.123",
+                ms,
+            ),
+            (
+                Arc::new(TimestampNanosecondArray::from(vec![ms * 1_000_000])),
+                "2024-01-31T10:20:30.123",
+                ms,
+            ),
+            // Con fuso: l'ora locale del fuso, lo stesso istante.
+            (
+                Arc::new(
+                    TimestampMicrosecondArray::from(vec![ms * 1000]).with_timezone("Europe/Rome"),
+                ),
+                "2024-01-31T11:20:30.123",
+                ms,
+            ),
+        ];
+        for (array, datetime, millis) in unita {
+            let testo = |target| {
+                cast(array.clone(), target, None)
+                    .expect("cast")
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .expect("utf8")
+                    .value(0)
+                    .to_owned()
+            };
+            assert_eq!(testo(TargetType::Datetime), datetime);
+            assert_eq!(testo(TargetType::Date), "2024-01-31");
+            let giorni = cast(array.clone(), TargetType::Date32, None).expect("date32");
+            assert_eq!(cast_column::<Date32Array>(&giorni).value(0), 19_753);
+            let istanti = cast(
+                array.clone(),
+                TargetType::TimestampMillis,
+                Some("Europe/Rome"),
+            )
+            .expect("timestamp_millis");
             assert_eq!(
-                report
-                    .examples
-                    .iter()
-                    .map(|example| (
-                        example.source_index,
-                        example.cause.as_str(),
-                        example.column.as_deref()
-                    ))
-                    .collect::<Vec<_>>(),
-                vec![
-                    (0, "conversion.invalid_integer", Some("c")),
-                    (2, "conversion.invalid_integer", Some("c")),
-                    (3, "conversion.invalid_integer", Some("c")),
-                ]
+                istanti.schema().field(0).data_type(),
+                &DataType::Timestamp(
+                    plenora_core::arrow::schema::TimeUnit::Millisecond,
+                    Some("Europe/Rome".into())
+                )
+            );
+            assert_eq!(
+                cast_column::<TimestampMillisecondArray>(&istanti).value(0),
+                millis
             );
         }
-        // Conversione valida esplicita: Date32 verso testo.
-        let text = type_cast(&dates, &cast_config(TargetType::Str, CastErrors::Raise))
-            .expect("Date32 -> str");
-        let text = text
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("utf8");
+        // Sotto il millisecondo: la riga si rifiuta invece di troncare.
+        let micro: ArrayRef = Arc::new(TimestampMicrosecondArray::from(vec![
+            Some(ms * 1000),
+            Some(ms * 1000 + 456),
+        ]));
+        let errore = cast(micro, TargetType::TimestampMillis, None).expect_err("sotto il ms");
+        let report = errore.row_diagnostics().expect("diagnostica");
         assert_eq!(
-            text.iter().collect::<Vec<_>>(),
-            vec![
-                Some("1970-01-01"),
-                None,
-                Some("2022-01-08"),
-                Some("1969-12-31")
-            ]
+            report
+                .examples
+                .iter()
+                .map(|esempio| (esempio.source_index, esempio.cause.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(1, "conversion.timestamp_precision")]
+        );
+        // Una data e' la sua mezzanotte nel fuso dichiarato: 2024-01-31
+        // 00:00 a Roma e' 2024-01-30T23:00Z.
+        let giorno: ArrayRef = Arc::new(Date32Array::from(vec![19_753]));
+        let istante = cast(giorno, TargetType::TimestampMillis, Some("Europe/Rome")).expect("data");
+        assert_eq!(
+            cast_column::<TimestampMillisecondArray>(&istante).value(0),
+            1_706_655_600_000
         );
     }
 
@@ -2471,10 +2762,17 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Valori scritti a mano per ogni target.
     fn type_cast_hand_written_values_per_temporal_and_decimal_target() {
         // Valori attesi scritti a mano, come per i target numerici.
+        // Default solo ISO 8601: l'offset si legge (l'ora resta quella
+        // scritta), giorno e mese in un ordine da indovinare no.
         let dates = cast_utf8(
-            &["2024-01-31", "31/01/2024", "31-01-2024", "2024/01/31"],
+            &[
+                "2024-01-31",
+                "2024-01-31T23:30:00+05:00",
+                "2024-01-31 10:00:00",
+            ],
             TargetType::Date,
         )
         .expect("date valide");
@@ -2482,29 +2780,49 @@ mod tests {
             cast_column::<StringArray>(&dates)
                 .iter()
                 .collect::<Vec<_>>(),
-            vec![Some("2024-01-31"); 4]
+            vec![Some("2024-01-31"); 3]
         );
         assert_cast_rejected(
-            &["2024-13-40", "2024-02-29", "2023-02-29"],
+            &[
+                "2024-13-40",
+                "2024-02-29",
+                "2023-02-29",
+                "31/01/2024",
+                "31-01-2024",
+                "2024/01/31",
+            ],
             TargetType::Date,
-            &[0, 2],
+            &[0, 2, 3, 4, 5],
             "conversion.invalid_date",
         );
 
         let datetimes = cast_utf8(
-            &["2024-01-31 10:20:30", "31/01/2024 10:20:30", "31/01/2024"],
+            &[
+                "2024-01-31 10:20:30",
+                "2024-01-31T10:20:30.250",
+                "2024-01-31",
+                "2024-01-31T10:20:30+00:00",
+            ],
             TargetType::Datetime,
         )
         .expect("datetime validi");
+        // La frazione di secondo resta (prima si troncava in silenzio).
         assert_eq!(
             cast_column::<StringArray>(&datetimes)
                 .iter()
                 .collect::<Vec<_>>(),
             vec![
                 Some("2024-01-31T10:20:30"),
-                Some("2024-01-31T10:20:30"),
-                Some("2024-01-31T00:00:00")
+                Some("2024-01-31T10:20:30.250"),
+                Some("2024-01-31T00:00:00"),
+                Some("2024-01-31T10:20:30")
             ]
+        );
+        assert_cast_rejected(
+            &["31/01/2024 10:20:30", "2024-01-31 10:20:30"],
+            TargetType::Datetime,
+            &[0],
+            "conversion.invalid_datetime",
         );
         assert_cast_rejected(
             &["2024-01-31 25:00:00", "bad"],
@@ -2566,6 +2884,33 @@ mod tests {
             TargetType::Decimal128,
             &[0, 2, 3, 4],
             "conversion.invalid_decimal",
+        );
+    }
+
+    /// Regressione (classe «segni ripetuti»): ogni target numerico rifiuta
+    /// un secondo segno. Il decimale toglieva `-` e poi `+`, e leggeva
+    /// `"-+5"` come -5; interi e float passano dai `parse` della libreria
+    /// standard, che gia' rifiutavano: il test fissa che restino allineati.
+    #[test]
+    fn type_cast_rifiuta_i_segni_ripetuti_su_ogni_target_numerico() {
+        let valori = ["-+5", "+-5", "--5", "++5", "-5", "+5"];
+        for (target, causa) in [
+            (TargetType::Decimal128, "conversion.invalid_decimal"),
+            (TargetType::Int, "conversion.invalid_integer"),
+            (TargetType::Float, "conversion.invalid_float"),
+        ] {
+            assert_cast_rejected(&valori, target, &[0, 1, 2, 3], causa);
+        }
+        assert_cast_rejected(
+            &["-+5", "+-5", "--5", "++5", "+5"],
+            TargetType::Uint64,
+            &[0, 1, 2, 3],
+            "conversion.invalid_unsigned_integer",
+        );
+        let decimali = cast_utf8(&["-5", "+5"], TargetType::Decimal128).expect("un segno solo");
+        assert_eq!(
+            cast_column::<Decimal128Array>(&decimali).values().to_vec(),
+            vec![-500, 500]
         );
     }
 

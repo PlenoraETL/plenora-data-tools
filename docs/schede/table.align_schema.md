@@ -34,10 +34,12 @@ Il `default` si converte così, e ciò che non si converte si rifiuta:
   qualunque combinazione di maiuscole;
 - `Date32`: una stringa `AAAA-MM-GG`;
 - `Timestamp`: una stringa RFC 3339 con fuso (`"2026-07-25T00:00:00Z"`),
-  convertita all'istante in millisecondi (la parte sotto il millisecondo si
-  scarta);
-- `Decimal128`: un numero JSON o una stringa, senza esponente e con al più
-  10 cifre decimali (nessun arrotondamento).
+  convertita all'istante in millisecondi; una parte sotto il millisecondo,
+  una frazione oltre il nanosecondo e un secondo intercalare si rifiutano
+  (il lettore di [README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data));
+- `Decimal128`: un numero JSON o una stringa, senza esponente, con un
+  segno facoltativo (uno solo: `"--5"` e `"+-5"` si rifiutano) e con al
+  più 10 cifre decimali (nessun arrotondamento).
 
 Si accetta, perché l'effetto dipende dall'ingresso e lo stesso piano gira
 su tabelle diverse: il `default` di una colonna che esiste già (non si
@@ -84,9 +86,6 @@ In esecuzione: nessun errore che dipenda dai dati.
 
 - **Nessuna conversione implicita**: per cambiare il tipo di una colonna
   esistente serve [`table.type_cast`](#tabletype_cast) prima.
-- **Segni ripetuti nel `default` `Decimal128`**: i segni iniziali si
-  accettano tutti e conta solo il primo carattere (`"--5"` vale -5,
-  `"+-5"` vale 5).
 
 ### Complessità
 

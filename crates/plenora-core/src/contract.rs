@@ -692,7 +692,10 @@ impl GeometryColumnContract {
 /// rende stabile l'ID di una colonna per nome (chiavi `sorted_by`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FieldAllocator {
-    next: u32,
+    /// Il prossimo ID libero, in `u64` perche' deve poter valere
+    /// `u32::MAX + 1` (spazio esaurito) senza saturare: un cursore `u32`
+    /// saturato a `u32::MAX` riassegnerebbe un ID gia' osservato.
+    next: u64,
     by_name: HashMap<String, FieldId>,
 }
 
@@ -702,7 +705,7 @@ impl FieldAllocator {
     #[must_use]
     pub fn new(next: u32) -> Self {
         Self {
-            next,
+            next: u64::from(next),
             by_name: HashMap::new(),
         }
     }
@@ -715,25 +718,32 @@ impl FieldAllocator {
     /// esaurito: un incremento saturante renderebbe lo stesso id due volte, e
     /// due colonne condividerebbero l'identità.
     pub fn alloc(&mut self) -> Result<FieldId> {
-        let id = FieldId(self.next);
-        self.next = self.next.checked_add(1).ok_or_else(|| {
+        // Il controllo e' sull'ID da consegnare, non sul successivo: anche
+        // `u32::MAX` si assegna, e solo la richiesta dopo fallisce.
+        let id = u32::try_from(self.next).map_err(|_| {
             PlenoraError::InvalidPlan(
                 "spazio dei FieldId esaurito: nessun identificatore fresco disponibile".to_owned(),
             )
         })?;
-        Ok(id)
+        self.next = u64::from(id) + 1;
+        Ok(FieldId(id))
     }
 
     /// Il prossimo ID che verrà assegnato (ispezione, non consuma).
+    ///
+    /// A spazio esaurito rende `u32::MAX`, che e' gia' assegnato: e'
+    /// un'ispezione, e solo [`FieldAllocator::alloc`] decide (con errore).
     #[must_use]
-    pub const fn peek(&self) -> FieldId {
-        FieldId(self.next)
+    pub fn peek(&self) -> FieldId {
+        FieldId(u32::try_from(self.next).unwrap_or(u32::MAX))
     }
 
     /// Registra un ID già assegnato (contratti di input) per evitare
     /// collisioni con i futuri [`FieldAllocator::alloc`].
     pub fn observe(&mut self, id: FieldId) {
-        self.next = self.next.max(id.0.saturating_add(1));
+        // Niente saturazione: osservato `u32::MAX`, il cursore passa oltre
+        // e il prossimo `alloc` fallisce invece di riconsegnarlo.
+        self.next = self.next.max(u64::from(id.0) + 1);
     }
 
     /// ID stabile di una colonna propagata: stesso nome → stesso ID.
@@ -1283,6 +1293,20 @@ mod tests {
         // Osservare un id gia' coperto non fa arretrare il cursore.
         allocator.observe(FieldId(3));
         assert_eq!(allocator.peek(), FieldId(9));
+    }
+
+    /// Regressione: l'ultimo ID rappresentabile si assegna, e osservarlo
+    /// esaurisce lo spazio invece di farlo riconsegnare (il cursore `u32`
+    /// saturava e `alloc` rendeva un ID gia' osservato).
+    #[test]
+    fn field_allocator_arriva_a_u32_max_e_non_riconsegna_l_osservato() {
+        let mut allocator = FieldAllocator::new(u32::MAX);
+        assert_eq!(allocator.alloc().expect("ultimo id"), FieldId(u32::MAX));
+        assert!(allocator.alloc().is_err());
+
+        let mut allocator = FieldAllocator::default();
+        allocator.observe(FieldId(u32::MAX));
+        assert!(allocator.alloc().is_err(), "u32::MAX e' gia' in uso");
     }
 
     #[test]

@@ -2,6 +2,13 @@
 //! ranghi per sequenze di pari merito (`ranghi`), copiata alla lettera, e i
 //! confronti degli esiti completi (batch per bit, errori per categoria e
 //! messaggio) su input avversari e casuali.
+//!
+//! Le varianti che tengono il tipo o sommano interi (`lag`/`lead` nel tipo
+//! d'ingresso, `cumsum`/`running_mean`/`pct_change` sul dominio intero)
+//! hanno qui un riferimento scritto a parte, per posizioni e con
+//! l'aritmetica `i128` del valore esatto di `scalar_as_numero`
+//! (`valori_esatti_riferimento`): la copia del percorso di prima le
+//! calcolava in `f64`.
 
 use std::sync::Arc;
 
@@ -52,6 +59,14 @@ fn window_function_riferimento(
     // Partizionamento condiviso con `rolling_window`.
     let partitions = build_partitions(&ordered, group_index)?;
     let colonna = ordered.column(source_index);
+    let name = config
+        .output_column
+        .clone()
+        .unwrap_or_else(|| format!("{}_{}", config.column, suffisso(&config.function)));
+    if let Some((tipo, uscita)) = valori_esatti_riferimento(&ordered, &partitions, colonna, config)?
+    {
+        return replace_or_append(&ordered, &name, tipo, true, uscita);
+    }
     // Le varianti di VALORE leggono `Float64` (arrotondamento dichiarato),
     // quelle di RANGO il dominio originale (vedi il doc sopra). Il dominio
     // numerico si valida sempre, anche per le varianti di posizione.
@@ -232,23 +247,6 @@ fn window_function_riferimento(
     };
     let mut output = vec![None; ordered.num_rows()];
     scatter_partitions(&ordered, &partitions, &mut output, compute)?;
-    let suffix = match config.function {
-        WindowKind::Rank => "rank",
-        WindowKind::DenseRank => "dense_rank",
-        WindowKind::Cumsum => "cumsum",
-        WindowKind::Cumcount => "cumcount",
-        WindowKind::Lag => "lag",
-        WindowKind::Lead => "lead",
-        WindowKind::PctChange => "pct_change",
-        WindowKind::RunningMean => "running_mean",
-        WindowKind::PercentRank => "percent_rank",
-        WindowKind::CumeDist => "cume_dist",
-        WindowKind::Ntile => "ntile",
-    };
-    let name = config
-        .output_column
-        .clone()
-        .unwrap_or_else(|| format!("{}_{}", config.column, suffix));
     replace_or_append(
         &ordered,
         &name,
@@ -256,6 +254,103 @@ fn window_function_riferimento(
         true,
         Arc::new(Float64Array::from(output)),
     )
+}
+
+/// Riferimento delle varianti esatte: `lag`/`lead` spostano l'indice di riga
+/// e prendono la cella con `take`; sul dominio intero `cumsum`,
+/// `running_mean` e `pct_change` sommano e sottraggono in `i128` i valori
+/// esatti di `scalar_as_numero`, e arrotondano una volta sola.
+fn valori_esatti_riferimento(
+    ordered: &RecordBatch,
+    partitions: &[(Option<std::borrow::Cow<'_, str>>, Vec<usize>)],
+    colonna: &ArrayRef,
+    config: &WindowFunction,
+) -> Result<Option<(DataType, ArrayRef)>> {
+    if matches!(config.function, WindowKind::Lag | WindowKind::Lead) {
+        valida_valori_numerici(colonna)?;
+        let mut indici: Vec<Option<u64>> = vec![None; ordered.num_rows()];
+        for (_, rows) in partitions {
+            for (posizione, row) in rows.iter().enumerate() {
+                let altra = if matches!(config.function, WindowKind::Lag) {
+                    posizione.checked_sub(config.offset())
+                } else {
+                    Some(posizione + config.offset()).filter(|altra| *altra < rows.len())
+                };
+                indici[*row] = altra.map(|altra| u64::try_from(rows[altra]).expect("u64"));
+            }
+        }
+        let uscita = plenora_core::arrow::select::take::take(
+            colonna.as_ref(),
+            &UInt64Array::from(indici),
+            None,
+        )?;
+        return Ok(Some((colonna.data_type().clone(), uscita)));
+    }
+    if matches!(config.function, WindowKind::Cumsum) {
+        crate::float64_source::verifica_somma(colonna.data_type())?;
+    }
+    if !crate::float64_source::dominio_intero(colonna.data_type())
+        || !matches!(
+            config.function,
+            WindowKind::Cumsum | WindowKind::RunningMean | WindowKind::PctChange
+        )
+    {
+        return Ok(None);
+    }
+    let intero = |row: usize| -> Result<Option<i128>> {
+        Ok(match crate::scalar_as_numero(colonna.as_ref(), row)? {
+            Some((_, crate::NumericBound::I64(intero))) => Some(i128::from(intero)),
+            Some((_, crate::NumericBound::U64(intero))) => Some(i128::from(intero)),
+            Some(_) => panic!("valore non intero nel dominio intero"),
+            None => None,
+        })
+    };
+    let mut somme: Vec<Option<i64>> = vec![None; ordered.num_rows()];
+    let mut double: Vec<Option<f64>> = vec![None; ordered.num_rows()];
+    for (_, rows) in partitions {
+        let mut cumulata = 0_i128;
+        let mut valori = 0_u32;
+        for (posizione, row) in rows.iter().enumerate() {
+            let corrente = intero(*row)?;
+            match config.function {
+                WindowKind::Cumsum => {
+                    if let Some(valore) = corrente {
+                        cumulata += valore;
+                        somme[*row] = Some(i64::try_from(cumulata).map_err(|_| {
+                            PlenoraError::DataMapping("somma intera oltre la gamma di Int64".into())
+                        })?);
+                    }
+                }
+                WindowKind::RunningMean => {
+                    if let Some(valore) = corrente {
+                        cumulata += valore;
+                        valori += 1;
+                        #[allow(clippy::cast_precision_loss)]
+                        let media = cumulata as f64 / f64::from(valori);
+                        double[*row] = Some(media);
+                    }
+                }
+                _ => {
+                    let precedente = match posizione.checked_sub(1) {
+                        Some(precedente) => intero(rows[precedente])?,
+                        None => None,
+                    };
+                    if let (Some(precedente), Some(corrente)) = (precedente, corrente) {
+                        if precedente != 0 {
+                            #[allow(clippy::cast_precision_loss)]
+                            let variazione = (corrente - precedente) as f64 / precedente as f64;
+                            double[*row] = Some(variazione);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(Some(if matches!(config.function, WindowKind::Cumsum) {
+        (DataType::Int64, Arc::new(Int64Array::from(somme)))
+    } else {
+        (DataType::Float64, Arc::new(Float64Array::from(double)))
+    }))
 }
 
 const FUNZIONI: [WindowKind; 11] = [

@@ -58,7 +58,7 @@ Esempi: 146 eseguiti con l'uscita confrontata, 0 verificati solo sul contratto.
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 1, kernel 2 |
 
 #### Che cosa fa
 
@@ -115,21 +115,15 @@ In validazione, `InvalidPlan`:
 In esecuzione:
 
 - `ResourceLimit`: un numero oltre `i64::MAX` (con `start` vicino al
-  massimo). Senza `partition_column` l'ultima riga può valere esattamente
-  `i64::MAX`; con `partition_column` il contatore di una partizione si
-  incrementa dopo ogni riga, anche l'ultima, quindi una partizione il cui
-  ultimo numero sarebbe `i64::MAX` fallisce già (con `start = i64::MAX`
-  basta una riga): un'asimmetria fra i due percorsi, dichiarata qui come
-  difetto noto;
+  massimo). Con e senza `partition_column` il numero vale `start` più la
+  posizione della riga (nella partizione): `i64::MAX` si raggiunge, solo
+  il numero successivo fallisce;
 - `Schema`: una cella di `partition_column` che non si legge come testo.
 
 #### Limiti e deviazioni
 
 Nessuna numerazione ordinata: `order_column` e `ascending` restano nella
 config per compatibilità, ma si rifiutano.
-
-Difetto noto: con `partition_column` il numero `i64::MAX` non si raggiunge
-mai (sopra, «Errori»); senza partizione sì.
 
 #### Complessità
 
@@ -188,7 +182,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 3 |
+| versioni | semantica 2, config 2, analisi 3, kernel 4 |
 
 #### Che cosa fa
 
@@ -223,10 +217,11 @@ Un parametro scritto per una funzione che non lo usa si rifiuta.
 
 Nome della colonna d'uscita: `alias` se non è vuoto; altrimenti
 `<column>_<funzione>` (`avg` scrive `mean`) se la stessa `column` compare
-in più aggregazioni; altrimenti `column`. Un nome uguale a una colonna già
-prodotta (di gruppo o di un'aggregazione precedente) si rifiuta: per
-esempio `mean` e `avg` sulla stessa colonna, due alias uguali, o un alias
-uguale a una colonna di `group_by`.
+in più aggregazioni; altrimenti `column`. Le chiavi di gruppo e i nomi
+delle aggregazioni (o `count` senza aggregazioni) sono tutti distinti: due
+aggregazioni con lo stesso nome, o un nome uguale a una chiave (anche una
+colonna aggregata senza `alias` che è anche chiave), si rifiutano
+([README, «Nomi delle colonne d'uscita»](../README.md#nomi-delle-colonne-duscita)).
 
 Funzioni:
 
@@ -234,16 +229,24 @@ Funzioni:
   una colonna di qualsiasi tipo;
 - `nunique`: `int64` non nullabile, i testi distinti del gruppo, più uno
   se c'è un null e `skip_null` è `false`;
-- `first`, `last`: `utf8`, il testo della cella nella prima o nell'ultima
-  riga del gruppo in ordine d'ingresso, null compreso;
+- `first`, `last`: la cella nella prima o nell'ultima riga del gruppo in
+  ordine d'ingresso, null compreso, nel tipo della colonna (un
+  `timestamp` resta `timestamp`, con il suo fuso);
 - `concat`: `utf8`, i testi delle celle in ordine d'ingresso uniti da
   `separator`; con `distinct` solo la prima occorrenza di ogni testo; un
   null si salta, o vale il testo vuoto con `skip_null: false`. Il testo di
   un gruppo non supera `max_string_bytes` byte;
-- `sum`, `mean`, `min`, `max`, `variance`, `stddev`, `quantile`:
-  `float64`. La cella si legge come `f64` (vedi i limiti). Con
+- `sum`, `mean`, `min`, `max`, `variance`, `stddev`, `quantile`: con
   `skip_null: false` un null nel gruppo dà null; un gruppo senza valori dà
-  null. `sum` somma in ordine d'ingresso; `min` e `max` ignorano i NaN
+  null (anche `sum`: la somma di nessun valore non è zero). Sulle colonne
+  intere (`int64`, `uint64`) `sum` è esatta ed esce `int64`, una somma
+  oltre `int64` è un errore; `sum` su `date32` o `timestamp` si rifiuta in
+  validazione (una somma di date non è una data). Su interi, date e istanti
+  `mean` parte dalla somma esatta e `variance`, `stddev` dagli scarti
+  esatti (valori uguali danno zero). `min` e `max` sulle colonne intere e
+  `decimal128` rendono la cella estrema nel tipo della colonna. Negli altri
+  casi l'uscita è `float64` e la cella si legge come `f64` (vedi i
+  limiti): `sum` somma in ordine d'ingresso; `min` e `max` ignorano i NaN
   salvo che il gruppo abbia solo NaN, la somma no; `variance` e `stddev`
   dividono per `valori - ddof` e danno null con `valori <= ddof`;
   `quantile` interpola linearmente fra i valori, ordinati come i
@@ -295,9 +298,9 @@ In validazione, `InvalidPlan`:
 - `quantile` assente con `function: "quantile"`, o fuori da `0..1`;
 - un parametro scritto per una funzione che non lo usa; `separator`,
   `distinct`, `skip_null`, `quantile` o `ddof` `null` espliciti;
-  `separator` oltre `max_string_bytes`; un nome d'uscita non valido (per esempio un `alias`
-  di soli spazi);
-- un nome d'uscita ripetuto o uguale a una colonna di `group_by`;
+  `separator` oltre `max_string_bytes`; un nome d'uscita non valido (per
+  esempio un `alias` di soli spazi) o ripetuto, anche uguale a una chiave
+  di gruppo;
 - funzione fuori elenco, campi sconosciuti.
 
 In esecuzione:
@@ -311,14 +314,17 @@ In esecuzione:
   variante spilled, file
   temporanei oltre `max_temp_bytes`, o una partizione i cui batch superano
   `max_governed_memory_bytes`;
+- `DataMapping`: `sum` su una colonna intera oltre la gamma di `int64`;
 - `Io`: nella variante spilled, un errore sui file temporanei.
 
 #### Limiti e deviazioni
 
-Le funzioni numeriche calcolano in `f64` perché il risultato è `float64`:
-un intero oltre `2^53`, un `decimal128` o un testo con più cifre di quante
-un `f64` ne tenga si arrotondano senza errore (con `distinct` i distinti si
-decidono comunque sul valore esatto). Le strutture di chiavi e gruppi
+Le funzioni a risultato `float64` calcolano in `f64`: un `decimal128` o un
+testo con più cifre di quante un `f64` ne tenga si arrotondano senza errore
+(con `distinct` i distinti si decidono comunque sul valore esatto); sulle
+colonne intere media e dispersione arrotondano alla fine del calcolo
+esatto, e
+`quantile` interpola i valori arrotondati ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)). Le strutture di chiavi e gruppi
 non sono contabilizzate
 ([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
 l'hash delle chiavi non ha seme
@@ -394,7 +400,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 2, analisi 2, kernel 1 |
+| versioni | semantica 3, config 2, analisi 3, kernel 3 |
 
 #### Che cosa fa
 
@@ -432,10 +438,12 @@ Il `default` si converte così, e ciò che non si converte si rifiuta:
   qualunque combinazione di maiuscole;
 - `Date32`: una stringa `AAAA-MM-GG`;
 - `Timestamp`: una stringa RFC 3339 con fuso (`"2026-07-25T00:00:00Z"`),
-  convertita all'istante in millisecondi (la parte sotto il millisecondo si
-  scarta);
-- `Decimal128`: un numero JSON o una stringa, senza esponente e con al più
-  10 cifre decimali (nessun arrotondamento).
+  convertita all'istante in millisecondi; una parte sotto il millisecondo,
+  una frazione oltre il nanosecondo e un secondo intercalare si rifiutano
+  (il lettore di [README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data));
+- `Decimal128`: un numero JSON o una stringa, senza esponente, con un
+  segno facoltativo (uno solo: `"--5"` e `"+-5"` si rifiutano) e con al
+  più 10 cifre decimali (nessun arrotondamento).
 
 Si accetta, perché l'effetto dipende dall'ingresso e lo stesso piano gira
 su tabelle diverse: il `default` di una colonna che esiste già (non si
@@ -482,9 +490,6 @@ In esecuzione: nessun errore che dipenda dai dati.
 
 - **Nessuna conversione implicita**: per cambiare il tipo di una colonna
   esistente serve [`table.type_cast`](#tabletype_cast) prima.
-- **Segni ripetuti nel `default` `Decimal128`**: i segni iniziali si
-  accettano tutti e conta solo il primo carattere (`"--5"` vale -5,
-  `"+-5"` vale 5).
 
 #### Complessità
 
@@ -659,7 +664,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 2 |
+| versioni | semantica 2, config 2, analisi 3, kernel 3 |
 
 #### Che cosa fa
 
@@ -678,7 +683,7 @@ coincidenti, per esempio a ogni ordine l'ultimo prezzo noto.
 | `left_by` | lista di stringhe | `[]` | colonne della sinistra, senza ripetizioni | gruppo: si abbinano solo righe con gli stessi valori |
 | `right_by` | lista di stringhe | `[]` | colonne della destra, tante quante `left_by`, senza ripetizioni | colonne di gruppo del lato destro, nello stesso ordine |
 | `direction` | stringa | `backward` | `backward`, `forward`, `nearest` | `backward`: il più grande `<=` del valore; `forward`: il più piccolo `>=`; `nearest`: il più vicino dei due |
-| `tolerance` | numero o `null` | `null` | finito, `>= 0`; non `0` con `allow_exact: false` | distanza massima fra i due valori; `null` nessun limite |
+| `tolerance` | numero o `null` | `null` | finito, `>= 0`; se intero, esatto in `f64`; non `0` con `allow_exact: false` | distanza massima fra i due valori; `null` nessun limite |
 | `allow_exact` | booleano | `true` | `true`, `false` | `false`: un candidato con valore uguale non si abbina (`<` e `>` stretti) |
 
 Le colonne `by` di ogni coppia hanno lo stesso tipo Arrow, fra quelli
@@ -728,8 +733,9 @@ In validazione, `InvalidPlan`:
   `right_on` assenti;
 - `left_by` e `right_by` di lunghezza diversa, con nomi ripetuti o oltre
   `max_columns`;
-- `tolerance` negativa; `tolerance` zero con `allow_exact: false` (nessun
-  candidato si abbinerebbe mai);
+- `tolerance` negativa, o intera e non esatta in `f64` (oltre `2^53` con
+  bit bassi non nulli: diventerebbe un'altra soglia); `tolerance` zero con
+  `allow_exact: false` (nessun candidato si abbinerebbe mai);
 - colonna assente; `left_on` e `right_on` non dello stesso tipo, o di tipo
   diverso da `int64` e `float64`; colonne `by` di tipi diversi nella
   coppia, o di tipo non ammesso;
@@ -747,10 +753,12 @@ In esecuzione, `Schema`:
 #### Limiti e deviazioni
 
 I valori `int64` si confrontano come `f64` esatti. Le distanze di
-`tolerance` e di `nearest` sono sottrazioni in `f64`: esatte per valori
-`int64` finché la differenza non supera `2^53`, arrotondate come ogni
-sottrazione IEEE per i `float64`. Un valore esattamente al bordo della
-tolleranza si abbina.
+`tolerance` e di `nearest` si decidono sulla differenza esatta dei due
+valori, non su quella arrotondata: una distanza appena sopra la
+tolleranza non si abbina, e di due candidati a distanze diverse vince il
+più vicino anche se le differenze arrotondate coincidono. Un valore
+esattamente al bordo della tolleranza si abbina, e a pari distanza vince
+il candidato prima. Una tolleranza decimale vale il suo `f64`.
 
 #### Complessità
 
@@ -1278,7 +1286,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 1, kernel 3 |
+| versioni | semantica 3, config 2, analisi 2, kernel 4 |
 
 #### Che cosa fa
 
@@ -1348,9 +1356,13 @@ In esecuzione:
 
 #### Limiti e deviazioni
 
-`min` e `max` si leggono dal JSON come `f64`: un estremo intero oltre `2^53`
-(`9007199254740993`) diventa il double più vicino prima di ogni confronto.
-Il confronto con la cella resta esatto, ma contro l'estremo arrotondato.
+`min` e `max` si leggono esatti dal JSON: un intero resta intero anche
+oltre `2^53` (`9007199254740993` è quel numero, non il double più vicino),
+un decimale resta decimale, anche con esponente (`0.1` è un decimo, `1e-7`
+un decimo di milionesimo, non il double più vicino). Un numero che il
+double non rappresenta come è scritto (`9007199254740993.0`, un intero
+oltre `u64` non riletto esatto) si rifiuta nel piano
+([README, «Letterali JSON oltre `u64`»](../README.md#letterali-json-oltre-u64)).
 Il testo non numerico in una colonna `utf8` fallisce solo in esecuzione
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
 
@@ -1768,7 +1780,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 2, kernel 2 |
+| versioni | semantica 2, config 1, analisi 3, kernel 3 |
 
 #### Che cosa fa
 
@@ -1801,9 +1813,14 @@ con `d = |v| · 0,001` (`0,001` se `v` è zero). In questo modo un valore
 sotto il primo bordo o sopra l'ultimo (anche `±inf`) cade nella classe
 esterna.
 
-L'etichetta di default (senza `labels`) scrive i due bordi `f64` con la
-resa decimale più corta (`(0, 18]`, `(2.5, 5]`); non supera
-`max_string_bytes` byte, controllato in esecuzione.
+I bordi espliciti si leggono esatti dal JSON, come `min` e `max` di
+[`table.assert_range`](#tableassert_range): un bordo intero oltre `2^53`
+resta quello scritto.
+
+L'etichetta di default (senza `labels`) scrive i bordi con la resa decimale
+più corta di `f64` (`(0, 18]`, `(2.5, 5]`); un bordo esplicito intero si
+scrive con tutte le sue cifre (`(9007199254740992, 9007199254740993]`).
+Non supera `max_string_bytes` byte, controllato in esecuzione.
 
 #### Schema
 
@@ -2372,7 +2389,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 2 |
+| versioni | semantica 2, config 2, analisi 3, kernel 3 |
 
 #### Che cosa fa
 
@@ -2402,7 +2419,9 @@ booleano come testo JSON, `null` come testo vuoto):
 - se ogni testo è vuoto o, sostituite le virgole con punti, un numero per
   il parse `f64` di Rust (esponente ammesso), l'uscita è `float64`
   nullable: il testo vuoto dà null, gli altri il numero (`"1,5"` dà 1,5,
-  `"1e3"` dà 1000);
+  `"1e3"` dà 1000). Un risultato scritto come intero che il `float64` non
+  rappresenta esattamente (`9007199254740993`) si rifiuta invece di
+  diventare un altro intero;
 - altrimenti l'uscita è `utf8` non nullable e ogni cella è il testo del
   valore scelto: `null` dà `""`, `true` dà `"true"`, `2` dà `"2"`.
 
@@ -2443,6 +2462,7 @@ In validazione, `InvalidPlan`:
   `isnull` o `notnull`;
 - il testo di un `result` o del `default_value` oltre `max_string_bytes`
   byte, o che si legge come numero non finito;
+- uscita `float64` con un risultato intero non esatto in `float64`;
 - `output_column` vuoto, di soli spazi o oltre 1024 byte;
 - config con campi sconosciuti.
 
@@ -2634,7 +2654,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 3, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -2648,19 +2668,22 @@ giorno del mese (31 gennaio più un mese è 29 febbraio 2024).
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `column` | stringa | obbligatorio | colonna leggibile come testo | colonna da leggere |
-| `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura |
+| `column` | stringa | obbligatorio | colonna temporale o leggibile come testo | colonna da leggere |
+| `input_format` | stringa | assente | formato `chrono` non vuoto, al più `max_string_bytes` byte; obbligatorio per un testo, rifiutato per una colonna temporale; `null` non ammesso | formato di lettura di un testo |
 | `output_format` | stringa | `"%Y-%m-%d %H:%M:%S"` | formato `chrono` non vuoto, al più `max_string_bytes` byte, senza fuso, che scrive al più `max_string_bytes` byte per valore | formato di scrittura |
 | `amount` | intero | obbligatorio | intero a 64 bit che almeno una data sopporta | quantità da aggiungere, con segno |
 | `unit` | stringa | obbligatorio | `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` | unità di `amount` |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
 | `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 
-Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
-`dictionary<utf8>` con chiavi `int32`. Una colonna non testuale si legge
-con la sua resa testuale: `date32` come `AAAA-MM-GG`, `timestamp(ms)` come
-RFC 3339.
+Una colonna temporale (`date32`, `timestamp` in secondi, millisecondi,
+microsecondi o nanosecondi, con o senza fuso) si legge dal valore nativo,
+senza `input_format` (scritto, si rifiuta): vale l'ora locale della
+colonna (del suo fuso; senza fuso, il valore com'è), e una data è la sua
+mezzanotte ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
+`input_format` obbligatorio; leggibili come testo: `utf8`, `int64`,
+`uint64`, `float64`, `bool`, `decimal128` con scala da 0 a 38, `binary`,
+`dictionary<utf8>` con chiavi `int32`.
 
 La lettura deve consumare tutto il testo della cella; un formato senza
 campi orari legge una data e la pone a mezzanotte. Il valore non ha fuso:
@@ -2696,7 +2719,8 @@ Invariato.
 
 In validazione, `InvalidPlan`:
 
-- `column` assente o non leggibile come testo;
+- `column` assente o non leggibile come testo; `input_format` assente con
+  una colonna di testo, o scritto con una colonna temporale;
 - un formato vuoto, oltre `max_string_bytes`, con un campo non
   riconosciuto, o `output_format` con campi di fuso (`%z`, `%:z`, `%Z`,
   `%+`);
@@ -2776,7 +2800,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 3, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -2788,22 +2812,28 @@ come numero con parte frazionaria (un giorno e mezzo è `1.5`) e con segno.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `start_column` | stringa | obbligatorio | colonna leggibile come testo | istante iniziale |
-| `end_column` | stringa | obbligatorio | colonna leggibile come testo | istante finale |
-| `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura di entrambe le colonne |
+| `start_column` | stringa | obbligatorio | colonna temporale o leggibile come testo | istante iniziale |
+| `end_column` | stringa | obbligatorio | colonna dello stesso genere di `start_column` | istante finale |
+| `input_format` | stringa | assente | formato `chrono` non vuoto, al più `max_string_bytes` byte; obbligatorio per colonne di testo, rifiutato per colonne temporali; `null` non ammesso | formato di lettura di entrambe le colonne |
 | `unit` | stringa | obbligatorio | `days`, `hours`, `minutes`, `seconds` | unità della differenza |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
 | `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 
-Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
-`dictionary<utf8>` con chiavi `int32`. Una colonna non testuale si legge
-con la sua resa testuale: `date32` come `AAAA-MM-GG`, `timestamp(ms)` come
-RFC 3339.
+Una colonna temporale (`date32`, `timestamp` in secondi, millisecondi,
+microsecondi o nanosecondi, con o senza fuso) si legge dal valore nativo,
+senza `input_format` (scritto, si rifiuta): vale l'ora locale della
+colonna (del suo fuso; senza fuso, il valore com'è), e una data è la sua
+mezzanotte ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
+`input_format` obbligatorio; leggibili come testo: `utf8`, `int64`,
+`uint64`, `float64`, `bool`, `decimal128` con scala da 0 a 38, `binary`,
+`dictionary<utf8>` con chiavi `int32`.
 
-La lettura deve consumare tutto il testo della cella; un formato senza
-campi orari legge una data e la pone a mezzanotte. I valori non hanno fuso:
-un giorno è sempre 86 400 secondi. La differenza è il numero di nanosecondi
+Le due colonne sono dello stesso genere: due istanti (`timestamp`), due
+date (`date32`) o due testi. La lettura di un testo deve consumarlo tutto;
+un formato senza campi orari legge una data e la pone a mezzanotte. Due
+istanti (colonne `timestamp`, o testi letti con un offset, `%z`/`%:z`) si
+sottraggono come istanti; date e ore senza offset come ore locali, e un
+giorno è sempre 86 400 secondi. La differenza è il numero di nanosecondi
 diviso per `10^9` e poi per 86 400, 3 600, 60 o 1. Un valore non leggibile
 rifiuta sempre la riga.
 
@@ -2826,7 +2856,10 @@ Invariato.
 
 In validazione, `InvalidPlan`:
 
-- `start_column` o `end_column` assenti o non leggibili come testo;
+- `start_column` o `end_column` assenti o non leggibili come testo; di
+  generi diversi (un istante e una data, una colonna temporale e un
+  testo); `input_format` assente con colonne di testo, o scritto con
+  colonne temporali;
 - `input_format` vuoto, oltre `max_string_bytes` o con un campo non
   riconosciuto;
 - `output_column` non valido;
@@ -2901,7 +2934,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 2, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -2915,20 +2948,26 @@ righe.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `column` | stringa | obbligatorio | colonna dell'ingresso leggibile come testo | date da leggere |
+| `column` | stringa | obbligatorio | colonna temporale o leggibile come testo | date da leggere |
 | `parts` | lista di stringhe | `["year"]` | non vuota, senza ripetizioni, fra `year`, `month`, `day`, `quarter`, `weekday`, `week`, `hour`, `minute`, `second` | parti da estrarre, nell'ordine delle colonne d'uscita |
 | `prefix` | stringa | `""` | qualunque; `""` vale `<column>_` | prefisso dei nomi d'uscita (`<prefix><parte>`) |
-| `date_format` | stringa o `null` | `null` | formato strftime di chrono, non vuoto, al più `max_string_bytes` byte | formato delle date; `null` usa i formati di default |
+| `date_format` | stringa o `null` | `null` | formato strftime di chrono, non vuoto, al più `max_string_bytes` byte; solo con una colonna di testo | formato delle date; `null` usa i formati ISO di default |
 | `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non interpretabile fa sempre fallire il passo, nessun valore avrebbe effetto |
 
-Ogni cella non nulla si legge come testo (una `date32` come `AAAA-MM-GG`,
-un `timestamp` in RFC 3339 con il fuso) e si interpreta:
+Una colonna temporale (`date32`, `timestamp` di ogni unità, con o senza
+fuso) si legge dal valore nativo, senza `date_format` (scritto, si
+rifiuta): le parti sono dell'ora locale della colonna (del suo fuso; senza
+fuso, il valore com'è). Ogni altra cella non nulla si legge come testo e
+si interpreta:
 
 - con `date_format`: prima come data e ora con quel formato, poi come sola
   data a mezzanotte;
-- senza: `%Y-%m-%dT%H:%M:%S`, `%Y-%m-%d %H:%M:%S`, `%d/%m/%Y %H:%M:%S`,
-  poi `%Y-%m-%d`, `%d/%m/%Y`, `%d-%m-%Y`, `%Y/%m/%d` a mezzanotte. Gli
-  spazi non si tolgono.
+- senza, solo ISO 8601: RFC 3339 con offset (`2024-01-31T10:00:00Z`,
+  `2024-01-31 10:00:00.5+01:00`: le parti sono dell'ora scritta), data e
+  ora con `T` o spazio e frazione facoltativa (`%Y-%m-%dT%H:%M:%S%.f`,
+  `%Y-%m-%d %H:%M:%S%.f`), poi `%Y-%m-%d` a mezzanotte. Nessun formato con
+  giorno e mese in un ordine da indovinare (`31/01/2024` serve un
+  `date_format`) ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Gli spazi non si tolgono.
 
 Le parti: `year` l'anno del calendario gregoriano; `month` 1-12; `day`
 1-31; `quarter` 1-4; `weekday` 0 per il lunedì fino a 6 per la domenica;
@@ -2962,8 +3001,8 @@ Righe nell'ordine d'ingresso.
 In validazione, `InvalidPlan`:
 
 - `column` assente o di un tipo che non si legge come testo;
-- `date_format` vuoto, oltre `max_string_bytes` o con un elemento
-  strftime non riconosciuto;
+- `date_format` vuoto, oltre `max_string_bytes`, con un elemento strftime
+  non riconosciuto, o scritto con una colonna temporale;
 - un nome d'uscita `<prefix><parte>` vuoto, di soli spazi o oltre 1024
   byte;
 - `parts` vuota o con una parte ripetuta;
@@ -2978,10 +3017,8 @@ In esecuzione:
 
 #### Limiti e deviazioni
 
-- **Colonne `timestamp`**: il loro testo porta il fuso (`+00:00`), che i
-  formati di default non riconoscono: ogni cella fallisce. Serve un
-  `date_format` con il fuso, per esempio `%Y-%m-%dT%H:%M:%S%.f%:z`; le parti
-  sono quelle dell'ora locale nel fuso della colonna.
+Nessuna oltre quelle dette sopra: una colonna temporale si legge dal
+valore nativo, un testo con `date_format` o con i formati ISO di default.
 
 #### Complessità
 
@@ -3006,7 +3043,7 @@ Ingresso `eventi`:
 | `quando: utf8` |
 | --- |
 | 2021-01-01 |
-| 30/12/2019 23:59:59 |
+| 2019-12-30T23:59:59+01:00 |
 | null |
 
 Uscita `risultato`:
@@ -3014,7 +3051,7 @@ Uscita `risultato`:
 | `quando: utf8` | `q_year: int64` | `q_quarter: int64` | `q_weekday: int64` | `q_week: int64` |
 | --- | --- | --- | --- | --- |
 | 2021-01-01 | 2021 | 1 | 4 | 53 |
-| 30/12/2019 23:59:59 | 2019 | 4 | 0 | 1 |
+| 2019-12-30T23:59:59+01:00 | 2019 | 4 | 0 | 1 |
 | null | null | null | null | null |
 
 Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella per cella.
@@ -3035,7 +3072,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 3, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -3047,17 +3084,20 @@ altro formato in una colonna nuova (per esempio da `31/01/2024` a
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `column` | stringa | obbligatorio | colonna leggibile come testo | colonna da leggere |
-| `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura |
+| `column` | stringa | obbligatorio | colonna temporale o leggibile come testo | colonna da leggere |
+| `input_format` | stringa | assente | formato `chrono` non vuoto, al più `max_string_bytes` byte; obbligatorio per un testo, rifiutato per una colonna temporale; `null` non ammesso | formato di lettura di un testo |
 | `output_format` | stringa | `"%Y-%m-%d %H:%M:%S"` | formato `chrono` non vuoto, al più `max_string_bytes` byte, senza fuso, che scrive al più `max_string_bytes` byte per valore | formato di scrittura |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
 | `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 
-Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
-`dictionary<utf8>` con chiavi `int32`. Una colonna non testuale si legge
-con la sua resa testuale: `date32` come `AAAA-MM-GG`, `timestamp(ms)` come
-RFC 3339 (`2024-01-31T10:00:00+00:00`).
+Una colonna temporale (`date32`, `timestamp` in secondi, millisecondi,
+microsecondi o nanosecondi, con o senza fuso) si legge dal valore nativo,
+senza `input_format` (scritto, si rifiuta): vale l'ora locale della
+colonna (del suo fuso; senza fuso, il valore com'è), e una data è la sua
+mezzanotte ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
+`input_format` obbligatorio; leggibili come testo: `utf8`, `int64`,
+`uint64`, `float64`, `bool`, `decimal128` con scala da 0 a 38, `binary`,
+`dictionary<utf8>` con chiavi `int32`.
 
 La lettura deve consumare tutto il testo della cella. Un formato senza
 campi orari legge una data e la pone a mezzanotte. `output_format` non può
@@ -3093,6 +3133,8 @@ Invariato.
 In validazione, `InvalidPlan`:
 
 - `column` assente o non leggibile come testo;
+- `input_format` assente con una colonna di testo, o scritto con una
+  colonna temporale;
 - un formato vuoto, oltre `max_string_bytes`, con un campo non riconosciuto
   (`%Q`, `%` finale), o `output_format` con campi di fuso;
 - `output_format` che può scrivere più di `max_string_bytes` byte per
@@ -3750,7 +3792,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 4, config 3, analisi 3, kernel 5 |
+| versioni | semantica 5, config 3, analisi 4, kernel 6 |
 
 #### Che cosa fa
 
@@ -3980,7 +4022,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 2, kernel 2 |
+| versioni | semantica 2, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -4107,7 +4149,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 3 |
+| versioni | semantica 2, config 2, analisi 3, kernel 4 |
 
 #### Che cosa fa
 
@@ -5773,7 +5815,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 3 |
+| versioni | semantica 2, config 2, analisi 3, kernel 4 |
 
 #### Che cosa fa
 
@@ -5811,10 +5853,15 @@ righe della cella in ordine d'ingresso:
 - `concat`: `utf8`, i testi delle celle non nulle uniti da `,`; solo null
   dà il testo vuoto; il testo di una cella non supera `max_string_bytes`
   byte;
-- `sum`, `mean`, `min`, `max`: `float64` sulla cella letta come `f64`
-  (tipi numerici di [`table.aggregate`](#tableaggregate)); i null si
-  saltano, solo null dà null; `min` e `max` ignorano i NaN salvo che siano
-  tutti NaN, `sum` e `mean` no.
+- `sum`, `mean`, `min`, `max` (tipi numerici di
+  [`table.aggregate`](#tableaggregate)): i null si saltano, solo null dà
+  null. Sulle colonne intere (`int64`, `uint64`) `sum` è esatta ed esce
+  `int64` (oltre `int64` è un errore); `sum` su `date32` o `timestamp` si
+  rifiuta; `mean` su interi, date e istanti parte dalla somma esatta; `min`
+  e `max` sulle colonne intere e `decimal128` rendono la cella estrema nel
+  tipo di `value_col`. Altrove l'uscita è `float64` sulla cella letta come
+  `f64`; `min` e `max` ignorano i NaN salvo che siano tutti NaN, `sum` e
+  `mean` no.
 
 Una combinazione chiave-valore che non compare nei dati è null, anche con
 `count`.
@@ -5881,13 +5928,15 @@ In esecuzione (dal runner con `mapping`, o chiamando il kernel):
   valore pivot vuoto o di soli spazi, o uguale a una colonna indice;
 - `ResourceLimit`: righe oltre `max_rows` o colonne oltre `max_columns`;
   più di `u32::MAX` righe; con `concat`, il testo di una cella oltre
-  `max_string_bytes` byte.
+  `max_string_bytes` byte;
+- `DataMapping`: `sum` su una colonna intera oltre la gamma di `int64`.
 
 #### Limiti e deviazioni
 
 Senza `mapping` il runner non esegue l'operazione (lo schema dipende dai
-dati); `table.transpose` ha lo stesso limite. `sum` e `mean` arrotondano
-un intero oltre `2^53` o un `decimal128`, perché il risultato è `float64`.
+dati); `table.transpose` ha lo stesso limite. Su `decimal128` e testo
+`sum` e `mean` arrotondano, perché il risultato è `float64`; su una colonna
+intera `mean` arrotonda una volta, dopo la somma esatta ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
 L'hash delle chiavi non ha seme
 ([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
 
@@ -6430,15 +6479,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 3 |
+| versioni | semantica 2, config 2, analisi 2, kernel 4 |
 
 #### Che cosa fa
 
 Calcola per ogni riga un'aggregazione (somma, media, minimo, massimo,
 deviazione standard) della colonna `column` sulle ultime `window` righe
 della sua partizione, riga corrente compresa, e la aggiunge come colonna
-`float64`. Con `order_column` le righe si riordinano prima su quella
-colonna.
+(`float64`, o del tipo detto sotto). Con `order_column` le righe si
+riordinano prima su quella colonna.
 
 #### Parametri
 
@@ -6455,15 +6504,22 @@ colonna.
 
 La finestra si misura in righe, non in valori: una cella nulla occupa il
 suo posto e non conta fra i valori. Con meno di `min_periods` valori non
-nulli nella finestra il risultato è null. `sum` somma in ordine di riga;
-`mean` è la somma divisa per i valori; `min` e `max` ignorano i NaN salvo
-che la finestra abbia solo NaN, `sum` e `mean` no; `stddev` divide per
-`valori - ddof` e dà null con `valori <= ddof`.
+nulli nella finestra il risultato è null. Sulle colonne intere (`int64`,
+`uint64`) `sum` è esatta ed esce `int64` (una somma oltre `int64` è un
+errore); `sum` su `date32` o `timestamp` si rifiuta in validazione. Su
+interi, date e istanti `mean` parte dalla somma esatta e `stddev` dagli
+scarti esatti; altrove `sum` somma in `f64` in ordine di riga. `mean` è la somma
+divisa per i valori. `min` e `max` sulle colonne intere e `decimal128`
+rendono la cella estrema nel tipo della colonna; altrove ignorano i NaN
+salvo che la finestra abbia solo NaN, `sum` e `mean` no. `stddev` divide
+per `valori - ddof` e dà null con `valori <= ddof`.
 
 #### Schema
 
-L'ingresso più la colonna `output_column`, `float64` nullabile, senza
-metadati di campo, in coda; se il nome esiste già, la colonna è sostituita
+L'ingresso più la colonna `output_column`, nullabile, senza metadati di
+campo, in coda: `int64` con `sum` su una colonna intera, il tipo di
+`column` con `min`/`max` su una colonna intera o `decimal128`, `float64`
+altrimenti; se il nome esiste già, la colonna è sostituita
 al suo posto. Gli altri metadati si conservano. Il contratto dichiara
 l'uscita ordinata in ascendente su `order_column` se c'è (altrimenti
 conserva l'ordinamento dell'ingresso) e conserva il conteggio.
@@ -6498,15 +6554,19 @@ In esecuzione:
   `group_by` che non si converte in testo; una chiave di dizionario di
   `order_column` fuori dal proprio dizionario;
 - `DataMapping`: un risultato di `sum`, `mean` o `stddev` non finito
-  calcolato da valori finiti (overflow di `f64`);
+  calcolato da valori finiti (overflow di `f64`); con `sum` su una colonna
+  intera, una somma oltre la gamma di `int64`;
 - `ResourceLimit`: più di `u32::MAX` righe con `order_column`.
 
 #### Limiti e deviazioni
 
-La cella si legge come `f64`: un intero oltre `2^53` o un `decimal128` si
-arrotondano senza errore, perché il risultato è `float64`. Un `NaN` o un
-infinito già nei dati si propagano senza errore; solo l'overflow di un
-calcolo su valori finiti si rifiuta.
+Su `decimal128` e testo numerico `sum`, `mean` e `stddev` leggono la cella
+come `f64` e arrotondano senza errore, perché il risultato è `float64`;
+sulle colonne intere `mean` e `stddev` arrotondano alla fine del calcolo
+esatto
+([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
+Un `NaN` o un infinito già nei dati si propagano senza errore; solo
+l'overflow di un calcolo su valori finiti si rifiuta.
 
 #### Complessità
 
@@ -6521,7 +6581,8 @@ Memoria: da misura v4.
 
 #### Esempio
 
-Somma mobile su due righe: il null occupa il suo posto ma non conta.
+Somma mobile su due righe: il null occupa il suo posto ma non conta, e
+la somma di una colonna intera resta `int64`, esatta.
 
 Passo del piano:
 
@@ -6541,12 +6602,12 @@ Ingresso `giorni`:
 
 Uscita `risultato`:
 
-| `giorno: int64` | `vendite: int64` | `somma_2: float64` |
+| `giorno: int64` | `vendite: int64` | `somma_2: int64` |
 | --- | --- | --- |
-| 1 | 1 | 1.0 |
-| 2 | 2 | 3.0 |
-| 3 | null | 2.0 |
-| 4 | 4 | 4.0 |
+| 1 | 1 | 1 |
+| 2 | 2 | 3 |
+| 3 | null | 2 |
+| 4 | 4 | 4 |
 
 Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella per cella.
 
@@ -7431,7 +7492,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 3 |
+| versioni | semantica 2, config 2, analisi 3, kernel 4 |
 
 #### Che cosa fa
 
@@ -7460,19 +7521,28 @@ Le statistiche, sui valori non nulli del gruppo:
 
 - `count`: quanti sono;
 - `min`, `max`, `median`, `q25`, `q75`: sui valori ordinati; i quantili
-  interpolano linearmente fra i due valori vicini (posizione `q · (c - 1)`);
-- `sum`, `mean`: somma in `f64` nell'ordine delle righe, e somma diviso
+  interpolano linearmente fra i due valori vicini (posizione `q · (c - 1)`).
+  `min` e `max` sulle colonne intere (`int64`, `uint64`, `date32`,
+  `timestamp(ms)`) e `decimal128` rendono la cella estrema nel tipo della
+  colonna;
+- `sum`, `mean`: sulle colonne intere (`int64`, `uint64`) la somma è
+  esatta ed esce `int64` (oltre `int64` è un errore); `sum` su `date32` o
+  `timestamp` si rifiuta in validazione; la media su interi, date e istanti
+  è la somma esatta diviso `count`; altrove somma in `f64` nell'ordine delle righe, e somma diviso
   `count`;
 - `var`, `std`: varianza campionaria (divisore `count - 1`) e sua radice;
   null con meno di due valori.
 
 I gruppi si formano sul testo della cella di `group_by`; le celle nulle
-formano un gruppo.
+formano un gruppo. Una statistica ripetuta in `stats` si rifiuta: darebbe
+due colonne con lo stesso nome
+([README, «Nomi delle colonne d'uscita»](../README.md#nomi-delle-colonne-duscita)).
 
 #### Schema
 
-Una colonna `float64` nullable per statistica, nell'ordine di `stats`, in
-coda; una colonna con lo stesso nome di una esistente la sostituisce al suo
+Una colonna nullable per statistica, nell'ordine di `stats`, in coda:
+`int64` per `sum` su una colonna intera, il tipo della colonna per `min` e
+`max` su una colonna intera o `decimal128`, `float64` altrimenti; una colonna con lo stesso nome di una esistente la sostituisce al suo
 posto (perdendone tipo e metadati di campo). Le colonne d'ingresso restano.
 Metadati di schema conservati; `row_count` resta; `sorted_by` resta solo se
 nessuna colonna esistente è sovrascritta.
@@ -7494,16 +7564,21 @@ In validazione, `InvalidPlan`:
 - `group_by` assente o non leggibile come testo, o `null` esplicito (il
   parametro si omette);
 - `stats` vuota o con una statistica ripetuta;
-- una voce di `stats` fuori elenco, o config con campi sconosciuti.
+- una voce di `stats` fuori elenco, un nome d'uscita non valido, o config
+  con campi sconosciuti.
 
 In esecuzione, `Schema`: una cella `utf8` di `column` che non è un numero;
-una cella di `group_by` che non si converte in testo.
+una cella di `group_by` che non si converte in testo. `DataMapping`: con
+`sum` su una colonna intera, una somma oltre la gamma di `int64`.
 
 #### Limiti e deviazioni
 
-Il risultato è `float64` per contratto: `int64` e `uint64` oltre `2^53` e i
-`decimal128` si convertono arrotondando, e la somma accumula gli errori di
-arrotondamento di `f64` nell'ordine delle righe. Un `NaN` nei valori entra
+Le statistiche `float64` sono tali per contratto: i `decimal128` e il testo
+si convertono arrotondando e la loro somma accumula gli errori di
+arrotondamento di `f64` nell'ordine delle righe; sulle colonne intere
+la media parte dalla somma esatta, varianza e deviazione dagli scarti
+esatti, e mediana e
+quartili interpolano i valori arrotondati ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)). Un `NaN` nei valori entra
 nei calcoli: somma, media e varianza diventano `NaN`, e nell'ordinamento di
 minimo, massimo e quantili sta dopo ogni numero.
 
@@ -8172,7 +8247,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 3, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -8185,8 +8260,8 @@ nomi IANA (`Europe/Rome`, `UTC`, `America/New_York`).
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `column` | stringa | obbligatorio | colonna leggibile come testo | colonna da leggere |
-| `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura |
+| `column` | stringa | obbligatorio | colonna temporale o leggibile come testo | colonna da leggere |
+| `input_format` | stringa | assente | formato `chrono` non vuoto, al più `max_string_bytes` byte; obbligatorio per un testo, rifiutato per una colonna temporale; `null` non ammesso | formato di lettura di un testo |
 | `output_format` | stringa | `"%Y-%m-%d %H:%M:%S"` | formato `chrono` non vuoto, al più `max_string_bytes` byte, che scrive al più `max_string_bytes` byte per valore | formato di scrittura; ammette `%z`, `%:z`, `%Z`, `%+` |
 | `source_timezone` | stringa | obbligatorio | nome IANA noto a `chrono-tz` | fuso dei valori letti |
 | `target_timezone` | stringa | obbligatorio | nome IANA noto a `chrono-tz` | fuso dei valori scritti |
@@ -8194,16 +8269,22 @@ nomi IANA (`Europe/Rome`, `UTC`, `America/New_York`).
 | `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 | `ambiguous` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un'ora locale ambigua o inesistente rifiuta sempre la riga, nessun valore avrebbe effetto |
 
-Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
-`dictionary<utf8>` con chiavi `int32`. Una colonna non testuale si legge
-con la sua resa testuale: `date32` come `AAAA-MM-GG`, `timestamp(ms)` come
-RFC 3339.
+Una colonna temporale (`date32`, `timestamp` in secondi, millisecondi,
+microsecondi o nanosecondi, con o senza fuso) si legge dal valore nativo,
+senza `input_format` (scritto, si rifiuta): vale l'ora locale della
+colonna (del suo fuso; senza fuso, il valore com'è), e una data è la sua
+mezzanotte ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
+`input_format` obbligatorio; leggibili come testo: `utf8`, `int64`,
+`uint64`, `float64`, `bool`, `decimal128` con scala da 0 a 38, `binary`,
+`dictionary<utf8>` con chiavi `int32`.
 
 La lettura deve consumare tutto il testo della cella; un formato senza
-campi orari legge una data e la pone a mezzanotte. Un eventuale offset nel
-testo letto non conta: il valore è sempre ora locale di
-`source_timezone`. Un'ora locale che nel fuso di partenza si ripete (il
+campi orari legge una data e la pone a mezzanotte. Un valore con un
+istante si converte dall'istante: una colonna `timestamp` con fuso (che
+dev'essere `source_timezone`, altrimenti il piano si rifiuta) o un testo
+letto con un offset (`%z`/`%:z`: l'offset letto prevale su
+`source_timezone`). Ogni altro valore (testo senza offset, `date32` a
+mezzanotte, `timestamp` senza fuso) è ora locale di `source_timezone`. Un'ora locale che nel fuso di partenza si ripete (il
 ritorno all'ora solare) o non esiste (il passaggio all'ora legale) rifiuta
 sempre la riga, come un valore non leggibile: per questo `ambiguous` e
 `invalid` non si accettano.
@@ -8236,7 +8317,9 @@ Invariato.
 
 In validazione, `InvalidPlan`:
 
-- `column` assente o non leggibile come testo;
+- `column` assente o non leggibile come testo; `input_format` assente con
+  una colonna di testo, o scritto con una colonna temporale; una colonna
+  `timestamp` con un fuso diverso da `source_timezone`;
 - `source_timezone` o `target_timezone` non riconosciuti;
 - un formato vuoto, oltre `max_string_bytes`, con un campo non
   riconosciuto, o che non si sa scrivere per un valore con fuso;
@@ -8428,7 +8511,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 2, config 2, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -8446,11 +8529,15 @@ eseguito chiamando il kernel.
 | `output_columns` | lista di stringhe | `[]` | nomi di colonna | nomi delle colonne d'uscita, per posizione di riga |
 | `type_policy` | stringa | `"reject"` | `"reject"`, `"string"`; `null` non ammesso | colonne dati di tipi diversi: rifiuto, o conversione in testo |
 
-Nome della colonna della riga i (da 0): `output_columns[i]` se c'è e non
-è vuoto; altrimenti il testo della cella di `id_column` alla riga i, se non
-è nulla; altrimenti `col_<i+1>`. I nomi in più di `output_columns` si
-ignorano. `type_policy` con colonne dati tutte dello stesso tipo si accetta
-e non cambia niente: dipende dall'ingresso.
+Nome della colonna della riga i (da 0): `output_columns[i]` se c'è;
+altrimenti il testo della cella di `id_column` alla riga i, se non è
+nulla; altrimenti `col_<i+1>`. Una voce di `output_columns` vuota non vale
+«assente»: si rifiuta, in validazione e nel kernel. I nomi in più di
+`output_columns` si ignorano. I nomi d'uscita, prima colonna compresa, sono
+tutti distinti
+([README, «Nomi delle colonne d'uscita»](../README.md#nomi-delle-colonne-duscita)).
+`type_policy` con colonne dati tutte dello stesso tipo si accetta e non
+cambia niente: dipende dall'ingresso.
 
 #### Schema
 
@@ -8486,17 +8573,16 @@ Chiamando il kernel:
   conversione in testo una cella dati, che non si converte in testo (tipo
   non leggibile come testo, `binary` non UTF-8, date fuori intervallo);
 - `InvalidPlan`: colonne dati di tipi diversi con `type_policy: "reject"`;
-  un nome di colonna d'uscita non valido (per esempio il testo di
-  `id_column` vuoto o di soli spazi);
+  una voce di `output_columns` vuota o ripetuta; un nome di colonna
+  d'uscita non valido (per esempio il testo di `id_column` vuoto o di soli
+  spazi) o uguale a un altro (valori ripetuti di `id_column`, una voce
+  uguale al nome della prima colonna);
 - `ResourceLimit`: colonne dati oltre `max_rows` o righe più una oltre
   `max_columns`; un testo oltre `max_string_bytes`.
 
 #### Limiti e deviazioni
 
-Chiamando il kernel non si rifiutano nomi d'uscita ripetuti: valori
-ripetuti di `id_column`, o nomi ripetuti in `output_columns`, danno
-colonne con lo stesso nome. Il kernel tratta una voce vuota di
-`output_columns` come assente, mentre l'analisi la rifiuta.
+Nessuno oltre allo schema che dipende dai dati.
 
 #### Complessità
 
@@ -8547,7 +8633,7 @@ Verifica: eseguito dal kernel (il runner rifiuta questa config in validazione, p
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 2, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -8561,28 +8647,46 @@ equivalenti): nessuna cella diventa null in silenzio.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `column` | stringa | obbligatorio | colonna dell'ingresso leggibile come testo (sotto) | colonna da convertire |
+| `column` | stringa | obbligatorio | colonna temporale o leggibile come testo (sotto) | colonna da convertire |
 | `target_type` | stringa | `"str"` | `str`, `int`, `float`, `bool`, `date`, `datetime`, `date32`, `timestamp_millis`, `decimal128`, `binary_utf8`, `uint64`, `dictionary_utf8` | tipo d'arrivo |
-| `date_format` | stringa | `""` | formato strftime di chrono, solo con `date`, `datetime`, `date32`, `timestamp_millis`, al più `max_string_bytes` byte | formato delle date; `""` usa i formati di default |
+| `date_format` | stringa | `""` | formato strftime di chrono, solo con `date`, `datetime`, `date32`, `timestamp_millis` e una colonna di testo, al più `max_string_bytes` byte | formato delle date; `""` usa i formati ISO di default |
 | `errors` | stringa | `"coerce"` | `coerce`, `raise`, `ignore`; non con `str`, `binary_utf8`, `dictionary_utf8`; `null` non ammesso | che cosa succede a una cella che non si converte |
 | `precision` | intero | assente | da 1 a 38, obbligatorio con `decimal128` e solo lì; `null` non ammesso | cifre totali del decimale |
 | `scale` | intero | assente | da 0 a `precision`, obbligatorio con `decimal128` e solo lì; `null` non ammesso | cifre dopo la virgola |
 | `timezone` | stringa | assente | nome IANA (`Europe/Rome`), solo con `timestamp_millis`; `null` non ammesso | fuso dei testi senza fuso, e fuso della colonna d'uscita |
 
-Tipi d'arrivo: `str`, `date`, `datetime` → `utf8`; `int` → `int64`;
+Tipi d'arrivo: `str`, `date`, `datetime` → `utf8` (**testo**: `date`
+scrive `AAAA-MM-GG`, `datetime` `AAAA-MM-GGTHH:MM:SS`; i tipi temporali
+Arrow sono `date32` e `timestamp_millis`); `int` → `int64`;
 `uint64` → `uint64`; `float` → `float64`; `bool` → `bool`; `date32` →
 `date32`; `timestamp_millis` → `timestamp(ms)`, con `timezone` se data;
 `decimal128` → `decimal128(precision, scale)`; `binary_utf8` → `binary`;
 `dictionary_utf8` → `dictionary<utf8>` (chiavi `int32`).
 
-La colonna d'ingresso può essere `utf8`, `int64`, `uint64`, `float64`,
-`bool`, `date32`, `timestamp(ms)` (con o senza fuso), `decimal128` con
-scala da 0 a 38, `binary`, `dictionary<utf8>`. Il suo testo è: l'intero in
-decimale; il `float64` nella forma più corta che lo rilegge (`1.0` dà
-`"1"`, niente esponente, `NaN`, `inf`); `true`/`false`; la data
-`AAAA-MM-GG`; il timestamp in RFC 3339 nel suo fuso
-(`"2024-01-31T10:00:00.123+00:00"`); il decimale con tutte le cifre della
-scala (`"12.30"`); i byte di un `binary` letti come UTF-8.
+Una colonna **temporale** (`date32`; `timestamp` in secondi,
+millisecondi, microsecondi o nanosecondi, con o senza fuso) si converte
+dal valore nativo, senza passare dal testo e senza `date_format`
+(scritto, si rifiuta) ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)):
+
+- `str`, `binary_utf8`, `dictionary_utf8`: la data `AAAA-MM-GG`, l'istante
+  in RFC 3339 nel fuso della colonna (senza fuso `+00:00`), con le cifre
+  frazionarie che servono (`"2024-01-31T10:00:00.123+00:00"`);
+- `date`, `datetime`, `date32`: la data e l'ora **locali** della colonna
+  (del suo fuso; senza fuso, il valore com'è); `datetime` scrive la
+  frazione di secondo quando c'è;
+- `timestamp_millis`: lo stesso istante (una data è la sua mezzanotte nel
+  fuso `timezone`, o in UTC); un istante con una parte sotto il
+  millisecondo si rifiuta (`conversion.timestamp_precision`) invece di
+  troncarla;
+- `int`, `uint64`, `float`, `bool`, `decimal128`: rifiutati in validazione
+  (un numero da un istante non ha un significato scritto).
+
+Ogni altra colonna si legge come testo: `utf8`, `int64`, `uint64`,
+`float64`, `bool`, `decimal128` con scala da 0 a 38, `binary`,
+`dictionary<utf8>`. Il suo testo è: l'intero in decimale; il `float64`
+nella forma più corta che lo rilegge (`1.0` dà `"1"`, niente esponente,
+`NaN`, `inf`); `true`/`false`; il decimale con tutte le cifre della scala
+(`"12.30"`); i byte di un `binary` letti come UTF-8.
 
 Come si interpreta il testo, per tipo d'arrivo:
 
@@ -8595,19 +8699,24 @@ Come si interpreta il testo, per tipo d'arrivo:
 - `bool`: senza spazi ai lati e in minuscolo, `true`, `1`, `yes`, `si`,
   `sì`, `vero`, `t`, `y`, `s` sono vero; `false`, `0`, `no`, `falso`, `f`,
   `n` sono falso;
-- `date`, `date32`: con `date_format`, quel formato; senza, nell'ordine
-  `%Y-%m-%d`, `%d/%m/%Y`, `%d-%m-%Y`, `%Y/%m/%d`. Gli spazi non si tolgono.
-  `date` scrive `AAAA-MM-GG`;
+- `date`, `date32`: con `date_format`, quel formato; senza, i soli
+  formati ISO 8601: RFC 3339 con offset, data e ora con `T` o spazio e
+  frazione facoltativa, `%Y-%m-%d`. Nessun formato con giorno e mese in un
+  ordine da indovinare (`31/01/2024`, `2024/01/31` servono un
+  `date_format`). Gli spazi non si tolgono. Con un offset vale la data
+  scritta. `date` scrive `AAAA-MM-GG`;
 - `datetime`: con `date_format`, quel formato, che deve avere anche l'ora;
-  senza, `%Y-%m-%dT%H:%M:%S`, `%Y-%m-%d %H:%M:%S`, `%d/%m/%Y %H:%M:%S`, poi
-  i formati di sola data a mezzanotte. Scrive `AAAA-MM-GGTHH:MM:SS`, al
-  secondo;
-- `timestamp_millis`: senza `date_format` prima RFC 3339 con fuso (che dà
-  l'istante), poi i formati di `datetime`; con `date_format`, solo quello,
-  che deve avere anche l'ora.
-  Un testo senza fuso è l'ora locale di `timezone` (un'ora ambigua o
-  inesistente nel cambio d'ora fallisce), o UTC senza `timezone`;
-- `decimal128`: senza spazi ai lati, `-` e poi `+` facoltativi, cifre, al
+  senza, i formati ISO di sopra (la data sola a mezzanotte). Scrive
+  `AAAA-MM-GGTHH:MM:SS` più la frazione di secondo quando c'è (tre, sei o
+  nove cifre: non si tronca); con un offset vale l'ora scritta;
+- `timestamp_millis`: con un offset (RFC 3339 senza `date_format`, o `%z`
+  nel formato) l'istante; con `date_format`, solo quello, che deve avere
+  anche l'ora. Un testo senza fuso è l'ora locale di `timezone` (un'ora
+  ambigua o inesistente nel cambio d'ora fallisce), o UTC senza
+  `timezone`. Una frazione sotto il millisecondo fallisce invece di
+  troncarsi;
+- `decimal128`: senza spazi ai lati, un segno facoltativo (`-` o `+`, uno
+  solo: `"-+5"` fallisce come `"--5"`), cifre, al
   più un punto; almeno una cifra prima del punto (`".5"` fallisce, `"5."`
   no), al più `scale` cifre dopo (nessun arrotondamento: con scala 1
   `"1.50"` fallisce), al più `precision` cifre significative contando le
@@ -8644,9 +8753,11 @@ Righe nell'ordine d'ingresso.
 
 In validazione, `InvalidPlan`:
 
-- `column` assente o di un tipo che non si legge come testo (`int32`,
-  `list`, `struct`, `timestamp` non in millisecondi…), o `timestamp` con un
-  fuso Arrow non valido;
+- `column` assente o di un tipo che non si legge come testo né è
+  temporale (`int32`, `list`, `struct`…), o `timestamp` con un fuso Arrow
+  non valido;
+- una colonna temporale con un target numerico o booleano, o con
+  `date_format`;
 - `date_format` con un target che non lo usa, oltre `max_string_bytes`, o
   con un elemento strftime non riconosciuto;
 - `decimal128` senza `precision` o `scale`, o fuori da
@@ -8668,7 +8779,8 @@ In esecuzione:
   cella non si converte. Per ogni causa il conteggio
   (`conversion.invalid_integer`, `invalid_unsigned_integer`,
   `invalid_float`, `invalid_boolean`, `invalid_date`, `invalid_datetime`,
-  `invalid_timestamp`, `invalid_decimal`) e i primi 10 esempi, con l'indice
+  `invalid_timestamp`, `timestamp_precision`, `invalid_decimal`) e i primi
+  10 esempi, con l'indice
   di riga (da 0) e la colonna, mai il valore;
 - `InvalidPlan` (`ignore`): una cella non si converte;
 - `Schema`: una cella che non si legge come testo (un `binary` non UTF-8,
@@ -8680,11 +8792,13 @@ In esecuzione:
   non convertibile è sempre un errore.
 - **Arrotondamento di `float`**: un intero oltre 2^53 o un decimale
   diventa il `f64` più vicino, con perdita delle cifre basse.
-- **Timestamp verso le date**: il testo di una colonna `timestamp` porta il
-  fuso, e i formati di default di `date`, `datetime`, `date32` lo
-  rifiutano: ogni cella fallisce. Si converte in `str` o in
-  `timestamp_millis`, o si dà un `date_format` con `%:z`.
-- **Segni nel `decimal128`**: `"-+5"` si legge come -5.
+- **Nomi dei target**: `date` e `datetime` producono testo, `date32` e
+  `timestamp_millis` tipi temporali Arrow; i nomi restano per
+  compatibilità, e un nome fuori elenco (`timestamp`, `date64`) si
+  rifiuta.
+- **Offset nei testi verso `date`/`datetime`**: si legge e vale l'ora
+  scritta; l'istante si perde, come nel testo d'uscita che non ha fuso. Per
+  tenerlo serve `timestamp_millis`.
 - Il testo di un `float64` con parte decimale non diventa mai `int`: si
   arrotonda prima con un'altra operazione.
 
@@ -9065,7 +9179,7 @@ Verifica: eseguito dal runner come passo unico; schema e numero di righe confron
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 3, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -9216,15 +9330,15 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 3 |
+| versioni | semantica 2, config 2, analisi 2, kernel 4 |
 
 #### Che cosa fa
 
 Calcola per ogni riga una funzione finestra sulla colonna `column` —
 rango, somma cumulata, valore precedente o successivo, variazione
 percentuale, quantile di posizione — dentro la sua partizione
-(`group_by`), e la aggiunge come colonna `float64`. Con `order_column` le
-righe si riordinano prima su quella colonna.
+(`group_by`), e la aggiunge come colonna (`float64`, o del tipo detto
+sotto). Con `order_column` le righe si riordinano prima su quella colonna.
 
 #### Parametri
 
@@ -9254,21 +9368,29 @@ Funzioni, per partizione, con le righe nell'ordine descritto sotto:
   solo valore;
 - `cume_dist`: valori minori o uguali diviso valori non nulli;
 - `cumsum`, `running_mean`: somma e media dei valori non nulli fin qui;
+  sulle colonne intere (`int64`, `uint64`) `cumsum` è esatta ed esce
+  `int64` (una somma oltre `int64` è un errore); `cumsum` su `date32` o
+  `timestamp` si rifiuta in validazione; `running_mean` su interi, date e
+  istanti parte dalla somma esatta;
 - `cumcount`: posizione della riga nella partizione, da 0;
-- `lag`, `lead`: il valore `offset` righe prima o dopo nella partizione;
+- `lag`, `lead`: la cella `offset` righe prima o dopo nella partizione,
+  com'è, nel tipo della colonna (un `timestamp` resta `timestamp`, un
+  `utf8` resta il suo testo);
 - `pct_change`: `(corrente − precedente) / precedente` sulla riga subito
   prima (`offset` non si usa);
 - `ntile`: `posizione * min(buckets, righe) / righe + 1` in divisione
   intera, con la posizione da 0.
 
 Le funzioni di rango confrontano il valore nativo con l'ordine di
-[`table.sort`](#tablesort) (su `float64`, `-0.0` prima di `0.0`); le altre
-leggono la cella come `f64`.
+[`table.sort`](#tablesort) (su `float64`, `-0.0` prima di `0.0`);
+`pct_change` sulle colonne intere sottrae esatto e arrotonda una volta; le
+altre leggono la cella come `f64`.
 
 #### Schema
 
-L'ingresso più la colonna `output_column`, `float64` nullabile, senza
-metadati di campo, in coda; se il nome esiste già, la colonna è sostituita
+L'ingresso più la colonna `output_column`, nullabile, senza metadati di
+campo, in coda: del tipo di `column` con `lag` e `lead`, `int64` con
+`cumsum` su una colonna intera, `float64` altrimenti; se il nome esiste già, la colonna è sostituita
 al suo posto. Gli altri metadati si conservano. Il contratto dichiara
 l'uscita ordinata in ascendente su `order_column` se c'è (altrimenti
 conserva l'ordinamento dell'ingresso) e conserva il conteggio.
@@ -9310,17 +9432,19 @@ In esecuzione:
   `group_by` che non si converte in testo; una chiave di dizionario di
   `order_column` fuori dal proprio dizionario;
 - `DataMapping`: un risultato di `cumsum`, `running_mean` o `pct_change`
-  non finito calcolato da valori finiti (overflow di `f64`);
+  non finito calcolato da valori finiti (overflow di `f64`); con `cumsum`
+  su una colonna intera, una somma oltre la gamma di `int64`;
 - `ResourceLimit`: più di `u32::MAX` righe con `order_column`.
 
 #### Limiti e deviazioni
 
-Le funzioni che rendono un valore (`cumsum`, `running_mean`, `lag`,
-`lead`, `pct_change`) leggono la cella come `f64`: un intero oltre `2^53`
-o un `decimal128` si arrotondano senza errore. Un `NaN` o un infinito già
-nei dati si propagano senza errore; solo l'overflow di un calcolo su valori
-finiti si rifiuta. Le funzioni di rango non arrotondano, e per questo
-rifiutano il testo numerico.
+`cumsum`, `running_mean` e `pct_change` su `decimal128` e testo numerico
+leggono la cella come `f64` e arrotondano senza errore; su una colonna
+intera la media e la variazione arrotondano una volta sola, dopo la somma
+o la differenza esatta ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
+Un `NaN` o un infinito già nei dati si propagano senza errore; solo
+l'overflow di un calcolo su valori finiti si rifiuta. Le funzioni di rango
+non arrotondano, e per questo rifiutano il testo numerico.
 
 #### Complessità
 

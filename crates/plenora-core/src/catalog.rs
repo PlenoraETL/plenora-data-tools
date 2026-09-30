@@ -763,7 +763,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         None,
         &[],
         DefinedOrder,
-        PublicProtocol
+        PublicProtocol,
+        semantic_version = 2,
+        kernel_version = 2
     ),
     op!(
         "table.aggregate",
@@ -777,9 +779,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         CanonicalOrder,
         PublicProtocol,
+        semantic_version = 2,
         config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 3
+        contract_analysis_version = 3,
+        kernel_version = 4
     ),
     op!(
         "table.bin",
@@ -793,8 +796,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        contract_analysis_version = 2,
-        kernel_version = 2
+        semantic_version = 2,
+        contract_analysis_version = 3,
+        kernel_version = 3
     ),
     op!(
         "table.concat",
@@ -840,9 +844,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
+        semantic_version = 2,
         config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 2
+        contract_analysis_version = 3,
+        kernel_version = 3
     ),
     op!(
         "table.cross_join",
@@ -871,10 +876,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        semantic_version = 2,
+        semantic_version = 3,
         config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 4
+        contract_analysis_version = 3,
+        kernel_version = 5
     ),
     op!(
         "table.dedup_advanced",
@@ -933,8 +938,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
+        semantic_version = 2,
         contract_analysis_version = 2,
-        kernel_version = 2
+        kernel_version = 3
     ),
     op!(
         "table.filter",
@@ -948,9 +954,12 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
+        // Un letterale numerico che la forma esatta non tiene si rifiuta
+        // invece di ricadere su un double (ciclo difetti-a).
+        semantic_version = 2,
         config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 3
+        contract_analysis_version = 3,
+        kernel_version = 4
     ),
     op!(
         "table.flatten_json",
@@ -1044,9 +1053,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
+        semantic_version = 2,
         config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 3
+        contract_analysis_version = 3,
+        kernel_version = 4
     ),
     op!(
         "table.rename",
@@ -1154,9 +1164,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
+        semantic_version = 2,
         config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 3
+        contract_analysis_version = 3,
+        kernel_version = 4
     ),
     op!(
         "table.string_extract",
@@ -1246,8 +1257,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
+        semantic_version = 2,
         config_schema_version = 2,
-        kernel_version = 2
+        contract_analysis_version = 2,
+        kernel_version = 3
     ),
     op!(
         "table.type_cast",
@@ -1261,10 +1274,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        semantic_version = 2,
+        semantic_version = 3,
         config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 4
+        contract_analysis_version = 3,
+        kernel_version = 5
     ),
     op!(
         "table.uuid_generator",
@@ -1291,8 +1304,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
+        semantic_version = 2,
         config_schema_version = 2,
-        kernel_version = 3
+        contract_analysis_version = 2,
+        kernel_version = 4
     ),
     op!(
         "table.mask_data",
@@ -1358,9 +1373,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         expansion_constraint = LeftRelative,
+        semantic_version = 2,
         config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 2
+        contract_analysis_version = 3,
+        kernel_version = 3
     ),
     op!(
         "table.assert_not_null",
@@ -1389,9 +1405,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        semantic_version = 2,
+        semantic_version = 3,
         config_schema_version = 2,
-        kernel_version = 3
+        contract_analysis_version = 2,
+        kernel_version = 4
     ),
     op!(
         "table.assert_regex",
@@ -1462,10 +1479,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        semantic_version = 2,
-        config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 4
+        semantic_version = 3,
+        config_schema_version = 3,
+        contract_analysis_version = 3,
+        kernel_version = 5
     ),
     op!(
         "table.date_diff",
@@ -1479,10 +1496,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        semantic_version = 2,
-        config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 4
+        semantic_version = 3,
+        config_schema_version = 3,
+        contract_analysis_version = 3,
+        kernel_version = 5
     ),
     op!(
         "table.date_format",
@@ -1496,10 +1513,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        semantic_version = 2,
-        config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 4
+        semantic_version = 3,
+        config_schema_version = 3,
+        contract_analysis_version = 3,
+        kernel_version = 5
     ),
     // except: output <= left -> LeftRelative.
     op!(
@@ -1560,8 +1577,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
+        semantic_version = 2,
         config_schema_version = 2,
-        kernel_version = 3
+        contract_analysis_version = 2,
+        kernel_version = 4
     ),
     // semi_join: output <= left -> LeftRelative.
     op!(
@@ -1608,10 +1627,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        semantic_version = 2,
-        config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 4
+        semantic_version = 3,
+        config_schema_version = 3,
+        contract_analysis_version = 3,
+        kernel_version = 5
     ),
     // union_distinct: output <= left + right -> SumRelative (esplicito).
     op!(
@@ -1659,10 +1678,12 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        semantic_version = 4,
+        // Un letterale numerico che la forma esatta non tiene si rifiuta
+        // invece di ricadere su un double (ciclo difetti-a).
+        semantic_version = 5,
         config_schema_version = 3,
-        contract_analysis_version = 3,
-        kernel_version = 5
+        contract_analysis_version = 4,
+        kernel_version = 6
     ),
     op!(
         "table.assert_cardinality",
@@ -3015,8 +3036,14 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
+        // Il default `Timestamp` passa dal lettore temporale centrale:
+        // parte sotto il millisecondo, secondo intercalare e frazione oltre
+        // il nanosecondo si rifiutano (prima si troncava): semantica,
+        // analisi (`check_align_default`) e kernel cambiano.
+        semantic_version = 3,
         config_schema_version = 2,
-        contract_analysis_version = 2
+        contract_analysis_version = 3,
+        kernel_version = 3
     ),
     op!(
         "table.concat_by_name",
@@ -3063,8 +3090,11 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         expansion_factor_exempt = true,
-        semantic_version = 2,
-        contract_analysis_version = 2
+        // Un letterale numerico che la forma esatta non tiene si rifiuta
+        // invece di ricadere su un double (ciclo difetti-a).
+        semantic_version = 3,
+        contract_analysis_version = 3,
+        kernel_version = 2
     ),
     // --- Estensioni table v1.3 -------------------------------------------
     // fuzzy_join: build/probe sui blocchi (prefix/soundex) come i join
@@ -3360,11 +3390,12 @@ mod tests {
     #[test]
     fn versions_default_to_one_and_expression_versions_are_explicit() {
         // Default: tutte e 4 le componenti a 1 per le op senza incrementi.
+        // table.filter porta gli incrementi di difetti-b e di difetti-a.
         let filter = find_operation("table.filter").expect("table.filter");
-        assert_eq!(filter.semantic_version, 1);
+        assert_eq!(filter.semantic_version, 2);
         assert_eq!(filter.config_schema_version, 2);
-        assert_eq!(filter.contract_analysis_version, 2);
-        assert_eq!(filter.kernel_version, 3);
+        assert_eq!(filter.contract_analysis_version, 3);
+        assert_eq!(filter.kernel_version, 4);
         let select = find_operation("table.select_columns").expect("table.select_columns");
         assert_eq!(
             (
@@ -3377,12 +3408,13 @@ mod tests {
         );
         // Le 4 componenti di table.expression restano esplicite e indipendenti
         // (diagnostica per riga, poi la divisione per zero che vale null, i
-        // campi dei nodi rifiutati e i limiti dei letterali).
+        // campi dei nodi rifiutati e i limiti dei letterali, poi i letterali
+        // numerici esatti di difetti-a).
         let expression = find_operation("table.expression").expect("table.expression");
-        assert_eq!(expression.semantic_version, 4);
+        assert_eq!(expression.semantic_version, 5);
         assert_eq!(expression.config_schema_version, 3);
-        assert_eq!(expression.contract_analysis_version, 3);
-        assert_eq!(expression.kernel_version, 5);
+        assert_eq!(expression.contract_analysis_version, 4);
+        assert_eq!(expression.kernel_version, 6);
         // Nessuna versione puo' essere 0 in tutto il catalogo.
         for op in CATALOG {
             assert!(op.semantic_version >= 1, "{} semantic_version", op.id);
@@ -3936,25 +3968,20 @@ mod tests {
         // scritta a mano, non letta dal catalogo, perché non sia una
         // tautologia: (id, semantic, config_schema, contract_analysis,
         // kernel).
+        // Le operazioni che il ciclo difetti-a tocca escono da questa tabella:
+        // i loro valori prima del ciclo, che includono questi incrementi,
+        // stanno in `difetti_a_porta_i_suoi_incrementi`.
         let expected: &[(&str, u32, u32, u32, u32)] = &[
             // Tabellari: nuovo rifiuto per riga nel kernel.
-            ("table.date_extract", 2, 2, 2, 4),
             ("table.flatten_json", 2, 1, 1, 4),
-            ("table.type_cast", 2, 2, 2, 4),
             ("table.md5_hash", 2, 2, 2, 3),
             ("table.sha256_hash", 2, 2, 2, 3),
             ("table.assert_not_null", 2, 1, 1, 2),
-            ("table.assert_range", 2, 2, 1, 3),
             ("table.assert_regex", 2, 1, 1, 2),
             ("table.assert_unique", 2, 1, 1, 3),
             ("table.assert_foreign_key", 2, 1, 1, 3),
-            ("table.date_add", 2, 2, 2, 4),
-            ("table.date_diff", 2, 2, 2, 4),
-            ("table.date_format", 2, 2, 2, 4),
-            ("table.timezone_convert", 2, 2, 2, 4),
             ("table.explode", 2, 1, 1, 2),
             ("table.formula", 3, 2, 2, 4),
-            ("table.expression", 4, 3, 3, 5),
             // `from_wkt`: raccolta nel kernel geo. La successiva dichiarazione
             // di encoding e tipi geometrici del produttore cambia anche
             // semantica e analisi del contratto.
@@ -4003,6 +4030,9 @@ mod tests {
         // (analisi 2 per tutti; semantica 2 dove un'uscita prima rifiutata
         // ora si produce). Tabella scritta a mano: (id, semantic,
         // config_schema, contract_analysis, kernel).
+        // Le operazioni che il ciclo difetti-a tocca escono da questa tabella:
+        // i loro valori prima del ciclo, che includono questi incrementi,
+        // stanno in `difetti_a_porta_i_suoi_incrementi`.
         let expected: &[(&str, u32, u32, u32, u32)] = &[
             // 1:N dichiarata, 1:1 resa.
             // 1:N e MaxRelative (o SumRelative) dichiarate, una riga per riga
@@ -4020,7 +4050,6 @@ mod tests {
             ("geo.line_builder", 2, 1, 2, 1),
             ("geo.polygon_builder", 2, 1, 2, 1),
             ("table.reconcile", 2, 1, 2, 2),
-            ("table.validate_rules", 2, 1, 2, 1),
         ];
         for (id, semantic, config_schema, contract_analysis, kernel) in expected {
             let descriptor = find_operation(id).expect(id);
@@ -4049,6 +4078,9 @@ mod tests {
         // cambia una regola di validazione; kernel se cambia
         // l'implementazione.
         type Versioni = (u32, u32, u32, u32);
+        // Le operazioni che il ciclo difetti-a tocca escono da questa tabella:
+        // i loro valori prima del ciclo, che includono questi incrementi,
+        // stanno in `difetti_a_porta_i_suoi_incrementi`.
         let motivi: &[(&str, Versioni, Versioni)] = &[
             // ignore_index scritto rifiutato
             ("table.concat", (1, 1, 1, 1), (0, 1, 1, 1)),
@@ -4058,28 +4090,8 @@ mod tests {
             ("table.md5_hash", (2, 1, 1, 2), (0, 1, 1, 1)),
             // null_literal fuori da literal
             ("table.sha256_hash", (2, 1, 1, 2), (0, 1, 1, 1)),
-            // invalid rifiutato; output_format contro max_string_bytes
-            ("table.date_format", (2, 1, 1, 3), (0, 1, 1, 1)),
-            // invalid rifiutato; output_format contro max_string_bytes
-            ("table.date_add", (2, 1, 1, 3), (0, 1, 1, 1)),
-            // invalid/ambiguous rifiutati; output_format contro max_string_bytes
-            ("table.timezone_convert", (2, 1, 1, 3), (0, 1, 1, 1)),
-            // invalid rifiutato
-            ("table.date_diff", (2, 1, 1, 3), (0, 1, 1, 1)),
-            // invalid rifiutato; parts vuoto o ripetuto
-            ("table.date_extract", (2, 1, 1, 3), (0, 1, 1, 1)),
-            // keep_extra null; default contro max_string_bytes
-            ("table.align_schema", (1, 1, 1, 1), (0, 1, 1, 0)),
-            // value con isnull/notnull
-            ("table.filter", (1, 1, 1, 2), (0, 1, 1, 1)),
-            // value con isnull/notnull; testi e numeri non finiti dei risultati
-            ("table.conditional", (1, 1, 1, 1), (0, 1, 1, 1)),
-            // divisione per zero null di default; on_division_by_zero; campi dei nodi; limiti; divisore letterale zero in analisi
-            ("table.expression", (3, 2, 2, 4), (1, 1, 1, 1)),
             // divisione per zero null di default; on_division_by_zero; numeri non finiti rifiutati; testo contro max_string_bytes
             ("table.formula", (2, 1, 1, 3), (1, 1, 1, 1)),
-            // errors su target infallibili; regole anche nel kernel; campi null
-            ("table.type_cast", (2, 1, 1, 3), (0, 1, 1, 1)),
             // separator con una colonna
             ("table.concat_columns", (1, 1, 1, 1), (0, 1, 1, 1)),
             // delimiter con una uscita; max_splits che non riduce
@@ -4094,10 +4106,6 @@ mod tests {
             ("table.top_n", (1, 1, 1, 1), (0, 1, 1, 1)),
             // offset con n 0
             ("table.limit", (1, 1, 1, 1), (0, 1, 1, 1)),
-            // nomi d'uscita ripetuti o uguali a una chiave; campi null; concat contro max_string_bytes
-            ("table.aggregate", (1, 1, 1, 2), (0, 1, 1, 1)),
-            // stats vuoto o ripetuto
-            ("table.statistics", (1, 1, 1, 2), (0, 1, 1, 1)),
             // colonna ripetuta senza overwrite; campi null; testo contro max_string_bytes
             ("table.mask_data", (1, 1, 1, 2), (0, 1, 1, 1)),
             // renames vuoto, su se stessa
@@ -4108,14 +4116,6 @@ mod tests {
             ("table.reorder_columns", (1, 1, 1, 1), (0, 1, 1, 1)),
             // fuori dal fattore di espansione (uscite prima rifiutate); type_policy null
             ("table.melt", (1, 1, 1, 2), (1, 1, 0, 1)),
-            // type_policy null
-            ("table.transpose", (1, 1, 1, 1), (0, 1, 0, 1)),
-            // voce vuota in index_col; concat contro max_string_bytes
-            ("table.pivot", (1, 1, 1, 2), (0, 1, 1, 1)),
-            // tolerance 0 senza allow_exact
-            ("table.asof_join", (1, 1, 1, 1), (0, 1, 1, 1)),
-            // inclusive_* null; regole anche nel kernel
-            ("table.assert_range", (2, 1, 1, 2), (0, 1, 0, 1)),
             // old_value senza regex contro max_string_bytes; celle sostituite contro max_string_bytes
             ("table.replace", (1, 1, 1, 1), (0, 1, 1, 1)),
             // extract_all contro max_string_bytes
@@ -4124,16 +4124,8 @@ mod tests {
             ("table.flatten_json", (2, 1, 1, 3), (0, 0, 0, 1)),
             // testi della config contro max_string_bytes
             ("table.lookup", (1, 1, 1, 1), (0, 0, 1, 0)),
-            // value contro max_string_bytes
-            ("table.fill_na", (1, 1, 1, 2), (0, 0, 1, 0)),
-            // labels ed etichette contro max_string_bytes
-            ("table.bin", (1, 1, 1, 1), (0, 0, 1, 1)),
             // chiave letta da una funzione sola; non UTF-8 rifiutata
             ("table.hmac_sha256", (1, 1, 1, 2), (0, 0, 0, 1)),
-            // offset/buckets null; overflow rifiutato
-            ("table.window_function", (1, 1, 1, 2), (0, 1, 0, 1)),
-            // ddof null; overflow rifiutato
-            ("table.rolling_window", (1, 1, 1, 2), (0, 1, 0, 1)),
             // ascending null
             ("table.dedup_advanced", (1, 1, 1, 2), (0, 1, 0, 0)),
             // SumRelative: uscite prima rifiutate
@@ -4144,6 +4136,101 @@ mod tests {
             ("table.fuzzy_join", (1, 1, 1, 1), (1, 0, 0, 0)),
             // SumRelative: uscite prima rifiutate
             // SumRelative: uscite prima rifiutate
+        ];
+        for (id, prima, incrementi) in motivi {
+            let attese = (
+                prima.0 + incrementi.0,
+                prima.1 + incrementi.1,
+                prima.2 + incrementi.2,
+                prima.3 + incrementi.3,
+            );
+            let descriptor = find_operation(id).expect(id);
+            assert_eq!(
+                (
+                    descriptor.semantic_version,
+                    descriptor.config_schema_version,
+                    descriptor.contract_analysis_version,
+                    descriptor.kernel_version,
+                ),
+                attese,
+                "{id}: versioni non allineate ai motivi dichiarati"
+            );
+        }
+    }
+
+    #[test]
+    fn difetti_a_porta_i_suoi_incrementi() {
+        // Incrementi di difetti-a (numeri, date e tipi tabellari), derivati
+        // dai motivi e non dai valori: per ogni operazione le versioni prima
+        // del ciclo (main `95de5d6`, con gli incrementi dei cicli precedenti)
+        // e quali componenti il ciclo tocca, con le definizioni dei campi di
+        // `parametri_senza_effetto_limiti_e_divisione_portano_i_loro_incrementi`.
+        type Versioni = (u32, u32, u32, u32);
+        let motivi: &[(&str, Versioni, Versioni)] = &[
+            // con partition_column il contatore arriva a i64::MAX
+            ("table.add_row_number", (1, 1, 1, 1), (1, 0, 0, 1)),
+            // somme intere esatte in Int64; min/max e first/last nel tipo d'ingresso; sum su date rifiutata; nomi d'uscita distinti
+            // (prima: difetti-b, nomi d'uscita ripetuti o uguali a una chiave; campi null; concat contro max_string_bytes)
+            ("table.aggregate", (1, 2, 2, 3), (1, 0, 1, 1)),
+            // default Decimal con un segno solo; default Timestamp dal lettore centrale (solo ISO, nanosecondi esatti, secondo intercalare rifiutato)
+            // (prima: difetti-b, keep_extra null; default contro max_string_bytes)
+            ("table.align_schema", (1, 2, 2, 1), (2, 0, 1, 2)),
+            // tolerance letta esatta (intero oltre 2^53 rifiutato); distanze confrontate esatte
+            // (prima: difetti-b, tolerance 0 senza allow_exact)
+            ("table.asof_join", (1, 2, 2, 2), (1, 0, 1, 1)),
+            // min/max letti esatti e confrontati sul valore esatto
+            // (prima: difetti-b, inclusive_* null; regole anche nel kernel)
+            ("table.assert_range", (2, 2, 1, 3), (1, 0, 1, 1)),
+            // bordi letti esatti
+            // (prima: difetti-b, labels ed etichette contro max_string_bytes)
+            ("table.bin", (1, 1, 2, 2), (1, 0, 1, 1)),
+            // soglie lette esatte; risultato intero non esatto in Float64 rifiutato
+            // (prima: difetti-b, value con isnull/notnull; testi e numeri non finiti dei risultati)
+            ("table.conditional", (1, 2, 2, 2), (1, 0, 1, 1)),
+            // colonne temporali dal valore nativo; input_format facoltativo; default solo ISO
+            // (prima: difetti-b, invalid rifiutato; output_format contro max_string_bytes)
+            ("table.date_add", (2, 2, 2, 4), (1, 1, 1, 1)),
+            // colonne temporali dal valore nativo, generi concordi; input_format facoltativo; default solo ISO
+            // (prima: difetti-b, invalid rifiutato)
+            ("table.date_diff", (2, 2, 2, 4), (1, 1, 1, 1)),
+            // colonne temporali dal valore nativo; default solo ISO; nomi d'uscita distinti
+            // (prima: difetti-b, invalid rifiutato; parts vuoto o ripetuto)
+            ("table.date_extract", (2, 2, 2, 4), (1, 0, 1, 1)),
+            // colonne temporali dal valore nativo; input_format facoltativo; default solo ISO
+            // (prima: difetti-b, invalid rifiutato; output_format contro max_string_bytes)
+            ("table.date_format", (2, 2, 2, 4), (1, 1, 1, 1)),
+            // letterali numerici esatti; un letterale che la forma esatta non tiene si rifiuta
+            // (prima: difetti-b, divisione per zero null di default; on_division_by_zero; campi dei nodi; limiti; divisore letterale zero in analisi)
+            ("table.expression", (4, 3, 3, 5), (1, 0, 1, 1)),
+            // value non intero o fuori da i64 su una colonna Int64 rifiutato anche nel kernel
+            // (prima: difetti-b, value contro max_string_bytes)
+            ("table.fill_na", (1, 1, 2, 2), (1, 0, 0, 1)),
+            // valori numerici esatti; un letterale che la forma esatta non tiene si rifiuta
+            // (prima: difetti-b, value con isnull/notnull)
+            ("table.filter", (1, 2, 2, 3), (1, 0, 1, 1)),
+            // somme intere esatte, estremi nel tipo d'ingresso; nomi d'uscita distinti
+            // (prima: difetti-b, voce vuota in index_col; concat contro max_string_bytes)
+            ("table.pivot", (1, 2, 2, 3), (1, 0, 1, 1)),
+            // somme intere esatte; sum su date rifiutata; nomi d'uscita distinti
+            // (prima: difetti-b, ddof null; overflow rifiutato)
+            ("table.rolling_window", (1, 2, 1, 3), (1, 0, 1, 1)),
+            // somma esatta, varianza dagli scarti esatti, estremi esatti; nomi d'uscita distinti
+            // (prima: difetti-b, stats vuoto o ripetuto)
+            ("table.statistics", (1, 2, 2, 3), (1, 0, 1, 1)),
+            // colonne temporali dal valore nativo, fuso sorgente verificato; input_format facoltativo
+            // (prima: difetti-b, invalid/ambiguous rifiutati; output_format contro max_string_bytes)
+            ("table.timezone_convert", (2, 2, 2, 4), (1, 1, 1, 1)),
+            // nomi d'uscita distinti
+            // (prima: difetti-b, type_policy null)
+            ("table.transpose", (1, 2, 1, 2), (1, 0, 1, 1)),
+            // colonne temporali convertite dal valore nativo
+            // (prima: difetti-b, errors su target infallibili; regole anche nel kernel; campi null)
+            ("table.type_cast", (2, 2, 2, 4), (1, 0, 1, 1)),
+            // valori numerici esatti; un letterale che la forma esatta non tiene si rifiuta
+            ("table.validate_rules", (2, 1, 2, 1), (1, 0, 1, 1)),
+            // somme cumulate intere esatte; cumsum su date rifiutata
+            // (prima: difetti-b, offset/buckets null; overflow rifiutato)
+            ("table.window_function", (1, 2, 1, 3), (1, 0, 1, 1)),
         ];
         for (id, prima, incrementi) in motivi {
             let attese = (

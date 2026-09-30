@@ -212,7 +212,15 @@ pub(in crate::analyze) fn analyze_pivot(
         | reshape::PivotAgg::Min
         | reshape::PivotAgg::Max => {
             require_numeric(op, input, &config.value_col)?;
-            DataType::Float64
+            if matches!(config.aggr_func, reshape::PivotAgg::Sum) {
+                con_op(
+                    op,
+                    crate::float64_source::verifica_somma(valore.data_type()),
+                )?;
+            }
+            // Il tipo del kernel (`tipo_pivot`): somma intera `Int64`,
+            // estremi esatti nel tipo d'ingresso.
+            reshape::tipo_pivot(&config.aggr_func, valore.data_type())
         }
     };
     for output in config.mapping.values() {
@@ -243,6 +251,8 @@ pub(in crate::analyze) fn analyze_transpose(
     let config: reshape::Transpose = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
+    // La regola del kernel su `output_columns`, poi il limite di colonne.
+    con_op(op, config.verifica_nomi())?;
     check_name_list(
         op,
         &config.output_columns,

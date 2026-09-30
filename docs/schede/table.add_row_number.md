@@ -53,21 +53,15 @@ In validazione, `InvalidPlan`:
 In esecuzione:
 
 - `ResourceLimit`: un numero oltre `i64::MAX` (con `start` vicino al
-  massimo). Senza `partition_column` l'ultima riga può valere esattamente
-  `i64::MAX`; con `partition_column` il contatore di una partizione si
-  incrementa dopo ogni riga, anche l'ultima, quindi una partizione il cui
-  ultimo numero sarebbe `i64::MAX` fallisce già (con `start = i64::MAX`
-  basta una riga): un'asimmetria fra i due percorsi, dichiarata qui come
-  difetto noto;
+  massimo). Con e senza `partition_column` il numero vale `start` più la
+  posizione della riga (nella partizione): `i64::MAX` si raggiunge, solo
+  il numero successivo fallisce;
 - `Schema`: una cella di `partition_column` che non si legge come testo.
 
 ### Limiti e deviazioni
 
 Nessuna numerazione ordinata: `order_column` e `ascending` restano nella
 config per compatibilità, ma si rifiutano.
-
-Difetto noto: con `partition_column` il numero `i64::MAX` non si raggiunge
-mai (sopra, «Errori»); senza partizione sì.
 
 ### Complessità
 

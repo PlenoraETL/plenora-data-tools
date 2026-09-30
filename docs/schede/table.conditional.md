@@ -26,7 +26,9 @@ booleano come testo JSON, `null` come testo vuoto):
 - se ogni testo è vuoto o, sostituite le virgole con punti, un numero per
   il parse `f64` di Rust (esponente ammesso), l'uscita è `float64`
   nullable: il testo vuoto dà null, gli altri il numero (`"1,5"` dà 1,5,
-  `"1e3"` dà 1000);
+  `"1e3"` dà 1000). Un risultato scritto come intero che il `float64` non
+  rappresenta esattamente (`9007199254740993`) si rifiuta invece di
+  diventare un altro intero;
 - altrimenti l'uscita è `utf8` non nullable e ogni cella è il testo del
   valore scelto: `null` dà `""`, `true` dà `"true"`, `2` dà `"2"`.
 
@@ -67,6 +69,7 @@ In validazione, `InvalidPlan`:
   `isnull` o `notnull`;
 - il testo di un `result` o del `default_value` oltre `max_string_bytes`
   byte, o che si legge come numero non finito;
+- uscita `float64` con un risultato intero non esatto in `float64`;
 - `output_column` vuoto, di soli spazi o oltre 1024 byte;
 - config con campi sconosciuti.
 

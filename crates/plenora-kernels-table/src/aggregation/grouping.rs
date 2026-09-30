@@ -1141,11 +1141,11 @@ pub(in crate::aggregation) fn build_partitions(
 /// Sopra soglia il calcolo va in parallelo con raccolta posizionale (stessi
 /// valori del sequenziale); la scrittura riproduce il riempimento diretto
 /// originale.
-pub(in crate::aggregation) fn scatter_partitions(
+pub(in crate::aggregation) fn scatter_partitions<T: Copy + Send + Sync>(
     batch: &RecordBatch,
     partitions: &[(Option<Cow<'_, str>>, Vec<usize>)],
-    output: &mut [Option<f64>],
-    compute: impl Fn(&[usize]) -> Result<Vec<Option<f64>>> + Sync,
+    output: &mut [Option<T>],
+    compute: impl Fn(&[usize]) -> Result<Vec<Option<T>>> + Sync,
 ) -> Result<()> {
     let parallel = batch.num_rows() >= PARALLEL_THRESHOLD && partitions.len() > 1;
     let partials = if parallel {

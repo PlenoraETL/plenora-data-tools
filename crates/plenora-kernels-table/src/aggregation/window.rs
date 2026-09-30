@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use num_traits::ToPrimitive;
-use plenora_core::arrow::array::{Array, ArrayRef, Float64Array, RecordBatch};
+use plenora_core::arrow::array::{Array, ArrayRef, Float64Array, Int64Array, RecordBatch};
 use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
 
@@ -13,20 +13,27 @@ use crate::{column_index, replace_or_append};
 use super::aggregate::default_ddof;
 use super::grouping::{build_partitions, scatter_partitions};
 use super::sort::{sort, Sort};
-use crate::float64_source::{valida_valori_numerici, Float64Source, OrdineNumerico};
+use crate::float64_source::{
+    intero_in_f64, prendi_righe, tipo_estremo, tipo_somma, valida_valori_numerici, varianza_intera,
+    ColonnaEsatta, ColonnaIntera, Float64Source, OrdineNumerico, SommaEsatta,
+};
 
 /// Aggregazione di `table.rolling_window` sui valori non nulli della
 /// finestra (in JSON in minuscolo).
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RollingKind {
-    /// Somma in ordine di riga (da `-0.0`); un NaN la rende NaN.
+    /// Somma: esatta ed `Int64` sul dominio intero (errore oltre `i64`),
+    /// altrimenti in ordine di riga (da `-0.0`), e un NaN la rende NaN.
     Sum,
-    /// Somma divisa per il numero di valori.
+    /// Somma divisa per il numero di valori (dalla somma esatta sul dominio
+    /// intero).
     Mean,
-    /// Minimo con `f64::min`: i NaN si ignorano salvo che siano tutti NaN.
+    /// Minimo: su interi e `Decimal128` la cella minima nel tipo
+    /// d'ingresso; altrimenti `f64::min`, e i NaN si ignorano salvo che
+    /// siano tutti NaN.
     Min,
-    /// Massimo con `f64::max`: i NaN si ignorano salvo che siano tutti NaN.
+    /// Massimo, come [`RollingKind::Min`].
     Max,
     /// Deviazione standard in due passate, divisore `valori - ddof`; null
     /// con `valori <= ddof`.
@@ -64,8 +71,8 @@ pub struct RollingWindow {
     /// Gradi di liberta' di `stddev` (assente: 1).
     #[serde(default, deserialize_with = "crate::mai_null")]
     pub ddof: Option<usize>,
-    /// Colonna d'uscita, `Float64` nullabile; se esiste gia' si sostituisce
-    /// al suo posto.
+    /// Colonna d'uscita, nullabile, del tipo di [`tipo_uscita_rolling`]; se
+    /// esiste gia' si sostituisce al suo posto.
     pub output_column: String,
 }
 
@@ -133,6 +140,42 @@ pub const fn strategia(funzione: &WindowKind) -> Strategia {
         | WindowKind::PercentRank
         | WindowKind::CumeDist => Strategia::Rango,
         WindowKind::Cumcount | WindowKind::Ntile => Strategia::Posizione,
+    }
+}
+
+/// Tipo della colonna d'uscita di `rolling_window`.
+///
+/// Autorita' di kernel e analisi, sulla colonna di tipo `data_type`: `sum`
+/// e' `Int64` sul dominio intero, `min`/`max` tengono il tipo d'ingresso su interi e decimali, il
+/// resto e' `Float64`.
+#[must_use]
+pub fn tipo_uscita_rolling(funzione: RollingKind, data_type: &DataType) -> DataType {
+    match funzione {
+        RollingKind::Sum => tipo_somma(data_type),
+        RollingKind::Min | RollingKind::Max => tipo_estremo(data_type),
+        RollingKind::Mean | RollingKind::Stddev => DataType::Float64,
+    }
+}
+
+/// Tipo della colonna d'uscita di `window_function`.
+///
+/// Autorita' di kernel e analisi, sulla colonna di tipo `data_type`: `lag`
+/// e `lead` spostano la
+/// cella e tengono il tipo d'ingresso, `cumsum` e' `Int64` sul dominio
+/// intero, il resto e' `Float64`.
+#[must_use]
+pub fn tipo_uscita_finestra(funzione: &WindowKind, data_type: &DataType) -> DataType {
+    match funzione {
+        WindowKind::Lag | WindowKind::Lead => data_type.clone(),
+        WindowKind::Cumsum => tipo_somma(data_type),
+        WindowKind::Rank
+        | WindowKind::DenseRank
+        | WindowKind::Cumcount
+        | WindowKind::PctChange
+        | WindowKind::RunningMean
+        | WindowKind::PercentRank
+        | WindowKind::CumeDist
+        | WindowKind::Ntile => DataType::Float64,
     }
 }
 
@@ -249,13 +292,17 @@ fn ranghi(
 /// colonna ([`sort`]), e l'uscita resta in quell'ordine; senza,
 /// ordine d'ingresso.
 ///
-/// Un intero oltre `2^53` **non** e' un errore: il risultato e' un
-/// `Float64` per contratto, quindi la conversione arrotonda.
+/// Tipo d'uscita: [`tipo_uscita_rolling`]. Sul dominio intero la somma e'
+/// esatta (`Int64`) e media e deviazione partono dalla somma esatta;
+/// `min`/`max` su interi e decimali scelgono la cella esatta. Negli altri
+/// casi il risultato e' un `Float64` per contratto, e un valore oltre la
+/// precisione del double arrotonda.
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: `window` o `min_periods` nulli, `min_periods > window`;
 ///   `ddof` con una funzione diversa da `stddev`;
+/// - `DataMapping`: una somma intera oltre la gamma di `Int64`;
 /// - `ResourceLimit`: dimensioni/divisori della finestra non rappresentabili
 ///   come `f64` (dipendono dal numero di righe nella finestra);
 /// - `Schema`: colonna `column`, `group_by` o `order_column` assente dallo
@@ -287,6 +334,14 @@ pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<Rec
         .transpose()?;
     // Partizionamento condiviso con `window_function` (`build_partitions`).
     let partitions = build_partitions(&ordered, group)?;
+    let colonna = ordered.column(source);
+    if matches!(config.function, RollingKind::Sum) {
+        crate::float64_source::verifica_somma(colonna.data_type())?;
+    }
+    let tipo = tipo_uscita_rolling(config.function, colonna.data_type());
+    if let Some(uscita) = rolling_esatto(&ordered, &partitions, colonna, config)? {
+        return replace_or_append(&ordered, &config.output_column, tipo, true, uscita);
+    }
     let numbers = Float64Source::new(ordered.column(source));
     let compute = |rows: &[usize]| -> Result<Vec<Option<f64>>> {
         let numbers = rows
@@ -361,9 +416,11 @@ pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<Rec
     )
 }
 
-/// Funzione di `table.window_function` (in JSON in `snake_case`:
-/// `"dense_rank"`, `"pct_change"`, ...). Tutte rendono `Float64`
-/// nullabile e si calcolano per partizione, nell'ordine delle righe.
+/// Funzione di `table.window_function` (in JSON in `snake_case`).
+///
+/// `"dense_rank"`, `"pct_change"`, ...: si calcolano per partizione,
+/// nell'ordine delle righe; il tipo d'uscita, nullabile, e' quello di
+/// [`tipo_uscita_finestra`].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowKind {
@@ -372,18 +429,20 @@ pub enum WindowKind {
     Rank,
     /// 1, 2, 3... sui valori distinti.
     DenseRank,
-    /// Somma cumulata dei valori non nulli; null sulle righe nulle.
+    /// Somma cumulata dei valori non nulli; null sulle righe nulle. Esatta
+    /// ed `Int64` sul dominio intero (errore oltre `i64`).
     Cumsum,
     /// Posizione della riga nella partizione, da 0.
     Cumcount,
-    /// Valore `offset` righe prima.
+    /// La cella `offset` righe prima, nel tipo d'ingresso.
     Lag,
-    /// Valore `offset` righe dopo.
+    /// La cella `offset` righe dopo, nel tipo d'ingresso.
     Lead,
     /// `(corrente - precedente) / precedente` sulla riga subito prima; null
     /// senza precedente, con precedente nullo o zero, o corrente nullo.
     PctChange,
-    /// Media dei valori non nulli fin qui; null sulle righe nulle.
+    /// Media dei valori non nulli fin qui (dalla somma esatta sul dominio
+    /// intero); null sulle righe nulle.
     RunningMean,
     /// Valori minori diviso (valori non nulli - 1); 0 con un solo valore.
     PercentRank,
@@ -474,11 +533,14 @@ impl WindowFunction {
 /// - `Schema`: colonna `column`, `group_by` o `order_column` assente dallo
 ///   schema; `column` fuori dal dominio numerico, `Utf8` con una funzione
 ///   di rango, testo non numerico; in piu' gli errori di `sort`,
-///   `scalar_as_string` (partizioni) e `replace_or_append`.
+///   `scalar_as_string` (partizioni) e `replace_or_append`;
+/// - `DataMapping`: una somma cumulata intera oltre la gamma di `Int64`.
 ///
-/// L'arrotondamento vale per le varianti che producono un **valore**
-/// (`cumsum`, `running_mean`, `lag`, `lead`, `pct_change`), il cui
-/// risultato e' un `Float64` per contratto.
+/// Tipo d'uscita: [`tipo_uscita_finestra`]. `lag` e `lead` spostano la
+/// cella senza convertirla; sul dominio intero `cumsum` e' esatta (`Int64`),
+/// `running_mean` e `pct_change` partono da somme e differenze esatte. Negli
+/// altri casi le varianti di **valore** rendono un `Float64` per contratto,
+/// e un valore oltre la precisione del double arrotonda.
 ///
 /// Le varianti di **rango** (`rank`, `dense_rank`, `percent_rank`,
 /// `cume_dist`) non convertono: confrontano il dominio originale come il
@@ -520,6 +582,19 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
     // Partizionamento condiviso con `rolling_window`.
     let partitions = build_partitions(&ordered, group_index)?;
     let colonna = ordered.column(source_index);
+    let name = config
+        .output_column
+        .clone()
+        .unwrap_or_else(|| format!("{}_{}", config.column, suffisso(&config.function)));
+    if matches!(config.function, WindowKind::Cumsum) {
+        crate::float64_source::verifica_somma(colonna.data_type())?;
+    }
+    let tipo = tipo_uscita_finestra(&config.function, colonna.data_type());
+    // `lag`/`lead` e, sul dominio intero, le varianti di somma: percorsi
+    // esatti, nel tipo di `tipo_uscita_finestra`.
+    if let Some(uscita) = finestra_esatta(&ordered, &partitions, colonna, config)? {
+        return replace_or_append(&ordered, &name, tipo, true, uscita);
+    }
     // Le varianti di VALORE leggono `Float64` (arrotondamento dichiarato),
     // quelle di RANGO il dominio originale (vedi il doc sopra). Il dominio
     // numerico si valida sempre, anche per le varianti di posizione.
@@ -622,7 +697,19 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
     };
     let mut output = vec![None; ordered.num_rows()];
     scatter_partitions(&ordered, &partitions, &mut output, compute)?;
-    let suffix = match config.function {
+    replace_or_append(
+        &ordered,
+        &name,
+        DataType::Float64,
+        true,
+        Arc::new(Float64Array::from(output)),
+    )
+}
+
+/// Il suffisso del nome d'uscita di default (`<column>_<suffisso>`).
+#[must_use]
+pub const fn suffisso(funzione: &WindowKind) -> &'static str {
+    match funzione {
         WindowKind::Rank => "rank",
         WindowKind::DenseRank => "dense_rank",
         WindowKind::Cumsum => "cumsum",
@@ -634,18 +721,208 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
         WindowKind::PercentRank => "percent_rank",
         WindowKind::CumeDist => "cume_dist",
         WindowKind::Ntile => "ntile",
+    }
+}
+
+type Partizioni<'a> = [(Option<std::borrow::Cow<'a, str>>, Vec<usize>)];
+
+/// I percorsi esatti di `window_function`: `lag` e `lead` su ogni tipo
+/// (spostano la riga, `take` tiene il tipo), e sul dominio intero `cumsum`
+/// (somma `i128`, `Int64`), `running_mean` e `pct_change` (somme e
+/// differenze esatte, poi `Float64`). `None` per le altre combinazioni, che
+/// restano sul percorso `f64` e dei ranghi.
+///
+/// Sono il valore corretto anche dove il vecchio percorso in `f64`
+/// arrotondava a ogni passo (somme parziali oltre 2^53).
+///
+/// # Errors
+///
+/// `Schema` per un testo non numerico (contratto della colonna, anche se
+/// `lag`/`lead` non leggono il valore); `DataMapping` per una somma oltre
+/// `Int64`; gli errori di `take`.
+fn finestra_esatta(
+    ordered: &RecordBatch,
+    partitions: &Partizioni<'_>,
+    colonna: &ArrayRef,
+    config: &WindowFunction,
+) -> Result<Option<ArrayRef>> {
+    if matches!(config.function, WindowKind::Lag | WindowKind::Lead) {
+        valida_valori_numerici(colonna)?;
+        let offset = config.offset();
+        let lag = matches!(config.function, WindowKind::Lag);
+        let mut righe = vec![None; ordered.num_rows()];
+        scatter_partitions(ordered, partitions, &mut righe, |rows| {
+            Ok((0..rows.len())
+                .map(|position| {
+                    let altra = if lag {
+                        position.checked_sub(offset)
+                    } else {
+                        position
+                            .checked_add(offset)
+                            .filter(|altra| *altra < rows.len())
+                    };
+                    altra.map(|altra| rows[altra])
+                })
+                .collect())
+        })?;
+        return prendi_righe(colonna, &righe).map(Some);
+    }
+    let Some(interi) = ColonnaIntera::new(colonna) else {
+        return Ok(None);
     };
-    let name = config
-        .output_column
-        .clone()
-        .unwrap_or_else(|| format!("{}_{}", config.column, suffix));
-    replace_or_append(
-        &ordered,
-        &name,
-        DataType::Float64,
-        true,
-        Arc::new(Float64Array::from(output)),
-    )
+    match config.function {
+        WindowKind::Cumsum => {
+            let mut output = vec![None; ordered.num_rows()];
+            scatter_partitions(ordered, partitions, &mut output, |rows| {
+                let mut somma = SommaEsatta::default();
+                rows.iter()
+                    .map(|row| {
+                        interi
+                            .value(*row)
+                            .map(|valore| {
+                                somma.aggiungi(valore)?;
+                                somma.in_int64()
+                            })
+                            .transpose()
+                    })
+                    .collect()
+            })?;
+            Ok(Some(Arc::new(Int64Array::from(output))))
+        }
+        WindowKind::RunningMean => {
+            let mut output = vec![None; ordered.num_rows()];
+            scatter_partitions(ordered, partitions, &mut output, |rows| {
+                let mut somma = SommaEsatta::default();
+                rows.iter()
+                    .map(|row| {
+                        interi
+                            .value(*row)
+                            .map(|valore| {
+                                somma.aggiungi(valore)?;
+                                somma.media().ok_or_else(|| {
+                                    PlenoraError::Internal("media senza valori".into())
+                                })
+                            })
+                            .transpose()
+                    })
+                    .collect()
+            })?;
+            Ok(Some(Arc::new(Float64Array::from(output))))
+        }
+        WindowKind::PctChange => {
+            let mut output = vec![None; ordered.num_rows()];
+            scatter_partitions(ordered, partitions, &mut output, |rows| {
+                Ok((0..rows.len())
+                    .map(|position| {
+                        let precedente = position
+                            .checked_sub(1)
+                            .and_then(|precedente| interi.value(rows[precedente]))
+                            .filter(|precedente| *precedente != 0)?;
+                        let corrente = interi.value(rows[position])?;
+                        // La differenza di due interi entro `u64`/`i64` sta
+                        // in `i128`: esatta, poi un solo arrotondamento.
+                        Some(intero_in_f64(corrente - precedente) / intero_in_f64(precedente))
+                    })
+                    .collect())
+            })?;
+            Ok(Some(Arc::new(Float64Array::from(output))))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// I percorsi esatti di `rolling_window`: sul dominio intero `sum` (somma
+/// `i128`, `Int64`), `mean` dalla somma esatta, `stddev` dagli scarti
+/// esatti; su interi e
+/// decimali `min`/`max` scelgono la cella esatta nel tipo d'ingresso. `None`
+/// per le altre combinazioni, che restano sul percorso `f64`.
+///
+/// # Errors
+///
+/// `DataMapping` per una somma oltre `Int64`; `ResourceLimit` per divisori
+/// non rappresentabili; gli errori di `take`.
+fn rolling_esatto(
+    ordered: &RecordBatch,
+    partitions: &Partizioni<'_>,
+    colonna: &ArrayRef,
+    config: &RollingWindow,
+) -> Result<Option<ArrayRef>> {
+    if matches!(config.function, RollingKind::Min | RollingKind::Max) {
+        let Some(esatta) = ColonnaEsatta::new(colonna) else {
+            return Ok(None);
+        };
+        let massimo = matches!(config.function, RollingKind::Max);
+        let mut righe = vec![None; ordered.num_rows()];
+        scatter_partitions(ordered, partitions, &mut righe, |rows| {
+            Ok((0..rows.len())
+                .map(|position| {
+                    let start = (position + 1).saturating_sub(config.window);
+                    let mut valori = 0_usize;
+                    let mut estremo = None;
+                    for row in &rows[start..=position] {
+                        if let Some(valore) = esatta.value(*row) {
+                            valori += 1;
+                            estremo = ColonnaEsatta::aggiorna(estremo, *row, valore, massimo);
+                        }
+                    }
+                    estremo
+                        .filter(|_| valori >= config.min_periods)
+                        .map(|(riga, _)| riga)
+                })
+                .collect())
+        })?;
+        return prendi_righe(colonna, &righe).map(Some);
+    }
+    let Some(interi) = ColonnaIntera::new(colonna) else {
+        return Ok(None);
+    };
+    let finestra = |rows: &[usize], position: usize| -> Result<Option<(SommaEsatta, Vec<i128>)>> {
+        let start = (position + 1).saturating_sub(config.window);
+        let valori = rows[start..=position]
+            .iter()
+            .filter_map(|row| interi.value(*row))
+            .collect::<Vec<_>>();
+        if valori.len() < config.min_periods {
+            return Ok(None);
+        }
+        let mut somma = SommaEsatta::default();
+        for valore in &valori {
+            somma.aggiungi(*valore)?;
+        }
+        Ok(Some((somma, valori)))
+    };
+    if matches!(config.function, RollingKind::Sum) {
+        let mut output = vec![None; ordered.num_rows()];
+        scatter_partitions(ordered, partitions, &mut output, |rows| {
+            (0..rows.len())
+                .map(|position| {
+                    finestra(rows, position)?
+                        .map(|(somma, _)| somma.in_int64())
+                        .transpose()
+                })
+                .collect()
+        })?;
+        return Ok(Some(Arc::new(Int64Array::from(output))));
+    }
+    let mut output = vec![None; ordered.num_rows()];
+    scatter_partitions(ordered, partitions, &mut output, |rows| {
+        (0..rows.len())
+            .map(|position| {
+                let Some((somma, valori)) = finestra(rows, position)? else {
+                    return Ok(None);
+                };
+                let Some(media) = somma.media() else {
+                    return Ok(None);
+                };
+                if matches!(config.function, RollingKind::Mean) {
+                    return Ok(Some(media));
+                }
+                // Scarti esatti dalla media esatta (`varianza_intera`).
+                Ok(varianza_intera(&valori, config.ddof())?.map(f64::sqrt))
+            })
+            .collect()
+    })?;
+    Ok(Some(Arc::new(Float64Array::from(output))))
 }
 
 #[cfg(test)]

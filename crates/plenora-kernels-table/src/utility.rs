@@ -1,14 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::format::{Item, Parsed};
-use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
+use chrono::{Datelike, NaiveDateTime, Timelike};
 use plenora_core::arrow::array::{Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::DataType;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::dates::{compile_items, parse_with_items};
+use crate::dates::compile_items;
 use crate::{
     column_index, reject_rows, replace_or_append, scalar_as_string, validate_output_name,
     RowRejection,
@@ -60,6 +59,15 @@ pub fn verifica_ascending(config: &AddRowNumber) -> Result<()> {
     Ok(())
 }
 
+/// `start + posizione`, l'unica aritmetica dei numeri di riga, con e senza
+/// partizione: `i64::MAX` si raggiunge, solo oltre e' un errore.
+fn numero_di_riga(start: i64, position: usize) -> Result<i64> {
+    i64::try_from(position)
+        .ok()
+        .and_then(|position| start.checked_add(position))
+        .ok_or_else(|| PlenoraError::ResourceLimit("overflow row number".into()))
+}
+
 /// Colonna `Int64` non nullable con il numero progressivo di ogni riga
 /// nell'ordine d'ingresso, a partire da `config.start`
 /// (`table.add_row_number`).
@@ -86,27 +94,23 @@ pub fn add_row_number(batch: &RecordBatch, config: &AddRowNumber) -> Result<Reco
     let values = if let Some(partition) = &config.partition_column {
         let index = column_index(batch, partition)?;
         let source = batch.column(index);
-        let mut counters: HashMap<Option<String>, i64> = HashMap::new();
+        // Per partizione si conta la posizione (da 0), e il numero e'
+        // `start + posizione` come senza partizione: incrementare il numero
+        // dopo averlo reso fallirebbe sull'ultimo rappresentabile
+        // (`i64::MAX`), che invece e' un numero valido.
+        let mut positions: HashMap<Option<String>, usize> = HashMap::new();
         (0..batch.num_rows())
             .map(|row| {
                 let key = scalar_as_string(source.as_ref(), row)?;
-                let value = counters.entry(key).or_insert(config.start);
-                let current = *value;
-                *value = value
-                    .checked_add(1)
-                    .ok_or_else(|| PlenoraError::ResourceLimit("overflow row number".into()))?;
+                let position = positions.entry(key).or_insert(0);
+                let current = numero_di_riga(config.start, *position)?;
+                *position += 1;
                 Ok(Some(current))
             })
             .collect::<Result<Vec<_>>>()?
     } else {
         (0..batch.num_rows())
-            .map(|row| {
-                i64::try_from(row)
-                    .ok()
-                    .and_then(|row| config.start.checked_add(row))
-                    .map(Some)
-                    .ok_or_else(|| PlenoraError::ResourceLimit("overflow row number".into()))
-            })
+            .map(|row| numero_di_riga(config.start, row).map(Some))
             .collect::<Result<Vec<_>>>()?
     };
     replace_or_append(
@@ -147,7 +151,9 @@ pub enum DatePart {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DateExtract {
-    /// Colonna da leggere come data, leggibile come testo (obbligatorio).
+    /// Colonna da leggere come data (obbligatorio): una colonna temporale
+    /// (`Date32`, `Timestamp` di ogni unita', con o senza fuso) si legge dal
+    /// valore nativo, ogni altra come testo.
     pub column: String,
     /// Parti da estrarre, nell'ordine delle colonne d'uscita (default
     /// `["year"]`).
@@ -157,8 +163,9 @@ pub struct DateExtract {
     #[serde(default)]
     pub prefix: String,
     /// Formato strftime di chrono esplicito, provato come data e ora e poi
-    /// come sola data. Se omesso si usano i formati di default, nell'ordine
-    /// di `parse_datetime`.
+    /// come sola data. Se omesso si usano i soli formati ISO 8601 di
+    /// default (`parse_datetime`). Legge un testo: con una colonna temporale
+    /// si rifiuta.
     pub date_format: Option<String>,
     /// Non ammesso: un valore non interpretabile fa sempre fallire il passo,
     /// quindi nessuna politica avrebbe effetto. Scritto si rifiuta
@@ -216,99 +223,92 @@ impl DateExtract {
     }
 }
 
+/// L'ora locale scritta in un testo: con `explicit_format` quel formato
+/// (data e ora, o sola data a mezzanotte), altrimenti i soli formati ISO
+/// 8601 (`crate::temporale::leggi_iso`: offset RFC 3339 ammesso, nessun
+/// ordine giorno/mese da indovinare).
 fn parse_datetime(value: &str, explicit_format: Option<&str>) -> Option<NaiveDateTime> {
-    if let Some(format) = explicit_format {
-        return NaiveDateTime::parse_from_str(value, format)
-            .ok()
-            .or_else(|| {
-                NaiveDate::parse_from_str(value, format)
-                    .ok()
-                    .and_then(|date| date.and_hms_opt(0, 0, 0))
-            });
-    }
-    for format in [
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S",
-        "%d/%m/%Y %H:%M:%S",
-    ] {
-        if let Ok(parsed) = NaiveDateTime::parse_from_str(value, format) {
-            return Some(parsed);
-        }
-    }
-    for format in ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"] {
-        if let Ok(parsed) = NaiveDate::parse_from_str(value, format) {
-            return parsed.and_hms_opt(0, 0, 0);
-        }
-    }
-    None
+    explicit_format
+        .map_or_else(
+            || crate::temporale::leggi_iso(value),
+            |format| crate::temporale::leggi_con_items(value, &compile_items(format)),
+        )
+        .map(|momento| momento.locale)
 }
 
-// Fast path `date_extract`:
-// formati chrono compilati una volta e loop sui `&str` nativi della colonna
-// Utf8; per gli altri tipi Arrow si ricade sul percorso generico.
-
-/// Item precompilati dei formati datetime del parser multi-formato di
-/// default (stesso ordine di `parse_datetime`).
-fn default_datetime_items() -> [Vec<Item<'static>>; 3] {
-    [
-        compile_items("%Y-%m-%dT%H:%M:%S"),
-        compile_items("%Y-%m-%d %H:%M:%S"),
-        compile_items("%d/%m/%Y %H:%M:%S"),
-    ]
+/// I nomi d'uscita di `date_extract`, uno per parte: validi e distinti (una
+/// parte ripetuta si rifiuta, come ogni coppia di colonne prodotte
+/// insieme). La chiamano il kernel e l'analisi.
+///
+/// # Errors
+///
+/// `InvalidPlan` per un nome non valido o ripetuto.
+pub fn nomi_date_extract(config: &DateExtract) -> Result<Vec<String>> {
+    let prefix = if config.prefix.is_empty() {
+        format!("{}_", config.column)
+    } else {
+        config.prefix.clone()
+    };
+    let nomi = config
+        .parts
+        .iter()
+        .map(|part| {
+            let suffix = match part {
+                DatePart::Year => "year",
+                DatePart::Month => "month",
+                DatePart::Day => "day",
+                DatePart::Quarter => "quarter",
+                DatePart::Weekday => "weekday",
+                DatePart::Week => "week",
+                DatePart::Hour => "hour",
+                DatePart::Minute => "minute",
+                DatePart::Second => "second",
+            };
+            format!("{prefix}{suffix}")
+        })
+        .collect::<Vec<_>>();
+    for nome in &nomi {
+        validate_output_name(nome)?;
+    }
+    crate::verifica_nomi_distinti("date_extract", nomi.iter().map(String::as_str))?;
+    Ok(nomi)
 }
 
-/// Item precompilati dei formati date-only del parser multi-formato di
-/// default (stesso ordine di `parse_datetime`).
-fn default_date_items() -> [Vec<Item<'static>>; 4] {
-    [
-        compile_items("%Y-%m-%d"),
-        compile_items("%d/%m/%Y"),
-        compile_items("%d-%m-%Y"),
-        compile_items("%Y/%m/%d"),
-    ]
-}
-
-/// Parser multi-formato di default con item precompilati, semantica identica
-/// a `parse_datetime(value, None)`: prima i formati datetime, poi quelli
-/// date-only (mezzanotte).
-fn parse_datetime_default(
-    value: &str,
-    datetime_items: &[Vec<Item<'static>>],
-    date_items: &[Vec<Item<'static>>],
-) -> Option<NaiveDateTime> {
-    for items in datetime_items {
-        let mut parsed = Parsed::new();
-        if chrono::format::parse(&mut parsed, value, items.iter()).is_ok() {
-            // Stessa risoluzione di `NaiveDateTime::parse_from_str`.
-            if let Ok(datetime) = parsed.to_naive_datetime_with_offset(0) {
-                return Some(datetime);
-            }
-        }
+/// `date_format` legge un testo: con una colonna temporale non ha effetto,
+/// e si rifiuta invece di essere ignorato. La chiamano il kernel e
+/// l'analisi.
+///
+/// # Errors
+///
+/// `InvalidPlan` se `date_format` accompagna una colonna temporale.
+pub fn verifica_date_extract_temporale(config: &DateExtract) -> Result<()> {
+    if config.date_format.is_some() {
+        return Err(PlenoraError::InvalidPlan(
+            "date_extract: date_format legge un testo e non si applica a una colonna temporale"
+                .into(),
+        ));
     }
-    for items in date_items {
-        let mut parsed = Parsed::new();
-        if chrono::format::parse(&mut parsed, value, items.iter()).is_ok() {
-            if let Ok(date) = parsed.to_naive_date() {
-                return date.and_hms_opt(0, 0, 0);
-            }
-        }
-    }
-    None
+    Ok(())
 }
 
 /// Estrae le parti di data e ora richieste in colonne `Int64`
 /// `<prefix><parte>` (`table.date_extract`).
 ///
-/// Ogni cella non nulla si legge come testo ([`scalar_as_string`]) e si
-/// interpreta con `date_format` se dato, altrimenti con i formati di
-/// default. Ogni valore non interpretabile rifiuta l'uscita con la
-/// diagnostica per riga; `invalid` scritto si rifiuta
-/// ([`crate::dates::verifica_politiche`]).
+/// Una colonna temporale (`Date32`, `Timestamp` di ogni unita', con o senza
+/// fuso) si legge dal valore nativo: le parti sono quelle dell'ora locale
+/// della colonna (del suo fuso; senza fuso, il valore com'e'). Ogni altra
+/// cella non nulla si legge come testo ([`scalar_as_string`]) e si
+/// interpreta con `date_format` se dato, altrimenti con i soli formati ISO
+/// 8601 (un offset si legge, e le parti sono dell'ora scritta). Ogni valore
+/// non interpretabile rifiuta l'uscita con la diagnostica per riga;
+/// `invalid` scritto si rifiuta ([`crate::dates::verifica_politiche`]).
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `date_format` con un elemento non riconosciuto; nome di
-///   colonna d'uscita non valido;
+/// - `InvalidPlan`: `date_format` con un elemento non riconosciuto, o con
+///   una colonna temporale; `parts` vuoto o con una parte ripetuta
+///   ([`DateExtract::verifica_parti`]); nome di colonna d'uscita non valido
+///   o ripetuto; `invalid` scritto;
 /// - `DataMapping`: almeno un valore non interpretabile come data (causa
 ///   `conversion.invalid_datetime`, con la diagnostica per riga); errore
 ///   Arrow nella costruzione del batch (guardia interna, non attesa);
@@ -325,8 +325,16 @@ pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordB
     if let Some(format) = &config.date_format {
         crate::dates::validate_format_items(format, "date_format")?;
     }
+    let nomi = nomi_date_extract(config)?;
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
+    if let Some(temporale) = crate::temporale::ColonnaTemporale::new(source)? {
+        verifica_date_extract_temporale(config)?;
+        let parsed = (0..batch.num_rows())
+            .map(|row| Ok(temporale.momento(row)?.map(|momento| momento.locale)))
+            .collect::<Result<Vec<_>>>()?;
+        return scrivi_parti(batch, config, &nomi, &parsed);
+    }
     let mut rejections = Vec::new();
     for row in 0..batch.num_rows() {
         if scalar_as_string(source.as_ref(), row)?
@@ -346,11 +354,6 @@ pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordB
     let parsed: Vec<Option<NaiveDateTime>> =
         if let Some(column) = source.as_any().downcast_ref::<StringArray>() {
             let explicit_items = config.date_format.as_deref().map(compile_items);
-            let default_items = if explicit_items.is_none() {
-                Some((default_datetime_items(), default_date_items()))
-            } else {
-                None
-            };
             let mut parsed = Vec::with_capacity(column.len());
             for row in 0..column.len() {
                 if column.is_null(row) {
@@ -358,14 +361,10 @@ pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordB
                     continue;
                 }
                 let value = column.value(row);
-                let parsed_value = match (&explicit_items, &default_items) {
-                    (Some(items), None) => parse_with_items(value, items),
-                    (None, Some((datetime_items, date_items))) => {
-                        parse_datetime_default(value, datetime_items, date_items)
-                    }
-                    _ => {
-                        return Err(PlenoraError::Internal("un solo parser compilato".into()));
-                    }
+                let parsed_value = match &explicit_items {
+                    Some(items) => crate::temporale::leggi_con_items(value, items)
+                        .map(|momento| momento.locale),
+                    None => crate::temporale::leggi_iso(value).map(|momento| momento.locale),
                 };
                 match parsed_value {
                     Some(value) => parsed.push(Some(value)),
@@ -392,26 +391,18 @@ pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordB
                 })
                 .collect::<Result<Vec<_>>>()?
         };
-    let prefix = if config.prefix.is_empty() {
-        format!("{}_", config.column)
-    } else {
-        config.prefix.clone()
-    };
+    scrivi_parti(batch, config, &nomi, &parsed)
+}
+
+/// Le colonne delle parti, una per nome d'uscita.
+fn scrivi_parti(
+    batch: &RecordBatch,
+    config: &DateExtract,
+    nomi: &[String],
+    parsed: &[Option<NaiveDateTime>],
+) -> Result<RecordBatch> {
     let mut result = batch.clone();
-    for part in &config.parts {
-        let suffix = match part {
-            DatePart::Year => "year",
-            DatePart::Month => "month",
-            DatePart::Day => "day",
-            DatePart::Quarter => "quarter",
-            DatePart::Weekday => "weekday",
-            DatePart::Week => "week",
-            DatePart::Hour => "hour",
-            DatePart::Minute => "minute",
-            DatePart::Second => "second",
-        };
-        let name = format!("{prefix}{suffix}");
-        validate_output_name(&name)?;
+    for (part, name) in config.parts.iter().zip(nomi) {
         let values = parsed
             .iter()
             .map(|value| {
@@ -430,7 +421,7 @@ pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordB
             .collect::<Vec<_>>();
         result = replace_or_append(
             &result,
-            &name,
+            name,
             DataType::Int64,
             true,
             Arc::new(Int64Array::from(values)),
@@ -735,9 +726,10 @@ mod tests {
         // 1970.
         let batch = utf8_batch(vec![
             Some("2021-01-01T06:07:08"),
-            Some("30/12/2019 23:59:59"),
+            Some("2019-12-30 23:59:59"),
             Some("1969-12-31"),
-            Some("2024/02/29"),
+            // L'offset si legge; le parti sono dell'ora scritta.
+            Some("2024-02-29T00:00:00+05:00"),
         ]);
         let output = date_extract(
             &batch,
@@ -906,28 +898,31 @@ mod tests {
 
     #[test]
     fn date_extract_fast_path_matches_generic_with_default_multi_format() {
-        // Tutti i formati del parser di default, solo valori validi.
+        // Tutti i formati ISO del parser di default, solo valori validi.
         let valid = utf8_batch(vec![
             Some("2024-01-15T10:30:00"),
             Some("2024-01-15 10:30:00"),
-            Some("15/01/2024 10:30:00"),
+            Some("2024-01-15T10:30:00.250"),
+            Some("2024-01-15T10:30:00Z"),
+            Some("2024-01-15 10:30:00+01:00"),
             Some("2024-01-15"),
-            Some("15/01/2024"),
-            Some("15-01-2024"),
-            Some("2024/01/15"),
             Some("1970-01-01"),
             Some("1969-12-31 23:59:59"),
-            Some("29/02/2000"),
+            Some("2000-02-29"),
             None,
         ]);
-        // Valori non parsabili da nessun formato, intercalati: 1, 2, 3 e 5.
+        // Valori che nessun formato di default legge, intercalati: 1, 2, 3,
+        // 5, 6 e 7. Giorno e mese in un ordine da indovinare non sono un
+        // default.
         let with_invalid = utf8_batch(vec![
             Some("2024-01-15"),
-            Some("29/02/2023"), // inesistente
+            Some("2023-02-29"), // inesistente
             Some("2024-13-01"), // mese 13
             Some("non una data"),
             None,
             Some(""),
+            Some("15/01/2024"),
+            Some("2024/01/15"),
         ]);
         {
             let invalid = None;
@@ -946,7 +941,135 @@ mod tests {
                 date_extract(&with_invalid, &config),
                 generic_date_extract(&with_invalid, &config),
             );
-            assert_rejected_rows(date_extract(&with_invalid, &config), &[1, 2, 3, 5]);
+            assert_rejected_rows(date_extract(&with_invalid, &config), &[1, 2, 3, 5, 6, 7]);
         }
+    }
+
+    /// Regressione: una colonna `Timestamp` si legge dal valore nativo (il
+    /// suo testo RFC 3339 con `+00:00` falliva con i formati di default, e
+    /// un `Timestamp` in microsecondi non si leggeva). Le parti sono dell'ora
+    /// locale della colonna; `date_format` con una colonna temporale si
+    /// rifiuta, e una parte ripetuta anche.
+    #[test]
+    fn date_extract_legge_le_colonne_temporali_senza_testo() {
+        use plenora_core::arrow::array::{ArrayRef, Date32Array, TimestampMicrosecondArray};
+        let micro = 1_706_696_430_123_456_i64; // 2024-01-31T10:20:30.123456Z
+        let config = |date_format: Option<&str>, parts: Vec<DatePart>| DateExtract {
+            column: "ts".into(),
+            parts,
+            prefix: "p_".into(),
+            date_format: date_format.map(ToOwned::to_owned),
+            invalid: None,
+        };
+        let richieste = vec![
+            DatePart::Year,
+            DatePart::Day,
+            DatePart::Hour,
+            DatePart::Second,
+        ];
+        for (colonna, ora) in [
+            (
+                Arc::new(TimestampMicrosecondArray::from(vec![Some(micro), None])) as ArrayRef,
+                10,
+            ),
+            (
+                Arc::new(
+                    TimestampMicrosecondArray::from(vec![Some(micro), None])
+                        .with_timezone("Europe/Rome"),
+                ),
+                11,
+            ),
+        ] {
+            let batch =
+                single_column_batch("ts", colonna.clone(), colonna.data_type().clone(), true);
+            let uscita = date_extract(&batch, &config(None, richieste.clone())).expect("nativo");
+            let valori_parte = |nome: &str| {
+                uscita
+                    .column_by_name(nome)
+                    .expect("valori_parte")
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .expect("int64")
+                    .iter()
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(valori_parte("p_year"), vec![Some(2024), None]);
+            assert_eq!(valori_parte("p_day"), vec![Some(31), None]);
+            assert_eq!(valori_parte("p_hour"), vec![Some(ora), None]);
+            assert_eq!(valori_parte("p_second"), vec![Some(30), None]);
+            assert!(matches!(
+                date_extract(&batch, &config(Some("%Y-%m-%d"), richieste.clone())),
+                Err(PlenoraError::InvalidPlan(_))
+            ));
+        }
+        let giorni: ArrayRef = Arc::new(Date32Array::from(vec![19_753]));
+        let batch = single_column_batch("ts", giorni, DataType::Date32, true);
+        let uscita = date_extract(&batch, &config(None, vec![DatePart::Month])).expect("date32");
+        assert_eq!(
+            uscita
+                .column_by_name("p_month")
+                .expect("mese")
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("int64")
+                .value(0),
+            1
+        );
+        assert!(matches!(
+            date_extract(
+                &batch,
+                &config(None, vec![DatePart::Month, DatePart::Month])
+            ),
+            Err(PlenoraError::InvalidPlan(_))
+        ));
+    }
+
+    /// Regressione: con e senza `partition_column` la numerazione raggiunge
+    /// esattamente `i64::MAX` e fallisce solo oltre. Con la partizione il
+    /// contatore veniva incrementato prima di rendere il numero, e l'ultimo
+    /// rappresentabile falliva.
+    #[test]
+    fn add_row_number_arriva_a_i64_max_con_e_senza_partizione() {
+        let batch = single_column_batch(
+            "p",
+            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("a")])),
+            DataType::Utf8,
+            true,
+        );
+        let numeri = |config: &AddRowNumber| -> Result<Vec<i64>> {
+            let uscita = add_row_number(&batch, config)?;
+            let colonna = uscita
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("Int64")
+                .clone();
+            Ok(colonna.values().to_vec())
+        };
+        let config = |start: i64, partition: Option<&str>| AddRowNumber {
+            output_column: "n".into(),
+            start,
+            partition_column: partition.map(ToOwned::to_owned),
+            order_column: None,
+            ascending: None,
+        };
+        // Partizione: "a" ha due righe, "b" una.
+        assert_eq!(
+            numeri(&config(i64::MAX - 1, Some("p"))).expect("i64::MAX si raggiunge"),
+            vec![i64::MAX - 1, i64::MAX - 1, i64::MAX]
+        );
+        assert!(matches!(
+            numeri(&config(i64::MAX, Some("p"))),
+            Err(PlenoraError::ResourceLimit(_))
+        ));
+        // Senza partizione: tre righe, l'ultima e' i64::MAX.
+        assert_eq!(
+            numeri(&config(i64::MAX - 2, None)).expect("i64::MAX si raggiunge"),
+            vec![i64::MAX - 2, i64::MAX - 1, i64::MAX]
+        );
+        assert!(matches!(
+            numeri(&config(i64::MAX - 1, None)),
+            Err(PlenoraError::ResourceLimit(_))
+        ));
     }
 }

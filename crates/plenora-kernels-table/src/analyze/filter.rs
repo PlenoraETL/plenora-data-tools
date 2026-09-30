@@ -157,13 +157,19 @@ pub(in crate::analyze) fn analyze_conditional(
         "default_value",
     )?;
     // Il tipo dipende solo dai letterali di config: tutti vuoti o numerici ->
-    // Float64 nullable, altrimenti Utf8 non nullable.
-    let numeric = config
+    // Float64 nullable, altrimenti Utf8 non nullable. La regola e' quella del
+    // kernel (`risultati_numerici`), con il suo rifiuto degli interi inesatti.
+    let testi = config
         .conditions
         .iter()
         .map(|condition| json_text(&condition.result))
         .chain(std::iter::once(json_text(&config.default_value)))
-        .all(|text| text.is_empty() || text.replace(',', ".").parse::<f64>().is_ok());
+        .collect::<Vec<_>>();
+    let numeric = super::helpers::con_op(
+        op,
+        filtering::risultati_numerici(testi.iter().map(String::as_str)),
+    )?
+    .is_some();
     let (data_type, nullable) = if numeric {
         (DataType::Float64, true)
     } else {

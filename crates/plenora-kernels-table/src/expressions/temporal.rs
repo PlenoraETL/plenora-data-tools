@@ -78,7 +78,11 @@ pub fn check_date32_unit(unit: TruncUnit) -> Result<()> {
 /// Troncamento Date32 (giorni dall'epoca) a year/month/day.
 pub fn trunc_date32_days(days: i32, unit: TruncUnit) -> Result<i32> {
     check_date32_unit(unit)?;
-    let date = date32_epoch()? + TimeDelta::days(i64::from(days));
+    // Somma controllata: Date32 arriva a milioni di anni, oltre l'intervallo
+    // di chrono, e `+` andrebbe in panico.
+    let date = date32_epoch()?
+        .checked_add_signed(TimeDelta::days(i64::from(days)))
+        .ok_or_else(|| PlenoraError::Schema("date_trunc: data fuori range".into()))?;
     let truncated = match unit {
         TruncUnit::Year => NaiveDate::from_ymd_opt(date.year(), 1, 1),
         TruncUnit::Month => NaiveDate::from_ymd_opt(date.year(), date.month(), 1),
@@ -98,11 +102,18 @@ pub fn trunc_date32_days(days: i32, unit: TruncUnit) -> Result<i32> {
 /// day e inferiori per aritmetica sui millisecondi (`rem_euclid` copre i
 /// timestamp pre-1970).
 pub fn trunc_timestamp_ms_value(ms: i64, unit: TruncUnit) -> Result<i64> {
+    // Sottrazione controllata: vicino a `i64::MIN` il troncamento verso il
+    // basso esce dalla gamma (`i64::MIN - 192`), e con i controlli di
+    // overflow attivi sarebbe un panico, senza un valore sbagliato.
+    let tronca = |passo: i64| {
+        ms.checked_sub(ms.rem_euclid(passo))
+            .ok_or_else(|| PlenoraError::Schema("date_trunc: timestamp fuori range".into()))
+    };
     Ok(match unit {
-        TruncUnit::Second => ms - ms.rem_euclid(1_000),
-        TruncUnit::Minute => ms - ms.rem_euclid(60_000),
-        TruncUnit::Hour => ms - ms.rem_euclid(3_600_000),
-        TruncUnit::Day => ms - ms.rem_euclid(86_400_000),
+        TruncUnit::Second => tronca(1_000)?,
+        TruncUnit::Minute => tronca(60_000)?,
+        TruncUnit::Hour => tronca(3_600_000)?,
+        TruncUnit::Day => tronca(86_400_000)?,
         TruncUnit::Year | TruncUnit::Month => {
             let datetime = chrono::DateTime::from_timestamp_millis(ms)
                 .ok_or_else(|| PlenoraError::Schema("date_trunc: timestamp fuori range".into()))?;

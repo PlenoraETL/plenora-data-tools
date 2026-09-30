@@ -19,9 +19,11 @@ use serde::Deserialize;
 
 use crate::hashing::FastHasher;
 use crate::Limits;
+use std::cmp::Ordering;
+
 use crate::{
     column_index, exact_f64_from_i64, scalar_as_f64, scalar_as_string, select_rows,
-    validate_output_name,
+    validate_output_name, NumericBound, NumeroConfig,
 };
 use plenora_core::{PlenoraError, Result};
 
@@ -1592,8 +1594,9 @@ pub struct AsOfJoin {
     #[serde(default = "default_asof_direction")]
     pub direction: AsOfDirection,
     /// Distanza massima `|destra - sinistra|`, finita e `>= 0`; assente o
-    /// `null`: nessun limite.
-    pub tolerance: Option<f64>,
+    /// `null`: nessun limite. Letta esatta ([`NumeroConfig`]): un intero
+    /// che il double non rappresenta si rifiuta ([`AsOfJoin::tolleranza`]).
+    pub tolerance: Option<NumeroConfig>,
     /// Default `true`; con `false` un candidato con valore uguale non si
     /// abbina.
     #[serde(default = "default_true")]
@@ -1607,9 +1610,9 @@ const fn default_true() -> bool {
 impl AsOfJoin {
     /// Regole sulla sola config, condivise da kernel e analisi dei
     /// contratti: `left_by` e `right_by` della stessa lunghezza; `tolerance`
-    /// finita e `>= 0`; `tolerance = 0` con `allow_exact = false` non abbina
-    /// mai (resterebbe solo il candidato a distanza zero, che `allow_exact`
-    /// esclude), quindi il lato destro sarebbe tutto null: si rifiuta.
+    /// finita, `>= 0` e, se intera, esatta in f64 ([`AsOfJoin::tolleranza`]);
+    /// `tolerance = 0` con `allow_exact = false` non abbina mai (resterebbe
+    /// solo il candidato a distanza zero, che `allow_exact` esclude), quindi il lato destro sarebbe tutto null: si rifiuta.
     ///
     /// # Errors
     ///
@@ -1620,10 +1623,7 @@ impl AsOfJoin {
                 "left_by/right_by di cardinalita' diversa".into(),
             ));
         }
-        match self.tolerance {
-            Some(tolerance) if !tolerance.is_finite() || tolerance < 0.0 => Err(
-                PlenoraError::InvalidPlan("tolerance deve essere finita e >= 0".into()),
-            ),
+        match self.tolleranza()? {
             Some(tolerance) if tolerance == 0.0 && !self.allow_exact => {
                 Err(PlenoraError::InvalidPlan(
                     "tolerance 0 con allow_exact=false non abbina mai".into(),
@@ -1632,6 +1632,81 @@ impl AsOfJoin {
             _ => Ok(()),
         }
     }
+
+    /// La tolleranza come double, se c'e'.
+    ///
+    /// Un intero scritto che il double non rappresenta (oltre 2^53) si
+    /// rifiuta: diventando il double piu' vicino sarebbe un'altra soglia,
+    /// senza errore. Un decimale vale il double piu' vicino, come le chiavi.
+    /// La chiama [`AsOfJoin::verifica_parametri`], condivisa da kernel e
+    /// analisi dei contratti.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` se la tolleranza e' negativa, non finita o un intero
+    /// non rappresentabile esattamente.
+    pub fn tolleranza(&self) -> Result<Option<f64>> {
+        let Some(tolleranza) = self.tolerance else {
+            return Ok(None);
+        };
+        let double = tolleranza.double();
+        let intero_inesatto = match tolleranza.esatto() {
+            NumericBound::I64(intero) => exact_f64_from_i64(intero).is_none(),
+            NumericBound::U64(intero) => crate::exact_f64_from_u64(intero).is_none(),
+            NumericBound::Decimal { .. } | NumericBound::F64(_) => false,
+        };
+        if !double.is_finite() || double < 0.0 || intero_inesatto {
+            return Err(PlenoraError::InvalidPlan(
+                "asof_join: tolerance non valida (finita, >= 0, un intero esatto in f64)".into(),
+            ));
+        }
+        Ok(Some(double))
+    }
+}
+
+/// `a - b` come somma esatta `s + e` (`TwoSum` di Knuth): `s` e' la
+/// differenza arrotondata, `e` il resto, e `s + e` vale esattamente `a - b`
+/// finche' `s` e' finito.
+fn differenza_esatta(a: f64, b: f64) -> (f64, f64) {
+    let meno_b = -b;
+    let s = a + meno_b;
+    let b_virtuale = s - a;
+    let a_virtuale = s - b_virtuale;
+    let e = (a - a_virtuale) + (meno_b - b_virtuale);
+    (s, e)
+}
+
+/// Ordine esatto fra due differenze `a1 - b1` e `a2 - b2` di double finiti.
+///
+/// L'arrotondamento e' monotono: se le differenze arrotondate sono diverse
+/// decidono loro, se sono uguali decide il resto esatto. Se una trabocca
+/// (entrambi gli operandi oltre `2^969` in modulo) si confrontano le meta',
+/// esatte per operandi normali.
+fn confronta_differenze(a1: f64, b1: f64, a2: f64, b2: f64) -> Ordering {
+    let (s1, e1) = differenza_esatta(a1, b1);
+    let (s2, e2) = differenza_esatta(a2, b2);
+    if !s1.is_finite() || !s2.is_finite() {
+        if s1.is_finite() || s2.is_finite() {
+            return s1.partial_cmp(&s2).unwrap_or(Ordering::Equal);
+        }
+        return confronta_differenze(a1 * 0.5, b1 * 0.5, a2 * 0.5, b2 * 0.5);
+    }
+    // `partial_cmp`, non `total_cmp`: uno zero negativo (resto nullo, o
+    // `-0.0 - 0.0`) vale lo zero. Finiti, nessun NaN.
+    let ordine = |x: f64, y: f64| x.partial_cmp(&y).unwrap_or(Ordering::Equal);
+    ordine(s1, s2).then(ordine(e1, e2))
+}
+
+/// `|candidato - chiave| <= limite`, deciso sulla distanza **esatta**: la
+/// differenza arrotondata puo' cadere sul limite quando la distanza vera e'
+/// appena sopra.
+fn entro_tolleranza(candidato: f64, chiave: f64, limite: f64) -> bool {
+    let (alto, basso) = if candidato >= chiave {
+        (candidato, chiave)
+    } else {
+        (chiave, candidato)
+    };
+    confronta_differenze(alto, basso, limite, 0.0) != Ordering::Greater
 }
 
 /// Valore `on` della riga da array tipizzato (fast path di `asof_join`).
@@ -1674,6 +1749,7 @@ fn asof_right_rows_fast(
 ) -> Result<Vec<Option<usize>>> {
     // Build sul lato destro: la chiave e' clonata solo al primo inserimento
     // del gruppo (pattern gia' usato nei contatori dei limiti).
+    let tolleranza = config.tolleranza()?;
     let mut groups: HashMap<Vec<KeyVal>, Vec<(f64, usize)>, FastHasher> = HashMap::default();
     let mut buffer: Vec<KeyVal> = Vec::new();
     for row in 0..right.num_rows() {
@@ -1704,9 +1780,7 @@ fn asof_right_rows_fast(
                 .get(group)
                 .and_then(|rows| choose_asof(rows, value, &config.direction, config.allow_exact))
                 .filter(|(candidate, _)| {
-                    config
-                        .tolerance
-                        .is_none_or(|limit| (candidate - value).abs() <= limit)
+                    tolleranza.is_none_or(|limite| entro_tolleranza(*candidate, value, limite))
                 })
                 .map(|(_, row)| row),
             _ => None,
@@ -1730,6 +1804,7 @@ fn asof_right_rows_generic(
     left_on: usize,
     right_on: usize,
 ) -> Result<Vec<Option<usize>>> {
+    let tolleranza = config.tolleranza()?;
     let mut groups: HashMap<Vec<u8>, Vec<(f64, usize)>> = HashMap::new();
     for row in 0..right.num_rows() {
         let Some(group) = group_key(right, right_by, row)? else {
@@ -1755,9 +1830,7 @@ fn asof_right_rows_generic(
                 .get(&group)
                 .and_then(|rows| choose_asof(rows, value, &config.direction, config.allow_exact))
                 .filter(|(candidate, _)| {
-                    config
-                        .tolerance
-                        .is_none_or(|limit| (candidate - value).abs() <= limit)
+                    tolleranza.is_none_or(|limite| entro_tolleranza(*candidate, value, limite))
                 })
                 .map(|(_, row)| row),
             _ => None,
@@ -1805,10 +1878,12 @@ fn choose_asof(
         AsOfDirection::Forward => forward,
         AsOfDirection::Nearest => match (backward, forward) {
             (Some(before), Some(after)) => {
-                if needle - before.0 <= after.0 - needle {
-                    Some(before)
-                } else {
+                // Distanze confrontate esatte: arrotondate, due distanze
+                // diverse possono risultare pari e scegliere il lato sbagliato.
+                if confronta_differenze(needle, before.0, after.0, needle) == Ordering::Greater {
                     Some(after)
+                } else {
+                    Some(before)
                 }
             }
             (before, after) => before.or(after),
@@ -2057,8 +2132,8 @@ mod tests {
             (AsOfDirection::Backward, true, None),
             (AsOfDirection::Backward, false, None),
             (AsOfDirection::Forward, true, None),
-            (AsOfDirection::Forward, false, Some(1.5)),
-            (AsOfDirection::Nearest, true, Some(1.5)),
+            (AsOfDirection::Forward, false, Some(1.5.into())),
+            (AsOfDirection::Nearest, true, Some(1.5.into())),
             (AsOfDirection::Nearest, false, None),
         ] {
             let config = AsOfJoin {
@@ -2641,5 +2716,83 @@ mod tests {
             serde_json::json!({"strict": false, "surprise": 1})
         )
         .is_err());
+    }
+
+    /// Regressione: le distanze di `asof_join` si decidono esatte. Con
+    /// chiavi `Int64` esatte in f64, `2^53 - (-5) = 2^53 + 5` si arrotonda a
+    /// `2^53 + 4`: `nearest` vedeva pari merito con il candidato a distanza
+    /// `2^53 + 4` e sceglieva quello prima, e una `tolerance` di `2^53 + 4`
+    /// lasciava passare la distanza `2^53 + 5`. Una tolleranza intera non
+    /// esatta in f64 ora si rifiuta invece di diventare un'altra soglia.
+    #[test]
+    fn asof_decide_distanze_e_tolleranza_sul_valore_esatto() {
+        let base = 1_i64 << 53;
+        let left = batch(vec![("on", i64_column(&[Some(base)]))]);
+        let right = batch(vec![
+            ("on", i64_column(&[Some(-5), Some(2 * base + 4)])),
+            ("r", i64_column(&[Some(0), Some(1)])),
+        ]);
+        let config = |direction: AsOfDirection, tolerance: Option<NumeroConfig>| AsOfJoin {
+            left_on: "on".into(),
+            right_on: "on".into(),
+            left_by: Vec::new(),
+            right_by: Vec::new(),
+            direction,
+            tolerance,
+            allow_exact: true,
+        };
+        let scelta = |config: &AsOfJoin| -> Option<i64> {
+            let uscita = asof_join(&left, &right, config, &Limits::default()).expect("asof");
+            let colonna = uscita
+                .column_by_name("r")
+                .expect("r")
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("Int64")
+                .clone();
+            colonna.is_valid(0).then(|| colonna.value(0))
+        };
+        assert_eq!(scelta(&config(AsOfDirection::Nearest, None)), Some(1));
+        let soglia = NumeroConfig::from(base + 4);
+        assert_eq!(scelta(&config(AsOfDirection::Backward, Some(soglia))), None);
+        assert_eq!(
+            scelta(&config(AsOfDirection::Forward, Some(soglia))),
+            Some(1)
+        );
+        let inesatta = NumeroConfig::from(base + 1);
+        assert!(matches!(
+            asof_join(
+                &left,
+                &right,
+                &config(AsOfDirection::Backward, Some(inesatta)),
+                &Limits::default()
+            ),
+            Err(PlenoraError::InvalidPlan(_))
+        ));
+        // Oracolo della distanza esatta: sugli interi esatti in f64 coincide
+        // con l'aritmetica i128.
+        let valori = [
+            -5_i64,
+            0,
+            3,
+            base - 1,
+            base,
+            base + 2,
+            2 * base + 4,
+            -(2 * base),
+        ];
+        for a in valori {
+            for b in valori {
+                for c in valori {
+                    for d in valori {
+                        #[allow(clippy::cast_precision_loss)] // Valori esatti in f64.
+                        let veloce = confronta_differenze(a as f64, b as f64, c as f64, d as f64);
+                        let esatto =
+                            (i128::from(a) - i128::from(b)).cmp(&(i128::from(c) - i128::from(d)));
+                        assert_eq!(veloce, esatto, "{a} {b} {c} {d}");
+                    }
+                }
+            }
+        }
     }
 }

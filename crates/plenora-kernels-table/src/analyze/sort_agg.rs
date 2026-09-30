@@ -232,18 +232,19 @@ pub(in crate::analyze) fn analyze_aggregate(
                 }
                 require_numeric(op, input, &aggregation.column)?;
             }
+            aggregation::AggFunction::Sum => {
+                require_numeric(op, input, &aggregation.column)?;
+                con_op(op, crate::float64_source::verifica_somma(field.data_type()))?;
+            }
             _ => require_numeric(op, input, &aggregation.column)?,
         }
-        check_output_name(op, &name)?;
-        let (data_type, nullable) = match aggregation.function {
-            aggregation::AggFunction::Count | aggregation::AggFunction::Nunique => {
-                (DataType::Int64, false)
-            }
-            aggregation::AggFunction::Concat
-            | aggregation::AggFunction::First
-            | aggregation::AggFunction::Last => (DataType::Utf8, true),
-            _ => (DataType::Float64, true),
-        };
+        // Il tipo del kernel (`tipo_uscita`): somme intere `Int64`, estremi
+        // esatti e `first`/`last` nel tipo d'ingresso.
+        let data_type = aggregation::tipo_uscita(aggregation.function, field.data_type());
+        let nullable = !matches!(
+            aggregation.function,
+            aggregation::AggFunction::Count | aggregation::AggFunction::Nunique
+        );
         produce(&mut fields_out, fields, &name, data_type, nullable)?;
     }
     if config.aggregations.is_empty() {
@@ -297,11 +298,18 @@ pub(in crate::analyze) fn analyze_rolling_window(
     } else {
         input.properties.sorted_by.clone()
     };
-    let mut output = analyze_append(
-        input,
-        fields,
-        &[(config.output_column, DataType::Float64, true)],
-    )?;
+    if matches!(config.function, aggregation::RollingKind::Sum) {
+        con_op(
+            op,
+            crate::float64_source::verifica_somma(field_of(op, input, &config.column)?.data_type()),
+        )?;
+    }
+    // Il tipo del kernel (`tipo_uscita_rolling`).
+    let tipo = aggregation::tipo_uscita_rolling(
+        config.function,
+        field_of(op, input, &config.column)?.data_type(),
+    );
+    let mut output = analyze_append(input, fields, &[(config.output_column, tipo, true)])?;
     output.properties = ContractProperties {
         sorted_by,
         row_count: input.properties.row_count.clone(),
@@ -355,29 +363,31 @@ pub(in crate::analyze) fn analyze_window_function(
     if let Some(order_column) = &config.order_column {
         require_sortable(op, input, std::slice::from_ref(order_column))?;
     }
-    let suffix = match config.function {
-        aggregation::WindowKind::Rank => "rank",
-        aggregation::WindowKind::DenseRank => "dense_rank",
-        aggregation::WindowKind::Cumsum => "cumsum",
-        aggregation::WindowKind::Cumcount => "cumcount",
-        aggregation::WindowKind::Lag => "lag",
-        aggregation::WindowKind::Lead => "lead",
-        aggregation::WindowKind::PctChange => "pct_change",
-        aggregation::WindowKind::RunningMean => "running_mean",
-        aggregation::WindowKind::PercentRank => "percent_rank",
-        aggregation::WindowKind::CumeDist => "cume_dist",
-        aggregation::WindowKind::Ntile => "ntile",
-    };
-    let name = config
-        .output_column
-        .unwrap_or_else(|| format!("{}_{suffix}", config.column));
+    let name = config.output_column.clone().unwrap_or_else(|| {
+        format!(
+            "{}_{}",
+            config.column,
+            aggregation::suffisso(&config.function)
+        )
+    });
     check_output_name(op, &name)?;
     let sorted_by = match config.order_column.as_ref() {
         // Il kernel ordina sempre in ascendente su order_column.
         Some(order_column) => Some(proven_sorted(vec![fields.intern(order_column)?], true)),
         None => input.properties.sorted_by.clone(),
     };
-    let mut output = analyze_append(input, fields, &[(name, DataType::Float64, true)])?;
+    if matches!(config.function, aggregation::WindowKind::Cumsum) {
+        con_op(
+            op,
+            crate::float64_source::verifica_somma(field_of(op, input, &config.column)?.data_type()),
+        )?;
+    }
+    // Il tipo del kernel (`tipo_uscita_finestra`).
+    let tipo = aggregation::tipo_uscita_finestra(
+        &config.function,
+        field_of(op, input, &config.column)?.data_type(),
+    );
+    let mut output = analyze_append(input, fields, &[(name, tipo, true)])?;
     output.properties = ContractProperties {
         sorted_by,
         row_count: input.properties.row_count.clone(),

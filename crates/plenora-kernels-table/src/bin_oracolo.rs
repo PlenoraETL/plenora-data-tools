@@ -28,20 +28,31 @@ fn bin_riferimento(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
         .iter()
         .map(|numero| numero.map(|(valore, _)| valore))
         .collect::<Vec<_>>();
-    let edges = match &config.bins {
-        Bins::Count(count) => equal_width_edges(&numeric, *count)?,
+    // Bordi letti esatti (con `Edges` i letterali del piano): la scansione
+    // resta quella di prima, sul valore esatto del bordo.
+    let (edges, testi_bordi): (Vec<NumericBound>, Vec<String>) = match &config.bins {
+        Bins::Count(count) => equal_width_edges(&numeric, *count)?
+            .into_iter()
+            .map(|bordo| (NumericBound::F64(bordo), bordo.to_string()))
+            .unzip(),
         Bins::Edges(edges) => {
             if edges.len() < 3
                 || edges.len() > 101
-                || edges
-                    .windows(2)
-                    .any(|v| !matches!(v[0].partial_cmp(&v[1]), Some(std::cmp::Ordering::Less)))
+                || edges.windows(2).any(|v| {
+                    !matches!(
+                        compare_bounds(v[0].esatto(), v[1].esatto()),
+                        Some(std::cmp::Ordering::Less)
+                    )
+                })
             {
                 return Err(PlenoraError::InvalidPlan(
                     "bordi bin non strettamente crescenti".into(),
                 ));
             }
-            edges.clone()
+            edges
+                .iter()
+                .map(|bordo| (bordo.esatto(), bordo.testo()))
+                .unzip()
         }
     };
     let count = edges.len() - 1;
@@ -63,7 +74,7 @@ fn bin_riferimento(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
         .into_iter()
         .map(|numero| {
             numero.and_then(|(_, esatto)| {
-                let rispetto = |bordo: f64| compare_bounds(esatto, NumericBound::F64(bordo));
+                let rispetto = |bordo: NumericBound| compare_bounds(esatto, bordo);
                 (0..count)
                     .find(|index| {
                         let primo = *index == 0;
@@ -83,7 +94,7 @@ fn bin_riferimento(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
                     })
                     .map(|index| {
                         config.labels.as_ref().map_or_else(
-                            || format!("({}, {}]", edges[index], edges[index + 1]),
+                            || format!("({}, {}]", testi_bordi[index], testi_bordi[index + 1]),
                             |labels| labels[index].clone(),
                         )
                     })
@@ -145,10 +156,22 @@ fn confronta_ogni_bordo(batch: &RecordBatch) {
     ];
     for bordi in bordi {
         let classi = bordi.len().saturating_sub(1);
-        confronta(batch, Bins::Edges(bordi.clone()), None);
+        confronta(
+            batch,
+            Bins::Edges(bordi.iter().copied().map(NumeroConfig::from).collect()),
+            None,
+        );
         let etichette = (0..classi).map(|indice| format!("e{indice}")).collect();
-        confronta(batch, Bins::Edges(bordi.clone()), Some(etichette));
-        confronta(batch, Bins::Edges(bordi), Some(vec!["una".into()]));
+        confronta(
+            batch,
+            Bins::Edges(bordi.iter().copied().map(NumeroConfig::from).collect()),
+            Some(etichette),
+        );
+        confronta(
+            batch,
+            Bins::Edges(bordi.into_iter().map(NumeroConfig::from).collect()),
+            Some(vec!["una".into()]),
+        );
     }
 }
 
@@ -319,7 +342,7 @@ proptest! {
         };
         let mut bordi = bordi.into_iter().map(|bordo| f64::from(bordo) / 2.0).collect::<Vec<_>>();
         bordi.sort_by(f64::total_cmp);
-        let bins = if espliciti { Bins::Edges(bordi.clone()) } else { Bins::Count(count) };
+        let bins = if espliciti { Bins::Edges(bordi.iter().copied().map(NumeroConfig::from).collect()) } else { Bins::Count(count) };
         let classi = if espliciti { bordi.len().saturating_sub(1) } else { count };
         let labels = con_etichette.then(|| (0..classi).map(|indice| format!("l{indice}")).collect());
         let batch = batch_di(colonna);

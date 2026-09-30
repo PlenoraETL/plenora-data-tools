@@ -3,8 +3,8 @@
 Calcola per ogni riga una funzione finestra sulla colonna `column` —
 rango, somma cumulata, valore precedente o successivo, variazione
 percentuale, quantile di posizione — dentro la sua partizione
-(`group_by`), e la aggiunge come colonna `float64`. Con `order_column` le
-righe si riordinano prima su quella colonna.
+(`group_by`), e la aggiunge come colonna (`float64`, o del tipo detto
+sotto). Con `order_column` le righe si riordinano prima su quella colonna.
 
 ### Parametri
 
@@ -34,21 +34,29 @@ Funzioni, per partizione, con le righe nell'ordine descritto sotto:
   solo valore;
 - `cume_dist`: valori minori o uguali diviso valori non nulli;
 - `cumsum`, `running_mean`: somma e media dei valori non nulli fin qui;
+  sulle colonne intere (`int64`, `uint64`) `cumsum` è esatta ed esce
+  `int64` (una somma oltre `int64` è un errore); `cumsum` su `date32` o
+  `timestamp` si rifiuta in validazione; `running_mean` su interi, date e
+  istanti parte dalla somma esatta;
 - `cumcount`: posizione della riga nella partizione, da 0;
-- `lag`, `lead`: il valore `offset` righe prima o dopo nella partizione;
+- `lag`, `lead`: la cella `offset` righe prima o dopo nella partizione,
+  com'è, nel tipo della colonna (un `timestamp` resta `timestamp`, un
+  `utf8` resta il suo testo);
 - `pct_change`: `(corrente − precedente) / precedente` sulla riga subito
   prima (`offset` non si usa);
 - `ntile`: `posizione * min(buckets, righe) / righe + 1` in divisione
   intera, con la posizione da 0.
 
 Le funzioni di rango confrontano il valore nativo con l'ordine di
-[`table.sort`](#tablesort) (su `float64`, `-0.0` prima di `0.0`); le altre
-leggono la cella come `f64`.
+[`table.sort`](#tablesort) (su `float64`, `-0.0` prima di `0.0`);
+`pct_change` sulle colonne intere sottrae esatto e arrotonda una volta; le
+altre leggono la cella come `f64`.
 
 ### Schema
 
-L'ingresso più la colonna `output_column`, `float64` nullabile, senza
-metadati di campo, in coda; se il nome esiste già, la colonna è sostituita
+L'ingresso più la colonna `output_column`, nullabile, senza metadati di
+campo, in coda: del tipo di `column` con `lag` e `lead`, `int64` con
+`cumsum` su una colonna intera, `float64` altrimenti; se il nome esiste già, la colonna è sostituita
 al suo posto. Gli altri metadati si conservano. Il contratto dichiara
 l'uscita ordinata in ascendente su `order_column` se c'è (altrimenti
 conserva l'ordinamento dell'ingresso) e conserva il conteggio.
@@ -90,17 +98,19 @@ In esecuzione:
   `group_by` che non si converte in testo; una chiave di dizionario di
   `order_column` fuori dal proprio dizionario;
 - `DataMapping`: un risultato di `cumsum`, `running_mean` o `pct_change`
-  non finito calcolato da valori finiti (overflow di `f64`);
+  non finito calcolato da valori finiti (overflow di `f64`); con `cumsum`
+  su una colonna intera, una somma oltre la gamma di `int64`;
 - `ResourceLimit`: più di `u32::MAX` righe con `order_column`.
 
 ### Limiti e deviazioni
 
-Le funzioni che rendono un valore (`cumsum`, `running_mean`, `lag`,
-`lead`, `pct_change`) leggono la cella come `f64`: un intero oltre `2^53`
-o un `decimal128` si arrotondano senza errore. Un `NaN` o un infinito già
-nei dati si propagano senza errore; solo l'overflow di un calcolo su valori
-finiti si rifiuta. Le funzioni di rango non arrotondano, e per questo
-rifiutano il testo numerico.
+`cumsum`, `running_mean` e `pct_change` su `decimal128` e testo numerico
+leggono la cella come `f64` e arrotondano senza errore; su una colonna
+intera la media e la variazione arrotondano una volta sola, dopo la somma
+o la differenza esatta ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
+Un `NaN` o un infinito già nei dati si propagano senza errore; solo
+l'overflow di un calcolo su valori finiti si rifiuta. Le funzioni di rango
+non arrotondano, e per questo rifiutano il testo numerico.
 
 ### Complessità
 

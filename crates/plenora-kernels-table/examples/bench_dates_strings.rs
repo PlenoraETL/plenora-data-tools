@@ -89,7 +89,7 @@ fn main() {
 
     let format_config = DateFormat {
         column: "ts".into(),
-        input_format: "%Y-%m-%d %H:%M:%S".into(),
+        input_format: Some("%Y-%m-%d %H:%M:%S".into()),
         output_format: "%d/%m/%Y %H:%M".into(),
         output_column: "fmt".into(),
         invalid: None,
@@ -100,7 +100,7 @@ fn main() {
 
     let add_config = DateAdd {
         column: "ts".into(),
-        input_format: "%Y-%m-%d %H:%M:%S".into(),
+        input_format: Some("%Y-%m-%d %H:%M:%S".into()),
         output_format: "%Y-%m-%d %H:%M:%S".into(),
         amount: 7,
         unit: DateUnit::Days,
@@ -114,7 +114,7 @@ fn main() {
     let diff_config = DateDiff {
         start_column: "ts".into(),
         end_column: "ts2".into(),
-        input_format: "%Y-%m-%d %H:%M:%S".into(),
+        input_format: Some("%Y-%m-%d %H:%M:%S".into()),
         unit: DiffUnit::Seconds,
         output_column: "diff".into(),
         invalid: None,
@@ -141,7 +141,7 @@ fn main() {
 
     let timezone_config = TimezoneConvert {
         column: "ts".into(),
-        input_format: "%Y-%m-%d %H:%M:%S".into(),
+        input_format: Some("%Y-%m-%d %H:%M:%S".into()),
         output_format: "%Y-%m-%d %H:%M:%S".into(),
         source_timezone: "Europe/Rome".into(),
         target_timezone: "UTC".into(),

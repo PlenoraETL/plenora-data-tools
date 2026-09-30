@@ -132,6 +132,7 @@ pub mod security;
 pub mod setops;
 pub mod spill;
 pub mod strings;
+mod temporale;
 pub mod utility;
 
 #[cfg(test)]
@@ -819,6 +820,36 @@ pub fn validate_output_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// I nomi delle colonne che un passo **produce insieme** sono tutti distinti.
+///
+/// E' la regola dei nomi d'uscita per le operazioni che costruiscono una
+/// tabella nuova (`aggregate`, `pivot`, `transpose`): due colonne con lo
+/// stesso nome si sostituirebbero (una sparisce senza errore) o darebbero
+/// uno schema con nomi ripetuti. Si rifiuta invece di scegliere. Per le
+/// operazioni che **aggiungono** una colonna all'ingresso vale l'altra
+/// regola, dichiarata: un nome gia' presente nell'ingresso si sostituisce al
+/// suo posto (README, «Nomi delle colonne d'uscita»).
+///
+/// Il messaggio non cita il nome: in `pivot` e `transpose` viene dai dati.
+///
+/// # Errors
+///
+/// `InvalidPlan` al primo nome ripetuto.
+pub fn verifica_nomi_distinti<'a>(
+    operazione: &str,
+    nomi: impl IntoIterator<Item = &'a str>,
+) -> Result<()> {
+    let mut visti = std::collections::HashSet::new();
+    for nome in nomi {
+        if !visti.insert(nome) {
+            return Err(PlenoraError::InvalidPlan(format!(
+                "{operazione}: due colonne d'uscita con lo stesso nome"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Valore testuale di una cella `Dictionary(Int32, Utf8)`, in prestito, con
 /// il **null logico** risolto.
 ///
@@ -967,6 +998,11 @@ pub fn scalar_as_string(array: &dyn Array, row: usize) -> Result<Option<String>>
             let timezone = timezone
                 .parse::<chrono_tz::Tz>()
                 .map_err(|_| PlenoraError::Schema("timezone Arrow non valida".into()))?;
+            // L'ora locale dev'essere nell'intervallo di chrono prima di
+            // scriverla: `to_rfc3339` somma l'offset senza controllo.
+            crate::temporale::ora_locale(&timestamp, timezone).ok_or_else(|| {
+                PlenoraError::Schema("timestamp fuori intervallo nel fuso della colonna".into())
+            })?;
             return Ok(Some(timestamp.with_timezone(&timezone).to_rfc3339()));
         }
         return Ok(Some(timestamp.to_rfc3339()));
@@ -1276,6 +1312,101 @@ pub fn ordine_esatto(sinistra: NumericBound, destra: NumericBound) -> Ordering {
     compare_bounds(sinistra, destra).unwrap_or_else(|| nan(sinistra).cmp(&nan(destra)))
 }
 
+/// Numero letterale di una config JSON, letto **esatto**.
+///
+/// Un campo `f64` arrotonderebbe in deserializzazione un intero oltre 2^53
+/// (`9007199254740993` diventerebbe `9007199254740992`) prima che il kernel
+/// lo veda: un vincolo o un bordo diverso da quello scritto, senza errore.
+/// Qui l'intero JSON resta [`NumericBound::I64`] o [`NumericBound::U64`], un
+/// decimale posizionale resta [`NumericBound::Decimal`] (lo stesso
+/// [`NumericBound::parse`] del valore di `table.filter`), e il double serve
+/// solo dove il contratto e' un double (etichette, ampiezze).
+///
+/// Limite dichiarato (README, «Letterali JSON oltre `u64`»): senza la
+/// feature `arbitrary_precision` di `serde_json`, un intero JSON oltre la
+/// gamma di `u64` e' gia' un double quando arriva qui.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NumeroConfig {
+    esatto: NumericBound,
+    double: f64,
+}
+
+impl NumeroConfig {
+    /// Il valore esatto, per confrontare e decidere.
+    #[must_use]
+    pub const fn esatto(&self) -> NumericBound {
+        self.esatto
+    }
+
+    /// Il double piu' vicino, per i calcoli il cui risultato e' un double.
+    #[must_use]
+    pub const fn double(&self) -> f64 {
+        self.double
+    }
+
+    /// Il numero di un letterale JSON.
+    #[must_use]
+    pub fn da_json(numero: &serde_json::Number) -> Self {
+        #[allow(clippy::cast_precision_loss)] // Il double e' solo l'approssimazione dichiarata.
+        if let Some(intero) = numero.as_i64() {
+            return Self {
+                esatto: NumericBound::I64(intero),
+                double: intero as f64,
+            };
+        }
+        #[allow(clippy::cast_precision_loss)] // Come sopra.
+        if let Some(intero) = numero.as_u64() {
+            return Self {
+                esatto: NumericBound::U64(intero),
+                double: intero as f64,
+            };
+        }
+        let double = numero.as_f64().unwrap_or(f64::NAN);
+        Self {
+            esatto: NumericBound::parse(&numero.to_string()).unwrap_or(NumericBound::F64(double)),
+            double,
+        }
+    }
+
+    /// Il testo con cui il numero si mostra (etichette): l'intero esatto per
+    /// un letterale intero, altrimenti il `Display` del double.
+    #[must_use]
+    pub fn testo(&self) -> String {
+        match self.esatto {
+            NumericBound::I64(intero) => intero.to_string(),
+            NumericBound::U64(intero) => intero.to_string(),
+            NumericBound::Decimal { .. } | NumericBound::F64(_) => self.double.to_string(),
+        }
+    }
+}
+
+impl From<f64> for NumeroConfig {
+    fn from(double: f64) -> Self {
+        Self {
+            esatto: NumericBound::F64(double),
+            double,
+        }
+    }
+}
+
+impl From<i64> for NumeroConfig {
+    #[allow(clippy::cast_precision_loss)] // Il double e' solo l'approssimazione dichiarata.
+    fn from(intero: i64) -> Self {
+        Self {
+            esatto: NumericBound::I64(intero),
+            double: intero as f64,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NumeroConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        serde_json::Number::deserialize(deserializer).map(|numero| Self::da_json(&numero))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Confronti scalari tipizzati (filtri, regole di governance, assert_range).
 //
@@ -1283,8 +1414,8 @@ pub fn ordine_esatto(sinistra: NumericBound, destra: NumericBound) -> Ordering {
 // intero, perche' oltre 2^53 interi distinti collassano sullo stesso double.
 //
 // Il valore di configurazione e' un letterale JSON reso testo: un intero
-// resta intero esatto, un decimale posizionale resta decimale esatto, ogni
-// altra forma e' `F64`. Contro `F64`: un double frazionario non eguaglia mai
+// resta intero esatto, un decimale (posizionale o con esponente) resta
+// decimale esatto, ogni altra forma e' `F64`. Contro `F64`: un double frazionario non eguaglia mai
 // un intero e ordina per floor, uno intero fuori gamma ordina per segno, NaN
 // rende falso ogni confronto (`None`), come in IEEE 754.
 // ---------------------------------------------------------------------------
@@ -1296,7 +1427,7 @@ pub enum NumericBound {
     I64(i64),
     /// Letterale intero oltre `i64::MAX` (gamma u64): confronto nativo esatto.
     U64(u64),
-    /// Letterale DECIMALE esatto (`10.5`, `-0.001`): conservato come intero
+    /// Letterale DECIMALE esatto (`10.5`, `-0.001`, `1e-7`): conservato come intero
     /// non scalato piu' scala, quindi confrontabile esattamente con una
     /// colonna Decimal128 senza passare da `f64`.
     Decimal {
@@ -1305,8 +1436,9 @@ pub enum NumericBound {
         /// Cifre decimali: il valore e' `unscaled * 10^(-scale)`.
         scale: i8,
     },
-    /// Qualunque altra forma numerica (esponenziale, inf, NaN, o un decimale
-    /// con piu' cifre di quante ne tenga un `i128`).
+    /// Qualunque altra forma numerica (inf, NaN, o un decimale con piu' cifre
+    /// significative di quante ne tenga `Decimal128`, o un esponente oltre la
+    /// scala `i8`).
     F64(f64),
 }
 
@@ -1349,15 +1481,28 @@ impl NumericBound {
         text.parse::<f64>().ok().map(Self::F64)
     }
 
-    /// Letterale decimale in notazione posizionale (niente esponente): segno
-    /// opzionale, cifre, al piu' un punto. `None` per ogni altra forma.
+    /// Letterale decimale esatto: segno opzionale, cifre, al piu' un punto,
+    /// e un esponente facoltativo (`1e-7`, `1.5e3`, `12E-2`): il valore e'
+    /// cifre per `10^esponente`, conservato come intero non scalato piu'
+    /// scala, senza passare dal double. `None` per ogni altra forma, o se
+    /// il valore non sta in 38 cifre significative con una scala `i8`.
     fn parse_decimal(text: &str) -> Option<Self> {
-        let negative = text.starts_with('-');
-        let digits = text
-            .strip_prefix('-')
-            .or_else(|| text.strip_prefix('+'))
-            .unwrap_or(text);
-        let (intero, frazione) = digits.split_once('.')?;
+        let (negative, digits) = separa_segno(text);
+        let (mantissa, esponente) = match digits.find(['e', 'E']) {
+            Some(posizione) => (
+                &digits[..posizione],
+                Some(digits[posizione + 1..].parse::<i32>().ok()?),
+            ),
+            None => (digits, None),
+        };
+        let (intero, frazione) = match (mantissa.split_once('.'), esponente) {
+            (Some(parti), _) => parti,
+            // Senza punto serve l'esponente: un intero semplice e' gia'
+            // passato dai parse interi.
+            (None, Some(_)) => (mantissa, ""),
+            (None, None) => return None,
+        };
+        let esponente = esponente.unwrap_or(0);
         // Almeno una cifra in tutto, e solo cifre: `.5` e `5.` sono ammessi,
         // `1.2.3`, `1e5` e `abc` no.
         if frazione.contains('.')
@@ -1370,15 +1515,31 @@ impl NumericBound {
         // Zeri non significativi via prima di contare le cifre, altrimenti
         // `0000…0.1` sforerebbe il tetto e ricadrebbe su `f64`. Gli zeri
         // iniziali della parte frazionaria restano: sono la scala.
-        let intero = intero.trim_start_matches('0');
-        let frazione = frazione.trim_end_matches('0');
-        if intero.len() + frazione.len() > MAX_DECIMAL_DIGITS {
+        // Cifre significative e scala: il valore e' `cifre * 10^(-scala)`.
+        let tutte = format!("{intero}{frazione}");
+        let significative = tutte.trim_start_matches('0');
+        let senza_coda = significative.trim_end_matches('0');
+        let zeri_in_coda = significative.len() - senza_coda.len();
+        let mut esponente_decimale = i64::try_from(frazione.len()).ok()?
+            - i64::from(esponente)
+            - i64::try_from(zeri_in_coda).ok()?;
+        let mut testo = senza_coda.to_owned();
+        // Scala negativa: gli zeri tornano nelle cifre (esponente_decimale zero), purche'
+        // restino entro il tetto.
+        while esponente_decimale < 0 && !testo.is_empty() {
+            testo.push('0');
+            esponente_decimale += 1;
+        }
+        if testo.len() > MAX_DECIMAL_DIGITS {
             return None;
         }
-        let scale = i8::try_from(frazione.len()).ok()?;
-        let testo = format!("{intero}{frazione}");
+        let scale = if testo.is_empty() {
+            0
+        } else {
+            i8::try_from(esponente_decimale).ok()?
+        };
         // Tutto zero (`0.0`, `-0.000`, `.0`): la stringa concatenata e'
-        // vuota e `parse` fallirebbe. Il valore e' lo zero, a scala zero.
+        // vuota e `parse` fallirebbe. Il valore e' lo zero, a esponente_decimale zero.
         if testo.is_empty() {
             return Some(Self::Decimal {
                 unscaled: 0,
@@ -1391,6 +1552,22 @@ impl NumericBound {
         }
         Some(Self::Decimal { unscaled, scale })
     }
+}
+
+/// Il segno di un letterale numerico testuale: **al piu' uno**, `+` o `-`,
+/// in testa. Rende `(negativo, resto)`; il resto non e' validato qui.
+///
+/// E' l'unica regola dei parser numerici scritti a mano (decimali di
+/// `table.type_cast` e `table.align_schema`, letterali decimali esatti di
+/// [`NumericBound`]), la stessa dei `parse` della libreria standard: un
+/// secondo segno resta nel resto e il chiamante, che pretende solo cifre,
+/// lo rifiuta. Togliere piu' segni leggerebbe `"-+5"` come -5 e `"--5"`
+/// come un numero.
+pub(crate) fn separa_segno(text: &str) -> (bool, &str) {
+    text.strip_prefix('-').map_or_else(
+        || (false, text.strip_prefix('+').unwrap_or(text)),
+        |resto| (true, resto),
+    )
 }
 
 /// Confronto esatto i64 <-> bound. `None` solo con bound NaN (ogni confronto
@@ -2046,12 +2223,21 @@ mod tests {
                 scale: 3
             })
         );
-        // Le forme che un decimale non e' restano double.
-        assert_eq!(NumericBound::parse("1e3"), Some(NumericBound::F64(1_000.0)));
-        assert!(matches!(
+        // L'esponente si legge in decimale esatto (revisione Codex).
+        assert_eq!(
+            NumericBound::parse("1e3"),
+            Some(NumericBound::Decimal {
+                unscaled: 1_000,
+                scale: 0
+            })
+        );
+        assert_eq!(
             NumericBound::parse("1.5e2"),
-            Some(NumericBound::F64(_))
-        ));
+            Some(NumericBound::Decimal {
+                unscaled: 150,
+                scale: 0
+            })
+        );
         // Oltre 38 cifre non c'e' forma decimale esatta: si ricade su f64.
         assert!(matches!(
             NumericBound::parse("1.000000000000000000000000000000000000000001"),
@@ -2222,6 +2408,37 @@ mod tests {
         assert_eq!(
             compare_f64(1.5, NumericBound::F64(1.5)),
             Some(Ordering::Equal)
+        );
+    }
+
+    /// Regressione (revisione Codex): la notazione esponenziale si legge
+    /// esatta. `1e-7` era un double appena sotto un decimo di milionesimo, e
+    /// un `Decimal128` di quel valore risultava fuori da un `max` scritto
+    /// `0.0000001`.
+    #[test]
+    fn l_esponente_si_legge_in_decimale_esatto() {
+        use super::NumericBound;
+        let decimale = |unscaled: i128, scale: i8| Some(NumericBound::Decimal { unscaled, scale });
+        assert_eq!(NumericBound::parse("1e-7"), decimale(1, 7));
+        assert_eq!(NumericBound::parse("1.5e3"), decimale(1500, 0));
+        assert_eq!(NumericBound::parse("12e-2"), decimale(12, 2));
+        assert_eq!(NumericBound::parse("-2.50E+1"), decimale(-25, 0));
+        assert_eq!(
+            NumericBound::parse("1e20"),
+            decimale(100_000_000_000_000_000_000, 0)
+        );
+        assert_eq!(NumericBound::parse("0e5"), decimale(0, 0));
+        assert!(matches!(
+            NumericBound::parse("1e400"),
+            Some(NumericBound::F64(_))
+        ));
+        assert_eq!(
+            compare_decimal128(1, 7, NumericBound::parse("1e-7").expect("numero")),
+            Some(std::cmp::Ordering::Equal)
+        );
+        assert_eq!(
+            compare_i64(1500, NumericBound::parse("1.5e3").expect("numero")),
+            Some(std::cmp::Ordering::Equal)
         );
     }
 }

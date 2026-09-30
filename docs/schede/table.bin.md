@@ -29,9 +29,14 @@ con `d = |v| · 0,001` (`0,001` se `v` è zero). In questo modo un valore
 sotto il primo bordo o sopra l'ultimo (anche `±inf`) cade nella classe
 esterna.
 
-L'etichetta di default (senza `labels`) scrive i due bordi `f64` con la
-resa decimale più corta (`(0, 18]`, `(2.5, 5]`); non supera
-`max_string_bytes` byte, controllato in esecuzione.
+I bordi espliciti si leggono esatti dal JSON, come `min` e `max` di
+[`table.assert_range`](#tableassert_range): un bordo intero oltre `2^53`
+resta quello scritto.
+
+L'etichetta di default (senza `labels`) scrive i bordi con la resa decimale
+più corta di `f64` (`(0, 18]`, `(2.5, 5]`); un bordo esplicito intero si
+scrive con tutte le sue cifre (`(9007199254740992, 9007199254740993]`).
+Non supera `max_string_bytes` byte, controllato in esecuzione.
 
 ### Schema
 

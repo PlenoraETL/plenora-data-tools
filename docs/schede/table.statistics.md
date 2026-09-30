@@ -25,19 +25,28 @@ Le statistiche, sui valori non nulli del gruppo:
 
 - `count`: quanti sono;
 - `min`, `max`, `median`, `q25`, `q75`: sui valori ordinati; i quantili
-  interpolano linearmente fra i due valori vicini (posizione `q · (c - 1)`);
-- `sum`, `mean`: somma in `f64` nell'ordine delle righe, e somma diviso
+  interpolano linearmente fra i due valori vicini (posizione `q · (c - 1)`).
+  `min` e `max` sulle colonne intere (`int64`, `uint64`, `date32`,
+  `timestamp(ms)`) e `decimal128` rendono la cella estrema nel tipo della
+  colonna;
+- `sum`, `mean`: sulle colonne intere (`int64`, `uint64`) la somma è
+  esatta ed esce `int64` (oltre `int64` è un errore); `sum` su `date32` o
+  `timestamp` si rifiuta in validazione; la media su interi, date e istanti
+  è la somma esatta diviso `count`; altrove somma in `f64` nell'ordine delle righe, e somma diviso
   `count`;
 - `var`, `std`: varianza campionaria (divisore `count - 1`) e sua radice;
   null con meno di due valori.
 
 I gruppi si formano sul testo della cella di `group_by`; le celle nulle
-formano un gruppo.
+formano un gruppo. Una statistica ripetuta in `stats` si rifiuta: darebbe
+due colonne con lo stesso nome
+([README, «Nomi delle colonne d'uscita»](../README.md#nomi-delle-colonne-duscita)).
 
 ### Schema
 
-Una colonna `float64` nullable per statistica, nell'ordine di `stats`, in
-coda; una colonna con lo stesso nome di una esistente la sostituisce al suo
+Una colonna nullable per statistica, nell'ordine di `stats`, in coda:
+`int64` per `sum` su una colonna intera, il tipo della colonna per `min` e
+`max` su una colonna intera o `decimal128`, `float64` altrimenti; una colonna con lo stesso nome di una esistente la sostituisce al suo
 posto (perdendone tipo e metadati di campo). Le colonne d'ingresso restano.
 Metadati di schema conservati; `row_count` resta; `sorted_by` resta solo se
 nessuna colonna esistente è sovrascritta.
@@ -59,16 +68,21 @@ In validazione, `InvalidPlan`:
 - `group_by` assente o non leggibile come testo, o `null` esplicito (il
   parametro si omette);
 - `stats` vuota o con una statistica ripetuta;
-- una voce di `stats` fuori elenco, o config con campi sconosciuti.
+- una voce di `stats` fuori elenco, un nome d'uscita non valido, o config
+  con campi sconosciuti.
 
 In esecuzione, `Schema`: una cella `utf8` di `column` che non è un numero;
-una cella di `group_by` che non si converte in testo.
+una cella di `group_by` che non si converte in testo. `DataMapping`: con
+`sum` su una colonna intera, una somma oltre la gamma di `int64`.
 
 ### Limiti e deviazioni
 
-Il risultato è `float64` per contratto: `int64` e `uint64` oltre `2^53` e i
-`decimal128` si convertono arrotondando, e la somma accumula gli errori di
-arrotondamento di `f64` nell'ordine delle righe. Un `NaN` nei valori entra
+Le statistiche `float64` sono tali per contratto: i `decimal128` e il testo
+si convertono arrotondando e la loro somma accumula gli errori di
+arrotondamento di `f64` nell'ordine delle righe; sulle colonne intere
+la media parte dalla somma esatta, varianza e deviazione dagli scarti
+esatti, e mediana e
+quartili interpolano i valori arrotondati ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)). Un `NaN` nei valori entra
 nei calcoli: somma, media e varianza diventano `NaN`, e nell'ordinamento di
 minimo, massimo e quantili sta dopo ogni numero.
 

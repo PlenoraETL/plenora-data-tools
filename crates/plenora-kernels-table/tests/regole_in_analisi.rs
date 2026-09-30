@@ -454,6 +454,110 @@ fn nomi_ripetuti_e_liste_vuote_si_rifiutano() {
         json!({"subset": []}),
         "vuoto",
     );
+    // Nomi d'uscita di `aggregate`: due aggregazioni con lo stesso nome, un
+    // alias uguale a una chiave, una colonna aggregata senza alias che e'
+    // anche chiave, la colonna `count` implicita con una chiave `count`. Il
+    // messaggio dice quale colonna sparirebbe (la chiave o l'aggregazione).
+    let stesso_nome = "sparirebbe";
+    for config in [
+        json!({"group_by": ["id"], "aggregations": [
+            {"column": "value", "function": "sum", "alias": "x"},
+            {"column": "value", "function": "mean", "alias": "x"}]}),
+        json!({"group_by": ["id"], "aggregations": [
+            {"column": "value", "function": "sum", "alias": "id"}]}),
+        json!({"group_by": ["name"], "aggregations": [
+            {"column": "name", "function": "count"}]}),
+        json!({"group_by": ["id"], "aggregations": [
+            {"column": "value", "function": "sum"},
+            {"column": "grande", "function": "sum", "alias": "value"}]}),
+    ] {
+        rifiuta("table.aggregate", &[&w], config, stesso_nome);
+    }
+    let conta = schema(vec![Field::new("count", DataType::Int64, true)]);
+    rifiuta(
+        "table.aggregate",
+        &[&conta],
+        json!({"group_by": ["count"]}),
+        stesso_nome,
+    );
+    accetta(
+        "table.aggregate",
+        &[&w],
+        json!({"group_by": ["id"], "aggregations": [
+            {"column": "value", "function": "sum"},
+            {"column": "value", "function": "mean"}]}),
+    );
+    // `transpose`: una voce di `output_columns` vuota si rifiuta (il kernel
+    // la trattava come assente), e le voci sono distinte.
+    rifiuta(
+        "table.transpose",
+        &[&w],
+        json!({"output_columns": ["a", ""]}),
+        "vuoto",
+    );
+    rifiuta(
+        "table.transpose",
+        &[&w],
+        json!({"output_columns": ["a", "a"]}),
+        "",
+    );
+}
+
+/// Gli stessi rifiuti di nomi nel kernel, senza l'analisi: la regola e' una
+/// (`Aggregate::nomi_uscita`, `Transpose::verifica_nomi`,
+/// `verifica_nomi_distinti`), e un nome ripetuto che viene dai dati
+/// (`id_column` di `transpose`) si rifiuta in esecuzione.
+#[test]
+fn i_kernel_rifiutano_i_nomi_d_uscita_ripetuti() {
+    use plenora_core::arrow::array::{Int64Array, RecordBatch, StringArray};
+    use plenora_kernels_table::aggregation::{aggregate, Aggregate};
+    use plenora_kernels_table::reshape::{transpose, Transpose};
+
+    let batch = RecordBatch::try_new(
+        schema(vec![
+            Field::new("k", DataType::Utf8, true),
+            Field::new("v", DataType::Int64, true),
+        ]),
+        vec![
+            Arc::new(StringArray::from(vec![Some("a"), Some("a")])),
+            Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+        ],
+    )
+    .expect("batch");
+    for config in [
+        json!({"group_by": ["k"], "aggregations": [{"column": "v", "function": "sum", "alias": "k"}]}),
+        json!({"group_by": ["k"], "aggregations": [
+            {"column": "v", "function": "sum", "alias": "s"},
+            {"column": "v", "function": "max", "alias": "s"}]}),
+        json!({"group_by": ["k", "k"]}),
+    ] {
+        let config: Aggregate = serde_json::from_value(config).expect("config");
+        assert!(matches!(
+            aggregate(&batch, &config),
+            Err(PlenoraError::InvalidPlan(_))
+        ));
+    }
+    let limiti = Limits::default();
+    // `type_policy: string`: il rifiuto e' per i nomi, non per i tipi.
+    for (config, frammento) in [
+        (json!({"output_columns": ["x", ""]}), "vuoto"),
+        (json!({"output_columns": ["x", "x"]}), "stesso nome"),
+        (json!({"id_column": "k"}), "stesso nome"),
+        (json!({"output_columns": ["col_0"]}), "stesso nome"),
+    ] {
+        let mut config = config;
+        config["type_policy"] = json!("string");
+        let config: Transpose = serde_json::from_value(config).expect("config");
+        let esito = transpose(&batch, &config, &limiti);
+        assert!(
+            matches!(&esito, Err(PlenoraError::InvalidPlan(messaggio)) if messaggio.contains(frammento)),
+            "{config:?}: {esito:?}"
+        );
+    }
+    let config: Transpose =
+        serde_json::from_value(json!({"output_columns": ["x", "y"], "type_policy": "string"}))
+            .expect("config");
+    assert!(transpose(&batch, &config, &limiti).is_ok());
 }
 
 #[test]
@@ -773,23 +877,28 @@ fn i_kernel_rifiutano_gli_stessi_parametri_ignorati() {
 }
 
 #[test]
-fn verifica_amount_conta_il_secondo_intercalare_dell_ultimo_giorno() {
+fn verifica_amount_ha_il_confine_dei_valori_leggibili() {
     use chrono::NaiveDate;
     use plenora_core::arrow::array::{Array, RecordBatch, StringArray};
     use plenora_kernels_table::dates::{date_add, verifica_amount, DateAdd, DateUnit};
 
-    // Dal secondo intercalare dell'ultimo giorno (`23:59:60`), `giorni`
-    // giorni all'indietro arrivano alla mezzanotte del primo giorno; da
-    // `NaiveDateTime::MAX` (23:59:59.999999999) no.
-    let giorni = (NaiveDate::MAX - NaiveDate::MIN).num_days() + 1;
+    // Il secondo intercalare (`23:59:60`) si rifiuta in lettura: il confine
+    // e' quello di `NaiveDateTime::MAX` (23:59:59.999999999), da cui
+    // `giorni - 1` giorni all'indietro arrivano al primo giorno.
+    let giorni = (NaiveDate::MAX - NaiveDate::MIN).num_days();
     assert!(verifica_amount(-giorni, &DateUnit::Days).is_ok());
     assert!(matches!(
         verifica_amount(-giorni - 1, &DateUnit::Days),
         Err(PlenoraError::InvalidPlan(_))
     ));
-    let batch = RecordBatch::try_new(
+    let intercalare = RecordBatch::try_new(
         schema(vec![Field::new("ts", DataType::Utf8, false)]),
         vec![Arc::new(StringArray::from(vec!["+262142-12-31 23:59:60"]))],
+    )
+    .expect("batch");
+    let batch = RecordBatch::try_new(
+        schema(vec![Field::new("ts", DataType::Utf8, false)]),
+        vec![Arc::new(StringArray::from(vec!["+262142-12-31 23:59:59"]))],
     )
     .expect("batch");
     let config = |amount: i64| -> DateAdd {
@@ -798,6 +907,10 @@ fn verifica_amount_conta_il_secondo_intercalare_dell_ultimo_giorno() {
             "output_column": "d"}))
         .expect("config")
     };
+    assert!(date_add(&intercalare, &config(0))
+        .expect_err("secondo intercalare")
+        .row_diagnostics()
+        .is_some());
     let uscita = date_add(&batch, &config(-giorni)).expect("il kernel lo esegue");
     let colonna = uscita
         .column_by_name("d")

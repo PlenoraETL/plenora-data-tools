@@ -8,22 +8,28 @@ come numero con parte frazionaria (un giorno e mezzo è `1.5`) e con segno.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `start_column` | stringa | obbligatorio | colonna leggibile come testo | istante iniziale |
-| `end_column` | stringa | obbligatorio | colonna leggibile come testo | istante finale |
-| `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura di entrambe le colonne |
+| `start_column` | stringa | obbligatorio | colonna temporale o leggibile come testo | istante iniziale |
+| `end_column` | stringa | obbligatorio | colonna dello stesso genere di `start_column` | istante finale |
+| `input_format` | stringa | assente | formato `chrono` non vuoto, al più `max_string_bytes` byte; obbligatorio per colonne di testo, rifiutato per colonne temporali; `null` non ammesso | formato di lettura di entrambe le colonne |
 | `unit` | stringa | obbligatorio | `days`, `hours`, `minutes`, `seconds` | unità della differenza |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
 | `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 
-Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
-`dictionary<utf8>` con chiavi `int32`. Una colonna non testuale si legge
-con la sua resa testuale: `date32` come `AAAA-MM-GG`, `timestamp(ms)` come
-RFC 3339.
+Una colonna temporale (`date32`, `timestamp` in secondi, millisecondi,
+microsecondi o nanosecondi, con o senza fuso) si legge dal valore nativo,
+senza `input_format` (scritto, si rifiuta): vale l'ora locale della
+colonna (del suo fuso; senza fuso, il valore com'è), e una data è la sua
+mezzanotte ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
+`input_format` obbligatorio; leggibili come testo: `utf8`, `int64`,
+`uint64`, `float64`, `bool`, `decimal128` con scala da 0 a 38, `binary`,
+`dictionary<utf8>` con chiavi `int32`.
 
-La lettura deve consumare tutto il testo della cella; un formato senza
-campi orari legge una data e la pone a mezzanotte. I valori non hanno fuso:
-un giorno è sempre 86 400 secondi. La differenza è il numero di nanosecondi
+Le due colonne sono dello stesso genere: due istanti (`timestamp`), due
+date (`date32`) o due testi. La lettura di un testo deve consumarlo tutto;
+un formato senza campi orari legge una data e la pone a mezzanotte. Due
+istanti (colonne `timestamp`, o testi letti con un offset, `%z`/`%:z`) si
+sottraggono come istanti; date e ore senza offset come ore locali, e un
+giorno è sempre 86 400 secondi. La differenza è il numero di nanosecondi
 diviso per `10^9` e poi per 86 400, 3 600, 60 o 1. Un valore non leggibile
 rifiuta sempre la riga.
 
@@ -46,7 +52,10 @@ Invariato.
 
 In validazione, `InvalidPlan`:
 
-- `start_column` o `end_column` assenti o non leggibili come testo;
+- `start_column` o `end_column` assenti o non leggibili come testo; di
+  generi diversi (un istante e una data, una colonna temporale e un
+  testo); `input_format` assente con colonne di testo, o scritto con
+  colonne temporali;
 - `input_format` vuoto, oltre `max_string_bytes` o con un campo non
   riconosciuto;
 - `output_column` non valido;

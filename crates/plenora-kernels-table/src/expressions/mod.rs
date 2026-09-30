@@ -1760,4 +1760,32 @@ mod tests {
             assert!(matches!(errore, PlenoraError::Schema(_)), "{errore}");
         }
     }
+
+    /// Regressione (revisione Codex, classe dei panici di intervallo di
+    /// chrono): una Date32 oltre l'intervallo di chrono e' un errore di
+    /// `date_trunc`, non un panico della somma.
+    #[test]
+    fn date_trunc_su_date32_fuori_da_chrono_e_un_errore() {
+        assert!(
+            super::temporal::trunc_date32_days(i32::MAX, super::temporal::TruncUnit::Year).is_err()
+        );
+        assert!(
+            super::temporal::trunc_date32_days(i32::MIN, super::temporal::TruncUnit::Day).is_err()
+        );
+    }
+
+    /// Regressione (revisione Codex): il troncamento di un timestamp vicino
+    /// a `i64::MIN` usciva dalla gamma nella sottrazione; ora e' un errore.
+    #[test]
+    fn date_trunc_su_timestamp_al_minimo_e_un_errore() {
+        for unit in [
+            super::temporal::TruncUnit::Second,
+            super::temporal::TruncUnit::Minute,
+            super::temporal::TruncUnit::Hour,
+            super::temporal::TruncUnit::Day,
+        ] {
+            assert!(super::temporal::trunc_timestamp_ms_value(i64::MIN, unit).is_err());
+            assert!(super::temporal::trunc_timestamp_ms_value(i64::MAX, unit).is_ok());
+        }
+    }
 }

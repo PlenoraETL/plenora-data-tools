@@ -603,6 +603,84 @@ pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
     select_rows(batch, &rows)
 }
 
+/// Il tipo d'uscita di `table.conditional` e, se numerico, il valore di ogni
+/// testo di risultato: l'unica regola, del kernel e dell'analisi.
+///
+/// Numerico se ogni testo e' vuoto (null) o un numero per il parse `f64`
+/// (virgola decimale ammessa). Un risultato scritto come **intero** che il
+/// double non rappresenta esattamente (oltre 2^53) e' un errore: diventando
+/// il double piu' vicino sarebbe un altro intero, senza errore. Un decimale
+/// diventa il double piu' vicino, come ogni `Float64`.
+///
+/// Rende `None` se l'uscita e' testuale, altrimenti i valori nell'ordine
+/// dei testi.
+///
+/// # Errors
+///
+/// `InvalidPlan` per un risultato intero non rappresentabile in `Float64`.
+pub fn risultati_numerici<'a>(
+    testi: impl IntoIterator<Item = &'a str>,
+) -> Result<Option<Vec<Option<f64>>>> {
+    // Due passate: il tipo si decide su tutti i testi prima di giudicare
+    // l'esattezza, che conta solo se l'uscita e' numerica.
+    let normalizzati = testi
+        .into_iter()
+        .map(|testo| testo.replace(',', "."))
+        .collect::<Vec<_>>();
+    if !normalizzati
+        .iter()
+        .all(|testo| testo.is_empty() || testo.parse::<f64>().is_ok())
+    {
+        return Ok(None);
+    }
+    let mut numeri = Vec::with_capacity(normalizzati.len());
+    for normalizzato in normalizzati {
+        if normalizzato.is_empty() {
+            numeri.push(None);
+            continue;
+        }
+        let Ok(valore) = normalizzato.parse::<f64>() else {
+            return Ok(None);
+        };
+        let intero_inesatto = intero_scritto(&normalizzato).map_or_else(
+            || {
+                matches!(
+                    NumericBound::parse(&normalizzato),
+                    Some(NumericBound::Decimal { unscaled, scale: 0 })
+                        if crate::exact_f64_from_i128(unscaled).is_none()
+                )
+            },
+            // Il double e' esatto se la sua espansione decimale completa
+            // (`{:.0}` scrive tutte le cifre) e' l'intero scritto: vale per
+            // interi di qualunque lunghezza, anche oltre `i128`.
+            |cifre| format!("{:.0}", valore.abs()) != cifre,
+        );
+        if intero_inesatto {
+            return Err(PlenoraError::InvalidPlan(
+                "conditional: un risultato intero non e' rappresentabile esattamente in Float64"
+                    .into(),
+            ));
+        }
+        numeri.push(Some(valore));
+    }
+    Ok(Some(numeri))
+}
+
+/// Le cifre di un testo scritto come intero (segno facoltativo, sole cifre),
+/// senza segno e zeri iniziali; `None` per ogni altra forma.
+fn intero_scritto(testo: &str) -> Option<String> {
+    let (_, cifre) = crate::separa_segno(testo);
+    if cifre.is_empty() || !cifre.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let senza_zeri = cifre.trim_start_matches('0');
+    Some(if senza_zeri.is_empty() {
+        "0".to_owned()
+    } else {
+        senza_zeri.to_owned()
+    })
+}
+
 /// Colonna calcolata dalla prima condizione vera di ogni riga, o da
 /// `default_value` (`table.conditional`).
 ///
@@ -610,14 +688,16 @@ pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
 /// `default_value`, letti come testo, sono vuoti o numeri (virgola
 /// decimale ammessa: `"1,5"` vale 1,5), l'uscita e' `Float64` nullable e il
 /// testo vuoto da' null; altrimenti e' `Utf8` non nullable e il null da'
-/// `""`.
+/// `""`. Un risultato intero oltre la precisione del double si rifiuta
+/// ([`risultati_numerici`]).
 ///
 /// # Errors
 ///
 /// - `Schema`: colonna assente; tipo della colonna che gli operatori non
 ///   sanno leggere; cella `Utf8` non numerica sotto un operatore ordinato;
 /// - `InvalidPlan`: come [`filter`] per la valutazione delle condizioni
-///   (valore di confronto non numerico, `between` malformato);
+///   (valore di confronto non numerico, `between` malformato); un risultato
+///   intero non rappresentabile esattamente in `Float64`;
 /// - `DataMapping`: errore Arrow nella sostituzione (guardia interna, non
 ///   attesa);
 /// - `Internal`: invariante interna violata.
@@ -638,31 +718,29 @@ pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBa
         })
         .collect();
     let default_text = json_text(&config.default_value);
-    let values = (0..batch.num_rows())
+    // Il tipo e i valori numerici si decidono sui letterali, prima dei dati:
+    // un risultato intero inesatto si rifiuta anche su un batch vuoto.
+    let numerici = risultati_numerici(
+        conditions
+            .iter()
+            .map(|condition| condition.result.as_str())
+            .chain(std::iter::once(default_text.as_str())),
+    )?;
+    // Per riga, l'indice del risultato scelto: le condizioni, poi il default.
+    let scelte = (0..batch.num_rows())
         .map(|row| {
-            for condition in &conditions {
+            for (indice, condition) in conditions.iter().enumerate() {
                 if evaluate(source.as_ref(), row, condition)? {
-                    return Ok(condition.result.clone());
+                    return Ok(indice);
                 }
             }
-            Ok(default_text.clone())
+            Ok(conditions.len())
         })
         .collect::<Result<Vec<_>>>()?;
-    let numeric = conditions
-        .iter()
-        .map(|condition| condition.result.clone())
-        .chain(std::iter::once(default_text))
-        .all(|v| v.is_empty() || v.replace(',', ".").parse::<f64>().is_ok());
-    if numeric {
-        let out = values
+    if let Some(numerici) = numerici {
+        let out = scelte
             .into_iter()
-            .map(|v| {
-                if v.is_empty() {
-                    None
-                } else {
-                    v.replace(',', ".").parse().ok()
-                }
-            })
+            .map(|indice| numerici[indice])
             .collect::<Vec<Option<f64>>>();
         replace_or_append(
             batch,
@@ -672,12 +750,20 @@ pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBa
             Arc::new(Float64Array::from(out)),
         )
     } else {
+        let testi = scelte
+            .into_iter()
+            .map(|indice| {
+                conditions
+                    .get(indice)
+                    .map_or(default_text.as_str(), |condition| condition.result.as_str())
+            })
+            .collect::<Vec<_>>();
         replace_or_append(
             batch,
             &config.output_column,
             DataType::Utf8,
             false,
-            Arc::new(StringArray::from(values)),
+            Arc::new(StringArray::from(testi)),
         )
     }
 }
@@ -1249,5 +1335,55 @@ mod tests {
             .expect("ids");
         // Ordine originale delle righe selezionate: 10, 40 (riga null esclusa).
         assert_eq!(ids.values(), &[10, 40]);
+    }
+
+    /// Regressione: un risultato intero oltre 2^53 diventava in silenzio il
+    /// double piu' vicino (un altro intero) nella colonna `Float64`. Ora si
+    /// rifiuta, nel kernel e nell'analisi, con la stessa regola; il testo
+    /// resta testo e un intero esatto resta valido.
+    #[test]
+    fn conditional_rifiuta_un_risultato_intero_inesatto() {
+        let batch = single_column_batch(
+            "x",
+            Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+            DataType::Int64,
+            true,
+        );
+        let config = |risultato: serde_json::Value| -> Conditional {
+            serde_json::from_value(json!({
+                "column": "x",
+                "conditions": [{"operator": "==", "value": 1, "result": risultato}],
+                "default_value": 0
+            }))
+            .expect("config")
+        };
+        for risultato in [json!(9_007_199_254_740_993_i64), json!("9007199254740993")] {
+            assert!(matches!(
+                conditional(&batch, &config(risultato)),
+                Err(PlenoraError::InvalidPlan(_))
+            ));
+        }
+        let esatto = conditional(&batch, &config(json!(9_007_199_254_740_992_i64))).expect("2^53");
+        let colonna = esatto
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("Float64")
+            .clone();
+        assert_eq!(
+            colonna.values().to_vec(),
+            vec![9_007_199_254_740_992.0, 0.0]
+        );
+        let testo = conditional(&batch, &config(json!("alto"))).expect("testo");
+        assert_eq!(testo.schema().field(1).data_type(), &DataType::Utf8);
+        assert_eq!(
+            risultati_numerici(["9007199254740993", "x"]).expect("uscita testuale"),
+            None
+        );
+        // Oltre `i128` (seconda revisione): 10^40 + 1 non e' un double.
+        assert!(risultati_numerici(["10000000000000000000000000000000000000001"]).is_err());
+        // 2^140 lo e', anche se non sta in `i128`.
+        assert!(risultati_numerici(["1393796574908163946345982392040522594123776"]).is_ok());
+        assert!(risultati_numerici(["-0007", "0"]).is_ok());
     }
 }

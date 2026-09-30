@@ -48,6 +48,121 @@ pub fn ensure_no_duplicate_keys(json_text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Verifica che ogni numero del documento valga esattamente quello che
+/// `serde_json` ne legge.
+///
+/// Senza la feature `arbitrary_precision` un intero oltre la gamma di `i64`
+/// e `u64` e ogni numero con parte frazionaria o esponente diventano un
+/// `f64`: `9007199254740993.0` arriva come `9007199254740992`, e un
+/// vincolo della config (un estremo, un bordo, una soglia) sarebbe un
+/// altro numero da quello scritto, senza errore. Il numero si accetta se il
+/// suo valore decimale esatto e' quello del double letto (la forma piu'
+/// corta che `serde_json` riscrive: `0.1`, `1e3`, `2.5` passano), altrimenti
+/// il documento si rifiuta. Chi vuole il valore del double lo scrive come
+/// il double lo rende; chi vuole un valore esatto oltre il double lo scrive
+/// come stringa, dove l'operazione accetta stringhe.
+///
+/// Scansione lessicale: le stringhe si saltano (con i loro escape), ogni
+/// altro numero si confronta. Un documento sintatticamente invalido non e'
+/// un errore qui: lo segnala la deserializzazione vera.
+///
+/// # Errors
+///
+/// `PlenoraError::InvalidPlan` per un numero non rappresentabile
+/// esattamente, senza citarlo.
+pub fn ensure_numbers_exact(json_text: &str) -> Result<()> {
+    let byte = json_text.as_bytes();
+    let mut indice = 0;
+    while indice < byte.len() {
+        match byte[indice] {
+            b'"' => {
+                indice += 1;
+                while indice < byte.len() && byte[indice] != b'"' {
+                    indice += if byte[indice] == b'\\' { 2 } else { 1 };
+                }
+                indice += 1;
+            }
+            b'-' | b'0'..=b'9' => {
+                let inizio = indice;
+                while indice < byte.len()
+                    && matches!(byte[indice], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')
+                {
+                    indice += 1;
+                }
+                let token = &json_text[inizio..indice];
+                if !numero_esatto(token) {
+                    return Err(PlenoraError::InvalidPlan(
+                        "un numero del documento non e' rappresentabile esattamente come \
+                         viene letto (intero oltre i64/u64, o decimale oltre la precisione \
+                         del double): scriverlo come il double che lo rappresenta, o come \
+                         stringa dove ammessa"
+                            .into(),
+                    ));
+                }
+            }
+            _ => indice += 1,
+        }
+    }
+    Ok(())
+}
+
+/// Il numero `token` vale esattamente quello che `serde_json` ne legge.
+/// Un token che non e' un numero JSON non e' giudicato qui.
+fn numero_esatto(token: &str) -> bool {
+    // Un intero in gamma resta intero; fuori gamma serde_json lo legge come
+    // double, e si confronta come ogni altro numero.
+    if !token.contains(['.', 'e', 'E'])
+        && (token.parse::<i64>().is_ok() || token.parse::<u64>().is_ok())
+    {
+        return true;
+    }
+    let Ok(letto) = serde_json::from_str::<serde_json::Number>(token) else {
+        return true;
+    };
+    if letto.is_i64() || letto.is_u64() {
+        return true;
+    }
+    let Some(riscritto) = letto.as_f64().and_then(serde_json::Number::from_f64) else {
+        return true;
+    };
+    match (
+        decimale_canonico(token),
+        decimale_canonico(&riscritto.to_string()),
+    ) {
+        (Some(scritto), Some(letto)) => scritto == letto,
+        _ => false,
+    }
+}
+
+/// Il valore esatto di un numero decimale in forma canonica: segno, cifre
+/// significative senza zeri ai bordi, esponente della cifra meno
+/// significativa. Lo zero e' uno solo.
+fn decimale_canonico(testo: &str) -> Option<(bool, String, i64)> {
+    let (negativo, resto) = testo
+        .strip_prefix('-')
+        .map_or((false, testo), |resto| (true, resto));
+    let (mantissa, esponente) = match resto.find(['e', 'E']) {
+        Some(posizione) => (
+            &resto[..posizione],
+            resto[posizione + 1..].parse::<i64>().ok()?,
+        ),
+        None => (resto, 0),
+    };
+    let (intera, frazione) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let mut cifre = format!("{intera}{frazione}");
+    let mut esponente = esponente.checked_sub(i64::try_from(frazione.len()).ok()?)?;
+    let senza_zeri_iniziali = cifre.trim_start_matches('0').to_owned();
+    cifre = senza_zeri_iniziali;
+    while cifre.ends_with('0') {
+        cifre.pop();
+        esponente = esponente.checked_add(1)?;
+    }
+    if cifre.is_empty() {
+        return Some((false, String::new(), 0));
+    }
+    Some((negativo, cifre, esponente))
+}
+
 /// Seme di deserializzazione che non produce valore: verifica soltanto.
 struct UniqueKeys;
 
@@ -277,5 +392,33 @@ mod tests {
         assert!(ensure_no_duplicate_keys("{").is_ok());
         assert!(ensure_no_duplicate_keys("{} {}").is_ok());
         assert!(ensure_no_duplicate_keys("non json").is_ok());
+    }
+
+    /// Regressione (revisione Codex): un numero che il double non tiene si
+    /// rifiuta invece di diventare un altro numero; le forme che il double
+    /// rende esattamente passano.
+    #[test]
+    fn i_numeri_del_documento_valgono_quello_che_si_legge() {
+        for esatto in [
+            r#"{"a": 1, "b": -7, "c": 18446744073709551615, "d": -9223372036854775808}"#,
+            r#"{"a": 0.1, "b": 2.5, "c": 1e3, "d": 1.0, "e": -0.0, "f": 9007199254740992.0}"#,
+            r#"{"s": "9007199254740993.0 dentro una stringa \" 1e400", "n": [1, 2.25]}"#,
+        ] {
+            assert!(ensure_numbers_exact(esatto).is_ok(), "{esatto}");
+        }
+        for inesatto in [
+            r#"{"min": 9007199254740993.0}"#,
+            r#"{"x": 18446744073709551616}"#,
+            r#"{"x": 0.30000000000000001}"#,
+            "[1, 2, 9007199254740993e0]",
+        ] {
+            assert!(
+                matches!(
+                    ensure_numbers_exact(inesatto),
+                    Err(PlenoraError::InvalidPlan(_))
+                ),
+                "{inesatto}"
+            );
+        }
     }
 }

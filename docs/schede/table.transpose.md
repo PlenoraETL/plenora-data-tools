@@ -14,11 +14,15 @@ eseguito chiamando il kernel.
 | `output_columns` | lista di stringhe | `[]` | nomi di colonna | nomi delle colonne d'uscita, per posizione di riga |
 | `type_policy` | stringa | `"reject"` | `"reject"`, `"string"`; `null` non ammesso | colonne dati di tipi diversi: rifiuto, o conversione in testo |
 
-Nome della colonna della riga i (da 0): `output_columns[i]` se c'è e non
-è vuoto; altrimenti il testo della cella di `id_column` alla riga i, se non
-è nulla; altrimenti `col_<i+1>`. I nomi in più di `output_columns` si
-ignorano. `type_policy` con colonne dati tutte dello stesso tipo si accetta
-e non cambia niente: dipende dall'ingresso.
+Nome della colonna della riga i (da 0): `output_columns[i]` se c'è;
+altrimenti il testo della cella di `id_column` alla riga i, se non è
+nulla; altrimenti `col_<i+1>`. Una voce di `output_columns` vuota non vale
+«assente»: si rifiuta, in validazione e nel kernel. I nomi in più di
+`output_columns` si ignorano. I nomi d'uscita, prima colonna compresa, sono
+tutti distinti
+([README, «Nomi delle colonne d'uscita»](../README.md#nomi-delle-colonne-duscita)).
+`type_policy` con colonne dati tutte dello stesso tipo si accetta e non
+cambia niente: dipende dall'ingresso.
 
 ### Schema
 
@@ -54,17 +58,16 @@ Chiamando il kernel:
   conversione in testo una cella dati, che non si converte in testo (tipo
   non leggibile come testo, `binary` non UTF-8, date fuori intervallo);
 - `InvalidPlan`: colonne dati di tipi diversi con `type_policy: "reject"`;
-  un nome di colonna d'uscita non valido (per esempio il testo di
-  `id_column` vuoto o di soli spazi);
+  una voce di `output_columns` vuota o ripetuta; un nome di colonna
+  d'uscita non valido (per esempio il testo di `id_column` vuoto o di soli
+  spazi) o uguale a un altro (valori ripetuti di `id_column`, una voce
+  uguale al nome della prima colonna);
 - `ResourceLimit`: colonne dati oltre `max_rows` o righe più una oltre
   `max_columns`; un testo oltre `max_string_bytes`.
 
 ### Limiti e deviazioni
 
-Chiamando il kernel non si rifiutano nomi d'uscita ripetuti: valori
-ripetuti di `id_column`, o nomi ripetuti in `output_columns`, danno
-colonne con lo stesso nome. Il kernel tratta una voce vuota di
-`output_columns` come assente, mentre l'analisi la rifiuta.
+Nessuno oltre allo schema che dipende dai dati.
 
 ### Complessità
 

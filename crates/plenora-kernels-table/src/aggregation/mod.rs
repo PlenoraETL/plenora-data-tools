@@ -20,7 +20,9 @@ mod oracolo_chiavi;
 mod sort;
 mod window;
 
-pub use aggregate::{aggregate, aggregate_con_limiti, AggFunction, Aggregate, Aggregation};
+pub use aggregate::{
+    aggregate, aggregate_con_limiti, tipo_uscita, AggFunction, Aggregate, Aggregation,
+};
 // Il comparatore tipizzato e' pubblico: e' il contratto d'ordine dei kernel
 // (`sort`, top-N, merge dello spill) e va verificabile dall'esterno.
 #[cfg(test)]
@@ -35,11 +37,12 @@ pub use sort::{
     Sort, TopN,
 };
 pub use window::{
-    rolling_window, window_function, RollingKind, RollingWindow, WindowFunction, WindowKind,
+    rolling_window, suffisso, tipo_uscita_finestra, tipo_uscita_rolling, window_function,
+    RollingKind, RollingWindow, WindowFunction, WindowKind,
 };
 // La classificazione delle varianti serve all'analizzatore, non a chi usa il
 // crate: `aggregation` e' un modulo pubblico, quindi il re-export va
-// ristretto qui — altrimenti un dettaglio interno diventa API.
+// ristretto qui â€” altrimenti un dettaglio interno diventa API.
 pub(crate) use window::{strategia, Strategia};
 
 // Simboli usati solo dai test-oracolo, che li importano con
@@ -549,6 +552,9 @@ mod tests {
         }
         for aggregation in &config.aggregations {
             let index = column_index(batch, &aggregation.column)?;
+            if matches!(aggregation.function, AggFunction::Sum) {
+                crate::float64_source::verifica_somma(batch.column(index).data_type())?;
+            }
             let function_name = match aggregation.function {
                 AggFunction::Count => "count",
                 AggFunction::Sum => "sum",
@@ -611,21 +617,37 @@ mod tests {
                         Arc::new(Int64Array::from(values)),
                     )?;
                 }
-                AggFunction::Concat | AggFunction::First | AggFunction::Last => {
+                AggFunction::First | AggFunction::Last => {
+                    // La cella nel tipo d'ingresso, con `take` di Arrow.
+                    let indici = groups
+                        .values()
+                        .map(|rows| {
+                            let row = if matches!(aggregation.function, AggFunction::First) {
+                                rows[0]
+                            } else {
+                                rows[rows.len() - 1]
+                            };
+                            u32::try_from(row).expect("indice in u32")
+                        })
+                        .collect::<Vec<_>>();
+                    let column = batch.column(index);
+                    let values = plenora_core::arrow::select::take::take(
+                        column.as_ref(),
+                        &plenora_core::arrow::array::UInt32Array::from(indici),
+                        None,
+                    )?;
+                    result = replace_or_append(
+                        &result,
+                        &name,
+                        column.data_type().clone(),
+                        true,
+                        values,
+                    )?;
+                }
+                AggFunction::Concat => {
                     let values = groups
                         .values()
                         .map(|rows| {
-                            if matches!(
-                                aggregation.function,
-                                AggFunction::First | AggFunction::Last
-                            ) {
-                                let row = if matches!(aggregation.function, AggFunction::First) {
-                                    rows[0]
-                                } else {
-                                    *rows.last().unwrap_or(&rows[0])
-                                };
-                                return scalar_as_string(batch.column(index).as_ref(), row);
-                            }
                             let mut seen = HashSet::new();
                             let mut values = Vec::new();
                             for row in rows {
@@ -649,6 +671,157 @@ mod tests {
                         true,
                         Arc::new(StringArray::from(values)),
                     )?;
+                }
+                AggFunction::Min | AggFunction::Max
+                    if crate::float64_source::estremo_esatto(batch.column(index).data_type()) =>
+                {
+                    // Estremo esatto: scansione con il comparatore del sort,
+                    // a pari valore la prima riga; la cella nel tipo
+                    // d'ingresso.
+                    let column = batch.column(index);
+                    let massimo = matches!(aggregation.function, AggFunction::Max);
+                    let mut indici = Vec::new();
+                    for rows in groups.values() {
+                        let nulli = rows.iter().any(|row| column.is_null(*row));
+                        let mut scelta: Option<usize> = None;
+                        if aggregation.skip_null() || !nulli {
+                            for row in rows.iter().filter(|row| !column.is_null(**row)) {
+                                let meglio = match scelta {
+                                    None => true,
+                                    Some(corrente) => {
+                                        let ordine = compare::compare_cells_typed(
+                                            column, *row, column, corrente,
+                                        )?;
+                                        if massimo {
+                                            ordine == Ordering::Greater
+                                        } else {
+                                            ordine == Ordering::Less
+                                        }
+                                    }
+                                };
+                                if meglio {
+                                    scelta = Some(*row);
+                                }
+                            }
+                        }
+                        indici.push(scelta.map(|row| u32::try_from(row).expect("indice in u32")));
+                    }
+                    let values = plenora_core::arrow::select::take::take(
+                        column.as_ref(),
+                        &plenora_core::arrow::array::UInt32Array::from(indici),
+                        None,
+                    )?;
+                    result = replace_or_append(
+                        &result,
+                        &name,
+                        column.data_type().clone(),
+                        true,
+                        values,
+                    )?;
+                }
+                AggFunction::Sum
+                | AggFunction::Avg
+                | AggFunction::Mean
+                | AggFunction::Variance
+                | AggFunction::Stddev
+                    if crate::float64_source::dominio_intero(batch.column(index).data_type()) =>
+                {
+                    // Dominio intero: valori esatti in i128 dal valore
+                    // esatto di `scalar_as_numero`, somma esatta; media e
+                    // scarti in f64 dalla somma esatta.
+                    let interi = groups
+                        .values()
+                        .map(|rows| {
+                            let mut valori = Vec::new();
+                            for row in rows {
+                                match crate::scalar_as_numero(batch.column(index).as_ref(), *row)? {
+                                    Some((_, crate::NumericBound::I64(intero))) => {
+                                        valori.push(i128::from(intero));
+                                    }
+                                    Some((_, crate::NumericBound::U64(intero))) => {
+                                        valori.push(i128::from(intero));
+                                    }
+                                    Some(_) => panic!("valore non intero nel dominio intero"),
+                                    None if !aggregation.skip_null() => return Ok(None),
+                                    None => {}
+                                }
+                            }
+                            if aggregation.distinct() {
+                                valori.sort_unstable();
+                                valori.dedup();
+                            }
+                            Ok((!valori.is_empty()).then_some(valori))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    if matches!(aggregation.function, AggFunction::Sum) {
+                        let values = interi
+                            .iter()
+                            .map(|valori| {
+                                valori
+                                    .as_ref()
+                                    .map(|valori| {
+                                        i64::try_from(valori.iter().sum::<i128>()).map_err(|_| {
+                                            PlenoraError::DataMapping(
+                                                "somma intera oltre la gamma di Int64".into(),
+                                            )
+                                        })
+                                    })
+                                    .transpose()
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        result = replace_or_append(
+                            &result,
+                            &name,
+                            DataType::Int64,
+                            true,
+                            Arc::new(Int64Array::from(values)),
+                        )?;
+                    } else {
+                        let values = interi
+                            .iter()
+                            .map(|valori| {
+                                let valori = valori.as_ref()?;
+                                #[allow(clippy::cast_precision_loss)]
+                                let media =
+                                    valori.iter().sum::<i128>() as f64 / valori.len() as f64;
+                                if matches!(
+                                    aggregation.function,
+                                    AggFunction::Avg | AggFunction::Mean
+                                ) {
+                                    return Some(media);
+                                }
+                                if valori.len() <= aggregation.ddof() {
+                                    return None;
+                                }
+                                #[allow(clippy::cast_precision_loss)]
+                                let varianza = valori
+                                    .iter()
+                                    .map(|valore| {
+                                        // Scarto esatto dalla media esatta:
+                                        // (n x - S) / n, un arrotondamento.
+                                        let n = valori.len() as i128;
+                                        let totale = valori.iter().sum::<i128>();
+                                        let scarto =
+                                            (*valore * n - totale) as f64 / valori.len() as f64;
+                                        scarto * scarto
+                                    })
+                                    .sum::<f64>()
+                                    / (valori.len() - aggregation.ddof()) as f64;
+                                Some(if matches!(aggregation.function, AggFunction::Stddev) {
+                                    varianza.sqrt()
+                                } else {
+                                    varianza
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        result = replace_or_append(
+                            &result,
+                            &name,
+                            DataType::Float64,
+                            true,
+                            Arc::new(Float64Array::from(values)),
+                        )?;
+                    }
                 }
                 _ => {
                     let values = groups
@@ -1614,8 +1787,8 @@ mod tests {
             "ab".into(),
             "abc".into(),
             "abd".into(),
-            "é".into(),
-            "🚀".into(),
+            "Ã©".into(),
+            "ðŸš€".into(),
         ];
         for len in [8_usize, 9, 10, 11, 12, 98, 99, 100, 101] {
             text_edges.push("x".repeat(len));
@@ -1714,6 +1887,9 @@ mod tests {
 
     /// Oracolo indipendente di `rolling_window`: ricostruisce la finestra in
     /// un `Vec` a ogni riga, invece di attraversare il percorso ottimizzato.
+    // Oracolo: un ramo per famiglia di tipo (estremi esatti, interi,
+    // double), lungo per costruzione.
+    #[allow(clippy::too_many_lines)]
     fn rolling_window_reference(
         batch: &RecordBatch,
         config: &RollingWindow,
@@ -1747,6 +1923,136 @@ mod tests {
                 .transpose()?
                 .flatten();
             partitions.entry(key).or_default().push(row);
+        }
+        let colonna = ordered.column(source);
+        if matches!(config.function, RollingKind::Sum) {
+            crate::float64_source::verifica_somma(colonna.data_type())?;
+        }
+        // Estremi esatti su interi e decimali: la cella scelta con il
+        // comparatore del sort, a pari valore la prima, nel tipo d'ingresso.
+        if matches!(config.function, RollingKind::Min | RollingKind::Max)
+            && crate::float64_source::estremo_esatto(colonna.data_type())
+        {
+            let mut indici: Vec<Option<u32>> = vec![None; ordered.num_rows()];
+            for rows in partitions.values() {
+                for (position, row) in rows.iter().enumerate() {
+                    let start = (position + 1).saturating_sub(config.window);
+                    let pieni = rows[start..=position]
+                        .iter()
+                        .copied()
+                        .filter(|riga| !colonna.is_null(*riga))
+                        .collect::<Vec<_>>();
+                    if pieni.len() < config.min_periods {
+                        continue;
+                    }
+                    let mut scelta = pieni[0];
+                    for riga in &pieni[1..] {
+                        let ordine = compare::compare_cells_typed(colonna, *riga, colonna, scelta)?;
+                        let meglio = if matches!(config.function, RollingKind::Max) {
+                            ordine == Ordering::Greater
+                        } else {
+                            ordine == Ordering::Less
+                        };
+                        if meglio {
+                            scelta = *riga;
+                        }
+                    }
+                    indici[*row] = Some(u32::try_from(scelta).expect("indice in u32"));
+                }
+            }
+            let valori = plenora_core::arrow::select::take::take(
+                colonna.as_ref(),
+                &plenora_core::arrow::array::UInt32Array::from(indici),
+                None,
+            )?;
+            return replace_or_append(
+                &ordered,
+                &config.output_column,
+                colonna.data_type().clone(),
+                true,
+                valori,
+            );
+        }
+        // Dominio intero: somma esatta in i128 dai valori esatti di
+        // `scalar_as_numero`; media e scarti in f64 dalla somma esatta.
+        if crate::float64_source::dominio_intero(colonna.data_type())
+            && !matches!(config.function, RollingKind::Min | RollingKind::Max)
+        {
+            let mut somme: Vec<Option<i64>> = vec![None; ordered.num_rows()];
+            let mut double: Vec<Option<f64>> = vec![None; ordered.num_rows()];
+            for rows in partitions.values() {
+                let interi = rows
+                    .iter()
+                    .map(|row| {
+                        Ok(match crate::scalar_as_numero(colonna.as_ref(), *row)? {
+                            Some((_, crate::NumericBound::I64(intero))) => Some(i128::from(intero)),
+                            Some((_, crate::NumericBound::U64(intero))) => Some(i128::from(intero)),
+                            Some(_) => panic!("valore non intero nel dominio intero"),
+                            None => None,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                for (position, row) in rows.iter().enumerate() {
+                    let start = (position + 1).saturating_sub(config.window);
+                    let valori = interi[start..=position]
+                        .iter()
+                        .flatten()
+                        .copied()
+                        .collect::<Vec<_>>();
+                    if valori.len() < config.min_periods {
+                        continue;
+                    }
+                    let totale = valori.iter().sum::<i128>();
+                    #[allow(clippy::cast_precision_loss)]
+                    let media = totale as f64 / valori.len() as f64;
+                    match config.function {
+                        RollingKind::Sum => {
+                            somme[*row] = Some(i64::try_from(totale).map_err(|_| {
+                                PlenoraError::DataMapping(
+                                    "somma intera oltre la gamma di Int64".into(),
+                                )
+                            })?);
+                        }
+                        RollingKind::Mean => double[*row] = Some(media),
+                        _ => {
+                            if valori.len() > config.ddof() {
+                                #[allow(clippy::cast_precision_loss)]
+                                let varianza = valori
+                                    .iter()
+                                    .map(|valore| {
+                                        // Scarto esatto dalla media esatta:
+                                        // (n x - S) / n, un arrotondamento.
+                                        let n = valori.len() as i128;
+                                        let totale = valori.iter().sum::<i128>();
+                                        let scarto =
+                                            (*valore * n - totale) as f64 / valori.len() as f64;
+                                        scarto * scarto
+                                    })
+                                    .sum::<f64>()
+                                    / (valori.len() - config.ddof()) as f64;
+                                double[*row] = Some(varianza.sqrt());
+                            }
+                        }
+                    }
+                }
+            }
+            return if matches!(config.function, RollingKind::Sum) {
+                replace_or_append(
+                    &ordered,
+                    &config.output_column,
+                    DataType::Int64,
+                    true,
+                    Arc::new(Int64Array::from(somme)),
+                )
+            } else {
+                replace_or_append(
+                    &ordered,
+                    &config.output_column,
+                    DataType::Float64,
+                    true,
+                    Arc::new(Float64Array::from(double)),
+                )
+            };
         }
         let mut output = vec![None; ordered.num_rows()];
         for rows in partitions.values() {
@@ -2207,6 +2513,256 @@ mod tests {
             ddof: None,
             output_column: "num_roll".into(),
         }
+    }
+
+    /// Fixture del dominio intero e dei decimali: valori oltre 2^53 (dove il
+    /// double arrotonda), estremi di `i64`, null, pari merito e partizioni.
+    fn interi_esatti_fixture() -> Vec<(&'static str, plenora_core::arrow::array::ArrayRef)> {
+        let interi = vec![
+            Some(9_007_199_254_740_993_i64),
+            Some(1),
+            None,
+            Some(-9_007_199_254_740_993),
+            Some(9_007_199_254_740_993),
+            Some(3),
+            Some(i64::MAX / 4),
+            Some(-2),
+            None,
+            Some(7),
+        ];
+        vec![
+            (
+                "i64",
+                Arc::new(Int64Array::from(interi.clone())) as plenora_core::arrow::array::ArrayRef,
+            ),
+            (
+                "u64",
+                Arc::new(UInt64Array::from(
+                    interi
+                        .iter()
+                        .map(|valore| valore.map(|valore| valore.unsigned_abs() * 2))
+                        .collect::<Vec<_>>(),
+                )),
+            ),
+            (
+                "d32",
+                Arc::new(plenora_core::arrow::array::Date32Array::from(
+                    interi
+                        .iter()
+                        .map(|valore| {
+                            valore.map(|valore| i32::try_from(valore % 50_000).expect("i32"))
+                        })
+                        .collect::<Vec<_>>(),
+                )),
+            ),
+            (
+                "ts",
+                Arc::new(
+                    plenora_core::arrow::array::TimestampMillisecondArray::from(interi.clone())
+                        .with_timezone("Europe/Rome"),
+                ),
+            ),
+            (
+                "dec",
+                Arc::new(
+                    plenora_core::arrow::array::Decimal128Array::from(
+                        interi
+                            .iter()
+                            .map(|valore| valore.map(|valore| i128::from(valore) * 1_000 + 7))
+                            .collect::<Vec<_>>(),
+                    )
+                    .with_precision_and_scale(38, 3)
+                    .expect("decimal"),
+                ),
+            ),
+        ]
+    }
+
+    fn interi_esatti_batch(colonna: plenora_core::arrow::array::ArrayRef) -> RecordBatch {
+        let righe = colonna.len();
+        let gruppi = (0..righe)
+            .map(|riga| if riga % 3 == 0 { None } else { Some("a") })
+            .collect::<Vec<_>>();
+        crate::test_support::nullable_batch(vec![
+            ("v", colonna),
+            ("g", Arc::new(StringArray::from(gruppi))),
+        ])
+    }
+
+    /// Oracolo dei percorsi esatti di `rolling_window` e `aggregate` sul
+    /// dominio intero e sui decimali: `sum` esatta in `Int64` (oltre 2^53 il
+    /// double sbaglierebbe), media e deviazione dalla somma esatta, estremi
+    /// nel tipo d'ingresso. Il riferimento somma in `i128` i valori esatti.
+    #[test]
+    fn rolling_e_aggregate_come_il_riferimento_sul_dominio_intero() {
+        for (nome, colonna) in interi_esatti_fixture() {
+            let batch = interi_esatti_batch(colonna);
+            for function in [
+                RollingKind::Sum,
+                RollingKind::Mean,
+                RollingKind::Min,
+                RollingKind::Max,
+                RollingKind::Stddev,
+            ] {
+                for (window, min_periods) in [(1, 1), (3, 1), (3, 2), (10, 4)] {
+                    for group_by in [None, Some("g")] {
+                        let config = RollingWindow {
+                            column: "v".into(),
+                            function,
+                            group_by: group_by.map(Into::into),
+                            order_column: None,
+                            window,
+                            min_periods,
+                            ddof: None,
+                            output_column: "r".into(),
+                        };
+                        let esito = rolling_window(&batch, &config);
+                        let riferimento = rolling_window_reference(&batch, &config);
+                        crate::test_support::assert_same_outcome_bits(esito, riferimento);
+                    }
+                }
+            }
+            for function in [
+                AggFunction::Sum,
+                AggFunction::Mean,
+                AggFunction::Min,
+                AggFunction::Max,
+                AggFunction::Variance,
+                AggFunction::Stddev,
+                AggFunction::First,
+                AggFunction::Last,
+            ] {
+                for skip_null in [None, Some(false)] {
+                    for distinct in [None, Some(true)] {
+                        let aggregazione = Aggregation {
+                            skip_null: skip_null.filter(|_| {
+                                !matches!(function, AggFunction::First | AggFunction::Last)
+                            }),
+                            distinct: distinct.filter(|_| {
+                                !matches!(function, AggFunction::First | AggFunction::Last)
+                            }),
+                            alias: "r".into(),
+                            ..agg("v", function)
+                        };
+                        let config = Aggregate {
+                            group_by: vec!["g".into()],
+                            aggregations: vec![aggregazione],
+                        };
+                        crate::test_support::assert_same_outcome_bits(
+                            aggregate(&batch, &config),
+                            aggregate_reference(&batch, &config),
+                        );
+                    }
+                }
+            }
+            let _ = nome;
+        }
+    }
+
+    /// Regressione (revisione Codex): varianza zero per valori uguali oltre
+    /// 2^53 in `aggregate`, `rolling_window` e `statistics`.
+    #[test]
+    #[allow(clippy::float_cmp)] // Zero esatto.
+    fn la_varianza_di_interi_uguali_oltre_due_53_e_zero() {
+        let batch =
+            interi_esatti_batch(Arc::new(Int64Array::from(vec![
+                Some(9_007_199_254_740_993);
+                6
+            ])));
+        let zeri = |uscita: &RecordBatch, nome: &str| {
+            uscita
+                .column_by_name(nome)
+                .expect("colonna")
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .expect("Float64")
+                .iter()
+                .flatten()
+                .all(|valore| valore == 0.0)
+        };
+        for ddof in [0, 1] {
+            let config = Aggregate {
+                group_by: vec!["g".into()],
+                aggregations: vec![Aggregation {
+                    ddof: Some(ddof),
+                    alias: "v".into(),
+                    ..agg("v", AggFunction::Variance)
+                }],
+            };
+            let uscita = aggregate(&batch, &config).expect("varianza");
+            assert!(zeri(&uscita, "v"));
+        }
+        let mobile = rolling_window(
+            &batch,
+            &RollingWindow {
+                column: "v".into(),
+                function: RollingKind::Stddev,
+                group_by: None,
+                order_column: None,
+                window: 3,
+                min_periods: 2,
+                ddof: None,
+                output_column: "r".into(),
+            },
+        )
+        .expect("stddev mobile");
+        assert!(zeri(&mobile, "r"));
+        let statistiche = crate::analysis::statistics(
+            &batch,
+            &crate::analysis::Statistics {
+                column: "v".into(),
+                group_by: None,
+                stats: vec![crate::analysis::Stat::Var],
+                output_prefix: String::new(),
+            },
+        )
+        .expect("statistics");
+        assert!(zeri(&statistiche, "v_var"));
+    }
+
+    /// Valori scritti a mano: la somma intera oltre 2^53 e' esatta e `Int64`
+    /// (il percorso `f64` dava 2^54 invece di 2^54 + 2), oltre `i64::MAX` e'
+    /// un errore; gli estremi di un istante restano istanti.
+    #[test]
+    fn la_somma_intera_e_esatta_e_fallisce_oltre_int64() {
+        let batch = interi_esatti_batch(Arc::new(Int64Array::from(vec![
+            Some(9_007_199_254_740_993),
+            Some(9_007_199_254_740_993),
+            Some(1),
+        ])));
+        let somma = |batch: &RecordBatch| {
+            aggregate(
+                batch,
+                &Aggregate {
+                    group_by: vec!["g".into()],
+                    aggregations: vec![Aggregation {
+                        alias: "s".into(),
+                        ..agg("v", AggFunction::Sum)
+                    }],
+                },
+            )
+        };
+        let uscita = somma(&batch).expect("somma esatta");
+        let colonna = uscita
+            .column_by_name("s")
+            .expect("s")
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("Int64")
+            .clone();
+        // Gruppo null: la riga 0; gruppo "a": righe 1 e 2.
+        assert_eq!(colonna.value(0), 9_007_199_254_740_993);
+        assert_eq!(colonna.value(1), 9_007_199_254_740_994);
+        let troppo = interi_esatti_batch(Arc::new(Int64Array::from(vec![
+            Some(1),
+            Some(i64::MAX),
+            Some(1),
+        ])));
+        assert!(matches!(somma(&troppo), Err(PlenoraError::DataMapping(_))));
+        // Gruppo di soli null: null (semantica SQL), non zero.
+        let nulli = interi_esatti_batch(Arc::new(Int64Array::from(vec![None, None, Some(4)])));
+        let uscita = somma(&nulli).expect("somma");
+        assert!(uscita.column_by_name("s").expect("s").is_null(0));
     }
 
     #[test]

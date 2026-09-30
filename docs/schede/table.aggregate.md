@@ -31,10 +31,11 @@ Un parametro scritto per una funzione che non lo usa si rifiuta.
 
 Nome della colonna d'uscita: `alias` se non è vuoto; altrimenti
 `<column>_<funzione>` (`avg` scrive `mean`) se la stessa `column` compare
-in più aggregazioni; altrimenti `column`. Un nome uguale a una colonna già
-prodotta (di gruppo o di un'aggregazione precedente) si rifiuta: per
-esempio `mean` e `avg` sulla stessa colonna, due alias uguali, o un alias
-uguale a una colonna di `group_by`.
+in più aggregazioni; altrimenti `column`. Le chiavi di gruppo e i nomi
+delle aggregazioni (o `count` senza aggregazioni) sono tutti distinti: due
+aggregazioni con lo stesso nome, o un nome uguale a una chiave (anche una
+colonna aggregata senza `alias` che è anche chiave), si rifiutano
+([README, «Nomi delle colonne d'uscita»](../README.md#nomi-delle-colonne-duscita)).
 
 Funzioni:
 
@@ -42,16 +43,24 @@ Funzioni:
   una colonna di qualsiasi tipo;
 - `nunique`: `int64` non nullabile, i testi distinti del gruppo, più uno
   se c'è un null e `skip_null` è `false`;
-- `first`, `last`: `utf8`, il testo della cella nella prima o nell'ultima
-  riga del gruppo in ordine d'ingresso, null compreso;
+- `first`, `last`: la cella nella prima o nell'ultima riga del gruppo in
+  ordine d'ingresso, null compreso, nel tipo della colonna (un
+  `timestamp` resta `timestamp`, con il suo fuso);
 - `concat`: `utf8`, i testi delle celle in ordine d'ingresso uniti da
   `separator`; con `distinct` solo la prima occorrenza di ogni testo; un
   null si salta, o vale il testo vuoto con `skip_null: false`. Il testo di
   un gruppo non supera `max_string_bytes` byte;
-- `sum`, `mean`, `min`, `max`, `variance`, `stddev`, `quantile`:
-  `float64`. La cella si legge come `f64` (vedi i limiti). Con
+- `sum`, `mean`, `min`, `max`, `variance`, `stddev`, `quantile`: con
   `skip_null: false` un null nel gruppo dà null; un gruppo senza valori dà
-  null. `sum` somma in ordine d'ingresso; `min` e `max` ignorano i NaN
+  null (anche `sum`: la somma di nessun valore non è zero). Sulle colonne
+  intere (`int64`, `uint64`) `sum` è esatta ed esce `int64`, una somma
+  oltre `int64` è un errore; `sum` su `date32` o `timestamp` si rifiuta in
+  validazione (una somma di date non è una data). Su interi, date e istanti
+  `mean` parte dalla somma esatta e `variance`, `stddev` dagli scarti
+  esatti (valori uguali danno zero). `min` e `max` sulle colonne intere e
+  `decimal128` rendono la cella estrema nel tipo della colonna. Negli altri
+  casi l'uscita è `float64` e la cella si legge come `f64` (vedi i
+  limiti): `sum` somma in ordine d'ingresso; `min` e `max` ignorano i NaN
   salvo che il gruppo abbia solo NaN, la somma no; `variance` e `stddev`
   dividono per `valori - ddof` e danno null con `valori <= ddof`;
   `quantile` interpola linearmente fra i valori, ordinati come i
@@ -103,9 +112,9 @@ In validazione, `InvalidPlan`:
 - `quantile` assente con `function: "quantile"`, o fuori da `0..1`;
 - un parametro scritto per una funzione che non lo usa; `separator`,
   `distinct`, `skip_null`, `quantile` o `ddof` `null` espliciti;
-  `separator` oltre `max_string_bytes`; un nome d'uscita non valido (per esempio un `alias`
-  di soli spazi);
-- un nome d'uscita ripetuto o uguale a una colonna di `group_by`;
+  `separator` oltre `max_string_bytes`; un nome d'uscita non valido (per
+  esempio un `alias` di soli spazi) o ripetuto, anche uguale a una chiave
+  di gruppo;
 - funzione fuori elenco, campi sconosciuti.
 
 In esecuzione:
@@ -119,14 +128,17 @@ In esecuzione:
   variante spilled, file
   temporanei oltre `max_temp_bytes`, o una partizione i cui batch superano
   `max_governed_memory_bytes`;
+- `DataMapping`: `sum` su una colonna intera oltre la gamma di `int64`;
 - `Io`: nella variante spilled, un errore sui file temporanei.
 
 ### Limiti e deviazioni
 
-Le funzioni numeriche calcolano in `f64` perché il risultato è `float64`:
-un intero oltre `2^53`, un `decimal128` o un testo con più cifre di quante
-un `f64` ne tenga si arrotondano senza errore (con `distinct` i distinti si
-decidono comunque sul valore esatto). Le strutture di chiavi e gruppi
+Le funzioni a risultato `float64` calcolano in `f64`: un `decimal128` o un
+testo con più cifre di quante un `f64` ne tenga si arrotondano senza errore
+(con `distinct` i distinti si decidono comunque sul valore esatto); sulle
+colonne intere media e dispersione arrotondano alla fine del calcolo
+esatto, e
+`quantile` interpola i valori arrotondati ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)). Le strutture di chiavi e gruppi
 non sono contabilizzate
 ([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
 l'hash delle chiavi non ha seme
