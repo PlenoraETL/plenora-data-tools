@@ -1088,10 +1088,14 @@ prima di eseguire:
   L'indice è la riga del primo ingresso del passo, da zero; il runner
   riscrive `index_basis` e antepone al testo del kernel «passo `<out>`:
   indici di riga riferiti all'ingresso `<nome>` del passo, non alla
-  sorgente». Per ritrovare la riga basta dichiarare `<nome>` fra gli
-  output del piano: la riga all'indice riportato è quella. Dopo
-  un'aggregazione le righe sono gruppi nuovi, e l'indice è la posizione
-  del gruppo.
+  sorgente». Il passo che fallisce fa fallire `run`, che non rende
+  output parziali: per vedere la riga si esegue a parte il prefisso del
+  piano fino a `<nome>`, con `<nome>` fra i suoi output, e la riga
+  all'indice riportato di quella tabella è la riga rifiutata. Quella
+  riga non dice in generale da quale riga del file viene: dopo un
+  `filter` o un `sort` una colonna identificativa dei dati, se c'è, lo
+  dice; dopo un'aggregazione o un pivot la riga è un gruppo nuovo, l'indice
+  è la posizione del gruppo, e una sola riga d'origine può non esistere.
 
 La «sorgente» è la tabella d'ingresso del piano: un piano spezzato in due
 riporta gli indici del secondo rispetto ai suoi input, cioè alle uscite del
@@ -1424,8 +1428,14 @@ quelle in memoria (`intersect`: `c` da 5,9 a 1,0).
   `source_row_provenance` `Unavailable` (catalogo).
   *Hazard*: un lettore del payload che ignori `index_basis` leggerebbe
   l'indice come riga del file d'origine; un lettore che conosce solo
-  `source_row_zero_based` lo rifiuta. Per arrivare alla riga del file
-  serve rieseguire il prefisso del piano fino all'ingresso nominato.
+  `source_row_zero_based` lo rifiuta. Il runner non tiene lineage: la
+  posizione nel file d'origine non si ricostruisce in generale, nemmeno
+  rieseguendo il prefisso del piano (che dà solo la riga dell'ingresso
+  del passo), e dopo un'aggregazione, un join o un'esplosione una sola
+  riga d'origine può non esistere. `run` fallisce senza output parziali,
+  quindi anche la riga dell'ingresso del passo si vede solo eseguendo a
+  parte il prefisso. Garanzia indebolita: indice sempre corretto per la
+  sua base, non sempre riconducibile al file.
   *Rientro*: una mappa di righe verso la sorgente per i passi che
   selezionano o permutano senza duplicare (`filter`, `sort`, `limit`,
   `sample`, `distinct`), composta passo per passo e contata nei byte vivi;

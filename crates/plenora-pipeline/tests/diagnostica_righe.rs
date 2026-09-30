@@ -9,12 +9,16 @@
 //! fallisce.
 
 mod comune;
+mod comune_geo;
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{Array, Float64Array, Int64Array, RecordBatch, StringArray};
+use plenora_core::arrow::array::{
+    Array, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
+};
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
-use plenora_core::catalog::{find_operation, SourceRowProvenance};
+use plenora_core::catalog::{find_operation, Family, SourceRowProvenance, CATALOG};
 use plenora_core::diagnostics::{
     RowDiagnostics, ROW_DIAGNOSTICS_INDEX_BASIS, ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT,
 };
@@ -688,33 +692,494 @@ fn from_wkt_dopo_un_filtro_riferisce_le_righe_dell_ingresso() {
     }
 }
 
+/// Colonna nascosta con il numero di riga d'ingresso, per l'oracolo della
+/// classificazione `Preserved`.
+const RIGA_NASCOSTA: &str = "__riga_oracolo";
+
+/// La tabella con in coda [`RIGA_NASCOSTA`] (`Int64`, 0..n), metadati di
+/// schema e di campo invariati.
+fn con_riga_nascosta(tabella: &RecordBatch) -> RecordBatch {
+    let schema = tabella.schema();
+    let mut campi: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|campo| campo.as_ref().clone())
+        .collect();
+    campi.push(Field::new(RIGA_NASCOSTA, DataType::Int64, false));
+    let mut colonne = tabella.columns().to_vec();
+    colonne.push(Arc::new(Int64Array::from(
+        (0..tabella.num_rows())
+            .map(|riga| i64::try_from(riga).expect("riga"))
+            .collect::<Vec<_>>(),
+    )));
+    RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(campi, schema.metadata().clone())),
+        colonne,
+    )
+    .expect("tabella con la riga nascosta")
+}
+
+/// Operazioni `Preserved` che per config proiettano le colonne e quindi
+/// tolgono la riga nascosta: per loro l'identita' si prova colonna per
+/// colonna. L'elenco e' chiuso: un'operazione nuova che perde la colonna
+/// fa fallire l'oracolo finche' non la si aggiunge qui con il motivo.
+const PROIEZIONI: &[&str] = &[
+    // `columns` elenca le colonne tenute.
+    "table.select_columns",
+    // Lo schema d'uscita e' quello dichiarato in `columns`.
+    "table.align_schema",
+];
+
+/// Un passo `Preserved` eseguito dal runner sulla tabella con la riga
+/// nascosta (il primo ingresso). Le righe d'uscita devono essere quelle
+/// d'ingresso, una per una e nello stesso ordine: la riga nascosta vale
+/// 0..n; dove l'operazione la proietta via, ogni colonna rimasta uguale
+/// per nome e tipo a una d'ingresso ha gli stessi valori.
+fn verifica_righe_conservate(
+    op: &str,
+    config: &Value,
+    ingressi: &[RecordBatch],
+    crs: Option<&str>,
+) {
+    let marcato = con_riga_nascosta(&ingressi[0]);
+    let mut tavole = vec![marcato.clone()];
+    tavole.extend(ingressi[1..].iter().cloned());
+    let nomi: Vec<&str> = ["t", "u"].into_iter().take(tavole.len()).collect();
+    let mut pipeline = piano(&nomi, vec![passo("x", op, &nomi, config.clone())], &["x"]);
+    pipeline.crs = crs.map(str::to_owned);
+    let coppie: Vec<(&str, RecordBatch)> = nomi.iter().copied().zip(tavole).collect();
+    let esito = esegui(&pipeline, &coppie).unwrap_or_else(|errore| panic!("{op}: {errore}"));
+    let uscita = output(&esito, "x");
+    assert_eq!(uscita.num_rows(), marcato.num_rows(), "{op}: righe");
+    if let Some(riga) = uscita.column_by_name(RIGA_NASCOSTA) {
+        assert_eq!(
+            riga.as_ref(),
+            marcato
+                .column_by_name(RIGA_NASCOSTA)
+                .expect("riga nascosta")
+                .as_ref(),
+            "{op}: identita' e ordine delle righe"
+        );
+        return;
+    }
+    assert!(
+        PROIEZIONI.contains(&op),
+        "{op}: la riga nascosta sparisce e l'operazione non e' fra le proiezioni"
+    );
+    let mut confrontate = 0;
+    for campo in uscita.schema().fields() {
+        if let Ok(indice) = marcato.schema().index_of(campo.name()) {
+            let prima = marcato.column(indice);
+            if prima.data_type() == campo.data_type() {
+                let dopo = uscita.column_by_name(campo.name()).expect("colonna");
+                assert_eq!(
+                    prima.as_ref(),
+                    dopo.as_ref(),
+                    "{op}: colonna {}",
+                    campo.name()
+                );
+                confrontate += 1;
+            }
+        }
+    }
+    assert!(confrontate > 0, "{op}: nessuna colonna da confrontare");
+}
+
 /// La base `Sorgente` si fida della classificazione `Preserved` del
-/// catalogo: un'operazione dichiarata cosi' che cambiasse numero o ordine
-/// delle righe farebbe leggere come righe della sorgente indici che non lo
-/// sono. Oracolo sulle config rappresentative: stesse righe del primo
-/// ingresso e, dove `id` resta com'era, nello stesso ordine.
+/// catalogo: un'operazione dichiarata cosi' che cambiasse numero, ordine o
+/// identita' delle righe farebbe leggere come righe della sorgente indici
+/// che non lo sono. Oracolo sulle config rappresentative delle tabellari.
 #[test]
-fn le_operazioni_che_conservano_le_righe_le_conservano_davvero() {
+fn le_tabellari_che_conservano_le_righe_le_conservano_davvero() {
     std::env::set_var(comune::CHIAVE_HMAC, "chiave-di-test-del-runner");
-    let mut provate = 0;
+    let mut provate = BTreeSet::new();
     for caso in comune::CASI {
         let descrittore = find_operation(caso.op).expect("operazione del catalogo");
         if descrittore.source_row_provenance() != SourceRowProvenance::Preserved {
             continue;
         }
         let config: Value = serde_json::from_str(caso.config).expect("config del caso");
-        let ingressi = comune::tabelle(caso.fixture);
-        let uscita = comune::chiamata_diretta(caso.op, &config, &ingressi)
-            .unwrap_or_else(|errore| panic!("{}: {errore}", caso.op));
-        let primo = &ingressi[0];
-        assert_eq!(uscita.num_rows(), primo.num_rows(), "{}", caso.op);
-        if let (Some(prima), Some(dopo)) = (primo.column_by_name("id"), uscita.column_by_name("id"))
-        {
-            if prima.data_type() == dopo.data_type() {
-                assert_eq!(prima.as_ref(), dopo.as_ref(), "{}: ordine", caso.op);
-            }
-        }
-        provate += 1;
+        verifica_righe_conservate(caso.op, &config, &comune::tabelle(caso.fixture), None);
+        provate.insert(caso.op);
     }
-    assert!(provate > 30, "operazioni provate: {provate}");
+    let attese: BTreeSet<&str> = CATALOG
+        .iter()
+        .filter(|op| {
+            op.family == Family::Table
+                && op.source_row_provenance() == SourceRowProvenance::Preserved
+        })
+        .map(|op| op.id)
+        .collect();
+    assert_eq!(provate, attese, "ogni tabellare Preserved ha un caso");
+}
+
+/// Lo stesso oracolo sulle geo `Preserved` (unarie 1:1 e produttori), con
+/// geometrie nulle in mezzo alle righe.
+#[test]
+#[allow(clippy::too_many_lines)] // Un caso per operazione, in un solo elenco.
+fn le_geo_che_conservano_le_righe_le_conservano_davvero() {
+    use comune_geo::{esadecimale_di, quadrato, tabella, LONLAT, UTM, X0, Y0};
+    use geo::{Geometry, LineString, Point};
+
+    let poligoni = tabella(
+        UTM,
+        &[
+            Some(Geometry::Polygon(quadrato(X0, Y0, 100.0))),
+            None,
+            Some(Geometry::Polygon(quadrato(X0 + 50.0, Y0 + 50.0, 100.0))),
+            None,
+            Some(Geometry::Polygon(quadrato(X0 + 500.0, Y0, 30.0))),
+        ],
+    );
+    let segmento_utm = |dx: f64| {
+        Some(Geometry::LineString(LineString::from(vec![
+            (X0 + dx, Y0),
+            (X0 + dx + 100.0, Y0 + 7.0),
+            (X0 + dx + 200.0, Y0),
+        ])))
+    };
+    let linee = tabella(
+        UTM,
+        &[
+            segmento_utm(0.0),
+            None,
+            segmento_utm(300.0),
+            None,
+            segmento_utm(600.0),
+        ],
+    );
+    let posizione_utm = |dx: f64, dy: f64| Some(Geometry::Point(Point::new(X0 + dx, Y0 + dy)));
+    let punti = tabella(
+        UTM,
+        &[
+            posizione_utm(0.0, 0.0),
+            None,
+            posizione_utm(10.0, 3.0),
+            posizione_utm(400.0, -20.0),
+            None,
+            posizione_utm(405.0, -22.0),
+        ],
+    );
+    let punti_lonlat = tabella(
+        LONLAT,
+        &[
+            Some(Geometry::Point(Point::new(9.19, 45.46))),
+            None,
+            Some(Geometry::Point(Point::new(12.49, 41.9))),
+            Some(Geometry::Point(Point::new(11.25, 43.77))),
+        ],
+    );
+    let segmento_geografico = |dy: f64| {
+        Some(Geometry::LineString(LineString::from(vec![
+            (9.0, 45.0 + dy),
+            (10.0, 45.5 + dy),
+            (11.0, 45.0 + dy),
+        ])))
+    };
+    let linee_lonlat = tabella(
+        LONLAT,
+        &[
+            segmento_geografico(0.0),
+            None,
+            segmento_geografico(-1.0),
+            segmento_geografico(-2.0),
+        ],
+    );
+    let poligoni_lonlat = tabella(
+        LONLAT,
+        &[
+            Some(Geometry::Polygon(quadrato(9.0, 45.0, 0.5))),
+            None,
+            Some(Geometry::Polygon(quadrato(11.0, 43.0, 0.2))),
+        ],
+    );
+    let coordinate = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Float64, false),
+            Field::new("y", DataType::Float64, false),
+        ])),
+        vec![
+            Arc::new(Float64Array::from(vec![X0, X0 + 1.5, X0 + 7.0])),
+            Arc::new(Float64Array::from(vec![Y0, Y0 + 10.0, Y0 - 3.0])),
+        ],
+    )
+    .expect("coordinate");
+    let testi = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("wkt", DataType::Utf8, true)])),
+        vec![Arc::new(StringArray::from(vec![
+            Some("POINT (500000 5000000)"),
+            None,
+            Some("LINESTRING (500000 5000000, 500010 5000010)"),
+            None,
+            Some("POINT (500005 5000005)"),
+        ]))],
+    )
+    .expect("testi");
+
+    let altra_linea = Geometry::LineString(LineString::from(vec![
+        (X0, Y0 + 20.0),
+        (X0 + 150.0, Y0 + 30.0),
+    ]));
+    let altro_poligono = Geometry::Polygon(quadrato(X0 + 20.0, Y0 + 20.0, 60.0));
+    let milano = Geometry::Point(Point::new(9.19, 45.46));
+    let riferimento = Geometry::Point(Point::new(X0 + 120.0, Y0 + 40.0));
+    let altro = esadecimale_di(&altro_poligono);
+
+    let mut casi: Vec<(&str, Value, &RecordBatch, Option<&str>)> = vec![
+        ("geo.centroid", json!({}), &poligoni, None),
+        ("geo.convex_hull", json!({}), &poligoni, None),
+        ("geo.envelope", json!({}), &poligoni, None),
+        ("geo.area", json!({}), &poligoni, None),
+        ("geo.boundary", json!({}), &poligoni, None),
+        ("geo.bounds_extractor", json!({}), &poligoni, None),
+        ("geo.buffer", json!({"distance": 3.0}), &poligoni, None),
+        (
+            "geo.distance",
+            json!({"other_wkb": esadecimale_di(&altra_linea)}),
+            &linee,
+            None,
+        ),
+        ("geo.from_coords", json!({}), &coordinate, Some(UTM)),
+        ("geo.length", json!({}), &linee, None),
+        ("geo.perimeter", json!({}), &poligoni, None),
+        ("geo.point_on_surface", json!({}), &poligoni, None),
+        ("geo.simplify", json!({"tolerance": 10.0}), &linee, None),
+        ("geo.to_wkt", json!({}), &linee, None),
+        ("geo.vertex_count", json!({}), &poligoni, None),
+        ("geo.make_valid", json!({}), &poligoni, None),
+        (
+            "geo.reproject",
+            json!({"target_crs": "EPSG:4326"}),
+            &linee,
+            None,
+        ),
+        (
+            "geo.affine_transform",
+            json!({"coefficients": [1.0, 0.0, 0.0, 1.0, 5.0, -5.0]}),
+            &linee,
+            None,
+        ),
+        (
+            "geo.translate",
+            json!({"x_offset": 10.0, "y_offset": -3.0}),
+            &linee,
+            None,
+        ),
+        (
+            "geo.scale",
+            json!({"x_factor": 1.5, "y_factor": 1.0, "x_origin": X0, "y_origin": Y0}),
+            &linee,
+            None,
+        ),
+        (
+            "geo.rotate",
+            json!({"degrees": 30.0, "x_origin": X0, "y_origin": Y0}),
+            &linee,
+            None,
+        ),
+        (
+            "geo.concave_hull",
+            json!({"concavity": 2.0}),
+            &poligoni,
+            None,
+        ),
+        (
+            "geo.hausdorff_distance",
+            json!({"other_wkb": esadecimale_di(&altra_linea)}),
+            &linee,
+            None,
+        ),
+        (
+            "geo.haversine_distance",
+            json!({"other_wkb": esadecimale_di(&milano)}),
+            &punti_lonlat,
+            None,
+        ),
+        (
+            "geo.geodesic_distance",
+            json!({"other_wkb": esadecimale_di(&milano)}),
+            &punti_lonlat,
+            None,
+        ),
+        ("geo.geodesic_line_length", json!({}), &linee_lonlat, None),
+        (
+            "geo.densify",
+            json!({"max_segment_length": 25.0}),
+            &linee,
+            None,
+        ),
+        ("geo.snap_to_grid", json!({"grid_size": 4.0}), &linee, None),
+        (
+            "geo.line_substring",
+            json!({"start_ratio": 0.25, "end_ratio": 0.75}),
+            &linee,
+            None,
+        ),
+        (
+            "geo.line_interpolate_point",
+            json!({"ratio": 0.4}),
+            &linee,
+            None,
+        ),
+        (
+            "geo.frechet_distance",
+            json!({"other_wkb": esadecimale_di(&altra_linea)}),
+            &linee,
+            None,
+        ),
+        (
+            "geo.bearing",
+            json!({"other_wkb": esadecimale_di(&milano)}),
+            &punti_lonlat,
+            None,
+        ),
+        ("geo.geodesic_area", json!({}), &poligoni_lonlat, None),
+        (
+            "geo.from_wkt",
+            json!({"wkt_column": "wkt"}),
+            &testi,
+            Some(UTM),
+        ),
+        (
+            "geo.geometry_accessors",
+            json!({"fields": ["is_closed", "geometry_type"], "output_prefix": "a_"}),
+            &linee,
+            None,
+        ),
+        (
+            "geo.line_locate_point",
+            json!({"point_wkb": esadecimale_di(&riferimento)}),
+            &linee,
+            None,
+        ),
+        (
+            "geo.snap",
+            json!({"reference_wkb": esadecimale_di(&riferimento), "tolerance": 2.0}),
+            &linee,
+            None,
+        ),
+        (
+            "geo.cluster_dbscan",
+            json!({"eps": 15.0, "min_points": 2}),
+            &punti,
+            None,
+        ),
+    ];
+    for predicato in [
+        "geo.predicate_intersects",
+        "geo.predicate_disjoint",
+        "geo.predicate_contains",
+        "geo.predicate_within",
+        "geo.predicate_equals_topo",
+        "geo.predicate_covers",
+        "geo.predicate_covered_by",
+        "geo.predicate_contains_properly",
+        "geo.predicate_touches",
+        "geo.predicate_crosses",
+        "geo.predicate_overlaps",
+    ] {
+        casi.push((
+            predicato,
+            json!({"other_wkb": altro.clone()}),
+            &poligoni,
+            None,
+        ));
+    }
+    let mut provate = BTreeSet::new();
+    for (op, config, ingresso, crs) in &casi {
+        verifica_righe_conservate(op, config, std::slice::from_ref(*ingresso), *crs);
+        provate.insert(*op);
+    }
+    let attese: BTreeSet<&str> = CATALOG
+        .iter()
+        .filter(|op| {
+            op.family == Family::Geo && op.source_row_provenance() == SourceRowProvenance::Preserved
+        })
+        .map(|op| op.id)
+        .collect();
+    assert_eq!(provate, attese, "ogni geo Preserved ha un caso");
+}
+
+#[test]
+fn aggregate_che_fonde_piu_righe_poi_formula_riferisce_il_gruppo() {
+    // Sei righe in tre gruppi: `b` fonde due righe, una con divisore zero.
+    // L'indice riportato e' la posizione del gruppo nell'output di
+    // `aggregate`, non una delle due righe d'origine.
+    let righe = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("g", DataType::Utf8, false),
+            Field::new("v", DataType::Float64, false),
+            Field::new("d", DataType::Float64, false),
+        ])),
+        vec![
+            Arc::new(StringArray::from(vec!["c", "b", "a", "b", "a", "c"])),
+            Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])),
+            Arc::new(Float64Array::from(vec![1.0, 2.0, 1.0, 0.0, 3.0, 2.0])),
+        ],
+    )
+    .expect("righe");
+    let aggrega = passo(
+        "gruppi",
+        "table.aggregate",
+        &["t"],
+        json!({"group_by": ["g"], "aggregations": [
+            {"column": "d", "function": "min", "alias": "dmin"},
+            {"column": "v", "function": "sum", "alias": "vsum"},
+            {"column": "v", "function": "count", "alias": "n"}]}),
+    );
+    let tavole = [("t", righe)];
+    let prefisso =
+        esegui(&piano(&["t"], vec![aggrega.clone()], &["gruppi"]), &tavole).expect("prefisso");
+    let gruppi = output(&prefisso, "gruppi");
+    assert_eq!(gruppi.num_rows(), 3, "sei righe in tre gruppi");
+    let chiavi = gruppi
+        .column_by_name("g")
+        .expect("g")
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("g Utf8");
+    let posizione = (0..chiavi.len())
+        .find(|riga| chiavi.value(*riga) == "b")
+        .expect("gruppo b");
+    let conteggi = gruppi.column_by_name("n").expect("n");
+    let conteggio = conteggi
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .map(|interi| interi.value(posizione).to_string())
+        .or_else(|| {
+            conteggi
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .map(|interi| interi.value(posizione).to_string())
+        })
+        .expect("conteggio intero");
+    assert_eq!(conteggio, "2", "il gruppo b fonde due righe");
+
+    let pipeline = piano(
+        &["t"],
+        vec![
+            aggrega,
+            passo(
+                "x",
+                "table.formula",
+                &["gruppi"],
+                json!({"new_column": "rapporto", "formula": "vsum / dmin"}),
+            ),
+        ],
+        &["x"],
+    );
+    let validata = valida(&pipeline, &tavole).expect("aggregate -> formula accettata");
+    assert_eq!(
+        validata.base_indici("x"),
+        Some(BaseIndici::IngressoDelPasso)
+    );
+    let errore = esegui(&pipeline, &tavole).expect_err("divisore zero nel gruppo b");
+    let report = diagnostica(&errore);
+    assert_eq!(report.index_basis, ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT);
+    assert_eq!(report.observed_total, 1);
+    assert_eq!(
+        report.examples[0].source_index,
+        u64::try_from(posizione).expect("posizione")
+    );
+    assert!(errore.to_string().contains("ingresso `gruppi`"), "{errore}");
 }
