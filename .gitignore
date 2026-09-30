@@ -4,3 +4,4 @@ target-*/
 # Scratch di lavoro e impostazioni locali: mai committati.
 /.agent-temp/
 /.claude/
+__pycache__/
