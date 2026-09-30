@@ -5694,20 +5694,27 @@ null per primo, poi per la stringa `<lunghezza>:<testo>` byte per byte.
 
 #### Errori
 
-In validazione:
+In validazione, in quest'ordine:
 
-- `InvalidPlan`: campi sconosciuti; una colonna assente (controllata per
-  prima, anche senza `mapping`); `index_col` senza colonne, con una colonna
-  ripetuta o oltre `max_columns`; una colonna indice o la `pivot_col` che
-  non si legge come testo; con `sum`, `mean`, `min`, `max` una `value_col`
-  non numerica, con `concat` una che non si legge come testo; un nome del
-  mapping non valido, ripetuto o uguale a una colonna indice; una chiave
-  che non è la forma canonica di un intero su una `pivot_col` intera;
-  `mapping` su una `pivot_col` che non è testo né intero (float, date,
-  istanti, decimali, booleani);
-- `Unsupported`: `mapping` assente o vuoto (lo schema d'uscita dipende dai
-  dati);
-- `ResourceLimit`: colonne indice più voci del mapping oltre `max_columns`.
+1. `InvalidPlan`: campi sconosciuti; una colonna assente fra quelle di
+   `index_col`, la `pivot_col` e la `value_col`. Questi due controlli
+   valgono anche senza `mapping`;
+2. `Unsupported`: `mapping` assente o vuoto (lo schema d'uscita dipende
+   dai dati). Senza `mapping` la validazione si ferma qui: `index_col`
+   senza colonne o con una colonna ripetuta, e ogni controllo di tipo
+   sotto, danno `Unsupported`, non `InvalidPlan` (il kernel, chiamato
+   direttamente, li rifiuta con `InvalidPlan` o `Schema`);
+3. solo con `mapping` non vuoto:
+   - `InvalidPlan`: `index_col` senza colonne, con una colonna ripetuta o
+     oltre `max_columns`; una colonna indice o la `pivot_col` che non si
+     legge come testo; con `sum`, `mean`, `min`, `max` una `value_col`
+     non numerica, con `concat` una che non si legge come testo; un nome
+     del mapping non valido, ripetuto o uguale a una colonna indice; una
+     chiave che non è la forma canonica di un intero su una `pivot_col`
+     intera; `mapping` su una `pivot_col` che non è testo né intero
+     (float, date, istanti, decimali, booleani);
+   - `ResourceLimit`: colonne indice più voci del mapping oltre
+     `max_columns`.
 
 In esecuzione (dal runner con `mapping`, o chiamando il kernel):
 

@@ -1232,3 +1232,293 @@ fn run_end_e_union_rifiutati_in_validazione_e_in_esecuzione() {
         assert!(matches!(errore, PlenoraError::Schema(_)), "{errore}");
     }
 }
+
+/// `table.pivot` con la colonna geometria come indice: la geometria resta
+/// geometria (tipo, metadati di campo con il CRS, contratto con CRS e
+/// geometria attiva), lo schema validato e' quello eseguito e ogni riga
+/// porta nella colonna della sua etichetta l'`id` della riga d'ingresso con
+/// la stessa geometria.
+#[test]
+#[allow(clippy::too_many_lines)] // Schema, contratto e valori in un caso.
+fn pivot_con_indice_geometria_conserva_la_geometria() {
+    let ingresso = poligoni();
+    let pipeline = piano(
+        &["t"],
+        vec![passo(
+            "p",
+            "table.pivot",
+            &["t"],
+            json!({"index_col": "geometry", "pivot_col": "label", "value_col": "id",
+                   "aggr_func": "first", "mapping": {"pari": "p", "dispari": "d"}}),
+        )],
+        &["p"],
+    );
+    let validata = pipeline
+        .validate(&[("t", ingresso.schema())])
+        .expect("pivot sulla geometria validato");
+    let contratto_validato = validata.contratto("p").expect("contratto").clone();
+    let esito = validata
+        .run(vec![("t".to_owned(), ingresso.clone())])
+        .expect("pivot sulla geometria eseguito");
+    let uscita = &esito.outputs[0].1;
+    assert_eq!(uscita.schema(), contratto_validato.schema);
+    let nomi: Vec<&str> = uscita
+        .schema_ref()
+        .fields()
+        .iter()
+        .map(|campo| campo.name().as_str())
+        .collect();
+    // Chiavi del mapping in ordine di byte: "dispari" prima di "pari".
+    assert_eq!(nomi, ["geometry", "d", "p"]);
+    // Il campo geometria e' quello d'ingresso nella forma canonica del
+    // runner: stesso tipo, metadati GeoArrow (CRS) d'ingresso conservati,
+    // CRS canonico dichiarato.
+    let schema_ingresso = ingresso.schema();
+    let campo_ingresso = schema_ingresso.field_with_name("geometry").unwrap();
+    let campo_uscita = uscita.schema_ref().field_with_name("geometry").unwrap();
+    assert_eq!(campo_uscita.data_type(), campo_ingresso.data_type());
+    for (chiave, valore) in campo_ingresso.metadata() {
+        assert_eq!(
+            campo_uscita.metadata().get(chiave),
+            Some(valore),
+            "metadato `{chiave}`"
+        );
+    }
+    assert_eq!(
+        campo_uscita
+            .metadata()
+            .get("plenora.geometry.crs_id")
+            .map(String::as_str),
+        Some(UTM)
+    );
+    // Contratto validato e contratto letto dall'uscita: stessa geometria,
+    // stesso CRS, geometria attiva.
+    for contratto in [contratto_validato, comune_geo::contratto(uscita)] {
+        assert_eq!(contratto.geometries.len(), 1);
+        let geometria = &contratto.geometries[0];
+        assert_eq!(geometria.name, "geometry");
+        assert_eq!(
+            geometria.crs.as_resolved().unwrap().definition(),
+            UTM,
+            "CRS conservato"
+        );
+        assert_eq!(contratto.active_geometry, Some(geometria.field_id));
+    }
+    // I valori: quattro geometrie distinte (una nulla), una riga ciascuna.
+    assert_eq!(uscita.num_rows(), ingresso.num_rows());
+    let celle_in = colonna(&ingresso, "geometry")
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .unwrap();
+    let id_in = colonna(&ingresso, "id")
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    let etichette_in = colonna(&ingresso, "label")
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let celle = colonna(uscita, "geometry")
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .unwrap();
+    let interi = |nome: &str| {
+        colonna(uscita, nome)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .clone()
+    };
+    let (d, p) = (interi("d"), interi("p"));
+    // La chiave nulla per prima (ordine delle chiavi di `aggregate`).
+    assert!(celle.is_null(0));
+    let mut viste = Vec::new();
+    for riga in 0..uscita.num_rows() {
+        let sorgente = (0..ingresso.num_rows())
+            .find(|&i| {
+                celle_in.is_null(i) == celle.is_null(riga)
+                    && (celle.is_null(riga) || celle_in.value(i) == celle.value(riga))
+            })
+            .expect("geometria dell'ingresso");
+        viste.push(sorgente);
+        let (piena, vuota) = match etichette_in.value(sorgente) {
+            "pari" => (&p, &d),
+            "dispari" => (&d, &p),
+            altra => panic!("etichetta inattesa `{altra}`"),
+        };
+        assert!(!piena.is_null(riga), "riga {riga}");
+        assert_eq!(piena.value(riga), id_in.value(sorgente), "riga {riga}");
+        assert!(vuota.is_null(riga), "riga {riga}");
+    }
+    viste.sort_unstable();
+    assert_eq!(viste, [0, 1, 2, 3], "ogni geometria una volta");
+}
+
+/// Due piani in catena: l'uscita del primo (`geo.area`) e' l'ingresso del
+/// secondo (`table.pivot` con `mapping`). Il secondo valida sullo schema
+/// eseguito dal primo ed esegue con i valori attesi; la stessa uscita con
+/// una colonna run-end o union si rifiuta al confine del secondo piano, in
+/// validazione e in esecuzione.
+#[test]
+#[allow(clippy::too_many_lines)] // Catena, valori e i due rifiuti in un caso.
+fn due_piani_in_catena_pivot_e_rifiuto_di_run_end_e_union() {
+    use plenora_core::arrow::array::types::Int32Type;
+    use plenora_core::arrow::array::{Int32Array, RunArray, UnionArray};
+    use plenora_core::arrow::schema::UnionFields;
+
+    let primo = piano(
+        &["t"],
+        vec![passo("a", "geo.area", &["t"], json!({}))],
+        &["a"],
+    );
+    let intermedia = esegui(&primo, &[("t", poligoni())])
+        .expect("primo piano")
+        .outputs
+        .remove(0)
+        .1;
+    let secondo = piano(
+        &["a"],
+        vec![passo(
+            "p",
+            "table.pivot",
+            &["a"],
+            json!({"index_col": "label", "pivot_col": "id", "value_col": "area",
+                   "aggr_func": "sum", "mapping": {"0": "zero", "3": "tre", "9": "nove"}}),
+        )],
+        &["p"],
+    );
+    let validata = secondo
+        .validate(&[("a", intermedia.schema())])
+        .expect("secondo piano validato sull'uscita del primo");
+    let atteso = validata.contratto("p").expect("contratto").schema.clone();
+    let esito = validata
+        .run(vec![("a".to_owned(), intermedia.clone())])
+        .expect("secondo piano eseguito");
+    let uscita = &esito.outputs[0].1;
+    assert_eq!(uscita.schema(), atteso);
+    let etichette = colonna(uscita, "label")
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let f64_di = |nome: &str| {
+        colonna(uscita, nome)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .clone()
+    };
+    let (zero, tre, nove) = (f64_di("zero"), f64_di("tre"), f64_di("nove"));
+    assert_eq!(uscita.num_rows(), 2);
+    for riga in 0..uscita.num_rows() {
+        match etichette.value(riga) {
+            "pari" => {
+                assert!((zero.value(riga) - 10_000.0).abs() < 1e-6);
+                assert!(tre.is_null(riga));
+            }
+            "dispari" => {
+                assert!(zero.is_null(riga));
+                assert!((tre.value(riga) - 900.0).abs() < 1e-6);
+            }
+            altra => panic!("etichetta inattesa `{altra}`"),
+        }
+        assert!(nove.is_null(riga));
+    }
+
+    // L'uscita del primo piano con `label` run-end o union.
+    let righe = intermedia.num_rows();
+    let run_end: ArrayRef = Arc::new(
+        RunArray::<Int32Type>::try_new(
+            &Int32Array::from(vec![2, i32::try_from(righe).unwrap()]),
+            &StringArray::from(vec![Some("pari"), None]),
+        )
+        .unwrap(),
+    );
+    let campi_union: UnionFields =
+        std::iter::once((0_i8, Arc::new(Field::new("s", DataType::Utf8, true)))).collect();
+    let union: ArrayRef = Arc::new(
+        UnionArray::try_new(
+            campi_union,
+            vec![0_i8; righe].into(),
+            None,
+            vec![Arc::new(StringArray::from(vec![Some("x"); righe])) as ArrayRef],
+        )
+        .unwrap(),
+    );
+    let schema_intermedio = intermedia.schema();
+    let posizione = schema_intermedio.index_of("label").unwrap();
+    for colonna_codificata in [run_end, union] {
+        let campi: Vec<Field> = schema_intermedio
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, campo)| {
+                if i == posizione {
+                    Field::new("label", colonna_codificata.data_type().clone(), true)
+                } else {
+                    campo.as_ref().clone()
+                }
+            })
+            .collect();
+        let mut colonne = intermedia.columns().to_vec();
+        colonne[posizione] = colonna_codificata.clone();
+        let codificata = RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                campi,
+                schema_intermedio.metadata().clone(),
+            )),
+            colonne,
+        )
+        .expect("tabella");
+        let errore = secondo
+            .validate(&[("a", codificata.schema())])
+            .expect_err("tipo non supportato in validazione");
+        assert!(
+            matches!(&errore, PlenoraError::Unsupported(m) if m.contains("RunEndEncoded")),
+            "{errore}"
+        );
+        let errore = secondo
+            .validate(&[("a", schema_intermedio.clone())])
+            .expect("schema senza codifica")
+            .run(vec![("a".to_owned(), codificata)])
+            .expect_err("tabella diversa dallo schema validato");
+        assert!(matches!(errore, PlenoraError::Schema(_)), "{errore}");
+    }
+}
+
+/// L'ordine dei rifiuti di `pivot` in validazione (scheda, «Errori»): una
+/// colonna assente e' `InvalidPlan` anche senza `mapping`; senza `mapping`
+/// ogni altro difetto (`index_col` vuoto o ripetuto) e' `Unsupported`; con
+/// `mapping` lo stesso difetto e' `InvalidPlan`.
+#[test]
+fn pivot_ordine_dei_rifiuti_in_validazione() {
+    let schema = poligoni().schema();
+    let valida = |config: Value| {
+        piano(
+            &["t"],
+            vec![passo("p", "table.pivot", &["t"], config)],
+            &["p"],
+        )
+        .validate(&[("t", schema.clone())])
+        .expect_err("rifiuto")
+    };
+    let mapping = json!({"pari": "p"});
+    for index_col in ["", " , ", "id,id"] {
+        let senza = valida(json!({"index_col": index_col, "pivot_col": "label",
+                                  "value_col": "id"}));
+        assert!(
+            matches!(senza, PlenoraError::Unsupported(_)),
+            "`{index_col}` senza mapping: {senza}"
+        );
+        let con = valida(json!({"index_col": index_col, "pivot_col": "label",
+                                "value_col": "id", "mapping": mapping}));
+        assert!(
+            matches!(con, PlenoraError::InvalidPlan(_)),
+            "`{index_col}` con mapping: {con}"
+        );
+    }
+    for (index_col, value_col) in [("manca", "id"), ("id", "manca")] {
+        let senza = valida(json!({"index_col": index_col, "pivot_col": "label",
+                                  "value_col": value_col}));
+        assert!(matches!(senza, PlenoraError::InvalidPlan(_)), "{senza}");
+    }
+}
