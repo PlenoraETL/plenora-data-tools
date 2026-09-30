@@ -764,10 +764,12 @@ fn scarto_angolare_gradi(primo: f64, secondo: f64) -> f64 {
 ///   `ValidazioneNonConclusa` se la validazione non conclude;
 /// - `InvalidGeographicCoordinate`: coordinate fuori intervallo lon/lat;
 /// - `InvalidInput`: un lato con differenza di longitudine di almeno 180
-///   gradi (poligono sull'antimeridiano o attorno a un polo), o un anello
-///   che, letto come geodetiche, gira al contrario del piano lon/lat o copre
-///   mezzo ellissoide: il verso nel piano non decide l'interno, e l'area
-///   sarebbe quella del complemento;
+///   gradi (poligono sull'antimeridiano o attorno a un polo); un lato
+///   troppo lungo o troppo vicino a un polo, o due lati piu' vicini dello
+///   scarto fra geodetiche e corde, per cui la topologia delle geodetiche
+///   non e' garantita uguale a quella del piano lon/lat
+///   (`geodetica::verifica_topologia_geodetica`); un anello che, letto come
+///   geodetiche, gira al contrario del piano o copre mezzo ellissoide;
 /// - `UnsupportedGeometry`: geometria diversa da `Polygon`/`MultiPolygon`;
 /// - `CalcoloNonConcluso`: il calcolo e' andato in panico;
 /// - `InvalidOutput`: area NaN o infinita.
@@ -797,6 +799,16 @@ pub fn geodesic_area_m2(
                 .to_owned(),
         ));
     }
+    // La topologia delle geodetiche (anelli semplici, buchi dentro
+    // l'esterno, parti disgiunte) deve essere quella del piano lon/lat, dove
+    // la validazione OGC l'ha verificata: altrimenti l'area sommerebbe o
+    // sottrarrebbe regioni sbagliate, in silenzio.
+    let anelli: Vec<&LineString<f64>> = poligoni
+        .iter()
+        .flat_map(|polygon| std::iter::once(polygon.exterior()).chain(polygon.interiors()))
+        .collect();
+    protetto(|| crate::geodetica::verifica_topologia_geodetica(&anelli, ellissoide))?
+        .map_err(|motivo| ExtendedAlgorithmError::InvalidInput(motivo.to_owned()))?;
     let area = match geometry {
         Geometry::Polygon(polygon) => {
             protetto(|| area_poligono(&polygon.orient(Direction::Default), ellissoide))?

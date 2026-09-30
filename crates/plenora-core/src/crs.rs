@@ -43,9 +43,13 @@ pub const BUILTIN_EPSG_DATE: &str = epsg_integrati::DATA_EPSG;
 /// Versione di PROJ che distribuiva il registro letto dal generatore.
 pub const BUILTIN_PROJ_VERSION: &str = epsg_integrati::VERSIONE_PROJ;
 
-/// Metri per grado d'arco sull'equatore di WGS 84 (`2 * pi * 6378137 / 360`,
-/// arrotondato al centimetro): converte la precisione a terra in gradi.
-pub const METRES_PER_DEGREE_AT_EQUATOR: f64 = 111_319.49;
+/// Raggio di curvatura prudente, in metri, per un geografico senza ellissoide.
+///
+/// Vale per un CRS risolto dal chiamante: e' maggiore del raggio di
+/// curvatura polare `a / (1 - f)` di ogni ellissoide terrestre in uso (il
+/// piu' grande della tabella integrata e' Internazionale 1924,
+/// 6 399 936,6 m).
+pub const CONSERVATIVE_CURVATURE_RADIUS_METRES: f64 = 6_400_000.0;
 
 /// Precisione a terra delle geometrie, in metri: un centimetro (README,
 /// «Precisione delle operazioni geografiche: 1 cm a terra»).
@@ -258,15 +262,15 @@ impl ResolvedCrs {
     /// Precisione a terra ([`GROUND_PRECISION_METRES`], un centimetro)
     /// espressa nelle unita' delle coordinate del CRS.
     ///
-    /// Proiettato: `0.01 / horizontal_unit_to_metre`. Geografico: `0.01 /
-    /// 111_319.49` gradi, un centimetro d'arco sull'equatore
-    /// ([`METRES_PER_DEGREE_AT_EQUATOR`]); lontano dall'equatore un grado di
-    /// longitudine e' piu' corto, e la stessa quantita' in gradi vale meno
-    /// di un centimetro a terra (precisione piu' fine). Deviazione
-    /// dichiarata (README, «Misure geodetiche: l'ellissoide del datum»): i
-    /// gradi sono quelli dell'equatore di WGS 84, non dell'ellissoide del
-    /// datum; su Internazionale 1924 e Clarke 1866, piu' grandi, il passo
-    /// vale fino a 1,000 04 cm all'equatore (0,4 µm oltre).
+    /// Proiettato: `0.01 / horizontal_unit_to_metre`. Geografico: 1 cm in
+    /// gradi sul raggio di curvatura **massimo** dell'ellissoide del datum,
+    /// `a / (1 - f)` (ai poli, lungo il meridiano e lungo il parallelo):
+    /// un grado di latitudine o di longitudine non e' mai piu' lungo di
+    /// `a / (1 - f) * pi / 180` metri, quindi il passo in gradi vale al piu'
+    /// 1 cm a terra ovunque, in entrambe le direzioni (per WGS 84 circa
+    /// `8.953e-8` gradi). Il quoziente si arrotonda verso il basso di un
+    /// margine relativo di `1e-12`. Senza ellissoide (CRS risolto dal
+    /// chiamante) il raggio e' [`CONSERVATIVE_CURVATURE_RADIUS_METRES`].
     /// `None` per un proiettato senza un'unita' lineare finita e positiva, o
     /// quando il quoziente non e' un `f64` normale e positivo (unita' fuori
     /// scala, per esempio `f64::from_bits(1)` o `f64::MAX`): la precisione
@@ -274,7 +278,20 @@ impl ResolvedCrs {
     #[must_use]
     pub fn precisione_coordinate(&self) -> Option<f64> {
         match self.kind {
-            CrsKind::Geographic => Some(GROUND_PRECISION_METRES / METRES_PER_DEGREE_AT_EQUATOR),
+            CrsKind::Geographic => {
+                let raggio = self
+                    .ellipsoid
+                    .and_then(|ellissoide| {
+                        let a = ellissoide.semi_major_axis_metre;
+                        let inverso = ellissoide.inverse_flattening;
+                        (a.is_finite() && a > 0.0 && inverso.is_finite() && inverso > 1.0)
+                            .then(|| a / (1.0 - 1.0 / inverso))
+                    })
+                    .unwrap_or(CONSERVATIVE_CURVATURE_RADIUS_METRES);
+                let metri_per_grado = raggio.to_radians();
+                Some(GROUND_PRECISION_METRES / metri_per_grado * (1.0 - 1e-12))
+                    .filter(|precisione| precisione.is_normal() && *precisione > 0.0)
+            }
             // Il quoziente si verifica, non solo l'unita': un'unita' finita e
             // positiva ma minuscola (subnormale) darebbe infinito, una enorme
             // un subnormale che ha perso cifre. Solo un normale positivo passa.

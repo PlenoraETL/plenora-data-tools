@@ -10,6 +10,7 @@
 //! esplicito, senza valore predefinito: nessun kernel sceglie WGS 84 da
 //! solo (README, «Misure geodetiche: l'ellissoide del datum»).
 
+use geo::{Coord, LineString};
 use geographiclib_rs::Geodesic;
 use plenora_core::crs::{CrsError, Ellipsoid, ResolvedCrs};
 
@@ -85,6 +86,231 @@ impl EllissoideGeodetico {
     pub(crate) const fn sfera(&self) -> &Geodesic {
         &self.sfera
     }
+}
+
+/// Margine assoluto sulle distanze nel piano lon/lat, in gradi (circa
+/// 11 µm a terra): copre gli arrotondamenti delle distanze fra segmenti.
+const MARGINE_GRADI: f64 = 1e-10;
+
+/// Rotazione massima della tangente di un lato geodetico nel piano
+/// lon/lat, in radianti (`K * L`): sotto `pi / 2` la geodetica e' un grafico
+/// sulla corda del lato, e il suo scarto dalla corda si limita.
+const ROTAZIONE_MASSIMA: f64 = 1.0;
+
+/// Il massimo di `|u| v^2` con `u^2 + v^2 = 1` (`2 / (3 sqrt 3)`),
+/// arrotondato per eccesso.
+const MASSIMO_U_V2: f64 = 0.385;
+
+/// Un lato di un anello nel piano lon/lat (gradi) con lo scarto massimo,
+/// in gradi, fra la sua geodetica e la sua corda.
+#[derive(Clone, Copy, Debug)]
+struct LatoGeodetico {
+    da: Coord<f64>,
+    a: Coord<f64>,
+    scarto: f64,
+}
+
+/// Lo scarto massimo, in gradi del piano lon/lat, fra la geodetica di un
+/// lato e la sua corda (il segmento nel piano lon/lat).
+///
+/// Nel piano (lambda, phi) in radianti la geodetica ha curvatura euclidea
+/// `kappa = |sin phi| |u| (A u^2 + B v^2) / (u^2 + v^2)^(3/2)`, con
+/// `(u, v)` la velocita' nel piano, `A = (N / M) cos phi` e
+/// `B = 3 e^2 cos phi / W^2 + 2 (M / N) / cos phi` (dalle equazioni delle
+/// geodetiche della metrica `M^2 dphi^2 + (N cos phi)^2 dlambda^2`). Con
+/// `N / M <= 1 / (1 - e^2)`, `M / N <= 1`, `W^2 >= 1 - e^2`, `|u|^3 <= 1`,
+/// `|u| v^2 <= 0.385` e `|sin phi cos phi| <= min(1/2, sin phi_max)`:
+///
+/// `kappa <= K = s / (1 - e^2) + 0.385 (3 e^2 s / (1 - e^2) + 2 tan phi_max)`,
+/// `s = min(1/2, sin phi_max)`,
+///
+/// con `phi_max` la latitudine massima in modulo lungo la geodetica (quella
+/// degli estremi o del vertice, se il lato lo contiene). La lunghezza nel
+/// piano e' al piu' `L = s12 / (a min(1 - e^2, cos phi_max))`. Se `K L <= 1`
+/// la tangente ruota di al piu' `K L` rispetto alla corda (in un punto le e'
+/// parallela), quindi la geodetica e' il grafico `h(t)` di una funzione
+/// sulla corda di lunghezza `l`, con `|h''| <= K / cos^3(K L)` e
+/// `h(0) = h(l) = 0`: `|h| <= l^2 / 8 * K / cos^3(K L)`.
+///
+/// `Err` per un lato su un polo o con `K L > 1` (troppo lungo per la
+/// verifica).
+fn scarto_del_lato(
+    ellissoide: &EllissoideGeodetico,
+    da: Coord<f64>,
+    a: Coord<f64>,
+) -> Result<f64, &'static str> {
+    use geographiclib_rs::InverseGeodesic as _;
+    const LATO_TROPPO_LUNGO: &str =
+        "lato troppo lungo o troppo vicino a un polo per verificare che la \
+         topologia delle geodetiche sia quella del piano lon/lat";
+    let parametri = ellissoide.parametri();
+    let semiasse = parametri.semi_major_axis_metre;
+    let f = 1.0 / parametri.inverse_flattening;
+    let e2 = f * (2.0 - f);
+    let (s12, azimut1, azimut2, _arco): (f64, f64, f64, f64) =
+        ellissoide.geodetica().inverse(da.y, da.x, a.y, a.x);
+    if !(s12.is_finite() && azimut1.is_finite() && azimut2.is_finite()) {
+        return Err(LATO_TROPPO_LUNGO);
+    }
+    let mut latitudine_massima = da.y.abs().max(a.y.abs());
+    // Vertice dentro il lato: la latitudine cambia verso (verso il polo
+    // alla partenza, verso l'equatore all'arrivo), o un azimut e' quasi
+    // est-ovest (vertice vicino a un estremo).
+    let (c1, c2) = (azimut1.to_radians().cos(), azimut2.to_radians().cos());
+    let vertice_dentro = c1 * c2 < 0.0 || c1.abs() < 1e-9 || c2.abs() < 1e-9;
+    if vertice_dentro {
+        // Clairaut: cos(beta0) = |cos(beta1) sin(alpha1)|, beta ridotta.
+        let beta1 = ((1.0 - f) * da.y.to_radians().tan()).atan();
+        let coseno = (beta1.cos() * azimut1.to_radians().sin()).abs().min(1.0);
+        let beta0 = coseno.acos();
+        let vertice = (beta0.tan() / (1.0 - f)).atan().to_degrees().abs();
+        latitudine_massima = latitudine_massima.max(vertice);
+    }
+    let phi = latitudine_massima.to_radians();
+    let (seno, coseno) = phi.sin_cos();
+    let tangente = phi.tan();
+    if !(tangente.is_finite() && coseno > 0.0) {
+        return Err(LATO_TROPPO_LUNGO);
+    }
+    let s = seno.min(0.5);
+    let curvatura = MASSIMO_U_V2.mul_add(
+        2.0f64.mul_add(tangente, 3.0 * e2 * s / (1.0 - e2)),
+        s / (1.0 - e2),
+    );
+    let lunghezza = s12 / (semiasse * (1.0 - e2).min(coseno));
+    let rotazione = curvatura * lunghezza;
+    if !(rotazione.is_finite() && rotazione <= ROTAZIONE_MASSIMA) {
+        return Err(LATO_TROPPO_LUNGO);
+    }
+    let corda = (a.x - da.x).to_radians().hypot((a.y - da.y).to_radians());
+    let scarto = corda * corda / 8.0 * curvatura / rotazione.cos().powi(3);
+    let scarto = scarto.to_degrees() * (1.0 + 1e-6);
+    if scarto.is_finite() {
+        Ok(scarto)
+    } else {
+        Err(LATO_TROPPO_LUNGO)
+    }
+}
+
+/// `distanza > soglia`, falso anche per un NaN.
+fn oltre(distanza: f64, soglia: f64) -> bool {
+    distanza.partial_cmp(&soglia) == Some(std::cmp::Ordering::Greater)
+}
+
+/// Verifica che gli anelli, letti come geodetiche, abbiano la topologia che
+/// hanno nel piano lon/lat (dove la validazione OGC li ha accettati): anelli
+/// semplici, che non si incrociano, con le stesse relazioni di contenimento
+/// (buchi dentro l'esterno, parti disgiunte).
+///
+/// Regola, dimostrabile: ogni geodetica sta entro il suo `scarto` dalla
+/// corda ([`scarto_del_lato`]), e
+///
+/// - due lati senza estremi comuni hanno corde a distanza maggiore della
+///   somma degli scarti (i tubi non si toccano);
+/// - due lati con un estremo comune `v`: l'altro estremo di ciascuno dista
+///   dalla corda dell'altro piu' del suo scarto. Due geodetiche minime
+///   uscenti da `v` non si incontrano di nuovo se non in un estremo (oltre
+///   un punto d'incontro nessuna delle due sarebbe minima), e un estremo
+///   sulla geodetica dell'altro starebbe entro il suo scarto;
+/// - due lati con entrambi gli estremi comuni si rifiutano.
+///
+/// Allora gli anelli geodetici sono semplici e si toccano solo nei vertici
+/// comuni, e la deformazione di ogni corda nella sua geodetica, dentro il
+/// suo tubo, non attraversa i vertici non comuni degli altri anelli: il
+/// numero di avvolgimento di ognuno rispetto a ogni anello e' quello del
+/// piano, e il contenimento e' lo stesso. Il segno dell'area di ogni anello
+/// ([`crate::extended_algorithms`]) conferma il verso.
+///
+/// # Errors
+///
+/// Un messaggio senza coordinate se un lato e' troppo lungo per la verifica
+/// o se due lati non rispettano la regola.
+pub(crate) fn verifica_topologia_geodetica(
+    anelli: &[&LineString<f64>],
+    ellissoide: &EllissoideGeodetico,
+) -> Result<(), &'static str> {
+    use geo::algorithm::line_measures::{Distance, Euclidean};
+    use rstar::{primitives::GeomWithData, primitives::Rectangle, RTree, AABB};
+    const VICINI: &str = "due lati del poligono sono piu' vicini dello scarto fra le loro \
+         geodetiche e le corde nel piano lon/lat: la topologia delle geodetiche non e' \
+         garantita";
+
+    let mut lati: Vec<LatoGeodetico> = Vec::new();
+    for anello in anelli {
+        for lato in anello.lines() {
+            if lato.start == lato.end {
+                continue;
+            }
+            lati.push(LatoGeodetico {
+                da: lato.start,
+                a: lato.end,
+                scarto: scarto_del_lato(ellissoide, lato.start, lato.end)?,
+            });
+        }
+    }
+    let riquadro = |lato: &LatoGeodetico| {
+        let bordo = lato.scarto + MARGINE_GRADI;
+        AABB::from_corners(
+            [
+                lato.da.x.min(lato.a.x) - bordo,
+                lato.da.y.min(lato.a.y) - bordo,
+            ],
+            [
+                lato.da.x.max(lato.a.x) + bordo,
+                lato.da.y.max(lato.a.y) + bordo,
+            ],
+        )
+    };
+    let albero: RTree<GeomWithData<Rectangle<[f64; 2]>, usize>> = RTree::bulk_load(
+        lati.iter()
+            .enumerate()
+            .map(|(indice, lato)| {
+                let aabb = riquadro(lato);
+                GeomWithData::new(Rectangle::from_aabb(aabb), indice)
+            })
+            .collect(),
+    );
+    let segmento = |lato: &LatoGeodetico| geo::Line::new(lato.da, lato.a);
+    for (i, lato) in lati.iter().enumerate() {
+        for vicino in albero.locate_in_envelope_intersecting(&riquadro(lato)) {
+            let j = vicino.data;
+            if j <= i {
+                continue;
+            }
+            let altro = &lati[j];
+            let comuni = [
+                (lato.da == altro.da, lato.a, altro.a),
+                (lato.da == altro.a, lato.a, altro.da),
+                (lato.a == altro.da, lato.da, altro.a),
+                (lato.a == altro.a, lato.da, altro.da),
+            ];
+            let condivisi: Vec<(Coord<f64>, Coord<f64>)> = comuni
+                .iter()
+                .filter(|(comune, _, _)| *comune)
+                .map(|&(_, mio, suo)| (mio, suo))
+                .collect();
+            match condivisi.as_slice() {
+                [] => {
+                    let distanza = Euclidean.distance(&segmento(lato), &segmento(altro));
+                    if !oltre(distanza, lato.scarto + altro.scarto + MARGINE_GRADI) {
+                        return Err(VICINI);
+                    }
+                }
+                [(mio, suo)] => {
+                    let mio_dall_altro =
+                        Euclidean.distance(&geo::Point::from(*mio), &segmento(altro));
+                    let suo_dal_mio = Euclidean.distance(&geo::Point::from(*suo), &segmento(lato));
+                    if !(oltre(mio_dall_altro, altro.scarto + MARGINE_GRADI)
+                        && oltre(suo_dal_mio, lato.scarto + MARGINE_GRADI))
+                    {
+                        return Err(VICINI);
+                    }
+                }
+                _ => return Err(VICINI),
+            }
+        }
+    }
+    Ok(())
 }
 
 /// L'ellissoide WGS 84 della tabella integrata, per i test dei kernel.
@@ -180,7 +406,7 @@ mod tests {
                 .to_bits(),
             Geodesic.length(&linea).to_bits()
         );
-        for (x, y, lato) in [(9.0, 45.0, 0.5), (-60.0, -30.0, 12.0), (100.0, 10.0, 40.0)] {
+        for (x, y, lato) in [(9.0, 45.0, 0.5), (-60.0, -30.0, 12.0), (100.0, 10.0, 4.0)] {
             let esterno = LineString::from(vec![
                 (x, y),
                 (x + lato, y),
@@ -286,21 +512,90 @@ mod tests {
             crate::extended_algorithms::geodesic_area_m2(&poligono, &e),
             Err(crate::extended_algorithms::ExtendedAlgorithmError::InvalidInput(_))
         ));
-        // Un quarto di globo, nel verso giusto: accettato.
-        let emisfero = LineString::from(vec![
-            (-90.0, -1.0),
-            (0.0, -1.0),
-            (90.0, -1.0),
-            (90.0, 89.0),
-            (0.0, 89.0),
-            (-90.0, 89.0),
-            (-90.0, -1.0),
-        ]);
-        let area = crate::extended_algorithms::geodesic_area_m2(
-            &Geometry::Polygon(Polygon::new(emisfero, vec![])),
-            &e,
+    }
+
+    /// Il controesempio della seconda lettura: valido nel piano, nessun lato
+    /// oltre 180 gradi, versi giusti, ma la geodetica del lato inferiore
+    /// dell'esterno sale oltre 70 gradi nord vicino alla longitudine 0, e il
+    /// «buco» a 40-41 gradi sta fuori dall'esterno geodetico. Prima si
+    /// sottraeva e l'area era un numero plausibile e sbagliato.
+    #[test]
+    fn un_buco_fuori_dall_esterno_geodetico_si_rifiuta() {
+        use geo::{Geometry, Polygon};
+        let e = wgs84_di_prova();
+        let poligono: Polygon<f64> = wkt::TryFromWkt::try_from_wkt_str(
+            "POLYGON((-80 30,80 30,80 80,-80 80,-80 30),(-1 40,-1 41,1 41,1 40,-1 40))",
+        )
+        .expect("wkt");
+        assert!(matches!(
+            crate::extended_algorithms::geodesic_area_m2(&Geometry::Polygon(poligono), &e),
+            Err(crate::extended_algorithms::ExtendedAlgorithmError::InvalidInput(_))
+        ));
+    }
+
+    /// Stessa classe fra le parti di un multi-poligono: disgiunte nel piano,
+    /// sovrapposte sul globo (il lato superiore della fascia sale a 38,1
+    /// gradi a longitudine 0, dentro il quadratino a 38-39 gradi).
+    #[test]
+    fn parti_sovrapposte_solo_sul_globo_si_rifiutano() {
+        use geo::{Geometry, MultiPolygon};
+        let e = wgs84_di_prova();
+        let parti: MultiPolygon<f64> = wkt::TryFromWkt::try_from_wkt_str(
+            "MULTIPOLYGON(((-40 29,40 29,40 31,-40 31,-40 29)),((-1 38,1 38,1 39,-1 39,-1 38)))",
+        )
+        .expect("wkt");
+        assert!(matches!(
+            crate::extended_algorithms::geodesic_area_m2(&Geometry::MultiPolygon(parti), &e),
+            Err(crate::extended_algorithms::ExtendedAlgorithmError::InvalidInput(_))
+        ));
+    }
+
+    /// Lati corti: un buco a 1 m dall'esterno, con lati di circa 100 m,
+    /// passa (lo scarto geodetica-corda e' sotto il millimetro); a 1 mm, con
+    /// lati di 100 km, si rifiuta.
+    #[test]
+    fn la_verifica_accetta_i_dati_ordinari_e_rifiuta_i_vicini() {
+        use geo::{Geometry, Polygon};
+        let e = wgs84_di_prova();
+        let grado = 1.0 / 111_000.0;
+        let (x, y, lato) = (11.0, 44.0, 100.0 * grado);
+        let esterno = format!(
+            "({x} {y},{x2} {y},{x2} {y2},{x} {y2},{x} {y})",
+            x2 = x + lato,
+            y2 = y + lato
         );
-        assert!(area.is_ok(), "{area:?}");
+        let d = grado; // 1 m
+        let buco = format!(
+            "({a} {b},{a} {c},{d2} {c},{d2} {b},{a} {b})",
+            a = x + d,
+            b = y + d,
+            c = y + lato / 2.0,
+            d2 = x + lato / 2.0
+        );
+        let ordinario: Polygon<f64> =
+            wkt::TryFromWkt::try_from_wkt_str(&format!("POLYGON({esterno},{buco})")).expect("wkt");
+        crate::extended_algorithms::geodesic_area_m2(&Geometry::Polygon(ordinario), &e)
+            .expect("dati ordinari");
+        let lato = 100_000.0 * grado;
+        let d = grado / 1000.0; // 1 mm
+        let esterno = format!(
+            "({x} {y},{x2} {y},{x2} {y2},{x} {y2},{x} {y})",
+            x2 = x + lato,
+            y2 = y + lato
+        );
+        let buco = format!(
+            "({a} {b},{a} {c},{d2} {c},{d2} {b},{a} {b})",
+            a = x + lato / 4.0,
+            b = y + d,
+            c = y + lato / 2.0,
+            d2 = x + lato / 2.0
+        );
+        let vicino: Polygon<f64> =
+            wkt::TryFromWkt::try_from_wkt_str(&format!("POLYGON({esterno},{buco})")).expect("wkt");
+        assert!(matches!(
+            crate::extended_algorithms::geodesic_area_m2(&Geometry::Polygon(vicino), &e),
+            Err(crate::extended_algorithms::ExtendedAlgorithmError::InvalidInput(_))
+        ));
     }
 
     #[test]

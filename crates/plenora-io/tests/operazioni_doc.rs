@@ -2269,3 +2269,107 @@ fn le_geo_dichiarano_null_solo_dove_ne_emettono() {
     }
     assert!(difetti.is_empty(), "nullabilita':\n{}", difetti.join("\n"));
 }
+
+/// Le geo 1:1 che per una geometria vuota non hanno un risultato e, con la
+/// colonna d'uscita non nullable (quella d'ingresso), rifiutano il passo
+/// con un errore esplicito del contratto, come le schede dichiarano
+/// («Righe»): la nullabilita' non si allarga per un caso limite.
+const VUOTA_RIFIUTATA: &[&str] = &[
+    "geo.line_interpolate_point",
+    "geo.line_substring",
+    "geo.point_on_surface",
+];
+
+/// La geometria vuota del tipo di una geometria (`None` per un punto, che
+/// in WKB vuoto avrebbe coordinate NaN).
+fn vuota_dello_stesso_tipo(geometria: &Geometry<f64>) -> Option<Geometry<f64>> {
+    use geo::{GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Polygon};
+    Some(match geometria {
+        Geometry::LineString(_) => Geometry::LineString(LineString::new(Vec::new())),
+        Geometry::Polygon(_) => {
+            Geometry::Polygon(Polygon::new(LineString::new(Vec::new()), Vec::new()))
+        }
+        Geometry::MultiPoint(_) => Geometry::MultiPoint(MultiPoint::new(Vec::new())),
+        Geometry::MultiLineString(_) => Geometry::MultiLineString(MultiLineString::new(Vec::new())),
+        Geometry::MultiPolygon(_) => Geometry::MultiPolygon(MultiPolygon::new(Vec::new())),
+        Geometry::GeometryCollection(_) => {
+            Geometry::GeometryCollection(GeometryCollection::new_from(Vec::new()))
+        }
+        _ => return None,
+    })
+}
+
+/// Il primo ingresso con la prima geometria sostituita dalla vuota del suo
+/// tipo; `None` se non ce n'e' una.
+fn con_una_geometria_vuota(batch: &RecordBatch) -> Option<RecordBatch> {
+    let schema = batch.schema();
+    let indice = schema
+        .fields()
+        .iter()
+        .position(|campo| e_geometria(campo))?;
+    let celle = batch.column(indice).as_binary::<i32>();
+    if celle.is_empty() || celle.is_null(0) {
+        return None;
+    }
+    let prima = plenora_kernels_geo::geometry_from_wkb(celle.value(0)).ok()?;
+    let vuota =
+        plenora_kernels_geo::arrow_adapter::encode_geometry(&vuota_dello_stesso_tipo(&prima)?)
+            .ok()?;
+    let mut builder = BinaryBuilder::new();
+    builder.append_value(vuota);
+    for riga in 1..celle.len() {
+        if celle.is_null(riga) {
+            builder.append_null();
+        } else {
+            builder.append_value(celle.value(riga));
+        }
+    }
+    let mut colonne = batch.columns().to_vec();
+    colonne[indice] = Arc::new(builder.finish());
+    RecordBatch::try_new(schema, colonne).ok()
+}
+
+/// Casi limite della nullabilita' dichiarata: ingressi vuoti (zero righe) e
+/// una geometria vuota al posto della prima, con ingressi senza null. Un
+/// rifiuto dei dati o del piano e' ammesso; non lo e' un errore interno,
+/// ne' una geometria null in una colonna dichiarata non nullable (il runner
+/// la rende con «non ammette null»): sarebbe una dichiarazione piu' stretta
+/// dell'uscita.
+#[test]
+fn le_geo_rispettano_la_nullabilita_su_ingressi_vuoti_e_geometrie_vuote() {
+    prepara_ambiente();
+    let (schede, _) = leggi_schede();
+    let mut difetti = Vec::new();
+    for scheda in schede
+        .iter()
+        .filter(|scheda| scheda.operazione.family == Family::Geo)
+    {
+        let op = scheda.operazione.id;
+        let ingressi = scheda
+            .esempio
+            .ingressi
+            .iter()
+            .map(|spec| tabella_con_metadati(&spec.colonne, &spec.metadati))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("ingressi dell'esempio");
+        let senza: Vec<RecordBatch> = ingressi.iter().map(senza_null_dichiarati).collect();
+        let vuoti: Vec<RecordBatch> = senza.iter().map(|batch| batch.slice(0, 0)).collect();
+        let mut varianti = vec![("ingressi vuoti", vuoti)];
+        if let Some(prima) = senza.first().and_then(con_una_geometria_vuota) {
+            let mut con_vuota = senza.clone();
+            con_vuota[0] = prima;
+            varianti.push(("una geometria vuota", con_vuota));
+        }
+        for (nome, variante) in varianti {
+            if let Some(Err(errore)) = esegui_su(scheda, &variante) {
+                let dichiarato = nome == "una geometria vuota" && VUOTA_RIFIUTATA.contains(&op);
+                if errore.contains("internal")
+                    || (errore.contains("non ammette null") && !dichiarato)
+                {
+                    difetti.push(format!("{op}, {nome}: {errore}"));
+                }
+            }
+        }
+    }
+    assert!(difetti.is_empty(), "nullabilita':\n{}", difetti.join("\n"));
+}

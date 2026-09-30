@@ -68,7 +68,8 @@ Poi, per riga:
   dal kernel (`ExtendedAlgorithmError`) `InvalidInput` (coordinate non
   finite o geometria non valida per l'OGC; un lato con almeno 180 gradi
   di longitudine o un anello che sul globo gira al contrario o copre mezzo
-  ellissoide, vedi «Limiti e deviazioni»), `InvalidGeographicCoordinate`
+  ellissoide, o un poligono che non passa la verifica di topologia delle
+  geodetiche, vedi «Limiti e deviazioni»), `InvalidGeographicCoordinate`
   (longitudine fuori da `[-180, 180]` o latitudine fuori da `[-90, 90]`),
   `InvalidOutput` (area non finita);
 - `Internal`: dal kernel `ValidazioneNonConclusa` (la validazione non
@@ -89,10 +90,19 @@ Poi, per riga:
   orario sul globo, perché il lato fra i primi due vertici sale oltre 80°)
   o copre mezzo ellissoide o più: l'area di ogni anello si calcola con
   segno e un segno non positivo si rifiuta.
-- La validità OGC si verifica nel piano lon/lat: lati molto lunghi, letti
-  come geodetiche, possono incrociarsi dove i segmenti piani non lo
-  fanno, e l'area di un anello così non ha senso. Nessun controllo lo
-  cerca.
+- **Topologia delle geodetiche.** La validità OGC si verifica nel piano
+  lon/lat, i lati sono geodetiche: un lato lungo può passare dall'altra
+  parte di un buco (`POLYGON((-80 30,80 30,80 80,-80 80,-80 30),(-1 40,-1
+  41,1 41,1 40,-1 40))`: il lato inferiore sale oltre 70° a longitudine 0,
+  e il buco a 40° è fuori dall'esterno geodetico) o di un'altra parte.
+  L'area si calcola solo se la topologia delle geodetiche è dimostrabilmente
+  quella del piano ([README, «Misure geodetiche: l'ellissoide del
+  datum»](../README.md#misure-geodetiche-lellissoide-del-datum)): ogni lato
+  deve avere una rotazione `K L` al più 1 e non toccare un polo, e gli
+  anelli devono stare più lontani degli scarti fra geodetiche e corde.
+  Altrimenti `InvalidInput`. La verifica è prudente: rifiuta anche poligoni
+  corretti con lati lunghi (qualche centinaio di chilometri) o anelli
+  vicini ai lati lunghi.
 - CRS proiettati rifiutati; fino alla versione 2 del catalogo l'ellissoide
   era sempre WGS 84 (su ED50, a 42° di latitudine, circa 8e-5 di area in
   meno, oltre perimetro per 1 cm già su un quadrato di 500 m).

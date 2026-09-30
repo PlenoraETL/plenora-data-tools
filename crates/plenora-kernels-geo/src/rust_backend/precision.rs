@@ -12,8 +12,10 @@
 //! [`ResolvedCrs::precisione_coordinate`]:
 //!
 //! - CRS proiettato: `0.01 / horizontal_unit_to_metre`;
-//! - CRS geografico: 1 cm in gradi all'equatore, il valore piu' severo:
-//!   `0.01 / 111_319.49`, circa `8.98e-8` gradi.
+//! - CRS geografico: 1 cm in gradi sul raggio di curvatura massimo
+//!   dell'ellissoide del datum, `a / (1 - f)` (ai poli): al piu' 1 cm a
+//!   terra ovunque e in entrambe le direzioni; per WGS 84 circa
+//!   `8.953e-8` gradi.
 //!
 //! Le funzioni dei kernel chiamate senza CRS ricevono la precisione come
 //! argomento esplicito: nessun valore predefinito.
@@ -149,7 +151,9 @@ mod tests {
         let piedi = Precision::from_crs(&crs(CrsKind::Projected, Some(0.3048))).unwrap();
         assert!((piedi.value() - 0.01 / 0.3048).abs() < 1e-17);
         let gradi = Precision::from_crs(&crs(CrsKind::Geographic, None)).unwrap();
-        assert!((gradi.value() - 0.01 / 111_319.49).abs() < 1e-22);
+        // Senza ellissoide: il raggio prudente di 6 400 000 m.
+        let prudente = 0.01 / 6_400_000.0_f64.to_radians();
+        assert!(gradi.value() <= prudente && gradi.value() > prudente * (1.0 - 1e-11));
         // Stesso valore del core, bit per bit: una sola fonte.
         for (kind, unit) in [
             (CrsKind::Projected, Some(1.0)),

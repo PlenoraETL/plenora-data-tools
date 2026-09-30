@@ -62,8 +62,12 @@ una sola funzione, `plenora_core::crs::ResolvedCrs::precisione_coordinate`
 (a cui delega `rust_backend::precision::Precision::from_crs` dei kernel):
 
 - CRS proiettato: `0.01 / horizontal_unit_to_metre`;
-- CRS geografico: 1 cm in gradi all'equatore, il valore più severo,
-  `0.01 / 111_319.49`, circa `8.98e-8` gradi.
+- CRS geografico: 1 cm in gradi sul raggio di curvatura massimo
+  dell'ellissoide del datum, `a / (1 - f)` (ai poli, lungo meridiano e
+  parallelo): un grado non è mai più lungo di `a / (1 - f) * pi / 180`
+  metri, quindi il passo vale al più 1 cm a terra ovunque e in entrambe le
+  direzioni (per WGS 84 circa `8.953e-8` gradi; senza ellissoide, per un
+  CRS risolto dal chiamante, il raggio prudente di 6 400 000 m).
 
 Sotto la precisione un risultato può differire dall'esatto e la differenza
 è accettata: vertici spostati, schegge e parti sottili fuse o sparite, aree
@@ -328,24 +332,48 @@ geografico della tabella (`scripts/genera_riferimenti_geodetici.py`), entro
 un micrometro e 1e-3 m²; con WGS 84 i kernel coincidono al bit con quelli
 di `geo`.
 
+**Area: topologia delle geodetiche.** La validazione OGC guarda il piano
+lon/lat, ma i lati dell'area sono geodetiche: un lato lungo può passare
+dall'altra parte di un buco o di un'altra parte, e l'area sottrarrebbe o
+sommerebbe la regione sbagliata in silenzio.
+`geodetica::verifica_topologia_geodetica` accetta solo i poligoni per cui
+la topologia delle geodetiche è dimostrabilmente quella del piano:
+
+- per ogni lato si maggiora lo scarto fra geodetica e corda nel piano
+  lon/lat: la curvatura della geodetica nel piano è al più `K` (dalle
+  equazioni delle geodetiche, in funzione della latitudine massima del
+  lato), la sua lunghezza nel piano al più `L`, e con `K L <= 1` la
+  geodetica è un grafico sulla corda che se ne scosta al più di
+  `l^2 / 8 * K / cos^3(K L)` (`l` la corda). Un lato con `K L > 1`, o che
+  tocca un polo, si rifiuta;
+- due lati senza estremi comuni devono avere le corde più lontane della
+  somma dei loro scarti; di due lati con un estremo comune, l'altro estremo
+  di ciascuno deve distare dalla corda dell'altro più del suo scarto (due
+  geodetiche minime uscenti dallo stesso punto non si incontrano di nuovo
+  prima di un estremo);
+- allora gli anelli geodetici sono semplici, si toccano solo nei vertici
+  comuni e i vertici non comuni restano fuori dai tubi degli altri anelli:
+  contenimenti e disgiunzioni sono quelli del piano. Il segno dell'area di
+  ogni anello conferma il verso.
+
 **Ambito.** Le cinque misure sopra; l'azimut dove non è definito (punti
 coincidenti, partenza su un polo, geodetica più breve non unica) si
-rifiuta, e l'area rifiuta un lato di almeno 180 gradi di longitudine
-(schede delle operazioni).
+rifiuta; l'area rifiuta un lato di almeno 180 gradi di longitudine e ogni
+poligono che non passa la verifica di topologia (schede delle
+operazioni).
 
-**Hazard.** Fino alla versione di catalogo precedente (distanza e azimut
-1, lunghezza e area 2) ogni misura usava WGS 84 qualunque fosse il datum:
-circa 4 m ogni 100 km su ED50, senza errore. Resta una deviazione
-dichiarata: la precisione di un CRS geografico
-(`ResolvedCrs::precisione_coordinate`, 1 cm all'equatore) si calcola con i
-gradi dell'equatore di WGS 84 (111 319,49 m), non dell'ellissoide del
-datum. Su Internazionale 1924 e Clarke 1866 (semiassi maggiori di 251 e
-69 m) quel passo in gradi vale fino a 1,000 04 cm all'equatore: 0,4 µm
-oltre il centimetro, sotto ogni grandezza che il centimetro protegge.
+**Hazard.** La verifica è prudente: rifiuta poligoni corretti con lati
+lunghi vicini ad altri anelli (a 45° di latitudine, lati di 1 km con anelli
+a meno di circa 3 cm; lati di 100 m sotto il millimetro), lati oltre
+qualche centinaio di chilometri e lati vicino ai poli. Fino alla versione
+di catalogo precedente (distanza e azimut 1, lunghezza e area 2) ogni
+misura usava WGS 84 qualunque fosse il datum (circa 4 m ogni 100 km su
+ED50) e l'area non verificava la topologia delle geodetiche, senza errore.
 
-**Condizione di rientro.** Per la precisione: calcolarla dall'ellissoide
-del CRS quando la tabella lo porta, cambiando la precisione (e i test che
-la fissano) di tutti i kernel sui geografici.
+**Condizione di rientro.** Una verifica esatta della topologia delle
+geodetiche (intersezioni di geodetiche, contenimento sul globo) al posto
+del maggiorante, per accettare i poligoni che oggi si rifiutano per
+prudenza.
 
 ### `geo.reproject`: il cambio di datum vale quanto l'accuratezza accettata
 
@@ -2278,7 +2306,9 @@ geometrie prodotte ([«Operazioni geo»](#operazioni-geo)).
 
 **Precisione.** `ResolvedCrs::precisione_coordinate()` esprime 1 cm a terra
 nelle unità del CRS: `0.01 / horizontal_unit_to_metre` per i proiettati,
-`0.01 / 111 319,49` gradi per i geografici; `None` quando il quoziente non
+`0.01` metri in gradi sul raggio di curvatura massimo `a / (1 - f)`
+dell'ellissoide per i geografici (6 400 000 m senza ellissoide); `None`
+quando il quoziente non
 è un `f64` normale e positivo. È la precisione dichiarata delle operazioni
 geografiche ([«Limiti dichiarati»](#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
 `Precision::from_crs` dei kernel geo delega a questa funzione, e un `None` è

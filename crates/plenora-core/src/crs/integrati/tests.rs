@@ -13,7 +13,7 @@ use super::super::epsg_integrati::{CRS84, EPSG, VERSIONE_EPSG};
 use super::super::{
     builtin_crs_identifiers, resolve_crs, validate_geometry_domain, validate_requirement,
     CoordinateDomainViolation, CrsError, CrsKind, ResolvedCrs, BUILTIN_EPSG_VERSION,
-    METRES_PER_DEGREE_AT_EQUATOR,
+    CONSERVATIVE_CURVATURE_RADIUS_METRES,
 };
 use super::{cerca, identificativo, Identificativo};
 use crate::catalog::CrsRequirement;
@@ -377,10 +377,20 @@ fn unita_e_precisione() {
     let geografico = risolto("EPSG:4326");
     assert_eq!(geografico.kind(), CrsKind::Geographic);
     assert_eq!(geografico.horizontal_unit_to_metre(), None);
-    assert_eq!(
-        geografico.precisione_coordinate(),
-        Some(0.01 / METRES_PER_DEGREE_AT_EQUATOR)
+    // WGS 84: 1 cm sul raggio polare a / (1 - f), circa 8.953e-8 gradi.
+    let wgs84 = geografico.precisione_coordinate().expect("precisione");
+    assert!((wgs84 - 8.953e-8).abs() < 1e-11, "{wgs84}");
+    let senza_ellissoide = ResolvedCrs::from_resolved_parts(
+        "X:2".to_owned(),
+        serde_json::json!({"type": "GeographicCRS"}),
+        CrsKind::Geographic,
+        None,
     );
+    let prudente = senza_ellissoide
+        .precisione_coordinate()
+        .expect("precisione");
+    assert!(prudente <= 0.01 / CONSERVATIVE_CURVATURE_RADIUS_METRES.to_radians());
+    assert!(prudente < wgs84);
     let piedi = ResolvedCrs::from_resolved_parts(
         "X:1".to_owned(),
         serde_json::json!({"type": "ProjectedCRS"}),
@@ -638,5 +648,41 @@ fn i_messaggi_del_dominio_proiettato_non_riportano_la_coordinata() {
             }
         }
         assert!(testo.contains("COORDINATE_OUT_OF_CRS_DOMAIN"), "{testo}");
+    }
+}
+
+/// Per ogni CRS geografico della tabella, il passo in gradi della precisione
+/// vale al piu' 1 cm a terra all'equatore, a 80 gradi e al polo, lungo il
+/// meridiano (`M`) e lungo il parallelo (`N cos(phi)`), su ogni ellissoide.
+/// Prima il passo era quello dell'equatore di WGS 84 e al polo, lungo il
+/// meridiano, valeva fino a 1,0034 cm.
+#[test]
+fn il_passo_in_gradi_non_supera_un_centimetro_ovunque() {
+    for id in builtin_crs_identifiers() {
+        let crs = risolto(&id);
+        if crs.kind() != CrsKind::Geographic {
+            continue;
+        }
+        let passo = crs
+            .precisione_coordinate()
+            .expect("precisione")
+            .to_radians();
+        let ellissoide = crs.ellipsoid().expect("ellissoide");
+        let a = ellissoide.semi_major_axis_metre;
+        let f = 1.0 / ellissoide.inverse_flattening;
+        let e2 = f * (2.0 - f);
+        for latitudine in [0.0_f64, 80.0, 90.0] {
+            let (seno, coseno) = latitudine.to_radians().sin_cos();
+            let w2 = (e2 * seno).mul_add(-seno, 1.0);
+            let meridiano = a * (1.0 - e2) / (w2 * w2.sqrt());
+            let parallelo = a / w2.sqrt() * coseno;
+            for raggio in [meridiano, parallelo] {
+                assert!(
+                    raggio * passo <= 0.01,
+                    "{id} a {latitudine} gradi: {} m",
+                    raggio * passo
+                );
+            }
+        }
     }
 }
