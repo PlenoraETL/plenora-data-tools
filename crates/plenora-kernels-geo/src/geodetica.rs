@@ -194,6 +194,13 @@ fn scarto_del_lato(
     let semiasse = parametri.semi_major_axis_metre;
     let f = 1.0 / parametri.inverse_flattening;
     let e2 = f * (2.0 - f);
+    // Il margine di arrotondamento di `maggioranti_del_lato` (1e-9 relativo)
+    // presuppone un ellissoide terrestre, `1 - e^2 >= 0.99` (tutti quelli
+    // della tabella stanno sopra 0.993): uno molto piu' schiacciato,
+    // fornito dal chiamante, si rifiuta.
+    if 1.0 - e2 < 0.99 {
+        return Err(LATO_TROPPO_LUNGO);
+    }
     let (lunghezza_massima, phi) = maggioranti_del_lato(ellissoide, da, a);
     if !(lunghezza_massima.is_finite() && lunghezza_massima <= LATO_MASSIMO_M) {
         return Err(LATO_TROPPO_LUNGO);

@@ -354,7 +354,9 @@ la topologia delle geodetiche è dimostrabilmente quella del piano:
   con `K L <= 1` la geodetica è un grafico sulla corda che se ne scosta al
   più di `l^2 / 8 * K / cos^3(K L)` (`l` la corda);
 - **dominio accettato**: `S` al più 1000 km, latitudine maggiorata sotto
-  90° e `K L <= 1`; ogni altro lato si rifiuta (`InvalidInput`). Poligoni
+  90° e `K L <= 1`, su un ellissoide terrestre (`1 - e^2 >= 0.99`, da cui
+  dipende il margine di arrotondamento dei maggioranti); ogni altro lato si
+  rifiuta (`InvalidInput`). Poligoni
   catastali, comunali e regionali non ne sono toccati; lo sono lati di
   centinaia di chilometri (confini semplificati di stati) e lati a pochi
   chilometri da un polo;
