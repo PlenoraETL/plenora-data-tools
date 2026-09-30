@@ -1413,11 +1413,12 @@ quello per byte.
     kernel con il margine passato;
   - `pivot` conta le celle d'uscita come righe in ingresso per colonne
     d'uscita (per eccesso: le righe d'uscita sono le chiavi indice
-    distinte, che a secco non si conoscono). Oggi il runner rifiuta
-    `pivot` in validazione e il termine non si usa; vale quando `pivot`
-    entra con un contratto le cui colonne sono esattamente quelle che il
-    kernel produce (con `mapping`, una per voce anche se i dati non la
-    contengono), mai meno;
+    distinte, al più le righe in ingresso, che a secco non si conoscono).
+    Le colonne sono quelle del contratto validato, che il runner accetta
+    solo con `mapping` e che il kernel produce esattamente (una per voce,
+    anche se i dati non la contengono; l'esecuzione verifica lo schema);
+    le misure hanno da 3 a 65 colonne d'uscita, oltre è estrapolazione
+    lineare nelle celle;
   - per `date_extract`, `lookup` e `string_length` (solo profilo wide) la
     crescita per riga fra gli ultimi due campioni supera 1,5: il modello
     resta lineare e copre il campione più grande;

@@ -37,8 +37,9 @@ pub struct Costo {
     pub c_larga_millesimi: u64,
     /// Per cella d'uscita prevista (righe in ingresso per colonne
     /// d'uscita): solo le operazioni la cui larghezza d'uscita la fa la
-    /// config (`pivot`, che oggi il runner rifiuta in validazione: il
-    /// termine vale per un contratto con le colonne esatte del kernel).
+    /// config (`pivot` con `mapping`, il cui contratto validato ha le
+    /// colonne esatte del kernel; le righe in ingresso maggiorano quelle
+    /// d'uscita).
     pub k_millesimi: u64,
     /// Per coppia di righe (sinistra per destra): solo le superlineari.
     pub p_millesimi: u64,

@@ -305,6 +305,91 @@ fn un_sort_che_non_sta_in_memoria_si_rifiuta_anche_con_la_variante_spilled() {
     );
 }
 
+/// `pivot` con `mapping` nel runner: il modello conta le celle d'uscita,
+/// righe in ingresso per colonne del contratto validato (indice piu' una
+/// colonna per voce), quindi la previsione cresce con il `mapping` e copre
+/// i byte nuovi dell'uscita.
+#[test]
+fn il_pivot_con_mapping_conta_le_celle_del_contratto() {
+    // Formato EAV: chiave testuale (una ogni quattro righe), nome
+    // dell'attributo fra 32, valore.
+    let n = 20_000_usize;
+    let t = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("chiave", DataType::Utf8, false),
+            Field::new("nome", DataType::Utf8, false),
+            Field::new("v", DataType::Float64, false),
+        ])),
+        vec![
+            Arc::new(StringArray::from_iter_values(
+                (0..n).map(|riga| format!("k{:06}", riga / 4)),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                (0..n).map(|riga| format!("a{:02}", riga % 32)),
+            )),
+            Arc::new(Float64Array::from_iter_values((0..n).map(|riga| {
+                f64::from(u32::try_from(riga % 97).expect("valore"))
+            }))),
+        ],
+    )
+    .expect("tabella");
+    let costo = costo_di("table.pivot").expect("modello").in_memoria;
+    assert!(costo.k_millesimi > 0);
+    let mut precedente = 0;
+    for voci in [2_usize, 8, 32] {
+        let mapping: serde_json::Map<String, Value> = (0..voci)
+            .map(|voce| (format!("a{voce:02}"), json!(format!("c{voce}"))))
+            .collect();
+        let pipeline = piano(
+            &["t"],
+            vec![passo(
+                "p",
+                "table.pivot",
+                &["t"],
+                json!({"index_col": "chiave", "pivot_col": "nome", "value_col": "v",
+                       "aggr_func": "sum", "mapping": mapping}),
+            )],
+            &["p"],
+            BUDGET_AMPIO,
+        );
+        let esito = esegui(&pipeline, &[("t", t.clone())]).expect("pivot");
+        let passo = &esito.report.passi[0];
+        let colonne = u64::try_from(voci + 1).expect("colonne");
+        assert_eq!(
+            output_colonne(&esito, "p"),
+            voci + 1,
+            "indice piu' una colonna per voce"
+        );
+        let senza_celle = Ingresso {
+            righe: righe(&t),
+            byte: byte(&t),
+            ..Ingresso::default()
+        };
+        let con_celle = Ingresso {
+            celle: righe(&t) * colonne,
+            ..senza_celle
+        };
+        // Il runner usa byte in ingresso mai sotto i byte vivi.
+        assert!(passo.byte_previsti >= costo.picco(con_celle), "{passo:?}");
+        assert!(costo.picco(con_celle) > costo.picco(senza_celle));
+        assert!(
+            passo.byte_previsti >= passo.byte_output_esclusivi,
+            "{passo:?}"
+        );
+        assert!(passo.byte_previsti > precedente, "{voci} voci");
+        precedente = passo.byte_previsti;
+    }
+}
+
+fn output_colonne(esito: &Esito, nome: &str) -> usize {
+    esito
+        .outputs
+        .iter()
+        .find(|(uscita, _)| uscita == nome)
+        .map(|(_, tabella)| tabella.num_columns())
+        .expect("uscita")
+}
+
 #[test]
 fn un_cross_join_oltre_il_budget_si_rifiuta_con_passo_e_operazione() {
     let a = tabella(2_000, 8, 8);
