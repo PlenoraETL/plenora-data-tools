@@ -16,7 +16,8 @@ fn split_column_riferimento(
     config: &SplitColumn,
     limits: &Limits,
 ) -> Result<RecordBatch> {
-    if config.delimiter.is_empty() {
+    let delimiter = config.delimitatore();
+    if delimiter.is_empty() {
         return Err(PlenoraError::InvalidPlan("delimiter vuoto".into()));
     }
     if config.new_columns.is_empty() {
@@ -38,10 +39,13 @@ fn split_column_riferimento(
     for name in &config.new_columns {
         validate_output_name(name)?;
     }
+    // La regola sui parametri senza effetto e' condivisa, non oracolata.
+    config.verifica_parametri()?;
     let input = utf8_column(batch, &config.column)?;
     let requested_parts = config.new_columns.len();
-    let split_limit = if config.max_splits > 0 {
-        usize::try_from(config.max_splits)
+    let max_splits = config.max_splits.unwrap_or(-1);
+    let split_limit = if max_splits > 0 {
+        usize::try_from(max_splits)
             .unwrap_or(usize::MAX)
             .saturating_add(1)
             .min(requested_parts)
@@ -56,10 +60,7 @@ fn split_column_riferimento(
             }
             continue;
         }
-        let parts: Vec<&str> = input
-            .value(row)
-            .splitn(split_limit, &config.delimiter)
-            .collect();
+        let parts: Vec<&str> = input.value(row).splitn(split_limit, delimiter).collect();
         for (index, output) in outputs.iter_mut().enumerate() {
             output.push(parts.get(index).map(|value| (*value).to_owned()));
         }
@@ -87,9 +88,9 @@ fn confronta(batch: &RecordBatch, config: &SplitColumn, limits: &Limits) {
 fn config(delimiter: &str, new_columns: &[&str], max_splits: i64) -> SplitColumn {
     SplitColumn {
         column: "s".into(),
-        delimiter: delimiter.into(),
+        delimiter: Some(delimiter.into()),
         new_columns: new_columns.iter().map(|nome| (*nome).to_owned()).collect(),
-        max_splits,
+        max_splits: (max_splits != -1).then_some(max_splits),
     }
 }
 
@@ -186,9 +187,9 @@ proptest! {
         let nomi = (0..colonne).map(|indice| format!("c{indice}")).collect::<Vec<_>>();
         let config = SplitColumn {
             column: "s".into(),
-            delimiter: delimiter.into(),
+            delimiter: Some(delimiter.into()),
             new_columns: nomi,
-            max_splits,
+            max_splits: (max_splits != -1).then_some(max_splits),
         };
         confronta(&batch, &config, &Limits::default());
     }

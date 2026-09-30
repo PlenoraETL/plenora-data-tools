@@ -60,9 +60,7 @@ use plenora_kernels_table::quality::{
     assert_not_null, assert_range, assert_regex, assert_schema, assert_unique, AssertNotNull,
     AssertRange, AssertRegex, AssertSchema, AssertUnique, SchemaExpectation,
 };
-use plenora_kernels_table::reshape::{
-    explode, transpose, unnest, Explode, HeterogeneousTypePolicy, Transpose, Unnest,
-};
+use plenora_kernels_table::reshape::{explode, transpose, unnest, Explode, Transpose, Unnest};
 use plenora_kernels_table::security::{
     hmac_sha256, md5_hash, sha256_hash, stable_fingerprint, FingerprintAlgorithm, HashNullPolicy,
     HmacNullPolicy, HmacSha256, Md5Hash, Sha256Hash, StableFingerprint,
@@ -216,7 +214,7 @@ fn align_config() -> AlignSchema {
     });
     AlignSchema {
         columns,
-        keep_extra: false,
+        keep_extra: Some(false),
     }
 }
 
@@ -533,7 +531,7 @@ fn main() {
     );
 
     let sample_config = Sample {
-        n: 100,
+        n: None,
         fraction: Some(0.1),
         random_state: Some(42),
         stratify_column: None,
@@ -550,7 +548,7 @@ fn main() {
     let concat_columns_config = ConcatColumns {
         columns: vec!["grp".into(), "text".into()],
         output_column: "combined".into(),
-        separator: "-".into(),
+        separator: Some("-".into()),
         skip_null: true,
     };
     sweep_unary(
@@ -563,9 +561,9 @@ fn main() {
 
     let split_config = SplitColumn {
         column: "path".into(),
-        delimiter: "/".into(),
+        delimiter: Some("/".into()),
         new_columns: vec!["p1".into(), "p2".into(), "p3".into()],
-        max_splits: -1,
+        max_splits: None,
     };
     sweep_unary(
         &mut results,
@@ -596,17 +594,17 @@ fn main() {
         conditions: vec![
             Condition {
                 operator: Operator::Lt,
-                value: json!(2500.0),
+                value: Some(json!(2500.0)),
                 result: json!("low"),
             },
             Condition {
                 operator: Operator::Lt,
-                value: json!(5000.0),
+                value: Some(json!(5000.0)),
                 result: json!("mid"),
             },
             Condition {
                 operator: Operator::Lt,
-                value: json!(7500.0),
+                value: Some(json!(7500.0)),
                 result: json!("high"),
             },
         ],
@@ -653,7 +651,7 @@ fn main() {
     let transpose_config = Transpose {
         id_column: None,
         output_columns: Vec::new(),
-        type_policy: HeterogeneousTypePolicy::Reject,
+        type_policy: None,
     };
     let transpose_input = transpose_fixture(4_000);
     results.push(measure_record(
@@ -665,7 +663,7 @@ fn main() {
     ));
 
     // --- Join --------------------------------------------------------------------------
-    let concat_config = Concat { ignore_index: true };
+    let concat_config = Concat { ignore_index: None };
     results.push(measure_record(
         "table.concat",
         M1,
@@ -715,7 +713,7 @@ fn main() {
         output_column: "md5_hash".into(),
         normalize: true,
         null_policy: HashNullPolicy::Empty,
-        null_literal: String::new(),
+        null_literal: None,
     };
     sweep_unary(
         &mut results,
@@ -730,7 +728,7 @@ fn main() {
         output_column: "sha256_hash".into(),
         normalize: true,
         null_policy: HashNullPolicy::Empty,
-        null_literal: String::new(),
+        null_literal: None,
     };
     sweep_unary(
         &mut results,

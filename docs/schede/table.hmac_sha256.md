@@ -57,13 +57,16 @@ In validazione, `InvalidPlan`:
 - una colonna assente o non leggibile come testo;
 - `output_column` non valido;
 - config con campi sconosciuti o `null_policy` fuori elenco;
-- (dal runner) la variabile `key_env` non esiste o è vuota.
+- (dal runner) la variabile `key_env` non esiste, è vuota o il suo valore
+  non è UTF-8 valido: tre cause distinte, lette dalla stessa funzione che
+  usa il kernel. Il messaggio non nomina la variabile e non contiene la
+  chiave.
 
 In esecuzione:
 
-- `InvalidPlan`: la chiave non è disponibile (variabile rimossa o svuotata
-  dopo la validazione, o valore non UTF-8). Il messaggio non nomina la
-  variabile e non contiene la chiave;
+- `InvalidPlan`: la chiave non è disponibile (variabile rimossa, svuotata
+  o resa non UTF-8 dopo la validazione), con le stesse tre cause. Il
+  messaggio non nomina la variabile e non contiene la chiave;
 - `Schema`: una cella che non si converte in testo (`binary` non UTF-8,
   data o istante fuori intervallo). Con `null` le colonne dopo la prima
   nulla di una riga non si leggono.

@@ -10,7 +10,7 @@ saltano (default) o contano come testo vuoto.
 | --- | --- | --- | --- | --- |
 | `columns` | lista di stringhe | obbligatorio | colonne `utf8` dell'ingresso, almeno una, senza ripetizioni, al più 4096 | parti da unire, nell'ordine |
 | `output_column` | stringa | `"concatenated"` | nome non vuoto, al più 1024 byte | colonna d'uscita |
-| `separator` | stringa | `" "` | al più `max_string_bytes` byte, anche vuota | testo messo fra due parti |
+| `separator` | stringa | `" "` | al più `max_string_bytes` byte, anche vuota; solo con almeno due colonne | testo messo fra due parti |
 | `skip_null` | booleano | `true` | `true`, `false` | salta i null invece di trattarli come testo vuoto |
 
 Con `skip_null` il separatore sta solo fra le parti non nulle, e una riga
@@ -40,7 +40,8 @@ In validazione, `InvalidPlan`:
 
 - `columns` assente, vuota, con un nome ripetuto o con più di 4096 nomi;
 - una colonna di `columns` assente o non `utf8`;
-- `separator` oltre `max_string_bytes`;
+- `separator` oltre `max_string_bytes`, o scritto con una sola colonna in
+  `columns` (non avrebbe effetto);
 - `output_column` vuoto, di soli spazi o oltre 1024 byte;
 - config con campi sconosciuti.
 

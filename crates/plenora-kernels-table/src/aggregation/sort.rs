@@ -224,12 +224,32 @@ pub fn sort_permutation(batch: &RecordBatch, config: &Sort) -> Result<Vec<usize>
 pub struct TopN {
     /// Chiavi d'ordinamento, come [`Sort::columns`].
     pub columns: Vec<String>,
-    /// Righe da tenere, da `0` (l'analisi lo limita a `max_rows`).
+    /// Righe da tenere, da `1` (l'analisi lo limita a `max_rows`): con `0`
+    /// l'uscita e' sempre vuota e `columns` e `descending` non avrebbero
+    /// effetto ([`TopN::verifica_parametri`]).
     pub n: u64,
     /// `true` tiene i valori piu' grandi (default `false`): come
     /// `ascending: false` di [`Sort`], con i null in testa.
     #[serde(default)]
     pub descending: bool,
+}
+
+impl TopN {
+    /// `n = 0` da' sempre una tabella vuota: ordinamento e verso non
+    /// avrebbero effetto, quindi si rifiuta. La chiamano il kernel e
+    /// l'analisi dei contratti.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` se `n` e' 0.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        if self.n == 0 {
+            return Err(PlenoraError::InvalidPlan(
+                "n 0 da' sempre una tabella vuota: columns e descending senza effetto".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// `table.top_n`: le prime `n` righe secondo l'ordinamento di [`sort`].
@@ -238,12 +258,12 @@ pub struct TopN {
 /// prime `min(n, righe)` righe: `select_nth_unstable_by` partiziona in
 /// O(righe) e ordina solo le prime `n`. Lo spareggio sull'indice originale
 /// rende l'ordine totale, quindi la permutazione coincide con quella del
-/// sort stabile completo. `n = 0` da' un batch vuoto con lo stesso schema.
+/// sort stabile completo. `n = 0` si rifiuta ([`TopN::verifica_parametri`]).
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `columns` vuoto, oppure `n` non rappresentabile come
-///   `usize`;
+/// - `InvalidPlan`: `n = 0`, `columns` vuoto, oppure `n` non
+///   rappresentabile come `usize`;
 /// - `Schema`: una colonna di `columns` assente dallo schema, di tipo non
 ///   ordinabile o dictionary con una chiave fuori dal dizionario (stessa
 ///   prevalidazione deterministica di `sort`);
@@ -251,6 +271,7 @@ pub struct TopN {
 /// - `ResourceLimit`: indice di riga oltre `u32::MAX` (`select_rows`);
 /// - `Internal`: un confronto fallito dopo la prevalidazione.
 pub fn top_n(batch: &RecordBatch, config: &TopN) -> Result<RecordBatch> {
+    config.verifica_parametri()?;
     let indices = config
         .columns
         .iter()

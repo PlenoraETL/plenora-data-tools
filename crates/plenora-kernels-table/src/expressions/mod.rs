@@ -24,7 +24,7 @@ mod temporal;
 use serde::Deserialize;
 use serde_json::Value;
 
-pub use interpreter::{expression, validate};
+pub use interpreter::{expression, expression_con_effetti, validate};
 
 /// Tipo della colonna prodotta da `table.expression`. Con un tipo
 /// dichiarato l'espressione deve poterlo produrre: il kernel non converte.
@@ -62,11 +62,184 @@ pub struct ExpressionTransform {
     /// Tipo della colonna d'uscita; default `auto`.
     #[serde(default = "default_output_type")]
     pub output_type: OutputType,
+    /// Che cosa rende una divisione per un divisore zero: `"null"` (default)
+    /// o `"error"` ([`crate::OnDivisionByZero`]). Senza divisioni
+    /// nell'espressione non avrebbe effetto: scritto si rifiuta
+    /// ([`ExpressionTransform::verifica_parametri`]).
+    #[serde(default)]
+    pub on_division_by_zero: Option<crate::OnDivisionByZero>,
+}
+
+impl ExpressionTransform {
+    /// La politica sulla divisione per zero: quella scritta, o `null`.
+    #[must_use]
+    pub fn divisione_per_zero(&self) -> crate::OnDivisionByZero {
+        self.on_division_by_zero.unwrap_or_default()
+    }
+
+    /// Regole sulla sola config, condivise da kernel e analisi dei
+    /// contratti: `on_division_by_zero` scritto senza una divisione
+    /// nell'espressione non ha effetto e si rifiuta; un divisore letterale
+    /// zero e' un errore di piano con ogni politica
+    /// ([`reject_literal_zero_divisor`]); i letterali contro i limiti
+    /// ([`verifica_limiti_letterali`]).
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per ciascuna delle regole.
+    pub fn verifica_parametri(&self, limits: &crate::Limits) -> plenora_core::Result<()> {
+        if self.on_division_by_zero.is_some() && !contiene_divisione(&self.expression) {
+            return Err(plenora_core::PlenoraError::InvalidPlan(
+                "on_division_by_zero senza effetto: l'espressione non divide".into(),
+            ));
+        }
+        reject_literal_zero_divisor(&self.expression)?;
+        verifica_limiti_letterali(&self.expression, limits)
+    }
+}
+
+/// Figli diretti di un nodo, nell'ordine dell'albero.
+fn figli(expr: &Expression) -> Vec<&Expression> {
+    match expr {
+        Expression::Column { .. } | Expression::Literal { .. } => Vec::new(),
+        Expression::Unary { value, .. } => vec![value],
+        Expression::Binary { left, right, .. } => vec![left, right],
+        Expression::Function { args, .. } => args.iter().collect(),
+        Expression::Case {
+            branches,
+            else_value,
+        } => branches
+            .iter()
+            .flat_map(|branch| [&branch.when, &branch.then])
+            .chain(std::iter::once(else_value.as_ref()))
+            .collect(),
+    }
+}
+
+/// `true` se l'albero contiene una divisione.
+fn contiene_divisione(expr: &Expression) -> bool {
+    matches!(
+        expr,
+        Expression::Binary {
+            op: BinaryOperator::Divide,
+            ..
+        }
+    ) || figli(expr).into_iter().any(contiene_divisione)
+}
+
+/// I letterali contro i limiti, prima dei dati.
+///
+/// Un testo letterale oltre `max_string_bytes`, un pattern letterale di
+/// `regex_replace` oltre `max_regex_bytes`. Un pattern calcolato dalle
+/// colonne si controlla riga per riga in valutazione (`ResourceLimit`).
+///
+/// # Errors
+///
+/// `InvalidPlan` per il primo letterale oltre il suo limite.
+pub fn verifica_limiti_letterali(
+    expr: &Expression,
+    limits: &crate::Limits,
+) -> plenora_core::Result<()> {
+    use plenora_core::error::PlenoraError;
+    match expr {
+        Expression::Literal {
+            value: Value::String(testo),
+        } if testo.len() > limits.max_string_bytes => {
+            return Err(PlenoraError::InvalidPlan(
+                "testo letterale oltre max_string_bytes".into(),
+            ));
+        }
+        Expression::Function {
+            name: Function::RegexReplace,
+            args,
+        } => {
+            if let Some(Expression::Literal {
+                value: Value::String(pattern),
+            }) = args.get(1)
+            {
+                if pattern.len() > limits.max_regex_bytes {
+                    return Err(PlenoraError::InvalidPlan(
+                        "regex_replace: pattern oltre max_regex_bytes".into(),
+                    ));
+                }
+            }
+        }
+        _ => {}
+    }
+    for figlio in figli(expr) {
+        verifica_limiti_letterali(figlio, limits)?;
+    }
+    Ok(())
+}
+
+/// Contesto di una valutazione: la politica sulla divisione per zero, se
+/// nella riga corrente una divisione l'ha applicata, e i limiti dei testi e
+/// dei pattern calcolati. Lo usano entrambi i percorsi (generico e fast),
+/// con lo stesso effetto.
+pub(crate) struct Contesto<'l> {
+    divisione: crate::OnDivisionByZero,
+    zero_nella_riga: std::cell::Cell<bool>,
+    limits: &'l crate::Limits,
+}
+
+impl<'l> Contesto<'l> {
+    pub(crate) fn new(config: &ExpressionTransform, limits: &'l crate::Limits) -> Self {
+        Self {
+            divisione: config.divisione_per_zero(),
+            zero_nella_riga: std::cell::Cell::new(false),
+            limits,
+        }
+    }
+
+    /// Esito di una divisione: con la politica `null` l'errore di divisione
+    /// per zero diventa `null` (dato da `nullo`) e la riga si segna; ogni
+    /// altro esito passa invariato.
+    pub(crate) fn dividi<T>(
+        &self,
+        esito: plenora_core::Result<T>,
+        nullo: impl FnOnce() -> T,
+    ) -> plenora_core::Result<T> {
+        match esito {
+            Err(errore)
+                if self.divisione == crate::OnDivisionByZero::Null
+                    && crate::e_divisione_per_zero(&errore) =>
+            {
+                self.zero_nella_riga.set(true);
+                Ok(nullo())
+            }
+            altro => altro,
+        }
+    }
+
+    /// Un testo calcolato entro `max_string_bytes`.
+    pub(crate) fn verifica_testo(&self, byte: usize) -> plenora_core::Result<()> {
+        crate::verifica_testo_prodotto("table.expression", byte, self.limits)
+    }
+
+    /// Un pattern calcolato di `regex_replace` entro `max_regex_bytes`.
+    pub(crate) fn verifica_pattern(&self, byte: usize) -> plenora_core::Result<()> {
+        if byte > self.limits.max_regex_bytes {
+            return Err(plenora_core::PlenoraError::ResourceLimit(
+                "regex_replace: pattern calcolato oltre max_regex_bytes".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Azzera il segno della riga e dice se la riga appena valutata ha
+    /// applicato la politica `null`.
+    pub(crate) const fn chiudi_riga(&self) -> bool {
+        self.zero_nella_riga.replace(false)
+    }
 }
 
 /// Nodo dell'espressione (JSON con il campo `kind`).
+///
+/// Un campo che il nodo non conosce si rifiuta: senza `deny_unknown_fields`
+/// serde lo ignorerebbe (un `{"kind": "column", "name": "a", "type": "int"}`
+/// si leggeva come la sola colonna).
 #[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Expression {
     /// Valore di una colonna: `Boolean` e' booleano; `Int64`, `UInt64`,
     /// `Float64`, `Decimal128`, `Date32` e `Timestamp(ms)` sono numeri; gli
@@ -655,30 +828,134 @@ mod tests {
                 "nessuna diagnostica row-scoped per errore di configurazione"
             );
         }
-        // Controllo: divisore dipendente dalla riga -> row-scoped invariato.
-        let cfg = config(
+        // Controllo: divisore dipendente dalla riga -> row-scoped con `error`.
+        let cfg = con_politica(
             bin(
                 "divide",
                 col("i"),
                 bin("multiply", col("i"), lit(json!(0.0))),
             ),
-            None,
+            "error",
         );
         let error = expression(&batch, &cfg).expect_err("divisione calcolata");
         assert!(error.row_diagnostics().is_some());
+        // Letterale zero: errore di piano anche con la politica `null`.
+        let cfg = con_politica(bin("divide", col("n"), lit(json!(0))), "null");
+        assert!(matches!(
+            expression(&batch, &cfg),
+            Err(PlenoraError::InvalidPlan(_))
+        ));
+    }
+
+    #[allow(clippy::needless_pass_by_value)] // Valore in linea con `json!` nei casi.
+    fn con_politica(expression: Value, politica: &str) -> ExpressionTransform {
+        serde_json::from_value(json!({"output_column": "out", "expression": expression,
+                                      "on_division_by_zero": politica}))
+        .expect("config valida")
+    }
+
+    #[test]
+    fn divisione_per_zero_di_default_vale_null_nel_nodo_e_si_conta() {
+        // Default (decisione dell'utente): la divisione vale null nel nodo, e
+        // il null segue le regole dei null. Righe 0, 2, 3, 4, 5 dividono per
+        // zero; la riga 1 ha `i` null e non conta.
+        let batch = fixture();
+        let divisione = bin(
+            "divide",
+            col("i"),
+            bin("multiply", col("i"), lit(json!(0.0))),
+        );
+        for cfg in [
+            config(divisione.clone(), None),
+            con_politica(divisione.clone(), "null"),
+        ] {
+            let (uscita, effetti) =
+                expression_con_effetti(&batch, &cfg, &crate::Limits::default()).expect("null");
+            assert_eq!(effetti.righe_divisione_per_zero, 5);
+            assert_eq!(uscita.column_by_name("out").expect("out").null_count(), 6);
+            // Fast e generico: stessa uscita, stesso conteggio.
+            let (generico, effetti_generico) =
+                interpreter::expression_generic_con_effetti(&batch, &cfg).expect("generico");
+            assert_eq!(uscita, generico);
+            assert_eq!(effetti, effetti_generico);
+            let (fast, effetti_fast) = FastProgram::compile(&cfg.expression, &batch)
+                .run_auto_con_effetti(&batch, &cfg)
+                .expect("fast");
+            assert_eq!(uscita, fast);
+            assert_eq!(effetti, effetti_fast);
+        }
+        // Null nel nodo, non nella riga: `coalesce(a / 0, -1)` da' -1 e la
+        // riga si conta comunque.
+        let cfg = config(
+            json!({"kind": "function", "name": "coalesce",
+                   "args": [divisione, lit(json!(-1))]}),
+            None,
+        );
+        let (uscita, effetti) =
+            expression_con_effetti(&batch, &cfg, &crate::Limits::default()).expect("coalesce");
+        assert_eq!(effetti.righe_divisione_per_zero, 5);
+        let valori = uscita
+            .column_by_name("out")
+            .expect("out")
+            .as_any()
+            .downcast_ref::<plenora_core::arrow::array::Float64Array>()
+            .expect("f64")
+            .clone();
+        assert_eq!(valori.null_count(), 0);
+        assert!(valori.iter().all(|valore| valore == Some(-1.0)));
+        let (generico, effetti_generico) =
+            interpreter::expression_generic_con_effetti(&batch, &cfg).expect("generico");
+        assert_eq!(uscita, generico);
+        assert_eq!(effetti, effetti_generico);
+        // Due divisioni per zero nella stessa riga: la riga si conta una volta.
+        let cfg = config(bin("add", divisione.clone(), divisione.clone()), None);
+        let (_, effetti) =
+            expression_con_effetti(&batch, &cfg, &crate::Limits::default()).expect("due");
+        assert_eq!(effetti.righe_divisione_per_zero, 5);
+        // Un ramo `case` non scelto non conta.
+        let cfg = config(
+            json!({"kind": "case",
+                   "branches": [{"when": lit(json!(false)), "then": divisione}],
+                   "else_value": lit(json!(1))}),
+            None,
+        );
+        let (_, effetti) =
+            expression_con_effetti(&batch, &cfg, &crate::Limits::default()).expect("case");
+        assert_eq!(effetti.righe_divisione_per_zero, 0);
+    }
+
+    #[test]
+    fn on_division_by_zero_senza_divisioni_si_rifiuta() {
+        let batch = fixture();
+        for politica in ["null", "error"] {
+            let cfg = con_politica(bin("add", col("n"), lit(json!(1))), politica);
+            let errore = expression(&batch, &cfg).expect_err("senza divisioni");
+            assert!(
+                errore
+                    .to_string()
+                    .contains("on_division_by_zero senza effetto"),
+                "{errore}"
+            );
+        }
+        // Un valore sconosciuto si rifiuta dalla config.
+        assert!(serde_json::from_value::<ExpressionTransform>(json!({
+            "output_column": "out", "on_division_by_zero": "zero",
+            "expression": bin("divide", col("n"), col("i"))}))
+        .is_err());
     }
 
     #[test]
     fn divisione_per_zero_riporta_diagnostica_row_scoped() {
         let batch = fixture();
-        // Divisore dipendente dalla riga (i * 0): il rifiuto resta row-scoped.
-        let cfg = config(
+        // Divisore dipendente dalla riga (i * 0): con `error` il rifiuto
+        // resta row-scoped.
+        let cfg = con_politica(
             bin(
                 "divide",
                 col("i"),
                 bin("multiply", col("i"), lit(json!(0.0))),
             ),
-            None,
+            "error",
         );
         // Righe difettose: 0, 2, 3, 4, 5 (riga 1 null -> null, nessun errore).
         let error = expression(&batch, &cfg).expect_err("divisione per zero");

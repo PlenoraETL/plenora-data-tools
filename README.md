@@ -1028,10 +1028,37 @@ su funzioni che non li usano; `chars_start`, `chars_end` e `mask_char` di
 `mask_data` fuori da `mask_type=custom`; `value` di `fill_na` con
 `ffill`/`bfill`; `offset` di `window_function` fuori da `lag`/`lead`;
 `ddof` di `rolling_window` fuori da `stddev`; `output_column` ed
-`extract_all` di `string_extract` con gruppi con nome). Un parametro
+`extract_all` di `string_extract` con gruppi con nome; `ignore_index` di
+`concat` con ogni valore; `n` di `sample` con `fraction`, `random_state`
+senza strati su un campione sempre vuoto; `null_literal` di `md5_hash` e
+`sha256_hash` fuori da `null_policy=literal`; `invalid` e `ambiguous`
+delle operazioni sulle date con ogni valore; `default` di `align_schema`
+su una colonna che esiste, `keep_extra` senza colonne non dichiarate;
+`value` di `filter` e `conditional` con `isnull`/`notnull`; `errors` di
+`type_cast` su `str`, `binary_utf8`, `dictionary_utf8`; `separator` di
+`concat_columns` con una colonna e di `table_diff` con al più una colonna
+confrontata; `delimiter` di `split_column` con una colonna d'uscita e
+`max_splits` che non riduce le parti; `width` 0 di `string_pad`; `n` 0 di
+`top_n` e `offset` di `limit` con `n` 0; `min_rows` 0 di
+`assert_cardinality`; `tolerance` 0 di `asof_join` con `allow_exact=false`;
+`type_policy` di `melt` e `transpose` su colonne omogenee; `alphabetical` di
+`reorder_columns` con al più una colonna restante; `on_division_by_zero`
+di `formula` ed `expression` senza divisioni; i nomi d'uscita che farebbero
+sparire una colonna scritta prima: aggregazioni con lo stesso nome o con il
+nome di una chiave di `aggregate`, statistiche e parti ripetute di
+`statistics` e `date_extract`, due voci di `mask_data` sulla stessa colonna
+senza `overwrite`; `drop_columns` e `rename` su colonne assenti, `rename` di
+una colonna su se stessa, una voce vuota nell'`index_col` di `pivot`; un
+campo sconosciuto dentro un nodo di `expression`). Un parametro
 assente prende il suo default; uno scritto e senza effetto si rifiuta,
 nell'analisi e nel kernel, con la stessa funzione (`verifica_parametri`,
-`verifica_offset`, `verifica_ascending`, `verifica_gruppi_con_nome`). Le
+`verifica_offset`, `verifica_ascending`, `verifica_gruppi_con_nome`,
+`verifica_politiche`, `verifica_valore`, `verifica_null_literal`,
+`verifica_type_policy`, `verifica_separatore`, `verifica_colonne`,
+`verifica_parti`, `nomi_uscita`); il censimento di ogni campo di ogni
+config tabellare è in `crates/plenora-pipeline/tests/censimento_parametri.rs`
+e la parità analisi–kernel di ogni regola in
+`crates/plenora-pipeline/tests/parametri_senza_effetto.rs`. Le
 asserzioni vacue (`assert_not_null`, `assert_unique`, `assert_schema` senza
 colonne, `assert_range` senza estremi, `assert_cardinality` senza vincoli,
 `assert_metadata` senza chiavi, `conditional` senza condizioni, `sha256_hash`
@@ -1041,14 +1068,38 @@ omonimi, `rename` con una sorgente ripetuta, `explode` con
 `max_columns`; `amount` di `date_add` che nessuna data sopporta, secondo
 intercalare dell'ultimo giorno compreso (`dates::verifica_amount`); nomi
 delle regole di `validate_rules` oltre 1024 byte; in `expression`, arietà
-delle funzioni, pattern letterali di `regex_replace` e indici letterali
-negativi di `substring`, questi ultimi solo dove la valutazione li
-guarderebbe (nessun argomento che li precede, o la sostituzione, solo
-null).
+delle funzioni, pattern letterali di `regex_replace` (sintassi e
+`max_regex_bytes`), testi letterali oltre `max_string_bytes`, divisori
+letterali zero e indici letterali negativi di `substring`, questi ultimi
+solo dove la valutazione li guarderebbe (nessun argomento che li precede, o
+la sostituzione, solo null).
+
+**Testi e regex contro i limiti.** I testi e i pattern della config
+(separatori, formati, valori sostitutivi, valori di `lookup`, `fill_na`,
+`conditional`, `bin`, `align_schema`, pattern di `replace`, `assert_regex`,
+`validate_rules`, `string_extract` ed `expression`) si confrontano con
+`max_string_bytes` e `max_regex_bytes` in analisi. I testi che crescono con
+i dati li controlla il kernel, con `ResourceLimit`, prima di pubblicarli:
+`replace` con regex, `concat_columns`, `string_pad`, `text_normalize`,
+`melt`, `transpose`, i testi calcolati da `expression` e `formula`, `concat`
+di `aggregate` e `pivot`, `_diff_columns` e `_diff_old_values` di
+`table_diff`, `extract_all` di `string_extract`, `mask_data`,
+`flatten_json`; un pattern di `regex_replace` calcolato dalle colonne si
+confronta con `max_regex_bytes` riga per riga. Il testo scritto da un
+formato di data non cresce con la cella: l'analisi ne limita la lunghezza
+per eccesso (i letterali per la loro lunghezza, ogni campo 64 byte) e il
+kernel non la ricontrolla. I default dei due limiti sono uno solo per il
+piano e per i kernel (`plenora_core::limits::DEFAULT_MAX_STRING_BYTES`, 16
+MiB, e `DEFAULT_MAX_REGEX_BYTES`, 64 KiB; prima i kernel avevano 4096 byte
+per le regex).
 
 Il runner tiene un solo controllo proprio, perché non riguarda la config ma
 l'ambiente del processo: la variabile `key_env` di `table.hmac_sha256`
-deve esistere e non essere vuota.
+deve esistere, non essere vuota ed essere UTF-8. La legge la stessa
+funzione del kernel (`security::carica_chiave_hmac`), con una causa per
+ciascuno dei tre rifiuti e senza il nome della variabile né il valore:
+prima il runner accettava un valore non UTF-8 che il kernel poi trattava
+come variabile assente.
 
 ### Esecuzione
 
@@ -1058,7 +1109,10 @@ per arco, colonne, nomi ripetuti e fattore di espansione si controllano
 sui dati; il fattore, sulla base che il catalogo dichiara per l'operazione
 (`expansion_constraint`), non per quelle che il catalogo ne esenta (righe
 da tutto l'ingresso, come `polygonize`, o in numero fisso, come `dissolve`
-e `reconcile`). Ogni tabella si libera appena ha girato il suo ultimo
+e `reconcile`) né per `melt`, le cui righe sono le righe d'ingresso per le
+colonne valore, fissate da config e schema: al posto del fattore il runner
+verifica che l'uscita abbia esattamente quelle righe
+([«Fattore di espansione»](#fattore-di-espansione)). Ogni tabella si libera appena ha girato il suo ultimo
 consumatore; un'uscita che nessuno usa si libera subito, un input mai usato
 prima del primo passo.
 
@@ -1066,12 +1120,86 @@ Il resoconto dà per passo operazione, righe in ingresso e in uscita,
 variante del kernel, picco previsto, margine passato al kernel, tabelle
 sfrattate e rilette, byte nuovi dell'output (allocazioni che nessuna
 tabella residente raggiungeva prima del passo), byte vivi con l'output e
-dopo i rilasci. `byte_vivi` (`plenora_core::memoria`) somma le allocazioni
+dopo i rilasci, e le righe in cui una divisione di `formula` o
+`expression` ha trovato un divisore zero (`righe_divisione_per_zero`, un
+conteggio senza valori: [«Divisione per zero»](#divisione-per-zero)).
+`byte_vivi` (`plenora_core::memoria`) somma le allocazioni
 Arrow delle tabelle residenti una volta ciascuna, per inizio
 dell'allocazione e capacità, figli compresi: una slice, una rinomina o le
 colonne di un batch letto da Arrow IPC non aggiungono nulla. È la stessa
 misura con cui i kernel stimano i byte di un batch
 (`spill::estimated_batch_bytes`).
+
+### Divisione per zero
+
+**Semantica dichiarata** (decisione dell'utente): in `table.formula` e
+`table.expression` una divisione con operandi non null e divisore zero
+vale null di default; il piano chiede l'errore con
+`"on_division_by_zero": "error"`. Non è un null silenzioso: il kernel conta
+le righe in cui è successo e il runner le riporta nel resoconto del passo
+(`ReportPasso::righe_divisione_per_zero`), con entrambe le politiche (con
+`error` un passo riuscito ne ha zero, perché la prima lo fa fallire con la
+diagnostica per riga `evaluation.division_by_zero`).
+
+- In `expression` il null è quello del nodo della divisione e segue le
+  regole dei null: `coalesce(a / b, 0)` dà 0, un ramo di `case` non scelto
+  non si valuta e non conta; una riga con più divisioni per zero conta una
+  volta. In `formula` ogni operatore propaga il null, quindi la riga intera
+  diventa null.
+- Un divisore letterale zero (`x / 0`, `x / -0.0`) resta un errore di piano
+  con ogni politica, in validazione (per `expression` prima lo vedeva solo
+  il kernel, in esecuzione).
+- `on_division_by_zero` scritto in una formula o un'espressione senza
+  divisioni si rifiuta, come ogni parametro senza effetto; un valore diverso
+  da `"null"` ed `"error"` si rifiuta dalla config.
+- Non ci sono modulo né divisione intera: `/` è l'unica divisione.
+  `power(0, -1)` (infinito) e un quoziente che trabocca restano risultati non
+  finiti (`evaluation.non_finite_result`), non divisioni per zero.
+
+`table.formula` emette diagnostica per riga solo con `"error"` (la
+divisione per zero è il suo unico rifiuto per riga), e il catalogo lo
+dichiara (`emits_row_diagnostics`). Semantica 3 per `formula`, 4 per
+`expression`.
+
+### Fattore di espansione
+
+`max_expansion_factor` (default 100) si controlla dopo il passo, sulle
+righe dell'uscita già costruita: non difende la memoria, che difendono il
+budget prima e dopo il passo, i preflight dei kernel con il margine e
+`max_rows_per_edge` (10 milioni). È una guardia logica contro
+un'espansione che nessun piano sensato chiede: un join molti-a-molti su una
+chiave sbagliata, un prodotto cartesiano involontario, liste esplose più
+lunghe del previsto.
+
+Un left join reale di un arricchimento 1:N è stato rifiutato a 106 volte:
+il vincolo dei join era `MaxRelative`, cioè l'uscita sul lato **minore**.
+Quella base misura l'asimmetria dei lati, non l'espansione: un left join
+di 10 600 righe su una dimensione di 100 righe con la chiave unica vale
+106 volte la destra senza duplicare una riga, e ogni arricchimento su una
+tabella con meno dell'1% delle righe dell'altra superava il default. Ora
+`table.join`, `table.cross_join`, `table.fuzzy_join`, `geo.sjoin` e
+`geo.overlay` misurano sulla **somma** dei lati (`SumRelative`), come le
+altre operazioni a due ingressi senza una base propria (`clip` e le
+booleane allineate sono `LeftRelative`):
+
+- un abbinamento con la chiave unica su almeno un lato (1:1, 1:N, N:1) vale
+  al più 1: l'uscita di un inner join è al più il lato maggiore, quella di
+  un left o outer join al più la somma dei lati. Nessun arricchimento
+  legittimo si avvicina a 100;
+- un molti-a-molti vale `Σ l_k · r_k / (L + R)`: con 300 righe per lato
+  sulla stessa chiave, 90 000 righe su 600, cioè 150, e si rifiuta; un
+  `cross_join` di L per R righe vale `L·R/(L+R)`, circa il lato minore
+  (10 000 per 5 scenari: 5, accettato; prima valeva 10 000).
+
+Il default resta 100: dopo il cambio di base supera 100 solo un'uscita che
+moltiplica i dati per più di cento volte la loro somma, e con gli ingressi
+oltre 100 000 righe il tetto effettivo è già `max_rows_per_edge`. Derivarlo
+dal budget non avrebbe senso: quando il fattore si controlla la memoria è
+già stata allocata e contata. Un piano che vuole un'espansione maggiore la
+dichiara (`limits.max_expansion_factor`). Le operazioni con righe fissate
+dalla config ne sono fuori (esenzioni del catalogo, e `melt` con la verifica
+esatta sopra). Semantica 2 per i cinque join (un'uscita prima rifiutata ora
+si produce).
 
 ### Diagnostica per riga
 
@@ -1561,7 +1689,9 @@ quello per byte.
   che non si convertono nel tipo chiesto (`type_cast`, parse delle date);
   un `amount` di `date_add` che alcune date sopportano e quelle dei dati no;
   in `expression`, regex e indici di `substring` calcolati dalle colonne,
-  divisori non letterali nulli; le asserzioni violate dai dati.
+  divisori non letterali nulli con `on_division_by_zero=error`; testi
+  prodotti oltre `max_string_bytes` e pattern calcolati oltre
+  `max_regex_bytes`; le asserzioni violate dai dati.
   *Hazard*: i passi a monte hanno già girato quando l'errore arriva.
   *Rientro*: nessuno previsto, è la natura del dato. L'oracolo
   `crates/plenora-pipeline/tests/oracolo_config.rs` esegue ogni config che
@@ -1571,22 +1701,54 @@ quello per byte.
   direttamente e verifica che fallisca davvero (nessun rifiuto falso).
   Oltre i dati delle fixture non prova: il confine di `verifica_amount` sul
   secondo intercalare ha un test a parte.
-- **Parametri ignorati: censimento per ispezione.**
+- **Parametri ignorati: censimento dei campi di primo livello.**
   *Regola*: nessun parametro scritto si ignora; si rifiuta in analisi e nel
   kernel.
-  *Ambito*: i parametri elencati in «Validazione», trovati leggendo i
-  kernel tabellari; l'oracolo `oracolo_config.rs` li prova contro i kernel.
-  *Hazard*: un parametro che il censimento non ha visto resterebbe ignorato
-  senza errore. Restano fuori, di proposito, i parametri che hanno effetto
-  ma non cambiano il risultato su certi dati (`distinct` con `min`/`max`).
-  `fill_na` con `method=value` e senza `value` riempie con null, cioè non
-  cambia niente: è accettato.
-  *Rientro*: un parametro nuovo di un kernel entra con la sua regola in
-  `verifica_parametri` e un caso nell'oracolo.
+  *Ambito*: `censimento_parametri.rs` legge da serde i campi di ogni config
+  tabellare e fallisce per un campo senza voce; `parametri_senza_effetto.rs`
+  prova ogni regola in validazione, nel kernel e sulla config gemella;
+  l'oracolo `oracolo_config.rs` prova le regole contro i kernel sulle
+  varianti delle fixture. I campi delle strutture annidate (aggregazioni,
+  mascherature, regole, condizioni, colonne di `align_schema`, nodi di
+  `expression`) non si enumerano da soli: li copre la voce del campo che li
+  contiene.
+  *Hazard*: restano accettati, e dichiarati, i parametri che hanno effetto
+  ma non cambiano il risultato su certi dati (`distinct` con `min`/`max`) e
+  questi senza effetto in casi limite: `fill_na` con `method=value` e senza
+  `value` (riempie con null, non cambia niente); `unit` di `date_add` con
+  `amount` 0 (riformatta soltanto); le politiche sui null
+  (`allow_null`, `nulls_equal`, `null_policy`) su colonne che lo schema
+  dichiara non nullable, perché la nullabilità dichiarata è spesso
+  prudente e una dictionary non nullable può contenere null logici;
+  `max_splits` di `split_column` che lascia sempre null le ultime colonne
+  (ha effetto sull'ultima parte); `var_name` e `value_name` di `melt` che
+  collidono con una colonna, rinominati con un suffisso come dichiara la
+  scheda.
+  *Rientro*: un parametro nuovo entra con la sua voce nel censimento, la sua
+  regola in una `verifica_*` condivisa e un caso in
+  `parametri_senza_effetto.rs`; le politiche sui null su colonne non
+  nullable si rifiuteranno quando la nullabilità dei contratti sarà esatta.
+- **Limiti dei testi: regole di config nell'analisi, testi prodotti nei
+  kernel.**
+  *Regola*: un testo o un pattern della config oltre `max_string_bytes` o
+  `max_regex_bytes` si rifiuta in analisi; un testo prodotto dai dati oltre
+  `max_string_bytes` si rifiuta nel kernel ([«Validazione»](#validazione)).
+  *Ambito*: i kernel chiamati direttamente, fuori dal runner; le funzioni
+  `expression`, `formula`, `aggregate`, `replace` e `mask_data`, che usano
+  `Limits::default()` (le varianti `_con_effetti` e `_con_limiti` ricevono
+  i limiti del chiamante, e il runner usa quelle); `geo.to_wkt`, che scrive
+  WKT senza confrontarlo con `max_string_bytes`.
+  *Hazard*: chi chiama un kernel senza l'analisi può passare testi e
+  pattern di config oltre i limiti, e con le funzioni senza limiti ottiene
+  i limiti di default, non i suoi; il WKT di una geometria grande supera
+  `max_string_bytes` senza errore.
+  *Rientro*: i limiti come parametro di ogni kernel tabellare che produce
+  testo (oggi cambierebbe la firma di decine di chiamate); il controllo di
+  `max_string_bytes` in `geo.to_wkt` con le geo.
 - **Chiave HMAC controllata in validazione, dal runner**: è ambiente, non
-  config, quindi non sta nell'analisi dei kernel; la variabile d'ambiente
-  può cambiare fra `validate` e `run`, e in quel caso l'errore arriva al
-  passo.
+  config, quindi non sta nell'analisi dei kernel; la legge la stessa
+  funzione del kernel. La variabile d'ambiente può cambiare fra `validate`
+  e `run`, e in quel caso l'errore arriva al passo.
 - **Nome del passo negli errori**: aggiunto al messaggio conservando la
   categoria; gli errori con diagnostica per riga o già strutturati restano
   quelli del kernel, salvo la diagnostica sulla base dell'ingresso del

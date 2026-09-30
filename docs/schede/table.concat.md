@@ -10,7 +10,7 @@ usa [`table.concat_by_name`](#tableconcat_by_name).
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `ignore_index` | booleano | `true` | `true`, `false` | nessun effetto: si accetta per compatibilità, una tabella Arrow non ha indice di riga |
+| `ignore_index` | booleano | assente | nessuno: scritto si rifiuta | una tabella Arrow non ha indice di riga, nessun valore avrebbe effetto |
 
 ### Schema
 
@@ -39,6 +39,8 @@ In validazione, `InvalidPlan`:
 - numero di colonne diverso, o nome o tipo diversi in una posizione (la
   nullabilità non conta);
 - metadati di schema con la stessa chiave e valori diversi;
+- `ignore_index` scritto, con qualunque valore (anche nel kernel, con la
+  stessa funzione);
 - config con campi sconosciuti.
 
 Nel runner, `table.concat` con più di due ingressi è `Unsupported`, con
@@ -55,8 +57,7 @@ In esecuzione, `ResourceLimit`:
 Il catalogo la dichiara N-aria, ma il runner esegue solo la forma a due
 ingressi ([README, «Validazione»](../README.md#validazione)); più tabelle
 si impilano con passi in catena. I metadati di campo della destra non si
-conservano. `ignore_index` si accetta e non ha effetto, qualunque valore
-abbia.
+conservano.
 
 ### Complessità
 

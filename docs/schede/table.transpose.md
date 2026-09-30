@@ -12,7 +12,7 @@ eseguito chiamando il kernel.
 | --- | --- | --- | --- | --- |
 | `id_column` | stringa | nessuno | nome di una colonna dell'ingresso | i suoi valori danno i nomi delle colonne d'uscita, e non si traspone |
 | `output_columns` | lista di stringhe | `[]` | nomi di colonna | nomi delle colonne d'uscita, per posizione di riga |
-| `type_policy` | stringa | `"reject"` | `"reject"`, `"string"` | colonne dati di tipi diversi: rifiuto, o conversione in testo |
+| `type_policy` | stringa | `"reject"` | `"reject"`, `"string"`; solo se le colonne dati hanno tipi diversi | colonne dati di tipi diversi: rifiuto, o conversione in testo |
 
 Nome della colonna della riga i (da 0): `output_columns[i]` se c'è e non
 è vuoto; altrimenti il testo della cella di `id_column` alla riga i, se non
@@ -52,6 +52,8 @@ Chiamando il kernel:
   conversione in testo una cella dati, che non si converte in testo (tipo
   non leggibile come testo, `binary` non UTF-8, date fuori intervallo);
 - `InvalidPlan`: colonne dati di tipi diversi con `type_policy: "reject"`;
+  `type_policy` scritto quando le colonne dati hanno tutte lo stesso tipo
+  (non avrebbe effetto);
   un nome di colonna d'uscita non valido (per esempio il testo di
   `id_column` vuoto o di soli spazi);
 - `ResourceLimit`: colonne dati oltre `max_rows` o righe più una oltre

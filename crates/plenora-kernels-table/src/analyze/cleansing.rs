@@ -6,8 +6,9 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_text_len, clone_fields, con_op, contract_error, field_of, finish,
-    produce, propagate_geometry, require_scalar_string, require_utf8, rows_only, typed,
+    analyze_append, check_json_text, check_text_len, clone_fields, con_op, contract_error,
+    field_of, finish, produce, propagate_geometry, require_scalar_string, require_utf8, rows_only,
+    typed,
 };
 use crate::{cleansing, Limits};
 
@@ -56,9 +57,12 @@ pub(in crate::analyze) fn analyze_fill_na(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: cleansing::FillNa = typed(op, config)?;
     con_op(op, config.verifica_parametri())?;
+    // Il valore di riempimento finisce nelle celle.
+    check_json_text(op, config.valore(), limits.max_string_bytes, "value")?;
     let input = &inputs[0];
     let _ = fields;
     let targets: Vec<usize> = if let Some(name) = &config.column {
@@ -112,7 +116,13 @@ pub(in crate::analyze) fn analyze_replace(
     let config: cleansing::Replace = typed(op, config)?;
     let input = &inputs[0];
     require_utf8(op, input, &config.column)?;
-    check_text_len(op, &config.old_value, limits.max_regex_bytes, "old_value")?;
+    // Con `regex` `old_value` e' un pattern; senza, il testo di una cella.
+    let limite_old = if config.regex {
+        limits.max_regex_bytes
+    } else {
+        limits.max_string_bytes
+    };
+    check_text_len(op, &config.old_value, limite_old, "old_value")?;
     check_text_len(op, &config.new_value, limits.max_string_bytes, "new_value")?;
     if config.regex {
         regex::Regex::new(&config.old_value).map_err(|error| {
@@ -154,48 +164,7 @@ pub(in crate::analyze) fn analyze_replace(
 ///   `1 <= precision <= 38` e `0 <= scale <= precision`;
 /// - `timezone` solo per `timestamp_millis`.
 fn check_type_cast_parameters(op: &str, config: &cleansing::TypeCast) -> Result<()> {
-    let usa_il_formato = matches!(
-        config.target_type,
-        cleansing::TargetType::Date
-            | cleansing::TargetType::Datetime
-            | cleansing::TargetType::Date32
-            | cleansing::TargetType::TimestampMillis
-    );
-    if !config.date_format.is_empty() && !usa_il_formato {
-        return contract_error(op, "date_format ammesso solo per i target data e timestamp");
-    }
-    match config.target_type {
-        cleansing::TargetType::Decimal128 => {
-            let precision = config.precision.ok_or_else(|| {
-                PlenoraError::InvalidPlan(format!("{op}: decimal128 richiede precision"))
-            })?;
-            let scale = config.scale.ok_or_else(|| {
-                PlenoraError::InvalidPlan(format!("{op}: decimal128 richiede scale"))
-            })?;
-            if !(1..=38).contains(&precision) || scale < 0 || scale > precision.cast_signed() {
-                return contract_error(
-                    op,
-                    "decimal128 richiede 1 <= precision <= 38 e 0 <= scale <= precision",
-                );
-            }
-            if config.timezone.is_some() {
-                return contract_error(op, "timezone non ammessa per decimal128");
-            }
-        }
-        cleansing::TargetType::TimestampMillis => {
-            if config.precision.is_some() || config.scale.is_some() {
-                return contract_error(op, "precision e scale non ammessi per timestamp");
-            }
-        }
-        _ if config.precision.is_some() || config.scale.is_some() || config.timezone.is_some() => {
-            return contract_error(
-                op,
-                "precision, scale e timezone non ammessi per questo target_type",
-            );
-        }
-        _ => {}
-    }
-    Ok(())
+    con_op(op, config.verifica_parametri())
 }
 
 pub(in crate::analyze) fn analyze_type_cast(

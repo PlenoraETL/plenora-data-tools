@@ -34,15 +34,47 @@ use plenora_core::{PlenoraError, Result};
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssertCardinality {
-    /// Numero esatto di righe; se presente, prevale sugli altri due.
+    /// Numero esatto di righe; esclude gli altri due.
     #[serde(default)]
     pub exact_rows: Option<usize>,
-    /// Minimo di righe, incluso.
+    /// Minimo di righe, incluso; almeno 1 (0 non vincola nulla).
     #[serde(default)]
     pub min_rows: Option<usize>,
     /// Massimo di righe, incluso.
     #[serde(default)]
     pub max_rows: Option<usize>,
+}
+
+impl AssertCardinality {
+    /// Regole sulla sola config, condivise da kernel e analisi dei
+    /// contratti: almeno un vincolo; `exact_rows` da solo; `min_rows` non
+    /// oltre `max_rows`; `min_rows = 0` vale per ogni tabella, quindi non
+    /// avrebbe effetto e si rifiuta. I limiti dei vincoli contro `max_rows`
+    /// dei limiti li controlla l'analisi.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per ciascuna delle regole.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        let piano = |messaggio: &str| Err(PlenoraError::InvalidPlan(messaggio.to_owned()));
+        if self.exact_rows.is_none() && self.min_rows.is_none() && self.max_rows.is_none() {
+            return piano("assert_cardinality richiede exact_rows, min_rows o max_rows");
+        }
+        if self.exact_rows.is_some() && (self.min_rows.is_some() || self.max_rows.is_some()) {
+            return piano("exact_rows non si combina con min_rows o max_rows");
+        }
+        if self.min_rows == Some(0) {
+            return piano("min_rows 0 non ha effetto: ogni tabella ha almeno 0 righe");
+        }
+        if self
+            .min_rows
+            .zip(self.max_rows)
+            .is_some_and(|(min, max)| min > max)
+        {
+            return piano("limiti di assert_cardinality non validi");
+        }
+        Ok(())
+    }
 }
 
 /// Batch invariato se il numero di righe rispetta il contratto dichiarato.
@@ -52,9 +84,11 @@ pub struct AssertCardinality {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: righe diverse da `exact_rows`, oppure fuori dall'intervallo
+/// - `InvalidPlan`: le regole di [`AssertCardinality::verifica_parametri`];
+///   righe diverse da `exact_rows`, oppure fuori dall'intervallo
 ///   `min_rows`/`max_rows`.
 pub fn assert_cardinality(batch: &RecordBatch, config: &AssertCardinality) -> Result<RecordBatch> {
+    config.verifica_parametri()?;
     let valid = config.exact_rows.map_or_else(
         || {
             config.min_rows.is_none_or(|min| batch.num_rows() >= min)

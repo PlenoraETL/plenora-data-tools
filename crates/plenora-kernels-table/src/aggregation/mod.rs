@@ -20,7 +20,7 @@ mod oracolo_chiavi;
 mod sort;
 mod window;
 
-pub use aggregate::{aggregate, AggFunction, Aggregate, Aggregation};
+pub use aggregate::{aggregate, aggregate_con_limiti, AggFunction, Aggregate, Aggregation};
 // Il comparatore tipizzato e' pubblico: e' il contratto d'ordine dei kernel
 // (`sort`, top-N, merge dello spill) e va verificabile dall'esterno.
 #[cfg(test)]
@@ -365,7 +365,7 @@ mod tests {
             Some(0.0),
         ];
         let batch = numeric_batch(&values);
-        for n in [0_u64, 1, 3, 5, 9, 10, 11, 1_000] {
+        for n in [1_u64, 3, 5, 9, 10, 11, 1_000] {
             for descending in [false, true] {
                 assert_top_n_matches_oracle(
                     &batch,
@@ -427,8 +427,9 @@ mod tests {
     #[test]
     fn top_n_edge_cases_and_config_validation() {
         let batch = numeric_batch(&[Some(2.0), Some(1.0), None]);
-        // n = 0: batch vuoto, schema invariato.
-        let empty = top_n(
+        // n = 0: uscita sempre vuota, columns e descending senza effetto:
+        // si rifiuta come parametro senza effetto.
+        let zero = top_n(
             &batch,
             &TopN {
                 columns: vec!["num".into()],
@@ -436,9 +437,8 @@ mod tests {
                 descending: false,
             },
         )
-        .expect("n=0");
-        assert_eq!(empty.num_rows(), 0);
-        assert_eq!(empty.schema(), batch.schema());
+        .expect_err("n=0");
+        assert!(matches!(zero, PlenoraError::InvalidPlan(_)), "{zero:?}");
         // Errori: colonne vuote, colonna mancante, config non strict.
         assert!(top_n(
             &batch,
@@ -841,10 +841,11 @@ mod tests {
         // I bordi 0.0 e 1.0 restano validi.
         let config = Aggregate {
             group_by: vec!["id".into()],
-            aggregations: [0.0, 1.0]
+            aggregations: [(0.0, "q0"), (1.0, "q1")]
                 .iter()
-                .map(|quantile| Aggregation {
+                .map(|(quantile, alias)| Aggregation {
                     quantile: Some(*quantile),
+                    alias: (*alias).into(),
                     ..agg("num", AggFunction::Quantile)
                 })
                 .collect(),
@@ -1045,12 +1046,17 @@ mod tests {
             },
             agg("num", AggFunction::Count),
             agg("num", AggFunction::Nunique),
+            // Due aggregazioni con lo stesso nome d'uscita si rifiutano
+            // (`Aggregate::nomi_uscita`): le varianti hanno un alias. Prima
+            // l'ultima sostituiva in silenzio la precedente.
             Aggregation {
                 skip_null: Some(false),
+                alias: "num_mean_con_null".into(),
                 ..agg("num", AggFunction::Mean)
             },
             Aggregation {
                 distinct: Some(true),
+                alias: "num_sum_distinti".into(),
                 ..agg("num", AggFunction::Sum)
             },
             agg("val", AggFunction::Sum),

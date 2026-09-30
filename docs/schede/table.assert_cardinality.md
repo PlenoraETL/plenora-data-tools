@@ -11,11 +11,12 @@ l'esito si decide in validazione.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `exact_rows` | intero | assente | da 0 a `max_input_rows` | numero esatto di righe |
-| `min_rows` | intero | assente | da 0 a `max_input_rows`, non oltre `max_rows` | minimo di righe, incluso |
+| `min_rows` | intero | assente | da 1 a `max_input_rows`, non oltre `max_rows` | minimo di righe, incluso |
 | `max_rows` | intero | assente | da 0 a `max_input_rows` | massimo di righe, incluso |
 
 Almeno uno dei tre; `exact_rows` non si combina con `min_rows` o
-`max_rows`. `max_input_rows` è il limite di righe del piano.
+`max_rows`. `min_rows = 0` non vincola niente e si rifiuta.
+`max_input_rows` è il limite di righe del piano.
 
 ### Schema
 
@@ -37,10 +38,15 @@ L'ordine d'ingresso.
 In validazione, `InvalidPlan`:
 
 - nessuno dei tre vincoli, o `exact_rows` insieme a `min_rows`/`max_rows`;
-- `min_rows` maggiore di `max_rows`, o un vincolo oltre `max_input_rows`;
+- `min_rows = 0`, `min_rows` maggiore di `max_rows`, o un vincolo oltre
+  `max_input_rows`;
 - il contratto d'ingresso attesta il numero di righe (`row_count`
   dimostrato, per esempio dopo `table.reconcile`) e questo viola il vincolo;
 - config con campi sconosciuti o valori negativi.
+
+Le regole sui vincoli (almeno uno, `exact_rows` da solo, `min_rows` non
+oltre `max_rows`, `min_rows` non zero) le applica anche il kernel, con la
+stessa funzione della validazione.
 
 In esecuzione, `InvalidPlan` (`N righe fuori contratto`): il numero di righe
 viola il vincolo. Non c'è diagnostica per riga: il difetto è della tabella,

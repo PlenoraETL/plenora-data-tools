@@ -814,7 +814,7 @@ fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
         ),
         // Oltre max_columns.
         SecondoPasso {
-            primo: ("table.drop_columns", json!({"columns": []})),
+            primo: ("table.limit", json!({"n": 1000})),
             ..caso(
                 &schema_largo_con_json(massimo),
                 "table.flatten_json",
@@ -1130,4 +1130,48 @@ fn run_end_e_union_si_rifiutano_a_ogni_profondita() {
         Field::new("l", lista(struttura(DataType::Int64)), true),
     ]));
     assert!(contract_from_arrow_schema(ammesso, resolve_crs).is_ok());
+}
+
+/// La chiave HMAC si legge con la stessa funzione nel runner e nel kernel:
+/// prima il runner (`var_os`) accettava un valore non UTF-8 che il kernel
+/// (`env::var`) trattava come variabile assente, e l'errore arrivava al
+/// passo. Ora il valore non UTF-8 si rifiuta in validazione, con la sua causa.
+#[test]
+fn la_chiave_hmac_non_utf8_si_rifiuta_in_validazione() {
+    fn valore_non_utf8() -> std::ffi::OsString {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            std::ffi::OsString::from_vec(vec![b'k', 0xff])
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            std::ffi::OsString::from_wide(&[u16::from(b'k'), 0xD800])
+        }
+    }
+    const VARIABILE: &str = "PLENORA_PIPELINE_CHIAVE_NON_UTF8";
+    std::env::set_var(VARIABILE, valore_non_utf8());
+    let pipeline = piano(
+        &["t"],
+        vec![passo(
+            "h",
+            "table.hmac_sha256",
+            &["t"],
+            json!({"columns": ["id"], "key_env": VARIABILE}),
+        )],
+        &["h"],
+    );
+    let errore = valida_wide(&pipeline).expect_err("chiave non UTF-8");
+    assert!(
+        matches!(
+            errore,
+            PlenoraError::InvalidPlan(_) | PlenoraError::Tagged { .. }
+        ),
+        "{errore:?}"
+    );
+    let testo = errore.to_string();
+    assert!(testo.contains("non UTF-8"), "{testo}");
+    assert!(!testo.contains(VARIABILE), "{testo}");
+    std::env::remove_var(VARIABILE);
 }

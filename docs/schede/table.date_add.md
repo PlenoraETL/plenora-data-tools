@@ -12,11 +12,11 @@ giorno del mese (31 gennaio più un mese è 29 febbraio 2024).
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna leggibile come testo | colonna da leggere |
 | `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura |
-| `output_format` | stringa | `"%Y-%m-%d %H:%M:%S"` | formato `chrono` non vuoto, al più `max_string_bytes` byte, senza fuso | formato di scrittura |
+| `output_format` | stringa | `"%Y-%m-%d %H:%M:%S"` | formato `chrono` non vuoto, al più `max_string_bytes` byte, senza fuso, che scrive al più `max_string_bytes` byte per valore | formato di scrittura |
 | `amount` | intero | obbligatorio | intero a 64 bit che almeno una data sopporta | quantità da aggiungere, con segno |
 | `unit` | stringa | obbligatorio | `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` | unità di `amount` |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
-| `invalid` | stringa | `null` | `null`, `error` | accettato per compatibilità, senza effetto |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -27,7 +27,13 @@ RFC 3339.
 La lettura deve consumare tutto il testo della cella; un formato senza
 campi orari legge una data e la pone a mezzanotte. Il valore non ha fuso:
 settimane, giorni, ore, minuti e secondi sono durate fisse (un giorno è
-sempre 24 ore, senza ora legale). `years` vale 12 mesi.
+sempre 24 ore, senza ora legale). `years` vale 12 mesi. Un valore non
+leggibile rifiuta sempre la riga.
+
+Il testo scritto da `output_format` non può superare `max_string_bytes`
+byte per valore. Il limite si controlla in validazione con una stima
+prudente: il testo letterale conta per la sua lunghezza, ogni campo
+`strftime` per 64 byte.
 
 ### Schema
 
@@ -52,9 +58,11 @@ In validazione, `InvalidPlan`:
 - un formato vuoto, oltre `max_string_bytes`, con un campo non
   riconosciuto, o `output_format` con campi di fuso (`%z`, `%:z`, `%Z`,
   `%+`);
+- `output_format` la cui stima supera `max_string_bytes` byte per valore;
 - `amount` che nessuna data rappresentabile sopporta nell'unità data;
 - `output_column` non valido;
-- config con campi sconosciuti, `unit` o `invalid` fuori elenco.
+- `invalid` scritto, con qualunque valore;
+- config con campi sconosciuti o `unit` fuori elenco.
 
 In esecuzione:
 
@@ -72,7 +80,8 @@ Le date rappresentabili sono quelle di `chrono` (anni da -262143 a
 262142). Un `amount` che alcune date sopportano e quelle dei dati no
 fallisce in esecuzione
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
-`invalid` non ha effetto e non si rifiuta.
+La stima di `output_format` è prudente: un formato che scriverebbe davvero
+meno di `max_string_bytes` byte si può rifiutare lo stesso.
 
 ### Complessità
 

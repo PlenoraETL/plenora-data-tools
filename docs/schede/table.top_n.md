@@ -9,7 +9,7 @@ prime `n` righe, calcolata senza ordinare tutto l'ingresso.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `columns` | lista di stringhe | obbligatorio | come `columns` di [`table.sort`](#tablesort) | chiavi d'ordinamento, dalla più significativa |
-| `n` | intero | obbligatorio | da `0` a `max_rows` | righe da tenere |
+| `n` | intero | obbligatorio | da `1` a `max_rows` | righe da tenere |
 | `descending` | booleano | `false` | `true`, `false` | `true` tiene i valori più grandi |
 
 Il verso si scrive `descending`, non `ascending`: `ascending` è un campo
@@ -23,8 +23,7 @@ dichiara l'uscita ordinata sulle colonne di `columns` e un conteggio di
 
 ### Righe
 
-Selezione: `min(n, righe)` righe dell'ingresso; `n = 0` dà una tabella
-vuota con lo stesso schema.
+Selezione: `min(n, righe)` righe dell'ingresso.
 
 ### Ordine
 
@@ -40,6 +39,8 @@ In validazione, `InvalidPlan`:
 
 - come [`table.sort`](#tablesort) per `columns`;
 - `n` oltre `max_rows`;
+- `n = 0`: l'uscita sarebbe sempre vuota, e `columns` e `descending` non
+  avrebbero effetto;
 - config con campi sconosciuti.
 
 In esecuzione:

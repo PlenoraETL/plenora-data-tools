@@ -985,13 +985,29 @@ pub(crate) fn combine_horizontal(
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Concat {
-    /// Default `true`. Accettato per compatibilita' e senza effetto,
-    /// qualunque valore abbia: un batch Arrow non ha indice di riga.
-    #[serde(default = "default_true")]
-    pub ignore_index: bool,
+    /// Non ammesso: un batch Arrow non ha indice di riga, quindi qualunque
+    /// valore sarebbe senza effetto. Scritto si rifiuta
+    /// ([`Concat::verifica_parametri`]); il campo resta per dare un errore
+    /// che nomina il motivo invece di un campo sconosciuto.
+    #[serde(default)]
+    pub ignore_index: Option<bool>,
 }
-const fn default_true() -> bool {
-    true
+
+impl Concat {
+    /// `ignore_index` non ha effetto con nessun valore: scritto si rifiuta.
+    /// La chiamano il kernel e l'analisi dei contratti.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` se `ignore_index` e' scritto.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        if self.ignore_index.is_some() {
+            return Err(PlenoraError::InvalidPlan(
+                "ignore_index non ha effetto: una tabella Arrow non ha indice di riga".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Concatenazione verticale di due batch con schema identico: le righe di
@@ -1003,6 +1019,7 @@ const fn default_true() -> bool {
 ///
 /// # Errors
 ///
+/// - `InvalidPlan`: `ignore_index` scritto ([`Concat::verifica_parametri`]);
 /// - `Schema`: numero di colonne, nomi o tipi non identici tra i due batch,
 ///   metadati di schema in conflitto;
 /// - `ResourceLimit`: overflow nel conteggio delle righe, righe totali oltre
@@ -1014,7 +1031,7 @@ pub fn concat(
     config: &Concat,
     limits: &Limits,
 ) -> Result<RecordBatch> {
-    let _ = config.ignore_index;
+    config.verifica_parametri()?;
     if left.num_columns() != right.num_columns()
         || left
             .schema()
@@ -1583,6 +1600,40 @@ pub struct AsOfJoin {
     pub allow_exact: bool,
 }
 
+const fn default_true() -> bool {
+    true
+}
+
+impl AsOfJoin {
+    /// Regole sulla sola config, condivise da kernel e analisi dei
+    /// contratti: `left_by` e `right_by` della stessa lunghezza; `tolerance`
+    /// finita e `>= 0`; `tolerance = 0` con `allow_exact = false` non abbina
+    /// mai (resterebbe solo il candidato a distanza zero, che `allow_exact`
+    /// esclude), quindi il lato destro sarebbe tutto null: si rifiuta.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per ciascuna delle regole.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        if self.left_by.len() != self.right_by.len() {
+            return Err(PlenoraError::InvalidPlan(
+                "left_by/right_by di cardinalita' diversa".into(),
+            ));
+        }
+        match self.tolerance {
+            Some(tolerance) if !tolerance.is_finite() || tolerance < 0.0 => Err(
+                PlenoraError::InvalidPlan("tolerance deve essere finita e >= 0".into()),
+            ),
+            Some(tolerance) if tolerance == 0.0 && !self.allow_exact => {
+                Err(PlenoraError::InvalidPlan(
+                    "tolerance 0 con allow_exact=false non abbina mai".into(),
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 /// Valore `on` della riga da array tipizzato (fast path di `asof_join`).
 ///
 /// Stessa conversione di `scalar_as_f64`: un Int64 senza `f64` esatto e' un
@@ -1777,9 +1828,10 @@ fn choose_asof(
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: cardinalita' diversa tra `left_by` e `right_by`, oppure
-///   `tolerance` non finita o negativa; nome d'uscita vuoto o oltre 1024
-///   byte;
+/// - `InvalidPlan`: le regole di [`AsOfJoin::verifica_parametri`]
+///   (cardinalita' diversa tra `left_by` e `right_by`, `tolerance` non
+///   finita o negativa, `tolerance = 0` con `allow_exact = false`); nome
+///   d'uscita vuoto o oltre 1024 byte;
 /// - `Schema`: colonna assente, chiavi `on` non numeriche o di tipo diverso
 ///   tra i lati, tipi `by` incompatibili, collisione di nomi in output,
 ///   metadati di schema in conflitto, valore `on` Int64 senza un `f64`
@@ -1791,19 +1843,7 @@ pub fn asof_join(
     config: &AsOfJoin,
     limits: &Limits,
 ) -> Result<RecordBatch> {
-    if config.left_by.len() != config.right_by.len() {
-        return Err(PlenoraError::InvalidPlan(
-            "asof_join: cardinalita' by diversa".into(),
-        ));
-    }
-    if config
-        .tolerance
-        .is_some_and(|value| !value.is_finite() || value < 0.0)
-    {
-        return Err(PlenoraError::InvalidPlan(
-            "asof_join: tolerance non valida".into(),
-        ));
-    }
+    config.verifica_parametri()?;
     let left_on = column_index(left, &config.left_on)?;
     let right_on = column_index(right, &config.right_on)?;
     if left.column(left_on).data_type() != right.column(right_on).data_type()

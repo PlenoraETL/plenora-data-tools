@@ -21,6 +21,65 @@ pub struct Formula {
     /// (senza escape) e nomi di colonna `[A-Za-z_][A-Za-z0-9_]*`. Solo
     /// `Int64` e `Float64` sono numeri; `+` con un testo concatena.
     pub formula: String,
+    /// Che cosa rende una divisione per un divisore zero: `"null"` (default)
+    /// o `"error"` ([`crate::OnDivisionByZero`]). Senza `/` nella formula non
+    /// avrebbe effetto: scritto si rifiuta ([`validate`]).
+    #[serde(default)]
+    pub on_division_by_zero: Option<crate::OnDivisionByZero>,
+}
+
+impl Formula {
+    /// La politica sulla divisione per zero: quella scritta, o `null`.
+    #[must_use]
+    pub fn divisione_per_zero(&self) -> crate::OnDivisionByZero {
+        self.on_division_by_zero.unwrap_or_default()
+    }
+}
+
+/// Stato di un'esecuzione: politica sulla divisione per zero, limiti dei
+/// testi prodotti, righe contate.
+struct Esecuzione<'l> {
+    divisione: crate::OnDivisionByZero,
+    limits: &'l crate::Limits,
+    effetti: crate::EffettiKernel,
+}
+
+impl<'l> Esecuzione<'l> {
+    fn new(config: &Formula, limits: &'l crate::Limits) -> Self {
+        Self {
+            divisione: config.divisione_per_zero(),
+            limits,
+            effetti: crate::EffettiKernel::default(),
+        }
+    }
+
+    /// `true` se l'errore della riga e' una divisione per zero che la
+    /// politica `null` trasforma in null: la riga si conta. In una formula
+    /// ogni operatore propaga il null, quindi il null della divisione e'
+    /// il null della riga.
+    fn nulla_su_zero(&mut self, errore: &PlenoraError) -> Result<bool> {
+        if self.divisione == crate::OnDivisionByZero::Null && crate::e_divisione_per_zero(errore) {
+            self.effetti.conta_divisione_per_zero()?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Un testo prodotto (concatenazione) entro `max_string_bytes`: la
+    /// concatenazione solo allunga, quindi basta il risultato della riga.
+    fn verifica_testo(&self, testo: &str) -> Result<()> {
+        crate::verifica_testo_prodotto("table.formula", testo.len(), self.limits)
+    }
+}
+
+/// `true` se la formula divide.
+fn contiene_divisione(expr: &Expr) -> bool {
+    match expr {
+        Expr::Binary(_, '/', _) => true,
+        Expr::Binary(left, _, right) => contiene_divisione(left) || contiene_divisione(right),
+        Expr::Neg(value) => contiene_divisione(value),
+        Expr::Number(_) | Expr::Text(_) | Expr::Column(_) => false,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -481,10 +540,17 @@ impl<'a> FastProgram<'a> {
             let index = column_index(batch, name)?;
             column_formula_type(batch.schema_ref().field(index).data_type(), name)
         })?;
-        self.run(batch, config, kind)
+        let limits = crate::Limits::default();
+        self.run(batch, config, kind, &mut Esecuzione::new(config, &limits))
     }
 
-    fn run(&self, batch: &RecordBatch, config: &Formula, kind: FormulaType) -> Result<RecordBatch> {
+    fn run(
+        &self,
+        batch: &RecordBatch,
+        config: &Formula,
+        kind: FormulaType,
+        esecuzione: &mut Esecuzione<'_>,
+    ) -> Result<RecordBatch> {
         if self.numeric {
             // Un programma `numeric` nasce solo da colonne Int64/Float64 e
             // letterali numerici: il tipo statico non puo' che essere Number.
@@ -493,22 +559,31 @@ impl<'a> FastProgram<'a> {
                     "formula: tier numerico con tipo statico {kind:?}"
                 )));
             }
-            self.run_numeric(batch, config)
+            self.run_numeric(batch, config, esecuzione)
         } else {
-            self.run_slots(batch, config, kind)
+            self.run_slots(batch, config, kind, esecuzione)
         }
     }
 
     /// Tier numerico: stack di `(valore, null)`, nessuna allocazione per
     /// riga; gli unici errori possibili sono colonna mancante (mai in un
     /// programma `numeric`) e divisione per zero.
-    fn run_numeric(&self, batch: &RecordBatch, config: &Formula) -> Result<RecordBatch> {
+    fn run_numeric(
+        &self,
+        batch: &RecordBatch,
+        config: &Formula,
+        esecuzione: &mut Esecuzione<'_>,
+    ) -> Result<RecordBatch> {
         let mut stack: Vec<(f64, bool)> = Vec::with_capacity(self.depth);
         let mut output = Vec::with_capacity(batch.num_rows());
         let mut rejections = Vec::new();
         for row in 0..batch.num_rows() {
             match self.eval_numeric_row(&mut stack, row) {
                 Ok((value, null)) => output.push(if null { None } else { Some(value) }),
+                Err(error) if esecuzione.nulla_su_zero(&error)? => {
+                    stack.clear();
+                    output.push(None);
+                }
                 Err(error) => {
                     let Some(cause) = crate::row_eval_failure_cause(&error) else {
                         return Err(error);
@@ -626,13 +701,23 @@ impl<'a> FastProgram<'a> {
         batch: &RecordBatch,
         config: &Formula,
         kind: FormulaType,
+        esecuzione: &mut Esecuzione<'_>,
     ) -> Result<RecordBatch> {
         let mut stack: Vec<Slot<'a>> = Vec::with_capacity(self.depth);
         let mut values: Vec<Slot<'a>> = Vec::with_capacity(batch.num_rows());
         let mut rejections = Vec::new();
         for row in 0..batch.num_rows() {
             match self.eval_slot_row(&mut stack, row) {
-                Ok(value) => values.push(value),
+                Ok(value) => {
+                    if let Slot::Text(testo) = &value {
+                        esecuzione.verifica_testo(testo)?;
+                    }
+                    values.push(value);
+                }
+                Err(error) if esecuzione.nulla_su_zero(&error)? => {
+                    stack.clear();
+                    values.push(Slot::Null);
+                }
                 Err(error) => {
                     let Some(cause) = crate::row_eval_failure_cause(&error) else {
                         return Err(error);
@@ -844,7 +929,18 @@ pub fn validate(config: &Formula, max_bytes: usize) -> Result<()> {
             "formula vuota o troppo grande".into(),
         ));
     }
-    parse(&config.formula).map(|_| ())
+    verifica_divisione(config, &parse(&config.formula)?)
+}
+
+/// `on_division_by_zero` scritto in una formula senza `/` non avrebbe
+/// effetto: si rifiuta. La chiamano [`validate`] (l'analisi) e il kernel.
+fn verifica_divisione(config: &Formula, expression: &Expr) -> Result<()> {
+    if config.on_division_by_zero.is_some() && !contiene_divisione(expression) {
+        return Err(PlenoraError::InvalidPlan(
+            "on_division_by_zero senza effetto: la formula non divide".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Valuta la formula su ogni riga e appende/sostituisce `new_column`
@@ -876,19 +972,48 @@ pub fn validate(config: &Formula, max_bytes: usize) -> Result<()> {
 /// - `Internal`: invarianti interne violate, fra cui un valore calcolato di
 ///   tipo diverso da quello statico, in ENTRAMBI i versi.
 pub fn formula(batch: &RecordBatch, config: &Formula) -> Result<RecordBatch> {
+    formula_con_effetti(batch, config, &crate::Limits::default()).map(|(uscita, _)| uscita)
+}
+
+/// Come [`formula`], con i limiti del chiamante e gli effetti.
+///
+/// Gli effetti sono cio' che l'uscita non mostra: le righe in cui una
+/// divisione ha trovato un divisore zero ([`crate::EffettiKernel`]). E' il
+/// punto d'ingresso del runner; [`formula`] lo chiama con
+/// `Limits::default()` e scarta il conteggio.
+///
+/// Con `on_division_by_zero = "null"` (default) una divisione con operandi
+/// non null e divisore zero rende null la riga (ogni operatore della
+/// formula propaga il null), e la riga si conta; con `"error"` la riga si
+/// rifiuta (`evaluation.division_by_zero`).
+///
+/// # Errors
+///
+/// Come [`formula`], piu': `InvalidPlan` per `on_division_by_zero` scritto
+/// in una formula senza `/`; `ResourceLimit` per un testo concatenato oltre
+/// `limits.max_string_bytes`; `Internal` se il conteggio trabocca.
+pub fn formula_con_effetti(
+    batch: &RecordBatch,
+    config: &Formula,
+    limits: &crate::Limits,
+) -> Result<(RecordBatch, crate::EffettiKernel)> {
     let expression = parse(&config.formula)?;
+    verifica_divisione(config, &expression)?;
     // Tipo dallo schema, mai dai valori (vedi il doc sopra): una colonna
     // assente fallisce anche su un batch vuoto.
     let kind = infer_expr_type(&expression, &|name| {
         let index = column_index(batch, name)?;
         column_formula_type(batch.schema_ref().field(index).data_type(), name)
     })?;
+    let mut esecuzione = Esecuzione::new(config, limits);
     if batch.num_rows() > 0 {
         if let Some(program) = FastProgram::compile(&expression, batch) {
-            return program.run(batch, config, kind);
+            let uscita = program.run(batch, config, kind, &mut esecuzione)?;
+            return Ok((uscita, esecuzione.effetti));
         }
     }
-    formula_generic(batch, config, &expression, kind)
+    let uscita = formula_generic(batch, config, &expression, kind, &mut esecuzione)?;
+    Ok((uscita, esecuzione.effetti))
 }
 
 /// Come [`formula_generic`] col tipo ricavato dallo schema: usato dai
@@ -903,7 +1028,14 @@ fn formula_generic_auto(
         let index = column_index(batch, name)?;
         column_formula_type(batch.schema_ref().field(index).data_type(), name)
     })?;
-    formula_generic(batch, config, expression, kind)
+    let limits = crate::Limits::default();
+    formula_generic(
+        batch,
+        config,
+        expression,
+        kind,
+        &mut Esecuzione::new(config, &limits),
+    )
 }
 
 /// Percorso generico: interprete ricorsivo sull'AST, usato come fallback
@@ -917,12 +1049,19 @@ fn formula_generic(
     config: &Formula,
     expression: &Expr,
     kind: FormulaType,
+    esecuzione: &mut Esecuzione<'_>,
 ) -> Result<RecordBatch> {
     let mut values = Vec::with_capacity(batch.num_rows());
     let mut rejections = Vec::new();
     for row in 0..batch.num_rows() {
         match evaluate(expression, batch, row) {
-            Ok(value) => values.push(value),
+            Ok(value) => {
+                if let Evaluated::Text(testo) = &value {
+                    esecuzione.verifica_testo(testo)?;
+                }
+                values.push(value);
+            }
+            Err(error) if esecuzione.nulla_su_zero(&error)? => values.push(Evaluated::Null),
             Err(error) => {
                 let Some(cause) = crate::row_eval_failure_cause(&error) else {
                     return Err(error);
@@ -1150,8 +1289,14 @@ mod tests {
 
         // Percorso generico, tipo statico Text su valori Number.
         let numerica = parse("f * 2").expect("parse");
-        let errore = formula_generic(&batch, &config("f * 2"), &numerica, FormulaType::Text)
-            .expect_err("Text dichiarato, valori Number");
+        let errore = formula_generic(
+            &batch,
+            &config("f * 2"),
+            &numerica,
+            FormulaType::Text,
+            &mut esecuzione(),
+        )
+        .expect_err("Text dichiarato, valori Number");
         assert!(
             matches!(errore, PlenoraError::Internal(_)),
             "categoria: {errore}"
@@ -1159,8 +1304,14 @@ mod tests {
 
         // Percorso generico, verso opposto.
         let testuale = parse("s + '!'").expect("parse");
-        let errore = formula_generic(&batch, &config("s + '!'"), &testuale, FormulaType::Number)
-            .expect_err("Number dichiarato, valori Text");
+        let errore = formula_generic(
+            &batch,
+            &config("s + '!'"),
+            &testuale,
+            FormulaType::Number,
+            &mut esecuzione(),
+        )
+        .expect_err("Number dichiarato, valori Text");
         assert!(
             matches!(errore, PlenoraError::Internal(_)),
             "categoria: {errore}"
@@ -1169,7 +1320,12 @@ mod tests {
         // Fast path, tier generale (`run_slots`), entrambi i versi.
         let programma = FastProgram::compile(&testuale, &batch).expect("programma compilato");
         let errore = programma
-            .run_slots(&batch, &config("s + '!'"), FormulaType::Number)
+            .run_slots(
+                &batch,
+                &config("s + '!'"),
+                FormulaType::Number,
+                &mut esecuzione(),
+            )
             .expect_err("Number dichiarato, valori Text");
         assert!(
             matches!(errore, PlenoraError::Internal(_)),
@@ -1177,7 +1333,12 @@ mod tests {
         );
         let programma = FastProgram::compile(&numerica, &batch).expect("programma compilato");
         let errore = programma
-            .run_slots(&batch, &config("f * 2"), FormulaType::Text)
+            .run_slots(
+                &batch,
+                &config("f * 2"),
+                FormulaType::Text,
+                &mut esecuzione(),
+            )
             .expect_err("Text dichiarato, valori Number");
         assert!(
             matches!(errore, PlenoraError::Internal(_)),
@@ -1186,7 +1347,12 @@ mod tests {
 
         // Il tier numerico rifiuta un tipo statico che non sia Number.
         let errore = programma
-            .run(&batch, &config("f * 2"), FormulaType::Text)
+            .run(
+                &batch,
+                &config("f * 2"),
+                FormulaType::Text,
+                &mut esecuzione(),
+            )
             .expect_err("tier numerico con tipo statico Text");
         assert!(
             matches!(errore, PlenoraError::Internal(_)),
@@ -1194,19 +1360,40 @@ mod tests {
         );
 
         // E col tipo GIUSTO i due percorsi continuano a coincidere.
-        let via_generico =
-            formula_generic(&batch, &config("f * 2"), &numerica, FormulaType::Number)
-                .expect("generico");
+        let via_generico = formula_generic(
+            &batch,
+            &config("f * 2"),
+            &numerica,
+            FormulaType::Number,
+            &mut esecuzione(),
+        )
+        .expect("generico");
         let via_fast = programma
-            .run(&batch, &config("f * 2"), FormulaType::Number)
+            .run(
+                &batch,
+                &config("f * 2"),
+                FormulaType::Number,
+                &mut esecuzione(),
+            )
             .expect("fast");
         assert_eq!(via_generico, via_fast);
+    }
+
+    /// Esecuzione con la politica di default e i limiti di default.
+    fn esecuzione() -> Esecuzione<'static> {
+        static LIMITI: std::sync::OnceLock<crate::Limits> = std::sync::OnceLock::new();
+        Esecuzione {
+            divisione: crate::OnDivisionByZero::default(),
+            limits: LIMITI.get_or_init(crate::Limits::default),
+            effetti: crate::EffettiKernel::default(),
+        }
     }
 
     fn config(text: &str) -> Formula {
         Formula {
             new_column: "out".into(),
             formula: text.into(),
+            on_division_by_zero: None,
         }
     }
 
@@ -1306,15 +1493,106 @@ mod tests {
                 "{text}: nessuna diagnostica row-scoped per errore di configurazione"
             );
         }
-        // Controllo: divisore dipendente dalla riga -> row-scoped invariato.
-        let error = formula(&batch, &config("i / (i * 0)")).expect_err("divisione calcolata");
+        // Letterale zero: errore di piano anche con la politica `null`.
+        for politica in [
+            crate::OnDivisionByZero::Null,
+            crate::OnDivisionByZero::Error,
+        ] {
+            let error = formula(&batch, &con_politica("f / 0", politica)).expect_err("f / 0");
+            assert!(matches!(error, PlenoraError::InvalidPlan(_)), "{error:?}");
+        }
+        // Controllo: divisore dipendente dalla riga -> row-scoped con `error`.
+        let error = formula(
+            &batch,
+            &con_politica("i / (i * 0)", crate::OnDivisionByZero::Error),
+        )
+        .expect_err("divisione calcolata");
         assert!(error.row_diagnostics().is_some());
+    }
+
+    fn con_politica(text: &str, politica: crate::OnDivisionByZero) -> Formula {
+        Formula {
+            on_division_by_zero: Some(politica),
+            ..config(text)
+        }
+    }
+
+    #[test]
+    fn divisione_per_zero_di_default_vale_null_e_si_conta() {
+        // Default (decisione dell'utente): la divisione per zero vale null,
+        // e le righe si contano. Righe 0, 2, 3, 4, 5 dividono per zero; la
+        // riga 1 ha `i` null e resta null senza contare.
+        let batch = fixture();
+        for cfg in [
+            config("i / (i * 0)"),
+            con_politica("i / (i * 0)", crate::OnDivisionByZero::Null),
+        ] {
+            let (uscita, effetti) =
+                formula_con_effetti(&batch, &cfg, &crate::Limits::default()).expect("null");
+            assert_eq!(effetti.righe_divisione_per_zero, 5);
+            let colonna = uscita
+                .column_by_name("out")
+                .expect("out")
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .expect("f64")
+                .clone();
+            assert_eq!(colonna.null_count(), 6);
+            // Fast e generico danno lo stesso conteggio.
+            let expression = parse(&cfg.formula).expect("parse");
+            let limits = crate::Limits::default();
+            let mut generico = Esecuzione::new(&cfg, &limits);
+            let atteso = formula_generic(
+                &batch,
+                &cfg,
+                &expression,
+                FormulaType::Number,
+                &mut generico,
+            )
+            .expect("generico");
+            assert_eq!(uscita, atteso);
+            assert_eq!(generico.effetti, effetti);
+        }
+        // Una formula senza divisioni per zero non conta niente.
+        let (_, effetti) =
+            formula_con_effetti(&batch, &config("f / 2"), &crate::Limits::default()).expect("ok");
+        assert_eq!(effetti.righe_divisione_per_zero, 0);
+        // Il testo: la riga intera diventa null (ogni operatore propaga il
+        // null), anche nella concatenazione.
+        let (uscita, effetti) = formula_con_effetti(
+            &batch,
+            &config("s + (i / (i * 0))"),
+            &crate::Limits::default(),
+        )
+        .expect("testo");
+        assert_eq!(effetti.righe_divisione_per_zero, 5);
+        assert_eq!(uscita.column_by_name("out").expect("out").null_count(), 6);
+    }
+
+    #[test]
+    fn on_division_by_zero_senza_divisioni_si_rifiuta() {
+        let batch = fixture();
+        for politica in [
+            crate::OnDivisionByZero::Null,
+            crate::OnDivisionByZero::Error,
+        ] {
+            let cfg = con_politica("f * 2", politica);
+            let error = formula(&batch, &cfg).expect_err("senza divisioni");
+            assert!(
+                error
+                    .to_string()
+                    .contains("on_division_by_zero senza effetto"),
+                "{error}"
+            );
+            assert!(validate(&cfg, 1024).is_err());
+        }
+        assert!(validate(&con_politica("f / 2", crate::OnDivisionByZero::Error), 1024).is_ok());
     }
 
     #[test]
     fn divisione_per_zero_riporta_diagnostica_row_scoped() {
         let batch = fixture();
-        let cfg = config("i / (i * 0)");
+        let cfg = con_politica("i / (i * 0)", crate::OnDivisionByZero::Error);
         // Righe difettose: 0, 2, 3, 4, 5 (riga 1 null -> null, nessun errore).
         let error = formula(&batch, &cfg).expect_err("divisione per zero");
         let report = error

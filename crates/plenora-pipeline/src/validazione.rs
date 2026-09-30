@@ -105,6 +105,10 @@ pub struct PassoValidato {
     /// Colonne dell'uscita, dal contratto: con le righe in ingresso danno le
     /// celle d'uscita del modello di costo ([`crate::budget::Ingresso`]).
     pub colonne_uscita: u64,
+    /// Espansione fissata dalla config (`melt`): fuori dal fattore di
+    /// espansione, verificata esatta dopo il passo
+    /// ([`PassoPreparato::moltiplicatore_dichiarato`]).
+    pub moltiplicatore_dichiarato: Option<u64>,
 }
 
 impl PassoValidato {
@@ -243,19 +247,15 @@ fn limiti_dei_kernel_tabellari(limiti: &Limits) -> Result<plenora_kernels_table:
 /// Controlli sull'ambiente del processo, non sulla config: l'analisi dei
 /// kernel non li vede, e un errore qui non arriva dopo i passi a monte.
 ///
-/// Solo `table.hmac_sha256`: la variabile `key_env` deve esistere e non
-/// essere vuota. Può ancora cambiare fra `validate` e `run`; in quel caso
-/// l'errore arriva al passo (README, «Runner»).
+/// Solo `table.hmac_sha256`: la variabile `key_env` deve esistere, non
+/// essere vuota ed essere UTF-8, con la stessa funzione del kernel
+/// (`security::carica_chiave_hmac`). Può ancora cambiare fra `validate` e
+/// `run`; in quel caso l'errore arriva al passo (README, «Runner»).
 fn verifica_ambiente(preparato: &PassoPreparato) -> Result<()> {
     if let PassoPreparato::HmacSha256(config) = preparato {
-        match std::env::var_os(&config.key_env) {
-            Some(valore) if !valore.is_empty() => {}
-            _ => {
-                return Err(PlenoraError::InvalidPlan(
-                    "hmac_sha256: chiave HMAC non disponibile".to_owned(),
-                ))
-            }
-        }
+        // La stessa lettura del kernel: variabile assente, vuota o non UTF-8
+        // si rifiutano qui come li' (la chiave letta si scarta subito).
+        plenora_kernels_table::security::carica_chiave_hmac(&config.key_env)?;
     }
     Ok(())
 }
@@ -604,6 +604,12 @@ impl Pipeline {
                     })
                 })
                 .collect::<Result<_>>()?;
+            let moltiplicatore_dichiarato = match (&preparato, ingressi.first()) {
+                (Some(preparato), Some(primo)) => {
+                    preparato.moltiplicatore_dichiarato(&primo.schema)
+                }
+                _ => None,
+            };
             let (uscita, kernel, righe_previste) = if let Some(preparato) = preparato {
                 let uscita = analyze_table_contract(
                     descrittore.id,
@@ -657,6 +663,7 @@ impl Pipeline {
                 righe_previste,
                 base_indici,
                 colonne_uscita,
+                moltiplicatore_dichiarato,
             });
         }
 

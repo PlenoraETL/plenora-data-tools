@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::scalar::{confronta_numeri, numero_del_letterale, numero_della_cella, Numero};
 use super::static_type::Kind;
 use super::temporal::{literal_unit, trunc_date32_days, trunc_timestamp_ms_value, TruncUnit};
-use super::{BinaryOperator, Expression, ExpressionTransform, Function, UnaryOperator};
+use super::{BinaryOperator, Contesto, Expression, ExpressionTransform, Function, UnaryOperator};
 use crate::{
     column_index, replace_or_append, scalar_as_string, NumericBound, DIVISION_BY_ZERO_MESSAGE,
     NON_FINITE_INPUT_MESSAGE, NON_FINITE_RESULT_MESSAGE,
@@ -907,13 +907,17 @@ fn compile_regex_replace<'a>(args: &'a [Expression], batch: &'a RecordBatch) -> 
 // lineare dei casi del contratto (uno per variante), non da complessita'
 // logica; spezzarla peggiorerebbe solo la leggibilita'.
 #[allow(clippy::too_many_lines)]
-fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastValue<'e>> {
+fn evaluate_fast<'e, 'a: 'e>(
+    node: &'e FastNode<'a>,
+    row: usize,
+    ctx: &Contesto<'_>,
+) -> Result<FastValue<'e>> {
     match node {
         FastNode::Literal(literal) => Ok(literal.value()),
         FastNode::Column(column) => column.get(row),
         FastNode::Error(error) => Err(error.build()),
         FastNode::Unary { op, value } => {
-            let value = evaluate_fast(value, row)?;
+            let value = evaluate_fast(value, row, ctx)?;
             Ok(match op {
                 UnaryOperator::IsNull => FastValue::Boolean(matches!(value, FastValue::Null)),
                 UnaryOperator::IsNotNull => FastValue::Boolean(!matches!(value, FastValue::Null)),
@@ -926,26 +930,38 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
             })
         }
         FastNode::Binary { op, left, right } => {
-            let left = evaluate_fast(left, row)?;
-            let right = evaluate_fast(right, row)?;
-            fast_binary(*op, &left, &right)
+            let left = evaluate_fast(left, row, ctx)?;
+            let right = evaluate_fast(right, row, ctx)?;
+            let esito = fast_binary(*op, &left, &right);
+            // Come il generico: la divisione per zero passa dal contesto.
+            if matches!(op, BinaryOperator::Divide) {
+                ctx.dividi(esito, || FastValue::Null)
+            } else {
+                esito
+            }
         }
-        FastNode::Function { name, args } => fast_function(
-            *name,
-            args.iter()
-                .map(|arg| evaluate_fast(arg, row))
-                .collect::<Result<Vec<_>>>()?,
-        ),
+        FastNode::Function { name, args } => {
+            let valore = fast_function(
+                *name,
+                args.iter()
+                    .map(|arg| evaluate_fast(arg, row, ctx))
+                    .collect::<Result<Vec<_>>>()?,
+            )?;
+            if let FastValue::Text(testo) = &valore {
+                ctx.verifica_testo(testo.len())?;
+            }
+            Ok(valore)
+        }
         FastNode::Case {
             branches,
             else_value,
         } => {
             for (when, then) in branches {
-                if fast_boolean(&evaluate_fast(when, row)?, "case when")? == Some(true) {
-                    return evaluate_fast(then, row);
+                if fast_boolean(&evaluate_fast(when, row, ctx)?, "case when")? == Some(true) {
+                    return evaluate_fast(then, row, ctx);
                 }
             }
-            evaluate_fast(else_value, row)
+            evaluate_fast(else_value, row, ctx)
         }
         FastNode::DateTrunc { unit, source } => {
             let value = match source {
@@ -963,7 +979,7 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
                         FastValue::TimestampMs(values.value(row))
                     }
                 }
-                TemporalSource::Nested(node) => evaluate_fast(node, row)?,
+                TemporalSource::Nested(node) => evaluate_fast(node, row, ctx)?,
                 TemporalSource::NullLiteral => FastValue::Null,
                 TemporalSource::Error(error) => return Err(error.build()),
             };
@@ -979,12 +995,12 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
             }
         }
         FastNode::In { value, list } => {
-            let value = evaluate_fast(value, row)?;
+            let value = evaluate_fast(value, row, ctx)?;
             if matches!(value, FastValue::Null) {
                 return Ok(FastValue::Null);
             }
             for item in list {
-                if fast_compare(&value, &evaluate_fast(item, row)?)? == Some(Ordering::Equal) {
+                if fast_compare(&value, &evaluate_fast(item, row, ctx)?)? == Some(Ordering::Equal) {
                     return Ok(FastValue::Boolean(true));
                 }
             }
@@ -997,12 +1013,12 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
         } => {
             // Stesso ordine del generico: valutazione argomenti, estrazione
             // testi (errori di tipo anche su righe null), poi null check.
-            let value = evaluate_fast(value, row)?;
+            let value = evaluate_fast(value, row, ctx)?;
             let dynamic = match pattern {
                 RegexSource::Compiled(..) => None,
-                RegexSource::Dynamic(node) => Some(evaluate_fast(node, row)?),
+                RegexSource::Dynamic(node) => Some(evaluate_fast(node, row, ctx)?),
             };
-            let replacement = evaluate_fast(replacement, row)?;
+            let replacement = evaluate_fast(replacement, row, ctx)?;
             let value = fast_text(&value, "regex_replace")?;
             let pattern_text = match (pattern, &dynamic) {
                 (RegexSource::Compiled(_, text), None) => Some(*text),
@@ -1025,6 +1041,7 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
                     .as_ref()
                     .map_err(|message| PlenoraError::InvalidPlan(message.clone()))?,
                 RegexSource::Dynamic(_) => {
+                    ctx.verifica_pattern(pattern_text.len())?;
                     owned = regex::Regex::new(pattern_text).map_err(|error| {
                         PlenoraError::InvalidPlan(format!(
                             "regex_replace: regex non valida: {error}"
@@ -1033,9 +1050,9 @@ fn evaluate_fast<'e, 'a: 'e>(node: &'e FastNode<'a>, row: usize) -> Result<FastV
                     &owned
                 }
             };
-            Ok(FastValue::Text(Cow::Owned(
-                regex.replace_all(value, replacement).into_owned(),
-            )))
+            let sostituito = regex.replace_all(value, replacement).into_owned();
+            ctx.verifica_testo(sostituito.len())?;
+            Ok(FastValue::Text(Cow::Owned(sostituito)))
         }
     }
 }
@@ -1079,8 +1096,24 @@ impl<'a> FastProgram<'a> {
         batch: &RecordBatch,
         config: &ExpressionTransform,
     ) -> Result<RecordBatch> {
+        self.run_auto_con_effetti(batch, config)
+            .map(|(uscita, _)| uscita)
+    }
+
+    /// Come [`Self::run_auto`], con il conteggio delle divisioni per zero.
+    #[cfg(test)]
+    pub fn run_auto_con_effetti(
+        &self,
+        batch: &RecordBatch,
+        config: &ExpressionTransform,
+    ) -> Result<(RecordBatch, crate::EffettiKernel)> {
+        let limits = crate::Limits::default();
+        config.verifica_parametri(&limits)?;
         let kind = super::interpreter::static_output_kind(batch, config)?;
-        self.run(batch, config, kind)
+        let ctx = Contesto::new(config, &limits);
+        let mut effetti = crate::EffettiKernel::default();
+        let uscita = self.run(batch, config, kind, &ctx, &mut effetti)?;
+        Ok((uscita, effetti))
     }
 
     pub fn run(
@@ -1088,11 +1121,17 @@ impl<'a> FastProgram<'a> {
         batch: &RecordBatch,
         config: &ExpressionTransform,
         kind: Kind,
+        ctx: &Contesto<'_>,
+        effetti: &mut crate::EffettiKernel,
     ) -> Result<RecordBatch> {
         let mut values = Vec::with_capacity(batch.num_rows());
         let mut rejections = Vec::new();
         for row in 0..batch.num_rows() {
-            match evaluate_fast(&self.root, row) {
+            let esito = evaluate_fast(&self.root, row, ctx);
+            if ctx.chiudi_riga() && esito.is_ok() {
+                effetti.conta_divisione_per_zero()?;
+            }
+            match esito {
                 Ok(value) => values.push(value),
                 Err(error) => {
                     let Some(cause) = crate::row_eval_failure_cause(&error) else {

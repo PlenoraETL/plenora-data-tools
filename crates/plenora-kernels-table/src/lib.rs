@@ -42,10 +42,18 @@ pub struct Limits {
     /// Default: [`limiti_interni::MAX_COLUMNS`].
     pub max_columns: usize,
     /// Byte massimi di un testo di config (separatori, formati, prefissi,
-    /// valori sostitutivi) e dei valori testuali costruiti dai kernel che lo
-    /// controllano (`concat_columns`, `melt`...). Default: 16 MiB.
+    /// valori sostitutivi; controllati dall'analisi) e dei valori testuali
+    /// che i kernel costruiscono e che possono superare le celle d'ingresso
+    /// (`concat_columns`, `melt`, `replace` con regex, `expression`,
+    /// `formula`, `concat` di `aggregate` e `pivot`, `table_diff`,
+    /// `string_extract` con `extract_all`, `mask_data`, `flatten_json`;
+    /// controllati dai kernel). Default:
+    /// `plenora_core::limits::DEFAULT_MAX_STRING_BYTES` (16 MiB).
     pub max_string_bytes: usize,
-    /// Byte massimi di un'espressione regolare di config. Default: 4096.
+    /// Byte massimi di un'espressione regolare, di config o calcolata da
+    /// `table.expression`. Default:
+    /// `plenora_core::limits::DEFAULT_MAX_REGEX_BYTES` (64 KiB), lo stesso
+    /// del piano.
     pub max_regex_bytes: usize,
     /// Colonne massime che un singolo `split_column` produce.
     /// Default: [`limiti_interni::MAX_SPLIT_COLUMNS`].
@@ -86,8 +94,9 @@ impl Default for Limits {
         Self {
             max_rows: 10_000_000,
             max_columns: limiti_interni::MAX_COLUMNS,
-            max_string_bytes: 16 * 1024 * 1024,
-            max_regex_bytes: 4_096,
+            // Stessa autorita' dei limiti del piano (`plenora_core::limits`).
+            max_string_bytes: plenora_core::limits::DEFAULT_MAX_STRING_BYTES,
+            max_regex_bytes: plenora_core::limits::DEFAULT_MAX_REGEX_BYTES,
             max_split_columns: limiti_interni::MAX_SPLIT_COLUMNS,
             // Stessa autorita' di `plenora_core::Limits::default()`: i due
             // default non possono divergere.
@@ -160,6 +169,71 @@ pub(crate) struct RowRejection<'a> {
 pub(crate) const DIVISION_BY_ZERO_MESSAGE: &str = "divisione per zero";
 pub(crate) const NON_FINITE_INPUT_MESSAGE: &str = "expression non accetta numeri non finiti";
 pub(crate) const NON_FINITE_RESULT_MESSAGE: &str = "risultato expression non finito";
+
+/// Che cosa rende una divisione per zero in `table.formula` e
+/// `table.expression` (campo `on_division_by_zero`, in JSON `"null"` o
+/// `"error"`; un altro valore si rifiuta).
+///
+/// Decisione dell'utente: di default la divisione per un divisore zero vale
+/// null, e il piano puo' chiedere l'errore. Non e' un null silenzioso: il
+/// kernel conta le righe in cui e' successo ([`EffettiKernel`]) e il runner
+/// le riporta nel resoconto di ogni passo, in entrambi i modi. Un divisore
+/// letterale zero resta un errore di piano con qualunque valore.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnDivisionByZero {
+    /// La divisione vale null (default): il null segue le regole dei null
+    /// dell'operazione, e la riga si conta.
+    #[default]
+    Null,
+    /// La riga si rifiuta con la diagnostica per riga
+    /// (`evaluation.division_by_zero`), e il passo fallisce.
+    Error,
+}
+
+/// Effetti di un kernel che l'uscita non mostra: conteggi, mai valori.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EffettiKernel {
+    /// Righe in cui una divisione con operandi non null ha trovato un
+    /// divisore zero e, con `on_division_by_zero = "null"`, ha dato null.
+    /// Con `"error"` un passo riuscito ne ha zero (altrimenti fallisce).
+    pub righe_divisione_per_zero: u64,
+}
+
+impl EffettiKernel {
+    /// Aggiunge una riga al conteggio delle divisioni per zero.
+    ///
+    /// # Errors
+    ///
+    /// `Internal` se il conteggio traboccherebbe `u64` (mai saturato).
+    pub(crate) fn conta_divisione_per_zero(&mut self) -> Result<()> {
+        self.righe_divisione_per_zero = self
+            .righe_divisione_per_zero
+            .checked_add(1)
+            .ok_or_else(|| PlenoraError::Internal("conteggio delle divisioni per zero".into()))?;
+        Ok(())
+    }
+}
+
+/// `true` se l'errore e' la divisione per zero di una riga.
+pub(crate) fn e_divisione_per_zero(error: &PlenoraError) -> bool {
+    matches!(error, PlenoraError::Schema(message) if message == DIVISION_BY_ZERO_MESSAGE)
+}
+
+/// Un testo prodotto da un kernel (non copiato da una cella) entro
+/// `limits.max_string_bytes`.
+///
+/// # Errors
+///
+/// `ResourceLimit` con il nome dell'operazione, senza il testo.
+pub(crate) fn verifica_testo_prodotto(op: &str, byte: usize, limits: &Limits) -> Result<()> {
+    if byte > limits.max_string_bytes {
+        return Err(PlenoraError::ResourceLimit(format!(
+            "{op}: testo prodotto oltre max_string_bytes"
+        )));
+    }
+    Ok(())
+}
 
 /// Classifica un errore di valutazione per riga: `Some(causa)` solo se il
 /// difetto dipende dal valore della cella (divisione per zero, numero non

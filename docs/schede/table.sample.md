@@ -9,9 +9,9 @@ sempre le stesse righe nello stesso ordine.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `n` | intero | `100` | intero non negativo | righe del campione (senza `fraction`) |
-| `fraction` | numero | assente | da 0 a 1 compresi | frazione delle righe; se presente, `n` non conta |
-| `random_state` | intero | assente (seme fisso `0x9e3779b97f4a7c15`) | intero senza segno a 64 bit | seme del generatore |
+| `n` | intero | `100` | intero non negativo; non insieme a `fraction` | righe del campione (senza `fraction`) |
+| `fraction` | numero | assente | da 0 a 1 compresi | frazione delle righe; esclude `n` |
+| `random_state` | intero | assente (seme fisso `0x9e3779b97f4a7c15`) | intero senza segno a 64 bit; si rifiuta se il campione è sempre vuoto (`n = 0` o `fraction = 0` senza `stratify_column`) | seme del generatore |
 | `stratify_column` | stringa | assente | colonna leggibile come testo | colonna degli strati |
 
 Senza strati il campione ha `min(n, righe)` righe, oppure
@@ -22,8 +22,8 @@ nulle formano uno strato); ogni strato di s righe contribuisce
 `floor(n · s / righe)` righe, oppure `floor(s · fraction)`, ma sempre
 almeno una e al più s. Il totale può quindi differire da `n`.
 
-`n` e `fraction` insieme: vale `fraction` e `n` non ha effetto, senza
-errore. I semi `0` e `1` danno lo stesso campione.
+`n` e `fraction` insieme si rifiutano: con `fraction` il valore di `n` non
+avrebbe effetto. I semi `0` e `1` danno lo stesso campione.
 
 ### Schema
 
@@ -50,6 +50,9 @@ In validazione, `InvalidPlan`:
 
 - `fraction` fuori da 0..=1;
 - `stratify_column` assente o non leggibile come testo;
+- `n` scritto insieme a `fraction`;
+- `random_state` scritto senza `stratify_column` quando il campione è
+  sempre vuoto (`n = 0` o `fraction = 0`): nessun seme avrebbe effetto;
 - config con campi sconosciuti o `n` negativo.
 
 In esecuzione:
@@ -62,10 +65,7 @@ In esecuzione:
 
 Il generatore non è crittografico e riduce con il modulo, con una
 distorsione trascurabile ma non nulla verso gli indici bassi: il campione
-serve all'esplorazione, non a garanzie statistiche. `n` scritto insieme a
-`fraction` si ignora invece di rifiutarsi, diversamente dalla regola dei
-parametri senza effetto
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
+serve all'esplorazione, non a garanzie statistiche.
 
 ### Complessità
 

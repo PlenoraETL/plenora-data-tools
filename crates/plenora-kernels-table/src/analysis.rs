@@ -1388,6 +1388,12 @@ pub fn flatten_json(
         }
     }
     rifiuti.verifica()?;
+    // Un valore annidato o un numero si riscrivono come testo JSON (un
+    // `1e15` diventa `1000000000000000.0`): testo prodotto, entro
+    // `max_string_bytes`.
+    for valore in columns.columns.iter().flatten().flatten() {
+        crate::verifica_testo_prodotto("flatten_json", valore.len(), limits)?;
+    }
     // Colonne dense: null dove il path manca nella riga.
     for column in &mut columns.columns {
         column.resize(batch.num_rows(), None);
@@ -1487,6 +1493,36 @@ pub struct Statistics {
     /// Prefisso dei nomi d'uscita; vuoto (default) vale `<column>_`.
     #[serde(default)]
     pub output_prefix: String,
+}
+
+impl Statistics {
+    /// Una statistica ripetuta in `stats` scriverebbe due volte la stessa
+    /// colonna, e la prima non avrebbe effetto; `stats` vuoto non produce
+    /// nulla. Entrambi si rifiutano. La chiamano il kernel e l'analisi dei
+    /// contratti.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per `stats` vuoto o con una statistica ripetuta.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        if self.stats.is_empty() {
+            return Err(PlenoraError::InvalidPlan(
+                "stats vuoto: nessuna colonna prodotta".into(),
+            ));
+        }
+        for (posizione, stat) in self.stats.iter().enumerate() {
+            let discriminante = std::mem::discriminant(stat);
+            if self.stats[..posizione]
+                .iter()
+                .any(|prima| std::mem::discriminant(prima) == discriminante)
+            {
+                return Err(PlenoraError::InvalidPlan(
+                    "statistica ripetuta in stats: la prima non avrebbe effetto".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn quantile(sorted: &[f64], q: f64) -> Option<f64> {
@@ -1591,6 +1627,7 @@ fn group_statistics(values: &[f64], stats: &[Stat]) -> Vec<Option<f64>> {
 ///   errori di `scalar_as_f64_rounded` e `scalar_as_string`); gli errori di
 ///   `replace_or_append`.
 pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatch> {
+    config.verifica_parametri()?;
     let value_index = column_index(batch, &config.column)?;
     let group_index = config
         .group_by
@@ -1678,10 +1715,11 @@ pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatc
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sample {
-    /// Righe del campione (default 100); con `fraction` presente non conta.
-    #[serde(default = "default_n")]
-    pub n: usize,
-    /// Frazione delle righe, da 0 a 1 compresi; prevale su `n`.
+    /// Righe del campione (default 100, [`Sample::righe`]); non ammesso
+    /// insieme a `fraction`, che lo renderebbe senza effetto.
+    #[serde(default)]
+    pub n: Option<usize>,
+    /// Frazione delle righe, da 0 a 1 compresi; esclude `n`.
     pub fraction: Option<f64>,
     /// Seme del generatore; assente, `0x9e37_79b9_7f4a_7c15`. `0` e `1`
     /// danno lo stesso campione.
@@ -1690,8 +1728,48 @@ pub struct Sample {
     /// almeno una riga.
     pub stratify_column: Option<String>,
 }
-const fn default_n() -> usize {
-    100
+
+const DEFAULT_SAMPLE_N: usize = 100;
+
+impl Sample {
+    /// Righe chieste senza `fraction`: `n`, o 100 se assente.
+    #[must_use]
+    pub fn righe(&self) -> usize {
+        self.n.unwrap_or(DEFAULT_SAMPLE_N)
+    }
+
+    /// Regole sulla sola config, condivise da kernel e analisi dei
+    /// contratti: `fraction` in `0..=1`; `n` e `fraction` insieme si
+    /// rifiutano (`fraction` renderebbe `n` senza effetto); `random_state`
+    /// senza strati con un campione sempre vuoto (`n = 0` o `fraction = 0`)
+    /// non ha effetto e si rifiuta. Con gli strati ogni strato da' almeno una
+    /// riga, quindi il seme conta anche li'.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per ciascuna delle regole.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        if self
+            .fraction
+            .is_some_and(|fraction| !(0.0..=1.0).contains(&fraction))
+        {
+            return Err(PlenoraError::InvalidPlan("fraction fuori 0..=1".into()));
+        }
+        if self.n.is_some() && self.fraction.is_some() {
+            return Err(PlenoraError::InvalidPlan(
+                "n e fraction insieme: con fraction n non ha effetto".into(),
+            ));
+        }
+        let sempre_vuoto = self
+            .fraction
+            .map_or_else(|| self.righe() == 0, |fraction| fraction == 0.0);
+        if self.random_state.is_some() && self.stratify_column.is_none() && sempre_vuoto {
+            return Err(PlenoraError::InvalidPlan(
+                "random_state non ha effetto su un campione sempre vuoto".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn shuffle(rows: &mut [usize], seed: u64) {
@@ -1707,7 +1785,8 @@ fn shuffle(rows: &mut [usize], seed: u64) {
 }
 
 /// Campione casuale deterministico delle righe (dimensione `n` o
-/// `fraction`, opzionalmente stratificato su `stratify_column`).
+/// `fraction`, mai entrambi; opzionalmente stratificato su
+/// `stratify_column`).
 ///
 /// Senza strati: `min(n, righe)` righe o `round(righe * fraction)`,
 /// nell'ordine di un rimescolamento Fisher-Yates con xorshift64 dal seme.
@@ -1717,19 +1796,15 @@ fn shuffle(rows: &mut [usize], seed: u64) {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: `fraction` fuori da 0..=1;
+/// - `InvalidPlan`: le regole di [`Sample::verifica_parametri`] (`fraction`
+///   fuori da 0..=1, `n` con `fraction`, `random_state` senza effetto);
 /// - `ResourceLimit`: dimensioni di gruppo, dataset o campione non
 ///   rappresentabili; indice di riga oltre `u32` (`select_rows`);
 /// - `Schema`: colonna `stratify_column` assente dallo schema; gli errori
 ///   di `scalar_as_string`;
 /// - `DataMapping` (`arrow error: …`): errore Arrow della `take` in `select_rows`.
 pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
-    if config
-        .fraction
-        .is_some_and(|fraction| !(0.0..=1.0).contains(&fraction))
-    {
-        return Err(PlenoraError::InvalidPlan("fraction fuori 0..1".into()));
-    }
+    config.verifica_parametri()?;
     let seed = config.random_state.unwrap_or(0x9e37_79b9_7f4a_7c15);
     let mut selected = Vec::new();
     if let Some(column) = &config.stratify_column {
@@ -1748,7 +1823,7 @@ pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
             );
             let count =
                 match config.fraction {
-                    None => config.n.saturating_mul(rows.len()) / batch.num_rows().max(1),
+                    None => config.righe().saturating_mul(rows.len()) / batch.num_rows().max(1),
                     Some(fraction) => (rows.len().to_f64().ok_or_else(|| {
                         PlenoraError::ResourceLimit("gruppo troppo grande".into())
                     })? * fraction)
@@ -1766,7 +1841,7 @@ pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
         selected.extend(0..batch.num_rows());
         shuffle(&mut selected, seed);
         let count = match config.fraction {
-            None => config.n,
+            None => config.righe(),
             Some(fraction) => (batch
                 .num_rows()
                 .to_f64()
@@ -1834,6 +1909,9 @@ mod tests {
     }
 
     fn oracle_statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatch> {
+        // Regola condivisa sulla config (`stats` vuoto o ripetuto), non
+        // oracolata.
+        config.verifica_parametri()?;
         let value_index = column_index(batch, &config.column)?;
         let group_index = config
             .group_by

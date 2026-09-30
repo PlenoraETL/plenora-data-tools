@@ -29,6 +29,18 @@ pub struct RowLimits {
     /// base è l'unico ingresso per le unarie, il vincolo del catalogo
     /// ([`crate::catalog::ExpansionConstraint`]) per le operazioni a due
     /// ingressi. Finito e positivo; default 100.
+    ///
+    /// Che cosa protegge: il runner lo controlla dopo il passo, sulle righe
+    /// dell'uscita gia' costruita, quindi non difende la memoria (la
+    /// difendono il budget prima e dopo il passo, i preflight dei kernel e
+    /// `max_rows_per_edge`). E' una guardia logica contro un'espansione dei
+    /// dati che nessun piano sensato chiede: un join molti-a-molti su una
+    /// chiave sbagliata, un prodotto cartesiano involontario, liste esplose
+    /// piu' lunghe del previsto. Non si applica alle uscite con righe fissate
+    /// dalla config (esenzioni del catalogo, `table.melt`). Con la base
+    /// `SumRelative` dei join un abbinamento con la chiave unica su un lato
+    /// vale al piu' 1, quindi 100 non rifiuta un arricchimento 1:N o N:1
+    /// legittimo (README, «Fattore di espansione»).
     pub max_expansion_factor: f64,
 }
 
@@ -69,6 +81,21 @@ pub const DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE: usize = 512 * 1024 * 1024;
 /// 8 GiB. Costante sola per la stessa ragione di
 /// [`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`]: la usano anche i kernel tabellari.
 pub const DEFAULT_MAX_TEMP_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
+/// Byte massimi di un testo, applicati quando il piano non li dichiara.
+///
+/// 16 MiB, per i testi di config e per quelli prodotti dai kernel. Costante
+/// sola, come [`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`]: la usano anche i kernel
+/// tabellari.
+pub const DEFAULT_MAX_STRING_BYTES: usize = 16 * 1024 * 1024;
+
+/// Byte massimi di un'espressione regolare, applicati quando il piano non li
+/// dichiara.
+///
+/// 64 KiB. Costante sola: prima i kernel tabellari ne avevano una loro
+/// (4096), e chi li chiamava direttamente con i limiti di default applicava
+/// un tetto diverso da quello del piano.
+pub const DEFAULT_MAX_REGEX_BYTES: usize = 64 * 1024;
 
 /// Partizioni di spill applicate quando il piano non le dichiara.
 ///
@@ -278,8 +305,8 @@ impl Default for Limits {
             max_payload_bytes: 16 * 1024 * 1024 * 1024,
             max_batches: 65_536,
             max_geometry_depth: 64,
-            max_string_bytes: 16 * 1024 * 1024,
-            max_regex_bytes: 64 * 1024,
+            max_string_bytes: DEFAULT_MAX_STRING_BYTES,
+            max_regex_bytes: DEFAULT_MAX_REGEX_BYTES,
         }
     }
 }

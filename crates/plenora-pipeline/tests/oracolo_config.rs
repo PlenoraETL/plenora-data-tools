@@ -51,6 +51,22 @@ const REGOLE_DEL_KERNEL: &[&str] = &[
     "mask_type=custom",
     "value ammesso solo",
     "offset ammesso solo",
+    // Parametri senza effetto (difetti-b): stessa funzione in analisi e nel
+    // kernel.
+    "non ha effetto",
+    "senza effetto",
+    "null_literal ammesso solo",
+    "n e fraction insieme",
+    "nome d'uscita",
+    "statistica ripetuta",
+    "parte ripetuta",
+    "ripetuta in maskings",
+    "non sposta niente",
+    "n 0 da' sempre",
+    "min_rows 0",
+    "width 0",
+    "voce vuota in index_col",
+    "non abbina mai",
 ];
 
 /// Regole nuove che l'oracolo deve aver provato almeno una volta contro il

@@ -184,11 +184,11 @@ fn emettitori() -> Vec<(&'static str, Value)> {
         ),
         (
             "table.formula",
-            json!({"new_column": "rapporto", "formula": "v / d"}),
+            json!({"new_column": "rapporto", "formula": "v / d", "on_division_by_zero": "error"}),
         ),
         (
             "table.expression",
-            json!({"output_column": "rapporto", "expression": {
+            json!({"output_column": "rapporto", "on_division_by_zero": "error", "expression": {
                 "kind": "binary", "op": "divide",
                 "left": {"kind": "column", "name": "v"},
                 "right": {"kind": "column", "name": "d"}}}),
@@ -444,7 +444,8 @@ fn aggregate_poi_formula_riferisce_le_righe_dei_gruppi() {
                 "x",
                 "table.formula",
                 &["g"],
-                json!({"new_column": "rapporto", "formula": "vmax / dmin"}),
+                json!({"new_column": "rapporto", "formula": "vmax / dmin",
+                        "on_division_by_zero": "error"}),
             ),
         ],
         &["x"],
@@ -636,7 +637,7 @@ fn la_base_non_aggiunge_memoria_ai_byte_vivi() {
                 "x",
                 "table.formula",
                 &["f"],
-                json!({"new_column": "rapporto", "formula": "v / d"}),
+                json!({"new_column": "rapporto", "formula": "v / d", "on_division_by_zero": "error"}),
             ),
         ],
         &["x"],
@@ -1244,7 +1245,8 @@ fn aggregate_che_fonde_piu_righe_poi_formula_riferisce_il_gruppo() {
                 "x",
                 "table.formula",
                 &["gruppi"],
-                json!({"new_column": "rapporto", "formula": "vsum / dmin"}),
+                json!({"new_column": "rapporto", "formula": "vsum / dmin",
+                        "on_division_by_zero": "error"}),
             ),
         ],
         &["x"],

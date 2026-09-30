@@ -8,10 +8,12 @@
 //! e' per id canonico del catalogo: nessun alias, nessun nome legacy.
 
 use plenora_core::arrow::array::RecordBatch;
+use plenora_core::arrow::schema::Schema;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_table::{
     aggregation, analysis, cleansing, columns, dates, expressions, filtering, formula, fuzzy,
-    governance, joins, quality, reshape, security, setops, spill, strings, utility, Limits,
+    governance, joins, quality, reshape, security, setops, spill, strings, utility, EffettiKernel,
+    Limits,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -206,6 +208,20 @@ pub enum Variante {
 }
 
 impl PassoPreparato {
+    /// Espansione fissata dalla config e dallo schema del primo ingresso:
+    /// righe d'uscita = righe d'ingresso per questo fattore, esattamente
+    /// (le colonne valore di `melt`). Non e' un'espansione dei dati: il
+    /// fattore di espansione non la misura (una `melt` di 365 colonne
+    /// giornaliere e' 365 volte l'ingresso per costruzione), e il runner
+    /// verifica invece che l'uscita abbia esattamente quelle righe.
+    #[must_use]
+    pub fn moltiplicatore_dichiarato(&self, primo_ingresso: &Schema) -> Option<u64> {
+        match self {
+            Self::Melt(config) => u64::try_from(config.numero_colonne_valore(primo_ingresso)).ok(),
+            _ => None,
+        }
+    }
+
     /// `true` se il passo ha una variante spilled.
     pub const fn ha_spill(&self) -> bool {
         matches!(self, Self::Sort(_) | Self::Distinct(_) | Self::Aggregate(_))
@@ -219,6 +235,32 @@ impl PassoPreparato {
             Self::Intersect(_) => Some(setops::SetOperationKind::Intersect),
             Self::Except(_) => Some(setops::SetOperationKind::Except),
             _ => None,
+        }
+    }
+
+    /// Come [`Self::esegui_unario`], con gli effetti che l'uscita non mostra
+    /// (le righe con una divisione per zero di `formula` ed `expression`);
+    /// per le altre operazioni sono zero.
+    ///
+    /// # Errors
+    ///
+    /// Come [`Self::esegui_unario`].
+    pub fn esegui_unario_con_effetti(
+        &self,
+        batch: &RecordBatch,
+        limits: &Limits,
+        variante: Variante,
+    ) -> Result<(RecordBatch, EffettiKernel)> {
+        match self {
+            Self::Formula(config) if variante == Variante::InMemoria => {
+                formula::formula_con_effetti(batch, config, limits)
+            }
+            Self::Expression(config) if variante == Variante::InMemoria => {
+                expressions::expression_con_effetti(batch, config, limits)
+            }
+            _ => self
+                .esegui_unario(batch, limits, variante)
+                .map(|uscita| (uscita, EffettiKernel::default())),
         }
     }
 
@@ -253,7 +295,7 @@ impl PassoPreparato {
             Self::StringLength(config) => strings::string_length(batch, config),
             Self::TextNormalize(config) => strings::text_normalize(batch, config, limits),
             Self::FillNa(config) => cleansing::fill_na(batch, config),
-            Self::Replace(config) => cleansing::replace(batch, config),
+            Self::Replace(config) => cleansing::replace_con_limiti(batch, config, limits),
             Self::TypeCast(config) => cleansing::type_cast(batch, config),
             Self::Filter(config) => filtering::filter(batch, config),
             Self::Conditional(config) => filtering::conditional(batch, config),
@@ -263,7 +305,7 @@ impl PassoPreparato {
             Self::Limit(config) => utility::limit(batch, config),
             Self::Lookup(config) => analysis::lookup(batch, config),
             Self::FlattenJson(config) => analysis::flatten_json(batch, config, limits),
-            Self::MaskData(config) => security::mask_data(batch, config),
+            Self::MaskData(config) => security::mask_data_con_limiti(batch, config, limits),
             Self::Md5Hash(config) => security::md5_hash(batch, config),
             Self::AddRowNumber(config) => utility::add_row_number(batch, config),
             Self::Bin(config) => analysis::bin(batch, config),
@@ -287,14 +329,18 @@ impl PassoPreparato {
                 spill::aggregate_spilled_in(batch, config, limits, &mut area)
                     .map(|(uscita, _)| uscita)
             }
-            Self::Aggregate(config) => aggregation::aggregate(batch, config),
+            Self::Aggregate(config) => aggregation::aggregate_con_limiti(batch, config, limits),
             Self::WindowFunction(config) => aggregation::window_function(batch, config),
             Self::RollingWindow(config) => aggregation::rolling_window(batch, config),
             Self::Melt(config) => reshape::melt(batch, config, limits),
             Self::Pivot(config) => reshape::pivot(batch, config, limits),
             Self::Transpose(config) => reshape::transpose(batch, config, limits),
-            Self::Formula(config) => formula::formula(batch, config),
-            Self::Expression(config) => expressions::expression(batch, config),
+            Self::Formula(config) => {
+                formula::formula_con_effetti(batch, config, limits).map(|(uscita, _)| uscita)
+            }
+            Self::Expression(config) => {
+                expressions::expression_con_effetti(batch, config, limits).map(|(uscita, _)| uscita)
+            }
             Self::AssertCardinality(config) => governance::assert_cardinality(batch, config),
             Self::AssertMetadata(config) => governance::assert_metadata(batch, config),
             Self::AssertSchema(config) => quality::assert_schema(batch, config),

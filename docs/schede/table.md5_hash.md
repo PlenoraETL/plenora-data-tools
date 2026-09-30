@@ -13,7 +13,7 @@ lati non cambiano l'hash.
 | `output_column` | stringa | `md5_hash` | nome valido | colonna d'uscita |
 | `normalize` | booleano | `true` | `true`, `false` | toglie gli spazi ai lati e porta in minuscolo ogni valore |
 | `null_policy` | stringa | `empty` | `empty`, `literal`, `error` | come entra una cella nulla |
-| `null_literal` | stringa | `"<null>"` | al più `max_string_bytes` byte | testo di una cella nulla con `literal` |
+| `null_literal` | stringa | `"<null>"` | al più `max_string_bytes` byte; solo con `null_policy = "literal"` | testo di una cella nulla con `literal` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -25,8 +25,8 @@ U+001F. Con `normalize` ogni testo passa da `trim` e `to_lowercase`
 (Unicode), e così `null_literal`. Una cella nulla con `empty` vale il testo
 vuoto, con `literal` vale `null_literal`, con `error` rifiuta la riga.
 
-`null_literal` scritto con una `null_policy` diversa da `literal` non ha
-effetto, senza errore.
+`null_literal` scritto con una `null_policy` diversa da `literal` si
+rifiuta; se manca, con `literal` vale `<null>`.
 
 ### Schema
 
@@ -52,6 +52,8 @@ In validazione, `InvalidPlan`:
 - `columns` vuoto, con ripetizioni o con più di `max_columns` colonne;
 - una colonna assente o non leggibile come testo;
 - `output_column` non valido; `null_literal` oltre `max_string_bytes`;
+- `null_literal` scritto con una `null_policy` diversa da `literal`: non
+  avrebbe effetto;
 - config con campi sconosciuti o `null_policy` fuori elenco.
 
 In esecuzione:

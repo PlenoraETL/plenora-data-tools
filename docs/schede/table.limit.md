@@ -9,11 +9,11 @@ righe tenute non si copiano: l'uscita è una finestra sull'ingresso.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `n` | intero | obbligatorio | da 0 a `max_rows` | righe da tenere al più |
-| `offset` | intero | `0` | da 0 a `max_rows` | righe da saltare in testa |
+| `offset` | intero | `0` | da 0 a `max_rows`; con `n = 0` solo 0 | righe da saltare in testa |
 
 `max_rows` è il `max_input_rows` del piano. Un `offset` oltre le righe
 dell'ingresso dà una tabella vuota; `n = 0` dà una tabella vuota con lo
-stesso schema.
+stesso schema, e un `offset` positivo non avrebbe effetto: si rifiuta.
 
 ### Schema
 
@@ -35,6 +35,7 @@ Le righe tenute restano nell'ordine d'ingresso: `limit` dopo un
 In validazione, `InvalidPlan`:
 
 - `n` assente, `n` o `offset` negativi o oltre `max_rows`;
+- `offset > 0` con `n = 0`;
 - config con campi sconosciuti.
 
 In esecuzione: nessun errore che dipenda dai dati (un `ResourceLimit` solo

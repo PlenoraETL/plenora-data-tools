@@ -264,7 +264,7 @@ pub static CASI: &[Caso] = &[
     caso!(
         "table.split_column",
         Wide,
-        r#"{"column":"date","delimiter":"-","new_columns":["year","month","day"],"max_splits":2}"#
+        r#"{"column":"date","delimiter":"-","new_columns":["year","month","day"]}"#
     ),
     caso!(
         "table.stable_fingerprint",

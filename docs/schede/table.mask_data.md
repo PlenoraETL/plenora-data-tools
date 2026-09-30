@@ -37,9 +37,11 @@ Le forme, contando i caratteri Unicode (non i byte):
   iniziali e 4 finali in chiaro (`+39 333 1234567` → `+39******4567`).
 
 Con `overwrite` una seconda voce sulla stessa colonna maschera il risultato
-della prima; senza, la seconda riscrive `<colonna>_masked` partendo dalla
-colonna originale. Una voce non può nominare una colonna `_masked` creata da
-una voce precedente: l'analisi cerca le colonne nell'ingresso e la rifiuta.
+della prima. Senza `overwrite` la stessa `column` due volte si rifiuta: la
+seconda riscriverebbe `<colonna>_masked` partendo dalla colonna originale e
+la prima non avrebbe effetto. Una voce non può nominare una colonna
+`_masked` creata da una voce precedente: l'analisi cerca le colonne
+nell'ingresso e la rifiuta.
 
 ### Schema
 
@@ -64,14 +66,18 @@ In validazione, `InvalidPlan`:
 
 - `maskings` vuoto o con più di `max_columns` voci;
 - una `column` assente dall'ingresso o non leggibile come testo;
+- la stessa `column` in due voci senza `overwrite`;
 - `chars_start`, `chars_end` o `mask_char` con un `mask_type` diverso da
   `custom`;
 - `mask_char` che non è un solo carattere;
 - nome d'uscita non valido (vuoto o oltre 1024 byte);
 - config con campi sconosciuti o `mask_type` fuori elenco.
 
-In esecuzione, `Schema`: una cella che non si converte in testo (`binary`
-non UTF-8, data o istante fuori intervallo).
+In esecuzione:
+
+- `Schema`: una cella che non si converte in testo (`binary` non UTF-8,
+  data o istante fuori intervallo);
+- `ResourceLimit`: un valore mascherato oltre `max_string_bytes` byte.
 
 ### Limiti e deviazioni
 

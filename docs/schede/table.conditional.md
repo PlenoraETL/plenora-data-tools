@@ -14,9 +14,9 @@ testuale (`utf8`) altrimenti.
 | `column` | stringa | obbligatorio | colonna dell'ingresso | colonna su cui si valutano le condizioni |
 | `conditions` | lista di oggetti | obbligatorio | da 1 a 4096 condizioni | regole, in ordine di precedenza |
 | `conditions[].operator` | stringa | `"=="` | gli operatori di `table.filter` | confronto fra la cella e `value` |
-| `conditions[].value` | JSON | `null` | come `value` di `table.filter` | termine di confronto |
-| `conditions[].result` | JSON | `null` | stringa, numero, booleano o `null` | valore scritto se la condizione è la prima vera |
-| `default_value` | JSON | `null` | stringa, numero, booleano o `null` | valore scritto se nessuna condizione è vera |
+| `conditions[].value` | JSON | `null` | come `value` di `table.filter`; con `isnull`, `notnull` non si scrive | termine di confronto |
+| `conditions[].result` | JSON | `null` | stringa, numero, booleano o `null`; testo al più `max_string_bytes` byte | valore scritto se la condizione è la prima vera |
+| `default_value` | JSON | `null` | stringa, numero, booleano o `null`; testo al più `max_string_bytes` byte | valore scritto se nessuna condizione è vera |
 | `output_column` | stringa | `"result"` | nome non vuoto, al più 1024 byte | colonna d'uscita |
 
 Il tipo d'uscita dipende solo dalla config. Ogni `result` e il
@@ -30,7 +30,9 @@ booleano come testo JSON, `null` come testo vuoto):
 - altrimenti l'uscita è `utf8` non nullable e ogni cella è il testo del
   valore scelto: `null` dà `""`, `true` dà `"true"`, `2` dà `"2"`.
 
-Una cella nulla non soddisfa nessun operatore tranne `isnull`.
+Una cella nulla non soddisfa nessun operatore tranne `isnull`. Con
+`isnull` e `notnull` il `value` non avrebbe effetto: scritto, anche
+`null`, si rifiuta.
 
 ### Schema
 
@@ -58,7 +60,10 @@ In validazione, `InvalidPlan`:
 - `column` assente;
 - `conditions` assente, vuota o con più di 4096 condizioni;
 - per ogni condizione, gli stessi rifiuti di operatore, tipo di colonna e
-  `value` di `table.filter`;
+  `value` di `table.filter`, compreso `value` scritto (anche `null`) con
+  `isnull` o `notnull`;
+- il testo di un `result` o del `default_value` oltre `max_string_bytes`
+  byte;
 - `output_column` vuoto, di soli spazi o oltre 1024 byte;
 - config con campi sconosciuti.
 

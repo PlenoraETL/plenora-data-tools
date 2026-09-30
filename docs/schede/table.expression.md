@@ -14,6 +14,7 @@ risultato, rifiuta la riga.
 | `output_column` | stringa | obbligatorio | nome valido (non vuoto, al più 1024 byte) | colonna d'uscita |
 | `expression` | oggetto | obbligatorio | nodo della grammatica sotto; profondità al più 64, al più 4096 nodi | espressione da calcolare |
 | `output_type` | stringa | `auto` | `auto`, `number`, `boolean`, `text`, `date32`, `timestamp_ms` | tipo della colonna d'uscita; `auto` lo deduce |
+| `on_division_by_zero` | stringa | `"null"` | `"null"`, `"error"`; solo in un'espressione con almeno una divisione | che cosa dà una divisione con divisore zero (sotto) |
 
 Nodi (campo `kind`):
 
@@ -27,6 +28,9 @@ Nodi (campo `kind`):
                      "else_value": nodo}
 ```
 
+Un campo non previsto dentro un nodo si rifiuta. Un letterale di testo non
+supera `max_string_bytes` byte.
+
 Tipi delle colonne: `bool` è booleano; `int64`, `uint64`, `float64`,
 `decimal128`, `date32` (giorni dall'epoca) e `timestamp(ms)` (millisecondi
 dall'epoca) sono numeri; `utf8`, `binary` e `dictionary<utf8>` sono testo.
@@ -35,7 +39,7 @@ Ogni altro tipo si rifiuta.
 Operatori (`binary`), con null che propaga salvo dove detto:
 
 - `add`, `subtract`, `multiply`, `divide`: numero, numero → numero, in
-  `f64`;
+  `f64`; per la divisione per zero vedi `on_division_by_zero`;
 - `equal`, `not_equal`, `greater`, `greater_equal`, `less`, `less_equal`:
   due operandi dello stesso tipo → booleano; i numeri si confrontano sul
   valore esatto (`int64` oltre `2^53`, `decimal128`, il letterale `0.1` come
@@ -70,6 +74,23 @@ Funzioni (argomenti → risultato):
 `when` null vale falso; nessun ramo vero rende `else_value`. I rami non
 scelti non si valutano.
 
+Divisione con operandi non nulli e divisore zero:
+
+- `on_division_by_zero = "null"` (default): il nodo della divisione vale
+  null, e il null segue poi le regole di sopra (`coalesce(a / b, 0)` dà 0;
+  in un ramo di `case` non scelto la divisione non si valuta). Ogni riga in
+  cui è successo si conta una volta nel campo `righe_divisione_per_zero`
+  del resoconto del passo nel runner: un conteggio, mai valori;
+- `on_division_by_zero = "error"`: la riga si rifiuta con diagnostica
+  `evaluation.division_by_zero` e il passo fallisce.
+
+Un divisore letterale zero (`x / 0`) si rifiuta in validazione con
+qualunque politica.
+
+Un pattern letterale di `regex_replace` non supera `max_regex_bytes` byte.
+Ogni testo prodotto da una funzione (`concat`, `lower`, `upper`,
+`regex_replace`, `substring`, …) non supera `max_string_bytes` byte.
+
 Con `auto` il tipo d'uscita è l'unico tipo che l'espressione può produrre
 (`case` e `coalesce` uniscono i tipi dei rami); solo null dà `text`. Con un
 tipo dichiarato, l'espressione deve poterlo produrre: non si converte, e una
@@ -95,26 +116,33 @@ Invariato.
 
 In validazione, `InvalidPlan`:
 
-- nodo non riconosciuto, profondità oltre 64, più di 4096 nodi, più di 64
-  argomenti o rami, `case` senza rami, nome di colonna vuoto;
+- nodo non riconosciuto o con un campo sconosciuto, profondità oltre 64,
+  più di 4096 nodi, più di 64 argomenti o rami, `case` senza rami, nome di
+  colonna vuoto;
 - una colonna assente o di tipo non ammesso (anche `timestamp` in unità
   diverse dai millisecondi);
-- letterale non scalare o non finito; `in` senza lista letterale di scalari;
+- letterale non scalare o non finito; letterale di testo oltre
+  `max_string_bytes` byte; `in` senza lista letterale di scalari;
 - numero di argomenti o tipo di un operando non ammessi; confronto fra tipi
   diversi (anche solo possibili, come `coalesce` di testo e numero);
 - unità di `date_trunc` non letterale o fuori elenco, unità oraria su
   `date32`, `date_trunc` su testo o su `timestamp` con fuso;
-- divisione per il numero zero scritto nell'espressione;
-- pattern letterale di `regex_replace` non valido, indice letterale negativo
-  di `substring` (solo dove la valutazione lo guarderebbe);
+- divisione per il numero zero scritto nell'espressione, con qualunque
+  `on_division_by_zero`;
+- `on_division_by_zero` scritto in un'espressione senza divisioni, o con
+  un valore fuori elenco;
+- pattern letterale di `regex_replace` non valido o oltre
+  `max_regex_bytes` byte, indice letterale negativo di `substring` (solo
+  dove la valutazione lo guarderebbe);
 - con `auto`, più tipi possibili; con un tipo dichiarato, un tipo che
   l'espressione non produce mai;
 - `output_column` non valido; config con campi sconosciuti.
 
 In esecuzione:
 
-- `DataMapping` con diagnostica per riga: divisione per zero
-  (`evaluation.division_by_zero`), `NaN` o infinito letto da una colonna
+- `DataMapping` con diagnostica per riga: divisione per zero, solo con
+  `on_division_by_zero = "error"` (`evaluation.division_by_zero`), `NaN` o
+  infinito letto da una colonna
   (`evaluation.non_finite_input`), risultato non finito di un'operazione o
   di `power` (`evaluation.non_finite_result`); il passo non produce uscita;
 - `InvalidPlan`: pattern di `regex_replace` o indice di `substring`
@@ -122,16 +150,21 @@ In esecuzione:
 - `Schema`: `year` su un testo che non inizia con una data; una riga che
   produce un tipo diverso da `output_type`; `negate` o `abs` di un
   `decimal128` fuori dominio; una cella che non si converte in testo;
-- `ResourceLimit`: `length` di un testo oltre `u32::MAX` caratteri.
+- `ResourceLimit`: `length` di un testo oltre `u32::MAX` caratteri; un
+  pattern di `regex_replace` calcolato dalle colonne oltre
+  `max_regex_bytes` byte; un testo prodotto da una funzione oltre
+  `max_string_bytes` byte.
 
 ### Limiti e deviazioni
 
 L'aritmetica e l'uscita numerica sono in `f64`: gli interi oltre `2^53` e i
 decimali si arrotondano nel calcolo, non nei confronti. `date_trunc` tronca
 in UTC e non accetta istanti con fuso. Gli errori che dipendono dai valori
-(regex e indici calcolati, divisori calcolati uguali a zero) arrivano in
-esecuzione
+(regex e indici calcolati) arrivano in esecuzione
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
+Un divisore calcolato uguale a zero dà null per default, contato in
+`righe_divisione_per_zero`; con `on_division_by_zero = "error"` rifiuta la
+riga in esecuzione. Il divisore letterale zero si vede già in validazione.
 
 ### Complessità
 

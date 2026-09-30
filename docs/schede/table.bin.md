@@ -11,7 +11,7 @@ numero di classi di uguale ampiezza fra il minimo e il massimo dei dati.
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna numerica | colonna da classificare |
 | `bins` | intero o lista di numeri | `5` | intero da 2 a 100, oppure da 3 a 101 bordi strettamente crescenti | numero di classi di uguale ampiezza, o bordi delle classi |
-| `labels` | lista di stringhe | assente | tante quante le classi | etichette delle classi, nell'ordine; assenti, `(a, b]` |
+| `labels` | lista di stringhe | assente | tante quante le classi, ciascuna al più `max_string_bytes` byte | etichette delle classi, nell'ordine; assenti, `(a, b]` |
 | `output_column` | stringa | `<column>_bin` | nome valido | colonna d'uscita |
 
 Colonna numerica: `float64`, `int64`, `uint64`, `date32` (giorni
@@ -55,7 +55,8 @@ In validazione, `InvalidPlan`:
 - `column` assente o non numerica;
 - numero di classi fuori da 2..=100, bordi fuori da 3..=101 o non
   strettamente crescenti;
-- numero di `labels` diverso dal numero di classi;
+- numero di `labels` diverso dal numero di classi; un'etichetta oltre
+  `max_string_bytes` byte;
 - config con campi sconosciuti.
 
 In esecuzione, `Schema`:

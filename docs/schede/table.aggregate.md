@@ -30,8 +30,9 @@ Un parametro scritto per una funzione che non lo usa si rifiuta.
 Nome della colonna d'uscita: `alias` se non è vuoto; altrimenti
 `<column>_<funzione>` (`avg` scrive `mean`) se la stessa `column` compare
 in più aggregazioni; altrimenti `column`. Un nome uguale a una colonna già
-prodotta (di gruppo o di un'aggregazione precedente) la sostituisce al suo
-posto: vale l'ultima.
+prodotta (di gruppo o di un'aggregazione precedente) si rifiuta: per
+esempio `mean` e `avg` sulla stessa colonna, due alias uguali, o un alias
+uguale a una colonna di `group_by`.
 
 Funzioni:
 
@@ -43,7 +44,8 @@ Funzioni:
   riga del gruppo in ordine d'ingresso, null compreso;
 - `concat`: `utf8`, i testi delle celle in ordine d'ingresso uniti da
   `separator`; con `distinct` solo la prima occorrenza di ogni testo; un
-  null si salta, o vale il testo vuoto con `skip_null: false`;
+  null si salta, o vale il testo vuoto con `skip_null: false`. Il testo di
+  un gruppo non supera `max_string_bytes` byte;
 - `sum`, `mean`, `min`, `max`, `variance`, `stddev`, `quantile`:
   `float64`. La cella si legge come `f64` (vedi i limiti). Con
   `skip_null: false` un null nel gruppo dà null; un gruppo senza valori dà
@@ -100,6 +102,7 @@ In validazione, `InvalidPlan`:
 - un parametro scritto per una funzione che non lo usa; `separator` oltre
   `max_string_bytes`; un nome d'uscita non valido (per esempio un `alias`
   di soli spazi);
+- un nome d'uscita ripetuto o uguale a una colonna di `group_by`;
 - funzione fuori elenco, campi sconosciuti.
 
 In esecuzione:
@@ -108,7 +111,9 @@ In esecuzione:
   numerica; una cella che non si converte in testo (date fuori
   intervallo, `binary` non UTF-8 sotto `first`, `last`, `concat`,
   `nunique`);
-- `ResourceLimit`: più di `u32::MAX` righe; nella variante spilled, file
+- `ResourceLimit`: più di `u32::MAX` righe; il testo `concat` di un gruppo
+  oltre `max_string_bytes` byte (controllato prima di unire); nella
+  variante spilled, file
   temporanei oltre `max_temp_bytes`, o una partizione i cui batch superano
   `max_governed_memory_bytes`;
 - `Io`: nella variante spilled, un errore sui file temporanei.
@@ -118,9 +123,7 @@ In esecuzione:
 Le funzioni numeriche calcolano in `f64` perché il risultato è `float64`:
 un intero oltre `2^53`, un `decimal128` o un testo con più cifre di quante
 un `f64` ne tenga si arrotondano senza errore (con `distinct` i distinti si
-decidono comunque sul valore esatto). Due aggregazioni con lo stesso nome
-d'uscita, o un nome uguale a una chiave di gruppo, non si rifiutano: vale
-l'ultima, e la colonna sostituita sparisce. Le strutture di chiavi e gruppi
+decidono comunque sul valore esatto). Le strutture di chiavi e gruppi
 non sono contabilizzate
 ([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
 l'hash delle chiavi non ha seme

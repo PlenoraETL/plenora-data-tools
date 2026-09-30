@@ -9,7 +9,7 @@ use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
-use super::helpers::{analyze_append, check_output_name, field_of, typed};
+use super::helpers::{analyze_append, check_output_name, con_op, field_of, typed};
 use crate::{expressions, formula, Limits};
 
 /// Numero massimo di nodi AST accettati nell'audit di `table.expression`
@@ -54,9 +54,12 @@ pub(in crate::analyze) fn analyze_expression(
 ) -> Result<DataContract> {
     let config: expressions::ExpressionTransform = typed(op, config)?;
     let input = &inputs[0];
-    let _ = limits;
     expressions::validate(&config, MAX_EXPRESSION_NODES)
         .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))?;
+    // Le stesse regole del kernel: `on_division_by_zero` senza divisioni,
+    // divisore letterale zero (prima l'analisi non lo vedeva e il piano
+    // falliva solo in esecuzione), letterali oltre i limiti.
+    con_op(op, config.verifica_parametri(limits))?;
     check_output_name(op, &config.output_column)?;
     // L'AST si analizza SEMPRE, anche quando `output_type` e' dichiarato: il
     // tipo dichiarato non dice niente sulle colonne referenziate ne' sugli

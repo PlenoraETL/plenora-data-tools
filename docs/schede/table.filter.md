@@ -11,7 +11,7 @@ quindi anche i null.
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | nome di una colonna dell'ingresso | colonna su cui si valuta la condizione |
 | `operator` | stringa | obbligatorio | `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains`, `startswith`, `endswith`, `isnull`, `notnull`, `between` | confronto fra la cella e `value` |
-| `value` | JSON | `null` | stringa, numero, booleano o `null`; per `between` il testo `"min,max"` | termine di confronto; un non-stringa vale il suo testo JSON, `null` vale `""` |
+| `value` | JSON | `null` | stringa, numero, booleano o `null`; per `between` il testo `"min,max"`; con `isnull`, `notnull` non si scrive | termine di confronto; un non-stringa vale il suo testo JSON, `null` vale `""` |
 
 Come si confronta, per operatore:
 
@@ -31,7 +31,8 @@ Come si confronta, per operatore:
 - `contains` (senza distinzione fra maiuscole e minuscole), `startswith`,
   `endswith` (con distinzione): sul testo della cella;
 - `isnull`, `notnull`: sulla nullità logica della cella (anche la voce
-  nulla di un dizionario); `value` non conta.
+  nulla di un dizionario). `value` non avrebbe effetto: scritto, anche
+  `null`, si rifiuta.
 
 ### Schema
 
@@ -58,6 +59,7 @@ In validazione (analisi del contratto), `InvalidPlan`:
   non numerico;
 - `contains`, `startswith`, `endswith` (e `==`/`!=` fuori da `int64` e
   `float64`) su una colonna che non si legge come testo scalare;
+- `value` scritto (anche `null`) con `isnull` o `notnull`;
 - config con campi sconosciuti o `operator` fuori elenco.
 
 In esecuzione:

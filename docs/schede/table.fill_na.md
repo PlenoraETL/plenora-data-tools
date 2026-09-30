@@ -11,7 +11,7 @@ righe. Il tipo delle colonne non cambia.
 | --- | --- | --- | --- | --- |
 | `column` | stringa o `null` | `null` | colonna dell'ingresso di tipo `utf8`, `int64`, `float64` o `bool` | colonna da riempire; `null` le riempie tutte |
 | `method` | stringa | `"value"` | `value`, `ffill`, `bfill` | come si riempie |
-| `value` | JSON | assente | convertibile nel tipo di ogni colonna da riempire (sotto) | valore di riempimento, solo con `method = "value"` |
+| `value` | JSON | assente | convertibile nel tipo di ogni colonna da riempire (sotto); testo al più `max_string_bytes` byte | valore di riempimento, solo con `method = "value"` |
 
 Senza `column` ogni colonna dell'ingresso deve essere di uno dei quattro
 tipi, e `value` deve convertirsi nel tipo di ognuna.
@@ -57,6 +57,7 @@ In validazione, `InvalidPlan`:
 - una colonna da riempire di tipo diverso da `utf8`, `int64`, `float64`,
   `bool` (senza `column`: una qualunque colonna dell'ingresso);
 - `value` non convertibile nel tipo di una colonna da riempire;
+- il testo di `value` oltre `max_string_bytes` byte;
 - `value` scritto con `ffill` o `bfill`;
 - `method` fuori elenco, config con campi sconosciuti.
 

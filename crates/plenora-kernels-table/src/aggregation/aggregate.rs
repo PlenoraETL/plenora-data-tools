@@ -191,6 +191,83 @@ impl Aggregation {
     }
 }
 
+impl Aggregation {
+    /// Nome della funzione nel nome d'uscita `<column>_<funzione>`.
+    #[must_use]
+    pub const fn nome_funzione(&self) -> &'static str {
+        match self.function {
+            AggFunction::Count => "count",
+            AggFunction::Sum => "sum",
+            AggFunction::Avg | AggFunction::Mean => "mean",
+            AggFunction::Min => "min",
+            AggFunction::Max => "max",
+            AggFunction::First => "first",
+            AggFunction::Last => "last",
+            AggFunction::Concat => "concat",
+            AggFunction::Nunique => "nunique",
+            AggFunction::Variance => "variance",
+            AggFunction::Stddev => "stddev",
+            AggFunction::Quantile => "quantile",
+        }
+    }
+}
+
+impl Aggregate {
+    /// Nomi delle colonne aggregate, nell'ordine d'uscita: `alias`, o
+    /// `column`, o `<column>_<funzione>` se `column` compare in piu'
+    /// aggregazioni; `count` senza aggregazioni.
+    ///
+    /// Un nome ripetuto, o uguale a una colonna di `group_by`, farebbe
+    /// sparire in silenzio la colonna scritta prima (l'uscita tiene l'ultima
+    /// con quel nome): si rifiuta. La chiamano il kernel (anche per la
+    /// variante spilled, che lo chiama per partizione) e l'analisi dei
+    /// contratti.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per un nome d'uscita ripetuto o uguale a una chiave.
+    pub fn nomi_uscita(&self) -> Result<Vec<String>> {
+        let mut ripetizioni: HashMap<&str, usize> = HashMap::new();
+        for aggregation in &self.aggregations {
+            *ripetizioni.entry(aggregation.column.as_str()).or_insert(0) += 1;
+        }
+        let nomi: Vec<String> = if self.aggregations.is_empty() {
+            vec!["count".to_owned()]
+        } else {
+            self.aggregations
+                .iter()
+                .map(|aggregation| {
+                    if !aggregation.alias.is_empty() {
+                        aggregation.alias.clone()
+                    } else if ripetizioni
+                        .get(aggregation.column.as_str())
+                        .is_some_and(|volte| *volte > 1)
+                    {
+                        format!("{}_{}", aggregation.column, aggregation.nome_funzione())
+                    } else {
+                        aggregation.column.clone()
+                    }
+                })
+                .collect()
+        };
+        let mut visti = std::collections::HashSet::new();
+        for nome in &nomi {
+            if self.group_by.contains(nome) {
+                return Err(PlenoraError::InvalidPlan(format!(
+                    "nome d'uscita {nome} uguale a una colonna di group_by: la chiave \
+                     sparirebbe"
+                )));
+            }
+            if !visti.insert(nome.as_str()) {
+                return Err(PlenoraError::InvalidPlan(format!(
+                    "nome d'uscita {nome} ripetuto: una aggregazione sparirebbe"
+                )));
+            }
+        }
+        Ok(nomi)
+    }
+}
+
 /// Config di `table.aggregate`. Campi sconosciuti rifiutati.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -395,7 +472,6 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
     }))
 }
 
-#[allow(clippy::too_many_lines)] // Le varianti condividono una passata di raggruppamento e i suoi invarianti.
 /// `table.aggregate`: una riga per chiave di gruppo distinta di `group_by`,
 /// con le aggregazioni di `config.aggregations` (vuoto: solo la colonna
 /// `count` con le righe di ogni gruppo).
@@ -405,8 +481,9 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
 /// nell'ordine lessicografico delle loro chiavi testuali (`row_key`): null
 /// prima, poi la stringa `<lunghezza>:<testo>` byte per byte, colonna per
 /// colonna. Le righe di un gruppo si riducono in ordine d'ingresso. Un nome
-/// d'uscita uguale a una colonna gia' prodotta la sostituisce al suo posto
-/// (`replace_or_append`).
+/// d'uscita ripetuto o uguale a una chiave si rifiuta
+/// ([`Aggregate::nomi_uscita`]). Con `Limits::default()`:
+/// [`aggregate_con_limiti`] con i limiti del chiamante.
 ///
 /// Un intero oltre `2^53` **non** e' un errore nelle aggregazioni a
 /// risultato `Float64`: li' la conversione arrotonda, perche' il double e'
@@ -427,6 +504,25 @@ fn reduce_numeric(raw: Vec<Option<f64>>, aggregation: &Aggregation) -> Result<Op
 /// - `DataMapping` (`arrow error: …`): errori Arrow di `select_rows` e `replace_or_append`;
 /// - `Internal`: invarianti interne del raggruppamento.
 pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch> {
+    aggregate_con_limiti(batch, config, &crate::Limits::default())
+}
+
+/// [`aggregate`] con i limiti del chiamante.
+///
+/// Il runner e la variante spilled passano i loro: il testo di `concat`,
+/// che unisce le celle di un gruppo intero, non supera
+/// `limits.max_string_bytes`, controllato prima di unirle.
+///
+/// # Errors
+///
+/// Come [`aggregate`], piu' `ResourceLimit` per un `concat` oltre
+/// `limits.max_string_bytes`.
+#[allow(clippy::too_many_lines)] // Le varianti condividono una passata di raggruppamento e i suoi invarianti.
+pub fn aggregate_con_limiti(
+    batch: &RecordBatch,
+    config: &Aggregate,
+    limits: &crate::Limits,
+) -> Result<RecordBatch> {
     let group_indices = config
         .group_by
         .iter()
@@ -452,6 +548,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
             ));
         }
     }
+    let nomi = config.nomi_uscita()?;
     // Raggruppamento: fast path nativo per colonna singola
     // Int64/UInt64/Utf8 (nessuna stringa di chiave), chiavi binarie con la
     // stessa identita' di `row_key` altrimenti. Stesso ordine canonico dei
@@ -540,36 +637,9 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
             Arc::new(Int64Array::from(counts)),
         );
     }
-    let mut duplicate_names = HashMap::new();
-    for aggregation in &config.aggregations {
-        *duplicate_names
-            .entry(&aggregation.column)
-            .or_insert(0_usize) += 1;
-    }
-    for aggregation in &config.aggregations {
+    for (aggregation, name) in config.aggregations.iter().zip(&nomi) {
         let index = column_index(batch, &aggregation.column)?;
-        let function_name = match aggregation.function {
-            AggFunction::Count => "count",
-            AggFunction::Sum => "sum",
-            AggFunction::Avg | AggFunction::Mean => "mean",
-            AggFunction::Min => "min",
-            AggFunction::Max => "max",
-            AggFunction::First => "first",
-            AggFunction::Last => "last",
-            AggFunction::Concat => "concat",
-            AggFunction::Nunique => "nunique",
-            AggFunction::Variance => "variance",
-            AggFunction::Stddev => "stddev",
-            AggFunction::Quantile => "quantile",
-        };
-        let name = if !aggregation.alias.is_empty() {
-            aggregation.alias.clone()
-        } else if duplicate_names[&aggregation.column] > 1 {
-            format!("{}_{}", aggregation.column, function_name)
-        } else {
-            aggregation.column.clone()
-        };
-        validate_output_name(&name)?;
+        validate_output_name(name)?;
         match aggregation.function {
             AggFunction::Count => {
                 let column = batch.column(index);
@@ -587,7 +657,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                 })?;
                 result = replace_or_append(
                     &result,
-                    &name,
+                    name,
                     DataType::Int64,
                     false,
                     Arc::new(Int64Array::from(values)),
@@ -614,7 +684,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                 })?;
                 result = replace_or_append(
                     &result,
-                    &name,
+                    name,
                     DataType::Int64,
                     false,
                     Arc::new(Int64Array::from(values)),
@@ -633,7 +703,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                 })?;
                 result = replace_or_append(
                     &result,
-                    &name,
+                    name,
                     DataType::Utf8,
                     true,
                     Arc::new(StringArray::from(values)),
@@ -653,11 +723,23 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                             values.push(Cow::Borrowed(""));
                         }
                     }
+                    // Byte del testo unito, prima di allocarlo.
+                    let separatori = aggregation
+                        .separator()
+                        .len()
+                        .checked_mul(values.len().saturating_sub(1));
+                    let byte = values
+                        .iter()
+                        .try_fold(separatori.unwrap_or(usize::MAX), |totale, valore| {
+                            totale.checked_add(valore.len())
+                        })
+                        .unwrap_or(usize::MAX);
+                    crate::verifica_testo_prodotto("aggregate", byte, limits)?;
                     Ok(Some(values.join(aggregation.separator())))
                 })?;
                 result = replace_or_append(
                     &result,
-                    &name,
+                    name,
                     DataType::Utf8,
                     true,
                     Arc::new(StringArray::from(values)),
@@ -677,7 +759,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
                 })?;
                 result = replace_or_append(
                     &result,
-                    &name,
+                    name,
                     DataType::Float64,
                     true,
                     Arc::new(Float64Array::from(values)),

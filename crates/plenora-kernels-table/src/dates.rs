@@ -41,6 +41,31 @@ pub(crate) fn compile_items(format: &str) -> Vec<Item<'_>> {
     StrftimeItems::new(format).collect()
 }
 
+/// Byte scritti al massimo da un valore formattato con `format`, per eccesso.
+///
+/// I letterali contano per la loro lunghezza, ogni campo per
+/// [`BYTE_PER_CAMPO`] (il campo piu' largo di chrono, `%+` con i
+/// nanosecondi e l'offset, sta sotto i 40 byte; un nome di fuso sotto i 64).
+///
+/// Un valore formattato non dipende dal testo della cella se non per la
+/// larghezza dei campi, quindi questo limite vale per ogni riga: l'analisi
+/// lo confronta con `max_string_bytes` e i kernel non devono controllare
+/// l'uscita riga per riga.
+#[must_use]
+pub fn byte_massimi_scritti(format: &str) -> usize {
+    StrftimeItems::new(format).fold(0_usize, |totale, item| {
+        let byte = match item {
+            Item::Literal(testo) | Item::Space(testo) => testo.len(),
+            Item::OwnedLiteral(testo) | Item::OwnedSpace(testo) => testo.len(),
+            _ => BYTE_PER_CAMPO,
+        };
+        totale.saturating_add(byte)
+    })
+}
+
+/// Tetto per eccesso dei byte di un campo strftime ([`byte_massimi_scritti`]).
+pub const BYTE_PER_CAMPO: usize = 64;
+
 /// Parsing con item precompilati, semantica identica a `parse`: prima il
 /// ramo `NaiveDateTime::parse_from_str` (campi orario di default a
 /// mezzanotte), poi il fallback `NaiveDate::parse_from_str`.
@@ -188,7 +213,8 @@ impl<'a> FormatoUscita<'a> {
     }
 }
 
-fn invalid<T>(_policy: &InvalidDatePolicy, operation: &str, _row: usize) -> Result<Option<T>> {
+/// Riga non leggibile dopo la prevalidazione per riga: irraggiungibile.
+fn invalid<T>(operation: &str) -> Result<Option<T>> {
     Err(PlenoraError::Internal(format!(
         "prevalidazione row-scoped incoerente in {operation}"
     )))
@@ -210,23 +236,49 @@ pub struct DateFormat {
     pub output_format: String,
     /// Colonna d'uscita (`Utf8` nullable).
     pub output_column: String,
-    /// Accettato per compatibilita', senza effetto: un valore non leggibile
-    /// rifiuta sempre la riga.
-    #[serde(default = "default_invalid")]
-    pub invalid: InvalidDatePolicy,
+    /// Non ammesso: un valore non leggibile rifiuta sempre la riga, quindi
+    /// nessuna politica avrebbe effetto. Scritto si rifiuta
+    /// ([`verifica_politiche`]).
+    #[serde(default)]
+    pub invalid: Option<InvalidDatePolicy>,
 }
 
-const fn default_invalid() -> InvalidDatePolicy {
-    InvalidDatePolicy::Null
+/// `invalid` e `ambiguous` delle operazioni sulle date: scritti si rifiutano.
+///
+/// Non hanno effetto con nessun valore: un valore non leggibile, un'ora
+/// ambigua o inesistente rifiutano sempre la riga con la diagnostica per
+/// riga. Scritti si
+/// rifiutano invece di promettere un null o una scelta che non avviene. La
+/// chiamano i kernel `date_format`, `date_add`, `date_diff`,
+/// `timezone_convert`, `date_extract` e l'analisi dei contratti.
+///
+/// # Errors
+///
+/// `InvalidPlan` se `invalid` o `ambiguous` e' scritto.
+pub fn verifica_politiche(
+    invalid: Option<&InvalidDatePolicy>,
+    ambiguous: Option<&AmbiguousPolicy>,
+) -> Result<()> {
+    if invalid.is_some() {
+        return Err(PlenoraError::InvalidPlan(
+            "invalid non ha effetto: un valore non leggibile rifiuta sempre la riga".into(),
+        ));
+    }
+    if ambiguous.is_some() {
+        return Err(PlenoraError::InvalidPlan(
+            "ambiguous non ha effetto: un'ora ambigua o inesistente rifiuta sempre la riga".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Riformatta la colonna `column` da `input_format` a `output_format`
 /// nella colonna `output_column`.
 ///
 /// Fast path su colonne Utf8 (item strftime precompilati), percorso
-/// generico riga-per-riga sugli altri tipi Arrow. Il token `invalid` si
-/// accetta ma non ha effetto: i valori non parsabili sono sempre rifiutati
-/// con diagnostica row-scoped.
+/// generico riga-per-riga sugli altri tipi Arrow. I valori non parsabili
+/// sono sempre rifiutati con diagnostica row-scoped; `invalid` scritto si
+/// rifiuta ([`verifica_politiche`]).
 ///
 /// # Errors
 ///
@@ -239,6 +291,7 @@ const fn default_invalid() -> InvalidDatePolicy {
 ///   convertibile in testo (come `scalar_as_string`); gli errori di
 ///   `replace_or_append`.
 pub fn date_format(batch: &RecordBatch, config: &DateFormat) -> Result<RecordBatch> {
+    verifica_politiche(config.invalid.as_ref(), None)?;
     validate_format_items(&config.input_format, "input_format")?;
     let uscita = FormatoUscita::senza_fuso(&config.output_format)?;
     let index = column_index(batch, &config.column)?;
@@ -270,7 +323,7 @@ pub fn date_format(batch: &RecordBatch, config: &DateFormat) -> Result<RecordBat
             let parsed = parse_with_items(column.value(row), &input_items);
             values.push(match parsed {
                 Some(value) => Some(uscita.scrivi_senza_fuso(&value)?),
-                None => invalid(&config.invalid, "date_format", row)?,
+                None => invalid("date_format")?,
             });
         }
         values
@@ -281,7 +334,7 @@ pub fn date_format(batch: &RecordBatch, config: &DateFormat) -> Result<RecordBat
                     return Ok(None);
                 };
                 parse(&value, &config.input_format).map_or_else(
-                    || invalid(&config.invalid, "date_format", row),
+                    || invalid("date_format"),
                     |value| uscita.scrivi_senza_fuso(&value).map(Some),
                 )
             })
@@ -336,9 +389,11 @@ pub struct DateAdd {
     pub unit: DateUnit,
     /// Colonna d'uscita (`Utf8` nullable).
     pub output_column: String,
-    /// Accettato per compatibilita', senza effetto.
-    #[serde(default = "default_invalid")]
-    pub invalid: InvalidDatePolicy,
+    /// Non ammesso: un valore non leggibile rifiuta sempre la riga, quindi
+    /// nessuna politica avrebbe effetto. Scritto si rifiuta
+    /// ([`verifica_politiche`]).
+    #[serde(default)]
+    pub invalid: Option<InvalidDatePolicy>,
 }
 
 fn shift_months(value: NaiveDateTime, amount: i64, multiplier: u32) -> Option<NaiveDateTime> {
@@ -424,6 +479,7 @@ pub fn verifica_amount(amount: i64, unit: &DateUnit) -> Result<()> {
 ///   convertibile in testo (come `scalar_as_string`); gli errori di
 ///   `replace_or_append`.
 pub fn date_add(batch: &RecordBatch, config: &DateAdd) -> Result<RecordBatch> {
+    verifica_politiche(config.invalid.as_ref(), None)?;
     validate_format_items(&config.input_format, "input_format")?;
     let uscita = FormatoUscita::senza_fuso(&config.output_format)?;
     let index = column_index(batch, &config.column)?;
@@ -480,7 +536,7 @@ pub fn date_add(batch: &RecordBatch, config: &DateAdd) -> Result<RecordBatch> {
             let shifted = parse_with_items(column.value(row), &input_items).and_then(shift_row);
             values.push(match shifted {
                 Some(value) => Some(uscita.scrivi_senza_fuso(&value)?),
-                None => invalid(&config.invalid, "date_add", row)?,
+                None => invalid("date_add")?,
             });
         }
         values
@@ -493,7 +549,7 @@ pub fn date_add(batch: &RecordBatch, config: &DateAdd) -> Result<RecordBatch> {
                 let shifted = parse(&value, &config.input_format)
                     .and_then(|value| shift(value, config.amount, &config.unit));
                 shifted.map_or_else(
-                    || invalid(&config.invalid, "date_add", row),
+                    || invalid("date_add"),
                     |value| uscita.scrivi_senza_fuso(&value).map(Some),
                 )
             })
@@ -537,9 +593,11 @@ pub struct DateDiff {
     pub unit: DiffUnit,
     /// Colonna d'uscita (`Float64` nullable).
     pub output_column: String,
-    /// Accettato per compatibilita', senza effetto.
-    #[serde(default = "default_invalid")]
-    pub invalid: InvalidDatePolicy,
+    /// Non ammesso: un valore non leggibile rifiuta sempre la riga, quindi
+    /// nessuna politica avrebbe effetto. Scritto si rifiuta
+    /// ([`verifica_politiche`]).
+    #[serde(default)]
+    pub invalid: Option<InvalidDatePolicy>,
 }
 
 /// Differenza in unita' frazionarie, identica al percorso generico
@@ -577,6 +635,7 @@ fn diff_value(start: NaiveDateTime, end: NaiveDateTime, divisor: f64, _row: usiz
 ///   convertibile in testo (come `scalar_as_string`); gli errori di
 ///   `replace_or_append`.
 pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> {
+    verifica_politiche(config.invalid.as_ref(), None)?;
     validate_format_items(&config.input_format, "input_format")?;
     let start_index = column_index(batch, &config.start_column)?;
     let end_index = column_index(batch, &config.end_column)?;
@@ -634,7 +693,7 @@ pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> 
                 .zip(parse_with_items(ends.value(row), &input_items));
             values.push(match parsed {
                 Some((start, end)) => Some(diff_value(start, end, divisor, row)?),
-                None => invalid(&config.invalid, "date_diff", row)?,
+                None => invalid("date_diff")?,
             });
         }
         values
@@ -654,7 +713,7 @@ pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> 
                             .and_then(|value| parse(value, &config.input_format)),
                     );
                 parsed.map_or_else(
-                    || invalid(&config.invalid, "date_diff", row),
+                    || invalid("date_diff"),
                     |(start, end)| diff_value(start, end, divisor, row).map(Some),
                 )
             })
@@ -669,9 +728,11 @@ pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> 
     )
 }
 
-/// Politica sulle ore locali ambigue di `table.timezone_convert`: accettata
-/// per compatibilita', senza effetto (un'ora ambigua o inesistente rifiuta
-/// sempre la riga).
+/// Politica sulle ore locali ambigue di `table.timezone_convert`.
+///
+/// Nessun valore ha effetto (un'ora ambigua o inesistente rifiuta sempre la
+/// riga), quindi scritta si rifiuta ([`verifica_politiche`]). Resta un tipo
+/// perche' il rifiuto nomini il motivo invece di un campo sconosciuto.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AmbiguousPolicy {
@@ -683,10 +744,6 @@ pub enum AmbiguousPolicy {
     Earliest,
     /// Senza effetto.
     Latest,
-}
-
-const fn default_ambiguous() -> AmbiguousPolicy {
-    AmbiguousPolicy::Error
 }
 
 /// Config di `table.timezone_convert`: ora locale di un fuso riscritta come
@@ -709,20 +766,17 @@ pub struct TimezoneConvert {
     pub target_timezone: String,
     /// Colonna d'uscita (`Utf8` nullable).
     pub output_column: String,
-    /// Accettato per compatibilita', senza effetto.
-    #[serde(default = "default_invalid")]
-    pub invalid: InvalidDatePolicy,
-    /// Accettato per compatibilita', senza effetto.
-    #[serde(default = "default_ambiguous")]
-    pub ambiguous: AmbiguousPolicy,
+    /// Non ammesso: un valore non leggibile rifiuta sempre la riga, quindi
+    /// nessuna politica avrebbe effetto. Scritto si rifiuta
+    /// ([`verifica_politiche`]).
+    #[serde(default)]
+    pub invalid: Option<InvalidDatePolicy>,
+    /// Non ammesso, come `invalid` ([`verifica_politiche`]).
+    #[serde(default)]
+    pub ambiguous: Option<AmbiguousPolicy>,
 }
 
-fn localize(
-    timezone: Tz,
-    value: NaiveDateTime,
-    _policy: &AmbiguousPolicy,
-    _row: usize,
-) -> Result<Option<chrono::DateTime<Tz>>> {
+fn localize(timezone: Tz, value: NaiveDateTime) -> Result<Option<chrono::DateTime<Tz>>> {
     match timezone.from_local_datetime(&value) {
         LocalResult::Single(value) => Ok(Some(value)),
         LocalResult::Ambiguous(_, _) | LocalResult::None => Err(PlenoraError::Internal(
@@ -735,9 +789,9 @@ fn localize(
 /// `target_timezone`, riscritta con `output_format` nella colonna
 /// `output_column`.
 ///
-/// Le policy `ambiguous` e `invalid` restano token di compatibilita': ore
-/// ambigue/inesistenti e valori non parsabili sono sempre rifiutati con
-/// diagnostica row-scoped, senza scelta o null sintetico.
+/// Ore ambigue/inesistenti e valori non parsabili sono sempre rifiutati con
+/// diagnostica row-scoped, senza scelta o null sintetico: `ambiguous` e
+/// `invalid` scritti si rifiutano ([`verifica_politiche`]).
 ///
 /// # Errors
 ///
@@ -752,6 +806,7 @@ fn localize(
 ///   convertibile in testo (come `scalar_as_string`); gli errori di
 ///   `replace_or_append`.
 pub fn timezone_convert(batch: &RecordBatch, config: &TimezoneConvert) -> Result<RecordBatch> {
+    verifica_politiche(config.invalid.as_ref(), config.ambiguous.as_ref())?;
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
     let source_tz: Tz = config
@@ -801,13 +856,13 @@ pub fn timezone_convert(batch: &RecordBatch, config: &TimezoneConvert) -> Result
                 continue;
             }
             let Some(parsed) = parse_with_items(column.value(row), &input_items) else {
-                values.push(invalid(&config.invalid, "timezone_convert", row)?);
+                values.push(invalid("timezone_convert")?);
                 continue;
             };
-            let localized = localize(source_tz, parsed, &config.ambiguous, row)?;
+            let localized = localize(source_tz, parsed)?;
             values.push(match localized {
                 Some(value) => Some(uscita.scrivi_con_fuso(&value.with_timezone(&target_tz))?),
-                None => invalid(&config.invalid, "timezone_convert", row)?,
+                None => invalid("timezone_convert")?,
             });
         }
         values
@@ -818,11 +873,11 @@ pub fn timezone_convert(batch: &RecordBatch, config: &TimezoneConvert) -> Result
                     return Ok(None);
                 };
                 let Some(parsed) = parse(&value, &config.input_format) else {
-                    return invalid(&config.invalid, "timezone_convert", row);
+                    return invalid("timezone_convert");
                 };
-                let localized = localize(source_tz, parsed, &config.ambiguous, row)?;
+                let localized = localize(source_tz, parsed)?;
                 localized.map_or_else(
-                    || invalid(&config.invalid, "timezone_convert", row),
+                    || invalid("timezone_convert"),
                     |value| {
                         uscita
                             .scrivi_con_fuso(&value.with_timezone(&target_tz))
@@ -1456,7 +1511,7 @@ mod tests {
             None,
             Some("2023-02-29 00:00:00"),
         ]);
-        let format = format_config(InvalidDatePolicy::Null);
+        let format = format_config(None);
         assert_complete_rows(
             &date_format(&batch, &format).expect_err("date_format ha accettato righe invalide"),
             &[1, 3],
@@ -1469,7 +1524,7 @@ mod tests {
             amount: 1,
             unit: DateUnit::Days,
             output_column: "out".into(),
-            invalid: InvalidDatePolicy::Null,
+            invalid: None,
         };
         assert_complete_rows(
             &date_add(&batch, &add).expect_err("date_add ha accettato righe invalide"),
@@ -1484,8 +1539,8 @@ mod tests {
             source_timezone: "Europe/Rome".into(),
             target_timezone: "UTC".into(),
             output_column: "out".into(),
-            invalid: InvalidDatePolicy::Null,
-            ambiguous: AmbiguousPolicy::Earliest,
+            invalid: None,
+            ambiguous: None,
         };
         let dst_batch = utf8_batch(vec![
             Some("2024-01-01 00:00:00"),
@@ -1521,14 +1576,14 @@ mod tests {
                 input_format: "%Y-%m-%d %H:%M:%S".into(),
                 unit: DiffUnit::Days,
                 output_column: "out".into(),
-                invalid: InvalidDatePolicy::Error,
+                invalid: None,
             },
         )
         .expect("null ammessi");
         assert_eq!(output.column(2).null_count(), 2);
     }
 
-    fn format_config(invalid: InvalidDatePolicy) -> DateFormat {
+    fn format_config(invalid: Option<InvalidDatePolicy>) -> DateFormat {
         DateFormat {
             column: "ts".into(),
             input_format: "%Y-%m-%d %H:%M:%S".into(),
@@ -1542,7 +1597,8 @@ mod tests {
     fn date_format_fast_path_matches_generic_on_edge_dates() {
         let valid = utf8_batch(valid_edge_values());
         let with_invalid = utf8_batch(edge_values_with_invalid());
-        for invalid in [InvalidDatePolicy::Null, InvalidDatePolicy::Error] {
+        {
+            let invalid = None;
             let config = format_config(invalid);
             assert_same_output(
                 date_format(&valid, &config),
@@ -1570,7 +1626,8 @@ mod tests {
             Some("2024-02-29 10:00:00"), // trailing input: fallisce
             None,
         ]);
-        for invalid in [InvalidDatePolicy::Null, InvalidDatePolicy::Error] {
+        {
+            let invalid = None;
             let config = DateFormat {
                 input_format: "%Y-%m-%d".into(),
                 ..format_config(invalid)
@@ -1614,29 +1671,12 @@ mod tests {
         }
     }
 
-    fn ambiguous_policy(code: u8) -> AmbiguousPolicy {
-        match code {
-            0 => AmbiguousPolicy::Error,
-            1 => AmbiguousPolicy::Null,
-            2 => AmbiguousPolicy::Earliest,
-            _ => AmbiguousPolicy::Latest,
-        }
-    }
-
-    fn invalid_policy(error: bool) -> InvalidDatePolicy {
-        if error {
-            InvalidDatePolicy::Error
-        } else {
-            InvalidDatePolicy::Null
-        }
-    }
-
     #[test]
     fn date_add_fast_path_matches_generic_on_all_units() {
         let valid = utf8_batch(valid_edge_values());
         let with_invalid = utf8_batch(edge_values_with_invalid());
         for unit_code in 0..7 {
-            for (amount, error_policy) in [(7, false), (-30, false), (90_061, true), (0, true)] {
+            for amount in [7, -30, 90_061, 0] {
                 let config = DateAdd {
                     column: "ts".into(),
                     input_format: "%Y-%m-%d %H:%M:%S".into(),
@@ -1644,7 +1684,7 @@ mod tests {
                     amount,
                     unit: date_unit(unit_code),
                     output_column: "out".into(),
-                    invalid: invalid_policy(error_policy),
+                    invalid: None,
                 };
                 assert_same_output(date_add(&valid, &config), generic_date_add(&valid, &config));
                 assert_equivalent(
@@ -1665,7 +1705,7 @@ mod tests {
                 amount: i64::MAX,
                 unit: date_unit(unit_code),
                 output_column: "out".into(),
-                invalid: InvalidDatePolicy::Null,
+                invalid: None,
             };
             assert_equivalent(
                 date_add(&with_invalid, &config),
@@ -1740,14 +1780,14 @@ mod tests {
             ],
         );
         for unit_code in 0..4 {
-            for error_policy in [false, true] {
+            {
                 let config = DateDiff {
                     start_column: "start".into(),
                     end_column: "end".into(),
                     input_format: "%Y-%m-%d %H:%M:%S".into(),
                     unit: diff_unit(unit_code),
                     output_column: "out".into(),
-                    invalid: invalid_policy(error_policy),
+                    invalid: None,
                 };
                 assert_same_output(
                     date_diff(&valid, &config),
@@ -1779,8 +1819,8 @@ mod tests {
         let rome_valid = utf8_batch(rome_valid);
         let batch = utf8_batch(valid_edge_values());
         let with_invalid = utf8_batch(edge_values_with_invalid());
-        for ambiguous_code in 0..4 {
-            for error_policy in [false, true] {
+        {
+            {
                 let config = TimezoneConvert {
                     column: "ts".into(),
                     input_format: "%Y-%m-%d %H:%M:%S".into(),
@@ -1788,8 +1828,8 @@ mod tests {
                     source_timezone: "Europe/Rome".into(),
                     target_timezone: "UTC".into(),
                     output_column: "out".into(),
-                    invalid: invalid_policy(error_policy),
-                    ambiguous: ambiguous_policy(ambiguous_code),
+                    invalid: None,
+                    ambiguous: None,
                 };
                 assert_same_output(
                     timezone_convert(&rome_valid, &config),
@@ -1825,8 +1865,8 @@ mod tests {
             source_timezone: "America/New_York".into(),
             target_timezone: "Asia/Tokyo".into(),
             output_column: "out".into(),
-            invalid: InvalidDatePolicy::Null,
-            ambiguous: AmbiguousPolicy::Latest,
+            invalid: None,
+            ambiguous: None,
         };
         assert_same_output(
             timezone_convert(&batch, &config),
@@ -1842,8 +1882,8 @@ mod tests {
                 source_timezone: String::new(),
                 target_timezone: "UTC".into(),
                 output_column: "out".into(),
-                invalid: InvalidDatePolicy::Null,
-                ambiguous: AmbiguousPolicy::Error,
+                invalid: None,
+                ambiguous: None,
             }
         };
         assert_equivalent(
@@ -1865,7 +1905,7 @@ mod tests {
             amount,
             unit,
             output_column: "out".into(),
-            invalid: InvalidDatePolicy::Error,
+            invalid: None,
         };
         let fast = date_add(&batch, &config).expect("date_add");
         let generic = generic_date_add(&batch, &config).expect("oracolo");
@@ -1943,8 +1983,8 @@ mod tests {
             source_timezone: "Europe/Rome".into(),
             target_timezone: "UTC".into(),
             output_column: "out".into(),
-            invalid: InvalidDatePolicy::Error,
-            ambiguous: AmbiguousPolicy::Error,
+            invalid: None,
+            ambiguous: None,
         };
         let output = timezone_convert(&valid, &config).expect("orari validi");
         assert_eq!(
@@ -2028,7 +2068,7 @@ mod tests {
         .expect("fixture");
         let config = DateFormat {
             column: "n".into(),
-            ..format_config(InvalidDatePolicy::Null)
+            ..format_config(None)
         };
         let error = date_format(&batch, &config).expect_err("valore non temporale accettato");
         let report = error

@@ -203,7 +203,12 @@ pub fn eval_temporal(expression: &Expression, batch: &RecordBatch, row: usize) -
 /// Null propagato; confronti con la stessa semantica dei `BinaryOperator`
 /// (tipi incompatibili -> errore, elementi null mai uguali). Lista vuota
 /// ammessa: sempre `false`.
-pub fn in_generic(args: &[Expression], batch: &RecordBatch, row: usize) -> Result<Scalar> {
+pub fn in_generic(
+    args: &[Expression],
+    batch: &RecordBatch,
+    row: usize,
+    ctx: &super::Contesto<'_>,
+) -> Result<Scalar> {
     if args.len() != 2 {
         return Err(PlenoraError::InvalidPlan("in richiede 2 argomenti".into()));
     }
@@ -215,7 +220,7 @@ pub fn in_generic(args: &[Expression], batch: &RecordBatch, row: usize) -> Resul
             "in richiede una lista di letterali come secondo argomento".into(),
         ));
     };
-    let value = evaluate(&args[0], batch, row)?;
+    let value = evaluate(&args[0], batch, row, ctx)?;
     if value == Scalar::Null {
         return Ok(Scalar::Null);
     }

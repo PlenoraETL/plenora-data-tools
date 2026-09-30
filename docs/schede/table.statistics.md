@@ -11,7 +11,7 @@ ripetute su ogni riga del gruppo. Le righe non si aggregano.
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna numerica | colonna dei valori |
 | `group_by` | stringa | assente | colonna leggibile come testo | colonna dei gruppi; assente, un gruppo solo |
-| `stats` | lista di stringhe | `["count", "min", "max", "mean", "median", "std"]` | `count`, `min`, `max`, `sum`, `mean`, `median`, `std`, `var`, `q25`, `q75` | statistiche, una colonna ciascuna nell'ordine scritto |
+| `stats` | lista di stringhe | `["count", "min", "max", "mean", "median", "std"]` | non vuota, senza ripetizioni, fra `count`, `min`, `max`, `sum`, `mean`, `median`, `std`, `var`, `q25`, `q75` | statistiche, una colonna ciascuna nell'ordine scritto |
 | `output_prefix` | stringa | `""`, cioè `<column>_` | qualsiasi | prefisso dei nomi: la colonna di `mean` è `<output_prefix>mean` |
 
 Colonna numerica: `float64`, `int64`, `uint64`, `date32` (giorni
@@ -32,8 +32,7 @@ Le statistiche, sui valori non nulli del gruppo:
   null con meno di due valori.
 
 I gruppi si formano sul testo della cella di `group_by`; le celle nulle
-formano un gruppo. Una statistica ripetuta in `stats` scrive due volte la
-stessa colonna.
+formano un gruppo.
 
 ### Schema
 
@@ -58,6 +57,7 @@ In validazione, `InvalidPlan`:
 
 - `column` assente o non numerica;
 - `group_by` assente o non leggibile come testo;
+- `stats` vuota o con una statistica ripetuta;
 - una voce di `stats` fuori elenco, o config con campi sconosciuti.
 
 In esecuzione, `Schema`: una cella `utf8` di `column` che non è un numero;

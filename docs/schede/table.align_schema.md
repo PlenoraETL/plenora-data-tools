@@ -13,8 +13,8 @@ scartano, o con `keep_extra` si tengono in coda.
 | `columns` | lista di oggetti | obbligatorio | da 1 a 4096 colonne, nomi senza ripetizioni | schema d'uscita, nell'ordine d'uscita |
 | `columns[].name` | stringa | obbligatorio | nome non vuoto, al più 1024 byte | nome della colonna |
 | `columns[].type` | stringa | obbligatorio | `Utf8`, `Int64`, `UInt64`, `Float64`, `Boolean`, `Date32`, `Timestamp`, `Decimal128`, `Binary` | tipo della colonna (tabella sotto) |
-| `columns[].default` | JSON | assente | valore convertibile nel tipo (sotto); `null` vale assente | valore di ogni cella di una colonna aggiunta |
-| `keep_extra` | booleano | `false` | `true`, `false` | tiene in coda, nell'ordine d'ingresso, le colonne non dichiarate |
+| `columns[].default` | JSON | assente | valore convertibile nel tipo (sotto), solo su una colonna che manca nell'ingresso; `null` vale assente | valore di ogni cella di una colonna aggiunta |
+| `keep_extra` | booleano | `false` | `true`, `false`; scritto solo se almeno una colonna d'ingresso non è dichiarata | tiene in coda, nell'ordine d'ingresso, le colonne non dichiarate |
 
 I tipi: `Utf8` → `utf8`, `Int64` → `int64`, `UInt64` → `uint64`,
 `Float64` → `float64`, `Boolean` → `bool`, `Date32` → `date32`,
@@ -24,8 +24,8 @@ esattamente così.
 
 Il `default` si converte così, e ciò che non si converte si rifiuta:
 
-- `Utf8`, `Binary`: solo una stringa JSON (per `Binary`, i suoi byte
-  UTF-8);
+- `Utf8`, `Binary`: solo una stringa JSON di al più `max_string_bytes`
+  byte (per `Binary`, i suoi byte UTF-8);
 - `Int64`, `UInt64`: un intero JSON nel dominio del tipo, o una stringa
   che lo è (spazi ai lati ignorati); `1.0` si rifiuta;
 - `Float64`: un numero JSON, o una stringa con la virgola decimale
@@ -39,7 +39,9 @@ Il `default` si converte così, e ciò che non si converte si rifiuta:
 - `Decimal128`: un numero JSON o una stringa, senza esponente e con al più
   10 cifre decimali (nessun arrotondamento).
 
-Il `default` di una colonna che esiste già non ha effetto.
+Il `default` di una colonna che esiste già non avrebbe effetto e si
+rifiuta. `keep_extra` scritto, con qualunque valore, quando ogni colonna
+d'ingresso è dichiarata non avrebbe effetto e si rifiuta.
 
 ### Schema
 
@@ -69,7 +71,11 @@ In validazione, `InvalidPlan`:
 - un nome ripetuto, vuoto, di soli spazi o oltre 1024 byte;
 - una colonna esistente di tipo diverso da quello dichiarato (anche un
   `timestamp(ms)` con fuso, o un decimale di precisione o scala diverse);
-- un `default` non convertibile nel tipo;
+- un `default` non convertibile nel tipo, o un `default` `Utf8` o
+  `Binary` oltre `max_string_bytes` byte;
+- un `default` su una colonna che esiste già nell'ingresso;
+- `keep_extra` scritto (`true` o `false`) quando ogni colonna d'ingresso
+  è dichiarata;
 - un `type` fuori elenco, config con campi sconosciuti.
 
 In esecuzione: nessun errore che dipenda dai dati.
@@ -78,8 +84,6 @@ In esecuzione: nessun errore che dipenda dai dati.
 
 - **Nessuna conversione implicita**: per cambiare il tipo di una colonna
   esistente serve [`table.type_cast`](#tabletype_cast) prima.
-- **`default` senza effetto accettato**: su una colonna che esiste il
-  `default` si ignora invece di rifiutarsi.
 - **Segni ripetuti nel `default` `Decimal128`**: i segni iniziali si
   accettano tutti e conta solo il primo carattere (`"--5"` vale -5,
   `"+-5"` vale 5).

@@ -109,7 +109,7 @@ fn main() {
         right_keys: vec!["id".into()],
         compare_columns: vec!["num".into()],
         include_unchanged: IncludeUnchanged::No,
-        separator: ", ".into(),
+        separator: Some(", ".into()),
     };
     measure(
         "table.table_diff",

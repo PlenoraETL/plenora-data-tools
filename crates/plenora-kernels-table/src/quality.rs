@@ -374,6 +374,41 @@ pub struct AssertRange {
     pub allow_null: bool,
 }
 
+impl AssertRange {
+    /// Regole sulla sola config, condivise da kernel e analisi dei
+    /// contratti: almeno uno fra `min` e `max` (senza, l'asserzione non
+    /// vincola nulla), estremi finiti con `min <= max`, e `inclusive_min` /
+    /// `inclusive_max` solo con l'estremo corrispondente (senza, non
+    /// avrebbero effetto).
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per ciascuna delle regole.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        if self.min.is_none() && self.max.is_none() {
+            return Err(PlenoraError::InvalidPlan(
+                "assert_range richiede min o max".into(),
+            ));
+        }
+        if self.min.is_some_and(|value| !value.is_finite())
+            || self.max.is_some_and(|value| !value.is_finite())
+            || self.min.zip(self.max).is_some_and(|(min, max)| min > max)
+        {
+            return Err(PlenoraError::InvalidPlan(
+                "estremi di assert_range non validi".into(),
+            ));
+        }
+        if (self.inclusive_min.is_some() && self.min.is_none())
+            || (self.inclusive_max.is_some() && self.max.is_none())
+        {
+            return Err(PlenoraError::InvalidPlan(
+                "inclusive_min/inclusive_max senza l'estremo corrispondente".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// true se il valore viola i limiti configurati; `compare` confronta il
 /// valore con un estremo (`None` = confronto con NaN: nessuna violazione,
 /// come i confronti IEEE storici).
@@ -423,6 +458,7 @@ fn non_finite_cell(array: &dyn Array, row: usize) -> bool {
 ///
 /// # Errors
 ///
+/// - `InvalidPlan`: le regole di [`AssertRange::verifica_parametri`];
 /// - `Schema`: colonna assente dallo schema (come `column_index`) o valore
 ///   non confrontabile numericamente (come `scalar_compare`: tipo fuori
 ///   elenco, testo `Utf8` che non e' un numero); il passo fallisce subito,
@@ -431,6 +467,7 @@ fn non_finite_cell(array: &dyn Array, row: usize) -> bool {
 ///   finito (causa `validation.value_out_of_range`), null con
 ///   `allow_null=false` (causa `validation.required_value_missing`).
 pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordBatch> {
+    config.verifica_parametri()?;
     let index = column_index(batch, &config.column)?;
     let array = batch.column(index).as_ref();
     let mut rejections = Vec::new();

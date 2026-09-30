@@ -1039,9 +1039,10 @@ pub fn aggregate_spilled_in(
     for aggregazione in &config.aggregations {
         aggregazione.verifica_parametri()?;
     }
+    config.nomi_uscita()?;
     if batch.num_rows() == 0 {
         return Ok((
-            aggregation::aggregate(batch, config)?,
+            aggregation::aggregate_con_limiti(batch, config, limits)?,
             SpillMetrics::default(),
         ));
     }
@@ -1084,7 +1085,7 @@ pub fn aggregate_spilled_in(
             }
             distinct_keys.insert(key.clone());
         }
-        let partition_output = aggregation::aggregate(&partition_batch, config)?;
+        let partition_output = aggregation::aggregate_con_limiti(&partition_batch, config, limits)?;
         if partition_output.num_rows() != distinct_keys.len() {
             return Err(PlenoraError::InvalidPlan(
                 "aggregate spill: righe di output diverse dai gruppi".into(),
@@ -2106,7 +2107,7 @@ mod tests {
                 aggregation("c", AggFunction::Mean, "media"),
                 aggregation("c", AggFunction::Min, ""),
                 aggregation("c", AggFunction::Max, ""),
-                aggregation("a", AggFunction::Count, ""),
+                aggregation("a", AggFunction::Count, "conteggio_a"),
                 aggregation("b", AggFunction::First, ""),
                 aggregation("b", AggFunction::Last, ""),
                 aggregation("b", AggFunction::Concat, ""),

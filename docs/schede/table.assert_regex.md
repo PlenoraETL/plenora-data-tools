@@ -50,7 +50,8 @@ e il nome della colonna; mai i valori.
 
 Sintassi e limiti del crate `regex`: niente riferimenti all'indietro né
 lookaround, tempo lineare nella lunghezza del testo. `max_regex_bytes` è un
-limite del piano (default 4096).
+limite del piano (default 65536 byte, 64 KiB), lo stesso per il piano e per
+i kernel.
 
 ### Complessità
 

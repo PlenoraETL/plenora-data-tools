@@ -87,9 +87,16 @@ pub(in crate::analyze) fn analyze_melt(
     let homogeneous = value_indices
         .iter()
         .all(|index| source_fields[*index].data_type() == &value_type);
+    con_op(
+        op,
+        reshape::verifica_type_policy(config.type_policy, homogeneous),
+    )?;
     let value_data_type = if homogeneous {
         value_type
-    } else if matches!(config.type_policy, reshape::HeterogeneousTypePolicy::String) {
+    } else if matches!(
+        reshape::politica_tipi(config.type_policy),
+        reshape::HeterogeneousTypePolicy::String
+    ) {
         // STESSA prevalidazione del kernel, che rifiuta dallo schema i tipi
         // non convertibili e le timezone non risolvibili: senza, il contratto
         // prometterebbe un output che non verra' mai prodotto. La categoria
@@ -409,6 +416,13 @@ pub(in crate::analyze) fn analyze_table_diff(
     } else {
         config.compare_columns.clone()
     };
+    con_op(op, config.verifica_separatore(compare.len()))?;
+    check_text_len(
+        op,
+        config.separatore(),
+        limits.max_string_bytes,
+        "separator",
+    )?;
     let mut fields_out: Vec<Field> = Vec::new();
     for name in &config.left_keys {
         let field = field_of(op, left, name)?;

@@ -58,7 +58,7 @@ fn main() {
     let filter_num = Filter {
         column: "num".into(),
         operator: Operator::Eq,
-        value: Value::from(42),
+        value: Some(Value::from(42)),
     };
     run_scenario("filter_num_eq", rows, repetitions, || {
         filter(&input, &filter_num).expect("filter num")
@@ -67,7 +67,7 @@ fn main() {
     let filter_group = Filter {
         column: "group".into(),
         operator: Operator::Eq,
-        value: Value::from("g42"),
+        value: Some(Value::from("g42")),
     };
     run_scenario("filter_utf8_eq", rows, repetitions, || {
         filter(&input, &filter_group).expect("filter group")

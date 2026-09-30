@@ -208,6 +208,7 @@ fn resoconto_passi(report: &plenora_pipeline::Report, piano: usize) -> Vec<Value
                 "byte_vivi_dopo": passo.byte_vivi,
                 "margine_kernel": passo.margine_kernel,
                 "sfrattati": passo.sfrattati, "ricaricati": passo.ricaricati,
+                "righe_divisione_per_zero": passo.righe_divisione_per_zero,
             });
             vivi_prima = passo.byte_vivi;
             riga

@@ -92,7 +92,10 @@ pub fn md5_hash_riferimento(batch: &RecordBatch, config: &Md5Hash) -> Result<Rec
                     let value = match (value, &config.null_policy) {
                         (Some(value), _) => value,
                         (None, HashNullPolicy::Empty) => String::new(),
-                        (None, HashNullPolicy::Literal) => config.null_literal.clone(),
+                        (None, HashNullPolicy::Literal) => {
+                            crate::security::letterale_nullo(config.null_literal.as_ref())
+                                .to_owned()
+                        }
                         (None, HashNullPolicy::Error) => {
                             return Err(PlenoraError::Internal(
                                 "prevalidazione null md5_hash incoerente".into(),
@@ -185,9 +188,12 @@ pub fn sha256_hash_riferimento(batch: &RecordBatch, config: &Sha256Hash) -> Resu
                     (None, HashNullPolicy::Literal) => {
                         digest.update([1]);
                         let literal = if config.normalize {
-                            config.null_literal.trim().to_lowercase()
+                            crate::security::letterale_nullo(config.null_literal.as_ref())
+                                .trim()
+                                .to_lowercase()
                         } else {
-                            config.null_literal.clone()
+                            crate::security::letterale_nullo(config.null_literal.as_ref())
+                                .to_owned()
                         };
                         framed_part(&mut digest, literal.as_bytes())?;
                     }
@@ -479,16 +485,11 @@ fn hmac_sha256_with_states(inner_base: &Sha256, outer_base: &Sha256, message: &[
     output
 }
 
-/// Legge la chiave dalla variabile d'ambiente indicata. L'errore e'
-/// volutamente generico: non rivela ne' il nome della variabile ne' alcun
-/// frammento del valore.
+/// La lettura della chiave non e' cio' che l'oracolo verifica: usa la
+/// stessa funzione del kernel e del runner
+/// ([`crate::security::carica_chiave_hmac`]).
 fn load_hmac_key(key_env: &str) -> Result<Vec<u8>> {
-    match std::env::var(key_env) {
-        Ok(value) if !value.is_empty() => Ok(value.into_bytes()),
-        _ => Err(PlenoraError::InvalidPlan(
-            "hmac_sha256: chiave HMAC non disponibile".into(),
-        )),
-    }
+    crate::security::carica_chiave_hmac(key_env)
 }
 
 fn framed_bytes(message: &mut Vec<u8>, value: &[u8]) -> Result<()> {
@@ -687,7 +688,8 @@ mod confronti {
                     output_column: "h".into(),
                     normalize,
                     null_policy: copia_politica(&null_policy),
-                    null_literal: null_literal.into(),
+                    null_literal: matches!(null_policy, HashNullPolicy::Literal)
+                        .then(|| null_literal.into()),
                 };
                 confronta(md5_hash(batch, &md5()), md5_hash_riferimento(batch, &md5()));
                 let sha = || Sha256Hash {
@@ -695,7 +697,8 @@ mod confronti {
                     output_column: "h".into(),
                     normalize,
                     null_policy: copia_politica(&null_policy),
-                    null_literal: null_literal.into(),
+                    null_literal: matches!(null_policy, HashNullPolicy::Literal)
+                        .then(|| null_literal.into()),
                 };
                 confronta(
                     sha256_hash(batch, &sha()),
@@ -905,7 +908,7 @@ mod confronti {
                 output_column: "s".into(),
                 normalize: true,
                 null_policy: HashNullPolicy::Empty,
-                null_literal: String::new(),
+                null_literal: None,
             };
             confronta(
                 md5_hash(&batch, &config),

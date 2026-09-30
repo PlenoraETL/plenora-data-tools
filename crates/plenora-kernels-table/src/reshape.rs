@@ -38,14 +38,16 @@ pub struct Melt {
     #[serde(default = "default_value")]
     pub value_name: String,
     /// Colonne valore di tipi diversi (default
-    /// [`HeterogeneousTypePolicy::Reject`]).
-    #[serde(default = "default_type_policy")]
-    pub type_policy: HeterogeneousTypePolicy,
+    /// [`HeterogeneousTypePolicy::Reject`]). Con colonne valore dello stesso
+    /// tipo non avrebbe effetto: scritta si rifiuta
+    /// ([`verifica_type_policy`]).
+    #[serde(default)]
+    pub type_policy: Option<HeterogeneousTypePolicy>,
 }
 
 /// Che cosa fanno `table.melt` e `table.transpose` con colonne di tipi Arrow
 /// diversi (in JSON `"reject"`, `"string"`).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HeterogeneousTypePolicy {
     /// Rifiuto (`InvalidPlan`); default.
@@ -55,8 +57,32 @@ pub enum HeterogeneousTypePolicy {
     String,
 }
 
-const fn default_type_policy() -> HeterogeneousTypePolicy {
-    HeterogeneousTypePolicy::Reject
+/// La politica sui tipi diversi: quella scritta, o `reject` se assente.
+#[must_use]
+pub fn politica_tipi(type_policy: Option<HeterogeneousTypePolicy>) -> HeterogeneousTypePolicy {
+    type_policy.unwrap_or(HeterogeneousTypePolicy::Reject)
+}
+
+/// `type_policy` scritta con colonne tutte dello stesso tipo si rifiuta.
+///
+/// Decide solo che cosa fare di colonne di tipi diversi: con colonne dello
+/// stesso tipo non avrebbe effetto, con nessuno dei due valori. La chiamano
+/// i kernel `melt` e `transpose` e l'analisi dei contratti, con le colonne
+/// che ciascuno ricava.
+///
+/// # Errors
+///
+/// `InvalidPlan` se `type_policy` e' scritta e le colonne sono omogenee.
+pub fn verifica_type_policy(
+    type_policy: Option<HeterogeneousTypePolicy>,
+    omogenee: bool,
+) -> Result<()> {
+    if type_policy.is_some() && omogenee {
+        return Err(PlenoraError::InvalidPlan(
+            "type_policy senza effetto: le colonne hanno tutte lo stesso tipo".into(),
+        ));
+    }
+    Ok(())
 }
 fn default_variable() -> String {
     "variable".into()
@@ -186,6 +212,25 @@ pub fn resolve_melt_names<'a>(
         .map_err(|_| PlenoraError::Internal("melt: il risolutore deve restituire due nomi".into()))
 }
 
+impl Melt {
+    /// Colonne valore contro `schema`: `value_columns`, o tutte le colonne
+    /// non id se e' vuoto. Le righe d'uscita sono le righe d'ingresso per
+    /// questo numero, esattamente: il runner lo usa come espansione fissata
+    /// dalla config, fuori dal fattore di espansione.
+    #[must_use]
+    pub fn numero_colonne_valore(&self, schema: &Schema) -> usize {
+        if self.value_columns.is_empty() {
+            schema
+                .fields()
+                .iter()
+                .filter(|field| !self.id_columns.iter().any(|id| id == field.name()))
+                .count()
+        } else {
+            self.value_columns.len()
+        }
+    }
+}
+
 /// `table.melt`: porta le `value_columns` da larghe a lunghe.
 ///
 /// L'uscita ha le colonne id, `var_name` (nome della colonna valore) e
@@ -248,8 +293,9 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
     let omogeneo = value_indices
         .iter()
         .all(|index| batch.column(*index).data_type() == &tipo_valore);
+    verifica_type_policy(config.type_policy, omogeneo)?;
     if !omogeneo {
-        match config.type_policy {
+        match politica_tipi(config.type_policy) {
             HeterogeneousTypePolicy::Reject => {
                 return Err(PlenoraError::InvalidPlan(
                     "melt: value_columns eterogenee; impostare type_policy='string' per la conversione esplicita".into(),
@@ -394,7 +440,10 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
             .collect::<Vec<_>>();
         fields.push(Field::new(&value_name, value_type, true));
         columns.push(plenora_core::arrow::select::concat::concat(&arrays)?);
-    } else if matches!(config.type_policy, HeterogeneousTypePolicy::String) {
+    } else if matches!(
+        politica_tipi(config.type_policy),
+        HeterogeneousTypePolicy::String
+    ) {
         // Fast path: downcast una volta per colonna e loop tipizzato sulle
         // righe; stessi byte, stessi null, stesso ordine di scansione e
         // stesso controllo max_string_bytes del percorso scalare.
@@ -496,7 +545,8 @@ pub struct Pivot {
 
 impl Pivot {
     /// Le colonne indice di `index_col` (separate da virgola, senza spazi ai
-    /// bordi, vuote ignorate).
+    /// bordi). Una voce vuota (`"a,,b"`) non nomina niente: la rifiuta
+    /// [`Pivot::verifica_mapping`] invece di scartarla in silenzio.
     #[must_use]
     pub fn nomi_indice(&self) -> Vec<&str> {
         self.index_col
@@ -524,7 +574,8 @@ impl Pivot {
     ///
     /// # Errors
     ///
-    /// - `InvalidPlan`: `index_col` senza colonne; colonna indice ripetuta; nome di output non valido,
+    /// - `InvalidPlan`: `index_col` senza colonne o con una voce vuota;
+    ///   colonna indice ripetuta; nome di output non valido,
     ///   ripetuto o uguale a una colonna indice; chiave non canonica o
     ///   `pivot_col` di un tipo senza chiavi certe;
     /// - `ResourceLimit`: colonne di output oltre `max_columns`.
@@ -532,6 +583,11 @@ impl Pivot {
         let indice = self.nomi_indice();
         if indice.is_empty() {
             return Err(PlenoraError::InvalidPlan("pivot: index_col vuoto".into()));
+        }
+        if self.index_col.split(',').any(|voce| voce.trim().is_empty()) {
+            return Err(PlenoraError::InvalidPlan(
+                "pivot: voce vuota in index_col".into(),
+            ));
         }
         let mut presi: HashSet<&str> = HashSet::with_capacity(indice.len());
         if !indice.iter().all(|nome| presi.insert(nome)) {
@@ -635,8 +691,9 @@ fn nuova_cella(stato: &mut StatoCelle, row: usize) {
 ///
 /// # Errors
 ///
-/// Gli errori di conversione del valore (`TextColumn`, `Float64Source`):
-/// il chiamante li tiene per la cella invece di interrompere la scansione.
+/// Gli errori di conversione del valore (`TextColumn`, `Float64Source`) e il
+/// testo di `concat` oltre `max_string_bytes` (`ResourceLimit`): il
+/// chiamante li tiene per la cella invece di interrompere la scansione.
 #[allow(clippy::too_many_arguments)] // Stato, sorgenti e scratch di una sola riduzione.
 fn aggiungi_valore(
     stato: &mut StatoCelle,
@@ -647,6 +704,7 @@ fn aggiungi_valore(
     text: &TextColumn<'_>,
     numeric: &Float64Source<'_>,
     value: &mut String,
+    limits: &Limits,
 ) -> Result<()> {
     match stato {
         StatoCelle::Riga(righe) => {
@@ -663,6 +721,13 @@ fn aggiungi_valore(
             value.clear();
             if text.write_value(row, value)? {
                 let (joined, scritto) = &mut testi[cella];
+                // Il testo della cella cresce con le righe del gruppo: si
+                // controlla prima di allungarlo.
+                let byte = joined
+                    .len()
+                    .saturating_add(usize::from(*scritto))
+                    .saturating_add(value.len());
+                crate::verifica_testo_prodotto("pivot", byte, limits)?;
                 if *scritto {
                     joined.push(',');
                 } else {
@@ -895,6 +960,7 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
                 &value_text,
                 &value_numeric,
                 &mut value,
+                limits,
             ) {
                 errori.insert(cella, errore);
             }
@@ -1020,9 +1086,10 @@ pub struct Transpose {
     #[serde(default)]
     pub output_columns: Vec<String>,
     /// Colonne dati di tipi diversi (default
-    /// [`HeterogeneousTypePolicy::Reject`]).
-    #[serde(default = "default_type_policy")]
-    pub type_policy: HeterogeneousTypePolicy,
+    /// [`HeterogeneousTypePolicy::Reject`]); con colonne dati dello stesso
+    /// tipo scritta si rifiuta ([`verifica_type_policy`]).
+    #[serde(default)]
+    pub type_policy: Option<HeterogeneousTypePolicy>,
 }
 
 /// `table.transpose`: le colonne dati diventano righe, le righe colonne.
@@ -1079,7 +1146,13 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
     let homogeneous = data_indices
         .iter()
         .all(|index| batch.column(*index).data_type() == &data_type);
-    if !homogeneous && matches!(config.type_policy, HeterogeneousTypePolicy::Reject) {
+    verifica_type_policy(config.type_policy, homogeneous)?;
+    if !homogeneous
+        && matches!(
+            politica_tipi(config.type_policy),
+            HeterogeneousTypePolicy::Reject
+        )
+    {
         return Err(PlenoraError::InvalidPlan(
             "transpose: colonne eterogenee; impostare type_policy='string' per la conversione esplicita".into(),
         ));
@@ -1428,9 +1501,39 @@ pub struct TableDiff {
     /// Emette anche le righe `UNCHANGED` (default [`IncludeUnchanged::No`]).
     #[serde(default = "default_no")]
     pub include_unchanged: IncludeUnchanged,
-    /// Separatore di `_diff_columns` e `_diff_old_values` (default `"#"`).
-    #[serde(default = "default_separator")]
-    pub separator: String,
+    /// Separatore di `_diff_columns` e `_diff_old_values` (default `"#"`,
+    /// [`TableDiff::separatore`]). Con una sola colonna confrontata non
+    /// separa mai niente: scritto si rifiuta
+    /// ([`TableDiff::verifica_separatore`]).
+    #[serde(default)]
+    pub separator: Option<String>,
+}
+
+impl TableDiff {
+    /// Il separatore: `separator`, o `"#"` se assente.
+    #[must_use]
+    pub fn separatore(&self) -> &str {
+        self.separator.as_deref().unwrap_or(DEFAULT_DIFF_SEPARATOR)
+    }
+
+    /// `separator` scritto con al piu' una colonna confrontata (quelle di
+    /// `compare_columns`, o quelle che il default ricava dagli schemi) non
+    /// separa mai due nomi o due valori: si rifiuta. La chiamano il kernel e
+    /// l'analisi dei contratti, con le colonne confrontate che ciascuno
+    /// ricava.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` se `separator` e' scritto con al piu' una colonna
+    /// confrontata.
+    pub fn verifica_separatore(&self, colonne_confrontate: usize) -> Result<()> {
+        if self.separator.is_some() && colonne_confrontate <= 1 {
+            return Err(PlenoraError::InvalidPlan(
+                "separator senza effetto con al piu' una colonna confrontata".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Sorgenti di una riga di output di `table_diff`.
@@ -1469,9 +1572,7 @@ impl TryFrom<String> for IncludeUnchanged {
 const fn default_no() -> IncludeUnchanged {
     IncludeUnchanged::No
 }
-fn default_separator() -> String {
-    "#".into()
-}
+const DEFAULT_DIFF_SEPARATOR: &str = "#";
 
 /// Abbinamento delle righe di `table_diff` per chiave: per ogni riga
 /// sinistra la riga destra con la stessa chiave, e le righe destre senza
@@ -1748,6 +1849,7 @@ pub fn table_diff(
     } else {
         config.compare_columns.clone()
     };
+    config.verifica_separatore(compare.len())?;
     let left_compare = compare
         .iter()
         .map(|name| column_index(left, name))
@@ -1842,14 +1944,17 @@ pub fn table_diff(
                     };
                     if diversa {
                         if cambiate > 0 {
-                            nomi.push_str(&config.separator);
-                            vecchi.push_str(&config.separator);
+                            nomi.push_str(config.separatore());
+                            vecchi.push_str(config.separatore());
                         }
                         nomi.push_str(name);
                         vecchi.push_str(&before);
                         cambiate += 1;
                     }
                 }
+                // Le due celle uniscono una voce per colonna cambiata.
+                crate::verifica_testo_prodotto("table_diff", nomi.len(), limits)?;
+                crate::verifica_testo_prodotto("table_diff", vecchi.len(), limits)?;
                 if cambiate == 0 {
                     ("UNCHANGED", false)
                 } else {
@@ -2021,6 +2126,8 @@ mod tests {
         let homogeneous = value_indices
             .iter()
             .all(|index| batch.column(*index).data_type() == &value_type);
+        // Regola condivisa sulla config, non oracolata.
+        super::verifica_type_policy(config.type_policy, homogeneous)?;
         if homogeneous {
             let arrays = value_indices
                 .iter()
@@ -2028,7 +2135,10 @@ mod tests {
                 .collect::<Vec<_>>();
             fields.push(Field::new(&value_name, value_type, true));
             columns.push(plenora_core::arrow::select::concat::concat(&arrays)?);
-        } else if matches!(config.type_policy, HeterogeneousTypePolicy::String) {
+        } else if matches!(
+            super::politica_tipi(config.type_policy),
+            HeterogeneousTypePolicy::String
+        ) {
             let mut values = Vec::with_capacity(output_rows);
             for index in value_indices {
                 for row in 0..batch.num_rows() {
@@ -2267,7 +2377,12 @@ mod tests {
             value_columns: value_columns.iter().map(|name| (*name).into()).collect(),
             var_name: "variable".into(),
             value_name: "value".into(),
-            type_policy,
+            // `reject` e' il default: assente, cosi' la regola su
+            // `type_policy` scritta con colonne omogenee non tocca i casi.
+            type_policy: match type_policy {
+                HeterogeneousTypePolicy::Reject => None,
+                HeterogeneousTypePolicy::String => Some(HeterogeneousTypePolicy::String),
+            },
         }
     }
 
@@ -3176,6 +3291,7 @@ mod tests {
         } else {
             config.compare_columns.clone()
         };
+        config.verifica_separatore(compare.len())?;
         let left_compare = compare
             .iter()
             .map(|name| column_index(left, name))
@@ -3240,8 +3356,8 @@ mod tests {
                     } else {
                         (
                             "MODIFIED".to_owned(),
-                            Some(changed.join(&config.separator)),
-                            Some(old_values.join(&config.separator)),
+                            Some(changed.join(config.separatore())),
+                            Some(old_values.join(config.separatore())),
                         )
                     }
                 }
@@ -3446,7 +3562,7 @@ mod tests {
             right_keys: vec!["id".into(), "grp".into()],
             compare_columns: vec!["num".into(), "txt".into()],
             include_unchanged,
-            separator: ", ".into(),
+            separator: Some(", ".into()),
         }
     }
 
@@ -3541,7 +3657,7 @@ mod tests {
         // chiave (num, txt); le colonne non condivise restano fuori.
         let config = TableDiff {
             compare_columns: Vec::new(),
-            separator: " | ".into(),
+            separator: Some(" | ".into()),
             ..diff_config(IncludeUnchanged::Yes)
         };
         let fast = table_diff(&left, &right, &config, &Limits::default()).expect("fast");
@@ -3903,7 +4019,7 @@ mod tests {
             right_keys: vec!["k".into()],
             compare_columns: vec!["v".into()],
             include_unchanged: IncludeUnchanged::Yes,
-            separator: ", ".into(),
+            separator: None,
         };
         let valori = || -> ArrayRef { Arc::new(StringArray::from(vec![Some("a"), Some("b")])) };
         let coppie: Vec<(ArrayRef, ArrayRef)> = vec![

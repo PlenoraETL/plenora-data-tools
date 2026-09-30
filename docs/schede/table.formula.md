@@ -13,6 +13,7 @@ leggere i dati. Per condizioni, confronti e funzioni c'è
 | --- | --- | --- | --- | --- |
 | `new_column` | stringa | obbligatorio | nome valido (non vuoto, al più 1024 byte) | colonna d'uscita |
 | `formula` | stringa | obbligatorio | formula della grammatica sotto, non vuota, al più `max_string_bytes` byte | espressione da calcolare |
+| `on_division_by_zero` | stringa | `"null"` | `"null"`, `"error"`; solo in una formula con almeno un `/` | che cosa dà una divisione con divisore zero (sotto) |
 
 Grammatica (spazi ASCII ignorati fra i simboli):
 
@@ -38,7 +39,16 @@ Tipi:
 - numero op numero dà un numero (`f64`); `+` con almeno un operando di testo
   concatena i due testi (un numero con la resa più corta di `f64`: `2.0`
   diventa `2`); `-`, `*`, `/` e il `-` unario su un testo si rifiutano;
-- un operando nullo rende nullo il risultato, anche nella concatenazione.
+- un operando nullo rende nullo il risultato, anche nella concatenazione;
+- un testo concatenato non supera `max_string_bytes` byte.
+
+Divisione con operandi non nulli e divisore calcolato zero: con
+`on_division_by_zero = "null"` (default) la divisione vale null e, poiché
+ogni operatore propaga il null, tutta la riga dà null; ogni riga in cui è
+successo si conta una volta nel campo `righe_divisione_per_zero` del
+resoconto del passo nel runner (un conteggio, mai valori). Con `"error"` la
+riga si rifiuta. Un divisore letterale zero si rifiuta in validazione con
+qualunque politica.
 
 ### Schema
 
@@ -64,16 +74,20 @@ In validazione, `InvalidPlan`:
   (parentesi non bilanciate, testo non chiuso o con `\`, numero o esponente
   non validi, carattere non ammesso, simboli in coda);
 - una divisione per il numero zero scritto nella formula (`x / 0`,
-  `x / -0.0`);
+  `x / -0.0`), con qualunque `on_division_by_zero`;
+- `on_division_by_zero` scritto in una formula senza `/`, o con un valore
+  fuori elenco;
 - una colonna assente o non leggibile come testo;
 - `-`, `*`, `/` o il `-` unario applicati a un testo;
 - `new_column` non valido; config con campi sconosciuti.
 
 In esecuzione:
 
-- `DataMapping` con diagnostica per riga: una divisione per un divisore
-  calcolato che vale zero (`evaluation.division_by_zero`); il passo non
-  produce uscita;
+- `DataMapping` con diagnostica per riga, solo con
+  `on_division_by_zero = "error"`: una divisione per un divisore calcolato
+  che vale zero (`evaluation.division_by_zero`); il passo non produce
+  uscita;
+- `ResourceLimit`: un testo concatenato oltre `max_string_bytes` byte;
 - `Schema`: una cella che non si converte in testo.
 
 ### Limiti e deviazioni

@@ -29,9 +29,7 @@ pub(in crate::analyze) fn analyze_string_pad(
     let config: strings::StringPad = typed(op, config)?;
     let input = &inputs[0];
     require_utf8(op, input, &config.column)?;
-    if config.fill_char.chars().count() != 1 {
-        return contract_error(op, "fill_char deve essere un singolo carattere");
-    }
+    con_op(op, config.verifica_parametri())?;
     if config.width > limits.max_string_bytes {
         return contract_error(op, "width oltre il limite di byte");
     }
@@ -134,9 +132,13 @@ pub(in crate::analyze) fn analyze_md5_hash(
     let input = &inputs[0];
     check_output_name(op, &config.output_column)?;
     check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
+    con_op(
+        op,
+        security::verifica_null_literal(&config.null_policy, config.null_literal.as_ref()),
+    )?;
     check_text_len(
         op,
-        &config.null_literal,
+        security::letterale_nullo(config.null_literal.as_ref()),
         limits.max_string_bytes,
         "null_literal",
     )?;
@@ -163,9 +165,13 @@ pub(in crate::analyze) fn analyze_sha256_hash(
     // Il kernel accetta columns vuoto e scrive per ogni riga l'hash di
     // niente: un'impronta vacua, rifiutata come in md5_hash.
     check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
+    con_op(
+        op,
+        security::verifica_null_literal(&config.null_policy, config.null_literal.as_ref()),
+    )?;
     check_text_len(
         op,
-        &config.null_literal,
+        security::letterale_nullo(config.null_literal.as_ref()),
         limits.max_string_bytes,
         "null_literal",
     )?;
@@ -252,6 +258,7 @@ pub(in crate::analyze) fn analyze_mask_data(
     if config.maskings.len() > limits.max_columns {
         return contract_error(op, "maskings oltre il limite di colonne");
     }
+    con_op(op, config.verifica_colonne())?;
     // `available` accumula le uscite delle masking precedenti, ma ogni
     // colonna mascherata deve comunque essere una colonna di testo
     // dell'ingresso (`require_scalar_string` sotto): una masking su una

@@ -176,7 +176,7 @@ pub fn analyze_table_contract(
     match id {
         "table.add_row_number" => analyze_add_row_number(id, inputs, config, fields, limits),
         "table.aggregate" => analyze_aggregate(id, inputs, config, fields, limits),
-        "table.bin" => analyze_bin(id, inputs, config, fields),
+        "table.bin" => analyze_bin(id, inputs, config, fields, limits),
         "table.concat" => analyze_concat(id, inputs, config, fields),
         "table.concat_columns" => analyze_concat_columns(id, inputs, config, fields, limits),
         "table.conditional" => analyze_conditional(id, inputs, config, fields, limits),
@@ -185,7 +185,7 @@ pub fn analyze_table_contract(
         "table.dedup_advanced" => analyze_dedup_advanced(id, inputs, config, fields, limits),
         "table.distinct" => analyze_distinct(id, inputs, config, fields, limits),
         "table.drop_columns" => analyze_drop_columns(id, inputs, config, fields, limits),
-        "table.fill_na" => analyze_fill_na(id, inputs, config, fields),
+        "table.fill_na" => analyze_fill_na(id, inputs, config, fields, limits),
         "table.filter" => analyze_filter(id, inputs, config, fields, limits),
         "table.flatten_json" => analyze_flatten_json(id, inputs, config, fields, limits),
         "table.formula" => analyze_formula(id, inputs, config, fields, limits),
@@ -1836,13 +1836,15 @@ mod tests {
             "drop della geometria -> tabellare"
         );
         assert!(output.active_geometry.is_none());
-        // Nomi inesistenti ignorati silenziosamente (comportamento del kernel).
-        let unchanged = ok(
+        // Un nome inesistente non toglierebbe niente: si rifiuta, qui e nel
+        // kernel (`DropColumns::verifica_parametri`).
+        assert!(err(
             "table.drop_columns",
             &[geo_contract()],
-            json!({"columns": ["nope"]}),
-        );
-        assert_eq!(unchanged.geometries.len(), 1);
+            json!({"columns": ["nope"]})
+        )
+        .to_string()
+        .contains("assente"));
         assert!(err(
             "table.drop_columns",
             &[tabular_contract()],

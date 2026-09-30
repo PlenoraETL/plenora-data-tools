@@ -1,8 +1,6 @@
 //! Analyzer a secco di ordinamento, distinct e aggregazioni (kernel del
 //! modulo `aggregation`).
 
-use std::collections::HashMap;
-
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::contract::{ContractProperties, DataContract, FieldAllocator, FieldId};
 use plenora_core::Result;
@@ -81,6 +79,7 @@ pub(in crate::analyze) fn analyze_top_n(
     limits: &Limits,
 ) -> Result<DataContract> {
     let config: aggregation::TopN = typed(op, config)?;
+    con_op(op, config.verifica_parametri())?;
     let input = &inputs[0];
     check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
     check_rows(op, config.n, limits.max_rows, "n")?;
@@ -202,13 +201,14 @@ pub(in crate::analyze) fn analyze_aggregate(
             Ok(field.clone())
         })
         .collect::<Result<_>>()?;
-    let mut duplicates: HashMap<&str, usize> = HashMap::new();
+    // Prima i parametri di ogni aggregazione, poi i nomi d'uscita: lo stesso
+    // ordine del kernel.
     for aggregation in &config.aggregations {
-        *duplicates.entry(aggregation.column.as_str()).or_insert(0) += 1;
-    }
-    for aggregation in &config.aggregations {
-        let field = field_of(op, input, &aggregation.column)?;
         check_aggregation_parameters(op, aggregation, limits)?;
+    }
+    let nomi = con_op(op, config.nomi_uscita())?;
+    for (aggregation, name) in config.aggregations.iter().zip(nomi) {
+        let field = field_of(op, input, &aggregation.column)?;
         match aggregation.function {
             aggregation::AggFunction::Count => {}
             aggregation::AggFunction::Nunique
@@ -234,27 +234,6 @@ pub(in crate::analyze) fn analyze_aggregate(
             }
             _ => require_numeric(op, input, &aggregation.column)?,
         }
-        let function_name = match aggregation.function {
-            aggregation::AggFunction::Count => "count",
-            aggregation::AggFunction::Sum => "sum",
-            aggregation::AggFunction::Avg | aggregation::AggFunction::Mean => "mean",
-            aggregation::AggFunction::Min => "min",
-            aggregation::AggFunction::Max => "max",
-            aggregation::AggFunction::First => "first",
-            aggregation::AggFunction::Last => "last",
-            aggregation::AggFunction::Concat => "concat",
-            aggregation::AggFunction::Nunique => "nunique",
-            aggregation::AggFunction::Variance => "variance",
-            aggregation::AggFunction::Stddev => "stddev",
-            aggregation::AggFunction::Quantile => "quantile",
-        };
-        let name = if !aggregation.alias.is_empty() {
-            aggregation.alias.clone()
-        } else if duplicates[aggregation.column.as_str()] > 1 {
-            format!("{}_{function_name}", aggregation.column)
-        } else {
-            aggregation.column.clone()
-        };
         check_output_name(op, &name)?;
         let (data_type, nullable) = match aggregation.function {
             aggregation::AggFunction::Count | aggregation::AggFunction::Nunique => {
@@ -273,8 +252,8 @@ pub(in crate::analyze) fn analyze_aggregate(
     // I metadata dello schema di input si conservano sempre (le chiavi
     // sconosciute non sono giudicabili qui; perderle rompe i round-trip).
     // Le colonne di gruppo tengono i metadata di campo; quelle aggregate
-    // sono derivate e non ne ereditano. Un nome d'uscita ripetuto
-    // sostituisce la colonna precedente (`produce`), come nel kernel.
+    // sono derivate e non ne ereditano. Un nome d'uscita ripetuto o uguale a
+    // una chiave si rifiuta (`Aggregate::nomi_uscita`), come nel kernel.
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     let preserved = input
         .geometries

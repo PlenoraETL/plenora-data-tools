@@ -66,9 +66,35 @@ pub struct Filter {
     pub column: String,
     /// Operatore di confronto (obbligatorio).
     pub operator: Operator,
-    /// Termine di confronto (default `null`, cioe' testo vuoto).
-    #[serde(default)]
-    pub value: serde_json::Value,
+    /// Termine di confronto (assente vale `null`, cioe' testo vuoto). Con
+    /// `isnull` e `notnull` non ha effetto: scritto, anche `null`, si
+    /// rifiuta ([`verifica_valore`]).
+    #[serde(default, deserialize_with = "crate::cleansing::valore_scritto")]
+    pub value: Option<serde_json::Value>,
+}
+
+impl Filter {
+    /// Il termine di confronto (`null` se assente).
+    #[must_use]
+    pub fn valore(&self) -> &serde_json::Value {
+        self.value.as_ref().unwrap_or(&serde_json::Value::Null)
+    }
+}
+
+/// `value` con `isnull` o `notnull` non si legge: scritto (anche `null`) si
+/// rifiuta invece di essere ignorato. La chiamano i kernel `filter` e
+/// `conditional` e l'analisi dei contratti.
+///
+/// # Errors
+///
+/// `InvalidPlan` se `value` e' scritto con `isnull` o `notnull`.
+pub fn verifica_valore(operator: &Operator, value: Option<&serde_json::Value>) -> Result<()> {
+    if value.is_some() && matches!(operator, Operator::Isnull | Operator::Notnull) {
+        return Err(PlenoraError::InvalidPlan(
+            "value non ha effetto con isnull e notnull".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Una condizione di `table.conditional`.
@@ -78,13 +104,22 @@ pub struct Condition {
     /// Operatore (default `"=="`), valutato come in `table.filter`.
     #[serde(default = "default_operator")]
     pub operator: Operator,
-    /// Termine di confronto (default `null`).
-    #[serde(default)]
-    pub value: serde_json::Value,
+    /// Termine di confronto (assente vale `null`); con `isnull` e `notnull`
+    /// scritto si rifiuta ([`verifica_valore`]).
+    #[serde(default, deserialize_with = "crate::cleansing::valore_scritto")]
+    pub value: Option<serde_json::Value>,
     /// Valore scritto se questa e' la prima condizione vera (default
     /// `null`); vale il suo testo JSON.
     #[serde(default)]
     pub result: serde_json::Value,
+}
+
+impl Condition {
+    /// Il termine di confronto (`null` se assente).
+    #[must_use]
+    pub fn valore(&self) -> &serde_json::Value {
+        self.value.as_ref().unwrap_or(&serde_json::Value::Null)
+    }
 }
 
 const fn default_operator() -> Operator {
@@ -510,21 +545,23 @@ fn fast_rows(
 ///   leggere (via [`scalar_as_string`] o [`scalar_compare`]); cella `Utf8`
 ///   non numerica sotto un operatore ordinato o `between`;
 /// - `InvalidPlan`: valore di confronto non numerico per i confronti
-///   numerici o ordinati; `between` senza estremi `min,max` validi;
+///   numerici o ordinati; `between` senza estremi `min,max` validi; `value`
+///   scritto con `isnull` o `notnull` ([`verifica_valore`]);
 /// - `ResourceLimit`: riga tenuta con indice oltre `u32::MAX`
 ///   ([`select_rows`]);
 /// - `DataMapping`: errore Arrow nella selezione delle righe;
 /// - `Internal`: invariante interna violata.
 pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
+    verifica_valore(&config.operator, config.value.as_ref())?;
     let index = column_index(batch, &config.column)?;
     let array = batch.column(index);
-    let rows = if let Some(result) = fast_rows(array, &config.operator, &config.value) {
+    let rows = if let Some(result) = fast_rows(array, &config.operator, config.valore()) {
         result?
     } else {
         // Il valore atteso e' risolto una volta per batch (hot path minimale): il
         // primo errore di parse scatta alla prima riga valutata, come
         // nel percorso per riga.
-        let condition = PreparedCondition::new(&config.operator, &config.value, &config.value);
+        let condition = PreparedCondition::new(&config.operator, config.valore(), config.valore());
         (0..batch.num_rows())
             .filter_map(|row| match evaluate(array.as_ref(), row, &condition) {
                 Ok(true) => Some(Ok(row)),
@@ -555,6 +592,9 @@ pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
 ///   attesa);
 /// - `Internal`: invariante interna violata.
 pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBatch> {
+    for condition in &config.conditions {
+        verifica_valore(&condition.operator, condition.value.as_ref())?;
+    }
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
     // Valori attesi e testi di risultato risolti una volta per batch (hot path minimale):
@@ -563,7 +603,7 @@ pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBa
         .conditions
         .iter()
         .map(|condition| {
-            PreparedCondition::new(&condition.operator, &condition.value, &condition.result)
+            PreparedCondition::new(&condition.operator, condition.valore(), &condition.result)
         })
         .collect();
     let default_text = json_text(&config.default_value);
@@ -635,9 +675,11 @@ mod tests {
     /// `filter_hand_written_boundaries` e i messaggi esatti dei letterali
     /// non validi.
     fn generic_filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
+        // Regola condivisa sulla config, non oracolata.
+        verifica_valore(&config.operator, config.value.as_ref())?;
         let index = column_index(batch, &config.column)?;
         let array = batch.column(index);
-        let condition = PreparedCondition::new(&config.operator, &config.value, &config.value);
+        let condition = PreparedCondition::new(&config.operator, config.valore(), config.valore());
         let rows = (0..batch.num_rows())
             .filter_map(|row| match evaluate(array.as_ref(), row, &condition) {
                 Ok(true) => Some(Ok(row)),
@@ -652,7 +694,9 @@ mod tests {
         Filter {
             column: "c".into(),
             operator,
-            value,
+            // `null` qui vale assente: con `isnull`/`notnull` un valore
+            // scritto si rifiuta ([`verifica_valore`]).
+            value: (!value.is_null()).then_some(value),
         }
     }
 
@@ -1162,7 +1206,7 @@ mod tests {
         let config = Filter {
             column: "c".into(),
             operator: Operator::Gt,
-            value: json!(1.5),
+            value: Some(json!(1.5)),
         };
         let fast = filter(&batch, &config).expect("fast");
         let generic = generic_filter(&batch, &config).expect("generic");

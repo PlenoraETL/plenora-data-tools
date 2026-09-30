@@ -19,7 +19,7 @@ use std::sync::Arc;
 use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_kernels_table::cleansing::{
-    fill_na, type_cast, CastErrors, FillMethod, FillNa, TargetType, TypeCast,
+    fill_na, type_cast, FillMethod, FillNa, TargetType, TypeCast,
 };
 use plenora_kernels_table::quality::{coalesce, Coalesce};
 use serde_json::Value;
@@ -124,7 +124,7 @@ fn cast(column: &str, target_type: TargetType) -> TypeCast {
         column: column.into(),
         target_type,
         date_format: String::new(),
-        errors: CastErrors::Coerce,
+        errors: None,
         precision: None,
         scale: None,
         timezone: None,

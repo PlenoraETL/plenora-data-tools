@@ -20,11 +20,11 @@ use std::sync::Arc;
 use plenora_core::arrow::array::{RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_kernels_table::dates::{
-    date_add, date_diff, date_format, timezone_convert, AmbiguousPolicy, DateAdd, DateDiff,
-    DateFormat, DateUnit, DiffUnit, TimezoneConvert,
+    date_add, date_diff, date_format, timezone_convert, DateAdd, DateDiff, DateFormat, DateUnit,
+    DiffUnit, TimezoneConvert,
 };
 use plenora_kernels_table::strings::{text_normalize, NormalizeOperation, TextNormalize};
-use plenora_kernels_table::utility::{date_extract, DateExtract, DatePart, InvalidDatePolicy};
+use plenora_kernels_table::utility::{date_extract, DateExtract, DatePart};
 use plenora_kernels_table::Limits;
 
 const WORDS: [&str; 8] = [
@@ -92,7 +92,7 @@ fn main() {
         input_format: "%Y-%m-%d %H:%M:%S".into(),
         output_format: "%d/%m/%Y %H:%M".into(),
         output_column: "fmt".into(),
-        invalid: InvalidDatePolicy::Null,
+        invalid: None,
     };
     run_scenario("date_format", rows, repetitions, || {
         date_format(&input, &format_config).expect("date_format")
@@ -105,7 +105,7 @@ fn main() {
         amount: 7,
         unit: DateUnit::Days,
         output_column: "shifted".into(),
-        invalid: InvalidDatePolicy::Null,
+        invalid: None,
     };
     run_scenario("date_add", rows, repetitions, || {
         date_add(&input, &add_config).expect("date_add")
@@ -117,7 +117,7 @@ fn main() {
         input_format: "%Y-%m-%d %H:%M:%S".into(),
         unit: DiffUnit::Seconds,
         output_column: "diff".into(),
-        invalid: InvalidDatePolicy::Null,
+        invalid: None,
     };
     run_scenario("date_diff", rows, repetitions, || {
         date_diff(&input, &diff_config).expect("date_diff")
@@ -133,7 +133,7 @@ fn main() {
         ],
         prefix: String::new(),
         date_format: Some("%Y-%m-%d %H:%M:%S".into()),
-        invalid: InvalidDatePolicy::Null,
+        invalid: None,
     };
     run_scenario("date_extract", rows, repetitions, || {
         date_extract(&input, &extract_config).expect("date_extract")
@@ -146,8 +146,8 @@ fn main() {
         source_timezone: "Europe/Rome".into(),
         target_timezone: "UTC".into(),
         output_column: "utc".into(),
-        invalid: InvalidDatePolicy::Null,
-        ambiguous: AmbiguousPolicy::Null,
+        invalid: None,
+        ambiguous: None,
     };
     run_scenario("timezone_convert", rows, repetitions, || {
         timezone_convert(&input, &timezone_config).expect("timezone_convert")

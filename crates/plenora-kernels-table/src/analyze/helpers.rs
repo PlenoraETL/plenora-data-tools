@@ -165,6 +165,26 @@ pub(in crate::analyze) fn check_text_len(
     Ok(())
 }
 
+/// Un valore JSON della config che un kernel scrive in una cella (come
+/// testo: una stringa com'e', `null` vuoto, gli altri con il loro testo
+/// JSON) entro `max` byte.
+pub(in crate::analyze) fn check_json_text(
+    op: &str,
+    value: &Value,
+    max: usize,
+    label: &str,
+) -> Result<()> {
+    let byte = match value {
+        Value::String(testo) => testo.len(),
+        Value::Null => 0,
+        altro => altro.to_string().len(),
+    };
+    if byte > max {
+        return contract_error(op, format!("{label} oltre il limite di byte"));
+    }
+    Ok(())
+}
+
 /// Un conteggio della config entro `max_rows`.
 pub(in crate::analyze) fn check_rows(
     op: &str,

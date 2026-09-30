@@ -11,10 +11,10 @@ righe.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna dell'ingresso leggibile come testo | date da leggere |
-| `parts` | lista di stringhe | `["year"]` | `year`, `month`, `day`, `quarter`, `weekday`, `week`, `hour`, `minute`, `second` | parti da estrarre, nell'ordine delle colonne d'uscita |
+| `parts` | lista di stringhe | `["year"]` | non vuota, senza ripetizioni, fra `year`, `month`, `day`, `quarter`, `weekday`, `week`, `hour`, `minute`, `second` | parti da estrarre, nell'ordine delle colonne d'uscita |
 | `prefix` | stringa | `""` | qualunque; `""` vale `<column>_` | prefisso dei nomi d'uscita (`<prefix><parte>`) |
 | `date_format` | stringa o `null` | `null` | formato strftime di chrono, non vuoto, al più `max_string_bytes` byte | formato delle date; `null` usa i formati di default |
-| `invalid` | stringa | `"null"` | `null`, `error` | nessun effetto (sotto) |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non interpretabile fa sempre fallire il passo, nessun valore avrebbe effetto |
 
 Ogni cella non nulla si legge come testo (una `date32` come `AAAA-MM-GG`,
 un `timestamp` in RFC 3339 con il fuso) e si interpreta:
@@ -31,16 +31,15 @@ Le parti: `year` l'anno del calendario gregoriano; `month` 1-12; `day`
 appartenere all'anno vicino (il 2021-01-01 è nella settimana 53);
 `hour`, `minute`, `second`.
 
-`invalid` si accetta per compatibilità ma non cambia niente: un valore non
-interpretabile fa sempre fallire il passo, anche con `"null"`.
+Un valore non interpretabile fa sempre fallire il passo: per questo
+`invalid` scritto, con qualunque valore, si rifiuta.
 
 ### Schema
 
 Una colonna `int64` nullable per parte, di nome `<prefix><parte>`: se
 esiste già si sostituisce nella sua posizione (senza i metadati di campo di
-prima), altrimenti si aggiunge in coda nell'ordine di `parts`. Una parte
-ripetuta scrive due volte la stessa colonna; `parts` vuota non aggiunge
-niente. Le altre colonne e i metadati di schema restano.
+prima), altrimenti si aggiunge in coda nell'ordine di `parts`. Le altre
+colonne e i metadati di schema restano.
 
 Contratto: il conteggio delle righe resta; l'ordinamento dichiarato resta
 solo se nessuna colonna esistente è stata sostituita.
@@ -62,7 +61,8 @@ In validazione, `InvalidPlan`:
   strftime non riconosciuto;
 - un nome d'uscita `<prefix><parte>` vuoto, di soli spazi o oltre 1024
   byte;
-- una parte o un `invalid` fuori elenco, config con campi sconosciuti.
+- `parts` vuota o con una parte ripetuta;
+- una parte fuori elenco, `invalid` scritto, config con campi sconosciuti.
 
 In esecuzione:
 
@@ -73,8 +73,6 @@ In esecuzione:
 
 ### Limiti e deviazioni
 
-- **`invalid` senza effetto accettato**: è un parametro scritto che non
-  cambia il risultato, e non si rifiuta.
 - **Colonne `timestamp`**: il loro testo porta il fuso (`+00:00`), che i
   formati di default non riconoscono: ogni cella fallisce. Serve un
   `date_format` con il fuso, per esempio `%Y-%m-%dT%H:%M:%S%.f%:z`; le parti

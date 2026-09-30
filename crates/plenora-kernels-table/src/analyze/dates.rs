@@ -29,6 +29,22 @@ pub(in crate::analyze) fn check_format_text(
     Ok(())
 }
 
+/// Un formato di scrittura: come [`check_format_text`], e il testo che
+/// scrive per ogni riga ([`dates::byte_massimi_scritti`], per eccesso) entro
+/// `max_string_bytes`. Il valore formattato non cresce con la cella, quindi
+/// il controllo sulla config vale per ogni riga.
+pub(in crate::analyze) fn check_output_format(
+    op: &str,
+    format: &str,
+    limits: &Limits,
+) -> Result<()> {
+    check_format_text(op, format, limits, "output_format")?;
+    if dates::byte_massimi_scritti(format) > limits.max_string_bytes {
+        return contract_error(op, "output_format: testo scritto oltre max_string_bytes");
+    }
+    Ok(())
+}
+
 pub(in crate::analyze) fn analyze_date_op(
     op: &str,
     input: &DataContract,
@@ -56,8 +72,9 @@ pub(in crate::analyze) fn analyze_date_format(
     limits: &Limits,
 ) -> Result<DataContract> {
     let config: dates::DateFormat = typed(op, config)?;
+    con_op(op, dates::verifica_politiche(config.invalid.as_ref(), None))?;
     check_format_text(op, &config.input_format, limits, "input_format")?;
-    check_format_text(op, &config.output_format, limits, "output_format")?;
+    check_output_format(op, &config.output_format, limits)?;
     con_op(
         op,
         dates::validate_format_items(&config.input_format, "input_format"),
@@ -81,8 +98,9 @@ pub(in crate::analyze) fn analyze_date_add(
     limits: &Limits,
 ) -> Result<DataContract> {
     let config: dates::DateAdd = typed(op, config)?;
+    con_op(op, dates::verifica_politiche(config.invalid.as_ref(), None))?;
     check_format_text(op, &config.input_format, limits, "input_format")?;
-    check_format_text(op, &config.output_format, limits, "output_format")?;
+    check_output_format(op, &config.output_format, limits)?;
     con_op(op, dates::verifica_amount(config.amount, &config.unit))?;
     con_op(
         op,
@@ -107,6 +125,7 @@ pub(in crate::analyze) fn analyze_date_diff(
     limits: &Limits,
 ) -> Result<DataContract> {
     let config: dates::DateDiff = typed(op, config)?;
+    con_op(op, dates::verifica_politiche(config.invalid.as_ref(), None))?;
     check_format_text(op, &config.input_format, limits, "input_format")?;
     con_op(
         op,
@@ -130,8 +149,12 @@ pub(in crate::analyze) fn analyze_timezone_convert(
     limits: &Limits,
 ) -> Result<DataContract> {
     let config: dates::TimezoneConvert = typed(op, config)?;
+    con_op(
+        op,
+        dates::verifica_politiche(config.invalid.as_ref(), config.ambiguous.as_ref()),
+    )?;
     check_format_text(op, &config.input_format, limits, "input_format")?;
-    check_format_text(op, &config.output_format, limits, "output_format")?;
+    check_output_format(op, &config.output_format, limits)?;
     let mut target = None;
     for timezone in [&config.source_timezone, &config.target_timezone] {
         target = Some(timezone.parse::<chrono_tz::Tz>().map_err(|_| {

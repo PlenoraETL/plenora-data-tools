@@ -38,9 +38,10 @@ pub struct Md5Hash {
     #[serde(default = "default_null_policy")]
     pub null_policy: HashNullPolicy,
     /// Testo di una cella nulla con `null_policy` `literal`; default
-    /// `<null>`. Con le altre politiche non ha effetto.
-    #[serde(default = "default_null_literal")]
-    pub null_literal: String,
+    /// `<null>` ([`letterale_nullo`]). Con le altre politiche non avrebbe
+    /// effetto: scritto si rifiuta ([`verifica_null_literal`]).
+    #[serde(default)]
+    pub null_literal: Option<String>,
 }
 
 /// Politica sui null di `md5_hash` e `sha256_hash`.
@@ -59,8 +60,34 @@ const fn default_null_policy() -> HashNullPolicy {
     HashNullPolicy::Empty
 }
 
-fn default_null_literal() -> String {
-    "<null>".into()
+const DEFAULT_NULL_LITERAL: &str = "<null>";
+
+/// Il testo di una cella nulla con `null_policy` `literal`: `null_literal`,
+/// o `<null>` se assente.
+#[must_use]
+pub fn letterale_nullo(null_literal: Option<&String>) -> &str {
+    null_literal.map_or(DEFAULT_NULL_LITERAL, String::as_str)
+}
+
+/// `null_literal` vale solo con `null_policy` `literal`.
+///
+/// Con `empty` e `error` una cella nulla non diventa mai quel testo, quindi
+/// scritto si rifiuta. La chiamano i kernel `md5_hash` e `sha256_hash` e
+/// l'analisi dei contratti.
+///
+/// # Errors
+///
+/// `InvalidPlan` se `null_literal` e' scritto con un'altra politica.
+pub fn verifica_null_literal(
+    null_policy: &HashNullPolicy,
+    null_literal: Option<&String>,
+) -> Result<()> {
+    if null_literal.is_some() && !matches!(null_policy, HashNullPolicy::Literal) {
+        return Err(PlenoraError::InvalidPlan(
+            "null_literal ammesso solo con null_policy=literal".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn default_hash_name() -> String {
@@ -100,7 +127,8 @@ fn reject_null_hash_rows(batch: &RecordBatch, columns: &[String], indices: &[usi
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nome della colonna di output non valido, `columns` vuoto;
+/// - `InvalidPlan`: nome della colonna di output non valido, `columns` vuoto,
+///   `null_literal` scritto senza `null_policy` `literal`;
 /// - `DataMapping`: null sorgente con `null_policy` `error`, con row
 ///   diagnostics (`validation.required_value_missing`);
 /// - `Schema`: colonna assente dal batch, valore non rappresentabile come
@@ -108,6 +136,7 @@ fn reject_null_hash_rows(batch: &RecordBatch, columns: &[String], indices: &[usi
 ///   `scalar_as_string`).
 pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
+    verifica_null_literal(&config.null_policy, config.null_literal.as_ref())?;
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
             "md5_hash richiede colonne".into(),
@@ -132,10 +161,11 @@ pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
         .iter()
         .map(|index| column_access(batch.column(*index).as_ref()))
         .collect::<Vec<_>>();
+    let letterale = letterale_nullo(config.null_literal.as_ref());
     let letterale = if config.normalize {
-        config.null_literal.trim().to_lowercase()
+        letterale.trim().to_lowercase()
     } else {
-        config.null_literal.clone()
+        letterale.to_owned()
     };
     let values = colonna_digest(batch.num_rows(), 32, |row, appunti, uscita| {
         let Appunti { messaggio, testo } = appunti;
@@ -189,9 +219,10 @@ pub struct Sha256Hash {
     #[serde(default = "default_null_policy")]
     pub null_policy: HashNullPolicy,
     /// Testo di una cella nulla con `null_policy` `literal`; default
-    /// `<null>`. Con le altre politiche non ha effetto.
-    #[serde(default = "default_null_literal")]
-    pub null_literal: String,
+    /// `<null>` ([`letterale_nullo`]). Con le altre politiche non avrebbe
+    /// effetto: scritto si rifiuta ([`verifica_null_literal`]).
+    #[serde(default)]
+    pub null_literal: Option<String>,
 }
 
 fn default_sha256_name() -> String {
@@ -209,7 +240,8 @@ fn default_sha256_name() -> String {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nome della colonna di output non valido;
+/// - `InvalidPlan`: nome della colonna di output non valido, `null_literal`
+///   scritto senza `null_policy` `literal`;
 /// - `ResourceLimit`: lunghezza di un valore oltre `u64` nel framing;
 /// - `DataMapping`: null sorgente con `null_policy` `error`, con row
 ///   diagnostics (`validation.required_value_missing`);
@@ -218,6 +250,7 @@ fn default_sha256_name() -> String {
 ///   `scalar_as_string`).
 pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBatch> {
     validate_output_name(&config.output_column)?;
+    verifica_null_literal(&config.null_policy, config.null_literal.as_ref())?;
     let mut names = config.columns.clone();
     names.sort();
     let indices = names
@@ -257,10 +290,11 @@ pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBat
     if let Some(prima) = intestazioni.first() {
         base.update(prima);
     }
+    let letterale = letterale_nullo(config.null_literal.as_ref());
     let letterale = if config.normalize {
-        config.null_literal.trim().to_lowercase()
+        letterale.trim().to_lowercase()
     } else {
-        config.null_literal.clone()
+        letterale.to_owned()
     };
     let values = colonna_digest(batch.num_rows(), 64, |row, appunti, uscita| {
         let Appunti { messaggio, testo } = appunti;
@@ -759,17 +793,37 @@ fn hmac_sha256_with_states(inner_base: &Sha256, outer_base: &Sha256, message: &[
     output
 }
 
-/// Legge la chiave (i byte UTF-8 del valore) dalla variabile d'ambiente
-/// indicata. L'errore e' volutamente generico: non rivela ne' il nome della
-/// variabile ne' alcun frammento del valore. Un valore non UTF-8 vale come
-/// variabile assente.
-fn load_hmac_key(key_env: &str) -> Result<Vec<u8>> {
-    match std::env::var(key_env) {
-        Ok(value) if !value.is_empty() => Ok(value.into_bytes()),
-        _ => Err(PlenoraError::InvalidPlan(
-            "hmac_sha256: chiave HMAC non disponibile".into(),
+/// Legge la chiave di `table.hmac_sha256` (i byte UTF-8 del valore) dalla
+/// variabile d'ambiente `key_env`.
+///
+/// E' l'unica lettura della chiave: la chiamano il kernel, il suo oracolo e
+/// il controllo d'ambiente del runner in validazione, cosi' non possono dare
+/// verdetti diversi sulla stessa variabile. Gli errori non rivelano ne' il
+/// nome della variabile ne' alcun frammento del valore.
+///
+/// # Errors
+///
+/// `InvalidPlan`, distinto per causa: variabile assente, vuota, o con un
+/// valore che non e' UTF-8 (su Windows, UTF-16 non valido). Un valore non
+/// UTF-8 non diventa in silenzio un'altra chiave, ne' una variabile assente.
+pub fn carica_chiave_hmac(key_env: &str) -> Result<Vec<u8>> {
+    match std::env::var_os(key_env) {
+        None => Err(PlenoraError::InvalidPlan(
+            "hmac_sha256: chiave HMAC non disponibile (variabile assente)".into(),
         )),
+        Some(value) if value.is_empty() => Err(PlenoraError::InvalidPlan(
+            "hmac_sha256: chiave HMAC non disponibile (variabile vuota)".into(),
+        )),
+        Some(value) => value.into_string().map(String::into_bytes).map_err(|_| {
+            PlenoraError::InvalidPlan(
+                "hmac_sha256: chiave HMAC non valida (valore non UTF-8)".into(),
+            )
+        }),
     }
+}
+
+fn load_hmac_key(key_env: &str) -> Result<Vec<u8>> {
+    carica_chiave_hmac(key_env)
 }
 
 /// HMAC-SHA256 per riga della concatenazione canonica dei valori.
@@ -976,6 +1030,36 @@ pub struct MaskData {
     pub overwrite: bool,
 }
 
+impl MaskData {
+    /// Senza `overwrite` ogni voce scrive `<colonna>_masked` leggendo la
+    /// colonna originale: due voci sulla stessa colonna scriverebbero la
+    /// stessa uscita, e la prima non avrebbe effetto. Si rifiuta. Con
+    /// `overwrite` le voci si applicano in sequenza e hanno effetto
+    /// entrambe. La chiamano il kernel e l'analisi dei contratti.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per una colonna ripetuta senza `overwrite`.
+    pub fn verifica_colonne(&self) -> Result<()> {
+        if self.overwrite {
+            return Ok(());
+        }
+        for (posizione, masking) in self.maskings.iter().enumerate() {
+            if self.maskings[..posizione]
+                .iter()
+                .any(|prima| prima.column == masking.column)
+            {
+                return Err(PlenoraError::InvalidPlan(format!(
+                    "colonna {} ripetuta in maskings senza overwrite: la prima voce \
+                     non avrebbe effetto",
+                    masking.column
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Maschera i caratteri centrali di `value` mantenendo `start` caratteri
 /// iniziali ed `end` finali.
 ///
@@ -1060,17 +1144,42 @@ fn mask(value: &str, config: &Masking) -> Result<String> {
 /// Con `overwrite` la colonna originale e' sostituita, altrimenti il
 /// risultato va in `<colonna>_masked` (`Utf8` nullable). I null restano
 /// null. Le voci si applicano in sequenza sul batch gia' mascherato dalle
-/// precedenti.
+/// precedenti. Con `Limits::default()`: [`mask_data_con_limiti`] con i
+/// limiti del chiamante.
+///
+/// # Errors
+///
+/// Come [`mask_data_con_limiti`].
+pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> {
+    mask_data_con_limiti(batch, config, &crate::Limits::default())
+}
+
+/// [`mask_data`] con i limiti del chiamante (il runner passa i suoi).
+///
+/// Ogni valore mascherato non supera `limits.max_string_bytes`: una
+/// maschera puo' allungare la cella (un carattere di un byte coperto da un
+/// `mask_char` di quattro byte).
 ///
 /// # Errors
 ///
 /// - `InvalidPlan`: `maskings` vuoto, nome della colonna di output non valido,
 ///   `mask_char` vuoto o piu' di un carattere (tipo `custom`),
-///   `chars_start`/`chars_end`/`mask_char` con un altro tipo;
+///   `chars_start`/`chars_end`/`mask_char` con un altro tipo, colonna
+///   ripetuta senza `overwrite` ([`MaskData::verifica_colonne`]);
+/// - `ResourceLimit`: un valore mascherato oltre `limits.max_string_bytes`;
 /// - `Schema`: colonna assente dal batch; valore non rappresentabile come
 ///   testo o tipo non coperto dal profilo scalare (gli errori di
 ///   `scalar_as_string`).
-pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> {
+pub fn mask_data_con_limiti(
+    batch: &RecordBatch,
+    config: &MaskData,
+    limits: &crate::Limits,
+) -> Result<RecordBatch> {
+    let mascherato = |value: &str, masking: &Masking| -> Result<String> {
+        let testo = mask(value, masking)?;
+        crate::verifica_testo_prodotto("mask_data", testo.len(), limits)?;
+        Ok(testo)
+    };
     if config.maskings.is_empty() {
         return Err(PlenoraError::InvalidPlan(
             "mask_data richiede configurazioni".into(),
@@ -1079,6 +1188,7 @@ pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> 
     for masking in &config.maskings {
         masking.verifica_parametri()?;
     }
+    config.verifica_colonne()?;
     let mut result = batch.clone();
     for masking in &config.maskings {
         let index = column_index(&result, &masking.column)?;
@@ -1101,15 +1211,16 @@ pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> 
                 if strings.is_null(row) {
                     builder.append_null();
                 } else {
-                    builder.append_value(&mask(strings.value(row), masking)?);
+                    builder.append_value(&mascherato(strings.value(row), masking)?);
                 }
             }
             Arc::new(builder.finish())
         } else {
             let values = (0..result.num_rows())
                 .map(|row| {
-                    scalar_as_string(column.as_ref(), row)
-                        .and_then(|value| value.map(|value| mask(&value, masking)).transpose())
+                    scalar_as_string(column.as_ref(), row).and_then(|value| {
+                        value.map(|value| mascherato(&value, masking)).transpose()
+                    })
                 })
                 .collect::<Result<Vec<_>>>()?;
             Arc::new(StringArray::from(values))
@@ -1155,7 +1266,7 @@ mod tests {
                     output_column: "digest".into(),
                     normalize: true,
                     null_policy: HashNullPolicy::Error,
-                    null_literal: String::new(),
+                    null_literal: None,
                 },
             )
             .expect_err("md5 ha accettato null vietati"),
@@ -1166,7 +1277,7 @@ mod tests {
                     output_column: "digest".into(),
                     normalize: true,
                     null_policy: HashNullPolicy::Error,
-                    null_literal: String::new(),
+                    null_literal: None,
                 },
             )
             .expect_err("sha256 ha accettato null vietati"),
@@ -1223,7 +1334,7 @@ mod tests {
                 output_column: "digest".into(),
                 normalize: false,
                 null_policy: HashNullPolicy::Empty,
-                null_literal: String::new(),
+                null_literal: None,
             },
         )
         .expect("null_policy=empty non rifiuta (output storico)");
@@ -1252,7 +1363,7 @@ mod tests {
                 output_column: "digest".into(),
                 normalize: false,
                 null_policy: HashNullPolicy::Literal,
-                null_literal: "<NULL>".to_owned(),
+                null_literal: Some("<NULL>".to_owned()),
             },
         )
         .expect("null_policy=literal non rifiuta (output storico)");
@@ -1274,7 +1385,7 @@ mod tests {
                 output_column: "digest".into(),
                 normalize: false,
                 null_policy: HashNullPolicy::Empty,
-                null_literal: String::new(),
+                null_literal: None,
             },
         )
         .expect("oracolo senza null");
@@ -1708,6 +1819,56 @@ mod tests {
         };
         let error = hmac_sha256(&batch, &config).expect_err("colonna ripetuta");
         assert!(!error.to_string().contains(secret));
+    }
+
+    /// Un valore che non e' UTF-8 (byte `0xff` su Unix, surrogato isolato su
+    /// Windows).
+    fn valore_non_utf8() -> std::ffi::OsString {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            std::ffi::OsString::from_vec(vec![b'k', 0xff])
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            std::ffi::OsString::from_wide(&[u16::from(b'k'), 0xD800])
+        }
+    }
+
+    #[test]
+    fn hmac_sha256_chiave_non_utf8_e_un_errore_esplicito() {
+        // Prima la lettura con `env::var` la trattava come variabile assente,
+        // mentre il runner (`var_os`) la accettava: verdetti diversi sulla
+        // stessa variabile. Ora una sola funzione, con una causa propria.
+        std::env::set_var("PLENORA_HMAC_NON_UTF8", valore_non_utf8());
+        let errore = carica_chiave_hmac("PLENORA_HMAC_NON_UTF8").expect_err("non UTF-8");
+        assert!(matches!(errore, PlenoraError::InvalidPlan(_)), "{errore:?}");
+        assert!(errore.to_string().contains("non UTF-8"), "{errore}");
+        assert!(!errore.to_string().contains("PLENORA_HMAC_NON_UTF8"));
+        let errore = hmac_sha256(
+            &hmac_fixture(),
+            &hmac_config(&["a"], "PLENORA_HMAC_NON_UTF8"),
+        )
+        .expect_err("kernel");
+        assert!(errore.to_string().contains("non UTF-8"), "{errore}");
+        std::env::remove_var("PLENORA_HMAC_NON_UTF8");
+        // Assente e vuota restano distinte.
+        std::env::remove_var("PLENORA_HMAC_NON_UTF8_ASSENTE");
+        assert!(carica_chiave_hmac("PLENORA_HMAC_NON_UTF8_ASSENTE")
+            .expect_err("assente")
+            .to_string()
+            .contains("variabile assente"));
+        std::env::set_var("PLENORA_HMAC_NON_UTF8_VUOTA", "");
+        assert!(carica_chiave_hmac("PLENORA_HMAC_NON_UTF8_VUOTA")
+            .expect_err("vuota")
+            .to_string()
+            .contains("variabile vuota"));
+        std::env::set_var("PLENORA_HMAC_NON_UTF8_BUONA", "k\u{e9}");
+        assert_eq!(
+            carica_chiave_hmac("PLENORA_HMAC_NON_UTF8_BUONA").expect("utf-8"),
+            "k\u{e9}".as_bytes()
+        );
     }
 
     #[test]

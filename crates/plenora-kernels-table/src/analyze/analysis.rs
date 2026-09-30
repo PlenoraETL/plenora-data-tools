@@ -6,8 +6,9 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_name_list, check_output_name, contract_error, map_row_count,
-    require_numeric, require_scalar_string, round_scaled, typed, unsupported,
+    analyze_append, check_json_text, check_name_list, check_output_name, check_text_len, con_op,
+    contract_error, map_row_count, require_numeric, require_scalar_string, round_scaled, typed,
+    unsupported,
 };
 use crate::{analysis, Limits};
 
@@ -28,6 +29,12 @@ pub(in crate::analyze) fn analyze_lookup(
     if config.mapping.len() > limits.max_rows {
         return contract_error(op, "mapping oltre max_rows");
     }
+    // I valori del mapping e il default finiscono nelle celle: testi della
+    // config entro `max_string_bytes`.
+    for valore in config.mapping.values() {
+        check_json_text(op, valore, limits.max_string_bytes, "mapping")?;
+    }
+    check_json_text(op, &config.default, limits.max_string_bytes, "default")?;
     // Default del kernel: sovrascrive la colonna sorgente in place.
     let name = config.output_column.unwrap_or(config.column);
     check_output_name(op, &name)?;
@@ -39,6 +46,7 @@ pub(in crate::analyze) fn analyze_bin(
     inputs: &[DataContract],
     config: &Value,
     fields: &mut FieldAllocator,
+    limits: &Limits,
 ) -> Result<DataContract> {
     let config: analysis::Bin = typed(op, config)?;
     let input = &inputs[0];
@@ -66,6 +74,9 @@ pub(in crate::analyze) fn analyze_bin(
                 op,
                 format!("labels ({}) diversi dai bin ({bins})", labels.len()),
             );
+        }
+        for label in labels {
+            check_text_len(op, label, limits.max_string_bytes, "labels")?;
         }
     }
     let name = config
@@ -139,6 +150,7 @@ pub(in crate::analyze) fn analyze_statistics(
     fields: &mut FieldAllocator,
 ) -> Result<DataContract> {
     let config: analysis::Statistics = typed(op, config)?;
+    con_op(op, config.verifica_parametri())?;
     let input = &inputs[0];
     require_numeric(op, input, &config.column)?;
     // Il kernel legge `group_by` come scalare testuale: stessi tipi ammessi.
@@ -181,12 +193,7 @@ pub(in crate::analyze) fn analyze_sample(
 ) -> Result<DataContract> {
     let config: analysis::Sample = typed(op, config)?;
     let input = &inputs[0];
-    if config
-        .fraction
-        .is_some_and(|fraction| !(0.0..=1.0).contains(&fraction))
-    {
-        return contract_error(op, "fraction fuori 0..=1");
-    }
+    con_op(op, config.verifica_parametri())?;
     if let Some(stratify) = &config.stratify_column {
         require_scalar_string(op, input, stratify)?;
     }
@@ -196,9 +203,11 @@ pub(in crate::analyze) fn analyze_sample(
     // Senza stratify il conteggio e' esatto: min(n, righe) o round(righe*f)
     // (stessa aritmetica f64 del kernel).
     let row_count = if config.stratify_column.is_none() {
-        map_row_count(input, |rows| match config.fraction {
-            None => rows.min(u64::try_from(config.n).unwrap_or(u64::MAX)),
-            Some(fraction) => round_scaled(rows, fraction),
+        map_row_count(input, |rows| {
+            config.fraction.map_or_else(
+                || rows.min(u64::try_from(config.righe()).unwrap_or(u64::MAX)),
+                |fraction| round_scaled(rows, fraction),
+            )
         })
     } else {
         None

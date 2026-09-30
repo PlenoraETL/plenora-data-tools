@@ -12,7 +12,7 @@ eseguito chiamando il kernel.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `index_col` | stringa | obbligatorio | nomi di colonne separati da virgola, almeno uno, senza ripetizioni | chiave delle righe; spazi ai lati tolti, voci vuote ignorate |
+| `index_col` | stringa | obbligatorio | nomi di colonne separati da virgola, almeno uno, senza ripetizioni né voci vuote (`"a,,b"`, `"a,"`) | chiave delle righe; spazi ai lati tolti |
 | `pivot_col` | stringa | obbligatorio | nome di una colonna dell'ingresso | i suoi valori diventano colonne |
 | `value_col` | stringa | obbligatorio | nome di una colonna dell'ingresso | valori aggregati nelle celle |
 | `aggr_func` | stringa | `"first"` | `first`, `last`, `min`, `max`, `sum`, `mean`, `count`, `concat` | aggregazione di una cella |
@@ -32,7 +32,8 @@ righe della cella in ordine d'ingresso:
   null compreso, con il tipo di `value_col`;
 - `count`: `int64`, le celle non nulle;
 - `concat`: `utf8`, i testi delle celle non nulle uniti da `,`; solo null
-  dà il testo vuoto;
+  dà il testo vuoto; il testo di una cella non supera `max_string_bytes`
+  byte;
 - `sum`, `mean`, `min`, `max`: `float64` sulla cella letta come `f64`
   (tipi numerici di [`table.aggregate`](#tableaggregate)); i null si
   saltano, solo null dà null; `min` e `max` ignorano i NaN salvo che siano
@@ -74,14 +75,16 @@ In validazione, in quest'ordine:
    valgono anche senza `mapping`;
 2. `Unsupported`: `mapping` assente o vuoto (lo schema d'uscita dipende
    dai dati). Senza `mapping` la validazione si ferma qui: `index_col`
-   senza colonne o con una colonna ripetuta, e ogni controllo di tipo
-   sotto, danno `Unsupported`, non `InvalidPlan` (il kernel, chiamato
-   direttamente, li rifiuta con `InvalidPlan` o `Schema`);
+   senza colonne, con una voce vuota o con una colonna ripetuta, e ogni
+   controllo di tipo sotto, danno `Unsupported`, non `InvalidPlan` (il
+   kernel, chiamato direttamente, li rifiuta con `InvalidPlan` o
+   `Schema`);
 3. solo con `mapping` non vuoto:
-   - `InvalidPlan`: `index_col` senza colonne, con una colonna ripetuta o
-     oltre `max_columns`; una colonna indice o la `pivot_col` che non si
-     legge come testo; con `sum`, `mean`, `min`, `max` una `value_col`
-     non numerica, con `concat` una che non si legge come testo; un nome
+   - `InvalidPlan`: `index_col` senza colonne, con una voce vuota
+     (`"a,,b"`, `"a,"`), con una colonna ripetuta o oltre `max_columns`;
+     una colonna indice o la `pivot_col` che non si legge come testo; con
+     `sum`, `mean`, `min`, `max` una `value_col` non numerica, con
+     `concat` una che non si legge come testo; un nome
      del mapping non valido, ripetuto o uguale a una colonna indice; una
      chiave che non è la forma canonica di un intero su una `pivot_col`
      intera; `mapping` su una `pivot_col` che non è testo né intero
@@ -100,7 +103,8 @@ In esecuzione (dal runner con `mapping`, o chiamando il kernel):
   validazione (`index_col`, nomi e chiavi del mapping); senza `mapping`, un
   valore pivot vuoto o di soli spazi, o uguale a una colonna indice;
 - `ResourceLimit`: righe oltre `max_rows` o colonne oltre `max_columns`;
-  più di `u32::MAX` righe.
+  più di `u32::MAX` righe; con `concat`, il testo di una cella oltre
+  `max_string_bytes` byte.
 
 ### Limiti e deviazioni
 

@@ -12,7 +12,7 @@ le colonne id si ripetono su ogni blocco.
 | `value_columns` | lista di stringhe | `[]` | nomi di colonne dell'ingresso, senza ripetizioni | colonne da portare in righe; vuota vale tutte le colonne non id |
 | `var_name` | stringa | `"variable"` | nome di colonna valido, diverso da `value_name` | colonna con il nome della colonna valore |
 | `value_name` | stringa | `"value"` | nome di colonna valido | colonna con la cella |
-| `type_policy` | stringa | `"reject"` | `"reject"`, `"string"` | colonne valore di tipi diversi: rifiuto, o conversione in testo |
+| `type_policy` | stringa | `"reject"` | `"reject"`, `"string"`; solo se le colonne valore hanno tipi diversi | colonne valore di tipi diversi: rifiuto, o conversione in testo |
 
 `var_name` e `value_name` non collidono con nessuna colonna dell'ingresso,
 nemmeno con quelle che spariscono: un nome già preso riceve il primo
@@ -52,8 +52,9 @@ In validazione:
 - `InvalidPlan`: `var_name` uguale a `value_name`; una lista con un nome
   ripetuto o non valido, o oltre il limite di colonne; una colonna assente;
   nessuna colonna valore; colonne valore di tipi diversi con
-  `type_policy: "reject"`; nessun suffisso libero per un nome d'uscita;
-  campi sconosciuti;
+  `type_policy: "reject"`; `type_policy` scritto quando le colonne valore
+  hanno tutte lo stesso tipo (non avrebbe effetto); nessun suffisso libero
+  per un nome d'uscita; campi sconosciuti;
 - `Schema`: con `type_policy: "string"` e tipi diversi, una colonna valore
   di tipo non convertibile in testo o con una timezone non valida.
 
@@ -70,8 +71,10 @@ In esecuzione:
 Prima di allocare, il kernel stima i byte dell'uscita (colonne id
 ripetute, nome della colonna valore più lungo, colonna valore più larga,
 misurata in testo con la conversione) e rifiuta oltre
-`max_governed_memory_bytes`. Dopo il passo il runner controlla righe per
-arco e fattore di espansione sui dati
+`max_governed_memory_bytes`. L'espansione (righe × colonne valore) è
+fissata da config e schema: il runner non le applica il fattore di
+espansione e dopo il passo controlla invece il numero esatto di righe,
+oltre alle righe per arco
 ([README, «Esecuzione»](../README.md#esecuzione)).
 
 ### Complessità

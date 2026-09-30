@@ -66,7 +66,9 @@ In esecuzione:
   valido (`json.invalid_syntax`) o la cui radice non è un oggetto
   (`json.root_not_object`). Il passo non produce uscita; la diagnostica
   conta tutte le righe rifiutate e ne riporta le prime 10;
-- `Schema`: una cella che non si converte in testo (`binary` non UTF-8).
+- `Schema`: una cella che non si converte in testo (`binary` non UTF-8);
+- `ResourceLimit`: un testo emesso (valori annidati e numeri riscritti come
+  testo JSON) oltre `max_string_bytes` byte.
 
 ### Limiti e deviazioni
 

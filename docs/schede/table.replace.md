@@ -11,7 +11,7 @@ sovrapposizioni, si sostituisce con `new_value`.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna `utf8` dell'ingresso | colonna da modificare |
-| `old_value` | stringa | obbligatorio | al più `max_regex_bytes` byte (anche senza `regex`); con `regex`, regex valida del crate `regex` | cella da sostituire, o pattern |
+| `old_value` | stringa | obbligatorio | con `regex`, regex valida del crate `regex` di al più `max_regex_bytes` byte; senza, al più `max_string_bytes` byte | cella da sostituire, o pattern |
 | `new_value` | stringa | obbligatorio | al più `max_string_bytes` byte | testo sostitutivo |
 | `regex` | booleano | `false` | `true`, `false` | interpreta `old_value` come espressione regolare |
 
@@ -20,6 +20,10 @@ Con `regex` il `new_value` riconosce i riferimenti ai gruppi: `$1`,
 lettere o cifre va scritto tra graffe: `$1a` è il gruppo di nome `1a` (che
 non esiste, e vale testo vuoto), `${1}a` è il gruppo 1 seguito da `a`.
 Senza `regex` il `$` non ha significato speciale.
+
+Con `regex` ogni cella sostituita non supera `max_string_bytes` byte; una
+regex che combacia con il testo vuoto inserisce `new_value` in ogni
+posizione, e può superarlo.
 
 ### Schema
 
@@ -40,17 +44,18 @@ Righe nell'ordine d'ingresso.
 In validazione, `InvalidPlan`:
 
 - `column` assente o non `utf8`;
-- `old_value` oltre `max_regex_bytes` o, con `regex`, non valido;
+- con `regex`, `old_value` non valido o oltre `max_regex_bytes`; senza,
+  `old_value` oltre `max_string_bytes`;
 - `new_value` oltre `max_string_bytes`;
 - config con campi sconosciuti.
 
-In esecuzione: nessun errore che dipenda dai dati.
+Il limite di `old_value` lo applica anche il kernel.
+
+In esecuzione, `ResourceLimit`: con `regex`, una cella sostituita oltre
+`max_string_bytes` byte.
 
 ### Limiti e deviazioni
 
-- **Lunghezza del risultato non controllata**: con `regex` una
-  sostituzione può allungare la cella oltre `max_string_bytes` senza
-  errore (per esempio un pattern vuoto, che combacia fra ogni carattere).
 - Per sostituire una sottostringa letterale serve `regex: true` con i
   metacaratteri protetti da `\`.
 

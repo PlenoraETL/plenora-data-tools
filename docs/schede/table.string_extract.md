@@ -55,7 +55,8 @@ In validazione, `InvalidPlan`:
 - un nome d'uscita (scritto, derivato o di gruppo) oltre 1024 byte;
 - config con campi sconosciuti.
 
-In esecuzione: nessun errore che dipenda dai dati.
+In esecuzione, `ResourceLimit`: con `extract_all`, il testo unito di una
+cella oltre `max_string_bytes` byte.
 
 ### Limiti e deviazioni
 

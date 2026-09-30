@@ -19,8 +19,8 @@ use serde_json::Value;
 
 use super::filter::json_text;
 use super::helpers::{
-    analyze_append, check_name_list, check_output_name, check_text_len, contract_error, field_of,
-    finish, require_numeric, require_scalar_string, require_utf8, typed,
+    analyze_append, check_name_list, check_output_name, check_text_len, con_op, contract_error,
+    field_of, finish, require_numeric, require_scalar_string, require_utf8, typed,
 };
 use super::joins::check_text_key_pairs;
 use crate::{governance, quality, Limits};
@@ -185,27 +185,7 @@ pub(in crate::analyze) fn analyze_assert_range(
     let config: quality::AssertRange = typed(op, config)?;
     let input = &inputs[0];
     let _ = (fields, limits);
-    if config.min.is_none() && config.max.is_none() {
-        return contract_error(op, "assert_range richiede min o max");
-    }
-    if config.min.is_some_and(|value| !value.is_finite())
-        || config.max.is_some_and(|value| !value.is_finite())
-        || config
-            .min
-            .zip(config.max)
-            .is_some_and(|(min, max)| min > max)
-    {
-        return contract_error(op, "estremi di assert_range non validi");
-    }
-    // Un estremo esclusivo senza l'estremo non avrebbe effetto.
-    if (config.inclusive_min.is_some() && config.min.is_none())
-        || (config.inclusive_max.is_some() && config.max.is_none())
-    {
-        return contract_error(
-            op,
-            "inclusive_min/inclusive_max senza l'estremo corrispondente",
-        );
-    }
+    con_op(op, config.verifica_parametri())?;
     require_numeric(op, input, &config.column)?;
     Ok(input.clone())
 }
@@ -268,23 +248,11 @@ pub(in crate::analyze) fn analyze_assert_cardinality(
     let config: governance::AssertCardinality = typed(op, config)?;
     let input = &inputs[0];
     let _ = fields;
-    if config.exact_rows.is_none() && config.min_rows.is_none() && config.max_rows.is_none() {
-        return contract_error(
-            op,
-            "assert_cardinality richiede exact_rows, min_rows o max_rows",
-        );
-    }
-    if config.exact_rows.is_some() && (config.min_rows.is_some() || config.max_rows.is_some()) {
-        return contract_error(op, "exact_rows non si combina con min_rows o max_rows");
-    }
-    if config
-        .min_rows
-        .zip(config.max_rows)
-        .is_some_and(|(min, max)| min > max)
-        || [config.exact_rows, config.min_rows, config.max_rows]
-            .into_iter()
-            .flatten()
-            .any(|rows| rows > limits.max_rows)
+    con_op(op, config.verifica_parametri())?;
+    if [config.exact_rows, config.min_rows, config.max_rows]
+        .into_iter()
+        .flatten()
+        .any(|rows| rows > limits.max_rows)
     {
         return contract_error(op, "limiti di assert_cardinality non validi");
     }

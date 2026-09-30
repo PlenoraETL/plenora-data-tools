@@ -10,9 +10,9 @@ altro formato in una colonna nuova (per esempio da `31/01/2024` a
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna leggibile come testo | colonna da leggere |
 | `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura |
-| `output_format` | stringa | `"%Y-%m-%d %H:%M:%S"` | formato `chrono` non vuoto, al più `max_string_bytes` byte, senza fuso | formato di scrittura |
+| `output_format` | stringa | `"%Y-%m-%d %H:%M:%S"` | formato `chrono` non vuoto, al più `max_string_bytes` byte, senza fuso, che scrive al più `max_string_bytes` byte per valore | formato di scrittura |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
-| `invalid` | stringa | `null` | `null`, `error` | accettato per compatibilità, senza effetto |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -23,8 +23,12 @@ RFC 3339 (`2024-01-31T10:00:00+00:00`).
 La lettura deve consumare tutto il testo della cella. Un formato senza
 campi orari legge una data e la pone a mezzanotte. `output_format` non può
 contenere campi di fuso o di offset (`%z`, `%:z`, `%Z`, `%+`): il valore
-letto non ha fuso. Un valore non leggibile rifiuta sempre la riga, qualunque
-sia `invalid`.
+letto non ha fuso. Un valore non leggibile rifiuta sempre la riga.
+
+Il testo scritto da `output_format` non può superare `max_string_bytes`
+byte per valore. Il limite si controlla in validazione con una stima
+prudente: il testo letterale conta per la sua lunghezza, ogni campo
+`strftime` per 64 byte.
 
 ### Schema
 
@@ -48,8 +52,10 @@ In validazione, `InvalidPlan`:
 - `column` assente o non leggibile come testo;
 - un formato vuoto, oltre `max_string_bytes`, con un campo non riconosciuto
   (`%Q`, `%` finale), o `output_format` con campi di fuso;
+- `output_format` la cui stima supera `max_string_bytes` byte per valore;
 - `output_column` non valido;
-- config con campi sconosciuti o `invalid` fuori elenco.
+- `invalid` scritto, con qualunque valore;
+- config con campi sconosciuti.
 
 In esecuzione:
 
@@ -62,9 +68,10 @@ In esecuzione:
 
 ### Limiti e deviazioni
 
-`invalid` non ha effetto: non esiste un modo di trasformare un valore non
-leggibile in null. È un parametro scritto senza effetto che non si rifiuta
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
+Non esiste un modo di trasformare un valore non leggibile in null: per
+questo `invalid` si rifiuta. La stima di `output_format` è prudente: un
+formato che scriverebbe davvero meno di `max_string_bytes` byte si può
+rifiutare lo stesso.
 
 ### Complessità
 

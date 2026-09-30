@@ -110,6 +110,7 @@ fn run_formula(input: &RecordBatch, text: &str) -> RecordBatch {
     let config = Formula {
         new_column: "out".into(),
         formula: text.into(),
+        on_division_by_zero: None,
     };
     formula::formula(input, &config).expect("formula")
 }

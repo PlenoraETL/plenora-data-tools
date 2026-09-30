@@ -66,7 +66,7 @@ pub struct FillNa {
 /// `Some` per ogni valore scritto, `null` compreso: serde renderebbe `None`
 /// anche un `null` esplicito, e un parametro scritto non sarebbe piu'
 /// distinguibile da uno assente.
-fn valore_scritto<'de, D: serde::Deserializer<'de>>(
+pub(crate) fn valore_scritto<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<Value>, D::Error> {
     Value::deserialize(deserializer).map(Some)
@@ -160,10 +160,6 @@ pub enum CastErrors {
     Ignore,
 }
 
-const fn default_errors() -> CastErrors {
-    CastErrors::Coerce
-}
-
 /// Config di `table.type_cast`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -178,9 +174,12 @@ pub struct TypeCast {
     /// `timestamp_millis`.
     #[serde(default)]
     pub date_format: String,
-    /// Politica per le celle non convertibili (default `coerce`).
-    #[serde(default = "default_errors")]
-    pub errors: CastErrors,
+    /// Politica per le celle non convertibili (default `coerce`,
+    /// [`TypeCast::errori`]). Con `str`, `binary_utf8` e `dictionary_utf8`
+    /// nessuna cella fallisce la conversione, quindi scritta non avrebbe
+    /// effetto e si rifiuta ([`TypeCast::verifica_parametri`]).
+    #[serde(default)]
+    pub errors: Option<CastErrors>,
     /// Cifre totali di `decimal128` (obbligatorio e ammesso solo li',
     /// da 1 a 38).
     #[serde(default)]
@@ -197,6 +196,77 @@ pub struct TypeCast {
 
 const fn default_target() -> TargetType {
     TargetType::Str
+}
+
+impl TypeCast {
+    /// La politica sulle celle non convertibili: `errors`, o `coerce` se
+    /// assente.
+    #[must_use]
+    pub fn errori(&self) -> CastErrors {
+        self.errors.unwrap_or(CastErrors::Coerce)
+    }
+
+    /// Parametri che il target non usa, rifiutati invece di essere ignorati;
+    /// parametri obbligatori di `decimal128`. La chiamano il kernel e
+    /// l'analisi dei contratti.
+    ///
+    /// - `date_format` solo con `date`, `datetime`, `date32`,
+    ///   `timestamp_millis`;
+    /// - `precision` e `scale` obbligatori con `decimal128` (1 <= precision
+    ///   <= 38, 0 <= scale <= precision) e ammessi solo li';
+    /// - `timezone` solo con `timestamp_millis`;
+    /// - `errors` non con `str`, `binary_utf8` e `dictionary_utf8`, dove
+    ///   nessuna cella fallisce.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per ciascuna delle regole.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        let piano = |messaggio: &str| Err(PlenoraError::InvalidPlan(messaggio.to_owned()));
+        let usa_il_formato = matches!(
+            self.target_type,
+            TargetType::Date
+                | TargetType::Datetime
+                | TargetType::Date32
+                | TargetType::TimestampMillis
+        );
+        if !self.date_format.is_empty() && !usa_il_formato {
+            return piano("date_format ammesso solo per i target data e timestamp");
+        }
+        if self.errors.is_some()
+            && matches!(
+                self.target_type,
+                TargetType::Str | TargetType::BinaryUtf8 | TargetType::DictionaryUtf8
+            )
+        {
+            return piano("errors non ha effetto: con questo target nessuna cella fallisce");
+        }
+        match self.target_type {
+            TargetType::Decimal128 => {
+                let (Some(precision), Some(scale)) = (self.precision, self.scale) else {
+                    return piano("decimal128 richiede precision e scale");
+                };
+                if !(1..=38).contains(&precision) || scale < 0 || scale > precision.cast_signed() {
+                    return piano(
+                        "decimal128 richiede 1 <= precision <= 38 e 0 <= scale <= precision",
+                    );
+                }
+                if self.timezone.is_some() {
+                    return piano("timezone non ammessa per decimal128");
+                }
+            }
+            TargetType::TimestampMillis => {
+                if self.precision.is_some() || self.scale.is_some() {
+                    return piano("precision e scale non ammessi per timestamp");
+                }
+            }
+            _ if self.precision.is_some() || self.scale.is_some() || self.timezone.is_some() => {
+                return piano("precision, scale e timezone non ammessi per questo target_type");
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -554,15 +624,41 @@ pub fn coalesce_fast(batch: &RecordBatch, indices: &[usize]) -> Option<ArrayRef>
 /// sottostringhe); con `regex` ogni match si sostituisce con `new_value`,
 /// che riconosce i riferimenti ai gruppi (`$1`, `${nome}`, `$$`). Il null
 /// resta null; la colonna resta nella sua posizione con i metadati di campo.
-/// La lunghezza del risultato non si confronta con `max_string_bytes`.
+/// Con `Limits::default()`: [`replace_con_limiti`] con i limiti del
+/// chiamante.
+///
+/// # Errors
+///
+/// Come [`replace_con_limiti`].
+pub fn replace(batch: &RecordBatch, config: &Replace) -> Result<RecordBatch> {
+    replace_con_limiti(batch, config, &crate::Limits::default())
+}
+
+/// [`replace`] con i limiti del chiamante (il runner passa i suoi).
+///
+/// Con `regex` il pattern non supera `limits.max_regex_bytes`, e ogni cella
+/// sostituita non supera `limits.max_string_bytes`. Una regex che accetta la
+/// stringa vuota inserisce `new_value` a ogni posizione: la cella cresce con
+/// i dati, e il controllo e' sul risultato di ogni cella.
 ///
 /// # Errors
 ///
 /// - `Schema`: colonna assente o non `Utf8`;
-/// - `InvalidPlan`: `old_value` non e' una regex valida (con `regex = true`);
+/// - `InvalidPlan`: `old_value` non e' una regex valida o supera
+///   `max_regex_bytes` (con `regex = true`);
+/// - `ResourceLimit`: una cella sostituita oltre `max_string_bytes`;
 /// - `DataMapping`: errore Arrow nella sostituzione (guardia interna, non
 ///   attesa).
-pub fn replace(batch: &RecordBatch, config: &Replace) -> Result<RecordBatch> {
+pub fn replace_con_limiti(
+    batch: &RecordBatch,
+    config: &Replace,
+    limits: &crate::Limits,
+) -> Result<RecordBatch> {
+    if config.regex && config.old_value.len() > limits.max_regex_bytes {
+        return Err(PlenoraError::InvalidPlan(
+            "replace: pattern oltre max_regex_bytes".into(),
+        ));
+    }
     let index = column_index(batch, &config.column)?;
     let values = batch
         .column(index)
@@ -580,21 +676,24 @@ pub fn replace(batch: &RecordBatch, config: &Replace) -> Result<RecordBatch> {
             item.map(|text| {
                 regex.as_ref().map_or_else(
                     || {
-                        if text == config.old_value {
+                        Ok(if text == config.old_value {
                             config.new_value.clone()
                         } else {
                             text.to_owned()
-                        }
+                        })
                     },
                     |pattern| {
-                        pattern
+                        let sostituito = pattern
                             .replace_all(text, config.new_value.as_str())
-                            .into_owned()
+                            .into_owned();
+                        crate::verifica_testo_prodotto("replace", sostituito.len(), limits)?;
+                        Ok(sostituito)
                     },
                 )
             })
+            .transpose()
         })
-        .collect();
+        .collect::<Result<StringArray>>()?;
     replace_keeping_field_metadata(batch, &config.column, DataType::Utf8, true, Arc::new(out))
 }
 
@@ -1121,19 +1220,19 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
             Some(array) => array,
             None => return Ok(None),
         },
-        TargetType::Int => match cast_to_int(source, config.errors)? {
+        TargetType::Int => match cast_to_int(source, config.errori())? {
             Some(array) => array,
             None => return Ok(None),
         },
-        TargetType::Float => match cast_to_float(source, config.errors)? {
+        TargetType::Float => match cast_to_float(source, config.errori())? {
             Some(array) => array,
             None => return Ok(None),
         },
-        TargetType::Bool => match cast_to_bool(source, config.errors)? {
+        TargetType::Bool => match cast_to_bool(source, config.errori())? {
             Some(array) => array,
             None => return Ok(None),
         },
-        TargetType::Uint64 => match cast_to_uint64(source, config.errors)? {
+        TargetType::Uint64 => match cast_to_uint64(source, config.errori())? {
             Some(array) => array,
             None => return Ok(None),
         },
@@ -1149,7 +1248,7 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
                         value.map_or(Ok(None), |value| {
                             cast_or_failure(
                                 parse_date(value, &config.date_format, datetime),
-                                config.errors,
+                                config.errori(),
                                 "conversione data fallita",
                             )
                         })
@@ -1168,7 +1267,7 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
                         value.map_or(Ok(None), |value| {
                             cast_or_failure(
                                 parse_date32_fast(value, &config.date_format),
-                                config.errors,
+                                config.errori(),
                                 "conversione date32 fallita",
                             )
                         })
@@ -1190,7 +1289,7 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
                                 &config.date_format,
                                 config.timezone.as_deref(),
                             ),
-                            config.errors,
+                            config.errori(),
                             "conversione timestamp fallita",
                         )
                     })
@@ -1216,7 +1315,7 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
                     value.map_or(Ok(None), |value| {
                         cast_or_failure(
                             parse_decimal128(value, precision, scale),
-                            config.errors,
+                            config.errori(),
                             "conversione decimal128 fallita",
                         )
                     })
@@ -1290,6 +1389,7 @@ pub fn type_cast_with_source_offset(
     config: &TypeCast,
     source_offset: u64,
 ) -> Result<RecordBatch> {
+    config.verifica_parametri()?;
     // Un formato non riconosciuto non combacia con nessun valore: errore di
     // piano, non righe rifiutate. Vuoto e' il parser di default.
     if !config.date_format.is_empty() {
@@ -1297,7 +1397,7 @@ pub fn type_cast_with_source_offset(
     }
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
-    if matches!(config.errors, CastErrors::Coerce | CastErrors::Raise) {
+    if matches!(config.errori(), CastErrors::Coerce | CastErrors::Raise) {
         if let Some(report) = cast_row_diagnostics(source, &config.column, config, source_offset)? {
             return Err(PlenoraError::DataMapping(
                 "conversione rifiutata; consultare row_diagnostics".to_owned(),
@@ -1460,7 +1560,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                         || Ok(None),
                         |value| {
                             value.trim().parse::<i64>().map_or_else(
-                                |_| cast_failure(config.errors, "conversione int fallita"),
+                                |_| cast_failure(config.errori(), "conversione int fallita"),
                                 |value| Ok(Some(value)),
                             )
                         },
@@ -1475,7 +1575,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                         || Ok(None),
                         |value| {
                             value.trim().replace(',', ".").parse::<f64>().map_or_else(
-                                |_| cast_failure(config.errors, "conversione float fallita"),
+                                |_| cast_failure(config.errori(), "conversione float fallita"),
                                 |value| Ok(Some(value)),
                             )
                         },
@@ -1495,7 +1595,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                                     Ok(Some(true))
                                 }
                                 "false" | "0" | "no" | "falso" | "f" | "n" => Ok(Some(false)),
-                                _ => cast_failure(config.errors, "conversione bool fallita"),
+                                _ => cast_failure(config.errori(), "conversione bool fallita"),
                             }
                         },
                     )
@@ -1511,7 +1611,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                             || Ok(None),
                             |value| {
                                 parse_date(&value, &config.date_format, datetime).map_or_else(
-                                    || cast_failure(config.errors, "conversione data fallita"),
+                                    || cast_failure(config.errori(), "conversione data fallita"),
                                     |value| Ok(Some(value)),
                                 )
                             },
@@ -1526,7 +1626,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                 .map(|value| {
                     value.map_or(Ok(None), |value| {
                         parse_date32(&value, &config.date_format).map_or_else(
-                            || cast_failure(config.errors, "conversione date32 fallita"),
+                            || cast_failure(config.errori(), "conversione date32 fallita"),
                             |value| Ok(Some(value)),
                         )
                     })
@@ -1544,7 +1644,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                             config.timezone.as_deref(),
                         )
                         .map_or_else(
-                            || cast_failure(config.errors, "conversione timestamp fallita"),
+                            || cast_failure(config.errori(), "conversione timestamp fallita"),
                             |value| Ok(Some(value)),
                         )
                     })
@@ -1566,7 +1666,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                 .map(|value| {
                     value.map_or(Ok(None), |value| {
                         parse_decimal128(&value, precision, scale).map_or_else(
-                            || cast_failure(config.errors, "conversione decimal128 fallita"),
+                            || cast_failure(config.errori(), "conversione decimal128 fallita"),
                             |value| Ok(Some(value)),
                         )
                     })
@@ -1591,7 +1691,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
                 .map(|value| {
                     value.map_or(Ok(None), |value| {
                         value.trim().parse::<u64>().map_or_else(
-                            |_| cast_failure(config.errors, "conversione uint64 fallita"),
+                            |_| cast_failure(config.errori(), "conversione uint64 fallita"),
                             |value| Ok(Some(value)),
                         )
                     })
@@ -1767,13 +1867,18 @@ mod tests {
     }
 
     fn cast_config(target_type: TargetType, errors: CastErrors) -> TypeCast {
+        let decimale = matches!(target_type, TargetType::Decimal128);
+        let infallibile = matches!(
+            target_type,
+            TargetType::Str | TargetType::BinaryUtf8 | TargetType::DictionaryUtf8
+        );
         TypeCast {
             column: "c".into(),
             target_type,
             date_format: String::new(),
-            errors,
-            precision: Some(10),
-            scale: Some(2),
+            errors: (!infallibile).then_some(errors),
+            precision: decimale.then_some(10),
+            scale: decimale.then_some(2),
             timezone: None,
         }
     }
@@ -2232,7 +2337,7 @@ mod tests {
     /// `type_cast_hand_written_values_per_*`.
     fn generic_type_cast_entry(batch: &RecordBatch, config: &TypeCast) -> Result<RecordBatch> {
         let source = batch.column(column_index(batch, &config.column)?);
-        if matches!(config.errors, CastErrors::Coerce | CastErrors::Raise) {
+        if matches!(config.errori(), CastErrors::Coerce | CastErrors::Raise) {
             let mut rejections = Vec::new();
             for row in 0..source.len() {
                 let Some(value) = scalar_as_string(source.as_ref(), row)? else {
@@ -2586,7 +2691,7 @@ mod tests {
         let config = TypeCast {
             column: "effective_date".to_owned(),
             target_type: TargetType::Date32,
-            errors: CastErrors::Coerce,
+            errors: Some(CastErrors::Coerce),
             date_format: String::new(),
             timezone: None,
             precision: None,
@@ -2632,7 +2737,7 @@ mod tests {
         let config = TypeCast {
             column: "effective_date".to_owned(),
             target_type: TargetType::Date32,
-            errors: CastErrors::Coerce,
+            errors: Some(CastErrors::Coerce),
             date_format: String::new(),
             timezone: None,
             precision: None,
@@ -2660,7 +2765,7 @@ mod tests {
         let config = TypeCast {
             column: "effective_date".to_owned(),
             target_type: TargetType::Date32,
-            errors: CastErrors::Raise,
+            errors: Some(CastErrors::Raise),
             date_format: String::new(),
             timezone: None,
             precision: None,
@@ -2691,7 +2796,7 @@ mod tests {
         let config = TypeCast {
             column: "effective_date".to_owned(),
             target_type: TargetType::Date32,
-            errors: CastErrors::Coerce,
+            errors: Some(CastErrors::Coerce),
             date_format: String::new(),
             timezone: None,
             precision: None,
@@ -2749,7 +2854,7 @@ mod tests {
             let config = TypeCast {
                 column: "value".to_owned(),
                 target_type,
-                errors: CastErrors::Coerce,
+                errors: Some(CastErrors::Coerce),
                 date_format: String::new(),
                 timezone: None,
                 precision,
@@ -2767,7 +2872,7 @@ mod tests {
         let config = TypeCast {
             column: "value".to_owned(),
             target_type: TargetType::Str,
-            errors: CastErrors::Coerce,
+            errors: None,
             date_format: String::new(),
             timezone: None,
             precision: None,

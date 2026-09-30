@@ -144,6 +144,8 @@ fn table_diff_precedente(
     } else {
         config.compare_columns.clone()
     };
+    // Regola condivisa sulla config, non oracolata.
+    config.verifica_separatore(compare.len())?;
     let left_compare = compare
         .iter()
         .map(|name| column_index(left, name))
@@ -227,8 +229,8 @@ fn table_diff_precedente(
                 } else {
                     (
                         "MODIFIED",
-                        Some(changed.join(&config.separator)),
-                        Some(old_values.join(&config.separator)),
+                        Some(changed.join(config.separatore())),
+                        Some(old_values.join(config.separatore())),
                     )
                 }
             }
@@ -337,7 +339,9 @@ fn config(chiavi: &[&str], confronto: &[&str], unchanged: &str, separator: &str)
         compare_columns: confronto.iter().map(|nome| (*nome).to_owned()).collect(),
         include_unchanged: IncludeUnchanged::try_from(unchanged.to_owned())
             .unwrap_or(IncludeUnchanged::No),
-        separator: separator.into(),
+        // Il default `#` vale assente: la regola su `separator` scritto con
+        // una sola colonna confrontata non toglie quei casi all'oracolo.
+        separator: (separator != "#").then(|| separator.into()),
     }
 }
 

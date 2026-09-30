@@ -13,7 +13,7 @@ come numero con parte frazionaria (un giorno e mezzo è `1.5`) e con segno.
 | `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura di entrambe le colonne |
 | `unit` | stringa | obbligatorio | `days`, `hours`, `minutes`, `seconds` | unità della differenza |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
-| `invalid` | stringa | `null` | `null`, `error` | accettato per compatibilità, senza effetto |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -24,7 +24,8 @@ RFC 3339.
 La lettura deve consumare tutto il testo della cella; un formato senza
 campi orari legge una data e la pone a mezzanotte. I valori non hanno fuso:
 un giorno è sempre 86 400 secondi. La differenza è il numero di nanosecondi
-diviso per `10^9` e poi per 86 400, 3 600, 60 o 1.
+diviso per `10^9` e poi per 86 400, 3 600, 60 o 1. Un valore non leggibile
+rifiuta sempre la riga.
 
 ### Schema
 
@@ -49,7 +50,8 @@ In validazione, `InvalidPlan`:
 - `input_format` vuoto, oltre `max_string_bytes` o con un campo non
   riconosciuto;
 - `output_column` non valido;
-- config con campi sconosciuti, `unit` o `invalid` fuori elenco.
+- `invalid` scritto, con qualunque valore;
+- config con campi sconosciuti o `unit` fuori elenco.
 
 In esecuzione:
 
@@ -64,9 +66,8 @@ In esecuzione:
 
 Il risultato è `float64` per contratto: oltre `2^53` nanosecondi (circa 104
 giorni) il numero esatto di nanosecondi si arrotonda al double più vicino
-prima della divisione. `invalid` non ha effetto e non si rifiuta
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
-Mesi e anni non sono unità ammesse, perché non hanno durata fissa.
+prima della divisione. Mesi e anni non sono unità ammesse, perché non
+hanno durata fissa.
 
 ### Complessità
 

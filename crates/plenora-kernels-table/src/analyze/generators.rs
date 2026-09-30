@@ -68,6 +68,11 @@ pub(in crate::analyze) fn analyze_date_extract(
     limits: &Limits,
 ) -> Result<DataContract> {
     let config: utility::DateExtract = typed(op, config)?;
+    con_op(
+        op,
+        crate::dates::verifica_politiche(config.invalid.as_ref(), None),
+    )?;
+    con_op(op, config.verifica_parti())?;
     let input = &inputs[0];
     require_scalar_string(op, input, &config.column)?;
     if let Some(format) = &config.date_format {
@@ -110,6 +115,7 @@ pub(in crate::analyze) fn analyze_limit(
     limits: &Limits,
 ) -> Result<DataContract> {
     let config: utility::Limit = typed(op, config)?;
+    con_op(op, config.verifica_parametri())?;
     let input = &inputs[0];
     let _ = fields;
     check_rows(op, config.n, limits.max_rows, "n")?;

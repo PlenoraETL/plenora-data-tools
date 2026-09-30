@@ -356,9 +356,9 @@ fn i_limiti_sulle_righe_si_applicano_ai_dati() {
             max_input_rows: Some(5),
             ..LimitiParziali::default()
         },
-        // Vincolo MaxRelative del catalogo: 36 righe su 6, fattore 6.
+        // Vincolo SumRelative del catalogo: 36 righe su 6 + 6, fattore 3.
         LimitiParziali {
-            max_expansion_factor: Some(5.5),
+            max_expansion_factor: Some(2.5),
             ..LimitiParziali::default()
         },
     ];
@@ -400,7 +400,7 @@ fn i_limiti_sulle_righe_si_applicano_ai_dati() {
     let ammessa = con_limiti(
         incrocio(),
         LimitiParziali {
-            max_expansion_factor: Some(6.0),
+            max_expansion_factor: Some(3.0),
             ..LimitiParziali::default()
         },
     );

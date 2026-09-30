@@ -8,9 +8,9 @@ use plenora_core::Result;
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_name_list, check_output_name, check_text_len, clone_fields,
-    contract_error, field_of, finish, propagate_geometry, require_utf8, scrub_dropped_geometry,
-    typed,
+    analyze_append, check_json_text, check_name_list, check_output_name, check_text_len,
+    clone_fields, con_op, contract_error, field_of, finish, propagate_geometry, require_utf8,
+    scrub_dropped_geometry, typed,
 };
 use crate::{columns, Limits};
 
@@ -29,6 +29,7 @@ pub(in crate::analyze) fn analyze_drop_columns(
     let input = &inputs[0];
     let _ = fields;
     check_name_list(op, &config.columns, limits.max_columns, "columns", true)?;
+    con_op(op, config.verifica_parametri(&input.schema))?;
     let to_drop: HashSet<&str> = config.columns.iter().map(String::as_str).collect();
     let kept: Vec<Field> = clone_fields(input)
         .into_iter()
@@ -73,13 +74,14 @@ pub(in crate::analyze) fn analyze_rename(
 ) -> Result<DataContract> {
     let config: columns::Rename = typed(op, config)?;
     let input = &inputs[0];
-    // Due rinomine della stessa sorgente lascerebbero al kernel la scelta
-    // («vince l'ultimo»): rifiutate, come due destinazioni uguali. Un
-    // `old_name` inesistente resta ignorato, come nel kernel.
+    // Due rinomine della stessa sorgente o verso la stessa destinazione, un
+    // `old_name` inesistente o uguale al `new_name`: rifiutati, qui e nel
+    // kernel (`Rename::verifica_parametri`).
     let old: Vec<String> = config.renames.iter().map(|p| p.old_name.clone()).collect();
     let new: Vec<String> = config.renames.iter().map(|p| p.new_name.clone()).collect();
     check_name_list(op, &old, limits.max_columns, "rename origine", true)?;
     check_name_list(op, &new, limits.max_columns, "rename destinazione", true)?;
+    con_op(op, config.verifica_parametri(&input.schema))?;
     let renames: HashMap<&str, &str> = config
         .renames
         .iter()
@@ -136,6 +138,7 @@ pub(in crate::analyze) fn analyze_reorder_columns(
         }
         field_of(op, input, name)?;
     }
+    con_op(op, config.verifica_parametri(&input.schema))?;
     let mut ordered: Vec<Field> = config
         .columns
         .iter()
@@ -145,7 +148,7 @@ pub(in crate::analyze) fn analyze_reorder_columns(
         .into_iter()
         .filter(|field| !seen.contains(field.name().as_str()))
         .collect();
-    if config.alphabetical {
+    if config.alfabetico() {
         rest.sort_by_key(|field| field.name().to_lowercase());
     }
     ordered.extend(rest);
@@ -173,7 +176,13 @@ pub(in crate::analyze) fn analyze_concat_columns(
     let config: columns::ConcatColumns = typed(op, config)?;
     let input = &inputs[0];
     check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
-    check_text_len(op, &config.separator, limits.max_string_bytes, "separator")?;
+    check_text_len(
+        op,
+        config.separatore(),
+        limits.max_string_bytes,
+        "separator",
+    )?;
+    con_op(op, config.verifica_parametri())?;
     check_output_name(op, &config.output_column)?;
     for name in &config.columns {
         require_utf8(op, input, name)?;
@@ -194,10 +203,15 @@ pub(in crate::analyze) fn analyze_split_column(
 ) -> Result<DataContract> {
     let config: columns::SplitColumn = typed(op, config)?;
     let input = &inputs[0];
-    if config.delimiter.is_empty() {
+    if config.delimitatore().is_empty() {
         return contract_error(op, "delimiter vuoto");
     }
-    check_text_len(op, &config.delimiter, limits.max_string_bytes, "delimiter")?;
+    check_text_len(
+        op,
+        config.delimitatore(),
+        limits.max_string_bytes,
+        "delimiter",
+    )?;
     check_name_list(
         op,
         &config.new_columns,
@@ -205,6 +219,7 @@ pub(in crate::analyze) fn analyze_split_column(
         "new_columns",
         false,
     )?;
+    con_op(op, config.verifica_parametri())?;
     require_utf8(op, input, &config.column)?;
     let produced: Vec<(String, DataType, bool)> = config
         .new_columns
@@ -273,6 +288,7 @@ pub(in crate::analyze) fn analyze_align_schema(
 ) -> Result<DataContract> {
     let config: columns::AlignSchema = typed(op, config)?;
     let input = &inputs[0];
+    con_op(op, config.verifica_parametri(&input.schema))?;
     if config.columns.is_empty() {
         return contract_error(op, "columns vuoto");
     }
@@ -311,6 +327,8 @@ pub(in crate::analyze) fn analyze_align_schema(
             // kernel: mai un errore a meta' dei dati.
             if let Some(default) = &declared.default {
                 columns::check_align_default(default, declared.align_type)?;
+                // Il default riempie ogni cella della colonna aggiunta.
+                check_json_text(op, default, limits.max_string_bytes, "default")?;
             }
             fields.derive(&declared.name)?;
             fields_out.push(Field::new(
@@ -320,13 +338,13 @@ pub(in crate::analyze) fn analyze_align_schema(
             ));
         }
     }
-    let removed_any = !config.keep_extra
+    let removed_any = !config.tiene_extra()
         && input
             .schema
             .fields()
             .iter()
             .any(|field| !seen.contains(field.name().as_str()));
-    if config.keep_extra {
+    if config.tiene_extra() {
         for field in input.schema.fields() {
             if !seen.contains(field.name().as_str()) {
                 fields_out.push(field.as_ref().clone());

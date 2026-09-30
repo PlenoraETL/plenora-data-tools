@@ -554,12 +554,20 @@ fn formati_vuoti_e_limiti_si_rifiutano_in_analisi() {
         json!({"columns": ["id"], "n": limiti.max_rows + 1}),
         "max_rows",
     );
+    // Con `regex` `old_value` e' un pattern (`max_regex_bytes`); senza, il
+    // testo di una cella (`max_string_bytes`).
     rifiuta(
         "table.replace",
         &[&w],
         json!({"column": "name", "old_value": "a".repeat(limiti.max_regex_bytes + 1),
-               "new_value": "b"}),
+               "new_value": "b", "regex": true}),
         "old_value",
+    );
+    accetta(
+        "table.replace",
+        &[&w],
+        json!({"column": "name", "old_value": "a".repeat(limiti.max_regex_bytes + 1),
+               "new_value": "b"}),
     );
     // flatten_json oltre max_columns: lo stesso conto del kernel.
     let massimo = limiti_interni::MAX_COLUMNS;
@@ -900,7 +908,7 @@ fn nessun_parametro_di_aggregate_mask_data_e_fill_na_si_ignora() {
     }
     for aggregazione in [
         json!({"column": "name", "function": "concat", "separator": "|", "distinct": true,
-               "skip_null": false}),
+               "skip_null": false, "alias": "nomi"}),
         json!({"column": "value", "function": "variance", "ddof": 0, "distinct": true}),
         json!({"column": "value", "function": "sum"}),
     ] {

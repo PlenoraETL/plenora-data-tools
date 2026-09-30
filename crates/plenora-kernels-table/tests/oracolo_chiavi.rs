@@ -436,7 +436,7 @@ proptest! {
             right_keys: chiave.iter().map(|nome| (*nome).to_owned()).collect(),
             compare_columns: vec![if subset.contains(&"s") { "f".into() } else { "s".into() }],
             include_unchanged: IncludeUnchanged::Yes,
-            separator: "#".into(),
+            separator: None,
         };
         let confronto = config.compare_columns[0].clone();
         let atteso = stati_attesi(&left, &right, &chiave, &confronto);

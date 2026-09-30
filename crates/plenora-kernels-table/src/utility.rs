@@ -160,13 +160,18 @@ pub struct DateExtract {
     /// come sola data. Se omesso si usano i formati di default, nell'ordine
     /// di `parse_datetime`.
     pub date_format: Option<String>,
-    /// Accettato per compatibilita', senza effetto: un valore non
-    /// interpretabile fa sempre fallire il passo (default `null`).
-    #[serde(default = "default_invalid_date_policy")]
-    pub invalid: InvalidDatePolicy,
+    /// Non ammesso: un valore non interpretabile fa sempre fallire il passo,
+    /// quindi nessuna politica avrebbe effetto. Scritto si rifiuta
+    /// ([`crate::dates::verifica_politiche`]).
+    #[serde(default)]
+    pub invalid: Option<InvalidDatePolicy>,
 }
 
-/// Token di `DateExtract::invalid`; nessuno dei due cambia il risultato.
+/// Token di `invalid` delle operazioni sulle date.
+///
+/// Nessuno dei due cambia il risultato, quindi scritti si rifiutano
+/// ([`crate::dates::verifica_politiche`]). Resta un tipo perche' il rifiuto
+/// nomini il motivo invece di un campo sconosciuto.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InvalidDatePolicy {
@@ -177,12 +182,38 @@ pub enum InvalidDatePolicy {
     Error,
 }
 
-const fn default_invalid_date_policy() -> InvalidDatePolicy {
-    InvalidDatePolicy::Null
-}
-
 fn default_parts() -> Vec<DatePart> {
     vec![DatePart::Year]
+}
+
+impl DateExtract {
+    /// Una parte ripetuta in `parts` scriverebbe due volte la stessa
+    /// colonna, e la prima non avrebbe effetto; `parts` vuoto non produce
+    /// nulla. Entrambi si rifiutano. La chiamano il kernel e l'analisi dei
+    /// contratti.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per `parts` vuoto o con una parte ripetuta.
+    pub fn verifica_parti(&self) -> Result<()> {
+        if self.parts.is_empty() {
+            return Err(PlenoraError::InvalidPlan(
+                "parts vuoto: nessuna colonna prodotta".into(),
+            ));
+        }
+        for (posizione, parte) in self.parts.iter().enumerate() {
+            let discriminante = std::mem::discriminant(parte);
+            if self.parts[..posizione]
+                .iter()
+                .any(|prima| std::mem::discriminant(prima) == discriminante)
+            {
+                return Err(PlenoraError::InvalidPlan(
+                    "parte ripetuta in parts: la prima non avrebbe effetto".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn parse_datetime(value: &str, explicit_format: Option<&str>) -> Option<NaiveDateTime> {
@@ -270,9 +301,9 @@ fn parse_datetime_default(
 ///
 /// Ogni cella non nulla si legge come testo ([`scalar_as_string`]) e si
 /// interpreta con `date_format` se dato, altrimenti con i formati di
-/// default. Il token `config.invalid` resta deserializzabile per
-/// compatibilita', ma ogni valore non interpretabile rifiuta l'uscita con la
-/// diagnostica per riga.
+/// default. Ogni valore non interpretabile rifiuta l'uscita con la
+/// diagnostica per riga; `invalid` scritto si rifiuta
+/// ([`crate::dates::verifica_politiche`]).
 ///
 /// # Errors
 ///
@@ -289,6 +320,8 @@ fn parse_datetime_default(
 // bracci del parser sono blocchi completi, troppo grandi per `map_or_else`.
 #[allow(clippy::too_many_lines, clippy::option_if_let_else)]
 pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordBatch> {
+    crate::dates::verifica_politiche(config.invalid.as_ref(), None)?;
+    config.verifica_parti()?;
     if let Some(format) = &config.date_format {
         crate::dates::validate_format_items(format, "date_format")?;
     }
@@ -414,9 +447,29 @@ pub struct Limit {
     /// `max_rows`).
     pub n: u64,
     /// Righe da saltare in testa (default 0; l'analisi lo limita a
-    /// `max_rows`).
+    /// `max_rows`). Con `n = 0` l'uscita e' vuota comunque: un `offset`
+    /// positivo non avrebbe effetto e si rifiuta
+    /// ([`Limit::verifica_parametri`]).
     #[serde(default)]
     pub offset: u64,
+}
+
+impl Limit {
+    /// `offset` positivo con `n = 0` non ha effetto (l'uscita e' vuota
+    /// comunque): si rifiuta. La chiamano il kernel e l'analisi dei
+    /// contratti.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` se `offset > 0` e `n = 0`.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        if self.n == 0 && self.offset > 0 {
+            return Err(PlenoraError::InvalidPlan(
+                "offset senza effetto con n 0: l'uscita e' vuota comunque".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Prime `n` righe dopo `offset` (`table.limit`).
@@ -427,9 +480,11 @@ pub struct Limit {
 ///
 /// # Errors
 ///
+/// - `InvalidPlan`: `offset` senza effetto ([`Limit::verifica_parametri`]);
 /// - `ResourceLimit`: numero di righe non rappresentabile come `u64`,
 ///   `offset` o `n` non rappresentabili come `usize`.
 pub fn limit(batch: &RecordBatch, config: &Limit) -> Result<RecordBatch> {
+    config.verifica_parametri()?;
     let rows = u64::try_from(batch.num_rows())
         .map_err(|_| PlenoraError::ResourceLimit("limit: righe oltre u64".into()))?;
     let start = config.offset.min(rows);
@@ -648,7 +703,7 @@ mod tests {
                 parts: vec![DatePart::Year],
                 prefix: String::new(),
                 date_format: Some("%Y-%m-%d".into()),
-                invalid: InvalidDatePolicy::Null,
+                invalid: None,
             },
         )
         .expect_err("date_extract ha pubblicato null sintetici");
@@ -691,7 +746,7 @@ mod tests {
                 parts: all_parts(),
                 prefix: "p_".into(),
                 date_format: None,
-                invalid: InvalidDatePolicy::Error,
+                invalid: None,
             },
         )
         .expect("date valide");
@@ -797,7 +852,8 @@ mod tests {
             None,
             Some(""),
         ]);
-        for invalid in [InvalidDatePolicy::Null, InvalidDatePolicy::Error] {
+        {
+            let invalid = None;
             let config = DateExtract {
                 column: "ts".into(),
                 parts: all_parts(),
@@ -827,7 +883,8 @@ mod tests {
             Some("2024-02-29 10:00:00"), // trailing input: fallisce
             Some("2023-02-29"),
         ]);
-        for invalid in [InvalidDatePolicy::Null, InvalidDatePolicy::Error] {
+        {
+            let invalid = None;
             let config = DateExtract {
                 column: "ts".into(),
                 parts: all_parts(),
@@ -872,7 +929,8 @@ mod tests {
             None,
             Some(""),
         ]);
-        for invalid in [InvalidDatePolicy::Null, InvalidDatePolicy::Error] {
+        {
+            let invalid = None;
             let config = DateExtract {
                 column: "ts".into(),
                 parts: all_parts(),

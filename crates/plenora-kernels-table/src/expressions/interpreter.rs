@@ -10,7 +10,7 @@ use super::scalar::{
 };
 use super::static_type::{self, Kind};
 use super::temporal::{date_trunc_generic, in_generic, literal_unit};
-use super::{Expression, ExpressionTransform, Function, UnaryOperator};
+use super::{BinaryOperator, Contesto, Expression, ExpressionTransform, Function, UnaryOperator};
 use crate::{column_index, replace_or_append, NON_FINITE_RESULT_MESSAGE};
 use plenora_core::arrow::array::{
     BooleanArray, Date32Array, Float64Array, RecordBatch, StringArray, TimestampMillisecondArray,
@@ -261,12 +261,17 @@ pub(super) fn substring_index(value: &Scalar, context: &str) -> Result<Option<us
     Ok(Some(value as usize))
 }
 
-pub fn evaluate(expression: &Expression, batch: &RecordBatch, row: usize) -> Result<Scalar> {
+pub fn evaluate(
+    expression: &Expression,
+    batch: &RecordBatch,
+    row: usize,
+    ctx: &Contesto<'_>,
+) -> Result<Scalar> {
     match expression {
         Expression::Column { name } => column(batch, name, row),
         Expression::Literal { value } => literal(value),
         Expression::Unary { op, value } => {
-            let value = evaluate(value, batch, row)?;
+            let value = evaluate(value, batch, row, ctx)?;
             Ok(match op {
                 UnaryOperator::IsNull => Scalar::Boolean(value == Scalar::Null),
                 UnaryOperator::IsNotNull => Scalar::Boolean(value != Scalar::Null),
@@ -279,33 +284,57 @@ pub fn evaluate(expression: &Expression, batch: &RecordBatch, row: usize) -> Res
                 },
             })
         }
-        Expression::Binary { op, left, right } => binary(
-            *op,
-            evaluate(left, batch, row)?,
-            evaluate(right, batch, row)?,
-        ),
+        Expression::Binary { op, left, right } => {
+            let esito = binary(
+                *op,
+                evaluate(left, batch, row, ctx)?,
+                evaluate(right, batch, row, ctx)?,
+            );
+            // La divisione per zero: null con la politica `null` (riga
+            // segnata), errore di riga con `error`.
+            if matches!(op, BinaryOperator::Divide) {
+                ctx.dividi(esito, || Scalar::Null)
+            } else {
+                esito
+            }
+        }
         Expression::Function { name, args } => match name {
             // Nodi speciali: richiedono l'AST degli argomenti (colonna
             // temporale nativa / lista di letterali), non scalari valutati.
             Function::DateTrunc => date_trunc_generic(args, batch, row),
-            Function::In => in_generic(args, batch, row),
-            _ => function(
-                *name,
-                args.iter()
-                    .map(|arg| evaluate(arg, batch, row))
-                    .collect::<Result<Vec<_>>>()?,
-            ),
+            Function::In => in_generic(args, batch, row, ctx),
+            _ => {
+                let args = args
+                    .iter()
+                    .map(|arg| evaluate(arg, batch, row, ctx))
+                    .collect::<Result<Vec<_>>>()?;
+                // Pattern calcolato di `regex_replace` contro
+                // `max_regex_bytes`, dove la funzione lo compilerebbe: con
+                // i tre argomenti testo (un null da' null prima).
+                if let (
+                    Function::RegexReplace,
+                    [Scalar::Text(_), Scalar::Text(pattern), Scalar::Text(_)],
+                ) = (name, args.as_slice())
+                {
+                    ctx.verifica_pattern(pattern.len())?;
+                }
+                let valore = function(*name, args)?;
+                if let Scalar::Text(testo) = &valore {
+                    ctx.verifica_testo(testo.len())?;
+                }
+                Ok(valore)
+            }
         },
         Expression::Case {
             branches,
             else_value,
         } => {
             for branch in branches {
-                if boolean(&evaluate(&branch.when, batch, row)?, "case when")? == Some(true) {
-                    return evaluate(&branch.then, batch, row);
+                if boolean(&evaluate(&branch.when, batch, row, ctx)?, "case when")? == Some(true) {
+                    return evaluate(&branch.then, batch, row, ctx);
                 }
             }
-            evaluate(else_value, batch, row)
+            evaluate(else_value, batch, row, ctx)
         }
     }
 }
@@ -510,15 +539,52 @@ fn scalar_timestamp_ms(value: &Scalar, context: &str) -> Result<Option<i64>> {
 /// - `ResourceLimit`: `length` oltre `u32::MAX` caratteri;
 /// - `Internal`: invarianti interne violate.
 pub fn expression(batch: &RecordBatch, config: &ExpressionTransform) -> Result<RecordBatch> {
-    super::reject_literal_zero_divisor(&config.expression)?;
+    expression_con_effetti(batch, config, &crate::Limits::default()).map(|(uscita, _)| uscita)
+}
+
+/// Come [`expression`], con i limiti del chiamante e gli effetti.
+///
+/// Gli effetti sono cio' che l'uscita non mostra: le righe in cui una
+/// divisione ha trovato un divisore zero ([`crate::EffettiKernel`]). E' il
+/// punto d'ingresso del runner; [`expression`] lo chiama con
+/// `Limits::default()` e scarta il conteggio.
+///
+/// Con `on_division_by_zero = "null"` (default) una divisione con operandi
+/// non null e divisore zero vale null in quel nodo (il null segue poi le
+/// regole dei null: `coalesce(a / b, 0)` da' 0), e la riga si conta una
+/// volta; con `"error"` la riga si rifiuta (`evaluation.division_by_zero`).
+///
+/// # Errors
+///
+/// Come [`expression`], piu': `InvalidPlan` per le regole di
+/// [`ExpressionTransform::verifica_parametri`] (`on_division_by_zero` senza
+/// divisioni, letterali oltre i limiti); `ResourceLimit` per un testo
+/// calcolato oltre `limits.max_string_bytes` o un pattern calcolato oltre
+/// `limits.max_regex_bytes`; `Internal` se il conteggio trabocca.
+pub fn expression_con_effetti(
+    batch: &RecordBatch,
+    config: &ExpressionTransform,
+    limits: &crate::Limits,
+) -> Result<(RecordBatch, crate::EffettiKernel)> {
+    config.verifica_parametri(limits)?;
     // Tipo dallo SCHEMA, mai dai valori (vedi il doc sopra).
     let kind = static_output_kind(batch, config)?;
+    let ctx = Contesto::new(config, limits);
+    let mut effetti = crate::EffettiKernel::default();
     // Batch vuoto: niente da compilare, si passa dal generico. Le colonne
     // sono gia' state risolte qui sopra per decidere il tipo.
-    if batch.num_rows() > 0 {
-        return FastProgram::compile(&config.expression, batch).run(batch, config, kind);
-    }
-    expression_generic_kind(batch, config, kind)
+    let uscita = if batch.num_rows() > 0 {
+        FastProgram::compile(&config.expression, batch).run(
+            batch,
+            config,
+            kind,
+            &ctx,
+            &mut effetti,
+        )?
+    } else {
+        expression_generic_kind(batch, config, kind, &ctx, &mut effetti)?
+    };
+    Ok((uscita, effetti))
 }
 
 /// Tipo della colonna prodotta, dal solo schema del batch.
@@ -546,7 +612,28 @@ pub fn expression_generic(
     batch: &RecordBatch,
     config: &ExpressionTransform,
 ) -> Result<RecordBatch> {
-    expression_generic_kind(batch, config, static_output_kind(batch, config)?)
+    expression_generic_con_effetti(batch, config).map(|(uscita, _)| uscita)
+}
+
+/// Come [`expression_generic`], con il conteggio delle divisioni per zero
+/// (oracolo del conteggio del fast path).
+#[cfg(test)]
+pub fn expression_generic_con_effetti(
+    batch: &RecordBatch,
+    config: &ExpressionTransform,
+) -> Result<(RecordBatch, crate::EffettiKernel)> {
+    let limits = crate::Limits::default();
+    config.verifica_parametri(&limits)?;
+    let ctx = Contesto::new(config, &limits);
+    let mut effetti = crate::EffettiKernel::default();
+    let uscita = expression_generic_kind(
+        batch,
+        config,
+        static_output_kind(batch, config)?,
+        &ctx,
+        &mut effetti,
+    )?;
+    Ok((uscita, effetti))
 }
 
 /// Come [`expression_generic`], col tipo di output gia' risolto.
@@ -554,11 +641,17 @@ fn expression_generic_kind(
     batch: &RecordBatch,
     config: &ExpressionTransform,
     kind: Kind,
+    ctx: &Contesto<'_>,
+    effetti: &mut crate::EffettiKernel,
 ) -> Result<RecordBatch> {
     let mut values = Vec::with_capacity(batch.num_rows());
     let mut rejections = Vec::new();
     for row in 0..batch.num_rows() {
-        match evaluate(&config.expression, batch, row) {
+        let esito = evaluate(&config.expression, batch, row, ctx);
+        if ctx.chiudi_riga() && esito.is_ok() {
+            effetti.conta_divisione_per_zero()?;
+        }
+        match esito {
             Ok(value) => values.push(value),
             Err(error) => {
                 let Some(cause) = crate::row_eval_failure_cause(&error) else {

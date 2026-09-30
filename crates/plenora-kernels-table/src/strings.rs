@@ -18,7 +18,9 @@ use super::{replace_or_append, utf8_column, validate_output_name};
 pub struct StringPad {
     /// Colonna `Utf8` da allungare (obbligatorio).
     pub column: String,
-    /// Lunghezza minima in code point (default 5); l'analisi la limita a
+    /// Lunghezza minima in code point (default 5), almeno 1 (con 0 nessun
+    /// valore si allunga e `side` e `fill_char` non avrebbero effetto,
+    /// [`StringPad::verifica_parametri`]); l'analisi la limita a
     /// `max_string_bytes`.
     #[serde(default = "default_width")]
     pub width: usize,
@@ -52,6 +54,31 @@ fn default_fill() -> String {
     "0".into()
 }
 
+impl StringPad {
+    /// Regole sulla sola config, condivise da kernel e analisi dei
+    /// contratti: `fill_char` di un solo code point; `width` almeno 1 (con 0
+    /// il passo non cambia nessun valore). Il tetto di `width` contro
+    /// `max_string_bytes` lo mette l'analisi; nel kernel un valore allungato
+    /// oltre il tetto e' un `ResourceLimit`.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per ciascuna delle regole.
+    pub fn verifica_parametri(&self) -> Result<()> {
+        if self.fill_char.chars().count() != 1 {
+            return Err(PlenoraError::InvalidPlan(
+                "fill_char deve essere un singolo carattere".into(),
+            ));
+        }
+        if self.width == 0 {
+            return Err(PlenoraError::InvalidPlan(
+                "width 0 non allunga nessun valore: side e fill_char senza effetto".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Allunga i valori a `width` code point con `fill_char` (`table.string_pad`).
 ///
 /// I valori gia' lunghi almeno `width` restano invariati (nessun
@@ -60,8 +87,9 @@ fn default_fill() -> String {
 ///
 /// # Errors
 ///
-/// - `InvalidPlan`: nome della colonna d'uscita non valido, `fill_char` vuoto
-///   o di piu' di un code point;
+/// - `InvalidPlan`: nome della colonna d'uscita non valido; le regole di
+///   [`StringPad::verifica_parametri`] (`fill_char` di un solo code point,
+///   `width` almeno 1);
 /// - `ResourceLimit`: risultato oltre `limits.max_string_bytes`;
 /// - `Schema`: colonna assente o non `Utf8`;
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
@@ -69,15 +97,12 @@ fn default_fill() -> String {
 pub fn string_pad(batch: &RecordBatch, config: &StringPad, limits: &Limits) -> Result<RecordBatch> {
     let output_name = config.output_column.as_deref().unwrap_or(&config.column);
     validate_output_name(output_name)?;
-    let mut fill = config.fill_char.chars();
-    let fill_char = fill
+    config.verifica_parametri()?;
+    let fill_char = config
+        .fill_char
+        .chars()
         .next()
-        .ok_or_else(|| PlenoraError::InvalidPlan("fill_char e' vuoto".into()))?;
-    if fill.next().is_some() {
-        return Err(PlenoraError::InvalidPlan(
-            "fill_char deve contenere un solo carattere Unicode".into(),
-        ));
-    }
+        .ok_or_else(|| PlenoraError::Internal("fill_char verificato e vuoto".into()))?;
     let input = utf8_column(batch, &config.column)?;
     let mut output = Vec::with_capacity(batch.num_rows());
     for row in 0..batch.num_rows() {
@@ -332,6 +357,9 @@ pub fn string_extract(
                         }
                     }
                     if matched {
+                        // I match uniti con la virgola possono superare la
+                        // cella (match vuoti): testo prodotto.
+                        crate::verifica_testo_prodotto("string_extract", scratch.len(), limits)?;
                         builder.append_value(&scratch);
                     } else {
                         builder.append_null();

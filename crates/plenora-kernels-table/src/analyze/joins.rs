@@ -11,7 +11,7 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
-    check_name_list, check_output_name, clone_fields, contract_error, field_of, finish,
+    check_name_list, check_output_name, clone_fields, con_op, contract_error, field_of, finish,
     merge_geometry, merge_schema_metadata, merge_schema_metadata_many, propagate_geometry,
     require_scalar_strings, require_utf8, sorted_only, typed,
 };
@@ -374,17 +374,9 @@ pub(in crate::analyze) fn analyze_asof_join(
     let config: joins::AsOfJoin = typed(op, config)?;
     let (left, right) = (&inputs[0], &inputs[1]);
     let _ = fields;
-    if config.left_by.len() != config.right_by.len() {
-        return contract_error(op, "left_by/right_by di cardinalita' diversa");
-    }
+    con_op(op, config.verifica_parametri())?;
     check_name_list(op, &config.left_by, limits.max_columns, "left_by", true)?;
     check_name_list(op, &config.right_by, limits.max_columns, "right_by", true)?;
-    if config
-        .tolerance
-        .is_some_and(|tolerance| !tolerance.is_finite() || tolerance < 0.0)
-    {
-        return contract_error(op, "tolerance deve essere finita e >= 0");
-    }
     let left_on = field_of(op, left, &config.left_on)?;
     let right_on = field_of(op, right, &config.right_on)?;
     if left_on.data_type() != right_on.data_type()
@@ -435,7 +427,8 @@ pub(in crate::analyze) fn analyze_concat(
     config: &Value,
     fields: &mut FieldAllocator,
 ) -> Result<DataContract> {
-    let _config: joins::Concat = typed(op, config)?;
+    let config: joins::Concat = typed(op, config)?;
+    con_op(op, config.verifica_parametri())?;
     let _ = fields;
     let first = &inputs[0];
     for other in &inputs[1..] {

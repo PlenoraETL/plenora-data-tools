@@ -11,8 +11,8 @@ una nuova.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna leggibile come testo | colonna da tradurre |
-| `mapping` | oggetto | obbligatorio | chiavi stringa, valori JSON qualsiasi; al più `max_rows` voci | corrispondenze testo della cella → valore |
-| `default` | JSON | `null` | qualsiasi | valore delle celle non nulle senza voce; `null` le lascia invariate |
+| `mapping` | oggetto | obbligatorio | chiavi stringa, valori JSON qualsiasi il cui testo è al più `max_string_bytes` byte; al più `max_rows` voci | corrispondenze testo della cella → valore |
+| `default` | JSON | `null` | qualsiasi, con testo al più `max_string_bytes` byte | valore delle celle non nulle senza voce; `null` le lascia invariate |
 | `output_column` | stringa | `column` | nome valido (non vuoto, al più 1024 byte) | colonna d'uscita; assente, sovrascrive `column` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
@@ -49,6 +49,8 @@ In validazione, `InvalidPlan`:
 
 - `column` assente o non leggibile come testo;
 - `mapping` con più di `max_rows` voci;
+- il testo di un valore di `mapping` o di `default` oltre
+  `max_string_bytes` byte;
 - `output_column` vuoto o oltre 1024 byte;
 - config con campi sconosciuti.
 

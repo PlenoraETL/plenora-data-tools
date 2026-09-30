@@ -53,6 +53,7 @@ use plenora_core::contract::DataContract;
 use plenora_core::limits::expansion_exceeded;
 use plenora_core::memoria::{byte_dati, byte_vivi};
 use plenora_core::{PlenoraError, Result};
+use plenora_kernels_table::EffettiKernel;
 
 use crate::budget::{riserva_spill, Costo, Ingresso};
 use crate::costi_operazioni::BUDGET_SPILL_MISURATO;
@@ -121,6 +122,12 @@ pub struct ReportPasso {
     pub liberati: Vec<String>,
     /// Byte vivi di tutte le tabelle residenti dopo il passo e i rilasci.
     pub byte_vivi: u64,
+    /// Righe in cui una divisione di `table.formula` o `table.expression`
+    /// ha trovato un divisore zero e, con `on_division_by_zero = "null"`
+    /// (il default), ha dato null: un conteggio, mai i valori. Zero per le
+    /// altre operazioni; con `"error"` un passo riuscito ne ha zero (una
+    /// divisione per zero lo fa fallire con la diagnostica per riga).
+    pub righe_divisione_per_zero: u64,
 }
 
 /// Ultimo uso degli output del piano: nessun passo li libera.
@@ -269,6 +276,11 @@ fn check_edge_counts(limiti: &plenora_core::limits::Limits, righe: u64) -> Resul
 /// Fattore di espansione (porting di `check_expansion` e
 /// `check_join_expansion`): base le righe di input per le unarie, il vincolo
 /// del catalogo per le binarie; le operazioni esenti non si controllano.
+///
+/// Un passo con un'espansione fissata dalla config (`melt`,
+/// `PassoValidato::moltiplicatore_dichiarato`) non espande i dati: al posto
+/// del fattore si verifica che l'uscita abbia esattamente le righe
+/// d'ingresso per quel fattore, e una differenza e' `Internal`.
 fn check_expansion(
     passo: &PassoValidato,
     limiti: &plenora_core::limits::Limits,
@@ -276,6 +288,19 @@ fn check_expansion(
     righe_out: u64,
 ) -> Result<()> {
     let descrittore = passo.descrittore;
+    if let Some(fattore) = passo.moltiplicatore_dichiarato {
+        let attese = match righe_in {
+            [righe] => righe.checked_mul(fattore),
+            _ => None,
+        };
+        return if attese == Some(righe_out) {
+            Ok(())
+        } else {
+            Err(PlenoraError::Internal(
+                "righe d'uscita diverse da quelle fissate dalla config".to_owned(),
+            ))
+        };
+    }
     if descrittore.expansion_factor_exempt {
         return Ok(());
     }
@@ -317,17 +342,18 @@ fn esegui_kernel(
     limiti: &plenora_kernels_table::Limits,
     variante: Variante,
     contratto: &DataContract,
-) -> Result<RecordBatch> {
+) -> Result<(RecordBatch, EffettiKernel)> {
     #[cfg(test)]
     CHIAMATE_KERNEL.with(|chiamate| chiamate.set(chiamate.get() + 1));
+    let nessuno = |uscita| (uscita, EffettiKernel::default());
     let chiamata = || match (&passo.kernel, ingressi) {
-        (KernelPasso::Geo(geo), _) => geo.esegui(ingressi, contratto),
+        (KernelPasso::Geo(geo), _) => geo.esegui(ingressi, contratto).map(nessuno),
         (KernelPasso::Tabellare(preparato), [unico]) => {
-            preparato.esegui_unario(unico, limiti, variante)
+            preparato.esegui_unario_con_effetti(unico, limiti, variante)
         }
-        (KernelPasso::Tabellare(preparato), [sinistra, destra]) => {
-            preparato.esegui_binario(sinistra, destra, limiti, variante)
-        }
+        (KernelPasso::Tabellare(preparato), [sinistra, destra]) => preparato
+            .esegui_binario(sinistra, destra, limiti, variante)
+            .map(nessuno),
         (KernelPasso::Tabellare(_), _) => Err(PlenoraError::Internal(
             "numero di input diverso da quello validato".to_owned(),
         )),
@@ -712,20 +738,21 @@ impl PipelineValidata {
                 ..self.limiti_kernel.clone()
             };
 
-            let uscita = esegui_kernel(passo, &ingressi, &limiti_kernel, variante, contratto)
-                .map_err(|errore| diagnostica_nella_base(errore, passo))
-                .and_then(|uscita| {
-                    validate_batch(&uscita, &self.limiti_kernel)?;
-                    let righe_out = righe(&uscita)?;
-                    // Come a `190c493` (`blocking.rs`), l'arco d'uscita del
-                    // piano ha solo `max_output_rows`, controllato alla fine.
-                    if !self.outputs.contains(&passo.out) {
-                        check_edge_counts(&self.limiti, righe_out)?;
-                    }
-                    check_expansion(passo, &self.limiti, &righe_in, righe_out)?;
-                    conforma(&uscita, contratto)
-                })
-                .map_err(nel)?;
+            let (uscita, effetti) =
+                esegui_kernel(passo, &ingressi, &limiti_kernel, variante, contratto)
+                    .map_err(|errore| diagnostica_nella_base(errore, passo))
+                    .and_then(|(uscita, effetti)| {
+                        validate_batch(&uscita, &self.limiti_kernel)?;
+                        let righe_out = righe(&uscita)?;
+                        // Come a `190c493` (`blocking.rs`), l'arco d'uscita del
+                        // piano ha solo `max_output_rows`, controllato alla fine.
+                        if !self.outputs.contains(&passo.out) {
+                            check_edge_counts(&self.limiti, righe_out)?;
+                        }
+                        check_expansion(passo, &self.limiti, &righe_in, righe_out)?;
+                        conforma(&uscita, contratto).map(|uscita| (uscita, effetti))
+                    })
+                    .map_err(nel)?;
             let righe_out = righe(&uscita)?;
 
             let con_uscita = byte_vivi(vivi.values().chain(std::iter::once(&uscita)))?;
@@ -762,6 +789,7 @@ impl PipelineValidata {
                 byte_vivi_con_uscita: con_uscita,
                 liberati,
                 byte_vivi: byte_vivi(vivi.values())?,
+                righe_divisione_per_zero: effetti.righe_divisione_per_zero,
             });
         }
 

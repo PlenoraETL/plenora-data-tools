@@ -11,12 +11,12 @@ nomi IANA (`Europe/Rome`, `UTC`, `America/New_York`).
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna leggibile come testo | colonna da leggere |
 | `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura |
-| `output_format` | stringa | `"%Y-%m-%d %H:%M:%S"` | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di scrittura; ammette `%z`, `%:z`, `%Z`, `%+` |
+| `output_format` | stringa | `"%Y-%m-%d %H:%M:%S"` | formato `chrono` non vuoto, al più `max_string_bytes` byte, che scrive al più `max_string_bytes` byte per valore | formato di scrittura; ammette `%z`, `%:z`, `%Z`, `%+` |
 | `source_timezone` | stringa | obbligatorio | nome IANA noto a `chrono-tz` | fuso dei valori letti |
 | `target_timezone` | stringa | obbligatorio | nome IANA noto a `chrono-tz` | fuso dei valori scritti |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
-| `invalid` | stringa | `null` | `null`, `error` | accettato per compatibilità, senza effetto |
-| `ambiguous` | stringa | `error` | `error`, `null`, `earliest`, `latest` | accettato per compatibilità, senza effetto |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
+| `ambiguous` | stringa | assente | nessuno: scritto si rifiuta | un'ora locale ambigua o inesistente rifiuta sempre la riga, nessun valore avrebbe effetto |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -29,7 +29,13 @@ campi orari legge una data e la pone a mezzanotte. Un eventuale offset nel
 testo letto non conta: il valore è sempre ora locale di
 `source_timezone`. Un'ora locale che nel fuso di partenza si ripete (il
 ritorno all'ora solare) o non esiste (il passaggio all'ora legale) rifiuta
-sempre la riga: `ambiguous` e `invalid` non scelgono un'alternativa.
+sempre la riga, come un valore non leggibile: per questo `ambiguous` e
+`invalid` non si accettano.
+
+Il testo scritto da `output_format` non può superare `max_string_bytes`
+byte per valore. Il limite si controlla in validazione con una stima
+prudente: il testo letterale conta per la sua lunghezza, ogni campo
+`strftime` per 64 byte.
 
 ### Schema
 
@@ -54,8 +60,10 @@ In validazione, `InvalidPlan`:
 - `source_timezone` o `target_timezone` non riconosciuti;
 - un formato vuoto, oltre `max_string_bytes`, con un campo non
   riconosciuto, o che non si sa scrivere per un valore con fuso;
+- `output_format` la cui stima supera `max_string_bytes` byte per valore;
 - `output_column` non valido;
-- config con campi sconosciuti, `invalid` o `ambiguous` fuori elenco.
+- `invalid` o `ambiguous` scritti, con qualunque valore;
+- config con campi sconosciuti.
 
 In esecuzione:
 
@@ -72,9 +80,9 @@ In esecuzione:
 
 Le regole dei fusi sono quelle della banca dati IANA inclusa in
 `chrono-tz` 0.10.4: un cambio di regole successivo non si vede finché la
-dipendenza non si aggiorna. `ambiguous` e `invalid` non hanno effetto e non
-si rifiutano
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
+dipendenza non si aggiorna. La stima di `output_format` è prudente: un
+formato che scriverebbe davvero meno di `max_string_bytes` byte si può
+rifiutare lo stesso.
 
 ### Complessità
 

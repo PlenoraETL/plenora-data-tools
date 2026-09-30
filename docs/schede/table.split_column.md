@@ -11,14 +11,15 @@ colonne senza parte ricevono null.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna `utf8` dell'ingresso | testo da dividere |
-| `delimiter` | stringa | `","` | non vuota, al più `max_string_bytes` byte | separatore, testo letterale (non regex) |
+| `delimiter` | stringa | `","` | non vuota, al più `max_string_bytes` byte; solo con almeno due colonne d'uscita | separatore, testo letterale (non regex) |
 | `new_columns` | lista di stringhe | obbligatorio | da 1 a 256 nomi, senza ripetizioni, ciascuno non vuoto e al più 1024 byte | colonne d'uscita, nell'ordine delle parti |
-| `max_splits` | intero | `-1` | qualunque intero a 64 bit | se positivo, al più `max_splits` divisioni, cioè `max_splits + 1` parti |
+| `max_splits` | intero | assente | da 1 a `len(new_columns) - 2` | al più `max_splits` divisioni, cioè `max_splits + 1` parti |
 
-Con `max_splits` non positivo (default) le parti sono al più
-`len(new_columns)`. Con `max_splits` positivo sono al più
-`min(max_splits + 1, len(new_columns))`: con tre colonne e `max_splits = 1`,
-`"a,b,c"` dà `"a"`, `"b,c"`, null.
+Senza `max_splits` le parti sono al più `len(new_columns)`. Con
+`max_splits` sono al più `max_splits + 1`, e le colonne in coda restano
+null: con tre colonne e `max_splits = 1`, `"a,b,c"` dà `"a"`, `"b,c"`,
+null. `max_splits` ha effetto solo se riduce le parti: un valore non
+positivo, o almeno `len(new_columns) - 1`, si rifiuta.
 
 ### Schema
 
@@ -44,7 +45,9 @@ Righe nell'ordine d'ingresso.
 In validazione, `InvalidPlan`:
 
 - `column` assente o non `utf8`;
-- `delimiter` vuoto o oltre `max_string_bytes`;
+- `delimiter` vuoto o oltre `max_string_bytes`, o scritto con una sola
+  colonna in `new_columns`;
+- `max_splits` non positivo o almeno `len(new_columns) - 1`;
 - `new_columns` assente, vuota, con più di 256 nomi, con un nome ripetuto,
   vuoto, di soli spazi o oltre 1024 byte;
 - config con campi sconosciuti.

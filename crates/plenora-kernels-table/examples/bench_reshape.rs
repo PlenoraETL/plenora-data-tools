@@ -214,7 +214,7 @@ fn main() {
         value_columns: (0..8).map(|column| format!("v{column}")).collect(),
         var_name: "variable".into(),
         value_name: "value".into(),
-        type_policy: plenora_kernels_table::reshape::HeterogeneousTypePolicy::Reject,
+        type_policy: None,
     };
     run_scenario("melt_wide_to_long_8f64", rows, repetitions, || {
         melt(&melt_input, &melt_config, &limits)
@@ -227,7 +227,7 @@ fn main() {
         value_columns: vec!["n".into(), "t".into(), "f".into()],
         var_name: "variable".into(),
         value_name: "value".into(),
-        type_policy: plenora_kernels_table::reshape::HeterogeneousTypePolicy::String,
+        type_policy: Some(plenora_kernels_table::reshape::HeterogeneousTypePolicy::String),
     };
     run_scenario(
         "melt_heterogeneous_string_policy",
