@@ -24,11 +24,14 @@ Il tipo d'uscita dipende solo dalla config. Ogni `result` e il
 booleano come testo JSON, `null` come testo vuoto):
 
 - se ogni testo è vuoto o, sostituite le virgole con punti, un numero per
-  il parse `f64` di Rust (esponente, `NaN`, `inf` ammessi), l'uscita è
-  `float64` nullable: il testo vuoto dà null, gli altri il numero (`"1,5"`
-  dà 1,5, `"1e3"` dà 1000);
+  il parse `f64` di Rust (esponente ammesso), l'uscita è `float64`
+  nullable: il testo vuoto dà null, gli altri il numero (`"1,5"` dà 1,5,
+  `"1e3"` dà 1000);
 - altrimenti l'uscita è `utf8` non nullable e ogni cella è il testo del
   valore scelto: `null` dà `""`, `true` dà `"true"`, `2` dà `"2"`.
+
+Un `result` o un `default_value` che si legge come numero non finito
+(`"NaN"`, `"inf"`, `"1e999"`) si rifiuta, in validazione e nel kernel.
 
 Una cella nulla non soddisfa nessun operatore tranne `isnull`. Con
 `isnull` e `notnull` il `value` non avrebbe effetto: scritto, anche
@@ -63,7 +66,7 @@ In validazione, `InvalidPlan`:
   `value` di `table.filter`, compreso `value` scritto (anche `null`) con
   `isnull` o `notnull`;
 - il testo di un `result` o del `default_value` oltre `max_string_bytes`
-  byte;
+  byte, o che si legge come numero non finito;
 - `output_column` vuoto, di soli spazi o oltre 1024 byte;
 - config con campi sconosciuti.
 

@@ -13,7 +13,7 @@ lati non cambiano l'hash.
 | `output_column` | stringa | `md5_hash` | nome valido | colonna d'uscita |
 | `normalize` | booleano | `true` | `true`, `false` | toglie gli spazi ai lati e porta in minuscolo ogni valore |
 | `null_policy` | stringa | `empty` | `empty`, `literal`, `error` | come entra una cella nulla |
-| `null_literal` | stringa | `"<null>"` | al più `max_string_bytes` byte; solo con `null_policy = "literal"` | testo di una cella nulla con `literal` |
+| `null_literal` | stringa | `"<null>"` | al più `max_string_bytes` byte; solo con `null_policy = "literal"`; `null` non ammesso | testo di una cella nulla con `literal` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -51,7 +51,8 @@ In validazione, `InvalidPlan`:
 
 - `columns` vuoto, con ripetizioni o con più di `max_columns` colonne;
 - una colonna assente o non leggibile come testo;
-- `output_column` non valido; `null_literal` oltre `max_string_bytes`;
+- `output_column` non valido; `null_literal` oltre `max_string_bytes`, o
+  `null` esplicito (il parametro si omette);
 - `null_literal` scritto con una `null_policy` diversa da `literal`: non
   avrebbe effetto;
 - config con campi sconosciuti o `null_policy` fuori elenco.

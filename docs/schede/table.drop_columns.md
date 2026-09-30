@@ -8,10 +8,11 @@ l'uscita condivide gli array dell'ingresso.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `columns` | lista di stringhe | obbligatorio | da 1 a 4096 colonne dell'ingresso, nomi non vuoti (non di soli spazi), al più 1024 byte ciascuno, senza ripetizioni | colonne da togliere |
+| `columns` | lista di stringhe | obbligatorio | da 1 a 4096 nomi, non vuoti (non di soli spazi), al più 1024 byte ciascuno, senza ripetizioni | colonne da togliere |
 
-Una lista vuota, o un nome che non è una colonna dell'ingresso, non
-avrebbe effetto e si rifiuta.
+Una lista vuota si rifiuta. Un nome che non è una colonna dell'ingresso
+si accetta e non toglie niente: dipende dall'ingresso, e lo stesso piano
+gira su tabelle diverse.
 
 ### Schema
 
@@ -21,7 +22,8 @@ colonne tolte sono tutte, l'uscita ha zero colonne e lo stesso numero di
 righe dell'ingresso.
 
 Contratto: il conteggio delle righe resta; l'ordinamento dichiarato
-(`sorted_by`) cade, anche se la colonna tolta non era una chiave. Se si
+(`sorted_by`) cade se almeno una colonna è stata tolta davvero, anche se
+non era una chiave. Se si
 toglie la colonna geometrica il contratto diventa tabellare.
 
 ### Righe
@@ -38,7 +40,6 @@ In validazione, `InvalidPlan`:
 
 - `columns` assente o vuota, con un nome ripetuto, vuoto, di soli spazi o
   oltre 1024 byte, o con più di 4096 nomi;
-- un nome che non è una colonna dell'ingresso;
 - config con campi sconosciuti.
 
 In esecuzione: nessun errore che dipenda dai dati.
@@ -56,7 +57,7 @@ memoria per i dati (array condivisi).
 
 ```json
 {
-  "config": {"columns": ["note"]},
+  "config": {"columns": ["note", "assente"]},
   "ingressi": [
     {"nome": "ordini", "colonne": [
       {"nome": "id", "tipo": "int64", "valori": [1, 2]},

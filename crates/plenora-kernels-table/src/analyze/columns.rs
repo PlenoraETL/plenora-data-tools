@@ -29,7 +29,7 @@ pub(in crate::analyze) fn analyze_drop_columns(
     let input = &inputs[0];
     let _ = fields;
     check_name_list(op, &config.columns, limits.max_columns, "columns", true)?;
-    con_op(op, config.verifica_parametri(&input.schema))?;
+    con_op(op, config.verifica_parametri())?;
     let to_drop: HashSet<&str> = config.columns.iter().map(String::as_str).collect();
     let kept: Vec<Field> = clone_fields(input)
         .into_iter()
@@ -81,7 +81,7 @@ pub(in crate::analyze) fn analyze_rename(
     let new: Vec<String> = config.renames.iter().map(|p| p.new_name.clone()).collect();
     check_name_list(op, &old, limits.max_columns, "rename origine", true)?;
     check_name_list(op, &new, limits.max_columns, "rename destinazione", true)?;
-    con_op(op, config.verifica_parametri(&input.schema))?;
+    con_op(op, config.verifica_parametri())?;
     let renames: HashMap<&str, &str> = config
         .renames
         .iter()
@@ -138,7 +138,7 @@ pub(in crate::analyze) fn analyze_reorder_columns(
         }
         field_of(op, input, name)?;
     }
-    con_op(op, config.verifica_parametri(&input.schema))?;
+    con_op(op, config.verifica_parametri())?;
     let mut ordered: Vec<Field> = config
         .columns
         .iter()
@@ -288,7 +288,6 @@ pub(in crate::analyze) fn analyze_align_schema(
 ) -> Result<DataContract> {
     let config: columns::AlignSchema = typed(op, config)?;
     let input = &inputs[0];
-    con_op(op, config.verifica_parametri(&input.schema))?;
     if config.columns.is_empty() {
         return contract_error(op, "columns vuoto");
     }

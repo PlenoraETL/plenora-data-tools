@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use chrono::format::{Item, Numeric, Parsed, StrftimeItems};
+use chrono::format::{Fixed, Item, Numeric, Parsed, StrftimeItems};
 use chrono::{
     DateTime, Datelike, LocalResult, Months, NaiveDate, NaiveDateTime, TimeDelta, TimeZone,
 };
@@ -41,11 +41,12 @@ pub(crate) fn compile_items(format: &str) -> Vec<Item<'_>> {
     StrftimeItems::new(format).collect()
 }
 
-/// Byte scritti al massimo da un valore formattato con `format`, per eccesso.
+/// Byte scritti al massimo da un valore formattato con `format`.
 ///
-/// I letterali contano per la loro lunghezza, ogni campo per
-/// [`BYTE_PER_CAMPO`] (il campo piu' largo di chrono, `%+` con i
-/// nanosecondi e l'offset, sta sotto i 40 byte; un nome di fuso sotto i 64).
+/// I letterali contano per la loro lunghezza, ogni campo per la sua
+/// larghezza massima ([`byte_massimi_campo`]): un limite superiore esatto
+/// per campo, non una stima, quindi non rifiuta un formato che non puo'
+/// superarlo (`%Y%m` scrive al piu' 9 byte).
 ///
 /// Un valore formattato non dipende dal testo della cella se non per la
 /// larghezza dei campi, quindi questo limite vale per ogni riga: l'analisi
@@ -57,13 +58,69 @@ pub fn byte_massimi_scritti(format: &str) -> usize {
         let byte = match item {
             Item::Literal(testo) | Item::Space(testo) => testo.len(),
             Item::OwnedLiteral(testo) | Item::OwnedSpace(testo) => testo.len(),
-            _ => BYTE_PER_CAMPO,
+            Item::Numeric(campo, _) => byte_massimi_numerico(&campo),
+            Item::Fixed(campo) => byte_massimi_campo(&campo),
+            Item::Error => 0,
         };
         totale.saturating_add(byte)
     })
 }
 
-/// Tetto per eccesso dei byte di un campo strftime ([`byte_massimi_scritti`]).
+/// Larghezza massima di un campo numerico di chrono. Gli anni vanno da
+/// -262143 a +262143 (`NaiveDate`), con il segno fuori da 0..=9999; il
+/// riempimento (`Pad`) non supera mai queste larghezze.
+const fn byte_massimi_numerico(campo: &Numeric) -> usize {
+    match campo {
+        Numeric::Year | Numeric::IsoYear => 7,
+        Numeric::YearDiv100 | Numeric::IsoYearDiv100 => 5,
+        Numeric::Quarter | Numeric::NumDaysFromSun | Numeric::WeekdayFromMon => 1,
+        Numeric::Ordinal => 3,
+        Numeric::Nanosecond => 9,
+        // Secondi dall'epoca di un `NaiveDateTime`: al piu' 14 cifre e il
+        // segno.
+        Numeric::Timestamp => 20,
+        Numeric::YearMod100
+        | Numeric::IsoYearMod100
+        | Numeric::Month
+        | Numeric::Day
+        | Numeric::WeekFromSun
+        | Numeric::WeekFromMon
+        | Numeric::IsoWeek
+        | Numeric::Hour
+        | Numeric::Hour12
+        | Numeric::Minute
+        | Numeric::Second => 2,
+        // Varianti interne o future: per eccesso.
+        _ => BYTE_PER_CAMPO,
+    }
+}
+
+/// Larghezza massima di un campo testuale di chrono.
+const fn byte_massimi_campo(campo: &Fixed) -> usize {
+    match campo {
+        Fixed::ShortMonthName | Fixed::ShortWeekdayName => 3,
+        // `September`, `Wednesday`; gli offset al piu' `+05:30:00`.
+        Fixed::LongMonthName
+        | Fixed::LongWeekdayName
+        | Fixed::TimezoneOffset
+        | Fixed::TimezoneOffsetColon
+        | Fixed::TimezoneOffsetDoubleColon
+        | Fixed::TimezoneOffsetTripleColon
+        | Fixed::TimezoneOffsetColonZ
+        | Fixed::TimezoneOffsetZ => 9,
+        Fixed::LowerAmPm | Fixed::UpperAmPm => 2,
+        Fixed::Nanosecond | Fixed::Nanosecond9 => 10,
+        Fixed::Nanosecond3 => 4,
+        Fixed::Nanosecond6 => 7,
+        // Abbreviazioni dei fusi di chrono-tz (`CEST`, `+0530`): per eccesso.
+        Fixed::TimezoneName => 32,
+        Fixed::RFC2822 | Fixed::RFC3339 => 48,
+        _ => BYTE_PER_CAMPO,
+    }
+}
+
+/// Larghezza di un campo che chrono non elenca (varianti interne o nuove):
+/// per eccesso.
 pub const BYTE_PER_CAMPO: usize = 64;
 
 /// Parsing con item precompilati, semantica identica a `parse`: prima il
@@ -239,7 +296,7 @@ pub struct DateFormat {
     /// Non ammesso: un valore non leggibile rifiuta sempre la riga, quindi
     /// nessuna politica avrebbe effetto. Scritto si rifiuta
     /// ([`verifica_politiche`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub invalid: Option<InvalidDatePolicy>,
 }
 
@@ -392,7 +449,7 @@ pub struct DateAdd {
     /// Non ammesso: un valore non leggibile rifiuta sempre la riga, quindi
     /// nessuna politica avrebbe effetto. Scritto si rifiuta
     /// ([`verifica_politiche`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub invalid: Option<InvalidDatePolicy>,
 }
 
@@ -596,7 +653,7 @@ pub struct DateDiff {
     /// Non ammesso: un valore non leggibile rifiuta sempre la riga, quindi
     /// nessuna politica avrebbe effetto. Scritto si rifiuta
     /// ([`verifica_politiche`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub invalid: Option<InvalidDatePolicy>,
 }
 
@@ -769,10 +826,10 @@ pub struct TimezoneConvert {
     /// Non ammesso: un valore non leggibile rifiuta sempre la riga, quindi
     /// nessuna politica avrebbe effetto. Scritto si rifiuta
     /// ([`verifica_politiche`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub invalid: Option<InvalidDatePolicy>,
     /// Non ammesso, come `invalid` ([`verifica_politiche`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub ambiguous: Option<AmbiguousPolicy>,
 }
 
@@ -904,6 +961,54 @@ mod tests {
 
     use super::*;
     use crate::test_support::{assert_same_outcome as assert_equivalent, single_column_batch};
+
+    /// Il limite di `byte_massimi_scritti` non rifiuta formati ragionevoli
+    /// (`%Y%m` al piu' 9 byte) e copre i valori estremi scritti davvero.
+    #[test]
+    fn byte_massimi_scritti_e_un_limite_superiore_esatto_per_campo() {
+        assert_eq!(byte_massimi_scritti("%Y%m"), 9);
+        assert_eq!(byte_massimi_scritti("%Y-%m-%d"), 13);
+        let estremi = [
+            NaiveDateTime::MIN,
+            NaiveDateTime::MAX,
+            NaiveDate::from_ymd_opt(2024, 9, 25)
+                .and_then(|data| data.and_hms_nano_opt(23, 59, 59, 999_999_999))
+                .expect("data"),
+        ];
+        let fuso: Tz = "Asia/Kolkata".parse().expect("fuso");
+        for formato in [
+            "%Y%m",
+            "%Y-%m-%d %H:%M:%S",
+            "%C%y %G-W%V-%u %j %s",
+            "%A %B %e %p %I %.f %.3f",
+            "%a %b %Z %z %:z",
+            "%+",
+            "%c",
+            "%x %X %D %T %R %r",
+        ] {
+            let limite = byte_massimi_scritti(formato);
+            for valore in estremi {
+                let testo = fuso.from_utc_datetime(&valore).format(formato).to_string();
+                assert!(
+                    testo.len() <= limite,
+                    "{formato}: {} > {limite}",
+                    testo.len()
+                );
+                let testo = valore
+                    .format(
+                        formato
+                            .replace("%Z", "")
+                            .replace("%z", "")
+                            .replace("%:z", "")
+                            .replace("%+", "")
+                            .replace("%c", "")
+                            .as_str(),
+                    )
+                    .to_string();
+                assert!(testo.len() <= limite, "{formato} senza fuso");
+            }
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Percorsi generici, indipendenti dai fast path: sono l'oracolo della

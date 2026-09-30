@@ -9,12 +9,13 @@ colonne non nominate restano come sono. I dati non si copiano.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `renames` | lista di oggetti | obbligatorio | da 1 a 4096 coppie | rinomine da applicare |
-| `renames[].old_name` | stringa | obbligatorio | colonna dell'ingresso, nome non vuoto, al più 1024 byte, mai ripetuto fra le coppie | colonna da rinominare |
+| `renames[].old_name` | stringa | obbligatorio | nome non vuoto, al più 1024 byte, mai ripetuto fra le coppie | colonna da rinominare |
 | `renames[].new_name` | stringa | obbligatorio | nome non vuoto, al più 1024 byte, diverso da `old_name`, mai ripetuto fra le coppie | nuovo nome |
 
-Ogni coppia deve avere effetto: una lista vuota, un `old_name` che non è
-una colonna dell'ingresso o una coppia con `old_name` uguale a `new_name`
-si rifiutano. I nomi dell'uscita devono essere tutti diversi: un
+Una lista vuota o una coppia con `old_name` uguale a `new_name` si
+rifiutano. Un `old_name` che non è una colonna dell'ingresso si accetta e
+non rinomina niente: dipende dall'ingresso, e lo stesso piano gira su
+tabelle diverse. I nomi dell'uscita devono essere tutti diversi: un
 `new_name` uguale al nome di una colonna che resta com'è si rifiuta.
 
 ### Schema
@@ -39,7 +40,7 @@ Righe e colonne nell'ordine d'ingresso.
 In validazione, `InvalidPlan`:
 
 - `renames` vuota;
-- un `old_name` assente dall'ingresso, o uguale al suo `new_name`;
+- un `old_name` uguale al suo `new_name`;
 - lo stesso `old_name` in due coppie, o lo stesso `new_name` in due coppie;
 - un nome vuoto, di soli spazi o oltre 1024 byte (in entrambe le
   posizioni), o più di 4096 coppie;

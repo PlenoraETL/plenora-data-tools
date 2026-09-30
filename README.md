@@ -1032,30 +1032,37 @@ su funzioni che non li usano; `chars_start`, `chars_end` e `mask_char` di
 `concat` con ogni valore; `n` di `sample` con `fraction`, `random_state`
 senza strati su un campione sempre vuoto; `null_literal` di `md5_hash` e
 `sha256_hash` fuori da `null_policy=literal`; `invalid` e `ambiguous`
-delle operazioni sulle date con ogni valore; `default` di `align_schema`
-su una colonna che esiste, `keep_extra` senza colonne non dichiarate;
-`value` di `filter` e `conditional` con `isnull`/`notnull`; `errors` di
-`type_cast` su `str`, `binary_utf8`, `dictionary_utf8`; `separator` di
-`concat_columns` con una colonna e di `table_diff` con al più una colonna
-confrontata; `delimiter` di `split_column` con una colonna d'uscita e
-`max_splits` che non riduce le parti; `width` 0 di `string_pad`; `n` 0 di
-`top_n` e `offset` di `limit` con `n` 0; `min_rows` 0 di
-`assert_cardinality`; `tolerance` 0 di `asof_join` con `allow_exact=false`;
-`type_policy` di `melt` e `transpose` su colonne omogenee; `alphabetical` di
-`reorder_columns` con al più una colonna restante; `on_division_by_zero`
-di `formula` ed `expression` senza divisioni; i nomi d'uscita che farebbero
-sparire una colonna scritta prima: aggregazioni con lo stesso nome o con il
-nome di una chiave di `aggregate`, statistiche e parti ripetute di
-`statistics` e `date_extract`, due voci di `mask_data` sulla stessa colonna
-senza `overwrite`; `drop_columns` e `rename` su colonne assenti, `rename` di
-una colonna su se stessa, una voce vuota nell'`index_col` di `pivot`; un
-campo sconosciuto dentro un nodo di `expression`). Un parametro
-assente prende il suo default; uno scritto e senza effetto si rifiuta,
-nell'analisi e nel kernel, con la stessa funzione (`verifica_parametri`,
-`verifica_offset`, `verifica_ascending`, `verifica_gruppi_con_nome`,
-`verifica_politiche`, `verifica_valore`, `verifica_null_literal`,
-`verifica_type_policy`, `verifica_separatore`, `verifica_colonne`,
-`verifica_parti`, `nomi_uscita`); il censimento di ogni campo di ogni
+delle operazioni sulle date con ogni valore; `value` di `filter` e
+`conditional` con `isnull`/`notnull`; `errors` di `type_cast` su `str`,
+`binary_utf8`, `dictionary_utf8`; `separator` di `concat_columns` con una
+colonna e di `table_diff` con una sola colonna in `compare_columns`;
+`delimiter` di `split_column` con una colonna d'uscita e `max_splits` che
+non riduce le parti; `width` 0 di `string_pad`; `n` 0 di `top_n` e
+`offset` di `limit` con `n` 0; `min_rows` 0 di `assert_cardinality`;
+`tolerance` 0 di `asof_join` con `allow_exact=false`; `columns` vuoto di
+`drop_columns`, `renames` vuoto e `rename` di una colonna su se stessa,
+`reorder_columns` che non sposta niente; `on_division_by_zero` di `formula`
+ed `expression` senza divisioni; i nomi d'uscita che farebbero sparire una
+colonna scritta prima: aggregazioni con lo stesso nome o con il nome di una
+chiave di `aggregate`, statistiche e parti ripetute di `statistics` e
+`date_extract`, due voci di `mask_data` sulla stessa colonna senza
+`overwrite`; una voce vuota nell'`index_col` di `pivot`; un campo
+sconosciuto dentro un nodo di `expression`; un `null` esplicito per un
+parametro facoltativo, che si omette invece di scriverlo `null`). Si
+rifiuta solo ciò che la config da sola rende senza effetto con ogni
+ingresso: un parametro che non ha effetto soltanto su certe tabelle si
+accetta, perché lo stesso piano deve girare su tabelle diverse (`default`
+di `align_schema` su una colonna che esiste, `keep_extra` senza colonne non
+dichiarate, `drop_columns` e `rename` di colonne assenti, `alphabetical`
+con al più una colonna restante, `type_policy` su colonne omogenee,
+`separator` di `table_diff` con le colonne ricavate dagli schemi). Un
+parametro assente prende il suo default; uno scritto e senza effetto si
+rifiuta, nell'analisi e nel kernel, con la stessa funzione
+(`verifica_parametri`, `verifica_offset`, `verifica_ascending`,
+`verifica_gruppi_con_nome`, `verifica_politiche`, `verifica_valore`,
+`verifica_null_literal`, `verifica_separatore`, `verifica_colonne`,
+`verifica_parti`, `verifica_risultati`, `nomi_uscita`; il `null` lo rifiuta
+la deserializzazione, `mai_null`); il censimento di ogni campo di ogni
 config tabellare è in `crates/plenora-pipeline/tests/censimento_parametri.rs`
 e la parità analisi–kernel di ogni regola in
 `crates/plenora-pipeline/tests/parametri_senza_effetto.rs`. Le
@@ -1069,7 +1076,8 @@ omonimi, `rename` con una sorgente ripetuta, `explode` con
 intercalare dell'ultimo giorno compreso (`dates::verifica_amount`); nomi
 delle regole di `validate_rules` oltre 1024 byte; in `expression`, arietà
 delle funzioni, pattern letterali di `regex_replace` (sintassi e
-`max_regex_bytes`), testi letterali oltre `max_string_bytes`, divisori
+`max_regex_bytes`), testi letterali oltre `max_string_bytes` (anche nelle
+liste di `in`), divisori
 letterali zero e indici letterali negativi di `substring`, questi ultimi
 solo dove la valutazione li guarderebbe (nessun argomento che li precede, o
 la sostituzione, solo null).
@@ -1084,11 +1092,14 @@ i dati li controlla il kernel, con `ResourceLimit`, prima di pubblicarli:
 `melt`, `transpose`, i testi calcolati da `expression` e `formula`, `concat`
 di `aggregate` e `pivot`, `_diff_columns` e `_diff_old_values` di
 `table_diff`, `extract_all` di `string_extract`, `mask_data`,
-`flatten_json`; un pattern di `regex_replace` calcolato dalle colonne si
-confronta con `max_regex_bytes` riga per riga. Il testo scritto da un
-formato di data non cresce con la cella: l'analisi ne limita la lunghezza
-per eccesso (i letterali per la loro lunghezza, ogni campo 64 byte) e il
-kernel non la ricontrolla. I default dei due limiti sono uno solo per il
+`flatten_json`, le etichette automatiche di `bin`; un pattern di
+`regex_replace` calcolato dalle colonne si confronta con `max_regex_bytes`
+riga per riga, e uno non valido rifiuta la riga
+(`evaluation.invalid_regex`) senza il testo dell'errore del crate `regex`,
+che riporterebbe il pattern, cioè una cella. Il testo scritto da un formato
+di data non cresce con la cella: l'analisi ne limita la lunghezza con la
+larghezza massima di ogni campo (i letterali per la loro lunghezza, l'anno 7
+byte, il mese 2, il nome del mese 9…) e il kernel non la ricontrolla. I default dei due limiti sono uno solo per il
 piano e per i kernel (`plenora_core::limits::DEFAULT_MAX_STRING_BYTES`, 16
 MiB, e `DEFAULT_MAX_REGEX_BYTES`, 64 KiB; prima i kernel avevano 4096 byte
 per le regex).
@@ -1154,7 +1165,13 @@ diagnostica per riga `evaluation.division_by_zero`).
   da `"null"` ed `"error"` si rifiuta dalla config.
 - Non ci sono modulo né divisione intera: `/` è l'unica divisione.
   `power(0, -1)` (infinito) e un quoziente che trabocca restano risultati non
-  finiti (`evaluation.non_finite_result`), non divisioni per zero.
+  finiti (`evaluation.non_finite_result`), non divisioni per zero, con
+  qualunque politica. In `formula` un risultato non finito da operandi
+  finiti (overflow, anche intermedio come `a / (a * a)`) rifiuta la riga
+  come in `expression`; un `NaN` o un infinito già nella colonna si propaga,
+  come in `window_function` e `rolling_window`, che rifiutano anch'esse
+  l'overflow da valori finiti; un `result` di `conditional` che si legge
+  come numero non finito si rifiuta in validazione.
 
 `table.formula` emette diagnostica per riga solo con `"error"` (la
 divisione per zero è il suo unico rifiuto per riga), e il catalogo lo
@@ -1193,13 +1210,23 @@ booleane allineate sono `LeftRelative`):
 
 Il default resta 100: dopo il cambio di base supera 100 solo un'uscita che
 moltiplica i dati per più di cento volte la loro somma, e con gli ingressi
-oltre 100 000 righe il tetto effettivo è già `max_rows_per_edge`. Derivarlo
+oltre 100 000 righe il tetto effettivo è già `max_rows_per_edge`.
+
+**Portata della guardia.** Con la somma come base, un prodotto completo
+di L per R righe vale `L·R/(L+R)`, cioè circa il lato minore: con il lato
+minore di al più 100 righe il fattore 100 non ferma mai un prodotto
+completo (100 per 50 000 righe danno 5 milioni di righe, fattore 99,8,
+accettato). Il fattore ferma i molti-a-molti fra lati entrambi grandi; la
+memoria e le uscite enormi le fermano il budget (prima del passo, con il
+modello di costo, e dopo, con i byte veri), i preflight dei kernel
+(`cross_join` e `fuzzy_join` contano le coppie prima di allocare) e i
+limiti assoluti di righe (`max_rows_per_edge`, `max_output_rows`). Derivarlo
 dal budget non avrebbe senso: quando il fattore si controlla la memoria è
 già stata allocata e contata. Un piano che vuole un'espansione maggiore la
 dichiara (`limits.max_expansion_factor`). Le operazioni con righe fissate
 dalla config ne sono fuori (esenzioni del catalogo, e `melt` con la verifica
-esatta sopra). Semantica 2 per i cinque join (un'uscita prima rifiutata ora
-si produce).
+esatta sopra). Semantica 2 per i cinque join e per `melt` (un'uscita prima
+rifiutata ora si produce).
 
 ### Diagnostica per riga
 
@@ -1713,8 +1740,10 @@ quello per byte.
   `expression`) non si enumerano da soli: li copre la voce del campo che li
   contiene.
   *Hazard*: restano accettati, e dichiarati, i parametri che hanno effetto
-  ma non cambiano il risultato su certi dati (`distinct` con `min`/`max`) e
-  questi senza effetto in casi limite: `fill_na` con `method=value` e senza
+  ma non cambiano il risultato su certi dati (`distinct` con `min`/`max`);
+  quelli senza effetto solo su certi schemi d'ingresso (elencati in
+  «Validazione»: la regola è rifiutare ciò che la config da sola rende
+  senza effetto); e questi senza effetto in casi limite: `fill_na` con `method=value` e senza
   `value` (riempie con null, non cambia niente); `unit` di `date_add` con
   `amount` 0 (riformatta soltanto); le politiche sui null
   (`allow_null`, `nulls_equal`, `null_policy`) su colonne che lo schema

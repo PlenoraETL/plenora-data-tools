@@ -163,7 +163,7 @@ pub struct DateExtract {
     /// Non ammesso: un valore non interpretabile fa sempre fallire il passo,
     /// quindi nessuna politica avrebbe effetto. Scritto si rifiuta
     /// ([`crate::dates::verifica_politiche`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub invalid: Option<InvalidDatePolicy>,
 }
 

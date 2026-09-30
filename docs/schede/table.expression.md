@@ -14,7 +14,7 @@ risultato, rifiuta la riga.
 | `output_column` | stringa | obbligatorio | nome valido (non vuoto, al più 1024 byte) | colonna d'uscita |
 | `expression` | oggetto | obbligatorio | nodo della grammatica sotto; profondità al più 64, al più 4096 nodi | espressione da calcolare |
 | `output_type` | stringa | `auto` | `auto`, `number`, `boolean`, `text`, `date32`, `timestamp_ms` | tipo della colonna d'uscita; `auto` lo deduce |
-| `on_division_by_zero` | stringa | `"null"` | `"null"`, `"error"`; solo in un'espressione con almeno una divisione | che cosa dà una divisione con divisore zero (sotto) |
+| `on_division_by_zero` | stringa | `"null"` | `"null"`, `"error"`; solo in un'espressione con almeno una divisione; `null` non ammesso | che cosa dà una divisione con divisore zero (sotto) |
 
 Nodi (campo `kind`):
 
@@ -29,7 +29,7 @@ Nodi (campo `kind`):
 ```
 
 Un campo non previsto dentro un nodo si rifiuta. Un letterale di testo non
-supera `max_string_bytes` byte.
+supera `max_string_bytes` byte, anche dentro la lista di `in`.
 
 Tipi delle colonne: `bool` è booleano; `int64`, `uint64`, `float64`,
 `decimal128`, `date32` (giorni dall'epoca) e `timestamp(ms)` (millisecondi
@@ -87,7 +87,11 @@ Divisione con operandi non nulli e divisore zero:
 Un divisore letterale zero (`x / 0`) si rifiuta in validazione con
 qualunque politica.
 
-Un pattern letterale di `regex_replace` non supera `max_regex_bytes` byte.
+Un pattern letterale di `regex_replace` non supera `max_regex_bytes` byte
+e, se non è una regex valida, si rifiuta in validazione. Un pattern
+calcolato dalle colonne che non è una regex valida rifiuta la riga
+(`evaluation.invalid_regex`), senza il testo d'errore della crate `regex`,
+che riporterebbe il pattern cioè un dato di cella.
 Ogni testo prodotto da una funzione (`concat`, `lower`, `upper`,
 `regex_replace`, `substring`, …) non supera `max_string_bytes` byte.
 
@@ -122,15 +126,16 @@ In validazione, `InvalidPlan`:
 - una colonna assente o di tipo non ammesso (anche `timestamp` in unità
   diverse dai millisecondi);
 - letterale non scalare o non finito; letterale di testo oltre
-  `max_string_bytes` byte; `in` senza lista letterale di scalari;
+  `max_string_bytes` byte, anche nella lista di `in`; `in` senza lista
+  letterale di scalari;
 - numero di argomenti o tipo di un operando non ammessi; confronto fra tipi
   diversi (anche solo possibili, come `coalesce` di testo e numero);
 - unità di `date_trunc` non letterale o fuori elenco, unità oraria su
   `date32`, `date_trunc` su testo o su `timestamp` con fuso;
 - divisione per il numero zero scritto nell'espressione, con qualunque
   `on_division_by_zero`;
-- `on_division_by_zero` scritto in un'espressione senza divisioni, o con
-  un valore fuori elenco;
+- `on_division_by_zero` scritto in un'espressione senza divisioni, con un
+  valore fuori elenco o `null` esplicito (il parametro si omette);
 - pattern letterale di `regex_replace` non valido o oltre
   `max_regex_bytes` byte, indice letterale negativo di `substring` (solo
   dove la valutazione lo guarderebbe);
@@ -144,9 +149,10 @@ In esecuzione:
   `on_division_by_zero = "error"` (`evaluation.division_by_zero`), `NaN` o
   infinito letto da una colonna
   (`evaluation.non_finite_input`), risultato non finito di un'operazione o
-  di `power` (`evaluation.non_finite_result`); il passo non produce uscita;
-- `InvalidPlan`: pattern di `regex_replace` o indice di `substring`
-  calcolati dalle colonne e non validi;
+  di `power` (`evaluation.non_finite_result`), pattern di `regex_replace`
+  calcolato dalle colonne che non è una regex valida
+  (`evaluation.invalid_regex`); il passo non produce uscita;
+- `InvalidPlan`: indice di `substring` calcolato dalle colonne e negativo;
 - `Schema`: `year` su un testo che non inizia con una data; una riga che
   produce un tipo diverso da `output_type`; `negate` o `abs` di un
   `decimal128` fuori dominio; una cella che non si converte in testo;

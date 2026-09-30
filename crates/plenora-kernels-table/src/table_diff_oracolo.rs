@@ -145,7 +145,7 @@ fn table_diff_precedente(
         config.compare_columns.clone()
     };
     // Regola condivisa sulla config, non oracolata.
-    config.verifica_separatore(compare.len())?;
+    config.verifica_separatore()?;
     let left_compare = compare
         .iter()
         .map(|name| column_index(left, name))

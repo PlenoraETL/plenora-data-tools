@@ -12,8 +12,8 @@ una diagnostica per riga e non produce uscita.
 | `column` | stringa | obbligatorio | colonna `int64`, `uint64`, `float64`, `decimal128`, `date32`, `timestamp(ms)` o `utf8` | colonna da controllare |
 | `min` | numero | assente | numero finito, non maggiore di `max` | estremo inferiore |
 | `max` | numero | assente | numero finito | estremo superiore |
-| `inclusive_min` | booleano | assente (incluso) | `true`, `false`; solo con `min` | se `min` fa parte dell'intervallo |
-| `inclusive_max` | booleano | assente (incluso) | `true`, `false`; solo con `max` | se `max` fa parte dell'intervallo |
+| `inclusive_min` | booleano | assente (incluso) | `true`, `false`; solo con `min`; `null` non ammesso | se `min` fa parte dell'intervallo |
+| `inclusive_max` | booleano | assente (incluso) | `true`, `false`; solo con `max`; `null` non ammesso | se `max` fa parte dell'intervallo |
 | `allow_null` | booleano | `false` | `true`, `false` | con `true` le celle nulle passano |
 
 Almeno uno fra `min` e `max`. `inclusive_min` senza `min` (o
@@ -47,6 +47,8 @@ In validazione, `InvalidPlan`:
 
 - né `min` né `max`; `min` maggiore di `max`;
 - `inclusive_min` senza `min` o `inclusive_max` senza `max`;
+- `inclusive_min` o `inclusive_max` `null` espliciti (un parametro
+  facoltativo si omette);
 - `column` assente o di un tipo fuori dall'elenco;
 - config con campi sconosciuti.
 

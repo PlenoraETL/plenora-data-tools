@@ -14,8 +14,8 @@ righe si riordinano prima su quella colonna.
 | `function` | stringa | `"rank"` | `rank`, `dense_rank`, `percent_rank`, `cume_dist`, `cumsum`, `running_mean`, `cumcount`, `lag`, `lead`, `pct_change`, `ntile` | funzione |
 | `group_by` | stringa | nessuno | colonna leggibile come testo | partizione; senza, una partizione sola |
 | `order_column` | stringa | nessuno | colonna di tipo ordinabile | ordinamento ascendente prima del calcolo |
-| `offset` | intero | `1` | da `1`; solo con `lag` e `lead` | distanza in righe |
-| `buckets` | intero | nessuno | da `1` a `max_rows`; obbligatorio con `ntile`, solo con `ntile` | numero di gruppi di `ntile` |
+| `offset` | intero | `1` | da `1`; solo con `lag` e `lead`; `null` non ammesso | distanza in righe |
+| `buckets` | intero | nessuno | da `1` a `max_rows`; obbligatorio con `ntile`, solo con `ntile`; `null` non ammesso | numero di gruppi di `ntile` |
 | `output_column` | stringa | `<column>_<function>` | nome di colonna valido | colonna d'uscita |
 
 Colonne numeriche: `int64`, `uint64`, `float64`, `decimal128`, `date32`,
@@ -79,6 +79,8 @@ In validazione, `InvalidPlan`:
 - `column` assente o non numerica; una funzione di rango su `utf8`;
 - `group_by` non leggibile come testo; `order_column` di tipo non
   ordinabile; un nome d'uscita non valido;
+- `offset` o `buckets` `null` espliciti (un parametro facoltativo si
+  omette);
 - funzione fuori elenco, campi sconosciuti.
 
 In esecuzione:
@@ -87,14 +89,18 @@ In esecuzione:
   `cumcount` e `ntile`, che non ne usano il valore); una cella di
   `group_by` che non si converte in testo; una chiave di dizionario di
   `order_column` fuori dal proprio dizionario;
+- `DataMapping`: un risultato di `cumsum`, `running_mean` o `pct_change`
+  non finito calcolato da valori finiti (overflow di `f64`);
 - `ResourceLimit`: più di `u32::MAX` righe con `order_column`.
 
 ### Limiti e deviazioni
 
 Le funzioni che rendono un valore (`cumsum`, `running_mean`, `lag`,
 `lead`, `pct_change`) leggono la cella come `f64`: un intero oltre `2^53`
-o un `decimal128` si arrotondano senza errore. Le funzioni di rango non
-arrotondano, e per questo rifiutano il testo numerico.
+o un `decimal128` si arrotondano senza errore. Un `NaN` o un infinito già
+nei dati si propagano senza errore; solo l'overflow di un calcolo su valori
+finiti si rifiuta. Le funzioni di rango non arrotondano, e per questo
+rifiutano il testo numerico.
 
 ### Complessità
 

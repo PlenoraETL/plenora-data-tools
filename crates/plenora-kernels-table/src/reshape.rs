@@ -39,9 +39,8 @@ pub struct Melt {
     pub value_name: String,
     /// Colonne valore di tipi diversi (default
     /// [`HeterogeneousTypePolicy::Reject`]). Con colonne valore dello stesso
-    /// tipo non avrebbe effetto: scritta si rifiuta
-    /// ([`verifica_type_policy`]).
-    #[serde(default)]
+    /// tipo non cambia niente, e si accetta: dipende dall'ingresso.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub type_policy: Option<HeterogeneousTypePolicy>,
 }
 
@@ -63,27 +62,6 @@ pub fn politica_tipi(type_policy: Option<HeterogeneousTypePolicy>) -> Heterogene
     type_policy.unwrap_or(HeterogeneousTypePolicy::Reject)
 }
 
-/// `type_policy` scritta con colonne tutte dello stesso tipo si rifiuta.
-///
-/// Decide solo che cosa fare di colonne di tipi diversi: con colonne dello
-/// stesso tipo non avrebbe effetto, con nessuno dei due valori. La chiamano
-/// i kernel `melt` e `transpose` e l'analisi dei contratti, con le colonne
-/// che ciascuno ricava.
-///
-/// # Errors
-///
-/// `InvalidPlan` se `type_policy` e' scritta e le colonne sono omogenee.
-pub fn verifica_type_policy(
-    type_policy: Option<HeterogeneousTypePolicy>,
-    omogenee: bool,
-) -> Result<()> {
-    if type_policy.is_some() && omogenee {
-        return Err(PlenoraError::InvalidPlan(
-            "type_policy senza effetto: le colonne hanno tutte lo stesso tipo".into(),
-        ));
-    }
-    Ok(())
-}
 fn default_variable() -> String {
     "variable".into()
 }
@@ -293,7 +271,6 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
     let omogeneo = value_indices
         .iter()
         .all(|index| batch.column(*index).data_type() == &tipo_valore);
-    verifica_type_policy(config.type_policy, omogeneo)?;
     if !omogeneo {
         match politica_tipi(config.type_policy) {
             HeterogeneousTypePolicy::Reject => {
@@ -1087,8 +1064,8 @@ pub struct Transpose {
     pub output_columns: Vec<String>,
     /// Colonne dati di tipi diversi (default
     /// [`HeterogeneousTypePolicy::Reject`]); con colonne dati dello stesso
-    /// tipo scritta si rifiuta ([`verifica_type_policy`]).
-    #[serde(default)]
+    /// tipo non cambia niente, e si accetta.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub type_policy: Option<HeterogeneousTypePolicy>,
 }
 
@@ -1146,7 +1123,6 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
     let homogeneous = data_indices
         .iter()
         .all(|index| batch.column(*index).data_type() == &data_type);
-    verifica_type_policy(config.type_policy, homogeneous)?;
     if !homogeneous
         && matches!(
             politica_tipi(config.type_policy),
@@ -1505,7 +1481,7 @@ pub struct TableDiff {
     /// [`TableDiff::separatore`]). Con una sola colonna confrontata non
     /// separa mai niente: scritto si rifiuta
     /// ([`TableDiff::verifica_separatore`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub separator: Option<String>,
 }
 
@@ -1516,20 +1492,20 @@ impl TableDiff {
         self.separator.as_deref().unwrap_or(DEFAULT_DIFF_SEPARATOR)
     }
 
-    /// `separator` scritto con al piu' una colonna confrontata (quelle di
-    /// `compare_columns`, o quelle che il default ricava dagli schemi) non
-    /// separa mai due nomi o due valori: si rifiuta. La chiamano il kernel e
-    /// l'analisi dei contratti, con le colonne confrontate che ciascuno
-    /// ricava.
+    /// `separator` scritto con una sola colonna in `compare_columns` non
+    /// separa mai due nomi o due valori: si rifiuta. Con `compare_columns`
+    /// vuoto le colonne confrontate le ricava lo schema, e il separatore si
+    /// accetta anche se l'ingresso ne da' una sola. La chiamano il kernel e
+    /// l'analisi dei contratti.
     ///
     /// # Errors
     ///
-    /// `InvalidPlan` se `separator` e' scritto con al piu' una colonna
-    /// confrontata.
-    pub fn verifica_separatore(&self, colonne_confrontate: usize) -> Result<()> {
-        if self.separator.is_some() && colonne_confrontate <= 1 {
+    /// `InvalidPlan` se `separator` e' scritto con una sola colonna in
+    /// `compare_columns`.
+    pub fn verifica_separatore(&self) -> Result<()> {
+        if self.separator.is_some() && self.compare_columns.len() == 1 {
             return Err(PlenoraError::InvalidPlan(
-                "separator senza effetto con al piu' una colonna confrontata".into(),
+                "separator senza effetto con una sola colonna confrontata".into(),
             ));
         }
         Ok(())
@@ -1849,7 +1825,7 @@ pub fn table_diff(
     } else {
         config.compare_columns.clone()
     };
-    config.verifica_separatore(compare.len())?;
+    config.verifica_separatore()?;
     let left_compare = compare
         .iter()
         .map(|name| column_index(left, name))
@@ -2126,8 +2102,6 @@ mod tests {
         let homogeneous = value_indices
             .iter()
             .all(|index| batch.column(*index).data_type() == &value_type);
-        // Regola condivisa sulla config, non oracolata.
-        super::verifica_type_policy(config.type_policy, homogeneous)?;
         if homogeneous {
             let arrays = value_indices
                 .iter()
@@ -3291,7 +3265,7 @@ mod tests {
         } else {
             config.compare_columns.clone()
         };
-        config.verifica_separatore(compare.len())?;
+        config.verifica_separatore()?;
         let left_compare = compare
             .iter()
             .map(|name| column_index(left, name))

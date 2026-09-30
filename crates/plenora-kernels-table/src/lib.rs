@@ -167,8 +167,38 @@ pub(crate) struct RowRejection<'a> {
 /// piano): costanti uniche condivise fra i siti di costruzione
 /// (`expressions`, `formula`) e la classificazione — mai dati di riga.
 pub(crate) const DIVISION_BY_ZERO_MESSAGE: &str = "divisione per zero";
-pub(crate) const NON_FINITE_INPUT_MESSAGE: &str = "expression non accetta numeri non finiti";
-pub(crate) const NON_FINITE_RESULT_MESSAGE: &str = "risultato expression non finito";
+pub(crate) const NON_FINITE_INPUT_MESSAGE: &str = "numero non finito in ingresso";
+pub(crate) const NON_FINITE_RESULT_MESSAGE: &str = "risultato non finito";
+/// Un pattern calcolato dalle colonne che non e' una regex valida: senza il
+/// testo dell'errore del crate `regex`, che riporta il pattern, cioe' il
+/// valore di una cella.
+pub(crate) const INVALID_REGEX_MESSAGE: &str = "regex calcolata non valida";
+
+/// Deserializzazione di un parametro facoltativo che rifiuta il `null`
+/// esplicito.
+///
+/// Con `#[serde(default)]` un `null` scritto varrebbe «assente», e un
+/// parametro scritto (anche `null`) sfuggirebbe alle regole sui parametri
+/// senza effetto. Un parametro si omette, non si scrive `null`.
+///
+/// # Errors
+///
+/// L'errore di serde per un `null`, con un messaggio fisso senza valori.
+pub(crate) fn mai_null<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    use serde::de::Error as _;
+    Option::<T>::deserialize(deserializer)?.map_or_else(
+        || {
+            Err(D::Error::custom(
+                "null non ammesso: un parametro facoltativo si omette",
+            ))
+        },
+        |valore| Ok(Some(valore)),
+    )
+}
 
 /// Che cosa rende una divisione per zero in `table.formula` e
 /// `table.expression` (campo `on_division_by_zero`, in JSON `"null"` o
@@ -248,6 +278,7 @@ pub(crate) fn row_eval_failure_cause(error: &PlenoraError) -> Option<&'static st
         DIVISION_BY_ZERO_MESSAGE => Some("evaluation.division_by_zero"),
         NON_FINITE_INPUT_MESSAGE => Some("evaluation.non_finite_input"),
         NON_FINITE_RESULT_MESSAGE => Some("evaluation.non_finite_result"),
+        INVALID_REGEX_MESSAGE => Some("evaluation.invalid_regex"),
         _ => None,
     }
 }

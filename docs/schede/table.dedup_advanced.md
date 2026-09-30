@@ -12,7 +12,7 @@ recente.
 | `subset` | lista di stringhe | obbligatorio | nomi di colonne leggibili come testo, almeno uno, senza ripetizioni | colonne della chiave |
 | `keep` | stringa | `"first"` | `"first"`, `"last"` | tiene la prima o l'ultima occorrenza di ogni chiave |
 | `order_column` | stringa | nessuno | nome di una colonna di tipo ordinabile | ordinamento stabile prima della deduplica |
-| `ascending` | booleano | `true` | `true`, `false`; solo con `order_column` | verso dell'ordinamento |
+| `ascending` | booleano | `true` | `true`, `false`; solo con `order_column`; `null` non ammesso | verso dell'ordinamento |
 
 Colonne leggibili come testo e uguaglianza delle chiavi come in
 [`table.distinct`](#tabledistinct); tipi ordinabili e confronto come in
@@ -43,7 +43,8 @@ In validazione, `InvalidPlan`:
 - `keep: "false"`;
 - `subset` vuoto, con un nome ripetuto o non valido, o oltre il limite di
   colonne; una sua colonna assente o non leggibile come testo;
-- `ascending` senza `order_column`;
+- `ascending` senza `order_column`, o `null` esplicito (il parametro si
+  omette);
 - `order_column` assente o di tipo non ordinabile;
 - campi sconosciuti.
 

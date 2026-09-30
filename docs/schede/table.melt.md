@@ -12,12 +12,16 @@ le colonne id si ripetono su ogni blocco.
 | `value_columns` | lista di stringhe | `[]` | nomi di colonne dell'ingresso, senza ripetizioni | colonne da portare in righe; vuota vale tutte le colonne non id |
 | `var_name` | stringa | `"variable"` | nome di colonna valido, diverso da `value_name` | colonna con il nome della colonna valore |
 | `value_name` | stringa | `"value"` | nome di colonna valido | colonna con la cella |
-| `type_policy` | stringa | `"reject"` | `"reject"`, `"string"`; solo se le colonne valore hanno tipi diversi | colonne valore di tipi diversi: rifiuto, o conversione in testo |
+| `type_policy` | stringa | `"reject"` | `"reject"`, `"string"`; `null` non ammesso | colonne valore di tipi diversi: rifiuto, o conversione in testo |
 
 `var_name` e `value_name` non collidono con nessuna colonna dell'ingresso,
 nemmeno con quelle che spariscono: un nome già preso riceve il primo
 suffisso libero fra `_1` e `_99`, prima `var_name` poi `value_name`
 (sciogliere una colonna di nome `value` dà una colonna `value_1`).
+
+`type_policy` con colonne valore tutte dello stesso tipo si accetta e non
+cambia niente: dipende dall'ingresso, e lo stesso piano gira su tabelle
+diverse.
 
 ### Schema
 
@@ -52,9 +56,8 @@ In validazione:
 - `InvalidPlan`: `var_name` uguale a `value_name`; una lista con un nome
   ripetuto o non valido, o oltre il limite di colonne; una colonna assente;
   nessuna colonna valore; colonne valore di tipi diversi con
-  `type_policy: "reject"`; `type_policy` scritto quando le colonne valore
-  hanno tutte lo stesso tipo (non avrebbe effetto); nessun suffisso libero
-  per un nome d'uscita; campi sconosciuti;
+  `type_policy: "reject"`; `type_policy: null` esplicito (il parametro si
+  omette); nessun suffisso libero per un nome d'uscita; campi sconosciuti;
 - `Schema`: con `type_policy: "string"` e tipi diversi, una colonna valore
   di tipo non convertibile in testo o con una timezone non valida.
 

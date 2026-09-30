@@ -14,7 +14,7 @@ elenca le colonne cambiate e i loro valori precedenti.
 | `right_keys` | lista di stringhe | obbligatorio | colonne della destra, tante quante `left_keys`, dello stesso tipo coppia per coppia | chiave a destra |
 | `compare_columns` | lista di stringhe | `[]` | colonne presenti in entrambe, dello stesso tipo, leggibili come testo | colonne confrontate; vuota vale le colonne non chiave della sinistra presenti anche a destra |
 | `include_unchanged` | stringa | `"no"` | `"yes"`, `"no"` | emette anche le righe `UNCHANGED` |
-| `separator` | stringa | `"#"` | al più `max_string_bytes` byte; solo con almeno due colonne confrontate | separatore di `_diff_columns` e `_diff_old_values` |
+| `separator` | stringa | `"#"` | al più `max_string_bytes` byte; `null` non ammesso; non con una sola colonna in `compare_columns` | separatore di `_diff_columns` e `_diff_old_values` |
 
 Colonne leggibili come testo: i tipi di [`table.distinct`](#tabledistinct).
 Due chiavi si abbinano con l'uguaglianza di `table.distinct`: un null è
@@ -60,9 +60,11 @@ In validazione, `InvalidPlan`:
   non leggibile come testo;
 - una colonna confrontata assente da un lato, non leggibile come testo, o
   di tipi diversi fra i lati;
-- `separator` oltre `max_string_bytes`, o scritto quando si confronta al
-  più una colonna (in `compare_columns` o dedotte dagli schemi): non
-  avrebbe effetto;
+- `separator` oltre `max_string_bytes`, `null` esplicito (il parametro si
+  omette), o scritto quando `compare_columns` elenca esattamente una
+  colonna (non avrebbe effetto con nessun ingresso); con `compare_columns`
+  vuota le colonne vengono dagli schemi e `separator` si accetta anche se
+  se ne confronta una sola: dipende dall'ingresso;
 - metadati di schema in conflitto; `include_unchanged` fuori da
   `"yes"`/`"no"`; campi sconosciuti.
 

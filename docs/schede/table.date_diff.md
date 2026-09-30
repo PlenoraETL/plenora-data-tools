@@ -13,7 +13,7 @@ come numero con parte frazionaria (un giorno e mezzo è `1.5`) e con segno.
 | `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura di entrambe le colonne |
 | `unit` | stringa | obbligatorio | `days`, `hours`, `minutes`, `seconds` | unità della differenza |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
-| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -50,7 +50,7 @@ In validazione, `InvalidPlan`:
 - `input_format` vuoto, oltre `max_string_bytes` o con un campo non
   riconosciuto;
 - `output_column` non valido;
-- `invalid` scritto, con qualunque valore;
+- `invalid` scritto, con qualunque valore, anche `null`;
 - config con campi sconosciuti o `unit` fuori elenco.
 
 In esecuzione:

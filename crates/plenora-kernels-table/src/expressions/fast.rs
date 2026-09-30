@@ -1042,11 +1042,10 @@ fn evaluate_fast<'e, 'a: 'e>(
                     .map_err(|message| PlenoraError::InvalidPlan(message.clone()))?,
                 RegexSource::Dynamic(_) => {
                     ctx.verifica_pattern(pattern_text.len())?;
-                    owned = regex::Regex::new(pattern_text).map_err(|error| {
-                        PlenoraError::InvalidPlan(format!(
-                            "regex_replace: regex non valida: {error}"
-                        ))
-                    })?;
+                    // Pattern da una cella: l'errore del crate lo riporterebbe,
+                    // quindi solo la causa, rifiuto per riga.
+                    owned = regex::Regex::new(pattern_text)
+                        .map_err(|_| PlenoraError::Schema(crate::INVALID_REGEX_MESSAGE.into()))?;
                     &owned
                 }
             };

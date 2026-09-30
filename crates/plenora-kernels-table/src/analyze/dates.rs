@@ -30,7 +30,8 @@ pub(in crate::analyze) fn check_format_text(
 }
 
 /// Un formato di scrittura: come [`check_format_text`], e il testo che
-/// scrive per ogni riga ([`dates::byte_massimi_scritti`], per eccesso) entro
+/// scrive per ogni riga ([`dates::byte_massimi_scritti`], larghezza massima
+/// di ogni campo) entro
 /// `max_string_bytes`. Il valore formattato non cresce con la cella, quindi
 /// il controllo sulla config vale per ogni riga.
 pub(in crate::analyze) fn check_output_format(

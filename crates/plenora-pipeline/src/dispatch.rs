@@ -308,7 +308,7 @@ impl PassoPreparato {
             Self::MaskData(config) => security::mask_data_con_limiti(batch, config, limits),
             Self::Md5Hash(config) => security::md5_hash(batch, config),
             Self::AddRowNumber(config) => utility::add_row_number(batch, config),
-            Self::Bin(config) => analysis::bin(batch, config),
+            Self::Bin(config) => analysis::bin_con_limiti(batch, config, limits),
             Self::Sample(config) => analysis::sample(batch, config),
             Self::Statistics(config) => analysis::statistics(batch, config),
             Self::Sort(config) if spill => {

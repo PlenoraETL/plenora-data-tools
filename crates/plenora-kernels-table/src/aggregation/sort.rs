@@ -439,7 +439,7 @@ pub struct DedupAdvanced {
     /// Verso di `order_column` (assente: ascendente). Senza `order_column`
     /// non c'e' ordinamento, e un verso dichiarato si rifiuta
     /// ([`verifica_verso_dedup`]) invece di essere ignorato.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub ascending: Option<bool>,
 }
 

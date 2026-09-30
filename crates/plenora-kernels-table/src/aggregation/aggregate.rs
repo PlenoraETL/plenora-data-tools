@@ -107,18 +107,18 @@ pub struct Aggregation {
     #[serde(default = "default_agg")]
     pub function: AggFunction,
     /// Separatore di `concat` (assente: `", "`).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub separator: Option<String>,
     /// Valori distinti (assente: no). Non ha effetto su `count`, `nunique`,
     /// `first` e `last`. Su `concat` tiene la prima occorrenza di ogni
     /// testo; sulle funzioni numeriche deduplica sul valore esatto e riduce
     /// i distinti in ordine crescente.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub distinct: Option<bool>,
     /// Null ignorati (assente: si'). Non ha effetto su `count`, `first` e
     /// `last`. Falso: un null rende null le funzioni numeriche, conta come
     /// un valore in `nunique` e vale il testo vuoto in `concat`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub skip_null: Option<bool>,
     /// Nome della colonna d'uscita; vuoto (default) vale `column`, o
     /// `<column>_<funzione>` se `column` compare in piu' aggregazioni.
@@ -126,9 +126,10 @@ pub struct Aggregation {
     pub alias: String,
     /// Quantile in `[0, 1]`: obbligatorio con `quantile`, rifiutato con le
     /// altre funzioni.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub quantile: Option<f64>,
     /// Gradi di liberta' di `variance` e `stddev` (assente: 1).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub ddof: Option<usize>,
 }
 

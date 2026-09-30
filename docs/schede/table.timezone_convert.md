@@ -15,8 +15,8 @@ nomi IANA (`Europe/Rome`, `UTC`, `America/New_York`).
 | `source_timezone` | stringa | obbligatorio | nome IANA noto a `chrono-tz` | fuso dei valori letti |
 | `target_timezone` | stringa | obbligatorio | nome IANA noto a `chrono-tz` | fuso dei valori scritti |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
-| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
-| `ambiguous` | stringa | assente | nessuno: scritto si rifiuta | un'ora locale ambigua o inesistente rifiuta sempre la riga, nessun valore avrebbe effetto |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
+| `ambiguous` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un'ora locale ambigua o inesistente rifiuta sempre la riga, nessun valore avrebbe effetto |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -33,9 +33,11 @@ sempre la riga, come un valore non leggibile: per questo `ambiguous` e
 `invalid` non si accettano.
 
 Il testo scritto da `output_format` non può superare `max_string_bytes`
-byte per valore. Il limite si controlla in validazione con una stima
-prudente: il testo letterale conta per la sua lunghezza, ogni campo
-`strftime` per 64 byte.
+byte per valore. Il limite si controlla in validazione, esatto per campo:
+il testo letterale conta per la sua lunghezza, ogni campo `strftime` per
+la sua larghezza massima (anno 7 byte col segno, mese, giorno, ora 2, nome
+del mese o del giorno 9, offset 9, nome del fuso 32); `%Y%m` scrive al più
+9 byte.
 
 ### Schema
 
@@ -60,9 +62,10 @@ In validazione, `InvalidPlan`:
 - `source_timezone` o `target_timezone` non riconosciuti;
 - un formato vuoto, oltre `max_string_bytes`, con un campo non
   riconosciuto, o che non si sa scrivere per un valore con fuso;
-- `output_format` la cui stima supera `max_string_bytes` byte per valore;
+- `output_format` che può scrivere più di `max_string_bytes` byte per
+  valore;
 - `output_column` non valido;
-- `invalid` o `ambiguous` scritti, con qualunque valore;
+- `invalid` o `ambiguous` scritti, con qualunque valore, anche `null`;
 - config con campi sconosciuti.
 
 In esecuzione:
@@ -80,9 +83,7 @@ In esecuzione:
 
 Le regole dei fusi sono quelle della banca dati IANA inclusa in
 `chrono-tz` 0.10.4: un cambio di regole successivo non si vede finché la
-dipendenza non si aggiorna. La stima di `output_format` è prudente: un
-formato che scriverebbe davvero meno di `max_string_bytes` byte si può
-rifiutare lo stesso.
+dipendenza non si aggiorna.
 
 ### Complessità
 

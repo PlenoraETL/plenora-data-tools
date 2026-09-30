@@ -13,8 +13,8 @@ scartano, o con `keep_extra` si tengono in coda.
 | `columns` | lista di oggetti | obbligatorio | da 1 a 4096 colonne, nomi senza ripetizioni | schema d'uscita, nell'ordine d'uscita |
 | `columns[].name` | stringa | obbligatorio | nome non vuoto, al più 1024 byte | nome della colonna |
 | `columns[].type` | stringa | obbligatorio | `Utf8`, `Int64`, `UInt64`, `Float64`, `Boolean`, `Date32`, `Timestamp`, `Decimal128`, `Binary` | tipo della colonna (tabella sotto) |
-| `columns[].default` | JSON | assente | valore convertibile nel tipo (sotto), solo su una colonna che manca nell'ingresso; `null` vale assente | valore di ogni cella di una colonna aggiunta |
-| `keep_extra` | booleano | `false` | `true`, `false`; scritto solo se almeno una colonna d'ingresso non è dichiarata | tiene in coda, nell'ordine d'ingresso, le colonne non dichiarate |
+| `columns[].default` | JSON | assente | valore convertibile nel tipo (sotto); `null` vale assente | valore di ogni cella di una colonna aggiunta |
+| `keep_extra` | booleano | `false` | `true`, `false`; `null` non ammesso | tiene in coda, nell'ordine d'ingresso, le colonne non dichiarate |
 
 I tipi: `Utf8` → `utf8`, `Int64` → `int64`, `UInt64` → `uint64`,
 `Float64` → `float64`, `Boolean` → `bool`, `Date32` → `date32`,
@@ -39,9 +39,11 @@ Il `default` si converte così, e ciò che non si converte si rifiuta:
 - `Decimal128`: un numero JSON o una stringa, senza esponente e con al più
   10 cifre decimali (nessun arrotondamento).
 
-Il `default` di una colonna che esiste già non avrebbe effetto e si
-rifiuta. `keep_extra` scritto, con qualunque valore, quando ogni colonna
-d'ingresso è dichiarata non avrebbe effetto e si rifiuta.
+Si accetta, perché l'effetto dipende dall'ingresso e lo stesso piano gira
+su tabelle diverse: il `default` di una colonna che esiste già (non si
+legge) e `keep_extra` quando ogni colonna d'ingresso è dichiarata (non
+tiene niente). `keep_extra: null` esplicito si rifiuta: il parametro si
+omette.
 
 ### Schema
 
@@ -73,9 +75,7 @@ In validazione, `InvalidPlan`:
   `timestamp(ms)` con fuso, o un decimale di precisione o scala diverse);
 - un `default` non convertibile nel tipo, o un `default` `Utf8` o
   `Binary` oltre `max_string_bytes` byte;
-- un `default` su una colonna che esiste già nell'ingresso;
-- `keep_extra` scritto (`true` o `false`) quando ogni colonna d'ingresso
-  è dichiarata;
+- `keep_extra` `null` esplicito;
 - un `type` fuori elenco, config con campi sconosciuti.
 
 In esecuzione: nessun errore che dipenda dai dati.

@@ -16,7 +16,7 @@ colonna.
 | `min_periods` | intero | `1` | da `1` a `window` | valori non nulli minimi per un risultato |
 | `group_by` | stringa | nessuno | colonna leggibile come testo | partizione; senza, una partizione sola |
 | `order_column` | stringa | nessuno | colonna di tipo ordinabile | ordinamento ascendente prima del calcolo |
-| `ddof` | intero | `1` | `0` o più; solo con `stddev` | gradi di libertà sottratti al divisore |
+| `ddof` | intero | `1` | `0` o più; solo con `stddev`; `null` non ammesso | gradi di libertà sottratti al divisore |
 | `output_column` | stringa | obbligatorio | nome di colonna valido | colonna d'uscita |
 
 La finestra si misura in righe, non in valori: una cella nulla occupa il
@@ -52,7 +52,8 @@ In validazione, `InvalidPlan`:
 
 - `window` o `min_periods` uguali a 0, `min_periods` maggiore di `window`,
   `window` oltre `max_rows`;
-- `ddof` con una funzione diversa da `stddev`;
+- `ddof` con una funzione diversa da `stddev`, o `null` esplicito (il
+  parametro si omette);
 - `column` assente o non numerica; `group_by` non leggibile come testo;
   `order_column` di tipo non ordinabile; `output_column` non valido;
 - funzione fuori elenco, campi sconosciuti.
@@ -62,12 +63,16 @@ In esecuzione:
 - `Schema`: una cella `utf8` di `column` che non è un numero; una cella di
   `group_by` che non si converte in testo; una chiave di dizionario di
   `order_column` fuori dal proprio dizionario;
+- `DataMapping`: un risultato di `sum`, `mean` o `stddev` non finito
+  calcolato da valori finiti (overflow di `f64`);
 - `ResourceLimit`: più di `u32::MAX` righe con `order_column`.
 
 ### Limiti e deviazioni
 
 La cella si legge come `f64`: un intero oltre `2^53` o un `decimal128` si
-arrotondano senza errore, perché il risultato è `float64`.
+arrotondano senza errore, perché il risultato è `float64`. Un `NaN` o un
+infinito già nei dati si propagano senza errore; solo l'overflow di un
+calcolo su valori finiti si rifiuta.
 
 ### Complessità
 

@@ -66,7 +66,7 @@ pub struct ExpressionTransform {
     /// o `"error"` ([`crate::OnDivisionByZero`]). Senza divisioni
     /// nell'espressione non avrebbe effetto: scritto si rifiuta
     /// ([`ExpressionTransform::verifica_parametri`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub on_division_by_zero: Option<crate::OnDivisionByZero>,
 }
 
@@ -141,10 +141,17 @@ pub fn verifica_limiti_letterali(
     limits: &crate::Limits,
 ) -> plenora_core::Result<()> {
     use plenora_core::error::PlenoraError;
+    /// Il testo piu' lungo dentro un valore JSON (anche nelle liste di `in`).
+    fn testo_massimo(valore: &Value) -> usize {
+        match valore {
+            Value::String(testo) => testo.len(),
+            Value::Array(elementi) => elementi.iter().map(testo_massimo).max().unwrap_or(0),
+            Value::Object(campi) => campi.values().map(testo_massimo).max().unwrap_or(0),
+            Value::Null | Value::Bool(_) | Value::Number(_) => 0,
+        }
+    }
     match expr {
-        Expression::Literal {
-            value: Value::String(testo),
-        } if testo.len() > limits.max_string_bytes => {
+        Expression::Literal { value } if testo_massimo(value) > limits.max_string_bytes => {
             return Err(PlenoraError::InvalidPlan(
                 "testo letterale oltre max_string_bytes".into(),
             ));
@@ -489,7 +496,7 @@ mod tests {
     /// Fixture con null, -0.0, zeri, testi (anche data-like) e booleani.
     ///
     /// La colonna `nan` contiene NaN: la lettura deve fallire in entrambi i
-    /// percorsi ("expression non accetta numeri non finiti"). `ts` e `tstz`
+    /// percorsi ("numero non finito in ingresso"). `ts` e `tstz`
     /// coprono i timestamp nativi (naive e timezone-aware) di `date_trunc`.
     fn fixture() -> RecordBatch {
         RecordBatch::try_new(

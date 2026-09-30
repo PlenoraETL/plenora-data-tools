@@ -11,9 +11,9 @@ colonne senza parte ricevono null.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna `utf8` dell'ingresso | testo da dividere |
-| `delimiter` | stringa | `","` | non vuota, al più `max_string_bytes` byte; solo con almeno due colonne d'uscita | separatore, testo letterale (non regex) |
+| `delimiter` | stringa | `","` | non vuota, al più `max_string_bytes` byte; solo con almeno due colonne d'uscita; `null` non ammesso | separatore, testo letterale (non regex) |
 | `new_columns` | lista di stringhe | obbligatorio | da 1 a 256 nomi, senza ripetizioni, ciascuno non vuoto e al più 1024 byte | colonne d'uscita, nell'ordine delle parti |
-| `max_splits` | intero | assente | da 1 a `len(new_columns) - 2` | al più `max_splits` divisioni, cioè `max_splits + 1` parti |
+| `max_splits` | intero | assente | da 1 a `len(new_columns) - 2`; `null` non ammesso | al più `max_splits` divisioni, cioè `max_splits + 1` parti |
 
 Senza `max_splits` le parti sono al più `len(new_columns)`. Con
 `max_splits` sono al più `max_splits + 1`, e le colonne in coda restano
@@ -48,6 +48,8 @@ In validazione, `InvalidPlan`:
 - `delimiter` vuoto o oltre `max_string_bytes`, o scritto con una sola
   colonna in `new_columns`;
 - `max_splits` non positivo o almeno `len(new_columns) - 1`;
+- `delimiter` o `max_splits` `null` espliciti: un parametro facoltativo si
+  omette;
 - `new_columns` assente, vuota, con più di 256 nomi, con un nome ripetuto,
   vuoto, di soli spazi o oltre 1024 byte;
 - config con campi sconosciuti.

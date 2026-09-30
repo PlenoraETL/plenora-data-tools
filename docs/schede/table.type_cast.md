@@ -13,10 +13,10 @@ equivalenti): nessuna cella diventa null in silenzio.
 | `column` | stringa | obbligatorio | colonna dell'ingresso leggibile come testo (sotto) | colonna da convertire |
 | `target_type` | stringa | `"str"` | `str`, `int`, `float`, `bool`, `date`, `datetime`, `date32`, `timestamp_millis`, `decimal128`, `binary_utf8`, `uint64`, `dictionary_utf8` | tipo d'arrivo |
 | `date_format` | stringa | `""` | formato strftime di chrono, solo con `date`, `datetime`, `date32`, `timestamp_millis`, al più `max_string_bytes` byte | formato delle date; `""` usa i formati di default |
-| `errors` | stringa | `"coerce"` | `coerce`, `raise`, `ignore`; non con `str`, `binary_utf8`, `dictionary_utf8` | che cosa succede a una cella che non si converte |
-| `precision` | intero | assente | da 1 a 38, obbligatorio con `decimal128` e solo lì | cifre totali del decimale |
-| `scale` | intero | assente | da 0 a `precision`, obbligatorio con `decimal128` e solo lì | cifre dopo la virgola |
-| `timezone` | stringa | assente | nome IANA (`Europe/Rome`), solo con `timestamp_millis` | fuso dei testi senza fuso, e fuso della colonna d'uscita |
+| `errors` | stringa | `"coerce"` | `coerce`, `raise`, `ignore`; non con `str`, `binary_utf8`, `dictionary_utf8`; `null` non ammesso | che cosa succede a una cella che non si converte |
+| `precision` | intero | assente | da 1 a 38, obbligatorio con `decimal128` e solo lì; `null` non ammesso | cifre totali del decimale |
+| `scale` | intero | assente | da 0 a `precision`, obbligatorio con `decimal128` e solo lì; `null` non ammesso | cifre dopo la virgola |
+| `timezone` | stringa | assente | nome IANA (`Europe/Rome`), solo con `timestamp_millis`; `null` non ammesso | fuso dei testi senza fuso, e fuso della colonna d'uscita |
 
 Tipi d'arrivo: `str`, `date`, `datetime` → `utf8`; `int` → `int64`;
 `uint64` → `uint64`; `float` → `float64`; `bool` → `bool`; `date32` →
@@ -104,6 +104,8 @@ In validazione, `InvalidPlan`:
 - `timezone` con un target diverso da `timestamp_millis`, o non un nome
   IANA;
 - `errors` scritto con `str`, `binary_utf8` o `dictionary_utf8`;
+- `errors`, `precision`, `scale` o `timezone` `null` espliciti: un
+  parametro facoltativo si omette;
 - valori fuori elenco, config con campi sconosciuti.
 
 Le regole su `date_format`, `precision`, `scale`, `timezone` ed `errors`

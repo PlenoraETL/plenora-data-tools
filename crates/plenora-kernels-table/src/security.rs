@@ -40,7 +40,7 @@ pub struct Md5Hash {
     /// Testo di una cella nulla con `null_policy` `literal`; default
     /// `<null>` ([`letterale_nullo`]). Con le altre politiche non avrebbe
     /// effetto: scritto si rifiuta ([`verifica_null_literal`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub null_literal: Option<String>,
 }
 
@@ -221,7 +221,7 @@ pub struct Sha256Hash {
     /// Testo di una cella nulla con `null_policy` `literal`; default
     /// `<null>` ([`letterale_nullo`]). Con le altre politiche non avrebbe
     /// effetto: scritto si rifiuta ([`verifica_null_literal`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub null_literal: Option<String>,
 }
 
@@ -969,13 +969,13 @@ pub struct Masking {
     #[serde(default = "default_mask_type")]
     pub mask_type: MaskType,
     /// Caratteri iniziali lasciati in chiaro (`custom`; assente: 3).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub chars_start: Option<usize>,
     /// Caratteri finali lasciati in chiaro (`custom`; assente: 3).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub chars_end: Option<usize>,
     /// Carattere di maschera (`custom`; assente: `*`).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub mask_char: Option<String>,
 }
 

@@ -13,9 +13,9 @@ una colonna nuova `<colonna>_masked` o sovrascrive la colonna.
 | `maskings` | lista di oggetti | obbligatorio | da 1 a `max_columns` voci | mascherature, applicate in sequenza |
 | `maskings[].column` | stringa | obbligatorio | colonna dell'ingresso leggibile come testo | colonna da mascherare |
 | `maskings[].mask_type` | stringa | `custom` | `cf`, `email`, `phone`, `iban`, `custom` | forma della maschera |
-| `maskings[].chars_start` | intero | `3` | intero non negativo; solo con `custom` | caratteri iniziali in chiaro |
-| `maskings[].chars_end` | intero | `3` | intero non negativo; solo con `custom` | caratteri finali in chiaro |
-| `maskings[].mask_char` | stringa | `"*"` | un solo carattere; solo con `custom` | carattere di maschera |
+| `maskings[].chars_start` | intero | `3` | intero non negativo; solo con `custom`; `null` non ammesso | caratteri iniziali in chiaro |
+| `maskings[].chars_end` | intero | `3` | intero non negativo; solo con `custom`; `null` non ammesso | caratteri finali in chiaro |
+| `maskings[].mask_char` | stringa | `"*"` | un solo carattere; solo con `custom`; `null` non ammesso | carattere di maschera |
 | `overwrite` | booleano | `false` | `true`, `false` | `true` sovrascrive la colonna, `false` scrive `<colonna>_masked` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
@@ -70,6 +70,8 @@ In validazione, `InvalidPlan`:
 - `chars_start`, `chars_end` o `mask_char` con un `mask_type` diverso da
   `custom`;
 - `mask_char` che non è un solo carattere;
+- `chars_start`, `chars_end` o `mask_char` `null` espliciti (un parametro
+  facoltativo si omette);
 - nome d'uscita non valido (vuoto o oltre 1024 byte);
 - config con campi sconosciuti o `mask_type` fuori elenco.
 

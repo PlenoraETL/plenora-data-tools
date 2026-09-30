@@ -9,7 +9,7 @@ sempre le stesse righe nello stesso ordine.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `n` | intero | `100` | intero non negativo; non insieme a `fraction` | righe del campione (senza `fraction`) |
+| `n` | intero | `100` | intero non negativo; non insieme a `fraction`; `null` non ammesso | righe del campione (senza `fraction`) |
 | `fraction` | numero | assente | da 0 a 1 compresi | frazione delle righe; esclude `n` |
 | `random_state` | intero | assente (seme fisso `0x9e3779b97f4a7c15`) | intero senza segno a 64 bit; si rifiuta se il campione è sempre vuoto (`n = 0` o `fraction = 0` senza `stratify_column`) | seme del generatore |
 | `stratify_column` | stringa | assente | colonna leggibile come testo | colonna degli strati |
@@ -53,7 +53,8 @@ In validazione, `InvalidPlan`:
 - `n` scritto insieme a `fraction`;
 - `random_state` scritto senza `stratify_column` quando il campione è
   sempre vuoto (`n = 0` o `fraction = 0`): nessun seme avrebbe effetto;
-- config con campi sconosciuti o `n` negativo.
+- config con campi sconosciuti, `n` negativo o `n: null` esplicito (il
+  parametro si omette).
 
 In esecuzione:
 

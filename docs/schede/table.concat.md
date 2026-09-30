@@ -10,7 +10,7 @@ usa [`table.concat_by_name`](#tableconcat_by_name).
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `ignore_index` | booleano | assente | nessuno: scritto si rifiuta | una tabella Arrow non ha indice di riga, nessun valore avrebbe effetto |
+| `ignore_index` | booleano | assente | nessuno: scritto si rifiuta, anche `null` | una tabella Arrow non ha indice di riga, nessun valore avrebbe effetto |
 
 ### Schema
 
@@ -39,8 +39,8 @@ In validazione, `InvalidPlan`:
 - numero di colonne diverso, o nome o tipo diversi in una posizione (la
   nullabilità non conta);
 - metadati di schema con la stessa chiave e valori diversi;
-- `ignore_index` scritto, con qualunque valore (anche nel kernel, con la
-  stessa funzione);
+- `ignore_index` scritto, con qualunque valore, anche `null` (anche nel
+  kernel, con la stessa funzione);
 - config con campi sconosciuti.
 
 Nel runner, `table.concat` con più di due ingressi è `Unsupported`, con

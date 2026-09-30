@@ -331,6 +331,20 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
 ///   null); valore non convertibile in numero (gli errori di
 ///   `scalar_as_numero`); gli errori di `replace_or_append`.
 pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
+    bin_con_limiti(batch, config, &Limits::default())
+}
+
+/// [`bin`] con i limiti del chiamante (il runner passa i suoi).
+///
+/// Le etichette automatiche (`(bordo, bordo]`) scrivono due `f64` interi, fino
+/// a qualche centinaio di byte ciascuno con bordi calcolati dai dati: ogni
+/// etichetta si confronta con `limits.max_string_bytes` prima di scriverla.
+///
+/// # Errors
+///
+/// Come [`bin`], piu' `ResourceLimit` per un'etichetta oltre
+/// `limits.max_string_bytes`.
+pub fn bin_con_limiti(batch: &RecordBatch, config: &Bin, limits: &Limits) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
     // Il double calcola i bordi a larghezza uguale; la classe la decide il
@@ -379,6 +393,9 @@ pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
             .map(|bordi| format!("({}, {}]", bordi[0], bordi[1]))
             .collect()
     });
+    for etichetta in &etichette {
+        crate::verifica_testo_prodotto("bin", etichetta.len(), limits)?;
+    }
     // La ricerca binaria vale solo su bordi strettamente crescenti (niente
     // NaN, niente bordi ripetuti): con `Edges` e' gia' verificato, con
     // `Count` i bordi calcolati possono coincidere per arrotondamento, e
@@ -1717,7 +1734,7 @@ pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatc
 pub struct Sample {
     /// Righe del campione (default 100, [`Sample::righe`]); non ammesso
     /// insieme a `fraction`, che lo renderebbe senza effetto.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub n: Option<usize>,
     /// Frazione delle righe, da 0 a 1 compresi; esclude `n`.
     pub fraction: Option<f64>,

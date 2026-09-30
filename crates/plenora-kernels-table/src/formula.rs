@@ -7,8 +7,21 @@ use serde::Deserialize;
 
 use crate::{
     column_index, replace_or_append, scalar_as_f64_rounded, scalar_as_string, validate_output_name,
-    DIVISION_BY_ZERO_MESSAGE,
+    DIVISION_BY_ZERO_MESSAGE, NON_FINITE_RESULT_MESSAGE,
 };
+
+/// Il risultato di un'operazione su operandi finiti: finito. Un overflow
+/// (`1e308 * 10`, `1e308 / 1e-308`, anche intermedio) rifiuta la riga
+/// (`evaluation.non_finite_result`) con qualunque `on_division_by_zero`: la
+/// politica vale solo per il divisore zero. Un `NaN` o un infinito gia'
+/// nella colonna si propaga, come dichiara la scheda.
+fn risultato_finito(left: f64, right: f64, value: f64) -> Result<f64> {
+    if value.is_finite() || !left.is_finite() || !right.is_finite() {
+        Ok(value)
+    } else {
+        Err(PlenoraError::Schema(NON_FINITE_RESULT_MESSAGE.into()))
+    }
+}
 use plenora_core::{PlenoraError, Result};
 
 /// Config di `table.formula`.
@@ -24,7 +37,7 @@ pub struct Formula {
     /// Che cosa rende una divisione per un divisore zero: `"null"` (default)
     /// o `"error"` ([`crate::OnDivisionByZero`]). Senza `/` nella formula non
     /// avrebbe effetto: scritto si rifiuta ([`validate`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub on_division_by_zero: Option<crate::OnDivisionByZero>,
 }
 
@@ -352,19 +365,19 @@ fn evaluate(expression: &Expr, batch: &RecordBatch, row: usize) -> Result<Evalua
             match (left, right, operator) {
                 (Evaluated::Null, _, _) | (_, Evaluated::Null, _) => Evaluated::Null,
                 (Evaluated::Number(left), Evaluated::Number(right), '+') => {
-                    Evaluated::Number(left + right)
+                    Evaluated::Number(risultato_finito(left, right, left + right)?)
                 }
                 (Evaluated::Number(left), Evaluated::Number(right), '-') => {
-                    Evaluated::Number(left - right)
+                    Evaluated::Number(risultato_finito(left, right, left - right)?)
                 }
                 (Evaluated::Number(left), Evaluated::Number(right), '*') => {
-                    Evaluated::Number(left * right)
+                    Evaluated::Number(risultato_finito(left, right, left * right)?)
                 }
                 (Evaluated::Number(_), Evaluated::Number(0.0), '/') => {
                     return Err(PlenoraError::Schema(DIVISION_BY_ZERO_MESSAGE.into()))
                 }
                 (Evaluated::Number(left), Evaluated::Number(right), '/') => {
-                    Evaluated::Number(left / right)
+                    Evaluated::Number(risultato_finito(left, right, left / right)?)
                 }
                 (left, right, '+') => {
                     Evaluated::Text(format!("{}{}", display(left), display(right)))
@@ -671,7 +684,7 @@ impl<'a> FastProgram<'a> {
                             ));
                         }
                     };
-                    stack.push((value, false));
+                    stack.push((risultato_finito(left, right, value)?, false));
                 }
                 FastOp::Text(_) | FastOp::MissingColumn(_) => {
                     return Err(PlenoraError::Internal(
@@ -886,13 +899,13 @@ fn binary_slot<'a>(op: FastOp<'a>, left: Slot<'a>, right: Slot<'a>) -> Result<Sl
     Ok(match (left, right) {
         (Slot::Null, _) | (_, Slot::Null) => Slot::Null,
         (Slot::Number(left), Slot::Number(right)) => match op {
-            FastOp::Add => Slot::Number(left + right),
-            FastOp::Subtract => Slot::Number(left - right),
-            FastOp::Multiply => Slot::Number(left * right),
+            FastOp::Add => Slot::Number(risultato_finito(left, right, left + right)?),
+            FastOp::Subtract => Slot::Number(risultato_finito(left, right, left - right)?),
+            FastOp::Multiply => Slot::Number(risultato_finito(left, right, left * right)?),
             FastOp::Divide if right == 0.0 => {
                 return Err(PlenoraError::Schema(DIVISION_BY_ZERO_MESSAGE.into()));
             }
-            FastOp::Divide => Slot::Number(left / right),
+            FastOp::Divide => Slot::Number(risultato_finito(left, right, left / right)?),
             _ => {
                 return Err(PlenoraError::Internal(
                     "operatore non aritmetico su operandi numerici".into(),

@@ -155,6 +155,36 @@ fn json_text(value: &serde_json::Value) -> String {
     }
 }
 
+impl Conditional {
+    /// Un `result` o `default_value` che si legge come numero non finito
+    /// (`"NaN"`, `"inf"`, `"1e999"`) renderebbe un `Float64` non finito:
+    /// si rifiuta. La chiamano il kernel e l'analisi dei contratti.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` per il primo risultato numerico non finito.
+    pub fn verifica_risultati(&self) -> Result<()> {
+        let non_finito = |valore: &serde_json::Value| {
+            json_text(valore)
+                .replace(',', ".")
+                .parse::<f64>()
+                .is_ok_and(|numero| !numero.is_finite())
+        };
+        if self
+            .conditions
+            .iter()
+            .map(|condition| &condition.result)
+            .chain(std::iter::once(&self.default_value))
+            .any(non_finito)
+        {
+            return Err(PlenoraError::InvalidPlan(
+                "result o default_value numerico non finito".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Condizione di filtro con il valore atteso risolto UNA volta per batch
 /// (hot path minimale: nessun parse del letterale per riga nel percorso generico).
 ///
@@ -595,6 +625,7 @@ pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBa
     for condition in &config.conditions {
         verifica_valore(&condition.operator, condition.value.as_ref())?;
     }
+    config.verifica_risultati()?;
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
     // Valori attesi e testi di risultato risolti una volta per batch (hot path minimale):

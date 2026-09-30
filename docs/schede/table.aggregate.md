@@ -26,6 +26,8 @@ Campi di ogni aggregazione:
 | `ddof` | intero | `1` | `0` o più; solo con `variance` e `stddev` | gradi di libertà sottratti al divisore |
 
 Un parametro scritto per una funzione che non lo usa si rifiuta.
+`separator`, `distinct`, `skip_null`, `quantile` e `ddof` non ammettono
+`null` esplicito: un parametro facoltativo si omette.
 
 Nome della colonna d'uscita: `alias` se non è vuoto; altrimenti
 `<column>_<funzione>` (`avg` scrive `mean`) se la stessa `column` compare
@@ -99,8 +101,9 @@ In validazione, `InvalidPlan`:
 - una colonna assente; una chiave di gruppo non leggibile come testo;
 - una funzione su un tipo che non accetta (sopra);
 - `quantile` assente con `function: "quantile"`, o fuori da `0..1`;
-- un parametro scritto per una funzione che non lo usa; `separator` oltre
-  `max_string_bytes`; un nome d'uscita non valido (per esempio un `alias`
+- un parametro scritto per una funzione che non lo usa; `separator`,
+  `distinct`, `skip_null`, `quantile` o `ddof` `null` espliciti;
+  `separator` oltre `max_string_bytes`; un nome d'uscita non valido (per esempio un `alias`
   di soli spazi);
 - un nome d'uscita ripetuto o uguale a una colonna di `group_by`;
 - funzione fuori elenco, campi sconosciuti.

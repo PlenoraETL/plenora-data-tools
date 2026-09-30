@@ -62,7 +62,7 @@ pub struct RollingWindow {
     #[serde(default = "default_min_periods")]
     pub min_periods: usize,
     /// Gradi di liberta' di `stddev` (assente: 1).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub ddof: Option<usize>,
     /// Colonna d'uscita, `Float64` nullabile; se esiste gia' si sostituisce
     /// al suo posto.
@@ -89,6 +89,19 @@ impl RollingWindow {
             ));
         }
         Ok(())
+    }
+}
+
+/// Un risultato non finito calcolato da valori tutti finiti e' un overflow
+/// dell'aritmetica `f64` (`1e308 + 1e308`): si rifiuta invece di pubblicare
+/// un infinito. Un `NaN` o un infinito gia' nei valori si propaga, come
+/// dichiarano le schede.
+fn senza_overflow(risultato: Option<f64>, valori_finiti: bool, op: &str) -> Result<Option<f64>> {
+    match risultato {
+        Some(valore) if valori_finiti && !valore.is_finite() => Err(PlenoraError::DataMapping(
+            format!("{op}: risultato non finito da valori finiti (overflow di f64)"),
+        )),
+        altro => Ok(altro),
     }
 }
 
@@ -307,7 +320,8 @@ pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<Rec
                 values.push(None);
                 continue;
             }
-            values.push(match config.function {
+            let finiti = window.iter().flatten().all(|value| value.is_finite());
+            let risultato = match config.function {
                 RollingKind::Sum => Some(sum),
                 RollingKind::Mean => count.to_f64().map(|length| sum / length),
                 RollingKind::Min => minimum,
@@ -331,7 +345,8 @@ pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<Rec
                             .sqrt(),
                     )
                 }
-            });
+            };
+            values.push(senza_overflow(risultato, finiti, "rolling_window")?);
         }
         Ok(values)
     };
@@ -402,11 +417,11 @@ pub struct WindowFunction {
     /// quell'ordine.
     pub order_column: Option<String>,
     /// Distanza di `lag` e `lead` (assente: 1).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub offset: Option<usize>,
     /// Gruppi di `ntile`: obbligatorio e positivo con `ntile`, rifiutato
     /// con le altre funzioni.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub buckets: Option<usize>,
     /// Colonna d'uscita (assente: `<column>_<funzione>`); se esiste gia' si
     /// sostituisce al suo posto.
@@ -531,9 +546,32 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
         };
         let mut sum = 0.0;
         let mut count = 0.0_f64;
+        // Tutti i valori letti fin qui finiti: un risultato non finito e'
+        // allora un overflow (`senza_overflow`).
+        let mut finiti = true;
         let mut values = Vec::with_capacity(rows.len());
         for position in 0..rows.len() {
-            values.push(match config.function {
+            if let Some(value) = numbers.get(position).copied().flatten() {
+                finiti &= value.is_finite();
+            }
+            let finiti_qui = match config.function {
+                WindowKind::PctChange => {
+                    position
+                        .checked_sub(1)
+                        .and_then(|previous| numbers.get(previous).copied().flatten())
+                        .is_none_or(f64::is_finite)
+                        && numbers
+                            .get(position)
+                            .copied()
+                            .flatten()
+                            .is_none_or(f64::is_finite)
+                }
+                WindowKind::Cumsum | WindowKind::RunningMean => finiti,
+                // Copie di un valore (`lag`, `lead`) e conteggi: nessuna
+                // aritmetica che possa traboccare.
+                _ => false,
+            };
+            let risultato = match config.function {
                 WindowKind::Cumcount => position.to_f64(),
                 WindowKind::Cumsum => numbers[position].map(|value| {
                     sum += value;
@@ -574,7 +612,8 @@ pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<R
                         .and_then(|value| value.checked_div(rows.len()))
                         .and_then(|value| (value + 1).to_f64())
                 }
-            });
+            };
+            values.push(senza_overflow(risultato, finiti_qui, "window_function")?);
         }
         Ok(values)
     };

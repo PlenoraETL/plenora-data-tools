@@ -29,8 +29,9 @@ con `d = |v| · 0,001` (`0,001` se `v` è zero). In questo modo un valore
 sotto il primo bordo o sopra l'ultimo (anche `±inf`) cade nella classe
 esterna.
 
-L'etichetta di default scrive i bordi con la resa decimale più corta di
-`f64` (`(0, 18]`, `(2.5, 5]`).
+L'etichetta di default (senza `labels`) scrive i due bordi `f64` con la
+resa decimale più corta (`(0, 18]`, `(2.5, 5]`); non supera
+`max_string_bytes` byte, controllato in esecuzione.
 
 ### Schema
 
@@ -59,11 +60,13 @@ In validazione, `InvalidPlan`:
   `max_string_bytes` byte;
 - config con campi sconosciuti.
 
-In esecuzione, `Schema`:
+In esecuzione:
 
-- con un numero di classi, nessun valore finito nella colonna (anche una
-  tabella vuota o tutta nulla);
-- una cella `utf8` che non è un numero.
+- `Schema`: con un numero di classi, nessun valore finito nella colonna
+  (anche una tabella vuota o tutta nulla); una cella `utf8` che non è un
+  numero;
+- `ResourceLimit`: senza `labels`, un'etichetta di default oltre
+  `max_string_bytes` byte.
 
 ### Limiti e deviazioni
 

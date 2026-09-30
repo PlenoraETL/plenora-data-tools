@@ -87,10 +87,6 @@ pub(in crate::analyze) fn analyze_melt(
     let homogeneous = value_indices
         .iter()
         .all(|index| source_fields[*index].data_type() == &value_type);
-    con_op(
-        op,
-        reshape::verifica_type_policy(config.type_policy, homogeneous),
-    )?;
     let value_data_type = if homogeneous {
         value_type
     } else if matches!(
@@ -416,7 +412,7 @@ pub(in crate::analyze) fn analyze_table_diff(
     } else {
         config.compare_columns.clone()
     };
-    con_op(op, config.verifica_separatore(compare.len()))?;
+    con_op(op, config.verifica_separatore())?;
     check_text_len(
         op,
         config.separatore(),

@@ -1836,15 +1836,14 @@ mod tests {
             "drop della geometria -> tabellare"
         );
         assert!(output.active_geometry.is_none());
-        // Un nome inesistente non toglierebbe niente: si rifiuta, qui e nel
-        // kernel (`DropColumns::verifica_parametri`).
-        assert!(err(
+        // Un nome inesistente non toglie niente e si accetta: dipende
+        // dall'ingresso (lo stesso piano gira su tabelle diverse).
+        let unchanged = ok(
             "table.drop_columns",
             &[geo_contract()],
-            json!({"columns": ["nope"]})
-        )
-        .to_string()
-        .contains("assente"));
+            json!({"columns": ["nope"]}),
+        );
+        assert_eq!(unchanged.geometries.len(), 1);
         assert!(err(
             "table.drop_columns",
             &[tabular_contract()],

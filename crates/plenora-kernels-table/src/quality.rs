@@ -363,10 +363,10 @@ pub struct AssertRange {
     pub max: Option<f64>,
     /// Estremo `min` incluso (assente: incluso). Senza `min` non ha effetto,
     /// e l'analisi dei contratti lo rifiuta.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub inclusive_min: Option<bool>,
     /// Come `inclusive_min`, per `max`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub inclusive_max: Option<bool>,
     /// Con `true` le celle nulle passano; con `false` (default) sono
     /// rifiutate.

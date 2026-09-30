@@ -14,7 +14,7 @@ righe.
 | `parts` | lista di stringhe | `["year"]` | non vuota, senza ripetizioni, fra `year`, `month`, `day`, `quarter`, `weekday`, `week`, `hour`, `minute`, `second` | parti da estrarre, nell'ordine delle colonne d'uscita |
 | `prefix` | stringa | `""` | qualunque; `""` vale `<column>_` | prefisso dei nomi d'uscita (`<prefix><parte>`) |
 | `date_format` | stringa o `null` | `null` | formato strftime di chrono, non vuoto, al più `max_string_bytes` byte | formato delle date; `null` usa i formati di default |
-| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non interpretabile fa sempre fallire il passo, nessun valore avrebbe effetto |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non interpretabile fa sempre fallire il passo, nessun valore avrebbe effetto |
 
 Ogni cella non nulla si legge come testo (una `date32` come `AAAA-MM-GG`,
 un `timestamp` in RFC 3339 con il fuso) e si interpreta:
@@ -32,7 +32,7 @@ appartenere all'anno vicino (il 2021-01-01 è nella settimana 53);
 `hour`, `minute`, `second`.
 
 Un valore non interpretabile fa sempre fallire il passo: per questo
-`invalid` scritto, con qualunque valore, si rifiuta.
+`invalid` scritto, con qualunque valore (anche `null`), si rifiuta.
 
 ### Schema
 

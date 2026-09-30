@@ -104,6 +104,13 @@ fn i_testi_e_i_pattern_della_config_si_rifiutano_in_validazione() {
             stringhe(16),
             "testo letterale oltre max_string_bytes",
         ),
+        // Anche un testo dentro la lista di `in`.
+        (
+            "table.expression",
+            funzione("in", json!([col("s"), lit(json!(["a", lungo]))])),
+            stringhe(16),
+            "testo letterale oltre max_string_bytes",
+        ),
         (
             "table.lookup",
             json!({"column": "k", "mapping": {"a": lungo}}),
@@ -126,8 +133,8 @@ fn i_testi_e_i_pattern_della_config_si_rifiutano_in_validazione() {
         (
             "table.date_format",
             json!({"column": "s", "input_format": "%Y", "output_column": "d",
-                   "output_format": "%Y%m"}),
-            stringhe(64),
+                   "output_format": "%Y-%m-%d %H:%M:%S"}),
+            stringhe(18),
             "output_format: testo scritto oltre max_string_bytes",
         ),
         (
@@ -144,6 +151,15 @@ fn i_testi_e_i_pattern_della_config_si_rifiutano_in_validazione() {
             "separator oltre il limite",
         ),
     ];
+    // Il limite del formato e' esatto per campo: `%Y%m` (al piu' 9 byte)
+    // passa con 16.
+    valida(&piano(
+        "table.date_format",
+        json!({"column": "s", "input_format": "%Y", "output_column": "d",
+               "output_format": "%Y%m"}),
+        stringhe(16),
+    ))
+    .expect("%Y%m entro 16 byte");
     for (op, config, limiti, frammento) in casi {
         let mut pipeline = piano(op, config.clone(), limiti);
         if op == "table.table_diff" {
@@ -311,4 +327,29 @@ fn pivot_table_diff_e_flatten_json_fermano_i_testi_oltre_il_limite() {
         "{errore:?}"
     );
     assert!(analysis::flatten_json(&json_tabella, &flatten, &Limits::default()).is_ok());
+}
+
+/// Le etichette automatiche di `bin` scrivono i bordi interi: con bordi
+/// calcolati da valori enormi superano `max_string_bytes`.
+#[test]
+fn le_etichette_automatiche_di_bin_rispettano_il_limite() {
+    use plenora_core::arrow::array::Float64Array;
+    use plenora_kernels_table::{analysis, Limits};
+    let tabella = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("v", DataType::Float64, false)])),
+        vec![Arc::new(Float64Array::from(vec![-1e300, 1e300]))],
+    )
+    .expect("tabella");
+    let config: analysis::Bin =
+        serde_json::from_value(json!({"column": "v", "bins": 2})).expect("bin");
+    let stretti = Limits {
+        max_string_bytes: 64,
+        ..Limits::default()
+    };
+    let errore = analysis::bin_con_limiti(&tabella, &config, &stretti).expect_err("etichetta");
+    assert!(
+        matches!(errore, PlenoraError::ResourceLimit(_)),
+        "{errore:?}"
+    );
+    assert!(analysis::bin(&tabella, &config).is_ok());
 }

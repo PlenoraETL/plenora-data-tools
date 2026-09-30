@@ -195,6 +195,35 @@ fn window_function_riferimento(
                         .and_then(|value| (value + 1).to_f64())
                 }
             });
+            // Overflow da valori finiti: rifiuto, scritto qui a parte dal
+            // kernel. Cumulate: ogni valore fin qui finito; `pct_change`: i
+            // due valori della riga e della precedente finiti.
+            let finiti = match config.function {
+                WindowKind::Cumsum | WindowKind::RunningMean => numbers[..=position]
+                    .iter()
+                    .flatten()
+                    .all(|value| value.is_finite()),
+                WindowKind::PctChange => {
+                    numbers[position].is_none_or(f64::is_finite)
+                        && position
+                            .checked_sub(1)
+                            .and_then(|previous| numbers[previous])
+                            .is_none_or(f64::is_finite)
+                }
+                _ => false,
+            };
+            if finiti
+                && values
+                    .last()
+                    .copied()
+                    .flatten()
+                    .is_some_and(|v| !v.is_finite())
+            {
+                return Err(PlenoraError::DataMapping(
+                    "window_function: risultato non finito da valori finiti (overflow di f64)"
+                        .into(),
+                ));
+            }
         }
         if let Some(errore) = errore {
             return Err(errore);

@@ -989,7 +989,7 @@ pub struct Concat {
     /// valore sarebbe senza effetto. Scritto si rifiuta
     /// ([`Concat::verifica_parametri`]); il campo resta per dare un errore
     /// che nomina il motivo invece di un campo sconosciuto.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub ignore_index: Option<bool>,
 }
 

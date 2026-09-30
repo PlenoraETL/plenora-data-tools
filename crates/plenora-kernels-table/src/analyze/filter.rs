@@ -145,6 +145,7 @@ pub(in crate::analyze) fn analyze_conditional(
         check_operator(op, field, &condition.operator, condition.valore())?;
     }
     check_output_name(op, &config.output_column)?;
+    con_op(op, config.verifica_risultati())?;
     // Risultati e default finiscono nelle celle.
     for condition in &config.conditions {
         check_json_text(op, &condition.result, limits.max_string_bytes, "result")?;

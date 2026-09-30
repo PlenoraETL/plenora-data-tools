@@ -10,17 +10,18 @@ copiano.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `columns` | lista di stringhe | `[]` | colonne dell'ingresso, senza ripetizioni; vuota solo con `alphabetical = true` | colonne da mettere in testa, nell'ordine dato |
-| `alphabetical` | booleano | `false` | `true`, `false`; alias `sort_alphabetical`; solo con almeno due colonne d'ingresso non elencate | ordina alfabeticamente le colonne non elencate |
+| `alphabetical` | booleano | `false` | `true`, `false`; alias `sort_alphabetical`; `null` non ammesso | ordina alfabeticamente le colonne non elencate |
 
 `alphabetical` riguarda solo le colonne non elencate in `columns`. L'ordine
 alfabetico confronta i nomi in minuscolo (minuscole Unicode) byte per byte
 in UTF-8, quindi le lettere accentate vanno dopo la `z`; due nomi uguali in
 minuscolo restano nell'ordine d'ingresso.
 
-Un parametro senza effetto si rifiuta: `columns` vuota senza
-`alphabetical = true` non sposta niente; `alphabetical` scritto (con
-qualunque valore) quando al più una colonna d'ingresso non è elencata in
-`columns` non ordina niente.
+`columns` vuota senza `alphabetical = true` non sposterebbe niente con
+nessun ingresso e si rifiuta. `alphabetical` quando al più una colonna
+d'ingresso non è elencata in `columns` si accetta e non ordina niente:
+dipende dall'ingresso, e lo stesso piano gira su tabelle diverse.
+`alphabetical: null` esplicito si rifiuta: il parametro si omette.
 
 ### Schema
 
@@ -42,8 +43,7 @@ In validazione, `InvalidPlan`:
 
 - un nome di `columns` ripetuto o che non è una colonna dell'ingresso;
 - `columns` vuota senza `alphabetical = true`;
-- `alphabetical` (o `sort_alphabetical`) scritto quando al più una colonna
-  d'ingresso non è elencata in `columns`;
+- `alphabetical` (o `sort_alphabetical`) `null` esplicito;
 - config con campi sconosciuti.
 
 In esecuzione: nessun errore che dipenda dai dati.

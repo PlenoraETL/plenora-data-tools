@@ -19,21 +19,22 @@ use super::{replace_or_append, utf8_column, validate_output_name};
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DropColumns {
-    /// Colonne da togliere (obbligatorio, almeno una, senza ripetizioni).
-    /// Un nome assente dallo schema non toglierebbe niente: si rifiuta
-    /// ([`DropColumns::verifica_parametri`]).
+    /// Colonne da togliere (obbligatorio, almeno una, senza ripetizioni:
+    /// [`DropColumns::verifica_parametri`]). Un nome assente dallo schema non
+    /// toglie niente e si accetta: dipende dall'ingresso, e lo stesso piano
+    /// deve poter girare su tabelle con e senza quella colonna.
     pub columns: Vec<String>,
 }
 
 impl DropColumns {
-    /// Parametri senza effetto contro lo schema d'ingresso, rifiutati:
-    /// `columns` vuoto (non toglie niente), un nome ripetuto, un nome che lo
-    /// schema non ha. La chiamano il kernel e l'analisi dei contratti.
+    /// Parametri senza effetto per la sola config, rifiutati: `columns` vuoto
+    /// (non toglie niente con nessun ingresso) e un nome ripetuto. La
+    /// chiamano il kernel e l'analisi dei contratti.
     ///
     /// # Errors
     ///
     /// `InvalidPlan` per ciascuna delle regole.
-    pub fn verifica_parametri(&self, schema: &Schema) -> Result<()> {
+    pub fn verifica_parametri(&self) -> Result<()> {
         if self.columns.is_empty() {
             return Err(PlenoraError::InvalidPlan(
                 "columns vuoto: nessuna colonna da togliere".into(),
@@ -44,11 +45,6 @@ impl DropColumns {
             if !visti.insert(name.as_str()) {
                 return Err(PlenoraError::InvalidPlan(format!(
                     "columns: colonna ripetuta: {name}"
-                )));
-            }
-            if schema.index_of(name).is_err() {
-                return Err(PlenoraError::InvalidPlan(format!(
-                    "colonna {name} assente: toglierla non avrebbe effetto"
                 )));
             }
         }
@@ -66,11 +62,11 @@ impl DropColumns {
 /// # Errors
 ///
 /// - `InvalidPlan`: le regole di [`DropColumns::verifica_parametri`]
-///   (`columns` vuoto, un nome ripetuto o assente dallo schema);
+///   (`columns` vuoto, un nome ripetuto); un nome assente non toglie niente;
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn drop_columns(batch: &RecordBatch, config: &DropColumns) -> Result<RecordBatch> {
-    config.verifica_parametri(&batch.schema())?;
+    config.verifica_parametri()?;
     let removed: HashSet<&str> = config.columns.iter().map(String::as_str).collect();
     let mut fields = Vec::new();
     let mut columns = Vec::new();
@@ -204,9 +200,10 @@ pub struct AlignColumn {
     pub align_type: AlignType,
     /// Valore di ogni cella se la colonna manca nell'ingresso: la colonna
     /// aggiunta e' costante e non nullable. Assente (o `null`): colonna di
-    /// null, nullable. Su una colonna che l'ingresso ha gia' non avrebbe
-    /// effetto: si rifiuta ([`AlignSchema::verifica_parametri`]). Le
-    /// conversioni ammesse sono quelle di [`check_align_default`].
+    /// null, nullable. Su una colonna che l'ingresso ha gia' non si legge:
+    /// dipende dall'ingresso, quindi si accetta (lo stesso piano allinea
+    /// tabelle con e senza la colonna). Le conversioni ammesse sono quelle
+    /// di [`check_align_default`].
     #[serde(default)]
     pub default: Option<Value>,
 }
@@ -219,10 +216,9 @@ pub struct AlignSchema {
     /// colonna, nomi senza ripetizioni).
     pub columns: Vec<AlignColumn>,
     /// Colonne d'ingresso non dichiarate: scartate (`false`, default) o
-    /// tenute in coda nell'ordine d'ingresso (`true`). Scritto quando ogni
-    /// colonna d'ingresso e' dichiarata non avrebbe effetto, con nessuno
-    /// dei due valori: si rifiuta ([`AlignSchema::verifica_parametri`]).
-    #[serde(default)]
+    /// tenute in coda nell'ordine d'ingresso (`true`). Senza colonne non
+    /// dichiarate non cambia niente, e si accetta: dipende dall'ingresso.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub keep_extra: Option<bool>,
 }
 
@@ -231,39 +227,6 @@ impl AlignSchema {
     #[must_use]
     pub fn tiene_extra(&self) -> bool {
         self.keep_extra.unwrap_or(false)
-    }
-
-    /// Parametri senza effetto contro lo schema d'ingresso, rifiutati: il
-    /// `default` di una colonna che l'ingresso ha gia' (la colonna si
-    /// propaga, il default non si legge) e `keep_extra` scritto quando ogni
-    /// colonna d'ingresso e' dichiarata (non c'e' niente da tenere o
-    /// scartare). La chiamano il kernel e l'analisi dei contratti, con lo
-    /// schema che ciascuno vede.
-    ///
-    /// # Errors
-    ///
-    /// `InvalidPlan` per ciascuna delle due regole.
-    pub fn verifica_parametri(&self, schema: &Schema) -> Result<()> {
-        for declared in &self.columns {
-            if declared.default.is_some() && schema.index_of(&declared.name).is_ok() {
-                return Err(PlenoraError::InvalidPlan(format!(
-                    "default della colonna {} senza effetto: la colonna esiste gia'",
-                    declared.name
-                )));
-            }
-        }
-        if self.keep_extra.is_some()
-            && schema.fields().iter().all(|field| {
-                self.columns
-                    .iter()
-                    .any(|declared| &declared.name == field.name())
-            })
-        {
-            return Err(PlenoraError::InvalidPlan(
-                "keep_extra senza effetto: ogni colonna d'ingresso e' dichiarata".into(),
-            ));
-        }
-        Ok(())
     }
 }
 
@@ -466,7 +429,6 @@ pub fn check_align_default(value: &Value, align_type: AlignType) -> Result<()> {
 /// - `InvalidPlan`: elenco `columns` vuoto, colonna ripetuta, nome non
 ///   valido ([`validate_output_name`]), tipo presente diverso dal
 ///   dichiarato o `default` non convertibile ([`check_align_default`]);
-///   parametri senza effetto ([`AlignSchema::verifica_parametri`]);
 /// - `DataMapping`: errore Arrow nella costruzione del batch o sulla
 ///   precisione/scala `Decimal128` (guardie interne, non attese);
 /// - `Internal`: colonna costruita con un tipo diverso da quello dichiarato
@@ -478,7 +440,6 @@ pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordB
         ));
     }
     let schema = batch.schema();
-    config.verifica_parametri(&schema)?;
     let mut seen = HashSet::new();
     let mut fields = Vec::with_capacity(config.columns.len());
     let mut columns: Vec<ArrayRef> = Vec::with_capacity(config.columns.len());
@@ -536,9 +497,8 @@ pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordB
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RenamePair {
-    /// Nome attuale (obbligatorio): una colonna dell'ingresso, altrimenti la
-    /// coppia non avrebbe effetto e si rifiuta
-    /// ([`Rename::verifica_parametri`]).
+    /// Nome attuale (obbligatorio); se non e' una colonna dell'ingresso la
+    /// coppia non rinomina niente e si accetta: dipende dall'ingresso.
     pub old_name: String,
     /// Nuovo nome (obbligatorio, non vuoto, al piu' 1024 byte).
     pub new_name: String,
@@ -555,16 +515,16 @@ pub struct Rename {
 }
 
 impl Rename {
-    /// Rinomine senza effetto contro lo schema d'ingresso, rifiutate:
-    /// `renames` vuoto, un `old_name` che lo schema non ha, un `old_name`
-    /// uguale al suo `new_name`, e due coppie della stessa sorgente (una
-    /// delle due non avrebbe effetto). La chiamano il kernel e l'analisi dei
-    /// contratti.
+    /// Rinomine senza effetto per la sola config, rifiutate: `renames`
+    /// vuoto, un `old_name` uguale al suo `new_name`, e due coppie della
+    /// stessa sorgente (una delle due non avrebbe effetto). Un `old_name` che
+    /// l'ingresso non ha si accetta: dipende dall'ingresso. La chiamano il
+    /// kernel e l'analisi dei contratti.
     ///
     /// # Errors
     ///
     /// `InvalidPlan` per ciascuna delle regole.
-    pub fn verifica_parametri(&self, schema: &Schema) -> Result<()> {
+    pub fn verifica_parametri(&self) -> Result<()> {
         if self.renames.is_empty() {
             return Err(PlenoraError::InvalidPlan(
                 "renames vuoto: nessuna rinomina".into(),
@@ -575,12 +535,6 @@ impl Rename {
             if !visti.insert(pair.old_name.as_str()) {
                 return Err(PlenoraError::InvalidPlan(format!(
                     "rename origine: colonna ripetuta: {}",
-                    pair.old_name
-                )));
-            }
-            if schema.index_of(&pair.old_name).is_err() {
-                return Err(PlenoraError::InvalidPlan(format!(
-                    "colonna {} assente: la rinomina non avrebbe effetto",
                     pair.old_name
                 )));
             }
@@ -609,7 +563,7 @@ impl Rename {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn rename(batch: &RecordBatch, config: &Rename) -> Result<RecordBatch> {
-    config.verifica_parametri(&batch.schema())?;
+    config.verifica_parametri()?;
     let mapping: HashMap<&str, &str> = config
         .renames
         .iter()
@@ -648,7 +602,11 @@ pub struct ReorderColumns {
     /// [`ReorderColumns::alfabetico`]; alias `sort_alphabetical`). Scritto
     /// quando restano al piu' una colonna non elencata non avrebbe effetto
     /// ([`ReorderColumns::verifica_parametri`]).
-    #[serde(default, alias = "sort_alphabetical")]
+    #[serde(
+        default,
+        alias = "sort_alphabetical",
+        deserialize_with = "crate::mai_null"
+    )]
     pub alphabetical: Option<bool>,
 }
 
@@ -659,29 +617,18 @@ impl ReorderColumns {
         self.alphabetical.unwrap_or(false)
     }
 
-    /// Parametri senza effetto contro lo schema d'ingresso, rifiutati:
-    /// `alphabetical` scritto quando restano al piu' una colonna non
-    /// elencata (non c'e' niente da ordinare), e una config che non sposta
-    /// niente (`columns` vuoto senza `alphabetical = true`). La chiamano il
-    /// kernel e l'analisi dei contratti, dopo i controlli sulle colonne.
+    /// Una config che non sposta niente con nessun ingresso (`columns`
+    /// vuoto senza `alphabetical = true`) si rifiuta. `alphabetical` con al
+    /// piu' una colonna restante si accetta: dipende dall'ingresso. La
+    /// chiamano il kernel e l'analisi dei contratti.
     ///
     /// # Errors
     ///
-    /// `InvalidPlan` per ciascuna delle due regole.
-    pub fn verifica_parametri(&self, schema: &Schema) -> Result<()> {
+    /// `InvalidPlan` per la config che non sposta niente.
+    pub fn verifica_parametri(&self) -> Result<()> {
         if self.columns.is_empty() && !self.alfabetico() {
             return Err(PlenoraError::InvalidPlan(
                 "columns vuoto senza alphabetical: il riordino non sposta niente".into(),
-            ));
-        }
-        let restanti = schema
-            .fields()
-            .iter()
-            .filter(|field| !self.columns.iter().any(|name| name == field.name()))
-            .count();
-        if self.alphabetical.is_some() && restanti <= 1 {
-            return Err(PlenoraError::InvalidPlan(
-                "alphabetical senza effetto: resta al piu' una colonna non elencata".into(),
             ));
         }
         Ok(())
@@ -717,7 +664,7 @@ pub fn reorder_columns(batch: &RecordBatch, config: &ReorderColumns) -> Result<R
             .map_err(|_| PlenoraError::Schema(format!("colonna non trovata: {name}")))?;
         selected.push(index);
     }
-    config.verifica_parametri(&schema)?;
+    config.verifica_parametri()?;
     let mut remaining: Vec<usize> = (0..batch.num_columns())
         .filter(|index| !selected.contains(index))
         .collect();
@@ -754,7 +701,7 @@ pub struct ConcatColumns {
     /// Testo fra due parti (default `" "`, [`ConcatColumns::separatore`];
     /// puo' essere vuoto). Con una sola colonna non ci sono due parti:
     /// scritto si rifiuta ([`ConcatColumns::verifica_parametri`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub separator: Option<String>,
     /// Salta i null (default `true`); con `false` un null vale `""`.
     #[serde(default = "default_true")]
@@ -877,7 +824,7 @@ pub struct SplitColumn {
     /// Separatore letterale, non vuoto (default `","`,
     /// [`SplitColumn::delimitatore`]). Con una sola colonna d'uscita il testo
     /// non si divide: scritto si rifiuta ([`SplitColumn::verifica_parametri`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub delimiter: Option<String>,
     /// Colonne d'uscita, una per parte (obbligatorio, da 1 a
     /// `limits.max_split_columns`, senza ripetizioni).
@@ -887,7 +834,7 @@ pub struct SplitColumn {
     /// solo fra 1 e `len(new_columns) - 2`: un valore non positivo o da
     /// `len(new_columns) - 1` in su da' le stesse parti dell'assente, e si
     /// rifiuta ([`SplitColumn::verifica_parametri`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub max_splits: Option<i64>,
 }
 
@@ -1047,14 +994,18 @@ mod tests {
     #[test]
     fn defaults_and_non_destructive_paths_work() {
         let input = batch();
-        // Un nome assente non toglierebbe niente: si rifiuta.
+        // Un nome assente non toglie niente e si accetta (dipende
+        // dall'ingresso); una lista vuota si rifiuta.
+        let dropped = drop_columns(
+            &input,
+            &DropColumns {
+                columns: vec!["missing".into()],
+            },
+        )
+        .expect("unknown drop is no-op");
+        assert_eq!(dropped.num_columns(), 2);
         assert!(matches!(
-            drop_columns(
-                &input,
-                &DropColumns {
-                    columns: vec!["missing".into()],
-                },
-            ),
+            drop_columns(&input, &DropColumns { columns: vec![] }),
             Err(PlenoraError::InvalidPlan(_))
         ));
 

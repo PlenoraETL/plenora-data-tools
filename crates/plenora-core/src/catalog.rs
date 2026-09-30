@@ -778,6 +778,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         CanonicalOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 3
     ),
     op!(
@@ -792,7 +793,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        contract_analysis_version = 2
+        contract_analysis_version = 2,
+        kernel_version = 2
     ),
     op!(
         "table.concat",
@@ -807,6 +809,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         InputOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     op!(
@@ -822,6 +825,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     op!(
@@ -852,8 +856,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        semantic_version = 2,
-        expansion_constraint = SumRelative
+        expansion_constraint = SumRelative,
+        semantic_version = 2
     ),
     op!(
         "table.date_extract",
@@ -869,6 +873,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol,
         semantic_version = 2,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 4
     ),
     op!(
@@ -883,6 +888,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         CanonicalOrder,
         PublicProtocol,
+        config_schema_version = 2,
         kernel_version = 2
     ),
     op!(
@@ -912,6 +918,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     op!(
@@ -942,6 +949,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 3
     ),
     op!(
@@ -973,6 +981,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol,
         semantic_version = 3,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 4
     ),
     // join generico: molti-a-molti possibile. Vincolo `SumRelative` come
@@ -989,9 +998,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        kernel_version = 2,
+        expansion_constraint = SumRelative,
         semantic_version = 2,
-        expansion_constraint = SumRelative
+        kernel_version = 2
     ),
     op!(
         "table.lookup",
@@ -1019,6 +1028,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
+        semantic_version = 2,
         config_schema_version = 2,
         kernel_version = 3
     ),
@@ -1035,6 +1045,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 3
     ),
     op!(
@@ -1050,6 +1061,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     op!(
@@ -1065,6 +1077,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     op!(
@@ -1079,6 +1092,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
+        config_schema_version = 2,
         contract_analysis_version = 2,
         kernel_version = 2
     ),
@@ -1095,6 +1109,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     op!(
@@ -1124,6 +1139,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     op!(
@@ -1139,6 +1155,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 3
     ),
     op!(
@@ -1181,6 +1198,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     // diff: l'uscita (added/removed/changed) è proporzionale a entrambi gli
@@ -1245,6 +1263,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol,
         semantic_version = 2,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 4
     ),
     op!(
@@ -1272,7 +1291,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        kernel_version = 2
+        config_schema_version = 2,
+        kernel_version = 3
     ),
     op!(
         "table.mask_data",
@@ -1287,6 +1307,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 3
     ),
     op!(
@@ -1303,6 +1324,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol,
         semantic_version = 2,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 3
     ),
     // --- Tabellari estensioni -----------------------------------------
@@ -1337,6 +1359,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol,
         expansion_constraint = LeftRelative,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     op!(
@@ -1367,6 +1390,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         semantic_version = 2,
+        config_schema_version = 2,
         kernel_version = 3
     ),
     op!(
@@ -1457,6 +1481,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol,
         semantic_version = 2,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 4
     ),
     op!(
@@ -1535,7 +1560,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        kernel_version = 2
+        config_schema_version = 2,
+        kernel_version = 3
     ),
     // semi_join: output <= left -> LeftRelative.
     op!(
@@ -1567,6 +1593,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol,
         semantic_version = 2,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 3
     ),
     op!(
@@ -1650,6 +1677,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     op!(
@@ -1763,8 +1791,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        semantic_version = 2,
-        expansion_constraint = SumRelative
+        expansion_constraint = SumRelative,
+        semantic_version = 2
     ),
     op!(
         "geo.area",
@@ -2034,8 +2062,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        semantic_version = 2,
-        expansion_constraint = SumRelative
+        expansion_constraint = SumRelative,
+        semantic_version = 2
     ),
     op!(
         "geo.perimeter",
@@ -2874,6 +2902,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         InputOrder,
         KernelValidated,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     op!(
@@ -2916,6 +2945,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         config_schema_version = 2,
+        contract_analysis_version = 2,
         kernel_version = 2
     ),
     // --- Estensioni table v1.2 -------------------------------------------
@@ -2932,8 +2962,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         KernelValidated,
         config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 2
+        contract_analysis_version = 2
     ),
     op!(
         "table.concat_by_name",
@@ -3000,8 +3029,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         KernelValidated,
-        semantic_version = 2,
-        expansion_constraint = SumRelative
+        expansion_constraint = SumRelative,
+        semantic_version = 2
     ),
 ];
 
@@ -3280,7 +3309,7 @@ mod tests {
         let filter = find_operation("table.filter").expect("table.filter");
         assert_eq!(filter.semantic_version, 1);
         assert_eq!(filter.config_schema_version, 2);
-        assert_eq!(filter.contract_analysis_version, 1);
+        assert_eq!(filter.contract_analysis_version, 2);
         assert_eq!(filter.kernel_version, 3);
         let select = find_operation("table.select_columns").expect("table.select_columns");
         assert_eq!(
@@ -3855,22 +3884,22 @@ mod tests {
         // kernel).
         let expected: &[(&str, u32, u32, u32, u32)] = &[
             // Tabellari: nuovo rifiuto per riga nel kernel.
-            ("table.date_extract", 2, 2, 1, 4),
+            ("table.date_extract", 2, 2, 2, 4),
             ("table.flatten_json", 2, 1, 1, 4),
-            ("table.type_cast", 2, 2, 1, 4),
-            ("table.md5_hash", 2, 2, 1, 3),
-            ("table.sha256_hash", 2, 2, 1, 3),
+            ("table.type_cast", 2, 2, 2, 4),
+            ("table.md5_hash", 2, 2, 2, 3),
+            ("table.sha256_hash", 2, 2, 2, 3),
             ("table.assert_not_null", 2, 1, 1, 2),
-            ("table.assert_range", 2, 1, 1, 3),
+            ("table.assert_range", 2, 2, 1, 3),
             ("table.assert_regex", 2, 1, 1, 2),
             ("table.assert_unique", 2, 1, 1, 3),
             ("table.assert_foreign_key", 2, 1, 1, 3),
             ("table.date_add", 2, 2, 2, 4),
-            ("table.date_diff", 2, 2, 1, 4),
+            ("table.date_diff", 2, 2, 2, 4),
             ("table.date_format", 2, 2, 2, 4),
             ("table.timezone_convert", 2, 2, 2, 4),
             ("table.explode", 2, 1, 1, 2),
-            ("table.formula", 3, 2, 1, 4),
+            ("table.formula", 3, 2, 2, 4),
             ("table.expression", 4, 3, 3, 5),
             // `from_wkt`: raccolta nel kernel geo. La successiva dichiarazione
             // di encoding e tipi geometrici del produttore cambia anche
@@ -3977,63 +4006,121 @@ mod tests {
 
     #[test]
     fn parametri_senza_effetto_limiti_e_divisione_portano_i_loro_incrementi() {
-        // Incrementi di difetti-b, tabella scritta a mano: (id, semantic,
-        // config_schema, contract_analysis, kernel). Regola: una config prima
-        // accettata e ora rifiutata (parametro senza effetto) incrementa lo
-        // schema della config e il kernel, che la rifiuta con la stessa
-        // funzione; un controllo nuovo della sola analisi (testi della config
-        // contro i limiti) l'analisi; un testo prodotto ora limitato il
-        // kernel; la divisione per zero che di default vale null la
-        // semantica (formula, expression). I join passati a `SumRelative`
-        // hanno semantica 2 (un'uscita prima rifiutata ora si produce).
-        let expected: &[(&str, u32, u32, u32, u32)] = &[
-            ("table.concat", 1, 2, 1, 2),
-            ("table.sample", 1, 2, 1, 2),
-            ("table.md5_hash", 2, 2, 1, 3),
-            ("table.sha256_hash", 2, 2, 1, 3),
-            ("table.date_format", 2, 2, 2, 4),
-            ("table.date_add", 2, 2, 2, 4),
-            ("table.timezone_convert", 2, 2, 2, 4),
-            ("table.date_diff", 2, 2, 1, 4),
-            ("table.date_extract", 2, 2, 1, 4),
-            ("table.align_schema", 1, 2, 2, 2),
-            ("table.filter", 1, 2, 1, 3),
-            ("table.conditional", 1, 2, 2, 2),
-            ("table.expression", 4, 3, 3, 5),
-            ("table.formula", 3, 2, 1, 4),
-            ("table.type_cast", 2, 2, 1, 4),
-            ("table.concat_columns", 1, 2, 1, 2),
-            ("table.split_column", 1, 2, 1, 2),
-            ("table.string_pad", 1, 2, 1, 2),
-            ("table.table_diff", 1, 2, 2, 3),
-            ("table.assert_cardinality", 1, 2, 1, 2),
-            ("table.top_n", 1, 2, 1, 2),
-            ("table.limit", 1, 2, 1, 2),
-            ("table.aggregate", 1, 2, 1, 3),
-            ("table.statistics", 1, 2, 1, 3),
-            ("table.mask_data", 1, 2, 1, 3),
-            ("table.rename", 1, 2, 1, 2),
-            ("table.drop_columns", 1, 2, 1, 2),
-            ("table.reorder_columns", 1, 2, 1, 2),
-            ("table.melt", 1, 2, 1, 3),
-            ("table.transpose", 1, 2, 1, 2),
-            ("table.pivot", 1, 2, 1, 3),
-            ("table.asof_join", 1, 2, 1, 2),
-            ("table.assert_range", 2, 1, 1, 3),
-            ("table.replace", 1, 1, 2, 2),
-            ("table.string_extract", 1, 1, 1, 3),
-            ("table.flatten_json", 2, 1, 1, 4),
-            ("table.lookup", 1, 1, 2, 1),
-            ("table.fill_na", 1, 1, 2, 2),
-            ("table.bin", 1, 1, 2, 1),
-            ("table.hmac_sha256", 1, 1, 1, 3),
-            ("table.join", 2, 1, 1, 2),
-            ("table.cross_join", 2, 1, 1, 1),
-            ("table.fuzzy_join", 2, 1, 1, 1),
-            ("geo.sjoin", 2, 1, 1, 1),
-            ("geo.overlay", 2, 1, 1, 1),
+        // Incrementi di difetti-b, derivati dai motivi e non dai valori: per
+        // ogni operazione le versioni prima del ciclo (main `816df5f`) e quali
+        // componenti il ciclo tocca, secondo le definizioni dei campi:
+        // semantica se cambia l'uscita per lo stesso ingresso e la stessa
+        // config (anche un'uscita prima rifiutata e ora prodotta); schema
+        // della config se cambiano i parametri accettati (nuovi, rifiutati
+        // se scritti senza effetto, `null` esplicito rifiutato); analisi se
+        // cambia una regola di validazione; kernel se cambia
+        // l'implementazione.
+        type Versioni = (u32, u32, u32, u32);
+        let motivi: &[(&str, Versioni, Versioni)] = &[
+            // ignore_index scritto rifiutato
+            ("table.concat", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // n con fraction, random_state su campione vuoto, n null
+            ("table.sample", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // null_literal fuori da literal
+            ("table.md5_hash", (2, 1, 1, 2), (0, 1, 1, 1)),
+            // null_literal fuori da literal
+            ("table.sha256_hash", (2, 1, 1, 2), (0, 1, 1, 1)),
+            // invalid rifiutato; output_format contro max_string_bytes
+            ("table.date_format", (2, 1, 1, 3), (0, 1, 1, 1)),
+            // invalid rifiutato; output_format contro max_string_bytes
+            ("table.date_add", (2, 1, 1, 3), (0, 1, 1, 1)),
+            // invalid/ambiguous rifiutati; output_format contro max_string_bytes
+            ("table.timezone_convert", (2, 1, 1, 3), (0, 1, 1, 1)),
+            // invalid rifiutato
+            ("table.date_diff", (2, 1, 1, 3), (0, 1, 1, 1)),
+            // invalid rifiutato; parts vuoto o ripetuto
+            ("table.date_extract", (2, 1, 1, 3), (0, 1, 1, 1)),
+            // keep_extra null; default contro max_string_bytes
+            ("table.align_schema", (1, 1, 1, 1), (0, 1, 1, 0)),
+            // value con isnull/notnull
+            ("table.filter", (1, 1, 1, 2), (0, 1, 1, 1)),
+            // value con isnull/notnull; testi e numeri non finiti dei risultati
+            ("table.conditional", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // divisione per zero null di default; on_division_by_zero; campi dei nodi; limiti; divisore letterale zero in analisi
+            ("table.expression", (3, 2, 2, 4), (1, 1, 1, 1)),
+            // divisione per zero null di default; on_division_by_zero; numeri non finiti rifiutati; testo contro max_string_bytes
+            ("table.formula", (2, 1, 1, 3), (1, 1, 1, 1)),
+            // errors su target infallibili; regole anche nel kernel; campi null
+            ("table.type_cast", (2, 1, 1, 3), (0, 1, 1, 1)),
+            // separator con una colonna
+            ("table.concat_columns", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // delimiter con una uscita; max_splits che non riduce
+            ("table.split_column", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // width 0
+            ("table.string_pad", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // separator con una colonna in compare_columns; testi contro max_string_bytes
+            ("table.table_diff", (1, 1, 1, 2), (0, 1, 1, 1)),
+            // min_rows 0; regole anche nel kernel
+            ("table.assert_cardinality", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // n 0
+            ("table.top_n", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // offset con n 0
+            ("table.limit", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // nomi d'uscita ripetuti o uguali a una chiave; campi null; concat contro max_string_bytes
+            ("table.aggregate", (1, 1, 1, 2), (0, 1, 1, 1)),
+            // stats vuoto o ripetuto
+            ("table.statistics", (1, 1, 1, 2), (0, 1, 1, 1)),
+            // colonna ripetuta senza overwrite; campi null; testo contro max_string_bytes
+            ("table.mask_data", (1, 1, 1, 2), (0, 1, 1, 1)),
+            // renames vuoto, su se stessa
+            ("table.rename", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // columns vuoto
+            ("table.drop_columns", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // columns vuoto senza alphabetical; alphabetical null
+            ("table.reorder_columns", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // fuori dal fattore di espansione (uscite prima rifiutate); type_policy null
+            ("table.melt", (1, 1, 1, 2), (1, 1, 0, 1)),
+            // type_policy null
+            ("table.transpose", (1, 1, 1, 1), (0, 1, 0, 1)),
+            // voce vuota in index_col; concat contro max_string_bytes
+            ("table.pivot", (1, 1, 1, 2), (0, 1, 1, 1)),
+            // tolerance 0 senza allow_exact
+            ("table.asof_join", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // inclusive_* null; regole anche nel kernel
+            ("table.assert_range", (2, 1, 1, 2), (0, 1, 0, 1)),
+            // old_value senza regex contro max_string_bytes; celle sostituite contro max_string_bytes
+            ("table.replace", (1, 1, 1, 1), (0, 1, 1, 1)),
+            // extract_all contro max_string_bytes
+            ("table.string_extract", (1, 1, 1, 2), (0, 0, 0, 1)),
+            // testi contro max_string_bytes
+            ("table.flatten_json", (2, 1, 1, 3), (0, 0, 0, 1)),
+            // testi della config contro max_string_bytes
+            ("table.lookup", (1, 1, 1, 1), (0, 0, 1, 0)),
+            // value contro max_string_bytes
+            ("table.fill_na", (1, 1, 1, 2), (0, 0, 1, 0)),
+            // labels ed etichette contro max_string_bytes
+            ("table.bin", (1, 1, 1, 1), (0, 0, 1, 1)),
+            // chiave letta da una funzione sola; non UTF-8 rifiutata
+            ("table.hmac_sha256", (1, 1, 1, 2), (0, 0, 0, 1)),
+            // offset/buckets null; overflow rifiutato
+            ("table.window_function", (1, 1, 1, 2), (0, 1, 0, 1)),
+            // ddof null; overflow rifiutato
+            ("table.rolling_window", (1, 1, 1, 2), (0, 1, 0, 1)),
+            // ascending null
+            ("table.dedup_advanced", (1, 1, 1, 2), (0, 1, 0, 0)),
+            // SumRelative: uscite prima rifiutate
+            ("table.join", (1, 1, 1, 2), (1, 0, 0, 0)),
+            // SumRelative: uscite prima rifiutate
+            ("table.cross_join", (1, 1, 1, 1), (1, 0, 0, 0)),
+            // SumRelative: uscite prima rifiutate
+            ("table.fuzzy_join", (1, 1, 1, 1), (1, 0, 0, 0)),
+            // SumRelative: uscite prima rifiutate
+            ("geo.sjoin", (1, 1, 1, 1), (1, 0, 0, 0)),
+            // SumRelative: uscite prima rifiutate
+            ("geo.overlay", (1, 1, 1, 1), (1, 0, 0, 0)),
         ];
-        for (id, semantic, config_schema, contract_analysis, kernel) in expected {
+        for (id, prima, incrementi) in motivi {
+            let attese = (
+                prima.0 + incrementi.0,
+                prima.1 + incrementi.1,
+                prima.2 + incrementi.2,
+                prima.3 + incrementi.3,
+            );
             let descriptor = find_operation(id).expect(id);
             assert_eq!(
                 (
@@ -4042,8 +4129,8 @@ mod tests {
                     descriptor.contract_analysis_version,
                     descriptor.kernel_version,
                 ),
-                (*semantic, *config_schema, *contract_analysis, *kernel),
-                "{id}: versioni non allineate agli incrementi dichiarati"
+                attese,
+                "{id}: versioni non allineate ai motivi dichiarati"
             );
         }
     }

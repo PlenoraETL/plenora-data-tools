@@ -178,19 +178,19 @@ pub struct TypeCast {
     /// [`TypeCast::errori`]). Con `str`, `binary_utf8` e `dictionary_utf8`
     /// nessuna cella fallisce la conversione, quindi scritta non avrebbe
     /// effetto e si rifiuta ([`TypeCast::verifica_parametri`]).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub errors: Option<CastErrors>,
     /// Cifre totali di `decimal128` (obbligatorio e ammesso solo li',
     /// da 1 a 38).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub precision: Option<u8>,
     /// Cifre decimali di `decimal128` (obbligatorio e ammesso solo li',
     /// da 0 a `precision`).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub scale: Option<i8>,
     /// Fuso IANA di `timestamp_millis` (ammesso solo li'): fuso dei testi
     /// senza fuso e della colonna d'uscita.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub timezone: Option<String>,
 }
 

@@ -16,7 +16,7 @@ giorno del mese (31 gennaio più un mese è 29 febbraio 2024).
 | `amount` | intero | obbligatorio | intero a 64 bit che almeno una data sopporta | quantità da aggiungere, con segno |
 | `unit` | stringa | obbligatorio | `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` | unità di `amount` |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
-| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -31,9 +31,11 @@ sempre 24 ore, senza ora legale). `years` vale 12 mesi. Un valore non
 leggibile rifiuta sempre la riga.
 
 Il testo scritto da `output_format` non può superare `max_string_bytes`
-byte per valore. Il limite si controlla in validazione con una stima
-prudente: il testo letterale conta per la sua lunghezza, ogni campo
-`strftime` per 64 byte.
+byte per valore. Il limite si controlla in validazione, esatto per campo:
+il testo letterale conta per la sua lunghezza, ogni campo `strftime` per
+la sua larghezza massima (anno 7 byte col segno, mese, giorno, ora 2, nome
+del mese o del giorno 9, offset 9, nome del fuso 32); `%Y%m` scrive al più
+9 byte.
 
 ### Schema
 
@@ -58,10 +60,11 @@ In validazione, `InvalidPlan`:
 - un formato vuoto, oltre `max_string_bytes`, con un campo non
   riconosciuto, o `output_format` con campi di fuso (`%z`, `%:z`, `%Z`,
   `%+`);
-- `output_format` la cui stima supera `max_string_bytes` byte per valore;
+- `output_format` che può scrivere più di `max_string_bytes` byte per
+  valore;
 - `amount` che nessuna data rappresentabile sopporta nell'unità data;
 - `output_column` non valido;
-- `invalid` scritto, con qualunque valore;
+- `invalid` scritto, con qualunque valore, anche `null`;
 - config con campi sconosciuti o `unit` fuori elenco.
 
 In esecuzione:
@@ -80,8 +83,6 @@ Le date rappresentabili sono quelle di `chrono` (anni da -262143 a
 262142). Un `amount` che alcune date sopportano e quelle dei dati no
 fallisce in esecuzione
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
-La stima di `output_format` è prudente: un formato che scriverebbe davvero
-meno di `max_string_bytes` byte si può rifiutare lo stesso.
 
 ### Complessità
 

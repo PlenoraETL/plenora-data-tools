@@ -192,9 +192,11 @@ fn function(name: Function, args: Vec<Scalar>) -> Result<Scalar> {
             ) else {
                 return Ok(Scalar::Null);
             };
-            let regex = regex::Regex::new(&pattern).map_err(|error| {
-                PlenoraError::InvalidPlan(format!("regex_replace: regex non valida: {error}"))
-            })?;
+            // Senza il testo dell'errore del crate, che riporta il pattern:
+            // un pattern letterale lo riconduce all'errore di piano
+            // `evaluate`, uno calcolato resta un rifiuto per riga.
+            let regex = regex::Regex::new(&pattern)
+                .map_err(|_| PlenoraError::Schema(crate::INVALID_REGEX_MESSAGE.into()))?;
             Ok(Scalar::Text(
                 regex.replace_all(&value, replacement.as_str()).into_owned(),
             ))
@@ -261,6 +263,33 @@ pub(super) fn substring_index(value: &Scalar, context: &str) -> Result<Option<us
     Ok(Some(value as usize))
 }
 
+/// Il pattern letterale di un `regex_replace`, se c'e'.
+fn expression_args_pattern(expression: &Expression) -> Option<String> {
+    match expression {
+        Expression::Function {
+            name: Function::RegexReplace,
+            args,
+        } => match args.get(1) {
+            Some(Expression::Literal {
+                value: Value::String(pattern),
+            }) => Some(pattern.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Con un pattern letterale non valido, l'errore di piano del fast path
+/// (stesso testo): il pattern e' config, non una cella.
+fn regex_letterale_non_valida(name: Function, pattern: Option<String>) -> Option<PlenoraError> {
+    let (Function::RegexReplace, Some(pattern)) = (name, pattern) else {
+        return None;
+    };
+    regex::Regex::new(&pattern)
+        .err()
+        .map(|error| PlenoraError::InvalidPlan(format!("regex_replace: regex non valida: {error}")))
+}
+
 pub fn evaluate(
     expression: &Expression,
     batch: &RecordBatch,
@@ -318,7 +347,18 @@ pub fn evaluate(
                 {
                     ctx.verifica_pattern(pattern.len())?;
                 }
-                let valore = function(*name, args)?;
+                let valore = function(*name, args).map_err(|errore| {
+                    let regex_calcolata = matches!(
+                        &errore,
+                        PlenoraError::Schema(messaggio) if messaggio == crate::INVALID_REGEX_MESSAGE
+                    );
+                    if regex_calcolata {
+                        regex_letterale_non_valida(*name, expression_args_pattern(expression))
+                            .unwrap_or(errore)
+                    } else {
+                        errore
+                    }
+                })?;
                 if let Scalar::Text(testo) = &valore {
                     ctx.verifica_testo(testo.len())?;
                 }

@@ -188,7 +188,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 3 |
+| versioni | semantica 1, config 2, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -218,6 +218,8 @@ Campi di ogni aggregazione:
 | `ddof` | intero | `1` | `0` o più; solo con `variance` e `stddev` | gradi di libertà sottratti al divisore |
 
 Un parametro scritto per una funzione che non lo usa si rifiuta.
+`separator`, `distinct`, `skip_null`, `quantile` e `ddof` non ammettono
+`null` esplicito: un parametro facoltativo si omette.
 
 Nome della colonna d'uscita: `alias` se non è vuoto; altrimenti
 `<column>_<funzione>` (`avg` scrive `mean`) se la stessa `column` compare
@@ -291,8 +293,9 @@ In validazione, `InvalidPlan`:
 - una colonna assente; una chiave di gruppo non leggibile come testo;
 - una funzione su un tipo che non accetta (sopra);
 - `quantile` assente con `function: "quantile"`, o fuori da `0..1`;
-- un parametro scritto per una funzione che non lo usa; `separator` oltre
-  `max_string_bytes`; un nome d'uscita non valido (per esempio un `alias`
+- un parametro scritto per una funzione che non lo usa; `separator`,
+  `distinct`, `skip_null`, `quantile` o `ddof` `null` espliciti;
+  `separator` oltre `max_string_bytes`; un nome d'uscita non valido (per esempio un `alias`
   di soli spazi);
 - un nome d'uscita ripetuto o uguale a una colonna di `group_by`;
 - funzione fuori elenco, campi sconosciuti.
@@ -391,7 +394,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 2, analisi 2, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -408,8 +411,8 @@ scartano, o con `keep_extra` si tengono in coda.
 | `columns` | lista di oggetti | obbligatorio | da 1 a 4096 colonne, nomi senza ripetizioni | schema d'uscita, nell'ordine d'uscita |
 | `columns[].name` | stringa | obbligatorio | nome non vuoto, al più 1024 byte | nome della colonna |
 | `columns[].type` | stringa | obbligatorio | `Utf8`, `Int64`, `UInt64`, `Float64`, `Boolean`, `Date32`, `Timestamp`, `Decimal128`, `Binary` | tipo della colonna (tabella sotto) |
-| `columns[].default` | JSON | assente | valore convertibile nel tipo (sotto), solo su una colonna che manca nell'ingresso; `null` vale assente | valore di ogni cella di una colonna aggiunta |
-| `keep_extra` | booleano | `false` | `true`, `false`; scritto solo se almeno una colonna d'ingresso non è dichiarata | tiene in coda, nell'ordine d'ingresso, le colonne non dichiarate |
+| `columns[].default` | JSON | assente | valore convertibile nel tipo (sotto); `null` vale assente | valore di ogni cella di una colonna aggiunta |
+| `keep_extra` | booleano | `false` | `true`, `false`; `null` non ammesso | tiene in coda, nell'ordine d'ingresso, le colonne non dichiarate |
 
 I tipi: `Utf8` → `utf8`, `Int64` → `int64`, `UInt64` → `uint64`,
 `Float64` → `float64`, `Boolean` → `bool`, `Date32` → `date32`,
@@ -434,9 +437,11 @@ Il `default` si converte così, e ciò che non si converte si rifiuta:
 - `Decimal128`: un numero JSON o una stringa, senza esponente e con al più
   10 cifre decimali (nessun arrotondamento).
 
-Il `default` di una colonna che esiste già non avrebbe effetto e si
-rifiuta. `keep_extra` scritto, con qualunque valore, quando ogni colonna
-d'ingresso è dichiarata non avrebbe effetto e si rifiuta.
+Si accetta, perché l'effetto dipende dall'ingresso e lo stesso piano gira
+su tabelle diverse: il `default` di una colonna che esiste già (non si
+legge) e `keep_extra` quando ogni colonna d'ingresso è dichiarata (non
+tiene niente). `keep_extra: null` esplicito si rifiuta: il parametro si
+omette.
 
 #### Schema
 
@@ -468,9 +473,7 @@ In validazione, `InvalidPlan`:
   `timestamp(ms)` con fuso, o un decimale di precisione o scala diverse);
 - un `default` non convertibile nel tipo, o un `default` `Utf8` o
   `Binary` oltre `max_string_bytes` byte;
-- un `default` su una colonna che esiste già nell'ingresso;
-- `keep_extra` scritto (`true` o `false`) quando ogni colonna d'ingresso
-  è dichiarata;
+- `keep_extra` `null` esplicito;
 - un `type` fuori elenco, config con campi sconosciuti.
 
 In esecuzione: nessun errore che dipenda dai dati.
@@ -656,7 +659,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -811,7 +814,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -1273,7 +1276,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 1, kernel 3 |
+| versioni | semantica 2, config 2, analisi 1, kernel 3 |
 
 #### Che cosa fa
 
@@ -1289,8 +1292,8 @@ una diagnostica per riga e non produce uscita.
 | `column` | stringa | obbligatorio | colonna `int64`, `uint64`, `float64`, `decimal128`, `date32`, `timestamp(ms)` o `utf8` | colonna da controllare |
 | `min` | numero | assente | numero finito, non maggiore di `max` | estremo inferiore |
 | `max` | numero | assente | numero finito | estremo superiore |
-| `inclusive_min` | booleano | assente (incluso) | `true`, `false`; solo con `min` | se `min` fa parte dell'intervallo |
-| `inclusive_max` | booleano | assente (incluso) | `true`, `false`; solo con `max` | se `max` fa parte dell'intervallo |
+| `inclusive_min` | booleano | assente (incluso) | `true`, `false`; solo con `min`; `null` non ammesso | se `min` fa parte dell'intervallo |
+| `inclusive_max` | booleano | assente (incluso) | `true`, `false`; solo con `max`; `null` non ammesso | se `max` fa parte dell'intervallo |
 | `allow_null` | booleano | `false` | `true`, `false` | con `true` le celle nulle passano |
 
 Almeno uno fra `min` e `max`. `inclusive_min` senza `min` (o
@@ -1324,6 +1327,8 @@ In validazione, `InvalidPlan`:
 
 - né `min` né `max`; `min` maggiore di `max`;
 - `inclusive_min` senza `min` o `inclusive_max` senza `max`;
+- `inclusive_min` o `inclusive_max` `null` espliciti (un parametro
+  facoltativo si omette);
 - `column` assente o di un tipo fuori dall'elenco;
 - config con campi sconosciuti.
 
@@ -1761,7 +1766,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -1794,8 +1799,9 @@ con `d = |v| · 0,001` (`0,001` se `v` è zero). In questo modo un valore
 sotto il primo bordo o sopra l'ultimo (anche `±inf`) cade nella classe
 esterna.
 
-L'etichetta di default scrive i bordi con la resa decimale più corta di
-`f64` (`(0, 18]`, `(2.5, 5]`).
+L'etichetta di default (senza `labels`) scrive i due bordi `f64` con la
+resa decimale più corta (`(0, 18]`, `(2.5, 5]`); non supera
+`max_string_bytes` byte, controllato in esecuzione.
 
 #### Schema
 
@@ -1824,11 +1830,13 @@ In validazione, `InvalidPlan`:
   `max_string_bytes` byte;
 - config con campi sconosciuti.
 
-In esecuzione, `Schema`:
+In esecuzione:
 
-- con un numero di classi, nessun valore finito nella colonna (anche una
-  tabella vuota o tutta nulla);
-- una cella `utf8` che non è un numero.
+- `Schema`: con un numero di classi, nessun valore finito nella colonna
+  (anche una tabella vuota o tutta nulla); una cella `utf8` che non è un
+  numero;
+- `ResourceLimit`: senza `labels`, un'etichetta di default oltre
+  `max_string_bytes` byte.
 
 #### Limiti e deviazioni
 
@@ -2003,7 +2011,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -2017,7 +2025,7 @@ usa [`table.concat_by_name`](#tableconcat_by_name).
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `ignore_index` | booleano | assente | nessuno: scritto si rifiuta | una tabella Arrow non ha indice di riga, nessun valore avrebbe effetto |
+| `ignore_index` | booleano | assente | nessuno: scritto si rifiuta, anche `null` | una tabella Arrow non ha indice di riga, nessun valore avrebbe effetto |
 
 #### Schema
 
@@ -2046,8 +2054,8 @@ In validazione, `InvalidPlan`:
 - numero di colonne diverso, o nome o tipo diversi in una posizione (la
   nullabilità non conta);
 - metadati di schema con la stessa chiave e valori diversi;
-- `ignore_index` scritto, con qualunque valore (anche nel kernel, con la
-  stessa funzione);
+- `ignore_index` scritto, con qualunque valore, anche `null` (anche nel
+  kernel, con la stessa funzione);
 - config con campi sconosciuti.
 
 Nel runner, `table.concat` con più di due ingressi è `Unsupported`, con
@@ -2251,7 +2259,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -2265,7 +2273,7 @@ saltano (default) o contano come testo vuoto.
 | --- | --- | --- | --- | --- |
 | `columns` | lista di stringhe | obbligatorio | colonne `utf8` dell'ingresso, almeno una, senza ripetizioni, al più 4096 | parti da unire, nell'ordine |
 | `output_column` | stringa | `"concatenated"` | nome non vuoto, al più 1024 byte | colonna d'uscita |
-| `separator` | stringa | `" "` | al più `max_string_bytes` byte, anche vuota; solo con almeno due colonne | testo messo fra due parti |
+| `separator` | stringa | `" "` | al più `max_string_bytes` byte, anche vuota; solo con almeno due colonne; `null` non ammesso | testo messo fra due parti |
 | `skip_null` | booleano | `true` | `true`, `false` | salta i null invece di trattarli come testo vuoto |
 
 Con `skip_null` il separatore sta solo fra le parti non nulle, e una riga
@@ -2295,8 +2303,9 @@ In validazione, `InvalidPlan`:
 
 - `columns` assente, vuota, con un nome ripetuto o con più di 4096 nomi;
 - una colonna di `columns` assente o non `utf8`;
-- `separator` oltre `max_string_bytes`, o scritto con una sola colonna in
-  `columns` (non avrebbe effetto);
+- `separator` oltre `max_string_bytes`, `null` esplicito (il parametro si
+  omette), o scritto con una sola colonna in `columns` (non avrebbe
+  effetto);
 - `output_column` vuoto, di soli spazi o oltre 1024 byte;
 - config con campi sconosciuti.
 
@@ -2388,11 +2397,14 @@ Il tipo d'uscita dipende solo dalla config. Ogni `result` e il
 booleano come testo JSON, `null` come testo vuoto):
 
 - se ogni testo è vuoto o, sostituite le virgole con punti, un numero per
-  il parse `f64` di Rust (esponente, `NaN`, `inf` ammessi), l'uscita è
-  `float64` nullable: il testo vuoto dà null, gli altri il numero (`"1,5"`
-  dà 1,5, `"1e3"` dà 1000);
+  il parse `f64` di Rust (esponente ammesso), l'uscita è `float64`
+  nullable: il testo vuoto dà null, gli altri il numero (`"1,5"` dà 1,5,
+  `"1e3"` dà 1000);
 - altrimenti l'uscita è `utf8` non nullable e ogni cella è il testo del
   valore scelto: `null` dà `""`, `true` dà `"true"`, `2` dà `"2"`.
+
+Un `result` o un `default_value` che si legge come numero non finito
+(`"NaN"`, `"inf"`, `"1e999"`) si rifiuta, in validazione e nel kernel.
 
 Una cella nulla non soddisfa nessun operatore tranne `isnull`. Con
 `isnull` e `notnull` il `value` non avrebbe effetto: scritto, anche
@@ -2427,7 +2439,7 @@ In validazione, `InvalidPlan`:
   `value` di `table.filter`, compreso `value` scritto (anche `null`) con
   `isnull` o `notnull`;
 - il testo di un `result` o del `default_value` oltre `max_string_bytes`
-  byte;
+  byte, o che si legge come numero non finito;
 - `output_column` vuoto, di soli spazi o oltre 1024 byte;
 - config con campi sconosciuti.
 
@@ -2639,7 +2651,7 @@ giorno del mese (31 gennaio più un mese è 29 febbraio 2024).
 | `amount` | intero | obbligatorio | intero a 64 bit che almeno una data sopporta | quantità da aggiungere, con segno |
 | `unit` | stringa | obbligatorio | `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds` | unità di `amount` |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
-| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -2654,9 +2666,11 @@ sempre 24 ore, senza ora legale). `years` vale 12 mesi. Un valore non
 leggibile rifiuta sempre la riga.
 
 Il testo scritto da `output_format` non può superare `max_string_bytes`
-byte per valore. Il limite si controlla in validazione con una stima
-prudente: il testo letterale conta per la sua lunghezza, ogni campo
-`strftime` per 64 byte.
+byte per valore. Il limite si controlla in validazione, esatto per campo:
+il testo letterale conta per la sua lunghezza, ogni campo `strftime` per
+la sua larghezza massima (anno 7 byte col segno, mese, giorno, ora 2, nome
+del mese o del giorno 9, offset 9, nome del fuso 32); `%Y%m` scrive al più
+9 byte.
 
 #### Schema
 
@@ -2681,10 +2695,11 @@ In validazione, `InvalidPlan`:
 - un formato vuoto, oltre `max_string_bytes`, con un campo non
   riconosciuto, o `output_format` con campi di fuso (`%z`, `%:z`, `%Z`,
   `%+`);
-- `output_format` la cui stima supera `max_string_bytes` byte per valore;
+- `output_format` che può scrivere più di `max_string_bytes` byte per
+  valore;
 - `amount` che nessuna data rappresentabile sopporta nell'unità data;
 - `output_column` non valido;
-- `invalid` scritto, con qualunque valore;
+- `invalid` scritto, con qualunque valore, anche `null`;
 - config con campi sconosciuti o `unit` fuori elenco.
 
 In esecuzione:
@@ -2703,8 +2718,6 @@ Le date rappresentabili sono quelle di `chrono` (anni da -262143 a
 262142). Un `amount` che alcune date sopportano e quelle dei dati no
 fallisce in esecuzione
 ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
-La stima di `output_format` è prudente: un formato che scriverebbe davvero
-meno di `max_string_bytes` byte si può rifiutare lo stesso.
 
 #### Complessità
 
@@ -2758,7 +2771,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 1, kernel 4 |
+| versioni | semantica 2, config 2, analisi 2, kernel 4 |
 
 #### Che cosa fa
 
@@ -2775,7 +2788,7 @@ come numero con parte frazionaria (un giorno e mezzo è `1.5`) e con segno.
 | `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura di entrambe le colonne |
 | `unit` | stringa | obbligatorio | `days`, `hours`, `minutes`, `seconds` | unità della differenza |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
-| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -2812,7 +2825,7 @@ In validazione, `InvalidPlan`:
 - `input_format` vuoto, oltre `max_string_bytes` o con un campo non
   riconosciuto;
 - `output_column` non valido;
-- `invalid` scritto, con qualunque valore;
+- `invalid` scritto, con qualunque valore, anche `null`;
 - config con campi sconosciuti o `unit` fuori elenco.
 
 In esecuzione:
@@ -2883,7 +2896,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 1, kernel 4 |
+| versioni | semantica 2, config 2, analisi 2, kernel 4 |
 
 #### Che cosa fa
 
@@ -2901,7 +2914,7 @@ righe.
 | `parts` | lista di stringhe | `["year"]` | non vuota, senza ripetizioni, fra `year`, `month`, `day`, `quarter`, `weekday`, `week`, `hour`, `minute`, `second` | parti da estrarre, nell'ordine delle colonne d'uscita |
 | `prefix` | stringa | `""` | qualunque; `""` vale `<column>_` | prefisso dei nomi d'uscita (`<prefix><parte>`) |
 | `date_format` | stringa o `null` | `null` | formato strftime di chrono, non vuoto, al più `max_string_bytes` byte | formato delle date; `null` usa i formati di default |
-| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non interpretabile fa sempre fallire il passo, nessun valore avrebbe effetto |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non interpretabile fa sempre fallire il passo, nessun valore avrebbe effetto |
 
 Ogni cella non nulla si legge come testo (una `date32` come `AAAA-MM-GG`,
 un `timestamp` in RFC 3339 con il fuso) e si interpreta:
@@ -2919,7 +2932,7 @@ appartenere all'anno vicino (il 2021-01-01 è nella settimana 53);
 `hour`, `minute`, `second`.
 
 Un valore non interpretabile fa sempre fallire il passo: per questo
-`invalid` scritto, con qualunque valore, si rifiuta.
+`invalid` scritto, con qualunque valore (anche `null`), si rifiuta.
 
 #### Schema
 
@@ -3033,7 +3046,7 @@ altro formato in una colonna nuova (per esempio da `31/01/2024` a
 | `input_format` | stringa | obbligatorio | formato `chrono` non vuoto, al più `max_string_bytes` byte | formato di lettura |
 | `output_format` | stringa | `"%Y-%m-%d %H:%M:%S"` | formato `chrono` non vuoto, al più `max_string_bytes` byte, senza fuso, che scrive al più `max_string_bytes` byte per valore | formato di scrittura |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
-| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -3047,9 +3060,11 @@ contenere campi di fuso o di offset (`%z`, `%:z`, `%Z`, `%+`): il valore
 letto non ha fuso. Un valore non leggibile rifiuta sempre la riga.
 
 Il testo scritto da `output_format` non può superare `max_string_bytes`
-byte per valore. Il limite si controlla in validazione con una stima
-prudente: il testo letterale conta per la sua lunghezza, ogni campo
-`strftime` per 64 byte.
+byte per valore. Il limite si controlla in validazione, esatto per campo:
+il testo letterale conta per la sua lunghezza, ogni campo `strftime` per
+la sua larghezza massima (anno 7 byte col segno, mese, giorno, ora 2, nome
+del mese o del giorno 9, offset 9, nome del fuso 32); `%Y%m` scrive al più
+9 byte.
 
 #### Schema
 
@@ -3073,9 +3088,10 @@ In validazione, `InvalidPlan`:
 - `column` assente o non leggibile come testo;
 - un formato vuoto, oltre `max_string_bytes`, con un campo non riconosciuto
   (`%Q`, `%` finale), o `output_format` con campi di fuso;
-- `output_format` la cui stima supera `max_string_bytes` byte per valore;
+- `output_format` che può scrivere più di `max_string_bytes` byte per
+  valore;
 - `output_column` non valido;
-- `invalid` scritto, con qualunque valore;
+- `invalid` scritto, con qualunque valore, anche `null`;
 - config con campi sconosciuti.
 
 In esecuzione:
@@ -3090,9 +3106,7 @@ In esecuzione:
 #### Limiti e deviazioni
 
 Non esiste un modo di trasformare un valore non leggibile in null: per
-questo `invalid` si rifiuta. La stima di `output_format` è prudente: un
-formato che scriverebbe davvero meno di `max_string_bytes` byte si può
-rifiutare lo stesso.
+questo `invalid` si rifiuta.
 
 #### Complessità
 
@@ -3146,7 +3160,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 1, kernel 2 |
 
 #### Che cosa fa
 
@@ -3162,7 +3176,7 @@ recente.
 | `subset` | lista di stringhe | obbligatorio | nomi di colonne leggibili come testo, almeno uno, senza ripetizioni | colonne della chiave |
 | `keep` | stringa | `"first"` | `"first"`, `"last"` | tiene la prima o l'ultima occorrenza di ogni chiave |
 | `order_column` | stringa | nessuno | nome di una colonna di tipo ordinabile | ordinamento stabile prima della deduplica |
-| `ascending` | booleano | `true` | `true`, `false`; solo con `order_column` | verso dell'ordinamento |
+| `ascending` | booleano | `true` | `true`, `false`; solo con `order_column`; `null` non ammesso | verso dell'ordinamento |
 
 Colonne leggibili come testo e uguaglianza delle chiavi come in
 [`table.distinct`](#tabledistinct); tipi ordinabili e confronto come in
@@ -3193,7 +3207,8 @@ In validazione, `InvalidPlan`:
 - `keep: "false"`;
 - `subset` vuoto, con un nome ripetuto o non valido, o oltre il limite di
   colonne; una sua colonna assente o non leggibile come testo;
-- `ascending` senza `order_column`;
+- `ascending` senza `order_column`, o `null` esplicito (il parametro si
+  omette);
 - `order_column` assente o di tipo non ordinabile;
 - campi sconosciuti.
 
@@ -3394,7 +3409,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -3406,10 +3421,11 @@ l'uscita condivide gli array dell'ingresso.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `columns` | lista di stringhe | obbligatorio | da 1 a 4096 colonne dell'ingresso, nomi non vuoti (non di soli spazi), al più 1024 byte ciascuno, senza ripetizioni | colonne da togliere |
+| `columns` | lista di stringhe | obbligatorio | da 1 a 4096 nomi, non vuoti (non di soli spazi), al più 1024 byte ciascuno, senza ripetizioni | colonne da togliere |
 
-Una lista vuota, o un nome che non è una colonna dell'ingresso, non
-avrebbe effetto e si rifiuta.
+Una lista vuota si rifiuta. Un nome che non è una colonna dell'ingresso
+si accetta e non toglie niente: dipende dall'ingresso, e lo stesso piano
+gira su tabelle diverse.
 
 #### Schema
 
@@ -3419,7 +3435,8 @@ colonne tolte sono tutte, l'uscita ha zero colonne e lo stesso numero di
 righe dell'ingresso.
 
 Contratto: il conteggio delle righe resta; l'ordinamento dichiarato
-(`sorted_by`) cade, anche se la colonna tolta non era una chiave. Se si
+(`sorted_by`) cade se almeno una colonna è stata tolta davvero, anche se
+non era una chiave. Se si
 toglie la colonna geometrica il contratto diventa tabellare.
 
 #### Righe
@@ -3436,7 +3453,6 @@ In validazione, `InvalidPlan`:
 
 - `columns` assente o vuota, con un nome ripetuto, vuoto, di soli spazi o
   oltre 1024 byte, o con più di 4096 nomi;
-- un nome che non è una colonna dell'ingresso;
 - config con campi sconosciuti.
 
 In esecuzione: nessun errore che dipenda dai dati.
@@ -3460,7 +3476,7 @@ Passo del piano:
 
 ```json
 {"out": "risultato", "op": "table.drop_columns", "in": ["ordini"],
- "config": {"columns": ["note"]}}
+ "config": {"columns": ["note", "assente"]}}
 ```
 
 Ingresso `ordini`:
@@ -3744,7 +3760,7 @@ risultato, rifiuta la riga.
 | `output_column` | stringa | obbligatorio | nome valido (non vuoto, al più 1024 byte) | colonna d'uscita |
 | `expression` | oggetto | obbligatorio | nodo della grammatica sotto; profondità al più 64, al più 4096 nodi | espressione da calcolare |
 | `output_type` | stringa | `auto` | `auto`, `number`, `boolean`, `text`, `date32`, `timestamp_ms` | tipo della colonna d'uscita; `auto` lo deduce |
-| `on_division_by_zero` | stringa | `"null"` | `"null"`, `"error"`; solo in un'espressione con almeno una divisione | che cosa dà una divisione con divisore zero (sotto) |
+| `on_division_by_zero` | stringa | `"null"` | `"null"`, `"error"`; solo in un'espressione con almeno una divisione; `null` non ammesso | che cosa dà una divisione con divisore zero (sotto) |
 
 Nodi (campo `kind`):
 
@@ -3759,7 +3775,7 @@ Nodi (campo `kind`):
 ```
 
 Un campo non previsto dentro un nodo si rifiuta. Un letterale di testo non
-supera `max_string_bytes` byte.
+supera `max_string_bytes` byte, anche dentro la lista di `in`.
 
 Tipi delle colonne: `bool` è booleano; `int64`, `uint64`, `float64`,
 `decimal128`, `date32` (giorni dall'epoca) e `timestamp(ms)` (millisecondi
@@ -3817,7 +3833,11 @@ Divisione con operandi non nulli e divisore zero:
 Un divisore letterale zero (`x / 0`) si rifiuta in validazione con
 qualunque politica.
 
-Un pattern letterale di `regex_replace` non supera `max_regex_bytes` byte.
+Un pattern letterale di `regex_replace` non supera `max_regex_bytes` byte
+e, se non è una regex valida, si rifiuta in validazione. Un pattern
+calcolato dalle colonne che non è una regex valida rifiuta la riga
+(`evaluation.invalid_regex`), senza il testo d'errore della crate `regex`,
+che riporterebbe il pattern cioè un dato di cella.
 Ogni testo prodotto da una funzione (`concat`, `lower`, `upper`,
 `regex_replace`, `substring`, …) non supera `max_string_bytes` byte.
 
@@ -3852,15 +3872,16 @@ In validazione, `InvalidPlan`:
 - una colonna assente o di tipo non ammesso (anche `timestamp` in unità
   diverse dai millisecondi);
 - letterale non scalare o non finito; letterale di testo oltre
-  `max_string_bytes` byte; `in` senza lista letterale di scalari;
+  `max_string_bytes` byte, anche nella lista di `in`; `in` senza lista
+  letterale di scalari;
 - numero di argomenti o tipo di un operando non ammessi; confronto fra tipi
   diversi (anche solo possibili, come `coalesce` di testo e numero);
 - unità di `date_trunc` non letterale o fuori elenco, unità oraria su
   `date32`, `date_trunc` su testo o su `timestamp` con fuso;
 - divisione per il numero zero scritto nell'espressione, con qualunque
   `on_division_by_zero`;
-- `on_division_by_zero` scritto in un'espressione senza divisioni, o con
-  un valore fuori elenco;
+- `on_division_by_zero` scritto in un'espressione senza divisioni, con un
+  valore fuori elenco o `null` esplicito (il parametro si omette);
 - pattern letterale di `regex_replace` non valido o oltre
   `max_regex_bytes` byte, indice letterale negativo di `substring` (solo
   dove la valutazione lo guarderebbe);
@@ -3874,9 +3895,10 @@ In esecuzione:
   `on_division_by_zero = "error"` (`evaluation.division_by_zero`), `NaN` o
   infinito letto da una colonna
   (`evaluation.non_finite_input`), risultato non finito di un'operazione o
-  di `power` (`evaluation.non_finite_result`); il passo non produce uscita;
-- `InvalidPlan`: pattern di `regex_replace` o indice di `substring`
-  calcolati dalle colonne e non validi;
+  di `power` (`evaluation.non_finite_result`), pattern di `regex_replace`
+  calcolato dalle colonne che non è una regex valida
+  (`evaluation.invalid_regex`); il passo non produce uscita;
+- `InvalidPlan`: indice di `substring` calcolato dalle colonne e negativo;
 - `Schema`: `year` su un testo che non inizia con una data; una riga che
   produce un tipo diverso da `output_type`; `negate` o `abs` di un
   `decimal128` fuori dominio; una cella che non si converte in testo;
@@ -4077,7 +4099,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 3 |
+| versioni | semantica 1, config 2, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -4348,7 +4370,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 1, kernel 4 |
+| versioni | semantica 3, config 2, analisi 2, kernel 4 |
 
 #### Che cosa fa
 
@@ -4365,7 +4387,7 @@ leggere i dati. Per condizioni, confronti e funzioni c'è
 | --- | --- | --- | --- | --- |
 | `new_column` | stringa | obbligatorio | nome valido (non vuoto, al più 1024 byte) | colonna d'uscita |
 | `formula` | stringa | obbligatorio | formula della grammatica sotto, non vuota, al più `max_string_bytes` byte | espressione da calcolare |
-| `on_division_by_zero` | stringa | `"null"` | `"null"`, `"error"`; solo in una formula con almeno un `/` | che cosa dà una divisione con divisore zero (sotto) |
+| `on_division_by_zero` | stringa | `"null"` | `"null"`, `"error"`; solo in una formula con almeno un `/`; `null` non ammesso | che cosa dà una divisione con divisore zero (sotto) |
 
 Grammatica (spazi ASCII ignorati fra i simboli):
 
@@ -4402,6 +4424,11 @@ resoconto del passo nel runner (un conteggio, mai valori). Con `"error"` la
 riga si rifiuta. Un divisore letterale zero si rifiuta in validazione con
 qualunque politica.
 
+Un'operazione con entrambi gli operandi finiti il cui risultato non è
+finito (overflow di `f64`, anche intermedio: `a / (a * a)` con `a = 1e308`)
+rifiuta la riga, con qualunque `on_division_by_zero`: la politica riguarda
+solo il divisore zero.
+
 #### Schema
 
 La colonna d'uscita è `float64` se la formula è numerica, `utf8` se
@@ -4427,8 +4454,8 @@ In validazione, `InvalidPlan`:
   non validi, carattere non ammesso, simboli in coda);
 - una divisione per il numero zero scritto nella formula (`x / 0`,
   `x / -0.0`), con qualunque `on_division_by_zero`;
-- `on_division_by_zero` scritto in una formula senza `/`, o con un valore
-  fuori elenco;
+- `on_division_by_zero` scritto in una formula senza `/`, con un valore
+  fuori elenco o `null` esplicito (il parametro si omette);
 - una colonna assente o non leggibile come testo;
 - `-`, `*`, `/` o il `-` unario applicati a un testo;
 - `new_column` non valido; config con campi sconosciuti.
@@ -4439,15 +4466,18 @@ In esecuzione:
   `on_division_by_zero = "error"`: una divisione per un divisore calcolato
   che vale zero (`evaluation.division_by_zero`); il passo non produce
   uscita;
+- `DataMapping` con diagnostica per riga, con qualunque
+  `on_division_by_zero`: un'operazione su operandi finiti con risultato non
+  finito (`evaluation.non_finite_result`); il passo non produce uscita;
 - `ResourceLimit`: un testo concatenato oltre `max_string_bytes` byte;
 - `Schema`: una cella che non si converte in testo.
 
 #### Limiti e deviazioni
 
-Il calcolo è in `f64`: un `int64` oltre `2^53` si arrotonda. Non c'è
-controllo di finitezza: un `NaN` o un infinito in ingresso si propagano, e
-un risultato che trabocca diventa infinito, senza errore (a differenza di
-[`table.expression`](#tableexpression)).
+Il calcolo è in `f64`: un `int64` oltre `2^53` si arrotonda. Un `NaN` o
+un infinito già presenti in una colonna si propagano senza errore (a
+differenza di [`table.expression`](#tableexpression), che rifiuta la
+riga); solo un risultato non finito da operandi finiti si rifiuta.
 
 #### Complessità
 
@@ -5096,7 +5126,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -5320,7 +5350,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 3 |
+| versioni | semantica 1, config 2, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -5337,9 +5367,9 @@ una colonna nuova `<colonna>_masked` o sovrascrive la colonna.
 | `maskings` | lista di oggetti | obbligatorio | da 1 a `max_columns` voci | mascherature, applicate in sequenza |
 | `maskings[].column` | stringa | obbligatorio | colonna dell'ingresso leggibile come testo | colonna da mascherare |
 | `maskings[].mask_type` | stringa | `custom` | `cf`, `email`, `phone`, `iban`, `custom` | forma della maschera |
-| `maskings[].chars_start` | intero | `3` | intero non negativo; solo con `custom` | caratteri iniziali in chiaro |
-| `maskings[].chars_end` | intero | `3` | intero non negativo; solo con `custom` | caratteri finali in chiaro |
-| `maskings[].mask_char` | stringa | `"*"` | un solo carattere; solo con `custom` | carattere di maschera |
+| `maskings[].chars_start` | intero | `3` | intero non negativo; solo con `custom`; `null` non ammesso | caratteri iniziali in chiaro |
+| `maskings[].chars_end` | intero | `3` | intero non negativo; solo con `custom`; `null` non ammesso | caratteri finali in chiaro |
+| `maskings[].mask_char` | stringa | `"*"` | un solo carattere; solo con `custom`; `null` non ammesso | carattere di maschera |
 | `overwrite` | booleano | `false` | `true`, `false` | `true` sovrascrive la colonna, `false` scrive `<colonna>_masked` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
@@ -5394,6 +5424,8 @@ In validazione, `InvalidPlan`:
 - `chars_start`, `chars_end` o `mask_char` con un `mask_type` diverso da
   `custom`;
 - `mask_char` che non è un solo carattere;
+- `chars_start`, `chars_end` o `mask_char` `null` espliciti (un parametro
+  facoltativo si omette);
 - nome d'uscita non valido (vuoto o oltre 1024 byte);
 - config con campi sconosciuti o `mask_type` fuori elenco.
 
@@ -5460,7 +5492,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 1, kernel 3 |
+| versioni | semantica 2, config 2, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -5477,7 +5509,7 @@ lati non cambiano l'hash.
 | `output_column` | stringa | `md5_hash` | nome valido | colonna d'uscita |
 | `normalize` | booleano | `true` | `true`, `false` | toglie gli spazi ai lati e porta in minuscolo ogni valore |
 | `null_policy` | stringa | `empty` | `empty`, `literal`, `error` | come entra una cella nulla |
-| `null_literal` | stringa | `"<null>"` | al più `max_string_bytes` byte; solo con `null_policy = "literal"` | testo di una cella nulla con `literal` |
+| `null_literal` | stringa | `"<null>"` | al più `max_string_bytes` byte; solo con `null_policy = "literal"`; `null` non ammesso | testo di una cella nulla con `literal` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -5515,7 +5547,8 @@ In validazione, `InvalidPlan`:
 
 - `columns` vuoto, con ripetizioni o con più di `max_columns` colonne;
 - una colonna assente o non leggibile come testo;
-- `output_column` non valido; `null_literal` oltre `max_string_bytes`;
+- `output_column` non valido; `null_literal` oltre `max_string_bytes`, o
+  `null` esplicito (il parametro si omette);
 - `null_literal` scritto con una `null_policy` diversa da `literal`: non
   avrebbe effetto;
 - config con campi sconosciuti o `null_policy` fuori elenco.
@@ -5593,7 +5626,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 3 |
+| versioni | semantica 2, config 2, analisi 1, kernel 3 |
 
 #### Che cosa fa
 
@@ -5609,12 +5642,16 @@ le colonne id si ripetono su ogni blocco.
 | `value_columns` | lista di stringhe | `[]` | nomi di colonne dell'ingresso, senza ripetizioni | colonne da portare in righe; vuota vale tutte le colonne non id |
 | `var_name` | stringa | `"variable"` | nome di colonna valido, diverso da `value_name` | colonna con il nome della colonna valore |
 | `value_name` | stringa | `"value"` | nome di colonna valido | colonna con la cella |
-| `type_policy` | stringa | `"reject"` | `"reject"`, `"string"`; solo se le colonne valore hanno tipi diversi | colonne valore di tipi diversi: rifiuto, o conversione in testo |
+| `type_policy` | stringa | `"reject"` | `"reject"`, `"string"`; `null` non ammesso | colonne valore di tipi diversi: rifiuto, o conversione in testo |
 
 `var_name` e `value_name` non collidono con nessuna colonna dell'ingresso,
 nemmeno con quelle che spariscono: un nome già preso riceve il primo
 suffisso libero fra `_1` e `_99`, prima `var_name` poi `value_name`
 (sciogliere una colonna di nome `value` dà una colonna `value_1`).
+
+`type_policy` con colonne valore tutte dello stesso tipo si accetta e non
+cambia niente: dipende dall'ingresso, e lo stesso piano gira su tabelle
+diverse.
 
 #### Schema
 
@@ -5649,9 +5686,8 @@ In validazione:
 - `InvalidPlan`: `var_name` uguale a `value_name`; una lista con un nome
   ripetuto o non valido, o oltre il limite di colonne; una colonna assente;
   nessuna colonna valore; colonne valore di tipi diversi con
-  `type_policy: "reject"`; `type_policy` scritto quando le colonne valore
-  hanno tutte lo stesso tipo (non avrebbe effetto); nessun suffisso libero
-  per un nome d'uscita; campi sconosciuti;
+  `type_policy: "reject"`; `type_policy: null` esplicito (il parametro si
+  omette); nessun suffisso libero per un nome d'uscita; campi sconosciuti;
 - `Schema`: con `type_policy: "string"` e tipi diversi, una colonna valore
   di tipo non convertibile in testo o con una timezone non valida.
 
@@ -5725,7 +5761,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 3 |
+| versioni | semantica 1, config 2, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -6045,7 +6081,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -6058,12 +6094,13 @@ colonne non nominate restano come sono. I dati non si copiano.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `renames` | lista di oggetti | obbligatorio | da 1 a 4096 coppie | rinomine da applicare |
-| `renames[].old_name` | stringa | obbligatorio | colonna dell'ingresso, nome non vuoto, al più 1024 byte, mai ripetuto fra le coppie | colonna da rinominare |
+| `renames[].old_name` | stringa | obbligatorio | nome non vuoto, al più 1024 byte, mai ripetuto fra le coppie | colonna da rinominare |
 | `renames[].new_name` | stringa | obbligatorio | nome non vuoto, al più 1024 byte, diverso da `old_name`, mai ripetuto fra le coppie | nuovo nome |
 
-Ogni coppia deve avere effetto: una lista vuota, un `old_name` che non è
-una colonna dell'ingresso o una coppia con `old_name` uguale a `new_name`
-si rifiutano. I nomi dell'uscita devono essere tutti diversi: un
+Una lista vuota o una coppia con `old_name` uguale a `new_name` si
+rifiutano. Un `old_name` che non è una colonna dell'ingresso si accetta e
+non rinomina niente: dipende dall'ingresso, e lo stesso piano gira su
+tabelle diverse. I nomi dell'uscita devono essere tutti diversi: un
 `new_name` uguale al nome di una colonna che resta com'è si rifiuta.
 
 #### Schema
@@ -6088,7 +6125,7 @@ Righe e colonne nell'ordine d'ingresso.
 In validazione, `InvalidPlan`:
 
 - `renames` vuota;
-- un `old_name` assente dall'ingresso, o uguale al suo `new_name`;
+- un `old_name` uguale al suo `new_name`;
 - lo stesso `old_name` in due coppie, o lo stesso `new_name` in due coppie;
 - un nome vuoto, di soli spazi o oltre 1024 byte (in entrambe le
   posizioni), o più di 4096 coppie;
@@ -6158,7 +6195,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -6172,17 +6209,18 @@ copiano.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `columns` | lista di stringhe | `[]` | colonne dell'ingresso, senza ripetizioni; vuota solo con `alphabetical = true` | colonne da mettere in testa, nell'ordine dato |
-| `alphabetical` | booleano | `false` | `true`, `false`; alias `sort_alphabetical`; solo con almeno due colonne d'ingresso non elencate | ordina alfabeticamente le colonne non elencate |
+| `alphabetical` | booleano | `false` | `true`, `false`; alias `sort_alphabetical`; `null` non ammesso | ordina alfabeticamente le colonne non elencate |
 
 `alphabetical` riguarda solo le colonne non elencate in `columns`. L'ordine
 alfabetico confronta i nomi in minuscolo (minuscole Unicode) byte per byte
 in UTF-8, quindi le lettere accentate vanno dopo la `z`; due nomi uguali in
 minuscolo restano nell'ordine d'ingresso.
 
-Un parametro senza effetto si rifiuta: `columns` vuota senza
-`alphabetical = true` non sposta niente; `alphabetical` scritto (con
-qualunque valore) quando al più una colonna d'ingresso non è elencata in
-`columns` non ordina niente.
+`columns` vuota senza `alphabetical = true` non sposterebbe niente con
+nessun ingresso e si rifiuta. `alphabetical` quando al più una colonna
+d'ingresso non è elencata in `columns` si accetta e non ordina niente:
+dipende dall'ingresso, e lo stesso piano gira su tabelle diverse.
+`alphabetical: null` esplicito si rifiuta: il parametro si omette.
 
 #### Schema
 
@@ -6204,8 +6242,7 @@ In validazione, `InvalidPlan`:
 
 - un nome di `columns` ripetuto o che non è una colonna dell'ingresso;
 - `columns` vuota senza `alphabetical = true`;
-- `alphabetical` (o `sort_alphabetical`) scritto quando al più una colonna
-  d'ingresso non è elencata in `columns`;
+- `alphabetical` (o `sort_alphabetical`) `null` esplicito;
 - config con campi sconosciuti.
 
 In esecuzione: nessun errore che dipenda dai dati.
@@ -6264,7 +6301,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 2, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -6379,7 +6416,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 1, kernel 3 |
 
 #### Che cosa fa
 
@@ -6399,7 +6436,7 @@ colonna.
 | `min_periods` | intero | `1` | da `1` a `window` | valori non nulli minimi per un risultato |
 | `group_by` | stringa | nessuno | colonna leggibile come testo | partizione; senza, una partizione sola |
 | `order_column` | stringa | nessuno | colonna di tipo ordinabile | ordinamento ascendente prima del calcolo |
-| `ddof` | intero | `1` | `0` o più; solo con `stddev` | gradi di libertà sottratti al divisore |
+| `ddof` | intero | `1` | `0` o più; solo con `stddev`; `null` non ammesso | gradi di libertà sottratti al divisore |
 | `output_column` | stringa | obbligatorio | nome di colonna valido | colonna d'uscita |
 
 La finestra si misura in righe, non in valori: una cella nulla occupa il
@@ -6435,7 +6472,8 @@ In validazione, `InvalidPlan`:
 
 - `window` o `min_periods` uguali a 0, `min_periods` maggiore di `window`,
   `window` oltre `max_rows`;
-- `ddof` con una funzione diversa da `stddev`;
+- `ddof` con una funzione diversa da `stddev`, o `null` esplicito (il
+  parametro si omette);
 - `column` assente o non numerica; `group_by` non leggibile come testo;
   `order_column` di tipo non ordinabile; `output_column` non valido;
 - funzione fuori elenco, campi sconosciuti.
@@ -6445,12 +6483,16 @@ In esecuzione:
 - `Schema`: una cella `utf8` di `column` che non è un numero; una cella di
   `group_by` che non si converte in testo; una chiave di dizionario di
   `order_column` fuori dal proprio dizionario;
+- `DataMapping`: un risultato di `sum`, `mean` o `stddev` non finito
+  calcolato da valori finiti (overflow di `f64`);
 - `ResourceLimit`: più di `u32::MAX` righe con `order_column`.
 
 #### Limiti e deviazioni
 
 La cella si legge come `f64`: un intero oltre `2^53` o un `decimal128` si
-arrotondano senza errore, perché il risultato è `float64`.
+arrotondano senza errore, perché il risultato è `float64`. Un `NaN` o un
+infinito già nei dati si propagano senza errore; solo l'overflow di un
+calcolo su valori finiti si rifiuta.
 
 #### Complessità
 
@@ -6510,7 +6552,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -6523,7 +6565,7 @@ sempre le stesse righe nello stesso ordine.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `n` | intero | `100` | intero non negativo; non insieme a `fraction` | righe del campione (senza `fraction`) |
+| `n` | intero | `100` | intero non negativo; non insieme a `fraction`; `null` non ammesso | righe del campione (senza `fraction`) |
 | `fraction` | numero | assente | da 0 a 1 compresi | frazione delle righe; esclude `n` |
 | `random_state` | intero | assente (seme fisso `0x9e3779b97f4a7c15`) | intero senza segno a 64 bit; si rifiuta se il campione è sempre vuoto (`n = 0` o `fraction = 0` senza `stratify_column`) | seme del generatore |
 | `stratify_column` | stringa | assente | colonna leggibile come testo | colonna degli strati |
@@ -6567,7 +6609,8 @@ In validazione, `InvalidPlan`:
 - `n` scritto insieme a `fraction`;
 - `random_state` scritto senza `stratify_column` quando il campione è
   sempre vuoto (`n = 0` o `fraction = 0`): nessun seme avrebbe effetto;
-- config con campi sconosciuti o `n` negativo.
+- config con campi sconosciuti, `n` negativo o `n: null` esplicito (il
+  parametro si omette).
 
 In esecuzione:
 
@@ -6853,7 +6896,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 1, kernel 3 |
+| versioni | semantica 2, config 2, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -6872,7 +6915,7 @@ maiuscole e di spazi ai lati non cambiano l'hash.
 | `output_column` | stringa | `sha256_hash` | nome valido | colonna d'uscita |
 | `normalize` | booleano | `true` | `true`, `false` | toglie gli spazi ai lati e porta in minuscolo ogni valore |
 | `null_policy` | stringa | `empty` | `empty`, `literal`, `error` | come entra una cella nulla |
-| `null_literal` | stringa | `"<null>"` | al più `max_string_bytes` byte; solo con `null_policy = "literal"` | testo di una cella nulla con `literal` |
+| `null_literal` | stringa | `"<null>"` | al più `max_string_bytes` byte; solo con `null_policy = "literal"`; `null` non ammesso | testo di una cella nulla con `literal` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -6916,7 +6959,8 @@ In validazione, `InvalidPlan`:
 
 - `columns` vuoto, con ripetizioni o con più di `max_columns` colonne;
 - una colonna assente o non leggibile come testo;
-- `output_column` non valido; `null_literal` oltre `max_string_bytes`;
+- `output_column` non valido; `null_literal` oltre `max_string_bytes`, o
+  `null` esplicito (il parametro si omette);
 - `null_literal` scritto con una `null_policy` diversa da `literal`: non
   avrebbe effetto;
 - config con campi sconosciuti o `null_policy` fuori elenco.
@@ -7128,7 +7172,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -7143,9 +7187,9 @@ colonne senza parte ricevono null.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna `utf8` dell'ingresso | testo da dividere |
-| `delimiter` | stringa | `","` | non vuota, al più `max_string_bytes` byte; solo con almeno due colonne d'uscita | separatore, testo letterale (non regex) |
+| `delimiter` | stringa | `","` | non vuota, al più `max_string_bytes` byte; solo con almeno due colonne d'uscita; `null` non ammesso | separatore, testo letterale (non regex) |
 | `new_columns` | lista di stringhe | obbligatorio | da 1 a 256 nomi, senza ripetizioni, ciascuno non vuoto e al più 1024 byte | colonne d'uscita, nell'ordine delle parti |
-| `max_splits` | intero | assente | da 1 a `len(new_columns) - 2` | al più `max_splits` divisioni, cioè `max_splits + 1` parti |
+| `max_splits` | intero | assente | da 1 a `len(new_columns) - 2`; `null` non ammesso | al più `max_splits` divisioni, cioè `max_splits + 1` parti |
 
 Senza `max_splits` le parti sono al più `len(new_columns)`. Con
 `max_splits` sono al più `max_splits + 1`, e le colonne in coda restano
@@ -7180,6 +7224,8 @@ In validazione, `InvalidPlan`:
 - `delimiter` vuoto o oltre `max_string_bytes`, o scritto con una sola
   colonna in `new_columns`;
 - `max_splits` non positivo o almeno `len(new_columns) - 1`;
+- `delimiter` o `max_splits` `null` espliciti: un parametro facoltativo si
+  omette;
 - `new_columns` assente, vuota, con più di 256 nomi, con un nome ripetuto,
   vuoto, di soli spazi o oltre 1024 byte;
 - config con campi sconosciuti.
@@ -7371,7 +7417,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 3 |
+| versioni | semantica 1, config 2, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -7723,7 +7769,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -7852,7 +7898,7 @@ elenca le colonne cambiate e i loro valori precedenti.
 | `right_keys` | lista di stringhe | obbligatorio | colonne della destra, tante quante `left_keys`, dello stesso tipo coppia per coppia | chiave a destra |
 | `compare_columns` | lista di stringhe | `[]` | colonne presenti in entrambe, dello stesso tipo, leggibili come testo | colonne confrontate; vuota vale le colonne non chiave della sinistra presenti anche a destra |
 | `include_unchanged` | stringa | `"no"` | `"yes"`, `"no"` | emette anche le righe `UNCHANGED` |
-| `separator` | stringa | `"#"` | al più `max_string_bytes` byte; solo con almeno due colonne confrontate | separatore di `_diff_columns` e `_diff_old_values` |
+| `separator` | stringa | `"#"` | al più `max_string_bytes` byte; `null` non ammesso; non con una sola colonna in `compare_columns` | separatore di `_diff_columns` e `_diff_old_values` |
 
 Colonne leggibili come testo: i tipi di [`table.distinct`](#tabledistinct).
 Due chiavi si abbinano con l'uguaglianza di `table.distinct`: un null è
@@ -7898,9 +7944,11 @@ In validazione, `InvalidPlan`:
   non leggibile come testo;
 - una colonna confrontata assente da un lato, non leggibile come testo, o
   di tipi diversi fra i lati;
-- `separator` oltre `max_string_bytes`, o scritto quando si confronta al
-  più una colonna (in `compare_columns` o dedotte dagli schemi): non
-  avrebbe effetto;
+- `separator` oltre `max_string_bytes`, `null` esplicito (il parametro si
+  omette), o scritto quando `compare_columns` elenca esattamente una
+  colonna (non avrebbe effetto con nessun ingresso); con `compare_columns`
+  vuota le colonne vengono dagli schemi e `separator` si accetta anche se
+  se ne confronta una sola: dipende dall'ingresso;
 - metadati di schema in conflitto; `include_unchanged` fuori da
   `"yes"`/`"no"`; campi sconosciuti.
 
@@ -8128,8 +8176,8 @@ nomi IANA (`Europe/Rome`, `UTC`, `America/New_York`).
 | `source_timezone` | stringa | obbligatorio | nome IANA noto a `chrono-tz` | fuso dei valori letti |
 | `target_timezone` | stringa | obbligatorio | nome IANA noto a `chrono-tz` | fuso dei valori scritti |
 | `output_column` | stringa | obbligatorio | nome valido | colonna d'uscita |
-| `invalid` | stringa | assente | nessuno: scritto si rifiuta | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
-| `ambiguous` | stringa | assente | nessuno: scritto si rifiuta | un'ora locale ambigua o inesistente rifiuta sempre la riga, nessun valore avrebbe effetto |
+| `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non leggibile rifiuta sempre la riga, nessun valore avrebbe effetto |
+| `ambiguous` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un'ora locale ambigua o inesistente rifiuta sempre la riga, nessun valore avrebbe effetto |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
 `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
@@ -8146,9 +8194,11 @@ sempre la riga, come un valore non leggibile: per questo `ambiguous` e
 `invalid` non si accettano.
 
 Il testo scritto da `output_format` non può superare `max_string_bytes`
-byte per valore. Il limite si controlla in validazione con una stima
-prudente: il testo letterale conta per la sua lunghezza, ogni campo
-`strftime` per 64 byte.
+byte per valore. Il limite si controlla in validazione, esatto per campo:
+il testo letterale conta per la sua lunghezza, ogni campo `strftime` per
+la sua larghezza massima (anno 7 byte col segno, mese, giorno, ora 2, nome
+del mese o del giorno 9, offset 9, nome del fuso 32); `%Y%m` scrive al più
+9 byte.
 
 #### Schema
 
@@ -8173,9 +8223,10 @@ In validazione, `InvalidPlan`:
 - `source_timezone` o `target_timezone` non riconosciuti;
 - un formato vuoto, oltre `max_string_bytes`, con un campo non
   riconosciuto, o che non si sa scrivere per un valore con fuso;
-- `output_format` la cui stima supera `max_string_bytes` byte per valore;
+- `output_format` che può scrivere più di `max_string_bytes` byte per
+  valore;
 - `output_column` non valido;
-- `invalid` o `ambiguous` scritti, con qualunque valore;
+- `invalid` o `ambiguous` scritti, con qualunque valore, anche `null`;
 - config con campi sconosciuti.
 
 In esecuzione:
@@ -8193,9 +8244,7 @@ In esecuzione:
 
 Le regole dei fusi sono quelle della banca dati IANA inclusa in
 `chrono-tz` 0.10.4: un cambio di regole successivo non si vede finché la
-dipendenza non si aggiorna. La stima di `output_format` è prudente: un
-formato che scriverebbe davvero meno di `max_string_bytes` byte si può
-rifiutare lo stesso.
+dipendenza non si aggiorna.
 
 #### Complessità
 
@@ -8249,7 +8298,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -8378,12 +8427,13 @@ eseguito chiamando il kernel.
 | --- | --- | --- | --- | --- |
 | `id_column` | stringa | nessuno | nome di una colonna dell'ingresso | i suoi valori danno i nomi delle colonne d'uscita, e non si traspone |
 | `output_columns` | lista di stringhe | `[]` | nomi di colonna | nomi delle colonne d'uscita, per posizione di riga |
-| `type_policy` | stringa | `"reject"` | `"reject"`, `"string"`; solo se le colonne dati hanno tipi diversi | colonne dati di tipi diversi: rifiuto, o conversione in testo |
+| `type_policy` | stringa | `"reject"` | `"reject"`, `"string"`; `null` non ammesso | colonne dati di tipi diversi: rifiuto, o conversione in testo |
 
 Nome della colonna della riga i (da 0): `output_columns[i]` se c'è e non
 è vuoto; altrimenti il testo della cella di `id_column` alla riga i, se non
 è nulla; altrimenti `col_<i+1>`. I nomi in più di `output_columns` si
-ignorano.
+ignorano. `type_policy` con colonne dati tutte dello stesso tipo si accetta
+e non cambia niente: dipende dall'ingresso.
 
 #### Schema
 
@@ -8407,7 +8457,8 @@ d'ingresso.
 #### Errori
 
 In validazione, il runner rifiuta sempre `table.transpose`: `InvalidPlan`
-per una config con campi sconosciuti, `output_columns` con un nome
+per una config con campi sconosciuti o `type_policy: null` esplicito (il
+parametro si omette), `output_columns` con un nome
 ripetuto o non valido (anche vuoto) o oltre il limite di colonne, o
 `id_column` assente; altrimenti `Unsupported` (lo schema d'uscita dipende
 dai dati).
@@ -8418,8 +8469,6 @@ Chiamando il kernel:
   conversione in testo una cella dati, che non si converte in testo (tipo
   non leggibile come testo, `binary` non UTF-8, date fuori intervallo);
 - `InvalidPlan`: colonne dati di tipi diversi con `type_policy: "reject"`;
-  `type_policy` scritto quando le colonne dati hanno tutte lo stesso tipo
-  (non avrebbe effetto);
   un nome di colonna d'uscita non valido (per esempio il testo di
   `id_column` vuoto o di soli spazi);
 - `ResourceLimit`: colonne dati oltre `max_rows` o righe più una oltre
@@ -8481,7 +8530,7 @@ Verifica: eseguito dal kernel (il runner rifiuta questa config in validazione, p
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 1, kernel 4 |
+| versioni | semantica 2, config 2, analisi 2, kernel 4 |
 
 #### Che cosa fa
 
@@ -8498,10 +8547,10 @@ equivalenti): nessuna cella diventa null in silenzio.
 | `column` | stringa | obbligatorio | colonna dell'ingresso leggibile come testo (sotto) | colonna da convertire |
 | `target_type` | stringa | `"str"` | `str`, `int`, `float`, `bool`, `date`, `datetime`, `date32`, `timestamp_millis`, `decimal128`, `binary_utf8`, `uint64`, `dictionary_utf8` | tipo d'arrivo |
 | `date_format` | stringa | `""` | formato strftime di chrono, solo con `date`, `datetime`, `date32`, `timestamp_millis`, al più `max_string_bytes` byte | formato delle date; `""` usa i formati di default |
-| `errors` | stringa | `"coerce"` | `coerce`, `raise`, `ignore`; non con `str`, `binary_utf8`, `dictionary_utf8` | che cosa succede a una cella che non si converte |
-| `precision` | intero | assente | da 1 a 38, obbligatorio con `decimal128` e solo lì | cifre totali del decimale |
-| `scale` | intero | assente | da 0 a `precision`, obbligatorio con `decimal128` e solo lì | cifre dopo la virgola |
-| `timezone` | stringa | assente | nome IANA (`Europe/Rome`), solo con `timestamp_millis` | fuso dei testi senza fuso, e fuso della colonna d'uscita |
+| `errors` | stringa | `"coerce"` | `coerce`, `raise`, `ignore`; non con `str`, `binary_utf8`, `dictionary_utf8`; `null` non ammesso | che cosa succede a una cella che non si converte |
+| `precision` | intero | assente | da 1 a 38, obbligatorio con `decimal128` e solo lì; `null` non ammesso | cifre totali del decimale |
+| `scale` | intero | assente | da 0 a `precision`, obbligatorio con `decimal128` e solo lì; `null` non ammesso | cifre dopo la virgola |
+| `timezone` | stringa | assente | nome IANA (`Europe/Rome`), solo con `timestamp_millis`; `null` non ammesso | fuso dei testi senza fuso, e fuso della colonna d'uscita |
 
 Tipi d'arrivo: `str`, `date`, `datetime` → `utf8`; `int` → `int64`;
 `uint64` → `uint64`; `float` → `float64`; `bool` → `bool`; `date32` →
@@ -8589,6 +8638,8 @@ In validazione, `InvalidPlan`:
 - `timezone` con un target diverso da `timestamp_millis`, o non un nome
   IANA;
 - `errors` scritto con `str`, `binary_utf8` o `dictionary_utf8`;
+- `errors`, `precision`, `scale` o `timezone` `null` espliciti: un
+  parametro facoltativo si omette;
 - valori fuori elenco, config con campi sconosciuti.
 
 Le regole su `date_format`, `precision`, `scale`, `timezone` ed `errors`
@@ -9148,7 +9199,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 1, config 2, analisi 1, kernel 3 |
 
 #### Che cosa fa
 
@@ -9166,8 +9217,8 @@ righe si riordinano prima su quella colonna.
 | `function` | stringa | `"rank"` | `rank`, `dense_rank`, `percent_rank`, `cume_dist`, `cumsum`, `running_mean`, `cumcount`, `lag`, `lead`, `pct_change`, `ntile` | funzione |
 | `group_by` | stringa | nessuno | colonna leggibile come testo | partizione; senza, una partizione sola |
 | `order_column` | stringa | nessuno | colonna di tipo ordinabile | ordinamento ascendente prima del calcolo |
-| `offset` | intero | `1` | da `1`; solo con `lag` e `lead` | distanza in righe |
-| `buckets` | intero | nessuno | da `1` a `max_rows`; obbligatorio con `ntile`, solo con `ntile` | numero di gruppi di `ntile` |
+| `offset` | intero | `1` | da `1`; solo con `lag` e `lead`; `null` non ammesso | distanza in righe |
+| `buckets` | intero | nessuno | da `1` a `max_rows`; obbligatorio con `ntile`, solo con `ntile`; `null` non ammesso | numero di gruppi di `ntile` |
 | `output_column` | stringa | `<column>_<function>` | nome di colonna valido | colonna d'uscita |
 
 Colonne numeriche: `int64`, `uint64`, `float64`, `decimal128`, `date32`,
@@ -9231,6 +9282,8 @@ In validazione, `InvalidPlan`:
 - `column` assente o non numerica; una funzione di rango su `utf8`;
 - `group_by` non leggibile come testo; `order_column` di tipo non
   ordinabile; un nome d'uscita non valido;
+- `offset` o `buckets` `null` espliciti (un parametro facoltativo si
+  omette);
 - funzione fuori elenco, campi sconosciuti.
 
 In esecuzione:
@@ -9239,14 +9292,18 @@ In esecuzione:
   `cumcount` e `ntile`, che non ne usano il valore); una cella di
   `group_by` che non si converte in testo; una chiave di dizionario di
   `order_column` fuori dal proprio dizionario;
+- `DataMapping`: un risultato di `cumsum`, `running_mean` o `pct_change`
+  non finito calcolato da valori finiti (overflow di `f64`);
 - `ResourceLimit`: più di `u32::MAX` righe con `order_column`.
 
 #### Limiti e deviazioni
 
 Le funzioni che rendono un valore (`cumsum`, `running_mean`, `lag`,
 `lead`, `pct_change`) leggono la cella come `f64`: un intero oltre `2^53`
-o un `decimal128` si arrotondano senza errore. Le funzioni di rango non
-arrotondano, e per questo rifiutano il testo numerico.
+o un `decimal128` si arrotondano senza errore. Un `NaN` o un infinito già
+nei dati si propagano senza errore; solo l'overflow di un calcolo su valori
+finiti si rifiuta. Le funzioni di rango non arrotondano, e per questo
+rifiutano il testo numerico.
 
 #### Complessità
 

@@ -85,12 +85,6 @@ const fn caso(
 #[allow(clippy::too_many_lines)] // Un caso per regola.
 fn casi() -> Vec<Caso> {
     use Fixture::{Binary, Set, Wide};
-    let colonne_wide = json!([
-        {"name": "id", "type": "Int64"}, {"name": "name", "type": "Utf8"},
-        {"name": "value", "type": "Float64"}, {"name": "flag", "type": "Boolean"},
-        {"name": "date", "type": "Utf8"}, {"name": "date2", "type": "Utf8"},
-        {"name": "json", "type": "Utf8"}, {"name": "geom", "type": "Binary"}
-    ]);
     vec![
         caso(
             "table.concat",
@@ -174,20 +168,6 @@ fn casi() -> Vec<Caso> {
             json!({"column": "date", "parts": ["year", "year"]}),
             "parte ripetuta",
             json!({"column": "date", "parts": ["year", "month"]}),
-        ),
-        caso(
-            "table.align_schema",
-            Wide,
-            json!({"columns": [{"name": "id", "type": "Int64", "default": 1}]}),
-            "senza effetto: la colonna esiste",
-            json!({"columns": [{"name": "nuova", "type": "Int64", "default": 1}]}),
-        ),
-        caso(
-            "table.align_schema",
-            Wide,
-            json!({"columns": colonne_wide, "keep_extra": false}),
-            "keep_extra senza effetto",
-            json!({"columns": [{"name": "id", "type": "Int64"}], "keep_extra": true}),
         ),
         caso(
             "table.filter",
@@ -325,23 +305,9 @@ fn casi() -> Vec<Caso> {
         caso(
             "table.rename",
             Wide,
-            json!({"renames": [{"old_name": "assente", "new_name": "x"}]}),
-            "assente",
-            json!({"renames": [{"old_name": "name", "new_name": "x"}]}),
-        ),
-        caso(
-            "table.rename",
-            Wide,
             json!({"renames": [{"old_name": "name", "new_name": "name"}]}),
             "su se stessa",
             json!({"renames": [{"old_name": "name", "new_name": "nome"}]}),
-        ),
-        caso(
-            "table.drop_columns",
-            Wide,
-            json!({"columns": ["assente"]}),
-            "assente",
-            json!({"columns": ["geom"]}),
         ),
         caso(
             "table.reorder_columns",
@@ -349,22 +315,6 @@ fn casi() -> Vec<Caso> {
             json!({}),
             "non sposta niente",
             json!({"alphabetical": true}),
-        ),
-        caso(
-            "table.reorder_columns",
-            Wide,
-            json!({"columns": ["id", "name", "value", "flag", "date", "date2", "json"],
-                    "alphabetical": true}),
-            "alphabetical senza effetto",
-            json!({"columns": ["id", "name", "value", "flag", "date", "date2"],
-                    "alphabetical": true}),
-        ),
-        caso(
-            "table.melt",
-            Wide,
-            json!({"id_columns": ["id"], "value_columns": ["name", "date"], "type_policy": "string"}),
-            "type_policy senza effetto",
-            json!({"id_columns": ["id"], "value_columns": ["name", "value"], "type_policy": "string"}),
         ),
         caso(
             "table.pivot",
@@ -433,4 +383,102 @@ fn i_parametri_senza_effetto_si_rifiutano_in_validazione_e_nel_kernel() {
         }
     }
     assert!(difetti.is_empty(), "{}", difetti.join("\n"));
+}
+
+/// I parametri che non hanno effetto solo con certi ingressi si accettano:
+/// lo stesso piano deve girare su tabelle diverse (decisione dell'utente),
+/// e il rifiuto dipenderebbe dallo schema, non dalla config.
+#[test]
+fn i_parametri_senza_effetto_solo_con_certi_ingressi_si_accettano() {
+    use Fixture::Wide;
+    let tutte = json!([
+        {"name": "id", "type": "Int64"}, {"name": "name", "type": "Utf8"},
+        {"name": "value", "type": "Float64"}, {"name": "flag", "type": "Boolean"},
+        {"name": "date", "type": "Utf8"}, {"name": "date2", "type": "Utf8"},
+        {"name": "json", "type": "Utf8"}, {"name": "geom", "type": "Binary"}
+    ]);
+    let casi = [
+        (
+            "table.align_schema",
+            json!({"columns": [{"name": "id", "type": "Int64", "default": 1}]}),
+        ),
+        (
+            "table.align_schema",
+            json!({"columns": tutte, "keep_extra": true}),
+        ),
+        ("table.drop_columns", json!({"columns": ["assente"]})),
+        (
+            "table.rename",
+            json!({"renames": [{"old_name": "assente", "new_name": "x"}]}),
+        ),
+        (
+            "table.reorder_columns",
+            json!({"columns": ["id", "name", "value", "flag", "date", "date2", "json"],
+                   "alphabetical": true}),
+        ),
+        (
+            "table.melt",
+            json!({"id_columns": ["id"], "value_columns": ["name", "date"],
+                   "type_policy": "string"}),
+        ),
+    ];
+    for (op, config) in casi {
+        esegui(op, Wide, &config).unwrap_or_else(|errore| panic!("{op} {config}: {errore}"));
+    }
+}
+
+/// Un parametro facoltativo scritto `null` non vale «assente»: si rifiuta
+/// dalla config, altrimenti sfuggirebbe alle regole sui parametri scritti.
+#[test]
+fn un_parametro_facoltativo_null_si_rifiuta() {
+    use Fixture::{Set, Wide};
+    let casi = [
+        ("table.concat", Set, json!({"ignore_index": null})),
+        ("table.sample", Wide, json!({"n": null})),
+        (
+            "table.md5_hash",
+            Wide,
+            json!({"columns": ["name"], "null_literal": null}),
+        ),
+        (
+            "table.date_format",
+            Wide,
+            json!({"column": "date", "input_format": "%Y-%m-%d", "output_column": "d",
+                   "invalid": null}),
+        ),
+        (
+            "table.concat_columns",
+            Wide,
+            json!({"columns": ["name"], "separator": null}),
+        ),
+        (
+            "table.formula",
+            Wide,
+            json!({"new_column": "f", "formula": "value / 2", "on_division_by_zero": null}),
+        ),
+        (
+            "table.expression",
+            Wide,
+            json!({"output_column": "e", "on_division_by_zero": null,
+                   "expression": {"kind": "column", "name": "value"}}),
+        ),
+        (
+            "table.aggregate",
+            Wide,
+            json!({"group_by": ["name"], "aggregations": [{"column": "value",
+                                                           "function": "sum", "ddof": null}]}),
+        ),
+        (
+            "table.type_cast",
+            Wide,
+            json!({"column": "id", "target_type": "int", "errors": null}),
+        ),
+        ("table.reorder_columns", Wide, json!({"alphabetical": null})),
+    ];
+    for (op, fixture, config) in casi {
+        match esegui(op, fixture, &config) {
+            Err(errore) if e_piano(&errore) && errore.to_string().contains("null non ammesso") => {}
+            altro => panic!("{op} {config}: atteso `null non ammesso`, avuto {altro:?}"),
+        }
+    }
 }

@@ -67,8 +67,8 @@ fn censimento() -> BTreeMap<&'static str, Vec<(&'static str, &'static str)>> {
             ("aggregations", "Aggregate::nomi_uscita (nomi ripetuti o uguali a una chiave); Aggregation::verifica_parametri"),
         ]),
         ("table.align_schema", &[
-            ("columns", "AlignSchema::verifica_parametri: default su una colonna che esiste"),
-            ("keep_extra", "AlignSchema::verifica_parametri: nessuna colonna non dichiarata"),
+            ("columns", "dipende dallo schema: default su una colonna che esiste accettato"),
+            ("keep_extra", "dipende dallo schema: accettato; null rifiutato"),
         ]),
         ("table.anti_join", &[("left_keys", "-"), ("right_keys", "-")]),
         ("table.asof_join", &[
@@ -140,7 +140,7 @@ fn censimento() -> BTreeMap<&'static str, Vec<(&'static str, &'static str)>> {
             ("ascending", "verifica_ascending: senza order_column"),
         ]),
         ("table.distinct", &[("subset", "-"), ("keep", "-")]),
-        ("table.drop_columns", &[("columns", "DropColumns::verifica_parametri: vuoto o nome assente")]),
+        ("table.drop_columns", &[("columns", "DropColumns::verifica_parametri: vuoto o ripetuto; assente accettato (schema)")]),
         ("table.explode", &[("column", "-"), ("empty_policy", "drop rifiutato"), ("output_column", "-")]),
         ("table.expression", &[
             ("output_column", "-"),
@@ -181,17 +181,17 @@ fn censimento() -> BTreeMap<&'static str, Vec<(&'static str, &'static str)>> {
         ]),
         ("table.melt", &[
             ("id_columns", "-"), ("value_columns", "-"), ("var_name", "-"), ("value_name", "-"),
-            ("type_policy", "reshape::verifica_type_policy: colonne omogenee"),
+            ("type_policy", "dipende dallo schema: accettato; null rifiutato"),
         ]),
         ("table.pivot", &[
             ("index_col", "Pivot::verifica_mapping: voce vuota"),
             ("pivot_col", "-"), ("value_col", "-"), ("aggr_func", "-"), ("mapping", "-"),
         ]),
         ("table.reconcile", &[("left_keys", "-"), ("right_keys", "-"), ("nulls_equal", NULLI)]),
-        ("table.rename", &[("renames", "Rename::verifica_parametri: vuoto, assente, su se stessa, ripetuta")]),
+        ("table.rename", &[("renames", "Rename::verifica_parametri: vuoto, su se stessa, ripetuta; assente accettato (schema)")]),
         ("table.reorder_columns", &[
             ("columns", "ReorderColumns::verifica_parametri: vuoto senza alphabetical"),
-            ("alphabetical", "ReorderColumns::verifica_parametri: al piu' una colonna restante"),
+            ("alphabetical", "dipende dallo schema: accettato; null rifiutato"),
             ("sort_alphabetical", "alias di alphabetical"),
         ]),
         ("table.replace", &[("column", "-"), ("old_value", "-"), ("new_value", "-"), ("regex", "-")]),
@@ -239,7 +239,7 @@ fn censimento() -> BTreeMap<&'static str, Vec<(&'static str, &'static str)>> {
         ]),
         ("table.table_diff", &[
             ("left_keys", "-"), ("right_keys", "-"), ("compare_columns", "-"), ("include_unchanged", "-"),
-            ("separator", "TableDiff::verifica_separatore: al piu' una colonna confrontata"),
+            ("separator", "TableDiff::verifica_separatore: una sola colonna in compare_columns"),
         ]),
         ("table.text_normalize", &[("columns", "-"), ("operations", "-"), ("overwrite", "-")]),
         ("table.timezone_convert", &[
@@ -251,7 +251,7 @@ fn censimento() -> BTreeMap<&'static str, Vec<(&'static str, &'static str)>> {
         ("table.top_n", &[("columns", "-"), ("n", "TopN::verifica_parametri: 0 da' sempre vuoto"), ("descending", "-")]),
         ("table.transpose", &[
             ("id_column", "-"), ("output_columns", "-"),
-            ("type_policy", "reshape::verifica_type_policy: colonne omogenee"),
+            ("type_policy", "dipende dallo schema: accettato; null rifiutato"),
         ]),
         ("table.type_cast", &[
             ("column", "-"), ("target_type", "-"),

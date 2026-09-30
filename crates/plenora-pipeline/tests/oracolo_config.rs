@@ -96,7 +96,7 @@ const DIPENDONO_DAI_DATI: &[(&str, &str)] = &[(
 /// non si converte nel tipo chiesto, un'asserzione violata dai dati.
 /// `conversion.datetime_range` resta fuori: su date del 2024 lo produce
 /// solo un `amount` che nessuna data sopporta, cioe' la config.
-const CAUSE_DEI_DATI: &[&str] = &["conversion.invalid_", "validation."];
+const CAUSE_DEI_DATI: &[&str] = &["conversion.invalid_", "validation.", "evaluation."];
 
 /// Un errore con diagnostica per riga dipende dai dati se ogni sua causa e'
 /// fra [`CAUSE_DEI_DATI`]; senza diagnostica, solo `Schema` e `DataMapping`
