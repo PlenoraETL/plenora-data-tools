@@ -581,6 +581,10 @@ fn celle_nel_margine(
         let per_riga = (margine.byte_disponibili() - usati) / RIGHE_IN_VOLO as u64;
         let fetta = celle.slice(inizio, fine - inizio);
         let blocco = map_nullable(&fetta, |payload| {
+            // Prima di decodificare, dalle intestazioni del WKB.
+            MargineMemoria::byte(per_riga)
+                .verifica(plenora_kernels_geo::decoded_size::decoded_size_xy(payload).unwrap_or(0))
+                .map_err(oltre)?;
             let geometria = plenora_kernels_geo::wkb_decoder::decode_validated(payload)?;
             // La geometria decodificata vive per tutta la riga.
             let decodificata = byte_heap_geometria(&geometria);

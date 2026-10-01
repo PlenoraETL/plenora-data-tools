@@ -73,7 +73,7 @@ Poi dal kernel, per geometria (`OperationError`, che il runner porta in `Plenora
 - `MargineMemoria` (`ResourceLimit`): i punti dei contorni prima di un
   overlay, le parti dopo un'unione dei blocchi o il risultato non
   starebbero nel margine di memoria del passo, per questa geometria
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»).
+  (guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»).
 
 Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
 è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza

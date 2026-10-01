@@ -76,7 +76,7 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
 - `ResourceLimit`: cella oltre il limite di byte per cella; più di
   `max_issues` sovrapposizioni (`IssueLimit`); coppie candidate e
   sovrapposizioni (stimate dalla zona, con la sua codifica) oltre il
-  margine di memoria del passo (`MargineMemoria`; [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  margine di memoria del passo (`MargineMemoria`; guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `Internal`: panico di `geo`, `i_overlay` o `rstar`, validazione che non
   conclude.
 

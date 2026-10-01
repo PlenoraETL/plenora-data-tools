@@ -86,7 +86,7 @@ passo geo indicata fra parentesi:
   left più larga (l'uscita ripete una riga di left per coppia), non
   starebbero nel margine di memoria del passo
   (budget meno byte vivi); stesso conteggio e stessa precedenza del limite
-  di righe, che vince se scatta prima ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  di righe, che vince se scatta prima (guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;

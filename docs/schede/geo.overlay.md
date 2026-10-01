@@ -95,7 +95,7 @@ parentesi:
   limite di righe dell'arco (`candidate_pairs`), o i pezzi lo superano
   (`overlay_results`), o coppie e pezzi (stimati dalla geometria, con la
   loro codifica) non starebbero nel margine di memoria del passo
-  (`memoria`; [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  (`memoria`; guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `IndexOverflow` (`InvalidPlan`): un indice non entra in `u64`;
 - `PrecisionInsufficient` (`Unsupported`): la griglia di un overlay
   sposterebbe il risultato oltre la precisione (sotto, «Precisione»);

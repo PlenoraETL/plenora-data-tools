@@ -70,7 +70,7 @@ categoria del passo geo indicata fra parentesi:
   confermate superano il limite di righe dell'arco; conta ogni destra che
   contiene una sinistra, anche se ne basta una;
 - `MargineMemoria` (`ResourceLimit`): le stesse coppie non starebbero nel
-  margine di memoria del passo (64 byte ciascuna, a maggiorante delle capacità; [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  margine di memoria del passo (64 byte ciascuna; guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;

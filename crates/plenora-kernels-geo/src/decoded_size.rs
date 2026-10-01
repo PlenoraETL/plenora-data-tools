@@ -3,9 +3,9 @@
 //! [`decoded_size_xy`] calcola i byte della `Geometry<f64>` che il decoder
 //! validante ([`crate::wkb_decoder`]) costruirebbe da una cella WKB, SENZA
 //! decodificarla, cosi' un chiamante puo' riservare memoria prima di
-//! decodificare e rifiutare prima di allocare. Oggi nessun chiamante del
-//! workspace lo usa: il governor di memoria del progetto d'origine non e'
-//! stato portato.
+//! decodificare e rifiutare prima di allocare: il runner lo usa per
+//! controllare il margine di memoria dei kernel geo
+//! ([`crate::margine`]) prima di decodificare le colonne d'ingresso.
 //!
 //! La camminata e' speculare a `decode_geometry`: stesso ordine di
 //! valutazione e stessi limiti ([`MAX_WKB_BYTES`], [`MAX_WKB_DEPTH`],

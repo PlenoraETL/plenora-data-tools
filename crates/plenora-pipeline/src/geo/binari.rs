@@ -29,13 +29,16 @@ use std::sync::Arc;
 use geo::{CoordsIter, Geometry};
 use plenora_core::arrow::array::cast::AsArray;
 use plenora_core::arrow::array::Array;
-use plenora_core::arrow::array::{ArrayRef, BooleanArray, Float64Array, RecordBatch, UInt64Array};
+use plenora_core::arrow::array::{
+    ArrayRef, BinaryArray, BooleanArray, Float64Array, RecordBatch, UInt64Array,
+};
 use plenora_core::arrow::select::take::take;
 use plenora_core::arrow::DataType;
 use plenora_core::limits::Limits;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::analyze::config::{NearestConfig, OverlayConfig, SJoinConfig};
 use plenora_kernels_geo::arrow_adapter::encode_geometry;
+use plenora_kernels_geo::decoded_size::decoded_size_xy;
 use plenora_kernels_geo::margine::{byte_heap_geometria, MargineMemoria};
 use plenora_kernels_geo::rust_backend::precision::Precision;
 use plenora_kernels_geo::spatial_join::JoinPredicate;
@@ -125,8 +128,17 @@ impl KernelBinario {
         // nel margine la riga piu' larga (un maggiorante di ogni riga
         // ripetuta), con gli indici.
         let riga_sinistra = byte_riga_massima(sinistra);
-        let geometrie_sx = decodifica(lato_sx.celle(sinistra)?)?;
-        let geometrie_dx = decodifica(lato_dx.celle(destra)?)?;
+        // Prima di decodificare: le geometrie dei due lati devono stare nel
+        // margine, a giudicare dalle intestazioni del WKB.
+        let (celle_sx, celle_dx) = (lato_sx.celle(sinistra)?, lato_dx.celle(destra)?);
+        margine
+            .verifica(
+                byte_decodificate_previste(celle_sx)
+                    .saturating_add(byte_decodificate_previste(celle_dx)),
+            )
+            .map_err(|superato| PlenoraError::ResourceLimit(format!("{op}: {superato}")))?;
+        let geometrie_sx = decodifica(celle_sx)?;
+        let geometrie_dx = decodifica(celle_dx)?;
         // Le geometrie decodificate restano vive per tutto il kernel: il
         // margine dei kernel e' quello che resta.
         let decodificate =
@@ -370,6 +382,23 @@ fn byte_riga_massima_colonna(colonna: &dyn Array) -> u64 {
         ),
     };
     valore.saturating_add(1)
+}
+
+/// I byte delle geometrie decodificate di una colonna, dalle intestazioni
+/// del WKB e senza decodificare: il posto di ogni riga piu' l'heap che il
+/// decoder costruirebbe ([`decoded_size_xy`], esatto per il nostro
+/// decoder). Una cella che la camminata rifiuta conta solo il suo posto: il
+/// decoder la rifiutera'.
+fn byte_decodificate_previste(celle: &BinaryArray) -> u64 {
+    let posto = std::mem::size_of::<Option<Geometry<f64>>>() as u64;
+    (0..celle.len()).fold(0_u64, |totale, riga| {
+        let heap = if celle.is_null(riga) {
+            0
+        } else {
+            decoded_size_xy(celle.value(riga)).unwrap_or(0)
+        };
+        totale.saturating_add(posto).saturating_add(heap)
+    })
 }
 
 /// Le colonne di left, riga per indice.

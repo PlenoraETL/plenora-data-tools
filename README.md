@@ -2025,59 +2025,32 @@ esplicito.
   La dipendenza del transitorio dai thread vale per ogni kernel per riga
   in parallelo: le misure v4 sono a 32 thread, e una macchina con più
   core ne trattiene di più (il buffer nel runner ne ha al più 64 in volo).
-  **Margine nei kernel.** I kernel di questi profili ricevono il margine
-  del passo (`plenora_kernels_geo::margine`, budget meno byte vivi) e
-  contano con maggioranti, dove crescono, i byte che il **nostro** codice
-  alloca e trattiene, più quelli che il runner spenderà per ogni risultato
-  nell'uscita; si fermano con un `ResourceLimit` che nomina il margine
-  **prima** di tenere ciò che non ci starebbe. Le geometrie si contano con
-  le capacità vere dei loro `Vec` (`byte_heap_geometria`), le codifiche WKB
-  col doppio della lunghezza esatta più 64 byte (il `Vec` di `to_wkb` cresce
-  raddoppiando), i vettori a capacità esatta (`try_reserve_exact`) o, dove
-  crescono con `push`, col doppio della lunghezza:
-  - `sjoin`, `within`, `count_points_in_polygons` (le coppie del join): i
-    candidati dell'R-tree si visitano senza raccoglierli; 64 byte per
-    coppia confermata (indice destro in un vettore che cresce, al più 32
-    byte; la coppia nel gruppo e nel risultato, a capacità esatta), contati
-    prima di accodarla; il tetto è il minore fra `max_pairs` e le coppie che
-    entrano nel margine, sullo stesso contatore (deterministico). Per
-    `sjoin` ogni coppia conta anche la riga **più larga** di left (per
-    colonna: il valore più lungo di binari e testi, la larghezza dei tipi
-    fissi, l'intera colonna per gli altri tipi), mai la media, e 16 byte di
-    indici;
-  - `nearest` (i vicini equidistanti): i candidati si visitano due volte
-    senza raccoglierli (il minimo e il numero dei pari, poi i pari, solo se
-    più di uno), e i pari si contano prima di allocarli: 48 byte per
-    abbinamento (gruppo e risultato a capacità esatta), più la riga più
-    larga di left e 24 byte;
-  - `overlay` (i pezzi): le copie degli ingressi, le coppie candidate (a
-    capacità vera), le maschere dissolte e, per pezzo, la geometria, la sua
-    codifica e la crescita del vettore dei pezzi, nell'ordine dei pezzi;
-  - `coverage_validate` (le sovrapposizioni): le geometrie decodificate e
-    gli elementi preparati, le coppie candidate contate su un primo giro
-    dell'R-tree e riservate a capacità esatta (16 byte ciascuna), il
-    risultato di ogni overlay appena calcolato, e per issue la zona, la sua
-    codifica e la crescita dei vettori delle issue e delle righe d'uscita;
-  - `buffer` (zig-zag): oltre ai blocchi («Buffer», voce «linee a
-    blocchi»), che tolgono la crescita quadratica, un **solo conto per
-    passo** nel runner (`celle_nel_margine`): le uscite già tenute (celle a
-    capacità vera e la loro copia nella colonna) riducono il margine delle
-    righe successive; le righe si calcolano a blocchi fissi di 64 in
-    parallelo, e ognuna riceve un sessantaquattresimo di ciò che resta, meno la
-    propria geometria decodificata. Nel kernel, per geometria: la copia di
-    lavoro dell'ingresso e i blocchi, prima di ogni overlay i punti dei
-    contorni (64 byte ciascuno, un minorante del costo di `i_overlay`),
-    ogni buffer di blocco e ogni unione appena calcolati con ciò che è
-    ancora vivo, e il risultato; lo stesso per la distanza nulla.
+  **Guardia di memoria nei kernel: riduce il rischio, non è un tetto.** I
+  kernel di questi profili ricevono il margine del passo
+  (`plenora_kernels_geo::margine`, budget meno byte vivi) e contano le
+  allocazioni **più grandi** del nostro codice, dove crescono con i dati: le
+  geometrie decodificate degli ingressi (stimate dalle intestazioni del WKB
+  prima di decodificarle), le coppie confermate di `sjoin`, `within` e
+  `count_points_in_polygons` (con la riga più larga di left ripetuta
+  nell'uscita, mai la media), i vicini equidistanti di `nearest`, le
+  coppie candidate e i pezzi di `overlay`, le coppie candidate e le
+  sovrapposizioni di `coverage_validate`, la copia di lavoro, i blocchi e
+  l'uscita trattenuta del `buffer` (un solo conto per passo, righe a
+  blocchi fissi di 64). Quando quelle non entrano nel margine il kernel si
+  ferma con un `ResourceLimit` che lo nomina, invece di allocarle. Il
+  controllo è deterministico.
 
-  Restano fuori: il transitorio dentro una chiamata di `geo` o di
-  `i_overlay` (incroci, grafi, e il risultato di un overlay fino al primo
-  controllo, appena allocato); le strutture di `rstar` (gli R-tree degli
-  ingressi, proporzionali agli ingressi come nel modello); l'overhead
-  dell'allocatore. Il controllo dopo il passo con i byte esatti resta.
-  *Rientro*: una grandezza a secco per queste espansioni (candidati
-  dell'R-tree, stima delle sovrapposizioni) nel modello, e un allocatore
-  contato per il transitorio dentro `geo` e `i_overlay`.
+  **Non è un tetto garantito.** Restano fuori: il transitorio dentro una
+  chiamata di `geo` o di `i_overlay` (incroci, grafi, il risultato di un
+  overlay fino al primo controllo); le strutture di `rstar` (gli R-tree,
+  proporzionali agli ingressi); la crescita dei builder Arrow delle colonne
+  d'uscita; alcuni vettori ausiliari (riferimenti alle righe, gruppi per
+  riga, indici) e il transitorio delle codifiche WKB e della validazione
+  OGC; l'overhead dell'allocatore. Il controllo dopo il passo con i byte
+  esatti resta. *Rientro*: un limite di memoria del processo imposto dal
+  sistema operativo (job object su Windows, cgroup su Linux), previsto con
+  l'infrastruttura; una grandezza a secco per queste espansioni nel
+  modello.
 - **Transitorio oltre la previsione non rilevato.**
   *Regola*: prima del passo si controlla la previsione del modello, dopo il
   passo i byte vivi esatti delle tabelle residenti con l'uscita; la memoria
@@ -2096,10 +2069,10 @@ esplicito.
   superato in silenzio; il resoconto riporta solo i byte vivi dopo il
   passo. Se la macchina non ne ha, il processo si ferma per esaurimento di
   memoria invece che con un errore del runner.
-  *Rientro*: un allocatore contato per il processo che rifiuti
-  l'allocazione oltre il budget (un tetto vero), o la contabilità esplicita
-  del transitorio nei kernel con il margine passato a tutti (le geo dei
-  sette profili ne contano oggi i risultati, non il transitorio).
+  *Rientro*: un limite di memoria del processo imposto dal sistema
+  operativo (job object, cgroup), previsto con l'infrastruttura: un tetto
+  vero, che la guardia dei kernel geo (limite «Modelli di costo geo») non
+  è.
 - **Geo senza diagnostica per riga.**
   *Regola*: un passo geo rende il primo errore in ordine di riga, senza
   report `plenora-row-diagnostics-v1`; gli indici che alcuni messaggi dei

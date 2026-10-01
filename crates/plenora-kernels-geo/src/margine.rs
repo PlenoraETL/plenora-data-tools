@@ -10,19 +10,20 @@
 //! vicini equidistanti. Senza margine il kernel li alloca tutti, e il
 //! runner se ne accorge solo dopo il passo, o mai se la memoria finisce
 //! prima. Con il margine il kernel conta, nei punti in cui quei vettori
-//! crescono, i byte che vi ha messo (piu' quelli che il chiamante spende
-//! per ogni risultato nell'uscita, [`MargineMemoria::con_uscita_per_risultato`])
+//! crescono, i byte che vi mette (piu' quelli che il chiamante spende per
+//! ogni risultato nell'uscita, [`MargineMemoria::con_uscita_per_risultato`])
 //! e si ferma con un `ResourceLimit` prima di superarlo.
 //!
-//! **Che cosa conta e che cosa no.** Si contano i risultati che il kernel
-//! trattiene (coppie, pezzi, problemi, vicini, uscite del buffer) con stime
-//! per eccesso della loro rappresentazione in memoria
-//! ([`crate::memory_estimate`] per le geometrie), non il transitorio dentro
-//! una chiamata di `geo` o `i_overlay`, che non si osserva; il controllo e'
+//! **Riduce il rischio, non e' un tetto.** Si contano le allocazioni piu'
+//! grandi del nostro codice (geometrie decodificate, coppie, candidati,
+//! pezzi, problemi, vicini, l'uscita trattenuta del buffer), con le
+//! capacita' vere dove si leggono. Restano fuori il transitorio dentro
+//! `geo` e `i_overlay`, gli R-tree di `rstar`, la crescita dei builder
+//! Arrow, alcuni vettori ausiliari e codifiche, l'overhead dell'allocatore
+//! (README, «Modelli di costo geo»): il tetto vero sara' un limite di
+//! memoria del processo imposto dal sistema operativo. Il controllo e'
 //! deterministico (conteggi nell'ordine delle righe, o un totale che non
-//! dipende dai thread). Nei kernel per riga (`buffer`) il margine vale per
-//! ogni riga: righe in parallelo possono trattenere insieme fino a tanti
-//! margini quanti sono i thread (limite dichiarato nel README).
+//! dipende dai thread).
 
 use std::mem::size_of;
 
