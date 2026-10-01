@@ -185,7 +185,33 @@ Ora:
   oltre `|d|` di circa 5.368 km), un punto d'arco di al più `4.1e-7 |d|`
   (tolto dalla freccia chiesta alle corde). Il buffer resta entro `p / 2` dal buffer
   esatto verso l'esterno ed entro `f + p / 2` verso l'interno lungo gli
-  archi, senza controllo a posteriori contro la definizione.
+  archi, senza controllo a posteriori contro la definizione;
+- **linee a blocchi** (`rust_backend::buffer::blocchi`): il tratto di
+  `i_overlay` mette in un solo overlay i contorni di tutti i segmenti e
+  calcola ogni incrocio fra loro; su una linea i cui offset si
+  sovrappongono su molti segmenti lontani (zig-zag stretto rispetto alla
+  distanza: 1.000 vertici a 0,8 m, buffer di 200 m) il calcolo misurava 21
+  GiB e 110 s per 16 KB d'ingresso. Per `LineString` e `MultiLineString`
+  con estremità tonde o piatte, se le coppie di segmenti lontani nella linea
+  (oltre 16 posizioni, o di linee diverse) a rettangoli allargati di `|d|`
+  sovrapposti superano 4 per segmento (e 4.096), il buffer si calcola per
+  blocchi di 8 segmenti sovrapposti di un segmento, uniti a coppie
+  (`ceil(log2(blocchi))` unioni in catena, nel bilancio della griglia
+  prima del calcolo). L'unione dei buffer esatti dei blocchi è il buffer
+  esatto della linea (giunzioni tonde; l'estremità tonda di un blocco su un
+  vertice interno è un disco contenuto nel buffer, quella piatta è il bordo
+  del rettangolo del segmento condiviso), e i due limiti sopra valgono per
+  l'unione: il risultato differisce dal tratto unico di al più `f + p` (gli
+  archi dei blocchi cominciano da angoli diversi), senza errore. Sotto la
+  soglia, e con estremità quadrate (sporgerebbero oltre i vertici interni),
+  il tratto unico come prima. L'oracolo
+  (`oracolo_a_blocchi_contro_tratto_unico_e_definizione`) confronta il
+  percorso di produzione con la definizione (vertici entro `|d| + p / 2`,
+  punti a `|d| - f - p` dentro) e con il tratto unico (bordi entro `f +
+  p`). Sul profilo avversario del laboratorio (1.000 linee da 1.000
+  vertici, 200 m) da 110 s e 20 GiB a 2,1 s e 112 MiB; 10.000 linee, prima
+  oltre il tempo massimo di 300 s, 38 s e 794 MiB (release, 32 thread,
+  mediana di 5).
 
 `clean_topology` con la morfologia divide il bilancio: due buffer con
 freccia `p / 8` (o lo 0,1% della tolleranza di chiusura, se maggiore:
@@ -298,6 +324,22 @@ vertice d'ingresso non sono riconosciuti.
   rientro:* archi entro `p / 2` a costo accettabile per ogni distanza
   (`i_overlay` non scende sotto un passo di `0.01 pi`), o un parametro
   esplicito di tolleranza nel piano.
+- **Buffer delle linee a blocchi: un secondo algoritmo.** *Regola:* oltre
+  la soglia di coppie di segmenti lontani («Buffer», voce «linee a
+  blocchi») il buffer di una linea è l'unione dei buffer di blocchi di 8
+  segmenti, non il tratto unico di `i_overlay`. *Ambito:* `buffer`,
+  `buffer_with_cap` su `LineString` e `MultiLineString` con estremità tonde
+  o piatte (non le collezioni, non i poligoni, non le estremità quadrate).
+  *Hazard:* lo stesso ingresso poco sopra e poco sotto la soglia dà
+  risultati diversi di al più `f + p` (vertici degli archi diversi, aree
+  diverse di circa perimetro per `f`), entrambi nella fascia dichiarata; un
+  poligono con anelli a zig-zag stretto rispetto alla distanza e le
+  estremità quadrate restano al tratto unico, con il suo costo (nessun
+  limite di memoria nel kernel: limite «Transitorio oltre la previsione non
+  rilevato»). *Condizione di rientro:* un tratto di `i_overlay` che non
+  calcoli gli incroci fra contorni già coperti, o i blocchi anche per gli
+  anelli dei poligoni (buffer positivo: poligono unito al buffer degli
+  anelli) con il loro oracolo.
 - **Non applicabile.** Le parti di `subdivide` sotto la soglia di vertici
   escono invariate, senza overlay; i punti con estremità piatte e il buffer
   negativo senza parti areali sono vuoti per definizione, senza calcolo.

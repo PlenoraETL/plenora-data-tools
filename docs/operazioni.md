@@ -10319,14 +10319,22 @@ e l'unione delle parti) si controlla prima del calcolo e, se non basta, si
 rifiuta con `PrecisionInsufficient`. Le componenti che la griglia
 ridurrebbe a un punto non spariscono: una linea più corta di due passi
 della griglia si bufferizza come il suo primo punto, un poligono minuscolo
-o più sottile di due passi come il suo anello esterno
+o più sottile di due passi come il suo anello esterno. Una linea i cui
+offset si sovrappongono su molti segmenti lontani (zig-zag stretto rispetto
+alla distanza), con estremità tonde o piatte, si bufferizza a blocchi di 8
+segmenti uniti a coppie: l'unione è lo stesso buffer entro la stessa fascia,
+e differisce dal calcolo in un solo passaggio di al più `f + p`
 ([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
-voci «Buffer» e «Deviazione: archi del buffer»).
+voci «Buffer», «Deviazione: archi del buffer» e «Buffer delle linee a
+blocchi: un secondo algoritmo»).
 
 #### Complessità
 
 Dominata da `i_overlay` (offset dei contorni e unione, sulla griglia
-intera); non c'è una stima asintotica dichiarata. Tempi misurati (stella e
+intera); non c'è una stima asintotica dichiarata. Il tratto in un solo
+passaggio calcola ogni incrocio fra gli offset dei segmenti: su una linea a
+zig-zag stretto è quadratico nei vertici, e oltre la soglia si passa ai
+blocchi (1.000 vertici a 0,8 m con 200 m: 24 ms invece di 110 s e 21 GiB). Tempi misurati (stella e
 linea da 1.000 vertici, da 1 m a 1 km) nel README, voce «Costo» di
 [«Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 Più la validazione OGC dell'ingresso e dell'uscita

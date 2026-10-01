@@ -80,6 +80,8 @@ use geo::{
 use super::griglia::{self, PrecisioneInsufficiente};
 use super::precision::Precision;
 
+mod blocchi;
+
 /// Le estremita' delle linee nel buffer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Estremita {
@@ -409,7 +411,43 @@ pub fn buffer_con_freccia(
     let stile = BufferStyle::new(distance)
         .line_join(LineJoin::Round(angolo))
         .line_cap(estremita_geo);
+    // Una linea i cui offset si sovrappongono su molti segmenti lontani: a
+    // blocchi, con le unioni nel bilancio della griglia (`blocchi`).
+    if let Some(linee) = blocchi::linee_di(&lavoro) {
+        if estremita != Estremita::Quadrate
+            && blocchi::tratto_unico_troppo_costoso(&linee, distance)
+        {
+            let parti = blocchi::blocchi_di(&linee);
+            controlla_unioni_dei_blocchi(
+                ingombro,
+                blocchi::livelli_di_unione(parti.len()),
+                limite,
+            )?;
+            return protetto(|| blocchi::buffer_dei_blocchi(&parti, &stile));
+        }
+    }
     protetto(|| lavoro.buffer_with_style(stile))
+}
+
+/// Il bilancio della griglia del buffer a blocchi: i passaggi del buffer
+/// ([`PASSI_BUFFER`] volte [`FATTORE_BUFFER`]) piu' `livelli` unioni in
+/// catena ([`griglia::FATTORE_OVERLAY`] ciascuna), tutti sull'ingombro
+/// allargato, che contiene gli operandi di ogni unione: entro `limite`.
+fn controlla_unioni_dei_blocchi(
+    ingombro: geo::Rect<f64>,
+    livelli: u32,
+    limite: f64,
+) -> Result<(), ErroreBuffer> {
+    let buffer = griglia::spostamento_a_priori(ingombro, FATTORE_BUFFER);
+    let unione = griglia::spostamento_a_priori(ingombro, griglia::FATTORE_OVERLAY);
+    match (buffer, unione) {
+        (Some(buffer), Some(unione))
+            if f64::from(PASSI_BUFFER).mul_add(buffer, f64::from(livelli) * unione) <= limite =>
+        {
+            Ok(())
+        }
+        _ => Err(ErroreBuffer::PrecisioneInsufficiente),
+    }
 }
 
 #[cfg(test)]
