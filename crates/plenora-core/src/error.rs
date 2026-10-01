@@ -102,6 +102,18 @@ pub enum PlenoraError {
     #[error("CRS error: {0}")]
     Crs(String),
 
+    /// Errore CRS con il codice stabile di [`crate::crs::CrsError`]
+    /// (`code`, il `code` di `plenora-error-v1`): lo produce la conversione
+    /// da `CrsError`. Stesso testo, categoria e assi di
+    /// [`PlenoraError::Crs`], che resta per i messaggi senza codice.
+    #[error("CRS error: {message}")]
+    CrsCoded {
+        /// [`crate::crs::CrsError::code`].
+        code: &'static str,
+        /// Il messaggio, con il codice in testa e gli eventuali contesti.
+        message: String,
+    },
+
     /// Esecuzione annullata dal chiamante: il segnale di annullamento del
     /// runner (`plenora_pipeline::Interruzione`) era alzato a un controllo
     /// fra i passi. Il testo dice dove (passo e operazione, o la consegna
@@ -181,6 +193,22 @@ pub enum PlenoraError {
         source: Box<Self>,
         /// Payload strutturato, di dimensione limitata.
         diagnostics: Box<RowDiagnostics>,
+    },
+
+    /// Errore con effetto sul supporto esplicito, assegnato da chi sa che
+    /// una parte dell'effetto è già visibile (oggi solo `esegui_da_file` di
+    /// `plenora-io`, dopo il primo output scritto: `Partial`).
+    ///
+    /// Wrapper trasparente come [`PlenoraError::Tagged`]: testo, categoria e
+    /// fase delegati; [`PlenoraError::remote_effect`] e
+    /// [`PlenoraError::retry_disposition`] ne tengono conto. Si costruisce con
+    /// [`PlenoraError::with_remote_effect`].
+    #[error("{source}")]
+    WithRemoteEffect {
+        /// Effetto dichiarato dal confine.
+        remote_effect: RemoteEffect,
+        /// Errore originale.
+        source: Box<Self>,
     },
 
     /// Errore con fase esplicita, assegnata da chi lo ha prodotto.
@@ -569,8 +597,9 @@ impl RetryDisposition {
 
 impl PlenoraError {
     /// Antepone un contesto (`"{contesto}: {messaggio}"`) al messaggio di
-    /// `InvalidPlan`, `Unsupported`, `Schema` e `Crs`, i cui testi sono
-    /// nostri; la variante resta la stessa.
+    /// `InvalidPlan`, `Unsupported`, `Schema`, `Crs` e `CrsCoded`, i cui
+    /// testi sono nostri (anche sotto `WithRemoteEffect`); la variante resta
+    /// la stessa.
     ///
     /// Lo usano il runner (nome dell'input) e `plenora-io` (nome dell'input
     /// o dell'output, colonna geometrica). Il `match` non ha ramo di
@@ -591,6 +620,17 @@ impl PlenoraError {
             Self::Unsupported(messaggio) => Self::Unsupported(anteponi(messaggio)),
             Self::Schema(messaggio) => Self::Schema(anteponi(messaggio)),
             Self::Crs(messaggio) => Self::Crs(anteponi(messaggio)),
+            Self::CrsCoded { code, message } => Self::CrsCoded {
+                code,
+                message: anteponi(message),
+            },
+            Self::WithRemoteEffect {
+                remote_effect,
+                source,
+            } => Self::WithRemoteEffect {
+                remote_effect,
+                source: Box::new(source.con_contesto(contesto)),
+            },
             altro @ (Self::DataMapping(_)
             | Self::Execution { .. }
             | Self::Cancelled(_)
@@ -617,7 +657,7 @@ impl PlenoraError {
             Self::Schema(_) => ErrorCategory::Schema,
             Self::DataMapping(_) => ErrorCategory::DataMapping,
             Self::Execution { .. } => ErrorCategory::Execution,
-            Self::Crs(_) => ErrorCategory::Crs,
+            Self::Crs(_) | Self::CrsCoded { .. } => ErrorCategory::Crs,
             Self::Cancelled(_) => ErrorCategory::Cancelled,
             Self::ResourceLimit(_) => ErrorCategory::ResourceLimit,
             Self::Io(_) => ErrorCategory::Io,
@@ -626,7 +666,9 @@ impl PlenoraError {
             Self::Conflict(_) => ErrorCategory::Conflict,
             Self::InvalidConfiguration(_) => ErrorCategory::InvalidConfiguration,
             Self::Internal(_) => ErrorCategory::Internal,
-            Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => source.category(),
+            Self::Tagged { source, .. }
+            | Self::RowDiagnostics { source, .. }
+            | Self::WithRemoteEffect { source, .. } => source.category(),
         }
     }
 
@@ -649,6 +691,9 @@ impl PlenoraError {
     ///   chiamante.
     /// - [`RetryDisposition::Never`] per le cause deterministiche e
     ///   `Internal`.
+    /// - [`RetryDisposition::RequiresRecovery`] al posto di un ritentativo
+    ///   automatico quando [`PlenoraError::WithRemoteEffect`] dichiara un
+    ///   effetto gia' visibile.
     /// - [`RetryDisposition::After`] e [`RetryDisposition::Quarantine`] non
     ///   sono mai prodotti.
     ///
@@ -663,6 +708,7 @@ impl PlenoraError {
             | Self::DataMapping(_)
             | Self::Execution { .. }
             | Self::Crs(_)
+            | Self::CrsCoded { .. }
             | Self::ResourceLimit(_)
             | Self::Protocol(_)
             | Self::Conflict(_)
@@ -671,6 +717,18 @@ impl PlenoraError {
             Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => {
                 source.retry_disposition()
             }
+            // Un effetto gia' visibile (parziale, definitivo o ignoto) esclude
+            // il ritentativo automatico: prima va accertato lo stato
+            // (ERR-006 per `unknown`, la stessa regola per gli altri). Una
+            // causa che non si ritenta mai resta `Never`.
+            Self::WithRemoteEffect {
+                remote_effect,
+                source,
+            } => match (remote_effect, source.retry_disposition()) {
+                (RemoteEffect::None | RemoteEffect::RolledBack, retry)
+                | (_, retry @ (RetryDisposition::Never | RetryDisposition::Quarantine)) => retry,
+                (_, _) => RetryDisposition::RequiresRecovery,
+            },
         }
     }
 
@@ -703,9 +761,11 @@ impl PlenoraError {
             // Bracci fusi per fase (stessa decisione documentata sopra per
             // ogni variante): l'esaustivita' e' preservata perche' tutte
             // le varianti restano nominate esplicitamente.
-            Self::InvalidPlan(_) | Self::Unsupported(_) | Self::Schema(_) | Self::Crs(_) => {
-                ErrorPhase::Validate
-            }
+            Self::InvalidPlan(_)
+            | Self::Unsupported(_)
+            | Self::Schema(_)
+            | Self::Crs(_)
+            | Self::CrsCoded { .. } => ErrorPhase::Validate,
             Self::Execution { .. }
             | Self::Cancelled(_)
             | Self::DataMapping(_)
@@ -728,7 +788,9 @@ impl PlenoraError {
             Self::Conflict(_) => ErrorPhase::Commit,
             // Il tag del confine vince sulla derivazione per variante.
             Self::Tagged { phase, .. } => *phase,
-            Self::RowDiagnostics { source, .. } => source.phase(),
+            Self::RowDiagnostics { source, .. } | Self::WithRemoteEffect { source, .. } => {
+                source.phase()
+            }
         }
     }
 
@@ -768,8 +830,30 @@ impl PlenoraError {
                 source: Box::new(source.with_phase(phase)),
                 diagnostics,
             },
+            Self::WithRemoteEffect {
+                remote_effect,
+                source,
+            } => Self::WithRemoteEffect {
+                remote_effect,
+                source: Box::new(source.with_phase(phase)),
+            },
             _ => Self::Tagged {
                 phase,
+                source: Box::new(self),
+            },
+        }
+    }
+
+    /// Dichiara l'effetto restato sul supporto
+    /// ([`PlenoraError::WithRemoteEffect`]). Il primo effetto dichiarato
+    /// vince, come il tag di fase: il confine più vicino all'origine sa di
+    /// più. `RemoteEffect::None` lascia l'errore com'è.
+    #[must_use]
+    pub fn with_remote_effect(self, remote_effect: RemoteEffect) -> Self {
+        match (remote_effect, &self) {
+            (RemoteEffect::None, _) | (_, Self::WithRemoteEffect { .. }) => self,
+            _ => Self::WithRemoteEffect {
+                remote_effect,
                 source: Box::new(self),
             },
         }
@@ -798,7 +882,9 @@ impl PlenoraError {
     pub const fn row_diagnostics(&self) -> Option<&RowDiagnostics> {
         match self {
             Self::RowDiagnostics { diagnostics, .. } => Some(diagnostics),
-            Self::Tagged { source, .. } => source.row_diagnostics(),
+            Self::Tagged { source, .. } | Self::WithRemoteEffect { source, .. } => {
+                source.row_diagnostics()
+            }
             _ => None,
         }
     }
@@ -833,9 +919,9 @@ impl PlenoraError {
                 operation,
                 (!execution_id.is_empty()).then_some(execution_id.as_str()),
             )),
-            Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => {
-                source.execution_location()
-            }
+            Self::Tagged { source, .. }
+            | Self::RowDiagnostics { source, .. }
+            | Self::WithRemoteEffect { source, .. } => source.execution_location(),
             _ => None,
         }
     }
@@ -845,9 +931,9 @@ impl PlenoraError {
     pub fn execution_reason(&self) -> Option<&str> {
         match self {
             Self::Execution { reason, .. } => Some(reason),
-            Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => {
-                source.execution_reason()
-            }
+            Self::Tagged { source, .. }
+            | Self::RowDiagnostics { source, .. }
+            | Self::WithRemoteEffect { source, .. } => source.execution_reason(),
             _ => None,
         }
     }
@@ -884,6 +970,13 @@ impl PlenoraError {
                 source: Box::new(source.with_execution_id(execution_id)),
                 diagnostics,
             },
+            Self::WithRemoteEffect {
+                remote_effect,
+                source,
+            } => Self::WithRemoteEffect {
+                remote_effect,
+                source: Box::new(source.with_execution_id(execution_id)),
+            },
             other => other,
         }
     }
@@ -894,7 +987,9 @@ impl PlenoraError {
     pub const fn phase_tag(&self) -> Option<ErrorPhase> {
         match self {
             Self::Tagged { phase, .. } => Some(*phase),
-            Self::RowDiagnostics { source, .. } => source.phase_tag(),
+            Self::RowDiagnostics { source, .. } | Self::WithRemoteEffect { source, .. } => {
+                source.phase_tag()
+            }
             _ => None,
         }
     }
@@ -913,6 +1008,13 @@ impl PlenoraError {
                 source: Box::new(source.untag()),
                 diagnostics,
             },
+            Self::WithRemoteEffect {
+                remote_effect,
+                source,
+            } => Self::WithRemoteEffect {
+                remote_effect,
+                source: Box::new(source.untag()),
+            },
             _ => self,
         }
     }
@@ -920,12 +1022,12 @@ impl PlenoraError {
     /// Effetto restato sul supporto quando l'errore è riportato (l'asse
     /// «effetto»).
     ///
-    /// Sempre [`RemoteEffect::None`], per costruzione: la scrittura atomica
-    /// di `plenora-io` non rende mai visibile un file d'uscita parziale, e un
-    /// temporaneo rimasto dopo un crash non sta alla destinazione. Limite
-    /// dichiarato (README, «Limiti dichiarati degli errori»): `esegui_da_file`
-    /// scrive gli output uno alla volta, e un errore dopo il primo lascia
-    /// scritti i precedenti senza che l'effetto lo dica.
+    /// [`RemoteEffect::None`] per costruzione: la scrittura atomica di
+    /// `plenora-io` non rende mai visibile un file d'uscita parziale, e un
+    /// temporaneo rimasto dopo un crash non sta alla destinazione. L'effetto
+    /// dichiarato da [`PlenoraError::WithRemoteEffect`] vince: `esegui_da_file`
+    /// scrive gli output uno alla volta e marca `Partial` un errore dopo il
+    /// primo output scritto.
     #[must_use]
     pub const fn remote_effect(&self) -> RemoteEffect {
         match self {
@@ -937,6 +1039,7 @@ impl PlenoraError {
             | Self::DataMapping(_)
             | Self::Execution { .. }
             | Self::Crs(_)
+            | Self::CrsCoded { .. }
             | Self::Cancelled(_)
             | Self::Io(_)
             | Self::ResourceLimit(_)
@@ -949,8 +1052,8 @@ impl PlenoraError {
             | Self::Conflict(_)
             | Self::InvalidConfiguration(_)
             | Self::Internal(_) => RemoteEffect::None,
-            // Delegato alla sorgente (comunque `None` per costruzione):
-            // il tag raffina solo la fase.
+            Self::WithRemoteEffect { remote_effect, .. } => *remote_effect,
+            // Delegato alla sorgente: il tag raffina solo la fase.
             Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => {
                 source.remote_effect()
             }
@@ -1659,5 +1762,45 @@ mod tests {
         let io = PlenoraError::Io(std::io::Error::other("disco")).con_contesto(contesto);
         assert!(matches!(io, PlenoraError::Io(_)));
         assert_eq!(io.to_string(), "io error: disco");
+    }
+
+    #[test]
+    fn l_effetto_dichiarato_vince_e_toglie_il_ritentativo_automatico() {
+        let io = || PlenoraError::Io(std::io::Error::other("disco"));
+        let parziale = io().with_remote_effect(RemoteEffect::Partial);
+        assert_eq!(parziale.remote_effect(), RemoteEffect::Partial);
+        assert_eq!(
+            parziale.retry_disposition(),
+            RetryDisposition::RequiresRecovery
+        );
+        assert_eq!(parziale.category(), ErrorCategory::Io);
+        assert_eq!(parziale.to_string(), io().to_string(), "Display delegato");
+        // Il primo effetto vince; `None` non avvolge.
+        let due = io()
+            .with_remote_effect(RemoteEffect::Partial)
+            .with_remote_effect(RemoteEffect::Committed);
+        assert_eq!(due.remote_effect(), RemoteEffect::Partial);
+        assert!(matches!(
+            io().with_remote_effect(RemoteEffect::None),
+            PlenoraError::Io(_)
+        ));
+        // Una causa che non si ritenta mai resta `Never`.
+        let mai =
+            PlenoraError::ResourceLimit("budget".into()).with_remote_effect(RemoteEffect::Partial);
+        assert_eq!(mai.retry_disposition(), RetryDisposition::Never);
+        // Fase e diagnostica attraversano il wrapper.
+        let taggato = io()
+            .with_remote_effect(RemoteEffect::Partial)
+            .with_phase(ErrorPhase::Commit);
+        assert_eq!(taggato.phase(), ErrorPhase::Commit);
+        assert_eq!(taggato.remote_effect(), RemoteEffect::Partial);
+        let con_diagnostica = PlenoraError::DataMapping("d".into())
+            .with_row_diagnostics(diagnostica())
+            .with_remote_effect(RemoteEffect::Partial);
+        assert!(con_diagnostica.row_diagnostics().is_some());
+        assert_eq!(
+            con_diagnostica.untag().remote_effect(),
+            RemoteEffect::Partial
+        );
     }
 }

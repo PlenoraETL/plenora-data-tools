@@ -2,15 +2,15 @@
 //! (`plenora-contracts`, `specs/errors/ERRORS-1.0.md` e
 //! `schemas/error-v1.schema.json`).
 //!
-//! La proiezione non aggiunge dati: il messaggio Ã¨ il `Display` dell'errore
-//! (giÃ  senza valori di righe o colonne, regola del modulo padre), troncato
+//! La proiezione non aggiunge dati: il messaggio è il `Display` dell'errore
+//! (già senza valori di righe o colonne, regola del modulo padre), troncato
 //! a [`MAX_MESSAGE_CHARS`] caratteri; `details` porta solo il documento
 //! `plenora-row-diagnostics-v1` (indici, conteggi e codici, mai valori).
 //!
 //! Limiti del contratto applicati qui, oltre allo schema: ERR-006 (effetto
 //! ignoto, nessun ritentativo automatico), ERR-007 (`delay_ms` solo con
-//! `after`, entro un giorno), ERR-011 e ERR-012 (byte, profonditÃ ,
-//! proprietÃ , elementi, stringhe e nodi di `details`). Un `details` oltre i
+//! `after`, entro un giorno), ERR-011 e ERR-012 (byte, profondità,
+//! proprietà, elementi, stringhe e nodi di `details`). Un `details` oltre i
 //! limiti non si tronca: la proiezione diventa un errore `internal`
 //! esplicito, senza `details` ([`CODE_DETAILS_NOT_PUBLISHABLE`]).
 
@@ -28,21 +28,21 @@ pub const MAX_RETRY_DELAY_MS: u64 = 86_400_000;
 pub const MAX_ERROR_BYTES: usize = 524_288;
 /// ERR-011: byte della codifica JSON compatta di `details`.
 pub const MAX_DETAILS_BYTES: usize = 262_144;
-/// ERR-012: profonditÃ  di `details` (l'oggetto `details` Ã¨ profonditÃ  1).
+/// ERR-012: profondità di `details` (l'oggetto `details` è profondità 1).
 pub const MAX_DETAILS_DEPTH: usize = 8;
-/// ERR-012: proprietÃ  di un oggetto, elementi di un array.
+/// ERR-012: proprietà di un oggetto, elementi di un array.
 pub const MAX_DETAILS_FANOUT: usize = 128;
 /// ERR-012: byte UTF-8 di una stringa.
 pub const MAX_DETAILS_STRING_BYTES: usize = 4_096;
 /// ERR-012: nodi JSON (contenitori e scalari).
 pub const MAX_DETAILS_NODES: usize = 2_048;
 
-/// Codice di [`PlenoraError::Timeout`]: la scadenza dell'esecuzione Ã¨
+/// Codice di [`PlenoraError::Timeout`]: la scadenza dell'esecuzione è
 /// passata (vettore `data-run-timeout-error` del contratto).
 pub const CODE_DEADLINE_EXCEEDED: &str = "EXECUTION_DEADLINE_EXCEEDED";
 /// Codice di [`PlenoraError::Cancelled`].
 pub const CODE_CANCELLED: &str = "EXECUTION_CANCELLED";
-/// Codice della proiezione sostitutiva quando `details` non Ã¨ pubblicabile:
+/// Codice della proiezione sostitutiva quando `details` non è pubblicabile:
 /// oltre i limiti ERR-011/ERR-012, o diagnostica per riga non valida.
 pub const CODE_DETAILS_NOT_PUBLISHABLE: &str = "ERROR_DETAILS_NOT_PUBLISHABLE";
 
@@ -50,23 +50,61 @@ pub const CODE_DETAILS_NOT_PUBLISHABLE: &str = "ERROR_DETAILS_NOT_PUBLISHABLE";
 /// [`PlenoraError::public_projection`] e si serializza con `serde`.
 ///
 /// `provider` ed `execution_id` non ci sono: nessun errore di questo
-/// workspace ne ha uno.
+/// workspace ne ha uno. I campi sono privati: un `PublicError` nasce solo
+/// dalla proiezione, che ne garantisce la validità.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PublicError {
-    pub category: ErrorCategory,
-    pub phase: ErrorPhase,
-    pub remote_effect: RemoteEffect,
-    pub retry: RetryDisposition,
+    category: ErrorCategory,
+    phase: ErrorPhase,
+    remote_effect: RemoteEffect,
+    retry: RetryDisposition,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<Value>,
+}
+
+impl PublicError {
+    #[must_use]
+    pub const fn category(&self) -> ErrorCategory {
+        self.category
+    }
+
+    #[must_use]
+    pub const fn phase(&self) -> ErrorPhase {
+        self.phase
+    }
+
+    #[must_use]
+    pub const fn remote_effect(&self) -> RemoteEffect {
+        self.remote_effect
+    }
+
+    #[must_use]
+    pub const fn retry(&self) -> RetryDisposition {
+        self.retry
+    }
+
     /// Codice stabile (`^[A-Z][A-Z0-9_]{1,63}$`), se l'errore ne ha uno
     /// ([`PlenoraError::code`]).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
-    /// Non vuoto, al piÃ¹ [`MAX_MESSAGE_CHARS`] caratteri.
-    pub message: String,
+    #[must_use]
+    pub const fn code(&self) -> Option<&'static str> {
+        self.code
+    }
+
+    /// Non vuoto, al più [`MAX_MESSAGE_CHARS`] caratteri.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
     /// `{"row_diagnostics": <plenora-row-diagnostics-v1>}`, se l'errore ha
     /// una diagnostica per riga.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<Value>,
+    #[must_use]
+    pub const fn details(&self) -> Option<&Value> {
+        self.details.as_ref()
+    }
 }
 
 impl Serialize for ErrorCategory {
@@ -112,62 +150,33 @@ impl Serialize for RetryDisposition {
     }
 }
 
-/// Codici in testa ai messaggi di [`crate::crs::CrsError`] (e di chi ne
-/// ripete uno, come `plenora-io` per `CRS_NOT_BUILTIN`): solo questi
-/// diventano `code` di un errore `Crs`. Un elenco chiuso, perchÃ© un
-/// segmento del messaggio in maiuscole non Ã¨ per forza un codice.
-const CODICI_CRS: &[&str] = &[
-    "CRS_REQUIRED",
-    "CRS_INVALID",
-    "CRS_BACKEND_UNAVAILABLE",
-    "CRS_NOT_BUILTIN",
-    "CRS_TYPE_UNSUPPORTED",
-    "LINEAR_UNIT_REQUIRED",
-    "PROJECTED_CRS_REQUIRED",
-    "GEOGRAPHIC_CRS_REQUIRED",
-    "ELLIPSOID_REQUIRED",
-    "CRS_MISMATCH",
-    "COORDINATE_OUT_OF_CRS_DOMAIN",
-    "CRS_CONTRACT_INVALID",
-    "REPROJECTION_PATH_UNAVAILABLE",
-    "REPROJECTION_ACCURACY_NOT_ACCEPTED",
-    "REPROJECTION_CONFIG_INVALID",
-    "REPROJECTION_OUTSIDE_TRANSFORMATION_AREA",
-    "REPROJECTION_MIXED_TRANSFORMATION_AREAS",
-    "REPROJECTION_NOT_CONVERGED",
-    "REPROJECTION_EDGE_NOT_CONVERGED",
-    "NTV2_GRID_UNREADABLE",
-    "NTV2_GRID_INVALID",
-];
-
 impl PlenoraError {
     /// Codice stabile dell'errore, per il campo `code` di
     /// `plenora-error-v1`; `None` se l'errore non ne ha uno.
     ///
     /// - `Timeout`: [`CODE_DEADLINE_EXCEEDED`]; `Cancelled`:
     ///   [`CODE_CANCELLED`];
-    /// - `Crs`: il codice di [`crate::crs::CrsError`] che il messaggio porta
-    ///   in un suo segmento (separatore `": "`, dopo gli eventuali contesti
-    ///   anteposti), se Ã¨ fra quelli noti;
-    /// - i wrapper delegano alla sorgente, le altre varianti non hanno
-    ///   codice.
+    /// - `CrsCoded`: il codice di [`crate::crs::CrsError`], tipizzato;
+    /// - i wrapper delegano alla sorgente, le altre varianti (anche `Crs`,
+    ///   un messaggio senza codice) non hanno codice.
     ///
-    /// Il codice Ã¨ un'informazione in piÃ¹: la sua assenza non cambia il
+    /// Il codice è un'informazione in più: la sua assenza non cambia il
     /// significato degli assi (ERR-013).
     #[must_use]
-    pub fn code(&self) -> Option<&str> {
+    pub const fn code(&self) -> Option<&'static str> {
         match self {
             Self::Timeout(_) => Some(CODE_DEADLINE_EXCEEDED),
             Self::Cancelled(_) => Some(CODE_CANCELLED),
-            Self::Crs(messaggio) => messaggio
-                .split(": ")
-                .find(|segmento| CODICI_CRS.contains(segmento)),
-            Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => source.code(),
+            Self::CrsCoded { code, .. } => Some(*code),
+            Self::Tagged { source, .. }
+            | Self::RowDiagnostics { source, .. }
+            | Self::WithRemoteEffect { source, .. } => source.code(),
             Self::InvalidPlan(_)
             | Self::Unsupported(_)
             | Self::Schema(_)
             | Self::DataMapping(_)
             | Self::Execution { .. }
+            | Self::Crs(_)
             | Self::ResourceLimit(_)
             | Self::Io(_)
             | Self::Protocol(_)
@@ -187,7 +196,7 @@ impl PlenoraError {
     /// `after` oltre un giorno diventa `never`.
     ///
     /// Se `details` supera i limiti ERR-011/ERR-012 (una diagnostica per
-    /// riga con troppi esempi o cause), la proiezione Ã¨ un errore
+    /// riga con troppi esempi o cause), la proiezione è un errore
     /// `internal` con [`CODE_DETAILS_NOT_PUBLISHABLE`], stessa fase ed effetto,
     /// ritentativo `never` e senza `details`: mai un documento troncato.
     #[must_use]
@@ -202,13 +211,13 @@ impl PlenoraError {
             phase: self.phase(),
             remote_effect,
             retry,
-            code: self.code().map(str::to_owned),
+            code: self.code(),
             message: messaggio_limitato(&self.to_string()),
             details: match details {
                 Some(Ok(details)) => Some(details),
                 // Non serializzabile = non supera `validate_for_emission`:
                 // `with_row_diagnostics` non lo allega, ma la variante
-                // `RowDiagnostics` si puÃ² costruire anche a mano.
+                // `RowDiagnostics` si può costruire anche a mano.
                 Some(Err(_)) => return sostitutiva(self, "diagnostica per riga non valida"),
                 None => None,
             },
@@ -265,7 +274,7 @@ fn sostitutiva(errore: &PlenoraError, motivo: &str) -> PublicError {
         phase: errore.phase(),
         remote_effect: errore.remote_effect(),
         retry: RetryDisposition::Never,
-        code: Some(CODE_DETAILS_NOT_PUBLISHABLE.to_owned()),
+        code: Some(CODE_DETAILS_NOT_PUBLISHABLE),
         message: messaggio_limitato(&format!("{motivo}; errore originale: {errore}")),
         details: None,
     }
@@ -289,8 +298,8 @@ fn entro_i_limiti(proiezione: &PublicError) -> bool {
     compatto.len() <= MAX_DETAILS_BYTES && struttura_entro_i_limiti(details, 1, &mut nodi)
 }
 
-/// ERR-012: profonditÃ  (`details` = 1), proprietÃ  ed elementi, byte delle
-/// stringhe (anche dei nomi di proprietÃ , piÃ¹ severo del contratto), nodi.
+/// ERR-012: profondità (`details` = 1), proprietà ed elementi, byte delle
+/// stringhe (anche dei nomi di proprietà, più severo del contratto), nodi.
 fn struttura_entro_i_limiti(valore: &Value, profondita: usize, nodi: &mut usize) -> bool {
     *nodi += 1;
     if *nodi > MAX_DETAILS_NODES || profondita > MAX_DETAILS_DEPTH {
@@ -326,7 +335,7 @@ mod tests {
     use crate::diagnostics::tests::{example, report};
 
     #[test]
-    fn i_codici_crs_sono_quelli_in_testa_ai_messaggi_di_crs_error() {
+    fn ogni_crs_error_ha_il_suo_codice_in_testa_al_messaggio() {
         use crate::crs::{CoordinateDomainViolation, CrsError, CrsKind};
         let campioni = [
             CrsError::Required { name: "crs" },
@@ -360,15 +369,19 @@ mod tests {
             CrsError::GridUnreadable,
             CrsError::GridInvalid { reason: "r" },
         ];
-        assert_eq!(campioni.len(), CODICI_CRS.len(), "un campione per codice");
-        for (campione, atteso) in campioni.into_iter().zip(CODICI_CRS) {
+        let mut visti = std::collections::BTreeSet::new();
+        for campione in campioni {
+            let codice = campione.code();
+            assert!(campione.to_string().starts_with(&format!("{codice}: ")));
+            assert!(visti.insert(codice), "{codice} ripetuto");
+            // Il codice viaggia tipizzato, anche sotto un contesto.
             let errore = PlenoraError::from(campione).con_contesto("geo.buffer");
-            assert_eq!(errore.code(), Some(*atteso), "{errore}");
+            assert_eq!(errore.code(), Some(codice), "{errore}");
+            assert_eq!(errore.category(), ErrorCategory::Crs);
         }
-        // Un segmento in maiuscole che non Ã¨ un codice noto non diventa
-        // `code` (per esempio il nome di una colonna).
-        assert_eq!(PlenoraError::Crs("COLONNA_X: motivo".into()).code(), None);
-        assert_eq!(PlenoraError::Crs("crs obbligatorio".into()).code(), None);
+        // Il messaggio non si interpreta: un `Crs` di solo testo non ha
+        // codice, anche se ne contiene uno.
+        assert_eq!(PlenoraError::Crs("CRS_NOT_BUILTIN: x".into()).code(), None);
     }
 
     #[test]
@@ -389,19 +402,19 @@ mod tests {
             })
         );
         let annullato = PlenoraError::Cancelled("c".into()).public_projection();
-        assert_eq!(annullato.category, ErrorCategory::Cancelled);
-        assert_eq!(annullato.code.as_deref(), Some(CODE_CANCELLED));
+        assert_eq!(annullato.category(), ErrorCategory::Cancelled);
+        assert_eq!(annullato.code(), Some(CODE_CANCELLED));
         let senza_codice = PlenoraError::Schema("s".into()).public_projection();
-        assert_eq!(senza_codice.code, None);
-        assert_eq!(senza_codice.retry, RetryDisposition::Never);
+        assert_eq!(senza_codice.code(), None);
+        assert_eq!(senza_codice.retry(), RetryDisposition::Never);
     }
 
     #[test]
     fn il_messaggio_e_limitato_e_mai_vuoto() {
-        let lungo = PlenoraError::Internal("Ã©".repeat(5_000)).public_projection();
-        assert_eq!(lungo.message.chars().count(), MAX_MESSAGE_CHARS);
+        let lungo = PlenoraError::Internal("é".repeat(5_000)).public_projection();
+        assert_eq!(lungo.message().chars().count(), MAX_MESSAGE_CHARS);
         let vuoto = PlenoraError::DataMapping(String::new()).public_projection();
-        assert!(!vuoto.message.is_empty());
+        assert!(!vuoto.message().is_empty());
     }
 
     #[test]
@@ -433,14 +446,14 @@ mod tests {
             PlenoraError::DataMapping("rifiutate".into()).with_row_diagnostics(diagnostica.clone());
         let proiezione = errore.public_projection();
         assert_eq!(
-            proiezione.details,
-            Some(json!({"row_diagnostics": serde_json::to_value(&diagnostica).expect("valida")}))
+            proiezione.details(),
+            Some(&json!({"row_diagnostics": serde_json::to_value(&diagnostica).expect("valida")}))
         );
     }
 
     #[test]
     fn details_oltre_i_limiti_diventa_un_errore_interno_esplicito() {
-        // 200 cause: l'oggetto `counts` supera le 128 proprietÃ  (ERR-012).
+        // 200 cause: l'oggetto `counts` supera le 128 proprietà (ERR-012).
         let mut diagnostica = report(0, Vec::new());
         diagnostica.counts = (0..200)
             .map(|indice| (format!("conversion.causa_{indice}"), 1))
@@ -456,13 +469,10 @@ mod tests {
         let proiezione = PlenoraError::DataMapping("rifiutate".into())
             .with_row_diagnostics(diagnostica)
             .public_projection();
-        assert_eq!(proiezione.category, ErrorCategory::Internal);
-        assert_eq!(
-            proiezione.code.as_deref(),
-            Some(CODE_DETAILS_NOT_PUBLISHABLE)
-        );
-        assert_eq!(proiezione.details, None);
-        assert_eq!(proiezione.retry, RetryDisposition::Never);
+        assert_eq!(proiezione.category(), ErrorCategory::Internal);
+        assert_eq!(proiezione.code(), Some(CODE_DETAILS_NOT_PUBLISHABLE));
+        assert_eq!(proiezione.details(), None);
+        assert_eq!(proiezione.retry(), RetryDisposition::Never);
     }
 
     #[test]
@@ -474,7 +484,7 @@ mod tests {
             &mut nodi
         ));
         assert_eq!(nodi, 4);
-        // ProfonditÃ  9: `details` Ã¨ 1, ogni annidamento aggiunge 1.
+        // Profondità 9: `details` è 1, ogni annidamento aggiunge 1.
         // Profondità 8 esatta (scalare a 8): ammessa.
         let mut nodi = 0;
         assert!(struttura_entro_i_limiti(

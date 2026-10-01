@@ -78,7 +78,7 @@ pub(in crate::analyze) fn require_resolved_crs<'a>(
 pub(in crate::analyze) fn require_geodetic_ellipsoid(op: &str, crs: &ResolvedCrs) -> Result<()> {
     crate::geodetica::EllissoideGeodetico::da_crs(crs)
         .map(drop)
-        .map_err(|error| PlenoraError::Crs(format!("{op}: {error}")))
+        .map_err(|error| PlenoraError::from(error).con_contesto(op))
 }
 
 /// Le operazioni che misurano sull'ellissoide del datum.

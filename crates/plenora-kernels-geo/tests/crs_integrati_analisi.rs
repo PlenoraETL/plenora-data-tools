@@ -161,12 +161,12 @@ fn geometria_da_config_nel_dominio_del_crs_dell_input() {
     let snap = json!({"reference_wkb": punto_hex(5_000_000.0, 0.0), "tolerance": 1.0});
     assert!(matches!(
         analizza("geo.snap", std::slice::from_ref(&utm), &snap),
-        Err(PlenoraError::Crs(_))
+        Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
     ));
     let locate = json!({"point_wkb": punto_hex(500_000.0, -1.0)});
     assert!(matches!(
         analizza("geo.line_locate_point", std::slice::from_ref(&utm), &locate),
-        Err(PlenoraError::Crs(_))
+        Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
     ));
 }
 

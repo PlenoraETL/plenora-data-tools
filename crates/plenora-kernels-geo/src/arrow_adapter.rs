@@ -230,11 +230,14 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&embedded).unwrap();
         assert_eq!(parsed["crs"]["type"], "ProjectedCRS");
 
-        assert!(matches!(geo_metadata_json("  "), Err(PlenoraError::Crs(_))));
+        assert!(matches!(
+            geo_metadata_json("  "),
+            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+        ));
         let oversized = "X".repeat(MAX_CRS_DEFINITION_BYTES + 1);
         assert!(matches!(
             geo_metadata_json(&oversized),
-            Err(PlenoraError::Crs(_))
+            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
         ));
     }
 
@@ -292,7 +295,7 @@ mod tests {
         // Le validazioni CRS restano quelle di `geo_metadata_json`.
         assert!(matches!(
             geo_metadata_json_with_dimensions("  ", GeometryDimensions::Xy),
-            Err(PlenoraError::Crs(_))
+            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
         ));
     }
 

@@ -204,8 +204,9 @@ pub(in crate::analyze) fn validate_config_geometry_domain(
     geometry: &geo::Geometry<f64>,
     crs: &ResolvedCrs,
 ) -> Result<()> {
-    crate::crs::validate_geometry_domain(geometry, crs)
-        .map_err(|error| PlenoraError::Crs(format!("{op}: parametro `{name}`: {error}")))
+    crate::crs::validate_geometry_domain(geometry, crs).map_err(|error| {
+        PlenoraError::from(error).con_contesto(&format!("{op}: parametro `{name}`"))
+    })
 }
 
 // ---------------------------------------------------------------------------

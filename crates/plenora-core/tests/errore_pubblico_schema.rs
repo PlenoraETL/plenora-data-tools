@@ -416,7 +416,10 @@ fn campioni() -> Vec<PlenoraError> {
             execution_id: "e-1".into(),
             reason: "fallito".into(),
         },
-        PlenoraError::Crs("geo.buffer: CRS_NOT_BUILTIN: fuori tabella".into()),
+        PlenoraError::Crs("geo.buffer: crs obbligatorio".into()),
+        PlenoraError::from(plenora_core::crs::CrsError::NotBuiltin).con_contesto("geo.buffer"),
+        PlenoraError::Io(std::io::Error::other("disco"))
+            .with_remote_effect(plenora_core::RemoteEffect::Partial),
         PlenoraError::Cancelled("esecuzione annullata prima del passo `x` (table.sort)".into()),
         PlenoraError::ResourceLimit("budget superato".into()),
         PlenoraError::Io(std::io::Error::other("disco")),
@@ -446,12 +449,12 @@ fn ogni_proiezione_e_valida_contro_lo_schema() {
         // La proiezione non cambia gli assi (nessun errore qui ha effetto
         // ignoto) e non aggiunge testo: il messaggio e' il `Display`,
         // eventualmente troncato.
-        assert_eq!(pubblico.category, errore.category());
-        assert_eq!(pubblico.phase, errore.phase());
-        assert_eq!(pubblico.retry, errore.retry_disposition());
+        assert_eq!(pubblico.category(), errore.category());
+        assert_eq!(pubblico.phase(), errore.phase());
+        assert_eq!(pubblico.retry(), errore.retry_disposition());
         let testo = errore.to_string();
         assert!(
-            testo.starts_with(&pubblico.message) || testo.is_empty(),
+            testo.starts_with(pubblico.message()) || testo.is_empty(),
             "{documento}"
         );
         assert_eq!(
@@ -525,8 +528,8 @@ fn la_proiezione_sostitutiva_e_valida_contro_lo_schema() {
     assert!(errore.row_diagnostics().is_some());
     let (pubblico, documento) = proiezione(&errore);
     assert_eq!(valida_errore(&documento), Ok(()), "{documento}");
-    assert_eq!(pubblico.category, ErrorCategory::Internal);
-    assert_eq!(pubblico.code.as_deref(), Some(CODE_DETAILS_NOT_PUBLISHABLE));
+    assert_eq!(pubblico.category(), ErrorCategory::Internal);
+    assert_eq!(pubblico.code(), Some(CODE_DETAILS_NOT_PUBLISHABLE));
     assert!(documento.get("details").is_none());
 }
 

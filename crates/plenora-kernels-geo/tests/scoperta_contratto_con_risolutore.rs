@@ -120,7 +120,10 @@ fn discovery_recognizes_canonical_only_geometry_field() {
     ]);
     let result = discover_input_contract_from_schema(schema, resolve_crs);
     assert!(
-        matches!(result, Err(PlenoraError::Crs(_))),
+        matches!(
+            result,
+            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+        ),
         "atteso fallimento di risoluzione CRS, ottenuto {result:?}"
     );
 }
@@ -152,7 +155,10 @@ fn discovery_resolved_with_double_representation_needs_the_backend() {
     let field = monte_mario_field("EPSG:3003");
     let result = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs);
     assert!(
-        matches!(result, Err(PlenoraError::Crs(_))),
+        matches!(
+            result,
+            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+        ),
         "atteso errore Crs senza backend: {result:?}"
     );
 }
@@ -171,7 +177,13 @@ fn contract_crs_from_keys_legacy_fallback_feeds_the_resolution() {
     );
     let legacy_wkt = format!(r#"{{"crs":{}}}"#, serde_json::Value::from(MONTE_MARIO_WKT));
     let result = contract_crs_from_keys("geometry", Some(&legacy_wkt), &keys, resolve_crs);
-    assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
+    assert!(
+        matches!(
+            result,
+            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+        ),
+        "{result:?}"
+    );
     // Nessuna rappresentazione: `Missing`, mai errore (il rifiuto spetta
     // all'analisi delle op che chiedono un CRS).
     let missing = contract_crs_from_keys("geometry", None, &keys, resolve_crs).expect("assente");

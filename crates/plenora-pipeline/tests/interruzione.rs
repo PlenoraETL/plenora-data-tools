@@ -92,11 +92,11 @@ fn la_scadenza_passata_ferma_prima_del_passo_con_gli_assi_del_contratto() {
         "timeout: scadenza dell'esecuzione superata prima del passo `x` (table.sort)"
     );
     let pubblico = errore.public_projection();
-    assert_eq!(pubblico.phase, ErrorPhase::Write);
-    assert_eq!(pubblico.category, ErrorCategory::Timeout);
-    assert_eq!(pubblico.code.as_deref(), Some(CODE_DEADLINE_EXCEEDED));
-    assert_eq!(pubblico.remote_effect, RemoteEffect::None);
-    assert_eq!(pubblico.retry, RetryDisposition::Safe);
+    assert_eq!(pubblico.phase(), ErrorPhase::Write);
+    assert_eq!(pubblico.category(), ErrorCategory::Timeout);
+    assert_eq!(pubblico.code(), Some(CODE_DEADLINE_EXCEEDED));
+    assert_eq!(pubblico.remote_effect(), RemoteEffect::None);
+    assert_eq!(pubblico.retry(), RetryDisposition::Safe);
 }
 
 #[test]
@@ -107,9 +107,9 @@ fn l_annullamento_ferma_prima_del_passo() {
         "cancelled: esecuzione annullata prima del passo `x` (table.sort)"
     );
     let pubblico = errore.public_projection();
-    assert_eq!(pubblico.category, ErrorCategory::Cancelled);
-    assert_eq!(pubblico.code.as_deref(), Some(CODE_CANCELLED));
-    assert_eq!(pubblico.remote_effect, RemoteEffect::None);
+    assert_eq!(pubblico.category(), ErrorCategory::Cancelled);
+    assert_eq!(pubblico.code(), Some(CODE_CANCELLED));
+    assert_eq!(pubblico.remote_effect(), RemoteEffect::None);
 }
 
 #[test]

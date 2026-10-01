@@ -351,7 +351,10 @@ fn il_crs_di_piano_si_risolve_in_validazione() {
         .crs_piano()
         .is_some());
     pipeline.crs = Some("EPSG:999999".to_owned());
-    assert!(matches!(valida_wide(&pipeline), Err(PlenoraError::Crs(_))));
+    assert!(matches!(
+        valida_wide(&pipeline),
+        Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+    ));
 }
 
 #[test]

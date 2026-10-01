@@ -1321,9 +1321,10 @@ copiati da `plenora-contracts@ade868c` e verificati per SHA-256):
 - `message` è il testo dell'errore, già senza valori di righe o colonne,
   troncato a 2048 caratteri e mai vuoto;
 - `code`, dove l'errore ne ha uno stabile: `EXECUTION_DEADLINE_EXCEEDED`
-  (`Timeout`), `EXECUTION_CANCELLED` (`Cancelled`), e il codice CRS in
-  testa al messaggio (`CRS_NOT_BUILTIN`, `CRS_MISMATCH`…, solo quelli di
-  `CrsError`);
+  (`Timeout`), `EXECUTION_CANCELLED` (`Cancelled`), e il codice di
+  `CrsError` (`CrsError::code`, `match` esaustivo) per un errore CRS nato
+  da un `CrsError` (`PlenoraError::CrsCoded`, codice tipizzato, mai letto
+  dal messaggio). Un `PlenoraError::Crs` di solo testo non ha codice;
 - `details.row_diagnostics`: il documento `plenora-row-diagnostics-v1`
   intero, se l'errore ha una diagnostica per riga;
 - `details` oltre i limiti ERR-011/ERR-012 (byte, profondità, 128
@@ -1337,20 +1338,15 @@ copiati da `plenora-contracts@ade868c` e verificati per SHA-256):
 `provider` ed `execution_id` non ci sono: nessun errore del workspace ne
 ha uno.
 
-### Limiti dichiarati degli errori
+### Effetto di un errore a metà della scrittura
 
-- **Effetto `none` anche dopo output già scritti da `esegui_da_file`.**
-  *Regola*: `remote_effect` è `none` per ogni errore: ogni file d'uscita
-  si scrive in modo atomico e non resta mai a metà.
-  *Ambito*: `plenora_io::esegui_da_file`, che scrive gli output uno dopo
-  l'altro.
-  *Hazard*: un errore scrivendo il secondo output lascia scritto il primo
-  (il piano intero non è atomico), e l'errore dice comunque `none` invece
-  di `partial` (ERR-004 vuole un effetto conservativo); il ritentativo
-  dell'errore resta quello della causa.
-  *Rientro*: un effetto assegnabile all'errore (come il tag di fase) e
-  `esegui_da_file` che marca `partial` gli errori dopo il primo output
-  scritto.
+`remote_effect` è `none` per costruzione (ogni file d'uscita è scritto in
+modo atomico), tranne dove un confine dichiara di più con
+`PlenoraError::with_remote_effect`: oggi solo `esegui_da_file`, che scrive
+gli output uno alla volta e marca `partial` un errore dopo il primo output
+scritto (i precedenti restano). Con un effetto già visibile un ritentativo
+automatico (`safe`, `after`, `requires_idempotency_key`) diventa
+`requires_recovery`; una causa che non si ritenta mai resta `never`.
 
 ## Runner
 
