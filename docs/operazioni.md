@@ -15690,8 +15690,8 @@ Per riga, con `v` i vertici della cella: la validazione OGC del workspace
 (scansione sui rettangoli d'ingombro, O(v²) nel caso peggiore). Solo per le
 celle invalide, in più: la validazione interna del kernel (la stessa
 scansione, con lo stesso verdetto di `check_validation` di `geo`), il
-noding (coppie di segmenti con filtro sugli inviluppi su una griglia di
-celle, quadratico nel caso peggiore), un polygonize per
+noding (coppie di segmenti con filtro sugli inviluppi, quadratico nel
+caso peggiore), un polygonize per
 giro (i giri sono al più i lati nodati: il caso peggiore, anelli
 concentrici collegati, è quadratico nei lati per il logaritmo, entro il
 tetto di 10.000 segmenti) e la rivalidazione dell'uscita. Memoria O(v) per
@@ -16687,10 +16687,8 @@ coordinate d'ingresso. `p` è la precisione del CRS della colonna
 
 #### Complessità
 
-`n` segmenti in tutto: noding con filtro sugli inviluppi (coppie trovate
-su una griglia di celle, nella sequenza e col budget della scansione su
-`x`), O(n²) coppie nel caso peggiore, entro il tetto di 100.000.000
-coppie; estrazione delle facce O(e log e) sui lati nodati `e`, col punto
+`n` segmenti in tutto: noding con filtro sugli inviluppi, O(n²) coppie nel
+caso peggiore, entro il tetto di 100.000.000 coppie; estrazione delle facce O(e log e) sui lati nodati `e`, col punto
 interno di una faccia calcolato solo se un'altra faccia ne contiene il
 rettangolo. Memoria O(n) per tutte le linee della
 tabella, raccolte prima del calcolo (classe bloccante), più le righe
@@ -20113,9 +20111,8 @@ Nessuna griglia di `i_overlay`. `p` è la precisione del CRS della colonna
 #### Complessità
 
 Per riga, sorgente poligonale con `n` segmenti fra bordo e lama: noding
-O(n²) coppie nel caso peggiore (tetto 100.000.000, contato come i
-confronti della scansione su `x` anche quando le coppie si trovano sulla
-griglia di celle), facce O(e log e), poi la verifica della copertura, con un
+O(n²) coppie nel caso peggiore (tetto 100.000.000), facce O(e log e), poi
+la verifica della copertura, con un
 R-tree dei lati della sorgente (O(b · s) nel caso peggiore, `b` i lati di
 bordo delle parti e `s` i lati della sorgente). Sorgente lineare: O(s · l)
 test fra segmenti della sorgente e primitive della lama, entro 100.000.000.

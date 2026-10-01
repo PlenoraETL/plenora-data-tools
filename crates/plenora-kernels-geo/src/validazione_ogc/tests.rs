@@ -15,9 +15,9 @@
 //!   prefisso.
 
 use super::{
-    autointersezione_a_celle, autointersezione_con, errori_di_validazione, limite_confronti,
-    relate_non_e_disgiunta, scansione_coppie, visita_geometria, visita_multipoligono_con,
-    visita_poligono_con, CoppieCandidate, Percorso, Preparate, RicercaCoppie, ValidazioneOgc,
+    autointersezione_con, errori_di_validazione, limite_confronti, relate_non_e_disgiunta,
+    scansione_coppie, visita_geometria, visita_multipoligono_con, visita_poligono_con,
+    CoppieCandidate, Percorso, Preparate, RicercaCoppie, ValidazioneOgc,
 };
 use geo::algorithm::validation::{
     InvalidGeometry, InvalidMultiPolygon, InvalidPolygon, Validation,
@@ -60,24 +60,7 @@ fn verifica_predicato(anello: &LineString<f64>) -> bool {
             "predicato divergente (doppio ciclo {doppio_ciclo}, asse {asse:?}) su {anello:?}"
         );
     }
-    assert_eq!(
-        celle_forzate(anello).unwrap_or(atteso),
-        atteso,
-        "predicato divergente (celle) su {anello:?}"
-    );
     atteso
-}
-
-/// La ricerca a celle senza soglie ne' limiti, su ogni anello a coordinate
-/// finite: `None` solo dove la griglia non si costruisce (estensione o
-/// fattore di scala non finiti), e li' decide la scansione.
-fn celle_forzate(anello: &LineString<f64>) -> Option<bool> {
-    if !anello.0.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
-        return None;
-    }
-    let segmenti: Vec<geo::Line<f64>> = anello.lines().collect();
-    let ingombri: Vec<super::Ingombro> = segmenti.iter().map(super::Ingombro::di).collect();
-    autointersezione_a_celle(&segmenti, &ingombri, false)
 }
 
 /// Lo stesso metodo sui due percorsi, ciascuno sotto il proprio
@@ -1860,9 +1843,8 @@ fn preparate_tiene_solo_le_parti_senza_buchi() {
 }
 
 /// Quadrato a lati frastagliati (come i confini ondulati di una copertura):
-/// `k` vertici per lato con uno scarto pseudo-casuale fino all'8% del lato,
-/// estremi esatti. La scansione su un asse vi prova coppie quadratiche nei
-/// vertici di un lato; le celle no.
+/// `k` vertici per lato con uno scarto pseudo-casuale fino ad `ampiezza`
+/// del lato, estremi esatti.
 #[allow(clippy::cast_precision_loss)]
 fn quadrato_frastagliato(rng: &mut Lcg, k: u32, ampiezza: f64) -> Vec<(f64, f64)> {
     let lato = 1_000.0;
@@ -1892,8 +1874,10 @@ fn quadrato_frastagliato(rng: &mut Lcg, k: u32, ampiezza: f64) -> Vec<(f64, f64)
     punti
 }
 
+/// I lati frastagliati lungo entrambi gli assi, validi e con un incrocio,
+/// su ogni ramo del predicato e nella validazione completa.
 #[test]
-fn lati_frastagliati_cercati_sulle_celle() {
+fn lati_frastagliati_su_entrambi_gli_assi() {
     let mut rng = Lcg(0x5EED_0000_0000_00F1);
     let casi: usize = if test_lunghi() { 60 } else { 12 };
     for caso in 0..casi {
@@ -1902,15 +1886,6 @@ fn lati_frastagliati_cercati_sulle_celle() {
         let ampiezza = [0.0005, 0.08][caso / 3 % 2];
         let punti = quadrato_frastagliato(&mut rng, k, ampiezza);
         let anello = chiuso(&punti);
-        // La ricerca di produzione passa davvero dalle celle (nessun limite
-        // superato) a partire da `MINIMO_SEGMENTI_CELLE` segmenti.
-        let segmenti: Vec<geo::Line<f64>> = anello.lines().collect();
-        let ingombri: Vec<super::Ingombro> = segmenti.iter().map(super::Ingombro::di).collect();
-        if segmenti.len() >= super::MINIMO_SEGMENTI_CELLE {
-            assert!(autointersezione_a_celle(&segmenti, &ingombri, true).is_some());
-        }
-        // Ogni lato e' il grafico di una funzione lungo il lato: l'anello e'
-        // semplice salvo vicino agli spigoli, dove lo scarto si annulla.
         verifica_predicato(&anello);
         // Un vertice spostato sul lato opposto: incrocio certo.
         let mut alterati = punti.clone();

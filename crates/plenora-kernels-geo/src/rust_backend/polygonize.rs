@@ -36,7 +36,7 @@ use geo::kernels::{Kernel, Orientation, RobustKernel};
 use geo::{Contains, Coord, CoordsIter, Geometry, InteriorPoint, Line, LineString, Point, Polygon};
 use thiserror::Error;
 
-/// Budget del polygonize. Un campo a [`u64::MAX`] vale Â«senza limiteÂ», e
+/// Budget del polygonize. Un campo a [`u64::MAX`] vale «senza limite», e
 /// l'ingresso [`polygonize_linework_rust_bounded`] lo rifiuta.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PolygonizeLimits {
@@ -734,124 +734,10 @@ fn indexed_envelope(index: usize, segment: Segment) -> Option<IndexedEnvelope> {
     })
 }
 
-/// Visita soltanto coppie i cui inviluppi possono intersecarsi. Ogni coppia
-/// che supera il filtro sull'asse X consuma budget, compresi i successivi
-/// scarti sull'asse Y: il limite continua quindi a coprire tutto il lavoro
-/// potenzialmente quadratico del ciclo interno. Coordinate non finite fanno
-/// ricadere nel confronto esaustivo, senza consentire al filtro di nascondere
-/// una coppia al kernel robusto.
-///
-/// **Le coppie si trovano su una griglia di celle** ([`crate::celle`]),
-/// quando conviene, e si visitano **nella stessa sequenza della scansione
-/// su `x`** ([`visit_candidate_pairs_sweep`], che resta il percorso quando
-/// la griglia non conviene): stesse coppie, stessi argomenti nello stesso
-/// ordine, stesso budget consumato e stesso errore nello stesso punto. La
-/// scansione visita, per ogni inviluppo nell'ordine `(min_x, max_x,
-/// indice)`, i successivi con `min_x` non oltre il suo `max_x` che si
-/// sovrappongono anche su `y`: e' l'insieme delle coppie a inviluppi chiusi
-/// sovrapposti, che la griglia trova. Ordinate per posizione nella stessa
-/// sequenza, si visitano nello stesso ordine; il budget della scansione e'
-/// un confronto per ogni successivo con `min_x` non oltre il `max_x` del
-/// primo (si contano con una ricerca binaria sull'ordine per `min_x`), e la
-/// coppia `(a, b)` arriva dopo `sum(confronti di ogni posizione < a) + (b -
-/// a)` confronti. Una coppia oltre il budget restante non si visita, e alla
-/// fine, se i confronti superano il budget, l'errore e' quello di
-/// `charge_pair` sul primo confronto oltre il limite.
-fn visit_candidate_pairs(
-    segments: &[Segment],
-    budget: &mut NodingBudget,
-    mut visit: impl FnMut(usize, usize) -> Result<bool, PolygonizeError>,
-) -> Result<bool, PolygonizeError> {
-    if segments.len() < MIN_SEGMENTS_FOR_CELLS || generic_path() {
-        return visit_candidate_pairs_sweep(segments, budget, visit);
-    }
-    let mut envelopes = Vec::new();
-    envelopes
-        .try_reserve_exact(segments.len())
-        .map_err(|_| PolygonizeError::AllocationFailed("indice spaziale del noding"))?;
-    for (index, segment) in segments.iter().copied().enumerate() {
-        let Some(envelope) = indexed_envelope(index, segment) else {
-            return visit_candidate_pairs_sweep(segments, budget, visit);
-        };
-        envelopes.push(envelope);
-    }
-    sort_envelopes(&mut envelopes);
-    let rectangles: Vec<crate::celle::Rettangolo> = envelopes
-        .iter()
-        .map(|envelope| crate::celle::Rettangolo {
-            min_x: envelope.min_x,
-            max_x: envelope.max_x,
-            min_y: envelope.min_y,
-            max_y: envelope.max_y,
-        })
-        .collect();
-    let mut pairs: Vec<(usize, usize)> = Vec::new();
-    let found = crate::celle::visita_coppie_sovrapposte(
-        &rectangles,
-        Some(crate::celle::LIMITI_CELLE),
-        |left_position, right_position| {
-            pairs.push((left_position, right_position));
-            true
-        },
-    );
-    if found.is_none() {
-        return visit_candidate_pairs_sweep(segments, budget, visit);
-    }
-    drop(rectangles);
-    // L'ordine della scansione: per primo inviluppo, poi per secondo.
-    pairs.sort_unstable();
-    // I confronti della scansione per ogni posizione: i successivi con
-    // `min_x` non oltre il suo `max_x` (ordine per `min_x`: monotono).
-    let mut comparisons_before = Vec::with_capacity(envelopes.len() + 1);
-    let mut total = 0_u64;
-    for (position, envelope) in envelopes.iter().enumerate() {
-        comparisons_before.push(total);
-        let rest = &envelopes[position + 1..];
-        // Coordinate finite: `<=` e' la negazione di `>` della scansione.
-        let count = rest.partition_point(|right| right.min_x <= envelope.max_x);
-        total = total
-            .checked_add(u64::try_from(count).map_err(|_| PolygonizeError::IndexOverflow)?)
-            .ok_or(PolygonizeError::IndexOverflow)?;
-    }
-    let start = budget.work;
-    let remaining = budget.limit.saturating_sub(start);
-    for (left_position, right_position) in pairs {
-        let charge = comparisons_before[left_position]
-            .checked_add(
-                u64::try_from(right_position - left_position)
-                    .map_err(|_| PolygonizeError::IndexOverflow)?,
-            )
-            .ok_or(PolygonizeError::IndexOverflow)?;
-        if charge > remaining {
-            break;
-        }
-        // Il budget come dopo il confronto di questa coppia nella scansione.
-        budget.work = start + charge;
-        let (left, right) = (envelopes[left_position], envelopes[right_position]);
-        if !visit(left.index, right.index)? {
-            return Ok(false);
-        }
-    }
-    if total > remaining {
-        // Il primo confronto oltre il limite, come nella scansione.
-        budget.work = budget.limit;
-        budget.charge_pair()?;
-        return Err(PolygonizeError::InternalInvariant(
-            "budget del noding non superato oltre il limite",
-        ));
-    }
-    budget.work = start + total;
-    Ok(true)
-}
-
-/// Sotto questi segmenti la scansione su `x` costa meno della griglia.
-const MIN_SEGMENTS_FOR_CELLS: usize = 64;
-
 #[cfg(test)]
 thread_local! {
-    /// Nei test, il percorso generico (scansione su `x`, punti interni di
-    /// ogni faccia) al posto delle scorciatoie, per gli oracoli che li
-    /// confrontano.
+    /// Nei test, il percorso generico (punti interni di ogni faccia) al
+    /// posto delle scorciatoie, per gli oracoli che li confrontano.
     static GENERIC_PATH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -877,9 +763,13 @@ fn sort_envelopes(envelopes: &mut [IndexedEnvelope]) {
     });
 }
 
-/// La scansione su `x` delle coppie candidate (vedi
-/// [`visit_candidate_pairs`]).
-fn visit_candidate_pairs_sweep(
+/// Visita soltanto coppie i cui inviluppi possono intersecarsi. Ogni coppia
+/// che supera il filtro sull'asse X consuma budget, compresi i successivi
+/// scarti sull'asse Y: il limite continua quindi a coprire tutto il lavoro
+/// potenzialmente quadratico del ciclo interno. Coordinate non finite fanno
+/// ricadere nel confronto esaustivo, senza consentire al filtro di nascondere
+/// una coppia al kernel robusto.
+fn visit_candidate_pairs(
     segments: &[Segment],
     budget: &mut NodingBudget,
     mut visit: impl FnMut(usize, usize) -> Result<bool, PolygonizeError>,
@@ -2720,7 +2610,7 @@ mod tests {
         // segno esatto l'anello invalido di GEOS e' un triangolo vero di area
         // circa 3,45e-31 e diventa il nono poligono: GEOS lo scarta con la
         // propria precisione double-double. Divergenza dichiarata nel README
-        // (Â«Differenze da GEOSÂ»); area totale e dangle restano quelli di GEOS.
+        // («Differenze da GEOS»); area totale e dangle restano quelli di GEOS.
         let polygon_area = result.polygons.iter().map(Area::unsigned_area).sum::<f64>();
         let residuals = result.residual_count()?;
         let slivers = result
@@ -2768,169 +2658,9 @@ mod tests {
         }
         Ok(())
     }
-    /// La traccia di una visita: le coppie nell'ordine, l'esito e il budget
-    /// consumato (o l'errore).
-    type Traccia = (Vec<(usize, usize)>, Result<bool, String>, u64);
-
-    fn traccia(
-        segments: &[Segment],
-        limit: u64,
-        start: u64,
-        stop_at: Option<usize>,
-        fail_at: Option<usize>,
-        celle: bool,
-    ) -> Traccia {
-        let mut budget = NodingBudget::new(limit);
-        budget.work = start;
-        let mut visited = Vec::new();
-        let visit = |left: usize, right: usize| {
-            visited.push((left, right));
-            if fail_at == Some(visited.len()) {
-                return Err(PolygonizeError::PrecisionInsufficient);
-            }
-            Ok(stop_at != Some(visited.len()))
-        };
-        let esito = if celle {
-            visit_candidate_pairs(segments, &mut budget, visit)
-        } else {
-            visit_candidate_pairs_sweep(segments, &mut budget, visit)
-        };
-        (visited, esito.map_err(|e| format!("{e:?}")), budget.work)
-    }
-
-    /// Oracolo della ricerca a celle delle coppie del noding (AGENTS.md,
-    /// regola 3): contro la scansione su `x`, la stessa sequenza di coppie
-    /// con gli stessi argomenti, lo stesso esito, lo stesso budget consumato
-    /// e lo stesso errore, con budget abbondanti, esauriti a meta' e gia'
-    /// in parte consumati, visite fermate o fallite a meta'. Segmenti su una
-    /// griglia intera piccola (tocchi, collineari, duplicati, degeneri) e
-    /// lati frastagliati di una cella di copertura.
-    #[test]
-    fn noding_celle_stessa_visita_della_scansione() {
-        let mut stato = 0x5EED_0D1C_u64;
-        let mut prossimo = |limite: u64| {
-            stato = stato
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            (stato >> 33) % limite
-        };
-        let mut con_celle = 0;
-        for caso in 0..300 {
-            let quanti = 64 + prossimo(200);
-            #[allow(clippy::cast_precision_loss)]
-            let segments: Vec<Segment> = if caso % 3 == 0 {
-                // Lati frastagliati: punti di un anello ondulato.
-                let k = quanti / 4;
-                let mut punti = Vec::new();
-                for lato in 0..4_u64 {
-                    for j in 0..k {
-                        let t = j as f64 / k as f64;
-                        let scarto = if j == 0 {
-                            0.0
-                        } else {
-                            80.0 * ((prossimo(2001) as f64) / 1000.0 - 1.0)
-                        };
-                        punti.push(match lato {
-                            0 => Coord {
-                                x: 1000.0 * t,
-                                y: scarto,
-                            },
-                            1 => Coord {
-                                x: 1000.0 + scarto,
-                                y: 1000.0 * t,
-                            },
-                            2 => Coord {
-                                x: 1000.0 * (1.0 - t),
-                                y: 1000.0 + scarto,
-                            },
-                            _ => Coord {
-                                x: scarto,
-                                y: 1000.0 * (1.0 - t),
-                            },
-                        });
-                    }
-                }
-                let primo = punti[0];
-                punti.push(primo);
-                punti
-                    .windows(2)
-                    .map(|w| Segment {
-                        start: w[0],
-                        end: w[1],
-                    })
-                    .collect()
-            } else {
-                let lato = 2 + prossimo(30);
-                (0..quanti)
-                    .map(|_| Segment {
-                        start: Coord {
-                            x: prossimo(lato) as f64,
-                            y: prossimo(lato) as f64,
-                        },
-                        end: Coord {
-                            x: prossimo(lato) as f64,
-                            y: prossimo(lato) as f64,
-                        },
-                    })
-                    .collect()
-            };
-            let completa = traccia(&segments, u64::MAX, 0, None, None, false);
-            let confronti = completa.2;
-            let coppie = completa.0.len();
-            for (limit, start) in [
-                (u64::MAX, 0),
-                (confronti, 0),
-                (confronti.saturating_sub(1), 0),
-                (confronti / 2, 0),
-                (confronti, confronti / 3),
-                (0, 0),
-            ] {
-                for (stop_at, fail_at) in [
-                    (None, None),
-                    (Some(1 + coppie / 2), None),
-                    (None, Some(1 + coppie / 3)),
-                ] {
-                    assert_eq!(
-                        traccia(&segments, limit, start, stop_at, fail_at, true),
-                        traccia(&segments, limit, start, stop_at, fail_at, false),
-                        "caso {caso}, limite {limit}, inizio {start}"
-                    );
-                }
-            }
-            // La griglia e' davvero usata (nessun ritorno alla scansione)
-            // su una parte dei casi: le coppie non superano il limite.
-            let mut envelopes: Vec<IndexedEnvelope> = segments
-                .iter()
-                .enumerate()
-                .filter_map(|(i, s)| indexed_envelope(i, *s))
-                .collect();
-            sort_envelopes(&mut envelopes);
-            let rettangoli: Vec<crate::celle::Rettangolo> = envelopes
-                .iter()
-                .map(|e| crate::celle::Rettangolo {
-                    min_x: e.min_x,
-                    max_x: e.max_x,
-                    min_y: e.min_y,
-                    max_y: e.max_y,
-                })
-                .collect();
-            if crate::celle::visita_coppie_sovrapposte(
-                &rettangoli,
-                Some(crate::celle::LIMITI_CELLE),
-                |_, _| true,
-            )
-            .is_some()
-            {
-                con_celle += 1;
-            }
-        }
-        assert!(con_celle >= 100, "{con_celle}");
-    }
-
-    /// Oracolo delle scorciatoie del polygonize (AGENTS.md, regola 3): coppie
-    /// del noding sulla griglia di celle, genitori senza punto interno quando
-    /// nessun rettangolo li contiene, punti interni calcolati solo quando
-    /// servono. Lo stesso esito, uguale per valore (facce, residui o
+    /// Oracolo delle scorciatoie del polygonize (AGENTS.md, regola 3):
+    /// genitori senza punto interno quando nessun rettangolo li contiene,
+    /// punti interni calcolati solo quando servono. Lo stesso esito, uguale per valore (facce, residui o
     /// errore), del percorso generico, su linework casuale con incroci,
     /// anelli annidati, buchi e lati frastagliati.
     #[test]

@@ -18,7 +18,6 @@ pub mod advanced;
 pub mod analysis;
 pub mod analyze;
 pub mod arrow_adapter;
-mod celle;
 pub mod cluster;
 pub mod construction;
 pub mod crs;

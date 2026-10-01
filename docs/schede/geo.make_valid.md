@@ -129,8 +129,8 @@ Per riga, con `v` i vertici della cella: la validazione OGC del workspace
 (scansione sui rettangoli d'ingombro, O(v²) nel caso peggiore). Solo per le
 celle invalide, in più: la validazione interna del kernel (la stessa
 scansione, con lo stesso verdetto di `check_validation` di `geo`), il
-noding (coppie di segmenti con filtro sugli inviluppi su una griglia di
-celle, quadratico nel caso peggiore), un polygonize per
+noding (coppie di segmenti con filtro sugli inviluppi, quadratico nel
+caso peggiore), un polygonize per
 giro (i giri sono al più i lati nodati: il caso peggiore, anelli
 concentrici collegati, è quadratico nei lati per il logaritmo, entro il
 tetto di 10.000 segmenti) e la rivalidazione dell'uscita. Memoria O(v) per

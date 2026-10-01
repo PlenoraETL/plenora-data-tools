@@ -468,20 +468,6 @@ API pubbliche di `geo` la stessa sequenza di `visit_validation` di `geo`
 come si trovano le coppie di segmenti candidate: una scansione sui rettangoli
 d'ingombro al posto del doppio ciclo O(n²). Il predicato per coppia è quello
 di `geo`; gli anelli con coordinate non finite passano dal doppio ciclo.
-Da 64 segmenti le coppie si cercano prima su una griglia di circa una cella
-per segmento (`autointersezione_a_celle`): ogni coppia a rettangoli
-sovrapposti si prova una volta, nella cella dell'angolo minimo della loro
-intersezione, e il verdetto («esiste una coppia che si interseca») non
-dipende dall'ordine; se un segmento occupa in media più di 8 celle o le
-coppie nelle celle superano 64 per segmento si torna alla scansione su un
-asse. Sui lati frastagliati lungo entrambi gli assi (i confini ondulati di
-una copertura, l'uscita di una booleana fra due di essi) la scansione
-provava coppie quadratiche nei vertici del lato: la decodifica validante
-(`geometry_from_wkb`) delle 2 000 celle da 1 000 vertici degli ingressi di
-una booleana del laboratorio passa da 227 a 168 ms (release, un thread,
-macchina con altri carichi). L'oracolo prova la griglia senza soglie né
-limiti su ogni anello finito dei differenziali contro il doppio ciclo di
-`geo`.
 Allo stesso modo le coppie di poligoni di un `MultiPolygon` e di buchi di un
 `Polygon` si trovano sui rettangoli chiusi (scansione su `x`, e un R-tree di
 `rstar` quando la scansione supererebbe 256 confronti per elemento): `relate`
@@ -509,13 +495,18 @@ L'oracolo è in `crates/plenora-kernels-geo/src/validazione_ogc/tests.rs`.
 **Hazard.**
 
 - il caso peggiore resta O(n²): con molti segmenti lunghi a rettangoli
-  sovrapposti (la griglia li rifiuta e decide la scansione) le coppie
-  candidate sono quadratiche come nel doppio ciclo (il
+  sovrapposti le coppie candidate sono quadratiche come nel doppio ciclo (il
   verdetto non cambia, il tempo sì). È il caso della stella a lati radiali:
   `geometry_from_wkb` di una stella da 2 000 vertici costa circa 2 ms, da
   10 000 circa 50 ms. Un R-tree dei segmenti non lo migliora (misurato: stessi
   tempi sulle stelle, da 5 a 10 volte più lento su cerchi e pettini), perché
-  le coppie di rettangoli che si toccano sono già quadratiche: serve una
+  le coppie di rettangoli che si toccano sono già quadratiche. Nemmeno una
+  griglia di circa una cella per segmento, misurata in alternanza nello
+  stesso processo: 58 contro 91 µs sui lati frastagliati di una copertura da
+  1.000 vertici (circa 40 confronti per segmento nella scansione), ma 432-470
+  contro 269-324 µs su un cerchio da 10.000 vertici e più lenta sotto i 100;
+  il noding di `polygonize` sulla stessa griglia non ha cambiato i tempi di
+  `split`. Non è stata tenuta. Serve una
   scansione a linea mobile (Shamos-Hoey) con predicati esatti e le esclusioni
   di `geo` sugli estremi condivisi, non ancora scritta;
 - la sequenza è copiata da `geo` 0.33.1: a ogni aggiornamento di `geo` va
@@ -945,11 +936,6 @@ lama da 74 s a 0,61 s, con lame a zig-zag da 235 a 4,2 s; `make_valid` di
 dove:
 
 - la validazione rapida al posto di quella di `geo` (sopra);
-- le coppie candidate del noding (`visit_candidate_pairs`) si trovano
-  sulla griglia di celle della validazione OGC (`celle`) e si visitano
-  nella stessa sequenza della scansione su `x`, con lo stesso budget
-  consumato e lo stesso errore nello stesso punto (oracolo
-  `noding_celle_stessa_visita_della_scansione`, traccia per traccia);
 - il genitore di una faccia si cerca col punto interno di `geo` (che
   interseca tutti i lati e chiama `relate`) solo se un'altra faccia d'area
   maggiore ne contiene il rettangolo, condizione necessaria perché due
@@ -2009,6 +1995,7 @@ esplicito.
   misurato 20 GiB su 15 MiB d'ingresso. I punti andati oltre il tempo
   massimo della campagna (`buffer`, `make_valid`, `split`) o
   rifiutati (`line_merge`, `polygonize`, `voronoi`) non sono nel modello.
+
   **Margine nei kernel.** I kernel di questi profili ricevono il margine
   del passo (`plenora_kernels_geo::margine`, budget meno byte vivi) e
   contano, dove i loro risultati crescono, i byte che vi mettono, più quelli

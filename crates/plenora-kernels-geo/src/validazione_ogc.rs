@@ -58,11 +58,7 @@
 //! un R-tree dei segmenti non la migliora (misurato su stelle da 2 000 e
 //! 10 000 vertici: stessi tempi, e 5-10 volte piu' lento su cerchi e
 //! pettini), perche' le coppie di rettangoli che si toccano sono gia'
-//! quadratiche. Da [`MINIMO_SEGMENTI_CELLE`] segmenti si prova prima una
-//! griglia di celle ([`autointersezione_a_celle`]), che separa i segmenti
-//! su entrambi gli assi (lati frastagliati in orizzontale e in verticale) e
-//! torna alla scansione quando i segmenti sono lunghi rispetto alle celle.
-//! Vedi `README.md`, sezione «Limiti dichiarati».
+//! quadratiche. Vedi `README.md`, sezione «Limiti dichiarati».
 
 use geo::algorithm::validation::{
     CoordIndex, GeometryIndex, InvalidGeometry, InvalidGeometryCollection, InvalidMultiPolygon,
@@ -77,8 +73,6 @@ use geo::{
 };
 use rstar::primitives::{GeomWithData, Rectangle};
 use rstar::{RTree, AABB};
-
-use crate::celle::Rettangolo;
 
 /// La coppia di segmenti conta come auto-intersezione, **esattamente** come
 /// nel doppio ciclo di `geo`.
@@ -159,11 +153,6 @@ fn autointersezione_con(anello: &LineString<f64>, doppio_ciclo: bool, asse: Opti
     }
 
     let ingombri: Vec<Ingombro> = segmenti.iter().map(Ingombro::di).collect();
-    if asse.is_none() && segmenti.len() >= MINIMO_SEGMENTI_CELLE {
-        if let Some(verdetto) = autointersezione_a_celle(&segmenti, &ingombri, true) {
-            return verdetto;
-        }
-    }
     let su_x = asse.unwrap_or_else(|| scansione_su_x(&ingombri));
     // (min e max sull'asse di scansione, min e max sull'altro, indice).
     let mut ordine: Vec<(f64, f64, f64, f64, usize)> = ingombri
@@ -194,45 +183,6 @@ fn autointersezione_con(anello: &LineString<f64>, doppio_ciclo: bool, asse: Opti
         }
     }
     false
-}
-
-/// Sotto questi segmenti la scansione su un asse costa meno della
-/// costruzione delle celle (misurato con `bench_validazione_ogc`).
-const MINIMO_SEGMENTI_CELLE: usize = 64;
-
-/// Se l'anello dei `segmenti` ha un'auto-intersezione secondo la regola di
-/// `geo`, cercando le coppie candidate su una **griglia di celle**
-/// ([`crate::celle`]) invece che con la scansione su un asse; `None` se la
-/// griglia non conviene (oltre [`crate::celle::LIMITI_CELLE`], quando
-/// `con_limiti`) o non si costruisce (estensione o fattore di scala non
-/// finiti): decide allora la scansione. Coordinate finite (il chiamante lo
-/// garantisce).
-///
-/// **Perche' il verdetto e' lo stesso.** Il verdetto e' «esiste una coppia
-/// a rettangoli chiusi sovrapposti che soddisfa [`coppia_si_interseca`]»,
-/// che non dipende dall'ordine in cui le coppie si provano (le coppie a
-/// rettangoli disgiunti non soddisfano il predicato: vedi il modulo), e la
-/// griglia visita ogni coppia a rettangoli sovrapposti una volta (vedi
-/// [`crate::celle`]). Il predicato per coppia e' quello di `geo`.
-fn autointersezione_a_celle(
-    segmenti: &[Line<f64>],
-    ingombri: &[Ingombro],
-    con_limiti: bool,
-) -> Option<bool> {
-    let rettangoli: Vec<Rettangolo> = ingombri
-        .iter()
-        .map(|ingombro| Rettangolo {
-            min_x: ingombro.min_x,
-            max_x: ingombro.max_x,
-            min_y: ingombro.min_y,
-            max_y: ingombro.max_y,
-        })
-        .collect();
-    let limiti = con_limiti.then_some(crate::celle::LIMITI_CELLE);
-    crate::celle::visita_coppie_sovrapposte(&rettangoli, limiti, |i, j| {
-        !coppia_si_interseca(&segmenti[i], &segmenti[j])
-    })
-    .map(|completata| !completata)
 }
 
 /// L'asse su cui scandire: quello dove i segmenti sono piu' sottili rispetto
