@@ -15,10 +15,11 @@ ripetute su ogni riga del gruppo. Le righe non si aggregano.
 | `output_prefix` | stringa | `""`, cioè `<column>_` | qualsiasi | prefisso dei nomi: la colonna di `mean` è `<output_prefix>mean` |
 
 Colonna numerica: `float64`, `int64`, `uint64`, `date32` (giorni
-dall'epoca), `timestamp(ms)` (millisecondi dall'epoca), `decimal128`,
+dall'epoca), `date64` (millisecondi dall'epoca), `timestamp` di ogni unità
+(il valore nell'unità della colonna), `decimal128`,
 `utf8` il cui testo è un numero (spazi ai lati ignorati, virgola decimale
 ammessa). Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`,
-`bool`, `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38,
+`bool`, `date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38,
 `binary`, `dictionary<utf8>` con chiavi `int32`.
 
 Le statistiche, sui valori non nulli del gruppo:
@@ -27,10 +28,10 @@ Le statistiche, sui valori non nulli del gruppo:
 - `min`, `max`, `median`, `q25`, `q75`: sui valori ordinati; i quantili
   interpolano linearmente fra i due valori vicini (posizione `q · (c - 1)`).
   `min` e `max` sulle colonne intere (`int64`, `uint64`, `date32`,
-  `timestamp(ms)`) e `decimal128` rendono la cella estrema nel tipo della
+  `date64`, `timestamp`) e `decimal128` rendono la cella estrema nel tipo della
   colonna;
 - `sum`, `mean`: sulle colonne intere (`int64`, `uint64`) la somma è
-  esatta ed esce `int64` (oltre `int64` è un errore); `sum` su `date32` o
+  esatta ed esce `int64` (oltre `int64` è un errore); `sum` su `date32`, `date64` o
   `timestamp` si rifiuta in validazione; la media su interi, date e istanti
   è la somma esatta diviso `count`; altrove somma in `f64` nell'ordine delle righe, e somma diviso
   `count`;

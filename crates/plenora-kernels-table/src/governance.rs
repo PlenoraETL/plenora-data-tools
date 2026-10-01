@@ -1033,7 +1033,8 @@ pub const fn is_rule_numeric(data_type: &DataType) -> bool {
             | DataType::Int64
             | DataType::UInt64
             | DataType::Date32
-            | DataType::Timestamp(plenora_core::arrow::schema::TimeUnit::Millisecond, _)
+            | DataType::Date64
+            | DataType::Timestamp(_, _)
             | DataType::Decimal128(_, _)
     )
 }
@@ -1252,7 +1253,8 @@ impl RuleComparison {
 
 /// Confronta la cella con un estremo di regola nel dominio nativo del tipo.
 ///
-/// Int64/UInt64/Float64, Date32, Timestamp(ms) e Decimal128 passano tutti da
+/// Int64/UInt64/Float64, Date32, Date64, Timestamp di ogni unita' (valore
+/// nativo) e Decimal128 passano tutti da
 /// `scalar_compare`, che confronta senza mai convertire a `f64`: nessun
 /// collasso degli interi oltre 2^53, nessun arrotondamento dei decimal.
 fn rule_compare(array: &dyn Array, row: usize, bound: Option<NumericBound>) -> RuleComparison {

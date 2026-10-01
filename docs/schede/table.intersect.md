@@ -9,7 +9,8 @@ ognuna una volta. Due righe sono uguali se lo sono tutte le loro colonne.
 Nessuno: la config è `{}`.
 
 Ogni colonna ha un tipo fra `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128`, `binary` e `dictionary<utf8>`
+`date32`, `date64`, `timestamp` di ogni unità, `decimal128`, `binary` e
+`dictionary<utf8>`
 (chiave int32).
 
 ### Schema

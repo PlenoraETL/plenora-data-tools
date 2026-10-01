@@ -9,7 +9,7 @@ una diagnostica per riga e non produce uscita.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `column` | stringa | obbligatorio | colonna `int64`, `uint64`, `float64`, `decimal128`, `date32`, `timestamp(ms)` o `utf8` | colonna da controllare |
+| `column` | stringa | obbligatorio | colonna `int64`, `uint64`, `float64`, `decimal128`, `date32`, `date64`, `timestamp` di ogni unità o `utf8` | colonna da controllare |
 | `min` | numero | assente | numero finito, non maggiore di `max` | estremo inferiore |
 | `max` | numero | assente | numero finito | estremo superiore |
 | `inclusive_min` | booleano | assente (incluso) | `true`, `false`; solo con `min`; `null` non ammesso | se `min` fa parte dell'intervallo |
@@ -21,8 +21,9 @@ Almeno uno fra `min` e `max`. `inclusive_min` senza `min` (o
 
 Come si confronta: nel dominio nativo della colonna, mai attraverso `f64`
 lato cella: esatto sugli interi oltre `2^53` e sui decimali. Una `date32` vale
-i giorni dall'epoca, un `timestamp(ms)` i millisecondi dall'epoca (l'istante,
-qualunque sia il fuso). Un `utf8` si legge come numero, con gli spazi ai lati
+i giorni dall'epoca, un `date64` i millisecondi dall'epoca, un `timestamp` il
+suo valore nell'unità della colonna (secondi, milli, micro o nanosecondi
+dall'epoca: l'istante, qualunque sia il fuso). Un `utf8` si legge come numero, con gli spazi ai lati
 ignorati e la virgola decimale ammessa. Un valore non finito (`inf`, `-inf`,
 `NaN`, in `float64` o come testo) è sempre fuori intervallo.
 

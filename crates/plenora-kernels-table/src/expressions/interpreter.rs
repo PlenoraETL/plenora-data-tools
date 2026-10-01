@@ -561,8 +561,8 @@ fn scalar_timestamp_ms(value: &Scalar, context: &str) -> Result<Option<i64>> {
 ///   divisore letterale zero; argomento di tipo errato per operatore o
 ///   funzione; confronto fra tipi eterogenei; tipi eterogenei con
 ///   `output_type = auto`; `output_type` dichiarato che l'espressione non
-///   puo' produrre; colonna di tipo non valutabile (`Timestamp`
-///   non-millisecondo, tipo non convertibile in testo); `date_trunc` su
+///   puo' produrre; colonna di tipo non valutabile (tipo non convertibile
+///   in testo); `date_trunc` su
 ///   colonna non temporale o timestamp timezone-aware, o unita' non valida;
 ///   letterale non scalare o non finito; numero di argomenti errato;
 /// - `DataMapping` con diagnostica per riga: divisione per zero
@@ -638,10 +638,12 @@ pub(super) fn static_output_kind(
     batch: &RecordBatch,
     config: &ExpressionTransform,
 ) -> Result<Kind> {
-    let possibili = static_type::infer("table.expression", &config.expression, &|name| {
+    let lookup = |name: &str| -> Result<DataType> {
         let index = column_index(batch, name)?;
         Ok(batch.schema_ref().field(index).data_type().clone())
-    })?;
+    };
+    static_type::verifica_domini_temporali("table.expression", &config.expression, &lookup)?;
+    let possibili = static_type::infer("table.expression", &config.expression, &lookup)?;
     static_type::resolve_output("table.expression", possibili, config.output_type)
 }
 

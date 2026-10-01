@@ -315,7 +315,8 @@ fn evaluate(array: &dyn Array, row: usize, condition: &PreparedCondition) -> Res
             let bound =
                 condition.numeric_bound("confronto ordinato richiede un valore numerico")?;
             // Confronto nel dominio nativo di ogni tipo (Int64/UInt64/Float64,
-            // Date32, Timestamp(ms), Decimal128 scalato in i128, Utf8 numerico
+            // Date32, Date64 e Timestamp di ogni unita' nel valore nativo,
+            // Decimal128 scalato in i128, Utf8 numerico
             // via `NumericBound`): nessun passaggio per f64, quindi nessun
             // collasso oltre 2^53 e nessun arrotondamento sui decimal.
             let ordering = scalar_compare(array, row, bound)?;

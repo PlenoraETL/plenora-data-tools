@@ -1850,7 +1850,11 @@ fn la_prevalidazione_dei_tipi_coincide_col_formatter() {
         DataType::UInt64,
         DataType::Date32,
         DataType::Binary,
+        DataType::Date64,
+        DataType::Timestamp(TimeUnit::Second, None),
         DataType::Timestamp(TimeUnit::Millisecond, None),
+        DataType::Timestamp(TimeUnit::Microsecond, Some("Europe/Rome".into())),
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
         DataType::Decimal128(38, 0),
         DataType::Decimal128(38, 38),
     ] {
@@ -1863,9 +1867,6 @@ fn la_prevalidazione_dei_tipi_coincide_col_formatter() {
     // Rifiutati: il formatter non li tratta, e accettarli sposta il
     // fallimento a dopo l'allocazione.
     for tipo in [
-        DataType::Timestamp(TimeUnit::Second, None),
-        DataType::Timestamp(TimeUnit::Microsecond, None),
-        DataType::Timestamp(TimeUnit::Nanosecond, None),
         DataType::Decimal128(38, -1),
         DataType::Decimal128(38, -100),
         DataType::Decimal128(38, 39),
@@ -1882,14 +1883,13 @@ fn la_prevalidazione_dei_tipi_coincide_col_formatter() {
 fn melt_rifiuta_timestamp_e_decimal_fuori_dal_formatter_prima_di_allocare() {
     // La stessa proprieta' vista dal kernel: il rifiuto arriva dalla
     // prevalidazione, non da meta' scansione.
-    use plenora_core::arrow::array::{Decimal128Array, TimestampSecondArray};
-    use plenora_core::arrow::schema::TimeUnit;
+    use plenora_core::arrow::array::{Decimal128Array, Float32Array};
 
     for (nome, tipo, colonna) in [
         (
-            "timestamp in secondi",
-            DataType::Timestamp(TimeUnit::Second, None),
-            Arc::new(TimestampSecondArray::from(vec![Some(1_i64), Some(2)])) as ArrayRef,
+            "float32",
+            DataType::Float32,
+            Arc::new(Float32Array::from(vec![Some(1.0_f32), Some(2.0)])) as ArrayRef,
         ),
         (
             "decimal a scala negativa",
@@ -2179,11 +2179,8 @@ fn l_analisi_di_melt_rifiuta_cio_che_il_kernel_rifiuterebbe() {
     use plenora_core::arrow::schema::TimeUnit;
 
     let casi: [(&str, DataType); 3] = [
-        // Unita' temporale che il formatter non tratta.
-        (
-            "timestamp in secondi",
-            DataType::Timestamp(TimeUnit::Second, None),
-        ),
+        // Tipo che il formatter non tratta.
+        ("float32", DataType::Float32),
         // Timezone non risolvibile: sta nello schema, non nei valori.
         (
             "timezone inesistente",
@@ -2531,12 +2528,12 @@ fn analisi_ed_esecuzione_di_expression_decidono_insieme() {
             Verdetto::Accetta,
         ),
         riga(
-            "timestamp in secondi: nessun percorso numerico",
+            "timestamp in secondi: numero, il valore nativo in secondi",
             colonna("tsec"),
             "auto",
-            Verdetto::Rifiuta,
-            None,
-            Verdetto::Rifiuta,
+            Verdetto::Accetta,
+            Some(DataType::Float64),
+            Verdetto::Accetta,
         ),
         riga(
             "timestamp in millisecondi: numero",

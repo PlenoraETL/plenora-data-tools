@@ -58,7 +58,7 @@ Esempi: 146 eseguiti con l'uscita confrontata, 0 verificati solo sul contratto.
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 1, kernel 2 |
+| versioni | semantica 3, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -182,7 +182,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 3, kernel 4 |
+| versioni | semantica 3, config 2, analisi 4, kernel 5 |
 
 #### Che cosa fa
 
@@ -231,7 +231,8 @@ Funzioni:
   se c'è un null e `skip_null` è `false`;
 - `first`, `last`: la cella nella prima o nell'ultima riga del gruppo in
   ordine d'ingresso, null compreso, nel tipo della colonna (un
-  `timestamp` resta `timestamp`, con il suo fuso);
+  `timestamp` di ogni unità resta `timestamp`, con la sua unità e il suo
+  fuso, letto senza passare dal testo: il fuso non si verifica);
 - `concat`: `utf8`, i testi delle celle in ordine d'ingresso uniti da
   `separator`; con `distinct` solo la prima occorrenza di ogni testo; un
   null si salta, o vale il testo vuoto con `skip_null: false`. Il testo di
@@ -240,11 +241,11 @@ Funzioni:
   `skip_null: false` un null nel gruppo dà null; un gruppo senza valori dà
   null (anche `sum`: la somma di nessun valore non è zero). Sulle colonne
   intere (`int64`, `uint64`) `sum` è esatta ed esce `int64`, una somma
-  oltre `int64` è un errore; `sum` su `date32` o `timestamp` si rifiuta in
+  oltre `int64` è un errore; `sum` su `date32`, `date64` o `timestamp` si rifiuta in
   validazione (una somma di date non è una data). Su interi, date e istanti
   `mean` parte dalla somma esatta e `variance`, `stddev` dagli scarti
-  esatti (valori uguali danno zero). `min` e `max` sulle colonne intere e
-  `decimal128` rendono la cella estrema nel tipo della colonna. Negli altri
+  esatti (valori uguali danno zero). `min` e `max` sulle colonne intere
+  (date e istanti compresi) e `decimal128` rendono la cella estrema nel tipo della colonna. Negli altri
   casi l'uscita è `float64` e la cella si legge come `f64` (vedi i
   limiti): `sum` somma in ordine d'ingresso; `min` e `max` ignorano i NaN
   salvo che il gruppo abbia solo NaN, la somma no; `variance` e `stddev`
@@ -255,11 +256,13 @@ Funzioni:
   deduplicano sul valore esatto (su `float64` per bit: `-0.0` e `0.0`
   distinti) e si riducono in ordine crescente.
 
-`nunique`, `concat`, `first`, `last` vogliono una colonna leggibile come
-testo (i tipi di [`table.distinct`](#tabledistinct)); le funzioni numeriche
-una colonna `int64`, `uint64`, `float64`, `decimal128`, `date32` (giorni),
-`timestamp(ms)` (millisecondi) o `utf8` il cui testo è un numero (spazi ai
-lati ignorati, virgola decimale ammessa).
+`nunique`, `concat` vogliono una colonna leggibile come testo (i tipi di
+[`table.distinct`](#tabledistinct)); `first`, `last` gli stessi tipi, ma
+la cella non passa dal testo (un fuso non valido non conta); le funzioni
+numeriche una colonna `int64`, `uint64`, `float64`, `decimal128`, `date32`
+(giorni), `date64` (millisecondi), `timestamp` di ogni unità (il valore
+nell'unità della colonna, con o senza fuso) o `utf8` il cui testo è un
+numero (spazi ai lati ignorati, virgola decimale ammessa).
 
 #### Schema
 
@@ -545,7 +548,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 2, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -562,8 +565,7 @@ esattamente una delle due uscite.
 | `right_keys` | lista di stringhe | obbligatorio | colonne della destra, tante quante `left_keys`, senza ripetizioni | colonne chiave del lato destro, nello stesso ordine |
 
 Tipi di chiave come in `table.semi_join`: stesso tipo Arrow nella coppia,
-fra `utf8`, `int64`, `uint64`, `float64`, `bool`, `date32`,
-`timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary` e
+fra `utf8`, `int64`, `uint64`, `float64`, `bool`, `date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary` e
 `dictionary<utf8>`.
 
 #### Schema
@@ -594,8 +596,9 @@ In validazione, `InvalidPlan`:
   `max_columns`; colonna assente; tipi diversi nella coppia; tipo fuori
   dall'elenco sopra.
 
-In esecuzione, `Schema`: una cella chiave `date32` o `timestamp(ms)` fuori
-dall'intervallo delle date rappresentabili, o un dizionario malformato.
+In esecuzione, `Schema`: una cella chiave `date32`, `date64` o `timestamp` fuori
+dall'intervallo delle date rappresentabili, un `date64` non allineato al
+  giorno, o un dizionario malformato.
 
 #### Limiti e deviazioni
 
@@ -664,7 +667,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 3, kernel 3 |
+| versioni | semantica 3, config 2, analisi 4, kernel 4 |
 
 #### Che cosa fa
 
@@ -747,8 +750,9 @@ In esecuzione, `Schema`:
 
 - un valore `int64` di `left_on` o `right_on` senza un `f64` esatto (oltre
   `2^53` con bit bassi non nulli): si rifiuta invece di arrotondarlo;
-- una cella `by` `date32` o `timestamp(ms)` fuori dall'intervallo delle
-  date rappresentabili, o un dizionario malformato.
+- una cella `by` `date32`, `date64` o `timestamp` fuori dall'intervallo delle
+  date rappresentabili, un `date64` non allineato al
+  giorno, o un dizionario malformato.
 
 #### Limiti e deviazioni
 
@@ -936,7 +940,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 1, kernel 3 |
+| versioni | semantica 3, config 1, analisi 2, kernel 4 |
 
 #### Che cosa fa
 
@@ -957,8 +961,8 @@ destra serve solo come riferimento.
 
 Le colonne si abbinano per posizione: `left_keys[i]` con `right_keys[i]`, e
 ogni coppia ha lo stesso tipo Arrow. Leggibili come testo scalare: `utf8`,
-`int64`, `uint64`, `float64`, `bool`, `binary`, `date32`, `timestamp(ms)`
-(con fuso valido), `decimal128` (scala da 0 a 38), dizionario
+`int64`, `uint64`, `float64`, `bool`, `binary`, `date32`, `date64`,
+`timestamp` di ogni unità (con fuso valido), `decimal128` (scala da 0 a 38), dizionario
 `int32`→`utf8`.
 
 Due chiavi sono uguali quando lo sono tutte le loro colonne, con
@@ -1008,8 +1012,8 @@ In esecuzione:
 - `ResourceLimit`: le chiavi distinte della destra superano il margine di
   memoria che il runner passa al kernel (`max_governed_memory_bytes`):
   ogni chiave conta la lunghezza della sua forma testuale più 64 byte;
-- `Schema`: una cella di chiave non si converte in testo (`date32` o
-  `timestamp(ms)` fuori dall'intervallo di calendario).
+- `Schema`: una cella di chiave non si converte in testo (`date32`, `date64` o
+  `timestamp` fuori dall'intervallo di calendario, `date64` non allineato al giorno).
 
 #### Limiti e deviazioni
 
@@ -1286,7 +1290,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 2, kernel 4 |
+| versioni | semantica 4, config 2, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -1299,7 +1303,7 @@ una diagnostica per riga e non produce uscita.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `column` | stringa | obbligatorio | colonna `int64`, `uint64`, `float64`, `decimal128`, `date32`, `timestamp(ms)` o `utf8` | colonna da controllare |
+| `column` | stringa | obbligatorio | colonna `int64`, `uint64`, `float64`, `decimal128`, `date32`, `date64`, `timestamp` di ogni unità o `utf8` | colonna da controllare |
 | `min` | numero | assente | numero finito, non maggiore di `max` | estremo inferiore |
 | `max` | numero | assente | numero finito | estremo superiore |
 | `inclusive_min` | booleano | assente (incluso) | `true`, `false`; solo con `min`; `null` non ammesso | se `min` fa parte dell'intervallo |
@@ -1311,8 +1315,9 @@ Almeno uno fra `min` e `max`. `inclusive_min` senza `min` (o
 
 Come si confronta: nel dominio nativo della colonna, mai attraverso `f64`
 lato cella: esatto sugli interi oltre `2^53` e sui decimali. Una `date32` vale
-i giorni dall'epoca, un `timestamp(ms)` i millisecondi dall'epoca (l'istante,
-qualunque sia il fuso). Un `utf8` si legge come numero, con gli spazi ai lati
+i giorni dall'epoca, un `date64` i millisecondi dall'epoca, un `timestamp` il
+suo valore nell'unità della colonna (secondi, milli, micro o nanosecondi
+dall'epoca: l'istante, qualunque sia il fuso). Un `utf8` si legge come numero, con gli spazi ai lati
 ignorati e la virgola decimale ammessa. Un valore non finito (`inf`, `-inf`,
 `NaN`, in `float64` o come testo) è sempre fuori intervallo.
 
@@ -1527,7 +1532,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 2, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -1553,12 +1558,14 @@ Valori di `data_type` e tipi che accettano:
 - `utf8` o `string`: `utf8`; `int64` o `integer`: `int64`; `float64`,
   `float` o `double`: `float64`; `boolean` o `bool`: `bool`; `uint64` o
   `unsigned`: `uint64`; `date32`; `binary`: tipo identico;
-- `timestamp_millis`: `timestamp(ms)` con o senza fuso orario;
+- `timestamp_seconds`, `timestamp_millis`, `timestamp_micros`,
+  `timestamp_nanos`: `timestamp` in secondi, millisecondi, microsecondi o
+  nanosecondi, con o senza fuso orario (l'unità conta, il fuso no);
 - `decimal128`: `decimal128` di qualunque precisione e scala;
 - `dictionary_utf8`: dizionario con chiavi `int32` e valori `utf8`;
 - `list`: qualunque lista; `struct`: qualunque struct.
 
-Gli altri tipi Arrow (`int32`, `float32`, `timestamp(us)`…) non si possono
+Gli altri tipi Arrow (`int32`, `float32`, `date64`…) non si possono
 asserire. Con `ordered=true` e `allow_extra=true` le prime colonne devono
 essere quelle di `fields`, nell'ordine, e le altre seguono libere.
 
@@ -1597,7 +1604,7 @@ in elenco).
 
 #### Limiti e deviazioni
 
-Le famiglie di tipo sono volutamente larghe: `decimal128`, `timestamp_millis`,
+Le famiglie di tipo sono volutamente larghe: `decimal128`, i `timestamp_*`,
 `list` e `struct` non controllano precisione, scala, fuso, tipo degli
 elementi né campi.
 
@@ -1654,7 +1661,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 1, kernel 3 |
+| versioni | semantica 3, config 1, analisi 2, kernel 4 |
 
 #### Che cosa fa
 
@@ -1672,7 +1679,8 @@ righe dei gruppi duplicati, senza produrre uscita.
 | `nulls_equal` | booleano | `true` | `true`, `false` | con `true` il null è un valore della chiave e due null sono uguali; con `false` le righe con un null in una colonna della chiave non si controllano |
 
 Leggibili come testo scalare: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`binary`, `date32`, `timestamp(ms)` (con fuso valido), `decimal128` (scala
+`binary`, `date32`, `date64`,
+`timestamp` di ogni unità (con fuso valido), `decimal128` (scala
 da 0 a 38), dizionario `int32`→`utf8`.
 
 Due valori sono uguali quando lo è la loro forma testuale: sugli interi, i
@@ -1712,8 +1720,8 @@ In esecuzione:
   riga, con l'indice (da zero) della riga nella base del runner
   ([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga));
   mai i valori;
-- `Schema`: una cella della chiave non si converte in testo (`date32` o
-  `timestamp(ms)` fuori dall'intervallo di calendario, chiave di dizionario
+- `Schema`: una cella della chiave non si converte in testo (`date32`, `date64` o
+  `timestamp` fuori dall'intervallo di calendario, `date64` non allineato al giorno, chiave di dizionario
   fuori dal dizionario). Le righe saltate con `nulls_equal=false` non si
   convertono.
 
@@ -1780,7 +1788,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 3, kernel 3 |
+| versioni | semantica 3, config 1, analisi 4, kernel 4 |
 
 #### Che cosa fa
 
@@ -1799,7 +1807,8 @@ numero di classi di uguale ampiezza fra il minimo e il massimo dei dati.
 | `output_column` | stringa | `<column>_bin` | nome valido | colonna d'uscita |
 
 Colonna numerica: `float64`, `int64`, `uint64`, `date32` (giorni
-dall'epoca), `timestamp(ms)` (millisecondi dall'epoca), `decimal128`,
+dall'epoca), `date64` (millisecondi dall'epoca), `timestamp` di ogni unità
+(il valore nell'unità della colonna), `decimal128`,
 `utf8` il cui testo è un numero (spazi ai lati ignorati, virgola decimale
 ammessa).
 
@@ -2389,7 +2398,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 3, kernel 3 |
+| versioni | semantica 3, config 2, analisi 4, kernel 4 |
 
 #### Che cosa fa
 
@@ -2654,7 +2663,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 3, analisi 3, kernel 5 |
+| versioni | semantica 4, config 3, analisi 4, kernel 6 |
 
 #### Che cosa fa
 
@@ -2800,7 +2809,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 3, analisi 3, kernel 5 |
+| versioni | semantica 4, config 3, analisi 4, kernel 6 |
 
 #### Che cosa fa
 
@@ -2934,7 +2943,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 3, kernel 5 |
+| versioni | semantica 4, config 2, analisi 4, kernel 6 |
 
 #### Che cosa fa
 
@@ -3072,7 +3081,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 3, analisi 3, kernel 5 |
+| versioni | semantica 4, config 3, analisi 4, kernel 6 |
 
 #### Che cosa fa
 
@@ -3209,7 +3218,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 1, kernel 2 |
+| versioni | semantica 2, config 2, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -3328,7 +3337,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 2, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -3344,8 +3353,14 @@ gruppo di righe uguali tiene la prima, l'ultima, oppure nessuna.
 | `keep` | stringa | `"first"` | `"first"`, `"last"`, `"false"` | tiene la prima occorrenza, l'ultima, o solo le righe la cui chiave compare una volta |
 
 Colonne leggibili come testo: `utf8`, `int64`, `uint64`, `float64`,
-`bool`, `date32`, `timestamp(ms)` (con timezone valida), `decimal128` con
-scala da 0 a 38, `binary`, `dictionary<utf8>` (chiavi `int32`).
+`bool`, `date32`, `date64`, `timestamp` di ogni unità (secondi, millisecondi,
+microsecondi, nanosecondi; con timezone valida), `decimal128` con scala da
+0 a 38, `binary`, `dictionary<utf8>` (chiavi `int32`). Un `timestamp` si
+scrive in RFC 3339 con tutte le cifre frazionarie che servono: due istanti
+distinti, anche di un solo nanosecondo, hanno testi distinti, e lo stesso
+istante ha lo stesso testo in ogni unità. Un `date64` si scrive
+`AAAA-MM-GG` se è allineato al giorno; altrimenti non è una data, e la
+cella si rifiuta.
 
 Uguaglianza delle chiavi, colonna per colonna: sul valore nella sua forma
 in testo, quindi `-0.0` e `0.0` sono diversi e ogni NaN è uguale a ogni
@@ -3378,8 +3393,9 @@ In validazione, `InvalidPlan`:
 
 In esecuzione:
 
-- `Schema`: una cella che non si converte in testo (`date32` o
-  `timestamp` fuori dall'intervallo delle date);
+- `Schema`: una cella che non si converte in testo (`date32`, `date64` o
+  `timestamp` fuori dall'intervallo delle date, `date64` non allineato al
+  giorno);
 - `ResourceLimit`: più di `u32::MAX` righe; nella variante spilled, file
   temporanei oltre `max_temp_bytes` o mappa delle chiavi oltre
   `max_governed_memory_bytes`;
@@ -3560,7 +3576,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 2, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -3573,7 +3589,8 @@ volta. Due righe sono uguali se lo sono tutte le loro colonne.
 Nessuno: la config è `{}`.
 
 Ogni colonna ha un tipo fra `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128`, `binary` e `dictionary<utf8>`
+`date32`, `date64`, `timestamp` di ogni unità, `decimal128`, `binary` e
+`dictionary<utf8>`
 (chiave int32).
 
 #### Schema
@@ -3792,7 +3809,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 5, config 3, analisi 4, kernel 6 |
+| versioni | semantica 6, config 3, analisi 5, kernel 7 |
 
 #### Che cosa fa
 
@@ -3828,8 +3845,9 @@ Un campo non previsto dentro un nodo si rifiuta. Un letterale di testo non
 supera `max_string_bytes` byte, anche dentro la lista di `in`.
 
 Tipi delle colonne: `bool` è booleano; `int64`, `uint64`, `float64`,
-`decimal128`, `date32` (giorni dall'epoca) e `timestamp(ms)` (millisecondi
-dall'epoca) sono numeri; `utf8`, `binary` e `dictionary<utf8>` sono testo.
+`decimal128`, `date32` (giorni dall'epoca), `date64` (millisecondi
+dall'epoca) e `timestamp` di ogni unità, con o senza fuso (il valore
+nell'unità della colonna) sono numeri; `utf8`, `binary` e `dictionary<utf8>` sono testo.
 Ogni altro tipo si rifiuta.
 
 Operatori (`binary`), con null che propaga salvo dove detto:
@@ -3864,7 +3882,7 @@ Funzioni (argomenti → risultato):
 | `between` | 3 dello stesso tipo | booleano | estremi compresi; null se un argomento è null |
 | `in` | valore, lista letterale | booleano | la lista è `{"kind": "literal", "value": [ … ]}` di scalari; lista vuota → `false` |
 | `greatest`, `least` | 1..N dello stesso tipo | tipo degli argomenti | null se un argomento è null |
-| `date_trunc` | unità letterale, colonna | `date32` o `timestamp(ms)` | unità `year`, `month`, `day` (e `hour`, `minute`, `second` solo per `timestamp(ms)`); il secondo argomento è una colonna `date32` o `timestamp(ms)` senza fuso, un altro `date_trunc` o `null` |
+| `date_trunc` | unità letterale, colonna | `date32` o `timestamp(ms)` | unità `year`, `month`, `day` (e `hour`, `minute`, `second` solo per i `timestamp`); il secondo argomento è una colonna `date32` o `timestamp` di ogni unità senza fuso, un altro `date_trunc` o `null`. Un `timestamp` esce in millisecondi: il troncamento è almeno al secondo, quindi esatto; un valore in secondi oltre la gamma dei millisecondi è un errore |
 
 `case` valuta i rami in ordine e rende il `then` del primo `when` vero; un
 `when` null vale falso; nessun ramo vero rende `else_value`. I rami non
@@ -3919,8 +3937,9 @@ In validazione, `InvalidPlan`:
 - nodo non riconosciuto o con un campo sconosciuto, profondità oltre 64,
   più di 4096 nodi, più di 64 argomenti o rami, `case` senza rami, nome di
   colonna vuoto;
-- una colonna assente o di tipo non ammesso (anche `timestamp` in unità
-  diverse dai millisecondi);
+- una colonna assente o di tipo non ammesso; colonne temporali di unità
+  diverse lette come numero nella stessa espressione (anche `date32` con un
+  `timestamp`: il numero è nell'unità della colonna);
 - letterale non scalare o non finito; letterale di testo oltre
   `max_string_bytes` byte, anche nella lista di `in`; `in` senza lista
   letterale di scalari;
@@ -4149,7 +4168,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 3, kernel 4 |
+| versioni | semantica 3, config 2, analisi 4, kernel 5 |
 
 #### Che cosa fa
 
@@ -4177,7 +4196,8 @@ Come si confronta, per operatore:
   `"true"`/`"false"`);
 - `>`, `>=`, `<`, `<=`, `between`: confronto nel dominio nativo del tipo,
   mai attraverso `f64`, su `int64`, `uint64`, `float64`, `decimal128`,
-  `date32` (giorni dall'epoca), `timestamp(ms)` (millisecondi dall'epoca) e
+  `date32` (giorni dall'epoca), `date64` (millisecondi dall'epoca),
+  `timestamp` di ogni unità (il valore nell'unità della colonna) e
   `utf8` il cui testo è un numero (spazi ai lati ignorati, virgola decimale
   ammessa). `value` deve essere numerico; `between` include entrambi gli
   estremi. Un `NaN`, nella cella o nell'estremo, rende falso il confronto;
@@ -4229,7 +4249,8 @@ In esecuzione:
 Il confronto fra numeri è esatto per costruzione, anche oltre `2^53` e fra
 interi e decimali ([README, «Validazione»](../README.md#validazione)). Gli
 operatori ordinati confrontano le date come numero di giorni dall'epoca e i
-timestamp come millisecondi: `value` è un intero, non una data in testo;
+timestamp come numero di unità della colonna (un `timestamp(us)` in
+microsecondi): `value` è un intero, non una data in testo;
 `==` e `!=` invece confrontano il testo della data.
 
 #### Complessità
@@ -4284,7 +4305,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 1, kernel 4 |
+| versioni | semantica 3, config 1, analisi 2, kernel 5 |
 
 #### Che cosa fa
 
@@ -4304,7 +4325,7 @@ con i livelli separati da un punto (`doc_indirizzo.citta` legge
 | `output_columns` | lista di stringhe | `[]` | non vuota nei piani; nomi che iniziano con `prefix`, senza ripetizioni, al più `max_columns` | colonne da estrarre |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
+`date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.
 
 Un percorso con k punti si estrae solo se `k <= max_level`: con il default
@@ -4420,7 +4441,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 2, kernel 4 |
+| versioni | semantica 4, config 2, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -4458,7 +4479,7 @@ Tipi:
 - `int64` e `float64` sono numeri; ogni altro tipo, anche `int32`,
   `uint64` e `decimal128`, è testo, letto con la sua resa testuale e deve
   essere leggibile come testo (`utf8`, `int64`, `uint64`, `float64`,
-  `bool`, `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38,
+  `bool`, `date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38,
   `binary`, `dictionary<utf8>` con chiavi `int32`);
 - numero op numero dà un numero (`f64`); `+` con almeno un operando di testo
   concatena i due testi (un numero con la resa più corta di `f64`: `2.0`
@@ -4751,7 +4772,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 3 |
+| versioni | semantica 2, config 1, analisi 2, kernel 4 |
 
 #### Che cosa fa
 
@@ -4771,7 +4792,7 @@ variabile, mai la chiave.
 | `null_policy` | stringa | `empty` | `empty`, `null`, `skip` | come entra una cella nulla |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
+`date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.
 
 La chiave sono i byte UTF-8 del valore della variabile. Il messaggio di una
@@ -4888,7 +4909,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 2, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -4901,7 +4922,8 @@ ognuna una volta. Due righe sono uguali se lo sono tutte le loro colonne.
 Nessuno: la config è `{}`.
 
 Ogni colonna ha un tipo fra `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128`, `binary` e `dictionary<utf8>`
+`date32`, `date64`, `timestamp` di ogni unità, `decimal128`, `binary` e
+`dictionary<utf8>`
 (chiave int32).
 
 #### Schema
@@ -5007,7 +5029,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 1, kernel 2 |
+| versioni | semantica 3, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -5028,10 +5050,11 @@ suffisso.
 
 Le due colonne di ogni coppia hanno lo stesso tipo Arrow (timezone,
 precisione e scala comprese), scelto fra `utf8`, `int64`, `uint64`,
-`float64`, `bool`, `date32`, `timestamp(ms)` (timezone assente o valida),
+`float64`, `bool`, `date32`, `date64`, `timestamp` di ogni unità (timezone assente o valida),
 `decimal128` con scala da 0 a 38, `binary` e `dictionary<utf8>`. Con
 `right` e `outer` la chiave d'uscita fonde i due lati, e i tipi ammessi
-sono solo `utf8`, `int64`, `uint64`, `float64`, `bool` e `date32`.
+sono solo `utf8`, `int64`, `uint64`, `float64`, `bool`, `date32`, `date64`
+e `timestamp` (la chiave fusa tiene unità e fuso).
 
 #### Schema
 
@@ -5097,8 +5120,9 @@ In esecuzione:
 
 - `ResourceLimit`: righe d'uscita oltre `max_rows` (nel runner
   `max_input_rows`), contate prima di costruirle;
-- `Schema`: una cella chiave `date32` o `timestamp(ms)` fuori
-  dall'intervallo delle date rappresentabili, o un dizionario malformato.
+- `Schema`: una cella chiave `date32`, `date64` o `timestamp` fuori
+  dall'intervallo delle date rappresentabili, un `date64` non allineato al
+  giorno, o un dizionario malformato.
 
 Chiamato senza l'analisi, il kernel ripete i controlli su chiavi, tipi e
 nomi con `Schema` (le colonne oltre `max_columns` con `ResourceLimit`).
@@ -5282,7 +5306,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -5302,7 +5326,7 @@ una nuova.
 | `output_column` | stringa | `column` | nome valido (non vuoto, al più 1024 byte) | colonna d'uscita; assente, sovrascrive `column` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
+`date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`. La chiave si confronta con il testo
 della cella byte per byte: un `int64` `5` è `"5"`, un `float64` `2.0` è
 `"2"`, una data è `AAAA-MM-GG`.
@@ -5404,7 +5428,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 3 |
+| versioni | semantica 2, config 2, analisi 3, kernel 4 |
 
 #### Che cosa fa
 
@@ -5427,7 +5451,7 @@ una colonna nuova `<colonna>_masked` o sovrascrive la colonna.
 | `overwrite` | booleano | `false` | `true`, `false` | `true` sovrascrive la colonna, `false` scrive `<colonna>_masked` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
+`date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.
 
 Le forme, contando i caratteri Unicode (non i byte):
@@ -5546,7 +5570,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 2, kernel 3 |
+| versioni | semantica 3, config 2, analisi 3, kernel 4 |
 
 #### Che cosa fa
 
@@ -5566,7 +5590,7 @@ lati non cambiano l'hash.
 | `null_literal` | stringa | `"<null>"` | al più `max_string_bytes` byte; solo con `null_policy = "literal"`; `null` non ammesso | testo di una cella nulla con `literal` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
+`date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.
 
 Il messaggio di una riga è il testo delle celle, con le colonne in ordine
@@ -5680,7 +5704,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 1, kernel 3 |
+| versioni | semantica 3, config 2, analisi 2, kernel 4 |
 
 #### Che cosa fa
 
@@ -5815,7 +5839,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 3, kernel 4 |
+| versioni | semantica 3, config 2, analisi 4, kernel 5 |
 
 #### Che cosa fa
 
@@ -5856,8 +5880,8 @@ righe della cella in ordine d'ingresso:
 - `sum`, `mean`, `min`, `max` (tipi numerici di
   [`table.aggregate`](#tableaggregate)): i null si saltano, solo null dà
   null. Sulle colonne intere (`int64`, `uint64`) `sum` è esatta ed esce
-  `int64` (oltre `int64` è un errore); `sum` su `date32` o `timestamp` si
-  rifiuta; `mean` su interi, date e istanti parte dalla somma esatta; `min`
+  `int64` (oltre `int64` è un errore); `sum` su `date32`, `date64` o
+  `timestamp` si rifiuta; `mean` su interi, date e istanti parte dalla somma esatta; `min`
   e `max` sulle colonne intere e `decimal128` rendono la cella estrema nel
   tipo di `value_col`. Altrove l'uscita è `float64` sulla cella letta come
   `f64`; `min` e `max` ignorano i NaN salvo che siano tutti NaN, `sum` e
@@ -5993,7 +6017,7 @@ Verifica: eseguito dal kernel (il runner rifiuta questa config in validazione, p
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 2, kernel 2 |
+| versioni | semantica 3, config 1, analisi 3, kernel 3 |
 
 #### Che cosa fa
 
@@ -6014,8 +6038,8 @@ solo a sinistra.
 
 Le colonne si abbinano per posizione: `left_keys[i]` con `right_keys[i]`, e
 ogni coppia ha lo stesso tipo Arrow. Leggibili come testo scalare: `utf8`,
-`int64`, `uint64`, `float64`, `bool`, `binary`, `date32`, `timestamp(ms)`
-(con fuso valido), `decimal128` (scala da 0 a 38), dizionario
+`int64`, `uint64`, `float64`, `bool`, `binary`, `date32`, `date64`,
+`timestamp` di ogni unità (con fuso valido), `decimal128` (scala da 0 a 38), dizionario
 `int32`→`utf8`.
 
 Due chiavi sono uguali quando lo sono tutte le loro colonne, con
@@ -6068,8 +6092,8 @@ In esecuzione:
   che il runner passa al kernel (`max_governed_memory_bytes`), a lunghezza
   della forma testuale più 64 byte per chiave; oppure le chiavi distinte di
   un lato superano `max_input_rows`;
-- `Schema`: una cella di chiave non si converte in testo (`date32` o
-  `timestamp(ms)` fuori dall'intervallo di calendario).
+- `Schema`: una cella di chiave non si converte in testo (`date32`, `date64` o
+  `timestamp` fuori dall'intervallo di calendario, `date64` non allineato al giorno).
 
 #### Limiti e deviazioni
 
@@ -6479,7 +6503,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 2, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -6506,7 +6530,7 @@ La finestra si misura in righe, non in valori: una cella nulla occupa il
 suo posto e non conta fra i valori. Con meno di `min_periods` valori non
 nulli nella finestra il risultato è null. Sulle colonne intere (`int64`,
 `uint64`) `sum` è esatta ed esce `int64` (una somma oltre `int64` è un
-errore); `sum` su `date32` o `timestamp` si rifiuta in validazione. Su
+errore); `sum` su `date32`, `date64` o `timestamp` si rifiuta in validazione. Su
 interi, date e istanti `mean` parte dalla somma esatta e `stddev` dagli
 scarti esatti; altrove `sum` somma in `f64` in ordine di riga. `mean` è la somma
 divisa per i valori. `min` e `max` sulle colonne intere e `decimal128`
@@ -6627,7 +6651,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 2 |
+| versioni | semantica 2, config 2, analisi 3, kernel 3 |
 
 #### Che cosa fa
 
@@ -6851,7 +6875,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 2, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -6869,7 +6893,7 @@ destra decide solo quali righe di sinistra restano. È il complemento di
 
 Le due colonne di ogni coppia hanno lo stesso tipo Arrow (timezone,
 precisione e scala comprese), scelto fra `utf8`, `int64`, `uint64`,
-`float64`, `bool`, `date32`, `timestamp(ms)` (timezone assente o valida),
+`float64`, `bool`, `date32`, `date64`, `timestamp` di ogni unità (timezone assente o valida),
 `decimal128` con scala da 0 a 38, `binary` e `dictionary<utf8>`.
 
 #### Schema
@@ -6901,8 +6925,9 @@ In validazione, `InvalidPlan`:
   `max_columns`; colonna assente; tipi diversi nella coppia; tipo fuori
   dall'elenco sopra.
 
-In esecuzione, `Schema`: una cella chiave `date32` o `timestamp(ms)` fuori
-dall'intervallo delle date rappresentabili, o un dizionario malformato.
+In esecuzione, `Schema`: una cella chiave `date32`, `date64` o `timestamp` fuori
+dall'intervallo delle date rappresentabili, un `date64` non allineato al
+  giorno, o un dizionario malformato.
 
 #### Limiti e deviazioni
 
@@ -6971,7 +6996,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 2, kernel 3 |
+| versioni | semantica 3, config 2, analisi 3, kernel 4 |
 
 #### Che cosa fa
 
@@ -6993,7 +7018,7 @@ maiuscole e di spazi ai lati non cambiano l'hash.
 | `null_literal` | stringa | `"<null>"` | al più `max_string_bytes` byte; solo con `null_policy = "literal"`; `null` non ammesso | testo di una cella nulla con `literal` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
+`date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.
 
 Il messaggio di una riga, con `f(x)` = lunghezza di x in 8 byte big-endian
@@ -7113,7 +7138,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 2, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -7136,8 +7161,10 @@ Tipi ordinabili e come si confrontano:
   NaN positivo dopo `+inf`, uno negativo prima di `-inf`;
 - `utf8`: byte per byte del testo UTF-8 (nessuna collazione linguistica);
 - `bool`: `false` prima di `true`;
-- `date32`: giorni dall'epoca; `timestamp(ms)`, con o senza timezone:
-  millisecondi dall'epoca, cioè l'istante (la timezone non conta);
+- `date32`: giorni dall'epoca; `date64`: millisecondi dall'epoca;
+  `timestamp` di ogni unità, con o senza timezone: il valore dall'epoca
+  nella sua unità, cioè l'istante (la timezone non conta; due unità diverse
+  si confrontano esatte, in nanosecondi);
 - `decimal128`: per valore;
 - `binary`: byte per byte;
 - `dictionary<utf8>` (chiavi `int32`): sul testo decodificato.
@@ -7364,7 +7391,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 2, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -7384,7 +7411,7 @@ la stessa impronta solo se hanno gli stessi valori.
 | `algorithm` | stringa | `sha256` | `sha256`, `md5` | funzione di hash |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
+`date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`. Con `columns` vuoto entrano tutte le
 colonne nell'ordine dello schema, e tutte devono esserlo.
 
@@ -7492,7 +7519,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 3, kernel 4 |
+| versioni | semantica 3, config 2, analisi 4, kernel 5 |
 
 #### Che cosa fa
 
@@ -7511,10 +7538,11 @@ ripetute su ogni riga del gruppo. Le righe non si aggregano.
 | `output_prefix` | stringa | `""`, cioè `<column>_` | qualsiasi | prefisso dei nomi: la colonna di `mean` è `<output_prefix>mean` |
 
 Colonna numerica: `float64`, `int64`, `uint64`, `date32` (giorni
-dall'epoca), `timestamp(ms)` (millisecondi dall'epoca), `decimal128`,
+dall'epoca), `date64` (millisecondi dall'epoca), `timestamp` di ogni unità
+(il valore nell'unità della colonna), `decimal128`,
 `utf8` il cui testo è un numero (spazi ai lati ignorati, virgola decimale
 ammessa). Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`,
-`bool`, `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38,
+`bool`, `date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38,
 `binary`, `dictionary<utf8>` con chiavi `int32`.
 
 Le statistiche, sui valori non nulli del gruppo:
@@ -7523,10 +7551,10 @@ Le statistiche, sui valori non nulli del gruppo:
 - `min`, `max`, `median`, `q25`, `q75`: sui valori ordinati; i quantili
   interpolano linearmente fra i due valori vicini (posizione `q · (c - 1)`).
   `min` e `max` sulle colonne intere (`int64`, `uint64`, `date32`,
-  `timestamp(ms)`) e `decimal128` rendono la cella estrema nel tipo della
+  `date64`, `timestamp`) e `decimal128` rendono la cella estrema nel tipo della
   colonna;
 - `sum`, `mean`: sulle colonne intere (`int64`, `uint64`) la somma è
-  esatta ed esce `int64` (oltre `int64` è un errore); `sum` su `date32` o
+  esatta ed esce `int64` (oltre `int64` è un errore); `sum` su `date32`, `date64` o
   `timestamp` si rifiuta in validazione; la media su interi, date e istanti
   è la somma esatta diviso `count`; altrove somma in `f64` nell'ordine delle righe, e somma diviso
   `count`;
@@ -7970,7 +7998,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 3 |
+| versioni | semantica 2, config 2, analisi 3, kernel 4 |
 
 #### Che cosa fa
 
@@ -8247,7 +8275,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 3, analisi 3, kernel 5 |
+| versioni | semantica 4, config 3, analisi 4, kernel 6 |
 
 #### Che cosa fa
 
@@ -8398,7 +8426,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 2, analisi 2, kernel 2 |
+| versioni | semantica 2, config 2, analisi 3, kernel 3 |
 
 #### Che cosa fa
 
@@ -8511,7 +8539,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 2, kernel 3 |
+| versioni | semantica 3, config 2, analisi 2, kernel 4 |
 
 #### Che cosa fa
 
@@ -8633,7 +8661,7 @@ Verifica: eseguito dal kernel (il runner rifiuta questa config in validazione, p
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 3, kernel 5 |
+| versioni | semantica 4, config 2, analisi 4, kernel 6 |
 
 #### Che cosa fa
 
@@ -8855,7 +8883,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 2, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -8868,7 +8896,8 @@ volta. Due righe sono uguali se lo sono tutte le loro colonne.
 Nessuno: la config è `{}`.
 
 Ogni colonna ha un tipo fra `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128`, `binary` e `dictionary<utf8>`
+`date32`, `date64`, `timestamp` di ogni unità, `decimal128`, `binary` e
+`dictionary<utf8>`
 (chiave int32).
 
 #### Schema
@@ -8885,7 +8914,8 @@ Una riga per ogni riga distinta dei due ingressi, presa dalla sua prima
 comparsa (prima a sinistra, poi a destra). L'uguaglianza è per valore,
 colonna per colonna: null è uguale a null, tutti i NaN sono uguali fra
 loro, `-0.0` è diverso da `0.0`, un `dictionary` vale il testo della sua
-voce (una voce nulla è null), un `timestamp` i suoi millisecondi.
+voce (una voce nulla è null), un `timestamp` o un `date64` il suo valore
+nella sua unità (i due lati hanno lo stesso tipo: la stessa unità).
 
 #### Ordine
 
@@ -9179,7 +9209,7 @@ Verifica: eseguito dal runner come passo unico; schema e numero di righe confron
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 3, kernel 2 |
+| versioni | semantica 4, config 1, analisi 4, kernel 3 |
 
 #### Che cosa fa
 
@@ -9203,7 +9233,8 @@ quale elenco o conteggio finisce la violazione.
 | `output_mode` | stringa | `annotate` | `annotate`, `summary` | forma dell'uscita |
 
 Per operatore (colonna numerica: `int64`, `uint64`, `float64`,
-`decimal128`, `date32`, `timestamp(ms)`; il testo `utf8` non è numerico
+`decimal128`, `date32`, `date64`, `timestamp` di ogni unità; il testo `utf8`
+non è numerico
 qui):
 
 - `isnull`, `notnull`: qualunque colonna; sulla nullità logica della cella
@@ -9214,8 +9245,8 @@ qui):
   `float64` un `NaN` è uguale a `"NaN"`. Sulle altre si confronta il testo
   della cella con il testo di `value` (`true`, `false` per `bool`);
 - `gt`, `ge`, `lt`, `le`: colonna numerica, `value` numerico, confronto
-  esatto; una `date32` vale i giorni dall'epoca, un `timestamp(ms)` i
-  millisecondi dall'epoca;
+  esatto; una `date32` vale i giorni dall'epoca, un `date64` i
+  millisecondi, un `timestamp` il valore nell'unità della colonna;
 - `range`: colonna numerica, `value` il testo `"min,max"` (spazi ai lati
   ignorati), estremi inclusi;
 - un numero che la forma esatta non tiene (più di 38 cifre significative,
@@ -9333,7 +9364,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 2, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -9356,7 +9387,7 @@ sotto). Con `order_column` le righe si riordinano prima su quella colonna.
 | `output_column` | stringa | `<column>_<function>` | nome di colonna valido | colonna d'uscita |
 
 Colonne numeriche: `int64`, `uint64`, `float64`, `decimal128`, `date32`,
-`timestamp(ms)` e `utf8` il cui testo è un numero; le funzioni di rango
+`date64`, `timestamp` di ogni unità e `utf8` il cui testo è un numero; le funzioni di rango
 (`rank`, `dense_rank`, `percent_rank`, `cume_dist`) non accettano `utf8`.
 `group_by` legge i tipi di [`table.distinct`](#tabledistinct);
 `order_column` quelli di [`table.sort`](#tablesort).
@@ -9372,12 +9403,13 @@ Funzioni, per partizione, con le righe nell'ordine descritto sotto:
 - `cume_dist`: valori minori o uguali diviso valori non nulli;
 - `cumsum`, `running_mean`: somma e media dei valori non nulli fin qui;
   sulle colonne intere (`int64`, `uint64`) `cumsum` è esatta ed esce
-  `int64` (una somma oltre `int64` è un errore); `cumsum` su `date32` o
-  `timestamp` si rifiuta in validazione; `running_mean` su interi, date e
+  `int64` (una somma oltre `int64` è un errore); `cumsum` su `date32`,
+  `date64` o `timestamp` si rifiuta in validazione; `running_mean` su interi, date e
   istanti parte dalla somma esatta;
 - `cumcount`: posizione della riga nella partizione, da 0;
 - `lag`, `lead`: la cella `offset` righe prima o dopo nella partizione,
-  com'è, nel tipo della colonna (un `timestamp` resta `timestamp`, un
+  com'è, nel tipo della colonna (un `timestamp` resta `timestamp`, nella
+  sua unità, un
   `utf8` resta il suo testo);
 - `pct_change`: `(corrente − precedente) / precedente` sulla riga subito
   prima (`offset` non si usa);
@@ -11019,7 +11051,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 2 |
+| versioni | semantica 3, config 1, analisi 3, kernel 3 |
 
 #### Che cosa fa
 

@@ -20,7 +20,8 @@ quale elenco o conteggio finisce la violazione.
 | `output_mode` | stringa | `annotate` | `annotate`, `summary` | forma dell'uscita |
 
 Per operatore (colonna numerica: `int64`, `uint64`, `float64`,
-`decimal128`, `date32`, `timestamp(ms)`; il testo `utf8` non è numerico
+`decimal128`, `date32`, `date64`, `timestamp` di ogni unità; il testo `utf8`
+non è numerico
 qui):
 
 - `isnull`, `notnull`: qualunque colonna; sulla nullità logica della cella
@@ -31,8 +32,8 @@ qui):
   `float64` un `NaN` è uguale a `"NaN"`. Sulle altre si confronta il testo
   della cella con il testo di `value` (`true`, `false` per `bool`);
 - `gt`, `ge`, `lt`, `le`: colonna numerica, `value` numerico, confronto
-  esatto; una `date32` vale i giorni dall'epoca, un `timestamp(ms)` i
-  millisecondi dall'epoca;
+  esatto; una `date32` vale i giorni dall'epoca, un `date64` i
+  millisecondi, un `timestamp` il valore nell'unità della colonna;
 - `range`: colonna numerica, `value` il testo `"min,max"` (spazi ai lati
   ignorati), estremi inclusi;
 - un numero che la forma esatta non tiene (più di 38 cifre significative,

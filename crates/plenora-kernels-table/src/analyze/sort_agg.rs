@@ -3,7 +3,7 @@
 
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::contract::{ContractProperties, DataContract, FieldAllocator, FieldId};
-use plenora_core::Result;
+use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
@@ -211,11 +211,14 @@ pub(in crate::analyze) fn analyze_aggregate(
         let field = field_of(op, input, &aggregation.column)?;
         match aggregation.function {
             aggregation::AggFunction::Count => {}
-            aggregation::AggFunction::Nunique
-            | aggregation::AggFunction::Concat
-            | aggregation::AggFunction::First
-            | aggregation::AggFunction::Last => {
+            aggregation::AggFunction::Nunique | aggregation::AggFunction::Concat => {
                 require_scalar_string_field(op, field)?;
+            }
+            // La cella com'e' (`take`): il tipo del profilo, senza il fuso,
+            // con la stessa funzione del kernel.
+            aggregation::AggFunction::First | aggregation::AggFunction::Last => {
+                crate::validate_cella_prendibile(field.data_type(), field.name())
+                    .map_err(|errore| PlenoraError::InvalidPlan(format!("{op}: {errore}")))?;
             }
             aggregation::AggFunction::Quantile => {
                 if aggregation.quantile.is_none() {

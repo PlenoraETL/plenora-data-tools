@@ -2284,4 +2284,159 @@ mod tests {
         assert_eq!(output.num_rows(), 0);
         assert_eq!(metrics, SpillMetrics::default());
     }
+
+    /// Istanti di ogni unita', con e senza fuso: valori distinti nella loro
+    /// unita' e uguali in millisecondi (in micro e nanosecondi). Ogni
+    /// variante spilled coincide con quella in memoria, e i gruppi restano
+    /// distinti.
+    // Una fixture per unita' e le quattro varianti spilled in sequenza:
+    // spezzarla nasconderebbe che girano sugli stessi dati.
+    #[allow(clippy::too_many_lines)]
+    #[test]
+    fn spilled_coincide_in_memoria_sugli_istanti_di_ogni_unita() {
+        use plenora_core::arrow::array::{
+            ArrayRef, TimestampMicrosecondArray, TimestampMillisecondArray,
+            TimestampNanosecondArray, TimestampSecondArray,
+        };
+        use plenora_core::arrow::schema::TimeUnit;
+
+        for unita in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            for fuso in [None, Some("Europe/Rome")] {
+                let (base, passo) = match unita {
+                    TimeUnit::Second => (1_706_696_430_i64, 2_i64),
+                    TimeUnit::Millisecond => (1_706_696_430_123, 2),
+                    TimeUnit::Microsecond => (1_706_696_430_123_000, 999),
+                    TimeUnit::Nanosecond => (1_706_696_430_123_000_000, 999_999),
+                };
+                let valori: Vec<Option<i64>> = (0..48_i64)
+                    .map(|i| match i % 5 {
+                        0 => None,
+                        1 => Some(base),
+                        2 => Some(base + 1),
+                        3 => Some(base + passo),
+                        _ => Some(base - i),
+                    })
+                    .collect();
+                let fuso: Option<Arc<str>> = fuso.map(Into::into);
+                let colonna: ArrayRef = match unita {
+                    TimeUnit::Second => {
+                        Arc::new(TimestampSecondArray::from(valori).with_timezone_opt(fuso))
+                    }
+                    TimeUnit::Millisecond => {
+                        Arc::new(TimestampMillisecondArray::from(valori).with_timezone_opt(fuso))
+                    }
+                    TimeUnit::Microsecond => {
+                        Arc::new(TimestampMicrosecondArray::from(valori).with_timezone_opt(fuso))
+                    }
+                    TimeUnit::Nanosecond => {
+                        Arc::new(TimestampNanosecondArray::from(valori).with_timezone_opt(fuso))
+                    }
+                };
+                let base_righe = rows_fixture();
+                let mut campi: Vec<Field> = base_righe
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|campo| campo.as_ref().clone())
+                    .collect();
+                campi.push(Field::new("t", colonna.data_type().clone(), true));
+                let mut array = base_righe.columns().to_vec();
+                array.push(colonna);
+                let batch =
+                    RecordBatch::try_new(Arc::new(Schema::new(campi)), array).expect("batch");
+                let caso = format!("{:?}", batch.schema().field(3).data_type());
+
+                let ordine = Sort {
+                    columns: vec!["t".to_string(), "a".to_string()],
+                    ascending: true,
+                };
+                let (spilled, metrics) =
+                    sort_spilled(&batch, &ordine, &spill_test_limits(128)).expect("sort spilled");
+                assert_eq!(
+                    spilled,
+                    aggregation::sort(&batch, &ordine).expect("sort"),
+                    "{caso}"
+                );
+                assert!(metrics.files > 1, "{caso}: attese piu' run");
+
+                let limits = spill_test_limits(1 << 20);
+                let distinti = Distinct {
+                    subset: vec!["t".to_string()],
+                    keep: Keep::First,
+                };
+                let (spilled, _) =
+                    distinct_spilled(&batch, &distinti, &limits).expect("distinct spilled");
+                let atteso = aggregation::distinct(&batch, &distinti).expect("distinct");
+                assert_eq!(spilled, atteso, "{caso}");
+                // null, base, base+1, base+passo e i nove `base - i`.
+                assert_eq!(atteso.num_rows(), 4 + 9, "{caso}: chiavi fuse");
+
+                let aggregazione = |funzione: AggFunction, alias: &str| Aggregation {
+                    column: "t".to_string(),
+                    function: funzione,
+                    separator: None,
+                    distinct: None,
+                    skip_null: None,
+                    alias: alias.to_string(),
+                    quantile: None,
+                    ddof: None,
+                };
+                for group_by in [vec!["t"], vec!["b"]] {
+                    let config = Aggregate {
+                        group_by: group_by.iter().map(|nome| (*nome).to_string()).collect(),
+                        aggregations: vec![
+                            aggregazione(AggFunction::First, "primo"),
+                            aggregazione(AggFunction::Last, "ultimo"),
+                            aggregazione(AggFunction::Min, "minimo"),
+                            aggregazione(AggFunction::Max, "massimo"),
+                            aggregazione(AggFunction::Count, "quanti"),
+                        ],
+                    };
+                    let (spilled, _) =
+                        aggregate_spilled(&batch, &config, &limits).expect("aggregate spilled");
+                    let atteso = aggregation::aggregate(&batch, &config).expect("aggregate");
+                    assert_eq!(spilled, atteso, "{caso} {group_by:?}");
+                }
+
+                let sinistra = batch.project(&[3]).expect("t");
+                let destra = sinistra.slice(0, 7);
+                for (operazione, in_memoria) in [
+                    (
+                        SetOperationKind::UnionDistinct,
+                        crate::setops::union_distinct(
+                            &sinistra,
+                            &destra,
+                            &crate::setops::SetOperation {},
+                            &limits,
+                        ),
+                    ),
+                    (
+                        SetOperationKind::Intersect,
+                        crate::setops::intersect(
+                            &sinistra,
+                            &destra,
+                            &crate::setops::SetOperation {},
+                        ),
+                    ),
+                    (
+                        SetOperationKind::Except,
+                        crate::setops::except(&sinistra, &destra, &crate::setops::SetOperation {}),
+                    ),
+                ] {
+                    let spilled = execute_set_operation(operazione, &sinistra, &destra, &limits)
+                        .expect("set operation spilled");
+                    assert_eq!(
+                        spilled,
+                        in_memoria.expect("in memoria"),
+                        "{caso} {operazione:?}"
+                    );
+                }
+            }
+        }
+    }
 }

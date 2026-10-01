@@ -17,10 +17,11 @@ suffisso.
 
 Le due colonne di ogni coppia hanno lo stesso tipo Arrow (timezone,
 precisione e scala comprese), scelto fra `utf8`, `int64`, `uint64`,
-`float64`, `bool`, `date32`, `timestamp(ms)` (timezone assente o valida),
+`float64`, `bool`, `date32`, `date64`, `timestamp` di ogni unità (timezone assente o valida),
 `decimal128` con scala da 0 a 38, `binary` e `dictionary<utf8>`. Con
 `right` e `outer` la chiave d'uscita fonde i due lati, e i tipi ammessi
-sono solo `utf8`, `int64`, `uint64`, `float64`, `bool` e `date32`.
+sono solo `utf8`, `int64`, `uint64`, `float64`, `bool`, `date32`, `date64`
+e `timestamp` (la chiave fusa tiene unità e fuso).
 
 ### Schema
 
@@ -86,8 +87,9 @@ In esecuzione:
 
 - `ResourceLimit`: righe d'uscita oltre `max_rows` (nel runner
   `max_input_rows`), contate prima di costruirle;
-- `Schema`: una cella chiave `date32` o `timestamp(ms)` fuori
-  dall'intervallo delle date rappresentabili, o un dizionario malformato.
+- `Schema`: una cella chiave `date32`, `date64` o `timestamp` fuori
+  dall'intervallo delle date rappresentabili, un `date64` non allineato al
+  giorno, o un dizionario malformato.
 
 Chiamato senza l'analisi, il kernel ripete i controlli su chiavi, tipi e
 nomi con `Schema` (le colonne oltre `max_columns` con `ResourceLimit`).

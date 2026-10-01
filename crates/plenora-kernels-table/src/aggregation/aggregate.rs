@@ -50,7 +50,8 @@ pub(super) fn conteggio_gruppo(righe: usize) -> Result<i64> {
 ///
 /// Le funzioni numeriche rendono null con `skip_null` falso e un null nel
 /// gruppo, o senza valori. Sul dominio intero (`Int64`, `UInt64`, `Date32`,
-/// `Timestamp(ms)`) `sum` e' esatta (`i128`) ed esce `Int64`, e media,
+/// `Date64`, `Timestamp` di ogni unita' nel valore nativo) `sum` e' esatta
+/// (`i128`) ed esce `Int64` (rifiutata su date e istanti), e media,
 /// varianza e deviazione partono dalla somma esatta; `min` e `max` su
 /// interi e `Decimal128` scelgono la cella col confronto esatto e tengono il
 /// tipo d'ingresso. Altrove la cella si legge come `f64`, arrotondando
@@ -843,9 +844,10 @@ pub fn aggregate_con_limiti(
             AggFunction::First | AggFunction::Last => {
                 // La cella com'e', nel tipo d'ingresso: il testo di un
                 // istante o di un decimale non e' il valore. I tipi ammessi
-                // restano quelli leggibili come testo, come nell'analisi.
+                // sono quelli dell'analisi, senza il fuso: la cella non passa
+                // dal testo.
                 let column = batch.column(index);
-                crate::validate_text_convertible(column.data_type(), &aggregation.column)?;
+                crate::validate_cella_prendibile(column.data_type(), &aggregation.column)?;
                 let first = matches!(aggregation.function, AggFunction::First);
                 let righe = groups
                     .iter()

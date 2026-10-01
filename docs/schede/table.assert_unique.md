@@ -14,7 +14,8 @@ righe dei gruppi duplicati, senza produrre uscita.
 | `nulls_equal` | booleano | `true` | `true`, `false` | con `true` il null è un valore della chiave e due null sono uguali; con `false` le righe con un null in una colonna della chiave non si controllano |
 
 Leggibili come testo scalare: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`binary`, `date32`, `timestamp(ms)` (con fuso valido), `decimal128` (scala
+`binary`, `date32`, `date64`,
+`timestamp` di ogni unità (con fuso valido), `decimal128` (scala
 da 0 a 38), dizionario `int32`→`utf8`.
 
 Due valori sono uguali quando lo è la loro forma testuale: sugli interi, i
@@ -54,8 +55,8 @@ In esecuzione:
   riga, con l'indice (da zero) della riga nella base del runner
   ([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga));
   mai i valori;
-- `Schema`: una cella della chiave non si converte in testo (`date32` o
-  `timestamp(ms)` fuori dall'intervallo di calendario, chiave di dizionario
+- `Schema`: una cella della chiave non si converte in testo (`date32`, `date64` o
+  `timestamp` fuori dall'intervallo di calendario, `date64` non allineato al giorno, chiave di dizionario
   fuori dal dizionario). Le righe saltate con `nulls_equal=false` non si
   convertono.
 

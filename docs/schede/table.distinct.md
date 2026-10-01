@@ -12,8 +12,14 @@ gruppo di righe uguali tiene la prima, l'ultima, oppure nessuna.
 | `keep` | stringa | `"first"` | `"first"`, `"last"`, `"false"` | tiene la prima occorrenza, l'ultima, o solo le righe la cui chiave compare una volta |
 
 Colonne leggibili come testo: `utf8`, `int64`, `uint64`, `float64`,
-`bool`, `date32`, `timestamp(ms)` (con timezone valida), `decimal128` con
-scala da 0 a 38, `binary`, `dictionary<utf8>` (chiavi `int32`).
+`bool`, `date32`, `date64`, `timestamp` di ogni unità (secondi, millisecondi,
+microsecondi, nanosecondi; con timezone valida), `decimal128` con scala da
+0 a 38, `binary`, `dictionary<utf8>` (chiavi `int32`). Un `timestamp` si
+scrive in RFC 3339 con tutte le cifre frazionarie che servono: due istanti
+distinti, anche di un solo nanosecondo, hanno testi distinti, e lo stesso
+istante ha lo stesso testo in ogni unità. Un `date64` si scrive
+`AAAA-MM-GG` se è allineato al giorno; altrimenti non è una data, e la
+cella si rifiuta.
 
 Uguaglianza delle chiavi, colonna per colonna: sul valore nella sua forma
 in testo, quindi `-0.0` e `0.0` sono diversi e ogni NaN è uguale a ogni
@@ -46,8 +52,9 @@ In validazione, `InvalidPlan`:
 
 In esecuzione:
 
-- `Schema`: una cella che non si converte in testo (`date32` o
-  `timestamp` fuori dall'intervallo delle date);
+- `Schema`: una cella che non si converte in testo (`date32`, `date64` o
+  `timestamp` fuori dall'intervallo delle date, `date64` non allineato al
+  giorno);
 - `ResourceLimit`: più di `u32::MAX` righe; nella variante spilled, file
   temporanei oltre `max_temp_bytes` o mappa delle chiavi oltre
   `max_governed_memory_bytes`;

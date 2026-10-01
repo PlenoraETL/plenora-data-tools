@@ -17,8 +17,8 @@ destra serve solo come riferimento.
 
 Le colonne si abbinano per posizione: `left_keys[i]` con `right_keys[i]`, e
 ogni coppia ha lo stesso tipo Arrow. Leggibili come testo scalare: `utf8`,
-`int64`, `uint64`, `float64`, `bool`, `binary`, `date32`, `timestamp(ms)`
-(con fuso valido), `decimal128` (scala da 0 a 38), dizionario
+`int64`, `uint64`, `float64`, `bool`, `binary`, `date32`, `date64`,
+`timestamp` di ogni unità (con fuso valido), `decimal128` (scala da 0 a 38), dizionario
 `int32`→`utf8`.
 
 Due chiavi sono uguali quando lo sono tutte le loro colonne, con
@@ -68,8 +68,8 @@ In esecuzione:
 - `ResourceLimit`: le chiavi distinte della destra superano il margine di
   memoria che il runner passa al kernel (`max_governed_memory_bytes`):
   ogni chiave conta la lunghezza della sua forma testuale più 64 byte;
-- `Schema`: una cella di chiave non si converte in testo (`date32` o
-  `timestamp(ms)` fuori dall'intervallo di calendario).
+- `Schema`: una cella di chiave non si converte in testo (`date32`, `date64` o
+  `timestamp` fuori dall'intervallo di calendario, `date64` non allineato al giorno).
 
 ### Limiti e deviazioni
 

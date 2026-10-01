@@ -14,7 +14,7 @@ destra decide solo quali righe di sinistra restano. È il complemento di
 
 Le due colonne di ogni coppia hanno lo stesso tipo Arrow (timezone,
 precisione e scala comprese), scelto fra `utf8`, `int64`, `uint64`,
-`float64`, `bool`, `date32`, `timestamp(ms)` (timezone assente o valida),
+`float64`, `bool`, `date32`, `date64`, `timestamp` di ogni unità (timezone assente o valida),
 `decimal128` con scala da 0 a 38, `binary` e `dictionary<utf8>`.
 
 ### Schema
@@ -46,8 +46,9 @@ In validazione, `InvalidPlan`:
   `max_columns`; colonna assente; tipi diversi nella coppia; tipo fuori
   dall'elenco sopra.
 
-In esecuzione, `Schema`: una cella chiave `date32` o `timestamp(ms)` fuori
-dall'intervallo delle date rappresentabili, o un dizionario malformato.
+In esecuzione, `Schema`: una cella chiave `date32`, `date64` o `timestamp` fuori
+dall'intervallo delle date rappresentabili, un `date64` non allineato al
+  giorno, o un dizionario malformato.
 
 ### Limiti e deviazioni
 

@@ -853,7 +853,7 @@ fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
     comune_geo::stessa_validazione(&casi);
 }
 
-/// Le chiavi di `collect` devono leggersi come testo: il tipo si decide
+/// Le chiavi di `collect` devono avere un ordine naturale: il tipo si decide
 /// dallo schema e si rifiuta in validazione, anche su una tabella vuota.
 #[test]
 fn i_tipi_delle_chiavi_di_collect_si_verificano_in_validazione() {
@@ -895,10 +895,6 @@ fn i_tipi_delle_chiavi_di_collect_si_verificano_in_validazione() {
             Field::new("k", DataType::Utf8View, true),
             Arc::new(StringViewArray::from(vec![Some("a"); righe])),
         ),
-        con_chiave(
-            Field::new("k", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
-            Arc::new(TimestampNanosecondArray::from(vec![Some(0_i64); righe])),
-        ),
     ];
     for tabella_chiave in rifiutate {
         let tipo = tabella_chiave
@@ -932,9 +928,14 @@ fn i_tipi_delle_chiavi_di_collect_si_verificano_in_validazione() {
     // o no. Un fuso orario inesistente non conta: l'ordine e' per istante,
     // e le chiavi escono invariate (prima si rifiutava perche' la chiave si
     // scriveva come testo nel fuso).
+    // Ogni unita' di `Timestamp` si ordina per istante sul valore nativo.
     let accettate = [
         millisecondi("Europe/Rome"),
         millisecondi("Fuso/Inesistente"),
+        con_chiave(
+            Field::new("k", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+            Arc::new(TimestampNanosecondArray::from(vec![Some(0_i64); righe])),
+        ),
         con_chiave(
             Field::new("k", DataType::Int64, true),
             Arc::new(Int64Array::from(vec![Some(7); righe])),

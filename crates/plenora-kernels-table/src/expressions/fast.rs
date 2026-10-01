@@ -7,8 +7,11 @@ use serde_json::Value;
 
 use super::scalar::{confronta_numeri, numero_del_letterale, numero_della_cella, Numero};
 use super::static_type::Kind;
-use super::temporal::{literal_unit, trunc_date32_days, trunc_timestamp_ms_value, TruncUnit};
+use super::temporal::{
+    literal_unit, millisecondi_per_difetto, trunc_date32_days, trunc_timestamp_ms_value, TruncUnit,
+};
 use super::{BinaryOperator, Contesto, Expression, ExpressionTransform, Function, UnaryOperator};
+use crate::interi_temporali::InteriTemporali;
 use crate::{
     column_index, replace_or_append, scalar_as_string, NumericBound, DIVISION_BY_ZERO_MESSAGE,
     NON_FINITE_INPUT_MESSAGE, NON_FINITE_RESULT_MESSAGE,
@@ -94,7 +97,8 @@ enum FastColumn<'a> {
     I64(&'a Int64Array),
     U64(&'a UInt64Array),
     Date32(&'a Date32Array),
-    TimestampMs(&'a TimestampMillisecondArray),
+    /// `Timestamp` di ogni unita' e `Date64`: il valore nativo.
+    Temporale(InteriTemporali<'a>),
     /// Array decimale, fattore di scala precomputato (`10^scale`) e scala.
     Decimal128(&'a Decimal128Array, f64, i8),
     Str(&'a StringArray),
@@ -144,9 +148,9 @@ impl<'a> FastColumn<'a> {
             DataType::Date32 => any
                 .downcast_ref::<Date32Array>()
                 .map_or(Self::Other(array), Self::Date32),
-            DataType::Timestamp(TimeUnit::Millisecond, _) => any
-                .downcast_ref::<TimestampMillisecondArray>()
-                .map_or(Self::Other(array), Self::TimestampMs),
+            DataType::Timestamp(_, _) | DataType::Date64 => {
+                InteriTemporali::new(array.as_ref()).map_or(Self::Other(array), Self::Temporale)
+            }
             DataType::Decimal128(_, scale) => any
                 .downcast_ref::<Decimal128Array>()
                 .map_or(Self::Other(array), |values| {
@@ -198,14 +202,9 @@ impl<'a> FastColumn<'a> {
                     finite_number(f64::from(value), NumericBound::I64(i64::from(value)))
                 }
             }
-            Self::TimestampMs(values) => {
-                if values.is_null(row) {
-                    Ok(FastValue::Null)
-                } else {
-                    let value = values.value(row);
-                    finite_number(integer_rounded(value), NumericBound::I64(value))
-                }
-            }
+            Self::Temporale(values) => values.valore(row).map_or(Ok(FastValue::Null), |value| {
+                finite_number(integer_rounded(value), NumericBound::I64(value))
+            }),
             Self::Decimal128(values, factor, scale) => {
                 if values.is_null(row) {
                     Ok(FastValue::Null)
@@ -264,6 +263,7 @@ fn other_column(array: &ArrayRef, row: usize) -> Result<FastValue<'static>> {
             | DataType::Float64
             | DataType::Decimal128(_, _)
             | DataType::Date32
+            | DataType::Date64
             | DataType::Timestamp(_, _)
     ) {
         return Ok(
@@ -703,7 +703,8 @@ enum FastNode<'a> {
 /// Sorgente temporale pre-risolta di `date_trunc` (downcast fatto una volta).
 enum TemporalSource<'a> {
     Date32(&'a Date32Array),
-    TimestampMs(&'a TimestampMillisecondArray),
+    /// `Timestamp` senza fuso di ogni unita', con la sua unita'.
+    Timestamp(InteriTemporali<'a>, TimeUnit),
     /// `date_trunc` annidato.
     Nested(Box<FastNode<'a>>),
     NullLiteral,
@@ -833,26 +834,23 @@ fn compile_temporal<'a>(expression: &'a Expression, batch: &'a RecordBatch) -> T
                     || TemporalSource::Error(LazyError::Schema("array Date32 incoerente".into())),
                     TemporalSource::Date32,
                 ),
-                DataType::Timestamp(TimeUnit::Millisecond, timezone) => {
+                DataType::Timestamp(unita, timezone) => {
                     if timezone.is_some() {
                         return TemporalSource::Error(LazyError::Schema(
                             "date_trunc: timestamp timezone-aware non supportato".into(),
                         ));
                     }
-                    array
-                        .as_any()
-                        .downcast_ref::<TimestampMillisecondArray>()
-                        .map_or_else(
-                            || {
-                                TemporalSource::Error(LazyError::Schema(
-                                    "array Timestamp(ms) incoerente".into(),
-                                ))
-                            },
-                            TemporalSource::TimestampMs,
-                        )
+                    InteriTemporali::new(array.as_ref()).map_or_else(
+                        || {
+                            TemporalSource::Error(LazyError::Schema(
+                                "array Timestamp incoerente".into(),
+                            ))
+                        },
+                        |valori| TemporalSource::Timestamp(valori, *unita),
+                    )
                 }
                 other => TemporalSource::Error(LazyError::Schema(format!(
-                    "date_trunc richiede una colonna Date32 o Timestamp(ms), trovato {other:?}"
+                    "date_trunc richiede una colonna Date32 o Timestamp, trovato {other:?}"
                 ))),
             }
         }
@@ -979,13 +977,12 @@ fn evaluate_fast<'e, 'a: 'e>(
                         FastValue::Date32(values.value(row))
                     }
                 }
-                TemporalSource::TimestampMs(values) => {
-                    if values.is_null(row) {
-                        FastValue::Null
-                    } else {
-                        FastValue::TimestampMs(values.value(row))
+                TemporalSource::Timestamp(values, unita) => match values.valore(row) {
+                    None => FastValue::Null,
+                    Some(valore) => {
+                        FastValue::TimestampMs(millisecondi_per_difetto(valore, *unita)?)
                     }
-                }
+                },
                 TemporalSource::Nested(node) => evaluate_fast(node, row, ctx)?,
                 TemporalSource::NullLiteral => FastValue::Null,
                 TemporalSource::Error(error) => return Err(error.build()),

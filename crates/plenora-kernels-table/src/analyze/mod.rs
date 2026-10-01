@@ -379,8 +379,8 @@ mod tests {
         DataContract::tabular(Arc::new(Schema::new(base_fields())))
     }
 
-    /// Contratto con un `Timestamp` fuori dall'unita' che il runtime sa
-    /// convertire (solo i millisecondi hanno un percorso).
+    /// Contratto con un `Timestamp` in secondi: un'unita' diversa dai
+    /// millisecondi, letta come le altre dal valore nativo.
     fn non_ms_contract() -> DataContract {
         DataContract::tabular(Arc::new(Schema::new(vec![Field::new(
             "tsec",
@@ -1446,7 +1446,10 @@ mod tests {
             ])),
             Arc::new(BooleanArray::from(vec![true, false])),
             Arc::new(Date32Array::from(vec![2_i32, 1])),
-            Arc::new(Date64Array::from(vec![2_i64, 1])),
+            // Allineati al giorno: un `Date64` con un'ora nascosta e' un
+            // valore non valido, rifiutato riga per riga dal profilo
+            // testuale (`scalar_as_string`), non un tipo da rifiutare.
+            Arc::new(Date64Array::from(vec![2 * 86_400_000_i64, 86_400_000])),
             Arc::new(TimestampSecondArray::from(vec![2_i64, 1])),
             Arc::new(TimestampMillisecondArray::from(vec![2_i64, 1])),
             Arc::new(TimestampMillisecondArray::from(vec![2_i64, 1]).with_timezone("UTC")),
@@ -2355,15 +2358,18 @@ mod tests {
         assert!(infer_err(col("st"))
             .to_string()
             .contains("non convertibile in testo"));
-        // `Timestamp` non-millisecondo: `column` lo manda al percorso
-        // numerico e li' non c'e' downcast. Il runtime fallisce sempre.
-        assert!(err(
-            "table.expression",
-            &[non_ms_contract()],
-            json!({"output_column": "e", "expression": col("tsec")})
-        )
-        .to_string()
-        .contains("millisecondi"));
+        // `Timestamp` di ogni unita' (qui i secondi): `column` lo manda al
+        // percorso numerico, col valore nativo nell'unita' della colonna.
+        assert_field(
+            &ok(
+                "table.expression",
+                &[non_ms_contract()],
+                json!({"output_column": "e", "expression": col("tsec")}),
+            ),
+            "e",
+            &DataType::Float64,
+            true,
+        );
 
         // Letterali scalari: null -> Any (Utf8 in auto), bool, numero, testo.
         assert_field(&infer(lit(Value::Null)), "e", &DataType::Utf8, true);

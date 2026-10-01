@@ -32,8 +32,9 @@ Un campo non previsto dentro un nodo si rifiuta. Un letterale di testo non
 supera `max_string_bytes` byte, anche dentro la lista di `in`.
 
 Tipi delle colonne: `bool` è booleano; `int64`, `uint64`, `float64`,
-`decimal128`, `date32` (giorni dall'epoca) e `timestamp(ms)` (millisecondi
-dall'epoca) sono numeri; `utf8`, `binary` e `dictionary<utf8>` sono testo.
+`decimal128`, `date32` (giorni dall'epoca), `date64` (millisecondi
+dall'epoca) e `timestamp` di ogni unità, con o senza fuso (il valore
+nell'unità della colonna) sono numeri; `utf8`, `binary` e `dictionary<utf8>` sono testo.
 Ogni altro tipo si rifiuta.
 
 Operatori (`binary`), con null che propaga salvo dove detto:
@@ -68,7 +69,7 @@ Funzioni (argomenti → risultato):
 | `between` | 3 dello stesso tipo | booleano | estremi compresi; null se un argomento è null |
 | `in` | valore, lista letterale | booleano | la lista è `{"kind": "literal", "value": [ … ]}` di scalari; lista vuota → `false` |
 | `greatest`, `least` | 1..N dello stesso tipo | tipo degli argomenti | null se un argomento è null |
-| `date_trunc` | unità letterale, colonna | `date32` o `timestamp(ms)` | unità `year`, `month`, `day` (e `hour`, `minute`, `second` solo per `timestamp(ms)`); il secondo argomento è una colonna `date32` o `timestamp(ms)` senza fuso, un altro `date_trunc` o `null` |
+| `date_trunc` | unità letterale, colonna | `date32` o `timestamp(ms)` | unità `year`, `month`, `day` (e `hour`, `minute`, `second` solo per i `timestamp`); il secondo argomento è una colonna `date32` o `timestamp` di ogni unità senza fuso, un altro `date_trunc` o `null`. Un `timestamp` esce in millisecondi: il troncamento è almeno al secondo, quindi esatto; un valore in secondi oltre la gamma dei millisecondi è un errore |
 
 `case` valuta i rami in ordine e rende il `then` del primo `when` vero; un
 `when` null vale falso; nessun ramo vero rende `else_value`. I rami non
@@ -123,8 +124,9 @@ In validazione, `InvalidPlan`:
 - nodo non riconosciuto o con un campo sconosciuto, profondità oltre 64,
   più di 4096 nodi, più di 64 argomenti o rami, `case` senza rami, nome di
   colonna vuoto;
-- una colonna assente o di tipo non ammesso (anche `timestamp` in unità
-  diverse dai millisecondi);
+- una colonna assente o di tipo non ammesso; colonne temporali di unità
+  diverse lette come numero nella stessa espressione (anche `date32` con un
+  `timestamp`: il numero è nell'unità della colonna);
 - letterale non scalare o non finito; letterale di testo oltre
   `max_string_bytes` byte, anche nella lista di `in`; `in` senza lista
   letterale di scalari;

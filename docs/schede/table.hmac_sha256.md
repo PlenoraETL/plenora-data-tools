@@ -16,7 +16,7 @@ variabile, mai la chiave.
 | `null_policy` | stringa | `empty` | `empty`, `null`, `skip` | come entra una cella nulla |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
+`date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.
 
 La chiave sono i byte UTF-8 del valore della variabile. Il messaggio di una

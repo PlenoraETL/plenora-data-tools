@@ -37,8 +37,8 @@ righe della cella in ordine d'ingresso:
 - `sum`, `mean`, `min`, `max` (tipi numerici di
   [`table.aggregate`](#tableaggregate)): i null si saltano, solo null dà
   null. Sulle colonne intere (`int64`, `uint64`) `sum` è esatta ed esce
-  `int64` (oltre `int64` è un errore); `sum` su `date32` o `timestamp` si
-  rifiuta; `mean` su interi, date e istanti parte dalla somma esatta; `min`
+  `int64` (oltre `int64` è un errore); `sum` su `date32`, `date64` o
+  `timestamp` si rifiuta; `mean` su interi, date e istanti parte dalla somma esatta; `min`
   e `max` sulle colonne intere e `decimal128` rendono la cella estrema nel
   tipo di `value_col`. Altrove l'uscita è `float64` sulla cella letta come
   `f64`; `min` e `max` ignorano i NaN salvo che siano tutti NaN, `sum` e

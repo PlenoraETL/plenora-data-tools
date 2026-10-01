@@ -249,7 +249,8 @@ impl<'l> Contesto<'l> {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Expression {
     /// Valore di una colonna: `Boolean` e' booleano; `Int64`, `UInt64`,
-    /// `Float64`, `Decimal128`, `Date32` e `Timestamp(ms)` sono numeri; gli
+    /// `Float64`, `Decimal128`, `Date32`, `Date64` e `Timestamp` di ogni
+    /// unita' (il valore nativo nell'unita' della colonna) sono numeri; gli
     /// altri tipi leggibili come testo sono testo.
     Column {
         /// Nome della colonna.
@@ -461,7 +462,9 @@ pub enum Function {
     Power,
     /// `date_trunc(unit, value)`: `unit` letterale del set chiuso
     /// year/month/day/hour/minute/second; `value` colonna Date32 o
-    /// Timestamp(ms) letta NATIVAMENTE (output Date32/TimestampMs).
+    /// Timestamp di ogni unita' senza fuso letta NATIVAMENTE (output
+    /// Date32/TimestampMs: un Timestamp esce in millisecondi, esatti perche'
+    /// il troncamento e' almeno al secondo).
     DateTrunc,
 }
 
@@ -1794,5 +1797,140 @@ mod tests {
             assert!(super::temporal::trunc_timestamp_ms_value(i64::MIN, unit).is_err());
             assert!(super::temporal::trunc_timestamp_ms_value(i64::MAX, unit).is_ok());
         }
+    }
+
+    /// Oracolo fast/generico sulle colonne temporali di ogni unita' (con e
+    /// senza fuso) e su `Date64`: numero nativo, confronti, `date_trunc`
+    /// (con i valori prima dell'epoca e quelli distinti solo sotto il
+    /// millisecondo), e il rifiuto delle unita' miste, uguale nei due
+    /// percorsi e nell'analisi.
+    // Fixture di cinque colonne e i casi su ciascuna: una matrice sola.
+    #[allow(clippy::too_many_lines)]
+    #[test]
+    fn oracle_temporali_di_ogni_unita() {
+        use plenora_core::arrow::array::{
+            ArrayRef, Date64Array, TimestampMicrosecondArray, TimestampNanosecondArray,
+            TimestampSecondArray,
+        };
+        let micro = vec![
+            Some(1_706_696_430_123_000_i64),
+            Some(1_706_696_430_123_001),
+            None,
+            Some(-1),
+            Some(-1_000_001),
+            Some(0),
+        ];
+        let colonne: Vec<(&str, ArrayRef)> = vec![
+            (
+                "s",
+                Arc::new(TimestampSecondArray::from(vec![
+                    Some(1_706_696_430_i64),
+                    Some(-1),
+                    None,
+                    Some(0),
+                    Some(i64::MAX),
+                    Some(59),
+                ])),
+            ),
+            (
+                "us",
+                Arc::new(TimestampMicrosecondArray::from(micro.clone())),
+            ),
+            (
+                "us_roma",
+                Arc::new(TimestampMicrosecondArray::from(micro).with_timezone("Europe/Rome")),
+            ),
+            (
+                "ns",
+                Arc::new(TimestampNanosecondArray::from(vec![
+                    Some(1_706_696_430_123_000_000_i64),
+                    Some(1_706_696_430_123_000_001),
+                    None,
+                    Some(-1),
+                    Some(i64::MIN),
+                    Some(i64::MAX),
+                ])),
+            ),
+            (
+                "d64",
+                Arc::new(Date64Array::from(vec![
+                    Some(86_400_000_i64),
+                    Some(0),
+                    None,
+                    Some(-86_400_000),
+                    Some(1),
+                    Some(19_753 * 86_400_000),
+                ])),
+            ),
+        ];
+        for (nome, colonna) in &colonne {
+            let batch =
+                single_column_batch(nome, colonna.clone(), colonna.data_type().clone(), true);
+            assert_equivalent(&batch, col(nome), None);
+            assert_equivalent(&batch, bin("add", col(nome), lit(json!(1))), None);
+            assert_equivalent(&batch, bin("subtract", col(nome), col(nome)), None);
+            for op in ["equal", "greater", "less_equal"] {
+                assert_equivalent(
+                    &batch,
+                    bin(op, col(nome), lit(json!(1_706_696_430_123_000_i64))),
+                    None,
+                );
+                assert_equivalent(&batch, bin(op, col(nome), lit(json!(-1))), None);
+            }
+            for unita in ["year", "month", "day", "hour", "minute", "second"] {
+                assert_equivalent(
+                    &batch,
+                    func("date_trunc", vec![lit(json!(unita)), col(nome)]),
+                    None,
+                );
+                assert_equivalent(
+                    &batch,
+                    func(
+                        "date_trunc",
+                        vec![
+                            lit(json!(unita)),
+                            func("date_trunc", vec![lit(json!("second")), col(nome)]),
+                        ],
+                    ),
+                    None,
+                );
+            }
+        }
+
+        // Unita' miste nella stessa espressione: rifiutate nei due percorsi,
+        // con lo stesso errore, prima di leggere una riga.
+        let campi: Vec<Field> = colonne
+            .iter()
+            .map(|(nome, colonna)| Field::new(*nome, colonna.data_type().clone(), true))
+            .collect();
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(campi)),
+            colonne.iter().map(|(_, colonna)| colonna.clone()).collect(),
+        )
+        .expect("batch");
+        for (sinistra, destra) in [("s", "us"), ("us", "ns"), ("ns", "d64"), ("s", "d64")] {
+            let espressione = bin("greater", col(sinistra), col(destra));
+            assert_equivalent(&batch, espressione.clone(), None);
+            let errore = expression(&batch, &config(espressione, None)).expect_err("unita' miste");
+            assert!(
+                errore.to_string().contains("unita' diverse"),
+                "{sinistra}/{destra}: {errore}"
+            );
+        }
+        // Stessa unita' (anche con fusi diversi) e millisecondi con Date64:
+        // ammesse. La sorgente di `date_trunc` non conta.
+        for espressione in [
+            bin("greater", col("us"), col("us_roma")),
+            bin(
+                "greater",
+                func("date_trunc", vec![lit(json!("day")), col("ns")]),
+                func("date_trunc", vec![lit(json!("day")), col("us")]),
+            ),
+        ] {
+            assert_equivalent(&batch, espressione.clone(), None);
+            expression(&batch, &config(espressione, None)).expect("stessa unita'");
+        }
+        let solo_ms = single_column_batch("d64", colonne[4].1.clone(), DataType::Date64, true);
+        assert_equivalent(&solo_ms, bin("greater", col("d64"), col("d64")), None);
     }
 }

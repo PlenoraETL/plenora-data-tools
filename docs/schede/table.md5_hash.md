@@ -16,7 +16,7 @@ lati non cambiano l'hash.
 | `null_literal` | stringa | `"<null>"` | al più `max_string_bytes` byte; solo con `null_policy = "literal"`; `null` non ammesso | testo di una cella nulla con `literal` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
+`date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.
 
 Il messaggio di una riga è il testo delle celle, con le colonne in ordine

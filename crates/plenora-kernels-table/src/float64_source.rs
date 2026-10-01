@@ -24,13 +24,14 @@ use std::cmp::Ordering;
 
 use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{
-    Array, ArrayRef, Date32Array, Decimal128Array, Float64Array, Int64Array,
-    TimestampMillisecondArray, UInt32Array, UInt64Array,
+    Array, ArrayRef, Date32Array, Decimal128Array, Float64Array, Int64Array, UInt32Array,
+    UInt64Array,
 };
-use plenora_core::arrow::schema::{DataType, TimeUnit};
+use plenora_core::arrow::schema::DataType;
 use plenora_core::{PlenoraError, Result};
 
 use crate::aggregation::compare_cells_typed;
+use crate::interi_temporali::InteriTemporali;
 use crate::scalar_as_f64_rounded;
 
 /// Colonna letta come `f64`: percorsi nativi per i tipi piu' comuni,
@@ -101,7 +102,11 @@ impl<'a> Float64Source<'a> {
 /// elenchi separati farebbero divergere analisi ed esecuzione.
 ///
 /// `Utf8` c'e' perche' il contratto ammette il testo **interpretato come
-/// numero**; `Boolean`, `Binary` e le dictionary non ci sono.
+/// numero**; `Boolean`, `Binary` e le dictionary non ci sono. Una data o un
+/// istante valgono il loro intero nativo, nell'unita' della colonna:
+/// `Date32` in giorni, `Date64` in millisecondi, `Timestamp` in secondi,
+/// milli, micro o nanosecondi dall'epoca secondo l'unita' (il fuso non
+/// cambia il valore).
 #[must_use]
 pub const fn dominio_numerico(data_type: &DataType) -> bool {
     matches!(
@@ -110,7 +115,8 @@ pub const fn dominio_numerico(data_type: &DataType) -> bool {
             | DataType::Int64
             | DataType::UInt64
             | DataType::Date32
-            | DataType::Timestamp(TimeUnit::Millisecond, _)
+            | DataType::Date64
+            | DataType::Timestamp(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Utf8
     )
@@ -121,7 +127,7 @@ pub const fn dominio_numerico(data_type: &DataType) -> bool {
 //
 // Una somma di interi non passa da `f64`: oltre 2^53 il double arrotonda gia'
 // gli addendi, e sommare double accumula l'errore. Sul dominio intero (`Int64`,
-// `UInt64`, `Date32` in giorni, `Timestamp(ms)` in millisecondi) la somma si
+// `UInt64`, `Date32` in giorni, `Date64` e `Timestamp` nell'unita' nativa) la somma si
 // accumula in `i128` ed esce `Int64` (errore oltre la gamma); la media e le
 // statistiche di dispersione restano `Float64`, calcolate dalla somma esatta.
 // Gli estremi (`min`, `max`) su interi e decimali scelgono la riga col
@@ -137,7 +143,8 @@ pub const fn dominio_intero(data_type: &DataType) -> bool {
         DataType::Int64
             | DataType::UInt64
             | DataType::Date32
-            | DataType::Timestamp(TimeUnit::Millisecond, _)
+            | DataType::Date64
+            | DataType::Timestamp(_, _)
     )
 }
 
@@ -149,16 +156,20 @@ pub const fn estremo_esatto(data_type: &DataType) -> bool {
 }
 
 /// Una somma (`sum`, `cumsum`) di date o istanti non ha un significato:
-/// giorni o millisecondi dall'epoca sommati non sono una data. Si rifiuta,
+/// giorni o istanti dall'epoca sommati non sono una data. Si rifiuta,
 /// nel kernel e nell'analisi, invece di rendere un `Int64` che sembra un
 /// numero. La media resta ammessa: la media di istanti e' un istante, reso
-/// come `Float64` nell'unita' della colonna (giorni o millisecondi).
+/// come `Float64` nell'unita' della colonna (giorni, o l'unita' del
+/// `Timestamp`; millisecondi per `Date64`).
 ///
 /// # Errors
 ///
-/// `InvalidPlan` per `Date32` e `Timestamp`.
+/// `InvalidPlan` per `Date32`, `Date64` e `Timestamp`.
 pub fn verifica_somma(data_type: &DataType) -> Result<()> {
-    if matches!(data_type, DataType::Date32 | DataType::Timestamp(_, _)) {
+    if matches!(
+        data_type,
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+    ) {
         return Err(PlenoraError::InvalidPlan(
             "somma di date o istanti non definita: sommare una colonna numerica".into(),
         ));
@@ -198,8 +209,8 @@ pub enum ColonnaIntera<'a> {
     UInt64(&'a UInt64Array),
     /// `Date32`, in giorni.
     Date32(&'a Date32Array),
-    /// `Timestamp(ms)`, in millisecondi.
-    TimestampMs(&'a TimestampMillisecondArray),
+    /// `Timestamp` di ogni unita' e `Date64`, nell'unita' nativa.
+    Temporale(InteriTemporali<'a>),
 }
 
 impl<'a> ColonnaIntera<'a> {
@@ -216,8 +227,7 @@ impl<'a> ColonnaIntera<'a> {
         if let Some(values) = any.downcast_ref::<Date32Array>() {
             return Some(Self::Date32(values));
         }
-        any.downcast_ref::<TimestampMillisecondArray>()
-            .map(Self::TimestampMs)
+        InteriTemporali::new(array.as_ref()).map(Self::Temporale)
     }
 
     /// Il valore della riga, `None` se null (questi tipi non hanno null
@@ -228,9 +238,7 @@ impl<'a> ColonnaIntera<'a> {
             Self::Int64(values) => (!values.is_null(row)).then(|| i128::from(values.value(row))),
             Self::UInt64(values) => (!values.is_null(row)).then(|| i128::from(values.value(row))),
             Self::Date32(values) => (!values.is_null(row)).then(|| i128::from(values.value(row))),
-            Self::TimestampMs(values) => {
-                (!values.is_null(row)).then(|| i128::from(values.value(row)))
-            }
+            Self::Temporale(values) => values.valore(row).map(i128::from),
         }
     }
 }

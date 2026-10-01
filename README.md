@@ -688,21 +688,22 @@ ogni operazione che aggiunge colonne, con errore in sua assenza.
 ### Somme intere esatte e tipi delle riduzioni
 
 **Regola.** Una somma di interi non passa da `f64`. Sul dominio intero
-(`int64`, `uint64`; `date32` in giorni e `timestamp(ms)` in millisecondi
-per media e dispersione) `sum` di `table.aggregate`, `table.pivot`,
+(`int64`, `uint64`; `date32` in giorni, `date64` in millisecondi e
+`timestamp` di ogni unità nel suo valore nativo per media, dispersione ed
+estremi) `sum` di `table.aggregate`, `table.pivot`,
 `table.rolling_window`, `table.statistics` e `cumsum` di
 `table.window_function` sommano in `i128` ed escono `int64`; una somma
 fuori dalla gamma di `int64` è `DataMapping`, mai un valore saturato o
-arrotondato. Una somma di date o istanti (`date32`, `timestamp`) non ha un
-significato e si rifiuta in validazione (`InvalidPlan`); la loro media
+arrotondato. Una somma di date o istanti (`date32`, `date64`, `timestamp`)
+non ha un significato e si rifiuta in validazione (`InvalidPlan`); la loro media
 resta, come istante in `float64` nell'unità della colonna.
 La varianza (e la deviazione) sul dominio intero si calcola dagli scarti
 esatti `(n x - S) / n` (`float64_source::varianza_intera`): valori uguali
 oltre `2^53` hanno varianza zero. La somma di un gruppo senza valori
 resta null (semantica SQL). Le riduzioni che scelgono una cella la rendono
 nel tipo d'ingresso: `first`/`last` di `aggregate` e `pivot`, `lag`/`lead`
-di `window_function`, e `min`/`max` sugli interi e su `decimal128` (scelti
-sul valore esatto). Il tipo d'uscita di ogni riduzione ha un'autorità sola
+di `window_function`, e `min`/`max` sugli interi (date e istanti compresi)
+e su `decimal128` (scelti sul valore esatto). Il tipo d'uscita di ogni riduzione ha un'autorità sola
 per kernel e analisi (`float64_source::tipo_somma`, `tipo_estremo` e i
 `tipo_uscita*` delle operazioni).
 
@@ -750,16 +751,68 @@ cadere sul secondo dopo. `%s` è sempre un istante UTC. L'ora locale di un
 istante si calcola con l'offset in aritmetica controllata: oltre
 l'intervallo di chrono è un errore, non un panico.
 
-**Ambito.** Le operazioni elencate.
+Fuori da queste operazioni una colonna temporale si legge dal valore
+nativo, in ogni unità e con o senza fuso
+(`crates/plenora-kernels-table/src/interi_temporali.rs`); nessuna
+conversione verso un'unità comune, che renderebbe uguali due microsecondi
+dello stesso millisecondo:
 
-**Hazard.** Fuori da queste operazioni un `timestamp` si legge ancora solo
-in millisecondi: il profilo testuale di chiavi, raggruppamenti, filtri e
-confronti (`text_convertible`, `scalar_compare_supported`), il dominio
-numerico (`dominio_numerico`) e `date_trunc` di `table.expression`
-rifiutano in validazione le altre unità. La conversione esplicita è
-`table.type_cast` verso `timestamp_millis`, esatta o rifiutata riga per
-riga. Inoltre:
+- **profilo testuale** di chiavi, raggruppamenti, `distinct`, join,
+  indici di `pivot`, hash e confronti di uguaglianza
+  (`text_convertible`, `scalar_as_string`): un `timestamp` si scrive in
+  RFC 3339 nel fuso della colonna con tutte le cifre frazionarie che
+  servono (nessuna, 3, 6 o 9), quindi due istanti distinti hanno testi
+  distinti e lo stesso istante ha lo stesso testo in ogni unità; un
+  `date64` si scrive `AAAA-MM-GG` solo se allineato al giorno, altrimenti
+  la cella si rifiuta (`Schema`);
+- **ordinamenti e comparatori** (`compare_cells_typed`: `sort`, `top_n`,
+  ranghi, merge dello spill, gruppi di `geo.collect`): l'istante, dal valore
+  nativo; due unità diverse si confrontano esatte, in nanosecondi `i128`;
+- **dominio numerico** (`dominio_numerico`, `scalar_compare`: filtri e
+  regole ordinati, statistiche, `bin`, `table.expression`): il valore
+  nativo nell'unità della colonna, secondi, milli, micro o nanosecondi
+  dall'epoca (`date64` in millisecondi); un'espressione che legge come
+  numero colonne temporali di unità diverse (anche `date32` con un
+  `timestamp`) si rifiuta in validazione e nel kernel
+  (`verifica_domini_temporali`): confrontarle o sottrarle darebbe un
+  risultato sbagliato senza errore;
+- **celle scelte** (`first`/`last`, `lag`/`lead`, `min`/`max`): la cella
+  com'è, nel tipo d'ingresso con unità e fuso; `first`/`last` di
+  `aggregate` non passano dal testo e non verificano il fuso
+  (`validate_cella_prendibile`; `first`/`last` di `pivot` non hanno mai
+  vincolato il tipo);
+- **set operation**: il valore nativo (i due lati hanno lo stesso tipo);
+- **`date_trunc`** di `table.expression`: ogni unità senza fuso, in
+  millisecondi per difetto prima di troncare; il troncamento è almeno al
+  secondo, quindi l'uscita `timestamp(ms)` è esatta, e un valore in
+  secondi oltre la gamma dei millisecondi è un errore.
 
+**Ambito.** Le operazioni su date elencate; per la lettura nativa fuori da
+esse, ogni operazione tabellare e `geo.collect`.
+
+**Hazard.**
+
+- Nel dominio numerico lo stesso estremo vale istanti diversi su unità
+  diverse: `{"operator": ">", "value": 1706696430123}` su un
+  `timestamp(us)` è un microsecondo del 1970, non un millisecondo del
+  2024. Il piano scrive l'estremo nell'unità della colonna; la conversione
+  esplicita resta `table.type_cast` verso `timestamp_millis`, esatta o
+  rifiutata riga per riga;
+- un `timestamp(ns)` reale (circa `1.7e18`) supera sempre `2^53`: dove il
+  contratto passa da `float64` (aritmetica di `table.expression` e
+  `table.formula`, medie, quantili, bordi di `bin`, `pct_change`) il valore
+  arrotonda a passi di qualche centinaio di nanosecondi (il limite
+  generico degli interi oltre `2^53`, «Somme intere esatte e tipi delle
+  riduzioni»); confronti, chiavi, estremi e celle scelte restano esatti;
+- `table.type_cast` da `date64` verso un tipo numerico si valida e si
+  rifiuta riga per riga (il testo `AAAA-MM-GG` non è un numero), mentre da
+  `date32` si rifiuta in validazione;
+- le chiavi di join e le colonne delle set operation hanno lo stesso tipo
+  Arrow sui due lati, unità e fuso compresi: lo stesso istante in unità
+  diverse non si abbina, e il piano si rifiuta in validazione;
+- `date_trunc` su un `timestamp` con fuso resta rifiutato; le operazioni
+  su date leggono un `date64` come il suo testo `AAAA-MM-GG` (allineato al
+  giorno, o la riga si rifiuta), non come colonna temporale nativa;
 - `date_add` sposta l'ora locale della colonna, non l'istante: con unità
   orarie su un `timestamp` con fuso può scrivere un'ora locale che nel
   cambio d'ora non esiste, senza errore;
@@ -767,12 +820,13 @@ riga. Inoltre:
   locale di `source_timezone` in `timezone_convert` (la semantica
   dichiarata dell'operazione);
 - un fuso Arrow a offset fisso (`+01:00`) non è un nome IANA: la colonna
-  si rifiuta con `Schema`;
+  si rifiuta con `Schema` nelle operazioni su date e nel profilo testuale;
+  comparatori, dominio numerico e celle scelte non leggono il fuso;
 - `%Z` in un formato di lettura si legge ma non dà un offset: il nome del
   fuso non conta.
 
-**Condizione di rientro.** Profilo testuale, dominio numerico e
-comparatori estesi a ogni unità, con oracolo differenziale per unità.
+**Condizione di rientro.** Fusi a offset fisso nel profilo testuale,
+`date64` letto nativamente dalle operazioni su date, `date_trunc` con fuso.
 
 ### `geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a GEOS verificata, non dimostrata
 

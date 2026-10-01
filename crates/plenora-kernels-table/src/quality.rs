@@ -35,7 +35,8 @@ pub struct SchemaExpectation {
     /// maiuscole e minuscole e con gli spazi ai lati ignorati: `utf8` o
     /// `string`, `int64` o `integer`, `float64`, `float` o `double`,
     /// `boolean` o `bool`, `uint64` o `unsigned`, `date32`,
-    /// `timestamp_millis` (qualunque fuso), `decimal128` (qualunque
+    /// `timestamp_seconds`, `timestamp_millis`, `timestamp_micros`,
+    /// `timestamp_nanos` (l'unita' conta, il fuso no), `decimal128` (qualunque
     /// precisione e scala), `binary`, `dictionary_utf8` (chiavi `Int32`),
     /// `list` (qualunque elemento), `struct` (qualunque campo).
     pub data_type: String,
@@ -72,8 +73,20 @@ fn expected_type(value: &str) -> Result<DataType> {
         "boolean" | "bool" => Ok(DataType::Boolean),
         "uint64" | "unsigned" => Ok(DataType::UInt64),
         "date32" => Ok(DataType::Date32),
+        "timestamp_seconds" => Ok(DataType::Timestamp(
+            plenora_core::arrow::schema::TimeUnit::Second,
+            None,
+        )),
         "timestamp_millis" => Ok(DataType::Timestamp(
             plenora_core::arrow::schema::TimeUnit::Millisecond,
+            None,
+        )),
+        "timestamp_micros" => Ok(DataType::Timestamp(
+            plenora_core::arrow::schema::TimeUnit::Microsecond,
+            None,
+        )),
+        "timestamp_nanos" => Ok(DataType::Timestamp(
+            plenora_core::arrow::schema::TimeUnit::Nanosecond,
             None,
         )),
         "decimal128" => Ok(DataType::Decimal128(38, 0)),
@@ -98,11 +111,10 @@ fn type_matches(actual: &DataType, expected: &DataType) -> bool {
     match expected {
         DataType::List(_) => matches!(actual, DataType::List(_)),
         DataType::Struct(_) => matches!(actual, DataType::Struct(_)),
-        DataType::Timestamp(plenora_core::arrow::schema::TimeUnit::Millisecond, None) => {
-            matches!(
-                actual,
-                DataType::Timestamp(plenora_core::arrow::schema::TimeUnit::Millisecond, _)
-            )
+        // L'unita' conta, il fuso no: `timestamp_micros` accetta ogni
+        // `Timestamp(Microsecond, _)`.
+        DataType::Timestamp(unita, None) => {
+            matches!(actual, DataType::Timestamp(effettiva, _) if effettiva == unita)
         }
         DataType::Decimal128(_, _) => matches!(actual, DataType::Decimal128(_, _)),
         _ => actual == expected,
@@ -352,8 +364,9 @@ pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<Recor
 #[serde(deny_unknown_fields)]
 pub struct AssertRange {
     /// Colonna da controllare (obbligatorio): `Int64`, `UInt64`, `Float64`,
-    /// `Decimal128`, `Date32` (giorni dall'epoca), `Timestamp(ms)`
-    /// (millisecondi dall'epoca) o `Utf8` letto come numero.
+    /// `Decimal128`, `Date32` (giorni dall'epoca), `Date64` (millisecondi
+    /// dall'epoca), `Timestamp` di ogni unita' (il valore nativo nell'unita'
+    /// della colonna) o `Utf8` letto come numero.
     pub column: String,
     /// Estremo inferiore, letto esatto ([`NumeroConfig`]): un intero JSON
     /// resta intero anche oltre 2^53, un decimale posizionale resta

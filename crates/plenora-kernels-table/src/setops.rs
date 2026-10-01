@@ -10,12 +10,12 @@ use std::sync::Arc;
 
 use plenora_core::arrow::array::{
     types::Int32Type, Array, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
-    DictionaryArray, Float64Array, Int64Array, RecordBatch, StringArray, TimestampMillisecondArray,
-    UInt64Array,
+    DictionaryArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Schema};
 use serde::Deserialize;
 
+use crate::interi_temporali::InteriTemporali;
 use crate::interning::KeyInterner;
 use crate::select_rows;
 use crate::Limits;
@@ -58,7 +58,9 @@ enum KeyColumn<'a> {
     Boolean(&'a BooleanArray),
     UInt64(&'a UInt64Array),
     Date32(&'a Date32Array),
-    TimestampMillis(&'a TimestampMillisecondArray),
+    /// `Timestamp` di ogni unita' e fuso, `Date64`: il valore nativo. I due
+    /// lati hanno lo stesso tipo (`validate_schema`), quindi la stessa unita'.
+    InteriTemporali(InteriTemporali<'a>),
     Decimal128(&'a Decimal128Array),
     Binary(&'a BinaryArray),
     DictionaryUtf8(&'a DictionaryArray<Int32Type>),
@@ -73,7 +75,7 @@ impl KeyColumn<'_> {
             Self::Boolean(values) => values.is_null(row),
             Self::UInt64(values) => values.is_null(row),
             Self::Date32(values) => values.is_null(row),
-            Self::TimestampMillis(values) => values.is_null(row),
+            Self::InteriTemporali(values) => values.is_null(row),
             Self::Decimal128(values) => values.is_null(row),
             Self::Binary(values) => values.is_null(row),
             // Il null logico della dictionary: una chiave valida puo'
@@ -112,7 +114,7 @@ impl KeyColumn<'_> {
             Self::Boolean(values) => output.push(u8::from(values.value(row))),
             Self::UInt64(values) => output.extend_from_slice(&values.value(row).to_be_bytes()),
             Self::Date32(values) => output.extend_from_slice(&values.value(row).to_be_bytes()),
-            Self::TimestampMillis(values) => {
+            Self::InteriTemporali(values) => {
                 output.extend_from_slice(&values.value(row).to_be_bytes());
             }
             Self::Decimal128(values) => {
@@ -136,7 +138,8 @@ impl KeyColumn<'_> {
 ///
 /// Non e' il profilo scalare testuale: l'encoder scrive la rappresentazione
 /// binaria, quindi accetta `Decimal128` a qualunque scala (l'`i128` grezzo) e
-/// non risolve la timezone (i millisecondi).
+/// non risolve la timezone (il valore nativo di un `Timestamp` di ogni unita',
+/// e di un `Date64`).
 ///
 /// Sta accanto all'encoder perche' una copia del `match` altrove divergerebbe.
 /// Il test `il_predicato_e_l_encoder_accettano_gli_stessi_tipi` li tiene
@@ -151,7 +154,8 @@ pub fn key_encodable(data_type: &DataType) -> bool {
         | DataType::Boolean
         | DataType::UInt64
         | DataType::Date32
-        | DataType::Timestamp(plenora_core::arrow::schema::TimeUnit::Millisecond, _)
+        | DataType::Timestamp(_, _)
+        | DataType::Date64
         | DataType::Decimal128(_, _)
         | DataType::Binary => true,
         DataType::Dictionary(key, value) => {
@@ -220,14 +224,10 @@ impl<'a> CompactRowEncoder<'a> {
                     .downcast_ref::<Date32Array>()
                     .map(KeyColumn::Date32)
                     .ok_or_else(|| PlenoraError::Schema("array Date32 incoerente".into())),
-                DataType::Timestamp(plenora_core::arrow::schema::TimeUnit::Millisecond, _) => {
-                    column
-                        .as_any()
-                        .downcast_ref::<TimestampMillisecondArray>()
-                        .map(KeyColumn::TimestampMillis)
-                        .ok_or_else(|| {
-                            PlenoraError::Schema("array TimestampMillis incoerente".into())
-                        })
+                DataType::Timestamp(_, _) | DataType::Date64 => {
+                    InteriTemporali::new(column.as_ref())
+                        .map(KeyColumn::InteriTemporali)
+                        .ok_or_else(|| PlenoraError::Schema("array temporale incoerente".into()))
                 }
                 DataType::Decimal128(_, _) => column
                     .as_any()
@@ -513,6 +513,7 @@ mod tests {
 
     use plenora_core::arrow::array::builder::StringDictionaryBuilder;
     use plenora_core::arrow::array::types::Int32Type;
+    use plenora_core::arrow::array::TimestampMillisecondArray;
     use plenora_core::arrow::schema::{DataType, Field};
 
     use super::*;

@@ -109,7 +109,10 @@ fn expected_type(op: &str, value: &str) -> Result<DataType> {
         "boolean" | "bool" => Ok(DataType::Boolean),
         "uint64" | "unsigned" => Ok(DataType::UInt64),
         "date32" => Ok(DataType::Date32),
+        "timestamp_seconds" => Ok(DataType::Timestamp(TimeUnit::Second, None)),
         "timestamp_millis" => Ok(DataType::Timestamp(TimeUnit::Millisecond, None)),
+        "timestamp_micros" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
+        "timestamp_nanos" => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         "decimal128" => Ok(DataType::Decimal128(38, 0)),
         "binary" => Ok(DataType::Binary),
         "dictionary_utf8" => Ok(DataType::Dictionary(
@@ -133,8 +136,8 @@ fn type_matches(actual: &DataType, expected: &DataType) -> bool {
     match expected {
         DataType::List(_) => matches!(actual, DataType::List(_)),
         DataType::Struct(_) => matches!(actual, DataType::Struct(_)),
-        DataType::Timestamp(TimeUnit::Millisecond, None) => {
-            matches!(actual, DataType::Timestamp(TimeUnit::Millisecond, _))
+        DataType::Timestamp(unita, None) => {
+            matches!(actual, DataType::Timestamp(effettiva, _) if effettiva == unita)
         }
         DataType::Decimal128(_, _) => matches!(actual, DataType::Decimal128(_, _)),
         _ => actual == expected,

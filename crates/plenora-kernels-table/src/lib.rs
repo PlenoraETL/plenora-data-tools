@@ -124,6 +124,7 @@ pub mod formula;
 pub mod fuzzy;
 pub mod governance;
 pub mod hashing;
+mod interi_temporali;
 mod interning;
 pub mod joins;
 pub mod quality;
@@ -146,8 +147,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
-    types::Int32Type, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
-    DictionaryArray, Float64Array, Int64Array, RecordBatch, StringArray, TimestampMillisecondArray,
+    types::Int32Type, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, DictionaryArray, Float64Array, Int64Array, RecordBatch, StringArray,
     UInt32Array, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
@@ -560,9 +561,17 @@ pub fn text_bytes_floor(data_type: &DataType) -> usize {
         // 38 cifre, segno, separatore decimale
         DataType::Decimal128(_, _) => 40,
         // "YYYY-MM-DD", con margine per gli anni fuori dalle quattro cifre
-        DataType::Date32 => 16,
-        // "YYYY-MM-DDTHH:MM:SS.sssZ" con margine per la timezone
-        DataType::Timestamp(_, _) => 32,
+        DataType::Date32 | DataType::Date64 => 16,
+        // RFC 3339 con l'offset: "+AAAAAA-MM-GGTHH:MM:SS" (22, anni a sei
+        // cifre con segno nell'intervallo di chrono) piu' "+HH:MM" (6) e le
+        // cifre frazionarie dell'unita': ".sss" (4) per i millisecondi, fino
+        // a ".nnnnnnnnn" (10) per micro e nanosecondi, che danno 38.
+        DataType::Timestamp(unita, _) => match unita {
+            plenora_core::arrow::schema::TimeUnit::Second
+            | plenora_core::arrow::schema::TimeUnit::Millisecond => 32,
+            plenora_core::arrow::schema::TimeUnit::Microsecond
+            | plenora_core::arrow::schema::TimeUnit::Nanosecond => 38,
+        },
         // "false"
         DataType::Boolean => 5,
         // Gia' testo o byte: nessuna conversione, la misura la fa il
@@ -609,14 +618,15 @@ pub fn text_bytes_per_row(array: &dyn Array) -> usize {
 /// Serve a rifiutare PRIMA di allocare (per esempio `melt` con
 /// `type_policy = "string"`), invece che a meta' scansione.
 ///
-/// Il predicato segue esattamente il formatter: di `Timestamp` accetta solo
-/// `Millisecond`, l'unico array su cui fa downcast; di `Decimal128` solo le
-/// scale `0..=38`, perche' il formatter rifiuta le scale negative (valide in
+/// Il predicato segue esattamente il formatter: `Timestamp` di ogni unita'
+/// e fuso e `Date64` (modulo `interi_temporali`); di `Decimal128` solo le scale
+/// `0..=38`, perche' il formatter rifiuta le scale negative (valide in
 /// Arrow) e `10^scala` trabocca oltre 38.
 ///
 /// E' una prevalidazione di tipo, non di valore: un `Binary` non UTF-8, una
-/// data o un istante fuori intervallo, una timezone non valida, una chiave
-/// dictionary fuori dal dizionario falliscono ancora durante la scansione.
+/// data o un istante fuori intervallo, un `Date64` non allineato al giorno,
+/// una timezone non valida, una chiave dictionary fuori dal dizionario
+/// falliscono ancora durante la scansione.
 #[must_use]
 pub fn text_convertible(data_type: &DataType) -> bool {
     match data_type {
@@ -626,12 +636,9 @@ pub fn text_convertible(data_type: &DataType) -> bool {
         | DataType::Boolean
         | DataType::UInt64
         | DataType::Date32
+        | DataType::Date64
+        | DataType::Timestamp(_, _)
         | DataType::Binary => true,
-        // Solo i millisecondi: e' l'unico array su cui il formatter fa
-        // downcast.
-        DataType::Timestamp(unit, _) => {
-            matches!(unit, plenora_core::arrow::schema::TimeUnit::Millisecond)
-        }
         // Scala non negativa e dentro il dominio di `10^scala` in `i128`.
         DataType::Decimal128(_, scale) => (0..=38).contains(scale),
         DataType::Dictionary(key, value) => {
@@ -743,6 +750,29 @@ pub fn validate_text_convertible(data_type: &DataType, column: &str) -> Result<(
         }
     }
     Ok(())
+}
+
+/// Verifica sullo SCHEMA che le riduzioni che **scelgono una cella**
+/// (`first`/`last` di `table.aggregate`) possano renderla com'e', nel tipo
+/// d'ingresso (`take`).
+///
+/// I tipi sono quelli del profilo scalare ([`text_convertible`]): ogni
+/// `Timestamp` (ogni unita', con o senza fuso), `Date32`, `Date64`. Il fuso
+/// non si verifica: la cella non passa dal testo, quindi un fuso che il
+/// testo non saprebbe scrivere non conta.
+///
+/// # Errors
+///
+/// `PlenoraError::Schema` con il nome della colonna per un tipo fuori dal
+/// profilo.
+pub fn validate_cella_prendibile(data_type: &DataType, column: &str) -> Result<()> {
+    if text_convertible(data_type) {
+        Ok(())
+    } else {
+        Err(PlenoraError::Schema(format!(
+            "colonna `{column}` di tipo {data_type:?}: nessuna cella da scegliere"
+        )))
+    }
 }
 
 /// Suffissi provati da [`resolve_output_names`] per evitare una collisione:
@@ -960,8 +990,8 @@ pub fn is_logically_null(array: &dyn Array, row: usize) -> bool {
 /// # Errors
 ///
 /// - `InvalidPlan`: epoch date32 non valida (guardia interna);
-/// - `Schema`: valore date32/timestamp fuori intervallo, timezone Arrow non
-///   valida, decimal128 incoerente o con scala non supportata, binary non
+/// - `Schema`: valore date32/date64/timestamp fuori intervallo, date64 non
+///   allineato al giorno, timezone Arrow non valida, decimal128 incoerente o con scala non supportata, binary non
 ///   UTF-8, dictionary non Utf8 o con chiave fuori dal dizionario, tipo non
 ///   supportato dal profilo scalare.
 pub fn scalar_as_string(array: &dyn Array, row: usize) -> Result<Option<String>> {
@@ -991,10 +1021,36 @@ pub fn scalar_as_string(array: &dyn Array, row: usize) -> Result<Option<String>>
             .ok_or_else(|| PlenoraError::Schema("date32 fuori intervallo".into()))?;
         return Ok(Some(date.format("%Y-%m-%d").to_string()));
     }
-    if let Some(values) = array.as_any().downcast_ref::<TimestampMillisecondArray>() {
-        let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(values.value(row))
+    if let Some(values) = array.as_any().downcast_ref::<Date64Array>() {
+        // Un `Date64` e' una data: si scrive come `Date32` solo se allineato
+        // al giorno. Un'ora nascosta nei millisecondi cadrebbe in silenzio
+        // dal testo, e due valori distinti avrebbero la stessa chiave.
+        let valore = values.value(row);
+        if valore % interi_temporali::MILLISECONDI_AL_GIORNO != 0 {
+            return Err(PlenoraError::Schema(
+                "date64 non allineato al giorno: non e' una data".into(),
+            ));
+        }
+        let date = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+            .and_then(|epoca| {
+                epoca.checked_add_signed(chrono::TimeDelta::days(
+                    valore / interi_temporali::MILLISECONDI_AL_GIORNO,
+                ))
+            })
+            .ok_or_else(|| PlenoraError::Schema("date64 fuori intervallo".into()))?;
+        return Ok(Some(date.format("%Y-%m-%d").to_string()));
+    }
+    if let DataType::Timestamp(unita, fuso) = array.data_type() {
+        // Ogni unita' dal suo valore nativo: il testo RFC 3339 tiene tutte
+        // le cifre frazionarie che servono (`AutoSi`: nessuna, 3, 6 o 9),
+        // quindi due istanti distinti hanno sempre testi distinti, e lo
+        // stesso istante ha lo stesso testo in ogni unita'.
+        let valore = interi_temporali::InteriTemporali::new(array)
+            .ok_or_else(|| PlenoraError::Schema("array timestamp incoerente".into()))?
+            .value(row);
+        let timestamp = interi_temporali::istante(valore, *unita)
             .ok_or_else(|| PlenoraError::Schema("timestamp fuori intervallo".into()))?;
-        if let DataType::Timestamp(_, Some(timezone)) = values.data_type() {
+        if let Some(timezone) = fuso {
             let timezone = timezone
                 .parse::<chrono_tz::Tz>()
                 .map_err(|_| PlenoraError::Schema("timezone Arrow non valida".into()))?;
@@ -1181,8 +1237,9 @@ pub fn scalar_as_f64(array: &dyn Array, row: usize) -> Result<Option<f64>> {
     if let Some(values) = array.as_any().downcast_ref::<Date32Array>() {
         return Ok(Some(f64::from(values.value(row))));
     }
-    if let Some(values) = array.as_any().downcast_ref::<TimestampMillisecondArray>() {
-        return exact_f64_from_i64(values.value(row))
+    if let Some(interi) = interi_temporali::InteriTemporali::new(array) {
+        // Il valore nativo nell'unita' della colonna (`Date64`: millisecondi).
+        return exact_f64_from_i64(interi.value(row))
             .map(Some)
             .ok_or_else(|| PlenoraError::Schema("timestamp non rappresentabile come f64".into()));
     }
@@ -1237,8 +1294,8 @@ pub fn scalar_as_f64_rounded(array: &dyn Array, row: usize) -> Result<Option<f64
     if let Some(values) = array.as_any().downcast_ref::<UInt64Array>() {
         return Ok(Some(values.value(row) as f64));
     }
-    if let Some(values) = array.as_any().downcast_ref::<TimestampMillisecondArray>() {
-        return Ok(Some(values.value(row) as f64));
+    if let Some(interi) = interi_temporali::InteriTemporali::new(array) {
+        return Ok(Some(interi.value(row) as f64));
     }
     if let Some(values) = array.as_any().downcast_ref::<Decimal128Array>() {
         let DataType::Decimal128(_, scale) = values.data_type() else {
@@ -1276,8 +1333,8 @@ pub fn scalar_as_numero(array: &dyn Array, row: usize) -> Result<Option<(f64, Nu
         NumericBound::I64(values.value(row))
     } else if let Some(values) = any.downcast_ref::<UInt64Array>() {
         NumericBound::U64(values.value(row))
-    } else if let Some(values) = any.downcast_ref::<TimestampMillisecondArray>() {
-        NumericBound::I64(values.value(row))
+    } else if let Some(interi) = interi_temporali::InteriTemporali::new(array) {
+        NumericBound::I64(interi.value(row))
     } else if let Some(values) = any.downcast_ref::<Date32Array>() {
         NumericBound::I64(i64::from(values.value(row)))
     } else if let Some(values) = any.downcast_ref::<Float64Array>() {
@@ -1910,7 +1967,8 @@ pub const fn scalar_compare_supported(data_type: &DataType) -> bool {
             | DataType::UInt64
             | DataType::Float64
             | DataType::Date32
-            | DataType::Timestamp(plenora_core::arrow::schema::TimeUnit::Millisecond, _)
+            | DataType::Date64
+            | DataType::Timestamp(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Utf8
     )
@@ -1948,9 +2006,11 @@ pub fn scalar_compare(
         // Stesso dominio numerico di `scalar_as_f64`: giorni dall'epoch.
         return Ok(compare_i64(i64::from(values.value(row)), bound));
     }
-    if let Some(values) = any.downcast_ref::<TimestampMillisecondArray>() {
-        // Stesso dominio numerico di `scalar_as_f64`: millisecondi dall'epoch.
-        return Ok(compare_i64(values.value(row), bound));
+    if let Some(interi) = interi_temporali::InteriTemporali::new(array) {
+        // Stesso dominio numerico di `scalar_as_f64`: il valore nativo
+        // nell'unita' della colonna (secondi, milli, micro o nanosecondi
+        // dall'epoca; `Date64` in millisecondi), senza conversioni.
+        return Ok(compare_i64(interi.value(row), bound));
     }
     if let Some(values) = any.downcast_ref::<Decimal128Array>() {
         let DataType::Decimal128(_, scale) = values.data_type() else {

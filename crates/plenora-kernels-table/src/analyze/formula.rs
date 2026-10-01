@@ -64,9 +64,9 @@ pub(in crate::analyze) fn analyze_expression(
     // L'AST si analizza SEMPRE, anche quando `output_type` e' dichiarato: il
     // tipo dichiarato non dice niente sulle colonne referenziate ne' sugli
     // operandi.
-    let possibili = expressions::static_type::infer(op, &config.expression, &|name| {
-        field_of(op, input, name).map(|field| field.data_type().clone())
-    })?;
+    let lookup = |name: &str| field_of(op, input, name).map(|field| field.data_type().clone());
+    expressions::static_type::verifica_domini_temporali(op, &config.expression, &lookup)?;
+    let possibili = expressions::static_type::infer(op, &config.expression, &lookup)?;
     let kind = expressions::static_type::resolve_output(op, possibili, config.output_type)?;
     expressions::static_type::verifica_letterali(op, &config.expression, &|name| {
         field_of(op, input, name).map(|field| field.data_type().clone())

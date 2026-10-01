@@ -22,20 +22,14 @@
 //! esatti dopo ogni lettura), con in piu' i tempi di lettura, catena e
 //! scrittura e il resoconto del runner passo per passo, in JSON su stdout.
 //! Nessun valore dei dati esce: solo nomi, tipi, conteggi, byte e tempi.
-//!
-//! Una conversione fuori dal piano, dichiarata nel resoconto: le colonne
-//! `Timestamp(Microsecond)` diventano `Timestamp(Millisecond)`, l'unica
-//! unita' che i kernel tabellari leggono come testo. Si rifiuta se un valore
-//! non e' un multiplo esatto di 1000 microsecondi (nessun troncamento).
+//! Le colonne entrano nel piano come il lettore le rende, `Timestamp` di
+//! ogni unita' compreso: i kernel tabellari le leggono dal valore nativo
+//! (README, «Colonne temporali e formati di data»).
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Instant;
 
-use plenora_core::arrow::array::{
-    Array, ArrayRef, RecordBatch, TimestampMicrosecondArray, TimestampMillisecondArray,
-};
-use plenora_core::arrow::schema::{DataType, Field, Schema, TimeUnit};
+use plenora_core::arrow::array::RecordBatch;
 use plenora_core::{PlenoraError, Result};
 use plenora_io::{leggi_tabella, scrivi_tabella, OpzioniScrittura};
 use plenora_pipeline::{byte_vivi, Pipeline};
@@ -138,53 +132,6 @@ fn percorsi_uscita(
     Ok(uscite)
 }
 
-fn in_millisecondi(tabella: &RecordBatch) -> Result<(RecordBatch, Vec<String>)> {
-    let mut convertite = Vec::new();
-    let mut campi = Vec::with_capacity(tabella.num_columns());
-    let mut colonne: Vec<ArrayRef> = Vec::with_capacity(tabella.num_columns());
-    for (campo, colonna) in tabella.schema().fields().iter().zip(tabella.columns()) {
-        if let DataType::Timestamp(TimeUnit::Microsecond, fuso) = campo.data_type() {
-            let micro = colonna
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .ok_or_else(|| PlenoraError::Internal("timestamp incoerente".into()))?;
-            let milli = micro
-                .iter()
-                .map(|valore| {
-                    valore
-                        .map(|us| {
-                            if us % 1000 == 0 {
-                                Ok(us / 1000)
-                            } else {
-                                Err(PlenoraError::DataMapping(format!(
-                                    "colonna `{}`: timestamp non intero in millisecondi",
-                                    campo.name()
-                                )))
-                            }
-                        })
-                        .transpose()
-                })
-                .collect::<Result<TimestampMillisecondArray>>()?
-                .with_timezone_opt(fuso.clone());
-            campi.push(
-                Field::new(
-                    campo.name(),
-                    DataType::Timestamp(TimeUnit::Millisecond, fuso.clone()),
-                    campo.is_nullable(),
-                )
-                .with_metadata(campo.metadata().clone()),
-            );
-            colonne.push(Arc::new(milli));
-            convertite.push(campo.name().clone());
-        } else {
-            campi.push(campo.as_ref().clone());
-            colonne.push(Arc::clone(colonna));
-        }
-    }
-    let schema = Schema::new_with_metadata(campi, tabella.schema().metadata().clone());
-    Ok((RecordBatch::try_new(Arc::new(schema), colonne)?, convertite))
-}
-
 fn millis(inizio: Instant) -> u128 {
     inizio.elapsed().as_millis()
 }
@@ -267,13 +214,9 @@ fn main() -> Result<()> {
         let inizio = Instant::now();
         let letta = leggi_tabella(Path::new(percorso), None, budget.saturating_sub(vivi))?;
         let ms_lettura = millis(inizio);
-        let inizio = Instant::now();
-        let (letta, convertite) = in_millisecondi(&letta)?;
-        let ms_conversione = millis(inizio);
         letture.push(json!({
             "nome": nome, "righe": letta.num_rows(), "colonne": letta.num_columns(),
             "byte": byte_vivi([&letta])?, "ms_lettura": ms_lettura,
-            "ms_conversione_timestamp": ms_conversione, "timestamp_convertiti": convertite,
         }));
         tabelle.push((nome.to_owned(), letta));
         let vivi = byte_vivi(tabelle.iter().map(|(_, tabella)| tabella))?;

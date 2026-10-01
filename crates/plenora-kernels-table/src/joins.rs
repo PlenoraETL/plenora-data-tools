@@ -10,10 +10,11 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
-    Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float64Array, Int64Array, RecordBatch,
-    StringArray, UInt32Array, UInt64Array,
+    Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float64Array, Int64Array,
+    RecordBatch, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt32Array, UInt64Array,
 };
-use plenora_core::arrow::schema::{DataType, Field, Schema};
+use plenora_core::arrow::schema::{DataType, Field, Schema, TimeUnit};
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 
@@ -249,6 +250,31 @@ fn coalesce(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
         plenora_core::arrow::schema::DataType::Float64 => typed!(Float64Array),
         plenora_core::arrow::schema::DataType::Boolean => typed!(BooleanArray),
         plenora_core::arrow::schema::DataType::Date32 => typed!(Date32Array),
+        plenora_core::arrow::schema::DataType::Date64 => typed!(Date64Array),
+        // Il fuso sta nel tipo: si rimette sull'array fuso, o la chiave
+        // d'uscita cambierebbe tipo rispetto all'analisi.
+        plenora_core::arrow::schema::DataType::Timestamp(unita, fuso) => {
+            macro_rules! con_fuso {
+                ($kind:ty) => {{
+                    let fusa = typed!($kind);
+                    Arc::new(
+                        fusa.as_any()
+                            .downcast_ref::<$kind>()
+                            .ok_or_else(|| {
+                                PlenoraError::Internal("chiave join fusa incoerente".into())
+                            })?
+                            .clone()
+                            .with_timezone_opt(fuso.clone()),
+                    ) as ArrayRef
+                }};
+            }
+            match unita {
+                TimeUnit::Second => con_fuso!(TimestampSecondArray),
+                TimeUnit::Millisecond => con_fuso!(TimestampMillisecondArray),
+                TimeUnit::Microsecond => con_fuso!(TimestampMicrosecondArray),
+                TimeUnit::Nanosecond => con_fuso!(TimestampNanosecondArray),
+            }
+        }
         other => {
             return Err(PlenoraError::Schema(format!(
                 "tipo chiave join non supportato: {other}"
@@ -258,7 +284,8 @@ fn coalesce(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
 }
 
 /// `true` se `coalesce` sa fondere questo tipo di chiave: `Utf8`, `Int64`,
-/// `UInt64`, `Float64`, `Boolean`, `Date32`.
+/// `UInt64`, `Float64`, `Boolean`, `Date32`, `Date64`, `Timestamp` di ogni
+/// unita' (il fuso resta quello del tipo).
 ///
 /// `coalesce` serve solo a `right`/`outer`, dove la chiave di output e' la
 /// fusione dei due lati. Verificando la sola UGUAGLIANZA dei tipi delle
@@ -276,6 +303,8 @@ pub const fn coalesce_supported(data_type: &DataType) -> bool {
             | DataType::Float64
             | DataType::Boolean
             | DataType::Date32
+            | DataType::Date64
+            | DataType::Timestamp(_, _)
     )
 }
 

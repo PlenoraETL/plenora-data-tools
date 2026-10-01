@@ -187,6 +187,7 @@ pub fn column(batch: &RecordBatch, name: &str, row: usize) -> Result<Scalar> {
             | DataType::Float64
             | DataType::Decimal128(_, _)
             | DataType::Date32
+            | DataType::Date64
             | DataType::Timestamp(_, _)
     ) {
         return Ok(numero_della_cella(value.as_ref(), row)?.map_or(Scalar::Null, Scalar::Number));

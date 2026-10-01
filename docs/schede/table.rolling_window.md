@@ -23,7 +23,7 @@ La finestra si misura in righe, non in valori: una cella nulla occupa il
 suo posto e non conta fra i valori. Con meno di `min_periods` valori non
 nulli nella finestra il risultato è null. Sulle colonne intere (`int64`,
 `uint64`) `sum` è esatta ed esce `int64` (una somma oltre `int64` è un
-errore); `sum` su `date32` o `timestamp` si rifiuta in validazione. Su
+errore); `sum` su `date32`, `date64` o `timestamp` si rifiuta in validazione. Su
 interi, date e istanti `mean` parte dalla somma esatta e `stddev` dagli
 scarti esatti; altrove `sum` somma in `f64` in ordine di riga. `mean` è la somma
 divisa per i valori. `min` e `max` sulle colonne intere e `decimal128`

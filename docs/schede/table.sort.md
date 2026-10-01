@@ -19,8 +19,10 @@ Tipi ordinabili e come si confrontano:
   NaN positivo dopo `+inf`, uno negativo prima di `-inf`;
 - `utf8`: byte per byte del testo UTF-8 (nessuna collazione linguistica);
 - `bool`: `false` prima di `true`;
-- `date32`: giorni dall'epoca; `timestamp(ms)`, con o senza timezone:
-  millisecondi dall'epoca, cioè l'istante (la timezone non conta);
+- `date32`: giorni dall'epoca; `date64`: millisecondi dall'epoca;
+  `timestamp` di ogni unità, con o senza timezone: il valore dall'epoca
+  nella sua unità, cioè l'istante (la timezone non conta; due unità diverse
+  si confrontano esatte, in nanosecondi);
 - `decimal128`: per valore;
 - `binary`: byte per byte;
 - `dictionary<utf8>` (chiavi `int32`): sul testo decodificato.

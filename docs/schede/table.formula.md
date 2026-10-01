@@ -34,7 +34,7 @@ Tipi:
 - `int64` e `float64` sono numeri; ogni altro tipo, anche `int32`,
   `uint64` e `decimal128`, è testo, letto con la sua resa testuale e deve
   essere leggibile come testo (`utf8`, `int64`, `uint64`, `float64`,
-  `bool`, `date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38,
+  `bool`, `date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38,
   `binary`, `dictionary<utf8>` con chiavi `int32`);
 - numero op numero dà un numero (`f64`); `+` con almeno un operando di testo
   concatena i due testi (un numero con la resa più corta di `f64`: `2.0`

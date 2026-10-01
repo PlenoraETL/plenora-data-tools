@@ -171,8 +171,8 @@ pub enum AlignType {
 
 impl AlignType {
     /// `DataType` Arrow corrispondente: `Timestamp` = millisecondi senza
-    /// fuso (il profilo scalare testuale legge solo i millisecondi),
-    /// `Decimal128` = precisione 38, scala 10.
+    /// fuso (la forma che `align_schema` dichiara, non un limite dei
+    /// kernel: ogni unita' si legge), `Decimal128` = precisione 38, scala 10.
     #[must_use]
     pub const fn data_type(self) -> DataType {
         match self {

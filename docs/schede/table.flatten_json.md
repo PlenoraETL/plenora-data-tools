@@ -16,7 +16,7 @@ con i livelli separati da un punto (`doc_indirizzo.citta` legge
 | `output_columns` | lista di stringhe | `[]` | non vuota nei piani; nomi che iniziano con `prefix`, senza ripetizioni, al più `max_columns` | colonne da estrarre |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
+`date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.
 
 Un percorso con k punti si estrae solo se `k <= max_level`: con il default

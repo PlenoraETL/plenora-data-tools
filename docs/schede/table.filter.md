@@ -24,7 +24,8 @@ Come si confronta, per operatore:
   `"true"`/`"false"`);
 - `>`, `>=`, `<`, `<=`, `between`: confronto nel dominio nativo del tipo,
   mai attraverso `f64`, su `int64`, `uint64`, `float64`, `decimal128`,
-  `date32` (giorni dall'epoca), `timestamp(ms)` (millisecondi dall'epoca) e
+  `date32` (giorni dall'epoca), `date64` (millisecondi dall'epoca),
+  `timestamp` di ogni unità (il valore nell'unità della colonna) e
   `utf8` il cui testo è un numero (spazi ai lati ignorati, virgola decimale
   ammessa). `value` deve essere numerico; `between` include entrambi gli
   estremi. Un `NaN`, nella cella o nell'estremo, rende falso il confronto;
@@ -76,7 +77,8 @@ In esecuzione:
 Il confronto fra numeri è esatto per costruzione, anche oltre `2^53` e fra
 interi e decimali ([README, «Validazione»](../README.md#validazione)). Gli
 operatori ordinati confrontano le date come numero di giorni dall'epoca e i
-timestamp come millisecondi: `value` è un intero, non una data in testo;
+timestamp come numero di unità della colonna (un `timestamp(us)` in
+microsecondi): `value` è un intero, non una data in testo;
 `==` e `!=` invece confrontano il testo della data.
 
 ### Complessità

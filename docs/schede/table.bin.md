@@ -15,7 +15,8 @@ numero di classi di uguale ampiezza fra il minimo e il massimo dei dati.
 | `output_column` | stringa | `<column>_bin` | nome valido | colonna d'uscita |
 
 Colonna numerica: `float64`, `int64`, `uint64`, `date32` (giorni
-dall'epoca), `timestamp(ms)` (millisecondi dall'epoca), `decimal128`,
+dall'epoca), `date64` (millisecondi dall'epoca), `timestamp` di ogni unità
+(il valore nell'unità della colonna), `decimal128`,
 `utf8` il cui testo è un numero (spazi ai lati ignorati, virgola decimale
 ammessa).
 

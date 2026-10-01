@@ -19,7 +19,7 @@ sotto). Con `order_column` le righe si riordinano prima su quella colonna.
 | `output_column` | stringa | `<column>_<function>` | nome di colonna valido | colonna d'uscita |
 
 Colonne numeriche: `int64`, `uint64`, `float64`, `decimal128`, `date32`,
-`timestamp(ms)` e `utf8` il cui testo è un numero; le funzioni di rango
+`date64`, `timestamp` di ogni unità e `utf8` il cui testo è un numero; le funzioni di rango
 (`rank`, `dense_rank`, `percent_rank`, `cume_dist`) non accettano `utf8`.
 `group_by` legge i tipi di [`table.distinct`](#tabledistinct);
 `order_column` quelli di [`table.sort`](#tablesort).
@@ -35,12 +35,13 @@ Funzioni, per partizione, con le righe nell'ordine descritto sotto:
 - `cume_dist`: valori minori o uguali diviso valori non nulli;
 - `cumsum`, `running_mean`: somma e media dei valori non nulli fin qui;
   sulle colonne intere (`int64`, `uint64`) `cumsum` è esatta ed esce
-  `int64` (una somma oltre `int64` è un errore); `cumsum` su `date32` o
-  `timestamp` si rifiuta in validazione; `running_mean` su interi, date e
+  `int64` (una somma oltre `int64` è un errore); `cumsum` su `date32`,
+  `date64` o `timestamp` si rifiuta in validazione; `running_mean` su interi, date e
   istanti parte dalla somma esatta;
 - `cumcount`: posizione della riga nella partizione, da 0;
 - `lag`, `lead`: la cella `offset` righe prima o dopo nella partizione,
-  com'è, nel tipo della colonna (un `timestamp` resta `timestamp`, un
+  com'è, nel tipo della colonna (un `timestamp` resta `timestamp`, nella
+  sua unità, un
   `utf8` resta il suo testo);
 - `pct_change`: `(corrente − precedente) / precedente` sulla riga subito
   prima (`offset` non si usa);

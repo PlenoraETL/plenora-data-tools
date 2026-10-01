@@ -79,8 +79,9 @@ In esecuzione, `Schema`:
 
 - un valore `int64` di `left_on` o `right_on` senza un `f64` esatto (oltre
   `2^53` con bit bassi non nulli): si rifiuta invece di arrotondarlo;
-- una cella `by` `date32` o `timestamp(ms)` fuori dall'intervallo delle
-  date rappresentabili, o un dizionario malformato.
+- una cella `by` `date32`, `date64` o `timestamp` fuori dall'intervallo delle
+  date rappresentabili, un `date64` non allineato al
+  giorno, o un dizionario malformato.
 
 ### Limiti e deviazioni
 

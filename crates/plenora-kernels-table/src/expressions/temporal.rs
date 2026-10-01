@@ -7,14 +7,15 @@ use super::interpreter::evaluate;
 use super::scalar::{compare, literal, Scalar};
 use super::{Expression, Function};
 use crate::column_index;
-use plenora_core::arrow::array::{Array, Date32Array, RecordBatch, TimestampMillisecondArray};
+use plenora_core::arrow::array::{Array, Date32Array, RecordBatch};
 use plenora_core::arrow::schema::{DataType, TimeUnit};
 use plenora_core::{PlenoraError, Result};
 
 // ---------------------------------------------------------------------------
 // date_trunc / in: nodi speciali valutati in `evaluate` (non in `function`)
 // perche' richiedono accesso all'AST degli argomenti: `date_trunc` legge la
-// colonna temporalmente tipizzata (Date32/Timestamp ms) in modo nativo e `in`
+// colonna temporalmente tipizzata (Date32/Timestamp di ogni unita') in modo
+// nativo e `in`
 // accetta una lista di letterali (non uno scalare).
 // ---------------------------------------------------------------------------
 
@@ -132,6 +133,31 @@ pub fn trunc_timestamp_ms_value(ms: i64, unit: TruncUnit) -> Result<i64> {
     })
 }
 
+/// Il valore nativo di un `Timestamp` nell'unita' `unita`, in millisecondi
+/// **per difetto** (verso meno infinito), il dominio di
+/// [`trunc_timestamp_ms_value`].
+///
+/// Esatto per `date_trunc`: l'unita' piu' fine e' il secondo, e il
+/// troncamento per difetto composto e' il troncamento per difetto
+/// (`floor(floor(x / 1000) / 1000) = floor(x / 10^6)`), quindi troncare i
+/// millisecondi per difetto da' lo stesso istante che troncare il valore
+/// nativo. Per i secondi la moltiplicazione e' controllata: un valore oltre
+/// la gamma dei millisecondi e' un errore, non un valore saturato.
+///
+/// # Errors
+///
+/// `Schema` se il valore in secondi non ha un equivalente in millisecondi.
+pub fn millisecondi_per_difetto(valore: i64, unita: TimeUnit) -> Result<i64> {
+    match unita {
+        TimeUnit::Second => valore
+            .checked_mul(1_000)
+            .ok_or_else(|| PlenoraError::Schema("date_trunc: timestamp fuori range".into())),
+        TimeUnit::Millisecond => Ok(valore),
+        TimeUnit::Microsecond => Ok(valore.div_euclid(1_000)),
+        TimeUnit::Nanosecond => Ok(valore.div_euclid(1_000_000)),
+    }
+}
+
 /// Valutazione di `date_trunc(unit, value)`: null propagato (tri-state), il
 /// valore e' letto nativamente da `eval_temporal`.
 pub fn date_trunc_generic(args: &[Expression], batch: &RecordBatch, row: usize) -> Result<Scalar> {
@@ -153,11 +179,12 @@ pub fn date_trunc_generic(args: &[Expression], batch: &RecordBatch, row: usize) 
 
 /// Sorgente temporale di `date_trunc`.
 ///
-/// Colonna Date32 o Timestamp(ms) letta nativamente, `date_trunc` annidato,
-/// letterale null. Nessun parsing implicito di stringhe; timestamp
+/// Colonna Date32 o Timestamp di ogni unita' letta nativamente (in
+/// millisecondi per difetto, [`millisecondi_per_difetto`]), `date_trunc`
+/// annidato, letterale null. Nessun parsing implicito di stringhe; timestamp
 /// timezone-aware rifiutati (la semantica tz del troncamento non e'
 /// definibile in modo sicuro, quindi l'output Timestamp e' sempre senza
-/// timezone).
+/// timezone, in millisecondi).
 pub fn eval_temporal(expression: &Expression, batch: &RecordBatch, row: usize) -> Result<Scalar> {
     match expression {
         Expression::Column { name } => {
@@ -175,26 +202,23 @@ pub fn eval_temporal(expression: &Expression, batch: &RecordBatch, row: usize) -
                         Scalar::Date32(values.value(row))
                     })
                 }
-                DataType::Timestamp(TimeUnit::Millisecond, timezone) => {
+                DataType::Timestamp(unita, timezone) => {
                     if timezone.is_some() {
                         return Err(PlenoraError::Schema(
                             "date_trunc: timestamp timezone-aware non supportato".into(),
                         ));
                     }
-                    let values = array
-                        .as_any()
-                        .downcast_ref::<TimestampMillisecondArray>()
-                        .ok_or_else(|| {
-                            PlenoraError::Schema("array Timestamp(ms) incoerente".into())
-                        })?;
-                    Ok(if values.is_null(row) {
-                        Scalar::Null
-                    } else {
-                        Scalar::TimestampMs(values.value(row))
+                    let values = crate::interi_temporali::InteriTemporali::new(array.as_ref())
+                        .ok_or_else(|| PlenoraError::Schema("array Timestamp incoerente".into()))?;
+                    Ok(match values.valore(row) {
+                        None => Scalar::Null,
+                        Some(valore) => {
+                            Scalar::TimestampMs(millisecondi_per_difetto(valore, *unita)?)
+                        }
                     })
                 }
                 other => Err(PlenoraError::Schema(format!(
-                    "date_trunc richiede una colonna Date32 o Timestamp(ms), trovato {other:?}"
+                    "date_trunc richiede una colonna Date32 o Timestamp, trovato {other:?}"
                 ))),
             }
         }

@@ -16,7 +16,7 @@ una nuova.
 | `output_column` | stringa | `column` | nome valido (non vuoto, al più 1024 byte) | colonna d'uscita; assente, sovrascrive `column` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
+`date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`. La chiave si confronta con il testo
 della cella byte per byte: un `int64` `5` è `"5"`, un `float64` `2.0` è
 `"2"`, una data è `AAAA-MM-GG`.

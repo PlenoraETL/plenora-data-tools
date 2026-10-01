@@ -13,8 +13,7 @@ esattamente una delle due uscite.
 | `right_keys` | lista di stringhe | obbligatorio | colonne della destra, tante quante `left_keys`, senza ripetizioni | colonne chiave del lato destro, nello stesso ordine |
 
 Tipi di chiave come in `table.semi_join`: stesso tipo Arrow nella coppia,
-fra `utf8`, `int64`, `uint64`, `float64`, `bool`, `date32`,
-`timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary` e
+fra `utf8`, `int64`, `uint64`, `float64`, `bool`, `date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary` e
 `dictionary<utf8>`.
 
 ### Schema
@@ -45,8 +44,9 @@ In validazione, `InvalidPlan`:
   `max_columns`; colonna assente; tipi diversi nella coppia; tipo fuori
   dall'elenco sopra.
 
-In esecuzione, `Schema`: una cella chiave `date32` o `timestamp(ms)` fuori
-dall'intervallo delle date rappresentabili, o un dizionario malformato.
+In esecuzione, `Schema`: una cella chiave `date32`, `date64` o `timestamp` fuori
+dall'intervallo delle date rappresentabili, un `date64` non allineato al
+  giorno, o un dizionario malformato.
 
 ### Limiti e deviazioni
 

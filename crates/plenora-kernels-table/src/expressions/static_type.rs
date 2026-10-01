@@ -207,21 +207,10 @@ fn column_kind(op: &str, data_type: &DataType, name: &str) -> Result<TypeSet> {
         | DataType::Float64
         | DataType::Decimal128(_, _)
         | DataType::Date32
-        | DataType::Timestamp(TimeUnit::Millisecond, _) => TypeSet::of(Kind::Number),
-        // `column` manda al percorso numerico QUALUNQUE `Timestamp`, ma
-        // `scalar_as_f64_rounded` fa downcast solo su
-        // `TimestampMillisecondArray`: le altre unita' non hanno percorso e
-        // falliscono a runtime. Non ricadono nel testo, perche' il runtime
-        // non ci arriva mai.
-        DataType::Timestamp(unit, _) => {
-            return errore(
-                op,
-                format!(
-                    "colonna {name}: Timestamp({unit:?}) non e' convertibile in numero; \
-                     il runtime tratta come numero i soli millisecondi"
-                ),
-            );
-        }
+        | DataType::Date64
+        // Ogni unita', con o senza fuso: il numero e' il valore nativo
+        // nell'unita' della colonna (`scalar_as_numero`), come in `column`.
+        | DataType::Timestamp(_, _) => TypeSet::of(Kind::Number),
         data_type => {
             crate::validate_text_convertible(data_type, name)
                 .map_err(|errore| PlenoraError::InvalidPlan(format!("{op}: {errore}")))?;
@@ -338,6 +327,79 @@ fn verifica_letterali_della_funzione(
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+/// Unita' del numero che una colonna temporale da' in un'espressione
+/// ([`column_kind`]: il valore nativo dall'epoca); `None` per gli altri tipi.
+const fn dominio_temporale(data_type: &DataType) -> Option<&'static str> {
+    match data_type {
+        DataType::Date32 => Some("giorni"),
+        DataType::Date64 | DataType::Timestamp(TimeUnit::Millisecond, _) => Some("millisecondi"),
+        DataType::Timestamp(TimeUnit::Second, _) => Some("secondi"),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Some("microsecondi"),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => Some("nanosecondi"),
+        _ => None,
+    }
+}
+
+/// Le colonne temporali lette come numero in un'espressione hanno tutte la
+/// stessa unita'.
+///
+/// Una colonna temporale vale il suo intero nativo: secondi, millisecondi,
+/// microsecondi, nanosecondi o giorni dall'epoca. Due colonne di unita'
+/// diverse nella stessa espressione darebbero confronti e differenze
+/// sbagliati senza errore (`1` secondo non e' minore di `1000`
+/// microsecondi), quindi l'espressione si rifiuta. La regola e'
+/// conservativa: guarda le colonne, non gli operatori che le legano. La
+/// sorgente di `date_trunc` non conta: il troncamento la porta ai
+/// millisecondi e non la legge come numero.
+///
+/// La chiamano l'analisi e il kernel (`static_output_kind`), prima di
+/// [`infer`]: stessa regola sullo stesso schema. Una colonna assente si
+/// salta: la riporta [`infer`].
+///
+/// # Errors
+///
+/// `InvalidPlan` con il prefisso `op` e i nomi delle colonne (nessun
+/// valore).
+pub fn verifica_domini_temporali(
+    op: &str,
+    expression: &Expression,
+    lookup: &dyn Fn(&str) -> Result<DataType>,
+) -> Result<()> {
+    let mut domini: std::collections::BTreeMap<&'static str, &str> =
+        std::collections::BTreeMap::new();
+    let mut da_visitare = vec![expression];
+    while let Some(nodo) = da_visitare.pop() {
+        match nodo {
+            Expression::Column { name } => {
+                if let Some(dominio) = lookup(name).ok().as_ref().and_then(dominio_temporale) {
+                    domini.entry(dominio).or_insert(name.as_str());
+                }
+            }
+            Expression::Function {
+                name: Function::DateTrunc,
+                ..
+            } => {}
+            altro => da_visitare.extend(super::figli(altro)),
+        }
+    }
+    if domini.len() > 1 {
+        let elenco = domini
+            .iter()
+            .map(|(dominio, colonna)| format!("{colonna} in {dominio}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return errore(
+            op,
+            format!(
+                "colonne temporali di unita' diverse nella stessa espressione ({elenco}): \
+                 il numero di una colonna temporale e' nella sua unita'; convertirle prima \
+                 a un'unita' comune"
+            ),
+        );
     }
     Ok(())
 }
@@ -607,7 +669,9 @@ fn temporal_kind(
                 }
                 Ok(TypeSet::of(Kind::Date32))
             }
-            DataType::Timestamp(TimeUnit::Millisecond, timezone) => {
+            // Ogni unita': il troncamento e' almeno al secondo, quindi
+            // l'uscita in millisecondi e' esatta (`millisecondi_per_difetto`).
+            DataType::Timestamp(_, timezone) => {
                 if timezone.is_some() {
                     return errore(op, "date_trunc: timestamp timezone-aware non supportato");
                 }
@@ -615,9 +679,7 @@ fn temporal_kind(
             }
             other => errore(
                 op,
-                format!(
-                    "date_trunc richiede una colonna Date32 o Timestamp(ms), trovato {other:?}"
-                ),
+                format!("date_trunc richiede una colonna Date32 o Timestamp, trovato {other:?}"),
             ),
         },
         Expression::Function {

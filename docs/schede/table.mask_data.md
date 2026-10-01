@@ -19,7 +19,7 @@ una colonna nuova `<colonna>_masked` o sovrascrive la colonna.
 | `overwrite` | booleano | `false` | `true`, `false` | `true` sovrascrive la colonna, `false` scrive `<colonna>_masked` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
+`date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.
 
 Le forme, contando i caratteri Unicode (non i byte):

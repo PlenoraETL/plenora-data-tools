@@ -22,12 +22,14 @@ Valori di `data_type` e tipi che accettano:
 - `utf8` o `string`: `utf8`; `int64` o `integer`: `int64`; `float64`,
   `float` o `double`: `float64`; `boolean` o `bool`: `bool`; `uint64` o
   `unsigned`: `uint64`; `date32`; `binary`: tipo identico;
-- `timestamp_millis`: `timestamp(ms)` con o senza fuso orario;
+- `timestamp_seconds`, `timestamp_millis`, `timestamp_micros`,
+  `timestamp_nanos`: `timestamp` in secondi, millisecondi, microsecondi o
+  nanosecondi, con o senza fuso orario (l'unità conta, il fuso no);
 - `decimal128`: `decimal128` di qualunque precisione e scala;
 - `dictionary_utf8`: dizionario con chiavi `int32` e valori `utf8`;
 - `list`: qualunque lista; `struct`: qualunque struct.
 
-Gli altri tipi Arrow (`int32`, `float32`, `timestamp(us)`…) non si possono
+Gli altri tipi Arrow (`int32`, `float32`, `date64`…) non si possono
 asserire. Con `ordered=true` e `allow_extra=true` le prime colonne devono
 essere quelle di `fields`, nell'ordine, e le altre seguono libere.
 
@@ -66,7 +68,7 @@ in elenco).
 
 ### Limiti e deviazioni
 
-Le famiglie di tipo sono volutamente larghe: `decimal128`, `timestamp_millis`,
+Le famiglie di tipo sono volutamente larghe: `decimal128`, i `timestamp_*`,
 `list` e `struct` non controllano precisione, scala, fuso, tipo degli
 elementi né campi.
 

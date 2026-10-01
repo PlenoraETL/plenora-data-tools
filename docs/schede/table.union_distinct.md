@@ -9,7 +9,8 @@ volta. Due righe sono uguali se lo sono tutte le loro colonne.
 Nessuno: la config è `{}`.
 
 Ogni colonna ha un tipo fra `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128`, `binary` e `dictionary<utf8>`
+`date32`, `date64`, `timestamp` di ogni unità, `decimal128`, `binary` e
+`dictionary<utf8>`
 (chiave int32).
 
 ### Schema
@@ -26,7 +27,8 @@ Una riga per ogni riga distinta dei due ingressi, presa dalla sua prima
 comparsa (prima a sinistra, poi a destra). L'uguaglianza è per valore,
 colonna per colonna: null è uguale a null, tutti i NaN sono uguali fra
 loro, `-0.0` è diverso da `0.0`, un `dictionary` vale il testo della sua
-voce (una voce nulla è null), un `timestamp` i suoi millisecondi.
+voce (una voce nulla è null), un `timestamp` o un `date64` il suo valore
+nella sua unità (i due lati hanno lo stesso tipo: la stessa unità).
 
 ### Ordine
 

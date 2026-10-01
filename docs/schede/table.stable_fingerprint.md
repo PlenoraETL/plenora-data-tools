@@ -16,7 +16,7 @@ la stessa impronta solo se hanno gli stessi valori.
 | `algorithm` | stringa | `sha256` | `sha256`, `md5` | funzione di hash |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
-`date32`, `timestamp(ms)`, `decimal128` con scala da 0 a 38, `binary`,
+`date32`, `date64` (allineato al giorno), `timestamp` di ogni unità, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`. Con `columns` vuoto entrano tutte le
 colonne nell'ordine dello schema, e tutte devono esserlo.
 

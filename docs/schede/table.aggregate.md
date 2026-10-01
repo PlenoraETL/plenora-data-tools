@@ -45,7 +45,8 @@ Funzioni:
   se c'è un null e `skip_null` è `false`;
 - `first`, `last`: la cella nella prima o nell'ultima riga del gruppo in
   ordine d'ingresso, null compreso, nel tipo della colonna (un
-  `timestamp` resta `timestamp`, con il suo fuso);
+  `timestamp` di ogni unità resta `timestamp`, con la sua unità e il suo
+  fuso, letto senza passare dal testo: il fuso non si verifica);
 - `concat`: `utf8`, i testi delle celle in ordine d'ingresso uniti da
   `separator`; con `distinct` solo la prima occorrenza di ogni testo; un
   null si salta, o vale il testo vuoto con `skip_null: false`. Il testo di
@@ -54,11 +55,11 @@ Funzioni:
   `skip_null: false` un null nel gruppo dà null; un gruppo senza valori dà
   null (anche `sum`: la somma di nessun valore non è zero). Sulle colonne
   intere (`int64`, `uint64`) `sum` è esatta ed esce `int64`, una somma
-  oltre `int64` è un errore; `sum` su `date32` o `timestamp` si rifiuta in
+  oltre `int64` è un errore; `sum` su `date32`, `date64` o `timestamp` si rifiuta in
   validazione (una somma di date non è una data). Su interi, date e istanti
   `mean` parte dalla somma esatta e `variance`, `stddev` dagli scarti
-  esatti (valori uguali danno zero). `min` e `max` sulle colonne intere e
-  `decimal128` rendono la cella estrema nel tipo della colonna. Negli altri
+  esatti (valori uguali danno zero). `min` e `max` sulle colonne intere
+  (date e istanti compresi) e `decimal128` rendono la cella estrema nel tipo della colonna. Negli altri
   casi l'uscita è `float64` e la cella si legge come `f64` (vedi i
   limiti): `sum` somma in ordine d'ingresso; `min` e `max` ignorano i NaN
   salvo che il gruppo abbia solo NaN, la somma no; `variance` e `stddev`
@@ -69,11 +70,13 @@ Funzioni:
   deduplicano sul valore esatto (su `float64` per bit: `-0.0` e `0.0`
   distinti) e si riducono in ordine crescente.
 
-`nunique`, `concat`, `first`, `last` vogliono una colonna leggibile come
-testo (i tipi di [`table.distinct`](#tabledistinct)); le funzioni numeriche
-una colonna `int64`, `uint64`, `float64`, `decimal128`, `date32` (giorni),
-`timestamp(ms)` (millisecondi) o `utf8` il cui testo è un numero (spazi ai
-lati ignorati, virgola decimale ammessa).
+`nunique`, `concat` vogliono una colonna leggibile come testo (i tipi di
+[`table.distinct`](#tabledistinct)); `first`, `last` gli stessi tipi, ma
+la cella non passa dal testo (un fuso non valido non conta); le funzioni
+numeriche una colonna `int64`, `uint64`, `float64`, `decimal128`, `date32`
+(giorni), `date64` (millisecondi), `timestamp` di ogni unità (il valore
+nell'unità della colonna, con o senza fuso) o `utf8` il cui testo è un
+numero (spazi ai lati ignorati, virgola decimale ammessa).
 
 ### Schema
 

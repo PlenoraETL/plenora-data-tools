@@ -2,13 +2,13 @@ use std::cmp::Ordering;
 
 use plenora_core::arrow::array::{
     types::Int32Type, Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
-    DictionaryArray, Float64Array, Int64Array, RecordBatch, StringArray, TimestampMillisecondArray,
-    UInt64Array,
+    DictionaryArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
 };
 use plenora_core::arrow::schema::DataType;
 use plenora_core::{PlenoraError, Result};
 
 use crate::compare_decimal128_values;
+use crate::interi_temporali::InteriTemporali;
 #[cfg(test)]
 use crate::scalar_as_string;
 
@@ -156,13 +156,28 @@ pub fn compare_cells_typed(
                 .value(left_row)
                 .cmp(&right_values.value(right_row)))
         }
-        ComparisonFamily::TimestampMillis => {
-            // Millisecondi dall'epoch: e' l'ordine degli ISTANTI, indipendente
-            // dalla timezone dichiarata nello schema — che infatti non si legge.
-            let (left_values, right_values) = coppia::<TimestampMillisecondArray>(left, right)?;
-            Ok(left_values
-                .value(left_row)
-                .cmp(&right_values.value(right_row)))
+        ComparisonFamily::Timestamp | ComparisonFamily::Date64 => {
+            // Il valore nativo dall'epoca: e' l'ordine degli ISTANTI,
+            // indipendente dalla timezone dichiarata nello schema — che
+            // infatti non si legge. Con unita' diverse il confronto passa dai
+            // nanosecondi in `i128`, esatto: nessuna conversione verso
+            // un'unita' piu' grossa rende uguali due valori distinti.
+            let (Some(sinistra), Some(destra)) = (
+                InteriTemporali::new(left.as_ref()),
+                InteriTemporali::new(right.as_ref()),
+            ) else {
+                return Err(PlenoraError::Schema(format!(
+                    "array incoerente col proprio tipo dichiarato: {:?} / {:?}",
+                    left.data_type(),
+                    right.data_type()
+                )));
+            };
+            Ok(crate::interi_temporali::confronta(
+                sinistra.value(left_row),
+                sinistra.nanosecondi_per_unita(),
+                destra.value(right_row),
+                destra.nanosecondi_per_unita(),
+            ))
         }
         ComparisonFamily::Decimal128 => {
             let (left_values, right_values) = coppia::<Decimal128Array>(left, right)?;
@@ -239,7 +254,10 @@ enum ComparisonFamily {
     Utf8,
     Boolean,
     Date32,
-    TimestampMillis,
+    /// `Timestamp` di ogni unita' e fuso: si confrontano gli istanti.
+    Timestamp,
+    /// `Date64`, in millisecondi.
+    Date64,
     Decimal128,
     Binary,
     DictionaryUtf8,
@@ -258,9 +276,8 @@ const fn comparison_family(data_type: &DataType) -> Option<ComparisonFamily> {
         DataType::Utf8 => Some(ComparisonFamily::Utf8),
         DataType::Boolean => Some(ComparisonFamily::Boolean),
         DataType::Date32 => Some(ComparisonFamily::Date32),
-        DataType::Timestamp(plenora_core::arrow::schema::TimeUnit::Millisecond, _) => {
-            Some(ComparisonFamily::TimestampMillis)
-        }
+        DataType::Timestamp(_, _) => Some(ComparisonFamily::Timestamp),
+        DataType::Date64 => Some(ComparisonFamily::Date64),
         DataType::Decimal128(_, _) => Some(ComparisonFamily::Decimal128),
         DataType::Binary => Some(ComparisonFamily::Binary),
         DataType::Dictionary(key, value) => {
@@ -309,7 +326,8 @@ fn cella_logicamente_nulla(array: &ArrayRef, row: usize) -> Result<bool> {
 /// `true` se [`compare_cells_typed`] ha un confronto nativo per il tipo.
 ///
 /// I tipi: `Int64`, `UInt64`, `Float64`, `Utf8`, `Boolean`, `Date32`,
-/// `Timestamp(Millisecond, _)` con qualunque timezone, `Decimal128`,
+/// `Date64`, `Timestamp` di ogni unita' con qualunque timezone (due unita'
+/// diverse si confrontano per istante, esatto), `Decimal128`,
 /// `Binary`, `Dictionary(Int32, Utf8)`.
 ///
 /// Decide dallo schema: e' il controllo con cui l'analisi rifiuta le
@@ -347,7 +365,8 @@ pub fn validate_sortable(array: &ArrayRef, rows: usize) -> Result<()> {
         | ComparisonFamily::Utf8
         | ComparisonFamily::Boolean
         | ComparisonFamily::Date32
-        | ComparisonFamily::TimestampMillis
+        | ComparisonFamily::Timestamp
+        | ComparisonFamily::Date64
         | ComparisonFamily::Binary => Ok(()),
         ComparisonFamily::Decimal128 => {
             let values = array
