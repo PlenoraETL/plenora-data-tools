@@ -135,9 +135,12 @@ coordinate d'ingresso. `p` è la precisione del CRS della colonna
 
 ### Complessità
 
-`n` segmenti in tutto: noding con filtro sugli inviluppi, O(n²) coppie nel
-caso peggiore, entro il tetto di 100.000.000 coppie; estrazione delle facce
-O(e log e) sui lati nodati `e`. Memoria O(n) per tutte le linee della
+`n` segmenti in tutto: noding con filtro sugli inviluppi (coppie trovate
+su una griglia di celle, nella sequenza e col budget della scansione su
+`x`), O(n²) coppie nel caso peggiore, entro il tetto di 100.000.000
+coppie; estrazione delle facce O(e log e) sui lati nodati `e`, col punto
+interno di una faccia calcolato solo se un'altra faccia ne contiene il
+rettangolo. Memoria O(n) per tutte le linee della
 tabella, raccolte prima del calcolo (classe bloccante), più le righe
 d'uscita.
 

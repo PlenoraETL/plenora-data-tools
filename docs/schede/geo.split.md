@@ -134,11 +134,17 @@ Nessuna griglia di `i_overlay`. `p` è la precisione del CRS della colonna
 ### Complessità
 
 Per riga, sorgente poligonale con `n` segmenti fra bordo e lama: noding
-O(n²) coppie nel caso peggiore (tetto 100.000.000), facce O(e log e), poi la
-verifica della copertura, O(b · s) con `b` i lati di bordo delle parti e
-`s` i lati della sorgente. Sorgente lineare: O(s · l) test fra segmenti
-della sorgente e primitive della lama, entro 100.000.000. Memoria O(n) per
-la riga più le parti prodotte; l'uscita si costruisce in un batch solo.
+O(n²) coppie nel caso peggiore (tetto 100.000.000, contato come i
+confronti della scansione su `x` anche quando le coppie si trovano sulla
+griglia di celle), facce O(e log e), poi la verifica della copertura, con un
+R-tree dei lati della sorgente (O(b · s) nel caso peggiore, `b` i lati di
+bordo delle parti e `s` i lati della sorgente). Sorgente lineare: O(s · l)
+test fra segmenti della sorgente e primitive della lama, entro 100.000.000.
+Le righe si calcolano in parallelo a blocchi di 256 e si accolgono in
+ordine di riga: memoria O(n) per riga in lavorazione più le parti del
+blocco e quelle prodotte; l'uscita si costruisce in un batch solo. Tempi
+misurati e oracoli nel
+[README, «`geo.make_valid`, `geo.polygonize`, `geo.split`»](../README.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata).
 
 ### Esempio
 

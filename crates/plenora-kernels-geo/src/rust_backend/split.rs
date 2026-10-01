@@ -450,27 +450,44 @@ fn checked_boundary_coverage(
 ) -> Result<(), SplitError> {
     let mut source_rings = Vec::new();
     collect_boundaries(source, &mut source_rings)?;
-    let mut rings = Vec::new();
+    let mut rings: CoverageRings = Vec::new();
     for ring in &source_rings {
         let segments = ring.lines().collect::<Vec<_>>();
         let intervals = vec![Vec::<(f64, f64)>::new(); segments.len()];
         rings.push((segments, intervals));
     }
+    let index = (!generic_coverage_path())
+        .then(|| CoverageIndex::new(&rings, boundary_segments, precision))
+        .flatten();
+    let mut candidates = Vec::new();
     for &(start, end) in boundary_segments {
         let mut matched = false;
-        for (segments, intervals) in &mut rings {
-            for (segment, covered) in segments.iter().zip(intervals.iter_mut()) {
-                let distance = segment_distance(start, segment.start, segment.end)
-                    .max(segment_distance(end, segment.start, segment.end));
-                if distance <= precision {
-                    matched = true;
-                    let first = projection_parameter(start, segment.start, segment.end);
-                    let second = projection_parameter(end, segment.start, segment.end);
-                    covered
-                        .try_reserve(1)
-                        .map_err(|_| SplitError::AllocationFailed("copertura del bordo"))?;
-                    covered.push((first.min(second), first.max(second)));
-                }
+        // I lati della sorgente da provare: tutti, o quelli che l'indice
+        // non esclude (vedi [`CoverageIndex`]), nello stesso ordine.
+        candidates.clear();
+        match &index {
+            Some(index) => index.candidates(start, end, &mut candidates),
+            None => candidates.extend(
+                rings
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(r, (segments, _))| (0..segments.len()).map(move |k| (r, k))),
+            ),
+        }
+        for &(ring_index, segment_index) in &candidates {
+            let (segments, intervals) = &mut rings[ring_index];
+            let segment = segments[segment_index];
+            let covered = &mut intervals[segment_index];
+            let distance = segment_distance(start, segment.start, segment.end)
+                .max(segment_distance(end, segment.start, segment.end));
+            if distance <= precision {
+                matched = true;
+                let first = projection_parameter(start, segment.start, segment.end);
+                let second = projection_parameter(end, segment.start, segment.end);
+                covered
+                    .try_reserve(1)
+                    .map_err(|_| SplitError::AllocationFailed("copertura del bordo"))?;
+                covered.push((first.min(second), first.max(second)));
             }
         }
         if !matched {
@@ -492,6 +509,120 @@ fn checked_boundary_coverage(
         }
     }
     Ok(())
+}
+
+/// Un lato della sorgente nell'indice: il rettangolo allargato e la
+/// posizione (anello, lato).
+type IndexedSourceSegment =
+    rstar::primitives::GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, (usize, usize)>;
+
+/// Gli anelli della sorgente con i loro lati e gli intervalli coperti di
+/// ciascun lato.
+type CoverageRings = Vec<(Vec<geo::Line<f64>>, Vec<Vec<(f64, f64)>>)>;
+
+/// I lati della sorgente in un R-tree, coi rettangoli allargati di `2 p`
+/// piu' `16 ulp(M)`, per provare la distanza solo sui lati che possono
+/// passarla.
+///
+/// **Perche' non cambia nulla.** Il test e' `segment_distance <= p` per i
+/// due estremi del lato delle parti. `segment_distance` calcola la distanza
+/// da un punto del segmento arrotondato (al piu' qualche `ulp(M)` dal
+/// segmento, `M` il modulo massimo delle coordinate) con `hypot` corretta
+/// a un ulp: una distanza calcolata entro `p` e' vera entro `p + 4 ulp(M)`,
+/// quindi entrambi gli estremi, e il rettangolo del lato, stanno nel
+/// rettangolo del lato sorgente allargato di `p + 4 ulp(M)`, e a maggior
+/// ragione di `2 p + 16 ulp(M)` arrotondato (gli arrotondamenti
+/// dell'allargamento sono di un ulp). Un lato sorgente fuori da quel
+/// rettangolo non passa il test: escluderlo non cambia `matched` ne' gli
+/// intervalli, che si sommano dopo un ordinamento per valore
+/// (`union_fraction`), indipendente dall'ordine d'inserimento. I candidati
+/// si provano comunque nell'ordine del doppio ciclo (anello, lato).
+/// Coordinate non finite: niente indice, il doppio ciclo.
+struct CoverageIndex {
+    tree: rstar::RTree<IndexedSourceSegment>,
+}
+
+impl CoverageIndex {
+    fn new(
+        rings: &CoverageRings,
+        boundary_segments: &[(Coord<f64>, Coord<f64>)],
+        precision: f64,
+    ) -> Option<Self> {
+        let coordinates = rings
+            .iter()
+            .flat_map(|(segments, _)| segments.iter().flat_map(|s| [s.start, s.end]))
+            .chain(
+                boundary_segments
+                    .iter()
+                    .flat_map(|&(a, b)| <[Coord<f64>; 2]>::from((a, b))),
+            );
+        let mut magnitude = 0.0_f64;
+        for c in coordinates {
+            if !(c.x.is_finite() && c.y.is_finite()) {
+                return None;
+            }
+            magnitude = magnitude.max(c.x.abs()).max(c.y.abs());
+        }
+        let margin = 2.0f64.mul_add(precision, 16.0 * super::griglia::ulp(magnitude));
+        if !margin.is_finite() {
+            return None;
+        }
+        let mut entries = Vec::new();
+        for (ring_index, (segments, _)) in rings.iter().enumerate() {
+            for (segment_index, segment) in segments.iter().enumerate() {
+                let lower = [
+                    segment.start.x.min(segment.end.x) - margin,
+                    segment.start.y.min(segment.end.y) - margin,
+                ];
+                let upper = [
+                    segment.start.x.max(segment.end.x) + margin,
+                    segment.start.y.max(segment.end.y) + margin,
+                ];
+                if !(lower.iter().chain(&upper).all(|v| v.is_finite())) {
+                    return None;
+                }
+                entries.push(rstar::primitives::GeomWithData::new(
+                    rstar::primitives::Rectangle::from_corners(lower, upper),
+                    (ring_index, segment_index),
+                ));
+            }
+        }
+        Some(Self {
+            tree: rstar::RTree::bulk_load(entries),
+        })
+    }
+
+    /// I lati sorgente il cui rettangolo allargato tocca quello del lato
+    /// `(start, end)`, in ordine (anello, lato).
+    fn candidates(&self, start: Coord<f64>, end: Coord<f64>, out: &mut Vec<(usize, usize)>) {
+        let query = rstar::AABB::from_corners(
+            [start.x.min(end.x), start.y.min(end.y)],
+            [start.x.max(end.x), start.y.max(end.y)],
+        );
+        out.extend(
+            self.tree
+                .locate_in_envelope_intersecting(&query)
+                .map(|entry| entry.data),
+        );
+        out.sort_unstable();
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Nei test, il doppio ciclo della copertura al posto dell'indice, per
+    /// l'oracolo che li confronta.
+    static GENERIC_COVERAGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn generic_coverage_path() -> bool {
+    GENERIC_COVERAGE.with(std::cell::Cell::get)
+}
+
+#[cfg(not(test))]
+const fn generic_coverage_path() -> bool {
+    false
 }
 
 /// Maggiorazione dell'errore d'arrotondamento dell'area di un anello
@@ -1050,5 +1181,102 @@ mod tests {
             return Err(SplitError::CoverageMismatch);
         }
         Ok(())
+    }
+    /// Oracolo dell'indice della copertura del bordo (AGENTS.md, regola 3):
+    /// lo stesso esito di `split_polygon_by_linework_rust` (parti uguali per
+    /// valore, o lo stesso errore) con l'indice e col doppio ciclo, su
+    /// quadrati e anelli frastagliati tagliati da linee casuali, anche con
+    /// buchi e con verifiche di copertura che falliscono (precisione minima).
+    #[test]
+    fn copertura_con_indice_uguale_al_doppio_ciclo() {
+        let mut stato = 0x5EED_C0DE_u64;
+        let mut prossimo = |limite: u64| {
+            stato = stato
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (stato >> 33) % limite
+        };
+        let limits = SplitLimits {
+            max_input_coordinates: 1_000_000,
+            max_noding_work: 100_000_000,
+            max_output_parts: 100_000,
+            max_output_coordinates: 1_000_000,
+        };
+        for caso in 0..120 {
+            #[allow(clippy::cast_precision_loss)]
+            let anello = if caso % 2 == 0 {
+                subdivided_square(
+                    0.0,
+                    0.0,
+                    100.0,
+                    1 + u32::try_from(prossimo(60)).unwrap_or(1),
+                )
+            } else {
+                let k = 10 + prossimo(80);
+                let mut punti = Vec::new();
+                for lato in 0..4_u64 {
+                    for j in 0..k {
+                        let t = j as f64 / k as f64;
+                        let scarto = if j == 0 {
+                            0.0
+                        } else {
+                            8.0 * (prossimo(2001) as f64 / 1000.0 - 1.0)
+                                * (std::f64::consts::PI * t).sin()
+                        };
+                        punti.push(match lato {
+                            0 => Coord {
+                                x: 100.0 * t,
+                                y: scarto,
+                            },
+                            1 => Coord {
+                                x: 100.0 + scarto,
+                                y: 100.0 * t,
+                            },
+                            2 => Coord {
+                                x: 100.0 * (1.0 - t),
+                                y: 100.0 + scarto,
+                            },
+                            _ => Coord {
+                                x: scarto,
+                                y: 100.0 * (1.0 - t),
+                            },
+                        });
+                    }
+                }
+                let primo = punti[0];
+                punti.push(primo);
+                LineString::new(punti)
+            };
+            let buchi = if caso % 3 == 0 {
+                vec![subdivided_square(40.0, 40.0, 20.0, 3)
+                    .0
+                    .into_iter()
+                    .rev()
+                    .collect()]
+            } else {
+                vec![]
+            };
+            let sorgente = Geometry::Polygon(Polygon::new(anello, buchi));
+            #[allow(clippy::cast_precision_loss)]
+            let lama = Geometry::LineString(LineString::new(
+                (0..2 + prossimo(5))
+                    .map(|_| Coord {
+                        x: prossimo(140) as f64 - 20.0,
+                        y: prossimo(140) as f64 - 20.0,
+                    })
+                    .collect(),
+            ));
+            for precisione in [PRECISION, 1e-3] {
+                let esegui = |generico: bool| {
+                    GENERIC_COVERAGE.with(|g| g.set(generico));
+                    let esito =
+                        split_polygon_by_linework_rust(&sorgente, &lama, limits, precisione)
+                            .map_err(|e| format!("{e:?}"));
+                    GENERIC_COVERAGE.with(|g| g.set(false));
+                    esito
+                };
+                assert_eq!(esegui(false), esegui(true), "caso {caso}");
+            }
+        }
     }
 }

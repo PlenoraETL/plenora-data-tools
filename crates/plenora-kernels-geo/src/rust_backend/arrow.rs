@@ -10,6 +10,8 @@
 
 use std::sync::Arc;
 
+use rayon::prelude::*;
+
 use geo::{CoordsIter, Geometry, LineString};
 use plenora_core::arrow::array::{Array, ArrayRef, BinaryArray, StringArray, UInt64Array};
 use plenora_core::arrow::select::{concat::concat, take::take};
@@ -264,32 +266,53 @@ pub fn split_batches(
         ));
     }
     let tolerance = tolerance.unwrap_or(0.0);
-    let mut pieces = SplitPieces::default();
-    let mut row = 0_usize;
+    // Le righe come (cella della sorgente, posizione nel suo batch).
+    let mut rows = Vec::with_capacity(left_rows);
     for batch in left_batches {
         let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;
-        for local in 0..cells.len() {
-            let index = row;
-            row += 1;
-            // Ogni cella non-null dei due lati si valida, anche se l'altro
-            // lato e' null e la coppia non produce righe (come
-            // `decode_geometry_side` a 190c493): prima la sorgente, poi lo
-            // splitter, in ordine di riga.
-            let source = (!cells.is_null(local))
-                .then(|| decode_geometry_cell(cells.value(local)))
-                .transpose()?;
-            let splitter = (!splitters.is_null(index))
-                .then(|| decode_geometry_cell(splitters.value(index)))
-                .transpose()?;
-            let (Some(source), Some(splitter)) = (source, splitter) else {
-                continue;
-            };
-            let parts = split_row(&source, &splitter, tolerance, max_output_rows, precision)?;
-            pieces.push(index, &parts, max_output_rows)?;
+        rows.extend((0..cells.len()).map(|local| (cells, local)));
+    }
+    // Ogni riga e' indipendente: le parti si calcolano in parallelo a
+    // blocchi di righe, e si accolgono in ordine di riga, come nel ciclo
+    // sequenziale (stesso primo errore in ordine di riga, stesso limite
+    // `max_output_rows` cumulato). Il blocco limita il lavoro e la memoria
+    // spesi oltre una riga che fallisce.
+    let mut pieces = SplitPieces::default();
+    for (block, chunk) in rows.chunks(SPLIT_ROWS_PER_BLOCK).enumerate() {
+        let first = block * SPLIT_ROWS_PER_BLOCK;
+        let parts: Vec<Result<Option<Vec<Geometry<f64>>>, PlenoraError>> = chunk
+            .par_iter()
+            .enumerate()
+            .map(|(offset, (cells, local))| {
+                let index = first + offset;
+                // Ogni cella non-null dei due lati si valida, anche se
+                // l'altro lato e' null e la coppia non produce righe (come
+                // `decode_geometry_side` a 190c493): prima la sorgente, poi
+                // lo splitter.
+                let source = (!cells.is_null(*local))
+                    .then(|| decode_geometry_cell(cells.value(*local)))
+                    .transpose()?;
+                let splitter = (!splitters.is_null(index))
+                    .then(|| decode_geometry_cell(splitters.value(index)))
+                    .transpose()?;
+                let (Some(source), Some(splitter)) = (source, splitter) else {
+                    return Ok(None);
+                };
+                split_row(&source, &splitter, tolerance, max_output_rows, precision).map(Some)
+            })
+            .collect();
+        for (offset, row_parts) in parts.into_iter().enumerate() {
+            if let Some(row_parts) = row_parts? {
+                pieces.push(first + offset, &row_parts, max_output_rows)?;
+            }
         }
     }
     split_output(left_schema, left_batches, geometry_index, pieces)
 }
+
+/// Le righe di `split` calcolate in parallelo prima di accoglierle in
+/// ordine (vedi [`split_batches`]).
+const SPLIT_ROWS_PER_BLOCK: usize = 256;
 
 /// Le parti gia' codificate e la riga sorgente di ciascuna.
 #[derive(Default)]
@@ -791,5 +814,108 @@ mod tests {
             message.contains("max_output_rows"),
             "errore del limite cumulato di split_batches: {message}"
         );
+    }
+    /// Il ciclo sequenziale di `split_batches` prima del calcolo a blocchi
+    /// paralleli, riga per riga: il percorso generico dell'oracolo.
+    fn split_batches_sequenziale(
+        left_schema: &SchemaRef,
+        left_batches: &[RecordBatch],
+        splitters: &BinaryArray,
+        max_output_rows: u64,
+    ) -> Result<(SchemaRef, Vec<RecordBatch>), PlenoraError> {
+        let geometry_index = geometry_column_index(left_schema, DEFAULT_GEOMETRY_COLUMN)?;
+        let mut pieces = SplitPieces::default();
+        let mut row = 0_usize;
+        for batch in left_batches {
+            let cells = batch_geometry_cells(batch, geometry_index, DEFAULT_GEOMETRY_COLUMN)?;
+            for local in 0..cells.len() {
+                let index = row;
+                row += 1;
+                let source = (!cells.is_null(local))
+                    .then(|| decode_geometry_cell(cells.value(local)))
+                    .transpose()?;
+                let splitter = (!splitters.is_null(index))
+                    .then(|| decode_geometry_cell(splitters.value(index)))
+                    .transpose()?;
+                let (Some(source), Some(splitter)) = (source, splitter) else {
+                    continue;
+                };
+                let parts = split_row(&source, &splitter, 0.0, max_output_rows, precisione())?;
+                pieces.push(index, &parts, max_output_rows)?;
+            }
+        }
+        split_output(left_schema, left_batches, geometry_index, pieces)
+    }
+
+    /// Oracolo del calcolo a blocchi paralleli di `split_batches` (AGENTS.md,
+    /// regola 3): stessa uscita, o stesso errore, del ciclo sequenziale, su
+    /// tabelle di piu' blocchi con null, linee, poligoni, una cella invalida
+    /// in un blocco successivo e limiti di righe che scattano a meta'.
+    #[test]
+    fn split_a_blocchi_uguale_al_ciclo_sequenziale() {
+        let square = square_wkb(2.0);
+        let line = linestring_wkb_le(&[(0.0, 1.0), (3.0, 1.0)]);
+        let blade = linestring_wkb_le(&[(1.0, -1.0), (1.0, 3.0)]);
+        let bowtie = polygon_wkb_le(&[(0.0, 0.0), (2.0, 2.0), (0.0, 2.0), (2.0, 0.0), (0.0, 0.0)]);
+        let righe = 3 * SPLIT_ROWS_PER_BLOCK + 17;
+        let celle = |invalida: Option<usize>| -> Vec<Option<&Vec<u8>>> {
+            (0..righe)
+                .map(|riga| {
+                    if Some(riga) == invalida {
+                        Some(&bowtie)
+                    } else if riga % 7 == 3 {
+                        None
+                    } else if riga % 3 == 0 {
+                        Some(&line)
+                    } else {
+                        Some(&square)
+                    }
+                })
+                .collect()
+        };
+        let splitters = (0..righe)
+            .map(|riga| (riga % 11 != 5).then_some(blade.as_slice()))
+            .collect::<BinaryArray>();
+        for invalida in [None, Some(SPLIT_ROWS_PER_BLOCK + 40)] {
+            let (schema, batch) = fixture_batch(&celle(invalida));
+            // Un secondo batch: le righe continuano oltre il primo.
+            let (_, coda) = fixture_batch(&celle(None)[..SPLIT_ROWS_PER_BLOCK]);
+            let batches = [batch, coda];
+            let splitters_tutti = (0..righe + SPLIT_ROWS_PER_BLOCK)
+                .map(|riga| (riga % 11 != 5).then_some(blade.as_slice()))
+                .collect::<BinaryArray>();
+            for limite in [u64::MAX >> 1, 2_000, 700, 3] {
+                let parallelo = split_batches(
+                    &schema,
+                    &batches,
+                    DEFAULT_GEOMETRY_COLUMN,
+                    &splitters_tutti,
+                    None,
+                    limite,
+                    precisione(),
+                )
+                .map_err(|e| format!("{e:?}"));
+                let sequenziale =
+                    split_batches_sequenziale(&schema, &batches, &splitters_tutti, limite)
+                        .map_err(|e| format!("{e:?}"));
+                assert_eq!(
+                    parallelo, sequenziale,
+                    "invalida {invalida:?}, limite {limite}"
+                );
+            }
+        }
+        // Un solo batch, nessun limite: uscita non vuota.
+        let (schema, batch) = fixture_batch(&celle(None));
+        let uscita = split_batches(
+            &schema,
+            &[batch],
+            DEFAULT_GEOMETRY_COLUMN,
+            &splitters,
+            None,
+            u64::MAX >> 1,
+            precisione(),
+        )
+        .expect("split");
+        assert!(uscita.1.iter().map(RecordBatch::num_rows).sum::<usize>() > righe);
     }
 }

@@ -931,8 +931,43 @@ differenziali no. Le differenze note sono in
   va riletto;
 - il corpus applicativo reale (gate del laboratorio) non è mai stato eseguito:
   mancano WKB reali anonimizzati;
-- la validazione interna dei kernel usa `check_validation` di `geo`,
-  quadratica, non la scansione della voce precedente.
+- la validazione interna dei kernel (ingressi di `split`, facce di
+  `polygonize`, uscite di `make_valid`) usava `check_validation` e
+  `validation_errors` di `geo`, quadratiche: ora la validazione rapida della
+  voce precedente, stesso verdetto e stessi errori (oracolo di
+  `validazione_ogc`, esteso a `errori_del_poligono`).
+
+**Prestazioni, a risultato identico.** Misurate in release su Windows
+(laboratorio, mediana di 5): `split` di 1.000 celle da 1.000 vertici con una
+lama da 74 s a 0,61 s, con lame a zig-zag da 235 a 4,2 s; `make_valid` di
+1.000 stelle invalide da 1.000 vertici da 40,8 a 4,7 s; a 10.000 righe da
+1.000 vertici, prima oltre i 300 s della campagna, 6,0 s, 42 s e 47 s. Da
+dove:
+
+- la validazione rapida al posto di quella di `geo` (sopra);
+- le coppie candidate del noding (`visit_candidate_pairs`) si trovano
+  sulla griglia di celle della validazione OGC (`celle`) e si visitano
+  nella stessa sequenza della scansione su `x`, con lo stesso budget
+  consumato e lo stesso errore nello stesso punto (oracolo
+  `noding_celle_stessa_visita_della_scansione`, traccia per traccia);
+- il genitore di una faccia si cerca col punto interno di `geo` (che
+  interseca tutti i lati e chiama `relate`) solo se un'altra faccia d'area
+  maggiore ne contiene il rettangolo, condizione necessaria perché due
+  anelli del grafo nodato non si attraversano; i punti interni
+  dell'atomizzazione si calcolano solo quando servono (oracolo
+  `scorciatoie_uguali_al_percorso_generico` contro il percorso generico);
+- la copertura del bordo di `split` prova la distanza solo sui lati della
+  sorgente il cui rettangolo allargato di `2 p + 16 ulp(M)` tocca il lato
+  delle parti (un R-tree), condizione necessaria per la distanza entro `p`
+  calcolata in `f64` (oracolo `copertura_con_indice_uguale_al_doppio_ciclo`);
+- `split` calcola le righe in parallelo a blocchi di 256 e le accoglie in
+  ordine di riga: stesso primo errore e stesso limite `max_output_rows`
+  cumulato del ciclo sequenziale (oracolo
+  `split_a_blocchi_uguale_al_ciclo_sequenziale`); oltre una riga che fallisce
+  si calcola al più il resto del suo blocco.
+
+Un panico di `interior_point` di `geo` su una faccia il cui punto interno
+non serve non si verifica più: è l'unica differenza osservabile.
 
 **Condizione di rientro.** La campagna differenziale del laboratorio
 rieseguita contro questo `geo` vendorizzato e il corpus applicativo reale
