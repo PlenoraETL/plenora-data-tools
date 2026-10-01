@@ -94,6 +94,10 @@ pub fn scrivi_tabella(
     // Run-end e union non si scrivono: la rilettura li rifiuterebbe
     // (README, «Run-end e union rifiutati al confine»).
     plenora_core::contract::arrow_schema::verifica_tipi_supportati(&tabella.schema())?;
+    // Uno schema con chiavi `plenora.*` si scrive solo se conforme al
+    // confine: versione `1` e identità dei campi valide e uniche (README,
+    // «Metadati Arrow»). Uno schema senza chiavi `plenora.*` passa intatto.
+    plenora_core::contract::arrow_schema::verifica_metadati_di_confine(&tabella.schema())?;
     match Formato::risolvi(opzioni.formato, percorso)? {
         Formato::ArrowIpc => atomico::scrivi_atomico(
             percorso,

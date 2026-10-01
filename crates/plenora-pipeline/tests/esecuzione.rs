@@ -447,7 +447,10 @@ fn pivot_con_mapping_esegue_lo_schema_validato() {
         let validata = pipeline
             .validate(&[("t", tabella.schema())])
             .unwrap_or_else(|errore| panic!("{aggr_func}: {errore}"));
-        let atteso = validata.contratto("p").expect("contratto").schema.clone();
+        let atteso = validata
+            .schema_uscita("p")
+            .expect("schema pubblicato")
+            .clone();
         let esito = validata
             .run(vec![("t".to_owned(), tabella.clone())])
             .unwrap_or_else(|errore| panic!("{aggr_func}: {errore}"));

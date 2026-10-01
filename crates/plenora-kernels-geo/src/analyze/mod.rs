@@ -59,8 +59,11 @@ mod producers;
 mod quality;
 mod tipi;
 
-use plenora_core::arrow::DataType;
+use std::sync::Arc;
+
+use plenora_core::arrow::{DataType, Field, Schema};
 use plenora_core::catalog::{find_operation, Arity, Family};
+use plenora_core::contract::arrow_metadata::PLENORA_GEOMETRY_PRECISION_KEY;
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::crs::ResolvedCrs;
 use plenora_core::{PlenoraError, Result};
@@ -143,6 +146,46 @@ pub const DIAGNOSTIC_COLUMNS: [(&str, DataType); 10] = [
 // Entry point del catalogo (`analyze_contract` delle operazioni `geo.*`).
 // ---------------------------------------------------------------------------
 
+/// Rifiuta una colonna geometria che dichiara la prima coordinata nord
+/// (`axis_order` `lat_lon` o `northing_easting`).
+///
+/// Ogni kernel geo legge x come est/longitudine (l'ordine GIS normalizzato
+/// del contratto): con gli assi scambiati misure geodetiche, azimut e
+/// costruzioni darebbero un risultato sbagliato senza errore. Il contratto
+/// Arrow ammette quegli ordini (il vettore `resolved-point` dichiara
+/// `lat_lon` per `EPSG:4326`), e le operazioni tabellari li attraversano
+/// intatti (ARROW-008); le operazioni geo li rifiutano, finché non ci sarà
+/// uno scambio esplicito degli assi.
+///
+/// # Errors
+///
+/// `PlenoraError::Crs` per un ordine scambiato; l'errore di lettura della
+/// chiave.
+fn rifiuta_assi_scambiati(op: &str, inputs: &[DataContract]) -> Result<()> {
+    for input in inputs {
+        for geometry in &input.geometries {
+            let Ok(field) = input.schema.field_with_name(&geometry.name) else {
+                continue;
+            };
+            if matches!(
+                plenora_core::contract::arrow_metadata::canonical_geometry_axis_order(field)?,
+                Some(
+                    plenora_core::contract::AxisOrder::LatLon
+                        | plenora_core::contract::AxisOrder::NorthingEasting
+                )
+            ) {
+                return Err(PlenoraError::Crs(format!(
+                    "{op}: colonna geometria `{}`: `axis_order` dichiara la prima coordinata \
+                     nord, ma i kernel geo leggono x come est/longitudine: l'ordine va \
+                     normalizzato a monte, mai in silenzio qui",
+                    geometry.name
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `analyze_contract` del catalogo per le operazioni `geo.*`: inferenza a
 /// secco del contratto di output.
 ///
@@ -169,8 +212,9 @@ pub const DIAGNOSTIC_COLUMNS: [(&str, DataType); 10] = [
 ///   prodotta collide con una esistente;
 /// - `PlenoraError::Crs` se il `crs_requirement` non e' soddisfatto (CRS
 ///   `Missing` o dichiarato ma non risolto compresi), se il CRS di output non
-///   e' risolvibile o la riproiezione non e' ammessa, o se una geometria di
-///   config esce dal dominio del CRS;
+///   e' risolvibile o la riproiezione non e' ammessa, se una geometria di
+///   config esce dal dominio del CRS, o se una colonna geometria di input
+///   dichiara gli assi scambiati (`lat_lon`, `northing_easting`);
 /// - `PlenoraError::Internal` per un'incoerenza interna dell'analisi, o se
 ///   la validazione OGC di un WKB di config non conclude.
 pub fn analyze_geo_contract(
@@ -203,10 +247,15 @@ pub fn analyze_geo_contract(
             inputs.len()
         )));
     }
+    // `geo.reproject` ha la verifica piu' stretta (ordine GIS normalizzato
+    // del CRS sorgente, `richiedi_assi_normalizzati`).
+    if descriptor.id != "geo.reproject" {
+        rifiuta_assi_scambiati(descriptor.id, inputs)?;
+    }
     // I produttori sono unari: l'arieta' e' gia' verificata sopra. Il
     // rifiuto dell'N-aria resta prima del controllo sul numero di input,
     // quindi qui l'arieta' e' solo 1 o 2.
-    match (descriptor.id, expected_arity) {
+    let output = match (descriptor.id, expected_arity) {
         ("geo.from_coords", _) => {
             // Il messaggio nomina l'op come richiesta (anche un alias).
             let requirement = crs_requirement(op, descriptor)?;
@@ -235,7 +284,63 @@ pub fn analyze_geo_contract(
         }
         (_, 2) => analyze_binary(descriptor, inputs, config),
         _ => analyze_unary(descriptor, &inputs[0], config, fields),
+    }?;
+    Ok(senza_precisione_ereditata(output))
+}
+
+/// Toglie `plenora.geometry.precision` ereditata dalle colonne geometriche
+/// dell'uscita di un'operazione geo.
+///
+/// Un kernel geo decodifica e ricodifica le coordinate in `f64`: una
+/// precisione `float32` o `native` dichiarata dall'ingresso direbbe il
+/// falso sulle geometrie che escono. Senza la chiave, l'emissione del blocco
+/// canonico dichiara `float64`, la precisione di ogni coordinata WKB. Le
+/// operazioni tabellari non toccano le coordinate e la precisione
+/// ereditata le attraversa intatta. Per semplicita' vale anche per le
+/// operazioni geo che restituiscono la geometria com'era (misure,
+/// predicati): l'informazione d'origine si perde, ma la dichiarazione
+/// resta vera.
+fn senza_precisione_ereditata(mut output: DataContract) -> DataContract {
+    let geometrie: Vec<&str> = output
+        .geometries
+        .iter()
+        .map(|geometria| geometria.name.as_str())
+        .collect();
+    // `float64` ereditata resta: e' gia' vera dopo la ricodifica.
+    let da_togliere = |campo: &Field| {
+        geometrie.contains(&campo.name().as_str())
+            && campo
+                .metadata()
+                .get(PLENORA_GEOMETRY_PRECISION_KEY)
+                .is_some_and(|precisione| precisione != "float64")
+    };
+    let eredita = output
+        .schema
+        .fields()
+        .iter()
+        .any(|campo| da_togliere(campo));
+    if !eredita {
+        return output;
     }
+    let campi: Vec<Field> = output
+        .schema
+        .fields()
+        .iter()
+        .map(|campo| {
+            if da_togliere(campo) {
+                let mut metadati = campo.metadata().clone();
+                metadati.remove(PLENORA_GEOMETRY_PRECISION_KEY);
+                campo.as_ref().clone().with_metadata(metadati)
+            } else {
+                campo.as_ref().clone()
+            }
+        })
+        .collect();
+    output.schema = Arc::new(Schema::new_with_metadata(
+        campi,
+        output.schema.metadata().clone(),
+    ));
+    output
 }
 
 #[cfg(test)]

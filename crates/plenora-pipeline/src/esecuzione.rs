@@ -28,7 +28,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use plenora_core::arrow::array::{Array, ArrayRef, LargeStringArray, RecordBatch, StringArray};
+use plenora_core::arrow::array::{
+    Array, ArrayRef, BinaryArray, LargeBinaryArray, LargeStringArray, RecordBatch, StringArray,
+};
 use plenora_core::arrow::schema::{DataType, Schema};
 use plenora_core::catalog::Arity;
 use plenora_core::contract::arrow_schema::arrow_schema_from_contract;
@@ -40,8 +42,8 @@ use plenora_kernels_table::EffettiKernel;
 
 use crate::budget::Ingresso;
 use crate::validazione::{
-    nel_passo, nel_passo_o_input, BaseIndici, KernelPasso, PassoValidato, PipelineValidata,
-    METADATI_PANDAS,
+    geometria_large_binary, nel_passo, nel_passo_o_input, BaseIndici, KernelPasso, PassoValidato,
+    PipelineValidata, METADATI_PANDAS,
 };
 
 /// Esito di un'esecuzione: le tabelle d'uscita e il resoconto.
@@ -136,17 +138,17 @@ fn validate_batch(batch: &RecordBatch, limits: &plenora_kernels_table::Limits) -
     Ok(())
 }
 
-/// `LargeUtf8` di primo livello in `Utf8`, voce `pandas` tolta dai metadati
-/// di schema (porting di `normalize_large_utf8`). Stessa trasformazione di
+/// `LargeUtf8` di primo livello in `Utf8`, geometrie `geoarrow.wkb`
+/// `LargeBinary` in `Binary`, voce `pandas` tolta dai metadati di schema
+/// (porting di `normalize_large_utf8`). Stessa trasformazione di
 /// [`crate::validazione::normalizza_schema`] sugli schemi.
 fn normalize_large_utf8(batch: RecordBatch) -> Result<RecordBatch> {
-    let has_large_utf8 = batch
-        .schema()
-        .fields()
-        .iter()
-        .any(|field| field.data_type() == &DataType::LargeUtf8);
+    let has_large =
+        batch.schema().fields().iter().any(|field| {
+            field.data_type() == &DataType::LargeUtf8 || geometria_large_binary(field)
+        });
     let has_pandas_metadata = batch.schema().metadata().contains_key(METADATI_PANDAS);
-    if !has_large_utf8 && !has_pandas_metadata {
+    if !has_large && !has_pandas_metadata {
         return Ok(batch);
     }
     let mut metadata = batch.schema().metadata().clone();
@@ -174,6 +176,23 @@ fn normalize_large_utf8(batch: RecordBatch) -> Result<RecordBatch> {
             }
             fields.push(field.as_ref().clone().with_data_type(DataType::Utf8));
             columns.push(Arc::new(strings.iter().collect::<StringArray>()));
+        } else if geometria_large_binary(field) {
+            let celle = column
+                .as_any()
+                .downcast_ref::<LargeBinaryArray>()
+                .ok_or_else(|| PlenoraError::Schema("downcast LargeBinary fallito".into()))?;
+            let bytes = celle.iter().flatten().try_fold(0_usize, |total, value| {
+                total.checked_add(value.len()).ok_or_else(|| {
+                    PlenoraError::ResourceLimit("overflow dimensione colonna LargeBinary".into())
+                })
+            })?;
+            if bytes > i32::MAX as usize {
+                return Err(PlenoraError::ResourceLimit(
+                    "colonna geometria LargeBinary oltre il limite sicuro Binary di Arrow".into(),
+                ));
+            }
+            fields.push(field.as_ref().clone().with_data_type(DataType::Binary));
+            columns.push(Arc::new(celle.iter().collect::<BinaryArray>()));
         } else {
             fields.push(field.as_ref().clone());
             columns.push(column.clone());
@@ -653,6 +672,21 @@ impl PipelineValidata {
                     self.limiti.rows.max_output_rows
                 )));
             }
+            // Lo schema pubblicato (versione e identità dei campi), deciso
+            // in validazione: stesse colonne, solo metadati in più.
+            let pubblicato = self.schemi_uscita.get(nome).ok_or_else(|| {
+                PlenoraError::Internal(format!("schema pubblicato dell'output `{nome}` assente"))
+            })?;
+            let tabella = plenora_core::batch_with_rows(
+                pubblicato.clone(),
+                tabella.columns().to_vec(),
+                tabella.num_rows(),
+            )
+            .map_err(|_| {
+                PlenoraError::Internal(format!(
+                    "output `{nome}`: la tabella non rispetta lo schema pubblicato"
+                ))
+            })?;
             outputs.push((nome.clone(), tabella));
         }
         Ok(Esito {

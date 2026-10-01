@@ -741,6 +741,7 @@ fn rifiuti_in_scrittura() {
     assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
     // CRS dichiarato non risolto.
     let campo = Field::new("geometry", DataType::Binary, true).with_metadata(HashMap::from([
+        ("ARROW:extension:name".to_owned(), "geoarrow.wkb".to_owned()),
         (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
         ("plenora.geometry.dimensions".to_owned(), "xy".to_owned()),
         (
@@ -912,7 +913,13 @@ fn forma_canonica_andata_e_ritorno() {
                 let dopo = contratto(&letta);
                 let g = &dopo.geometries[0];
                 assert_eq!(g.dimensions, dimensioni, "{dichiarazione:?}");
-                if let Some(tipi) = dichiarazione {
+                // `unresolved` e la proprieta' non dichiarata dicono la
+                // stessa cosa: la lettura le unifica, e lo scrittore scrive i
+                // tipi dei dati per entrambe.
+                let dichiarata = dichiarazione
+                    .as_ref()
+                    .filter(|tipi| tipi.declaration() != TypesDeclaration::Unresolved);
+                if let Some(tipi) = dichiarata {
                     assert_eq!(g.types.value(), Some(tipi), "{dimensioni:?}");
                 } else {
                     // Tipi dai dati solo con dimensionalita' nota e geometrie

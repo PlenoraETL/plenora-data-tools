@@ -710,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_metadata_minimal_omits_everything_not_declared() {
+    fn canonical_metadata_minimal_is_complete_and_claims_nothing_unknown() {
         let contract = GeometryColumnContract {
             types: GeometryColumnContract::undeclared_types(),
             encoding: None,
@@ -724,19 +724,30 @@ mod tests {
         assert_eq!(get(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY), Some("resolved"));
         assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), Some("EPSG:3857"));
         assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("unknown"));
-        // `field_id` non e' emesso (chiave opzionale: il FieldId di grafo non
-        // ha significato fuori dal processo).
+        // Il blocco e' sempre completo (vocabolario Arrow 1.0, sezione 4):
+        // tipi non dichiarati -> `unresolved` senza elenco, encoding
+        // assente -> `wkb` (quello che la lettura completa dal nome
+        // d'estensione), semantica `geometry`, precisione `float64`.
+        assert_eq!(
+            get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
+            Some("unresolved")
+        );
+        assert_eq!(get(PLENORA_GEOMETRY_ENCODING_KEY), Some("wkb"));
+        assert_eq!(
+            get(PLENORA_GEOMETRY_SPATIAL_SEMANTICS_KEY),
+            Some("geometry")
+        );
+        assert_eq!(get(PLENORA_GEOMETRY_PRECISION_KEY), Some("float64"));
+        // `field_id` non e' emesso qui: lo assegna la pubblicazione dello
+        // schema al confine (`arrow_schema::pubblica_schema`).
         assert_eq!(get(PLENORA_FIELD_ID_KEY), None);
-        // Le opzionali e le non dichiarate restano assenti, mai un default.
+        // Resta assente cio' che non si sa: elenco dei tipi, SRID senza
+        // autorita' numerica, definizione.
         for key in [
-            PLENORA_GEOMETRY_ENCODING_KEY,
             PLENORA_GEOMETRY_TYPES_KEY,
-            PLENORA_GEOMETRY_TYPES_DECLARATION_KEY,
             PLENORA_GEOMETRY_SRID_KEY,
             PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
             PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY,
-            PLENORA_GEOMETRY_SPATIAL_SEMANTICS_KEY,
-            PLENORA_GEOMETRY_PRECISION_KEY,
         ] {
             assert_eq!(get(key), None, "{key} deve restare assente");
         }
@@ -1200,7 +1211,9 @@ mod tests {
             (PLENORA_GEOMETRY_ENCODING_KEY, "twkb"),
             (PLENORA_GEOMETRY_DIMENSIONS_KEY, "2d"),
             (PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, "Exact"),
-            (PLENORA_GEOMETRY_SRID_KEY, "-1"),
+            // `srid` e' un intero con segno a 32 bit (vocabolario Arrow
+            // 1.0): `-1` e' ammesso, fuori da `i32` no.
+            (PLENORA_GEOMETRY_SRID_KEY, "2147483648"),
             (PLENORA_GEOMETRY_SRID_KEY, "+7"),
             (PLENORA_GEOMETRY_SRID_KEY, "4326.0"),
             (PLENORA_GEOMETRY_SRID_KEY, " 4326"),
@@ -1254,7 +1267,7 @@ mod tests {
         let without_axis = field_with_pairs(&[(PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326")]);
         assert!(matches!(
             read_geometry_contract_keys(&without_axis),
-            Err(PlenoraError::InvalidPlan(_))
+            Err(PlenoraError::Crs(_))
         ));
         let with_unknown_axis = field_with_pairs(&[
             (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
@@ -1266,12 +1279,18 @@ mod tests {
                 .axis_order,
             Some(AxisOrder::Unknown)
         );
-        // `crs_resolution = missing` non ammette metadati CRS dichiarati.
+        // `crs_resolution = missing` non ammette identificatore, definizione
+        // o assi; lo `srid` si' (vocabolario Arrow 1.0, sezione 4).
+        let missing_with_axis = field_with_pairs(&[
+            (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "missing"),
+            (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lon_lat"),
+        ]);
+        assert!(read_geometry_contract_keys(&missing_with_axis).is_err());
         let missing_with_srid = field_with_pairs(&[
             (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "missing"),
             (PLENORA_GEOMETRY_SRID_KEY, "4326"),
         ]);
-        assert!(read_geometry_contract_keys(&missing_with_srid).is_err());
+        assert!(read_geometry_contract_keys(&missing_with_srid).is_ok());
     }
 
     #[test]
@@ -1280,7 +1299,7 @@ mod tests {
         let exact_without = field_with_pairs(&[(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, "exact")]);
         assert!(matches!(
             read_geometry_contract_keys(&exact_without),
-            Err(PlenoraError::InvalidPlan(_))
+            Err(PlenoraError::Schema(_))
         ));
         // `unresolved` con elenco -> errore.
         let unresolved_with = field_with_pairs(&[
@@ -1331,7 +1350,7 @@ mod tests {
         // seguono, senza di essa non sono interpretabili).
         assert!(matches!(
             read_contract_version(&Schema::new(vec![canonical_field.clone()])),
-            Err(PlenoraError::InvalidPlan(_))
+            Err(PlenoraError::Schema(_))
         ));
         // Versione assente + nessuna chiave canonica -> Ok(None): input
         // legacy o non plenora, nessun protocollo da verificare.
@@ -1340,18 +1359,24 @@ mod tests {
                 .expect("legacy"),
             None
         );
-        // Versioni 0 e 1 accettate: il fallimento e' solo per
-        // versioni successive a quella nota.
-        for (version, expected) in [("0", 0), ("1", 1)] {
-            let schema = Schema::new_with_metadata(
-                vec![canonical_field.clone()],
-                HashMap::from([(PLENORA_CONTRACT_VERSION_KEY.to_owned(), version.to_owned())]),
-            );
-            assert_eq!(
-                read_contract_version(&schema).expect("versione nota"),
-                Some(expected)
-            );
-        }
+        // Solo `1` e' ammessa (vocabolario Arrow 1.0, sezione 1): `0` e'
+        // una versione sconosciuta e fallisce chiusa.
+        let schema = Schema::new_with_metadata(
+            vec![canonical_field.clone()],
+            HashMap::from([(PLENORA_CONTRACT_VERSION_KEY.to_owned(), "1".to_owned())]),
+        );
+        assert_eq!(
+            read_contract_version(&schema).expect("versione nota"),
+            Some(1)
+        );
+        let zero = Schema::new_with_metadata(
+            vec![canonical_field.clone()],
+            HashMap::from([(PLENORA_CONTRACT_VERSION_KEY.to_owned(), "0".to_owned())]),
+        );
+        assert!(matches!(
+            read_contract_version(&zero),
+            Err(PlenoraError::Schema(_))
+        ));
         // Versione successiva -> errore esplicito, mai interpretazione
         // parziale.
         let future = Schema::new_with_metadata(
@@ -1369,7 +1394,7 @@ mod tests {
         );
         assert!(matches!(
             read_contract_version(&broken),
-            Err(PlenoraError::InvalidPlan(_))
+            Err(PlenoraError::Schema(_))
         ));
         // Helper di emissione: schema con la versione corrente.
         let emitted =
@@ -1393,7 +1418,7 @@ mod tests {
         ]);
         assert!(matches!(
             read_geometry_contract_keys(&divergent_dimensions),
-            Err(PlenoraError::InvalidPlan(_))
+            Err(PlenoraError::Schema(_))
         ));
         let divergent_encoding = field_with_pairs(&[
             (PLENORA_GEOMETRY_ENCODING_KEY, "wkb"),

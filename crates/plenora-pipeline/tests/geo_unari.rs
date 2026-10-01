@@ -1234,7 +1234,10 @@ fn pivot_con_mapping_sullo_schema_canonico() {
         let validata = pipeline
             .validate(&[("t", tabella.schema())])
             .expect("pivot con mapping validato");
-        let atteso = validata.contratto("p").expect("contratto").schema.clone();
+        let atteso = validata
+            .schema_uscita("p")
+            .expect("schema pubblicato")
+            .clone();
         let esito = validata
             .run(vec![("t".to_owned(), tabella)])
             .expect("pivot con mapping eseguito");
@@ -1384,11 +1387,15 @@ fn pivot_con_indice_geometria_conserva_la_geometria() {
         .validate(&[("t", ingresso.schema())])
         .expect("pivot sulla geometria validato");
     let contratto_validato = validata.contratto("p").expect("contratto").clone();
+    let pubblicato = validata
+        .schema_uscita("p")
+        .expect("schema pubblicato")
+        .clone();
     let esito = validata
         .run(vec![("t".to_owned(), ingresso.clone())])
         .expect("pivot sulla geometria eseguito");
     let uscita = &esito.outputs[0].1;
-    assert_eq!(uscita.schema(), contratto_validato.schema);
+    assert_eq!(uscita.schema(), pubblicato);
     let nomi: Vec<&str> = uscita
         .schema_ref()
         .fields()
@@ -1517,7 +1524,10 @@ fn due_piani_in_catena_pivot_e_rifiuto_di_run_end_e_union() {
     let validata = secondo
         .validate(&[("a", intermedia.schema())])
         .expect("secondo piano validato sull'uscita del primo");
-    let atteso = validata.contratto("p").expect("contratto").schema.clone();
+    let atteso = validata
+        .schema_uscita("p")
+        .expect("schema pubblicato")
+        .clone();
     let esito = validata
         .run(vec![("a".to_owned(), intermedia.clone())])
         .expect("secondo piano eseguito");

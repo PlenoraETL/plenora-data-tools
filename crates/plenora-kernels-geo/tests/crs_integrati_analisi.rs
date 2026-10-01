@@ -26,14 +26,16 @@ use plenora_kernels_geo::analyze::analyze_geo_contract;
 use serde_json::{json, Value};
 
 /// Schema con una colonna geometria canonica nel CRS dato, con l'ordine
-/// degli assi dell'autorita'.
+/// degli assi GIS normalizzato (x = est/longitudine): la chiave descrive
+/// l'ordine dei byte, e i kernel geo rifiutano gli ordini con la prima
+/// coordinata nord.
 fn schema(crs_id: &str) -> SchemaRef {
     let assi = resolve_crs(crs_id, "crs")
         .expect("CRS integrato")
-        .authority_axis_order()
-        .expect("assi dell'autorita'")
+        .normalized_gis_axis_order()
         .to_string();
     let metadata = HashMap::from([
+        ("ARROW:extension:name".to_owned(), "geoarrow.wkb".to_owned()),
         (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
         (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
         (

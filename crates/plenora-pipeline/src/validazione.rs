@@ -25,8 +25,10 @@ use plenora_core::arrow::schema::{DataType, Schema, SchemaRef};
 use plenora_core::catalog::{
     find_operation, Arity, Family, OperationDescriptor, SourceRowProvenance,
 };
+use plenora_core::contract::arrow_metadata::{GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION};
 use plenora_core::contract::arrow_schema::{
-    arrow_schema_from_contract, contract_from_arrow_schema,
+    arrow_schema_from_contract, contract_from_arrow_schema, pubblica_schema,
+    verifica_identita_campi,
 };
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::crs::{resolve_crs, ResolvedCrs};
@@ -122,6 +124,10 @@ pub struct PipelineValidata {
     pub(crate) passi: Vec<PassoValidato>,
     pub(crate) outputs: Vec<String>,
     pub(crate) contratti: BTreeMap<String, DataContract>,
+    /// Schema pubblicato di ogni output del piano
+    /// ([`pubblica_schema`]): versione del contratto e identità dei campi.
+    /// `run` lo applica alle tabelle d'uscita.
+    pub(crate) schemi_uscita: BTreeMap<String, SchemaRef>,
     pub(crate) limiti: Limits,
     pub(crate) limiti_kernel: plenora_kernels_table::Limits,
     pub(crate) crs_piano: Option<ResolvedCrs>,
@@ -129,9 +135,21 @@ pub struct PipelineValidata {
 
 impl PipelineValidata {
     /// Contratto inferito per un nome del piano (input o `out` di un passo).
+    ///
+    /// È la forma interna: lo schema che un output porta fuori dal runner è
+    /// [`PipelineValidata::schema_uscita`].
     #[must_use]
     pub fn contratto(&self, nome: &str) -> Option<&DataContract> {
         self.contratti.get(nome)
+    }
+
+    /// Schema con cui `run` restituisce l'output `nome`: lo schema del
+    /// contratto con `plenora.contract.version` e `plenora.field_id` su
+    /// ogni campo (README, «Metadati Arrow»). `None` se `nome` non è un
+    /// output del piano.
+    #[must_use]
+    pub fn schema_uscita(&self, nome: &str) -> Option<&SchemaRef> {
+        self.schemi_uscita.get(nome)
     }
 
     /// Limiti effettivi del piano.
@@ -184,8 +202,10 @@ pub fn nel_passo_o_input(contesto: &str, errore: PlenoraError) -> PlenoraError {
 }
 
 /// Normalizzazione degli schemi di input, la stessa che `run` applica ai
-/// batch: `LargeUtf8` di primo livello diventa `Utf8`, la voce `pandas` dei
-/// metadati di schema si toglie (è un secondo schema che una trasformazione
+/// batch: `LargeUtf8` di primo livello diventa `Utf8`, una colonna
+/// `geoarrow.wkb` `LargeBinary` diventa `Binary` (il contratto Arrow ammette
+/// entrambe, i kernel geo leggono `Binary`), la voce `pandas` dei metadati
+/// di schema si toglie (è un secondo schema che una trasformazione
 /// renderebbe falso).
 pub fn normalizza_schema(schema: &Schema) -> SchemaRef {
     let mut metadati = schema.metadata().clone();
@@ -196,12 +216,24 @@ pub fn normalizza_schema(schema: &Schema) -> SchemaRef {
         .map(|campo| {
             if campo.data_type() == &DataType::LargeUtf8 {
                 campo.as_ref().clone().with_data_type(DataType::Utf8)
+            } else if geometria_large_binary(campo) {
+                campo.as_ref().clone().with_data_type(DataType::Binary)
             } else {
                 campo.as_ref().clone()
             }
         })
         .collect();
     Arc::new(Schema::new_with_metadata(campi, metadati))
+}
+
+/// Colonna `geoarrow.wkb` con storage `LargeBinary`, che la normalizzazione
+/// converte in `Binary`.
+pub fn geometria_large_binary(campo: &plenora_core::arrow::schema::Field) -> bool {
+    campo.data_type() == &DataType::LargeBinary
+        && campo
+            .metadata()
+            .get(GEOARROW_EXTENSION_KEY)
+            .is_some_and(|estensione| estensione == GEOARROW_WKB_EXTENSION)
 }
 
 /// Limiti dei kernel tabellari derivati dai limiti effettivi del piano.
@@ -486,6 +518,10 @@ impl Pipeline {
         // rimappati all'ingresso con un'allocazione fresca SENZA legare il
         // nome: input diversi possono avere colonne omonime.
         let mut campi = FieldAllocator::default();
+        // Identità pubbliche dei campi di input (`plenora.field_id`): tutte
+        // osservate, e ambigue quelle che più di un input dichiara.
+        let mut identita_osservate: BTreeSet<u32> = BTreeSet::new();
+        let mut identita_ambigue: BTreeSet<u32> = BTreeSet::new();
         let mut schemi_input: BTreeMap<String, SchemaRef> = BTreeMap::new();
         let mut contratti: BTreeMap<String, DataContract> = BTreeMap::new();
         let mut provenance: BTreeMap<String, bool> = BTreeMap::new();
@@ -499,6 +535,13 @@ impl Pipeline {
             letto
                 .validate()
                 .map_err(|errore| errore.con_contesto(&format!("input `{nome}`")))?;
+            for id in verifica_identita_campi(&normalizzato)
+                .map_err(|errore| errore.con_contesto(&format!("input `{nome}`")))?
+            {
+                if !identita_osservate.insert(id) {
+                    identita_ambigue.insert(id);
+                }
+            }
             if let Some(ordinamento) = &letto.properties.sorted_by {
                 if ordinamento.confidence.value().is_some() {
                     return Err(PlenoraError::InvalidPlan(format!(
@@ -655,12 +698,26 @@ impl Pipeline {
             });
         }
 
+        // Lo schema che ogni output porta fuori dal runner: versione e
+        // identità dei campi, deciso qui una volta (`run` lo applica).
+        let mut schemi_uscita = BTreeMap::new();
+        for nome in &self.outputs {
+            let interno = contratti.get(nome).ok_or_else(|| {
+                PlenoraError::Internal(format!("contratto dell'output `{nome}` assente"))
+            })?;
+            let pubblicato =
+                pubblica_schema(&interno.schema, &identita_osservate, &identita_ambigue)
+                    .map_err(|errore| nel_passo_o_input(&format!("output `{nome}`"), errore))?;
+            schemi_uscita.insert(nome.clone(), pubblicato);
+        }
+
         Ok(PipelineValidata {
             inputs: self.inputs.clone(),
             schemi_input,
             passi,
             outputs: self.outputs.clone(),
             contratti,
+            schemi_uscita,
             limiti,
             limiti_kernel,
             crs_piano,

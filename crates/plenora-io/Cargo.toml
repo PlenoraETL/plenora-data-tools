@@ -35,6 +35,10 @@ plenora-kernels-table.workspace = true
 chrono.workspace = true
 wkt.workspace = true
 serde.workspace = true
+# SHA-256 dei vettori di conformita' del contratto Arrow copiati da
+# plenora-contracts (tests/contratti_arrow.rs): gia' nel workspace per
+# `table.sha256_hash`, nessun crate nuovo nel lockfile.
+sha2.workspace = true
 
 # I test dell'esempio (lettura della catena, percorsi d'uscita) girano con
 # `cargo test`.

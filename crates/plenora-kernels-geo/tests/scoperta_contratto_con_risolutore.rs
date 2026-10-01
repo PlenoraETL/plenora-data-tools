@@ -59,10 +59,12 @@ fn canonical_geometry_field(data_type: DataType) -> Field {
     )
 }
 
-/// Campo `geometry` del tipo dato con `encoding = wkb`, `dimensions = xy`
-/// e poi le coppie date, che prevalgono sulle due di base.
+/// Campo `geometry` del tipo dato con l'estensione `geoarrow.wkb`,
+/// `encoding = wkb`, `dimensions = xy` e poi le coppie date, che
+/// prevalgono sulle due di base.
 fn canonical_field(data_type: DataType, pairs: &[(&str, &str)]) -> Field {
     let mut metadata = HashMap::from([
+        ("ARROW:extension:name".to_owned(), "geoarrow.wkb".to_owned()),
         (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
         (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
     ]);
@@ -88,17 +90,30 @@ fn canonical_crs_field(pairs: &[(&str, &str)]) -> Field {
 }
 
 #[test]
-fn discovery_recognizes_canonical_only_geometry_field() {
-    // Le chiavi canoniche sono autosufficienti — il campo
-    // e' riconosciuto come geometria anche senza estensione `geoarrow.wkb`
-    // e metadato `geo`, con types Declared/Schema dalla coppia canonica.
+fn discovery_recognizes_canonical_geometry_field() {
+    // Chiavi canoniche ed estensione `geoarrow.wkb`, senza metadato `geo`:
+    // il campo e' una geometria, con types Declared/Schema dalla coppia
+    // canonica. Senza l'estensione le stesse chiavi si rifiutano
+    // (vocabolario Arrow 1.0, sezione 4).
     let schema = schema_v1(vec![
         Field::new("id", DataType::Int64, false),
         canonical_geometry_field(DataType::Binary),
     ]);
     let contract = discover_input_contract_from_schema(schema, resolve_crs)
         .expect("EPSG:32632 e' nella tabella dei CRS integrati");
-    // Il campo canonico-only e' riconosciuto come geometria e il CRS
+    let senza_estensione = {
+        let field = canonical_geometry_field(DataType::Binary);
+        let mut metadata = field.metadata().clone();
+        metadata.remove("ARROW:extension:name");
+        field.with_metadata(metadata)
+    };
+    let rifiutato =
+        discover_input_contract_from_schema(schema_v1(vec![senza_estensione]), resolve_crs);
+    assert!(
+        matches!(rifiutato, Err(PlenoraError::Schema(_))),
+        "{rifiutato:?}"
+    );
+    // Il campo canonico e' riconosciuto come geometria e il CRS
     // dichiarato si risolve dalla tabella integrata.
     assert_eq!(contract.geometries.len(), 1);
     let ContractCrs::Resolved(crs) = &contract.geometries[0].crs else {

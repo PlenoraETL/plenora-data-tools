@@ -10,3 +10,7 @@ data/misure/*.json -text
 *.arrow binary
 # Griglie NTv2 (fixture della riproiezione): byte, non testo.
 *.gsb binary
+# Vettori di conformita' copiati da plenora-contracts: i byte restano quelli
+# del commit d'origine, cosi' lo SHA-256 registrato in provenienza.json resta
+# vero.
+crates/plenora-io/tests/fixtures/contratti/**/*.json -text

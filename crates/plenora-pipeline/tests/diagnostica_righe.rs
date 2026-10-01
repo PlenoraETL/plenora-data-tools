@@ -155,6 +155,22 @@ fn esegui(pipeline: &Pipeline, tabelle: &[(&str, RecordBatch)]) -> Result<Esito>
     )
 }
 
+/// La tabella senza `plenora.field_id` nei metadati dei campi.
+fn senza_identita(tabella: &RecordBatch) -> RecordBatch {
+    let campi: Vec<Field> = tabella
+        .schema()
+        .fields()
+        .iter()
+        .map(|campo| {
+            let mut metadati = campo.metadata().clone();
+            metadati.remove("plenora.field_id");
+            campo.as_ref().clone().with_metadata(metadati)
+        })
+        .collect();
+    let schema = Schema::new_with_metadata(campi, tabella.schema().metadata().clone());
+    RecordBatch::try_new(Arc::new(schema), tabella.columns().to_vec()).expect("stessa tabella")
+}
+
 fn output(esito: &Esito, nome: &str) -> RecordBatch {
     esito
         .outputs
@@ -503,9 +519,14 @@ fn le_catene_prima_rifiutate_danno_gli_stessi_risultati_dei_piani_spezzati() {
             let seconda = piano(&["t"], vec![passo("x", op, &["t"], config)], &["x"]);
             let spezzata = esegui(&seconda, &[("t", intermedia.clone())])
                 .unwrap_or_else(|errore| panic!("{} -> {op} spezzato: {errore}", forma.nome));
+            // Le identità dei campi (`plenora.field_id`) si riferiscono
+            // agli ingressi di ciascun piano: il piano spezzato ne vede
+            // altri, e una colonna che l'emettitore riscrive ne prende una
+            // nuova nell'uno e nell'altro. Il confronto è sui dati e sul
+            // resto dello schema.
             assert_eq!(
-                output(&unica, "x"),
-                output(&spezzata, "x"),
+                senza_identita(&output(&unica, "x")),
+                senza_identita(&output(&spezzata, "x")),
                 "{} -> {op}",
                 forma.nome
             );

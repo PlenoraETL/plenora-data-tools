@@ -58,7 +58,8 @@ fn geometry_field(geo_json: Option<&str>) -> Field {
     Field::new("geometry", DataType::Binary, true).with_metadata(metadata)
 }
 
-/// Campo geometria con SOLE chiavi canoniche (niente `GeoArrow` legacy).
+/// Campo geometria con le chiavi canoniche e l'estensione `geoarrow.wkb`
+/// (niente metadato legacy `geo`).
 fn canonical_geometry_field(data_type: DataType) -> Field {
     canonical_field(
         data_type,
@@ -73,10 +74,15 @@ fn canonical_geometry_field(data_type: DataType) -> Field {
     )
 }
 
-/// Campo `geometry` del tipo dato con `encoding = wkb`, `dimensions = xy`
-/// e poi le coppie date, che prevalgono sulle due di base.
+/// Campo `geometry` del tipo dato con l'estensione `geoarrow.wkb`,
+/// `encoding = wkb`, `dimensions = xy` e poi le coppie date, che
+/// prevalgono sulle due di base.
 fn canonical_field(data_type: DataType, pairs: &[(&str, &str)]) -> Field {
     let mut metadata = HashMap::from([
+        (
+            GEOARROW_EXTENSION_KEY.to_owned(),
+            GEOARROW_WKB_EXTENSION.to_owned(),
+        ),
         (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
         (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
     ]);
@@ -187,10 +193,32 @@ fn discovery_legacy_field_leaves_types_undeclared() {
 
 #[test]
 fn discovery_rejects_canonical_geometry_field_of_non_binary_type() {
-    // (1c) chiavi canoniche coerenti ma tipo non Binary -> errore.
+    // (1c) chiavi canoniche coerenti ma tipo non Binary -> errore di
+    // schema (vocabolario Arrow 1.0, sezione 4).
     let schema = schema_v1(vec![canonical_geometry_field(DataType::Utf8)]);
     let result = discover_input_contract_from_schema(schema, resolve_crs);
-    assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))));
+    assert!(matches!(result, Err(PlenoraError::Schema(_))));
+}
+
+#[test]
+fn discovery_rejects_canonical_keys_without_the_extension() {
+    // Vocabolario Arrow 1.0, sezione 4: «Geometry keys on a field without
+    // the geoarrow.wkb extension are invalid». Prima le chiavi canoniche
+    // bastavano da sole a dichiarare la colonna.
+    let field = canonical_geometry_field(DataType::Binary);
+    let mut metadata = field.metadata().clone();
+    metadata.remove(GEOARROW_EXTENSION_KEY);
+    let field = field.with_metadata(metadata);
+    let result = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs);
+    match result {
+        Err(PlenoraError::Schema(message)) => {
+            assert!(
+                message.contains("senza `ARROW:extension:name`"),
+                "{message}"
+            );
+        }
+        other => panic!("attese chiavi senza estensione rifiutate, ottenuto {other:?}"),
+    }
 }
 
 #[test]
@@ -215,7 +243,7 @@ fn discovery_rejects_canonical_legacy_divergence() {
     let field = field.with_metadata(metadata);
     let result = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs);
     match result {
-        Err(PlenoraError::InvalidPlan(message)) => {
+        Err(PlenoraError::Schema(message)) => {
             assert!(message.contains("divergente"), "{message}");
         }
         other => panic!("attesa divergenza fra contratto e schema, ottenuto {other:?}"),
@@ -244,15 +272,10 @@ fn discovery_canonical_missing_resolution_is_carried() {
     // `crs_resolution = missing` dichiarato canonicamente (senza chiavi
     // CRS, come impone la coerenza delle chiavi) -> stato missing nel
     // contratto.
-    let metadata = HashMap::from([
-        (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
-        (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
-        (
-            PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
-            "missing".to_owned(),
-        ),
-    ]);
-    let field = Field::new("geometry", DataType::Binary, true).with_metadata(metadata);
+    let field = canonical_field(
+        DataType::Binary,
+        &[(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "missing")],
+    );
     let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
         .expect("discovery");
     assert!(matches!(contract.geometries[0].crs, ContractCrs::Missing));
@@ -264,17 +287,13 @@ fn discovery_rejects_resolution_declaration_without_any_crs() {
     // alcuna rappresentazione CRS e' una contraddizione — MAI collassata
     // su `missing`: errore esplicito che nomina la chiave.
     for resolution in ["resolved", "declared_unresolved"] {
-        let metadata = HashMap::from([
-            (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
-            (
-                PLENORA_GEOMETRY_CRS_RESOLUTION_KEY.to_owned(),
-                resolution.to_owned(),
-            ),
-        ]);
-        let field = Field::new("geometry", DataType::Binary, true).with_metadata(metadata);
+        let field = canonical_field(
+            DataType::Binary,
+            &[(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, resolution)],
+        );
         let result = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs);
         match result {
-            Err(PlenoraError::InvalidPlan(message)) => {
+            Err(PlenoraError::Crs(message)) => {
                 assert!(
                     message.contains("nessun CRS e' dichiarato in alcuna rappresentazione"),
                     "{resolution}: {message}"
@@ -414,10 +433,7 @@ fn crs_definition_from_metadata_accepts_objects_and_rejects_other_types() {
     // Tipo non stringa/oggetto: metadato malformato -> errore.
     let invalid = r#"{"crs":32632}"#.to_owned();
     let result = crs_definition_from_metadata("geometry", Some(&invalid));
-    assert!(
-        matches!(result, Err(PlenoraError::InvalidPlan(_))),
-        "{result:?}"
-    );
+    assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
     // Senza chiave `crs` e senza metadato: assenza, non errore.
     let bare = "{}".to_owned();
     assert_eq!(
@@ -431,29 +447,36 @@ fn crs_definition_from_metadata_accepts_objects_and_rejects_other_types() {
 }
 
 #[test]
-fn contract_crs_from_keys_srid_only_declared_unresolved_is_a_representation() {
-    // Catena MySQL TLS Database→Data: il provider dichiara
-    // `declared_unresolved` con solo `srid`. Lo SRID e' la terza
-    // rappresentazione CRS, quindi non e' la contraddizione «stato senza
-    // rappresentazioni»:
-    // `DeclaredUnresolved` con crs_id/definition/format assenti, mai
-    // sintetizzati.
+fn contract_crs_from_keys_srid_only_declared_unresolved_is_rejected() {
+    // Vocabolario Arrow 1.0, sezione 4: `declared_unresolved` richiede un
+    // identificatore o una definizione. Il solo `srid` non basta: prima
+    // diventava `DeclaredUnresolved` senza rappresentazioni, e l'uscita
+    // dichiarava uno stato che il contratto non ammette. Ora e' la
+    // contraddizione «stato senza rappresentazioni», categoria `crs`.
     let keys = CanonicalGeometryKeys {
         srid: Some(4326),
         crs_resolution: Some(CrsResolution::DeclaredUnresolved),
         ..CanonicalGeometryKeys::default()
     };
-    let ContractCrs::DeclaredUnresolved {
-        crs_id,
-        definition,
-        definition_format,
-    } = contract_crs_from_keys("geometry", None, &keys, resolve_crs).expect("stato")
-    else {
-        panic!("atteso DeclaredUnresolved");
-    };
-    assert_eq!(crs_id, None, "crs_id mai sintetizzato");
-    assert_eq!(definition, None, "definizione mai sintetizzata");
-    assert_eq!(definition_format, None, "formato mai sintetizzato");
+    let result = contract_crs_from_keys("geometry", None, &keys, resolve_crs);
+    assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
+}
+
+#[test]
+fn missing_with_srid_is_accepted_and_stays_missing() {
+    // Il vocabolario vieta con `missing` identificatore, definizione,
+    // formato e ordine degli assi, non lo `srid`: lo stato resta `missing`
+    // (un indizio numerico non diventa un CRS, ARROW-007).
+    let field = canonical_field(
+        DataType::Binary,
+        &[
+            (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "missing"),
+            (PLENORA_GEOMETRY_SRID_KEY, "4326"),
+        ],
+    );
+    let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
+        .expect("missing con srid");
+    assert!(matches!(contract.geometries[0].crs, ContractCrs::Missing));
 }
 
 #[test]
@@ -469,7 +492,7 @@ fn contract_crs_from_keys_resolved_with_srid_only_is_never_promoted() {
     };
     let result = contract_crs_from_keys("geometry", None, &keys, resolve_crs);
     assert!(
-        matches!(result, Err(PlenoraError::InvalidPlan(_))),
+        matches!(result, Err(PlenoraError::Crs(_))),
         "`resolved` srid-only non promosso: {result:?}"
     );
 }
@@ -487,7 +510,7 @@ fn discovery_rejects_incoherent_geometry_metadata() {
         resolve_crs,
     );
     match result {
-        Err(PlenoraError::InvalidPlan(message)) => {
+        Err(PlenoraError::Schema(message)) => {
             assert!(message.contains("non supportata"), "{message}");
         }
         other => panic!("atteso rifiuto estensione, ottenuto {other:?}"),
@@ -500,7 +523,7 @@ fn discovery_rejects_incoherent_geometry_metadata() {
     let result =
         discover_input_contract_from_schema(Arc::new(Schema::new(vec![orphan])), resolve_crs);
     match result {
-        Err(PlenoraError::InvalidPlan(message)) => {
+        Err(PlenoraError::Schema(message)) => {
             assert!(message.contains("incoerenti"), "{message}");
         }
         other => panic!("attesi metadati incoerenti, ottenuto {other:?}"),
@@ -528,7 +551,157 @@ fn discovery_rejects_canonical_keys_without_contract_version() {
         DataType::Binary,
     )]));
     let result = discover_input_contract_from_schema(schema, resolve_crs);
-    assert!(matches!(result, Err(PlenoraError::InvalidPlan(_))));
+    assert!(matches!(result, Err(PlenoraError::Schema(_))));
+}
+
+#[test]
+fn discovery_rejects_unknown_contract_versions() {
+    // Vocabolario Arrow 1.0, sezione 1: il solo valore ammesso e' `1`, e
+    // una versione sconosciuta fallisce chiusa. Una versione successiva e'
+    // `Unsupported` (ARROW-002), ogni altra forma e' `Schema`.
+    let con_versione = |versione: &str| {
+        Arc::new(Schema::new_with_metadata(
+            vec![Field::new("id", DataType::Int64, false)],
+            HashMap::from([(PLENORA_CONTRACT_VERSION_KEY.to_owned(), versione.to_owned())]),
+        ))
+    };
+    for versione in ["2", "10", "99999999999999999999999"] {
+        let result = discover_input_contract_from_schema(con_versione(versione), resolve_crs);
+        assert!(
+            matches!(result, Err(PlenoraError::Unsupported(_))),
+            "{versione}: {result:?}"
+        );
+    }
+    for versione in ["0", "01", "1.0", "+1", " 1", "", "uno"] {
+        let result = discover_input_contract_from_schema(con_versione(versione), resolve_crs);
+        assert!(
+            matches!(result, Err(PlenoraError::Schema(_))),
+            "{versione}: {result:?}"
+        );
+    }
+    assert!(discover_input_contract_from_schema(con_versione("1"), resolve_crs).is_ok());
+}
+
+#[test]
+fn discovery_reads_and_checks_field_identities() {
+    // `plenora.field_id`: intero decimale non negativo, unico nello schema,
+    // solo sui campi di primo livello.
+    let con_id = |nome: &str, id: &str| {
+        Field::new(nome, DataType::Int64, true).with_metadata(HashMap::from([(
+            "plenora.field_id".to_owned(),
+            id.to_owned(),
+        )]))
+    };
+    assert!(discover_input_contract_from_schema(
+        schema_v1(vec![con_id("a", "0"), con_id("b", "7")]),
+        resolve_crs
+    )
+    .is_ok());
+    let ripetuto = discover_input_contract_from_schema(
+        schema_v1(vec![con_id("a", "3"), con_id("b", "3")]),
+        resolve_crs,
+    );
+    assert!(
+        matches!(ripetuto, Err(PlenoraError::Schema(_))),
+        "{ripetuto:?}"
+    );
+    for malformato in ["-1", "", "x", "+2", "1.5"] {
+        let result = discover_input_contract_from_schema(
+            schema_v1(vec![con_id("a", malformato)]),
+            resolve_crs,
+        );
+        assert!(
+            matches!(result, Err(PlenoraError::Schema(_))),
+            "{malformato}: {result:?}"
+        );
+    }
+    let oltre = discover_input_contract_from_schema(
+        schema_v1(vec![con_id("a", "4294967296")]),
+        resolve_crs,
+    );
+    assert!(
+        matches!(oltre, Err(PlenoraError::Unsupported(_))),
+        "{oltre:?}"
+    );
+    let annidato = Field::new_struct("s", vec![con_id("figlio", "1")], true);
+    let annidato = discover_input_contract_from_schema(schema_v1(vec![annidato]), resolve_crs);
+    assert!(
+        matches!(annidato, Err(PlenoraError::Unsupported(_))),
+        "{annidato:?}"
+    );
+}
+
+#[test]
+fn discovery_rejects_geography_and_non_planar_extension_metadata() {
+    // I kernel sono planari: `geography` e `edges` non planari si
+    // rifiutano invece di essere letti come `geometry`; un CRS nel metadato
+    // d'estensione GeoArrow, che questo componente non interpreta, si
+    // rifiuta invece di passare per assente.
+    let geography = canonical_field(
+        DataType::Binary,
+        &[
+            ("plenora.geometry.spatial_semantics", "geography"),
+            (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "missing"),
+        ],
+    );
+    let result = discover_input_contract_from_schema(schema_v1(vec![geography]), resolve_crs);
+    assert!(
+        matches!(result, Err(PlenoraError::Unsupported(_))),
+        "{result:?}"
+    );
+    for (estensione, atteso_ok) in [
+        ("", true),
+        ("{}", true),
+        (r#"{"edges":"planar"}"#, true),
+        (r#"{"edges":"spherical"}"#, false),
+        (r#"{"crs":"EPSG:4326"}"#, false),
+        (r#"{"crs":null}"#, true),
+    ] {
+        let mut metadata = geometry_field(None).metadata().clone();
+        metadata.insert("ARROW:extension:metadata".to_owned(), estensione.to_owned());
+        let field = geometry_field(None).with_metadata(metadata);
+        let result =
+            discover_input_contract_from_schema(Arc::new(Schema::new(vec![field])), resolve_crs);
+        if atteso_ok {
+            assert!(result.is_ok(), "{estensione}: {result:?}");
+        } else {
+            assert!(
+                matches!(result, Err(PlenoraError::Unsupported(_))),
+                "{estensione}: {result:?}"
+            );
+        }
+    }
+    let mut metadata = geometry_field(None).metadata().clone();
+    metadata.insert("ARROW:extension:metadata".to_owned(), "[".to_owned());
+    let field = geometry_field(None).with_metadata(metadata);
+    let result =
+        discover_input_contract_from_schema(Arc::new(Schema::new(vec![field])), resolve_crs);
+    assert!(matches!(result, Err(PlenoraError::Schema(_))), "{result:?}");
+}
+
+#[test]
+fn srid_is_a_signed_32_bit_integer() {
+    // Vocabolario Arrow 1.0, sezione 3: `srid` e' un intero decimale con
+    // segno a 32 bit.
+    for (srid, atteso) in [("4326", Some(4326)), ("-1", Some(-1)), ("0", Some(0))] {
+        let field = canonical_field(
+            DataType::Binary,
+            &[
+                (PLENORA_GEOMETRY_SRID_KEY, srid),
+                (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "declared_unresolved"),
+            ],
+        );
+        let keys = read_geometry_contract_keys(&field).expect(srid);
+        assert_eq!(keys.srid, atteso, "{srid}");
+    }
+    for srid in ["2147483648", "-2147483649", "+4326", "4326.0", "", "-"] {
+        let field = canonical_field(DataType::Binary, &[(PLENORA_GEOMETRY_SRID_KEY, srid)]);
+        let result = read_geometry_contract_keys(&field);
+        assert!(
+            matches!(result, Err(PlenoraError::Crs(_))),
+            "{srid}: {result:?}"
+        );
+    }
 }
 
 #[test]

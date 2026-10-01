@@ -1161,9 +1161,19 @@ fn validate_declared_types(
     // Tipi geometrici: il confronto scatta solo con entrambi i lati presenti,
     // perche' «non dichiarato» e' legittimo su ciascun lato; la
     // contraddizione e' sempre un errore.
+    //
+    // `unresolved` nei metadati non dichiara nulla: è la forma che
+    // l'emissione scrive per una proprietà non dichiarata (il vocabolario
+    // Arrow vuole la chiave sempre), e la lettura la riporta a «non
+    // dichiarato». Un contratto che ne sa di più (tipi letti da `GeoParquet`,
+    // dichiarati da un'operazione) non la contraddice: l'emissione la
+    // sostituisce.
     let Some(declared) = geometry.types.value() else {
         return Ok(());
     };
+    if parsed_declaration == TypesDeclaration::Unresolved {
+        return Ok(());
+    }
     if parsed_declaration != declared.declaration() {
         return Err(PlenoraError::Schema(format!(
             "colonna geometrica `{}`: types_declaration del contratto ({}) diversa dai metadati canonici ({metadata_declaration})",
