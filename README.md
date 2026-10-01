@@ -31,8 +31,9 @@ Engine, CLI, isolamento e protocollo del progetto d'origine non sono stati
 portati. Nemmeno, e oggi non sono in programma: la verifica automatica (CI,
 fuzzing, misura della copertura, mutation testing: i gate si eseguono a
 mano, [`AGENTS.md`](AGENTS.md)), l'identità del piano (`plan_hash`,
-fingerprint del catalogo) e la cancellazione di un'esecuzione in corso
-(Ctrl-C): `run` gira fino alla fine o al primo errore.
+fingerprint del catalogo) e l'interruzione di un kernel a metà: scadenza e
+annullamento si controllano solo fra i passi
+([«Scadenza e annullamento»](#scadenza-e-annullamento)).
 
 ## Le operazioni
 
@@ -1305,6 +1306,52 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
 - **Fuori perimetro come per le altre operazioni**: diagnostica per riga,
   envelope e fusione dei segmenti vivevano nell'engine, che non è portato.
 
+## Errori
+
+Ogni errore è un `PlenoraError` con i quattro assi del contratto
+`plenora-error-v1` (`plenora-contracts`, `specs/errors/ERRORS-1.0.md`):
+categoria, fase, effetto sul supporto e ritentativo. Le enumerazioni sono
+quelle dello schema (`concurrent_modification` e il ritentativo
+`quarantine` ci sono anche se nessun errore del workspace li produce).
+`PlenoraError::public_projection` dà il documento pubblico (`PublicError`,
+serializzabile con serde), valido contro `schemas/error-v1.schema.json`
+(test `crates/plenora-core/tests/errore_pubblico_schema.rs`, con gli schemi
+copiati da `plenora-contracts@ade868c` e verificati per SHA-256):
+
+- `message` è il testo dell'errore, già senza valori di righe o colonne,
+  troncato a 2048 caratteri e mai vuoto;
+- `code`, dove l'errore ne ha uno stabile: `EXECUTION_DEADLINE_EXCEEDED`
+  (`Timeout`), `EXECUTION_CANCELLED` (`Cancelled`), e il codice CRS in
+  testa al messaggio (`CRS_NOT_BUILTIN`, `CRS_MISMATCH`…, solo quelli di
+  `CrsError`);
+- `details.row_diagnostics`: il documento `plenora-row-diagnostics-v1`
+  intero, se l'errore ha una diagnostica per riga;
+- `details` oltre i limiti ERR-011/ERR-012 (byte, profondità, 128
+  proprietà o elementi, stringhe da 4096 byte, 2048 nodi) non si tronca: la
+  proiezione diventa un errore `internal` con codice
+  `ERROR_DETAILS_NOT_PUBLISHABLE`, senza `details`. Con i limiti di esempi
+  dei kernel (10) non scatta;
+- effetto `unknown` con un ritentativo automatico diventa
+  `requires_recovery` (ERR-006); oggi nessun errore ha effetto `unknown`.
+
+`provider` ed `execution_id` non ci sono: nessun errore del workspace ne
+ha uno.
+
+### Limiti dichiarati degli errori
+
+- **Effetto `none` anche dopo output già scritti da `esegui_da_file`.**
+  *Regola*: `remote_effect` è `none` per ogni errore: ogni file d'uscita
+  si scrive in modo atomico e non resta mai a metà.
+  *Ambito*: `plenora_io::esegui_da_file`, che scrive gli output uno dopo
+  l'altro.
+  *Hazard*: un errore scrivendo il secondo output lascia scritto il primo
+  (il piano intero non è atomico), e l'errore dice comunque `none` invece
+  di `partial` (ERR-004 vuole un effetto conservativo); il ritentativo
+  dell'errore resta quello della causa.
+  *Rientro*: un effetto assegnabile all'errore (come il tag di fase) e
+  `esegui_da_file` che marca `partial` gli errori dopo il primo output
+  scritto.
+
 ## Runner
 
 `plenora-pipeline` concatena le operazioni **tabellari** e **geo** del
@@ -1531,6 +1578,31 @@ Arrow delle tabelle residenti una volta ciascuna, per inizio
 dell'allocazione e capacità, figli compresi: una slice, una rinomina o le
 colonne di un batch letto da Arrow IPC non aggiungono nulla.
 
+### Scadenza e annullamento
+
+`PipelineValidata::run_interrompibile(tabelle, &Interruzione)` è `run`
+con una scadenza (`Instant`, assoluta) e un segnale di annullamento
+(`Arc<AtomicBool>`, alzato da un altro thread), entrambi facoltativi; `run`
+è `run_interrompibile` senza nessuno dei due. Il runner li controlla prima
+di ogni passo e prima di consegnare gli output:
+
+- annullamento alzato: `Cancelled` (categoria `cancelled`, codice
+  `EXECUTION_CANCELLED`);
+- scadenza passata: `Timeout` (categoria `timeout`, codice
+  `EXECUTION_DEADLINE_EXCEEDED`, come il vettore `data-run-timeout-error`
+  del contratto);
+- con entrambi vince l'annullamento.
+
+Il testo dice dove («prima del passo `x` (table.sort)», «prima di
+consegnare gli output»), la fase anche: `write` prima di un passo,
+`finalize` prima della consegna. Nessun output è reso, quindi effetto `none` e
+ritentativo `safe`: rieseguire lo stesso piano è deterministico (se
+ritentare dopo un annullamento voluto lo decide il chiamante). Una scadenza
+RFC 3339 (`plenora.execution.deadline` del binding di runtime) la converte
+in `Instant` chi la riceve. Con una scadenza l'esito (output o `Timeout`) dipende
+dal tempo, per natura; gli output resi sono sempre quelli di `run`. Il controllo è fra i passi, mai dentro un
+kernel (limite in [«Limiti dichiarati del runner»](#limiti-dichiarati-del-runner)).
+
 ### Divisione per zero
 
 **Semantica dichiarata** (decisione dell'utente): in `table.formula` e
@@ -1620,41 +1692,41 @@ rifiutata ora si produce).
 
 ### Diagnostica per riga
 
-**Regola**: ogni ordine valido dei passi si accetta; gli indici di riga di
-un payload `plenora-row-diagnostics-v1` dicono sempre a che cosa si
-riferiscono, nel campo `index_basis`.
+**Regola**: ogni ordine valido dei passi si accetta; un payload
+`plenora-row-diagnostics-v1` ha solo indici di riga della sorgente
+(`index_basis` `source_row_zero_based`, DIAG-002) e, dove la riga della
+sorgente non si conosce, nessun indice (DIAG-003: mai un indice indovinato
+o di un'altra base).
 
 Un kernel riporta gli indici delle righe del suo primo ingresso (l'unico
-per le unarie, il lato left per `assert_foreign_key`). Che cosa siano
-quelle righe lo decide la validazione, dal catalogo
+per le unarie, il lato left per `assert_foreign_key`). Se quelle righe
+siano della sorgente lo decide la validazione, dal catalogo
 (`source_row_provenance`), e `PipelineValidata::base_indici(out)` lo dice
 prima di eseguire:
 
-- **`source_row_zero_based`** (`BaseIndici::Sorgente`): l'ingresso discende
-  da un input del piano solo attraverso passi che conservano numero e
-  ordine delle righe (`rename`, `type_cast`, `formula`…). L'indice è la
-  riga di quell'input, da zero; payload e testo sono quelli del kernel.
-- **`step_input_row_zero_based`** (`BaseIndici::IngressoDelPasso`): a monte
-  c'è un passo che filtra, riordina, espande, unisce o aggrega (`filter`,
-  `sort`, `limit`, `sample`, `distinct`, `join`, `aggregate`, `explode`…).
-  L'indice è la riga del primo ingresso del passo, da zero; il runner
-  riscrive `index_basis` e antepone al testo del kernel «passo `<out>`:
-  indici di riga riferiti all'ingresso `<nome>` del passo, non alla
-  sorgente». Il passo che fallisce fa fallire `run`, che non rende
-  output parziali: per vedere la riga si esegue a parte il prefisso del
-  piano fino a `<nome>`, con `<nome>` fra i suoi output, e la riga
-  all'indice riportato di quella tabella è la riga rifiutata. Quella
-  riga non dice in generale da quale riga del file viene: dopo un
-  `filter` o un `sort` una colonna identificativa dei dati, se c'è, lo
-  dice; dopo un'aggregazione o un pivot la riga è un gruppo nuovo, l'indice
-  è la posizione del gruppo, e una sola riga d'origine può non esistere.
+- **`BaseIndici::Sorgente`**: l'ingresso discende da un input del piano
+  solo attraverso passi che conservano numero e ordine delle righe
+  (`rename`, `type_cast`, `formula`…). L'indice è la riga di quell'input,
+  da zero; payload e testo sono quelli del kernel.
+- **`BaseIndici::SenzaAttribuzione`**: a monte c'è un passo che filtra,
+  riordina, espande, unisce o aggrega (`filter`, `sort`, `limit`, `sample`,
+  `distinct`, `join`, `aggregate`, `explode`…). Il runner toglie gli esempi
+  e tiene conteggi, cause e totale: la completezza `complete` diventa
+  `partial` con il limite di conoscenza `read.row_attribution_unavailable`
+  (`RowDiagnostics::senza_attribuzione`). Il testo del kernel prende
+  davanti «passo `<out>`: righe rifiutate nell'ingresso `<nome>` del passo,
+  non riconducibili alla sorgente (diagnostica senza esempi)». Per trovare
+  le righe si esegue a parte il piano spezzato: il prefisso fino a `<nome>`
+  e poi il passo su quell'output come input, che ha gli esempi rispetto a
+  `<nome>`. Dopo un'aggregazione o un pivot la riga rifiutata è un gruppo
+  nuovo, e una sola riga d'origine può non esistere.
 
 La «sorgente» è la tabella d'ingresso del piano: un piano spezzato in due
 riporta gli indici del secondo rispetto ai suoi input, cioè alle uscite del
 primo. Gli indici non si ricalcolano mai verso la sorgente attraverso un
 passo che cambia le righe: nessuna mappa di righe si tiene in memoria, e
-il budget non ha niente in più da contare (limite sotto, «Indici di riga
-dopo un passo che cambia le righe»).
+il budget non ha niente in più da contare (limite sotto, «Diagnostica senza
+esempi dopo un passo che cambia le righe»).
 
 Fase e scope di un rifiuto per riga: l'errore ha la fase derivata
 `write` (`ErrorPhase`: l'esecuzione di un passo, il canone non ha una fase
@@ -2082,31 +2154,43 @@ esplicito.
   (`table.filter`, `table.sort`) non punta alla riga del file d'origine.
   *Rientro*: la raccolta completa per riga del passo geo di `190c493`
   (`collect_cell_failures`), con la base degli indici del runner.
-- **Indici di riga dopo un passo che cambia le righe.**
-  *Regola*: gli indici della diagnostica per riga sono righe della
-  sorgente (`source_row_zero_based`) solo quando nessun passo a monte cambia
-  numero o ordine delle righe; altrimenti sono righe del primo ingresso del
-  passo (`step_input_row_zero_based`), e il testo nomina passo e ingresso
-  ([«Diagnostica per riga»](#diagnostica-per-riga)). È una garanzia più
-  debole di quella che il nome `source_index` degli esempi suggerisce.
+- **Diagnostica senza esempi dopo un passo che cambia le righe.**
+  *Regola*: gli esempi della diagnostica per riga hanno l'indice della
+  sorgente (`source_row_zero_based`) solo quando nessun passo a monte
+  cambia numero o ordine delle righe; altrimenti il payload ha conteggi,
+  cause e totale senza esempi, completezza `partial` e limite di
+  conoscenza `read.row_attribution_unavailable`, e il testo nomina passo e
+  ingresso ([«Diagnostica per riga»](#diagnostica-per-riga)). Garanzia
+  indebolita: quante righe e perché, non quali.
   *Ambito*: ogni passo il cui primo ingresso discende da un'operazione con
   `source_row_provenance` `Unavailable` (catalogo).
-  *Hazard*: un lettore del payload che ignori `index_basis` leggerebbe
-  l'indice come riga del file d'origine; un lettore che conosce solo
-  `source_row_zero_based` lo rifiuta. Il runner non tiene lineage: la
-  posizione nel file d'origine non si ricostruisce in generale, nemmeno
-  rieseguendo il prefisso del piano (che dà solo la riga dell'ingresso
-  del passo), e dopo un'aggregazione, un join o un'esplosione una sola
-  riga d'origine può non esistere. `run` fallisce senza output parziali,
-  quindi anche la riga dell'ingresso del passo si vede solo eseguendo a
-  parte il prefisso. Garanzia indebolita: indice sempre corretto per la
-  sua base, non sempre riconducibile al file.
+  *Hazard*: nessun indice sbagliato (il contratto vieta la base
+  dell'ingresso del passo che il runner pubblicava fino a `da5f779`), ma la
+  riga rifiutata si trova solo eseguendo a parte il piano spezzato, e dopo
+  un'aggregazione, un join o un'esplosione una sola riga d'origine può non
+  esistere. `run` fallisce senza output parziali.
   *Rientro*: una mappa di righe verso la sorgente per i passi che
   selezionano o permutano senza duplicare (`filter`, `sort`, `limit`,
-  `sample`, `distinct`), composta passo per passo e contata nei byte vivi;
-  i passi che duplicano o creano righe (`join`, `explode`, `aggregate`)
-  restano sulla base dell'ingresso del passo, perché il contratto v1 vuole
-  indici unici fra gli esempi.
+  `sample`, `distinct`), composta passo per passo e contata nei byte vivi,
+  che riporterebbe gli esempi con l'indice della sorgente; i passi che
+  duplicano o creano righe (`join`, `explode`, `aggregate`) restano senza
+  esempi, perché il contratto v1 vuole un indice della sorgente unico per
+  esempio.
+- **Scadenza e annullamento solo fra i passi.**
+  *Regola*: `run_interrompibile` controlla scadenza e annullamento prima
+  di ogni passo e prima di consegnare gli output
+  ([«Scadenza e annullamento»](#scadenza-e-annullamento)), mai dentro un
+  kernel.
+  *Ambito*: `PipelineValidata::run_interrompibile`; anche i controlli dopo
+  il passo (budget, contratto) e la validazione degli input girano fino in
+  fondo.
+  *Hazard*: un passo lungo (un join enorme, un overlay) finisce anche
+  oltre la scadenza o dopo l'annullamento, e l'errore arriva al controllo
+  successivo: il ritardo è al più la durata del passo in corso. Il
+  risultato non è mai sbagliato: un'esecuzione interrotta non rende
+  output, una finita prima della scadenza li rende tutti.
+  *Rientro*: controlli cooperativi dentro i kernel lunghi (per blocco di
+  righe o di coppie), con lo stesso `Interruzione` passato ai kernel.
 - **Run-end e union rifiutati al confine.**
   *Regola*: uno schema con una colonna `RunEndEncoded` o `Union`, a
   qualunque profondità (valori di una dictionary, figli di liste, struct e

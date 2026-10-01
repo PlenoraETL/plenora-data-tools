@@ -22,8 +22,14 @@
 //!
 //! Alcune varianti vengono dall'engine, dalla CLI e dal trasporto fra
 //! processi di `plenora-data-tools` e qui nessun codice le produce
-//! (`Execution`, `Cancelled`, `Protocol`, `Timeout`): lo dice il rustdoc di
-//! ciascuna.
+//! (`Execution`, `Protocol`): lo dice il rustdoc di ciascuna. `Cancelled` e
+//! `Timeout` le produce il runner (`plenora-pipeline`), al controllo
+//! cooperativo fra i passi.
+//!
+//! La forma pubblica, `plenora-error-v1`, è [`PlenoraError::public_projection`]
+//! ([`PublicError`]): i quattro assi, un `code` stabile dove l'errore ne ha
+//! uno, il messaggio limitato e la diagnostica per riga in
+//! `details.row_diagnostics`.
 
 use std::fmt;
 use std::time::Duration;
@@ -31,6 +37,14 @@ use std::time::Duration;
 use thiserror::Error;
 
 use crate::diagnostics::RowDiagnostics;
+
+mod pubblico;
+
+pub use pubblico::{
+    PublicError, CODE_CANCELLED, CODE_DEADLINE_EXCEEDED, CODE_DETAILS_NOT_PUBLISHABLE,
+    MAX_DETAILS_BYTES, MAX_DETAILS_DEPTH, MAX_DETAILS_FANOUT, MAX_DETAILS_NODES,
+    MAX_DETAILS_STRING_BYTES, MAX_ERROR_BYTES, MAX_MESSAGE_CHARS, MAX_RETRY_DELAY_MS,
+};
 
 /// Errore unico del workspace.
 ///
@@ -88,22 +102,12 @@ pub enum PlenoraError {
     #[error("CRS error: {0}")]
     Crs(String),
 
-    /// Esecuzione annullata dal chiamante.
-    ///
-    /// Nessun codice di questo repository la produce: qui non c'è un
-    /// meccanismo di cancellazione (lo aveva l'executor di
-    /// `plenora-data-tools`). Contesto come `Execution` (nodo, operazione,
-    /// `execution_id`), mai dati.
-    #[error(
-        "cancelled at node `{node}` (operation `{operation}`{}): {reason}",
-        execution_suffix(execution_id)
-    )]
-    Cancelled {
-        node: String,
-        operation: String,
-        execution_id: String,
-        reason: String,
-    },
+    /// Esecuzione annullata dal chiamante: il segnale di annullamento del
+    /// runner (`plenora_pipeline::Interruzione`) era alzato a un controllo
+    /// fra i passi. Il testo dice dove (passo e operazione, o la consegna
+    /// degli output), mai dati. Codice pubblico `EXECUTION_CANCELLED`.
+    #[error("cancelled: {0}")]
+    Cancelled(String),
 
     /// Limite di risorsa superato: righe, byte in memoria, byte temporanei,
     /// fattore di espansione, lavoro massimo di un kernel.
@@ -129,12 +133,11 @@ pub enum PlenoraError {
     #[error("protocol error: {0}")]
     Protocol(String),
 
-    /// Una scadenza dichiarata è passata senza che l'attesa si chiudesse.
-    ///
-    /// Nessun codice di questo repository la produce. Non dice che l'altro
-    /// capo sia morto: dice che non ha risposto entro il tempo che gli è
-    /// stato dato. Chi sceglie la scadenza deve nominarla nel testo,
-    /// altrimenti l'errore non è diagnosticabile.
+    /// La scadenza dell'esecuzione è passata: il runner l'ha trovata
+    /// superata a un controllo fra i passi
+    /// (`plenora_pipeline::Interruzione`), prima di eseguire il passo
+    /// successivo o di consegnare gli output. Il testo dice dove. Codice
+    /// pubblico `EXECUTION_DEADLINE_EXCEEDED`.
     #[error("timeout: {0}")]
     Timeout(String),
 
@@ -351,6 +354,10 @@ categorie_errore! {
     NotFound => "not_found",
     /// Destinazione gia' esistente o conflitto di scrittura.
     Conflict => "conflict",
+    /// La risorsa è cambiata fra lettura e scrittura. Nessuna variante di
+    /// [`PlenoraError`] la produce: c'è perché l'enumerazione di
+    /// `plenora-error-v1` la contiene.
+    ConcurrentModification => "concurrent_modification",
     /// Credenziali assenti o rifiutate.
     Authentication => "authentication",
     /// Permessi insufficienti.
@@ -525,6 +532,11 @@ asse_canonico! {
                          [`RetryDisposition::delay`]." {
         /// Ritentare e' sempre errato (causa deterministica o volontaria).
         Never => "never",
+        /// L'effetto e' ignoto e la risorsa va messa da parte (non riusata)
+        /// finche' lo stato non si accerta. Nessun errore di questo
+        /// workspace la produce: c'e' perche' l'enumerazione di
+        /// `plenora-error-v1` la contiene.
+        Quarantine => "quarantine",
         /// L'operazione e' idempotente o priva di effetti: si puo' ritentare.
         Safe => "safe",
         /// Ritentabile solo con una chiave che deduplichi l'effetto.
@@ -546,9 +558,11 @@ impl RetryDisposition {
     pub const fn delay(self) -> Option<Duration> {
         match self {
             Self::After(duration) => Some(duration),
-            Self::Never | Self::Safe | Self::RequiresIdempotencyKey | Self::RequiresRecovery => {
-                None
-            }
+            Self::Never
+            | Self::Quarantine
+            | Self::Safe
+            | Self::RequiresIdempotencyKey
+            | Self::RequiresRecovery => None,
         }
     }
 }
@@ -564,9 +578,9 @@ impl PlenoraError {
     /// applica, invece di perderlo in silenzio.
     ///
     /// Tornano invariate tutte le altre: `Io` (errore del sistema
-    /// operativo); `Execution`, `Cancelled`, `RowDiagnostics` e `Tagged`, che
-    /// portano già un'attribuzione strutturata; `Internal`, dove il contesto
-    /// utile è il punto del codice; `DataMapping`, `ResourceLimit`,
+    /// operativo); `Execution`, `RowDiagnostics` e `Tagged`, che portano già
+    /// un'attribuzione strutturata; `Internal`, dove il contesto utile è il
+    /// punto del codice; `DataMapping`, `Cancelled`, `ResourceLimit`,
     /// `Protocol`, `Timeout`, `Conflict` e `InvalidConfiguration`, che chi
     /// vuole un contesto compone da sé.
     #[must_use]
@@ -579,7 +593,7 @@ impl PlenoraError {
             Self::Crs(messaggio) => Self::Crs(anteponi(messaggio)),
             altro @ (Self::DataMapping(_)
             | Self::Execution { .. }
-            | Self::Cancelled { .. }
+            | Self::Cancelled(_)
             | Self::ResourceLimit(_)
             | Self::Io(_)
             | Self::Protocol(_)
@@ -604,7 +618,7 @@ impl PlenoraError {
             Self::DataMapping(_) => ErrorCategory::DataMapping,
             Self::Execution { .. } => ErrorCategory::Execution,
             Self::Crs(_) => ErrorCategory::Crs,
-            Self::Cancelled { .. } => ErrorCategory::Cancelled,
+            Self::Cancelled(_) => ErrorCategory::Cancelled,
             Self::ResourceLimit(_) => ErrorCategory::ResourceLimit,
             Self::Io(_) => ErrorCategory::Io,
             Self::Protocol(_) => ErrorCategory::Protocol,
@@ -625,33 +639,32 @@ impl PlenoraError {
     ///   [`RetryDisposition::RequiresIdempotencyKey`] o
     ///   [`RetryDisposition::RequiresRecovery`], che restano per i componenti
     ///   con stato remoto.
-    /// - [`RetryDisposition::Safe`] solo per gli errori di I/O, causa
-    ///   potenzialmente transitoria; backoff e tentativi spettano al
+    /// - [`RetryDisposition::Safe`] per gli errori di I/O, causa
+    ///   potenzialmente transitoria, e per la scadenza e l'annullamento del
+    ///   runner (`Timeout`, `Cancelled`): scattano prima di un passo o della
+    ///   consegna degli output, nessun output è stato reso e la riesecuzione
+    ///   è deterministica (come nei vettori `data-run-timeout-error` e
+    ///   `io-read-cancelled-error` del contratto). Backoff, tentativi e la
+    ///   scelta di ritentare dopo un annullamento voluto spettano al
     ///   chiamante.
-    /// - [`RetryDisposition::Never`] per le cause deterministiche, la
-    ///   cancellazione (volontaria) e `Internal`.
-    /// - [`RetryDisposition::After`] non e' mai prodotto: non ci sono sorgenti
-    ///   di backoff tipizzate.
+    /// - [`RetryDisposition::Never`] per le cause deterministiche e
+    ///   `Internal`.
+    /// - [`RetryDisposition::After`] e [`RetryDisposition::Quarantine`] non
+    ///   sono mai prodotti.
     ///
     /// Il tag di fase ([`PlenoraError::Tagged`]) non cambia la disposizione.
     #[must_use]
     pub const fn retry_disposition(&self) -> RetryDisposition {
         match self {
-            Self::Io(_) => RetryDisposition::Safe,
+            Self::Io(_) | Self::Timeout(_) | Self::Cancelled(_) => RetryDisposition::Safe,
             Self::InvalidPlan(_)
             | Self::Unsupported(_)
             | Self::Schema(_)
             | Self::DataMapping(_)
             | Self::Execution { .. }
             | Self::Crs(_)
-            | Self::Cancelled { .. }
             | Self::ResourceLimit(_)
-            // Non ritentabili in cieco. `Timeout` sembra transitorio, ma il
-            // chiamante non sa se l'altro capo sia lento o morto: ritentare su
-            // un worker ancora al lavoro ne avvierebbe un secondo, e stabilire
-            // che il primo sia finito non spetta a questo asse.
             | Self::Protocol(_)
-            | Self::Timeout(_)
             | Self::Conflict(_)
             | Self::InvalidConfiguration(_)
             | Self::Internal(_) => RetryDisposition::Never,
@@ -675,9 +688,9 @@ impl PlenoraError {
     /// - `InvalidPlan`, `Unsupported`, `Schema`, `Crs` ->
     ///   [`ErrorPhase::Validate`], anche quando il controllo scatta durante
     ///   l'esecuzione;
-    /// - `Execution`, `Cancelled` -> [`ErrorPhase::Write`]: il canone non ha
-    ///   «Execute», e un `Execution` nasce solo mentre un nodo produce
-    ///   l'uscita;
+    /// - `Execution`, `Cancelled`, `Timeout` -> [`ErrorPhase::Write`]: il
+    ///   canone non ha «Execute», e questi errori nascono mentre il piano
+    ///   produce le uscite;
     /// - `DataMapping`, `Io`, `Internal` non taggati -> [`ErrorPhase::Write`],
     ///   il lato con possibile effetto sul supporto (scelta conservativa; la
     ///   disposizione di retry non dipende comunque dalla fase);
@@ -694,7 +707,7 @@ impl PlenoraError {
                 ErrorPhase::Validate
             }
             Self::Execution { .. }
-            | Self::Cancelled { .. }
+            | Self::Cancelled(_)
             | Self::DataMapping(_)
             | Self::Io(_)
             // `ResourceLimit` deriva `Write` come le altre varianti di
@@ -702,9 +715,8 @@ impl PlenoraError {
             // lo produce leggendo un input lo tagga `Read` con `with_phase`,
             // e il tag del confine vince sulla derivazione (vedi sotto).
             | Self::ResourceLimit(_)
-            // `Protocol` e `Timeout` derivano `Write` come `Io`, il lato con
-            // possibile effetto. Chi conosce il confine raffina con
-            // `with_phase`.
+            // `Protocol` deriva `Write` come `Io`, il lato con possibile
+            // effetto. Chi conosce il confine raffina con `with_phase`.
             | Self::Protocol(_)
             | Self::Timeout(_)
             | Self::Internal(_) => ErrorPhase::Write,
@@ -798,26 +810,20 @@ impl PlenoraError {
         self.category() == ErrorCategory::Cancelled
     }
 
-    /// Nodo, operazione ed `execution_id` di un `Execution` o `Cancelled`
-    /// con `execution_id` assegnato, attraversando i wrapper trasparenti.
+    /// Nodo, operazione ed `execution_id` di un `Execution` con
+    /// `execution_id` assegnato, attraversando i wrapper trasparenti.
     #[must_use]
     pub fn execution_context(&self) -> Option<(&str, &str, &str)> {
         let (node, operation, execution_id) = self.execution_location()?;
         execution_id.map(|execution_id| (node, operation, execution_id))
     }
 
-    /// Nodo, operazione ed `execution_id` (se assegnato) di un `Execution` o
-    /// `Cancelled`, attraversando i wrapper trasparenti.
+    /// Nodo, operazione ed `execution_id` (se assegnato) di un `Execution`,
+    /// attraversando i wrapper trasparenti.
     #[must_use]
     pub fn execution_location(&self) -> Option<(&str, &str, Option<&str>)> {
         match self {
             Self::Execution {
-                node,
-                operation,
-                execution_id,
-                ..
-            }
-            | Self::Cancelled {
                 node,
                 operation,
                 execution_id,
@@ -834,11 +840,11 @@ impl PlenoraError {
         }
     }
 
-    /// Motivo di un `Execution` o `Cancelled`, attraverso i wrapper.
+    /// Motivo di un `Execution`, attraverso i wrapper.
     #[must_use]
     pub fn execution_reason(&self) -> Option<&str> {
         match self {
-            Self::Execution { reason, .. } | Self::Cancelled { reason, .. } => Some(reason),
+            Self::Execution { reason, .. } => Some(reason),
             Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => {
                 source.execution_reason()
             }
@@ -846,9 +852,9 @@ impl PlenoraError {
         }
     }
 
-    /// Assegna l'`execution_id` a un `Execution` o `Cancelled` (anche sotto
-    /// i wrapper) senza sovrascriverne uno già assegnato; le altre varianti
-    /// tornano invariate.
+    /// Assegna l'`execution_id` a un `Execution` (anche sotto i wrapper)
+    /// senza sovrascriverne uno già assegnato; le altre varianti tornano
+    /// invariate.
     #[must_use]
     pub fn with_execution_id(self, execution_id: &str) -> Self {
         match self {
@@ -858,21 +864,6 @@ impl PlenoraError {
                 execution_id: current,
                 reason,
             } => Self::Execution {
-                node,
-                operation,
-                execution_id: if current.is_empty() {
-                    execution_id.to_owned()
-                } else {
-                    current
-                },
-                reason,
-            },
-            Self::Cancelled {
-                node,
-                operation,
-                execution_id: current,
-                reason,
-            } => Self::Cancelled {
                 node,
                 operation,
                 execution_id: if current.is_empty() {
@@ -930,8 +921,11 @@ impl PlenoraError {
     /// «effetto»).
     ///
     /// Sempre [`RemoteEffect::None`], per costruzione: la scrittura atomica
-    /// di `plenora-io` non rende mai visibile un'uscita parziale, e un
-    /// temporaneo rimasto dopo un crash non sta alla destinazione.
+    /// di `plenora-io` non rende mai visibile un file d'uscita parziale, e un
+    /// temporaneo rimasto dopo un crash non sta alla destinazione. Limite
+    /// dichiarato (README, «Limiti dichiarati degli errori»): `esegui_da_file`
+    /// scrive gli output uno alla volta, e un errore dopo il primo lascia
+    /// scritti i precedenti senza che l'effetto lo dica.
     #[must_use]
     pub const fn remote_effect(&self) -> RemoteEffect {
         match self {
@@ -943,7 +937,7 @@ impl PlenoraError {
             | Self::DataMapping(_)
             | Self::Execution { .. }
             | Self::Crs(_)
-            | Self::Cancelled { .. }
+            | Self::Cancelled(_)
             | Self::Io(_)
             | Self::ResourceLimit(_)
             // Nessuna eccezione tra le nuove: `Conflict` e' l'unica che
@@ -994,12 +988,7 @@ mod tests {
     }
 
     fn cancelled() -> PlenoraError {
-        PlenoraError::Cancelled {
-            node: "n".to_owned(),
-            operation: "table.filter".to_owned(),
-            execution_id: "exec-1".to_owned(),
-            reason: "cancellazione richiesta dal chiamante".to_owned(),
-        }
+        PlenoraError::Cancelled("prima del passo `n` (table.filter)".to_owned())
     }
 
     /// Una istanza per variante costruibile direttamente, con la categoria e
@@ -1028,6 +1017,11 @@ mod tests {
             (step("exec-1"), C::Execution, P::Write),
             (PlenoraError::Crs("crs".into()), C::Crs, P::Validate),
             (cancelled(), C::Cancelled, P::Write),
+            (
+                PlenoraError::Timeout("prima del passo `n` (table.filter)".into()),
+                C::Timeout,
+                P::Write,
+            ),
             (
                 PlenoraError::Io(std::io::Error::other("io")),
                 C::Io,
@@ -1123,13 +1117,16 @@ mod tests {
     }
 
     #[test]
-    fn retry_disposition_is_safe_only_for_transient_io() {
-        // La disposizione sostituisce il booleano: `Safe` solo per
-        // la causa potenzialmente transitoria (I/O) a effetto assente e
-        // operazione idempotente; `Never` per cause deterministiche o
-        // volontarie.
+    fn retry_disposition_is_safe_only_for_io_and_interruptions() {
+        // La disposizione sostituisce il booleano: `Safe` solo per la causa
+        // potenzialmente transitoria (I/O) e per scadenza e annullamento del
+        // runner, tutti a effetto assente; `Never` per le cause
+        // deterministiche.
         for (error, _) in samples() {
-            let expected = if matches!(error, PlenoraError::Io(_)) {
+            let expected = if matches!(
+                error,
+                PlenoraError::Io(_) | PlenoraError::Cancelled(_) | PlenoraError::Timeout(_)
+            ) {
                 RetryDisposition::Safe
             } else {
                 RetryDisposition::Never
@@ -1175,6 +1172,7 @@ mod tests {
         pretendi_nomi_stabili(
             &[
                 (RetryDisposition::Never, "never"),
+                (RetryDisposition::Quarantine, "quarantine"),
                 (RetryDisposition::Safe, "safe"),
                 (
                     RetryDisposition::RequiresIdempotencyKey,
@@ -1261,10 +1259,10 @@ mod tests {
                 categoria.index()
             );
         }
-        // Il conteggio e' un'informazione, non un presidio: le 18 categorie
-        // canoniche usate (le due estensioni locali dell'isolamento non ci
-        // sono).
-        assert_eq!(ErrorCategory::ALL.len(), 18, "categorie supportate");
+        // Il conteggio e' un'informazione, non un presidio: le 19 categorie
+        // di `plenora-error-v1` (le due estensioni locali dell'isolamento
+        // del progetto d'origine non ci sono).
+        assert_eq!(ErrorCategory::ALL.len(), 19, "categorie supportate");
         // `from_stable_name` e' l'inverso di `as_str`: se il giro non
         // chiudesse, un report legittimo verrebbe letto come categoria
         // sconosciuta.
@@ -1305,15 +1303,11 @@ mod tests {
     fn le_varianti_nuove_dichiarano_i_quattro_assi() {
         // La tabella e' scritta a mano: e' il contratto approvato, e serve
         // che sia leggibile accanto a cio' che verifica.
-        let casi: [(PlenoraError, ErrorCategory, ErrorPhase); 4] = [
+        // `Timeout` sta in `campioni`: e' ritentabile (`Safe`).
+        let casi: [(PlenoraError, ErrorCategory, ErrorPhase); 3] = [
             (
                 PlenoraError::Protocol("attesa hello, ricevuto ready".into()),
                 ErrorCategory::Protocol,
-                ErrorPhase::Write,
-            ),
-            (
-                PlenoraError::Timeout("handshake oltre la scadenza".into()),
-                ErrorCategory::Timeout,
                 ErrorPhase::Write,
             ),
             (
@@ -1458,16 +1452,13 @@ mod tests {
     #[test]
     fn cancelled_display_carries_context_without_values() {
         let text = cancelled().to_string();
-        assert_eq!(
-            text,
-            "cancelled at node `n` (operation `table.filter`, execution `exec-1`): \
-             cancellazione richiesta dal chiamante"
-        );
+        assert_eq!(text, "cancelled: prima del passo `n` (table.filter)");
         assert_eq!(cancelled().category(), ErrorCategory::Cancelled);
+        assert!(cancelled().is_cancelled());
         assert_eq!(
             cancelled().retry_disposition(),
-            RetryDisposition::Never,
-            "la cancellazione e' volontaria"
+            RetryDisposition::Safe,
+            "nessun output reso: rieseguire e' sicuro, deciderlo spetta al chiamante"
         );
     }
 
@@ -1488,6 +1479,10 @@ mod tests {
             (ErrorCategory::Unsupported, "unsupported"),
             (ErrorCategory::NotFound, "not_found"),
             (ErrorCategory::Conflict, "conflict"),
+            (
+                ErrorCategory::ConcurrentModification,
+                "concurrent_modification",
+            ),
             (ErrorCategory::Authentication, "authentication"),
             (ErrorCategory::Authorization, "authorization"),
             (ErrorCategory::Timeout, "timeout"),

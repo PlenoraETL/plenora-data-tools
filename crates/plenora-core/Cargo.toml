@@ -15,5 +15,12 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+# Validatore JSON Schema minimo dei test (tests/errore_pubblico_schema.rs):
+# `pattern` con `regex` e SHA-256 delle fixture dei contratti con `sha2`.
+# Entrambi gia' nel lockfile (plenora-kernels-table), nessun pacchetto nuovo.
+regex.workspace = true
+sha2.workspace = true
+
 [lints]
 workspace = true

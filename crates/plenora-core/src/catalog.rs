@@ -153,9 +153,9 @@ pub enum ResultShape {
 /// `Preserved` significa che ogni configurazione valida mantiene numero e
 /// ordine delle righe (del primo ingresso, per le binarie). Ogni altra
 /// operazione è `Unavailable`: senza una traccia di lineage non si può
-/// ricostruire l'indice originale, e il runner dichiara gli indici della
-/// diagnostica per riga di un passo a valle come righe dell'ingresso del
-/// passo (`step_input_row_zero_based`), non della sorgente. È questa
+/// ricostruire l'indice originale, e il runner pubblica la diagnostica per
+/// riga di un passo a valle con i soli conteggi, senza esempi (limite di
+/// conoscenza `read.row_attribution_unavailable`). È questa
 /// classificazione, non [`OperationDescriptor::emits_row_diagnostics`], che
 /// decide la base: un `Preserved` sbagliato farebbe leggere come righe della
 /// sorgente indici che non lo sono.

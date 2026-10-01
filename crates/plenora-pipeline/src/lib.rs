@@ -27,7 +27,7 @@ mod geo;
 pub mod piano;
 mod validazione;
 
-pub use esecuzione::{Esito, Report, ReportPasso};
+pub use esecuzione::{Esito, Interruzione, Report, ReportPasso};
 pub use piano::{LimitiParziali, Passo, Pipeline, VERSIONE_PIANO};
 pub use plenora_core::memoria::byte_vivi;
 pub use validazione::{BaseIndici, PipelineValidata};
