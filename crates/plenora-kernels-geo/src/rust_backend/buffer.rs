@@ -491,9 +491,6 @@ fn buffer_con_freccia_e_margine(
         limite,
     )?;
     let passo = griglia::passo_griglia(ingombro).ok_or(ErroreBuffer::PrecisioneInsufficiente)?;
-    // Prima di copiare: la copia di lavoro non supera l'heap dell'ingresso
-    // (piu' il posto delle parti che rende come collezione, contato dopo).
-    margine.verifica(crate::margine::byte_heap_geometria(geometry))?;
     let lavoro = senza_componenti_sotto_griglia(geometry, passo);
     let angolo = angolo_degli_archi(distance, freccia_corde);
     let estremita_geo = match estremita {
