@@ -860,10 +860,32 @@ fn l_ora_media_locale_non_ha_testo_rfc_3339() {
                 .unwrap_or_else(|errore| panic!("{unita:?} {op}: {errore}"));
             let errore =
                 esegui(&pipeline, &[("t", ingresso.clone())]).expect_err("offset ai secondi");
-            assert!(
-                errore.to_string().contains("offset del fuso"),
-                "{unita:?} {op}: {errore}"
-            );
+            if op == "table.timezone_convert" {
+                // Per riga: le due celle LMT (righe 0 e 2), non le tre a
+                // -10:00:00.
+                let diagnostica = errore
+                    .row_diagnostics()
+                    .unwrap_or_else(|| panic!("{unita:?} {op}: {errore}"));
+                assert_eq!(
+                    diagnostica.counts.get("conversion.offset_precision"),
+                    Some(&2),
+                    "{unita:?}"
+                );
+                assert_eq!(
+                    diagnostica
+                        .examples
+                        .iter()
+                        .map(|esempio| esempio.source_index)
+                        .collect::<Vec<_>>(),
+                    vec![0, 2],
+                    "{unita:?}"
+                );
+            } else {
+                assert!(
+                    errore.to_string().contains("offset del fuso"),
+                    "{unita:?} {op}: {errore}"
+                );
+            }
         }
         let esatto = passo_validato(
             "table.timezone_convert",

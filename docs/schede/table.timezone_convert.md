@@ -71,7 +71,10 @@ In validazione, `InvalidPlan`:
   `timestamp` con un fuso diverso da `source_timezone`;
 - `source_timezone` o `target_timezone` non riconosciuti;
 - un formato vuoto, oltre `max_string_bytes`, con un campo non
-  riconosciuto, o che non si sa scrivere per un valore con fuso;
+  riconosciuto, o che non si sa scrivere per un valore con fuso. La
+  validazione guarda la struttura del formato, non l'offset, che è della
+  cella: `%:::z` con `target_timezone` `Australia/Adelaide` si accetta, e in
+  esecuzione il 1896 (+09:00) si scrive, il 2000 (+10:30) rifiuta la riga;
 - `output_format` che può scrivere più di `max_string_bytes` byte per
   valore;
 - `output_column` non valido;
@@ -83,14 +86,15 @@ In esecuzione:
 - `DataMapping` con diagnostica per riga: una cella non nulla che non si
   legge (`conversion.invalid_datetime`), un'ora locale ambigua
   (`conversion.ambiguous_local_time`) o inesistente
-  (`conversion.nonexistent_local_time`) nel fuso di partenza; il passo non
-  produce uscita;
+  (`conversion.nonexistent_local_time`) nel fuso di partenza, o il cui
+  offset nel fuso di arrivo è più fine di quanto `output_format` lo scriva
+  (`conversion.offset_precision`: un offset ai secondi, come l'ora media
+  locale prima dei fusi standard, con `%z`, `%:z`, `%#z`, `%+`; un offset
+  non a ore intere con `%:::z`), che chrono arrotonderebbe e il testo
+  indicherebbe un altro istante; `%::z` scrive l'offset coi secondi. Il
+  passo non produce uscita;
 - `DataMapping`, senza diagnostica per riga: un valore che `output_format`
-  non sa scrivere (anno fuori da 0..=9999 con `%C`), o un offset più fine
-  di quanto `output_format` lo scriva (un offset ai secondi, come l'ora
-  media locale prima dei fusi standard, con `%z`, `%:z`, `%#z`, `%+`; un
-  offset non a ore intere con `%:::z`): chrono lo arrotonderebbe e il testo
-  indicherebbe un altro istante. `%::z` scrive l'offset coi secondi;
+  non sa scrivere (anno fuori da 0..=9999 con `%C`);
 - `Schema`: una cella che non si converte in testo.
 
 ### Limiti e deviazioni
@@ -98,6 +102,13 @@ In esecuzione:
 Le regole dei fusi sono quelle della banca dati IANA inclusa in
 `chrono-tz` 0.10.4: un cambio di regole successivo non si vede finché la
 dipendenza non si aggiorna.
+
+Un `target_timezone` che non ha mai un offset scrivibile con
+`output_format` (`Asia/Kolkata` con `%:::z`: +05:30 e, prima, offset
+locali mai a ore intere) non si rifiuta in validazione: `chrono-tz` non
+espone l'elenco delle transizioni di un fuso, e un controllo su istanti di
+prova non sarebbe esatto. Ogni cella non nulla si rifiuta in esecuzione
+(`conversion.offset_precision`), mai con un testo arrotondato.
 
 ### Complessità
 

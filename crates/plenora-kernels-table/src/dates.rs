@@ -179,8 +179,15 @@ fn scrivi_formattato(valore: impl std::fmt::Display) -> Result<String> {
 /// `%+`), che chrono scrive solo per un valore con fuso. Per riga resta un
 /// errore esplicito, mai un panico ne' un testo sbagliato: il secolo (`%C`)
 /// fuori dagli anni 0..=9999, che chrono scriverebbe con un carattere non
-/// numerico al posto delle decine, e gli anni fuori dall'intervallo di
-/// RFC 2822.
+/// numerico al posto delle decine, gli anni fuori dall'intervallo di
+/// RFC 2822 e l'offset del fuso piu' fine di quanto il formato lo scriva
+/// ([`FormatoUscita::offset_esatto`]).
+///
+/// La validazione guarda solo la struttura del formato: l'offset e' una
+/// proprieta' della cella (dell'istante e del fuso), non della config, e
+/// non si controlla su un istante di prova. `Australia/Adelaide` vale
+/// +09:00 nel 1896 e +10:30 nel 2000: con `%:::z` la prima cella si scrive
+/// esatta, la seconda si rifiuta.
 pub(crate) struct FormatoUscita<'a> {
     items: Vec<Item<'a>>,
     /// Il formato scrive il secolo civile a due cifre (`%C`, anno / 100).
@@ -234,6 +241,8 @@ impl<'a> FormatoUscita<'a> {
     /// Istante di prova per scoprire, prima dei dati, gli item che chrono
     /// non sa scrivere per il tipo del valore: il risultato non dipende
     /// dall'istante se non per gli anni, e il 2000 e' dentro ogni intervallo.
+    /// Solo controlli strutturali: niente che dipenda dai dati si controlla
+    /// su questo istante (l'offset del fuso, [`FormatoUscita::offset_esatto`]).
     fn campione() -> Result<NaiveDateTime> {
         NaiveDate::from_ymd_opt(2000, 1, 1)
             .and_then(|date| date.and_hms_opt(0, 0, 0))
@@ -251,11 +260,12 @@ impl<'a> FormatoUscita<'a> {
         Ok(formato)
     }
 
-    /// Per valori con il fuso `fuso`.
+    /// Per valori con il fuso `fuso`. L'offset del campione non si
+    /// controlla: e' quello del 2000, non quello delle celle.
     pub(crate) fn con_fuso(format: &'a str, fuso: Tz) -> Result<Self> {
         let formato = Self::compila(format)?;
         let campione = fuso.from_utc_datetime(&Self::campione()?);
-        if formato.scrivi_con_fuso(&campione).is_err() {
+        if formato.scrivi_istante(&campione).is_err() {
             return Err(PlenoraError::InvalidPlan(
                 "output_format non applicabile ai valori con fuso".into(),
             ));
@@ -281,7 +291,31 @@ impl<'a> FormatoUscita<'a> {
         scrivi_formattato(valore.format_with_items(self.items.iter()))
     }
 
+    /// L'offset del fuso di `valore` si scrive esatto con questo formato:
+    /// e' un multiplo della granularita' con cui il formato lo scrive
+    /// (`passo_offset`). Altrimenti chrono lo arrotonderebbe e il testo
+    /// indicherebbe un altro istante. Si controlla per cella, in esecuzione.
+    pub(crate) fn offset_esatto(&self, valore: &DateTime<Tz>) -> bool {
+        chrono::Offset::fix(valore.offset()).local_minus_utc() % self.passo_offset == 0
+    }
+
+    /// Scrive `valore`; un offset non esatto ([`Self::offset_esatto`]) e'
+    /// un errore, mai un testo arrotondato. Chi scrive per riga lo
+    /// controlla prima, per una diagnostica per riga.
     pub(crate) fn scrivi_con_fuso(&self, valore: &DateTime<Tz>) -> Result<String> {
+        if !self.offset_esatto(valore) {
+            return Err(PlenoraError::DataMapping(
+                "offset del fuso piu' fine di quanto output_format lo scriva: \
+                 il testo indicherebbe un altro istante"
+                    .into(),
+            ));
+        }
+        self.scrivi_istante(valore)
+    }
+
+    /// Scrive `valore` senza il controllo dell'offset: la struttura del
+    /// formato e i limiti di anno.
+    fn scrivi_istante(&self, valore: &DateTime<Tz>) -> Result<String> {
         // L'ora locale oltre l'intervallo di chrono: `year()` e la scrittura
         // andrebbero in panico sommando l'offset senza controllo.
         crate::temporale::ora_locale(&valore.with_timezone(&chrono::Utc), valore.timezone())
@@ -291,13 +325,6 @@ impl<'a> FormatoUscita<'a> {
                 )
             })?;
         self.controlla_secolo(valore.year(), valore.iso_week().year())?;
-        if chrono::Offset::fix(valore.offset()).local_minus_utc() % self.passo_offset != 0 {
-            return Err(PlenoraError::DataMapping(
-                "offset del fuso piu' fine di quanto output_format lo scriva: \
-                 il testo indicherebbe un altro istante"
-                    .into(),
-            ));
-        }
         scrivi_formattato(valore.format_with_items(self.items.iter()))
     }
 }
@@ -984,8 +1011,10 @@ pub struct TimezoneConvert {
 ///   `input_format` assente per un testo o scritto per una colonna
 ///   temporale;
 /// - `DataMapping`: ora ambigua (`conversion.ambiguous_local_time`) o
-///   inesistente (`conversion.nonexistent_local_time`) o valore non
-///   parsabile (`conversion.invalid_datetime`), con row diagnostics; senza
+///   inesistente (`conversion.nonexistent_local_time`), valore non
+///   parsabile (`conversion.invalid_datetime`) o offset del fuso d'arrivo
+///   piu' fine di quanto `output_format` lo scriva
+///   (`conversion.offset_precision`), con row diagnostics; senza
 ///   diagnostica, un valore che `output_format` non sa scrivere;
 /// - `Schema`: colonna assente (come `column_index`) o valore non
 ///   convertibile in testo (come `scalar_as_string`); gli errori di
@@ -1012,27 +1041,31 @@ pub fn timezone_convert(batch: &RecordBatch, config: &TimezoneConvert) -> Result
     let mut rejections = Vec::new();
     let mut convertiti = Vec::with_capacity(batch.num_rows());
     for row in 0..batch.num_rows() {
-        let cause = match lettore.momento(row)? {
+        let istante = match lettore.momento(row)? {
             Letto::Nullo => {
                 convertiti.push(None);
                 continue;
             }
-            Letto::Illeggibile => "conversion.invalid_datetime",
+            Letto::Illeggibile => Err("conversion.invalid_datetime"),
             Letto::Valore(Momento {
                 istante: Some(noto),
                 ..
-            }) if colonna_con_fuso || testo => {
-                convertiti.push(Some(noto));
+            }) if colonna_con_fuso || testo => Ok(noto),
+            Letto::Valore(momento) => match source_tz.from_local_datetime(&momento.locale) {
+                LocalResult::Single(valore) => Ok(valore.with_timezone(&chrono::Utc)),
+                LocalResult::Ambiguous(_, _) => Err("conversion.ambiguous_local_time"),
+                LocalResult::None => Err("conversion.nonexistent_local_time"),
+            },
+        };
+        // L'offset d'arrivo e' della cella, non della config: un offset che
+        // `output_format` scriverebbe arrotondato rifiuta la riga.
+        let cause = match istante {
+            Ok(istante) if uscita.offset_esatto(&istante.with_timezone(&target_tz)) => {
+                convertiti.push(Some(istante));
                 continue;
             }
-            Letto::Valore(momento) => match source_tz.from_local_datetime(&momento.locale) {
-                LocalResult::Single(valore) => {
-                    convertiti.push(Some(valore.with_timezone(&chrono::Utc)));
-                    continue;
-                }
-                LocalResult::Ambiguous(_, _) => "conversion.ambiguous_local_time",
-                LocalResult::None => "conversion.nonexistent_local_time",
-            },
+            Ok(_) => "conversion.offset_precision",
+            Err(cause) => cause,
         };
         convertiti.push(None);
         rejections.push(RowRejection {
@@ -2513,6 +2546,93 @@ mod tests {
                 Some("2024-10-27 02:00:00"),
             ]
         );
+    }
+
+    /// Regressione: l'offset d'arrivo e' della cella, non della config.
+    /// `Australia/Adelaide` vale +09:00 dal 1895 al 1899 e +10:30 d'estate
+    /// nel 2000. Prima la validazione scriveva un istante di prova del 2000
+    /// e rifiutava `%:::z` (solo ore) per ogni dato, anche per il 1896, che
+    /// si scrive esatto. Ora la validazione accetta, il 1896 si scrive e il
+    /// 2000 rifiuta la sua riga. Valori attesi scritti a mano.
+    #[test]
+    fn l_offset_d_arrivo_si_controlla_per_cella_non_in_validazione() {
+        use plenora_core::contract::{DataContract, FieldAllocator};
+
+        let json = serde_json::json!({
+            "column": "ts", "input_format": "%Y-%m-%d %H:%M:%S",
+            "output_format": "%Y-%m-%d %H:%M %:::z", "source_timezone": "UTC",
+            "target_timezone": "Australia/Adelaide", "output_column": "out"});
+        let config: TimezoneConvert = config(json.clone());
+        let ottocento = utf8_batch(vec![Some("1896-01-01 00:00:00"), None]);
+        let analisi = crate::analyze::analyze_table_contract(
+            "table.timezone_convert",
+            &[DataContract::tabular(ottocento.schema())],
+            &json,
+            &mut FieldAllocator::default(),
+            &crate::Limits::default(),
+        );
+        assert!(analisi.is_ok(), "{analisi:?}");
+        let output = timezone_convert(&ottocento, &config).expect("offset a ore intere");
+        assert_eq!(
+            output
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("utf8")
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("1896-01-01 09:00 +09"), None]
+        );
+        // Il 2000 (+10:30) rifiuta solo la sua riga; con `%::z` (coi
+        // secondi) si scrive.
+        let misto = utf8_batch(vec![
+            Some("1896-01-01 00:00:00"),
+            Some("2000-01-01 00:00:00"),
+            None,
+        ]);
+        assert_rejected(
+            timezone_convert(&misto, &config),
+            &[(1, "conversion.offset_precision", Some("ts"))],
+        );
+        let esatto = timezone_convert(
+            &misto,
+            &TimezoneConvert {
+                output_format: "%Y-%m-%d %H:%M %::z".into(),
+                ..config
+            },
+        )
+        .expect("offset coi secondi");
+        assert_eq!(
+            esatto
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("utf8")
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![
+                Some("1896-01-01 09:00 +09:00:00"),
+                Some("2000-01-01 10:30 +10:30:00"),
+                None
+            ]
+        );
+        // La validazione resta strutturale: un item che chrono non scrive si
+        // rifiuta prima dei dati, qualunque sia il fuso.
+        for formato in ["%Q", "%Y-%"] {
+            let mut json = json.clone();
+            json["output_format"] = serde_json::json!(formato);
+            let analisi = crate::analyze::analyze_table_contract(
+                "table.timezone_convert",
+                &[DataContract::tabular(ottocento.schema())],
+                &json,
+                &mut FieldAllocator::default(),
+                &crate::Limits::default(),
+            );
+            assert!(
+                matches!(analisi, Err(PlenoraError::InvalidPlan(_))),
+                "{formato}: {analisi:?}"
+            );
+        }
     }
 
     #[test]

@@ -4306,7 +4306,7 @@ mod tests {
             ("table.statistics", (2, 2, 3, 4), (1, 0, 1, 1)),
             // chiavi e confronti di ogni unita' nel profilo testuale
             ("table.table_diff", (1, 2, 2, 3), (1, 0, 1, 1)),
-            // date64 letto come il suo testo AAAA-MM-GG; offset piu' fine di output_format rifiutato invece che arrotondato
+            // date64 letto come il suo testo AAAA-MM-GG; offset piu' fine di output_format rifiutato per riga (conversion.offset_precision) invece che arrotondato, mai in validazione su un istante di prova
             ("table.timezone_convert", (3, 3, 3, 5), (1, 0, 1, 1)),
             // comparatore di ogni unita' (istante esatto) e date64
             ("table.top_n", (1, 2, 2, 2), (1, 0, 1, 1)),

@@ -777,7 +777,12 @@ dello stesso millisecondo:
   testo; la cella si rifiuta (`Schema`). Lo stesso vale per un
   `output_format` di `timezone_convert` che scrive l'offset più grosso di
   quanto sia (`%z`, `%:z`, `%+` per un offset ai secondi; `%:::z` per un
-  offset non a ore intere): `DataMapping`, mentre `%::z` lo scrive esatto.
+  offset non a ore intere): la riga si rifiuta (`DataMapping` con
+  diagnostica per riga, `conversion.offset_precision`), mentre `%::z` lo
+  scrive esatto. L'offset è della cella, non della config: si controlla in
+  esecuzione, mai in validazione su un istante di prova
+  (`Australia/Adelaide` con `%:::z` scrive il 1896, a +09:00, e rifiuta il
+  2000, a +10:30).
   Un `date64` si scrive `AAAA-MM-GG` solo se allineato al giorno,
   altrimenti la cella si rifiuta (`Schema`);
 - **ordinamenti e comparatori** (`compare_cells_typed`: `sort`, `top_n`,
