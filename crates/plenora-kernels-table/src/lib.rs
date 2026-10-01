@@ -984,6 +984,38 @@ pub fn is_logically_null(array: &dyn Array, row: usize) -> bool {
     }
 }
 
+/// Chiave d'identita' della cella, `None` se la riga e' null.
+///
+/// Il testo del profilo scalare ([`scalar_as_string`]), salvo i
+/// `Timestamp`, che valgono il loro istante
+/// (`interi_temporali::frammento_chiave`: nanosecondi dall'epoca, in ordine
+/// cronologico).
+///
+/// Per raggruppare, deduplicare, abbinare e partizionare: il testo RFC 3339
+/// di un istante dipende dal fuso, e non esiste per un offset con i secondi
+/// (ora media locale prima dei fusi standard), che [`scalar_as_string`]
+/// rifiuta. Il fuso della colonna si verifica comunque, come nel testo: la
+/// validazione lo pretende per ogni chiave.
+///
+/// # Errors
+///
+/// Come [`scalar_as_string`]; per un `Timestamp`, `Schema` per un fuso
+/// Arrow non valido o un array incoerente col suo tipo.
+pub fn scalar_key_string(array: &dyn Array, row: usize) -> Result<Option<String>> {
+    if let DataType::Timestamp(_, fuso) = array.data_type() {
+        if let Some(fuso) = fuso {
+            fuso.parse::<chrono_tz::Tz>()
+                .map_err(|_| PlenoraError::Schema("timezone Arrow non valida".into()))?;
+        }
+        let interi = interi_temporali::InteriTemporali::new(array)
+            .ok_or_else(|| PlenoraError::Schema("array timestamp incoerente".into()))?;
+        return Ok(interi
+            .nanosecondi(row)
+            .map(interi_temporali::frammento_chiave));
+    }
+    scalar_as_string(array, row)
+}
+
 /// Valore scalare della riga come `String` (profilo scalare testuale).
 /// `None` se la riga e' null.
 ///
@@ -991,7 +1023,9 @@ pub fn is_logically_null(array: &dyn Array, row: usize) -> bool {
 ///
 /// - `InvalidPlan`: epoch date32 non valida (guardia interna);
 /// - `Schema`: valore date32/date64/timestamp fuori intervallo, date64 non
-///   allineato al giorno, timezone Arrow non valida, decimal128 incoerente o con scala non supportata, binary non
+///   allineato al giorno, timestamp il cui offset nel fuso ha i secondi
+///   (nessuna forma RFC 3339, `temporale::verifica_offset_rfc3339`),
+///   timezone Arrow non valida, decimal128 incoerente o con scala non supportata, binary non
 ///   UTF-8, dictionary non Utf8 o con chiave fuori dal dizionario, tipo non
 ///   supportato dal profilo scalare.
 pub fn scalar_as_string(array: &dyn Array, row: usize) -> Result<Option<String>> {
@@ -1059,7 +1093,9 @@ pub fn scalar_as_string(array: &dyn Array, row: usize) -> Result<Option<String>>
             crate::temporale::ora_locale(&timestamp, timezone).ok_or_else(|| {
                 PlenoraError::Schema("timestamp fuori intervallo nel fuso della colonna".into())
             })?;
-            return Ok(Some(timestamp.with_timezone(&timezone).to_rfc3339()));
+            let locale = timestamp.with_timezone(&timezone);
+            crate::temporale::verifica_offset_rfc3339(&locale)?;
+            return Ok(Some(locale.to_rfc3339()));
         }
         return Ok(Some(timestamp.to_rfc3339()));
     }

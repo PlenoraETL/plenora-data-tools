@@ -13,7 +13,7 @@ use plenora_core::{PlenoraError, Result};
 
 use crate::hashing::FastHasher;
 use crate::interning::KeyInterner;
-use crate::scalar_as_string;
+use crate::{scalar_as_string, scalar_key_string};
 
 // ---------------------------------------------------------------------------
 // Fast path di `table.aggregate`.
@@ -69,8 +69,9 @@ pub enum KeyColumn {
         prefix: String,
         values: BinaryArray,
     },
-    /// Qualunque altro tipo: chiave via `scalar_as_string`, il percorso
-    /// generico.
+    /// Qualunque altro tipo: chiave via `scalar_key_string` (il testo del
+    /// profilo scalare; per un `Timestamp` l'istante in nanosecondi), il
+    /// percorso generico.
     Generic {
         prefix: String,
         array: ArrayRef,
@@ -201,7 +202,7 @@ impl KeyColumn {
                     push_key_value(key, values.value(row));
                 }
             }
-            Self::Generic { array, .. } => match scalar_as_string(array.as_ref(), row)? {
+            Self::Generic { array, .. } => match scalar_key_string(array.as_ref(), row)? {
                 Some(value) => push_key_value(key, value.as_bytes()),
                 None => key.push(b'0'),
             },
@@ -685,7 +686,7 @@ impl<'a> BinaryKeyColumn<'a> {
                     push_binary_value(key, values.value(row));
                 }
             }
-            Self::Generic(array) => match scalar_as_string(array.as_ref(), row)? {
+            Self::Generic(array) => match scalar_key_string(array.as_ref(), row)? {
                 Some(value) => push_binary_value(key, value.as_bytes()),
                 None => key.push(0),
             },
@@ -916,7 +917,7 @@ impl<'a> OrderColumn<'a> {
                     })?;
                     return Ok(Some(text));
                 }
-                scalar_as_string(array.as_ref(), *row)
+                scalar_key_string(array.as_ref(), *row)
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self::Text(texts))
@@ -1053,19 +1054,31 @@ pub fn canonical_key_order(
     Ok(order)
 }
 
-/// Sorgente testuale per nunique/concat: valori Utf8 presi in prestito,
-/// `scalar_as_string` (invariato) per gli altri tipi.
+/// Sorgente testuale per nunique/concat/partizioni: valori Utf8 presi in
+/// prestito, `scalar_as_string` (il testo, per `concat`) o
+/// `scalar_key_string` (l'identita', per `nunique` e le partizioni) per gli
+/// altri tipi.
 pub(in crate::aggregation) enum TextSource<'a> {
     Utf8(&'a StringArray),
     Generic(&'a ArrayRef),
+    Chiave(&'a ArrayRef),
 }
 
 impl<'a> TextSource<'a> {
+    /// Il testo della cella: per `concat`, che lo scrive.
     pub(in crate::aggregation) fn new(array: &'a ArrayRef) -> Self {
         if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
             return Self::Utf8(values);
         }
         Self::Generic(array)
+    }
+
+    /// L'identita' della cella: per contare i distinti e partizionare.
+    pub(in crate::aggregation) fn chiave(array: &'a ArrayRef) -> Self {
+        if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
+            return Self::Utf8(values);
+        }
+        Self::Chiave(array)
     }
 
     pub(in crate::aggregation) fn value(&self, row: usize) -> Result<Option<Cow<'a, str>>> {
@@ -1076,6 +1089,7 @@ impl<'a> TextSource<'a> {
                 Some(Cow::Borrowed(values.value(row)))
             }),
             Self::Generic(array) => Ok(scalar_as_string(array.as_ref(), row)?.map(Cow::Owned)),
+            Self::Chiave(array) => Ok(scalar_key_string(array.as_ref(), row)?.map(Cow::Owned)),
         }
     }
 }
@@ -1114,7 +1128,7 @@ pub(in crate::aggregation) fn build_partitions(
     batch: &RecordBatch,
     group: Option<usize>,
 ) -> Result<KeyPartitions<'_>> {
-    let source = group.map(|index| TextSource::new(batch.column(index)));
+    let source = group.map(|index| TextSource::chiave(batch.column(index)));
     let mut lookup: HashMap<Option<Cow<'_, str>>, usize, FastHasher> = HashMap::default();
     let mut partitions: Vec<(Option<Cow<'_, str>>, Vec<usize>)> = Vec::new();
     for row in 0..batch.num_rows() {

@@ -98,6 +98,14 @@ impl<'a> InteriTemporali<'a> {
         (!self.is_null(row)).then(|| self.value(row))
     }
 
+    /// L'istante della riga in nanosecondi dall'epoca, `None` se null:
+    /// esatto per ogni unita' (`|i64| * 10^9` sta in `i128`).
+    #[must_use]
+    pub fn nanosecondi(&self, row: usize) -> Option<i128> {
+        self.valore(row)
+            .map(|valore| i128::from(valore) * self.nanosecondi_per_unita())
+    }
+
     /// Nanosecondi in un'unita' della colonna (`Date64`: millisecondi).
     #[must_use]
     pub const fn nanosecondi_per_unita(&self) -> i128 {
@@ -119,6 +127,20 @@ pub fn confronta(sinistra: i64, unita_sinistra: i128, destra: i64, unita_destra:
     }
     // |i64| * 10^9 < 2^63 * 2^30 = 2^93: nessun trabocco in `i128`.
     (i128::from(sinistra) * unita_sinistra).cmp(&(i128::from(destra) * unita_destra))
+}
+
+/// Frammento di chiave di un istante, in nanosecondi dall'epoca: 32 cifre
+/// esadecimali dell'`i128` col bit di segno invertito, quindi a larghezza
+/// fissa e con l'ordine dei byte uguale all'ordine cronologico.
+///
+/// E' l'identita' di una cella `Timestamp` in ogni chiave testuale
+/// (raggruppamenti, `distinct`, join, indici, partizioni): il testo RFC 3339
+/// non lo e', perche' dipende dal fuso e non ogni offset ha una forma
+/// RFC 3339 (`scalar_as_string`). Due istanti distinti hanno frammenti
+/// distinti, lo stesso istante lo stesso frammento in ogni unita'.
+#[must_use]
+pub fn frammento_chiave(nanosecondi: i128) -> String {
+    format!("{:032x}", nanosecondi.cast_unsigned() ^ (1_u128 << 127))
 }
 
 /// L'istante UTC di un valore nativo di `Timestamp` nell'unita' data;
@@ -185,6 +207,20 @@ mod tests {
             confronta(i64::MIN, 1_000_000_000, i64::MAX, 1),
             Ordering::Less
         );
+        // Il frammento di chiave: iniettivo, a larghezza fissa, in ordine.
+        let campioni = [
+            i128::from(i64::MIN) * 1_000_000_000,
+            -1,
+            0,
+            1,
+            1_000,
+            i128::from(i64::MAX) * 1_000_000_000,
+        ];
+        for coppia in campioni.windows(2) {
+            let (a, b) = (frammento_chiave(coppia[0]), frammento_chiave(coppia[1]));
+            assert_eq!(a.len(), 32);
+            assert!(a < b, "{} < {}", coppia[0], coppia[1]);
+        }
         let testo: ArrayRef = Arc::new(plenora_core::arrow::array::StringArray::from(vec!["x"]));
         assert!(InteriTemporali::new(testo.as_ref()).is_none());
         assert!(istante(i64::MAX, TimeUnit::Second).is_none());

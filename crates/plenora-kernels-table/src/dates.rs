@@ -188,6 +188,13 @@ pub(crate) struct FormatoUscita<'a> {
     /// Il formato scrive il secolo dell'anno ISO a due cifre (item chrono
     /// `IsoYearDiv100`, senza specificatore strftime ma costruibile).
     secolo_iso: bool,
+    /// Granularita' piu' grossa, in secondi, con cui il formato scrive
+    /// l'offset del fuso: 60 per `%z`, `%:z`, `%#z`, `%+` e RFC 2822 (ore e
+    /// minuti), 3600 per `%:::z` (solo ore), 1 se lo scrive coi secondi
+    /// (`%::z`) o non lo scrive. chrono arrotonda un offset piu' fine al
+    /// valore piu' vicino: un offset con i secondi (ora media locale) o i
+    /// minuti scritto cosi' indicherebbe un altro istante.
+    passo_offset: i32,
 }
 
 impl<'a> FormatoUscita<'a> {
@@ -200,10 +207,27 @@ impl<'a> FormatoUscita<'a> {
         let secolo_iso = items
             .iter()
             .any(|item| matches!(item, Item::Numeric(Numeric::IsoYearDiv100, _)));
+        let passo_offset = items
+            .iter()
+            .map(|item| match item {
+                Item::Fixed(
+                    Fixed::TimezoneOffset
+                    | Fixed::TimezoneOffsetZ
+                    | Fixed::TimezoneOffsetColon
+                    | Fixed::TimezoneOffsetColonZ
+                    | Fixed::RFC2822
+                    | Fixed::RFC3339,
+                ) => 60,
+                Item::Fixed(Fixed::TimezoneOffsetTripleColon) => 3600,
+                _ => 1,
+            })
+            .max()
+            .unwrap_or(1);
         Ok(Self {
             items,
             secolo_civile,
             secolo_iso,
+            passo_offset,
         })
     }
 
@@ -267,6 +291,13 @@ impl<'a> FormatoUscita<'a> {
                 )
             })?;
         self.controlla_secolo(valore.year(), valore.iso_week().year())?;
+        if chrono::Offset::fix(valore.offset()).local_minus_utc() % self.passo_offset != 0 {
+            return Err(PlenoraError::DataMapping(
+                "offset del fuso piu' fine di quanto output_format lo scriva: \
+                 il testo indicherebbe un altro istante"
+                    .into(),
+            ));
+        }
         scrivi_formattato(valore.format_with_items(self.items.iter()))
     }
 }
@@ -1621,6 +1652,7 @@ mod tests {
             items: vec![Item::Numeric(Numeric::IsoYearDiv100, Pad::Zero)],
             secolo_civile: false,
             secolo_iso: true,
+            passo_offset: 1,
         };
         let data = |a, m, g| {
             NaiveDate::from_ymd_opt(a, m, g)

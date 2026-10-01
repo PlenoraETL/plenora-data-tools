@@ -10,13 +10,13 @@ use plenora_core::{PlenoraError, Result};
 use crate::compare_decimal128_values;
 use crate::interi_temporali::InteriTemporali;
 #[cfg(test)]
-use crate::scalar_as_string;
+use crate::scalar_key_string;
 
 #[cfg(test)] // Solo i test-oracolo usano il percorso testuale originale.
 pub fn row_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<String> {
     let mut key = String::new();
     for index in indices {
-        let value = scalar_as_string(batch.column(*index).as_ref(), row)?;
+        let value = scalar_key_string(batch.column(*index).as_ref(), row)?;
         key.push_str(batch.column(*index).data_type().to_string().as_str());
         key.push('\u{1e}');
         match value {

@@ -287,8 +287,11 @@ colonna: il gruppo del null per primo, poi i valori nell'ordine dei byte
 della stringa `<n>:<testo>`, con `n` la lunghezza in byte del testo scritta
 in decimale. Quindi non è l'ordine dei valori: `"sud"` (`3:sud`) precede
 `"nord"` (`4:nord`), `9` precede `-1`, `-1` precede `-2` e `10`, e un
-testo di 10 byte precede uno di 1 byte (`10:` precede `1:`). L'ordine è
-deterministico e non dipende dall'hash.
+testo di 10 byte precede uno di 1 byte (`10:` precede `1:`). Una chiave
+`timestamp` non ha come testo la sua resa RFC 3339 ma il suo istante, a
+larghezza fissa ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)):
+i suoi gruppi escono in ordine cronologico, in ogni unità e fuso. L'ordine
+è deterministico e non dipende dall'hash.
 
 #### Errori
 
@@ -3358,12 +3361,15 @@ microsecondi, nanosecondi; con timezone valida), `decimal128` con scala da
 0 a 38, `binary`, `dictionary<utf8>` (chiavi `int32`). Un `timestamp` si
 scrive in RFC 3339 con tutte le cifre frazionarie che servono: due istanti
 distinti, anche di un solo nanosecondo, hanno testi distinti, e lo stesso
-istante ha lo stesso testo in ogni unità. Un `date64` si scrive
+istante ha lo stesso testo in ogni unità; un istante il cui offset nel
+fuso della colonna ha i secondi (ora media locale) non ha forma RFC 3339,
+e dove serve il testo la cella si rifiuta. Un `date64` si scrive
 `AAAA-MM-GG` se è allineato al giorno; altrimenti non è una data, e la
 cella si rifiuta.
 
 Uguaglianza delle chiavi, colonna per colonna: sul valore nella sua forma
-in testo, quindi `-0.0` e `0.0` sono diversi e ogni NaN è uguale a ogni
+in testo (un `timestamp` sul suo istante, non sul testo), quindi `-0.0` e
+`0.0` sono diversi e ogni NaN è uguale a ogni
 altro NaN; `binary` sui byte; un null è uguale a un null e diverso da ogni
 valore, anche dal testo vuoto; la voce nulla di un dizionario è un null.
 
@@ -5912,7 +5918,8 @@ l'uguaglianza di [`table.distinct`](#tabledistinct).
 #### Ordine
 
 Le righe nell'ordine delle chiavi di [`table.aggregate`](#tableaggregate):
-null per primo, poi per la stringa `<lunghezza>:<testo>` byte per byte.
+null per primo, poi per la stringa `<lunghezza>:<testo>` byte per byte
+(una chiave `timestamp` in ordine cronologico).
 
 #### Errori
 
@@ -8365,7 +8372,11 @@ In esecuzione:
   (`conversion.nonexistent_local_time`) nel fuso di partenza; il passo non
   produce uscita;
 - `DataMapping`, senza diagnostica per riga: un valore che `output_format`
-  non sa scrivere (anno fuori da 0..=9999 con `%C`);
+  non sa scrivere (anno fuori da 0..=9999 con `%C`), o un offset più fine
+  di quanto `output_format` lo scriva (un offset ai secondi, come l'ora
+  media locale prima dei fusi standard, con `%z`, `%:z`, `%#z`, `%+`; un
+  offset non a ore intere con `%:::z`): chrono lo arrotonderebbe e il testo
+  indicherebbe un altro istante. `%::z` scrive l'offset coi secondi;
 - `Schema`: una cella che non si converte in testo.
 
 #### Limiti e deviazioni

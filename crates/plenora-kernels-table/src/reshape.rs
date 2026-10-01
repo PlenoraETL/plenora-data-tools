@@ -1836,7 +1836,7 @@ fn composite_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<S
     for index in indices {
         key.push_str(batch.column(*index).data_type().to_string().as_str());
         key.push('\u{1e}');
-        match scalar_as_string(batch.column(*index).as_ref(), row)? {
+        match crate::scalar_key_string(batch.column(*index).as_ref(), row)? {
             Some(value) => {
                 key.push('1');
                 key.push_str(&value.len().to_string());

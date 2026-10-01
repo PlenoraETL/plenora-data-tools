@@ -127,6 +127,27 @@ fn frazione_letta_oltre_i_nanosecondi(testo: &str, items: &[Item<'_>]) -> bool {
     })
 }
 
+/// L'offset di un istante nel suo fuso ha una forma RFC 3339, cioe' minuti
+/// interi.
+///
+/// RFC 3339 scrive l'offset in ore e minuti, e chrono arrotonderebbe un
+/// offset con i secondi (l'ora media locale di molti fusi prima dei fusi
+/// standard, `America/Anchorage` fino al 1900: `-09:59:36`) al minuto piu'
+/// vicino, lasciando l'ora locale esatta: il testo indicherebbe un altro
+/// istante, e due istanti distinti potrebbero avere lo stesso testo.
+///
+/// # Errors
+///
+/// `Schema` per un offset con i secondi.
+pub fn verifica_offset_rfc3339<T: TimeZone>(istante: &DateTime<T>) -> Result<()> {
+    if istante.offset().fix().local_minus_utc() % 60 != 0 {
+        return Err(PlenoraError::Schema(
+            "offset del fuso con i secondi (ora media locale): nessuna forma RFC 3339".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Un secondo intercalare (`23:59:60`): chrono lo rappresenta con i
 /// nanosecondi oltre `10^9`, che un istante Arrow/POSIX non ha. Convertito,
 /// cadrebbe sul secondo dopo: si rifiuta.
@@ -248,32 +269,29 @@ impl<'a> ColonnaTemporale<'a> {
     }
 
     /// Il testo della riga, lo stesso del profilo scalare per `Date32` e
-    /// `Timestamp(ms)`: la data `AAAA-MM-GG`, l'istante in RFC 3339 nel fuso
-    /// della colonna (senza fuso, `+00:00`) con le cifre frazionarie che
-    /// servono.
+    /// `Timestamp` di ogni unita': la data `AAAA-MM-GG`, l'istante in
+    /// RFC 3339 nel fuso della colonna (senza fuso, `+00:00`) con le cifre
+    /// frazionarie che servono.
     ///
     /// # Errors
     ///
-    /// Come [`ColonnaTemporale::momento`].
+    /// Come [`ColonnaTemporale::momento`]; `Schema` per un offset con i
+    /// secondi ([`verifica_offset_rfc3339`]).
     pub fn testo(&self, row: usize) -> Result<Option<String>> {
         let Some(momento) = self.momento(row)? else {
             return Ok(None);
         };
-        Ok(Some(momento.istante.map_or_else(
-            || momento.locale.format("%Y-%m-%d").to_string(),
-            // `momento` ha gia' verificato che l'ora locale sta
-            // nell'intervallo: la scrittura con fuso non va in panico.
-            |istante| {
-                self.fuso.map_or_else(
-                    || istante.to_rfc3339_opts(SecondsFormat::AutoSi, false),
-                    |fuso| {
-                        istante
-                            .with_timezone(&fuso)
-                            .to_rfc3339_opts(SecondsFormat::AutoSi, false)
-                    },
-                )
-            },
-        )))
+        // `momento` ha gia' verificato che l'ora locale sta nell'intervallo:
+        // la scrittura con fuso non va in panico.
+        let Some(istante) = momento.istante else {
+            return Ok(Some(momento.locale.format("%Y-%m-%d").to_string()));
+        };
+        let Some(fuso) = self.fuso else {
+            return Ok(Some(istante.to_rfc3339_opts(SecondsFormat::AutoSi, false)));
+        };
+        let locale = istante.with_timezone(&fuso);
+        verifica_offset_rfc3339(&locale)?;
+        Ok(Some(locale.to_rfc3339_opts(SecondsFormat::AutoSi, false)))
     }
 }
 

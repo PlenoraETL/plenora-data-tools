@@ -4232,7 +4232,7 @@ mod tests {
             ("geo.collect", (2, 1, 2, 2), (1, 0, 1, 1)),
             // partition_column nel profilo testuale di ogni unita'
             ("table.add_row_number", (2, 1, 1, 2), (1, 0, 1, 1)),
-            // chiavi di gruppo di ogni unita' sul valore esatto; first/last di ogni timestamp e di date64 senza il profilo testuale; min/max/mean nell'unita' nativa
+            // chiavi di gruppo di ogni unita' sul valore esatto; first/last di ogni timestamp e di date64 senza il profilo testuale; min/max/mean nell'unita' nativa; chiavi sull'istante, gruppi timestamp in ordine cronologico
             ("table.aggregate", (2, 2, 3, 4), (1, 0, 1, 1)),
             // chiavi di ogni unita' e date64
             ("table.anti_join", (1, 1, 1, 2), (1, 0, 1, 1)),
@@ -4260,7 +4260,7 @@ mod tests {
             ("table.date_format", (3, 3, 3, 5), (1, 0, 1, 1)),
             // subset nel profilo testuale e order_column nel comparatore, ogni unita'
             ("table.dedup_advanced", (1, 2, 1, 2), (1, 0, 1, 1)),
-            // chiavi di ogni unita' e date64 nel profilo testuale esatto
+            // chiavi di ogni unita' e date64 nel profilo testuale esatto; chiavi timestamp sull'istante, mai sul testo
             ("table.distinct", (1, 1, 1, 2), (1, 0, 1, 1)),
             // colonne di ogni unita' e date64 sul valore nativo
             ("table.except", (1, 1, 1, 2), (1, 0, 1, 1)),
@@ -4276,7 +4276,7 @@ mod tests {
             ("table.hmac_sha256", (1, 1, 1, 3), (1, 0, 1, 1)),
             // colonne di ogni unita' e date64 sul valore nativo
             ("table.intersect", (1, 1, 1, 2), (1, 0, 1, 1)),
-            // chiavi di ogni unita' e date64; chiave fusa di right/outer anche temporale, unita' e fuso conservati
+            // chiavi di ogni unita' e date64; chiave fusa di right/outer anche temporale, unita' e fuso conservati; chiavi timestamp sull'istante
             ("table.join", (2, 1, 1, 2), (1, 0, 1, 1)),
             // colonna nel profilo testuale di ogni unita'
             ("table.lookup", (1, 1, 2, 1), (1, 0, 1, 1)),
@@ -4286,7 +4286,7 @@ mod tests {
             ("table.md5_hash", (2, 2, 2, 3), (1, 0, 1, 1)),
             // type_policy string su timestamp di ogni unita' e date64
             ("table.melt", (2, 2, 1, 3), (1, 0, 1, 1)),
-            // indice e pivot_col di ogni unita'; estremi e first/last nell'unita' nativa
+            // indice e pivot_col di ogni unita'; estremi e first/last nell'unita' nativa; indice timestamp sull'istante, in ordine cronologico
             ("table.pivot", (2, 2, 3, 4), (1, 0, 1, 1)),
             // chiavi di ogni unita' e date64
             ("table.reconcile", (2, 1, 2, 2), (1, 0, 1, 1)),
@@ -4306,7 +4306,7 @@ mod tests {
             ("table.statistics", (2, 2, 3, 4), (1, 0, 1, 1)),
             // chiavi e confronti di ogni unita' nel profilo testuale
             ("table.table_diff", (1, 2, 2, 3), (1, 0, 1, 1)),
-            // date64 letto come il suo testo AAAA-MM-GG
+            // date64 letto come il suo testo AAAA-MM-GG; offset piu' fine di output_format rifiutato invece che arrotondato
             ("table.timezone_convert", (3, 3, 3, 5), (1, 0, 1, 1)),
             // comparatore di ogni unita' (istante esatto) e date64
             ("table.top_n", (1, 2, 2, 2), (1, 0, 1, 1)),

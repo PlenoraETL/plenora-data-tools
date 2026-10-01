@@ -23,7 +23,7 @@ use crate::Limits;
 use std::cmp::Ordering;
 
 use crate::{
-    column_index, exact_f64_from_i64, scalar_as_f64, scalar_as_string, select_rows,
+    column_index, exact_f64_from_i64, scalar_as_f64, scalar_key_string, select_rows,
     validate_output_name, NumericBound, NumeroConfig,
 };
 use plenora_core::{PlenoraError, Result};
@@ -46,7 +46,7 @@ fn key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Option<Vec<
             push_key_fragment(&mut out, values.value(row));
             continue;
         }
-        let Some(value) = scalar_as_string(column.as_ref(), row)? else {
+        let Some(value) = scalar_key_string(column.as_ref(), row)? else {
             return Ok(None);
         };
         push_key_fragment(&mut out, value.as_bytes());

@@ -101,8 +101,11 @@ colonna: il gruppo del null per primo, poi i valori nell'ordine dei byte
 della stringa `<n>:<testo>`, con `n` la lunghezza in byte del testo scritta
 in decimale. Quindi non è l'ordine dei valori: `"sud"` (`3:sud`) precede
 `"nord"` (`4:nord`), `9` precede `-1`, `-1` precede `-2` e `10`, e un
-testo di 10 byte precede uno di 1 byte (`10:` precede `1:`). L'ordine è
-deterministico e non dipende dall'hash.
+testo di 10 byte precede uno di 1 byte (`10:` precede `1:`). Una chiave
+`timestamp` non ha come testo la sua resa RFC 3339 ma il suo istante, a
+larghezza fissa ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)):
+i suoi gruppi escono in ordine cronologico, in ogni unità e fuso. L'ordine
+è deterministico e non dipende dall'hash.
 
 ### Errori
 

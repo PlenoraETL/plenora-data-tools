@@ -101,7 +101,7 @@ pub fn add_row_number(batch: &RecordBatch, config: &AddRowNumber) -> Result<Reco
         let mut positions: HashMap<Option<String>, usize> = HashMap::new();
         (0..batch.num_rows())
             .map(|row| {
-                let key = scalar_as_string(source.as_ref(), row)?;
+                let key = crate::scalar_key_string(source.as_ref(), row)?;
                 let position = positions.entry(key).or_insert(0);
                 let current = numero_di_riga(config.start, *position)?;
                 *position += 1;

@@ -86,7 +86,11 @@ In esecuzione:
   (`conversion.nonexistent_local_time`) nel fuso di partenza; il passo non
   produce uscita;
 - `DataMapping`, senza diagnostica per riga: un valore che `output_format`
-  non sa scrivere (anno fuori da 0..=9999 con `%C`);
+  non sa scrivere (anno fuori da 0..=9999 con `%C`), o un offset più fine
+  di quanto `output_format` lo scriva (un offset ai secondi, come l'ora
+  media locale prima dei fusi standard, con `%z`, `%:z`, `%#z`, `%+`; un
+  offset non a ore intere con `%:::z`): chrono lo arrotonderebbe e il testo
+  indicherebbe un altro istante. `%::z` scrive l'offset coi secondi;
 - `Schema`: una cella che non si converte in testo.
 
 ### Limiti e deviazioni

@@ -246,7 +246,7 @@ pub fn key_for_row(batch: &RecordBatch, indices: &[usize], row: usize) -> Result
         let type_len = type_name.len() as u64;
         key.extend_from_slice(&type_len.to_be_bytes());
         key.extend_from_slice(type_name.as_bytes());
-        match scalar_as_string(column.as_ref(), row)? {
+        match crate::scalar_key_string(column.as_ref(), row)? {
             Some(value) => {
                 key.push(1);
                 let value_len = value.len() as u64;

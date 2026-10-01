@@ -757,14 +757,29 @@ nativo, in ogni unità e con o senza fuso
 conversione verso un'unità comune, che renderebbe uguali due microsecondi
 dello stesso millisecondo:
 
-- **profilo testuale** di chiavi, raggruppamenti, `distinct`, join,
-  indici di `pivot`, hash e confronti di uguaglianza
-  (`text_convertible`, `scalar_as_string`): un `timestamp` si scrive in
-  RFC 3339 nel fuso della colonna con tutte le cifre frazionarie che
-  servono (nessuna, 3, 6 o 9), quindi due istanti distinti hanno testi
-  distinti e lo stesso istante ha lo stesso testo in ogni unità; un
-  `date64` si scrive `AAAA-MM-GG` solo se allineato al giorno, altrimenti
-  la cella si rifiuta (`Schema`);
+- **chiavi d'identità** (raggruppamenti, `distinct`, `nunique`, join,
+  indici di `pivot`, partizioni di `window_function`, `rolling_window`,
+  `statistics`, `sample`, `add_row_number`, `assert_unique`,
+  `assert_foreign_key`, `reconcile`, `table_diff`; `scalar_key_string`):
+  un `timestamp` vale il suo istante, in nanosecondi dall'epoca
+  (`frammento_chiave`, a larghezza fissa e in ordine cronologico), mai il
+  suo testo; i gruppi di `aggregate` e `pivot` con una chiave `timestamp`
+  escono quindi in ordine cronologico;
+- **profilo testuale** (`text_convertible`, `scalar_as_string`: testo
+  scritto, hash, confronti di uguaglianza con un testo della config): un
+  `timestamp` si scrive in RFC 3339 nel fuso della colonna con tutte le
+  cifre frazionarie che servono (nessuna, 3, 6 o 9), quindi due istanti
+  distinti hanno testi distinti e lo stesso istante ha lo stesso testo in
+  ogni unità. Un offset con i secondi (l'ora media locale di molti fusi
+  prima dei fusi standard: `America/Anchorage` fino al 1900, `-09:59:36`)
+  non ha forma RFC 3339: chrono lo arrotonderebbe al minuto lasciando
+  l'ora locale esatta, e due istanti a 24 secondi avrebbero lo stesso
+  testo; la cella si rifiuta (`Schema`). Lo stesso vale per un
+  `output_format` di `timezone_convert` che scrive l'offset più grosso di
+  quanto sia (`%z`, `%:z`, `%+` per un offset ai secondi; `%:::z` per un
+  offset non a ore intere): `DataMapping`, mentre `%::z` lo scrive esatto.
+  Un `date64` si scrive `AAAA-MM-GG` solo se allineato al giorno,
+  altrimenti la cella si rifiuta (`Schema`);
 - **ordinamenti e comparatori** (`compare_cells_typed`: `sort`, `top_n`,
   ranghi, merge dello spill, gruppi di `geo.collect`): l'istante, dal valore
   nativo; due unità diverse si confrontano esatte, in nanosecondi `i128`;

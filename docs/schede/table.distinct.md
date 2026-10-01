@@ -17,12 +17,15 @@ microsecondi, nanosecondi; con timezone valida), `decimal128` con scala da
 0 a 38, `binary`, `dictionary<utf8>` (chiavi `int32`). Un `timestamp` si
 scrive in RFC 3339 con tutte le cifre frazionarie che servono: due istanti
 distinti, anche di un solo nanosecondo, hanno testi distinti, e lo stesso
-istante ha lo stesso testo in ogni unità. Un `date64` si scrive
+istante ha lo stesso testo in ogni unità; un istante il cui offset nel
+fuso della colonna ha i secondi (ora media locale) non ha forma RFC 3339,
+e dove serve il testo la cella si rifiuta. Un `date64` si scrive
 `AAAA-MM-GG` se è allineato al giorno; altrimenti non è una data, e la
 cella si rifiuta.
 
 Uguaglianza delle chiavi, colonna per colonna: sul valore nella sua forma
-in testo, quindi `-0.0` e `0.0` sono diversi e ogni NaN è uguale a ogni
+in testo (un `timestamp` sul suo istante, non sul testo), quindi `-0.0` e
+`0.0` sono diversi e ogni NaN è uguale a ogni
 altro NaN; `binary` sui byte; un null è uguale a un null e diverso da ogni
 valore, anche dal testo vuoto; la voce nulla di un dizionario è un null.
 

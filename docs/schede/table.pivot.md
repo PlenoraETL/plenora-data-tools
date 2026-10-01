@@ -69,7 +69,8 @@ l'uguaglianza di [`table.distinct`](#tabledistinct).
 ### Ordine
 
 Le righe nell'ordine delle chiavi di [`table.aggregate`](#tableaggregate):
-null per primo, poi per la stringa `<lunghezza>:<testo>` byte per byte.
+null per primo, poi per la stringa `<lunghezza>:<testo>` byte per byte
+(una chiave `timestamp` in ordine cronologico).
 
 ### Errori
 

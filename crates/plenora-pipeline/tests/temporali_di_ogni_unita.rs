@@ -678,7 +678,7 @@ fn le_somme_di_istanti_restano_rifiutate_in_ogni_unita() {
 
 /// La catena reale che ha trovato il difetto: `first` su un
 /// `Timestamp(Microsecond, None)` letto da Parquet si rifiutava in
-/// validazione come «non leggibile come scalare testuale», benche' scegliere
+/// validazione come Â«non leggibile come scalare testualeÂ», benche' scegliere
 /// una cella non legga il testo.
 #[test]
 fn first_su_microsecondi_senza_fuso_si_valida_e_si_esegue() {
@@ -732,4 +732,165 @@ fn un_espressione_con_unita_miste_si_rifiuta_in_validazione() {
     )
     .expect_err("unita' miste nel kernel");
     assert_eq!(kernel.category(), ErrorCategory::InvalidPlan, "{kernel}");
+}
+
+/// Due istanti a 24 secondi, `1900-08-20T21:59:35Z` (offset LMT di
+/// `America/Anchorage`, -09:59:36) e `1900-08-20T21:59:59Z` (offset
+/// -10:00:00): chrono li scrive entrambi `1900-08-20T11:59:59-10:00`,
+/// perche' arrotonda l'offset al minuto. Nella stessa colonna, in ogni unita'.
+fn coppia_lmt(unita: TimeUnit) -> ArrayRef {
+    let per = match unita {
+        TimeUnit::Second => 1,
+        TimeUnit::Millisecond => 1_000,
+        TimeUnit::Microsecond => 1_000_000,
+        TimeUnit::Nanosecond => 1_000_000_000,
+    };
+    colonna_temporale(
+        unita,
+        Some("America/Anchorage"),
+        vec![
+            Some(-2_188_951_225 * per),
+            Some(-2_188_951_201 * per),
+            Some(-2_188_951_225 * per),
+            None,
+            Some(-2_188_951_201 * per),
+            Some(-2_188_951_201 * per),
+        ],
+    )
+}
+
+/// Chiavi d'identita' sull'istante, non sul testo: i due istanti dell'ora
+/// media locale restano distinti in group-by, distinct, statistics,
+/// `add_row_number` e join.
+#[test]
+fn l_ora_media_locale_non_fonde_le_chiavi() {
+    for unita in UNITA {
+        let ingresso = tabella(coppia_lmt(unita));
+        let nome = format!("{unita:?}");
+        let gruppi = passo_validato(
+            "table.aggregate",
+            json!({"group_by": ["t"], "aggregations": [{"column": "i", "function": "count"}]}),
+            std::slice::from_ref(&ingresso),
+        );
+        // Ordine cronologico delle chiavi: null, poi i due istanti.
+        assert_eq!(
+            nativi(gruppi.column(0)),
+            vec![None, valori_lmt(unita, 0), valori_lmt(unita, 1)],
+            "{nome}: aggregate"
+        );
+        assert_eq!(
+            interi(gruppi.column(1)),
+            vec![Some(1), Some(2), Some(3)],
+            "{nome}"
+        );
+        let distinte = passo_validato(
+            "table.distinct",
+            json!({"subset": ["t"]}),
+            std::slice::from_ref(&ingresso),
+        );
+        assert_eq!(distinte.num_rows(), 3, "{nome}: distinct");
+        let numerate = passo_validato(
+            "table.add_row_number",
+            json!({"partition_column": "t", "output_column": "n"}),
+            std::slice::from_ref(&ingresso),
+        );
+        assert_eq!(numerate.num_rows(), 6, "{nome}: add_row_number");
+        let destra = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("rt", ingresso.schema().field(0).data_type().clone(), true),
+                Field::new("ri", DataType::Int64, false),
+                Field::new("rk", DataType::Utf8, false),
+            ])),
+            ingresso.columns().to_vec(),
+        )
+        .expect("destra");
+        // 2x2 + 3x3 = 13 coppie; con i due istanti fusi 5x5 = 25.
+        let unite = passo_validato(
+            "table.join",
+            json!({"left_keys": ["t"], "right_keys": ["rt"], "how": "inner"}),
+            &[ingresso.clone(), destra],
+        );
+        assert_eq!(unite.num_rows(), 13, "{nome}: join");
+        let pivot = passo_validato(
+            "table.pivot",
+            json!({"index_col": "t", "pivot_col": "k", "value_col": "i",
+                   "aggr_func": "first", "mapping": {"a": "va", "b": "vb"}}),
+            std::slice::from_ref(&ingresso),
+        );
+        assert_eq!(pivot.num_rows(), 3, "{nome}: pivot");
+    }
+}
+
+fn valori_lmt(unita: TimeUnit, quale: usize) -> Option<i64> {
+    nativi(&coppia_lmt(unita))[quale]
+}
+
+/// Il testo RFC 3339 di un istante con un offset ai secondi non esiste:
+/// errore esplicito, mai l'offset arrotondato. Lo stesso per un
+/// `output_format` che scrive l'offset in ore e minuti; `%::z` lo scrive
+/// coi secondi ed e' esatto.
+#[test]
+fn l_ora_media_locale_non_ha_testo_rfc_3339() {
+    for unita in UNITA {
+        let ingresso = tabella(coppia_lmt(unita));
+        for (op, config) in [
+            (
+                "table.type_cast",
+                json!({"column": "t", "target_type": "str"}),
+            ),
+            (
+                "table.melt",
+                json!({"id_columns": ["i"], "value_columns": ["t", "k"], "type_policy": "string"}),
+            ),
+            (
+                "table.md5_hash",
+                json!({"columns": ["t"], "output_column": "h"}),
+            ),
+            (
+                "table.timezone_convert",
+                json!({"column": "t", "output_format": "%Y-%m-%d %H:%M:%S %z",
+                       "source_timezone": "America/Anchorage",
+                       "target_timezone": "America/Anchorage", "output_column": "f"}),
+            ),
+        ] {
+            let pipeline = piano(&["t"], vec![passo("x", op, &["t"], config)], &["x"]);
+            // La validazione accetta: l'offset e' una proprieta' della cella.
+            pipeline
+                .validate(&[("t", ingresso.schema())])
+                .unwrap_or_else(|errore| panic!("{unita:?} {op}: {errore}"));
+            let errore =
+                esegui(&pipeline, &[("t", ingresso.clone())]).expect_err("offset ai secondi");
+            assert!(
+                errore.to_string().contains("offset del fuso"),
+                "{unita:?} {op}: {errore}"
+            );
+        }
+        let esatto = passo_validato(
+            "table.timezone_convert",
+            json!({"column": "t", "output_format": "%Y-%m-%dT%H:%M:%S%::z",
+                   "source_timezone": "America/Anchorage",
+                   "target_timezone": "America/Anchorage", "output_column": "f"}),
+            std::slice::from_ref(&ingresso),
+        );
+        let testi = esatto
+            .column_by_name("f")
+            .expect("f")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("testo")
+            .clone();
+        assert_eq!(testi.value(0), "1900-08-20T11:59:59-09:59:36", "{unita:?}");
+        assert_eq!(testi.value(1), "1900-08-20T11:59:59-10:00:00", "{unita:?}");
+    }
+    // Un offset a minuti interi resta scritto com'e'.
+    let oggi = tabella(colonna_temporale(
+        TimeUnit::Microsecond,
+        Some("America/Anchorage"),
+        valori(TimeUnit::Microsecond),
+    ));
+    passo_validato(
+        "table.type_cast",
+        json!({"column": "t", "target_type": "str"}),
+        std::slice::from_ref(&oggi),
+    );
 }

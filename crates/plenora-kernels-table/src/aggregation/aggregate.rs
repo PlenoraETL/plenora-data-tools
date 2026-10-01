@@ -815,7 +815,7 @@ pub fn aggregate_con_limiti(
                 )?;
             }
             AggFunction::Nunique => {
-                let source = TextSource::new(batch.column(index));
+                let source = TextSource::chiave(batch.column(index));
                 let values = map_groups(&groups, parallel, |rows| {
                     let mut seen = HashSet::new();
                     let mut null_seen = false;

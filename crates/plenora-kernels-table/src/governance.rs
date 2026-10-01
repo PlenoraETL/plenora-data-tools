@@ -294,7 +294,7 @@ impl<'a> KeyValueColumn<'a> {
                     .map_err(|_| PlenoraError::Internal("fmt su String".into()))?;
             }
             Self::Generic(array) => {
-                let Some(value) = scalar_as_string(array.as_ref(), row)? else {
+                let Some(value) = crate::scalar_key_string(array.as_ref(), row)? else {
                     return Ok(false);
                 };
                 text.push_str(&value);
@@ -447,7 +447,7 @@ impl<'a> LunghezzaValore<'a> {
                 .then(|| if values.value(row) { "true" } else { "false" }.len()),
             Self::Binary(values) => (!values.is_null(row)).then(|| values.value(row).len()),
             Self::Generica(array) => {
-                scalar_as_string(array.as_ref(), row)?.map(|testo| testo.len())
+                crate::scalar_key_string(array.as_ref(), row)?.map(|testo| testo.len())
             }
         })
     }

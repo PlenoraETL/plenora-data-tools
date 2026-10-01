@@ -594,9 +594,10 @@ mod tests {
                             } else {
                                 let mut seen = HashSet::new();
                                 for row in rows {
-                                    if let Some(value) =
-                                        scalar_as_string(batch.column(index).as_ref(), *row)?
-                                    {
+                                    if let Some(value) = crate::scalar_key_string(
+                                        batch.column(index).as_ref(),
+                                        *row,
+                                    )? {
                                         seen.insert(format!("1{}:{value}", value.len()));
                                     } else if !aggregation.skip_null() {
                                         seen.insert("0".to_owned());
@@ -1919,7 +1920,7 @@ mod tests {
         let mut partitions: BTreeMap<Option<String>, Vec<usize>> = BTreeMap::new();
         for row in 0..ordered.num_rows() {
             let key = group
-                .map(|index| scalar_as_string(ordered.column(index).as_ref(), row))
+                .map(|index| crate::scalar_key_string(ordered.column(index).as_ref(), row))
                 .transpose()?
                 .flatten();
             partitions.entry(key).or_default().push(row);
@@ -2176,7 +2177,7 @@ mod tests {
         let mut partitions: BTreeMap<Option<String>, Vec<usize>> = BTreeMap::new();
         for row in 0..ordered.num_rows() {
             let key = group_index
-                .map(|index| scalar_as_string(ordered.column(index).as_ref(), row))
+                .map(|index| crate::scalar_key_string(ordered.column(index).as_ref(), row))
                 .transpose()?
                 .flatten();
             partitions.entry(key).or_default().push(row);
