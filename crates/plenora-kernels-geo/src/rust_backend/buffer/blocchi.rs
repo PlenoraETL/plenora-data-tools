@@ -51,6 +51,8 @@
 use geo::algorithm::buffer::BufferStyle;
 use geo::{BooleanOps, Buffer, Coord, Geometry, LineString, MultiPolygon};
 
+use crate::margine::MargineMemoria;
+
 /// I segmenti di un blocco. Misurato sul zig-zag di 1.000 vertici con
 /// buffer di 200 m: 2, 4, 8, 16, 32 segmenti costano 29, 21, 24, 37, 62
 /// ms (release, un thread).
@@ -200,27 +202,39 @@ pub(super) fn livelli_di_unione(parti: usize) -> u32 {
 
 /// Il buffer di ogni blocco con lo stile dato, poi l'unione a coppie di
 /// blocchi adiacenti, livello per livello ([`livelli_di_unione`] livelli,
-/// ordine deterministico).
+/// ordine deterministico). Dopo i buffer dei blocchi e dopo ogni livello la
+/// stima delle parti vive ([`crate::memory_estimate`]) deve stare nel
+/// `margine`; ogni calcolo di `geo` dietro la barriera dei panici.
 pub(super) fn buffer_dei_blocchi(
     blocchi: &[LineString<f64>],
     stile: &BufferStyle<f64>,
-) -> MultiPolygon<f64> {
+    margine: MargineMemoria,
+) -> Result<MultiPolygon<f64>, super::ErroreBuffer> {
+    let stima = |parti: &[MultiPolygon<f64>]| {
+        parti.iter().fold(0_u64, |totale, parte| {
+            totale.saturating_add(crate::memory_estimate::estimate_geometry_native_bytes(
+                &Geometry::MultiPolygon(parte.clone()),
+            ))
+        })
+    };
     let mut parti: Vec<MultiPolygon<f64>> = blocchi
         .iter()
-        .map(|blocco| blocco.buffer_with_style(stile.clone()))
-        .collect();
+        .map(|blocco| super::protetto(|| blocco.buffer_with_style(stile.clone())))
+        .collect::<Result<_, _>>()?;
+    margine.verifica(stima(&parti))?;
     while parti.len() > 1 {
         let mut prossime = Vec::with_capacity(parti.len().div_ceil(2));
         let mut resto = parti.into_iter();
         while let Some(a) = resto.next() {
             prossime.push(match resto.next() {
-                Some(b) => a.union(&b),
+                Some(b) => super::protetto(|| a.union(&b))?,
                 None => a,
             });
         }
         parti = prossime;
+        margine.verifica(stima(&parti))?;
     }
-    parti.pop().unwrap_or_else(|| MultiPolygon::new(Vec::new()))
+    Ok(parti.pop().unwrap_or_else(|| MultiPolygon::new(Vec::new())))
 }
 
 #[cfg(test)]

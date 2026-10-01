@@ -7,6 +7,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::margine::{MargineMemoria, TettoRisultati};
 use crate::ValidazioneProtetta as _;
 use geo::{BoundingRect, Contains, CoordsIter, Geometry, Intersects, Relate};
 use rayon::prelude::*;
@@ -62,6 +63,11 @@ pub enum SpatialJoinError {
     /// Le coppie confermate superano `max_pairs` (`limit`).
     #[error("spatial join oltre il limite di {limit} coppie")]
     PairLimitExceeded { limit: u64 },
+
+    /// Le coppie confermate (con la loro uscita) supererebbero il margine
+    /// di memoria passato al kernel ([`crate::margine`]).
+    #[error("spatial join: {0}")]
+    MargineMemoria(crate::margine::MargineSuperato),
     /// Una geometria ha coordinate NaN o infinite; porta il lato (`side`,
     /// `left` o `right`) e la posizione della riga (`index`).
     #[error("geometria {side}[{index}] contiene coordinate NaN o infinite")]
@@ -200,7 +206,14 @@ pub fn spatial_join(
 ) -> Result<Vec<JoinPair>, SpatialJoinError> {
     let left_refs: Vec<_> = left.iter().map(Some).collect();
     let right_refs: Vec<_> = right.iter().map(Some).collect();
-    spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs, false)
+    spatial_join_refs(
+        &left_refs,
+        &right_refs,
+        predicate,
+        max_pairs,
+        false,
+        MargineMemoria::ILLIMITATO,
+    )
 }
 
 /// Variante di [`spatial_join`] SENZA il gate di ingresso (scansione di
@@ -226,7 +239,14 @@ pub fn spatial_join_validated(
 ) -> Result<Vec<JoinPair>, SpatialJoinError> {
     let left_refs: Vec<_> = left.iter().map(Some).collect();
     let right_refs: Vec<_> = right.iter().map(Some).collect();
-    spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs, true)
+    spatial_join_refs(
+        &left_refs,
+        &right_refs,
+        predicate,
+        max_pairs,
+        true,
+        MargineMemoria::ILLIMITATO,
+    )
 }
 
 /// Variante di [`spatial_join`] su colonne con celle nulle: una riga `None`
@@ -244,7 +264,14 @@ pub fn spatial_join_nullable(
 ) -> Result<Vec<JoinPair>, SpatialJoinError> {
     let left_refs: Vec<_> = left.iter().map(Option::as_ref).collect();
     let right_refs: Vec<_> = right.iter().map(Option::as_ref).collect();
-    spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs, false)
+    spatial_join_refs(
+        &left_refs,
+        &right_refs,
+        predicate,
+        max_pairs,
+        false,
+        MargineMemoria::ILLIMITATO,
+    )
 }
 
 /// Variante di [`spatial_join_nullable`] SENZA il gate di ingresso: stessa
@@ -262,19 +289,90 @@ pub fn spatial_join_nullable_validated(
 ) -> Result<Vec<JoinPair>, SpatialJoinError> {
     let left_refs: Vec<_> = left.iter().map(Option::as_ref).collect();
     let right_refs: Vec<_> = right.iter().map(Option::as_ref).collect();
-    spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs, true)
+    spatial_join_refs(
+        &left_refs,
+        &right_refs,
+        predicate,
+        max_pairs,
+        true,
+        MargineMemoria::ILLIMITATO,
+    )
 }
 
+/// Variante di [`spatial_join_nullable_validated`] con il margine di
+/// memoria del chiamante ([`crate::margine`]).
+///
+/// Ogni coppia confermata
+/// conta [`BYTE_PER_COPPIA`] byte nel kernel piu' quelli dell'uscita del
+/// margine, e il join si ferma con [`SpatialJoinError::MargineMemoria`]
+/// quando le coppie non ci starebbero, come col limite `max_pairs` e prima
+/// di trattenerle (il conteggio e' lo stesso del limite: totale delle
+/// coppie confermate, deterministico).
+///
+/// # Errors
+///
+/// Come [`spatial_join_nullable_validated`]; in piu'
+/// [`SpatialJoinError::MargineMemoria`] se le coppie confermate superano
+/// il margine prima di `max_pairs`.
+pub fn spatial_join_nullable_validated_con_margine(
+    left: &[Option<Geometry<f64>>],
+    right: &[Option<Geometry<f64>>],
+    predicate: JoinPredicate,
+    max_pairs: u64,
+    margine: MargineMemoria,
+) -> Result<Vec<JoinPair>, SpatialJoinError> {
+    let left_refs: Vec<_> = left.iter().map(Option::as_ref).collect();
+    let right_refs: Vec<_> = right.iter().map(Option::as_ref).collect();
+    spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs, true, margine)
+}
+
+/// Variante di [`spatial_join_validated`] con il margine di memoria del
+/// chiamante, come [`spatial_join_nullable_validated_con_margine`].
+///
+/// # Errors
+///
+/// Come [`spatial_join_nullable_validated_con_margine`].
+pub fn spatial_join_validated_con_margine(
+    left: &[Geometry<f64>],
+    right: &[Geometry<f64>],
+    predicate: JoinPredicate,
+    max_pairs: u64,
+    margine: MargineMemoria,
+) -> Result<Vec<JoinPair>, SpatialJoinError> {
+    let left_refs: Vec<_> = left.iter().map(Some).collect();
+    let right_refs: Vec<_> = right.iter().map(Some).collect();
+    spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs, true, margine)
+}
+
+/// I byte di una coppia confermata nel kernel: la coppia nel risultato
+/// (`JoinPair`, due volte per la crescita del vettore e la concatenazione
+/// dei gruppi) e il suo indice nel gruppo della riga.
+pub const BYTE_PER_COPPIA: u64 =
+    2 * std::mem::size_of::<JoinPair>() as u64 + std::mem::size_of::<usize>() as u64;
+
+// Una sola sequenza per riga (candidati, predicato, tetto): lunghezza intrinseca.
+#[allow(clippy::too_many_lines)]
 fn spatial_join_refs(
     left: &[Option<&Geometry<f64>>],
     right: &[Option<&Geometry<f64>>],
     predicate: JoinPredicate,
     max_pairs: u64,
     validated: bool,
+    margine: MargineMemoria,
 ) -> Result<Vec<JoinPair>, SpatialJoinError> {
     if max_pairs == 0 {
         return Err(SpatialJoinError::InvalidPairLimit);
     }
+    // Il tetto delle coppie: `max_pairs`, o meno se il margine non ne
+    // contiene tante; l'errore dice quale dei due e' scattato.
+    let tetto_risultati = TettoRisultati::nuovo(max_pairs, margine, BYTE_PER_COPPIA);
+    let tetto = tetto_risultati.tetto();
+    let errore_del_tetto = || {
+        tetto_risultati.superato_dalla_memoria().map_or(
+            SpatialJoinError::PairLimitExceeded { limit: max_pairs },
+            SpatialJoinError::MargineMemoria,
+        )
+    };
     u64::try_from(left.len()).map_err(|_| SpatialJoinError::IndexOverflow)?;
     u64::try_from(right.len()).map_err(|_| SpatialJoinError::IndexOverflow)?;
 
@@ -338,7 +436,7 @@ fn spatial_join_refs(
                 if exact_match(left_geometry, right_geometry, predicate)? && !limite_superato {
                     let accettata = pair_count
                         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                            current.checked_add(1).filter(|next| *next <= max_pairs)
+                            current.checked_add(1).filter(|next| *next <= tetto)
                         })
                         .is_ok();
                     if accettata {
@@ -350,7 +448,7 @@ fn spatial_join_refs(
                 }
             }
             if limite_superato {
-                return Err(SpatialJoinError::PairLimitExceeded { limit: max_pairs });
+                return Err(errore_del_tetto());
             }
             right_indexes.sort_unstable();
 
@@ -375,7 +473,10 @@ fn spatial_join_refs(
     for group in groups {
         match group {
             Ok(group) => pairs.extend(group),
-            Err(error @ SpatialJoinError::PairLimitExceeded { .. }) => {
+            Err(
+                error @ (SpatialJoinError::PairLimitExceeded { .. }
+                | SpatialJoinError::MargineMemoria(_)),
+            ) => {
                 limite_superato.get_or_insert(error);
             }
             Err(error) => return Err(error),

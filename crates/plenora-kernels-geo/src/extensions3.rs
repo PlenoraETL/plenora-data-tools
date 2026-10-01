@@ -29,6 +29,7 @@ use rstar::{RTree, RTreeObject, AABB};
 use crate::arrow_adapter::{decode_geometry_cell, encode_geometry, map_nullable};
 use crate::extensions::{check_tolerance, invalid_parameter, protetto, u64_len, ExtensionError};
 use crate::geometry_type_name as geometry_name;
+use crate::margine::{ContatoreMargine, MargineMemoria};
 use crate::rust_backend::griglia;
 use crate::rust_backend::precision::Precision;
 use crate::ValidazioneProtetta as _;
@@ -132,10 +133,18 @@ fn prepare_elements(
 /// Coppie candidate `(a, b)` con `a < b` in ordine lessicografico: envelope
 /// che si intersecano o toccano (l'intersezione AABB di rstar include il
 /// contatto zero-area).
+/// I byte di una coppia candidata: la coppia e la sua copia nei candidati
+/// della riga.
+const BYTE_PER_COPPIA_CANDIDATA: u64 =
+    std::mem::size_of::<(usize, usize)>() as u64 + std::mem::size_of::<usize>() as u64;
+
+/// Le coppie candidate, con i loro byte nel `margine` (prima di accodare
+/// i candidati di ogni elemento): `Err` col margine superato.
 fn candidate_pairs(
     elements: &[Option<CoverageElement>],
     tree: &RTree<IndexedEnvelope>,
-) -> Vec<(usize, usize)> {
+    margine: MargineMemoria,
+) -> Result<Vec<(usize, usize)>, crate::margine::MargineSuperato> {
     let mut pairs = Vec::new();
     for (a, element) in elements.iter().enumerate() {
         let Some(element) = element else {
@@ -146,10 +155,14 @@ fn candidate_pairs(
             .map(|candidate| candidate.index)
             .filter(|b| *b > a)
             .collect();
+        let totale = u64::try_from(pairs.len().saturating_add(others.len()))
+            .unwrap_or(u64::MAX)
+            .saturating_mul(BYTE_PER_COPPIA_CANDIDATA);
+        margine.verifica(totale)?;
         others.sort_unstable();
         pairs.extend(others.into_iter().map(|b| (a, b)));
     }
-    pairs
+    Ok(pairs)
 }
 
 // ---------------------------------------------------------------------------
@@ -219,12 +232,25 @@ fn overlap_geometry(intersection: MultiPolygon<f64>) -> Result<Geometry<f64>, Ex
 fn coverage_validate_elements(
     elements: &[Option<CoverageElement>],
     tree: &RTree<IndexedEnvelope>,
-    tolerance: f64,
-    max_issues: u64,
+    (tolerance, max_issues): (f64, u64),
     precision: Precision,
+    margine: MargineMemoria,
 ) -> Result<Vec<CoverageIssue>, ExtensionError> {
     let mut issues = Vec::new();
-    for (a, b) in protetto(|| candidate_pairs(elements, tree))? {
+    // Le coppie candidate senza l'uscita del margine (restano nel kernel).
+    let pairs = protetto(|| {
+        candidate_pairs(
+            elements,
+            tree,
+            MargineMemoria::byte(margine.byte_disponibili()),
+        )
+    })?
+    .map_err(ExtensionError::MargineMemoria)?;
+    let byte_coppie = u64::try_from(pairs.len())
+        .unwrap_or(u64::MAX)
+        .saturating_mul(BYTE_PER_COPPIA_CANDIDATA);
+    let mut contatore = ContatoreMargine::con_usati(margine, byte_coppie);
+    for (a, b) in pairs {
         let left = &elements[a]
             .as_ref()
             .ok_or(ExtensionError::Internal("coppia indicizzata"))?
@@ -240,12 +266,21 @@ fn coverage_validate_elements(
             if u64_len(issues.len())? >= max_issues {
                 return Err(ExtensionError::IssueLimit { limit: max_issues });
             }
+            let geometry = overlap_geometry(intersection)?;
+            // La zona e la sua codifica nell'uscita, piu' la struttura.
+            contatore
+                .aggiungi(
+                    crate::memory_estimate::estimate_geometry_native_bytes(&geometry)
+                        .saturating_mul(2)
+                        .saturating_add(std::mem::size_of::<CoverageIssue>() as u64),
+                )
+                .map_err(ExtensionError::MargineMemoria)?;
             issues.push(CoverageIssue {
                 issue_type: CoverageIssueType::Overlap,
                 index_a: u64_len(a)?,
                 index_b: u64_len(b)?,
                 area,
-                geometry: overlap_geometry(intersection)?,
+                geometry,
             });
         }
     }
@@ -299,10 +334,44 @@ pub fn coverage_validate_nullable(
     max_issues: usize,
     precision: Precision,
 ) -> Result<Vec<CoverageIssue>, ExtensionError> {
+    coverage_validate_nullable_con_margine(
+        geometries,
+        tolerance,
+        max_issues,
+        precision,
+        MargineMemoria::ILLIMITATO,
+    )
+}
+
+/// Variante di [`coverage_validate_nullable`] con il margine di memoria del
+/// chiamante ([`crate::margine`]).
+///
+/// Le coppie candidate contano 24 byte ciascuna, ogni issue due volte la
+/// stima della sua geometria (la zona e la sua codifica nell'uscita) piu'
+/// la struttura e l'uscita del margine; il kernel e' sequenziale e si ferma
+/// prima di trattenere cio' che non ci starebbe.
+///
+/// # Errors
+///
+/// Come [`coverage_validate_nullable`]; in piu'
+/// [`ExtensionError::MargineMemoria`].
+pub fn coverage_validate_nullable_con_margine(
+    geometries: &[Option<Geometry<f64>>],
+    tolerance: f64,
+    max_issues: usize,
+    precision: Precision,
+    margine: MargineMemoria,
+) -> Result<Vec<CoverageIssue>, ExtensionError> {
     check_tolerance(tolerance)?;
     let max_issues = check_max_issues(max_issues)?;
     let (elements, tree) = prepare_elements(geometries)?;
-    coverage_validate_elements(&elements, &tree, tolerance, max_issues, precision)
+    coverage_validate_elements(
+        &elements,
+        &tree,
+        (tolerance, max_issues),
+        precision,
+        margine,
+    )
 }
 
 fn coverage_error(error: &ExtensionError) -> PlenoraError {
@@ -347,9 +416,38 @@ pub fn coverage_validate_rows(
     max_issues: usize,
     precision: Precision,
 ) -> Result<Vec<CoverageIssueRow>, PlenoraError> {
+    coverage_validate_rows_con_margine(
+        cells,
+        tolerance,
+        max_issues,
+        precision,
+        MargineMemoria::ILLIMITATO,
+    )
+}
+
+/// Variante di [`coverage_validate_rows`] con il margine di memoria del
+/// chiamante: come [`coverage_validate_nullable_con_margine`].
+///
+/// # Errors
+///
+/// Come [`coverage_validate_rows`]; `PlenoraError::ResourceLimit` anche per
+/// il margine superato.
+pub fn coverage_validate_rows_con_margine(
+    cells: &BinaryArray,
+    tolerance: f64,
+    max_issues: usize,
+    precision: Precision,
+    margine: MargineMemoria,
+) -> Result<Vec<CoverageIssueRow>, PlenoraError> {
     let geometries = map_nullable(cells, |payload| decode_geometry_cell(payload).map(Some))?;
-    let issues = coverage_validate_nullable(&geometries, tolerance, max_issues, precision)
-        .map_err(|error| coverage_error(&error))?;
+    let issues = coverage_validate_nullable_con_margine(
+        &geometries,
+        tolerance,
+        max_issues,
+        precision,
+        margine,
+    )
+    .map_err(|error| coverage_error(&error))?;
     issues
         .iter()
         .map(|issue| {
@@ -486,7 +584,9 @@ pub fn shared_paths_nullable(
     }
     let (elements, tree) = prepare_elements(geometries)?;
     let mut paths = Vec::new();
-    for (a, b) in protetto(|| candidate_pairs(&elements, &tree))? {
+    let pairs = protetto(|| candidate_pairs(&elements, &tree, MargineMemoria::ILLIMITATO))?
+        .map_err(ExtensionError::MargineMemoria)?;
+    for (a, b) in pairs {
         let left = &elements[a]
             .as_ref()
             .ok_or(ExtensionError::Internal("coppia indicizzata"))?

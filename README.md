@@ -1892,7 +1892,11 @@ insieme) sono confini: oltre il budget sono un `ResourceLimit`, anche in un
 piano senza passi.
 
 Il kernel riceve come `max_governed_memory_bytes` il margine vero, budget
-meno byte vivi, così i suoi preflight usano lo spazio che c'è.
+meno byte vivi, così i suoi preflight usano lo spazio che c'è. Lo stesso
+margine va ai passi geo (`esegui_kernel` lo passa a `PassoGeo::esegui`),
+che lo danno ai kernel i cui risultati crescono con i dati come
+`plenora_kernels_geo::margine::MargineMemoria` (limite «Modelli di costo
+geo»).
 
 `B` del modello è il maggiore fra i byte vivi degli input e il costo
 di una loro copia (`plenora_core::memoria::byte_dati`: colonne che sono lo
@@ -2005,23 +2009,52 @@ esplicito.
   misurato 20 GiB su 15 MiB d'ingresso. I punti andati oltre il tempo
   massimo della campagna (`buffer`, `make_valid`, `split`) o
   rifiutati (`line_merge`, `polygonize`, `voronoi`) non sono nel modello.
-  I kernel geo non ricevono il margine di memoria: un'uscita grande si
-  scopre al controllo dopo il passo, cioè dopo essere stata allocata; un
-  transitorio grande non si scopre affatto (limite «Transitorio oltre la
-  previsione non rilevato»).
+  **Margine nei kernel.** I kernel di questi profili ricevono il margine
+  del passo (`plenora_kernels_geo::margine`, budget meno byte vivi) e
+  contano, dove i loro risultati crescono, i byte che vi mettono, più quelli
+  che il runner spenderà per ogni risultato nell'uscita; si fermano con un
+  `ResourceLimit` che nomina il margine **prima** di allocare ciò che non
+  ci starebbe:
+  - `sjoin`, `within`, `count_points_in_polygons` (le coppie del join):
+    40 byte per coppia confermata nel kernel, più per `sjoin` la riga
+    media di left (`byte_dati` diviso le righe, per eccesso) e 16 byte di
+    indici; il tetto è il minore fra `max_pairs` e le coppie che entrano nel
+    margine, sullo stesso contatore, quindi deterministico;
+  - `nearest` (i vicini equidistanti): 64 byte per abbinamento, più la
+    riga di left e 24 byte, con lo stesso schema di `max_results`;
+  - `overlay` (i pezzi): le coppie candidate, e per pezzo due volte la stima
+    della geometria (`memory_estimate`: il pezzo e la sua codifica) più la
+    struttura e 24 byte d'uscita, nell'ordine dei pezzi;
+  - `coverage_validate` (le sovrapposizioni): 24 byte per coppia candidata
+    e per issue due volte la stima della zona più 64 byte d'uscita;
+  - `buffer` (zig-zag): oltre ai blocchi («Buffer», voce «linee a
+    blocchi»), che tolgono la crescita quadratica, prima di ogni overlay i
+    punti dei contorni (un minorante del costo di `i_overlay`, 64 byte
+    ciascuno), dopo ogni unione dei blocchi e alla fine la stima del
+    risultato, per ogni geometria.
+
+  Restano fuori: il transitorio dentro una chiamata di `geo` o di
+  `i_overlay` (incroci, grafi), che non si osserva; i vettori candidati di
+  una riga del join e dei vicini (al più le righe di right per riga, per
+  thread); nel `buffer` il margine vale per geometria, e le righe in
+  parallelo possono trattenere insieme fino a tanti margini quanti sono i
+  thread; le stime per geometria sono quelle di `memory_estimate`, non i
+  byte veri. Il controllo dopo il passo con i byte esatti resta.
   *Rientro*: una grandezza a secco per queste espansioni (candidati
-  dell'R-tree, stima delle sovrapposizioni) nel modello o nei kernel, con
-  il margine passato ai kernel geo come alle tabellari.
+  dell'R-tree, stima delle sovrapposizioni) nel modello, e un allocatore
+  contato per il transitorio dentro `geo` e `i_overlay`.
 - **Transitorio oltre la previsione non rilevato.**
   *Regola*: prima del passo si controlla la previsione del modello, dopo il
   passo i byte vivi esatti delle tabelle residenti con l'uscita; la memoria
   che il kernel alloca e libera durante il passo non si misura.
   *Ambito*: ogni passo di `PipelineValidata::run` (il controllo dopo il
   passo in `esecuzione.rs` conta solo i buffer Arrow ancora vivi con
-  l'uscita); in particolare i sette profili geo esclusi dal modello
-  (limite «Modelli di costo geo») e le espansioni che dipendono dai dati
-  senza preflight di memoria nel kernel (`join` molti a molti, `explode`,
-  `unnest`, le geo che non ricevono il margine).
+  l'uscita); in particolare il transitorio dentro `geo` e `i_overlay` dei
+  sette profili geo esclusi dal modello, che il margine dei kernel non vede
+  (limite «Modelli di costo geo»: i risultati trattenuti invece si
+  contano), e le espansioni che dipendono dai dati senza preflight di
+  memoria nel kernel (`join` molti a molti, `explode`, `unnest`, le geo
+  fuori da quei profili).
   *Hazard*: un transitorio già liberato alla fine del passo può aver
   superato il budget senza alcun errore: nessun `ResourceLimit`, e nessun
   esaurimento di memoria se la macchina ne ha. Il budget dichiarato è stato
@@ -2030,7 +2063,8 @@ esplicito.
   memoria invece che con un errore del runner.
   *Rientro*: un allocatore contato per il processo che rifiuti
   l'allocazione oltre il budget (un tetto vero), o la contabilità esplicita
-  del transitorio nei kernel con il margine passato a tutti, geo compresi.
+  del transitorio nei kernel con il margine passato a tutti (le geo dei
+  sette profili ne contano oggi i risultati, non il transitorio).
 - **Geo senza diagnostica per riga.**
   *Regola*: un passo geo rende il primo errore in ordine di riga, senza
   report `plenora-row-diagnostics-v1`; gli indici che alcuni messaggi dei

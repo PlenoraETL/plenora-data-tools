@@ -8,6 +8,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::margine::{MargineMemoria, TettoRisultati};
 use crate::ValidazioneProtetta as _;
 use geo::algorithm::line_measures::{Distance, Euclidean};
 use geo::{BoundingRect, CoordsIter, Geometry, LineString, Polygon};
@@ -16,7 +17,8 @@ use rstar::{PointDistance, RTree, RTreeObject, AABB};
 use thiserror::Error;
 
 use crate::spatial_join::{
-    spatial_join_nullable, spatial_join_nullable_validated, JoinPredicate, SpatialJoinError,
+    spatial_join_nullable, spatial_join_nullable_validated_con_margine, JoinPredicate,
+    SpatialJoinError,
 };
 
 /// Un abbinamento di [`nearest_matches`]: una riga sinistra e una delle
@@ -51,6 +53,10 @@ pub enum AnalysisError {
     /// Gli abbinamenti emessi superano `max_results` (`limit`).
     #[error("numero di risultati oltre il limite di {limit}")]
     ResultLimitExceeded { limit: u64 },
+    /// Gli abbinamenti emessi (con la loro uscita) supererebbero il
+    /// margine di memoria passato al kernel ([`crate::margine`]).
+    #[error("vicini: {0}")]
+    MargineMemoria(crate::margine::MargineSuperato),
     /// `max_distance` non e' finita o e' negativa.
     #[error("max_distance deve essere finita e non negativa")]
     InvalidMaximumDistance,
@@ -260,9 +266,9 @@ pub fn nearest_matches(
         left,
         right,
         max_distance,
-        max_comparisons,
-        max_results,
+        (max_comparisons, max_results),
         false,
+        MargineMemoria::ILLIMITATO,
     )
 }
 
@@ -284,23 +290,71 @@ pub fn nearest_matches_validated(
         left,
         right,
         max_distance,
-        max_comparisons,
-        max_results,
+        (max_comparisons, max_results),
         true,
+        MargineMemoria::ILLIMITATO,
     )
 }
 
+/// Variante di [`nearest_matches_validated`] con il margine di memoria del
+/// chiamante ([`crate::margine`]).
+///
+/// Ogni abbinamento conta
+/// [`BYTE_PER_VICINO`] byte nel kernel piu' quelli dell'uscita del
+/// margine, e il kernel si ferma con [`AnalysisError::MargineMemoria`]
+/// quando gli abbinamenti non ci starebbero, come col limite `max_results`
+/// (stesso conteggio, deterministico).
+///
+/// # Errors
+///
+/// Come [`nearest_matches_validated`]; in piu'
+/// [`AnalysisError::MargineMemoria`] se gli abbinamenti superano il
+/// margine prima di `max_results`.
+pub fn nearest_matches_validated_con_margine(
+    left: &[Option<Geometry<f64>>],
+    right: &[Option<Geometry<f64>>],
+    max_distance: Option<f64>,
+    (max_comparisons, max_results): (u64, u64),
+    margine: MargineMemoria,
+) -> Result<Vec<NearestMatch>, AnalysisError> {
+    nearest_matches_impl(
+        left,
+        right,
+        max_distance,
+        (max_comparisons, max_results),
+        true,
+        margine,
+    )
+}
+
+/// I byte di un abbinamento nel kernel: `NearestMatch` due volte (crescita
+/// del vettore e concatenazione dei gruppi) e la distanza del candidato.
+pub const BYTE_PER_VICINO: u64 =
+    2 * std::mem::size_of::<NearestMatch>() as u64 + std::mem::size_of::<(usize, f64)>() as u64;
+
+// Una sola sequenza per riga (candidati, predicato, tetto): lunghezza intrinseca.
+#[allow(clippy::too_many_lines)]
 fn nearest_matches_impl(
     left: &[Option<Geometry<f64>>],
     right: &[Option<Geometry<f64>>],
     max_distance: Option<f64>,
-    max_comparisons: u64,
-    max_results: u64,
+    (max_comparisons, max_results): (u64, u64),
     validated: bool,
+    margine: MargineMemoria,
 ) -> Result<Vec<NearestMatch>, AnalysisError> {
     if max_comparisons == 0 || max_results == 0 {
         return Err(AnalysisError::InvalidWorkLimit);
     }
+    // Il tetto dei risultati: `max_results`, o meno se il margine non ne
+    // contiene tanti; l'errore dice quale dei due e' scattato.
+    let tetto_risultati = TettoRisultati::nuovo(max_results, margine, BYTE_PER_VICINO);
+    let tetto = tetto_risultati.tetto();
+    let errore_del_tetto = || {
+        tetto_risultati.superato_dalla_memoria().map_or(
+            AnalysisError::ResultLimitExceeded { limit: max_results },
+            AnalysisError::MargineMemoria,
+        )
+    };
     if max_distance.is_some_and(|value| !value.is_finite() || value < 0.0) {
         return Err(AnalysisError::InvalidMaximumDistance);
     }
@@ -377,9 +431,9 @@ fn nearest_matches_impl(
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                     current
                         .checked_add(additional)
-                        .filter(|next| *next <= max_results)
+                        .filter(|next| *next <= tetto)
                 })
-                .map_err(|_| AnalysisError::ResultLimitExceeded { limit: max_results })?;
+                .map_err(|_| errore_del_tetto())?;
             let left = u64::try_from(left_index).map_err(|_| AnalysisError::IndexOverflow)?;
             distances
                 .into_iter()
@@ -403,7 +457,10 @@ fn nearest_matches_impl(
     for group in groups {
         match group {
             Ok(group) => matches.extend(group),
-            Err(error @ AnalysisError::ResultLimitExceeded { .. }) => {
+            Err(
+                error @ (AnalysisError::ResultLimitExceeded { .. }
+                | AnalysisError::MargineMemoria(_)),
+            ) => {
                 limite_superato.get_or_insert(error);
             }
             Err(error) => return Err(error),
@@ -642,7 +699,30 @@ pub fn within_indexes_validated(
     right: &[Option<Geometry<f64>>],
     max_pairs: u64,
 ) -> Result<Vec<u64>, AnalysisError> {
-    let pairs = spatial_join_nullable_validated(left, right, JoinPredicate::Within, max_pairs)?;
+    within_indexes_validated_con_margine(left, right, max_pairs, MargineMemoria::ILLIMITATO)
+}
+
+/// Variante di [`within_indexes_validated`] con il margine di memoria del
+/// chiamante: le coppie del join contano come in
+/// [`crate::spatial_join::spatial_join_nullable_validated_con_margine`].
+///
+/// # Errors
+///
+/// Come [`within_indexes_validated`]; in piu' `SpatialJoin(MargineMemoria)`
+/// se le coppie confermate superano il margine.
+pub fn within_indexes_validated_con_margine(
+    left: &[Option<Geometry<f64>>],
+    right: &[Option<Geometry<f64>>],
+    max_pairs: u64,
+    margine: MargineMemoria,
+) -> Result<Vec<u64>, AnalysisError> {
+    let pairs = spatial_join_nullable_validated_con_margine(
+        left,
+        right,
+        JoinPredicate::Within,
+        max_pairs,
+        margine,
+    )?;
     let mut indexes: Vec<_> = pairs.into_iter().map(|pair| pair.left).collect();
     indexes.dedup();
     Ok(indexes)
@@ -696,8 +776,38 @@ pub fn count_points_in_polygons_validated(
     points: &[Option<Geometry<f64>>],
     max_pairs: u64,
 ) -> Result<Vec<u64>, AnalysisError> {
-    let pairs =
-        spatial_join_nullable_validated(points, polygons, JoinPredicate::Within, max_pairs)?;
+    count_points_in_polygons_validated_con_margine(
+        polygons,
+        points,
+        max_pairs,
+        MargineMemoria::ILLIMITATO,
+    )
+}
+
+/// Variante di [`count_points_in_polygons_validated`] con il margine di
+/// memoria del chiamante.
+///
+/// Le coppie punto-poligono del join contano come
+/// in [`crate::spatial_join::spatial_join_nullable_validated_con_margine`].
+///
+/// # Errors
+///
+/// Come [`count_points_in_polygons_validated`]; in piu'
+/// `SpatialJoin(MargineMemoria)` se le coppie confermate superano il
+/// margine.
+pub fn count_points_in_polygons_validated_con_margine(
+    polygons: &[Option<Geometry<f64>>],
+    points: &[Option<Geometry<f64>>],
+    max_pairs: u64,
+    margine: MargineMemoria,
+) -> Result<Vec<u64>, AnalysisError> {
+    let pairs = spatial_join_nullable_validated_con_margine(
+        points,
+        polygons,
+        JoinPredicate::Within,
+        max_pairs,
+        margine,
+    )?;
     let mut counts = vec![0_u64; polygons.len()];
     for pair in pairs {
         let index = usize::try_from(pair.right).map_err(|_| AnalysisError::IndexOverflow)?;

@@ -79,6 +79,7 @@ use geo::{
 
 use super::griglia::{self, PrecisioneInsufficiente};
 use super::precision::Precision;
+use crate::margine::MargineMemoria;
 
 mod blocchi;
 
@@ -101,6 +102,32 @@ pub enum ErroreBuffer {
     /// Un calcolo di `geo` o `i_overlay` e' andato in panico dentro
     /// [`crate::calcolo_protetto`]: la forma del payload, mai il contenuto.
     CalcoloNonConcluso(&'static str),
+    /// Il buffer supererebbe il margine di memoria ([`crate::margine`]).
+    MargineMemoria(crate::margine::MargineSuperato),
+}
+
+impl From<crate::margine::MargineSuperato> for ErroreBuffer {
+    fn from(superato: crate::margine::MargineSuperato) -> Self {
+        Self::MargineMemoria(superato)
+    }
+}
+
+/// I byte di un punto in un overlay di `i_overlay` (punto intero, segmento
+/// e collegamenti): un **minorante** del costo, per il controllo del margine
+/// prima di un overlay: se non ci stanno nemmeno i punti dei contorni,
+/// l'overlay non si esegue.
+const BYTE_PER_PUNTO_OVERLAY: u64 = 64;
+
+/// I punti dei contorni che `i_overlay` costruisce per il buffer di una
+/// geometria: per ogni vertice due offset e un arco di al piu'
+/// `pi / angolo + 1` punti (giunzioni ed estremita').
+fn punti_dei_contorni(vertici: usize, angolo: f64) -> u64 {
+    // `angolo` sta in `[0.01 pi, 0.25 pi]`: al piu' 101 punti per arco.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let per_arco = (PI / angolo).ceil() as u64 + 1;
+    u64::try_from(vertici)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(per_arco.saturating_add(2))
 }
 
 impl From<PrecisioneInsufficiente> for ErroreBuffer {
@@ -341,18 +368,45 @@ fn unione(
 /// finita;
 /// [`ErroreBuffer::CalcoloNonConcluso`] se `geo` o `i_overlay` vanno in
 /// panico.
+#[cfg(test)]
 pub fn buffer_controllato(
     geometry: &Geometry<f64>,
     distance: f64,
     estremita: Estremita,
     precision: Precision,
 ) -> Result<MultiPolygon<f64>, ErroreBuffer> {
-    buffer_con_freccia(
+    buffer_controllato_con_margine(
+        geometry,
+        distance,
+        estremita,
+        precision,
+        MargineMemoria::ILLIMITATO,
+    )
+}
+
+/// Come [`buffer_controllato`], con il margine di memoria del chiamante
+/// ([`crate::margine`]): prima di ogni overlay i punti dei contorni
+/// ([`BYTE_PER_PUNTO_OVERLAY`] ciascuno, un minorante), dopo ogni unione dei
+/// blocchi e alla fine la stima del risultato ([`crate::memory_estimate`])
+/// devono stare nel margine.
+///
+/// # Errors
+///
+/// Come [`buffer_controllato`]; in piu' [`ErroreBuffer::MargineMemoria`].
+pub fn buffer_controllato_con_margine(
+    geometry: &Geometry<f64>,
+    distance: f64,
+    estremita: Estremita,
+    precision: Precision,
+    margine: MargineMemoria,
+) -> Result<MultiPolygon<f64>, ErroreBuffer> {
+    buffer_con_freccia_e_margine(
         geometry,
         distance,
         estremita,
         freccia_degli_archi(distance, precision),
         precision,
+        margine,
     )
 }
 
@@ -369,6 +423,26 @@ pub fn buffer_con_freccia(
     estremita: Estremita,
     freccia: f64,
     precision: Precision,
+) -> Result<MultiPolygon<f64>, ErroreBuffer> {
+    buffer_con_freccia_e_margine(
+        geometry,
+        distance,
+        estremita,
+        freccia,
+        precision,
+        MargineMemoria::ILLIMITATO,
+    )
+}
+
+/// Il corpo di [`buffer_con_freccia`], col margine di memoria (vedi
+/// [`buffer_controllato_con_margine`]).
+fn buffer_con_freccia_e_margine(
+    geometry: &Geometry<f64>,
+    distance: f64,
+    estremita: Estremita,
+    freccia: f64,
+    precision: Precision,
+    margine: MargineMemoria,
 ) -> Result<MultiPolygon<f64>, ErroreBuffer> {
     if !distance.is_finite() {
         return Err(ErroreBuffer::PrecisioneInsufficiente);
@@ -423,10 +497,28 @@ pub fn buffer_con_freccia(
                 blocchi::livelli_di_unione(parti.len()),
                 limite,
             )?;
-            return protetto(|| blocchi::buffer_dei_blocchi(&parti, &stile));
+            let vertici = parti.iter().map(|parte| parte.0.len()).sum();
+            margine.verifica(
+                punti_dei_contorni(vertici, angolo).saturating_mul(BYTE_PER_PUNTO_OVERLAY),
+            )?;
+            let risultato = blocchi::buffer_dei_blocchi(&parti, &stile, margine)?;
+            margine.verifica(stima_byte(&risultato))?;
+            return Ok(risultato);
         }
     }
-    protetto(|| lavoro.buffer_with_style(stile))
+    margine.verifica(
+        punti_dei_contorni(lavoro.coords_count(), angolo).saturating_mul(BYTE_PER_PUNTO_OVERLAY),
+    )?;
+    let risultato = protetto(|| lavoro.buffer_with_style(stile))?;
+    margine.verifica(stima_byte(&risultato))?;
+    Ok(risultato)
+}
+
+/// La stima dei byte di un risultato ([`crate::memory_estimate`]).
+fn stima_byte(poligoni: &MultiPolygon<f64>) -> u64 {
+    crate::memory_estimate::estimate_geometry_native_bytes(&Geometry::MultiPolygon(
+        poligoni.clone(),
+    ))
 }
 
 /// Il bilancio della griglia del buffer a blocchi: i passaggi del buffer

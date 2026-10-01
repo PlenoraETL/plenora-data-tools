@@ -315,7 +315,9 @@ fn esegui_kernel(
     CHIAMATE_KERNEL.with(|chiamate| chiamate.set(chiamate.get() + 1));
     let nessuno = |uscita| (uscita, EffettiKernel::default());
     let chiamata = || match (&passo.kernel, ingressi) {
-        (KernelPasso::Geo(geo), _) => geo.esegui(ingressi, contratto).map(nessuno),
+        (KernelPasso::Geo(geo), _) => geo
+            .esegui(ingressi, contratto, limiti.max_governed_memory_bytes)
+            .map(nessuno),
         (KernelPasso::Tabellare(preparato), [unico]) => {
             preparato.esegui_unario_con_effetti(unico, limiti)
         }

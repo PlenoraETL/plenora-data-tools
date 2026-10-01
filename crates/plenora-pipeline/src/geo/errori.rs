@@ -60,6 +60,7 @@ impl ErroreKernel for OperationError {
                 Classe::Interna
             }
             Self::PrecisionInsufficient => Classe::Precisione,
+            Self::MargineMemoria(_) => Classe::Limite,
             Self::InvalidParameter { .. }
             | Self::InvalidOutput(_)
             | Self::InvalidInput(_)
@@ -154,7 +155,7 @@ impl ErroreKernel for SpatialJoinError {
             Self::Internal(_) | Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => {
                 Classe::Interna
             }
-            Self::PairLimitExceeded { .. } => Classe::Limite,
+            Self::PairLimitExceeded { .. } | Self::MargineMemoria(_) => Classe::Limite,
             Self::IndexOverflow
             | Self::InvalidPairLimit
             | Self::NonFiniteCoordinate { .. }
@@ -168,7 +169,9 @@ impl ErroreKernel for AnalysisError {
         match self {
             Self::SpatialJoin(interno) => interno.classe(),
             Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Classe::Interna,
-            Self::WorkLimitExceeded { .. } | Self::ResultLimitExceeded { .. } => Classe::Limite,
+            Self::WorkLimitExceeded { .. }
+            | Self::ResultLimitExceeded { .. }
+            | Self::MargineMemoria(_) => Classe::Limite,
             Self::InvalidWorkLimit
             | Self::InvalidMaximumDistance
             | Self::IndexOverflow

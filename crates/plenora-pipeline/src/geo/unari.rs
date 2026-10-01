@@ -35,6 +35,7 @@ use plenora_kernels_geo::analyze::{DEFAULT_X_COLUMN, DEFAULT_Y_COLUMN};
 use plenora_kernels_geo::arrow_adapter::{encode_geometry, map_nullable};
 use plenora_kernels_geo::extensions::OnWktError;
 use plenora_kernels_geo::geodetica::EllissoideGeodetico;
+use plenora_kernels_geo::margine::MargineMemoria;
 use plenora_kernels_geo::operations::{BufferCapStyle, SimplifyPolicy};
 use plenora_kernels_geo::predicates::SpatialPredicate;
 use plenora_kernels_geo::riproiezione::ReprojectParams;
@@ -294,7 +295,12 @@ impl Trasformazione {
 
     /// La geometria trasformata; `None` dove il kernel non ne ha una (una
     /// geometria vuota), che diventa null.
-    fn applica(&self, op: &str, geometria: &Geometry<f64>) -> Result<Option<Geometry<f64>>> {
+    fn applica(
+        &self,
+        op: &str,
+        geometria: &Geometry<f64>,
+        margine: MargineMemoria,
+    ) -> Result<Option<Geometry<f64>>> {
         Ok(match self {
             Self::Canonica(operazione) => Some(plenora_kernels_geo::transform_geometry(
                 *operazione,
@@ -311,8 +317,14 @@ impl Trasformazione {
                 estremita,
                 precisione,
             } => Some(
-                operations::buffer_with_cap(geometria, *distanza, *estremita, *precisione)
-                    .map_err(|e| del_kernel(op, &e))?,
+                operations::buffer_with_cap_con_margine(
+                    geometria,
+                    *distanza,
+                    *estremita,
+                    *precisione,
+                    margine,
+                )
+                .map_err(|e| del_kernel(op, &e))?,
             ),
             Self::Semplifica {
                 tolleranza,
@@ -628,6 +640,7 @@ impl KernelUnario {
         lato: Option<&Lato>,
         batch: &RecordBatch,
         _uscita: &DataContract,
+        margine: MargineMemoria,
     ) -> Result<(Vec<ArrayRef>, usize)> {
         let righe = batch.num_rows();
         let mut colonne = batch.columns().to_vec();
@@ -653,7 +666,7 @@ impl KernelUnario {
             Self::Trasforma(trasformazione) => {
                 let celle = per_cella(lato.celle(batch)?, |g| {
                     trasformazione
-                        .applica(op, g)?
+                        .applica(op, g, margine)?
                         .map(|uscita| encode_geometry(&uscita))
                         .transpose()
                 })?;

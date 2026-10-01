@@ -31,6 +31,7 @@ pub mod extensions2;
 pub mod extensions3;
 pub mod geodetica;
 pub mod geometry_contract;
+pub mod margine;
 pub mod memory_estimate;
 pub mod operations;
 pub mod predicates;

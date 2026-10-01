@@ -65,6 +65,10 @@ pub enum ExtensionError {
     /// mai un elenco troncato.
     #[error("issues di copertura oltre il limite {limit}")]
     IssueLimit { limit: u64 },
+    /// Le coppie candidate o le issue supererebbero il margine di memoria
+    /// passato al kernel ([`crate::margine`]).
+    #[error("{0}")]
+    MargineMemoria(crate::margine::MargineSuperato),
     /// Un indice o un conteggio non rappresentabile.
     #[error("indice o conteggio non rappresentabile come uint64")]
     IndexOverflow,
@@ -125,7 +129,7 @@ impl ExtensionError {
     /// sbagliato (`InvalidPlan`, come in analisi).
     #[must_use]
     pub const fn e_un_limite(&self) -> bool {
-        matches!(self, Self::IssueLimit { .. })
+        matches!(self, Self::IssueLimit { .. } | Self::MargineMemoria(_))
     }
 
     /// L'errore nella categoria giusta, con il prefisso dell'operazione:

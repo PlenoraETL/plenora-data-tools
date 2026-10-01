@@ -7,7 +7,8 @@
 //! [`OperationError`] in `PlenoraError` non si definiscono qui: li decide il
 //! runner (`plenora-pipeline`), che chiama questi kernel sulle righe.
 
-use crate::rust_backend::buffer::{buffer_controllato, ErroreBuffer, Estremita};
+use crate::margine::MargineMemoria;
+use crate::rust_backend::buffer::{buffer_controllato_con_margine, ErroreBuffer, Estremita};
 use crate::rust_backend::griglia;
 use crate::rust_backend::precision::Precision;
 use crate::ValidazioneProtetta as _;
@@ -96,6 +97,10 @@ pub enum OperationError {
     /// dato nel messaggio.
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
+    /// Il buffer supererebbe il margine di memoria passato al kernel
+    /// ([`crate::margine`]).
+    #[error("buffer: {0}")]
+    MargineMemoria(crate::margine::MargineSuperato),
 }
 
 impl From<griglia::PrecisioneInsufficiente> for OperationError {
@@ -390,6 +395,35 @@ pub fn buffer_with_cap(
     cap_style: BufferCapStyle,
     precision: Precision,
 ) -> Result<Geometry<f64>, OperationError> {
+    buffer_with_cap_con_margine(
+        geometry,
+        distance,
+        cap_style,
+        precision,
+        MargineMemoria::ILLIMITATO,
+    )
+}
+
+/// Variante di [`buffer_with_cap`] con il margine di memoria del chiamante
+/// ([`crate::margine`]).
+///
+/// Prima di ogni overlay i punti dei contorni
+/// (un minorante del costo di `i_overlay`), dopo ogni unione dei blocchi e
+/// alla fine la stima del risultato devono stare nel margine
+/// (`rust_backend::buffer::buffer_controllato_con_margine`). Il margine vale
+/// per questa geometria.
+///
+/// # Errors
+///
+/// Come [`buffer_with_cap`]; in piu' `MargineMemoria` se il buffer non
+/// starebbe nel margine.
+pub fn buffer_with_cap_con_margine(
+    geometry: &Geometry<f64>,
+    distance: f64,
+    cap_style: BufferCapStyle,
+    precision: Precision,
+    margine: MargineMemoria,
+) -> Result<Geometry<f64>, OperationError> {
     ensure_valid(geometry)?;
     if !distance.is_finite() {
         return Err(OperationError::InvalidParameter {
@@ -402,12 +436,12 @@ pub fn buffer_with_cap(
         BufferCapStyle::Flat => Estremita::Piatte,
         BufferCapStyle::Square => Estremita::Quadrate,
     };
-    let result = buffer_controllato(geometry, distance, estremita, precision).map_err(
-        |errore| match errore {
+    let result = buffer_controllato_con_margine(geometry, distance, estremita, precision, margine)
+        .map_err(|errore| match errore {
             ErroreBuffer::PrecisioneInsufficiente => OperationError::PrecisionInsufficient,
             ErroreBuffer::CalcoloNonConcluso(forma) => OperationError::CalcoloNonConcluso(forma),
-        },
-    )?;
+            ErroreBuffer::MargineMemoria(superato) => OperationError::MargineMemoria(superato),
+        })?;
     validate_output(Geometry::MultiPolygon(result))
 }
 

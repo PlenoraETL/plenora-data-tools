@@ -10285,7 +10285,11 @@ Poi dal kernel, per geometria (`OperationError`, che il runner porta in `Plenora
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
   calcolo di `geo` e `i_overlay` vanno in panico dentro la barriera (il
   messaggio porta solo la forma del payload);
-- `InvalidParameter`: `distance` non finita (l'analisi la rifiuta prima).
+- `InvalidParameter`: `distance` non finita (l'analisi la rifiuta prima);
+- `MargineMemoria` (`ResourceLimit`): i punti dei contorni prima di un
+  overlay, le parti dopo un'unione dei blocchi o il risultato non
+  starebbero nel margine di memoria del passo, per questa geometria
+  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»).
 
 Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
 è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza
@@ -11544,6 +11548,8 @@ validate), nella categoria del passo geo indicata fra parentesi:
 
 - `PairLimitExceeded` (`ResourceLimit`): le coppie punto-poligono
   confermate superano il limite di righe dell'arco;
+- `MargineMemoria` (`ResourceLimit`): le stesse coppie non starebbero nel
+  margine di memoria del passo (40 byte ciascuna; [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;
@@ -11715,7 +11721,9 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
 - `Unsupported`: `PrecisionInsufficient` (sotto, «Precisione»); WKB con
   dimensioni Z/M o SRID;
 - `ResourceLimit`: cella oltre il limite di byte per cella; più di
-  `max_issues` sovrapposizioni (`IssueLimit`);
+  `max_issues` sovrapposizioni (`IssueLimit`); coppie candidate e
+  sovrapposizioni (stimate dalla zona, con la sua codifica) oltre il
+  margine di memoria del passo (`MargineMemoria`; [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `Internal`: panico di `geo`, `i_overlay` o `rstar`, validazione che non
   conclude.
 
@@ -15822,6 +15830,10 @@ geo indicata fra parentesi:
 - `ResultLimitExceeded` (`ResourceLimit`): gli abbinamenti superano il
   limite di righe dell'arco (ogni altro errore, il primo in ordine di
   riga, ha la precedenza);
+- `MargineMemoria` (`ResourceLimit`): gli abbinamenti, con la riga di left
+  che l'uscita ripete, non starebbero nel margine di memoria del passo;
+  stesso conteggio e stessa precedenza del limite di righe, che vince se
+  scatta prima ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso` (`Internal`): un
   calcolo di `geo` (la distanza su un candidato) non ha concluso;
 - `IndexOverflow` (`InvalidPlan`): un indice non entra in `u64`.
@@ -16021,7 +16033,9 @@ parentesi:
   validazione OGC;
 - `ResourceLimit` (`ResourceLimit`): le coppie candidate superano il
   limite di righe dell'arco (`candidate_pairs`), o i pezzi lo superano
-  (`overlay_results`);
+  (`overlay_results`), o coppie e pezzi (stimati dalla geometria, con la
+  loro codifica) non starebbero nel margine di memoria del passo
+  (`memoria`; [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `IndexOverflow` (`InvalidPlan`): un indice non entra in `u64`;
 - `PrecisionInsufficient` (`Unsupported`): la griglia di un overlay
   sposterebbe il risultato oltre la precisione (sotto, «Precisione»);
@@ -19564,6 +19578,10 @@ passo geo indicata fra parentesi:
   limite di righe dell'arco (si controlla coppia per coppia, prima di
   materializzarle; ogni altro errore, il primo in ordine di riga, ha la
   precedenza);
+- `MargineMemoria` (`ResourceLimit`): le coppie confermate, con la riga di
+  left che l'uscita ripete, non starebbero nel margine di memoria del passo
+  (budget meno byte vivi); stesso conteggio e stessa precedenza del limite
+  di righe, che vince se scatta prima ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;
@@ -21293,6 +21311,8 @@ categoria del passo geo indicata fra parentesi:
 - `PairLimitExceeded` (`ResourceLimit`): le coppie (sinistra, destra)
   confermate superano il limite di righe dell'arco; conta ogni destra che
   contiene una sinistra, anche se ne basta una;
+- `MargineMemoria` (`ResourceLimit`): le stesse coppie non starebbero nel
+  margine di memoria del passo (40 byte ciascuna; [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;

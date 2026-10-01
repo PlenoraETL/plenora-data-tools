@@ -33,6 +33,7 @@ use plenora_core::limits::Limits;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::analyze::config::{NearestConfig, OverlayConfig, SJoinConfig};
 use plenora_kernels_geo::arrow_adapter::encode_geometry;
+use plenora_kernels_geo::margine::MargineMemoria;
 use plenora_kernels_geo::rust_backend::precision::Precision;
 use plenora_kernels_geo::spatial_join::JoinPredicate;
 use plenora_kernels_geo::topology::{BooleanOperation, OverlayMode};
@@ -113,19 +114,24 @@ impl KernelBinario {
         lati: (&Lato, &Lato),
         tabelle: (&RecordBatch, &RecordBatch),
         righe_massime: u64,
+        margine: MargineMemoria,
     ) -> Result<(Vec<ArrayRef>, usize)> {
         let (lato_sx, lato_dx) = lati;
         let (sinistra, destra) = tabelle;
+        // Le uscite a una riga per coppia ripetono la riga di left: il suo
+        // costo medio (per eccesso) conta nel margine, con gli indici.
+        let riga_sinistra = byte_per_riga(sinistra);
         let geometrie_sx = decodifica(lato_sx.celle(sinistra)?)?;
         let geometrie_dx = decodifica(lato_dx.celle(destra)?)?;
         let righe_sx = sinistra.num_rows();
         match self {
             Self::Unione(predicato) => {
-                let coppie = spatial_join::spatial_join_nullable_validated(
+                let coppie = spatial_join::spatial_join_nullable_validated_con_margine(
                     &geometrie_sx,
                     &geometrie_dx,
                     *predicato,
                     righe_massime,
+                    margine.con_uscita_per_risultato(riga_sinistra.saturating_add(16)),
                 )
                 .map_err(|e| del_kernel(op, &e))?;
                 let indici = UInt64Array::from_iter_values(coppie.iter().map(|c| c.left));
@@ -139,12 +145,12 @@ impl KernelBinario {
                 distanza,
                 confronti,
             } => {
-                let trovati = analysis::nearest_matches_validated(
+                let trovati = analysis::nearest_matches_validated_con_margine(
                     &geometrie_sx,
                     &geometrie_dx,
                     *distanza,
-                    *confronti,
-                    righe_massime,
+                    (*confronti, righe_massime),
+                    margine.con_uscita_per_risultato(riga_sinistra.saturating_add(24)),
                 )
                 .map_err(|e| del_kernel(op, &e))?;
                 let indici = UInt64Array::from_iter_values(trovati.iter().map(|m| m.left));
@@ -158,11 +164,15 @@ impl KernelBinario {
                 Ok((colonne, indici.len()))
             }
             Self::Dentro => {
-                let dentro: HashSet<u64> =
-                    analysis::within_indexes_validated(&geometrie_sx, &geometrie_dx, righe_massime)
-                        .map_err(|e| del_kernel(op, &e))?
-                        .into_iter()
-                        .collect();
+                let dentro: HashSet<u64> = analysis::within_indexes_validated_con_margine(
+                    &geometrie_sx,
+                    &geometrie_dx,
+                    righe_massime,
+                    margine,
+                )
+                .map_err(|e| del_kernel(op, &e))?
+                .into_iter()
+                .collect();
                 let mut indici = 0_u64..;
                 let valori: BooleanArray = geometrie_sx
                     .iter()
@@ -176,10 +186,11 @@ impl KernelBinario {
                 Ok((colonne, righe_sx))
             }
             Self::Conta => {
-                let conteggi = analysis::count_points_in_polygons_validated(
+                let conteggi = analysis::count_points_in_polygons_validated_con_margine(
                     &geometrie_sx,
                     &geometrie_dx,
                     righe_massime,
+                    margine,
                 )
                 .map_err(|e| del_kernel(op, &e))?;
                 // Un conteggio per riga di left, verificato prima di
@@ -223,13 +234,15 @@ impl KernelBinario {
             Self::Sovrapponi(modo, precisione) => {
                 let (posizioni_sx, presenti_sx) = presenti(geometrie_sx);
                 let (posizioni_dx, presenti_dx) = presenti(geometrie_dx);
-                let pezzi = topology::polygon_overlay_validated(
+                // Per pezzo, oltre alla geometria che il kernel conta: i due
+                // indici con le validita'.
+                let pezzi = topology::polygon_overlay_validated_con_margine(
                     &presenti_sx,
                     &presenti_dx,
                     *modo,
-                    righe_massime,
-                    righe_massime,
+                    (righe_massime, righe_massime),
                     *precisione,
+                    margine.con_uscita_per_risultato(24),
                 )
                 .map_err(|e| del_kernel(op, &e))?;
                 let riga_di = |posizioni: &[usize], indice: Option<u64>| -> Result<Option<u64>> {
@@ -298,6 +311,15 @@ impl KernelBinario {
             }
         }
     }
+}
+
+/// I byte medi di una riga di `tabella`, per eccesso (la copia di tutte le
+/// colonne divisa per le righe, arrotondata in su).
+fn byte_per_riga(tabella: &RecordBatch) -> u64 {
+    let righe = u64::try_from(tabella.num_rows()).unwrap_or(u64::MAX).max(1);
+    u64::try_from(plenora_core::memoria::byte_dati(tabella))
+        .unwrap_or(u64::MAX)
+        .div_ceil(righe)
 }
 
 /// Le colonne di left, riga per indice.

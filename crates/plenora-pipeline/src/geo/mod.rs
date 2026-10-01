@@ -45,6 +45,7 @@ use plenora_core::limits::Limits;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, map_nullable};
 use plenora_kernels_geo::geodetica::EllissoideGeodetico;
+use plenora_kernels_geo::margine::MargineMemoria;
 use plenora_kernels_geo::rust_backend::precision::Precision;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -350,11 +351,22 @@ impl PassoGeo {
 
     /// Esegue il passo sugli ingressi e monta l'uscita sul contratto.
     ///
+    /// `margine` sono i byte che il passo puo' ancora occupare (budget meno
+    /// byte vivi, come per i kernel tabellari): i kernel geo che crescono
+    /// con i dati lo ricevono ([`plenora_kernels_geo::margine`]) e si
+    /// fermano con `ResourceLimit` prima di superarlo.
+    ///
     /// # Errors
     ///
     /// Gli errori dei controlli sugli ingressi (dominio del CRS, tipi
     /// dichiarati), dei kernel e del montaggio.
-    pub fn esegui(&self, ingressi: &[&RecordBatch], uscita: &DataContract) -> Result<RecordBatch> {
+    pub fn esegui(
+        &self,
+        ingressi: &[&RecordBatch],
+        uscita: &DataContract,
+        margine: usize,
+    ) -> Result<RecordBatch> {
+        let margine = MargineMemoria::byte(u64::try_from(margine).unwrap_or(u64::MAX));
         if ingressi.len() != self.lati.len() {
             return Err(PlenoraError::Internal(format!(
                 "{}: numero di ingressi diverso da quello validato",
@@ -379,6 +391,7 @@ impl PassoGeo {
                     self.lati.first().and_then(Option::as_ref),
                     batch,
                     uscita,
+                    margine,
                 )?
             }
             Kernel::Collettivo(kernel, righe_massime) => {
@@ -393,6 +406,7 @@ impl PassoGeo {
                     self.lati.first().and_then(Option::as_ref),
                     batch,
                     *righe_massime,
+                    margine,
                 )?
             }
             Kernel::Binario(kernel, righe_massime) => {
@@ -409,6 +423,7 @@ impl PassoGeo {
                     (geo_left, geo_right),
                     (sinistra, destra),
                     *righe_massime,
+                    margine,
                 )?
             }
         };

@@ -170,6 +170,11 @@ fn dal_join(error: crate::spatial_join::SpatialJoinError) -> TopologyError {
             actual: limit.saturating_add(1),
             limit,
         },
+        S::MargineMemoria(superato) => TopologyError::ResourceLimit {
+            name: "memoria",
+            actual: superato.previsti,
+            limit: superato.margine,
+        },
         S::InvalidPairLimit => TopologyError::InvalidParameter {
             name: "max_candidate_pairs",
             reason: "deve essere maggiore di zero",
@@ -182,6 +187,7 @@ fn dal_join(error: crate::spatial_join::SpatialJoinError) -> TopologyError {
 }
 
 use crate::geometry_type_name as geometry_name;
+use crate::margine::{ContatoreMargine, MargineMemoria};
 use crate::ValidazioneProtetta as _;
 
 /// Mappa l'esito della barriera sull'errore proprio di questo modulo.
@@ -481,9 +487,9 @@ fn clip_to_mask_impl(
 fn push_piece(
     pieces: &mut Vec<OverlayPiece>,
     geometry: Geometry<f64>,
-    left: Option<usize>,
-    right: Option<usize>,
+    (left, right): (Option<usize>, Option<usize>),
     max_results: u64,
+    contatore: &mut ContatoreMargine,
 ) -> Result<(), TopologyError> {
     if is_empty(&geometry) {
         return Ok(());
@@ -497,6 +503,14 @@ fn push_piece(
             limit: max_results,
         });
     }
+    // Il pezzo e la sua codifica nell'uscita, piu' la struttura.
+    contatore
+        .aggiungi(
+            crate::memory_estimate::estimate_geometry_native_bytes(&geometry)
+                .saturating_mul(2)
+                .saturating_add(std::mem::size_of::<OverlayPiece>() as u64),
+        )
+        .map_err(dal_margine)?;
     pieces.push(OverlayPiece {
         geometry,
         left: left
@@ -551,6 +565,7 @@ pub fn polygon_overlay(
         (max_candidate_pairs, max_results),
         false,
         precision,
+        MargineMemoria::ILLIMITATO,
     )
 }
 
@@ -580,7 +595,51 @@ pub fn polygon_overlay_validated(
         (max_candidate_pairs, max_results),
         true,
         precision,
+        MargineMemoria::ILLIMITATO,
     )
+}
+
+/// Variante di [`polygon_overlay_validated`] con il margine di memoria del
+/// chiamante ([`crate::margine`]).
+///
+/// Le coppie candidate contano come nel
+/// join (`spatial_join::BYTE_PER_COPPIA`), ogni pezzo due volte la stima
+/// della sua geometria ([`crate::memory_estimate`]: il pezzo e la sua
+/// codifica nell'uscita) piu' la struttura e l'uscita del margine. Il
+/// kernel e' sequenziale: si ferma al primo pezzo che non ci starebbe,
+/// prima di trattenerlo.
+///
+/// # Errors
+///
+/// Come [`polygon_overlay_validated`]; in piu' `ResourceLimit` con nome
+/// `memoria` (byte previsti e margine) se coppie o pezzi superano il
+/// margine.
+pub fn polygon_overlay_validated_con_margine(
+    left: &[Geometry<f64>],
+    right: &[Geometry<f64>],
+    mode: OverlayMode,
+    (max_candidate_pairs, max_results): (u64, u64),
+    precision: Precision,
+    margine: MargineMemoria,
+) -> Result<Vec<OverlayPiece>, TopologyError> {
+    polygon_overlay_impl(
+        left,
+        right,
+        mode,
+        (max_candidate_pairs, max_results),
+        true,
+        precision,
+        margine,
+    )
+}
+
+/// Il margine superato, nella lingua di questo modulo.
+const fn dal_margine(superato: crate::margine::MargineSuperato) -> TopologyError {
+    TopologyError::ResourceLimit {
+        name: "memoria",
+        actual: superato.previsti,
+        limit: superato.margine,
+    }
 }
 
 /// Le coppie di righe che si intersecano (il gate di tipo e OGC delle
@@ -590,16 +649,19 @@ fn candidate_pairs(
     right: &[Geometry<f64>],
     max_candidate_pairs: u64,
     validated: bool,
+    margine: MargineMemoria,
 ) -> Result<Vec<crate::spatial_join::JoinPair>, TopologyError> {
     // Percorso gated: il join candidati rivalida gli input. Percorso
     // validated: gli input sono coperti dalla precondizione, il join non
     // rivalida.
     if validated {
-        crate::spatial_join::spatial_join_validated(
+        crate::spatial_join::spatial_join_validated_con_margine(
             left,
             right,
             crate::spatial_join::JoinPredicate::Intersects,
             max_candidate_pairs,
+            // Le coppie candidate restano nel kernel: nessuna uscita.
+            MargineMemoria::byte(margine.byte_disponibili()),
         )
     } else {
         crate::spatial_join::spatial_join(
@@ -623,6 +685,7 @@ fn polygon_overlay_impl(
     (max_candidate_pairs, max_results): (u64, u64),
     validated: bool,
     precision: Precision,
+    margine: MargineMemoria,
 ) -> Result<Vec<OverlayPiece>, TopologyError> {
     if max_candidate_pairs == 0 || max_results == 0 {
         return Err(TopologyError::InvalidParameter {
@@ -638,8 +701,14 @@ fn polygon_overlay_impl(
         .iter()
         .map(|geometry| coerce(geometry, validated))
         .collect::<Result<_, _>>()?;
-    let pairs = candidate_pairs(left, right, max_candidate_pairs, validated)?;
+    let pairs = candidate_pairs(left, right, max_candidate_pairs, validated, margine)?;
     let mut pieces = Vec::new();
+    // Le coppie restano vive per tutto il ciclo delle intersezioni.
+    let byte_coppie = u64::try_from(pairs.len())
+        .map_err(|_| TopologyError::IndexOverflow)?
+        .saturating_mul(crate::spatial_join::BYTE_PER_COPPIA);
+    margine.verifica(byte_coppie).map_err(dal_margine)?;
+    let mut contatore = ContatoreMargine::con_usati(margine, byte_coppie);
 
     if matches!(
         mode,
@@ -660,9 +729,9 @@ fn polygon_overlay_impl(
             push_piece(
                 &mut pieces,
                 geometry,
-                Some(left_index),
-                Some(right_index),
+                (Some(left_index), Some(right_index)),
                 max_results,
+                &mut contatore,
             )?;
         }
     }
@@ -691,7 +760,13 @@ fn polygon_overlay_impl(
                 Some(mask) => remainder(&left_polygons[index], mask)?,
                 None => geometry.clone(),
             };
-            push_piece(&mut pieces, piece, Some(index), None, max_results)?;
+            push_piece(
+                &mut pieces,
+                piece,
+                (Some(index), None),
+                max_results,
+                &mut contatore,
+            )?;
         }
     }
 
@@ -704,7 +779,13 @@ fn polygon_overlay_impl(
                 Some(mask) => remainder(&right_polygons[index], mask)?,
                 None => geometry.clone(),
             };
-            push_piece(&mut pieces, piece, None, Some(index), max_results)?;
+            push_piece(
+                &mut pieces,
+                piece,
+                (None, Some(index)),
+                max_results,
+                &mut contatore,
+            )?;
         }
     }
     Ok(pieces)
@@ -807,6 +888,7 @@ fn checked_buffer(
         match errore {
             ErroreBuffer::PrecisioneInsufficiente => TopologyError::PrecisionInsufficient,
             ErroreBuffer::CalcoloNonConcluso(forma) => TopologyError::CalcoloNonConcluso(forma),
+            ErroreBuffer::MargineMemoria(superato) => dal_margine(superato),
         }
     })
 }

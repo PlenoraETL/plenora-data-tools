@@ -44,7 +44,14 @@ use plenora_kernels_geo::{
 };
 use serde_json::Value;
 
+use plenora_kernels_geo::margine::MargineMemoria;
+
 use super::errori::del_kernel;
+
+/// I byte di una riga d'uscita di `geo.coverage_validate` oltre la zona
+/// (che il kernel conta): tipo (offset e testo), due indici, area, con le
+/// validita'.
+const BYTE_RIGA_PROBLEMA: u64 = 64;
 use super::{binaria, config, sostituisci, Lato};
 
 /// Punti massimi di `voronoi` senza `max_points` in config: il default del
@@ -270,6 +277,7 @@ impl KernelCollettivo {
         lato: Option<&Lato>,
         batch: &RecordBatch,
         righe_massime: u64,
+        margine: MargineMemoria,
     ) -> Result<(Vec<ArrayRef>, usize)> {
         if let Self::Griglia {
             estensione,
@@ -408,11 +416,13 @@ impl KernelCollettivo {
                 problemi,
                 precisione,
             } => {
-                let problemi = extensions3::coverage_validate_rows(
+                // Una riga d'uscita per problema: tipo, due indici, area.
+                let problemi = extensions3::coverage_validate_rows_con_margine(
                     celle,
                     *tolleranza,
                     *problemi,
                     *precisione,
+                    margine.con_uscita_per_risultato(BYTE_RIGA_PROBLEMA),
                 )?;
                 let righe = problemi.len();
                 Ok((
