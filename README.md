@@ -504,9 +504,12 @@ L'oracolo è in `crates/plenora-kernels-geo/src/validazione_ogc/tests.rs`.
   griglia di circa una cella per segmento, misurata in alternanza nello
   stesso processo: 58 contro 91 µs sui lati frastagliati di una copertura da
   1.000 vertici (circa 40 confronti per segmento nella scansione), ma 432-470
-  contro 269-324 µs su un cerchio da 10.000 vertici e più lenta sotto i 100;
-  il noding di `polygonize` sulla stessa griglia non ha cambiato i tempi di
-  `split`. Non è stata tenuta. Serve una
+  contro 269-324 µs su un cerchio da 10.000 vertici e più lenta sotto i 100
+  (sulle booleane del laboratorio a 10.000 righe da 1.000 vertici, uscite
+  frastagliate, dal 5 al 21% di tempo in meno); il noding di `polygonize`
+  sulla stessa griglia non ha cambiato i tempi di `split`. Una soglia sulla
+  stima dei confronti della scansione non ha separato i casi senza costo: non
+  è stata tenuta. Serve una
   scansione a linea mobile (Shamos-Hoey) con predicati esatti e le esclusioni
   di `geo` sugli estremi condivisi, non ancora scritta;
 - la sequenza è copiata da `geo` 0.33.1: a ogni aggiornamento di `geo` va
@@ -1996,6 +1999,29 @@ esplicito.
   massimo della campagna (`buffer`, `make_valid`, `split`) o
   rifiutati (`line_merge`, `polygonize`, `voronoi`) non sono nel modello.
 
+  **Modelli non rigenerati dopo il buffer a blocchi e lo split parallelo.**
+  Le misure di questo ciclo (laboratorio della campagna v4 sul codice
+  corrente, Windows, 32 thread, mediana di 5 del `PeakWorkingSet64` oltre
+  quello di un processo con gli stessi ingressi) non sono nel catalogo e
+  i modelli restano quelli v4:
+  - il `buffer` a zig-zag ora sta sotto il modello del profilo ordinario
+    (1.000 linee da 1.000 vertici: 117 MB contro 398 MB senza `S`; 10.000:
+    832 MB contro 3,9 GB), ma resta escluso finché una campagna non ne
+    rigenera le misure;
+  - `split` calcola le righe in parallelo, e il transitorio cresce coi
+    thread (circa 0,5 MiB per thread sulle lame a zig-zag: 38 MiB con un
+    thread, 54 con 32): sul profilo a zig-zag 1.000 righe da 100 vertici
+    misurano 57 MB contro 39 MB del modello senza `S` (59 MB con `S`), e
+    10.000 righe da 1.000 vertici, prima oltre il tempo massimo, 4,2 GB
+    contro 3,9 GB senza `S` (5,8 GB con `S`): l'invariante «previsione
+    almeno una volta e mezza la misura» non vale su questi punti, la
+    previsione con `S` sì;
+  - `make_valid` sulle stelle invalide a 10.000 righe da 1.000 vertici,
+    prima oltre il tempo massimo, 2,2 GB contro 2,4 GB senza `S`.
+
+  La dipendenza del transitorio dai thread vale per ogni kernel per riga
+  in parallelo: le misure v4 sono a 32 thread, e una macchina con più
+  core ne trattiene di più.
   **Margine nei kernel.** I kernel di questi profili ricevono il margine
   del passo (`plenora_kernels_geo::margine`, budget meno byte vivi) e
   contano, dove i loro risultati crescono, i byte che vi mettono, più quelli
