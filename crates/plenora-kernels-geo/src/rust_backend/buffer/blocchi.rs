@@ -12,29 +12,49 @@
 //! l'unione di due blocchi vicini attraversa solo i loro bordi, che la
 //! sovrapposizione ha gia' ridotto.
 //!
-//! **Perche' il risultato e' lo stesso buffer.** Il buffer di una linea con
-//! giunzioni tonde e' l'unione dei rettangoli dei suoi segmenti (larghi
-//! `2 |d|`) e dei dischi di raggio `|d|` sui vertici interni, piu' le due
-//! estremita'. I blocchi si sovrappongono di un segmento (il blocco `k + 1`
-//! comincia dal penultimo vertice del blocco `k`), quindi:
+//! **Perche' il risultato e' lo stesso buffer.** I blocchi si sovrappongono
+//! di un segmento (il blocco `k + 1` comincia dal penultimo vertice del
+//! blocco `k`), e quel segmento condiviso non degenera sulla griglia di
+//! `i_overlay` (sotto). Allora:
 //!
-//! - ogni segmento sta in almeno un blocco, e ogni vertice interno della
-//!   linea e' interno ad almeno un blocco (il primo e l'ultimo vertice del
-//!   blocco `k` sono interni rispettivamente al blocco `k - 1` e `k + 1`),
-//!   con la sua giunzione;
-//! - con estremita' **tonde** l'estremita' di un blocco su un vertice
-//!   interno della linea e' un disco centrato su quel vertice, contenuto nel
-//!   buffer della linea; con estremita' **piatte** e' il bordo del
-//!   rettangolo del segmento condiviso, contenuto nel buffer del blocco
-//!   vicino. Le estremita' della linea sono quelle del primo e dell'ultimo
-//!   blocco.
+//! - ogni segmento della linea sta in almeno un blocco, e ogni vertice
+//!   interno della linea e' interno ad almeno un blocco, con i suoi due
+//!   segmenti: l'ultimo vertice del blocco `k` e' interno al blocco `k + 1`
+//!   (che ne contiene il segmento precedente, quello condiviso, e il
+//!   successivo), il primo del blocco `k + 1` e' interno al blocco `k`;
+//! - con estremita' **piatte** il buffer di una linea con giunzioni tonde e'
+//!   l'unione dei rettangoli dei suoi segmenti (i punti che si proiettano
+//!   nel segmento, entro `|d|`) e dei settori di giunzione sui vertici
+//!   interni (il settore di raggio `|d|` fra le normali dei due segmenti, dal
+//!   lato esterno della svolta), che dipendono solo dai due segmenti del
+//!   vertice. Ogni blocco ha rettangoli e settori della linea, quindi il suo
+//!   buffer sta nel buffer della linea; ogni rettangolo e ogni settore della
+//!   linea e' di un blocco (punto sopra): l'unione dei buffer dei blocchi
+//!   e' il buffer della linea, anche con segmenti cortissimi (nessun disco
+//!   intero ai vertici, solo i settori);
+//! - con estremita' **tonde** e giunzioni tonde il buffer e' la somma di
+//!   Minkowski della linea con il disco di raggio `|d|`, che si distribuisce
+//!   sull'unione: la linea e' l'unione dei blocchi, e il buffer l'unione dei
+//!   loro buffer.
 //!
-//! L'unione dei buffer esatti dei blocchi e' quindi il buffer esatto della
-//! linea. Le estremita' **quadrate** sporgerebbero di `|d|` oltre i vertici
-//! interni: con quelle si resta al tratto unico. I punti ripetuti
-//! consecutivi si tolgono prima (stesso insieme di punti, stesso buffer):
-//! un segmento di lunghezza nulla condiviso fra due blocchi non avrebbe
-//! direzione.
+//! Le estremita' **quadrate** sporgerebbero di `|d|` oltre il vertice
+//! condiviso: con quelle si resta al tratto unico. I punti ripetuti
+//! consecutivi si tolgono prima (stesso insieme di punti, stesso buffer).
+//!
+//! **Segmenti sotto la griglia.** `i_overlay` porta le coordinate su interi
+//! di passo `g` e scarta i segmenti che vi degenerano: rettangoli e settori
+//! sono quelli della linea senza quei segmenti. Il segmento condiviso fra
+//! due blocchi si sceglie con almeno una componente oltre `2 g` (il
+//! blocco si allunga finche' non lo trova; senza, resta un blocco solo),
+//! quindi non degenera (la griglia di un blocco, sul suo ingombro, non e'
+//! piu' larga di `g`), e i settori ai suoi estremi sono fra lui e i
+//! segmenti non degeneri vicini, come nel tratto unico. Nessun blocco
+//! degenera per intero (contiene quel segmento). Un segmento sotto la
+//! griglia dentro un blocco puo' essere tenuto o scartato diversamente dal
+//! tratto unico (la griglia di un blocco e' piu' fine di quella della
+//! linea): e' una feature piu' vicina della precisione, fuori dalla
+//! garanzia come in ogni overlay (README, «Feature d'ingresso piu' vicine
+//! della precisione»).
 //!
 //! **Scostamento dal tratto unico.** Ogni buffer di blocco sta entro
 //! `p / 2` dal buffer esatto del blocco verso l'esterno ed entro `f + p /
@@ -162,7 +182,7 @@ pub(super) fn tratto_unico_troppo_costoso(linee: &[&LineString<f64>], distanza: 
 /// [`SEGMENTI_PER_BLOCCO`] segmenti, sovrapposti di un segmento (vedi il
 /// modulo). Una linea di un solo punto distinto resta un blocco di un
 /// punto: `geo` ne fa il buffer di un punto, come per la linea intera.
-fn blocchi(linea: &LineString<f64>) -> Vec<LineString<f64>> {
+fn blocchi(linea: &LineString<f64>, passo: f64) -> Vec<LineString<f64>> {
     let mut punti: Vec<Coord<f64>> = Vec::with_capacity(linea.0.len());
     for punto in &linea.0 {
         if punti.last() != Some(punto) {
@@ -172,26 +192,37 @@ fn blocchi(linea: &LineString<f64>) -> Vec<LineString<f64>> {
     if punti.len() <= SEGMENTI_PER_BLOCCO + 1 {
         return vec![LineString::new(punti)];
     }
+    let ultimo = punti.len() - 1;
+    // Il segmento che finisce in `i` non degenera sulla griglia di passo
+    // `passo`: una componente oltre `2 passo` (vedi il modulo).
+    let lungo = |i: usize| {
+        let (a, b) = (punti[i - 1], punti[i]);
+        (b.x - a.x).abs().max((b.y - a.y).abs()) > 2.0 * passo
+    };
     let mut out = Vec::with_capacity(punti.len() / (SEGMENTI_PER_BLOCCO - 1) + 1);
     let mut inizio = 0;
     loop {
-        let fine = (inizio + SEGMENTI_PER_BLOCCO).min(punti.len() - 1);
-        out.push(LineString::new(punti[inizio..=fine].to_vec()));
-        if fine == punti.len() - 1 {
+        let mut fine = inizio + SEGMENTI_PER_BLOCCO;
+        while fine < ultimo && !lungo(fine) {
+            fine += 1;
+        }
+        if fine >= ultimo {
+            out.push(LineString::new(punti[inizio..].to_vec()));
             break;
         }
+        out.push(LineString::new(punti[inizio..=fine].to_vec()));
         inizio = fine - 1;
     }
     out
 }
 
-/// I blocchi di tutte le linee, nell'ordine delle linee; le linee vuote non
-/// ne hanno.
-pub(super) fn blocchi_di(linee: &[&LineString<f64>]) -> Vec<LineString<f64>> {
+/// I blocchi di tutte le linee, nell'ordine delle linee, con il passo
+/// della griglia di `i_overlay`; le linee vuote non ne hanno.
+pub(super) fn blocchi_di(linee: &[&LineString<f64>], passo: f64) -> Vec<LineString<f64>> {
     linee
         .iter()
         .filter(|linea| !linea.0.is_empty())
-        .flat_map(|linea| blocchi(linea))
+        .flat_map(|linea| blocchi(linea, passo))
         .collect()
 }
 
@@ -202,37 +233,62 @@ pub(super) fn livelli_di_unione(parti: usize) -> u32 {
 
 /// Il buffer di ogni blocco con lo stile dato, poi l'unione a coppie di
 /// blocchi adiacenti, livello per livello ([`livelli_di_unione`] livelli,
-/// ordine deterministico). Dopo i buffer dei blocchi e dopo ogni livello la
-/// stima delle parti vive ([`crate::memory_estimate`]) deve stare nel
-/// `margine`; ogni calcolo di `geo` dietro la barriera dei panici.
+/// ordine deterministico); ogni calcolo di `geo` dietro la barriera dei
+/// panici.
+///
+/// **Memoria.** Si contano i byte vivi delle parti (capacita' vere,
+/// [`crate::margine::byte_multipoligono`]) e dei vettori che le tengono, a
+/// capacita' esatta: ogni buffer di blocco e ogni unione appena calcolati
+/// devono stare nel `margine` insieme a cio' che e' ancora vivo, prima di
+/// essere tenuti; un'unione libera i due operandi. Il transitorio dentro
+/// `geo` e `i_overlay` resta fuori (README, «Modelli di costo geo»).
 pub(super) fn buffer_dei_blocchi(
     blocchi: &[LineString<f64>],
     stile: &BufferStyle<f64>,
     margine: MargineMemoria,
 ) -> Result<MultiPolygon<f64>, super::ErroreBuffer> {
-    let stima = |parti: &[MultiPolygon<f64>]| {
-        parti.iter().fold(0_u64, |totale, parte| {
-            totale.saturating_add(crate::memory_estimate::estimate_geometry_native_bytes(
-                &Geometry::MultiPolygon(parte.clone()),
-            ))
-        })
+    let byte = crate::margine::byte_multipoligono;
+    let elemento = std::mem::size_of::<MultiPolygon<f64>>() as u64;
+    let alloca = |quante: usize| {
+        let mut parti: Vec<MultiPolygon<f64>> = Vec::new();
+        parti
+            .try_reserve_exact(quante)
+            .map(|()| parti)
+            .map_err(|_| super::ErroreBuffer::CalcoloNonConcluso("allocazione dei blocchi"))
     };
-    let mut parti: Vec<MultiPolygon<f64>> = blocchi
-        .iter()
-        .map(|blocco| super::protetto(|| blocco.buffer_with_style(stile.clone())))
-        .collect::<Result<_, _>>()?;
-    margine.verifica(stima(&parti))?;
+    let quante = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    let mut parti = alloca(blocchi.len())?;
+    let mut vive = quante(parti.capacity()).saturating_mul(elemento);
+    margine.verifica(vive)?;
+    for blocco in blocchi {
+        let buffer = super::protetto(|| blocco.buffer_with_style(stile.clone()))?;
+        vive = vive.saturating_add(byte(&buffer));
+        margine.verifica(vive)?;
+        parti.push(buffer);
+    }
     while parti.len() > 1 {
-        let mut prossime = Vec::with_capacity(parti.len().div_ceil(2));
+        let mut prossime = alloca(parti.len().div_ceil(2))?;
+        vive = vive.saturating_add(quante(prossime.capacity()).saturating_mul(elemento));
+        margine.verifica(vive)?;
+        let vecchie = quante(parti.capacity()).saturating_mul(elemento);
         let mut resto = parti.into_iter();
         while let Some(a) = resto.next() {
-            prossime.push(match resto.next() {
-                Some(b) => super::protetto(|| a.union(&b))?,
-                None => a,
-            });
+            match resto.next() {
+                Some(b) => {
+                    let unione = super::protetto(|| a.union(&b))?;
+                    let nuovi = byte(&unione);
+                    margine.verifica(vive.saturating_add(nuovi))?;
+                    vive = vive
+                        .saturating_add(nuovi)
+                        .saturating_sub(byte(&a))
+                        .saturating_sub(byte(&b));
+                    prossime.push(unione);
+                }
+                None => prossime.push(a),
+            }
         }
+        vive = vive.saturating_sub(vecchie);
         parti = prossime;
-        margine.verifica(stima(&parti))?;
     }
     Ok(parti.pop().unwrap_or_else(|| MultiPolygon::new(Vec::new())))
 }
@@ -260,7 +316,7 @@ mod tests {
     fn i_blocchi_coprono_ogni_segmento_e_ogni_vertice_interno() {
         for vertici in [1, 2, 3, 9, 10, 11, 17, 100, 101] {
             let linea = zigzag(vertici, 1.0, 5.0);
-            let parti = blocchi(&linea);
+            let parti = blocchi(&linea, 0.0);
             // Il primo e l'ultimo punto, e la sovrapposizione di un
             // segmento fra blocchi consecutivi.
             assert_eq!(parti.first().and_then(|b| b.0.first()), linea.0.first());
@@ -280,11 +336,14 @@ mod tests {
     fn i_punti_ripetuti_consecutivi_si_tolgono() {
         let linea = LineString::from(vec![(0.0, 0.0), (0.0, 0.0), (1.0, 0.0), (1.0, 0.0)]);
         assert_eq!(
-            blocchi(&linea),
+            blocchi(&linea, 0.0),
             vec![LineString::from(vec![(0.0, 0.0), (1.0, 0.0)])]
         );
         let punto = LineString::from(vec![(2.0, 3.0), (2.0, 3.0)]);
-        assert_eq!(blocchi(&punto), vec![LineString::from(vec![(2.0, 3.0)])]);
+        assert_eq!(
+            blocchi(&punto, 0.0),
+            vec![LineString::from(vec![(2.0, 3.0)])]
+        );
     }
 
     #[test]
@@ -404,11 +463,26 @@ mod tests {
                 })
                 .collect(),
         );
+        // Segmenti cortissimi: dopo ogni vertice un punto a 1 micron, in una
+        // direzione che ruota (svolte strette su segmenti sotto la precisione
+        // ma sopra la griglia).
+        let mut corti = Vec::new();
+        for (k, c) in zigzag(150, 0.8, 600.0).0.into_iter().enumerate() {
+            corti.push(c);
+            #[allow(clippy::cast_precision_loss)]
+            let a = k as f64 * 0.7;
+            corti.push(Coord {
+                x: 1e-6f64.mul_add(a.cos(), c.x),
+                y: 1e-6f64.mul_add(a.sin(), c.y),
+            });
+        }
+        let corti = LineString::new(corti);
         let casi: Vec<(Geometry<f64>, f64)> = vec![
             (
                 Geometry::LineString(sposta(&zigzag(150, 0.8, 600.0))),
                 200.0,
             ),
+            (Geometry::LineString(sposta(&corti)), 120.0),
             (Geometry::LineString(sposta(&zigzag(200, 0.8, 600.0))), 50.0),
             (Geometry::LineString(sposta(&cammino)), 30.0),
             (Geometry::LineString(sposta(&chiuso)), 100.0),
@@ -485,5 +559,57 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Sotto la griglia: segmenti che degenerano sul passo di `i_overlay`
+    /// (componenti di `1e-20` vicino all'origine) non sono mai il segmento
+    /// condiviso fra due blocchi, e nessun blocco e' fatto solo di loro
+    /// (vedi il modulo, «Segmenti sotto la griglia»).
+    #[test]
+    fn il_segmento_condiviso_non_degenera_sulla_griglia() {
+        let passo = 1e-18;
+        let lungo =
+            |a: Coord<f64>, b: Coord<f64>| (b.x - a.x).abs().max((b.y - a.y).abs()) > 2.0 * passo;
+        let mut punti = Vec::new();
+        for k in 0_i32..400 {
+            let c = Coord {
+                x: f64::from(k) * 0.8,
+                y: if k % 2 == 0 { 0.0 } else { 600.0 },
+            };
+            punti.push(c);
+            // Una raffica di punti sotto la griglia vicino all'origine e
+            // in mezzo alla linea.
+            if k % 37 == 0 || k < 3 {
+                for j in 1..=20 {
+                    punti.push(Coord {
+                        x: f64::from(j).mul_add(1e-20, c.x),
+                        y: f64::from(j % 2).mul_add(1e-20, c.y),
+                    });
+                }
+            }
+        }
+        let linea = LineString::new(punti);
+        let parti = blocchi(&linea, passo);
+        assert!(parti.len() > 1);
+        for parte in &parti {
+            assert!(
+                parte.lines().any(|s| lungo(s.start, s.end)),
+                "blocco degenere"
+            );
+        }
+        for coppia in parti.windows(2) {
+            let (a, b) = (&coppia[0].0, &coppia[1].0);
+            assert_eq!(a[a.len() - 2..], b[..2]);
+            assert!(lungo(b[0], b[1]), "segmento condiviso sotto la griglia");
+        }
+        // Tutti i punti, in ordine, una volta (piu' i condivisi).
+        let ricomposti: Vec<Coord<f64>> = parti
+            .iter()
+            .enumerate()
+            .flat_map(|(k, parte)| parte.0.iter().skip(if k == 0 { 0 } else { 2 }).copied())
+            .collect();
+        let mut attesi = linea.0;
+        attesi.dedup();
+        assert_eq!(ricomposti, attesi);
     }
 }

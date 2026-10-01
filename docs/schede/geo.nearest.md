@@ -80,7 +80,7 @@ geo indicata fra parentesi:
 - `ResultLimitExceeded` (`ResourceLimit`): gli abbinamenti superano il
   limite di righe dell'arco (ogni altro errore, il primo in ordine di
   riga, ha la precedenza);
-- `MargineMemoria` (`ResourceLimit`): gli abbinamenti, con la riga di left
+- `MargineMemoria` (`ResourceLimit`): gli abbinamenti, con la riga di left più larga
   che l'uscita ripete, non starebbero nel margine di memoria del passo;
   stesso conteggio e stessa precedenza del limite di righe, che vince se
   scatta prima ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);

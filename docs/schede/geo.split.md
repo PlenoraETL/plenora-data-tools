@@ -139,9 +139,8 @@ la verifica della copertura, con un
 R-tree dei lati della sorgente (O(b · s) nel caso peggiore, `b` i lati di
 bordo delle parti e `s` i lati della sorgente). Sorgente lineare: O(s · l)
 test fra segmenti della sorgente e primitive della lama, entro 100.000.000.
-Le righe si calcolano in parallelo a blocchi di 256 e si accolgono in
-ordine di riga: memoria O(n) per riga in lavorazione più le parti del
-blocco e quelle prodotte; l'uscita si costruisce in un batch solo. Tempi
+Le righe si calcolano una alla volta, in ordine: memoria O(n) per la riga
+più le parti prodotte; l'uscita si costruisce in un batch solo. Tempi
 misurati e oracoli nel
 [README, «`geo.make_valid`, `geo.polygonize`, `geo.split`»](../README.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata).
 

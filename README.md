@@ -932,11 +932,12 @@ differenziali no. Le differenze note sono in
   `validazione_ogc`, esteso a `errori_del_poligono`).
 
 **Prestazioni, a risultato identico.** Misurate in release su Windows
-(laboratorio, mediana di 5): `split` di 1.000 celle da 1.000 vertici con una
-lama da 74 s a 0,61 s, con lame a zig-zag da 235 a 4,2 s; `make_valid` di
-1.000 stelle invalide da 1.000 vertici da 40,8 a 4,7 s; a 10.000 righe da
-1.000 vertici, prima oltre i 300 s della campagna, 6,0 s, 42 s e 47 s. Da
-dove:
+(laboratorio, mediana di 5, `split` a un thread come nel runner): `split`
+di 1.000 celle da 1.000 vertici con una lama da 74,8 a 9,3 s, con lame a
+zig-zag da 235 a 57 s (e 1.000 celle da 100 vertici da 18,3 a 4,3 s);
+`make_valid` di 1.000 stelle invalide da 1.000 vertici da 29,1 a 4,7 s; a
+10.000 righe da 1.000 vertici, prima oltre i 300 s della campagna, 106 s,
+829 s (macchina carica) e 46 s. Da dove:
 
 - la validazione rapida al posto di quella di `geo` (sopra);
 - il genitore di una faccia si cerca col punto interno di `geo` (che
@@ -949,11 +950,15 @@ dove:
   sorgente il cui rettangolo allargato di `2 p + 16 ulp(M)` tocca il lato
   delle parti (un R-tree), condizione necessaria per la distanza entro `p`
   calcolata in `f64` (oracolo `copertura_con_indice_uguale_al_doppio_ciclo`);
-- `split` calcola le righe in parallelo a blocchi di 256 e le accoglie in
-  ordine di riga: stesso primo errore e stesso limite `max_output_rows`
-  cumulato del ciclo sequenziale (oracolo
-  `split_a_blocchi_uguale_al_ciclo_sequenziale`); oltre una riga che fallisce
-  si calcola al più il resto del suo blocco.
+- le parti codificate di `split` vanno subito nel buffer contiguo della
+  colonna d'uscita (niente `Vec` per parte, niente seconda copia): sulle lame
+  a zig-zag 1.000 celle da 100 vertici da 37 a 16 MiB, 10.000 da 1.000
+  vertici 1,9 GB; oltre i 2 GiB di una colonna `Binary` un `ResourceLimit`
+  esplicito invece del panico del builder.
+
+Le righe di `split` restano una alla volta, in ordine: il calcolo in
+parallelo provato in questo ciclo aggiungeva un transitorio proporzionale ai
+thread e il limite `max_output_rows` arrivava dopo un blocco di righe.
 
 Un panico di `interior_point` di `geo` su una faccia il cui punto interno
 non serve non si verifica più: è l'unica differenza osservabile.
@@ -1999,7 +2004,7 @@ esplicito.
   massimo della campagna (`buffer`, `make_valid`, `split`) o
   rifiutati (`line_merge`, `polygonize`, `voronoi`) non sono nel modello.
 
-  **Modelli non rigenerati dopo il buffer a blocchi e lo split parallelo.**
+  **Modelli non rigenerati dopo il buffer a blocchi e la revisione di split.**
   Le misure di questo ciclo (laboratorio della campagna v4 sul codice
   corrente, Windows, 32 thread, mediana di 5 del `PeakWorkingSet64` oltre
   quello di un processo con gli stessi ingressi) non sono nel catalogo e
@@ -2008,51 +2013,68 @@ esplicito.
     (1.000 linee da 1.000 vertici: 117 MB contro 398 MB senza `S`; 10.000:
     832 MB contro 3,9 GB), ma resta escluso finché una campagna non ne
     rigenera le misure;
-  - `split` calcola le righe in parallelo, e il transitorio cresce coi
-    thread (circa 0,5 MiB per thread sulle lame a zig-zag: 38 MiB con un
-    thread, 54 con 32): sul profilo a zig-zag 1.000 righe da 100 vertici
-    misurano 57 MB contro 39 MB del modello senza `S` (59 MB con `S`), e
-    10.000 righe da 1.000 vertici, prima oltre il tempo massimo, 4,2 GB
-    contro 3,9 GB senza `S` (5,8 GB con `S`): l'invariante «previsione
-    almeno una volta e mezza la misura» non vale su questi punti, la
-    previsione con `S` sì;
+  - `split`, a un thread e con le parti nel buffer contiguo, sta sotto il
+    modello senza `S` su ogni punto rimisurato: lame a zig-zag 1.000 righe
+    da 100 vertici 17 MB contro 39 MB, 1.000 da 1.000 vertici 115 MB
+    contro 386 MB, 10.000 da 1.000 vertici (prima oltre il tempo massimo)
+    1,9 GB contro 3,9 GB; la lama singola 10.000 da 1.000 vertici sotto il
+    rumore della misura contro 1,9 GB;
   - `make_valid` sulle stelle invalide a 10.000 righe da 1.000 vertici,
     prima oltre il tempo massimo, 2,2 GB contro 2,4 GB senza `S`.
 
   La dipendenza del transitorio dai thread vale per ogni kernel per riga
   in parallelo: le misure v4 sono a 32 thread, e una macchina con più
-  core ne trattiene di più.
+  core ne trattiene di più (il buffer nel runner ne ha al più 64 in volo).
   **Margine nei kernel.** I kernel di questi profili ricevono il margine
   del passo (`plenora_kernels_geo::margine`, budget meno byte vivi) e
-  contano, dove i loro risultati crescono, i byte che vi mettono, più quelli
-  che il runner spenderà per ogni risultato nell'uscita; si fermano con un
-  `ResourceLimit` che nomina il margine **prima** di allocare ciò che non
-  ci starebbe:
-  - `sjoin`, `within`, `count_points_in_polygons` (le coppie del join):
-    40 byte per coppia confermata nel kernel, più per `sjoin` la riga
-    media di left (`byte_dati` diviso le righe, per eccesso) e 16 byte di
-    indici; il tetto è il minore fra `max_pairs` e le coppie che entrano nel
-    margine, sullo stesso contatore, quindi deterministico;
-  - `nearest` (i vicini equidistanti): 64 byte per abbinamento, più la
-    riga di left e 24 byte, con lo stesso schema di `max_results`;
-  - `overlay` (i pezzi): le coppie candidate, e per pezzo due volte la stima
-    della geometria (`memory_estimate`: il pezzo e la sua codifica) più la
-    struttura e 24 byte d'uscita, nell'ordine dei pezzi;
-  - `coverage_validate` (le sovrapposizioni): 24 byte per coppia candidata
-    e per issue due volte la stima della zona più 64 byte d'uscita;
+  contano con maggioranti, dove crescono, i byte che il **nostro** codice
+  alloca e trattiene, più quelli che il runner spenderà per ogni risultato
+  nell'uscita; si fermano con un `ResourceLimit` che nomina il margine
+  **prima** di tenere ciò che non ci starebbe. Le geometrie si contano con
+  le capacità vere dei loro `Vec` (`byte_heap_geometria`), le codifiche WKB
+  col doppio della lunghezza esatta più 64 byte (il `Vec` di `to_wkb` cresce
+  raddoppiando), i vettori a capacità esatta (`try_reserve_exact`) o, dove
+  crescono con `push`, col doppio della lunghezza:
+  - `sjoin`, `within`, `count_points_in_polygons` (le coppie del join): i
+    candidati dell'R-tree si visitano senza raccoglierli; 64 byte per
+    coppia confermata (indice destro in un vettore che cresce, al più 32
+    byte; la coppia nel gruppo e nel risultato, a capacità esatta), contati
+    prima di accodarla; il tetto è il minore fra `max_pairs` e le coppie che
+    entrano nel margine, sullo stesso contatore (deterministico). Per
+    `sjoin` ogni coppia conta anche la riga **più larga** di left (per
+    colonna: il valore più lungo di binari e testi, la larghezza dei tipi
+    fissi, l'intera colonna per gli altri tipi), mai la media, e 16 byte di
+    indici;
+  - `nearest` (i vicini equidistanti): i candidati si visitano due volte
+    senza raccoglierli (il minimo e il numero dei pari, poi i pari, solo se
+    più di uno), e i pari si contano prima di allocarli: 48 byte per
+    abbinamento (gruppo e risultato a capacità esatta), più la riga più
+    larga di left e 24 byte;
+  - `overlay` (i pezzi): le copie degli ingressi, le coppie candidate (a
+    capacità vera), le maschere dissolte e, per pezzo, la geometria, la sua
+    codifica e la crescita del vettore dei pezzi, nell'ordine dei pezzi;
+  - `coverage_validate` (le sovrapposizioni): le geometrie decodificate e
+    gli elementi preparati, le coppie candidate contate su un primo giro
+    dell'R-tree e riservate a capacità esatta (16 byte ciascuna), il
+    risultato di ogni overlay appena calcolato, e per issue la zona, la sua
+    codifica e la crescita dei vettori delle issue e delle righe d'uscita;
   - `buffer` (zig-zag): oltre ai blocchi («Buffer», voce «linee a
-    blocchi»), che tolgono la crescita quadratica, prima di ogni overlay i
-    punti dei contorni (un minorante del costo di `i_overlay`, 64 byte
-    ciascuno), dopo ogni unione dei blocchi e alla fine la stima del
-    risultato, per ogni geometria.
+    blocchi»), che tolgono la crescita quadratica, un **solo conto per
+    passo** nel runner (`celle_nel_margine`): le uscite già tenute (celle a
+    capacità vera e la loro copia nella colonna) riducono il margine delle
+    righe successive; le righe si calcolano a blocchi fissi di 64 in
+    parallelo, e ognuna riceve un sessantaquattresimo di ciò che resta, meno la
+    propria geometria decodificata. Nel kernel, per geometria: la copia di
+    lavoro dell'ingresso e i blocchi, prima di ogni overlay i punti dei
+    contorni (64 byte ciascuno, un minorante del costo di `i_overlay`),
+    ogni buffer di blocco e ogni unione appena calcolati con ciò che è
+    ancora vivo, e il risultato; lo stesso per la distanza nulla.
 
   Restano fuori: il transitorio dentro una chiamata di `geo` o di
-  `i_overlay` (incroci, grafi), che non si osserva; i vettori candidati di
-  una riga del join e dei vicini (al più le righe di right per riga, per
-  thread); nel `buffer` il margine vale per geometria, e le righe in
-  parallelo possono trattenere insieme fino a tanti margini quanti sono i
-  thread; le stime per geometria sono quelle di `memory_estimate`, non i
-  byte veri. Il controllo dopo il passo con i byte esatti resta.
+  `i_overlay` (incroci, grafi, e il risultato di un overlay fino al primo
+  controllo, appena allocato); le strutture di `rstar` (gli R-tree degli
+  ingressi, proporzionali agli ingressi come nel modello); l'overhead
+  dell'allocatore. Il controllo dopo il passo con i byte esatti resta.
   *Rientro*: una grandezza a secco per queste espansioni (candidati
   dell'R-tree, stima delle sovrapposizioni) nel modello, e un allocatore
   contato per il transitorio dentro `geo` e `i_overlay`.

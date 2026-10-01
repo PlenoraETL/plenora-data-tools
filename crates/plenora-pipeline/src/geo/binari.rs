@@ -27,13 +27,16 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use geo::{CoordsIter, Geometry};
+use plenora_core::arrow::array::cast::AsArray;
+use plenora_core::arrow::array::Array;
 use plenora_core::arrow::array::{ArrayRef, BooleanArray, Float64Array, RecordBatch, UInt64Array};
 use plenora_core::arrow::select::take::take;
+use plenora_core::arrow::DataType;
 use plenora_core::limits::Limits;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::analyze::config::{NearestConfig, OverlayConfig, SJoinConfig};
 use plenora_kernels_geo::arrow_adapter::encode_geometry;
-use plenora_kernels_geo::margine::MargineMemoria;
+use plenora_kernels_geo::margine::{byte_heap_geometria, MargineMemoria};
 use plenora_kernels_geo::rust_backend::precision::Precision;
 use plenora_kernels_geo::spatial_join::JoinPredicate;
 use plenora_kernels_geo::topology::{BooleanOperation, OverlayMode};
@@ -118,11 +121,36 @@ impl KernelBinario {
     ) -> Result<(Vec<ArrayRef>, usize)> {
         let (lato_sx, lato_dx) = lati;
         let (sinistra, destra) = tabelle;
-        // Le uscite a una riga per coppia ripetono la riga di left: il suo
-        // costo medio (per eccesso) conta nel margine, con gli indici.
-        let riga_sinistra = byte_per_riga(sinistra);
+        // Le uscite a una riga per coppia ripetono una riga di left: conta
+        // nel margine la riga piu' larga (un maggiorante di ogni riga
+        // ripetuta), con gli indici.
+        let riga_sinistra = byte_riga_massima(sinistra);
         let geometrie_sx = decodifica(lato_sx.celle(sinistra)?)?;
         let geometrie_dx = decodifica(lato_dx.celle(destra)?)?;
+        // Le geometrie decodificate restano vive per tutto il kernel: il
+        // margine dei kernel e' quello che resta.
+        let decodificate =
+            [&geometrie_sx, &geometrie_dx]
+                .into_iter()
+                .fold(0_u64, |totale, geometrie| {
+                    geometrie.iter().fold(
+                        totale.saturating_add(
+                            u64::try_from(
+                                geometrie
+                                    .capacity()
+                                    .saturating_mul(std::mem::size_of::<Option<Geometry<f64>>>()),
+                            )
+                            .unwrap_or(u64::MAX),
+                        ),
+                        |totale, geometria| {
+                            totale.saturating_add(geometria.as_ref().map_or(0, byte_heap_geometria))
+                        },
+                    )
+                });
+        margine
+            .verifica(decodificate)
+            .map_err(|superato| PlenoraError::ResourceLimit(format!("{op}: {superato}")))?;
+        let margine = margine.con_byte(margine.byte_disponibili() - decodificate);
         let righe_sx = sinistra.num_rows();
         match self {
             Self::Unione(predicato) => {
@@ -313,13 +341,35 @@ impl KernelBinario {
     }
 }
 
-/// I byte medi di una riga di `tabella`, per eccesso (la copia di tutte le
-/// colonne divisa per le righe, arrotondata in su).
-fn byte_per_riga(tabella: &RecordBatch) -> u64 {
-    let righe = u64::try_from(tabella.num_rows()).unwrap_or(u64::MAX).max(1);
-    u64::try_from(plenora_core::memoria::byte_dati(tabella))
-        .unwrap_or(u64::MAX)
-        .div_ceil(righe)
+/// Un maggiorante dei byte che `take` alloca per **una qualunque** riga di
+/// `tabella`, colonna per colonna: per i binari e i testi il valore piu'
+/// lungo piu' l'offset, per i tipi a larghezza fissa la larghezza, piu' un
+/// byte di validita' (per eccesso sul bit); per ogni altro tipo (liste,
+/// struct, dizionari) i byte dell'intera colonna, che nessuna riga supera.
+/// Mai la media: una riga enorme ripetuta migliaia di volte costerebbe ben
+/// oltre.
+fn byte_riga_massima(tabella: &RecordBatch) -> u64 {
+    tabella.columns().iter().fold(0_u64, |totale, colonna| {
+        totale.saturating_add(byte_riga_massima_colonna(colonna.as_ref()))
+    })
+}
+
+fn byte_riga_massima_colonna(colonna: &dyn Array) -> u64 {
+    let piu_lungo = |lunghezze: &mut dyn Iterator<Item = usize>| {
+        u64::try_from(lunghezze.max().unwrap_or(0)).unwrap_or(u64::MAX)
+    };
+    let valore = match colonna.data_type() {
+        DataType::Binary => piu_lungo(&mut colonna.as_binary::<i32>().offsets().lengths()) + 4,
+        DataType::LargeBinary => piu_lungo(&mut colonna.as_binary::<i64>().offsets().lengths()) + 8,
+        DataType::Utf8 => piu_lungo(&mut colonna.as_string::<i32>().offsets().lengths()) + 4,
+        DataType::LargeUtf8 => piu_lungo(&mut colonna.as_string::<i64>().offsets().lengths()) + 8,
+        DataType::Boolean => 1,
+        tipo => tipo.primitive_width().map_or_else(
+            || u64::try_from(colonna.get_array_memory_size()).unwrap_or(u64::MAX),
+            |larghezza| u64::try_from(larghezza).unwrap_or(u64::MAX),
+        ),
+    };
+    valore.saturating_add(1)
 }
 
 /// Le colonne di left, riga per indice.

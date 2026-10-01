@@ -34,6 +34,12 @@ use crate::rust_backend::griglia;
 use crate::rust_backend::precision::Precision;
 use crate::ValidazioneProtetta as _;
 
+/// I byte di crescita di una issue: il vettore delle issue e quello delle
+/// righe d'uscita crescono con `push` o con un `collect` di `Result` (senza
+/// dimensione nota), quindi fino al doppio delle loro lunghezze.
+const BYTE_PER_ISSUE: u64 = 2 * std::mem::size_of::<CoverageIssue>() as u64
+    + 2 * std::mem::size_of::<CoverageIssueRow>() as u64;
+
 /// Default di `max_issues` per `geo.coverage_validate`.
 pub const DEFAULT_MAX_ISSUES: usize = 1_000;
 
@@ -133,34 +139,57 @@ fn prepare_elements(
 /// Coppie candidate `(a, b)` con `a < b` in ordine lessicografico: envelope
 /// che si intersecano o toccano (l'intersezione AABB di rstar include il
 /// contatto zero-area).
-/// I byte di una coppia candidata: la coppia e la sua copia nei candidati
-/// della riga.
-const BYTE_PER_COPPIA_CANDIDATA: u64 =
-    std::mem::size_of::<(usize, usize)>() as u64 + std::mem::size_of::<usize>() as u64;
+/// I byte di una coppia candidata: il vettore delle coppie ha capacita'
+/// esatta (le coppie si contano prima di allocarlo).
+const BYTE_PER_COPPIA_CANDIDATA: u64 = std::mem::size_of::<(usize, usize)>() as u64;
 
-/// Le coppie candidate, con i loro byte nel `margine` (prima di accodare
-/// i candidati di ogni elemento): `Err` col margine superato.
+/// Coppie candidate `(a, b)` con `a < b` in ordine lessicografico: envelope
+/// che si intersecano o toccano (l'intersezione AABB di rstar include il
+/// contatto zero-area).
+///
+/// Due giri sull'R-tree: il primo le conta senza allocare, e il loro conto
+/// deve stare nel `margine` prima di riservarle a capacita' esatta; il
+/// secondo le scrive, e ordina quelle di ogni `a` sul posto (nessun vettore
+/// temporaneo dei candidati).
 fn candidate_pairs(
     elements: &[Option<CoverageElement>],
     tree: &RTree<IndexedEnvelope>,
     margine: MargineMemoria,
-) -> Result<Vec<(usize, usize)>, crate::margine::MargineSuperato> {
+) -> Result<Vec<(usize, usize)>, ExtensionError> {
+    let altri = |a: usize, element: &CoverageElement| {
+        tree.locate_in_envelope_intersecting(&element.envelope)
+            .map(|candidate| candidate.index)
+            .filter(move |b| *b > a)
+    };
+    let mut totale = 0_usize;
+    for (a, element) in elements.iter().enumerate() {
+        if let Some(element) = element {
+            totale = totale.saturating_add(altri(a, element).count());
+        }
+    }
+    margine
+        .verifica(
+            u64::try_from(totale)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(BYTE_PER_COPPIA_CANDIDATA),
+        )
+        .map_err(ExtensionError::MargineMemoria)?;
     let mut pairs = Vec::new();
+    pairs
+        .try_reserve_exact(totale)
+        .map_err(|_| ExtensionError::Internal("allocazione delle coppie candidate"))?;
     for (a, element) in elements.iter().enumerate() {
         let Some(element) = element else {
             continue;
         };
-        let mut others: Vec<usize> = tree
-            .locate_in_envelope_intersecting(&element.envelope)
-            .map(|candidate| candidate.index)
-            .filter(|b| *b > a)
-            .collect();
-        let totale = u64::try_from(pairs.len().saturating_add(others.len()))
-            .unwrap_or(u64::MAX)
-            .saturating_mul(BYTE_PER_COPPIA_CANDIDATA);
-        margine.verifica(totale)?;
-        others.sort_unstable();
-        pairs.extend(others.into_iter().map(|b| (a, b)));
+        let inizio = pairs.len();
+        pairs.extend(altri(a, element).map(|b| (a, b)));
+        pairs[inizio..].sort_unstable();
+    }
+    if pairs.len() != totale {
+        return Err(ExtensionError::Internal(
+            "i due giri delle coppie candidate non coincidono",
+        ));
     }
     Ok(pairs)
 }
@@ -237,19 +266,46 @@ fn coverage_validate_elements(
     margine: MargineMemoria,
 ) -> Result<Vec<CoverageIssue>, ExtensionError> {
     let mut issues = Vec::new();
+    // Gli elementi preparati (copie degli ingressi, in un vettore a
+    // capacita' esatta: `prepare_elements`) restano vivi per tutto il kernel.
+    let byte_elementi = elements.iter().fold(
+        u64::try_from(
+            elements
+                .len()
+                .saturating_mul(std::mem::size_of::<Option<CoverageElement>>()),
+        )
+        .unwrap_or(u64::MAX),
+        |totale, element| {
+            totale.saturating_add(element.as_ref().map_or(0, |element| {
+                crate::margine::byte_multipoligono(&element.polygons)
+            }))
+        },
+    );
+    margine
+        .verifica(byte_elementi)
+        .map_err(ExtensionError::MargineMemoria)?;
     // Le coppie candidate senza l'uscita del margine (restano nel kernel).
     let pairs = protetto(|| {
         candidate_pairs(
             elements,
             tree,
-            MargineMemoria::byte(margine.byte_disponibili()),
+            MargineMemoria::byte(margine.byte_disponibili().saturating_sub(byte_elementi)),
         )
-    })?
-    .map_err(ExtensionError::MargineMemoria)?;
-    let byte_coppie = u64::try_from(pairs.len())
+    })??;
+    let byte_coppie = u64::try_from(pairs.capacity())
         .unwrap_or(u64::MAX)
         .saturating_mul(BYTE_PER_COPPIA_CANDIDATA);
-    let mut contatore = ContatoreMargine::con_usati(margine, byte_coppie);
+    // Le issue crescono con `push`: capacita' minima di 4 subito, poi il
+    // doppio di ognuna (`BYTE_PER_ISSUE`).
+    let mut contatore = ContatoreMargine::con_usati(
+        margine,
+        byte_elementi
+            .saturating_add(byte_coppie)
+            .saturating_add(4 * std::mem::size_of::<CoverageIssue>() as u64),
+    );
+    contatore
+        .aggiungi_senza_uscita(0)
+        .map_err(ExtensionError::MargineMemoria)?;
     for (a, b) in pairs {
         let left = &elements[a]
             .as_ref()
@@ -261,18 +317,29 @@ fn coverage_validate_elements(
             .polygons;
         griglia::controlla_overlay(griglia::rettangolo_multipoligoni([left, right]), precision)?;
         let intersection = protetto(|| left.intersection(right))?;
+        // Il risultato dell'overlay, appena allocato, si conta prima di
+        // tenerlo.
+        margine
+            .verifica(
+                contatore
+                    .usati()
+                    .saturating_add(crate::margine::byte_multipoligono(&intersection)),
+            )
+            .map_err(ExtensionError::MargineMemoria)?;
         let area = protetto(|| intersection.unsigned_area())?;
         if area > tolerance {
             if u64_len(issues.len())? >= max_issues {
                 return Err(ExtensionError::IssueLimit { limit: max_issues });
             }
             let geometry = overlap_geometry(intersection)?;
-            // La zona e la sua codifica nell'uscita, piu' la struttura.
+            // La zona (capacita' vere), la sua codifica nell'uscita (un
+            // maggiorante) e la crescita dei vettori delle issue e delle
+            // righe d'uscita.
             contatore
                 .aggiungi(
-                    crate::memory_estimate::estimate_geometry_native_bytes(&geometry)
-                        .saturating_mul(2)
-                        .saturating_add(std::mem::size_of::<CoverageIssue>() as u64),
+                    crate::margine::byte_heap_geometria(&geometry)
+                        .saturating_add(crate::margine::byte_codifica(&geometry))
+                        .saturating_add(BYTE_PER_ISSUE),
                 )
                 .map_err(ExtensionError::MargineMemoria)?;
             issues.push(CoverageIssue {
@@ -440,6 +507,26 @@ pub fn coverage_validate_rows_con_margine(
     margine: MargineMemoria,
 ) -> Result<Vec<CoverageIssueRow>, PlenoraError> {
     let geometries = map_nullable(cells, |payload| decode_geometry_cell(payload).map(Some))?;
+    // Le geometrie decodificate restano vive per tutto il kernel.
+    let decodificate = geometries.iter().fold(
+        u64::try_from(
+            geometries
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Option<Geometry<f64>>>()),
+        )
+        .unwrap_or(u64::MAX),
+        |totale, geometria| {
+            totale.saturating_add(
+                geometria
+                    .as_ref()
+                    .map_or(0, crate::margine::byte_heap_geometria),
+            )
+        },
+    );
+    margine
+        .verifica(decodificate)
+        .map_err(|superato| coverage_error(&ExtensionError::MargineMemoria(superato)))?;
+    let margine = margine.con_byte(margine.byte_disponibili() - decodificate);
     let issues = coverage_validate_nullable_con_margine(
         &geometries,
         tolerance,
@@ -584,8 +671,7 @@ pub fn shared_paths_nullable(
     }
     let (elements, tree) = prepare_elements(geometries)?;
     let mut paths = Vec::new();
-    let pairs = protetto(|| candidate_pairs(&elements, &tree, MargineMemoria::ILLIMITATO))?
-        .map_err(ExtensionError::MargineMemoria)?;
+    let pairs = protetto(|| candidate_pairs(&elements, &tree, MargineMemoria::ILLIMITATO))??;
     for (a, b) in pairs {
         let left = &elements[a]
             .as_ref()
@@ -1018,5 +1104,27 @@ mod tests {
         assert_close(rows[0].shared_length, 3.0);
         let geometry = crate::geometry_from_wkb(&rows[0].wkb).expect("decode");
         assert!(matches!(geometry, Geometry::LineString(_)));
+    }
+    /// Le coppie candidate si contano prima di allocarle, a capacita'
+    /// esatta: 1.025 rettangoli coincidenti danno 524.800 coppie, e il
+    /// margine di esattamente `524.800 * 16` byte basta, uno in meno no
+    /// (prima, la crescita per raddoppio arrivava a capacita' ben oltre il
+    /// conto).
+    #[test]
+    fn coppie_candidate_a_capacita_esatta() {
+        let geometrie: Vec<Option<Geometry<f64>>> = (0..1_025)
+            .map(|_| Some(rectangle(0.0, 0.0, 1.0, 1.0)))
+            .collect();
+        let (elements, tree) = prepare_elements(&geometrie).unwrap();
+        let attese = 1_025 * 1_024 / 2;
+        let byte = attese as u64 * BYTE_PER_COPPIA_CANDIDATA;
+        let coppie = candidate_pairs(&elements, &tree, MargineMemoria::byte(byte)).unwrap();
+        assert_eq!(coppie.len(), attese);
+        assert_eq!(coppie.capacity(), attese);
+        assert!(coppie.windows(2).all(|w| w[0] < w[1]));
+        assert!(matches!(
+            candidate_pairs(&elements, &tree, MargineMemoria::byte(byte - 1)),
+            Err(ExtensionError::MargineMemoria(_))
+        ));
     }
 }

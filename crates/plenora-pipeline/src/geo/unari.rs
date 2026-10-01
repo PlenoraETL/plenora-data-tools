@@ -35,7 +35,7 @@ use plenora_kernels_geo::analyze::{DEFAULT_X_COLUMN, DEFAULT_Y_COLUMN};
 use plenora_kernels_geo::arrow_adapter::{encode_geometry, map_nullable};
 use plenora_kernels_geo::extensions::OnWktError;
 use plenora_kernels_geo::geodetica::EllissoideGeodetico;
-use plenora_kernels_geo::margine::MargineMemoria;
+use plenora_kernels_geo::margine::{byte_heap_geometria, MargineMemoria};
 use plenora_kernels_geo::operations::{BufferCapStyle, SimplifyPolicy};
 use plenora_kernels_geo::predicates::SpatialPredicate;
 use plenora_kernels_geo::riproiezione::ReprojectParams;
@@ -538,6 +538,74 @@ fn per_cella<T: Send>(
     })
 }
 
+/// Le righe trasformate insieme da [`celle_nel_margine`]: un numero fisso,
+/// non i thread della macchina, cosi' le decisioni sul margine non
+/// dipendono dall'hardware.
+const RIGHE_IN_VOLO: usize = 64;
+
+/// Come [`per_cella`], con **un solo conto** della memoria del passo nel
+/// `margine`: l'uscita gia' tenuta (le celle codificate, a capacita' vera,
+/// e la loro copia nella colonna d'uscita) piu' il transitorio delle righe in
+/// lavorazione.
+///
+/// Le righe si trasformano a blocchi di [`RIGHE_IN_VOLO`] in parallelo, e ogni
+/// riga del blocco riceve una parte uguale di cio' che resta del margine
+/// (meno la propria geometria decodificata): le righe in volo non lo
+/// superano insieme. Dopo il blocco le uscite si accolgono in ordine di
+/// riga, contandole prima di tenerle; il primo errore e' quello della prima
+/// riga in ordine. Deterministico: il blocco e le parti dipendono solo dai
+/// dati e dal margine.
+fn celle_nel_margine(
+    op: &str,
+    celle: &plenora_core::arrow::array::BinaryArray,
+    margine: MargineMemoria,
+    kernel: impl Fn(&Geometry<f64>, MargineMemoria) -> Result<Option<Geometry<f64>>> + Sync,
+) -> Result<Vec<Option<Vec<u8>>>> {
+    use plenora_core::arrow::array::Array;
+    let oltre = |superato: plenora_kernels_geo::margine::MargineSuperato| {
+        PlenoraError::ResourceLimit(format!("{op}: {superato}"))
+    };
+    let righe = celle.len();
+    let mut uscita: Vec<Option<Vec<u8>>> = Vec::new();
+    uscita
+        .try_reserve_exact(righe)
+        .map_err(|_| PlenoraError::ResourceLimit(format!("{op}: allocazione delle celle")))?;
+    // Il vettore delle celle e gli offset della colonna d'uscita.
+    let mut usati = u64::try_from(righe)
+        .unwrap_or(u64::MAX)
+        .saturating_mul((std::mem::size_of::<Option<Vec<u8>>>() + 8) as u64);
+    margine.verifica(usati).map_err(oltre)?;
+    let mut inizio = 0;
+    while inizio < righe {
+        let fine = (inizio + RIGHE_IN_VOLO).min(righe);
+        let per_riga = (margine.byte_disponibili() - usati) / RIGHE_IN_VOLO as u64;
+        let fetta = celle.slice(inizio, fine - inizio);
+        let blocco = map_nullable(&fetta, |payload| {
+            let geometria = plenora_kernels_geo::wkb_decoder::decode_validated(payload)?;
+            // La geometria decodificata vive per tutta la riga.
+            let decodificata = byte_heap_geometria(&geometria);
+            MargineMemoria::byte(per_riga)
+                .verifica(decodificata)
+                .map_err(oltre)?;
+            kernel(&geometria, MargineMemoria::byte(per_riga - decodificata))?
+                .map(|risultato| encode_geometry(&risultato))
+                .transpose()
+        })?;
+        for risultato in blocco {
+            if let Some(wkb) = &risultato {
+                // La cella (capacita' vera) e la sua copia nella colonna.
+                usati = usati
+                    .saturating_add(u64::try_from(wkb.capacity()).unwrap_or(u64::MAX))
+                    .saturating_add(u64::try_from(wkb.len()).unwrap_or(u64::MAX));
+                margine.verifica(usati).map_err(oltre)?;
+            }
+            uscita.push(risultato);
+        }
+        inizio = fine;
+    }
+    Ok(uscita)
+}
+
 /// La colonna di un nome dello schema d'ingresso.
 fn indice_colonna(op: &str, contratto: &DataContract, nome: &str) -> Result<usize> {
     contratto.schema.index_of(nome).map_err(|_| {
@@ -664,12 +732,18 @@ impl KernelUnario {
         })?;
         match self {
             Self::Trasforma(trasformazione) => {
-                let celle = per_cella(lato.celle(batch)?, |g| {
-                    trasformazione
-                        .applica(op, g, margine)?
-                        .map(|uscita| encode_geometry(&uscita))
-                        .transpose()
-                })?;
+                let celle = if matches!(trasformazione, Trasformazione::Buffer { .. }) {
+                    celle_nel_margine(op, lato.celle(batch)?, margine, |g, margine_riga| {
+                        trasformazione.applica(op, g, margine_riga)
+                    })?
+                } else {
+                    per_cella(lato.celle(batch)?, |g| {
+                        trasformazione
+                            .applica(op, g, MargineMemoria::ILLIMITATO)?
+                            .map(|uscita| encode_geometry(&uscita))
+                            .transpose()
+                    })?
+                };
                 sostituisci(op, &mut colonne, lato.indice, vec![binaria(&celle)])?;
             }
             Self::Riproietta(parametri) => {
@@ -925,4 +999,65 @@ fn da_wkt(
         celle.iter().map(Option::as_deref).collect();
     super::verifica_dominio(op, &prodotte, crs)?;
     Ok(Arc::new(prodotte))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Il conto unico del passo: ogni riga da sola sta nel margine, ma le
+    /// uscite accumulate no, e il passo si ferma (prima ogni riga riceveva
+    /// lo stesso margine, e l'uscita accumulata non lo riduceva); con un
+    /// margine ampio l'uscita e' quella riga per riga.
+    #[test]
+    fn il_buffer_conta_l_uscita_accumulata_nel_margine() {
+        let celle: plenora_core::arrow::array::BinaryArray = (0_i32..1_000)
+            .map(|k| {
+                let punto = Geometry::Point(Point::new(
+                    f64::from(k).mul_add(10.0, 500_000.0),
+                    5_000_000.0,
+                ));
+                Some(encode_geometry(&punto).expect("wkb"))
+            })
+            .collect::<Vec<_>>()
+            .iter()
+            .map(Option::as_deref)
+            .collect();
+        let precisione = Precision::new(0.01).expect("1 cm");
+        let kernel = |g: &Geometry<f64>, margine: MargineMemoria| {
+            operations::buffer_with_cap_con_margine(
+                g,
+                1_000.0,
+                BufferCapStyle::Round,
+                precisione,
+                margine,
+            )
+            .map(Some)
+            .map_err(|e| del_kernel("geo.buffer", &e))
+        };
+        let ampio = celle_nel_margine("geo.buffer", &celle, MargineMemoria::byte(1 << 30), kernel)
+            .expect("margine ampio");
+        let attese = per_cella(&celle, |g| {
+            kernel(g, MargineMemoria::ILLIMITATO)?
+                .map(|b| encode_geometry(&b))
+                .transpose()
+        })
+        .expect("senza margine");
+        assert_eq!(ampio, attese);
+        let uscita: u64 = ampio
+            .iter()
+            .flatten()
+            .map(|wkb| (wkb.capacity() + wkb.len()) as u64)
+            .sum();
+        // Meta' dell'uscita: ogni riga (qualche KB) sta nella sua parte,
+        // l'accumulo no.
+        let errore = celle_nel_margine(
+            "geo.buffer",
+            &celle,
+            MargineMemoria::byte(uscita / 2),
+            kernel,
+        )
+        .expect_err("uscita accumulata oltre il margine");
+        assert!(errore.to_string().contains("margine"), "{errore}");
+    }
 }

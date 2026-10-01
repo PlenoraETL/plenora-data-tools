@@ -503,12 +503,13 @@ fn push_piece(
             limit: max_results,
         });
     }
-    // Il pezzo e la sua codifica nell'uscita, piu' la struttura.
+    // Il pezzo (capacita' vere), la sua codifica nell'uscita (un
+    // maggiorante) e la crescita del vettore dei pezzi, prima di tenerlo.
     contatore
         .aggiungi(
-            crate::memory_estimate::estimate_geometry_native_bytes(&geometry)
-                .saturating_mul(2)
-                .saturating_add(std::mem::size_of::<OverlayPiece>() as u64),
+            crate::margine::byte_heap_geometria(&geometry)
+                .saturating_add(crate::margine::byte_codifica(&geometry))
+                .saturating_add(2 * std::mem::size_of::<OverlayPiece>() as u64),
         )
         .map_err(dal_margine)?;
     pieces.push(OverlayPiece {
@@ -701,14 +702,48 @@ fn polygon_overlay_impl(
         .iter()
         .map(|geometry| coerce(geometry, validated))
         .collect::<Result<_, _>>()?;
-    let pairs = candidate_pairs(left, right, max_candidate_pairs, validated, margine)?;
+    // Le copie degli ingressi (capacita' vere) restano vive per tutto il
+    // kernel.
+    let byte_ingressi =
+        [&left_polygons, &right_polygons]
+            .into_iter()
+            .fold(0_u64, |totale, poligoni| {
+                poligoni.iter().fold(
+                    totale.saturating_add(
+                        u64::try_from(
+                            poligoni
+                                .capacity()
+                                .saturating_mul(std::mem::size_of::<MultiPolygon<f64>>()),
+                        )
+                        .unwrap_or(u64::MAX),
+                    ),
+                    |totale, parti| {
+                        totale.saturating_add(crate::margine::byte_multipoligono(parti))
+                    },
+                )
+            });
+    margine.verifica(byte_ingressi).map_err(dal_margine)?;
+    let pairs = candidate_pairs(
+        left,
+        right,
+        max_candidate_pairs,
+        validated,
+        margine.con_byte(margine.byte_disponibili() - byte_ingressi),
+    )?;
     let mut pieces = Vec::new();
-    // Le coppie restano vive per tutto il ciclo delle intersezioni.
-    let byte_coppie = u64::try_from(pairs.len())
+    // Le coppie restano vive per tutto il ciclo delle intersezioni; i pezzi
+    // crescono con `push`, capacita' minima di 4 subito.
+    let byte_coppie = u64::try_from(pairs.capacity())
         .map_err(|_| TopologyError::IndexOverflow)?
-        .saturating_mul(crate::spatial_join::BYTE_PER_COPPIA);
-    margine.verifica(byte_coppie).map_err(dal_margine)?;
-    let mut contatore = ContatoreMargine::con_usati(margine, byte_coppie);
+        .saturating_mul(std::mem::size_of::<crate::spatial_join::JoinPair>() as u64);
+    let mut contatore = ContatoreMargine::con_usati(margine, 0);
+    contatore
+        .aggiungi_senza_uscita(
+            byte_ingressi
+                .saturating_add(byte_coppie)
+                .saturating_add(4 * std::mem::size_of::<OverlayPiece>() as u64),
+        )
+        .map_err(dal_margine)?;
 
     if matches!(
         mode,
@@ -755,6 +790,11 @@ fn polygon_overlay_impl(
         let right_mask = (!right.is_empty())
             .then(|| dissolve_raw(&right_polygons, precision, 2))
             .transpose()?;
+        if let Some(mask) = &right_mask {
+            contatore
+                .aggiungi_senza_uscita(crate::margine::byte_multipoligono(mask))
+                .map_err(dal_margine)?;
+        }
         for (index, geometry) in left.iter().enumerate() {
             let piece = match &right_mask {
                 Some(mask) => remainder(&left_polygons[index], mask)?,
@@ -774,6 +814,11 @@ fn polygon_overlay_impl(
         let left_mask = (!left.is_empty())
             .then(|| dissolve_raw(&left_polygons, precision, 2))
             .transpose()?;
+        if let Some(mask) = &left_mask {
+            contatore
+                .aggiungi_senza_uscita(crate::margine::byte_multipoligono(mask))
+                .map_err(dal_margine)?;
+        }
         for (index, geometry) in right.iter().enumerate() {
             let piece = match &left_mask {
                 Some(mask) => remainder(&right_polygons[index], mask)?,

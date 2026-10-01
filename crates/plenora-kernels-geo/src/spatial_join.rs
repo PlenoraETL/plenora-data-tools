@@ -344,11 +344,15 @@ pub fn spatial_join_validated_con_margine(
     spatial_join_refs(&left_refs, &right_refs, predicate, max_pairs, true, margine)
 }
 
-/// I byte di una coppia confermata nel kernel: la coppia nel risultato
-/// (`JoinPair`, due volte per la crescita del vettore e la concatenazione
-/// dei gruppi) e il suo indice nel gruppo della riga.
+/// Un maggiorante dei byte che una coppia confermata fa allocare al kernel.
+///
+/// L'indice destro nel vettore della riga, che cresce con `push` (capacita'
+/// al piu' `max(4, 2 len)`, cioe' al piu' 4 indici per coppia con almeno una
+/// coppia: 32 byte), la coppia nel gruppo della riga e nel risultato, a
+/// capacita' esatta (16 + 16 byte). I candidati dell'R-tree non si
+/// raccolgono.
 pub const BYTE_PER_COPPIA: u64 =
-    2 * std::mem::size_of::<JoinPair>() as u64 + std::mem::size_of::<usize>() as u64;
+    4 * std::mem::size_of::<usize>() as u64 + 2 * std::mem::size_of::<JoinPair>() as u64;
 
 // Una sola sequenza per riga (candidati, predicato, tetto): lunghezza intrinseca.
 #[allow(clippy::too_many_lines)]
@@ -421,54 +425,69 @@ fn spatial_join_refs(
             // candidati restanti: quale riga lo supera dipende dai thread, e
             // fermarsi subito salterebbe predicati che potrebbero non
             // concludere, rendendo l'errore finale dipendente dall'ordine.
-            let candidati: Vec<usize> = crate::calcolo_protetto(|| {
-                tree.locate_in_envelope_intersecting(&envelope)
-                    .map(|candidate| candidate.index)
-                    .collect()
-            })
-            .map_err(SpatialJoinError::CalcoloNonConcluso)?;
+            //
+            // I candidati dell'R-tree si visitano mentre li rende la
+            // ricerca, senza raccoglierli: un rettangolo che ne tocca molti
+            // non alloca nulla oltre le coppie confermate, che il tetto
+            // conta prima di accodarle. Stesso ordine di visita di prima.
             let mut right_indexes: Vec<usize> = Vec::new();
             let mut limite_superato = false;
-            for candidate in candidati {
-                let right_geometry = right[candidate].ok_or(SpatialJoinError::Internal(
-                    "R-tree contains only non-null right geometries",
-                ))?;
-                if exact_match(left_geometry, right_geometry, predicate)? && !limite_superato {
-                    let accettata = pair_count
-                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                            current.checked_add(1).filter(|next| *next <= tetto)
-                        })
-                        .is_ok();
-                    if accettata {
-                        right_indexes.push(candidate);
-                    } else {
-                        limite_superato = true;
-                        right_indexes = Vec::new();
+            crate::calcolo_protetto(|| -> Result<(), SpatialJoinError> {
+                for candidate in tree.locate_in_envelope_intersecting(&envelope) {
+                    let candidate = candidate.index;
+                    let right_geometry = right[candidate].ok_or(SpatialJoinError::Internal(
+                        "R-tree contains only non-null right geometries",
+                    ))?;
+                    if exact_match(left_geometry, right_geometry, predicate)? && !limite_superato {
+                        let accettata = pair_count
+                            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                                current.checked_add(1).filter(|next| *next <= tetto)
+                            })
+                            .is_ok();
+                        if accettata {
+                            right_indexes.push(candidate);
+                        } else {
+                            limite_superato = true;
+                            right_indexes = Vec::new();
+                        }
                     }
                 }
-            }
+                Ok(())
+            })
+            .map_err(SpatialJoinError::CalcoloNonConcluso)??;
             if limite_superato {
                 return Err(errore_del_tetto());
             }
             right_indexes.sort_unstable();
 
             let left = u64::try_from(left_index).map_err(|_| SpatialJoinError::IndexOverflow)?;
-            right_indexes
-                .into_iter()
-                .map(|right_index| {
-                    Ok(JoinPair {
-                        left,
-                        right: u64::try_from(right_index)
-                            .map_err(|_| SpatialJoinError::IndexOverflow)?,
-                    })
-                })
-                .collect()
+            // Capacita' esatta: il gruppo e' parte del conto per coppia.
+            let mut group = Vec::new();
+            group
+                .try_reserve_exact(right_indexes.len())
+                .map_err(|_| SpatialJoinError::Internal("allocazione delle coppie"))?;
+            for right_index in right_indexes {
+                group.push(JoinPair {
+                    left,
+                    right: u64::try_from(right_index)
+                        .map_err(|_| SpatialJoinError::IndexOverflow)?,
+                });
+            }
+            Ok(group)
         })
         .collect();
     // Ogni altro errore vince sul limite delle coppie, il primo in ordine di
     // riga: quale riga supera il limite dipende dai thread, che lo superi
     // no (come in `analysis::nearest_matches`).
+    // Capacita' esatta: anche il risultato e' nel conto per coppia.
+    let totale = groups
+        .iter()
+        .map(|group| group.as_ref().map_or(0, Vec::len))
+        .sum();
     let mut pairs = Vec::new();
+    pairs
+        .try_reserve_exact(totale)
+        .map_err(|_| SpatialJoinError::Internal("allocazione delle coppie"))?;
     let mut limite_superato = None;
     for group in groups {
         match group {

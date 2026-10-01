@@ -10,9 +10,8 @@
 
 use std::sync::Arc;
 
-use rayon::prelude::*;
-
 use geo::{CoordsIter, Geometry, LineString};
+use plenora_core::arrow::array::builder::BinaryBuilder;
 use plenora_core::arrow::array::{Array, ArrayRef, BinaryArray, StringArray, UInt64Array};
 use plenora_core::arrow::select::{concat::concat, take::take};
 use plenora_core::arrow::{DataType, Field, RecordBatch, Schema, SchemaRef};
@@ -266,59 +265,49 @@ pub fn split_batches(
         ));
     }
     let tolerance = tolerance.unwrap_or(0.0);
-    // Le righe come (cella della sorgente, posizione nel suo batch).
-    let mut rows = Vec::with_capacity(left_rows);
+    let mut pieces = SplitPieces::default();
+    let mut row = 0_usize;
     for batch in left_batches {
         let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;
-        rows.extend((0..cells.len()).map(|local| (cells, local)));
-    }
-    // Ogni riga e' indipendente: le parti si calcolano in parallelo a
-    // blocchi di righe, e si accolgono in ordine di riga, come nel ciclo
-    // sequenziale (stesso primo errore in ordine di riga, stesso limite
-    // `max_output_rows` cumulato). Il blocco limita il lavoro e la memoria
-    // spesi oltre una riga che fallisce.
-    let mut pieces = SplitPieces::default();
-    for (block, chunk) in rows.chunks(SPLIT_ROWS_PER_BLOCK).enumerate() {
-        let first = block * SPLIT_ROWS_PER_BLOCK;
-        let parts: Vec<Result<Option<Vec<Geometry<f64>>>, PlenoraError>> = chunk
-            .par_iter()
-            .enumerate()
-            .map(|(offset, (cells, local))| {
-                let index = first + offset;
-                // Ogni cella non-null dei due lati si valida, anche se
-                // l'altro lato e' null e la coppia non produce righe (come
-                // `decode_geometry_side` a 190c493): prima la sorgente, poi
-                // lo splitter.
-                let source = (!cells.is_null(*local))
-                    .then(|| decode_geometry_cell(cells.value(*local)))
-                    .transpose()?;
-                let splitter = (!splitters.is_null(index))
-                    .then(|| decode_geometry_cell(splitters.value(index)))
-                    .transpose()?;
-                let (Some(source), Some(splitter)) = (source, splitter) else {
-                    return Ok(None);
-                };
-                split_row(&source, &splitter, tolerance, max_output_rows, precision).map(Some)
-            })
-            .collect();
-        for (offset, row_parts) in parts.into_iter().enumerate() {
-            if let Some(row_parts) = row_parts? {
-                pieces.push(first + offset, &row_parts, max_output_rows)?;
-            }
+        for local in 0..cells.len() {
+            let index = row;
+            row += 1;
+            // Ogni cella non-null dei due lati si valida, anche se l'altro
+            // lato e' null e la coppia non produce righe (come
+            // `decode_geometry_side` a 190c493): prima la sorgente, poi lo
+            // splitter, in ordine di riga.
+            let source = (!cells.is_null(local))
+                .then(|| decode_geometry_cell(cells.value(local)))
+                .transpose()?;
+            let splitter = (!splitters.is_null(index))
+                .then(|| decode_geometry_cell(splitters.value(index)))
+                .transpose()?;
+            let (Some(source), Some(splitter)) = (source, splitter) else {
+                continue;
+            };
+            let parts = split_row(&source, &splitter, tolerance, max_output_rows, precision)?;
+            pieces.push(index, &parts, max_output_rows)?;
         }
     }
     split_output(left_schema, left_batches, geometry_index, pieces)
 }
 
-/// Le righe di `split` calcolate in parallelo prima di accoglierle in
-/// ordine (vedi [`split_batches`]).
-const SPLIT_ROWS_PER_BLOCK: usize = 256;
-
-/// Le parti gia' codificate e la riga sorgente di ciascuna.
-#[derive(Default)]
+/// Le parti gia' codificate e la riga sorgente di ciascuna. Le parti vanno
+/// subito nel buffer della colonna d'uscita, contiguo: niente `Vec` per
+/// parte e niente seconda copia alla fine (su milioni di parti il conto
+/// separato costava centinaia di MB in piu').
 struct SplitPieces {
-    encoded: Vec<Vec<u8>>,
+    encoded: BinaryBuilder,
     parents: Vec<u64>,
+}
+
+impl Default for SplitPieces {
+    fn default() -> Self {
+        Self {
+            encoded: BinaryBuilder::new(),
+            parents: Vec::new(),
+        }
+    }
 }
 
 impl SplitPieces {
@@ -333,7 +322,7 @@ impl SplitPieces {
         let non_rappresentabile =
             || PlenoraError::Internal("split: conteggio parti non rappresentabile".to_owned());
         let count = u64::try_from(parts.len()).map_err(|_| non_rappresentabile())?;
-        let total = u64::try_from(self.encoded.len()).map_err(|_| non_rappresentabile())?;
+        let total = u64::try_from(self.parents.len()).map_err(|_| non_rappresentabile())?;
         let next = total.checked_add(count).ok_or_else(non_rappresentabile)?;
         if next > max_output_rows {
             return Err(PlenoraError::InvalidPlan(format!(
@@ -344,7 +333,17 @@ impl SplitPieces {
             PlenoraError::Internal("split: indice di riga non rappresentabile".to_owned())
         })?;
         for part in parts {
-            self.encoded.push(encode_geometry(part)?);
+            let wkb = encode_geometry(part)?;
+            // Gli offset della colonna `Binary` sono `i32`: oltre, un errore
+            // esplicito invece del panico del builder.
+            if self.encoded.values_slice().len().saturating_add(wkb.len())
+                > usize::try_from(i32::MAX).unwrap_or(usize::MAX)
+            {
+                return Err(PlenoraError::ResourceLimit(
+                    "split: parti codificate oltre i 2 GiB di una colonna Binary".to_owned(),
+                ));
+            }
+            self.encoded.append_value(&wkb);
             self.parents.push(parent);
         }
         Ok(())
@@ -425,7 +424,11 @@ fn split_output(
     geometry_index: usize,
     pieces: SplitPieces,
 ) -> Result<(SchemaRef, Vec<RecordBatch>), PlenoraError> {
-    let SplitPieces { encoded, parents } = pieces;
+    let SplitPieces {
+        mut encoded,
+        parents,
+    } = pieces;
+    let geometrie: ArrayRef = Arc::new(encoded.finish());
     let mut output_fields: Vec<Field> = left_schema
         .fields()
         .iter()
@@ -442,12 +445,7 @@ fn split_output(
     let mut columns: Vec<ArrayRef> = Vec::with_capacity(left_schema.fields().len() + 1);
     for index in 0..left_schema.fields().len() {
         if index == geometry_index {
-            columns.push(Arc::new(
-                encoded
-                    .iter()
-                    .map(|piece| Some(piece.as_slice()))
-                    .collect::<BinaryArray>(),
-            ));
+            columns.push(geometrie.clone());
         } else {
             let parts = left_batches
                 .iter()
@@ -461,8 +459,9 @@ fn split_output(
             columns.push(take(&column, &take_indices, None)?);
         }
     }
+    let parents_len = parents.len();
     columns.push(Arc::new(UInt64Array::from(parents)));
-    let batch = plenora_core::batch_with_rows(output_schema.clone(), columns, encoded.len())?;
+    let batch = plenora_core::batch_with_rows(output_schema.clone(), columns, parents_len)?;
     Ok((output_schema, vec![batch]))
 }
 
@@ -814,108 +813,5 @@ mod tests {
             message.contains("max_output_rows"),
             "errore del limite cumulato di split_batches: {message}"
         );
-    }
-    /// Il ciclo sequenziale di `split_batches` prima del calcolo a blocchi
-    /// paralleli, riga per riga: il percorso generico dell'oracolo.
-    fn split_batches_sequenziale(
-        left_schema: &SchemaRef,
-        left_batches: &[RecordBatch],
-        splitters: &BinaryArray,
-        max_output_rows: u64,
-    ) -> Result<(SchemaRef, Vec<RecordBatch>), PlenoraError> {
-        let geometry_index = geometry_column_index(left_schema, DEFAULT_GEOMETRY_COLUMN)?;
-        let mut pieces = SplitPieces::default();
-        let mut row = 0_usize;
-        for batch in left_batches {
-            let cells = batch_geometry_cells(batch, geometry_index, DEFAULT_GEOMETRY_COLUMN)?;
-            for local in 0..cells.len() {
-                let index = row;
-                row += 1;
-                let source = (!cells.is_null(local))
-                    .then(|| decode_geometry_cell(cells.value(local)))
-                    .transpose()?;
-                let splitter = (!splitters.is_null(index))
-                    .then(|| decode_geometry_cell(splitters.value(index)))
-                    .transpose()?;
-                let (Some(source), Some(splitter)) = (source, splitter) else {
-                    continue;
-                };
-                let parts = split_row(&source, &splitter, 0.0, max_output_rows, precisione())?;
-                pieces.push(index, &parts, max_output_rows)?;
-            }
-        }
-        split_output(left_schema, left_batches, geometry_index, pieces)
-    }
-
-    /// Oracolo del calcolo a blocchi paralleli di `split_batches` (AGENTS.md,
-    /// regola 3): stessa uscita, o stesso errore, del ciclo sequenziale, su
-    /// tabelle di piu' blocchi con null, linee, poligoni, una cella invalida
-    /// in un blocco successivo e limiti di righe che scattano a meta'.
-    #[test]
-    fn split_a_blocchi_uguale_al_ciclo_sequenziale() {
-        let square = square_wkb(2.0);
-        let line = linestring_wkb_le(&[(0.0, 1.0), (3.0, 1.0)]);
-        let blade = linestring_wkb_le(&[(1.0, -1.0), (1.0, 3.0)]);
-        let bowtie = polygon_wkb_le(&[(0.0, 0.0), (2.0, 2.0), (0.0, 2.0), (2.0, 0.0), (0.0, 0.0)]);
-        let righe = 3 * SPLIT_ROWS_PER_BLOCK + 17;
-        let celle = |invalida: Option<usize>| -> Vec<Option<&Vec<u8>>> {
-            (0..righe)
-                .map(|riga| {
-                    if Some(riga) == invalida {
-                        Some(&bowtie)
-                    } else if riga % 7 == 3 {
-                        None
-                    } else if riga % 3 == 0 {
-                        Some(&line)
-                    } else {
-                        Some(&square)
-                    }
-                })
-                .collect()
-        };
-        let splitters = (0..righe)
-            .map(|riga| (riga % 11 != 5).then_some(blade.as_slice()))
-            .collect::<BinaryArray>();
-        for invalida in [None, Some(SPLIT_ROWS_PER_BLOCK + 40)] {
-            let (schema, batch) = fixture_batch(&celle(invalida));
-            // Un secondo batch: le righe continuano oltre il primo.
-            let (_, coda) = fixture_batch(&celle(None)[..SPLIT_ROWS_PER_BLOCK]);
-            let batches = [batch, coda];
-            let splitters_tutti = (0..righe + SPLIT_ROWS_PER_BLOCK)
-                .map(|riga| (riga % 11 != 5).then_some(blade.as_slice()))
-                .collect::<BinaryArray>();
-            for limite in [u64::MAX >> 1, 2_000, 700, 3] {
-                let parallelo = split_batches(
-                    &schema,
-                    &batches,
-                    DEFAULT_GEOMETRY_COLUMN,
-                    &splitters_tutti,
-                    None,
-                    limite,
-                    precisione(),
-                )
-                .map_err(|e| format!("{e:?}"));
-                let sequenziale =
-                    split_batches_sequenziale(&schema, &batches, &splitters_tutti, limite)
-                        .map_err(|e| format!("{e:?}"));
-                assert_eq!(
-                    parallelo, sequenziale,
-                    "invalida {invalida:?}, limite {limite}"
-                );
-            }
-        }
-        // Un solo batch, nessun limite: uscita non vuota.
-        let (schema, batch) = fixture_batch(&celle(None));
-        let uscita = split_batches(
-            &schema,
-            &[batch],
-            DEFAULT_GEOMETRY_COLUMN,
-            &splitters,
-            None,
-            u64::MAX >> 1,
-            precisione(),
-        )
-        .expect("split");
-        assert!(uscita.1.iter().map(RecordBatch::num_rows).sum::<usize>() > righe);
     }
 }

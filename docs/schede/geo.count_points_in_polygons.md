@@ -73,7 +73,7 @@ validate), nella categoria del passo geo indicata fra parentesi:
 - `PairLimitExceeded` (`ResourceLimit`): le coppie punto-poligono
   confermate superano il limite di righe dell'arco;
 - `MargineMemoria` (`ResourceLimit`): le stesse coppie non starebbero nel
-  margine di memoria del passo (40 byte ciascuna; [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  margine di memoria del passo (64 byte ciascuna, a maggiorante delle capacità; [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;

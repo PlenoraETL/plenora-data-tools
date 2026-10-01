@@ -327,10 +327,11 @@ pub fn nearest_matches_validated_con_margine(
     )
 }
 
-/// I byte di un abbinamento nel kernel: `NearestMatch` due volte (crescita
-/// del vettore e concatenazione dei gruppi) e la distanza del candidato.
-pub const BYTE_PER_VICINO: u64 =
-    2 * std::mem::size_of::<NearestMatch>() as u64 + std::mem::size_of::<(usize, f64)>() as u64;
+/// Un maggiorante dei byte che un abbinamento fa allocare al kernel.
+///
+/// `NearestMatch` nel gruppo della riga e nel risultato, entrambi a
+/// capacita' esatta. I candidati e le loro distanze non si raccolgono.
+pub const BYTE_PER_VICINO: u64 = 2 * std::mem::size_of::<NearestMatch>() as u64;
 
 // Una sola sequenza per riga (candidati, predicato, tetto): lunghezza intrinseca.
 #[allow(clippy::too_many_lines)]
@@ -396,37 +397,39 @@ fn nearest_matches_impl(
             let Some(geometry) = geometry.as_ref().filter(|value| value.coords_count() > 0) else {
                 return Ok(Vec::new());
             };
-            // Candidati in ordine di indice right: un sovrainsieme di ogni
-            // riga che puo' essere alla distanza minima (vedi `IndiceVicini`).
-            // La distanza di ogni candidato e' la stessa chiamata della
-            // forza bruta, quindi minimo, pari e valori sono gli stessi bit.
-            let mut distances: Vec<_> = indice
-                .candidati(geometry, &usable_right)?
-                .into_iter()
-                .map(|posizione| {
-                    let (right_index, right) = usable_right[posizione];
-                    Ok((right_index, distanza_protetta(geometry, right)?))
-                })
-                .collect::<Result<_, AnalysisError>>()?;
-            let Some(minimum) = distances
-                .iter()
-                .map(|(_, distance)| *distance)
-                .reduce(f64::min)
-            else {
+            // Candidati: un sovrainsieme di ogni riga che puo' essere alla
+            // distanza minima (vedi `IndiceVicini`), visitati senza
+            // raccoglierli. La distanza di ogni candidato e' la stessa
+            // chiamata della forza bruta, quindi minimo, pari e valori sono
+            // gli stessi bit. Primo giro: il minimo (`f64::min` come
+            // `reduce`) e quanti candidati lo eguagliano, senza allocare;
+            // il tetto conta i pari prima di raccoglierli; secondo giro (solo
+            // con piu' di un pari): i pari, a capacita' esatta.
+            let mut minimo: Option<f64> = None;
+            let mut pari = 0_usize;
+            let mut unico: Option<(usize, f64)> = None;
+            indice.visita_candidati(geometry, &usable_right, |posizione| {
+                let (right_index, right) = usable_right[posizione];
+                let distanza = distanza_protetta(geometry, right)?;
+                let nuovo = minimo.map_or(distanza, |attuale| attuale.min(distanza));
+                // Uguaglianze esatte: confronti fra gli stessi valori.
+                #[allow(clippy::float_cmp)]
+                if minimo.is_none_or(|attuale| nuovo < attuale || attuale.is_nan()) {
+                    minimo = Some(nuovo);
+                    pari = usize::from(distanza == nuovo);
+                    unico = (distanza == nuovo).then_some((right_index, distanza));
+                } else if distanza == nuovo {
+                    pari += 1;
+                }
+                Ok(())
+            })?;
+            let Some(minimum) = minimo else {
                 return Ok(Vec::new());
             };
             if max_distance.is_some_and(|limit| minimum > limit) {
                 return Ok(Vec::new());
             }
-            // Uguaglianza esatta corretta per costruzione: `minimum` e' il
-            // minimo degli stessi valori (reduce(f64::min)), non una stima.
-            #[allow(clippy::float_cmp)]
-            distances.retain(|(_, distance)| *distance == minimum);
-            // Gia' in ordine di indice (i candidati lo sono): resta come
-            // difesa, a costo trascurabile sui soli pari.
-            distances.sort_unstable_by_key(|(right_index, _)| *right_index);
-            let additional =
-                u64::try_from(distances.len()).map_err(|_| AnalysisError::IndexOverflow)?;
+            let additional = u64::try_from(pari).map_err(|_| AnalysisError::IndexOverflow)?;
             result_count
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                     current
@@ -435,24 +438,52 @@ fn nearest_matches_impl(
                 })
                 .map_err(|_| errore_del_tetto())?;
             let left = u64::try_from(left_index).map_err(|_| AnalysisError::IndexOverflow)?;
-            distances
-                .into_iter()
-                .map(|(right_index, distance)| {
-                    Ok(NearestMatch {
-                        left,
-                        right: u64::try_from(right_index)
-                            .map_err(|_| AnalysisError::IndexOverflow)?,
-                        distance,
-                    })
+            let mut trovati = Vec::new();
+            trovati
+                .try_reserve_exact(pari)
+                .map_err(|_| AnalysisError::CalcoloNonConcluso("allocazione dei vicini"))?;
+            let a_match = |right_index: usize, distance: f64| {
+                Ok::<_, AnalysisError>(NearestMatch {
+                    left,
+                    right: u64::try_from(right_index).map_err(|_| AnalysisError::IndexOverflow)?,
+                    distance,
                 })
-                .collect()
+            };
+            if let (1, Some((right_index, distance))) = (pari, unico) {
+                trovati.push(a_match(right_index, distance)?);
+            } else {
+                indice.visita_candidati(geometry, &usable_right, |posizione| {
+                    let (right_index, right) = usable_right[posizione];
+                    let distanza = distanza_protetta(geometry, right)?;
+                    #[allow(clippy::float_cmp)]
+                    if distanza == minimum && trovati.len() < pari {
+                        trovati.push(a_match(right_index, distanza)?);
+                    }
+                    Ok(())
+                })?;
+                if trovati.len() != pari {
+                    return Err(AnalysisError::CalcoloNonConcluso(
+                        "i due giri dei vicini non trovano gli stessi pari",
+                    ));
+                }
+                trovati.sort_unstable_by_key(|trovato| trovato.right);
+            }
+            Ok(trovati)
         })
         .collect();
     // Quale riga supera `max_results` dipende dall'ordine dei thread (il
     // contatore e' condiviso), l'esistenza del superamento no: ogni altro
     // errore vince quindi sul limite dei risultati, il primo in ordine di
     // riga, e l'esito resta deterministico.
+    // Capacita' esatta: anche il risultato e' nel conto per abbinamento.
+    let totale = groups
+        .iter()
+        .map(|group| group.as_ref().map_or(0, Vec::len))
+        .sum();
     let mut matches = Vec::new();
+    matches
+        .try_reserve_exact(totale)
+        .map_err(|_| AnalysisError::CalcoloNonConcluso("allocazione dei vicini"))?;
     let mut limite_superato = None;
     for group in groups {
         match group {
@@ -563,11 +594,69 @@ impl IndiceVicini {
         }
     }
 
+    /// Visita le posizioni di [`Self::candidati`] (lo stesso insieme, ogni
+    /// posizione una volta) senza raccoglierle, nell'ordine dell'R-tree
+    /// e poi di `sempre`: il primo vicino del centro si visita a parte solo
+    /// se la finestra non lo contiene. Gli alberi e `sempre` sono disgiunti
+    /// (geometrie regolari nell'albero, le altre in `sempre`).
+    ///
+    /// # Errors
+    ///
+    /// `CalcoloNonConcluso` se la distanza del primo candidato va in panico;
+    /// il primo errore di `visita`.
+    fn visita_candidati(
+        &self,
+        geometria: &Geometry<f64>,
+        usable_right: &[(usize, &Geometry<f64>)],
+        mut visita: impl FnMut(usize) -> Result<(), AnalysisError>,
+    ) -> Result<(), AnalysisError> {
+        let tutti = |visita: &mut dyn FnMut(usize) -> Result<(), AnalysisError>| {
+            (0..self.totale).try_for_each(visita)
+        };
+        let Some((involucro, modulo_left)) = involucro_regolare(geometria) else {
+            return tutti(&mut visita);
+        };
+        let (minimo, massimo) = (involucro.lower(), involucro.upper());
+        let centro = [
+            f64::midpoint(minimo[0], massimo[0]),
+            f64::midpoint(minimo[1], massimo[1]),
+        ];
+        let Some(primo) = self.albero.nearest_neighbor(&centro) else {
+            return tutti(&mut visita);
+        };
+        let Some((_, destra)) = usable_right.get(primo.posizione) else {
+            return tutti(&mut visita);
+        };
+        let limite = distanza_protetta(geometria, destra)?;
+        let margine = modulo_left.max(self.modulo_right) * MARGINE_RELATIVO;
+        let espansione = limite + (margine + margine);
+        if !espansione.is_finite() {
+            return tutti(&mut visita);
+        }
+        let finestra = AABB::from_corners(
+            [minimo[0] - espansione, minimo[1] - espansione],
+            [massimo[0] + espansione, massimo[1] + espansione],
+        );
+        let mut primo_visto = false;
+        for candidato in self.albero.locate_in_envelope_intersecting(&finestra) {
+            primo_visto |= candidato.posizione == primo.posizione;
+            visita(candidato.posizione)?;
+        }
+        for posizione in &self.sempre {
+            visita(*posizione)?;
+        }
+        if !primo_visto {
+            visita(primo.posizione)?;
+        }
+        Ok(())
+    }
+
     /// Posizioni in `usable_right` da valutare, crescenti e senza ripetizioni.
     ///
     /// # Errors
     ///
     /// `CalcoloNonConcluso` se la distanza del primo candidato va in panico.
+    #[cfg(test)]
     fn candidati(
         &self,
         geometria: &Geometry<f64>,

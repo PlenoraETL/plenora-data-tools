@@ -450,7 +450,23 @@ fn buffer_con_freccia_e_margine(
     if distance == 0.0 {
         let mut parti = Vec::new();
         protetto(|| areali(geometry, &mut parti))?;
-        return unione(&parti, precision);
+        // Le parti (copie dell'ingresso), i punti dell'unione e il suo
+        // risultato nel margine, come per ogni altro buffer.
+        let usati = parti.iter().fold(
+            byte_vec(parti.capacity(), size_of::<MultiPolygon<f64>>()),
+            |totale, parte| totale.saturating_add(crate::margine::byte_multipoligono(parte)),
+        );
+        let punti: usize = parti.iter().map(CoordsIter::coords_count).sum();
+        margine.verifica(
+            usati.saturating_add(
+                u64::try_from(punti)
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(BYTE_PER_PUNTO_OVERLAY),
+            ),
+        )?;
+        let risultato = unione(&parti, precision)?;
+        margine.verifica(usati.saturating_add(crate::margine::byte_multipoligono(&risultato)))?;
+        return Ok(risultato);
     }
     if nulla_da_bufferizzare(geometry, distance, estremita) {
         return Ok(MultiPolygon::new(Vec::new()));
@@ -485,40 +501,55 @@ fn buffer_con_freccia_e_margine(
     let stile = BufferStyle::new(distance)
         .line_join(LineJoin::Round(angolo))
         .line_cap(estremita_geo);
+    // La copia di lavoro dell'ingresso resta viva per tutto il calcolo.
+    let usati_lavoro = crate::margine::byte_heap_geometria(&lavoro);
+    margine.verifica(usati_lavoro)?;
     // Una linea i cui offset si sovrappongono su molti segmenti lontani: a
     // blocchi, con le unioni nel bilancio della griglia (`blocchi`).
     if let Some(linee) = blocchi::linee_di(&lavoro) {
         if estremita != Estremita::Quadrate
             && blocchi::tratto_unico_troppo_costoso(&linee, distance)
         {
-            let parti = blocchi::blocchi_di(&linee);
+            let parti = blocchi::blocchi_di(&linee, passo);
             controlla_unioni_dei_blocchi(
                 ingombro,
                 blocchi::livelli_di_unione(parti.len()),
                 limite,
             )?;
+            // L'ingresso di lavoro e i blocchi (copie) restano vivi.
+            let usati = parti.iter().fold(
+                usati_lavoro
+                    .saturating_add(byte_vec(parti.capacity(), size_of::<LineString<f64>>())),
+                |totale, parte| {
+                    totale.saturating_add(byte_vec(parte.0.capacity(), size_of::<Coord<f64>>()))
+                },
+            );
             let vertici = parti.iter().map(|parte| parte.0.len()).sum();
-            margine.verifica(
+            margine.verifica(usati.saturating_add(
                 punti_dei_contorni(vertici, angolo).saturating_mul(BYTE_PER_PUNTO_OVERLAY),
+            ))?;
+            let risultato = blocchi::buffer_dei_blocchi(
+                &parti,
+                &stile,
+                margine.con_byte(margine.byte_disponibili() - usati),
             )?;
-            let risultato = blocchi::buffer_dei_blocchi(&parti, &stile, margine)?;
-            margine.verifica(stima_byte(&risultato))?;
+            margine
+                .verifica(usati.saturating_add(crate::margine::byte_multipoligono(&risultato)))?;
             return Ok(risultato);
         }
     }
-    margine.verifica(
+    margine.verifica(usati_lavoro.saturating_add(
         punti_dei_contorni(lavoro.coords_count(), angolo).saturating_mul(BYTE_PER_PUNTO_OVERLAY),
-    )?;
+    ))?;
     let risultato = protetto(|| lavoro.buffer_with_style(stile))?;
-    margine.verifica(stima_byte(&risultato))?;
+    margine
+        .verifica(usati_lavoro.saturating_add(crate::margine::byte_multipoligono(&risultato)))?;
     Ok(risultato)
 }
 
-/// La stima dei byte di un risultato ([`crate::memory_estimate`]).
-fn stima_byte(poligoni: &MultiPolygon<f64>) -> u64 {
-    crate::memory_estimate::estimate_geometry_native_bytes(&Geometry::MultiPolygon(
-        poligoni.clone(),
-    ))
+/// I byte di `capacita` elementi da `elemento` byte.
+fn byte_vec(capacita: usize, elemento: usize) -> u64 {
+    u64::try_from(capacita.saturating_mul(elemento)).unwrap_or(u64::MAX)
 }
 
 /// Il bilancio della griglia del buffer a blocchi: i passaggi del buffer

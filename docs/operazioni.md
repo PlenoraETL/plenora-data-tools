@@ -11549,7 +11549,7 @@ validate), nella categoria del passo geo indicata fra parentesi:
 - `PairLimitExceeded` (`ResourceLimit`): le coppie punto-poligono
   confermate superano il limite di righe dell'arco;
 - `MargineMemoria` (`ResourceLimit`): le stesse coppie non starebbero nel
-  margine di memoria del passo (40 byte ciascuna; [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  margine di memoria del passo (64 byte ciascuna, a maggiorante delle capacità; [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;
@@ -15830,7 +15830,7 @@ geo indicata fra parentesi:
 - `ResultLimitExceeded` (`ResourceLimit`): gli abbinamenti superano il
   limite di righe dell'arco (ogni altro errore, il primo in ordine di
   riga, ha la precedenza);
-- `MargineMemoria` (`ResourceLimit`): gli abbinamenti, con la riga di left
+- `MargineMemoria` (`ResourceLimit`): gli abbinamenti, con la riga di left più larga
   che l'uscita ripete, non starebbero nel margine di memoria del passo;
   stesso conteggio e stessa precedenza del limite di righe, che vince se
   scatta prima ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
@@ -19577,7 +19577,8 @@ passo geo indicata fra parentesi:
   materializzarle; ogni altro errore, il primo in ordine di riga, ha la
   precedenza);
 - `MargineMemoria` (`ResourceLimit`): le coppie confermate, con la riga di
-  left che l'uscita ripete, non starebbero nel margine di memoria del passo
+  left più larga (l'uscita ripete una riga di left per coppia), non
+  starebbero nel margine di memoria del passo
   (budget meno byte vivi); stesso conteggio e stessa precedenza del limite
   di righe, che vince se scatta prima ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
@@ -20116,9 +20117,8 @@ la verifica della copertura, con un
 R-tree dei lati della sorgente (O(b · s) nel caso peggiore, `b` i lati di
 bordo delle parti e `s` i lati della sorgente). Sorgente lineare: O(s · l)
 test fra segmenti della sorgente e primitive della lama, entro 100.000.000.
-Le righe si calcolano in parallelo a blocchi di 256 e si accolgono in
-ordine di riga: memoria O(n) per riga in lavorazione più le parti del
-blocco e quelle prodotte; l'uscita si costruisce in un batch solo. Tempi
+Le righe si calcolano una alla volta, in ordine: memoria O(n) per la riga
+più le parti prodotte; l'uscita si costruisce in un batch solo. Tempi
 misurati e oracoli nel
 [README, «`geo.make_valid`, `geo.polygonize`, `geo.split`»](../README.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata).
 
@@ -21309,7 +21309,7 @@ categoria del passo geo indicata fra parentesi:
   confermate superano il limite di righe dell'arco; conta ogni destra che
   contiene una sinistra, anche se ne basta una;
 - `MargineMemoria` (`ResourceLimit`): le stesse coppie non starebbero nel
-  margine di memoria del passo (40 byte ciascuna; [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  margine di memoria del passo (64 byte ciascuna, a maggiorante delle capacità; [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;

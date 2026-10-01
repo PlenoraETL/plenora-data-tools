@@ -286,3 +286,66 @@ fn buffer_a_zig_zag_si_ferma_al_margine() {
         Err(OperationError::MargineMemoria(_))
     ));
 }
+
+/// Il conto per coppia e' un maggiorante esatto al byte del tetto: con un
+/// margine di esattamente `coppie * BYTE_PER_COPPIA` il join riesce, con un
+/// byte in meno no; il risultato ha capacita' esatta (nessuna crescita per
+/// raddoppio oltre il conto), e cosi' i vicini.
+#[test]
+fn i_risultati_hanno_capacita_esatta_e_il_conto_e_al_byte() {
+    use plenora_kernels_geo::analysis::BYTE_PER_VICINO;
+    use plenora_kernels_geo::spatial_join::BYTE_PER_COPPIA;
+    let (punti, dischi) = tutti_candidati(60);
+    let coppie = 60 * 60;
+    let esatto = MargineMemoria::byte(coppie * BYTE_PER_COPPIA);
+    let trovate = spatial_join_nullable_validated_con_margine(
+        &punti,
+        &dischi,
+        JoinPredicate::Intersects,
+        u64::MAX,
+        esatto,
+    )
+    .expect("margine esatto");
+    assert_eq!(trovate.len() as u64, coppie);
+    assert_eq!(trovate.capacity(), trovate.len());
+    assert!(matches!(
+        spatial_join_nullable_validated_con_margine(
+            &punti,
+            &dischi,
+            JoinPredicate::Intersects,
+            u64::MAX,
+            MargineMemoria::byte(coppie * BYTE_PER_COPPIA - 1),
+        ),
+        Err(SpatialJoinError::MargineMemoria(_))
+    ));
+    let centro: Vec<Option<Geometry<f64>>> = (0..50)
+        .map(|_| Some(Geometry::Point(Point::new(0.0, 0.0))))
+        .collect();
+    let anello: Vec<Option<Geometry<f64>>> = (0..40)
+        .map(|k| {
+            let (x, y) = [(5.0, 0.0), (0.0, 5.0), (-5.0, 0.0), (0.0, -5.0)][k % 4];
+            Some(Geometry::Point(Point::new(x, y)))
+        })
+        .collect();
+    let abbinamenti = 50 * 40;
+    let vicini = nearest_matches_validated_con_margine(
+        &centro,
+        &anello,
+        None,
+        (u64::MAX, u64::MAX),
+        MargineMemoria::byte(abbinamenti * BYTE_PER_VICINO),
+    )
+    .expect("margine esatto");
+    assert_eq!(vicini.len() as u64, abbinamenti);
+    assert_eq!(vicini.capacity(), vicini.len());
+    assert!(matches!(
+        nearest_matches_validated_con_margine(
+            &centro,
+            &anello,
+            None,
+            (u64::MAX, u64::MAX),
+            MargineMemoria::byte(abbinamenti * BYTE_PER_VICINO - 1),
+        ),
+        Err(AnalysisError::MargineMemoria(_))
+    ));
+}

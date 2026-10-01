@@ -77,3 +77,56 @@ fn il_join_con_ogni_coppia_si_ferma_al_margine_del_kernel() {
     assert!(testo.contains("margine"), "{testo}");
     assert!(testo.contains("geo.sjoin"), "{testo}");
 }
+
+/// Una sola riga larga di left ripetuta per migliaia di coppie: il conto
+/// per coppia usa la riga piu' larga, non la media (che qui e' piccola),
+/// e il kernel si ferma col margine invece di lasciar allocare l'uscita.
+#[test]
+fn la_riga_larga_ripetuta_conta_per_intero() {
+    let (cerchio, _) = tutti_in_tutti(1, 0);
+    // Left: il cerchio (circa 16 KB) e 999 punti lontani da tutto.
+    let geometrie_left: Vec<Option<Geometry<f64>>> =
+        std::iter::once(comune_geo::geometrie(&cerchio, "geometry")[0].clone())
+            .chain((0..999).map(|k| {
+                Some(Geometry::Point(Point::new(
+                    X0 + 5_000.0 + f64::from(k),
+                    Y0 + 5_000.0,
+                )))
+            }))
+            .collect();
+    let left = tabella(UTM, &geometrie_left);
+    // Right: 2.000 punti dentro il cerchio.
+    let right = tabella(
+        UTM,
+        &(0..2_000)
+            .map(|k| {
+                Some(Geometry::Point(Point::new(
+                    X0 + 400.0 + f64::from(k % 40),
+                    Y0 + 400.0 + f64::from(k / 40),
+                )))
+            })
+            .collect::<Vec<_>>(),
+    );
+    let pipeline = piano(
+        &["l", "r"],
+        vec![passo(
+            "x",
+            "geo.sjoin",
+            &["l", "r"],
+            json!({"predicate": "intersects"}),
+        )],
+        &["x"],
+    );
+    let esito = esegui(&pipeline, &[("l", left.clone()), ("r", right.clone())])
+        .expect("sjoin con budget ampio");
+    assert_eq!(esito.outputs[0].1.num_rows(), 2_000);
+    // 2.000 copie della riga del cerchio sono circa 32 MB: con 16 MiB il
+    // kernel si ferma col margine.
+    let errore = esegui(
+        &con_budget(pipeline, 16 * 1024 * 1024),
+        &[("l", left), ("r", right)],
+    )
+    .expect_err("margine superato");
+    assert_eq!(errore.category(), ErrorCategory::ResourceLimit);
+    assert!(errore.to_string().contains("margine"), "{errore}");
+}
