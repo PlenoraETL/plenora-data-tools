@@ -537,3 +537,77 @@ fn parquet_pagina_con_checksum_corrotta_rifiutata() {
     let errore = errore(&corrotto, Formato::Parquet, &LimitiLettura::default());
     assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
 }
+
+/// Byte IPC di una tabella con metadati a due chiavi nello schema, in un
+/// campo e in un campo annidato; `ripeti` rinomina in tutto il file la
+/// seconda chiave come la prima (stessa lunghezza, flatbuffer ancora valido).
+fn ipc_con_metadati(stream: bool, ripeti: Option<&str>) -> Vec<u8> {
+    let metadati = |prefisso: &str| {
+        HashMap::from([
+            (format!("{prefisso}1"), "u".to_owned()),
+            (format!("{prefisso}2"), "v".to_owned()),
+        ])
+    };
+    let figlio = Field::new("c", DataType::Int64, false).with_metadata(metadati("chiaveN"));
+    let schema = Schema::new_with_metadata(
+        vec![
+            Field::new("id", DataType::Int64, false).with_metadata(metadati("chiaveC")),
+            Field::new("s", DataType::Struct(vec![figlio.clone()].into()), false),
+        ],
+        metadati("chiaveS"),
+    );
+    let struttura = plenora_core::arrow::array::StructArray::from(vec![(
+        Arc::new(figlio),
+        Arc::new(Int64Array::from(vec![3, 4])) as ArrayRef,
+    )]);
+    let tabella = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(Int64Array::from(vec![1, 2])), Arc::new(struttura)],
+    )
+    .unwrap();
+    let mut byte = Vec::new();
+    if stream {
+        let mut scrittore = StreamWriter::try_new(&mut byte, &tabella.schema()).unwrap();
+        scrittore.write(&tabella).unwrap();
+        scrittore.finish().unwrap();
+    } else {
+        let mut scrittore = FileWriter::try_new(&mut byte, &tabella.schema()).unwrap();
+        scrittore.write(&tabella).unwrap();
+        scrittore.finish().unwrap();
+    }
+    if let Some(prefisso) = ripeti {
+        let (seconda, prima) = (format!("{prefisso}2"), format!("{prefisso}1"));
+        let mut trovate = 0;
+        for inizio in 0..=byte.len() - seconda.len() {
+            if byte[inizio..].starts_with(seconda.as_bytes()) {
+                byte[inizio..inizio + prima.len()].copy_from_slice(prima.as_bytes());
+                trovate += 1;
+            }
+        }
+        assert!(trovate > 0, "chiave {seconda} non trovata");
+    }
+    byte
+}
+
+/// Una chiave ripetuta nei metadati di schema, di campo o di un campo
+/// annidato: Arrow terrebbe l'ultima, qui è un errore.
+#[test]
+fn ipc_chiavi_dei_metadati_ripetute_rifiutate() {
+    for stream in [false, true] {
+        let letta = leggi_byte(
+            &ipc_con_metadati(stream, None),
+            Formato::ArrowIpc,
+            &LimitiLettura::default(),
+        )
+        .expect("metadati validi");
+        assert_eq!(letta.schema().metadata().len(), 2);
+        for prefisso in ["chiaveS", "chiaveC", "chiaveN"] {
+            rifiutato(
+                &ipc_con_metadati(stream, Some(prefisso)),
+                Formato::ArrowIpc,
+                ErrorCategory::DataMapping,
+                "ripetuta",
+            );
+        }
+    }
+}

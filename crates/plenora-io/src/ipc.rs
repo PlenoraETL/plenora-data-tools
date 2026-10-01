@@ -12,7 +12,8 @@
 //! metadati entro il tetto, corpi e blocchi dentro il file, blocchi del
 //! footer non ripetuti né sovrapposti (moltiplicherebbero le righe senza
 //! errore), il marcatore di fine dello stream (senza, uno stream tagliato
-//! darebbe meno righe senza errore), l'endianness. Poi
+//! darebbe meno righe senza errore), l'endianness, le chiavi dei metadati
+//! di schema e di campo non ripetute (Arrow terrebbe l'ultima). Poi
 //! `FileDecoder`/`StreamDecoder` decodificano per viste dello stesso
 //! buffer, dentro la barriera anti-panico. Il contenuto dei messaggi
 //! (buffer, nodi, dizionari) resta ad Arrow: i casi che lì allocano oltre il
@@ -31,6 +32,7 @@
 //! Nessuna compressione: i crate Arrow del workspace non la abilitano, e un
 //! file IPC compresso si rifiuta in lettura con l'errore di Arrow.
 
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
@@ -137,7 +139,8 @@ fn verifica_blocchi(n: usize, blocchi: u64, residuo: u64, limiti: &LimitiLettura
 
 /// Lo schema del file dentro la barriera, con endianness, tipi e metadati
 /// verificati. `StreamDecoder` non guarda l'endianness: un file big-endian
-/// si decodificherebbe come little-endian, con altri valori.
+/// si decodificherebbe come little-endian, con altri valori. Le chiavi dei
+/// metadati si verificano uniche prima della conversione.
 fn schema_verificato(
     schema: plenora_core::arrow::ipc::Schema<'_>,
     limiti: &LimitiLettura,
@@ -147,12 +150,48 @@ fn schema_verificato(
             "Arrow IPC con endianness diversa da quella del sistema".to_owned(),
         ));
     }
+    verifica_chiavi_uniche(&schema)?;
     let schema = barriera("arrow-ipc", || {
         Ok(plenora_core::arrow::ipc::convert::try_fb_to_schema(schema)?)
     })?;
     verifica_tipi_supportati(&schema)?;
     verifica_metadati_custom(&schema, 0, limiti.max_byte_metadati_custom)?;
     Ok(Arc::new(schema))
+}
+
+/// Le chiavi dei metadati dello schema e di ogni campo, a ogni profondità,
+/// sono uniche: `try_fb_to_schema` terrebbe in silenzio l'ultima di due
+/// chiavi uguali (come `parquet`, rifiutato in `parquet_io`).
+fn verifica_chiavi_uniche(schema: &plenora_core::arrow::ipc::Schema<'_>) -> Result<()> {
+    chiavi_uniche(
+        schema.custom_metadata().into_iter().flatten(),
+        "dello schema",
+    )?;
+    // Visita a pila, non ricorsiva: la profondità la limita già il
+    // verificatore flatbuffers, ma così non conta.
+    let mut campi: Vec<_> = schema.fields().into_iter().flatten().collect();
+    while let Some(campo) = campi.pop() {
+        chiavi_uniche(campo.custom_metadata().into_iter().flatten(), "di un campo")?;
+        campi.extend(campo.children().into_iter().flatten());
+    }
+    Ok(())
+}
+
+/// Una lista chiave-valore senza chiavi ripetute.
+fn chiavi_uniche<'a>(
+    voci: impl IntoIterator<Item = plenora_core::arrow::ipc::KeyValue<'a>>,
+    dove: &str,
+) -> Result<()> {
+    let mut viste = BTreeSet::new();
+    for chiave in voci.into_iter().filter_map(|voce| voce.key()) {
+        if !viste.insert(chiave) {
+            return Err(malformato(
+                IPC,
+                &format!("metadati {dove} con la chiave `{chiave}` ripetuta"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Intero con segno a 32 bit little-endian in `byte[da..da + 4]`.
