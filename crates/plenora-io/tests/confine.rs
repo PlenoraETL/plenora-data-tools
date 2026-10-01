@@ -542,11 +542,33 @@ fn parquet_pagina_con_checksum_corrotta_rifiutata() {
 /// campo e in un campo annidato; `ripeti` rinomina in tutto il file la
 /// seconda chiave come la prima (stessa lunghezza, flatbuffer ancora valido).
 fn ipc_con_metadati(stream: bool, ripeti: Option<&str>) -> Vec<u8> {
+    let mut byte = ipc_con_metadati_in(stream, &["chiaveS", "chiaveC", "chiaveN"]);
+    if let Some(prefisso) = ripeti {
+        let (seconda, prima) = (format!("{prefisso}2"), format!("{prefisso}1"));
+        let mut trovate = 0;
+        for inizio in 0..=byte.len() - seconda.len() {
+            if byte[inizio..].starts_with(seconda.as_bytes()) {
+                byte[inizio..inizio + prima.len()].copy_from_slice(prima.as_bytes());
+                trovate += 1;
+            }
+        }
+        assert!(trovate > 0, "chiave {seconda} non trovata");
+    }
+    byte
+}
+
+/// Come [`ipc_con_metadati`], con i metadati solo ai livelli indicati
+/// (`chiaveS` schema, `chiaveC` campo, `chiaveN` campo annidato).
+fn ipc_con_metadati_in(stream: bool, livelli: &[&str]) -> Vec<u8> {
     let metadati = |prefisso: &str| {
-        HashMap::from([
-            (format!("{prefisso}1"), "u".to_owned()),
-            (format!("{prefisso}2"), "v".to_owned()),
-        ])
+        if livelli.contains(&prefisso) {
+            HashMap::from([
+                (format!("{prefisso}1"), "u".to_owned()),
+                (format!("{prefisso}2"), "v".to_owned()),
+            ])
+        } else {
+            HashMap::new()
+        }
     };
     let figlio = Field::new("c", DataType::Int64, false).with_metadata(metadati("chiaveN"));
     let schema = Schema::new_with_metadata(
@@ -575,18 +597,48 @@ fn ipc_con_metadati(stream: bool, ripeti: Option<&str>) -> Vec<u8> {
         scrittore.write(&tabella).unwrap();
         scrittore.finish().unwrap();
     }
-    if let Some(prefisso) = ripeti {
-        let (seconda, prima) = (format!("{prefisso}2"), format!("{prefisso}1"));
-        let mut trovate = 0;
-        for inizio in 0..=byte.len() - seconda.len() {
-            if byte[inizio..].starts_with(seconda.as_bytes()) {
-                byte[inizio..inizio + prima.len()].copy_from_slice(prima.as_bytes());
-                trovate += 1;
-            }
-        }
-        assert!(trovate > 0, "chiave {seconda} non trovata");
-    }
     byte
+}
+
+/// Toglie il campo `campo` (0 chiave, 1 valore) dalle voci `KeyValue` del
+/// flatbuffer che puntano alla stringa `chiave`, azzerandone la voce nella
+/// vtable (condivisa da tutte le voci del messaggio, che restano tutte
+/// senza quel campo). Restituisce le vtable toccate.
+fn togli_campo_kv(byte: &mut [u8], chiave: &str, campo: usize) -> usize {
+    let u16_in = |b: &[u8], i: usize| usize::from(u16::from_le_bytes([b[i], b[i + 1]]));
+    let u32_in = |b: &[u8], i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+    // Le stringhe flatbuffer della chiave: lunghezza u32, poi i byte.
+    let stringhe: Vec<usize> = (4..=byte.len() - chiave.len())
+        .filter(|&i| {
+            byte[i..].starts_with(chiave.as_bytes())
+                && u32_in(byte, i - 4) == u32::try_from(chiave.len()).unwrap()
+        })
+        .map(|i| i - 4)
+        .collect();
+    let mut vtable = Vec::new();
+    for tabella in 0..byte.len() - 4 {
+        let soffset = i64::from(i32::from_le_bytes(
+            byte[tabella..tabella + 4].try_into().unwrap(),
+        ));
+        let Ok(v) = usize::try_from(i64::try_from(tabella).unwrap() - soffset) else {
+            continue;
+        };
+        if v + 8 > byte.len() || u16_in(byte, v) != 8 {
+            continue;
+        }
+        let campo_chiave = tabella + u16_in(byte, v + 4);
+        if campo_chiave == tabella || campo_chiave + 4 > byte.len() {
+            continue;
+        }
+        let puntata = campo_chiave + usize::try_from(u32_in(byte, campo_chiave)).unwrap();
+        if stringhe.contains(&puntata) && !vtable.contains(&v) {
+            vtable.push(v);
+        }
+    }
+    for &v in &vtable {
+        byte[v + 4 + 2 * campo..v + 6 + 2 * campo].copy_from_slice(&[0, 0]);
+    }
+    vtable.len()
 }
 
 /// Una chiave ripetuta nei metadati di schema, di campo o di un campo
@@ -609,5 +661,72 @@ fn ipc_chiavi_dei_metadati_ripetute_rifiutate() {
                 "ripetuta",
             );
         }
+    }
+}
+
+/// Una voce dei metadati di schema, di campo o di un campo annidato senza
+/// valore (assente, non vuoto) o senza chiave: Arrow la scarterebbe in
+/// silenzio, qui è un errore che nomina la chiave.
+#[test]
+fn ipc_voci_dei_metadati_incomplete_rifiutate() {
+    for stream in [false, true] {
+        for (prefisso, dove) in [
+            ("chiaveS", "dello schema"),
+            ("chiaveC", "di un campo"),
+            ("chiaveN", "di un campo"),
+        ] {
+            let intatto = ipc_con_metadati_in(stream, &[prefisso]);
+            leggi_byte(&intatto, Formato::ArrowIpc, &LimitiLettura::default())
+                .expect("metadati validi");
+            let mut senza_valore = intatto.clone();
+            assert!(togli_campo_kv(&mut senza_valore, &format!("{prefisso}1"), 1) > 0);
+            rifiutato(
+                &senza_valore,
+                Formato::ArrowIpc,
+                ErrorCategory::DataMapping,
+                &format!("metadati {dove} con la chiave `{prefisso}"),
+            );
+            rifiutato(
+                &senza_valore,
+                Formato::ArrowIpc,
+                ErrorCategory::DataMapping,
+                "senza valore",
+            );
+            let mut senza_chiave = intatto;
+            assert!(togli_campo_kv(&mut senza_chiave, &format!("{prefisso}1"), 0) > 0);
+            rifiutato(
+                &senza_chiave,
+                Formato::ArrowIpc,
+                ErrorCategory::DataMapping,
+                &format!("metadati {dove} con una voce senza chiave"),
+            );
+        }
+    }
+}
+
+/// Un valore vuoto (presente) resta legale e si conserva.
+#[test]
+fn ipc_metadati_con_valore_vuoto_si_leggono() {
+    let schema = Schema::new_with_metadata(
+        vec![Field::new("id", DataType::Int64, false)
+            .with_metadata(HashMap::from([("c".to_owned(), String::new())]))],
+        HashMap::from([("s".to_owned(), String::new())]),
+    );
+    let tabella =
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(Int64Array::from(vec![1]))]).unwrap();
+    for stream in [false, true] {
+        let mut byte = Vec::new();
+        if stream {
+            let mut scrittore = StreamWriter::try_new(&mut byte, &tabella.schema()).unwrap();
+            scrittore.write(&tabella).unwrap();
+            scrittore.finish().unwrap();
+        } else {
+            let mut scrittore = FileWriter::try_new(&mut byte, &tabella.schema()).unwrap();
+            scrittore.write(&tabella).unwrap();
+            scrittore.finish().unwrap();
+        }
+        let letta =
+            leggi_byte(&byte, Formato::ArrowIpc, &LimitiLettura::default()).expect("valore vuoto");
+        assert_eq!(letta.schema(), tabella.schema());
     }
 }

@@ -2397,12 +2397,16 @@ difesa da file costruiti apposta (limiti dichiarati sotto).
   messaggio, cioè lunghezza dei metadati uguale a prefisso più messaggio,
   tipo atteso e stessa lunghezza del corpo (`FileDecoder` prende il corpo
   dall'offset del blocco: un blocco spostato leggerebbe metadati come
-  valori); l'endianness (`StreamDecoder` non la guarda); le chiavi dei
-  metadati di schema e di campo, a ogni profondità, non ripetute
-  (`try_fb_to_schema` terrebbe l'ultima).
+  valori); l'endianness (`StreamDecoder` non la guarda); le voci dei
+  metadati di schema e di campo, a ogni profondità, con chiave e valore
+  (anche vuoto) e chiavi non ripetute (`try_fb_to_schema` scarterebbe una
+  voce senza chiave o senza valore e terrebbe l'ultima di due chiavi).
 - **Parquet**: la lunghezza del footer, letta dalla coda, entro il tetto
   prima che `parquet` la usi; i row group entro il massimo e la loro somma
-  di righe uguale a quella del footer dopo.
+  di righe uguale a quella del footer dopo; i metadati chiave-valore del
+  file con un valore (anche vuoto) e chiavi non ripetute, e lo schema
+  incorporato con le stesse verifiche di un file IPC (`parquet` scarterebbe
+  una voce senza valore).
 
 | limite (`LimitiLettura`) | predefinito | a che cosa si applica | errore |
 | --- | --- | --- | --- |

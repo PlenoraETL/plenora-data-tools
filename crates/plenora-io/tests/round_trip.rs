@@ -449,6 +449,114 @@ fn metadati_ambigui_rifiutati() {
     );
 }
 
+/// Una voce dei metadati senza valore (assente, non vuoto): `parquet` la
+/// scarterebbe in silenzio, nei metadati del file come nello schema Arrow
+/// incorporato. Un valore vuoto resta legale.
+#[test]
+fn metadati_senza_valore_rifiutati() {
+    use base64::Engine;
+    use parquet::arrow::arrow_writer::ArrowWriterOptions;
+    use parquet::arrow::{ArrowWriter, ARROW_SCHEMA_META_KEY};
+    use parquet::file::metadata::KeyValue;
+    use parquet::file::properties::WriterProperties;
+
+    let scrivi = |voci: Vec<KeyValue>, salta_incorporato: bool| {
+        let dir = cartella();
+        let percorso = dir.path().join("m.parquet");
+        let tabella = comune::ordini();
+        let opzioni = ArrowWriterOptions::new()
+            .with_properties(
+                WriterProperties::builder()
+                    .set_key_value_metadata(Some(voci))
+                    .build(),
+            )
+            .with_skip_arrow_metadata(salta_incorporato);
+        let mut w = ArrowWriter::try_new_with_options(
+            File::create(&percorso).unwrap(),
+            tabella.schema(),
+            opzioni,
+        )
+        .unwrap();
+        w.write(&tabella).unwrap();
+        w.close().unwrap();
+        leggi_tabella(&percorso, None, u64::MAX)
+    };
+    let errore = scrivi(vec![KeyValue::new("x".to_owned(), None)], false).expect_err("assente");
+    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+    assert!(
+        errore.to_string().contains("chiave `x` senza valore"),
+        "{errore}"
+    );
+    let letta =
+        scrivi(vec![KeyValue::new("x".to_owned(), String::new())], false).expect("valore vuoto");
+    assert_eq!(
+        letta.schema().metadata().get("x").map(String::as_str),
+        Some("")
+    );
+
+    // Schema incorporato con la voce di un campo senza valore: la vtable
+    // dell'unica voce `KeyValue` perde il campo del valore.
+    let tabella = comune::ordini();
+    let mut campi: Vec<Field> = tabella
+        .schema()
+        .fields()
+        .iter()
+        .map(|campo| campo.as_ref().clone())
+        .collect();
+    campi[0] = campi[0]
+        .clone()
+        .with_metadata(std::collections::HashMap::from([(
+            "chiaveC1".to_owned(),
+            "u".to_owned(),
+        )]));
+    let codificato = parquet::arrow::encode_arrow_schema(&Schema::new(campi));
+    let mut byte = base64::engine::general_purpose::STANDARD
+        .decode(&codificato)
+        .unwrap();
+    let stringa = byte
+        .windows(8)
+        .position(|finestra| finestra == b"chiaveC1")
+        .unwrap()
+        - 4;
+    let mut vtable = Vec::new();
+    for tabella in 0..byte.len() - 4 {
+        let soffset = i32::from_le_bytes(byte[tabella..tabella + 4].try_into().unwrap());
+        let Ok(v) = usize::try_from(i64::try_from(tabella).unwrap() - i64::from(soffset)) else {
+            continue;
+        };
+        if v + 8 > byte.len() || byte[v..v + 2] != [8, 0] {
+            continue;
+        }
+        let della_chiave = tabella + usize::from(u16::from_le_bytes([byte[v + 4], byte[v + 5]]));
+        if della_chiave == tabella || della_chiave + 4 > byte.len() {
+            continue;
+        }
+        let puntata = della_chiave
+            + usize::try_from(u32::from_le_bytes(
+                byte[della_chiave..della_chiave + 4].try_into().unwrap(),
+            ))
+            .unwrap();
+        if puntata == stringa {
+            vtable.push(v);
+        }
+    }
+    assert_eq!(vtable.len(), 1);
+    byte[vtable[0] + 6..vtable[0] + 8].copy_from_slice(&[0, 0]);
+    let alterato = base64::engine::general_purpose::STANDARD.encode(&byte);
+    let errore = scrivi(
+        vec![KeyValue::new(ARROW_SCHEMA_META_KEY.to_owned(), alterato)],
+        true,
+    )
+    .expect_err("incorporato senza valore");
+    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+    assert!(
+        errore
+            .to_string()
+            .contains("chiave `chiaveC1` senza valore"),
+        "{errore}"
+    );
+}
+
 /// Il transitorio di scrittura si misura sui blocchi veri: una riga molto
 /// piu' grande della media non sfugge.
 #[test]

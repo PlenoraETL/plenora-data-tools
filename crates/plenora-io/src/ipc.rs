@@ -12,8 +12,9 @@
 //! metadati entro il tetto, corpi e blocchi dentro il file, blocchi del
 //! footer non ripetuti né sovrapposti (moltiplicherebbero le righe senza
 //! errore), il marcatore di fine dello stream (senza, uno stream tagliato
-//! darebbe meno righe senza errore), l'endianness, le chiavi dei metadati
-//! di schema e di campo non ripetute (Arrow terrebbe l'ultima). Poi
+//! darebbe meno righe senza errore), l'endianness, le voci dei metadati
+//! di schema e di campo con chiave e valore e non ripetute (Arrow
+//! scarterebbe le voci incomplete e terrebbe l'ultima di due chiavi). Poi
 //! `FileDecoder`/`StreamDecoder` decodificano per viste dello stesso
 //! buffer, dentro la barriera anti-panico. Il contenuto dei messaggi
 //! (buffer, nodi, dizionari) resta ad Arrow: i casi che lì allocano oltre il
@@ -159,10 +160,12 @@ fn schema_verificato(
     Ok(Arc::new(schema))
 }
 
-/// Le chiavi dei metadati dello schema e di ogni campo, a ogni profondità,
-/// sono uniche: `try_fb_to_schema` terrebbe in silenzio l'ultima di due
-/// chiavi uguali (come `parquet`, rifiutato in `parquet_io`).
-fn verifica_chiavi_uniche(schema: &plenora_core::arrow::ipc::Schema<'_>) -> Result<()> {
+/// Le voci dei metadati dello schema e di ogni campo, a ogni profondità,
+/// hanno chiave e valore (anche vuoto) e chiavi uniche: `try_fb_to_schema`
+/// scarterebbe in silenzio una voce senza chiave o senza valore e terrebbe
+/// l'ultima di due chiavi uguali (come `parquet`, rifiutato in
+/// `parquet_io`, che la usa anche sullo schema Arrow incorporato).
+pub(crate) fn verifica_chiavi_uniche(schema: &plenora_core::arrow::ipc::Schema<'_>) -> Result<()> {
     chiavi_uniche(
         schema.custom_metadata().into_iter().flatten(),
         "dello schema",
@@ -177,13 +180,26 @@ fn verifica_chiavi_uniche(schema: &plenora_core::arrow::ipc::Schema<'_>) -> Resu
     Ok(())
 }
 
-/// Una lista chiave-valore senza chiavi ripetute.
+/// Una lista chiave-valore con chiave e valore in ogni voce e senza chiavi
+/// ripetute.
 fn chiavi_uniche<'a>(
     voci: impl IntoIterator<Item = plenora_core::arrow::ipc::KeyValue<'a>>,
     dove: &str,
 ) -> Result<()> {
     let mut viste = BTreeSet::new();
-    for chiave in voci.into_iter().filter_map(|voce| voce.key()) {
+    for voce in voci {
+        let Some(chiave) = voce.key() else {
+            return Err(malformato(
+                IPC,
+                &format!("metadati {dove} con una voce senza chiave"),
+            ));
+        };
+        if voce.value().is_none() {
+            return Err(malformato(
+                IPC,
+                &format!("metadati {dove} con la chiave `{chiave}` senza valore"),
+            ));
+        }
         if !viste.insert(chiave) {
             return Err(malformato(
                 IPC,

@@ -109,21 +109,25 @@ fn verifica_colonne(metadati: &ParquetMetaData) -> Result<()> {
     Ok(())
 }
 
-/// Le chiavi dei metadati chiave-valore sono uniche, e non contraddicono i
-/// metadati dello schema incorporato: `parquet` terrebbe l'ultima di due
-/// chiavi uguali, e una chiave del file prevale in silenzio su quella dello
-/// schema.
+/// Le voci dei metadati chiave-valore hanno un valore (anche vuoto) e
+/// chiavi uniche, e non contraddicono i metadati dello schema incorporato:
+/// `parquet` scarterebbe in silenzio una voce senza valore, terrebbe
+/// l'ultima di due chiavi uguali, e una chiave del file prevale in silenzio
+/// su quella dello schema.
 fn verifica_chiavi(metadati: &ParquetMetaData, incorporato: Option<&Schema>) -> Result<()> {
-    let mut viste: BTreeMap<&str, Option<&str>> = BTreeMap::new();
+    let mut viste: BTreeMap<&str, &str> = BTreeMap::new();
     for voce in metadati
         .file_metadata()
         .key_value_metadata()
         .map_or(&[][..], Vec::as_slice)
     {
-        if viste
-            .insert(voce.key.as_str(), voce.value.as_deref())
-            .is_some()
-        {
+        let Some(valore) = voce.value.as_deref() else {
+            return Err(PlenoraError::DataMapping(format!(
+                "metadati del file con la chiave `{}` senza valore",
+                voce.key
+            )));
+        };
+        if viste.insert(voce.key.as_str(), valore).is_some() {
             return Err(PlenoraError::DataMapping(format!(
                 "metadati del file con la chiave `{}` ripetuta: documento ambiguo",
                 voce.key
@@ -133,7 +137,7 @@ fn verifica_chiavi(metadati: &ParquetMetaData, incorporato: Option<&Schema>) -> 
     if let Some(incorporato) = incorporato {
         for (chiave, valore) in incorporato.metadata() {
             if let Some(nel_file) = viste.get(chiave.as_str()) {
-                if *nel_file != Some(valore.as_str()) {
+                if *nel_file != valore.as_str() {
                     return Err(PlenoraError::DataMapping(format!(
                         "metadato `{chiave}` diverso fra il file e lo schema Arrow incorporato"
                     )));
@@ -210,6 +214,11 @@ fn schema_incorporato(metadati: &ParquetMetaData) -> Result<Option<Schema>> {
     };
     let messaggio = plenora_core::arrow::ipc::root_as_message(fetta).map_err(|_| illeggibile())?;
     let intestazione = messaggio.header_as_schema().ok_or_else(illeggibile)?;
+    // Come in un file IPC: una voce dei metadati senza chiave o senza
+    // valore, o una chiave ripetuta, sparirebbe in silenzio nella
+    // conversione (e nello schema che `parquet` applica, decodificato allo
+    // stesso modo).
+    crate::ipc::verifica_chiavi_uniche(&intestazione)?;
     // `try_fb_to_schema` rifiuta gli schemi che il verificatore flatbuffer
     // accetta ma che non sono Arrow validi; la barriera resta per i panici
     // che rimangono nella conversione.
