@@ -1158,6 +1158,23 @@ impl ValidazioneOgc for Geometry<f64> {
     }
 }
 
+/// Tutti gli errori di un poligono, nell'ordine e con i valori di
+/// `Validation::validation_errors` di `geo` (stessa sequenza di
+/// [`visita_poligono`], verificata dall'oracolo con `errori_di_validazione`):
+/// per i chiamanti che decidono su tutti gli errori, senza il doppio ciclo
+/// quadratico di `geo`.
+pub fn errori_del_poligono(poligono: &Polygon<f64>) -> Vec<InvalidPolygon> {
+    let mut errori = Vec::new();
+    let esito: Result<(), std::convert::Infallible> = visita_poligono(poligono, &mut |errore| {
+        errori.push(errore);
+        Ok(())
+    });
+    match esito {
+        Ok(()) => errori,
+        Err(infallibile) => match infallibile {},
+    }
+}
+
 /// Tutti gli errori, come `Validation::validation_errors` di `geo`: serve
 /// all'oracolo per confrontare anche cio' che segue il primo errore.
 #[cfg(test)]

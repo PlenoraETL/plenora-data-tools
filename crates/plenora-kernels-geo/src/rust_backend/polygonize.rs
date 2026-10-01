@@ -29,8 +29,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::exact::{self, AreaPoligono};
 
+use crate::validazione_ogc::ValidazioneOgc;
 use geo::algorithm::line_intersection::{line_intersection, LineIntersection};
-use geo::algorithm::validation::{InvalidPolygon, Validation};
+use geo::algorithm::validation::InvalidPolygon;
 use geo::kernels::{Kernel, Orientation, RobustKernel};
 use geo::{Contains, Coord, CoordsIter, Geometry, InteriorPoint, Line, LineString, Point, Polygon};
 use thiserror::Error;
@@ -1231,7 +1232,8 @@ struct Faces {
 }
 
 fn validate_polygonized_face(face: &Polygon<f64>, context: &str) -> Result<(), PolygonizeError> {
-    let errors = face.validation_errors();
+    // Gli errori di `validation_errors` di `geo`, senza il doppio ciclo.
+    let errors = crate::validazione_ogc::errori_del_poligono(face);
     if errors.is_empty()
         || errors.iter().all(|error| {
             matches!(
@@ -1329,7 +1331,7 @@ fn extract_faces(
                 let orientation = ring_orientation(&ring)?;
                 if orientation == Ordering::Greater {
                     let polygon = Polygon::new(LineString::new(ring), Vec::new());
-                    if polygon.check_validation().is_ok() {
+                    if ValidazioneOgc::valida_ogc_rapida(&polygon).is_ok() {
                         intermediate_budget.charge_polygon(&polygon)?;
                         polygons.try_reserve(1).map_err(|_| {
                             PolygonizeError::AllocationFailed("facce poligonali intermedie")
@@ -2108,8 +2110,7 @@ pub fn polygonize_linework_rust_with_rounded(
     checked_preflight(linework, options)?;
     let mut lines = Vec::new();
     collect_lines(linework, &mut lines)?;
-    linework
-        .check_validation()
+    ValidazioneOgc::valida_ogc_rapida(linework)
         .map_err(|error| PolygonizeError::InvalidInput(error.to_string()))?;
     // Coordinate troppo rade per la precisione: nessun punto calcolato
     // (noding) potrebbe restarvi entro.

@@ -134,6 +134,14 @@ fn verifica_geometria(geometria: &Geometry<f64>) {
         || geometria.validation_errors(),
         || errori_di_validazione(geometria),
     );
+    if let Geometry::Polygon(poligono) = geometria {
+        confronta_metodo(
+            "errori_del_poligono",
+            geometria,
+            || poligono.validation_errors(),
+            || super::errori_del_poligono(poligono),
+        );
+    }
     let generico = prefisso_emesso(|raccolti| {
         let _: Result<(), std::convert::Infallible> =
             geometria.visit_validation(Box::new(|errore| {

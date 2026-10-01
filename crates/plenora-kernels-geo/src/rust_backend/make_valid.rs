@@ -29,6 +29,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use super::polygonize::{
     polygonize_linework_rust, PolygonizeError, PolygonizeLimits, PolygonizeOptions,
 };
+use crate::validazione_ogc::ValidazioneOgc;
+#[cfg(test)]
 use geo::algorithm::validation::Validation;
 use geo::coordinate_position::{CoordPos, CoordinatePosition};
 use geo::kernels::{Kernel, Orientation, RobustKernel};
@@ -1166,8 +1168,7 @@ fn structure(
         Geometry::Rect(rectangle) => Geometry::Rect(*rectangle),
         Geometry::Triangle(triangle) => Geometry::Triangle(*triangle),
     };
-    output
-        .check_validation()
+    ValidazioneOgc::valida_ogc_rapida(&output)
         .map_err(|error| MakeValidError::InvalidOutput(error.to_string()))?;
     Ok(output)
 }
@@ -1567,8 +1568,7 @@ fn validate_linework_output(geometry: &Geometry<f64>) -> Result<(), MakeValidErr
             }
             Ok(())
         }
-        _ => geometry
-            .check_validation()
+        _ => ValidazioneOgc::valida_ogc_rapida(geometry)
             .map_err(|error| MakeValidError::InvalidOutput(error.to_string())),
     }
 }
@@ -1830,7 +1830,7 @@ fn make_valid_geometry_rust_impl(
         }
         _ => true,
     };
-    if non_degenerate_area && geometry.check_validation().is_ok() {
+    if non_degenerate_area && ValidazioneOgc::valida_ogc_rapida(geometry).is_ok() {
         checked_limits_output(geometry, limits)?;
         return Ok(geometry.clone());
     }

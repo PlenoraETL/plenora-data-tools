@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::polygonize::{
     polygonize_linework_rust, PolygonizeError, PolygonizeLimits, PolygonizeOptions,
 };
-use geo::algorithm::validation::Validation;
+use crate::validazione_ogc::ValidazioneOgc;
 use geo::kernels::{Kernel, Orientation, RobustKernel};
 use geo::{
     Area, Contains, Coord, CoordsIter, Geometry, InteriorPoint, LineString, MultiLineString, Point,
@@ -632,11 +632,11 @@ pub fn split_polygon_by_linework_rust(
     if !matches!(source, Geometry::Polygon(_) | Geometry::MultiPolygon(_)) {
         return Err(SplitError::UnsupportedSource(geometry_type(source)));
     }
-    source
-        .check_validation()
+    // Stesso verdetto e stesso errore di `check_validation` di `geo`, senza
+    // il suo doppio ciclo quadratico (`validazione_ogc`).
+    ValidazioneOgc::valida_ogc_rapida(source)
         .map_err(|error| SplitError::InvalidInput(error.to_string()))?;
-    splitter
-        .check_validation()
+    ValidazioneOgc::valida_ogc_rapida(splitter)
         .map_err(|error| SplitError::InvalidInput(error.to_string()))?;
     checked_combined_input_coordinates(source, splitter, limits.max_input_coordinates)?;
     let mut linework = Vec::new();
