@@ -2406,7 +2406,9 @@ difesa da file costruiti apposta (limiti dichiarati sotto).
   di righe uguale a quella del footer dopo; i metadati chiave-valore del
   file con un valore (anche vuoto) e chiavi non ripetute, e lo schema
   incorporato con le stesse verifiche di un file IPC (`parquet` scarterebbe
-  una voce senza valore).
+  una voce senza valore). È una restrizione voluta: la specifica Parquet
+  ammette una voce senza valore, ma qui sparirebbe in silenzio, quindi si
+  rifiuta; pyarrow e arrow-rs scrivono sempre il valore, anche vuoto.
 
 | limite (`LimitiLettura`) | predefinito | a che cosa si applica | errore |
 | --- | --- | --- | --- |
