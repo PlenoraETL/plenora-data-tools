@@ -122,9 +122,13 @@ pub fn identificativo_da_projjson(documento: &Value) -> Result<String> {
         CrsKind::Projected => "ProjectedCRS",
     };
     if oggetto.get("type").and_then(Value::as_str) != Some(tipo_atteso) {
-        return Err(PlenoraError::Crs(format!(
-            "CRS_NOT_BUILTIN: il PROJJSON di `{identificativo}` non e' di tipo {tipo_atteso}"
-        )));
+        let code = CrsError::NotBuiltin.code();
+        return Err(PlenoraError::CrsCoded {
+            code,
+            message: format!(
+                "{code}: il PROJJSON di `{identificativo}` non e' di tipo {tipo_atteso}"
+            ),
+        });
     }
     Ok(identificativo)
 }
@@ -185,6 +189,13 @@ mod tests {
             assert!(
                 errore.to_string().contains("CRS_NOT_BUILTIN"),
                 "{documento}: {errore}"
+            );
+            // Il codice pubblico esce tipizzato su ogni ramo, anche su quello
+            // del tipo sbagliato che compone il proprio messaggio.
+            assert_eq!(
+                errore.public_projection().code(),
+                Some("CRS_NOT_BUILTIN"),
+                "{documento}"
             );
         }
         assert!(identificativo_da_projjson(&Value::String("EPSG:4326".to_owned())).is_err());
