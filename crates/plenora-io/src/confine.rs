@@ -4,8 +4,10 @@
 //!
 //! - **barriera anti-panico** ([`barriera`]) attorno a ogni chiamata ad
 //!   `arrow-ipc`, `parquet` e `concat_batches` sui byte del file: le
-//!   dipendenze vanno in panico su input malformati (`fb_to_schema`,
-//!   `unwrap` sui campi opzionali del footer);
+//!   dipendenze vanno in panico su input malformati (`unwrap` sui campi
+//!   opzionali del footer; lo schema IPC passa da `try_fb_to_schema`, che
+//!   da `arrow-ipc` 60 restituisce un errore dove `fb_to_schema` andava in
+//!   panico);
 //! - **limiti economici** ([`LimitiLettura`]): metadati IPC e footer
 //!   Parquet entro [`LimitiLettura::max_byte_metadati`], metadati di schema e
 //!   di campo entro [`LimitiLettura::max_byte_metadati_custom`], blocchi IPC
@@ -136,7 +138,7 @@ pub fn verifica_metadati_custom(schema: &Schema, altri: u64, limite: u64) -> Res
     Ok(())
 }
 
-fn byte_mappa(mappa: &std::collections::HashMap<String, String>) -> u64 {
+fn byte_mappa(mappa: &plenora_core::arrow::Metadata) -> u64 {
     mappa.iter().fold(0_u64, |totale, (chiave, valore)| {
         totale
             .saturating_add(u64::try_from(chiave.len()).unwrap_or(u64::MAX))

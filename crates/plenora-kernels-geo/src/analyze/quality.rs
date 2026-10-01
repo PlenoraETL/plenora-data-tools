@@ -2,7 +2,6 @@
 //! `shared_paths` e `cluster_dbscan` e la forma di risultato condivisa
 //! `WholeToMany` delle op di copertura.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use plenora_core::arrow::{DataType, Field, Schema};
@@ -33,7 +32,7 @@ use super::{
 /// dataset, non le colonne attributo soppresse.
 pub(in crate::analyze) fn analyze_coverage_rows(
     geometry: &GeometryColumnContract,
-    schema_metadata: &HashMap<String, String>,
+    schema_metadata: &plenora_core::arrow::Metadata,
     columns: &[(&str, DataType)],
     fields_allocator: &mut FieldAllocator,
 ) -> Result<DataContract> {

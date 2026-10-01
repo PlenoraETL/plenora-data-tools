@@ -129,7 +129,8 @@ fn base_fixture(rows: usize) -> RecordBatch {
             Field::new("key", DataType::Int64, false),
             Field::new("path", DataType::Utf8, false),
         ],
-        std::iter::once(("source".to_owned(), "bench_sweep2".to_owned())).collect(),
+        std::iter::once(("source".to_owned(), "bench_sweep2".to_owned()))
+            .collect::<plenora_core::arrow::Metadata>(),
     );
     RecordBatch::try_new(
         Arc::new(schema),

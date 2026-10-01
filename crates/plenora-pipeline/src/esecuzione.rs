@@ -768,7 +768,7 @@ mod tests {
                 .schema()
                 .as_ref()
                 .clone()
-                .with_metadata([("chiave".to_owned(), "valore".to_owned())].into()),
+                .with_metadata(plenora_core::arrow::Metadata::from([("chiave", "valore")])),
         );
         let contratto = DataContract::tabular(con_metadati);
         assert!(matches!(

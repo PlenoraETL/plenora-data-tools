@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use crate::arrow::{DataType, Field, Schema};
+use crate::arrow::{DataType, Field, Metadata, Schema};
 use crate::contract::{
     AxisOrder, ContractCrs, CrsDefinitionFormat, CrsResolution, FieldId, GeometryColumnContract,
     GeometryDimensions, GeometryEncoding, GeometryPrecision, GeometryTypesProperty,
@@ -741,9 +741,7 @@ pub const TYPES_KEYS_REWRITTEN_BY_TRANSFORM: [&str; 2] = [
 /// ri-emette da lì. La dichiarazione ereditata non deve sopravvivere
 /// accanto (un consumatore a valle leggerebbe il tipo di prima della
 /// trasformazione) né provocare un conflitto di chiave.
-pub fn strip_rewritten_types_declarations<S: std::hash::BuildHasher>(
-    metadata: &mut HashMap<String, String, S>,
-) {
+pub fn strip_rewritten_types_declarations(metadata: &mut Metadata) {
     for key in TYPES_KEYS_REWRITTEN_BY_TRANSFORM {
         metadata.remove(key);
     }
@@ -755,9 +753,7 @@ pub fn strip_rewritten_types_declarations<S: std::hash::BuildHasher>(
 /// Per `geo.reproject`: la riproiezione cambia il CRS, quindi le chiavi
 /// della sorgente si sostituiscono e il blocco canonico ri-emette il target
 /// senza conflitto di chiave.
-pub fn strip_rewritten_crs_keys<S: std::hash::BuildHasher>(
-    metadata: &mut HashMap<String, String, S>,
-) {
+pub fn strip_rewritten_crs_keys(metadata: &mut Metadata) {
     for key in CRS_KEYS_REPLACED_BY_DECISION {
         metadata.remove(key);
     }
@@ -770,9 +766,7 @@ pub fn strip_rewritten_crs_keys<S: std::hash::BuildHasher>(
 /// piano ([`ContractCrs::ResolvedByDecision`]) sostituisce le dichiarazioni
 /// della sorgente. Un `geo` non oggetto o non JSON resta invariato: il
 /// `geo` malformato è già un errore della lettura del contratto.
-pub fn strip_decided_crs_declarations<S: std::hash::BuildHasher>(
-    metadata: &mut HashMap<String, String, S>,
-) {
+pub fn strip_decided_crs_declarations(metadata: &mut Metadata) {
     for key in CRS_KEYS_REPLACED_BY_DECISION {
         metadata.remove(key);
     }

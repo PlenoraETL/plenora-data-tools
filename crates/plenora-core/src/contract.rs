@@ -1070,7 +1070,7 @@ pub const PLENORA_GEOMETRY_CRS_RESOLUTION_KEY: &str = "plenora.geometry.crs_reso
 ///    contraddicono, il contratto e' rifiutato.
 fn validate_declared_types(
     geometry: &GeometryColumnContract,
-    metadata: &HashMap<String, String>,
+    metadata: &crate::arrow::Metadata,
 ) -> Result<()> {
     // Ogni chiave canonica PRESENTE dev'essere sintatticamente valida, anche
     // quando il lato tipizzato del contratto tace. «Assente» e «presente ma

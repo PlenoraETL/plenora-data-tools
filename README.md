@@ -2116,10 +2116,14 @@ esplicito.
   decodificare i blocchi (Parquet non li produce) e in scrittura prima di
   creare il file. Nessun kernel li vede.
   *Ambito*: input del runner, `plenora-io`.
-  *Hazard*: in Arrow 59.2.0 `take` su run-end ignora gli indici nulli,
-  `concat` di run-end trabocca sulle fini `Int16` (panico) e
-  `logical_nulls` sbaglia sulle union dense a un campo con id diverso da 0:
-  una cella nulla diventerebbe un valore senza errore. Chi chiama i kernel
+  *Hazard*: in Arrow 60.0.0 `concat` di run-end trabocca sulle fini
+  `Int16` (la somma delle lunghezze in `concat_run_arrays` non è
+  controllata: panico con `overflow-checks`) e `logical_nulls` sbaglia
+  sulle union dense a un campo con id diverso da 0 (raccoglie i null con
+  l'id fisso 0): una cella nulla diventerebbe un valore senza errore.
+  `take` su run-end, che in 59.2.0 ignorava gli indici nulli, in 60.0.0 li
+  tratta. Tutti e tre verificati sul sorgente e con una sonda fuori dal
+  workspace, non con l'oracolo del rientro. Chi chiama i kernel
   direttamente, fuori dal runner, non ha il controllo.
   *Rientro*: quando Arrow corregge `take`/`concat` sulle run-end e
   `logical_nulls` delle union a un campo, verificato con un oracolo contro
@@ -2245,10 +2249,16 @@ valore alla larghezza fisica e un decimale fuori precisione tornerebbe un
 altro numero.
 
 **Scrittura deterministica.** `created_by` costante (`parquet-rs version
-59.2.0`), pagine formato 1.0, row group di al più 1 048 576 righe,
+60.0.0`), pagine formato 1.0, row group di al più 1 048 576 righe,
 statistiche di pagina, niente bloom filter, metadati JSON con chiavi in
 ordine: la stessa tabella dà gli stessi byte, in Parquet e in Arrow IPC
-(provato). Dopo ogni scrittura si rilegge il footer: per Parquet lo schema
+(provato). I byte Parquet dipendono dalla versione di `parquet`: da 60.0.0
+cambiano `created_by`, l'ordine dichiarato delle colonne float
+(`IEEE_754_TOTAL_ORDER` al posto di `TYPE_DEFINED_ORDER`, PARQUET-2249) e
+le statistiche float, che portano `nan_count` anche negli indici di
+pagina; pagine e valori restano gli stessi byte. Un lettore che non
+conosce quell'ordine ignora il minimo e il massimo delle colonne float
+(pyarrow 25 li riporta assenti), non i valori. Dopo ogni scrittura si rilegge il footer: per Parquet lo schema
 incorporato deve essere quello scritto e applicarsi senza cambiare, per
 Arrow IPC lo schema del file deve essere quello della tabella.
 
@@ -2368,8 +2378,10 @@ difesa da file costruiti apposta (limiti dichiarati sotto).
 - **Barriera anti-panico**: ogni chiamata ad `arrow-ipc`, `parquet` e
   `concat_batches` sui byte del file gira in
   `plenora_core::panic_policy::barriera_di_dipendenza`: un panico (per
-  esempio di `fb_to_schema`, o di un `unwrap` sui campi opzionali del
-  footer) diventa `DataMapping` con la sola forma del payload.
+  esempio di un `unwrap` sui campi opzionali del footer) diventa
+  `DataMapping` con la sola forma del payload. Lo schema IPC si converte
+  con `try_fb_to_schema`, che da `arrow-ipc` 60 restituisce un errore dove
+  `fb_to_schema` andava in panico.
 - **Budget prima di leggere, decodificare e ricomporre** (tabella in
   «Memoria»).
 - **Arrow IPC**: il file si legge intero in un buffer allineato (già nel
@@ -2457,10 +2469,10 @@ limite della tabella.
   corrotta ma ancora decodificabile, per esempio un byte di un valore
   numerico in una pagina non compressa, torna con altri valori senza errore.
   **I file scritti da `plenora-io` non portano CRC**: lo scrittore di
-  `parquet` 59.2.0 non sa scriverli (l'intestazione di pagina ha sempre
-  `crc: None`, `column/page.rs`, «TODO: Add support for crc checksum», e
-  `WriterProperties` non ha un'opzione), quindi la verifica protegge solo i
-  file di altri scrittori che li hanno scritti.
+  `parquet` 60.0.0 (come 59.2.0) non sa scriverli (l'intestazione di
+  pagina ha sempre `crc: None`, `column/page.rs`, «TODO: Add support for
+  crc checksum», e `WriterProperties` non ha un'opzione), quindi la
+  verifica protegge solo i file di altri scrittori che li hanno scritti.
   *Rientro*: scrivere i CRC (`write_page_checksum` in pyarrow) nei file da
   proteggere; per i nostri, una versione di `parquet` che li scriva; un
   controllo d'integrità del file intero a monte.
@@ -2491,11 +2503,11 @@ limite della tabella.
   la decodifica qualche volta i suoi byte di metadati, oltre la previsione;
   i blocchi restano entro `max_blocchi` e i metadati entro il file.
   *Rientro*: contare colonne per blocchi nella previsione.
-- **Arrow IPC file V4.** `FileDecoder` di `arrow-rs` 59.2.0 rifiuta un
-  file (non uno stream) scritto con `metadata_version` V4, come lo scrive
-  pyarrow con `metadata_version=V4` (`DataMapping`, «arrow error: ipc»);
-  lo rifiuta anche `FileReader` da solo, prima di questo confine. Lo stream
-  V4 si legge. *Rientro*: una versione di `arrow-ipc` che lo accetti.
+- **Arrow IPC file V4.** `FileDecoder` di `arrow-rs` 60.0.0 (come 59.2.0)
+  rifiuta un file (non uno stream) scritto con `metadata_version` V4, come
+  lo scrive pyarrow con `metadata_version=V4` (`DataMapping`, «arrow error:
+  ipc»); lo rifiuta anche `FileReader` da solo, prima di questo confine. Lo
+  stream V4 si legge. *Rientro*: una versione di `arrow-ipc` che lo accetti.
 - **Hook di panico.** La barriera trasforma il panico in errore, ma l'hook
   di `std` ne stampa il testo su stderr prima, e quel testo può contenere
   byte del file: chi usa `plenora-io` installa

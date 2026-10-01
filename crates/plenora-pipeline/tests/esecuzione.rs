@@ -288,7 +288,7 @@ fn le_tabelle_devono_essere_quelle_validate() {
 fn large_utf8_e_metadati_pandas_si_normalizzano_come_in_validazione() {
     let schema = Arc::new(Schema::new_with_metadata(
         vec![Field::new("testo", DataType::LargeUtf8, true)],
-        [("pandas".to_owned(), "{}".to_owned())].into(),
+        plenora_core::arrow::Metadata::from([("pandas", "{}")]),
     ));
     let colonna: ArrayRef = Arc::new(LargeStringArray::from(vec![Some("b"), None, Some("a")]));
     let tabella = RecordBatch::try_new(schema, vec![colonna]).expect("tabella");

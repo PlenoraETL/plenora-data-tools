@@ -387,7 +387,7 @@ mod tests {
     fn with_geometry_field_metadata(
         mut contract: DataContract,
         conserva_metadati_schema: bool,
-        modifica: impl Fn(&mut HashMap<String, String>),
+        modifica: impl Fn(&mut plenora_core::arrow::Metadata),
     ) -> DataContract {
         let fields: Vec<Field> = contract
             .schema
@@ -2841,7 +2841,7 @@ mod tests {
             pairs
                 .iter()
                 .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                .collect(),
+                .collect::<plenora_core::arrow::Metadata>(),
         ));
         with_metadata
     }

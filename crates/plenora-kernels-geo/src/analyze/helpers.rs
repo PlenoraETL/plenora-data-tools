@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use plenora_core::arrow::{DataType, Field, Schema};
+use plenora_core::arrow::{DataType, Field, Metadata, Schema};
 use plenora_core::catalog::{CrsRequirement, OperationDescriptor};
 use plenora_core::contract::{
     ContractProperties, ContractProperty, DataContract, GeometryColumnContract, GeometryDimensions,
@@ -362,12 +362,10 @@ pub(in crate::analyze) fn merge_schema_metadata(
     op: &str,
     left: &DataContract,
     right: &DataContract,
-) -> Result<HashMap<String, String>> {
+) -> Result<Metadata> {
     let mut merged = left.schema.metadata().clone();
-    let mut right_keys: Vec<&String> = right.schema.metadata().keys().collect();
-    right_keys.sort();
-    for key in right_keys {
-        let value = &right.schema.metadata()[key];
+    // `Metadata` itera in ordine di chiave (`BTreeMap`).
+    for (key, value) in right.schema.metadata() {
         match merged.get(key) {
             None => {
                 merged.insert(key.clone(), value.clone());
@@ -388,7 +386,7 @@ pub(in crate::analyze) fn merge_schema_metadata(
 /// di [`merge_schema_metadata`].
 pub(in crate::analyze) fn with_schema_metadata(
     contract: &DataContract,
-    metadata: HashMap<String, String>,
+    metadata: Metadata,
 ) -> Result<DataContract> {
     DataContract::new(
         Arc::new(Schema::new_with_metadata(output_fields(contract), metadata)),

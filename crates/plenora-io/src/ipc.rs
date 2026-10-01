@@ -148,7 +148,7 @@ fn schema_verificato(
         ));
     }
     let schema = barriera("arrow-ipc", || {
-        Ok(plenora_core::arrow::ipc::convert::fb_to_schema(schema))
+        Ok(plenora_core::arrow::ipc::convert::try_fb_to_schema(schema)?)
     })?;
     verifica_tipi_supportati(&schema)?;
     verifica_metadati_custom(&schema, 0, limiti.max_byte_metadati_custom)?;

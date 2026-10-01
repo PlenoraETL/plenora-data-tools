@@ -677,7 +677,7 @@ mod tests {
             pairs
                 .iter()
                 .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                .collect(),
+                .collect::<plenora_core::arrow::Metadata>(),
         )
     }
 

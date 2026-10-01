@@ -84,7 +84,7 @@ pub mod arrow {
     pub use arrow_select as select;
 
     pub use arrow_array::RecordBatch;
-    pub use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
+    pub use arrow_schema::{ArrowError, DataType, Field, Metadata, Schema, SchemaRef};
 
     /// Versione dei crate Arrow in uso (`arrow-schema` e gli altri: una sola
     /// per tutto il workspace).
@@ -93,7 +93,7 @@ pub mod arrow {
     /// tiene allineata ai pin del workspace. Nessun codice di questo
     /// repository la legge; nel progetto d'origine entrava nell'identità dei
     /// grafi validati.
-    pub const VERSION: &str = "59.2.0";
+    pub const VERSION: &str = "60.0.0";
 }
 
 #[cfg(test)]

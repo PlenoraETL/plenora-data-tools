@@ -360,7 +360,7 @@ pub fn wide(con_null: bool) -> RecordBatch {
     let valori: Vec<f64> = (0..RIGHE)
         .map(|indice| f64::from(u32::try_from(indice * 17 % 100).expect("valore")) + 0.5)
         .collect();
-    let metadati = [("origine".to_owned(), "test".to_owned())].into();
+    let metadati = plenora_core::arrow::Metadata::from([("origine", "test")]);
     RecordBatch::try_new(
         Arc::new(Schema::new_with_metadata(
             vec![

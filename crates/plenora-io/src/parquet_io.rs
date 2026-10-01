@@ -210,11 +210,13 @@ fn schema_incorporato(metadati: &ParquetMetaData) -> Result<Option<Schema>> {
     };
     let messaggio = plenora_core::arrow::ipc::root_as_message(fetta).map_err(|_| illeggibile())?;
     let intestazione = messaggio.header_as_schema().ok_or_else(illeggibile)?;
-    // `fb_to_schema` va in panico su schemi malformati.
+    // `try_fb_to_schema` rifiuta gli schemi che il verificatore flatbuffer
+    // accetta ma che non sono Arrow validi; la barriera resta per i panici
+    // che rimangono nella conversione.
     let schema = barriera("arrow-ipc", || {
-        Ok(plenora_core::arrow::ipc::convert::fb_to_schema(
+        Ok(plenora_core::arrow::ipc::convert::try_fb_to_schema(
             intestazione,
-        ))
+        )?)
     })?;
     Ok(Some(schema))
 }

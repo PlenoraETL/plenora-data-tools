@@ -133,7 +133,8 @@ fn schema_base() -> Arc<Schema> {
             Field::new("key", DataType::Int64, false),
             Field::new("path", DataType::Utf8, false),
         ],
-        std::iter::once(("source".to_owned(), "bench_sweep".to_owned())).collect(),
+        std::iter::once(("source".to_owned(), "bench_sweep".to_owned()))
+            .collect::<plenora_core::arrow::Metadata>(),
     ))
 }
 

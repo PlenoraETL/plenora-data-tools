@@ -162,7 +162,8 @@ impl Drop for BarrieraAperta {
 /// Esegue `lavoro` dentro una **barriera di dipendenza**.
 ///
 /// E' un `catch_unwind` per una dipendenza nominata che va in panico su
-/// ingressi ordinari (`relate` di `geo`, `fb_to_schema` di `arrow-ipc`).
+/// ingressi ordinari (`relate` di `geo`, `arrow-ipc` e `parquet` su file
+/// malformati).
 ///
 /// A differenza di una rete di sicurezza attorno a codice nostro, qui il
 /// panico è **atteso**: chi sorveglia i panici (per esempio l'hook di un

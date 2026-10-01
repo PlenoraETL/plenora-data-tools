@@ -36,7 +36,7 @@
 //! e `ARROW:extension:metadata` si tolgono dallo schema scritto: li porta il
 //! metadato di file.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{Array, ArrayRef, BinaryArray, LargeBinaryArray, RecordBatch};
@@ -459,7 +459,7 @@ pub fn prepara(tabella: &RecordBatch) -> Result<Option<Preparata>> {
         .iter()
         .map(|campo| {
             if nomi_geometrici.contains(campo.name()) {
-                let mut metadati: HashMap<String, String> = campo.metadata().clone();
+                let mut metadati = campo.metadata().clone();
                 metadati.remove(GEO_METADATA_KEY);
                 metadati.remove(EXTENSION_METADATA_KEY);
                 campo.as_ref().clone().with_metadata(metadati)

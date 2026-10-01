@@ -691,7 +691,7 @@ fn errore_scrittura(campo: Field, celle: Vec<Option<Vec<u8>>>) -> PlenoraError {
 }
 
 fn con_metadati(campo: Field, coppie: &[(&str, &str)]) -> Field {
-    let mut metadati: HashMap<String, String> = campo.metadata().clone();
+    let mut metadati = campo.metadata().clone();
     for (k, v) in coppie {
         metadati.insert((*k).to_owned(), (*v).to_owned());
     }

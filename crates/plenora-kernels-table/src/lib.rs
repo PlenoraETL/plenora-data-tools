@@ -366,14 +366,13 @@ pub fn utf8_column<'a>(
 ///
 /// La chiave in conflitto.
 pub(crate) fn unisci_metadata_schema<'a>(
-    sorgenti: impl IntoIterator<Item = &'a HashMap<String, String>>,
+    sorgenti: impl IntoIterator<Item = &'a plenora_core::arrow::Metadata>,
 ) -> std::result::Result<HashMap<String, String>, String> {
     let mut uniti = HashMap::new();
     for sorgente in sorgenti {
-        let mut chiavi: Vec<_> = sorgente.keys().collect();
-        chiavi.sort();
-        for chiave in chiavi {
-            let valore = &sorgente[chiave];
+        // `Metadata` itera in ordine di chiave (`BTreeMap`): il primo
+        // conflitto e' deterministico.
+        for (chiave, valore) in sorgente {
             match uniti.get(chiave) {
                 None => {
                     uniti.insert(chiave.clone(), valore.clone());

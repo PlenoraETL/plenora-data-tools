@@ -314,7 +314,7 @@ pub(in crate::analyze) fn merge_geometry(
 /// conflitto e' deterministico.
 fn merge_metadata_maps<'a>(
     op: &str,
-    sorgenti: impl IntoIterator<Item = &'a HashMap<String, String>>,
+    sorgenti: impl IntoIterator<Item = &'a plenora_core::arrow::Metadata>,
 ) -> Result<HashMap<String, String>> {
     crate::unisci_metadata_schema(sorgenti).or_else(|chiave| {
         contract_error(

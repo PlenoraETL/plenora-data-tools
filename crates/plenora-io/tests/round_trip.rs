@@ -424,7 +424,7 @@ fn metadati_ambigui_rifiutati() {
             metadati_schema
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                .collect(),
+                .collect::<plenora_core::arrow::Metadata>(),
         ));
         let tabella = tabella.with_schema(schema.clone()).unwrap();
         let proprieta = WriterProperties::builder()

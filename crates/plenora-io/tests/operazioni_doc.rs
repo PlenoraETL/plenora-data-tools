@@ -803,7 +803,7 @@ fn tabella_con_metadati(
     let metadati = metadati
         .iter()
         .map(|(chiave, valore)| (chiave.clone(), valore.clone()))
-        .collect();
+        .collect::<plenora_core::arrow::Metadata>();
     let schema = Schema::new_with_metadata(campi, metadati);
     plenora_core::batch_with_rows(Arc::new(schema), array, righe).map_err(|e| e.to_string())
 }

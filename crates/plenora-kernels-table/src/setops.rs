@@ -648,7 +648,8 @@ mod tests {
                         true,
                     ),
                 ],
-                std::iter::once(("origin".to_owned(), "oracle".to_owned())).collect(),
+                std::iter::once(("origin".to_owned(), "oracle".to_owned()))
+                    .collect::<plenora_core::arrow::Metadata>(),
             )),
             vec![
                 Arc::new(StringArray::from(vec![
