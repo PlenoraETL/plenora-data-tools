@@ -1,6 +1,5 @@
 //! Set operation su righe intere: `table.union_distinct`,
-//! `table.intersect`, `table.except` (percorso in memoria; la variante
-//! spilled e' `spill::execute_set_operation`).
+//! `table.intersect`, `table.except`.
 //!
 //! Due righe sono uguali se lo sono le loro chiavi compatte
 //! ([`CompactRowEncoder`]): null uguale a null, tutti i NaN uguali, `-0.0`
@@ -38,8 +37,7 @@ pub struct SetOperation {}
 
 /// Quale set operation eseguire.
 ///
-/// Per i percorsi che la scelgono a runtime (`spill::execute_set_operation`,
-/// l'analisi). E' un enum chiuso e non un nome: un'operazione sconosciuta non
+/// Per i percorsi che la scelgono a runtime (l'analisi). E' un enum chiuso e non un nome: un'operazione sconosciuta non
 /// si puo' esprimere, quindi non puo' ricadere in silenzio su una delle tre.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetOperationKind {

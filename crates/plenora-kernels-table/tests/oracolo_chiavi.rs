@@ -8,7 +8,7 @@
 //! testuali di `row_key` (prefisso di tipo, `0` per il null, `1{len}:{testo}`
 //! per il valore). Da li' seguono gruppi e righe di `aggregate`, righe di
 //! `distinct`, esito di `assert_unique`, stati di `table_diff` e righe delle
-//! set operation, in memoria e nelle varianti spilled.
+//! set operation.
 //!
 //! I dati mescolano cio' che le chiavi binarie devono trattare come il
 //! testo: NaN con payload e segni diversi (un solo `NaN`), `-0.0` distinto
@@ -30,7 +30,6 @@ use plenora_kernels_table::reshape::{table_diff, IncludeUnchanged, TableDiff};
 use plenora_kernels_table::setops::{
     except, intersect, union_distinct, SetOperation, SetOperationKind,
 };
-use plenora_kernels_table::spill::{aggregate_spilled, distinct_spilled, execute_set_operation};
 use plenora_kernels_table::{scalar_as_string, select_rows, Limits};
 use proptest::prelude::*;
 use serde_json::json;
@@ -175,14 +174,6 @@ fn chiavi(batch: &RecordBatch, nomi: &[&str]) -> Vec<String> {
     (0..batch.num_rows())
         .map(|row| chiave_testuale(batch, &indici, row))
         .collect()
-}
-
-fn limiti_ampi(spill_partitions: usize) -> Limits {
-    Limits {
-        max_governed_memory_bytes: 1 << 30,
-        spill_partitions,
-        ..Limits::default()
-    }
 }
 
 fn errore(contesto: &str) -> impl Fn(plenora_core::PlenoraError) -> TestCaseError + '_ {
@@ -364,10 +355,8 @@ proptest! {
         righe in proptest::collection::vec(riga(), 0..300),
         subset in sottoinsieme(),
         keep in proptest::sample::select(vec!["first", "last", "false"]),
-        spill_partitions in 2_usize..9,
     ) {
         let input = batch(&righe);
-        let limits = limiti_ampi(spill_partitions);
         let config: Aggregate = serde_json::from_value(json!({
             "group_by": subset,
             "aggregations": [
@@ -378,11 +367,6 @@ proptest! {
         let in_memoria = aggregation::aggregate(&input, &config)
             .map_err(errore("aggregate in memoria"))?;
         verifica_aggregate(&in_memoria, &input, &subset)?;
-        if input.num_rows() > 0 {
-            let (spilled, _) = aggregate_spilled(&input, &config, &limits)
-                .map_err(errore("aggregate spilled"))?;
-            verifica_aggregate(&spilled, &input, &subset)?;
-        }
 
         let config: Distinct = serde_json::from_value(json!({"subset": subset, "keep": keep}))
             .expect("config distinct");
@@ -391,9 +375,6 @@ proptest! {
         let in_memoria = aggregation::distinct(&input, &config)
             .map_err(errore("distinct in memoria"))?;
         prop_assert_eq!(&in_memoria, &atteso);
-        let (spilled, _) = distinct_spilled(&input, &config, &limits)
-            .map_err(errore("distinct spilled"))?;
-        prop_assert_eq!(&spilled, &atteso);
     }
 
     #[test]
@@ -458,14 +439,12 @@ proptest! {
     fn set_operation_hanno_l_identita_delle_chiavi_testuali(
         sinistra in proptest::collection::vec(riga(), 0..200),
         destra in proptest::collection::vec(riga(), 0..200),
-        spill_partitions in 2_usize..9,
     ) {
         // Righe intere senza `id`, che renderebbe ogni riga unica.
         let senza_id = |righe: &[Riga]| batch(righe).project(&[0, 1, 2, 3, 4]).expect("proiezione");
         let left = senza_id(&sinistra);
         let right = senza_id(&destra);
         let config = SetOperation {};
-        let limits = limiti_ampi(spill_partitions);
         for (operazione, nome) in [
             (SetOperationKind::UnionDistinct, "union_distinct"),
             (SetOperationKind::Intersect, "intersect"),
@@ -481,9 +460,6 @@ proptest! {
             }
             .map_err(errore(nome))?;
             prop_assert_eq!(&in_memoria, &atteso, "{}", nome);
-            let spilled = execute_set_operation(operazione, &left, &right, &limits)
-                .map_err(errore(nome))?;
-            prop_assert_eq!(&spilled, &atteso, "{} spilled", nome);
         }
     }
 }

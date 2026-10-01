@@ -1,10 +1,12 @@
 //! Stime di memoria su batch letti da Arrow IPC.
 //!
 //! In un batch letto da IPC tutte le colonne sono viste dello stesso buffer
-//! del messaggio, e ogni buffer dichiara come capacità l'intero messaggio.
-//! Le stime contavano quella capacità una volta per buffer: circa dieci
-//! volte la memoria reale su una tabella larga, e `read_partition` dello
-//! spill rifiutava partizioni che stavano nel budget.
+//! del messaggio, e ogni buffer dichiara come capacitÃ  l'intero messaggio.
+//! Le stime contavano quella capacitÃ  una volta per buffer: circa dieci
+//! volte la memoria reale su una tabella larga. La misura del budget del
+//! runner Ã¨ il maggiore fra `byte_vivi` (ogni allocazione una volta) e
+//! `byte_dati` (il costo di una copia): qui si verifica su batch letti da
+//! IPC e su colonne che sono lo stesso array.
 
 use std::io::Cursor;
 use std::sync::Arc;
@@ -15,11 +17,20 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::ipc::reader::StreamReader;
 use plenora_core::arrow::ipc::writer::StreamWriter;
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_kernels_table::aggregation::{self, Aggregate};
-use plenora_kernels_table::spill::{self, estimated_batch_bytes, RowSpillWorkspace};
-use plenora_kernels_table::{batch_bytes_per_row, column_bytes_per_row, Limits};
+use plenora_kernels_table::{batch_bytes_per_row, column_bytes_per_row};
 
 const RIGHE: usize = 20_000;
+
+/// La misura dei byte d'ingresso del runner (`byte_ingresso` in
+/// `plenora-pipeline`): il maggiore fra le allocazioni tenute vive, ognuna
+/// una volta, e il costo di una copia.
+fn stima_runner(batch: &RecordBatch) -> usize {
+    plenora_core::memoria::byte_vivi(std::iter::once(batch))
+        .ok()
+        .and_then(|byte| usize::try_from(byte).ok())
+        .unwrap_or(usize::MAX)
+        .max(plenora_core::memoria::byte_dati(batch))
+}
 
 /// Dieci colonne: interi, reali e testi.
 fn tabella_larga() -> RecordBatch {
@@ -74,20 +85,20 @@ fn la_stima_di_un_batch_letto_da_ipc_conta_il_messaggio_una_volta() {
     let originale = tabella_larga();
     let letta = riletta(&originale);
     assert_eq!(letta, originale);
-    let stima = estimated_batch_bytes(&letta);
+    let stima = stima_runner(&letta);
     let dati: usize = originale
         .columns()
         .iter()
         .map(|colonna| plenora_core::memoria::byte_viste(colonna.as_ref()))
         .sum();
-    // Il messaggio contiene i dati di tutte le colonne più il padding.
+    // Il messaggio contiene i dati di tutte le colonne piÃ¹ il padding.
     assert!(stima >= dati, "{stima} < {dati}");
     assert!(stima <= dati + dati / 10, "{stima} oltre i dati {dati}");
     // La somma per colonna lo contava una volta per buffer.
     assert!(vecchia_stima(&letta) > 5 * stima);
     // Un batch costruito in memoria: stessa misura dell'originale, a meno
-    // della capacità inutilizzata dei builder.
-    assert!(estimated_batch_bytes(&originale) >= dati);
+    // della capacitÃ  inutilizzata dei builder.
+    assert!(stima_runner(&originale) >= dati);
 }
 
 #[test]
@@ -97,39 +108,13 @@ fn le_stime_per_riga_non_dipendono_da_come_il_batch_e_stato_letto() {
     for (colonna_originale, colonna_letta) in originale.columns().iter().zip(letta.columns()) {
         let prima = column_bytes_per_row(colonna_originale.as_ref());
         let dopo = column_bytes_per_row(colonna_letta.as_ref());
-        // Il padding IPC a 8 byte può aggiungere al più un byte per riga.
+        // Il padding IPC a 8 byte puÃ² aggiungere al piÃ¹ un byte per riga.
         assert!(dopo <= prima + 1, "{prima} -> {dopo}");
         assert!(prima <= dopo + 1, "{prima} -> {dopo}");
     }
     let prima = batch_bytes_per_row(&originale).expect("larghezza");
     let dopo = batch_bytes_per_row(&letta).expect("larghezza");
     assert!(dopo <= prima + originale.num_columns(), "{prima} -> {dopo}");
-}
-
-#[test]
-fn lo_spill_rilegge_una_partizione_che_sta_nel_budget() {
-    let tabella = tabella_larga();
-    let config: Aggregate = serde_json::from_value(serde_json::json!({
-        "group_by": ["s0"],
-        "aggregations": [{"column": "f0", "function": "sum"}]
-    }))
-    .expect("config");
-    // Una partizione: tutta la tabella torna da IPC a chunk. Il budget sta
-    // sopra i byte reali di ogni chunk riletto, sotto la vecchia stima.
-    let byte = estimated_batch_bytes(&tabella);
-    let limiti = Limits {
-        max_governed_memory_bytes: byte * 2,
-        spill_partitions: 1,
-        ..Limits::default()
-    };
-    assert!(vecchia_stima(&riletta(&tabella)) > limiti.max_governed_memory_bytes);
-    let mut area = RowSpillWorkspace::new(limiti.max_temp_bytes).expect("area");
-    let (spilled, _) =
-        spill::aggregate_spilled_in(&tabella, &config, &limiti, &mut area).expect("spill");
-    assert_eq!(
-        spilled,
-        aggregation::aggregate(&tabella, &config).expect("memoria")
-    );
 }
 
 #[test]
@@ -147,5 +132,5 @@ fn colonne_che_sono_lo_stesso_array_contano_ciascuna() {
         .expect("copia");
     let byte_copia = plenora_core::memoria::byte_vivi(std::iter::once(&copia)).expect("byte");
     assert!(byte_copia >= 8 * una - 8 * 64);
-    assert!(estimated_batch_bytes(&batch) >= 80_000 * 8);
+    assert!(stima_runner(&batch) >= 80_000 * 8);
 }

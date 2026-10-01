@@ -316,12 +316,8 @@ In esecuzione:
   intervallo, `binary` non UTF-8 sotto `first`, `last`, `concat`,
   `nunique`);
 - `ResourceLimit`: più di `u32::MAX` righe; il testo `concat` di un gruppo
-  oltre `max_string_bytes` byte (controllato prima di unire); nella
-  variante spilled, file
-  temporanei oltre `max_temp_bytes`, o una partizione i cui batch superano
-  `max_governed_memory_bytes`;
-- `DataMapping`: `sum` su una colonna intera oltre la gamma di `int64`;
-- `Io`: nella variante spilled, un errore sui file temporanei.
+  oltre `max_string_bytes` byte (controllato prima di unire);
+- `DataMapping`: `sum` su una colonna intera oltre la gamma di `int64`.
 
 #### Limiti e deviazioni
 
@@ -343,14 +339,6 @@ i g gruppi e, per `quantile` e `distinct`, O(m log m) sugli m valori di
 ogni gruppo; memoria O(n) per l'assegnazione delle righe ai gruppi più
 l'uscita. Da 32.768 righe, con gruppi di almeno 8 righe in media, il
 calcolo per gruppo va in parallelo, con lo stesso risultato.
-
-La variante spilled la sceglie il runner quando quella in memoria non sta
-nel budget ([README, «Budget di memoria»](../README.md#budget-di-memoria)):
-le righe si dividono per hash della chiave di gruppo in `spill_partitions`
-file Arrow IPC temporanei, così ogni gruppo sta in una partizione sola con
-le sue righe in ordine d'ingresso; ogni partizione si rilegge (entro
-`max_governed_memory_bytes`) e si aggrega in memoria, poi le righe si
-riordinano sulla chiave. L'uscita è identica a quella in memoria.
 
 #### Memoria
 
@@ -3290,7 +3278,7 @@ l'hash delle chiavi non ha seme
 
 Con `order_column`, tempo O(n log n) per l'ordinamento più O(n) per la
 deduplica; senza, O(n). Memoria O(n) per la copia ordinata e O(k) per le k
-chiavi distinte. Nessuna variante spilled.
+chiavi distinte.
 
 #### Memoria
 
@@ -3402,35 +3390,20 @@ In esecuzione:
 - `Schema`: una cella che non si converte in testo (`date32`, `date64` o
   `timestamp` fuori dall'intervallo delle date, `date64` non allineato al
   giorno);
-- `ResourceLimit`: più di `u32::MAX` righe; nella variante spilled, file
-  temporanei oltre `max_temp_bytes` o mappa delle chiavi oltre
-  `max_governed_memory_bytes`;
-- `InvalidPlan`: nella variante spilled, un ingresso con una colonna di
-  nome `__plenora_spill_ordinal`, riservata allo spill;
-- `Io`: nella variante spilled, un errore sui file temporanei.
+- `ResourceLimit`: più di `u32::MAX` righe.
 
 #### Limiti e deviazioni
 
-La mappa delle chiavi non è contabilizzata nel percorso in memoria
+La mappa delle chiavi non è contabilizzata
 ([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
 l'hash delle chiavi non ha seme
 ([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
-La variante spilled rifiuta un ingresso con una colonna
-`__plenora_spill_ordinal`, che quella in memoria accetta.
 
 #### Complessità
 
 Tempo O(n) sulle righe (una passata con una mappa delle chiavi), più
 l'ordinamento degli indici tenuti; memoria O(k) per le k chiavi distinte e
 O(k) indici.
-
-La variante spilled la sceglie il runner quando quella in memoria non sta
-nel budget ([README, «Budget di memoria»](../README.md#budget-di-memoria)):
-le righe, con il loro indice originale, si dividono per hash della chiave
-in `spill_partitions` file Arrow IPC temporanei; una lettura in streaming
-accumula per ogni chiave prima e ultima occorrenza e conteggio, in una
-mappa globale contata su `max_governed_memory_bytes` (lunghezza della
-chiave più 64 byte per chiave). L'uscita è identica a quella in memoria.
 
 #### Memoria
 
@@ -3626,18 +3599,11 @@ In validazione, `InvalidPlan`:
 - una colonna di tipo fuori dall'elenco sopra;
 - config non vuota.
 
-In esecuzione, solo nella variante spilled: `ResourceLimit` per file
-temporanei oltre `max_temp_bytes`, o chiavi distinte di destra, o righe
-tenute distinte, di una partizione oltre `max_governed_memory_bytes`
-(lunghezza della chiave più 64 byte per chiave, ciascuna delle due
-contabilità); `Io` sui file temporanei.
+In esecuzione, `ResourceLimit`: più di `u32::MAX` righe tenute.
 
 #### Limiti e deviazioni
 
-Il runner passa alla variante spilled quando il passo in memoria non sta
-nel budget ([README, «Budget di memoria»](../README.md#budget-di-memoria)),
-con la stessa uscita del percorso in memoria. In memoria le chiavi non si
-contano su `max_governed_memory_bytes`
+Le chiavi non si contano su `max_governed_memory_bytes`
 ([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata)),
 e gli insiemi usano un hash deterministico senza seme
 ([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
@@ -3645,8 +3611,7 @@ e gli insiemi usano un hash deterministico senza seme
 #### Complessità
 
 Tempo O(n + m) atteso; memoria O(byte delle chiavi distinte dei due lati)
-più la copia delle righe tenute. Spilled: memoria di lavoro O(chiavi
-distinte di una partizione).
+più la copia delle righe tenute.
 
 #### Memoria
 
@@ -4958,17 +4923,11 @@ In validazione, `InvalidPlan`:
 - una colonna di tipo fuori dall'elenco sopra;
 - config non vuota.
 
-In esecuzione, solo nella variante spilled: `ResourceLimit` per file
-temporanei oltre `max_temp_bytes` o chiavi distinte di destra di una
-partizione oltre `max_governed_memory_bytes` (lunghezza della chiave più
-64 byte per chiave); `Io` sui file temporanei.
+In esecuzione, `ResourceLimit`: più di `u32::MAX` righe tenute.
 
 #### Limiti e deviazioni
 
-Il runner passa alla variante spilled quando il passo in memoria non sta
-nel budget ([README, «Budget di memoria»](../README.md#budget-di-memoria)),
-con la stessa uscita del percorso in memoria. In memoria le chiavi non si
-contano su `max_governed_memory_bytes`
+Le chiavi non si contano su `max_governed_memory_bytes`
 ([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata)),
 e l'insieme usa un hash deterministico senza seme
 ([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
@@ -4976,8 +4935,7 @@ e l'insieme usa un hash deterministico senza seme
 #### Complessità
 
 Tempo O(n + m) atteso; memoria O(byte delle chiavi distinte di destra) più
-la copia delle righe tenute. Spilled: memoria di lavoro O(chiavi distinte
-di destra di una partizione).
+la copia delle righe tenute.
 
 #### Memoria
 
@@ -5975,7 +5933,6 @@ L'hash delle chiavi non ha seme
 
 Tempo O(n) sulle righe più O(g log g + p log p) per ordinare g chiavi e p
 valori pivot; memoria O(c) per le c celle presenti e O(g · p) per l'uscita.
-Nessuna variante spilled.
 
 #### Memoria
 
@@ -6604,7 +6561,7 @@ l'overflow di un calcolo su valori finiti si rifiuta.
 Tempo O(n · window): ogni riga riscorre la propria finestra (due volte per
 `stddev`), più O(n log n) per l'ordinamento su `order_column`; memoria
 O(n). Da 32.768 righe, con più di una partizione, le partizioni si
-calcolano in parallelo, con lo stesso risultato. Nessuna variante spilled.
+calcolano in parallelo, con lo stesso risultato.
 
 #### Memoria
 
@@ -7209,9 +7166,7 @@ In validazione, `InvalidPlan`:
 In esecuzione:
 
 - `Schema`: una chiave di dizionario fuori dal proprio dizionario;
-- `ResourceLimit`: più di `u32::MAX` righe; nella variante spilled, file
-  temporanei oltre `max_temp_bytes`;
-- `Io`: nella variante spilled, un errore sui file temporanei.
+- `ResourceLimit`: più di `u32::MAX` righe.
 
 #### Limiti e deviazioni
 
@@ -7222,15 +7177,6 @@ Nessuno oltre ai limiti comuni.
 Tempo O(n log n) confronti su n righe, ciascuno fino al numero di chiavi;
 memoria O(n) indici più la copia dell'uscita. Da 32.768 righe il sort è un
 merge sort parallelo, con la stessa permutazione del sequenziale.
-
-La variante spilled la sceglie il runner quando quella in memoria non sta
-nel budget ([README, «Budget di memoria»](../README.md#budget-di-memoria)):
-l'ingresso si divide in run dimensionate su `max_governed_memory_bytes`,
-ognuna ordinata in memoria con lo stesso comparatore e scritta su file
-Arrow IPC temporanei con l'indice originale di ogni riga; una fusione in
-streaming delle run (una scansione lineare delle run per ogni riga emessa)
-produce la permutazione, e a parità di chiavi vince l'indice originale
-minore. L'uscita è identica a quella in memoria, e resta intera in memoria.
 
 #### Memoria
 
@@ -8098,7 +8044,7 @@ l'hash delle chiavi non ha seme
 #### Complessità
 
 Tempo O(n + m) sulle righe dei due lati (una mappa delle chiavi) per il
-numero di colonne confrontate; memoria O(n + m). Nessuna variante spilled.
+numero di colonne confrontate; memoria O(n + m).
 
 #### Memoria
 
@@ -8509,8 +8455,7 @@ Nessuno oltre ai limiti comuni.
 #### Complessità
 
 Tempo O(n_righe) confronti per separare le prime `n` più O(n log n) per
-ordinarle; memoria O(n_righe) indici più la copia delle `n` righe. Nessuna
-variante spilled.
+ordinarle; memoria O(n_righe) indici più la copia delle `n` righe.
 
 #### Memoria
 
@@ -8956,19 +8901,11 @@ In validazione, `InvalidPlan`:
 
 In esecuzione, `ResourceLimit`: righe dei due ingressi insieme oltre
 `max_rows` (nel runner `max_input_rows`), anche se le righe distinte sono
-meno. Nella variante spilled anche: file temporanei oltre `max_temp_bytes`
-(una sola chiave di riga oltre la quota compresa), chiavi distinte di una
-partizione oltre `max_governed_memory_bytes` (lunghezza della chiave più 64
-byte per chiave); `Io` sui file temporanei.
+meno.
 
 #### Limiti e deviazioni
 
-Il runner passa alla variante spilled quando il passo in memoria non sta
-nel budget ([README, «Budget di memoria»](../README.md#budget-di-memoria)):
-le chiavi di riga vanno su file temporanei in `spill_partitions`
-partizioni e le righe tenute si riselezionano dagli ingressi; l'uscita è
-la stessa del percorso in memoria, e resta intera in memoria. In memoria le
-chiavi non si contano su `max_governed_memory_bytes`
+Le chiavi non si contano su `max_governed_memory_bytes`
 ([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata)),
 e l'insieme usa un hash deterministico senza seme
 ([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
@@ -8976,8 +8913,7 @@ e l'insieme usa un hash deterministico senza seme
 #### Complessità
 
 Tempo O(n + m) atteso; memoria O(byte delle chiavi distinte) più la copia
-delle righe tenute. Spilled: tempo O(n + m) più la scrittura e la lettura
-delle chiavi, memoria di lavoro O(chiavi distinte di una partizione).
+delle righe tenute.
 
 #### Memoria
 
@@ -9509,7 +9445,7 @@ Tempo O(n log n) per l'ordinamento su `order_column`, O(n) per le
 partizioni e, per le funzioni di rango, O(p log p) per ogni partizione di p
 righe; le altre funzioni O(p). Memoria O(n). Da 32.768 righe, con più di
 una partizione, le partizioni si calcolano in parallelo, con lo stesso
-risultato. Nessuna variante spilled.
+risultato.
 
 #### Memoria
 

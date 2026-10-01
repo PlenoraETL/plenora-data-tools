@@ -124,10 +124,6 @@ pub struct LimitiParziali {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_governed_memory_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_temp_bytes: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spill_partitions: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_string_bytes: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_regex_bytes: Option<usize>,
@@ -155,12 +151,6 @@ impl LimitiParziali {
         }
         if let Some(valore) = self.max_governed_memory_bytes {
             limiti.max_governed_memory_bytes = valore;
-        }
-        if let Some(valore) = self.max_temp_bytes {
-            limiti.max_temp_bytes = valore;
-        }
-        if let Some(valore) = self.spill_partitions {
-            limiti.spill_partitions = valore;
         }
         if let Some(valore) = self.max_string_bytes {
             limiti.max_string_bytes = valore;

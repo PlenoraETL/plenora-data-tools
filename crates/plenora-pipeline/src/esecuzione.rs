@@ -1,37 +1,21 @@
 //! Esecuzione di un piano validato: tabelle intere in memoria, vivibilità
 //! per nome, byte vivi contati per allocazione, budget di memoria.
 //!
-//! Stato: una mappa nome → `RecordBatch` delle tabelle residenti, e l'area
-//! delle tabelle sfrattate su disco ([`crate::sfratto`]). L'ultimo passo che
-//! usa ogni nome si calcola una volta, all'indietro sui passi; gli output
-//! del piano non muoiono mai. Dopo ogni passo si liberano le tabelle il cui
-//! ultimo consumatore ha girato, e un'uscita che nessuno usa si libera
-//! subito.
+//! Stato: una mappa nome → `RecordBatch` delle tabelle residenti. L'ultimo
+//! passo che usa ogni nome si calcola una volta, all'indietro sui passi; gli
+//! output del piano non muoiono mai. Dopo ogni passo si liberano le tabelle
+//! il cui ultimo consumatore ha girato, e un'uscita che nessuno usa si
+//! libera subito.
 //!
-//! **Budget** (`max_governed_memory_bytes` del piano). Prima di ogni passo:
-//!
-//! 1. il picco previsto del kernel ([`crate::budget`]) più i byte vivi delle
-//!    tabelle residenti, più le tabelle sfrattate da rileggere per il passo,
-//!    deve stare nel budget;
-//! 2. se non sta, si sfrattano su disco le tabelle residenti che il passo
-//!    non usa, prima quella il cui prossimo uso è più lontano (Belady; a
-//!    parità, per nome), fino al più corto prefisso di quell'ordine che fa
-//!    stare il passo, poi si tengono in memoria quelle del prefisso che non
-//!    servono. Il guadagno di uno sfratto sono i byte vivi che spariscono
-//!    davvero, non la dimensione della tabella: le allocazioni condivise con
-//!    tabelle residenti restano;
-//! 3. se nemmeno così sta, la variante spilled del kernel dove c'è
-//!    (`sort`, `distinct`, `aggregate`, set operation), con lo stesso
-//!    procedimento: lo spill riduce il transitorio, non l'output, che il
-//!    modello della variante comprende;
-//! 4. altrimenti `ResourceLimit` prima di eseguire, con il nome del passo e
-//!    dell'operazione.
+//! **Budget** (`max_governed_memory_bytes` del piano). Prima di ogni passo
+//! il picco previsto del kernel ([`crate::budget`]) più i byte vivi delle
+//! tabelle residenti deve stare nel budget; altrimenti `ResourceLimit`
+//! prima di eseguire, con il nome del passo e dell'operazione. Niente va su
+//! disco: non c'è ripiego per un passo che non sta.
 //!
 //! Il kernel riceve come `max_governed_memory_bytes` il margine vero,
-//! budget meno byte vivi (per la variante spilled, al più il budget con cui
-//! è stata misurata), e come `max_temp_bytes` la quota che gli sfratti non
-//! occupano. Dopo il passo, byte vivi con l'output oltre il budget sono un
-//! `ResourceLimit` esplicito.
+//! budget meno byte vivi. Dopo il passo, byte vivi con l'output oltre il
+//! budget sono un `ResourceLimit` esplicito.
 //!
 //! Dopo ogni passo l'output del kernel deve avere nomi e tipi del contratto
 //! inferito in validazione (altrimenti `Internal`: analisi e kernel
@@ -41,8 +25,7 @@
 //! `check_expansion`, `check_join_expansion` di `executor/validation.rs` a
 //! `190c493`, per un solo batch per arco.
 
-use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{Array, ArrayRef, LargeStringArray, RecordBatch, StringArray};
@@ -55,10 +38,7 @@ use plenora_core::memoria::{byte_dati, byte_vivi};
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_table::EffettiKernel;
 
-use crate::budget::{riserva_spill, Costo, Ingresso};
-use crate::costi_operazioni::BUDGET_SPILL_MISURATO;
-use crate::dispatch::Variante;
-use crate::sfratto::{pianifica, AreaSfratti};
+use crate::budget::Ingresso;
 use crate::validazione::{
     nel_passo, nel_passo_o_input, BaseIndici, KernelPasso, PassoValidato, PipelineValidata,
     METADATI_PANDAS,
@@ -83,10 +63,6 @@ pub struct Report {
     pub byte_vivi_iniziali: u64,
     /// Un elemento per passo, nell'ordine del piano.
     pub passi: Vec<ReportPasso>,
-    /// Output del piano sfrattati e riletti alla fine, in ordine di nome.
-    pub ricaricati_alla_fine: Vec<String>,
-    /// Massimo dei byte su disco degli sfratti.
-    pub byte_su_disco_massimi: u64,
 }
 
 /// Resoconto di un passo.
@@ -99,18 +75,11 @@ pub struct ReportPasso {
     /// Righe di ogni input, nell'ordine del passo.
     pub righe_in: Vec<u64>,
     pub righe_out: u64,
-    /// Variante del kernel eseguita.
-    pub variante: Variante,
     /// Picco previsto del kernel oltre le tabelle residenti, fattore di
-    /// sicurezza compreso (per la variante spilled, con la riserva per le
-    /// partizioni rilette, `budget::riserva_spill`).
+    /// sicurezza compreso.
     pub byte_previsti: u64,
-    /// `max_governed_memory_bytes` passato al kernel.
+    /// `max_governed_memory_bytes` passato al kernel: budget meno byte vivi.
     pub margine_kernel: u64,
-    /// Tabelle sfrattate su disco prima del passo, nell'ordine di sfratto.
-    pub sfrattati: Vec<String>,
-    /// Input del passo riletti dal disco prima del passo, in ordine di nome.
-    pub ricaricati: Vec<String>,
     /// Byte dell'output in allocazioni che nessuna tabella residente
     /// raggiungeva prima del passo: la memoria nuova del passo. Una
     /// rinomina ne ha zero.
@@ -340,7 +309,6 @@ fn esegui_kernel(
     passo: &PassoValidato,
     ingressi: &[&RecordBatch],
     limiti: &plenora_kernels_table::Limits,
-    variante: Variante,
     contratto: &DataContract,
 ) -> Result<(RecordBatch, EffettiKernel)> {
     #[cfg(test)]
@@ -349,10 +317,10 @@ fn esegui_kernel(
     let chiamata = || match (&passo.kernel, ingressi) {
         (KernelPasso::Geo(geo), _) => geo.esegui(ingressi, contratto).map(nessuno),
         (KernelPasso::Tabellare(preparato), [unico]) => {
-            preparato.esegui_unario_con_effetti(unico, limiti, variante)
+            preparato.esegui_unario_con_effetti(unico, limiti)
         }
         (KernelPasso::Tabellare(preparato), [sinistra, destra]) => preparato
-            .esegui_binario(sinistra, destra, limiti, variante)
+            .esegui_binario(sinistra, destra, limiti)
             .map(nessuno),
         (KernelPasso::Tabellare(_), _) => Err(PlenoraError::Internal(
             "numero di input diverso da quello validato".to_owned(),
@@ -426,81 +394,6 @@ fn con_contesto_sotto_la_fase(contesto: &str, errore: PlenoraError) -> PlenoraEr
     }
 }
 
-/// Byte vivi delle tabelle residenti meno quelle escluse.
-fn byte_vivi_senza(vivi: &BTreeMap<String, RecordBatch>, esclusi: &[&str]) -> Result<u64> {
-    byte_vivi(
-        vivi.iter()
-            .filter(|(nome, _)| !esclusi.contains(&nome.as_str()))
-            .map(|(_, tabella)| tabella),
-    )
-}
-
-/// Tabelle da sfrattare perché il passo stia nel budget. `None` se nessuna
-/// scelta lo fa stare.
-///
-/// Per ogni prefisso dell'ordine di Belady, dal più corto: se sfrattarlo fa
-/// stare `extra` in memoria, si tolgono le tabelle inutili (dalla usata
-/// prima: ogni tabella senza la quale il passo sta comunque, compresa una
-/// che non libera nulla perché condivide le allocazioni con tabelle
-/// residenti); solo sulla scelta ridotta si verificano la quota su disco e
-/// il transitorio di ogni scrittura, nell'ordine di sfratto, con le tabelle
-/// ancora residenti in quel momento. Deterministico: l'ordine è fissato.
-fn scegli_sfratti<'a>(
-    vivi: &BTreeMap<String, RecordBatch>,
-    candidati: &[&'a str],
-    extra: u64,
-    budget: u64,
-    disco: u64,
-) -> Result<Option<Vec<&'a str>>> {
-    let sta = |esclusi: &[&str]| -> Result<bool> {
-        Ok(byte_vivi_senza(vivi, esclusi)?
-            .checked_add(extra)
-            .is_some_and(|totale| totale <= budget))
-    };
-    let scrivibile = |scelti: &[&str]| -> Result<bool> {
-        let mut su_disco = 0_u64;
-        for (indice, nome) in scelti.iter().enumerate() {
-            let Some(tabella) = vivi.get(*nome) else {
-                return Err(PlenoraError::Internal(format!(
-                    "`{nome}` da sfrattare non residente"
-                )));
-            };
-            let piano = pianifica(tabella);
-            su_disco = su_disco.saturating_add(piano.byte_file);
-            let durante = byte_vivi_senza(vivi, &scelti[..indice])?.checked_add(piano.transitorio);
-            if su_disco > disco || durante.is_none_or(|totale| totale > budget) {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    };
-    for lunghezza in 0..=candidati.len() {
-        let mut scelti: Vec<&str> = candidati[..lunghezza].to_vec();
-        if !sta(&scelti)? {
-            continue;
-        }
-        for indice in (0..scelti.len()).rev() {
-            let mut senza = scelti.clone();
-            senza.remove(indice);
-            if sta(&senza)? {
-                scelti = senza;
-            }
-        }
-        if scrivibile(&scelti)? {
-            return Ok(Some(scelti));
-        }
-    }
-    Ok(None)
-}
-
-/// Variante scelta per un passo, con le tabelle da sfrattare.
-struct Scelta<'a> {
-    variante: Variante,
-    costo: Costo,
-    sfrattare: Vec<&'a str>,
-}
-
-/// Righe sinistra per righe destra di un passo binario; zero per gli altri.
 /// Byte in ingresso per il modello: il maggiore fra la memoria tenuta viva
 /// (ogni allocazione una volta) e il costo di una copia (colonne che sono lo
 /// stesso array contano ciascuna: i kernel le copiano ciascuna).
@@ -541,9 +434,8 @@ impl PipelineValidata {
     /// Esegue il piano sulle tabelle date.
     ///
     /// Le tabelle passano **per valore**: il runner le libera appena il loro
-    /// ultimo consumatore ha girato, e le sfratta su disco quando un passo
-    /// non sta nel budget. Un clone tenuto dal chiamante tiene vive le
-    /// stesse allocazioni e vanifica rilascio e sfratto: i byte vivi del
+    /// ultimo consumatore ha girato. Un clone tenuto dal chiamante tiene vive
+    /// le stesse allocazioni e vanifica il rilascio: i byte vivi del
     /// resoconto contano solo le tabelle del runner.
     ///
     /// # Errors
@@ -553,10 +445,9 @@ impl PipelineValidata {
     ///   nomi di colonna ripetuti;
     /// - `ResourceLimit`: righe o colonne oltre i limiti, fattore di
     ///   espansione superato, passo che non sta nel budget (prima di
-    ///   eseguirlo) o che lo supera (dopo), sfratti oltre `max_temp_bytes`;
+    ///   eseguirlo) o che lo supera (dopo);
     /// - `Internal`: output di un kernel che diverge dal contratto, panico
     ///   di un kernel;
-    /// - `Io`, `Arrow`: scrittura o rilettura di una tabella sfrattata;
     /// - gli errori dei kernel, con il nome del passo dove la variante porta
     ///   un messaggio.
     #[allow(clippy::too_many_lines)] // Il ciclo dei passi in un punto solo.
@@ -624,13 +515,6 @@ impl PipelineValidata {
             }
             ultimo_uso.entry(&passo.out).or_insert(indice);
         }
-        // Passi che usano ogni nome, in ordine: il prossimo uso per Belady.
-        let mut usi: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-        for (indice, passo) in self.passi.iter().enumerate() {
-            for sorgente in &passo.inputs {
-                usi.entry(sorgente).or_default().push(indice);
-            }
-        }
 
         let liberati_all_avvio: Vec<String> = self
             .inputs
@@ -650,47 +534,11 @@ impl PipelineValidata {
                  (max_governed_memory_bytes)"
             )));
         }
-        let mut area = AreaSfratti::new(self.limiti.max_temp_bytes);
 
         let mut passi = Vec::with_capacity(self.passi.len());
         for (indice, passo) in self.passi.iter().enumerate() {
             let op = passo.descrittore.id;
             let nel = |errore: PlenoraError| nel_passo(&passo.out, errore);
-            let scelta = self
-                .scegli(indice, passo, &vivi, &area, &usi)
-                .map_err(nel)?;
-            let variante = scelta.variante;
-            let costo = scelta.costo;
-            let da_sfrattare: Vec<String> = scelta
-                .sfrattare
-                .iter()
-                .map(|nome| (*nome).to_owned())
-                .collect();
-
-            // Sfratti, poi riletture: i byte liberati fanno posto a quelli
-            // riletti.
-            for nome in &da_sfrattare {
-                let tabella = vivi.remove(nome).ok_or_else(|| {
-                    nel(PlenoraError::Internal(format!(
-                        "`{nome}` da sfrattare non residente"
-                    )))
-                })?;
-                let byte_tabella = byte_vivi(std::iter::once(&tabella)).map_err(nel)?;
-                area.sfratta(nome, &tabella, byte_tabella).map_err(nel)?;
-            }
-            let da_rileggere: BTreeSet<&str> = passo
-                .inputs
-                .iter()
-                .map(String::as_str)
-                .filter(|nome| area.sfrattata(nome).is_some())
-                .collect();
-            let mut ricaricati = Vec::with_capacity(da_rileggere.len());
-            for nome in da_rileggere {
-                let tabella = area.ricarica(nome).map_err(nel)?;
-                vivi.insert(nome.to_owned(), tabella);
-                ricaricati.push(nome.to_owned());
-            }
-
             let ingressi: Vec<&RecordBatch> = passo
                 .inputs
                 .iter()
@@ -707,13 +555,14 @@ impl PipelineValidata {
                 PlenoraError::Internal(format!("contratto di `{}` assente", passo.out))
             })?;
 
-            // Controllo con i byte veri, dopo sfratti e riletture.
+            // Prima di eseguire: byte vivi delle residenti piu' il picco
+            // previsto nel budget, o il passo si rifiuta senza girare.
             let residenti = byte_vivi(vivi.values()).map_err(nel)?;
-            let (byte_previsti, riserva) = self.previsione(
-                variante,
-                costo,
-                ingresso_del_passo(passo, &righe_in, byte_ingresso(&ingressi).map_err(nel)?),
-            );
+            let byte_previsti = passo.costo.in_memoria.picco(ingresso_del_passo(
+                passo,
+                &righe_in,
+                byte_ingresso(&ingressi).map_err(nel)?,
+            ));
             if residenti
                 .checked_add(byte_previsti)
                 .is_none_or(|totale| totale > budget)
@@ -723,36 +572,28 @@ impl PipelineValidata {
                      oltre il budget {budget} (max_governed_memory_bytes)"
                 ))));
             }
-            // In memoria: tutto il margine. Spilled: meta' di cio' che resta
-            // oltre il picco del modello (almeno meta' della riserva), al
-            // piu' il budget delle misure: il kernel tiene fino al suo budget
-            // di batch riletti e `concat_batches` li copia ([`riserva_spill`]).
-            let margine = match variante {
-                Variante::InMemoria => budget - residenti,
-                Variante::Spill => ((budget - residenti - (byte_previsti - riserva)) / 2)
-                    .min(BUDGET_SPILL_MISURATO),
-            };
+            // Al kernel tutto il margine: i suoi preflight usano lo spazio
+            // che c'e'.
+            let margine = budget - residenti;
             let limiti_kernel = plenora_kernels_table::Limits {
                 max_governed_memory_bytes: usize::try_from(margine).unwrap_or(usize::MAX),
-                max_temp_bytes: area.quota_rimasta(),
                 ..self.limiti_kernel.clone()
             };
 
-            let (uscita, effetti) =
-                esegui_kernel(passo, &ingressi, &limiti_kernel, variante, contratto)
-                    .map_err(|errore| diagnostica_nella_base(errore, passo))
-                    .and_then(|(uscita, effetti)| {
-                        validate_batch(&uscita, &self.limiti_kernel)?;
-                        let righe_out = righe(&uscita)?;
-                        // Come a `190c493` (`blocking.rs`), l'arco d'uscita del
-                        // piano ha solo `max_output_rows`, controllato alla fine.
-                        if !self.outputs.contains(&passo.out) {
-                            check_edge_counts(&self.limiti, righe_out)?;
-                        }
-                        check_expansion(passo, &self.limiti, &righe_in, righe_out)?;
-                        conforma(&uscita, contratto).map(|uscita| (uscita, effetti))
-                    })
-                    .map_err(nel)?;
+            let (uscita, effetti) = esegui_kernel(passo, &ingressi, &limiti_kernel, contratto)
+                .map_err(|errore| diagnostica_nella_base(errore, passo))
+                .and_then(|(uscita, effetti)| {
+                    validate_batch(&uscita, &self.limiti_kernel)?;
+                    let righe_out = righe(&uscita)?;
+                    // Come a `190c493` (`blocking.rs`), l'arco d'uscita del
+                    // piano ha solo `max_output_rows`, controllato alla fine.
+                    if !self.outputs.contains(&passo.out) {
+                        check_edge_counts(&self.limiti, righe_out)?;
+                    }
+                    check_expansion(passo, &self.limiti, &righe_in, righe_out)?;
+                    conforma(&uscita, contratto).map(|uscita| (uscita, effetti))
+                })
+                .map_err(nel)?;
             let righe_out = righe(&uscita)?;
 
             let con_uscita = byte_vivi(vivi.values().chain(std::iter::once(&uscita)))?;
@@ -780,52 +621,14 @@ impl PipelineValidata {
                 op,
                 righe_in,
                 righe_out,
-                variante,
                 byte_previsti,
                 margine_kernel: margine,
-                sfrattati: da_sfrattare,
-                ricaricati,
                 byte_output_esclusivi,
                 byte_vivi_con_uscita: con_uscita,
                 liberati,
                 byte_vivi: byte_vivi(vivi.values())?,
                 righe_divisione_per_zero: effetti.righe_divisione_per_zero,
             });
-        }
-
-        // Output sfrattati: si rileggono uno alla volta, nel budget.
-        let mut ricaricati_alla_fine = Vec::new();
-        let sfrattati_finali: Vec<String> = area.nomi().map(str::to_owned).collect();
-        for nome in sfrattati_finali {
-            let residenti = byte_vivi(vivi.values())?;
-            let stimati = area
-                .sfrattata(&nome)
-                .map(crate::sfratto::Sfrattata::byte_stimati)
-                .ok_or_else(|| {
-                    PlenoraError::Internal(format!("output `{nome}` non piu' sfrattato"))
-                })?;
-            // Lettura: i blocchi e la tabella ricomposta insieme.
-            let lettura = stimati.saturating_mul(2);
-            if residenti
-                .checked_add(lettura)
-                .is_none_or(|totale| totale > budget)
-            {
-                return Err(PlenoraError::ResourceLimit(format!(
-                    "output `{nome}`: rileggerlo dal disco richiede {lettura} byte oltre i \
-                     {residenti} residenti, oltre il budget {budget} \
-                     (max_governed_memory_bytes)"
-                )));
-            }
-            let tabella = area.ricarica(&nome)?;
-            vivi.insert(nome.clone(), tabella);
-            let dopo = byte_vivi(vivi.values())?;
-            if dopo > budget {
-                return Err(PlenoraError::ResourceLimit(format!(
-                    "output `{nome}`: riletto dal disco, byte vivi {dopo} oltre il budget \
-                     {budget} (max_governed_memory_bytes)"
-                )));
-            }
-            ricaricati_alla_fine.push(nome);
         }
 
         // Ultimo confine: tutti gli output residenti insieme.
@@ -857,112 +660,14 @@ impl PipelineValidata {
                 liberati_all_avvio,
                 byte_vivi_iniziali,
                 passi,
-                ricaricati_alla_fine,
-                byte_su_disco_massimi: area.massimo_su_disco(),
             },
         })
-    }
-
-    /// Picco previsto di un passo, riserva della variante spilled compresa,
-    /// e quella riserva.
-    fn previsione(&self, variante: Variante, costo: Costo, ingresso: Ingresso) -> (u64, u64) {
-        let riserva = match variante {
-            Variante::InMemoria => 0,
-            Variante::Spill => riserva_spill(ingresso.byte, self.limiti.spill_partitions),
-        };
-        (costo.picco(ingresso).saturating_add(riserva), riserva)
-    }
-
-    /// Variante e sfratti di un passo, prima di toccare qualunque tabella.
-    fn scegli<'a>(
-        &self,
-        indice: usize,
-        passo: &PassoValidato,
-        vivi: &'a BTreeMap<String, RecordBatch>,
-        area: &AreaSfratti,
-        usi: &BTreeMap<&str, Vec<usize>>,
-    ) -> Result<Scelta<'a>> {
-        let budget = self.limiti.max_governed_memory_bytes;
-        let op = passo.descrittore.id;
-        // Grandezze dell'ingresso: le tabelle sfrattate contano per la
-        // stima di quando saranno rilette.
-        let mut righe_in = Vec::with_capacity(passo.inputs.len());
-        let mut residenti_del_passo = Vec::new();
-        let mut riletti = 0_u64;
-        let mut visti: BTreeSet<&str> = BTreeSet::new();
-        for sorgente in &passo.inputs {
-            if let Some(tabella) = vivi.get(sorgente) {
-                righe_in.push(righe(tabella)?);
-                residenti_del_passo.push(tabella);
-            } else if let Some(sfrattata) = area.sfrattata(sorgente) {
-                righe_in.push(sfrattata.righe);
-                // Uno stesso input a sinistra e a destra si rilegge una volta.
-                if visti.insert(sorgente) {
-                    riletti = riletti.saturating_add(sfrattata.byte_stimati());
-                }
-            } else {
-                return Err(PlenoraError::Internal(format!(
-                    "`{sorgente}` ne' residente ne' sfrattato al passo che lo usa"
-                )));
-            }
-        }
-        let ingresso = ingresso_del_passo(
-            passo,
-            &righe_in,
-            byte_ingresso(&residenti_del_passo)?.saturating_add(riletti),
-        );
-
-        // Candidati allo sfratto: le residenti che il passo non usa, prima
-        // quella usata più tardi (Belady), a parità per nome. Un output del
-        // piano senza altri consumatori ha il prossimo uso più lontano.
-        let prossimo_uso = |nome: &str| -> usize {
-            usi.get(nome)
-                .and_then(|indici| indici.iter().copied().find(|uso| *uso > indice))
-                .unwrap_or(USO_SENZA_FINE)
-        };
-        let mut candidati: Vec<&str> = vivi
-            .keys()
-            .map(String::as_str)
-            .filter(|nome| !passo.inputs.iter().any(|sorgente| sorgente == nome))
-            .collect();
-        candidati.sort_by_key(|nome| (Reverse(prossimo_uso(nome)), *nome));
-
-        let mut varianti = vec![(Variante::InMemoria, passo.costo.in_memoria)];
-        if passo.ha_spill() {
-            if let Some(costo) = passo.costo.spill {
-                varianti.push((Variante::Spill, costo));
-            }
-        }
-        for (variante, costo) in varianti {
-            let (picco, _) = self.previsione(variante, costo, ingresso);
-            // Rilettura (blocchi e tabella ricomposta), poi il kernel con le
-            // tabelle rilette residenti.
-            let extra = riletti.saturating_add(riletti.max(picco));
-            if let Some(sfrattare) =
-                scegli_sfratti(vivi, &candidati, extra, budget, area.quota_rimasta())?
-            {
-                return Ok(Scelta {
-                    variante,
-                    costo,
-                    sfrattare,
-                });
-            }
-        }
-        let previsti = passo.costo.in_memoria.picco(ingresso);
-        let residenti = byte_vivi(vivi.values())?;
-        Err(PlenoraError::ResourceLimit(format!(
-            "{op}: previsti {previsti} byte oltre i {residenti} residenti (piu' {riletti} \
-             da rileggere dal disco), oltre il budget {budget} (max_governed_memory_bytes) \
-             anche sfrattando le tabelle che il passo non usa e con la variante spilled \
-             dove c'e'"
-        )))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    //! Oracolo del percorso con spill (stesso output del percorso in
-    //! memoria, operazione per operazione) e rifiuto prima di eseguire.
+    //! Rifiuto prima di eseguire e conformità al contratto.
 
     use std::sync::Arc;
 
@@ -970,7 +675,7 @@ mod tests {
     use plenora_core::arrow::schema::{DataType, Field, Schema};
     use serde_json::json;
 
-    use super::{conforma, Variante, CHIAMATE_KERNEL};
+    use super::{conforma, CHIAMATE_KERNEL};
     use crate::{LimitiParziali, Passo, Pipeline};
     use plenora_core::contract::DataContract;
     use plenora_core::PlenoraError;
@@ -1000,75 +705,6 @@ mod tests {
             ],
         )
         .expect("tabella")
-    }
-
-    /// Il kernel del passo, chiamato con la variante data e un budget sotto
-    /// la stima dei byte di ogni input (circa 24 KiB), sopra il working set
-    /// delle chiavi (50 distinte).
-    fn esegui(op: &str, config: serde_json::Value, variante: Variante) -> RecordBatch {
-        let binaria = matches!(
-            op,
-            "table.union_distinct" | "table.intersect" | "table.except"
-        );
-        let ingressi: Vec<String> = if binaria {
-            vec!["a".into(), "b".into()]
-        } else {
-            vec!["a".into()]
-        };
-        let pipeline = Pipeline {
-            version: 1,
-            inputs: ingressi.clone(),
-            crs: None,
-            limits: None,
-            steps: vec![Passo {
-                out: "x".into(),
-                op: op.into(),
-                inputs: ingressi,
-                config,
-            }],
-            outputs: vec!["x".into()],
-        };
-        let (a, b) = (tabella(50), tabella(40));
-        let schemi = [("a", a.schema()), ("b", b.schema())];
-        let validata = pipeline
-            .validate(if binaria { &schemi[..] } else { &schemi[..1] })
-            .expect("piano valido");
-        let limiti = plenora_kernels_table::Limits {
-            max_governed_memory_bytes: 16 * 1024,
-            ..plenora_kernels_table::Limits::default()
-        };
-        let crate::validazione::KernelPasso::Tabellare(preparato) = &validata.passi[0].kernel
-        else {
-            panic!("{op}: passo tabellare atteso");
-        };
-        let uscita = if binaria {
-            preparato.esegui_binario(&a, &b, &limiti, variante)
-        } else {
-            preparato.esegui_unario(&a, &limiti, variante)
-        };
-        uscita.unwrap_or_else(|errore| panic!("{op} {variante:?}: {errore}"))
-    }
-
-    #[test]
-    fn lo_spill_sopra_il_budget_da_lo_stesso_output_della_memoria() {
-        let casi = [
-            ("table.sort", json!({"columns": ["k", "v"]})),
-            ("table.distinct", json!({"subset": ["k"]})),
-            (
-                "table.aggregate",
-                json!({"group_by": ["k"],
-                       "aggregations": [{"column": "v", "function": "sum"}]}),
-            ),
-            ("table.union_distinct", json!({})),
-            ("table.intersect", json!({})),
-            ("table.except", json!({})),
-        ];
-        for (op, config) in casi {
-            let memoria = esegui(op, config.clone(), Variante::InMemoria);
-            let spill = esegui(op, config, Variante::Spill);
-            assert_eq!(memoria, spill, "{op}");
-            assert!(memoria.num_rows() > 0, "{op}");
-        }
     }
 
     #[test]

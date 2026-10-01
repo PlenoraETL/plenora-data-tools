@@ -10,9 +10,7 @@
 //!   conto si fa quindi per **allocazione**: la chiave è l'inizio
 //!   (`Buffer::data_ptr`), il valore la capacità (`Buffer::capacity`), e
 //!   ogni allocazione si somma una volta sola, anche se la raggiungono più
-//!   colonne, più tabelle o più slice. È la misura del budget del runner e
-//!   della stima con cui i kernel decidono lo spill
-//!   (`plenora_kernels_table::spill::estimated_batch_bytes`).
+//!   colonne, più tabelle o più slice. È la misura del budget del runner.
 //! - [`byte_viste`] e [`byte_dati`]: **quanti byte costa copiare** una
 //!   colonna o una tabella, cioè la somma delle lunghezze delle sue viste. Serve alle stime per riga di un output
 //!   ancora da costruire (`column_bytes_per_row` dei kernel): la capacità di

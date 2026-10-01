@@ -65,7 +65,7 @@ l'hash delle chiavi non ha seme
 
 Con `order_column`, tempo O(n log n) per l'ordinamento più O(n) per la
 deduplica; senza, O(n). Memoria O(n) per la copia ordinata e O(k) per le k
-chiavi distinte. Nessuna variante spilled.
+chiavi distinte.
 
 ### Esempio
 

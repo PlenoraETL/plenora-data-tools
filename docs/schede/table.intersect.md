@@ -39,17 +39,11 @@ In validazione, `InvalidPlan`:
 - una colonna di tipo fuori dall'elenco sopra;
 - config non vuota.
 
-In esecuzione, solo nella variante spilled: `ResourceLimit` per file
-temporanei oltre `max_temp_bytes` o chiavi distinte di destra di una
-partizione oltre `max_governed_memory_bytes` (lunghezza della chiave più
-64 byte per chiave); `Io` sui file temporanei.
+In esecuzione, `ResourceLimit`: più di `u32::MAX` righe tenute.
 
 ### Limiti e deviazioni
 
-Il runner passa alla variante spilled quando il passo in memoria non sta
-nel budget ([README, «Budget di memoria»](../README.md#budget-di-memoria)),
-con la stessa uscita del percorso in memoria. In memoria le chiavi non si
-contano su `max_governed_memory_bytes`
+Le chiavi non si contano su `max_governed_memory_bytes`
 ([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata)),
 e l'insieme usa un hash deterministico senza seme
 ([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
@@ -57,8 +51,7 @@ e l'insieme usa un hash deterministico senza seme
 ### Complessità
 
 Tempo O(n + m) atteso; memoria O(byte delle chiavi distinte di destra) più
-la copia delle righe tenute. Spilled: memoria di lavoro O(chiavi distinte
-di destra di una partizione).
+la copia delle righe tenute.
 
 ### Esempio
 

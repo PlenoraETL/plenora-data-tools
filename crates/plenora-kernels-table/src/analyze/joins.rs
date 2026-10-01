@@ -648,7 +648,7 @@ pub(in crate::analyze) fn analyze_concat_by_name(
     )
 }
 
-/// L'analisi usa lo stesso enum chiuso del kernel spilled.
+/// L'analisi usa lo stesso enum chiuso dei kernel.
 pub(in crate::analyze) use crate::setops::SetOperationKind as SetOp;
 
 pub(in crate::analyze) fn analyze_set_operation(

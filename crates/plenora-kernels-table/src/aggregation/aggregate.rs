@@ -657,7 +657,7 @@ pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch>
 
 /// [`aggregate`] con i limiti del chiamante.
 ///
-/// Il runner e la variante spilled passano i loro: il testo di `concat`,
+/// Il runner passa i suoi: il testo di `concat`,
 /// che unisce le celle di un gruppo intero, non supera
 /// `limits.max_string_bytes`, controllato prima di unirle.
 ///

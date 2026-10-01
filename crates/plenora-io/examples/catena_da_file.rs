@@ -146,7 +146,6 @@ fn resoconto_passi(report: &plenora_pipeline::Report, piano: usize) -> Vec<Value
             let riga = json!({
                 "piano": piano, "out": passo.out, "op": passo.op,
                 "righe_in": passo.righe_in, "righe_out": passo.righe_out,
-                "variante": format!("{:?}", passo.variante),
                 "byte_vivi_prima": vivi_prima,
                 "byte_previsti": passo.byte_previsti,
                 "previsione_totale": vivi_prima.saturating_add(passo.byte_previsti),
@@ -154,7 +153,6 @@ fn resoconto_passi(report: &plenora_pipeline::Report, piano: usize) -> Vec<Value
                 "byte_output_esclusivi": passo.byte_output_esclusivi,
                 "byte_vivi_dopo": passo.byte_vivi,
                 "margine_kernel": passo.margine_kernel,
-                "sfrattati": passo.sfrattati, "ricaricati": passo.ricaricati,
                 "righe_divisione_per_zero": passo.righe_divisione_per_zero,
             });
             vivi_prima = passo.byte_vivi;
@@ -265,7 +263,6 @@ fn main() -> Result<()> {
         piani_json.push(json!({
             "piano": indice + 1, "budget": budget_di(piano)?,
             "byte_vivi_iniziali": esito.report.byte_vivi_iniziali,
-            "byte_su_disco_massimi": esito.report.byte_su_disco_massimi,
             "ms_validazione": ms_validazione, "ms_totale": millis(inizio),
         }));
         tabelle = esito.outputs;

@@ -130,12 +130,8 @@ In esecuzione:
   intervallo, `binary` non UTF-8 sotto `first`, `last`, `concat`,
   `nunique`);
 - `ResourceLimit`: più di `u32::MAX` righe; il testo `concat` di un gruppo
-  oltre `max_string_bytes` byte (controllato prima di unire); nella
-  variante spilled, file
-  temporanei oltre `max_temp_bytes`, o una partizione i cui batch superano
-  `max_governed_memory_bytes`;
-- `DataMapping`: `sum` su una colonna intera oltre la gamma di `int64`;
-- `Io`: nella variante spilled, un errore sui file temporanei.
+  oltre `max_string_bytes` byte (controllato prima di unire);
+- `DataMapping`: `sum` su una colonna intera oltre la gamma di `int64`.
 
 ### Limiti e deviazioni
 
@@ -157,14 +153,6 @@ i g gruppi e, per `quantile` e `distinct`, O(m log m) sugli m valori di
 ogni gruppo; memoria O(n) per l'assegnazione delle righe ai gruppi più
 l'uscita. Da 32.768 righe, con gruppi di almeno 8 righe in media, il
 calcolo per gruppo va in parallelo, con lo stesso risultato.
-
-La variante spilled la sceglie il runner quando quella in memoria non sta
-nel budget ([README, «Budget di memoria»](../README.md#budget-di-memoria)):
-le righe si dividono per hash della chiave di gruppo in `spill_partitions`
-file Arrow IPC temporanei, così ogni gruppo sta in una partizione sola con
-le sue righe in ordine d'ingresso; ogni partizione si rilegge (entro
-`max_governed_memory_bytes`) e si aggrega in memoria, poi le righe si
-riordinano sulla chiave. L'uscita è identica a quella in memoria.
 
 ### Esempio
 

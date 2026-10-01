@@ -57,8 +57,7 @@ Nessuno oltre ai limiti comuni.
 ### Complessità
 
 Tempo O(n_righe) confronti per separare le prime `n` più O(n log n) per
-ordinarle; memoria O(n_righe) indici più la copia delle `n` righe. Nessuna
-variante spilled.
+ordinarle; memoria O(n_righe) indici più la copia delle `n` righe.
 
 ### Esempio
 

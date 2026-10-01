@@ -90,7 +90,7 @@ l'overflow di un calcolo su valori finiti si rifiuta.
 Tempo O(n · window): ogni riga riscorre la propria finestra (due volte per
 `stddev`), più O(n log n) per l'ordinamento su `order_column`; memoria
 O(n). Da 32.768 righe, con più di una partizione, le partizioni si
-calcolano in parallelo, con lo stesso risultato. Nessuna variante spilled.
+calcolano in parallelo, con lo stesso risultato.
 
 ### Esempio
 

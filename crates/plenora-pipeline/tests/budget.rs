@@ -1,5 +1,6 @@
-//! Budget di memoria del runner: modello di costo, sfratto e rilettura,
-//! variante spilled, rifiuto prima di eseguire, catene generate.
+//! Budget di memoria del runner: modello di costo, rifiuto prima di
+//! eseguire (niente va su disco: un passo che non sta non ha ripiego),
+//! vivibilità nelle catene lunghe, catene generate.
 
 mod comune;
 
@@ -8,14 +9,14 @@ use std::sync::Arc;
 use plenora_core::arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::{PlenoraError, Result};
-use plenora_pipeline::budget::{costo_di, riserva_spill, Ingresso};
+use plenora_pipeline::budget::{costo_di, Ingresso};
 use plenora_pipeline::costi_operazioni::{COSTI, SHA256_MISURE};
-use plenora_pipeline::{byte_vivi, Esito, LimitiParziali, Passo, Pipeline, Variante};
+use plenora_pipeline::{byte_vivi, Esito, LimitiParziali, Passo, Pipeline};
 use proptest::prelude::*;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-/// Budget di default: nessuno sfratto sulle tabelle di questi test.
+/// Budget di default: ogni passo di questi test ci sta.
 const BUDGET_AMPIO: u64 = 512 * 1024 * 1024;
 
 fn passo(out: &str, op: &str, inputs: &[&str], config: Value) -> Passo {
@@ -54,19 +55,22 @@ fn esegui(pipeline: &Pipeline, tabelle: &[(&str, RecordBatch)]) -> Result<Esito>
     )
 }
 
-/// Lo stesso piano con il budget di default: il riferimento senza sfratti
-/// e senza spill.
+/// Lo stesso piano con il budget di default: il riferimento.
 fn riferimento(pipeline: &Pipeline, tabelle: &[(&str, RecordBatch)]) -> Esito {
     let mut ampio = pipeline.clone();
     ampio.limits = Some(LimitiParziali {
         max_governed_memory_bytes: Some(BUDGET_AMPIO),
         ..LimitiParziali::default()
     });
-    let esito = esegui(&ampio, tabelle).expect("riferimento");
-    for passo in &esito.report.passi {
-        assert!(passo.sfrattati.is_empty() && passo.variante == Variante::InMemoria);
-    }
-    esito
+    esegui(&ampio, tabelle).expect("riferimento")
+}
+
+/// `ResourceLimit` prima di eseguire, con il passo e l'operazione nominati.
+fn rifiutato_prima(errore: &PlenoraError, out: &str, op: &str) -> bool {
+    matches!(errore, PlenoraError::ResourceLimit(messaggio)
+        if messaggio.contains(&format!("passo `{out}`"))
+            && messaggio.contains(op)
+            && messaggio.contains("previsti"))
 }
 
 /// `righe` righe: `k` intero, `v` reale, `s` testo di `larghezza` byte.
@@ -99,19 +103,12 @@ fn byte(tabella: &RecordBatch) -> u64 {
     byte_vivi(std::iter::once(tabella)).expect("byte")
 }
 
-fn picco(op: &str, righe: u64, byte_in: u64, spill: bool) -> u64 {
-    let costo = costo_di(op).expect("modello");
-    let ingresso = Ingresso {
+fn picco(op: &str, righe: u64, byte_in: u64) -> u64 {
+    costo_di(op).expect("modello").in_memoria.picco(Ingresso {
         righe,
         byte: byte_in,
         ..Ingresso::default()
-    };
-    if spill {
-        // Partizioni di default (64).
-        costo.spill.expect("variante spilled").picco(ingresso) + riserva_spill(byte_in, 64)
-    } else {
-        costo.in_memoria.picco(ingresso)
-    }
+    })
 }
 
 fn righe(tabella: &RecordBatch) -> u64 {
@@ -131,37 +128,32 @@ fn le_misure_nel_repository_sono_quelle_del_modello() {
 }
 
 #[test]
-fn ogni_operazione_del_runner_ha_un_modello_e_lo_spill_dove_il_kernel_lo_ha() {
+fn ogni_operazione_del_runner_ha_un_modello() {
     for caso in comune::CASI {
         assert!(costo_di(caso.op).is_some(), "{} senza modello", caso.op);
     }
-    let con_spill: Vec<&str> = COSTI
-        .iter()
-        .filter(|voce| voce.spill.is_some())
-        .map(|voce| voce.op)
-        .collect();
-    assert_eq!(
-        con_spill,
-        [
-            "table.aggregate",
-            "table.distinct",
-            "table.except",
-            "table.intersect",
-            "table.sort",
-            "table.union_distinct"
-        ]
-    );
+    // Nessun profilo spilled nel modello: il runner esegue solo i kernel in
+    // memoria.
+    for voce in COSTI {
+        assert!(
+            voce.profili.iter().all(|id| !id.starts_with("spilled")),
+            "{}: {:?}",
+            voce.op,
+            voce.profili
+        );
+    }
 }
 
 #[test]
-fn le_tabelle_fredde_si_sfrattano_e_si_rileggono_con_lo_stesso_output() {
-    let caldo = tabella(60_000, 8, 1);
-    // La scrittura dello sfratto tiene fino a due volte `freddo` accanto a
-    // `caldo`: deve stare nel margine del sort.
-    let freddo = tabella(8_000, 100, 2);
+fn una_tabella_fredda_non_va_su_disco_e_il_passo_si_rifiuta_prima() {
     // Il sort di `caldo` sta nel budget solo senza `freddo` residente.
-    let budget = byte(&caldo) + picco("table.sort", righe(&caldo), byte(&caldo), false) + 1;
-    assert!(byte(&freddo) > 1);
+    // Prima `freddo` si sfrattava su disco e il piano riusciva: ora il
+    // passo si rifiuta prima di eseguire, ed e' il primo, quindi nessun
+    // kernel ha girato.
+    let caldo = tabella(60_000, 8, 1);
+    let freddo = tabella(8_000, 100, 2);
+    let budget = byte(&caldo) + picco("table.sort", righe(&caldo), byte(&caldo)) + 1;
+    assert!(byte(&caldo) + byte(&freddo) <= budget);
     let pipeline = piano(
         &["caldo", "freddo"],
         vec![
@@ -172,106 +164,67 @@ fn le_tabelle_fredde_si_sfrattano_e_si_rileggono_con_lo_stesso_output() {
                 json!({"columns": ["k"]}),
             ),
             passo(
-                "filtrato",
-                "table.filter",
-                &["ordinato"],
-                json!({"column": "v", "operator": ">", "value": 10}),
-            ),
-            passo(
                 "stretto",
                 "table.select_columns",
                 &["freddo"],
                 json!({"columns": ["k", "s"]}),
             ),
         ],
-        &["filtrato", "stretto"],
+        &["ordinato", "stretto"],
         budget,
     );
-    let tabelle = [("caldo", caldo), ("freddo", freddo)];
-    let esito = esegui(&pipeline, &tabelle).expect("nel budget con lo sfratto");
-    let passi = &esito.report.passi;
-    assert_eq!(passi[0].sfrattati, ["freddo"]);
-    assert_eq!(passi[2].ricaricati, ["freddo"]);
-    for passo in passi {
-        assert!(passo.byte_vivi_con_uscita <= budget, "{passo:?}");
-        assert!(passo.byte_vivi <= budget, "{passo:?}");
+    let tabelle = [("caldo", caldo), ("freddo", freddo.clone())];
+    let errore = esegui(&pipeline, &tabelle).expect_err("oltre il budget");
+    assert!(
+        rifiutato_prima(&errore, "ordinato", "table.sort"),
+        "{errore}"
+    );
+    // Con il posto per `freddo` lo stesso piano gira, con l'uscita del
+    // riferimento: il rifiuto e' solo il budget.
+    let mut largo = pipeline;
+    largo.limits = Some(LimitiParziali {
+        max_governed_memory_bytes: Some(budget + byte(&freddo)),
+        ..LimitiParziali::default()
+    });
+    let esito = esegui(&largo, &tabelle).expect("nel budget");
+    for passo in &esito.report.passi {
+        assert!(
+            passo.byte_vivi_con_uscita <= budget + byte(&freddo),
+            "{passo:?}"
+        );
     }
-    assert!(esito.report.byte_su_disco_massimi > 0);
-    assert_eq!(esito.outputs, riferimento(&pipeline, &tabelle).outputs);
+    assert_eq!(esito.outputs, riferimento(&largo, &tabelle).outputs);
 }
 
 #[test]
-fn gli_output_sfrattati_si_rileggono_alla_fine() {
-    let primo = tabella(10_000, 64, 3);
-    let secondo = tabella(60_000, 8, 4);
-    // `copia` e' un output del piano senza altri consumatori: il primo
-    // candidato allo sfratto (prossimo uso piu' lontano).
-    let budget = byte(&secondo) + picco("table.sort", righe(&secondo), byte(&secondo), false) + 1;
-    let pipeline = piano(
-        &["primo", "secondo"],
-        vec![
-            passo(
-                "copia",
-                "table.select_columns",
-                &["primo"],
-                json!({"columns": ["k", "s"]}),
-            ),
-            passo(
-                "ordinato",
-                "table.sort",
-                &["secondo"],
-                json!({"columns": ["k"]}),
-            ),
-        ],
-        &["copia", "ordinato"],
-        budget,
-    );
-    let tabelle = [("primo", primo), ("secondo", secondo)];
-    let esito = esegui(&pipeline, &tabelle).expect("nel budget");
-    assert_eq!(esito.report.passi[1].sfrattati, ["copia"]);
-    assert_eq!(esito.report.ricaricati_alla_fine, ["copia"]);
-    assert_eq!(esito.outputs, riferimento(&pipeline, &tabelle).outputs);
-}
-
-#[test]
-fn una_set_operation_oltre_il_budget_passa_alla_variante_spilled() {
+fn una_set_operation_oltre_il_budget_si_rifiuta_senza_ripiego() {
+    // Prima una set operation oltre il budget passava alla variante
+    // spilled; ora si rifiuta prima di eseguire.
     let sinistra = tabella(20_000, 16, 5);
     let destra = tabella(20_000, 16, 6);
     let insieme = byte_vivi([&sinistra, &destra]).expect("byte");
     let righe_in = righe(&sinistra) + righe(&destra);
-    let spill = picco("table.intersect", righe_in, insieme, true);
-    let memoria = picco("table.intersect", righe_in, insieme, false);
-    assert!(spill < memoria);
-    let budget = insieme + spill + 1;
     for op in ["table.intersect", "table.except", "table.union_distinct"] {
+        // Sotto i byte vivi piu' il picco: il runner usa byte in ingresso
+        // mai sotto i byte vivi, quindi la previsione e' almeno questa.
+        let budget = insieme + picco(op, righe_in, insieme) - 1;
         let pipeline = piano(
             &["a", "b"],
             vec![passo("x", op, &["a", "b"], json!({}))],
             &["x"],
-            budget + picco(op, righe_in, insieme, true) - spill,
+            budget,
         );
         let tabelle = [("a", sinistra.clone()), ("b", destra.clone())];
-        let esito = esegui(&pipeline, &tabelle).unwrap_or_else(|errore| panic!("{op}: {errore}"));
-        assert_eq!(esito.report.passi[0].variante, Variante::Spill, "{op}");
-        assert_eq!(
-            esito.outputs,
-            riferimento(&pipeline, &tabelle).outputs,
-            "{op}"
-        );
+        let errore = esegui(&pipeline, &tabelle).expect_err("oltre il budget");
+        assert!(rifiutato_prima(&errore, "x", op), "{op}: {errore}");
     }
 }
 
 #[test]
-fn un_sort_che_non_sta_in_memoria_si_rifiuta_anche_con_la_variante_spilled() {
-    // Dalle misure v4 lo spill di `sort` non costa meno del sort in memoria
-    // (input e output interi coesistono, piu' la riserva delle partizioni):
-    // anche su righe larghe la variante spilled non fa stare un sort che in
-    // memoria non sta.
+fn un_sort_che_non_sta_si_rifiuta_prima_di_eseguire() {
     let larga = tabella(20_000, 400, 7);
     let byte_in = byte(&larga);
-    let memoria = picco("table.sort", righe(&larga), byte_in, false);
-    let spill = picco("table.sort", righe(&larga), byte_in, true);
-    assert!(spill >= memoria, "{spill} < {memoria}");
+    let memoria = picco("table.sort", righe(&larga), byte_in);
     let budget = byte_in + memoria + 1;
     let pipeline = piano(
         &["t"],
@@ -287,8 +240,8 @@ fn un_sort_che_non_sta_in_memoria_si_rifiuta_anche_con_la_variante_spilled() {
     let tabelle = [("t", larga)];
     let esito = esegui(&pipeline, &tabelle).expect("in memoria");
     let passo = &esito.report.passi[0];
-    assert_eq!(passo.variante, Variante::InMemoria);
     assert!(passo.byte_vivi_con_uscita <= budget);
+    assert_eq!(passo.margine_kernel, budget - byte_in);
     assert_eq!(esito.outputs, riferimento(&pipeline, &tabelle).outputs);
 
     // Sotto la somma di input e picco: rifiuto prima di eseguire.
@@ -298,11 +251,7 @@ fn un_sort_che_non_sta_in_memoria_si_rifiuta_anche_con_la_variante_spilled() {
         ..LimitiParziali::default()
     });
     let errore = esegui(&stretto, &tabelle).expect_err("oltre il budget");
-    assert!(
-        matches!(&errore, PlenoraError::ResourceLimit(messaggio)
-            if messaggio.contains("passo `x`") && messaggio.contains("table.sort")),
-        "{errore}"
-    );
+    assert!(rifiutato_prima(&errore, "x", "table.sort"), "{errore}");
 }
 
 /// `pivot` con `mapping` nel runner: il modello conta le celle d'uscita,
@@ -449,7 +398,6 @@ fn una_catena_lunga_resta_nel_budget_grazie_alla_vivibilita() {
     for passo in &esito.report.passi {
         assert!(passo.byte_vivi_con_uscita <= 3 * byte_base, "{passo:?}");
         assert!(passo.byte_vivi <= 2 * byte_base, "{passo:?}");
-        assert!(passo.sfrattati.is_empty());
     }
 }
 
@@ -493,7 +441,7 @@ proptest! {
 
     /// A ogni confine di passo i byte vivi stanno nel budget, il picco
     /// previsto copre i byte nuovi dell'output e l'output e' quello del
-    /// percorso senza sfratti; oppure il piano si rifiuta con
+    /// riferimento con il budget ampio; oppure il piano si rifiuta con
     /// `ResourceLimit`.
     #[test]
     fn le_catene_generate_restano_nel_budget(
@@ -519,7 +467,7 @@ proptest! {
         }
         let uscite: Vec<&str> = nomi.iter().rev().take(ultimi).map(String::as_str).collect();
         // Oltre gli input, da uno a sedici MiB: abbastanza vicino da
-        // costringere a sfratti e spill.
+        // costringere a rifiuti.
         let budget = byte_vivi(tabelle.iter().map(|(_, tabella)| tabella)).expect("byte")
             + budget_mib * 1024 * 1024;
         let pipeline = piano(&["a", "b"], steps, &uscite, budget);
@@ -542,184 +490,6 @@ proptest! {
             Err(altro) => prop_assert!(false, "errore inatteso: {altro}"),
         }
     }
-}
-
-/// Dizionario con metadati di campo, non nullo.
-fn dizionario() -> RecordBatch {
-    use plenora_core::arrow::array::types::Int32Type;
-    use plenora_core::arrow::array::{DictionaryArray, Int32Array};
-    let valori: ArrayRef = Arc::new(StringArray::from(vec!["uno", "due", "tre"]));
-    let chiavi = Int32Array::from((0..300).map(|riga| riga % 3).collect::<Vec<i32>>());
-    let colonna: ArrayRef =
-        Arc::new(DictionaryArray::<Int32Type>::try_new(chiavi, valori).expect("dizionario"));
-    let campo = Field::new("d", colonna.data_type().clone(), false)
-        .with_metadata([("unita".to_owned(), "nessuna".to_owned())].into());
-    RecordBatch::try_new(Arc::new(Schema::new(vec![campo])), vec![colonna]).expect("tabella")
-}
-
-/// Tabelle fredde di tipi diversi (metadati di schema e di campo, null,
-/// liste, struct, dizionari), output del piano senza consumatori: il sort
-/// le sfratta tutte e la fine le rilegge identiche.
-fn piano_con_fredde(max_temp_bytes: Option<u64>) -> (Pipeline, Vec<(&'static str, RecordBatch)>) {
-    let caldo = tabella(60_000, 8, 13);
-    let fredde = [
-        ("larga", comune::wide(true)),
-        ("annidata", comune::nested()),
-        ("dizionario", dizionario()),
-    ];
-    let byte_fredde = byte_vivi(fredde.iter().map(|(_, tabella)| tabella)).expect("byte");
-    let budget = byte(&caldo) + picco("table.sort", righe(&caldo), byte(&caldo), false) + 1;
-    assert!(byte_fredde > 1);
-    let mut pipeline = piano(
-        &["caldo", "larga", "annidata", "dizionario"],
-        vec![passo(
-            "ordinato",
-            "table.sort",
-            &["caldo"],
-            json!({"columns": ["k", "s"]}),
-        )],
-        &["ordinato", "larga", "annidata", "dizionario"],
-        budget,
-    );
-    pipeline.limits = Some(LimitiParziali {
-        max_governed_memory_bytes: Some(budget),
-        max_temp_bytes,
-        ..LimitiParziali::default()
-    });
-    let mut tabelle = vec![("caldo", caldo)];
-    tabelle.extend(fredde);
-    (pipeline, tabelle)
-}
-
-#[test]
-fn lo_sfratto_conserva_tipi_annidati_dizionari_e_metadati() {
-    let (pipeline, tabelle) = piano_con_fredde(None);
-    let esito = esegui(&pipeline, &tabelle).expect("nel budget con lo sfratto");
-    assert_eq!(
-        esito.report.passi[0].sfrattati.len() + esito.report.ricaricati_alla_fine.len(),
-        6,
-        "{:?}",
-        esito.report
-    );
-    for (nome, tabella) in &esito.outputs {
-        if let Some((_, originale)) = tabelle.iter().find(|(input, _)| input == nome) {
-            assert_eq!(tabella, originale, "{nome}");
-            assert_eq!(tabella.schema(), originale.schema(), "{nome}");
-        }
-    }
-    assert_eq!(esito.outputs, riferimento(&pipeline, &tabelle).outputs);
-}
-
-#[test]
-fn senza_quota_su_disco_non_si_sfratta_e_il_passo_si_rifiuta_prima() {
-    // Quota di un byte: nessuna tabella fredda ci sta, e il rifiuto arriva
-    // dalla scelta, prima di scrivere, non da uno sfratto a meta'.
-    let (pipeline, tabelle) = piano_con_fredde(Some(1));
-    let errore = esegui(&pipeline, &tabelle).expect_err("oltre il budget");
-    assert!(
-        matches!(&errore, PlenoraError::ResourceLimit(messaggio)
-            if messaggio.contains("passo `ordinato`") && messaggio.contains("previsti")),
-        "{errore}"
-    );
-}
-
-/// Una colonna dizionario con pochi indici e valori grandi: i valori non si
-/// affettano con le righe, e la scrittura IPC li codifica interi.
-fn dizionario_grande(valori: usize) -> RecordBatch {
-    use plenora_core::arrow::array::types::Int32Type;
-    use plenora_core::arrow::array::{DictionaryArray, Int32Array};
-    let testi: ArrayRef = Arc::new(StringArray::from_iter_values(
-        (0..valori).map(|indice| format!("{indice:0100}")),
-    ));
-    let chiavi = Int32Array::from(vec![0, 1, 2]);
-    let colonna: ArrayRef =
-        Arc::new(DictionaryArray::<Int32Type>::try_new(chiavi, testi).expect("dizionario"));
-    RecordBatch::try_new(
-        Arc::new(Schema::new(vec![Field::new(
-            "d",
-            colonna.data_type().clone(),
-            false,
-        )])),
-        vec![colonna],
-    )
-    .expect("tabella")
-}
-
-#[test]
-fn il_transitorio_dello_sfratto_di_un_dizionario_conta_nel_budget() {
-    // `freddo` va sfrattato perche' il sort stia, ma la sua scrittura
-    // codifica i valori del dizionario interi (circa due volte, per la
-    // crescita del vettore): con `freddo` ancora residente non ci stanno, e
-    // il passo si rifiuta prima di scrivere invece di sforare.
-    let caldo = tabella(60_000, 8, 14);
-    let picco_sort = picco("table.sort", righe(&caldo), byte(&caldo), false);
-    // Valori per circa meta' del picco: gli input iniziali stanno nel budget.
-    let freddo = dizionario_grande(usize::try_from(picco_sort / 220).expect("valori"));
-    assert!(3 * byte(&freddo) > picco_sort);
-    let budget = byte(&caldo) + picco_sort + 1;
-    assert!(byte(&caldo) + byte(&freddo) <= budget);
-    assert!(byte(&caldo) + byte(&freddo) + picco_sort > budget);
-    let pipeline = piano(
-        &["caldo", "freddo"],
-        vec![passo(
-            "ordinato",
-            "table.sort",
-            &["caldo"],
-            json!({"columns": ["k"]}),
-        )],
-        &["ordinato", "freddo"],
-        budget,
-    );
-    let errore = esegui(&pipeline, &[("caldo", caldo), ("freddo", freddo)])
-        .expect_err("transitorio oltre il budget");
-    assert!(
-        matches!(&errore, PlenoraError::ResourceLimit(messaggio)
-            if messaggio.contains("passo `ordinato`") && messaggio.contains("previsti")),
-        "{errore}"
-    );
-}
-
-#[test]
-fn uno_sfratto_che_non_libera_nulla_non_blocca_la_quota_su_disco() {
-    // `alias` e' `x` rinominata: stesse allocazioni, sfrattarla non libera
-    // nulla, ma e' la prima in ordine di Belady (output senza altri usi).
-    // Basta sfrattare `freddo`, e la quota non basta per entrambe.
-    let x = tabella(60_000, 8, 15);
-    let freddo = tabella(8_000, 100, 16);
-    let budget = byte(&x) + picco("table.sort", righe(&x), byte(&x), false) + 1;
-    assert!(byte(&x) + byte(&freddo) + picco("table.sort", righe(&x), byte(&x), false) > budget);
-    let quota = byte(&freddo) + byte(&freddo) / 2;
-    assert!(quota < byte(&freddo) + byte(&x));
-    let mut pipeline = piano(
-        &["x", "freddo"],
-        vec![
-            passo(
-                "alias",
-                "table.rename",
-                &["x"],
-                json!({"renames": [{"old_name": "k", "new_name": "k2"}]}),
-            ),
-            passo("ordinato", "table.sort", &["x"], json!({"columns": ["k"]})),
-            passo(
-                "stretto",
-                "table.select_columns",
-                &["freddo"],
-                json!({"columns": ["k"]}),
-            ),
-        ],
-        &["alias", "ordinato", "stretto"],
-        budget,
-    );
-    pipeline.limits = Some(LimitiParziali {
-        max_governed_memory_bytes: Some(budget),
-        max_temp_bytes: Some(quota),
-        ..LimitiParziali::default()
-    });
-    let tabelle = [("x", x), ("freddo", freddo)];
-    let esito = esegui(&pipeline, &tabelle).expect("sfrattando solo `freddo`");
-    assert_eq!(esito.report.passi[1].sfrattati, ["freddo"]);
-    assert_eq!(esito.report.passi[1].variante, Variante::InMemoria);
-    assert_eq!(esito.outputs, riferimento(&pipeline, &tabelle).outputs);
 }
 
 #[test]

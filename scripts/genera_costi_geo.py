@@ -156,7 +156,6 @@ def rust(dati, impronta):
             "    CostoOperazione {",
             f'        op: "{operazione}",',
             f"        in_memoria: {mc.costo_rust(voce['modello'], 8)},",
-            "        spill: None,",
             f"        dipende_dai_dati: {'true' if voce['dipende'] else 'false'},",
             mc.lista_rust("profili", voce["profili"], 8),
             mc.lista_rust("esclusi", voce["esclusi"], 8),

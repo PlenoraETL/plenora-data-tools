@@ -3,7 +3,9 @@
 //! fattore di sicurezza non è sotto il picco misurato (l'invariante di
 //! conservatività; con `S` la previsione è almeno una volta e mezza la
 //! misura). Solo i profili dichiarati in `esclusi` restano fuori, e il test
-//! ne riporta il rapporto.
+//! ne riporta il rapporto. I profili delle varianti spilled che il catalogo
+//! conserva (`execution` diverso da `direct`) non sono nel modello: il
+//! runner esegue solo i kernel in memoria.
 //!
 //! Le unità di un punto sono quelle che il runner calcola per un passo
 //! (`scripts/modello_costi.py`, `unita_del_punto`): righe di tutti gli
@@ -102,17 +104,16 @@ fn il_modello_copre_ogni_punto_misurato_non_escluso() {
         let operazione = profilo["operation_id"].as_str().expect("id");
         let id = profilo["profile_id"].as_str().expect("profilo");
         let voce = costo_di(operazione).unwrap_or_else(|| panic!("{operazione} senza modello"));
-        assert!(
-            voce.profili.contains(&id),
-            "{operazione}: profilo {id} misurato ma non elencato"
-        );
         let spill = !(profilo["family"] == "geo" || profilo["execution"] == "direct");
-        let costo = if spill {
-            voce.spill
-                .unwrap_or_else(|| panic!("{operazione}: profilo spilled senza variante"))
-        } else {
-            voce.in_memoria
-        };
+        assert_eq!(
+            voce.profili.contains(&id),
+            !spill,
+            "{operazione}: profilo {id} misurato in memoria e non elencato, o spilled ed elencato"
+        );
+        if spill {
+            continue;
+        }
+        let costo = voce.in_memoria;
         let escluso = voce.esclusi.contains(&id);
         if escluso {
             esclusi_visti.insert((operazione, id));

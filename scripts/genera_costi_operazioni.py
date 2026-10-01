@@ -3,12 +3,17 @@
 
 Scrive `crates/plenora-pipeline/src/costi_operazioni.rs` dalle misure
 `data/misure/catalogo-memoria-v4.json` (campagna Windows v4,
-`PeakWorkingSet64`, profili wide/narrow/distinct/spilled; provenienza e
+`PeakWorkingSet64`, profili wide/narrow/distinct; provenienza e
 avvertenze nel file), con la forma e le regole di `modello_costi.py`. Il
 file generato riporta lo SHA-256 delle misure: un test del runner lo
 confronta con il file nel repository, e l'oracolo
 `crates/plenora-pipeline/tests/oracolo_costi.rs` verifica che il modello
 copra ogni punto misurato.
+
+Il catalogo contiene anche i profili delle varianti spilled dei kernel
+(`execution` diverso da `direct`), misurati quando i kernel scrivevano su
+disco: restano nelle misure, ma il modello non li usa, perche' il runner
+esegue solo i kernel in memoria.
 
 Uso:
 
@@ -109,21 +114,18 @@ def costruisci(dati):
             continue
         if profilo["status"] != "measured" or not mc.punti_osservati(profilo):
             continue
-        variante = "memoria" if profilo["execution"] == "direct" else "spill"
-        per_operazione.setdefault(profilo["operation_id"], {}).setdefault(variante, []).append(profilo)
+        # Solo i kernel in memoria: i profili spilled restano nel catalogo,
+        # fuori dal modello.
+        if profilo["execution"] != "direct":
+            continue
+        per_operazione.setdefault(profilo["operation_id"], []).append(profilo)
 
-    budget_spill = set()
     sospetti = []
     voci = []
     for operazione in sorted(per_operazione):
-        varianti = per_operazione[operazione]
-        if "memoria" not in varianti:
-            fallisci(f"{operazione}: nessun profilo in memoria misurato")
-        for profilo in varianti.get("spill", []):
-            for punto in mc.punti_osservati(profilo):
-                budget_spill.add(punto["governed_budget_bytes"])
+        profili = per_operazione[operazione]
         rapporti = []
-        for profilo in varianti["memoria"]:
+        for profilo in profili:
             punti = punti_del_profilo(operazione, profilo)
             if len(punti) >= 2:
                 rapporti.append((profilo["profile_id"], per_riga_ultimi_due(punti)))
@@ -135,26 +137,20 @@ def costruisci(dati):
         if superlineare_ovunque and operazione not in SUPERLINEARI_A_COPPIE:
             for profilo_id, rapporto in rapporti:
                 sospetti.append(f"`{operazione}` {profilo_id}: {rapporto:.2f}")
-        modelli = {}
-        for variante, profili in varianti.items():
-            punti = [p for profilo in profili for p in punti_del_profilo(operazione, profilo)]
-            modello = mc.adatta(
-                punti,
-                celle=operazione in PER_CELLA,
-                coppie=operazione in SUPERLINEARI_A_COPPIE,
-                c_minimo=1 if operazione in USCITA_COPIA else 0,
-            )
-            mc.verifica_copertura(operazione, modello, punti)
-            modelli[variante] = modello
+        punti = [p for profilo in profili for p in punti_del_profilo(operazione, profilo)]
+        modello = mc.adatta(
+            punti,
+            celle=operazione in PER_CELLA,
+            coppie=operazione in SUPERLINEARI_A_COPPIE,
+            c_minimo=1 if operazione in USCITA_COPIA else 0,
+        )
+        mc.verifica_copertura(operazione, modello, punti)
         voci.append({
             "op": operazione,
-            "memoria": modelli["memoria"],
-            "spill": modelli.get("spill"),
-            "profili": sorted(p["profile_id"] for v in ("memoria", "spill") for p in varianti.get(v, [])),
+            "memoria": modello,
+            "profili": sorted(p["profile_id"] for p in profili),
             "dipende_dai_dati": operazione in DIPENDENTI_DAI_DATI,
         })
-    if len(budget_spill) != 1:
-        fallisci(f"budget governato dei profili spilled non unico: {sorted(budget_spill)}")
     for insieme, nome in (
         (SUPERLINEARI_A_COPPIE, "SUPERLINEARI_A_COPPIE"),
         (PER_CELLA, "PER_CELLA"),
@@ -164,13 +160,13 @@ def costruisci(dati):
         ignote = insieme - set(per_operazione)
         if ignote:
             fallisci(f"{nome}: operazioni non misurate {sorted(ignote)}")
-    return voci, budget_spill.pop(), sospetti
+    return voci, sospetti
 
 
 def genera():
     mc.verifica_controesempio_rami()
     dati, impronta = mc.carica()
-    voci, budget_spill, sospetti = costruisci(dati)
+    voci, sospetti = costruisci(dati)
     righe = [
         "//! Modello di costo delle operazioni tabellari: GENERATO da",
         "//! `scripts/genera_costi_operazioni.py`, non si modifica a mano.",
@@ -178,7 +174,7 @@ def genera():
         "//! Fonte: `data/misure/catalogo-memoria-v4.json` (campagna Windows v4 a",
         f"//! `{dati['data_tools_commit'][:7]}`, `PeakWorkingSet64`; SHA-256 in [`SHA256_MISURE`]).",
         "//!",
-        "//! Per operazione e variante, con `R` righe in ingresso (somma dei lati),",
+        "//! Per operazione, con `R` righe in ingresso (somma dei lati),",
         "//! `B` byte Arrow in ingresso, `K = R * colonne d'uscita`, `P` = righe",
         "//! sinistra per righe destra:",
         "//!",
@@ -187,7 +183,7 @@ def genera():
         "//! ```",
         "//!",
         "//! - `y_i = max(budget_estimate_bytes_i, output_new_buffer_bytes_i, 0)`",
-        "//!   per ogni punto osservato di tutti i profili della variante;",
+        "//!   per ogni punto osservato di tutti i profili in memoria dell'operazione;",
         "//! - piano `a + r*R + c*B (+ k*K | p*P)`: il minimo (somma dei rapporti",
         "//!   previsto/misurato) che copre ogni `y_i`, con `a <= min y` e `c >= 1`",
         "//!   dove l'uscita puo' essere una copia intera degli ingressi;",
@@ -199,9 +195,8 @@ def genera():
         "//! - coefficienti in millesimi di byte, per eccesso; `S` =",
         "//!   [`FATTORE_SICUREZZA`], per eccesso. Regole in `scripts/modello_costi.py`.",
         "//!",
-        "//! Le varianti spilled sono misurate con `max_governed_memory_bytes` pari",
-        "//! a [`BUDGET_SPILL_MISURATO`]: il runner non passa ai kernel spilled un",
-        "//! margine piu' grande.",
+        "//! I profili spilled del catalogo (`execution` diverso da `direct`) non",
+        "//! entrano nel modello: il runner esegue solo i kernel in memoria.",
     ]
     if sospetti:
         righe.append("//!")
@@ -221,19 +216,14 @@ def genera():
         "/// Fattore di sicurezza `S` come frazione (numeratore, denominatore).",
         f"pub const FATTORE_SICUREZZA: (u64, u64) = ({FATTORE_SICUREZZA[0]}, {FATTORE_SICUREZZA[1]});",
         "",
-        "/// `max_governed_memory_bytes` dei profili spilled misurati.",
-        f"pub const BUDGET_SPILL_MISURATO: u64 = {budget_spill:_};",
-        "",
         "/// Un modello per operazione misurata, in ordine di id.",
         "pub static COSTI: &[CostoOperazione] = &[",
     ]
     for voce in voci:
-        spill = f"Some({mc.costo_rust(voce['spill'], 8)})" if voce["spill"] else "None"
         righe += [
             "    CostoOperazione {",
             f'        op: "{voce["op"]}",',
             f"        in_memoria: {mc.costo_rust(voce['memoria'], 8)},",
-            f"        spill: {spill},",
             f"        dipende_dai_dati: {'true' if voce['dipende_dai_dati'] else 'false'},",
             mc.lista_rust("profili", voce["profili"], 8),
             "        esclusi: &[],",

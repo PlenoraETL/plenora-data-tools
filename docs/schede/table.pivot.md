@@ -126,7 +126,6 @@ L'hash delle chiavi non ha seme
 
 Tempo O(n) sulle righe più O(g log g + p log p) per ordinare g chiavi e p
 valori pivot; memoria O(c) per le c celle presenti e O(g · p) per l'uscita.
-Nessuna variante spilled.
 
 ### Esempio
 

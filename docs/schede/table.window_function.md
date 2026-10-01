@@ -119,7 +119,7 @@ Tempo O(n log n) per l'ordinamento su `order_column`, O(n) per le
 partizioni e, per le funzioni di rango, O(p log p) per ogni partizione di p
 righe; le altre funzioni O(p). Memoria O(n). Da 32.768 righe, con più di
 una partizione, le partizioni si calcolano in parallelo, con lo stesso
-risultato. Nessuna variante spilled.
+risultato.
 
 ### Esempio
 

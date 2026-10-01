@@ -3,7 +3,7 @@
 //! - [`RowLimits`]: righe e fattore di espansione;
 //! - [`PlanLimits`]: complessità del piano, applicati in lettura e in
 //!   validazione;
-//! - [`Limits`]: contenitore unico (righe, piano, memoria, spill, stringhe,
+//! - [`Limits`]: contenitore unico (righe, piano, memoria, stringhe,
 //!   geometrie).
 //!
 //! Il runner applica solo una parte dei campi e rende dichiarabili nel piano
@@ -76,12 +76,6 @@ pub const DEFAULT_MAX_GOVERNED_MEMORY_BYTES: u64 = DEFAULT_MAX_GOVERNED_MEMORY_B
 /// la compilazione fallisce.
 pub const DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE: usize = 512 * 1024 * 1024;
 
-/// Quota di spill su disco applicata quando il piano non la dichiara.
-///
-/// 8 GiB. Costante sola per la stessa ragione di
-/// [`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`]: la usano anche i kernel tabellari.
-pub const DEFAULT_MAX_TEMP_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-
 /// Byte massimi di un testo, applicati quando il piano non li dichiara.
 ///
 /// 16 MiB, per i testi di config e per quelli prodotti dai kernel. Costante
@@ -96,13 +90,6 @@ pub const DEFAULT_MAX_STRING_BYTES: usize = 16 * 1024 * 1024;
 /// (4096), e chi li chiamava direttamente con i limiti di default applicava
 /// un tetto diverso da quello del piano.
 pub const DEFAULT_MAX_REGEX_BYTES: usize = 64 * 1024;
-
-/// Partizioni di spill applicate quando il piano non le dichiara.
-///
-/// Vive in `u32` come nel piano; i kernel la tengono in `usize`. La
-/// conversione e' esatta per questo valore, non in generale (su un target a
-/// 16 bit non lo sarebbe): chi lo cambia la riguarda.
-pub const DEFAULT_SPILL_PARTITIONS: u32 = 64;
 
 /// Limiti alla complessità del piano, controllati prima di qualunque dato.
 ///
@@ -162,13 +149,6 @@ pub struct Limits {
     /// Budget di memoria del runner, in byte (README, «Budget di memoria»).
     /// Default [`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`].
     pub max_governed_memory_bytes: u64,
-    /// Quota di byte su disco per lo spill dei kernel e lo sfratto delle
-    /// tabelle del runner. Default [`DEFAULT_MAX_TEMP_BYTES`].
-    pub max_temp_bytes: u64,
-    /// Partizioni dello spill, fra [`Limits::MIN_SPILL_PARTITIONS`] e
-    /// [`Limits::MAX_SPILL_PARTITIONS`]. Default
-    /// [`DEFAULT_SPILL_PARTITIONS`].
-    pub spill_partitions: u32,
     /// Grado massimo di parallelismo; `0` significa «numero di core logici».
     ///
     /// Nessun codice di questo repository lo applica: nel progetto
@@ -197,18 +177,10 @@ pub struct Limits {
 }
 
 impl Limits {
-    /// Numero minimo di partizioni di spill: con una sola partizione il
-    /// merge non ha nulla da fondere e lo spill non riduce la memoria.
-    pub const MIN_SPILL_PARTITIONS: u32 = 2;
-
-    /// Numero massimo di partizioni di spill: oltre, i file aperti e i buffer
-    /// per partizione costano più della memoria che lo spill libera.
-    pub const MAX_SPILL_PARTITIONS: u32 = 4_096;
-
     /// Validazione dei limiti effettivi, in un punto solo.
     ///
     /// Un limite fuori dominio si rifiuta, non si corregge: una correzione
-    /// silenziosa (per esempio `spill_partitions.max(2)`) eseguirebbe il piano
+    /// silenziosa (per esempio `max_input_rows.max(1)`) eseguirebbe il piano
     /// con limiti diversi da quelli dichiarati. Un limite a zero rende il
     /// componente incapace di fare alcunche', e va detto subito.
     /// `max_expansion_factor` dev'essere finito e positivo: un `NaN` rende
@@ -241,9 +213,6 @@ impl Limits {
         }
         if self.max_governed_memory_bytes == 0 {
             return nullo("max_governed_memory_bytes");
-        }
-        if self.max_temp_bytes == 0 {
-            return nullo("max_temp_bytes");
         }
         if self.max_payload_bytes == 0 {
             return nullo("max_payload_bytes");
@@ -278,16 +247,6 @@ impl Limits {
         if self.plan.max_identifier_bytes == 0 {
             return nullo("plan.max_identifier_bytes");
         }
-        if self.spill_partitions < Self::MIN_SPILL_PARTITIONS
-            || self.spill_partitions > Self::MAX_SPILL_PARTITIONS
-        {
-            return Err(PlenoraError::InvalidPlan(format!(
-                "spill_partitions {} fuori dall'intervallo {}..={}",
-                self.spill_partitions,
-                Self::MIN_SPILL_PARTITIONS,
-                Self::MAX_SPILL_PARTITIONS
-            )));
-        }
         Ok(())
     }
 }
@@ -298,8 +257,6 @@ impl Default for Limits {
             rows: RowLimits::default(),
             plan: PlanLimits::default(),
             max_governed_memory_bytes: DEFAULT_MAX_GOVERNED_MEMORY_BYTES,
-            max_temp_bytes: DEFAULT_MAX_TEMP_BYTES,
-            spill_partitions: DEFAULT_SPILL_PARTITIONS,
             max_parallelism: 0, // 0 = numero di core logici
             max_wkb_cell_bytes: 64 * 1024 * 1024,
             max_payload_bytes: 16 * 1024 * 1024 * 1024,
@@ -390,10 +347,7 @@ pub(crate) fn expansion_exceeded_wide(output_rows: u64, base_rows: u128, factor:
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        expansion_exceeded, Limits, PlanLimits, DEFAULT_MAX_GOVERNED_MEMORY_BYTES,
-        DEFAULT_MAX_TEMP_BYTES, DEFAULT_SPILL_PARTITIONS,
-    };
+    use super::{expansion_exceeded, Limits, PlanLimits, DEFAULT_MAX_GOVERNED_MEMORY_BYTES};
 
     #[test]
     fn il_default_governato_viene_dall_autorita_ed_e_quello_pubblicato() {
@@ -410,14 +364,6 @@ mod tests {
             Limits::default().max_governed_memory_bytes,
             DEFAULT_MAX_GOVERNED_MEMORY_BYTES
         );
-        // Gli altri due default del gruppo memoria valgono le stesse due
-        // cose: il numero è quello documentato nel rustdoc, e la struttura lo
-        // prende da qui.
-        assert_eq!(DEFAULT_MAX_TEMP_BYTES, 8_589_934_592, "8 GiB");
-        assert_eq!(DEFAULT_SPILL_PARTITIONS, 64);
-        let predefiniti = Limits::default();
-        assert_eq!(predefiniti.max_temp_bytes, DEFAULT_MAX_TEMP_BYTES);
-        assert_eq!(predefiniti.spill_partitions, DEFAULT_SPILL_PARTITIONS);
     }
 
     #[test]

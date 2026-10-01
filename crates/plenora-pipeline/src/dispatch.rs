@@ -12,8 +12,7 @@ use plenora_core::arrow::schema::Schema;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_table::{
     aggregation, analysis, cleansing, columns, dates, expressions, filtering, formula, fuzzy,
-    governance, joins, quality, reshape, security, setops, spill, strings, utility, EffettiKernel,
-    Limits,
+    governance, joins, quality, reshape, security, setops, strings, utility, EffettiKernel, Limits,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -194,19 +193,6 @@ impl PassoPreparato {
     }
 }
 
-/// Variante del kernel scelta dal runner per un passo.
-///
-/// La sceglie il budget ([`crate::esecuzione`]): la variante spilled solo
-/// dove il kernel la ha (`sort`, `distinct`, `aggregate`, set operation) e
-/// solo quando quella in memoria non sta nel budget.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Variante {
-    /// Il kernel in memoria.
-    InMemoria,
-    /// Il kernel con spill su disco.
-    Spill,
-}
-
 impl PassoPreparato {
     /// Espansione fissata dalla config e dallo schema del primo ingresso:
     /// righe d'uscita = righe d'ingresso per questo fattore, esattamente
@@ -222,22 +208,6 @@ impl PassoPreparato {
         }
     }
 
-    /// `true` se il passo ha una variante spilled.
-    pub const fn ha_spill(&self) -> bool {
-        matches!(self, Self::Sort(_) | Self::Distinct(_) | Self::Aggregate(_))
-            || self.tipo_set_operation().is_some()
-    }
-
-    /// Operazione di set per `spill::execute_set_operation`.
-    const fn tipo_set_operation(&self) -> Option<setops::SetOperationKind> {
-        match self {
-            Self::UnionDistinct(_) => Some(setops::SetOperationKind::UnionDistinct),
-            Self::Intersect(_) => Some(setops::SetOperationKind::Intersect),
-            Self::Except(_) => Some(setops::SetOperationKind::Except),
-            _ => None,
-        }
-    }
-
     /// Come [`Self::esegui_unario`], con gli effetti che l'uscita non mostra
     /// (le righe con una divisione per zero di `formula` ed `expression`);
     /// per le altre operazioni sono zero.
@@ -249,17 +219,12 @@ impl PassoPreparato {
         &self,
         batch: &RecordBatch,
         limits: &Limits,
-        variante: Variante,
     ) -> Result<(RecordBatch, EffettiKernel)> {
         match self {
-            Self::Formula(config) if variante == Variante::InMemoria => {
-                formula::formula_con_effetti(batch, config, limits)
-            }
-            Self::Expression(config) if variante == Variante::InMemoria => {
-                expressions::expression_con_effetti(batch, config, limits)
-            }
+            Self::Formula(config) => formula::formula_con_effetti(batch, config, limits),
+            Self::Expression(config) => expressions::expression_con_effetti(batch, config, limits),
             _ => self
-                .esegui_unario(batch, limits, variante)
+                .esegui_unario(batch, limits)
                 .map(|uscita| (uscita, EffettiKernel::default())),
         }
     }
@@ -271,18 +236,7 @@ impl PassoPreparato {
     /// Gli errori del kernel; `Internal` se il passo non è unario (la
     /// validazione lo esclude).
     #[allow(clippy::too_many_lines)] // Un braccio per operazione, in un solo match verificabile.
-    pub fn esegui_unario(
-        &self,
-        batch: &RecordBatch,
-        limits: &Limits,
-        variante: Variante,
-    ) -> Result<RecordBatch> {
-        let spill = variante == Variante::Spill;
-        if spill && !self.ha_spill() {
-            return Err(PlenoraError::Internal(
-                "variante spilled chiesta per un passo che non la ha".to_owned(),
-            ));
-        }
+    pub fn esegui_unario(&self, batch: &RecordBatch, limits: &Limits) -> Result<RecordBatch> {
         match self {
             Self::DropColumns(config) => columns::drop_columns(batch, config),
             Self::Rename(config) => columns::rename(batch, config),
@@ -311,24 +265,10 @@ impl PassoPreparato {
             Self::Bin(config) => analysis::bin_con_limiti(batch, config, limits),
             Self::Sample(config) => analysis::sample(batch, config),
             Self::Statistics(config) => analysis::statistics(batch, config),
-            Self::Sort(config) if spill => {
-                let mut area = spill::RowSpillWorkspace::new(limits.max_temp_bytes)?;
-                spill::sort_spilled_in(batch, config, limits, &mut area).map(|(uscita, _)| uscita)
-            }
             Self::Sort(config) => aggregation::sort(batch, config),
             Self::TopN(config) => aggregation::top_n(batch, config),
-            Self::Distinct(config) if spill => {
-                let mut area = spill::RowSpillWorkspace::new(limits.max_temp_bytes)?;
-                spill::distinct_spilled_in(batch, config, limits, &mut area)
-                    .map(|(uscita, _)| uscita)
-            }
             Self::Distinct(config) => aggregation::distinct(batch, config),
             Self::DedupAdvanced(config) => aggregation::dedup_advanced(batch, config),
-            Self::Aggregate(config) if spill => {
-                let mut area = spill::RowSpillWorkspace::new(limits.max_temp_bytes)?;
-                spill::aggregate_spilled_in(batch, config, limits, &mut area)
-                    .map(|(uscita, _)| uscita)
-            }
             Self::Aggregate(config) => aggregation::aggregate_con_limiti(batch, config, limits),
             Self::WindowFunction(config) => aggregation::window_function(batch, config),
             Self::RollingWindow(config) => aggregation::rolling_window(batch, config),
@@ -389,16 +329,7 @@ impl PassoPreparato {
         left: &RecordBatch,
         right: &RecordBatch,
         limits: &Limits,
-        variante: Variante,
     ) -> Result<RecordBatch> {
-        if variante == Variante::Spill {
-            let Some(tipo) = self.tipo_set_operation() else {
-                return Err(PlenoraError::Internal(
-                    "variante spilled chiesta per un passo che non la ha".to_owned(),
-                ));
-            };
-            return spill::execute_set_operation(tipo, left, right, limits);
-        }
         match self {
             Self::Join(config) => joins::join(left, right, config, limits),
             Self::Concat(config) => joins::concat(left, right, config, limits),

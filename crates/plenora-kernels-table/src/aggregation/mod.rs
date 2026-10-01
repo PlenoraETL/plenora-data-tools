@@ -3,7 +3,7 @@
 //!
 //! I sottomoduli e cio' che ciascuno possiede:
 //!
-//! - `compare`: confronto tipizzato tra celle condiviso da sort e spill;
+//! - `compare`: confronto tipizzato tra celle, il contratto d'ordine di sort;
 //! - `sort`: `table.sort`, `table.top_n`, `table.distinct`,
 //!   `table.dedup_advanced` e i comparatori tipizzati;
 //! - `grouping`: infrastruttura di raggruppamento (chiavi di gruppo,
@@ -24,14 +24,13 @@ pub use aggregate::{
     aggregate, aggregate_con_limiti, tipo_uscita, AggFunction, Aggregate, Aggregation,
 };
 // Il comparatore tipizzato e' pubblico: e' il contratto d'ordine dei kernel
-// (`sort`, top-N, merge dello spill) e va verificabile dall'esterno.
+// (`sort`, top-N) e va verificabile dall'esterno.
 #[cfg(test)]
 pub(crate) use compare::row_key as row_key_per_test;
 pub use compare::{compare_cells_typed, is_sortable, validate_sortable};
 pub(crate) use grouping::{
-    canonical_key_order, visit_key_ids, visit_key_ids_where, BinaryKeyEncoder, KeyColumn,
+    canonical_key_order, visit_key_ids, visit_key_ids_where, BinaryKeyEncoder,
 };
-pub(crate) use sort::sort_permutation;
 pub use sort::{
     dedup_advanced, distinct, sort, top_n, verifica_verso_dedup, DedupAdvanced, Distinct, Keep,
     Sort, TopN,

@@ -19,8 +19,7 @@
 //!   `BTreeMap` sui byte della chiave di `row_key` estesa ai byte grezzi
 //!   (`{tipo}\u{1e}1{len}:{byte}\u{1f}`, null `0`), la definizione
 //!   dell'ordine canonico; su un binario UTF-8 valido quei byte sono quelli
-//!   del testo. Il percorso spilled (che ordina sugli stessi byte con
-//!   `KeyColumn`) deve coincidere con quello in memoria.
+//!   del testo.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -33,7 +32,7 @@ use serde_json::{json, Value};
 
 use crate::aggregation::{self, Aggregate};
 use crate::test_support::assert_same_outcome_bits;
-use crate::{governance, joins, quality, reshape, setops, spill, Limits};
+use crate::{governance, joins, quality, reshape, setops, Limits};
 
 /// Valori `Binary` della fixture: WKB di un punto (non UTF-8), byte non
 /// UTF-8 singoli e in coppia, prefissi l'uno dell'altro, lunghezze che il
@@ -228,17 +227,6 @@ fn distinct_dedup_assert_unique_come_sul_testo_rimappato() {
                 let cfg = json!({"subset": subset, "keep": keep});
                 assert_same_outcome_bits(
                     rimappa.esito(aggregation::distinct(&batch, &config(cfg.clone()))),
-                    aggregation::distinct(&rimappato, &config(cfg.clone())),
-                );
-                let limits = Limits {
-                    spill_partitions: 3,
-                    ..Limits::default()
-                };
-                assert_same_outcome_bits(
-                    rimappa.esito(
-                        spill::distinct_spilled(&batch, &config(cfg.clone()), &limits)
-                            .map(|(batch, _)| batch),
-                    ),
                     aggregation::distinct(&rimappato, &config(cfg)),
                 );
             }
@@ -480,16 +468,6 @@ fn aggregate_ordina_i_gruppi_sui_byte_della_chiave() {
                         .expect("colonna")
                         .as_ref()
                 );
-            }
-            // Spilled: stesso ordine dai byte di `KeyColumn`.
-            for partitions in [1_usize, 4] {
-                let limits = Limits {
-                    spill_partitions: partitions,
-                    ..Limits::default()
-                };
-                let (spilled, _) =
-                    spill::aggregate_spilled(&batch, &cfg, &limits).expect("aggregate spilled");
-                assert_same_outcome_bits(Ok(spilled), Ok(output.clone()));
             }
         }
     }

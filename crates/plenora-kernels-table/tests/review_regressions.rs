@@ -937,7 +937,7 @@ fn il_pivot_count_non_conta_una_entry_nulla_del_dizionario() {
 #[test]
 #[allow(clippy::too_many_lines)] // Elenco di casi: la lunghezza e' nei dati.
 fn ogni_limite_di_risorsa_dei_kernel_ha_la_categoria_dedicata() {
-    // `ResourceLimit` vale nei kernel quanto in join e spill: un kernel che
+    // `ResourceLimit` vale in ogni kernel quanto nei join: un kernel che
     // risponde `invalid_plan` quando sono i DATI a non entrare nel budget
     // da' alla stessa condizione — «il piano e' corretto, il volume no» —
     // una categoria diversa a seconda di dove capita.
@@ -1664,8 +1664,7 @@ fn melt_stima_la_larghezza_testuale_quando_converte_in_stringa() {
 fn una_stima_che_perde_il_conto_non_autorizza_l_allocazione() {
     // `saturating_add` a fondo scala restituisce `usize::MAX`; con un budget
     // anch'esso a fondo scala il confronto `stima > budget` e' falso, e una
-    // stima che ha perso il conto autorizzerebbe l'allocazione. E' la stessa
-    // forma del difetto gia' corretto nello spill.
+    // stima che ha perso il conto autorizzerebbe l'allocazione.
     //
     // Il caso si costruisce sul prodotto, che e' la moltiplicazione dove il
     // traboccamento e' raggiungibile: righe enormi per una larghezza reale.
@@ -3708,4 +3707,37 @@ fn coalesce_vede_i_null_logici_della_prima_colonna() {
     };
     // Riga 1: la prima colonna e' logicamente nulla, vince la seconda.
     assert_eq!([testo(0), testo(1), testo(2)], ["a", "b", "a"]);
+}
+
+// ---------------------------------------------------------------------------
+// Nessun nome di colonna riservato in `distinct`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn distinct_accetta_ogni_nome_di_colonna_anche_quello_del_vecchio_spill() {
+    // La variante su disco di `distinct` rifiutava un ingresso con la
+    // colonna `__plenora_spill_ordinal`, che il percorso in memoria
+    // accettava: l'esito dipendeva dal budget. Senza variante su disco il
+    // nome e' una colonna come le altre, come chiave e fuori dalla chiave.
+    let tabella = batch(
+        vec![
+            Field::new("__plenora_spill_ordinal", DataType::Int64, false),
+            Field::new("v", DataType::Float64, false),
+        ],
+        vec![
+            Arc::new(Int64Array::from(vec![3, 1, 3, 2, 1])),
+            Arc::new(Float64Array::from(vec![0.5, 1.5, 2.5, 3.5, 4.5])),
+        ],
+    );
+    for (subset, attese) in [
+        (json!(["__plenora_spill_ordinal"]), vec![0_usize, 1, 3]),
+        (json!(["v"]), vec![0, 1, 2, 3, 4]),
+    ] {
+        let config: plenora_kernels_table::aggregation::Distinct =
+            serde_json::from_value(json!({"subset": subset, "keep": "first"})).expect("config");
+        let uscita = plenora_kernels_table::aggregation::distinct(&tabella, &config)
+            .expect("nessun nome riservato");
+        let attesa = plenora_kernels_table::select_rows(&tabella, &attese).expect("righe");
+        assert_eq!(uscita, attesa, "{subset}");
+    }
 }

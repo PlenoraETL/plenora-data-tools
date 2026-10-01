@@ -111,16 +111,6 @@ pub struct PassoValidato {
     pub moltiplicatore_dichiarato: Option<u64>,
 }
 
-impl PassoValidato {
-    /// `true` se il passo ha una variante spilled.
-    pub const fn ha_spill(&self) -> bool {
-        match &self.kernel {
-            KernelPasso::Tabellare(preparato) => preparato.ha_spill(),
-            KernelPasso::Geo(_) => false,
-        }
-    }
-}
-
 /// Piano validato contro gli schemi degli input: pronto per l'esecuzione.
 #[derive(Debug)]
 pub struct PipelineValidata {
@@ -239,8 +229,6 @@ fn limiti_dei_kernel_tabellari(limiti: &Limits) -> Result<plenora_kernels_table:
             limiti.max_governed_memory_bytes,
             "max_governed_memory_bytes",
         )?,
-        max_temp_bytes: limiti.max_temp_bytes,
-        spill_partitions: stretto(u64::from(limiti.spill_partitions), "spill_partitions")?,
     })
 }
 

@@ -17,7 +17,6 @@ unicode-normalization.workspace = true
 num-traits.workspace = true
 md-5.workspace = true
 sha2.workspace = true
-tempfile.workspace = true
 uuid.workspace = true
 # Parallelismo dei kernel: merge sort stabile di `table.sort`, raggruppamenti,
 # join, `fuzzy_join`, hash di sicurezza.

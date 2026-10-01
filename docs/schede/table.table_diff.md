@@ -89,7 +89,7 @@ l'hash delle chiavi non ha seme
 ### Complessità
 
 Tempo O(n + m) sulle righe dei due lati (una mappa delle chiavi) per il
-numero di colonne confrontate; memoria O(n + m). Nessuna variante spilled.
+numero di colonne confrontate; memoria O(n + m).
 
 ### Esempio
 

@@ -34,8 +34,7 @@ pub fn row_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Str
 }
 
 /// Confronto tipizzato tra due celle: il contratto d'ordine di `table.sort`,
-/// `table.top_n`, del merge dello spill e dei ranghi di
-/// `table.window_function`.
+/// `table.top_n` e dei ranghi di `table.window_function`.
 ///
 /// Semantica: null dopo i valori (uguaglianza tra null); confronto nel
 /// dominio NATIVO di ogni tipo supportato, mai sulla forma testuale.
@@ -57,9 +56,8 @@ pub fn row_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Str
 ///
 /// I siti d'uso sono `compare_at` (stesso batch; lo usa anche il ramo
 /// generico di `ColumnComparator`, i cui rami tipizzati riproducono la
-/// stessa semantica), `OrdineNumerico` dei ranghi e il merge k-way dello
-/// spill (`spill::compare_cells`, batch diversi: da qui la forma a due
-/// array).
+/// stessa semantica) e `OrdineNumerico` dei ranghi; la forma a due array
+/// serve a chi confronta celle di batch diversi.
 // Dispatch lineare per tipo Arrow: spezzarlo renderebbe piu' difficile
 // verificare che ogni tipo sia trattato una volta sola.
 #[allow(clippy::too_many_lines)]
@@ -295,8 +293,7 @@ const fn comparison_family(data_type: &DataType) -> Option<ComparisonFamily> {
 ///
 /// `Array::is_null` e `value` di arrow vanno in PANICO fuori intervallo.
 /// `compare_cells_typed` e' pubblica e riceve due array e due indici
-/// indipendenti — in particolare dal merge k-way dello spill, dove gli indici
-/// vengono da file — quindi l'intervallo va verificato, non assunto.
+/// indipendenti, quindi l'intervallo va verificato, non assunto.
 fn riga_in_intervallo(array: &ArrayRef, row: usize, lato: &str) -> Result<()> {
     if row >= array.len() {
         return Err(PlenoraError::Schema(format!(

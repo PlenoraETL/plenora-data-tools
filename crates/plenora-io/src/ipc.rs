@@ -26,7 +26,7 @@
 //! blocchi decodificati e della loro copia; dopo, i byte vivi esatti.
 //!
 //! La scrittura procede a blocchi di righe di circa [`BYTE_PER_BLOCCO`]
-//! byte, come lo sfratto del runner: `FileWriter` codifica ogni blocco in un
+//! byte: `FileWriter` codifica ogni blocco in un
 //! vettore prima di scriverlo, e blocchi limitati limitano quel transitorio.
 //! Nessuna compressione: i crate Arrow del workspace non la abilitano, e un
 //! file IPC compresso si rifiuta in lettura con l'errore di Arrow.

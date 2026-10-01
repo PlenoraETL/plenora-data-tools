@@ -58,35 +58,20 @@ In esecuzione:
 - `Schema`: una cella che non si converte in testo (`date32`, `date64` o
   `timestamp` fuori dall'intervallo delle date, `date64` non allineato al
   giorno);
-- `ResourceLimit`: più di `u32::MAX` righe; nella variante spilled, file
-  temporanei oltre `max_temp_bytes` o mappa delle chiavi oltre
-  `max_governed_memory_bytes`;
-- `InvalidPlan`: nella variante spilled, un ingresso con una colonna di
-  nome `__plenora_spill_ordinal`, riservata allo spill;
-- `Io`: nella variante spilled, un errore sui file temporanei.
+- `ResourceLimit`: più di `u32::MAX` righe.
 
 ### Limiti e deviazioni
 
-La mappa delle chiavi non è contabilizzata nel percorso in memoria
+La mappa delle chiavi non è contabilizzata
 ([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
 l'hash delle chiavi non ha seme
 ([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
-La variante spilled rifiuta un ingresso con una colonna
-`__plenora_spill_ordinal`, che quella in memoria accetta.
 
 ### Complessità
 
 Tempo O(n) sulle righe (una passata con una mappa delle chiavi), più
 l'ordinamento degli indici tenuti; memoria O(k) per le k chiavi distinte e
 O(k) indici.
-
-La variante spilled la sceglie il runner quando quella in memoria non sta
-nel budget ([README, «Budget di memoria»](../README.md#budget-di-memoria)):
-le righe, con il loro indice originale, si dividono per hash della chiave
-in `spill_partitions` file Arrow IPC temporanei; una lettura in streaming
-accumula per ogni chiave prima e ultima occorrenza e conteggio, in una
-mappa globale contata su `max_governed_memory_bytes` (lunghezza della
-chiave più 64 byte per chiave). L'uscita è identica a quella in memoria.
 
 ### Esempio
 

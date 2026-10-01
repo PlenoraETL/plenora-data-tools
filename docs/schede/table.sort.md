@@ -60,9 +60,7 @@ In validazione, `InvalidPlan`:
 In esecuzione:
 
 - `Schema`: una chiave di dizionario fuori dal proprio dizionario;
-- `ResourceLimit`: più di `u32::MAX` righe; nella variante spilled, file
-  temporanei oltre `max_temp_bytes`;
-- `Io`: nella variante spilled, un errore sui file temporanei.
+- `ResourceLimit`: più di `u32::MAX` righe.
 
 ### Limiti e deviazioni
 
@@ -73,15 +71,6 @@ Nessuno oltre ai limiti comuni.
 Tempo O(n log n) confronti su n righe, ciascuno fino al numero di chiavi;
 memoria O(n) indici più la copia dell'uscita. Da 32.768 righe il sort è un
 merge sort parallelo, con la stessa permutazione del sequenziale.
-
-La variante spilled la sceglie il runner quando quella in memoria non sta
-nel budget ([README, «Budget di memoria»](../README.md#budget-di-memoria)):
-l'ingresso si divide in run dimensionate su `max_governed_memory_bytes`,
-ognuna ordinata in memoria con lo stesso comparatore e scritta su file
-Arrow IPC temporanei con l'indice originale di ogni riga; una fusione in
-streaming delle run (una scansione lineare delle run per ogni riga emessa)
-produce la permutazione, e a parità di chiavi vince l'indice originale
-minore. L'uscita è identica a quella in memoria, e resta intera in memoria.
 
 ### Esempio
 

@@ -11,9 +11,9 @@
 //! budget e diventa un `ResourceLimit` esplicito, mai un passo ammesso.
 
 use crate::costi_geo::COSTI_GEO;
-use crate::costi_operazioni::{BUDGET_SPILL_MISURATO, COSTI, FATTORE_SICUREZZA};
+use crate::costi_operazioni::{COSTI, FATTORE_SICUREZZA};
 
-/// Coefficienti del modello di una variante: `a` in byte, gli altri in
+/// Coefficienti del modello di un'operazione: `a` in byte, gli altri in
 /// millesimi di byte per unità. Il picco senza fattore di sicurezza è
 ///
 /// ```text
@@ -50,8 +50,6 @@ pub struct Costo {
 pub struct CostoOperazione {
     pub op: &'static str,
     pub in_memoria: Costo,
-    /// Variante spilled, dove il kernel la ha ed è stata misurata.
-    pub spill: Option<Costo>,
     /// Output e transitorio dipendono dal contenuto: l'output lo limitano i
     /// preflight dei kernel e il controllo esatto dopo il passo.
     pub dipende_dai_dati: bool,
@@ -89,24 +87,6 @@ pub fn costo_di(op: &str) -> Option<&'static CostoOperazione> {
         .binary_search_by(|voce| voce.op.cmp(op))
         .ok()
         .and_then(|indice| tabella.get(indice))
-}
-
-/// Memoria da riservare, oltre al picco del modello, al kernel spilled.
-///
-/// Il kernel tiene in memoria fino al proprio `max_governed_memory_bytes`
-/// di batch riletti da una partizione, e `concat_batches` li copia: la
-/// riserva è due volte il margine che gli si passa, cioè due volte due
-/// partizioni medie (margine per lo sbilanciamento delle chiavi), al più
-/// [`BUDGET_SPILL_MISURATO`]. Il picco misurato non la copre: le varianti
-/// spilled sono state misurate con la stima dei batch IPC gonfiata, cioè
-/// con partizioni rilette più piccole (README, «Budget di memoria»).
-#[must_use]
-pub fn riserva_spill(byte_in: u64, partizioni: u32) -> u64 {
-    let media = byte_in.div_ceil(u64::from(partizioni.max(1)));
-    media
-        .saturating_mul(2)
-        .min(BUDGET_SPILL_MISURATO)
-        .saturating_mul(2)
 }
 
 /// `ceil(millesimi * unita / 1000)` in `u128`: non trabocca per operandi

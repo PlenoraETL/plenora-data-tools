@@ -47,19 +47,11 @@ In validazione, `InvalidPlan`:
 
 In esecuzione, `ResourceLimit`: righe dei due ingressi insieme oltre
 `max_rows` (nel runner `max_input_rows`), anche se le righe distinte sono
-meno. Nella variante spilled anche: file temporanei oltre `max_temp_bytes`
-(una sola chiave di riga oltre la quota compresa), chiavi distinte di una
-partizione oltre `max_governed_memory_bytes` (lunghezza della chiave più 64
-byte per chiave); `Io` sui file temporanei.
+meno.
 
 ### Limiti e deviazioni
 
-Il runner passa alla variante spilled quando il passo in memoria non sta
-nel budget ([README, «Budget di memoria»](../README.md#budget-di-memoria)):
-le chiavi di riga vanno su file temporanei in `spill_partitions`
-partizioni e le righe tenute si riselezionano dagli ingressi; l'uscita è
-la stessa del percorso in memoria, e resta intera in memoria. In memoria le
-chiavi non si contano su `max_governed_memory_bytes`
+Le chiavi non si contano su `max_governed_memory_bytes`
 ([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata)),
 e l'insieme usa un hash deterministico senza seme
 ([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
@@ -67,8 +59,7 @@ e l'insieme usa un hash deterministico senza seme
 ### Complessità
 
 Tempo O(n + m) atteso; memoria O(byte delle chiavi distinte) più la copia
-delle righe tenute. Spilled: tempo O(n + m) più la scrittura e la lettura
-delle chiavi, memoria di lavoro O(chiavi distinte di una partizione).
+delle righe tenute.
 
 ### Esempio
 

@@ -5,14 +5,12 @@
 //! se la config e lo schema d'ingresso sono accettabili e quale schema esce,
 //! e il kernel, una funzione pura dal batch d'ingresso (due per le binarie),
 //! la config e se serve i [`Limits`] al batch d'uscita, che lavora su una
-//! tabella intera in memoria. Le varianti che scaricano su disco file
-//! temporanei (`aggregate`, `distinct`, `sort`, set operation) stanno in
-//! [`spill`]; quale variante eseguire lo decide il chiamante.
+//! tabella intera in memoria. Nessun kernel scrive su disco.
 //!
 //! I moduli kernel sono `columns`, `strings`, `cleansing`, `filtering`,
 //! `dates`, `utility`, `analysis`, `aggregation`, `reshape`, `joins`,
 //! `fuzzy`, `setops`, `security`, `quality`, `governance`, `formula`,
-//! `expressions` e `spill`. Questo file raccoglie cio' che condividono: i
+//! `expressions`. Questo file raccoglie cio' che condividono: i
 //! limiti ([`Limits`]), la lettura e la conversione dei valori scalari, i
 //! confronti numerici esatti ([`NumericBound`], [`scalar_compare`]), le stime
 //! di memoria per il rifiuto preventivo ([`preflight_output_bytes`]) e la
@@ -64,13 +62,6 @@ pub struct Limits {
     /// [`preflight_output_bytes`]). Default:
     /// `plenora_core::limits::DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE`.
     pub max_governed_memory_bytes: usize,
-    /// Byte massimi scritti su disco dalle varianti spilled ([`spill`]).
-    /// Default: `plenora_core::limits::DEFAULT_MAX_TEMP_BYTES`.
-    pub max_temp_bytes: u64,
-    /// Numero di partizioni (file temporanei) delle varianti spilled; zero
-    /// si rifiuta dove serve partizionare. Default:
-    /// `plenora_core::limits::DEFAULT_SPILL_PARTITIONS` (64).
-    pub spill_partitions: usize,
 }
 
 /// Limiti **interni ai kernel**: non sono dichiarabili in un piano, e nessuna
@@ -102,10 +93,6 @@ impl Default for Limits {
             // default non possono divergere.
             max_governed_memory_bytes:
                 plenora_core::limits::DEFAULT_MAX_GOVERNED_MEMORY_BYTES_USIZE,
-            max_temp_bytes: plenora_core::limits::DEFAULT_MAX_TEMP_BYTES,
-            // 64 sta in qualunque `usize` che questo progetto supporti; la
-            // conversione e' esatta per il VALORE, non per i tipi.
-            spill_partitions: plenora_core::limits::DEFAULT_SPILL_PARTITIONS as usize,
         }
     }
 }
@@ -131,7 +118,6 @@ pub mod quality;
 pub mod reshape;
 pub mod security;
 pub mod setops;
-pub mod spill;
 pub mod strings;
 mod temporale;
 pub mod utility;
@@ -2251,33 +2237,6 @@ mod tests {
             Limits::default().max_governed_memory_bytes as u64,
             plenora_core::limits::Limits::default().max_governed_memory_bytes,
             "e coincidere con quello del contenitore dei limiti del piano"
-        );
-    }
-
-    #[test]
-    fn anche_gli_altri_due_default_condivisi_vengono_dall_autorita() {
-        // Anche `max_temp_bytes` e `spill_partitions` vengono dalle costanti
-        // di `plenora-core`: finiscono negli override del piano, e una
-        // divergenza darebbe limiti che nessuno ha dichiarato.
-        let nostri = Limits::default();
-        let del_piano = plenora_core::limits::Limits::default();
-        assert_eq!(nostri.max_temp_bytes, del_piano.max_temp_bytes);
-        assert_eq!(
-            nostri.max_temp_bytes,
-            plenora_core::limits::DEFAULT_MAX_TEMP_BYTES
-        );
-        // Il confronto si fa nel tipo LARGO: restringere `usize` a `u32` per
-        // confrontarli introdurrebbe qui la stessa troncatura che il codice
-        // di produzione evita.
-        let nostre_partizioni = u64::try_from(nostri.spill_partitions).expect("partizioni");
-        assert_eq!(
-            nostre_partizioni,
-            u64::from(del_piano.spill_partitions),
-            "i due crate li tengono in tipi diversi, non in valori diversi"
-        );
-        assert_eq!(
-            nostre_partizioni,
-            u64::from(plenora_core::limits::DEFAULT_SPILL_PARTITIONS)
         );
     }
 
