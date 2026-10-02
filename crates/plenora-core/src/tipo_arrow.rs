@@ -14,8 +14,11 @@ use crate::arrow::schema::DataType;
 /// senza nomi né metadati dei campi figli.
 ///
 /// I tipi senza figli si scrivono come li scrive Arrow (`Int64`,
-/// `Timestamp(Microsecond, Some("UTC"))`, `Decimal128(10, 2)`): i loro
-/// parametri sono parte del tipo, non metadati. I composti si scrivono con
+/// `Decimal128(10, 2)`, `Duration(Second)`): i loro parametri sono enum o
+/// numeri chiusi. Fa eccezione `Timestamp`, il cui fuso è testo libero
+/// dello schema ricevuto: si scrivono l'unità e la sola presenza del fuso
+/// (`Timestamp(Microsecond, con fuso)`, `Timestamp(Second, senza fuso)`),
+/// mai il fuso. I composti si scrivono con
 /// il tipo dei figli (`List<Utf8>`, `FixedSizeList<Float64; 3>`,
 /// `Dictionary<Int32, Utf8>`) o con il loro numero (`Struct<2 campi>`,
 /// `Union<3 campi>`).
@@ -47,7 +50,16 @@ pub fn descrivi_tipo(tipo: &DataType) -> String {
             descrivi_tipo(fini.data_type()),
             descrivi_tipo(valori.data_type())
         ),
-        // Nessun campo figlio: niente nomi né metadati da tacere.
+        // Il fuso è testo libero dello schema: se ne dice solo la presenza.
+        DataType::Timestamp(unita, fuso) => format!(
+            "Timestamp({unita:?}, {})",
+            if fuso.is_some() {
+                "con fuso"
+            } else {
+                "senza fuso"
+            }
+        ),
+        // Nessun campo figlio né testo libero: niente da tacere.
         foglia => foglia.to_string(),
     }
 }
@@ -131,5 +143,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn il_fuso_del_timestamp_non_compare() {
+        use crate::arrow::schema::TimeUnit;
+        let con_fuso = DataType::Timestamp(TimeUnit::Microsecond, Some("SEGRETO".into()));
+        let casi = [
+            (con_fuso.clone(), "Timestamp(Microsecond, con fuso)"),
+            (
+                DataType::Timestamp(TimeUnit::Second, None),
+                "Timestamp(Second, senza fuso)",
+            ),
+            (
+                DataType::List(Arc::new(Field::new("item", con_fuso.clone(), true))),
+                "List<Timestamp(Microsecond, con fuso)>",
+            ),
+            (
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(con_fuso.clone())),
+                "Dictionary<Int32, Timestamp(Microsecond, con fuso)>",
+            ),
+        ];
+        for (tipo, atteso) in casi {
+            let testo = descrivi_tipo(&tipo);
+            assert_eq!(testo, atteso);
+            assert!(!testo.contains("SEGRETO"), "{testo}");
+        }
+        // Il difetto che la funzione evita: Arrow stampa il fuso.
+        assert!(
+            format!("{con_fuso}").contains("SEGRETO")
+                || format!("{con_fuso:?}").contains("SEGRETO")
+        );
     }
 }

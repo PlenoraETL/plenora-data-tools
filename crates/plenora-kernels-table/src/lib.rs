@@ -730,8 +730,10 @@ pub fn validate_text_convertible(data_type: &DataType, column: &str) -> Result<(
     }
     if let DataType::Timestamp(_, Some(timezone)) = data_type {
         if timezone.parse::<chrono_tz::Tz>().is_err() {
+            // Il fuso e' testo libero dello schema ricevuto: non entra nel
+            // messaggio («errori senza dati»).
             return Err(PlenoraError::Schema(format!(
-                "colonna `{column}`: timezone Arrow `{timezone}` non valida"
+                "colonna `{column}`: timezone Arrow del tipo non valida"
             )));
         }
     }

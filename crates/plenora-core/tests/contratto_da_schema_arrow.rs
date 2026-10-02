@@ -592,6 +592,42 @@ fn errors_never_print_nested_field_metadata() {
 }
 
 #[test]
+fn errors_never_print_a_timestamp_timezone() {
+    // Il fuso di un `Timestamp` e' testo libero dello schema ricevuto, e
+    // Arrow lo stampa; anche dentro una lista non deve arrivare al messaggio
+    // pubblico.
+    let tipo = DataType::List(Arc::new(Field::new(
+        "item",
+        DataType::Timestamp(
+            plenora_core::arrow::schema::TimeUnit::Microsecond,
+            Some("SEGRETO".into()),
+        ),
+        true,
+    )));
+    let geometria = Field::new("geometry", tipo, true).with_metadata(HashMap::from([(
+        GEOARROW_EXTENSION_KEY.to_owned(),
+        GEOARROW_WKB_EXTENSION.to_owned(),
+    )]));
+    let errore =
+        discover_input_contract_from_schema(Arc::new(Schema::new(vec![geometria])), resolve_crs)
+            .expect_err("geometria non Binary");
+    let pubblico = errore.public_projection();
+    assert_eq!(pubblico.category().as_str(), "schema");
+    assert!(
+        pubblico
+            .message()
+            .contains("List<Timestamp(Microsecond, con fuso)>"),
+        "{}",
+        pubblico.message()
+    );
+    assert!(
+        !pubblico.message().contains("SEGRETO"),
+        "{}",
+        pubblico.message()
+    );
+}
+
+#[test]
 fn metadata_errors_project_with_their_category_and_no_values() {
     // I metadati incoerenti escono con categoria `schema` o `crs`
     // (vocabolario Arrow 1.0, sezione 4) anche nella proiezione pubblica, e

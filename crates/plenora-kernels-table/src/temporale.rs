@@ -170,9 +170,11 @@ pub const fn tipo_temporale(data_type: &DataType) -> bool {
 /// `Schema` con il nome della colonna per un fuso non riconosciuto.
 pub fn verifica_tipo_temporale(data_type: &DataType, column: &str) -> Result<()> {
     if let DataType::Timestamp(_, Some(fuso)) = data_type {
+        // Il fuso e' testo libero dello schema ricevuto: non entra nel
+        // messaggio («errori senza dati»).
         fuso.parse::<Tz>().map_err(|_| {
             PlenoraError::Schema(format!(
-                "colonna `{column}`: timezone Arrow `{fuso}` non valida"
+                "colonna `{column}`: timezone Arrow del tipo non valida"
             ))
         })?;
     }
@@ -414,6 +416,24 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn il_fuso_non_valido_non_compare_nei_messaggi() {
+        // Il fuso del tipo e' testo libero dello schema ricevuto.
+        let tipo = DataType::Timestamp(TimeUnit::Second, Some("SEGRETO".into()));
+        for errore in [
+            verifica_tipo_temporale(&tipo, "t").expect_err("fuso non valido"),
+            crate::validate_text_convertible(&tipo, "t").expect_err("fuso non valido"),
+        ] {
+            let testo = errore.to_string();
+            assert!(testo.contains("timezone"), "{testo}");
+            assert!(!testo.contains("SEGRETO"), "{testo}");
+            assert!(
+                !errore.public_projection().message().contains("SEGRETO"),
+                "{testo}"
+            );
+        }
+    }
 
     #[test]
     fn i_formati_di_default_sono_solo_iso() {
