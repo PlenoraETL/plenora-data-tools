@@ -17,6 +17,7 @@ progetto d'origine si portano qui senza rinomine.
 | `plenora-pipeline` | runner minimo: piano SSA di operazioni tabellari e geo, validazione senza dati, esecuzione su tabelle intere con byte vivi contati per allocazione e budget di memoria per passo ([«Runner»](#runner)) |
 | `plenora-io` | tabelle da e verso file: Arrow IPC (file e stream), Parquet, GeoParquet 1.1; scrittura atomica; un piano da file a file ([«File»](#file)) |
 | `plenora-cli` | la CLI pubblica `plenora-data` (CLI 2.0 di `plenora-contracts`: `catalog`, `describe`, `validate`, `run`, `capabilities`) e la stessa superficie in Rust ([«CLI `plenora-data`»](#cli-plenora-data)) |
+| `plenora-data-py` | l'SDK Python `plenora-data` (`plenora_data`): le stesse operazioni su tabelle PyArrow ([«SDK Python»](#sdk-python)) |
 | `vendor/` | `geo` (con il porting a `i_overlay` 9.0.0) e `wkt` con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`) |
 
 ## Che cosa non c'è ancora
@@ -3063,8 +3064,11 @@ catalogo pubblico con i suoi contratti, tipi di contenuto e controlli. Gli
 | `bounded_materialization` | `true`: le tabelle si materializzano intere, entro il budget (ARROW-011) |
 
 La superficie Rust è `plenora_cli::api::{catalogo, descrivi, valida,
-esegui}`; la mappa operazione → export (`plenora_cli::capacita::mappa_rust`,
-contratto `plenora-data-rust-surface-v1`) nasce dalla stessa tabella, e
+esegui}` con le forme che prendono anche tabelle in memoria
+(`descrivi_tabella`, `valida_ingressi`, `esegui_ingressi`,
+`esegui_in_memoria`: stesso corpo, quelle che l'SDK Python chiama); la mappa
+operazione → export (`plenora_cli::capacita::mappa_rust`, contratto
+`plenora-data-rust-surface-v1`) nasce dalla stessa tabella, e
 `tests/superficie_rust.rs` la compila da consumatore.
 
 ### Verifica e adozione
@@ -3248,9 +3252,23 @@ manifesto, `crates/plenora-cli/adozione.json`).
   (`plenora-data-*-v1`) sono descritti qui, non da uno schema JSON
   pubblicato; i test ne verificano la forma campo per campo.
 
+## SDK Python
+
+`crates/plenora-data-py` è l'SDK Python del componente (*Python SDK 1.0*):
+distribuzione `plenora-data`, pacchetto `plenora_data`, le quattro
+operazioni della CLI in forma sincrona e asincrona su tabelle PyArrow o
+file, chiamando le stesse funzioni di `plenora_cli::api`. Uso, errori,
+scadenza e annullamento, deviazioni, limiti dichiarati e ciò che
+l'aggiornamento dei contratti deve aggiungere sono nel
+[README del crate](crates/plenora-data-py/README.md); la CI è
+`.github/workflows/sdk-python.yml`.
+
 ## Costruire e provare
 
 Serve `rustup`: la toolchain (1.98.0) è fissata in `rust-toolchain.toml`.
+Il workspace comprende il modulo nativo dell'SDK Python (PyO3), che si
+collega a libpython: `cargo build` e `cargo test` vogliono un Python >= 3.10
+nel `PATH` (o in `PYO3_PYTHON`).
 L'unico codice nativo è libzstd, che `zstd-sys` compila con `cc` (niente
 cmake): basta il compilatore C che il linker del target già richiede
 (MSVC su Windows, `cc` su Linux).
