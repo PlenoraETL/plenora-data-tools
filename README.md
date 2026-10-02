@@ -1350,7 +1350,10 @@ ritentabili (`safe`); `NotFound` → `not_found`, `PermissionDenied` →
 `authorization`, `AlreadyExists` → `conflict`, spazio, quota, file troppo
 grande o memoria → `resource_limit`, `Unsupported` → `unsupported`, il resto
 → `io`, tutti `never`. Un `ErrorKind` non classificato è `io` e `never`, la
-scelta prudente.
+scelta prudente. Un errore di serde_json che nasce dall'I/O della lettura
+resta `Io` con il suo `ErrorKind`; uno di sintassi, di dati o di fine
+inattesa è `data_mapping` con il solo genere e la posizione («json error:
+dati alla riga 1 colonna 15»), mai il testo che cita il valore letto.
 
 ### Effetto di un errore a metà della scrittura
 
@@ -1366,7 +1369,9 @@ diagnostica.
 
 La scrittura atomica cancella il temporaneo di una scrittura fallita e ne
 controlla l'esito: se la cancellazione fallisce l'errore ha effetto
-`unknown` (e con una causa ritentabile `requires_recovery`).
+`unknown` (e con una causa ritentabile `requires_recovery`), anche sopra un
+effetto che la causa dichiarava già (`PlenoraError::override_remote_effect`,
+l'unico punto in cui un effetto si sostituisce).
 
 - **Temporaneo rimasto dopo una scrittura fallita.**
   *Regola*: un errore di `scrivi_atomico` non lascia nulla alla

@@ -279,12 +279,24 @@ impl From<arrow_schema::ArrowError> for PlenoraError {
 }
 
 impl From<serde_json::Error> for PlenoraError {
+    /// Un errore di I/O sotto la lettura (`from_reader`) resta `Io`, con il
+    /// suo `ErrorKind` e senza testo del sistema operativo nel messaggio
+    /// pubblico. Sintassi, dati e fine inattesa diventano `DataMapping` con
+    /// il solo genere e la posizione: il testo di `serde_json` cita il valore
+    /// letto (`invalid type: string "..."`), e non attraversa il confine.
     fn from(error: serde_json::Error) -> Self {
-        // Il testo è quello di serde_json: posizione e genere del difetto e,
-        // per un tipo sbagliato, il valore letto. In forma tipizzata si
-        // leggono solo piani e config, i cui valori sono parametri, non dati
-        // di riga.
-        Self::DataMapping(format!("json error: {error}"))
+        use serde_json::error::Category;
+        let genere = match error.classify() {
+            Category::Io => return Self::Io(std::io::Error::from(error)),
+            Category::Syntax => "sintassi",
+            Category::Data => "dati",
+            Category::Eof => "fine inattesa",
+        };
+        Self::DataMapping(format!(
+            "json error: {genere} alla riga {} colonna {}",
+            error.line(),
+            error.column()
+        ))
     }
 }
 
@@ -868,6 +880,44 @@ impl PlenoraError {
         }
     }
 
+    /// Sostituisce l'effetto dichiarato, a differenza di
+    /// [`PlenoraError::with_remote_effect`] dove vince il primo: toglie ogni
+    /// [`PlenoraError::WithRemoteEffect`] della catena e mette `remote_effect`
+    /// sopra. Per un esito di confine che smentisce quello dichiarato prima:
+    /// oggi solo la pulizia fallita della scrittura atomica di `plenora-io`
+    /// (`unknown` sopra, per esempio, un `rolled_back` del chiamante). Il
+    /// ritentativo si ricalcola sulla causa ([`PlenoraError::retry_disposition`]).
+    #[must_use]
+    pub fn override_remote_effect(self, remote_effect: RemoteEffect) -> Self {
+        let causa = self.senza_effetto();
+        if remote_effect == RemoteEffect::None {
+            return causa;
+        }
+        Self::WithRemoteEffect {
+            remote_effect,
+            source: Box::new(causa),
+        }
+    }
+
+    /// La catena senza [`PlenoraError::WithRemoteEffect`].
+    fn senza_effetto(self) -> Self {
+        match self {
+            Self::WithRemoteEffect { source, .. } => source.senza_effetto(),
+            Self::Tagged { phase, source } => Self::Tagged {
+                phase,
+                source: Box::new(source.senza_effetto()),
+            },
+            Self::RowDiagnostics {
+                source,
+                diagnostics,
+            } => Self::RowDiagnostics {
+                source: Box::new(source.senza_effetto()),
+                diagnostics,
+            },
+            altro => altro,
+        }
+    }
+
     /// Un [`PlenoraError::WithRemoteEffect`] in un punto qualunque della
     /// catena dei wrapper trasparenti.
     fn ha_effetto_dichiarato(&self) -> bool {
@@ -1171,6 +1221,18 @@ mod tests {
     // non deve dover indovinare quella del rappresentante.
     use core::mem::discriminant;
 
+    /// Lettore che fallisce con un testo che cita un percorso.
+    struct Illeggibile;
+
+    impl std::io::Read for Illeggibile {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "at path C:/segreti/piano.json",
+            ))
+        }
+    }
+
     fn step(execution_id: &str) -> PlenoraError {
         PlenoraError::Execution {
             node: "n".to_owned(),
@@ -1260,7 +1322,17 @@ mod tests {
             .expect_err("json invalido")
             .into();
         assert_eq!(json.category(), ErrorCategory::DataMapping);
-        assert!(json.to_string().starts_with("json error: "));
+        assert_eq!(json.to_string(), "json error: dati alla riga 1 colonna 15");
+        // Il valore letto non attraversa il confine.
+        assert!(!json.to_string().contains("non-un-numero"));
+        // Un errore di I/O della lettura resta I/O, senza il suo testo nel
+        // messaggio pubblico.
+        let lettore = std::io::BufReader::new(Illeggibile);
+        let io: PlenoraError = serde_json::from_reader::<_, u32>(lettore)
+            .expect_err("lettura fallita")
+            .into();
+        assert_eq!(io.category(), ErrorCategory::NotFound);
+        assert!(!io.public_projection().message().contains("segreti"));
     }
 
     /// Sentinella di privacy: il testo di arrow-rs cita i valori che hanno
@@ -2046,6 +2118,44 @@ mod tests {
         assert_eq!(
             messaggio,
             "io error: output `b`: scrittura: entity not found"
+        );
+    }
+
+    #[test]
+    fn l_override_sostituisce_l_effetto_sotto_ogni_wrapper() {
+        let timeout =
+            || PlenoraError::Timeout("t".into()).with_remote_effect(RemoteEffect::RolledBack);
+        for (ordine, errore) in [
+            ("effetto in cima", timeout()),
+            ("tag sopra", timeout().with_phase(ErrorPhase::Commit)),
+            (
+                "diagnostica sopra",
+                timeout().with_row_diagnostics(diagnostica()),
+            ),
+        ] {
+            let ignoto = errore.override_remote_effect(RemoteEffect::Unknown);
+            assert_eq!(ignoto.remote_effect(), RemoteEffect::Unknown, "{ordine}");
+            assert_eq!(
+                ignoto.retry_disposition(),
+                RetryDisposition::RequiresRecovery,
+                "{ordine}"
+            );
+            // Un solo effetto nella catena: il successivo `with_remote_effect`
+            // non lo cambia.
+            assert_eq!(
+                ignoto
+                    .with_remote_effect(RemoteEffect::Partial)
+                    .remote_effect(),
+                RemoteEffect::Unknown,
+                "{ordine}"
+            );
+        }
+        // `None` toglie l'effetto dichiarato.
+        assert_eq!(
+            timeout()
+                .override_remote_effect(RemoteEffect::None)
+                .remote_effect(),
+            RemoteEffect::None
         );
     }
 }

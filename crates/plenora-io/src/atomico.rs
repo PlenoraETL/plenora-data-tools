@@ -111,11 +111,13 @@ pub fn scrivi_atomico(
 /// Cancella il temporaneo di una scrittura fallita, controllando l'esito
 /// (il `Drop` di `tempfile` lo ignora). Se la cancellazione fallisce, un
 /// file con i dati resta accanto alla destinazione: l'errore lo dichiara con
-/// effetto `unknown` (e il ritentativo non è più automatico).
+/// effetto `unknown`, che **sostituisce** l'effetto che la causa dichiarava
+/// (`override_remote_effect`: un `rolled_back` del chiamante non è più
+/// vero), e il ritentativo non è più automatico.
 fn scarta(temporaneo: tempfile::NamedTempFile, causa: PlenoraError) -> PlenoraError {
     match temporaneo.close() {
         Ok(()) => causa,
-        Err(_) => causa.with_remote_effect(RemoteEffect::Unknown),
+        Err(_) => causa.override_remote_effect(RemoteEffect::Unknown),
     }
 }
 
@@ -161,5 +163,41 @@ mod tests {
         let pubblico = errore.public_projection();
         assert_eq!(pubblico.remote_effect(), RemoteEffect::Unknown);
         assert_eq!(pubblico.retry(), RetryDisposition::RequiresRecovery);
+    }
+
+    #[test]
+    fn la_pulizia_fallita_smentisce_l_effetto_del_chiamante() {
+        // Il chiamante dichiara `rolled_back` su una causa ritentabile; la
+        // verifica cancella il temporaneo da fuori, cosi' la cancellazione
+        // di `scarta` fallisce: l'effetto diventa `unknown`.
+        let dir = tempfile::tempdir().expect("directory");
+        let destinazione = dir.path().join("t.bin");
+        let errore = super::scrivi_atomico(
+            &destinazione,
+            false,
+            |scrittore| std::io::Write::write_all(scrittore, b"dati").map_err(PlenoraError::from),
+            |percorso| {
+                std::fs::remove_file(percorso).expect("cancellazione esterna");
+                Err(PlenoraError::Timeout("t".to_owned())
+                    .with_remote_effect(RemoteEffect::RolledBack))
+            },
+        )
+        .expect_err("verifica fallita");
+        assert_eq!(errore.remote_effect(), RemoteEffect::Unknown);
+        assert_eq!(
+            errore.retry_disposition(),
+            RetryDisposition::RequiresRecovery
+        );
+        assert_eq!(
+            errore.public_projection().remote_effect(),
+            RemoteEffect::Unknown
+        );
+        assert!(!destinazione.exists());
+        // Una causa che non si ritenta mai resta `never`.
+        let mai = PlenoraError::Conflict("c".to_owned())
+            .with_remote_effect(RemoteEffect::RolledBack)
+            .override_remote_effect(RemoteEffect::Unknown);
+        assert_eq!(mai.remote_effect(), RemoteEffect::Unknown);
+        assert_eq!(mai.retry_disposition(), RetryDisposition::Never);
     }
 }

@@ -315,21 +315,14 @@ impl RowDiagnostics {
             }
             sum.checked_add(*count).ok_or("overflow conteggi")
         })?;
-        // DIAG-007: troncati se esempi osservati sono stati omessi, dal
-        // limite o perché le righe non si attribuiscono alla sorgente
-        // (`senza_attribuzione`: nessun esempio, limite di conoscenza).
-        let omessi_dal_limite =
-            self.observed_total > example_count && example_count == self.examples_limit;
-        let omessi_senza_attribuzione = example_count == 0
-            && self.observed_total > 0
-            && self
-                .knowledge_limits
-                .iter()
-                .flatten()
-                .any(|limite| limite == KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE);
+        // DIAG-007: troncati se e solo se righe osservate mancano dagli
+        // esempi, qualunque sia il motivo (il limite, o righe che non si
+        // attribuiscono alla sorgente). Con `complete` gli esempi sono
+        // `min(observed_total, examples_limit)`, quindi lì il motivo è il
+        // limite.
         if counted != self.observed_total
             || self.counts.keys().any(|cause| !valid_cause(cause))
-            || self.examples_truncated != (omessi_dal_limite || omessi_senza_attribuzione)
+            || self.examples_truncated != (self.observed_total > example_count)
             || self
                 .total
                 .is_some_and(|total| total == 0 || total < self.observed_total)
@@ -852,6 +845,34 @@ pub(crate) mod tests {
         }
     }
 
+    /// DIAG-003/007: una riga attribuibile su due, l'altra no (limite di
+    /// conoscenza): un esempio, troncati; e lo stesso senza esempi.
+    #[test]
+    fn troncati_quando_righe_osservate_mancano_dagli_esempi() {
+        let mut parziale = report(2, vec![example(5)]);
+        parziale.examples_limit = 10;
+        parziale.completeness = RowDiagnosticsCompleteness::Partial;
+        parziale.knowledge_limits =
+            Some(vec![KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE.to_owned()]);
+        parziale.examples_truncated = true;
+        assert_eq!(parziale.validate_for_emission(), Ok(()));
+        let mut non_troncato = parziale.clone();
+        non_troncato.examples_truncated = false;
+        assert_eq!(
+            non_troncato.validate_for_emission(),
+            Err("conteggi incoerenti")
+        );
+        let mut senza_esempi = parziale.clone();
+        senza_esempi.examples.clear();
+        assert_eq!(senza_esempi.validate_for_emission(), Ok(()));
+        // Tutte le righe osservate negli esempi: non troncati.
+        let mut tutti = parziale;
+        tutti.examples.push(example(8));
+        assert!(tutti.validate_for_emission().is_err());
+        tutti.examples_truncated = false;
+        assert_eq!(tutti.validate_for_emission(), Ok(()));
+    }
+
     #[test]
     fn senza_attribuzione_tiene_i_conteggi_e_toglie_gli_esempi() {
         let mut completo = report(3, vec![example(4), example(9)]);
@@ -861,12 +882,7 @@ pub(crate) mod tests {
         assert_eq!(ridotto.examples, Vec::new());
         // DIAG-007: esempi osservati omessi.
         assert!(ridotto.examples_truncated);
-        // Senza il limite di conoscenza, nessun esempio su righe osservate
-        // non e' un troncamento dichiarabile.
-        let mut senza_limite = ridotto.clone();
-        senza_limite.knowledge_limits = Some(vec!["scan.interrupted".to_owned()]);
-        assert!(senza_limite.validate_for_emission().is_err());
-        // E con il limite ma `examples_truncated` falso, il payload mente.
+        // Con `examples_truncated` falso il payload mente.
         let mut falso = ridotto.clone();
         falso.examples_truncated = false;
         assert!(falso.validate_for_emission().is_err());
