@@ -943,7 +943,8 @@ fn coordinate(op: &str, batch: &RecordBatch, indice: usize) -> Result<Vec<Option
                 .collect()
         }
         altro => Err(PlenoraError::Internal(format!(
-            "{op}: colonna di coordinate di tipo {altro} dopo l'analisi"
+            "{op}: colonna di coordinate di tipo {} dopo l'analisi",
+            plenora_core::tipo_arrow::descrivi_tipo(altro)
         ))),
     }
 }

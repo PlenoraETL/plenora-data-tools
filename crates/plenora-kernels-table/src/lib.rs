@@ -724,7 +724,8 @@ pub use plenora_core::batch_with_rows;
 pub fn validate_text_convertible(data_type: &DataType, column: &str) -> Result<()> {
     if !text_convertible(data_type) {
         return Err(PlenoraError::Schema(format!(
-            "colonna `{column}` di tipo {data_type:?} non convertibile in testo"
+            "colonna `{column}` di tipo {} non convertibile in testo",
+            plenora_core::tipo_arrow::descrivi_tipo(data_type)
         )));
     }
     if let DataType::Timestamp(_, Some(timezone)) = data_type {
@@ -755,7 +756,8 @@ pub fn validate_cella_prendibile(data_type: &DataType, column: &str) -> Result<(
         Ok(())
     } else {
         Err(PlenoraError::Schema(format!(
-            "colonna `{column}` di tipo {data_type:?}: nessuna cella da scegliere"
+            "colonna `{column}` di tipo {}: nessuna cella da scegliere",
+            plenora_core::tipo_arrow::descrivi_tipo(data_type)
         )))
     }
 }
@@ -1117,8 +1119,8 @@ pub fn scalar_as_string(array: &dyn Array, row: usize) -> Result<Option<String>>
         return Ok(dictionary_utf8_value(values, row)?.map(ToOwned::to_owned));
     }
     Err(PlenoraError::Schema(format!(
-        "tipo {:?} non supportato dal profilo scalare",
-        array.data_type()
+        "tipo {} non supportato dal profilo scalare",
+        plenora_core::tipo_arrow::descrivi_tipo(array.data_type())
     )))
 }
 
@@ -1284,8 +1286,8 @@ pub fn scalar_as_f64(array: &dyn Array, row: usize) -> Result<Option<f64>> {
             .map_err(|_| PlenoraError::Schema("valore non convertibile in numero".into()));
     }
     Err(PlenoraError::Schema(format!(
-        "tipo {:?} non convertibile in numero",
-        array.data_type()
+        "tipo {} non convertibile in numero",
+        plenora_core::tipo_arrow::descrivi_tipo(array.data_type())
     )))
 }
 
@@ -2048,8 +2050,8 @@ pub fn scalar_compare(
         return Ok(compare_bounds(actual, bound));
     }
     Err(PlenoraError::Schema(format!(
-        "tipo {:?} non confrontabile numericamente",
-        array.data_type()
+        "tipo {} non confrontabile numericamente",
+        plenora_core::tipo_arrow::descrivi_tipo(array.data_type())
     )))
 }
 

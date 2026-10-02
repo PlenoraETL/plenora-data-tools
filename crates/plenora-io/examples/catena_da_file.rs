@@ -289,7 +289,13 @@ fn main() -> Result<()> {
             .schema()
             .fields()
             .iter()
-            .map(|campo| json!([campo.name(), format!("{}", campo.data_type())]))
+            // Il `Display` di Arrow riporterebbe i metadati dei figli.
+            .map(|campo| {
+                json!([
+                    campo.name(),
+                    plenora_core::tipo_arrow::descrivi_tipo(campo.data_type())
+                ])
+            })
             .collect();
         uscite.push(json!({"nome": nome, "righe": tabella.num_rows(), "campi": campi}));
     }

@@ -555,6 +555,29 @@ fn discovery_rejects_canonical_keys_without_contract_version() {
 }
 
 #[test]
+fn errors_never_print_nested_field_metadata() {
+    // Arrow 60 stampa i metadati dei campi figli nel `Display` e nel
+    // `Debug` di un `DataType`: un messaggio d'errore che descrivesse il
+    // tipo cosi' riporterebbe metadati del file («errori senza dati»).
+    let figlio = Field::new("figlio_riservato", DataType::Binary, true).with_metadata(
+        HashMap::from([("chiave.privata".to_owned(), "SEGRETO".to_owned())]),
+    );
+    let geometria =
+        Field::new_struct("geometry", vec![figlio], true).with_metadata(HashMap::from([(
+            GEOARROW_EXTENSION_KEY.to_owned(),
+            GEOARROW_WKB_EXTENSION.to_owned(),
+        )]));
+    let errore =
+        discover_input_contract_from_schema(Arc::new(Schema::new(vec![geometria])), resolve_crs)
+            .expect_err("geometria non Binary");
+    let testo = errore.to_string();
+    assert!(matches!(errore, PlenoraError::Schema(_)), "{testo}");
+    assert!(testo.contains("Struct<1 campi>"), "{testo}");
+    assert!(!testo.contains("SEGRETO"), "{testo}");
+    assert!(!testo.contains("figlio_riservato"), "{testo}");
+}
+
+#[test]
 fn nested_plenora_keys_require_the_contract_version() {
     // Una chiave `plenora.*` su un figlio (struct, lista, mappa, a
     // qualunque profondita') rende lo schema uno schema Plenora come quella

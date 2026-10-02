@@ -47,7 +47,10 @@ fn check_fill_value(op: &str, data_type: &DataType, value: &Value) -> Result<()>
     } else {
         contract_error(
             op,
-            format!("valore di fill non valido per il tipo {data_type:?}"),
+            format!(
+                "valore di fill non valido per il tipo {}",
+                plenora_core::tipo_arrow::descrivi_tipo(data_type)
+            ),
         )
     }
 }
@@ -83,7 +86,8 @@ pub(in crate::analyze) fn analyze_fill_na(
             return contract_error(
                 op,
                 format!(
-                    "fill_na non supporta il tipo {data_type:?} della colonna {}",
+                    "fill_na non supporta il tipo {} della colonna {}",
+                    plenora_core::tipo_arrow::descrivi_tipo(&data_type),
                     fields_out[index].name()
                 ),
             );

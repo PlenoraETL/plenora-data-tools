@@ -86,7 +86,7 @@ pub(in crate::analyze) fn analyze_assert_schema(
                     "tipo errato per {}: atteso {}, trovato {}",
                     expectation.name,
                     expectation.data_type,
-                    field.data_type()
+                    plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
                 ),
             );
         }
@@ -459,9 +459,9 @@ pub(in crate::analyze) fn analyze_validate_rules(
                     return contract_error(
                         op,
                         format!(
-                            "regola {}: tipo {:?} non confrontabile",
+                            "regola {}: tipo {} non confrontabile",
                             rule.name,
-                            field.data_type()
+                            plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
                         ),
                     );
                 }
@@ -486,9 +486,9 @@ pub(in crate::analyze) fn analyze_validate_rules(
                     return contract_error(
                         op,
                         format!(
-                            "regola {}: confronto ordinato richiede colonna numerica (tipo {:?})",
+                            "regola {}: confronto ordinato richiede colonna numerica (tipo {})",
                             rule.name,
-                            field.data_type()
+                            plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
                         ),
                     );
                 }
@@ -507,9 +507,9 @@ pub(in crate::analyze) fn analyze_validate_rules(
                     return contract_error(
                         op,
                         format!(
-                            "regola {}: range richiede colonna numerica (tipo {:?})",
+                            "regola {}: range richiede colonna numerica (tipo {})",
                             rule.name,
-                            field.data_type()
+                            plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
                         ),
                     );
                 }
@@ -531,9 +531,9 @@ pub(in crate::analyze) fn analyze_validate_rules(
                     return contract_error(
                         op,
                         format!(
-                            "regola {}: regex richiede colonna Utf8 (tipo {:?})",
+                            "regola {}: regex richiede colonna Utf8 (tipo {})",
                             rule.name,
-                            field.data_type()
+                            plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
                         ),
                     );
                 }

@@ -258,11 +258,13 @@ impl<'a> CompactRowEncoder<'a> {
                     Ok(KeyColumn::DictionaryUtf8(values))
                 }
                 other if key_encodable(other) => Err(PlenoraError::Internal(format!(
-                    "tipo {other:?} dichiarato codificabile da `key_encodable` ma \
-                     non gestito da nessun ramo dell'encoder"
+                    "tipo {} dichiarato codificabile da `key_encodable` ma \
+                     non gestito da nessun ramo dell'encoder",
+                    plenora_core::tipo_arrow::descrivi_tipo(other)
                 ))),
                 other => Err(PlenoraError::Schema(format!(
-                    "tipo {other:?} non supportato dalle set operation"
+                    "tipo {} non supportato dalle set operation",
+                    plenora_core::tipo_arrow::descrivi_tipo(other)
                 ))),
             })
             .collect::<Result<Vec<_>>>()?;

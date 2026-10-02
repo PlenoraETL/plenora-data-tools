@@ -501,8 +501,8 @@ fn fill_array(array: &dyn Array, method: &FillMethod, value: &Value) -> Result<A
         return Ok(fill_boolean(values, method, fixed));
     }
     Err(PlenoraError::Schema(format!(
-        "fill_na non supporta {:?}",
-        array.data_type()
+        "fill_na non supporta {}",
+        plenora_core::tipo_arrow::descrivi_tipo(array.data_type())
     )))
 }
 

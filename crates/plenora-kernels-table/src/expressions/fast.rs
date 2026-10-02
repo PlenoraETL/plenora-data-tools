@@ -850,7 +850,8 @@ fn compile_temporal<'a>(expression: &'a Expression, batch: &'a RecordBatch) -> T
                     )
                 }
                 other => TemporalSource::Error(LazyError::Schema(format!(
-                    "date_trunc richiede una colonna Date32 o Timestamp, trovato {other:?}"
+                    "date_trunc richiede una colonna Date32 o Timestamp, trovato {}",
+                    plenora_core::tipo_arrow::descrivi_tipo(other)
                 ))),
             }
         }

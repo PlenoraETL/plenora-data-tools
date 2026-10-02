@@ -277,7 +277,7 @@ pub(in crate::analyze) fn analyze_from_coords(
         if !matches!(field.data_type(), DataType::Float64 | DataType::Int64) {
             return Err(PlenoraError::Schema(format!(
                 "{op}: colonna `{column}` di tipo {}, attesa Float64 o Int64",
-                field.data_type()
+                plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
             )));
         }
     }
@@ -351,7 +351,7 @@ pub(in crate::analyze) fn analyze_from_wkt(
         return Err(PlenoraError::Schema(format!(
             "{op}: colonna `{}` di tipo {}, attesa Utf8",
             parsed.wkt_column,
-            wkt_field.data_type()
+            plenora_core::tipo_arrow::descrivi_tipo(wkt_field.data_type())
         )));
     }
     let name = parsed
@@ -450,9 +450,9 @@ pub(in crate::analyze) fn analyze_collect(
         // non ha un confronto nativo si rifiuta qui, non in esecuzione.
         if !plenora_kernels_table::aggregation::is_sortable(field.data_type()) {
             return Err(PlenoraError::InvalidPlan(format!(
-                "{op}: parametro `group_by` non valido: colonna `{name}` di tipo {:?} senza \
+                "{op}: parametro `group_by` non valido: colonna `{name}` di tipo {} senza \
                  un ordine naturale",
-                field.data_type()
+                plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
             )));
         }
         // La colonna chiave sopravvive invariata: si clona il `Field`

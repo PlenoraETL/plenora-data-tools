@@ -489,8 +489,8 @@ impl<'a> OrdineNumerico<'a> {
     pub fn new(array: &'a ArrayRef) -> Result<Self> {
         if !dominio_numerico(array.data_type()) {
             return Err(PlenoraError::Schema(format!(
-                "tipo {:?} non convertibile in numero",
-                array.data_type()
+                "tipo {} non convertibile in numero",
+                plenora_core::tipo_arrow::descrivi_tipo(array.data_type())
             )));
         }
         if array.data_type() == &DataType::Utf8 {
@@ -554,8 +554,8 @@ impl<'a> OrdineNumerico<'a> {
 pub fn valida_valori_numerici(array: &ArrayRef) -> Result<()> {
     if !dominio_numerico(array.data_type()) {
         return Err(PlenoraError::Schema(format!(
-            "tipo {:?} non convertibile in numero",
-            array.data_type()
+            "tipo {} non convertibile in numero",
+            plenora_core::tipo_arrow::descrivi_tipo(array.data_type())
         )));
     }
     if array.data_type() == &DataType::Utf8 {

@@ -460,10 +460,10 @@ pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordB
             let field = schema.field(index);
             if field.data_type() != &data_type {
                 return Err(PlenoraError::InvalidPlan(format!(
-                    "align_schema: colonna {} di tipo {:?}, atteso {:?} (nessun cast implicito)",
+                    "align_schema: colonna {} di tipo {}, atteso {} (nessun cast implicito)",
                     declared.name,
-                    field.data_type(),
-                    data_type
+                    plenora_core::tipo_arrow::descrivi_tipo(field.data_type()),
+                    plenora_core::tipo_arrow::descrivi_tipo(&data_type)
                 )));
             }
             fields.push(field.clone());

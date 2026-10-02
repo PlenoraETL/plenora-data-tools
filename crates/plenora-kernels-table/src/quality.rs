@@ -168,7 +168,7 @@ pub fn assert_schema(batch: &RecordBatch, config: &AssertSchema) -> Result<Recor
                 "assert_schema: tipo errato per {}: atteso {}, trovato {}",
                 expectation.name,
                 expectation.data_type,
-                field.data_type()
+                plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
             )));
         }
         if expectation

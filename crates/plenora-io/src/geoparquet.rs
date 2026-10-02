@@ -253,7 +253,7 @@ fn come_binary(colonna: &ArrayRef) -> Result<Arc<BinaryArray>> {
     }
     Err(PlenoraError::Unsupported(format!(
         "tipo Arrow {} non ammesso per una colonna WKB (attesi Binary o LargeBinary)",
-        colonna.data_type()
+        plenora_core::tipo_arrow::descrivi_tipo(colonna.data_type())
     )))
 }
 
@@ -325,8 +325,10 @@ pub fn applica(tabella: &RecordBatch, testo_geo: &str) -> Result<RecordBatch> {
         let errore = |e| di_colonna(campo.name(), e);
         if let Some(estensione) = campo.metadata().get(GEOARROW_EXTENSION_KEY) {
             if estensione != GEOARROW_WKB_EXTENSION {
+                // Il valore letto non entra nel messaggio («errori senza dati»).
                 return Err(errore(PlenoraError::Unsupported(format!(
-                    "estensione `{estensione}` incoerente con encoding WKB"
+                    "`{GEOARROW_EXTENSION_KEY}` diversa da `{GEOARROW_WKB_EXTENSION}`: \
+                     incoerente con encoding WKB"
                 ))));
             }
         }

@@ -103,8 +103,8 @@ pub(in crate::analyze) fn require_numeric(
         contract_error(
             op,
             format!(
-                "colonna {name}: tipo {:?} non convertibile in numero",
-                field.data_type()
+                "colonna {name}: tipo {} non convertibile in numero",
+                plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
             ),
         )
     }

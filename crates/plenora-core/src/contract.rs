@@ -1012,9 +1012,9 @@ impl DataContract {
             }
             if field.data_type() != &DataType::Binary {
                 return Err(PlenoraError::Schema(format!(
-                    "colonna geometrica `{}`: tipo fisico {:?}, atteso Binary (framing WKB/EWKB)",
+                    "colonna geometrica `{}`: tipo fisico {}, atteso Binary (framing WKB/EWKB)",
                     geometry.name,
-                    field.data_type()
+                    crate::tipo_arrow::descrivi_tipo(field.data_type())
                 )));
             }
             validate_declared_types(geometry, field.metadata())?;

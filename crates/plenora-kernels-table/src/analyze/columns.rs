@@ -312,10 +312,10 @@ pub(in crate::analyze) fn analyze_align_schema(
                 return contract_error(
                     op,
                     format!(
-                        "colonna {} di tipo {:?}, atteso {:?} (nessun cast implicito)",
+                        "colonna {} di tipo {}, atteso {} (nessun cast implicito)",
                         declared.name,
-                        field.data_type(),
-                        data_type
+                        plenora_core::tipo_arrow::descrivi_tipo(field.data_type()),
+                        plenora_core::tipo_arrow::descrivi_tipo(&data_type)
                     ),
                 );
             }

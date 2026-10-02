@@ -89,9 +89,9 @@ fn require_ordered(op: &str, field: &Field) -> Result<()> {
         contract_error(
             op,
             format!(
-                "colonna {} di tipo {:?}: nessun confronto ordinato",
+                "colonna {} di tipo {}: nessun confronto ordinato",
                 field.name(),
-                field.data_type()
+                plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
             ),
         )
     }

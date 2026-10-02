@@ -178,8 +178,9 @@ pub(in crate::analyze) fn analyze_join(
                 return contract_error(
                     op,
                     format!(
-                        "chiave {name} di tipo {:?} non fondibile con how={:?}:                          il coalesce delle chiavi non copre questo tipo",
-                        field.data_type(),
+                        "chiave {name} di tipo {} non fondibile con how={:?}: il coalesce \
+                         delle chiavi non copre questo tipo",
+                        plenora_core::tipo_arrow::descrivi_tipo(field.data_type()),
                         config.how
                     ),
                 );
@@ -535,11 +536,11 @@ fn check_same_schema(op: &str, left: &DataContract, right: &DataContract) -> Res
             return contract_error(
                 op,
                 format!(
-                    "schemi incompatibili: {} ({:?}) vs {} ({:?})",
+                    "schemi incompatibili: {} ({}) vs {} ({})",
                     left_field.name(),
-                    left_field.data_type(),
+                    plenora_core::tipo_arrow::descrivi_tipo(left_field.data_type()),
                     right_field.name(),
-                    right_field.data_type()
+                    plenora_core::tipo_arrow::descrivi_tipo(right_field.data_type())
                 ),
             );
         }
@@ -583,10 +584,10 @@ pub(in crate::analyze) fn analyze_concat_by_name(
                         return contract_error(
                             op,
                             format!(
-                                "tipi incompatibili per la colonna {} ({:?} vs {:?})",
+                                "tipi incompatibili per la colonna {} ({} vs {})",
                                 field.name(),
-                                existing.data_type(),
-                                field.data_type()
+                                plenora_core::tipo_arrow::descrivi_tipo(existing.data_type()),
+                                plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
                             ),
                         );
                     }
@@ -668,8 +669,8 @@ pub(in crate::analyze) fn analyze_set_operation(
             return contract_error(
                 op,
                 format!(
-                    "tipo {:?} non supportato dalle set operation",
-                    field.data_type()
+                    "tipo {} non supportato dalle set operation",
+                    plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
                 ),
             );
         }

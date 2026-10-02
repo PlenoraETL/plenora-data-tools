@@ -142,9 +142,14 @@ pub fn field_declares_wkb_geometry(field: &Field) -> bool {
 }
 
 /// Errore di schema: la colonna geometria non e' `Binary`.
-pub fn geometry_column_not_binary(name: &str, actual: impl std::fmt::Display) -> PlenoraError {
+///
+/// Il tipo si descrive con [`crate::tipo_arrow::descrivi_tipo`]: il
+/// `Display` di Arrow riporterebbe i metadati dei campi figli.
+#[must_use]
+pub fn geometry_column_not_binary(name: &str, actual: &DataType) -> PlenoraError {
     PlenoraError::Schema(format!(
-        "colonna geometria `{name}` di tipo {actual}, atteso Binary"
+        "colonna geometria `{name}` di tipo {}, atteso Binary",
+        crate::tipo_arrow::descrivi_tipo(actual)
     ))
 }
 
@@ -1059,7 +1064,8 @@ pub fn canonical_geometry_crs_definition(
             if actual_format != Some(format) {
                 return Err(PlenoraError::Crs(format!(
                     "chiave `{PLENORA_GEOMETRY_CRS_DEFINITION_KEY}`: il contenuto non \
-                     corrisponde al formato `{format}` dichiarato"
+                     corrisponde al formato dichiarato in \
+                     `{PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY}`"
                 )));
             }
             Ok(Some((definition.clone(), format)))

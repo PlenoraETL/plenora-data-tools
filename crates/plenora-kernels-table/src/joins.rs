@@ -1176,10 +1176,10 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
             if let Some(existing) = fields.iter_mut().find(|f| f.name() == field.name()) {
                 if existing.data_type() != field.data_type() {
                     return Err(PlenoraError::Schema(format!(
-                        "concat_by_name: tipi incompatibili per la colonna {} ({:?} vs {:?})",
+                        "concat_by_name: tipi incompatibili per la colonna {} ({} vs {})",
                         field.name(),
-                        existing.data_type(),
-                        field.data_type()
+                        plenora_core::tipo_arrow::descrivi_tipo(existing.data_type()),
+                        plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
                     )));
                 }
                 if field.is_nullable() && !existing.is_nullable() {

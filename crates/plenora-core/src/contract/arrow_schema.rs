@@ -207,7 +207,7 @@ pub fn contract_from_arrow_schema(
                 "colonna geometria `{}` di tipo {}, atteso Binary (LargeBinary lo \
                  converte chi riceve la tabella)",
                 field.name(),
-                field.data_type()
+                crate::tipo_arrow::descrivi_tipo(field.data_type())
             )));
         }
         verifica_metadato_estensione(field)?;
@@ -349,8 +349,8 @@ pub fn contract_crs_from_keys(
         if resolution != CrsResolution::Missing {
             return Err(PlenoraError::Crs(format!(
                 "colonna geometria `{field_name}`: chiave \
-                 `{PLENORA_GEOMETRY_CRS_RESOLUTION_KEY}` dichiara `{resolution}` ma \
-                 nessun CRS e' dichiarato in alcuna rappresentazione accettata"
+                 `{PLENORA_GEOMETRY_CRS_RESOLUTION_KEY}` dichiara un CRS (risolto o non \
+                 risolto) ma nessun CRS e' dichiarato in alcuna rappresentazione accettata"
             )));
         }
     }

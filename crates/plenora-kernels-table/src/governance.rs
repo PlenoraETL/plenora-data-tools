@@ -1105,8 +1105,9 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
             RuleOperator::Eq | RuleOperator::Ne => {
                 if !is_rule_comparable(&data_type) {
                     return Err(PlenoraError::InvalidPlan(format!(
-                        "validate_rules: regola {}: tipo {data_type:?} non confrontabile",
-                        rule.name
+                        "validate_rules: regola {}: tipo {} non confrontabile",
+                        rule.name,
+                        plenora_core::tipo_arrow::descrivi_tipo(&data_type)
                     )));
                 }
                 if numeric_column {
@@ -1121,8 +1122,9 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
             RuleOperator::Gt | RuleOperator::Ge | RuleOperator::Lt | RuleOperator::Le => {
                 if !numeric_column {
                     return Err(PlenoraError::InvalidPlan(format!(
-                        "validate_rules: regola {}: confronto ordinato richiede colonna numerica (tipo {data_type:?})",
-                        rule.name
+                        "validate_rules: regola {}: confronto ordinato richiede colonna numerica (tipo {})",
+                        rule.name,
+                        plenora_core::tipo_arrow::descrivi_tipo(&data_type)
                     )));
                 }
                 expected_bound = Some(valore_regola(&expected).ok_or_else(|| {
@@ -1135,8 +1137,9 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
             RuleOperator::Range => {
                 if !numeric_column {
                     return Err(PlenoraError::InvalidPlan(format!(
-                        "validate_rules: regola {}: range richiede colonna numerica (tipo {data_type:?})",
-                        rule.name
+                        "validate_rules: regola {}: range richiede colonna numerica (tipo {})",
+                        rule.name,
+                        plenora_core::tipo_arrow::descrivi_tipo(&data_type)
                     )));
                 }
                 let Some(estremi) = estremi_regola(&expected) else {
@@ -1157,8 +1160,9 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
             RuleOperator::Regex => {
                 if data_type != DataType::Utf8 {
                     return Err(PlenoraError::InvalidPlan(format!(
-                        "validate_rules: regola {}: regex richiede colonna Utf8 (tipo {data_type:?})",
-                        rule.name
+                        "validate_rules: regola {}: regex richiede colonna Utf8 (tipo {})",
+                        rule.name,
+                        plenora_core::tipo_arrow::descrivi_tipo(&data_type)
                     )));
                 }
                 regex = Some(regex::Regex::new(&expected).map_err(|error| {

@@ -612,7 +612,9 @@ impl Pivot {
             },
             _ => {
                 return Err(PlenoraError::InvalidPlan(format!(
-                    "pivot: mapping su una pivot_col di tipo {tipo_pivot:?}: il testo dei valori non e' prevedibile dalle chiavi"
+                    "pivot: mapping su una pivot_col di tipo {}: il testo dei valori non e' \
+                     prevedibile dalle chiavi",
+                    plenora_core::tipo_arrow::descrivi_tipo(tipo_pivot)
                 )));
             }
         };
@@ -1854,8 +1856,8 @@ fn diff_values(left: &ArrayRef, right: &ArrayRef, rows: &[DiffRow]) -> Result<Ar
     if left.data_type() != right.data_type() {
         return Err(PlenoraError::Schema(format!(
             "table_diff richiede tipi Arrow identici, trovati {} e {}",
-            left.data_type(),
-            right.data_type()
+            plenora_core::tipo_arrow::descrivi_tipo(left.data_type()),
+            plenora_core::tipo_arrow::descrivi_tipo(right.data_type())
         )));
     }
     let combined = plenora_core::arrow::select::concat::concat(&[left.as_ref(), right.as_ref()])?;

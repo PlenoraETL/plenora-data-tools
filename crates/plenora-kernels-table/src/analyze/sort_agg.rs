@@ -36,8 +36,8 @@ fn require_sortable(op: &str, input: &DataContract, columns: &[String]) -> Resul
             return contract_error(
                 op,
                 format!(
-                    "colonna {name} di tipo {:?} non ordinabile: nessun confronto nativo definito",
-                    field.data_type()
+                    "colonna {name} di tipo {} non ordinabile: nessun confronto nativo definito",
+                    plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
                 ),
             );
         }

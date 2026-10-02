@@ -83,16 +83,16 @@ pub fn compare_cells_typed(
         comparison_family(right.data_type()),
     ) else {
         return Err(PlenoraError::Schema(format!(
-            "tipo {:?} o {:?} non ordinabile: nessun confronto nativo definito",
-            left.data_type(),
-            right.data_type()
+            "tipo {} o {} non ordinabile: nessun confronto nativo definito",
+            plenora_core::tipo_arrow::descrivi_tipo(left.data_type()),
+            plenora_core::tipo_arrow::descrivi_tipo(right.data_type())
         )));
     };
     if left_family != right_family {
         return Err(PlenoraError::Schema(format!(
-            "tipi non confrontabili fra loro: {:?} e {:?}",
-            left.data_type(),
-            right.data_type()
+            "tipi non confrontabili fra loro: {} e {}",
+            plenora_core::tipo_arrow::descrivi_tipo(left.data_type()),
+            plenora_core::tipo_arrow::descrivi_tipo(right.data_type())
         )));
     }
 
@@ -165,9 +165,9 @@ pub fn compare_cells_typed(
                 InteriTemporali::new(right.as_ref()),
             ) else {
                 return Err(PlenoraError::Schema(format!(
-                    "array incoerente col proprio tipo dichiarato: {:?} / {:?}",
-                    left.data_type(),
-                    right.data_type()
+                    "array incoerente col proprio tipo dichiarato: {} / {}",
+                    plenora_core::tipo_arrow::descrivi_tipo(left.data_type()),
+                    plenora_core::tipo_arrow::descrivi_tipo(right.data_type())
                 )));
             };
             Ok(crate::interi_temporali::confronta(
@@ -228,9 +228,9 @@ fn coppia<'a, A: 'static>(left: &'a ArrayRef, right: &'a ArrayRef) -> Result<(&'
         right.as_any().downcast_ref::<A>(),
     ) else {
         return Err(PlenoraError::Schema(format!(
-            "array incoerente col proprio tipo dichiarato: {:?} / {:?}",
-            left.data_type(),
-            right.data_type()
+            "array incoerente col proprio tipo dichiarato: {} / {}",
+            plenora_core::tipo_arrow::descrivi_tipo(left.data_type()),
+            plenora_core::tipo_arrow::descrivi_tipo(right.data_type())
         )));
     };
     Ok((left_values, right_values))
@@ -349,8 +349,8 @@ pub fn validate_sortable(array: &ArrayRef, rows: usize) -> Result<()> {
     // Stessa tabella del comparatore.
     let Some(family) = comparison_family(array.data_type()) else {
         return Err(PlenoraError::Schema(format!(
-            "tipo {:?} non ordinabile: nessun confronto nativo definito",
-            array.data_type()
+            "tipo {} non ordinabile: nessun confronto nativo definito",
+            plenora_core::tipo_arrow::descrivi_tipo(array.data_type())
         )));
     };
     // Match esaustivo: una famiglia nuova senza il proprio braccio non

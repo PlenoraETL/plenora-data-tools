@@ -218,7 +218,8 @@ pub fn eval_temporal(expression: &Expression, batch: &RecordBatch, row: usize) -
                     })
                 }
                 other => Err(PlenoraError::Schema(format!(
-                    "date_trunc richiede una colonna Date32 o Timestamp, trovato {other:?}"
+                    "date_trunc richiede una colonna Date32 o Timestamp, trovato {}",
+                    plenora_core::tipo_arrow::descrivi_tipo(other)
                 ))),
             }
         }
