@@ -67,6 +67,42 @@ fn g<'a>(x: &'a str) -> &'a str { x } // dopo una lifetime
         comments = list(check_comments.comments_for(Path("sample.rs"), source))
         self.assertEqual([comment.line for comment in comments], [2, 4, 5])
 
+    def lines(self, name: str, source: str) -> list[int]:
+        return [comment.line for comment in check_comments.comments_for(Path(name), source)]
+
+    def test_toml_literal_strings_have_no_escapes(self) -> None:
+        self.assertEqual(self.lines("a.toml", "path = 'C:\\' # TODO\n"), [1])
+        self.assertEqual(self.lines("a.toml", "testo = \"a\\\"#b\" # TODO\n"), [1])
+        self.assertEqual(self.lines("a.toml", "x = '#non commento'\n"), [])
+
+    def test_toml_multiline_strings_span_lines(self) -> None:
+        literal = "a = '''\n# dentro\nC:\\'''  # dopo\n# riga\n"
+        self.assertEqual(self.lines("a.toml", literal), [3, 4])
+        basic = 'b = """\n# dentro \\"""\nancora"""  # dopo\n'
+        self.assertEqual(self.lines("a.toml", basic), [3])
+
+    def test_yaml_quotes_open_only_at_a_boundary(self) -> None:
+        self.assertEqual(self.lines("a.yml", "name: it's # TODO\n"), [1])
+        self.assertEqual(self.lines("a.yml", "run: echo 'it''s # no'  # TODO\n"), [1])
+        self.assertEqual(self.lines("a.yml", "url: a#b\n"), [])
+
+    def test_shell_single_quotes_are_literal(self) -> None:
+        self.assertEqual(self.lines("a.sh", "echo 'C:\\' # TODO\n"), [1])
+        self.assertEqual(self.lines("a.sh", "echo a#b\n"), [])
+
+    def test_sql_and_ini(self) -> None:
+        self.assertEqual(self.lines("a.sql", "select 'it''s -- no' -- TODO\n"), [1])
+        self.assertEqual(self.lines("a.ini", "a = b # no\n# TODO\n"), [2])
+
+    def test_python_raw_strings(self) -> None:
+        source = "x = r'C:\\d' # TODO\ny = r\"# no\"\n"
+        self.assertEqual(self.lines("a.py", source), [1])
+
+    def test_rust_raw_strings_with_hashes(self) -> None:
+        source = 'let a = r#"x " // no"#; // TODO\nlet b = r"C:\\"; // TODO\n'
+        comments = list(check_comments.comments_for(Path("a.rs"), source))
+        self.assertEqual([(c.line, c.text) for c in comments], [(1, "TODO"), (2, "TODO")])
+
     def test_toml_yaml_and_git_files_read_hash_comments(self) -> None:
         for name in ("Cargo.toml", "ci.yml", ".gitattributes"):
             comments = list(check_comments.comments_for(Path(name), 'a = "#"\n# TODO\n'))

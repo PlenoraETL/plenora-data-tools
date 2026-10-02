@@ -59,6 +59,22 @@ class LinkTests(unittest.TestCase):
             self.assertTrue(any("link locale inesistente" in item for item in reasons))
             self.assertTrue(any("ancora inesistente" in item for item in reasons))
 
+    def test_reference_style_links_are_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write(
+                root,
+                "README.md",
+                "# Home\n\nVedi [il target][t] e [l'altro][rotto].\n\n"
+                "[t]: target.md#present\n"
+                "  [rotto]: <target.md#manca> \"titolo\"\n"
+                "```md\n[nel codice]: assente.md\n```\n",
+            )
+            write(root, "target.md", "# Present\n")
+            documents = check_docs.markdown_documents(root)
+            reasons = [item.reason for item in check_docs.validate_links(root, documents)]
+            self.assertEqual(reasons, ["ancora inesistente: target.md#manca"])
+
     def test_schede_links_resolve_from_the_assembled_document(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -120,6 +136,17 @@ class CodeReferenceTests(unittest.TestCase):
             write(root, "c.toml", "# vedi docs/" + "assente.md, «Runner»\n")
             reasons = [item.reason for item in check_docs.validate_code_references(root)]
             self.assertEqual(len(reasons), 2)
+
+    def test_code_references_are_reported_in_path_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write(root, "README.md", "# Radice\n")
+            for name in ("z.rs", "m/b.py", "a.toml", "m/a.rs"):
+                marker = "#" if name.endswith((".py", ".toml")) else "//"
+                write(root, name, f"{marker} vedi README, «Assente»\n")
+            paths = [item.path for item in check_docs.validate_code_references(root)]
+            self.assertEqual(paths, sorted(paths))
+            self.assertEqual(len(paths), 4)
 
     def test_apostrophe_accents_match_accented_titles(self) -> None:
         self.assertEqual(

@@ -92,6 +92,6 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 
 | file | prove |
 | --- | --- |
-| `scripts/test_check_comments.py` | 20 |
-| `scripts/test_check_docs.py` | 12 |
+| `scripts/test_check_comments.py` | 27 |
+| `scripts/test_check_docs.py` | 14 |
 | `scripts/test_genera_inventario.py` | 5 |

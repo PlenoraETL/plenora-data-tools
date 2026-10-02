@@ -41,6 +41,8 @@ SKIP_PARTS = {
     "venv",
 }
 LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+# Definizione di un link a riferimento: `[nome]: destinazione "titolo"`.
+REFERENCE_DEFINITION = re.compile(r"^ {0,3}\[[^\]]+\]:\s*<?([^\s>]+)>?")
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 BOLD_LABEL = re.compile(r"\*\*([^*]+?)\*\*")
 PYTHON_COMMAND = re.compile(r"\bpython(?:3)?\s+((?:scripts[\\/])[A-Za-z0-9_.\\/-]+\.py)")
@@ -160,12 +162,25 @@ def reading_context(root: Path, path: Path) -> Path:
     return root / assembled if assembled is not None else path
 
 
+def link_targets(text: str) -> list[str]:
+    """Le destinazioni dei link fuori dai blocchi di codice: in linea
+    (`[testo](destinazione)`) e definizioni dei link a riferimento
+    (`[nome]: destinazione`)."""
+
+    lines = outside_fences(text)
+    targets = LINK.findall("\n".join(lines))
+    targets += [
+        match.group(1) for line in lines if (match := REFERENCE_DEFINITION.match(line))
+    ]
+    return targets
+
+
 def validate_links(root: Path, documents: list[Path]) -> list[Violation]:
     violations: list[Violation] = []
     cache: dict[Path, set[str]] = {}
     for path in documents:
         context = reading_context(root, path)
-        for raw in LINK.findall("\n".join(outside_fences(path.read_text(encoding="utf-8")))):
+        for raw in link_targets(path.read_text(encoding="utf-8")):
             target = raw.strip().strip("<>")
             if target.startswith(("http://", "https://", "mailto:")):
                 continue
@@ -263,7 +278,7 @@ def validate_code_references(root: Path) -> list[Violation]:
 
     violations: list[Violation] = []
     cache: dict[Path, set[str]] = {}
-    for path in check_comments.source_files(root):
+    for path in sorted(check_comments.source_files(root)):
         source = path.read_text(encoding="utf-8")
         comments = list(check_comments.comments_for(path, source))
         # I commenti consecutivi formano una frase: un rimando può andare a

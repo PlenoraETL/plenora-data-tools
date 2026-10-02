@@ -269,28 +269,121 @@ def _c_like_comments(source: str) -> Iterator[Comment]:
         index += 1
 
 
-def _line_comments(source: str, marker: str) -> Iterator[Comment]:
+@dataclass(frozen=True)
+class LineSyntax:
+    """Le regole delle stringhe di un formato con commenti fino a fine riga.
+
+    Ogni formato ha le sue: in TOML `'...'` è una stringa letterale, senza
+    escape (`'C:\\'` è chiusa), mentre in `"..."` la barra rovescia
+    protegge l'apice; YAML e SQL raddoppiano l'apice singolo; in YAML e
+    nella shell `#` apre un commento solo a inizio riga o dopo uno spazio.
+    """
+
+    marker: str = "#"
+    # Apici nei quali la barra rovescia protegge il carattere seguente.
+    backslash_in: frozenset[str] = frozenset()
+    # Apici che si proteggono raddoppiandoli (`''` dentro `'...'`).
+    doubled_in: frozenset[str] = frozenset()
+    # Delimitatori di stringhe su più righe, con l'escape che vale dentro.
+    multiline: tuple[tuple[str, bool], ...] = ()
+    # Un apice apre una stringa solo dopo spazio, inizio riga o separatore.
+    quote_at_boundary: bool = False
+    # Il marcatore apre un commento solo dopo spazio o a inizio riga.
+    marker_at_boundary: bool = False
+    # Commenti solo su righe intere (`.gitignore`, `.ini`).
+    whole_line_only: bool = False
+
+
+_TOML = LineSyntax(
+    backslash_in=frozenset('"'),
+    multiline=(('"""', True), ("'''", False)),
+)
+_YAML = LineSyntax(
+    backslash_in=frozenset('"'),
+    doubled_in=frozenset("'"),
+    quote_at_boundary=True,
+    marker_at_boundary=True,
+)
+_SHELL = LineSyntax(backslash_in=frozenset('"'), marker_at_boundary=True)
+_POWERSHELL = LineSyntax(doubled_in=frozenset("'\""), marker_at_boundary=True)
+_SQL = LineSyntax(marker="--", doubled_in=frozenset("'"))
+_WHOLE_LINE = LineSyntax(whole_line_only=True)
+LINE_SYNTAX = {
+    ".toml": _TOML,
+    ".yaml": _YAML,
+    ".yml": _YAML,
+    ".sh": _SHELL,
+    ".ps1": _POWERSHELL,
+    ".sql": _SQL,
+    ".cfg": _WHOLE_LINE,
+    ".ini": _WHOLE_LINE,
+}
+_QUOTE_OPENERS = " \t[{(,:=-?"
+
+
+def _line_comments(source: str, syntax: LineSyntax) -> Iterator[Comment]:
     """Estrae commenti da formati nei quali il marcatore vale fino a EOL."""
 
+    marker = syntax.marker
+    open_multiline: tuple[str, bool] | None = None
     for line_number, line in enumerate(source.splitlines(), 1):
-        quote: str | None = None
-        escaped = False
+        if syntax.whole_line_only:
+            if line.lstrip().startswith(marker):
+                yield Comment(line_number, line.lstrip()[len(marker) :].strip())
+            continue
         index = 0
-        while index <= len(line) - len(marker):
+        if open_multiline is not None:
+            delimiter, escapes = open_multiline
+            while index < len(line):
+                if escapes and line[index] == "\\":
+                    index += 2
+                    continue
+                if line.startswith(delimiter, index):
+                    index += len(delimiter)
+                    open_multiline = None
+                    break
+                index += 1
+            if open_multiline is not None:
+                continue
+        quote: str | None = None
+        while index < len(line):
             char = line[index]
-            if escaped:
-                escaped = False
+            if quote is not None:
+                if char == "\\" and quote in syntax.backslash_in:
+                    index += 2
+                    continue
+                if char == quote:
+                    if quote in syntax.doubled_in and line.startswith(quote * 2, index):
+                        index += 2
+                        continue
+                    quote = None
                 index += 1
                 continue
-            if char == "\\" and quote:
-                escaped = True
+            started = next(
+                (pair for pair in syntax.multiline if line.startswith(pair[0], index)), None
+            )
+            if started is not None:
+                delimiter, escapes = started
+                index += len(delimiter)
+                while index < len(line):
+                    if escapes and line[index] == "\\":
+                        index += 2
+                        continue
+                    if line.startswith(delimiter, index):
+                        index += len(delimiter)
+                        break
+                    index += 1
+                else:
+                    open_multiline = started
+                continue
+            at_boundary = index == 0 or line[index - 1] in _QUOTE_OPENERS
+            if char in {'"', "'"} and (at_boundary or not syntax.quote_at_boundary):
+                quote = char
                 index += 1
                 continue
-            if char in {'"', "'"}:
-                quote = None if quote == char else char if quote is None else quote
-                index += 1
-                continue
-            if quote is None and line.startswith(marker, index):
+            if line.startswith(marker, index) and (
+                not syntax.marker_at_boundary or index == 0 or line[index - 1].isspace()
+            ):
                 yield Comment(line_number, line[index + len(marker) :].strip())
                 break
             index += 1
@@ -318,10 +411,10 @@ def comments_for(path: Path, source: str) -> Iterable[Comment]:
         return _python_comments(source)
     if suffix in C_LIKE_SUFFIXES:
         return _c_like_comments(source)
-    if suffix in HASH_SUFFIXES or path.name in HASH_NAMES or path.name.startswith("Dockerfile"):
-        return _line_comments(source, "#")
-    if suffix in DASH_SUFFIXES:
-        return _line_comments(source, "--")
+    if suffix in LINE_SYNTAX:
+        return _line_comments(source, LINE_SYNTAX[suffix])
+    if path.name in HASH_NAMES or path.name.startswith("Dockerfile"):
+        return _line_comments(source, _WHOLE_LINE)
     return ()
 
 
