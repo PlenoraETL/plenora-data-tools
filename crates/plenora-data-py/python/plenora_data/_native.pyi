@@ -5,6 +5,7 @@
 # `scadenza_monotona` un istante di `time.monotonic()` fissato
 # all'ingresso della chiamata pubblica (`timeout`).
 
+from collections.abc import Callable
 from typing import final
 
 @final
@@ -20,6 +21,9 @@ class CancellationToken:
         """Se il segnale e' alzato."""
 
 def version() -> str: ...
+def _sonda_consegna(sonda: Callable[[], object] | None) -> None:
+    """Solo per le prove: un callable chiamato fra la fine del lavoro e il
+    controllo della consegna; None lo toglie."""
 def capabilities() -> str: ...
 def catalog() -> str: ...
 def describe(

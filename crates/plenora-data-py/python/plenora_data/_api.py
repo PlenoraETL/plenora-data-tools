@@ -187,6 +187,10 @@ def _sorgente(valore: object, voce: str) -> tuple[str, object]:
             # Senza copia: la tabella condivide i buffer del blocco.
             return ("arrow", pa.Table.from_batches([valore]))
         arrow = hasattr(valore, "__arrow_c_stream__")
+    except PlenoraError:
+        # Già pubblica e classificata (per esempio un annullamento): resta
+        # quella.
+        raise
     except Exception:
         # L'oggetto fallisce già mentre lo si guarda: il suo testo può
         # portare dati, e non esce.

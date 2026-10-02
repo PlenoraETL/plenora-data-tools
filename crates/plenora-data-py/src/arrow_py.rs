@@ -20,13 +20,14 @@ use plenora_core::arrow::array::ffi_stream::ArrowArrayStreamReader;
 use plenora_core::arrow::array::{RecordBatch, RecordBatchReader};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::arrow::ArrowError;
+use plenora_core::arrow::DataType;
 use plenora_core::memoria::byte_dati;
 use plenora_core::{ErrorPhase, PlenoraError};
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
 use crate::controlli::Controlli;
-use crate::errori::Errore;
+use crate::errori::{e_pubblica, Errore};
 
 /// Un errore di lettura dell'input, senza il testo della causa (può
 /// contenere valori del produttore).
@@ -52,10 +53,11 @@ fn errore_arrow(contesto: &str, errore: &ArrowError) -> Errore {
 }
 
 /// L'eccezione Python sollevata dal produttore dello stream. Un'eccezione
-/// che non è `Exception` (`KeyboardInterrupt`, `SystemExit`) passa com'è;
-/// le altre diventano `data_mapping` senza il loro testo.
+/// che non è `Exception` (`KeyboardInterrupt`, `SystemExit`) o che è già
+/// una `PlenoraError` pubblica passa com'è; le altre diventano
+/// `data_mapping` senza il loro testo.
 fn errore_del_produttore(py: Python<'_>, errore: PyErr, contesto: &str) -> Errore {
-    if errore.is_instance_of::<PyException>(py) {
+    if errore.is_instance_of::<PyException>(py) && !e_pubblica(py, &errore) {
         illeggibile(
             contesto,
             "l'oggetto non da' uno stream Arrow (Arrow PyCapsule Interface, `__arrow_c_stream__`)",
@@ -75,6 +77,60 @@ fn oltre_il_budget(contesto: &str, servono: u64, residuo: u64) -> Errore {
         ))
         .with_phase(ErrorPhase::Read),
     )
+}
+
+/// Margine per buffer della copia di `concat_batches`: Arrow arrotonda la
+/// capacità di ogni buffer a 64 byte; il doppio copre anche gli offset e
+/// i dizionari che l'unione ricostruisce.
+const MARGINE_PER_BUFFER: u64 = 128;
+
+/// Buffer contati per nodo del tipo, per eccesso: bitmap dei null e fino a
+/// tre buffer di dati (offset, valori, dati delle viste).
+const BUFFER_PER_NODO: u64 = 4;
+
+/// I buffer di una colonna del tipo dato e dei suoi figli, ricorsivamente
+/// e per eccesso ([`BUFFER_PER_NODO`] per nodo).
+fn buffer_di(tipo: &DataType) -> u64 {
+    let somma = |campi: &mut dyn Iterator<Item = &DataType>| {
+        campi.fold(0_u64, |totale, figlio| {
+            totale.saturating_add(buffer_di(figlio))
+        })
+    };
+    let figli = match tipo {
+        DataType::Struct(campi) => somma(&mut campi.iter().map(|campo| campo.data_type())),
+        DataType::Union(campi, _) => somma(&mut campi.iter().map(|(_, campo)| campo.data_type())),
+        DataType::List(campo)
+        | DataType::LargeList(campo)
+        | DataType::ListView(campo)
+        | DataType::LargeListView(campo)
+        | DataType::FixedSizeList(campo, _)
+        | DataType::Map(campo, _) => buffer_di(campo.data_type()),
+        DataType::Dictionary(_, valori) => buffer_di(valori),
+        DataType::RunEndEncoded(estremi, valori) => {
+            buffer_di(estremi.data_type()).saturating_add(buffer_di(valori.data_type()))
+        }
+        _ => 0,
+    };
+    BUFFER_PER_NODO.saturating_add(figli)
+}
+
+/// Picco dell'unione di più blocchi, per eccesso: i blocchi restano vivi
+/// mentre si alloca la copia, che vale i loro byte di dati più il margine di
+/// arrotondamento di ogni buffer di ogni colonna. Un conto conservativo per
+/// input, non per allocazione.
+fn picco_dell_unione(letti: u64, blocchi: &[RecordBatch]) -> u64 {
+    let buffer = blocchi.first().map_or(0, |blocco| {
+        blocco
+            .schema()
+            .fields()
+            .iter()
+            .fold(0_u64, |totale, campo| {
+                totale.saturating_add(buffer_di(campo.data_type()))
+            })
+    });
+    letti
+        .saturating_mul(2)
+        .saturating_add(buffer.saturating_mul(MARGINE_PER_BUFFER))
 }
 
 /// Importa una tabella da un oggetto Python con `__arrow_c_stream__`.
@@ -129,9 +185,11 @@ pub fn importa(
         1 => blocchi
             .pop()
             .ok_or_else(|| Errore::Plenora(PlenoraError::Internal("blocco assente".to_owned()))),
-        _ if letti.saturating_mul(2) > residuo => {
-            Err(oltre_il_budget(contesto, letti.saturating_mul(2), residuo))
-        }
+        _ if picco_dell_unione(letti, &blocchi) > residuo => Err(oltre_il_budget(
+            contesto,
+            picco_dell_unione(letti, &blocchi),
+            residuo,
+        )),
         _ => concat_batches(&schema, &blocchi).map_err(|_| {
             illeggibile(
                 contesto,

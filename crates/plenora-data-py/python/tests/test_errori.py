@@ -244,6 +244,58 @@ def test_la_preparazione_degli_argomenti_classifica_e_tace(
         assert errore.value.__cause__ is None
 
 
+def _annullamento() -> pd.PlenoraCancelledError:
+    return pd.PlenoraCancelledError(
+        "cancelled: annullata dal produttore",
+        category="cancelled",
+        phase="read",
+        remote_effect="none",
+        retry={"kind": "safe"},
+        code="EXECUTION_CANCELLED",
+    )
+
+
+def test_una_plenora_error_del_produttore_resta_quella() -> None:
+    """Un oggetto Arrow che solleva già un errore pubblico (qui un
+    annullamento): né la preparazione in Python né l'import nativo lo
+    riclassificano."""
+    errore_atteso = _annullamento()
+
+    class _AttributoAnnullato:
+        @property
+        def __arrow_c_stream__(self) -> object:
+            raise errore_atteso
+
+    class _StreamAnnullato:
+        def __arrow_c_stream__(self, requested_schema: object | None = None) -> object:
+            raise errore_atteso
+
+    for oggetto in (_AttributoAnnullato(), _StreamAnnullato()):
+        for chiamata in (
+            lambda: pd.describe(oggetto),  # type: ignore[arg-type]
+            lambda: pd.run(piano_identita(), {"t": oggetto}),  # type: ignore[dict-item]
+        ):
+            with pytest.raises(pd.PlenoraCancelledError) as errore:
+                chiamata()
+            assert errore.value is errore_atteso
+
+
+def test_l_unione_dei_blocchi_conta_l_arrotondamento_dei_buffer(
+    valida: Callable[[str, object], None],
+) -> None:
+    """Due blocchi di un booleano ciascuno: due byte di dati, ma l'unione
+    alloca buffer arrotondati a 64 byte mentre i blocchi restano vivi; con
+    un budget di 64 l'unione non ci sta, e si rifiuta prima di farla."""
+    blocco = pa.record_batch({"b": pa.array([True], pa.bool_())})
+    lettore = pa.RecordBatchReader.from_batches(blocco.schema, [blocco, blocco])
+    piano = {**piano_identita(), "limits": {"max_governed_memory_bytes": 64}}
+    with pytest.raises(pd.PlenoraResourceLimitError) as errore:
+        pd.run(piano, {"t": lettore})
+    documento = verifica(errore.value, valida)
+    assert documento["phase"] == "read"
+    assert "input `t`" in documento["message"]
+
+
 def test_uno_stream_oltre_il_budget_si_ferma_al_primo_blocco_di_troppo(
     valida: Callable[[str, object], None],
 ) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import _thread
 import asyncio
+import contextlib
 import functools
 import threading
 import time
@@ -17,6 +18,7 @@ import pyarrow as pa
 import pytest
 
 import plenora_data as pd
+from plenora_data import _native
 from aiuti import piano_identita, piano_lungo, tabella_grande, tabella_semplice
 
 # Abbastanza passi da durare secondi senza annullamento; ognuno dura
@@ -132,6 +134,52 @@ def test_annullamento_in_corsa_con_la_fine_non_e_mai_un_successo_taciuto(
     # Gli istanti vanno da subito a due volte la durata: qualche
     # annullamento si vede di certo.
     assert esiti & {"none", "committed"}
+
+
+@contextlib.contextmanager
+def _sonda(azione: Callable[[], object]) -> Any:
+    """Registra la sonda privata del modulo nativo: `azione` gira fra la
+    fine del lavoro e il controllo della consegna."""
+    _native._sonda_consegna(azione)
+    try:
+        yield
+    finally:
+        _native._sonda_consegna(None)
+
+
+def test_gettone_alzato_fra_la_fine_e_la_consegna(tmp_path: Any) -> None:
+    """Deterministico: il gettone si alza esattamente dopo che il lavoro è
+    finito con successo e prima della consegna."""
+    uscita = tmp_path / "u.arrow"
+    for outputs, effetto, ritentativo in (
+        ({"t": uscita}, "committed", "requires_recovery"),
+        (None, "none", "safe"),
+    ):
+        gettone = pd.CancellationToken()
+        with _sonda(gettone.cancel), pytest.raises(pd.PlenoraCancelledError) as errore:
+            pd.run(
+                piano_identita(), {"t": tabella_semplice()}, outputs=outputs, cancel=gettone
+            )
+        assert errore.value.phase == "finalize"
+        assert errore.value.remote_effect == effetto
+        assert errore.value.retry == {"kind": ritentativo}
+        assert errore.value.code == "EXECUTION_CANCELLED"
+    assert uscita.exists()
+
+
+def test_ctrl_c_fra_la_fine_e_la_consegna(tmp_path: Any) -> None:
+    """Deterministico: SIGINT armato dopo la fine del lavoro e prima della
+    consegna esce come `KeyboardInterrupt` con l'annullamento alla consegna
+    come causa, con l'effetto vero."""
+    uscita = tmp_path / "u.arrow"
+    for outputs, effetto in (({"t": uscita}, "committed"), (None, "none")):
+        with _sonda(_thread.interrupt_main), pytest.raises(KeyboardInterrupt) as interruzione:
+            pd.run(piano_identita(), {"t": tabella_semplice()}, outputs=outputs)
+        causa = interruzione.value.__cause__
+        assert isinstance(causa, pd.PlenoraCancelledError), repr(causa)
+        assert causa.phase == "finalize"
+        assert causa.remote_effect == effetto
+    assert uscita.exists()
 
 
 def test_gettone_alzato_da_un_altro_thread() -> None:

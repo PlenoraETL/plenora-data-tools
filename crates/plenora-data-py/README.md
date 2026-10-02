@@ -216,6 +216,11 @@ lint, `--workspace --lib`) passa sul crate.
   capacità dell'SDK contro `capabilities-v2`, la sezione Python contro
   `surface-bindings-v1` dei contratti, l'equivalenza fra le forme in memoria
   e da file dell'API (stessi documenti, stesse tabelle).
+- L'istante fra la fine del lavoro e il controllo della consegna si prova
+  in modo deterministico con una sonda privata del modulo nativo
+  (`_native._sonda_consegna`, non API, inerte senza registrazione): la prova
+  alza il gettone o arma SIGINT esattamente lì, e fallisce se il controllo
+  alla consegna manca (verificato togliendolo).
 - La suite Python (`python/tests`) valida errori, capacità e diagnostica
   con `jsonschema` contro le copie degli schemi dei contratti
   (`crates/plenora-cli/tests/fixtures/contratti`, SHA-256 verificato).
@@ -298,7 +303,10 @@ python scripts/verifica_sdk_python.py --wheel dist/plenora_data-<versione>-<tag>
   (`plenora_core::memoria::byte_dati`) contro il budget meno le tabelle già
   importate, e l'import si ferma al primo blocco di troppo; con più blocchi
   l'unione (`concat_batches`, una copia) vuole spazio per blocchi e copia
-  insieme. Il blocco che supera il budget è già in memoria quando si
+  insieme, e la copia si stima per eccesso: i suoi byte di dati più 128
+  byte per ogni buffer di ogni colonna (quattro per nodo del tipo, figli
+  compresi), che coprono l'arrotondamento a 64 byte delle capacità di
+  Arrow. Il blocco che supera il budget è già in memoria quando si
   rifiuta (lo ha prodotto il produttore), e le allocazioni del produttore
   (per esempio un generatore Python che costruisce i suoi blocchi) non si
   vedono. Le tabelle in memoria si riservano nel budget prima di leggere

@@ -64,12 +64,27 @@ pub fn converti(py: Python<'_>, errore: Errore) -> PyErr {
 /// quella dell'import: il pacchetto Python la trasforma in
 /// `PlenoraInternalError`, così nessuna eccezione nativa supera il confine.
 fn costruisci(py: Python<'_>, documento: &str) -> PyErr {
-    static MODULO: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
-    let modulo = MODULO.get_or_try_init(py, || py.import(MODULO_ERRORI).map(Bound::unbind));
-    match modulo.and_then(|modulo| modulo.bind(py).call_method1(COSTRUTTORE, (documento,))) {
+    match modulo(py).and_then(|modulo| modulo.call_method1(COSTRUTTORE, (documento,))) {
         Ok(eccezione) => PyErr::from_value(eccezione),
         Err(errore) => errore,
     }
+}
+
+fn modulo(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
+    static MODULO: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+    MODULO
+        .get_or_try_init(py, || py.import(MODULO_ERRORI).map(Bound::unbind))
+        .map(|modulo| modulo.bind(py))
+}
+
+/// Se un'eccezione Python è già una `PlenoraError` pubblica (per esempio
+/// un annullamento sollevato dal produttore di uno stream): allora passa
+/// com'è, con la sua categoria, invece di essere riclassificata.
+pub fn e_pubblica(py: Python<'_>, errore: &PyErr) -> bool {
+    modulo(py)
+        .and_then(|modulo| modulo.getattr("PlenoraError"))
+        .and_then(|radice| errore.value(py).is_instance(&radice))
+        .unwrap_or(false)
 }
 
 /// L'errore di un panico intercettato: `internal`, senza il testo del

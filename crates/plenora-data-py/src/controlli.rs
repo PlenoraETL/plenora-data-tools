@@ -24,7 +24,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use plenora_core::{ErrorPhase, PlenoraError, RemoteEffect};
@@ -35,6 +35,28 @@ use crate::errori::{in_python, panico, Errore};
 
 /// Ogni quanto il thread del chiamante guarda gettoni e segnali.
 const INTERVALLO: Duration = Duration::from_millis(10);
+
+/// Sonda delle prove: un callable Python chiamato fra la fine del lavoro e
+/// il controllo della consegna, l'unico istante che una prova non sa
+/// raggiungere dall'esterno. Privata (`_native._sonda_consegna`), non è
+/// API: senza sonda registrata (sempre, fuori dalle prove) non fa nulla.
+static SONDA: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
+
+/// Registra o toglie la sonda della consegna.
+pub fn registra_sonda(sonda: Option<Py<PyAny>>) {
+    if let Ok(mut registrata) = SONDA.lock() {
+        *registrata = sonda;
+    }
+}
+
+/// Chiama la sonda, se c'è; la sua eccezione passa com'è.
+fn chiama_sonda(py: Python<'_>) -> PyResult<()> {
+    let sonda = SONDA
+        .lock()
+        .ok()
+        .and_then(|registrata| registrata.as_ref().map(|sonda| sonda.clone_ref(py)));
+    sonda.map_or_else(|| Ok(()), |sonda| sonda.call0(py).map(|_| ()))
+}
 
 /// Scadenza e segnali di una chiamata.
 pub struct Controlli {
@@ -238,6 +260,9 @@ impl Controlli {
             match esito {
                 Ok(Err(errore)) => break Err(Errore::Plenora(errore)),
                 Ok(Ok(valore)) => {
+                    if let Err(eccezione) = chiama_sonda(py) {
+                        break Err(Errore::Python(eccezione));
+                    }
                     // Consegna: un annullamento arrivato nell'ultimo
                     // intervallo (gettone o segnale) non diventa un successo.
                     if let Err(eccezione) = self.sorveglia(py) {
