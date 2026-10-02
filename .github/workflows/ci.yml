@@ -1,0 +1,94 @@
+name: ci
+
+# I gate di AGENTS.md, «Prima del commit», eseguiti su Linux e Windows a ogni
+# push su main e a ogni pull request. Fuzzing, copertura e controllo della
+# catena delle dipendenze non sono ancora qui (README, introduzione).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Sola lettura: nessun job scrive sul repository, pubblica o commenta.
+permissions:
+  contents: read
+
+# Un push successivo cancella la run in corso sullo stesso riferimento.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gate:
+    name: gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Un sistema che fallisce non nasconde l'esito dell'altro.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # La versione esatta la fissa `rust-toolchain.toml`; qui si installano
+      # solo i componenti.
+      - name: Rust 1.98.0 + rustfmt + clippy
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
+        with:
+          toolchain: '1.98.0'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: cargo fmt
+        run: cargo fmt --all --check
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: cargo clippy anti-panic (librerie)
+        run: >-
+          cargo clippy --workspace --lib --locked --
+          -D unsafe-code
+          -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+          -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
+      - name: cargo test (suite lunga)
+        env:
+          PLENORA_TEST_LUNGHI: '1'
+        run: cargo test --workspace --locked
+      - name: modello dei costi
+        run: |
+          python scripts/genera_costi_operazioni.py --verifica
+          python scripts/genera_costi_geo.py --verifica
+
+  contratti:
+    name: CLI contro plenora-contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Lo stesso commit fissato in scripts/verifica_cli_contratti.py.
+      - name: plenora-contracts al commit fissato
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: PlenoraETL/plenora-contracts
+          ref: ade868cf89c6652cffe20019e7194b383384ee78
+          path: .plenora-contracts
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: validatore dei contratti (versioni fissate dai contratti)
+        run: python -m pip install -r .plenora-contracts/requirements-validation.txt
+      - name: Rust 1.98.0
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
+        with:
+          toolchain: '1.98.0'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: costruisce la CLI
+        run: cargo build --locked -p plenora-cli
+      - name: verifica con jsonschema e i controlli dei contratti
+        run: >-
+          python scripts/verifica_cli_contratti.py
+          --binario target/debug/plenora-data
+          --contratti .plenora-contracts

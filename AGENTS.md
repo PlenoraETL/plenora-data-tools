@@ -29,7 +29,8 @@ Le regole che non si negoziano. Il resto lo dice il codice.
    conversioni numeriche, aggregazioni, serializzazione.
 7. **Prima del commit**: fmt, clippy con `-D warnings`, clippy anti-panic
    sulle librerie, test completi. Tutti verdi. Un gate non eseguito si
-   dichiara non eseguito.
+   dichiara non eseguito. Prima del merge in `main` la CI
+   (`.github/workflows/ci.yml`) è verde su Linux **e** Windows.
 
 ## Comandi
 

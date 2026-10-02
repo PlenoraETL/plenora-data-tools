@@ -30,10 +30,14 @@ progetto d'origine si portano qui senza rinomine.
 
 Engine, CLI, isolamento e protocollo del progetto d'origine non sono stati
 portati: la CLI `plenora-data` è nuova, scritta sui contratti pubblici
-([«CLI `plenora-data`»](#cli-plenora-data)). Nemmeno, e oggi non sono in
-programma: la verifica automatica (CI,
-fuzzing, misura della copertura, mutation testing: i gate si eseguono a
-mano, [`AGENTS.md`](AGENTS.md)), l'identità del piano (`plan_hash`,
+([«CLI `plenora-data`»](#cli-plenora-data)).
+
+La CI (`.github/workflows/ci.yml`) esegue i gate di
+[`AGENTS.md`](AGENTS.md) su Linux e Windows a ogni push su `main` e a ogni
+pull request, con la suite lunga, e verifica la CLI contro
+`plenora-contracts` al commit fissato. Non ci sono ancora, e si dichiarano
+assenti: fuzzing, misura della copertura, mutation testing e controllo della
+catena delle dipendenze. Non sono in programma l'identità del piano (`plan_hash`,
 fingerprint del catalogo) e l'interruzione di un kernel a metà: scadenza e
 annullamento si controllano solo fra i passi
 ([«Scadenza e annullamento»](#scadenza-e-annullamento)).

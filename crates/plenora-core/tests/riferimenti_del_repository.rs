@@ -32,14 +32,13 @@ const VIETATI: &[&str] = &[
     "verifica_vendor_provenienza",
     "verifica_filtro_sperimentale",
     "verifica_risoluzione_vendor",
-    ".github/workflows",
     "ICD ",
     "Non adottato",
 ];
 
 /// Estensioni di testo: ogni file si legge per intero come UTF-8, e un
 /// errore di lettura fa fallire il test.
-const TESTO: &[&str] = &["rs", "toml", "md", "py", "json", "csv", "lock"];
+const TESTO: &[&str] = &["rs", "toml", "md", "py", "json", "csv", "lock", "yml"];
 /// Nomi di file di testo senza estensione.
 const TESTO_PER_NOME: &[&str] = &[".gitignore", ".gitattributes"];
 /// Estensioni binarie: non si leggono, si contano. Un file con
