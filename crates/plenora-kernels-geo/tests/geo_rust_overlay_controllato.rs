@@ -1,6 +1,6 @@
 //! `make_valid` e la precisione dichiarata: 1 cm a terra.
 //!
-//! La politica (README, «Limiti dichiarati»; AGENTS.md, regola 1): sotto la
+//! La politica (docs/limiti.md, «Limiti dichiarati»; AGENTS.md, regola 1): sotto la
 //! precisione un risultato puo' differire dall'esatto (vertici spostati,
 //! feature sottili fuse o sparite); sopra, ogni errore e' esplicito. Il solo
 //! rifiuto legato alla precisione e' uno spostamento oltre la precisione:

@@ -8,7 +8,7 @@
 //! f / 3)` (IUGG). Il chiamante costruisce il valore dal CRS
 //! ([`EllissoideGeodetico::da_crs`]) e lo passa ai kernel come argomento
 //! esplicito, senza valore predefinito: nessun kernel sceglie WGS 84 da
-//! solo (README, «Misure geodetiche: l'ellissoide del datum»).
+//! solo (docs/limiti.md, «Misure geodetiche: l'ellissoide del datum»).
 
 use geo::{Coord, LineString};
 use geographiclib_rs::Geodesic;

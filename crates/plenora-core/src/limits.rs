@@ -7,7 +7,7 @@
 //!   geometrie).
 //!
 //! Il runner applica solo una parte dei campi e rende dichiarabili nel piano
-//! solo quelli (README, «Il piano»); i campi che nessun codice applica lo
+//! solo quelli (docs/runner.md, «Il piano»); i campi che nessun codice applica lo
 //! dicono nel proprio rustdoc.
 
 use serde::Deserialize;
@@ -40,7 +40,7 @@ pub struct RowLimits {
     /// dalla config (esenzioni del catalogo, `table.melt`). Con la base
     /// `SumRelative` dei join un abbinamento con la chiave unica su un lato
     /// vale al piu' 1, quindi 100 non rifiuta un arricchimento 1:N o N:1
-    /// legittimo (README, «Fattore di espansione»).
+    /// legittimo (docs/runner.md, «Fattore di espansione»).
     pub max_expansion_factor: f64,
 }
 
@@ -146,7 +146,7 @@ pub struct Limits {
     /// Limiti di complessità del piano.
     #[serde(default)]
     pub plan: PlanLimits,
-    /// Budget di memoria del runner, in byte (README, «Budget di memoria»).
+    /// Budget di memoria del runner, in byte (docs/runner.md, «Budget di memoria»).
     /// Default [`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`].
     pub max_governed_memory_bytes: u64,
     /// Grado massimo di parallelismo; `0` significa «numero di core logici».

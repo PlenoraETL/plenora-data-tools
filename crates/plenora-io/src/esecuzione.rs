@@ -292,7 +292,7 @@ fn verifica_finale(interruzione: &Interruzione, pubblicati: &[UscitaScritta]) ->
 /// Gli input si caricano come in [`esegui_da_file_interrompibile`] (stesso
 /// budget, stessa lettura, stessi controlli dell'interruzione), poi si
 /// liberano: la validazione guarda solo gli schemi. Leggere le tabelle
-/// intere per averne lo schema è un costo dichiarato (README, «CLI
+/// intere per averne lo schema è un costo dichiarato (docs/cli.md, «CLI
 /// `plenora-data`»), limitato dal budget del piano.
 ///
 /// # Errors

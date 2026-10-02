@@ -2,8 +2,8 @@
 
 Abbina ogni riga della sinistra alla riga della destra più vicina, con la
 distanza planare fra le due geometrie (kernel
-`analysis::nearest_matches_validated`, [README, «Operazioni
-geo»](../README.md#operazioni-geo)): in caso di pari tutte le destre alla
+`analysis::nearest_matches_validated`, [Runner, «Operazioni
+geo»](runner.md#operazioni-geo)): in caso di pari tutte le destre alla
 distanza minima, come `sjoin_nearest` di GeoPandas.
 
 ### Parametri
@@ -58,7 +58,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -83,14 +83,14 @@ geo indicata fra parentesi:
 - `MargineMemoria` (`ResourceLimit`): gli abbinamenti, con la riga di left più larga
   che l'uscita ripete, non starebbero nel margine di memoria del passo;
   stesso conteggio e stessa precedenza del limite di righe, che vince se
-  scatta prima (guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  scatta prima (guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso` (`Internal`): un
   calcolo di `geo` (la distanza su un candidato) non ha concluso;
 - `IndexOverflow` (`InvalidPlan`): un indice non entra in `u64`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 ### Limiti e deviazioni
@@ -99,14 +99,14 @@ Un R-tree sceglie i candidati e scarta una destra solo quando la sua
 distanza non può essere il minimo, con un margine appoggiato alla stima
 d'errore della distanza di `geo` letta dai sorgenti, non dimostrata; le
 geometrie fuori da quella stima non si scartano mai. L'oracolo confronta
-il risultato con la forza bruta sui bit ([README, «`geo.nearest`: lo
+il risultato con la forza bruta sui bit ([Limiti dichiarati, «`geo.nearest`: lo
 scarto dell'R-tree si appoggia alla stima d'errore di
-`geo`»](../README.md#geonearest-lo-scarto-dellr-tree-si-appoggia-alla-stima-derrore-di-geo)).
+`geo`»](limiti.md#geonearest-lo-scarto-dellr-tree-si-appoggia-alla-stima-derrore-di-geo)).
 Il catalogo dichiara il vincolo `uscita / sinistra`, ma i pari possono dare
 più righe della sinistra. Gli abbinamenti dipendono dai dati: il modello di
 costo non li prevede, e li limita solo il limite di righe dell'arco
-([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo
+([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo
 geo»).
 
 ### Precisione
@@ -118,8 +118,8 @@ delle coordinate su geometrie regolari (circa 0,14 µm con coordinate
 fino a 10.000 km), molto sotto 1 cm. I pari sono
 uguaglianze esatte dei valori calcolati: due destre la cui distanza vera è
 uguale possono non risultare pari se i loro `f64` differiscono nell'ultima
-cifra ([README, «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+cifra ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

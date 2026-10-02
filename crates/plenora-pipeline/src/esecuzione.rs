@@ -109,7 +109,7 @@ pub struct ReportPasso {
 /// Il runner li controlla prima di ogni passo e prima di consegnare gli
 /// output, mai durante un kernel: un passo lungo finisce anche oltre la
 /// scadenza, e l'errore arriva al controllo successivo (limite dichiarato
-/// nel README, «Scadenza e annullamento»). L'annullamento prevale sulla
+/// in docs/runner.md, «Scadenza e annullamento»). L'annullamento prevale sulla
 /// scadenza quando valgono entrambi.
 #[derive(Clone, Debug, Default)]
 pub struct Interruzione {

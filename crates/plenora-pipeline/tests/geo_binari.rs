@@ -1,6 +1,6 @@
 //! Operazioni geo su due tabelle nel runner: join, ritaglio, overlay e
 //! booleane uguali ai kernel, con la semantica delle righe dichiarata nel
-//! README («Operazioni geo»).
+//! docs/runner.md («Operazioni geo»).
 
 // Un caso per operazione; `_sx`/`_dx` sono coppie volute.
 #![allow(clippy::too_many_lines, clippy::similar_names)]

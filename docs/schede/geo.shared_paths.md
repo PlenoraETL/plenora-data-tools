@@ -8,7 +8,7 @@ righe, la lunghezza condivisa totale e i tratti, sul modello di
 
 La conversione di colonna è `extensions3::shared_paths_rows`, che il
 runner chiama su tutta la colonna con i default della tabella sotto
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Parametri
 
@@ -62,8 +62,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -82,8 +82,8 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
 ### Limiti e deviazioni
 
 Solo tratti esattamente collineari: nessuna tolleranza di distanza, nessuna
-fusione dei segmenti consecutivi in una linea sola. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+fusione dei segmenti consecutivi in una linea sola. Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+«Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
@@ -93,7 +93,7 @@ Esatta sulla geometria: la collinearità si decide con il predicato
 vertici d'ingresso. Solo le lunghezze (`shared_length`, e il confronto con
 `tolerance` e `min_length`) si calcolano in `f64`. Nessuna griglia, nessun
 controllo di precisione
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

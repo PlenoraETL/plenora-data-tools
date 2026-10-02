@@ -77,7 +77,7 @@ dominio di `f64`, surrogati isolati e annidamento oltre 128 livelli lo
 rendono invalido, anche dove il valore non verrebbe estratto. Il kernel
 chiamato fuori dal runner accetta `output_columns` vuoto e crea una colonna
 per ogni percorso trovato; il runner lo rifiuta in validazione
-([README, «Validazione»](../README.md#validazione)).
+([Runner, «Validazione»](runner.md#validazione)).
 
 ### Complessità
 

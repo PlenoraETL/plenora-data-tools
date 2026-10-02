@@ -8,7 +8,8 @@
 //! `CRS_NOT_BUILTIN`: il documento non si interpreta e il CRS non si
 //! indovina. Il tipo del documento (`GeographicCRS`/`ProjectedCRS`) deve
 //! essere quello del CRS integrato; il resto del documento non si confronta
-//! (limite dichiarato nel README).
+//! (limite dichiarato in docs/file.md, «`GeoParquet`, ciò che il contratto
+//! non porta»).
 //!
 //! In scrittura il documento è il `PROJJSON` completo che PROJ 9.5.1 produce
 //! per quel CRS (`data/projjson_integrati.json`, generato da

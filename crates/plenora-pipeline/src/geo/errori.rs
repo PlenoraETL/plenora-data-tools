@@ -3,7 +3,7 @@
 //! Stessa attribuzione di `ExtensionError::del_passo` e di
 //! `From<RustBackendError>` dei kernel: `Internal` cio' che non ha concluso
 //! o un'invariante saltata (nessuno ha dimostrato che l'ingresso sia
-//! sbagliato), `Unsupported` la precisione insufficiente (README,
+//! sbagliato), `Unsupported` la precisione insufficiente (docs/limiti.md,
 //! «Precisione delle operazioni geografiche»), `ResourceLimit` un limite di
 //! lavoro, d'uscita o di coppie superato (il piano e' corretto, sono i dati a
 //! non entrarci: la definizione di `PlenoraError::ResourceLimit`, come le

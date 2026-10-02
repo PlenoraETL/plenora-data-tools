@@ -31,7 +31,7 @@ geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
 primo errore in ordine di riga
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Ordine
 
@@ -71,7 +71,7 @@ riga. Prima del kernel, su ogni cella non nulla:
   geometrici e la cella è di un altro tipo.
 
 Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
-categoria di `PlenoraError` ([README, «Operazioni geo»](../README.md#operazioni-geo),
+categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
 - `InvalidPlan`: `NonFiniteCoordinate` o `InvalidGeometry` (geometria
@@ -95,13 +95,13 @@ voce «Errori»):
   fallire il calcolo.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
-  ripete a ogni valutazione ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+  ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 - Si calcola sempre la matrice intera: nessuna scorciatoia per il singolo
   predicato.
 - Nessuna diagnostica per riga: un errore è il primo in ordine di riga,
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
   previsione del modello geo misurato (voce «Modelli di costo geo»).
 
@@ -113,8 +113,8 @@ sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
 toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
 in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
 un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([README, «Precisione
-delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
+delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

@@ -7,7 +7,7 @@
 //! precisione del double la perde **senza errore**. Una somma sul dominio
 //! intero (`Int64`, `UInt64`, `Date32`, `Timestamp(ms)`) invece e' esatta:
 //! si accumula in `i128` ed esce `Int64`, e oltre la gamma di `Int64` e' un
-//! errore (README, «Somme intere esatte e tipi delle riduzioni»).
+//! errore (docs/limiti.md, «Somme intere esatte e tipi delle riduzioni»).
 //!
 //! Gli attesi qui sono letterali, calcolati dalla regola IEEE 754 e non da
 //! `scalar_as_f64_rounded`: un oracolo che chiedesse al codice quale sia la

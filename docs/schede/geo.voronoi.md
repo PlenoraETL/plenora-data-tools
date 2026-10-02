@@ -48,8 +48,8 @@ config, CRS):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -82,23 +82,23 @@ punti distinti, punti tutti collineari), `PrecisionInsufficient` e
   indipendente dalla rotazione della faccia: rispetto all'inserimento
   incrementale un vertice può differire di qualche ulp, e con quattro o più
   punti cocircolari i circocentri vengono da triangoli diversi; il caso
-  peggiore resta quadratico ([README, «`geo.delaunay` e `geo.voronoi`:
-  triangolazione caricata in blocco»](../README.md#geodelaunay-e-geovoronoi-triangolazione-caricata-in-blocco)).
+  peggiore resta quadratico ([Limiti dichiarati, «`geo.delaunay` e `geo.voronoi`:
+  triangolazione caricata in blocco»](limiti.md#geodelaunay-e-geovoronoi-triangolazione-caricata-in-blocco)).
 - Solo `Point`: un `MultiPoint` è `ExpectedPoint`. `ST_VoronoiPolygons` di
   PostGIS prende invece una geometria e rende una collezione di celle.
 - Punti tutti collineari sono un errore, non celle a striscia.
 - Ritaglio fisso sul rettangolo allargato della metà del lato maggiore:
   nessun parametro d'inviluppo.
-- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+- Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+  «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
 
 La precisione `p` è 1 cm a terra nelle unità del CRS della colonna: il
 runner la ricava con `Precision::from_crs` e il kernel la riceve come
-argomento ([README, «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+argomento ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 I vertici interni delle celle sono circocentri calcolati con un maggiorante
 del loro errore d'arrotondamento: oltre `p / 4` l'operazione si rifiuta
 (`VerticeMalCondizionato`; succede con triangoli molto sottili sul bordo

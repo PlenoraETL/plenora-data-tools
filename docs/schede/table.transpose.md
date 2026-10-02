@@ -20,7 +20,7 @@ nulla; altrimenti `col_<i+1>`. Una voce di `output_columns` vuota non vale
 «assente»: si rifiuta, in validazione e nel kernel. I nomi in più di
 `output_columns` si ignorano. I nomi d'uscita, prima colonna compresa, sono
 tutti distinti
-([README, «Nomi delle colonne d'uscita»](../README.md#nomi-delle-colonne-duscita)).
+([Limiti dichiarati, «Nomi delle colonne d'uscita»](limiti.md#nomi-delle-colonne-duscita)).
 `type_policy` con colonne dati tutte dello stesso tipo si accetta e non
 cambia niente: dipende dall'ingresso.
 

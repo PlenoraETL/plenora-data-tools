@@ -34,7 +34,7 @@ cella nulla resta nulla; una linea vuota dà null, e se la colonna d'uscita
 rifiuta con `InvalidPlan`; una riga di altro tipo (anche
 `MultiLineString`) è `InvalidPlan` («tipo geometria non supportato»).
 L'analisi non controlla i tipi dichiarati dell'ingresso
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Ordine
 
@@ -59,7 +59,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi, per riga: `InvalidPlan` per una geometria che non è una
 `LineString`. Il kernel rende `ExtendedAlgorithmError`, che il runner
@@ -80,7 +80,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 - Solo `LineString` nel kernel; solo CRS proiettati.
@@ -93,8 +93,8 @@ Nessun controllo e nessun rifiuto di precisione. I vertici interni sono
 quelli d'ingresso, con i loro bit. I due estremi sono calcolati in `f64`
 come in [`geo.line_interpolate_point`](#geoline_interpolate_point), con un
 errore relativo dell'ordine del numero di lati per 1e-16 della lunghezza:
-molto sotto 1 cm su ogni linea realistica ([README, «Precisione delle
-operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+molto sotto 1 cm su ogni linea realistica ([Limiti dichiarati, «Precisione delle
+operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Un vertice a distanza cumulata quasi uguale a un estremo può entrare o
 restare fuori secondo l'arrotondamento delle due somme.
 

@@ -55,7 +55,7 @@ In esecuzione, `ResourceLimit`:
 ### Limiti e deviazioni
 
 Il catalogo la dichiara N-aria, ma il runner esegue solo la forma a due
-ingressi ([README, «Validazione»](../README.md#validazione)); più tabelle
+ingressi ([Runner, «Validazione»](runner.md#validazione)); più tabelle
 si impilano con passi in catena. I metadati di campo della destra non si
 conservano.
 

@@ -80,7 +80,7 @@ In esecuzione:
 I bordi di uguale ampiezza sono calcolati in `f64`; la classe invece la
 decide il confronto esatto del valore d'origine con il bordo, quindi un
 `int64` oltre `2^53` o un `decimal128` non cadono nella classe accanto per
-arrotondamento ([README, «Validazione»](../README.md#validazione)).
+arrotondamento ([Runner, «Validazione»](runner.md#validazione)).
 
 ### Complessità
 

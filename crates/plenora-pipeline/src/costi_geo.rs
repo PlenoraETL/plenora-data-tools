@@ -9,7 +9,7 @@
 //! larghezza sono profilo per vertici per geometria, e `generate_grid` ha
 //! solo il termine per cella d'uscita. I profili in `esclusi` non entrano
 //! nel modello (motivi in `scripts/genera_costi_geo.py`): limite
-//! dichiarato nel README.
+//! dichiarato in docs/runner.md, «Modelli di costo geo».
 
 use crate::budget::{Costo, CostoOperazione};
 

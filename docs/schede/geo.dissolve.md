@@ -42,8 +42,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: una colonna geometria non XY;
 - `Crs`: CRS non risolto, o non proiettato (o senza unità lineare).
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -70,11 +70,11 @@ Nessun raggruppamento per attributo: tutta la tabella diventa una
 geometria. Gli ingressi si orientano (anello esterno antiorario) prima
 dell'unione, perché `unary_union` di `geo` sceglie la regola di
 riempimento dal verso del primo anello e un poligono valido di verso
-opposto sparirebbe ([README, «Precisione delle operazioni geografiche: 1 cm
-a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+opposto sparirebbe ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm
+a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Nessun controllo a posteriori del risultato contro gli ingressi.
-Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+«Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
@@ -85,9 +85,9 @@ griglia controllata prima del calcolo sull'ingombro di tutti gli ingressi.
 Se lo spostamento a priori supera mezzo centimetro, o le coordinate sono
 troppo rade per il centimetro, `PrecisionInsufficient` e nessun calcolo.
 Due poligoni separati da meno di 1 cm possono fondersi, e parti più
-sottili di 1 cm sparire, senza errore; vedi [README, «Precisione delle
+sottili di 1 cm sparire, senza errore; vedi [Limiti dichiarati, «Precisione delle
 operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 
 ### Complessità
 

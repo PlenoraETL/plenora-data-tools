@@ -45,9 +45,9 @@ In esecuzione, `ResourceLimit`: più di `u32::MAX` righe tenute.
 ### Limiti e deviazioni
 
 Le chiavi non si contano su `max_governed_memory_bytes`
-([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata)),
+([Limiti dichiarati, «Memoria delle chiavi dei kernel in memoria non governata»](limiti.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata)),
 e gli insiemi usano un hash deterministico senza seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 ### Complessità
 

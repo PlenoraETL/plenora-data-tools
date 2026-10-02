@@ -1076,7 +1076,7 @@ fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
 }
 
 /// Run-end e union, a qualunque profondita', si rifiutano al confine: i
-/// kernel non li vedono mai (README, «Limiti dichiarati del runner»).
+/// kernel non li vedono mai (docs/runner.md, «Limiti dichiarati del runner»).
 #[test]
 fn run_end_e_union_si_rifiutano_a_ogni_profondita() {
     use std::sync::Arc;

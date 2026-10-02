@@ -82,9 +82,9 @@ In esecuzione:
 In `_diff_old_values` un valore precedente nullo e il testo vuoto si
 scrivono allo stesso modo, e un `separator` che compare nei valori rende
 il testo ambiguo. La mappa delle chiavi non è contabilizzata
-([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
+([Limiti dichiarati, «Memoria delle chiavi dei kernel in memoria non governata»](limiti.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
 l'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 ### Complessità
 

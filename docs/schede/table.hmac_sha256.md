@@ -75,7 +75,7 @@ In esecuzione:
 
 La variabile d'ambiente si controlla in validazione, ma può cambiare prima
 dell'esecuzione: allora l'errore arriva al passo
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner)).
 Con `empty` una cella nulla e una vuota danno lo stesso valore (con `skip`
 no: la colonna nulla manca dal messaggio). Nome e tipo Arrow
 entrano nel messaggio: rinominare o cambiare tipo cambia il risultato.

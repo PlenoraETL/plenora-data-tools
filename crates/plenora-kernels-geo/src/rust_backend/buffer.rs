@@ -2,7 +2,7 @@
 //! (`i_overlay::mesh`, contorni e tratti) con gli archi scelti dalla
 //! precisione e la griglia controllata a priori. Nessun controllo a
 //! posteriori contro la definizione esatta: la garanzia poggia sui limiti a
-//! priori e sulla correttezza di `i_overlay` (README, «Limiti dichiarati»).
+//! priori e sulla correttezza di `i_overlay` (docs/limiti.md, «Limiti dichiarati»).
 //!
 //! **Archi.** `geo` espone `LineJoin::Round(a)` e `LineCap::Round(a)` di
 //! `i_overlay` 9.0.0, con `a` il passo angolare richiesto; `i_overlay` lo
@@ -21,7 +21,7 @@
 //! maggior ragione). `f = max(p / 2, 0.001 |d|)` ([`freccia_degli_archi`]):
 //! fino a `|d| = 500 p` (5 m con 1 cm) freccia piu' griglia restano entro
 //! `p`; oltre, la freccia e' lo 0,1% della distanza, **deviazione
-//! dichiarata** del solo buffer (README «Limiti dichiarati»). Con il passo
+//! dichiarata** del solo buffer (docs/limiti.md «Limiti dichiarati»). Con il passo
 //! minimo `0.01 pi` la freccia e' al piu' `1.24e-4 |d|`, quindi sempre
 //! entro la tolleranza. Il raggio `R` e' la distanza arrotondata sulla
 //! griglia (al piu' `g / 2` da `|d|`, nel termine della griglia, sotto).

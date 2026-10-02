@@ -31,7 +31,7 @@ si tolgono dal campo.
 
 1:1: il runner chiama il kernel (`operations::buffer_with_cap`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Ordine
 
@@ -54,7 +54,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria (`OperationError`, che il runner porta in `PlenoraError`:
 `Internal` per `Internal`, `ValidazioneNonConclusa` e
@@ -73,7 +73,7 @@ Poi dal kernel, per geometria (`OperationError`, che il runner porta in `Plenora
 - `MargineMemoria` (`ResourceLimit`): i punti dei contorni prima di un
   overlay, le parti dopo un'unione dei blocchi o il risultato non
   starebbero nel margine di memoria del passo, per questa geometria
-  (guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»).
+  (guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»).
 
 Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
 è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza
@@ -83,16 +83,16 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il runner passa al kernel la precisione di 1 cm a terra nelle unità del
 CRS della colonna (`Precision::from_crs`, calcolata in validazione;
-[README, «Operazioni geo»](../README.md#operazioni-geo), voce
+[Runner, «Operazioni geo»](runner.md#operazioni-geo), voce
 «Precisione»). Non ci sono i parametri di GEOS e PostGIS per le
 giunzioni (`join`, `mitre_limit`), il numero di segmenti per quarto di
 cerchio (qui il passo degli archi viene dalla precisione) e il buffer da un
 solo lato. Nessun controllo a posteriori del risultato contro la
-definizione esatta ([README, «Limiti dichiarati»](../README.md#limiti-dichiarati),
+definizione esatta ([«Limiti dichiarati»](limiti.md#limiti-dichiarati),
 voce «Nessun controllo a posteriori»).
 
 ### Precisione
@@ -112,7 +112,7 @@ offset si sovrappongono su molti segmenti lontani (zig-zag stretto rispetto
 alla distanza), con estremità tonde o piatte, si bufferizza a blocchi di 8
 segmenti uniti a coppie: l'unione è lo stesso buffer entro la stessa fascia,
 e differisce dal calcolo in un solo passaggio di al più `f + p`
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 voci «Buffer», «Deviazione: archi del buffer» e «Buffer delle linee a
 blocchi: un secondo algoritmo»).
 
@@ -123,10 +123,10 @@ intera); non c'è una stima asintotica dichiarata. Il tratto in un solo
 passaggio calcola ogni incrocio fra gli offset dei segmenti: su una linea a
 zig-zag stretto è quadratico nei vertici, e oltre la soglia si passa ai
 blocchi (1.000 vertici a 0,8 m con 200 m: 24 ms invece di 110 s e 21 GiB). Tempi misurati (stella e
-linea da 1.000 vertici, da 1 m a 1 km) nel README, voce «Costo» di
-[«Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
+linea da 1.000 vertici, da 1 m a 1 km) in Limiti dichiarati, voce «Costo» di
+[«Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 Più la validazione OGC dell'ingresso e dell'uscita
-([README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+([Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 
 ### Esempio
 

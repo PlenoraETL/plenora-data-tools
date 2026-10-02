@@ -2610,7 +2610,7 @@ mod tests {
         // GEOS: 8 poligoni e 5 residui (4 dangle, 1 anello invalido). Con il
         // segno esatto l'anello invalido di GEOS e' un triangolo vero di area
         // circa 3,45e-31 e diventa il nono poligono: GEOS lo scarta con la
-        // propria precisione double-double. Divergenza dichiarata nel README
+        // propria precisione double-double. Divergenza dichiarata in docs/topologia.md
         // («Differenze da GEOS»); area totale e dangle restano quelli di GEOS.
         let polygon_area = result.polygons.iter().map(Area::unsigned_area).sum::<f64>();
         let residuals = result.residual_count()?;

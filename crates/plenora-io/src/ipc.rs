@@ -19,7 +19,7 @@
 //! `FileDecoder`/`StreamDecoder` decodificano per viste dello stesso
 //! buffer, dentro la barriera anti-panico. Il contenuto dei messaggi
 //! (buffer, nodi, dizionari) resta ad Arrow: i casi che lì allocano oltre il
-//! file sono un limite dichiarato (README, «File»).
+//! file sono un limite dichiarato (docs/file.md, «File»).
 //!
 //! Memoria: i buffer letti sono i byte del file (i dati IPC senza
 //! compressione si leggono per viste), e la ricomposizione di più blocchi

@@ -6,7 +6,7 @@
 //! solo gli identificatori d'autorità della tabella dei CRS integrati
 //! (`epsg_integrati`, generata dal registro EPSG); ogni altra definizione
 //! fallisce chiusa e un [`ResolvedCrs`] diverso entra solo già risolto dal
-//! chiamante (README, «CRS integrati»). La riproiezione fra CRS integrati
+//! chiamante (docs/crs.md, «CRS integrati»). La riproiezione fra CRS integrati
 //! sta in [`riproiezione`].
 //!
 //! Per ogni CRS integrato ci sono due insiemi di limiti:
@@ -43,7 +43,7 @@ pub const BUILTIN_EPSG_DATE: &str = epsg_integrati::DATA_EPSG;
 /// Versione di PROJ che distribuiva il registro letto dal generatore.
 pub const BUILTIN_PROJ_VERSION: &str = epsg_integrati::VERSIONE_PROJ;
 
-/// Precisione a terra delle geometrie, in metri: un centimetro (README,
+/// Precisione a terra delle geometrie, in metri: un centimetro (docs/limiti.md,
 /// «Precisione delle operazioni geografiche: 1 cm a terra»).
 pub const GROUND_PRECISION_METRES: f64 = 0.01;
 

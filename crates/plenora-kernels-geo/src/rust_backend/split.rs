@@ -696,7 +696,7 @@ fn checked_output(
             _ => return Err(SplitError::CoverageMismatch),
         }
     }
-    // Area entro la precisione dichiarata `p` (README, «Limiti dichiarati»),
+    // Area entro la precisione dichiarata `p` (docs/limiti.md, «Limiti dichiarati»),
     // con un margine **locale**: i tagli interni si compensano, e i vertici
     // d'ingresso restano esatti, quindi l'area puo' cambiare solo dove un
     // lato di bordo ha un estremo calcolato dal noding (spostato al piu' di

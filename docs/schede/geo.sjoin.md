@@ -3,8 +3,8 @@
 Join spaziale interno: abbina ogni riga della sinistra alle righe della
 destra la cui geometria soddisfa `predicate` con la sua, e dà una riga per
 coppia, con la posizione della riga destra in `__right_index` (kernel
-`spatial_join::spatial_join_nullable_validated`, [README, «Operazioni
-geo»](../README.md#operazioni-geo)).
+`spatial_join::spatial_join_nullable_validated`, [Runner, «Operazioni
+geo»](runner.md#operazioni-geo)).
 
 ### Parametri
 
@@ -63,7 +63,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -86,15 +86,15 @@ passo geo indicata fra parentesi:
   left più larga (l'uscita ripete una riga di left per coppia), non
   starebbero nel margine di memoria del passo
   (budget meno byte vivi); stesso conteggio e stessa precedenza del limite
-  di righe, che vince se scatta prima (guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  di righe, che vince se scatta prima (guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;
 - `IndexOverflow` (`InvalidPlan`): numero di righe oltre `u64`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 ### Limiti e deviazioni
@@ -104,8 +104,8 @@ abbinamento, e non c'è una variante che le tenga con valori nulli. Gli
 attributi della destra non entrano nell'uscita, a differenza di `sjoin` di
 GeoPandas: si ricollegano con `__right_index`. Le coppie dipendono dai
 dati: il modello di costo non le prevede, e le limita solo il limite di
-righe dell'arco ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo
+righe dell'arco ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo
 geo»).
 
 ### Precisione
@@ -113,9 +113,9 @@ geo»).
 Nessun calcolo di geometrie e nessuna griglia: i predicati di `geo` si
 valutano sulle coordinate `f64` d'ingresso, senza tolleranza, e la regola
 di 1 cm non sposta nulla. Due geometrie a meno di 1 cm si toccano o no
-secondo le loro coordinate esatte ([README, «Precisione delle operazioni
+secondo le loro coordinate esatte ([Limiti dichiarati, «Precisione delle operazioni
 geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «Feature d'ingresso più vicine della precisione»).
 
 ### Complessità

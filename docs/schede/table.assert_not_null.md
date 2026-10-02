@@ -42,7 +42,7 @@ prima colonna di `columns` in cui è nulla; causa
 `validation.required_value_missing`. La diagnostica dà il conteggio per
 causa e fino a 10 esempi in ordine di riga, con l'indice (da zero) della
 riga nella base del runner
-([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga))
+([Runner, «Diagnostica per riga»](runner.md#diagnostica-per-riga))
 e il nome della colonna; mai i valori.
 
 ### Limiti e deviazioni

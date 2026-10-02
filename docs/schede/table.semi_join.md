@@ -54,7 +54,7 @@ dall'intervallo delle date rappresentabili, un `date64` non allineato al
 
 Nessuna conversione fra tipi di chiave, come in `table.join`. L'insieme
 delle chiavi di destra usa un hash deterministico senza seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 ### Complessità
 

@@ -2,7 +2,7 @@ name: ci
 
 # I gate di AGENTS.md, «Prima del commit», eseguiti su Linux e Windows a ogni
 # push su main e a ogni pull request. Fuzzing, copertura e controllo della
-# catena delle dipendenze non sono ancora qui (README, introduzione).
+# catena delle dipendenze non sono ancora qui (README, «Che cosa non c'è ancora»).
 
 on:
   push:

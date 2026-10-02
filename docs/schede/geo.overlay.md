@@ -2,8 +2,8 @@
 
 Sovrappone due tabelle di poligoni e ne produce i pezzi, ognuno con la
 riga sinistra e la riga destra da cui viene (kernel
-`topology::polygon_overlay_validated`; [README, «Operazioni
-geo»](../README.md#operazioni-geo)): le intersezioni delle coppie che si
+`topology::polygon_overlay_validated`; [Runner, «Operazioni
+geo»](runner.md#operazioni-geo)): le intersezioni delle coppie che si
 sovrappongono e, secondo `mode`, i resti di ciascun lato fuori dall'altro.
 Lavora solo su `Polygon` e `MultiPolygon`.
 
@@ -70,7 +70,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -95,7 +95,7 @@ parentesi:
   limite di righe dell'arco (`candidate_pairs`), o i pezzi lo superano
   (`overlay_results`), o coppie e pezzi (stimati dalla geometria, con la
   loro codifica) non starebbero nel margine di memoria del passo
-  (`memoria`; guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  (`memoria`; guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `IndexOverflow` (`InvalidPlan`): un indice non entra in `u64`;
 - `PrecisionInsufficient` (`Unsupported`): la griglia di un overlay
   sposterebbe il risultato oltre la precisione (sotto, «Precisione»);
@@ -106,8 +106,8 @@ Un indice di pezzo che non corrisponde a una riga d'ingresso è
 `Internal`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 ### Limiti e deviazioni
@@ -118,11 +118,11 @@ del catalogo il superamento del limite delle coppie candidate usciva come
 `InvalidGeometry`, e i due limiti avevano la categoria `InvalidPlan`. I
 pezzi dipendono dai
 dati: il modello di costo non li prevede, e li limita solo il limite di
-righe dell'arco ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di
+righe dell'arco ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di
 costo geo»). Nessun controllo a posteriori del risultato contro
-gli ingressi ([README, «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+gli ingressi ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Precisione
 
@@ -134,8 +134,8 @@ differenza), ognuno entro un quarto di centimetro. Ogni griglia è
 controllata prima del calcolo sull'ingombro dei suoi operandi; oltre, o
 con coordinate troppo rade per il centimetro, `PrecisionInsufficient` e
 nessun calcolo. Parti più sottili di 1 cm possono sparire o fondersi senza
-errore; vedi [README, «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
+errore; vedi [Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 
 ### Complessità
 

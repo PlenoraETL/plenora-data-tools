@@ -6,7 +6,7 @@ parte la geodetica, misurata in senso orario dal nord (nord 0, est 90, sud
 180, ovest 270), in `[0, 360)`. Le coordinate sono longitudine (`x`) e
 latitudine (`y`) in gradi; il calcolo è il problema inverso di Karney
 (`geographiclib-rs`) sull'ellissoide del datum del CRS della colonna
-([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)).
+([Limiti dichiarati, «Misure geodetiche: l'ellissoide del datum»](limiti.md#misure-geodetiche-lellissoide-del-datum)).
 
 ### Parametri
 
@@ -62,7 +62,7 @@ CRS, config):
 - `Internal`: la decodifica o la validazione OGC di `other_wkb` non
   conclude.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -100,7 +100,7 @@ Poi, per riga:
 - CRS proiettati rifiutati.
 - Solo `Point` nella colonna: una `MultiPoint` ferma il passo.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 ### Precisione
@@ -109,8 +109,8 @@ La regola di 1 cm riguarda gli spostamenti, e qui l'uscita è un angolo:
 nessun controllo e nessun rifiuto di precisione. L'errore è quello
 dell'algoritmo di Karney in `f64` sull'ellissoide del datum; per punti a
 pochi millimetri l'azimut è mal condizionato (un nanometro di posizione
-sono gradi di direzione) ([README, «Precisione delle operazioni
-geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+sono gradi di direzione) ([Limiti dichiarati, «Precisione delle operazioni
+geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

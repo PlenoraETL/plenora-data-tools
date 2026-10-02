@@ -9,7 +9,7 @@ spariscono.
 
 Il runner forma i gruppi su tutta la tabella e per ciascuno chiama
 `extensions::collect_geometries` con le geometrie del gruppo nell'ordine
-delle righe ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+delle righe ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Parametri
 
@@ -69,8 +69,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -91,14 +91,14 @@ in `InvalidPlan`; una validazione che non conclude è `Internal`.
 
 Nessuna unione: poligoni che si sovrappongono o si toccano lungo un lato
 si rifiutano invece di fondersi (per l'unione c'è `geo.dissolve`).
-Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+«Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
 
 Esatta: le geometrie si copiano senza calcolo
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

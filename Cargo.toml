@@ -36,7 +36,7 @@ arrow-ipc = "=60.0.0"
 arrow-select = "=60.0.0"
 # `Buffer` di Arrow per plenora-io: la lettura IPC legge il file intero in un
 # buffer allineato e lo decodifica con `FileDecoder`/`StreamDecoder` di
-# arrow-ipc sugli stessi byte che il confine ha verificato (README, «Confine
+# arrow-ipc sugli stessi byte che il confine ha verificato (docs/file.md, «Confine
 # di lettura»). Non e' una dipendenza nuova: arrow-array e arrow-ipc la usano
 # gia', nel lockfile nessun pacchetto nuovo.
 arrow-buffer = "=60.0.0"
@@ -91,7 +91,7 @@ rstar = "=0.12.2"
 # alla volta (100k punti in ~0,65 s, 1M in ~83 s). Non e' una dipendenza
 # nuova: e' la stessa copia che `geo` usa gia' (feature `spade`; nel lockfile
 # nessun pacchetto nuovo), con i predicati esatti di `robust` 1.2.0. Scelta
-# di `bulk_load` e limiti in README, «geo.delaunay e geo.voronoi».
+# di `bulk_load` e limiti in docs/limiti.md, «geo.delaunay e geo.voronoi».
 spade = "=2.15.1"
 # Misure geodetiche di plenora-kernels-geo (`geodetica`) sull'ellissoide del
 # datum del CRS: `Geodesic`, `Bearing` e `GeodesicArea` di `geo` usano solo

@@ -1,6 +1,6 @@
 //! Confine di lettura: il minimo perché un file malformato diventi un
 //! errore esplicito invece di un panico o di un risultato sbagliato
-//! (README, «Confine di lettura»):
+//! (docs/file.md, «Confine di lettura»):
 //!
 //! - **barriera anti-panico** ([`barriera`]) attorno a ogni chiamata ad
 //!   `arrow-ipc`, `parquet` e `concat_batches` sui byte del file: le
@@ -15,7 +15,8 @@
 //!
 //! Non è una difesa da file costruiti apposta: un'allocazione impossibile
 //! dentro `parquet` o `arrow-ipc` è un aborto del processo, che la barriera
-//! non ferma (limite dichiarato nel README).
+//! non ferma (limite dichiarato in docs/file.md, «File costruiti apposta:
+//! aborto del processo»).
 //!
 //! Gli errori non riportano byte del file né valori: solo che cosa non va e
 //! quale limite.
@@ -28,7 +29,7 @@ use plenora_core::{PlenoraError, Result};
 
 /// Limiti del confine di lettura.
 ///
-/// I valori predefiniti stanno larghi sui file reali (README, «Confine di
+/// I valori predefiniti stanno larghi sui file reali (docs/file.md, «Confine di
 /// lettura»); chi ne ha di più grandi li alza con
 /// [`crate::leggi_tabella_con_limiti`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -6,7 +6,7 @@ datum lungo un percorso di trasformazioni EPSG, proiezione diretta. Ogni
 lato si densifica perché resti entro mezza precisione dall'immagine
 esatta del lato sorgente; tipo e struttura di ogni geometria non
 cambiano. Il quadro completo è in
-[README, «Riproiezione»](../README.md#riproiezione).
+[«Riproiezione»](riproiezione.md#riproiezione).
 
 ### Parametri
 
@@ -23,7 +23,7 @@ quando ogni percorso ammesso sta già entro 1 cm, una griglia che nessun
 percorso ammesso usa, `convenzione_wgs84_etrs89` (con l'uno o l'altro
 valore) su una coppia che non passa da ETRS89 to WGS 84 (1). I percorsi
 imposti da `trasformazioni` restano soggetti alla regola dell'accuratezza
-([README, «La regola dell'accuratezza»](../README.md#la-regola-dellaccuratezza)).
+([Riproiezione, «La regola dell'accuratezza»](riproiezione.md#la-regola-dellaccuratezza)).
 L'analisi non legge i file delle griglie: li legge l'esecuzione.
 
 ### Schema
@@ -43,7 +43,7 @@ normalizzato del target. Gli altri metadati del campo restano.
 (`riproiezione::reproject_batches`) con i parametri letti in validazione:
 ogni cella non nulla si decodifica, si riproietta e si ricodifica; una
 cella nulla resta nulla; le altre colonne non cambiano
-([README, «Operazioni geo»](../README.md#operazioni-geo)). Ogni geometria usa un solo percorso fra i datum, il primo
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)). Ogni geometria usa un solo percorso fra i datum, il primo
 dell'ordine di preferenza la cui area d'uso contiene tutti i suoi punti.
 
 ### Ordine
@@ -106,32 +106,32 @@ riga in ordine di riga, senza diagnostica per riga.
 
 - Il cambio di datum vale quanto l'accuratezza EPSG del percorso: oltre 1
   cm solo con `accuratezza_accettata_m` dichiarata
-  ([README, «`geo.reproject`: il cambio di datum vale quanto l'accuratezza accettata»](../README.md#georeproject-il-cambio-di-datum-vale-quanto-laccuratezza-accettata));
+  ([Limiti dichiarati, «`geo.reproject`: il cambio di datum vale quanto l'accuratezza accettata»](limiti.md#georeproject-il-cambio-di-datum-vale-quanto-laccuratezza-accettata));
   WGS 84 ed ETRS89 sono equivalenti per convenzione
-  ([README, «WGS 84 = ETRS89 per convenzione»](../README.md#wgs-84--etrs89-per-convenzione)).
+  ([Riproiezione, «WGS 84 = ETRS89 per convenzione»](riproiezione.md#wgs-84--etrs89-per-convenzione)).
 - Solo i CRS della tabella integrata
-  ([README, «CRS integrati»](../README.md#crs-integrati)); aree d'uso come
+  ([«CRS integrati»](crs.md#crs-integrati)); aree d'uso come
   riquadri, accuratezze sommate, griglie non verificate contro il
   registro, densificazione a campioni e gli altri limiti in
-  [README, «Limiti dichiarati della riproiezione»](../README.md#limiti-dichiarati-della-riproiezione).
+  [Riproiezione, «Limiti dichiarati della riproiezione»](riproiezione.md#limiti-dichiarati-della-riproiezione).
 - Nel runner un errore non ha diagnostica per riga e il costo in memoria è
   una previsione dalle misure
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
 
 La matematica resta entro la precisione del target: proiezioni e
 trasformazioni entro circa `1e-8` m da PROJ
-([README, «Oracolo»](../README.md#oracolo)), lati densificati entro mezza
+([Riproiezione, «Oracolo»](riproiezione.md#oracolo)), lati densificati entro mezza
 precisione del target, cioè 5 mm a terra (per un target geografico metà
 di 1 cm in gradi all'equatore;
-[README, «Densificazione dei lati»](../README.md#densificazione-dei-lati)).
+[Riproiezione, «Densificazione dei lati»](riproiezione.md#densificazione-dei-lati)).
 Stesso CRS, o CRS che differiscono solo per l'ordine d'autorità degli
 assi: coordinate invariate al bit. Il cambio di datum invece vale quanto
 l'accuratezza del percorso, che oltre 1 cm si accetta solo dichiarandola
 (sopra): è una garanzia indebolita per scelta esplicita
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

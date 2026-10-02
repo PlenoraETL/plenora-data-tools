@@ -65,7 +65,7 @@ fn push_key_fragment(out: &mut Vec<u8>, value: &[u8]) {
 // ---------------------------------------------------------------------------
 // Fast path di `join`/`semi_join`/`anti_join`: chiavi tipizzate sui valori
 // nativi Arrow al posto delle chiavi in byte di `key`, hash `FastHasher`
-// (stile FxHash, README «Hash delle chiavi non keyed») al posto di SipHash. Semantica byte-identica al percorso generico: ogni NaN
+// (stile FxHash, docs/limiti.md «Hash delle chiavi non keyed») al posto di SipHash. Semantica byte-identica al percorso generico: ogni NaN
 // matcha ogni NaN ("NaN" per tutti), -0.0 distinto da 0.0 ("-0" vs "0"),
 // null nella chiave mai in match, stesso ordine di output (sinistre in
 // ordine, match destri per riga, destri non matchati in coda), stessi

@@ -26,7 +26,7 @@ contratto (`sorted_by`, `row_count`) restano.
 1:1: la geometria di ogni riga diventa quella agganciata alla griglia. Il
 runner chiama il kernel (`extended_algorithms::snap_to_grid`) su ogni
 cella non nulla, in parallelo; una cella nulla resta nulla
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Ordine
 
@@ -51,7 +51,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi il kernel rende `ExtendedAlgorithmError`, che il runner porta in
 `Internal` per `Internal`, `ValidazioneNonConclusa` e
@@ -70,7 +70,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 - A differenza di `ST_SnapToGrid` di PostGIS, che toglie i vertici
@@ -85,8 +85,8 @@ voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Lo spostamento è voluto e dichiarato dal parametro: ogni vertice si sposta
 fino a `grid_size * sqrt(2) / 2`, entro 1 cm solo se `grid_size` è sotto
 circa 1,4 cm; oltre, la regola di 1 cm non si applica a questa
-operazione, perché lo spostamento è la sua definizione ([README,
-«Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+operazione, perché lo spostamento è la sua definizione ([Limiti dichiarati,
+«Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Il nodo è il prodotto `round(x / grid_size) * grid_size` arrotondato in
 `f64`: con un passo non rappresentabile esattamente (0,1) è il `f64` più
 vicino al multiplo, non il multiplo esatto. Nessun rifiuto
@@ -95,9 +95,9 @@ vicino al multiplo, non il multiplo esatto. Nessun rifiuto
 ### Complessità
 
 O(n) per geometria, con `n` le coordinate, più la validazione OGC
-dell'ingresso e dell'uscita (O(n²) nel caso peggiore, [README,
+dell'ingresso e dell'uscita (O(n²) nel caso peggiore, [Limiti dichiarati,
 «Validazione OGC: la ricerca delle auto-intersezioni non è quella di `geo`,
-il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(n).
 
 ### Esempio

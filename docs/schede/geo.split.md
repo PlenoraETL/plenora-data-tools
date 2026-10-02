@@ -11,8 +11,8 @@ punti in cui la lama la tocca, entro `tolerance`.
 La lama arriva dalla config (`other_wkb`), nello stesso CRS della colonna.
 L'esecuzione Arrow (`rust_backend::arrow::split_batches`) riceve una lama
 per riga, allineata alle sorgenti: il runner la chiama su tutta la tabella
-con la stessa lama su ogni riga ([README, «Operazioni
-geo»](../README.md#operazioni-geo)).
+con la stessa lama su ogni riga ([Runner, «Operazioni
+geo»](runner.md#operazioni-geo)).
 
 ### Parametri
 
@@ -66,8 +66,8 @@ In validazione (analisi del contratto):
 - `Crs`: colonna senza CRS risolto o CRS non proiettato; coordinate della
   lama fuori dal dominio del CRS.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -93,8 +93,8 @@ Poi l'esecuzione Arrow (vince la prima riga che fallisce):
 
 - Lo split poligonale gira sul kernel del laboratorio, qualificato contro
   GEOS per equivalenza semantica
-  ([README, «`geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a
-  GEOS verificata, non dimostrata»](../README.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata));
+  ([Limiti dichiarati, «`geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a
+  GEOS verificata, non dimostrata»](limiti.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata));
   lo split lineare è il codice precedente al porting.
 - La scelta delle facce usa un campione interno e un test pari-dispari con
   il lato del punto deciso in modo esatto, non `point_on_surface` e `covers`
@@ -104,15 +104,15 @@ Poi l'esecuzione Arrow (vince la prima riga che fallisce):
   interno, anche facce fuori dalla sorgente e residui scartati, non solo le
   parti tenute; il limite di coordinate vale per ciascun ingresso e per la
   somma.
-- Elenco completo: [README, «Differenze da GEOS»](../README.md#differenze-da-geos).
-- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+- Elenco completo: [Operazioni topologiche, «Differenze da GEOS»](topologia.md#differenze-da-geos).
+- Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+  «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
 
 Sorgenti poligonali
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
 
 - guardia di spaziatura delle coordinate e noding del polygonize interno:
   ogni incrocio arrotondato entro `p / 5` dai segmenti che divide, al più
@@ -142,7 +142,7 @@ test fra segmenti della sorgente e primitive della lama, entro 100.000.000.
 Le righe si calcolano una alla volta, in ordine: memoria O(n) per la riga
 più le parti prodotte; l'uscita si costruisce in un batch solo. Tempi
 misurati e oracoli nel
-[README, «`geo.make_valid`, `geo.polygonize`, `geo.split`»](../README.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata).
+[Limiti dichiarati, «`geo.make_valid`, `geo.polygonize`, `geo.split`»](limiti.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata).
 
 ### Esempio
 

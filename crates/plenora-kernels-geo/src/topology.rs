@@ -15,7 +15,7 @@
 //! quando piu' overlay sono in catena, `rust_backend::griglia`). Oltre,
 //! [`TopologyError::PrecisionInsufficient`]. Il risultato non e'
 //! confrontato con gli ingressi dopo il calcolo: resta la sola validazione
-//! OGC dell'output (README, «Limiti dichiarati»).
+//! OGC dell'output (docs/limiti.md, «Limiti dichiarati»).
 
 use geo::algorithm::bool_ops::unary_union;
 use geo::orient::{Direction, Orient};
@@ -1010,7 +1010,7 @@ fn clean_valid_polygon_topology_impl(
     if morfologia {
         // Archi: `p / 8` (qui `precision` e' gia' `p / 2`), o lo 0,1% della
         // tolleranza di chiusura se maggiore (deviazione dichiarata del
-        // buffer, README «Limiti dichiarati»).
+        // buffer, docs/limiti.md «Limiti dichiarati»).
         let freccia = (precision.value() * 0.25)
             .max(crate::rust_backend::buffer::FRECCIA_RELATIVA_MASSIMA * snap_tolerance);
         for geometry in working.iter_mut().flatten() {
@@ -1206,7 +1206,7 @@ mod tests {
     /// Precisione dei test con la morfologia (`fill_gaps`): un millesimo di
     /// unita'. Gli archi si derivano dalla precisione, e con `1e-5` una
     /// chiusura di `0.1` avrebbe 157 corde per angolo, tutte convergenti
-    /// nel centro: un overlay lento (come quello di `geo`, README).
+    /// nel centro: un overlay lento (come quello di `geo`, docs/limiti.md).
     fn precisione_morfologia() -> Precision {
         Precision::new(1e-3).unwrap()
     }

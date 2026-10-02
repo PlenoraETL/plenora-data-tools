@@ -169,7 +169,7 @@ L'aritmetica e l'uscita numerica sono in `f64`: gli interi oltre `2^53` e i
 decimali si arrotondano nel calcolo, non nei confronti. `date_trunc` tronca
 in UTC e non accetta istanti con fuso. Gli errori che dipendono dai valori
 (regex e indici calcolati) arrivano in esecuzione
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner)).
 Un divisore calcolato uguale a zero dà null per default, contato in
 `righe_divisione_per_zero`; con `on_division_by_zero = "error"` rifiuta la
 riga in esecuzione. Il divisore letterale zero si vede già in validazione.

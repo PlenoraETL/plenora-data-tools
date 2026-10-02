@@ -41,7 +41,7 @@ Le statistiche, sui valori non nulli del gruppo:
 I gruppi si formano sul testo della cella di `group_by`; le celle nulle
 formano un gruppo. Una statistica ripetuta in `stats` si rifiuta: darebbe
 due colonne con lo stesso nome
-([README, «Nomi delle colonne d'uscita»](../README.md#nomi-delle-colonne-duscita)).
+([Limiti dichiarati, «Nomi delle colonne d'uscita»](limiti.md#nomi-delle-colonne-duscita)).
 
 ### Schema
 
@@ -83,7 +83,7 @@ si convertono arrotondando e la loro somma accumula gli errori di
 arrotondamento di `f64` nell'ordine delle righe; sulle colonne intere
 la media parte dalla somma esatta, varianza e deviazione dagli scarti
 esatti, e mediana e
-quartili interpolano i valori arrotondati ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)). Un `NaN` nei valori entra
+quartili interpolano i valori arrotondati ([Limiti dichiarati, «Somme intere esatte e tipi delle riduzioni»](limiti.md#somme-intere-esatte-e-tipi-delle-riduzioni)). Un `NaN` nei valori entra
 nei calcoli: somma, media e varianza diventano `NaN`, e nell'ordinamento di
 minimo, massimo e quantili sta dopo ogni numero.
 

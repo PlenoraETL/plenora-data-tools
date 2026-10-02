@@ -3,7 +3,7 @@
 Aggiunge alla sinistra una colonna booleana che dice se la sua geometria
 sta dentro almeno una geometria della destra (kernel
 `analysis::within_indexes_validated`, predicato `within` del join
-spaziale; [README, «Operazioni geo»](../README.md#operazioni-geo)).
+spaziale; [Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 «Dentro» è il `contains` di `geo` letto dalla destra: una geometria sul
 solo bordo, come un punto sul lato di un poligono, non è dentro.
 
@@ -51,7 +51,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -70,15 +70,15 @@ categoria del passo geo indicata fra parentesi:
   confermate superano il limite di righe dell'arco; conta ogni destra che
   contiene una sinistra, anche se ne basta una;
 - `MargineMemoria` (`ResourceLimit`): le stesse coppie non starebbero nel
-  margine di memoria del passo (64 byte ciascuna; guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  margine di memoria del passo (64 byte ciascuna; guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;
 - `IndexOverflow` (`InvalidPlan`): un numero di righe non entra in `u64`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 ### Limiti e deviazioni
@@ -92,9 +92,9 @@ può superarlo anche se la colonna ha una riga per riga sinistra.
 Nessun calcolo di geometrie e nessuna griglia: il predicato di `geo` si
 valuta sulle coordinate `f64` d'ingresso, senza tolleranza, e la regola di
 1 cm non sposta nulla. Una geometria a meno di 1 cm dal bordo è dentro o
-fuori secondo le sue coordinate esatte ([README, «Precisione delle
+fuori secondo le sue coordinate esatte ([Limiti dichiarati, «Precisione delle
 operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «Feature d'ingresso più vicine della precisione»).
 
 ### Complessità

@@ -59,7 +59,7 @@
 //! Il risultato non e' confrontato con gli ingressi dopo il calcolo: la
 //! garanzia di 1 cm poggia sui limiti a priori (griglia, arrotondamenti,
 //! catene) e sulla correttezza di `i_overlay`. Due spostamenti non hanno un
-//! limite a priori e restano dichiarati (README, «Limiti dichiarati»): gli
+//! limite a priori e restano dichiarati (docs/limiti.md, «Limiti dichiarati»): gli
 //! agganci dopo il primo giro (raggio `2^(k/2) g` al giro `k`: per arrivare
 //! a `p / 2` servono circa `2 log2(p / g)` giri, 26 al limite della guardia
 //! di spaziatura e 60 a 20.000 km con 1 cm) e un difetto di `i_overlay`

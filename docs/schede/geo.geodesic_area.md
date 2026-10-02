@@ -2,7 +2,7 @@
 
 Aggiunge una colonna `float64` con l'area geodetica, in metri quadrati,
 dei poligoni e multi-poligoni di ogni riga, sull'ellissoide del datum del
-CRS della colonna ([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le
+CRS della colonna ([Limiti dichiarati, «Misure geodetiche: l'ellissoide del datum»](limiti.md#misure-geodetiche-lellissoide-del-datum)). Le
 coordinate sono longitudine (`x`) e latitudine (`y`) in gradi e i lati sono
 geodetiche fra vertici consecutivi. Il verso degli anelli non conta: ogni
 poligono si orienta prima (esterno antiorario, buchi orari), e l'area è
@@ -50,7 +50,7 @@ CRS, config):
 - `Crs`: CRS della colonna assente o non risolto; CRS non geografico;
   CRS senza l'ellissoide del datum (`ELLIPSOID_REQUIRED`).
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -96,8 +96,8 @@ Poi, per riga:
   41,1 41,1 40,-1 40))`: il lato inferiore sale oltre 70° a longitudine 0,
   e il buco a 40° è fuori dall'esterno geodetico) o di un'altra parte.
   L'area si calcola solo se la topologia delle geodetiche è dimostrabilmente
-  quella del piano ([README, «Misure geodetiche: l'ellissoide del
-  datum»](../README.md#misure-geodetiche-lellissoide-del-datum)): ogni lato
+  quella del piano ([Limiti dichiarati, «Misure geodetiche: l'ellissoide del
+  datum»](limiti.md#misure-geodetiche-lellissoide-del-datum)): ogni lato
   deve avere una lunghezza maggiorata di al più 1000 km, una latitudine
   maggiorata sotto 90° e una rotazione `K L` al più 1 (maggioranti
   certificati, senza problema inverso), e gli anelli devono stare più
@@ -111,16 +111,16 @@ Poi, per riga:
   meno, oltre perimetro per 1 cm già su un quadrato di 500 m).
 - Un poligono vuoto dà `-0.0`, non `0.0`.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 
 Nessun controllo e nessun rifiuto di precisione. L'area è quella
 dell'algoritmo di Karney in `f64` sull'ellissoide del datum; la regola di
-1 cm per le aree ammette circa perimetro per 1 cm ([README, «Precisione
+1 cm per le aree ammette circa perimetro per 1 cm ([Limiti dichiarati, «Precisione
 delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 La somma non è compensata (come in `geo`): su un poligono piccolo lontano
 dall'equatore lo scarto da GeographicLib è dell'ordine di 1e-5 m²
 (l'oracolo ammette 1e-3 m²).

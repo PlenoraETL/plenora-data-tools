@@ -37,7 +37,7 @@ schema e le proprietà del contratto (`sorted_by`, `row_count`) restano.
 
 1:1: il runner chiama la conversione di colonna dei kernel
 (`extensions::from_wkt_column_named`) sulla colonna intera. Una cella
-nulla dà una geometria nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla dà una geometria nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Ordine
 
@@ -72,12 +72,12 @@ In esecuzione (conversione di colonna):
 È l'unica operazione geo con diagnostica per riga nel runner; gli indici
 seguono la base delle tabellari: righe della sorgente, o dell'ingresso del
 passo dopo un passo che cambia le righe
-([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga)).
+([Runner, «Diagnostica per riga»](runner.md#diagnostica-per-riga)).
 
 ### Limiti e deviazioni
 
 - Il costo in memoria del passo è una previsione dalle misure
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Modelli di costo geo»).
 - Solo WKT 2D: EWKT con `SRID=` e WKT con `Z`, `M`, `ZM` si rifiutano.
 - `on_error` non ha effetto (sopra).
@@ -86,7 +86,7 @@ passo dopo un passo che cambia le righe
 
 Esatta: le coordinate sono i `f64` più vicini ai numeri del testo, senza
 altro calcolo. Nessun controllo di precisione si applica
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

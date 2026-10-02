@@ -53,7 +53,7 @@
 //! griglia dentro un blocco puo' essere tenuto o scartato diversamente dal
 //! tratto unico (la griglia di un blocco e' piu' fine di quella della
 //! linea): e' una feature piu' vicina della precisione, fuori dalla
-//! garanzia come in ogni overlay (README, «Feature d'ingresso piu' vicine
+//! garanzia come in ogni overlay (docs/limiti.md, «Feature d'ingresso piu' vicine
 //! della precisione»).
 //!
 //! **Scostamento dal tratto unico.** Ogni buffer di blocco sta entro
@@ -241,7 +241,7 @@ pub(super) fn livelli_di_unione(parti: usize) -> u32 {
 /// capacita' esatta: ogni buffer di blocco e ogni unione appena calcolati
 /// devono stare nel `margine` insieme a cio' che e' ancora vivo, prima di
 /// essere tenuti; un'unione libera i due operandi. Il transitorio dentro
-/// `geo` e `i_overlay` resta fuori (README, «Modelli di costo geo»).
+/// `geo` e `i_overlay` resta fuori (docs/runner.md, «Modelli di costo geo»).
 pub(super) fn buffer_dei_blocchi(
     blocchi: &[LineString<f64>],
     stile: &BufferStyle<f64>,

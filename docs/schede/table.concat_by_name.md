@@ -62,7 +62,7 @@ In esecuzione, `ResourceLimit`:
 ### Limiti e deviazioni
 
 Come `table.concat`, il catalogo la dichiara N-aria e il runner esegue solo
-la forma a due ingressi ([README, «Validazione»](../README.md#validazione)).
+la forma a due ingressi ([Runner, «Validazione»](runner.md#validazione)).
 Due colonne con lo stesso nome e tipi diversi si rifiutano: nessuna
 promozione di tipo.
 

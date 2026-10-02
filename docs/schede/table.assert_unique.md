@@ -53,7 +53,7 @@ In esecuzione:
   compresa, con causa `validation.duplicate_key` e senza colonna. La
   diagnostica dà il conteggio delle righe e fino a 10 esempi in ordine di
   riga, con l'indice (da zero) della riga nella base del runner
-  ([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga));
+  ([Runner, «Diagnostica per riga»](runner.md#diagnostica-per-riga));
   mai i valori;
 - `Schema`: una cella della chiave non si converte in testo (`date32`, `date64` o
   `timestamp` fuori dall'intervallo di calendario, `date64` non allineato al giorno, chiave di dizionario
@@ -63,9 +63,9 @@ In esecuzione:
 ### Limiti e deviazioni
 
 La mappa delle chiavi non si conta su `max_governed_memory_bytes`
-([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
+([Limiti dichiarati, «Memoria delle chiavi dei kernel in memoria non governata»](limiti.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
 l'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 ### Complessità
 

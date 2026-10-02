@@ -9,7 +9,7 @@ poligoni (gap) non si cercano: se un buco sia atteso dipende dal dominio.
 
 La conversione di colonna è `extensions3::coverage_validate_rows`, che il
 runner chiama su tutta la colonna con i default della tabella sotto e la
-precisione del CRS della colonna ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+precisione del CRS della colonna ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Parametri
 
@@ -58,8 +58,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -76,7 +76,7 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
 - `ResourceLimit`: cella oltre il limite di byte per cella; più di
   `max_issues` sovrapposizioni (`IssueLimit`); coppie candidate e
   sovrapposizioni (stimate dalla zona, con la sua codifica) oltre il
-  margine di memoria del passo (`MargineMemoria`; guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  margine di memoria del passo (`MargineMemoria`; guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `Internal`: panico di `geo`, `i_overlay` o `rstar`, validazione che non
   conclude.
 
@@ -85,11 +85,11 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
 - Solo sovrapposizioni: i gap non sono rilevati.
 - Oltre `max_issues` l'operazione fallisce, non tronca l'elenco.
 - La decisione sull'area è presa sul risultato passato dalla griglia di
-  `i_overlay` ([README, «Precisione delle operazioni geografiche: 1 cm a
-  terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+  `i_overlay` ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
+  terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
   «Hazard»).
-- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+- Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+  «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
@@ -102,7 +102,7 @@ colonna (`Precision::from_crs`). Nessun controllo a posteriori: una sovrapposizi
 più sottile della griglia può sparire (segnalazione mancata), e vertici
 diversi su lati collineari possono lasciare una scheggia (segnalazione
 spuria), con area entro la precisione per il perimetro della zona
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 `area` è calcolata in `f64` sulla zona restituita dalla griglia.
 
 ### Complessità

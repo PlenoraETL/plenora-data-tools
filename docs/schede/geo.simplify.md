@@ -37,7 +37,7 @@ passano invariati.
 
 1:1: il runner chiama il kernel (`operations::simplify_with_policy`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Ordine
 
@@ -65,7 +65,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria (`OperationError`, che il runner porta in `PlenoraError`:
 `Internal` per `Internal`, `ValidazioneNonConclusa` e
@@ -93,7 +93,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 `preserve_topology` non è `TopologyPreservingSimplifier` di GEOS
 (`ST_SimplifyPreserveTopology`), che usa una distanza: qui la soglia è
@@ -113,7 +113,7 @@ dal percorso scalato (coordinate oltre `1e150` o sotto `1e-150` in modulo,
 fuori da ogni dominio di un CRS reale), dove passano per una divisione e
 una moltiplicazione. Lo scarto dalla forma originale è quello chiesto con
 la soglia, non un errore di precisione
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 
@@ -122,7 +122,7 @@ O(n²) nel peggiore, con una seconda traversata dello stesso costo che
 verifica le distanze; `preserve_topology` O(n log n) nel caso tipico (coda di priorità e
 indice spaziale di `geo`). Più la validazione OGC dell'ingresso e
 dell'uscita (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 
 ### Esempio
 

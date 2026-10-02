@@ -29,7 +29,7 @@ vuota dà null, e se la colonna d'uscita (con la nullabilità di quella
 d'ingresso) non ammette null il passo si rifiuta con `InvalidPlan`; una
 riga di altro tipo (anche `MultiLineString`) è `InvalidPlan` («tipo
 geometria non supportato»). L'analisi non controlla i tipi dichiarati
-dell'ingresso ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dell'ingresso ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Ordine
 
@@ -53,7 +53,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi, per riga: `InvalidPlan` per una geometria che non è una
 `LineString`. Il kernel rende `ExtendedAlgorithmError`, che il runner
@@ -70,7 +70,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 - Solo `LineString` nel kernel; solo CRS proiettati.
@@ -83,8 +83,8 @@ il primo vertice, con i suoi bit; negli altri casi è calcolato in `f64`
 (somma delle lunghezze dei lati, interpolazione sul lato), con un errore
 relativo dell'ordine del numero di lati per 1e-16 della lunghezza: molto
 sotto 1 cm su ogni linea realistica. Con `ratio` 1 il punto è l'ultimo
-vertice a meno di qualche ulp ([README, «Precisione delle operazioni
-geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+vertice a meno di qualche ulp ([Limiti dichiarati, «Precisione delle operazioni
+geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

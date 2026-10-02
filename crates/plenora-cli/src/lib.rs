@@ -6,7 +6,7 @@
 //! su stdout, niente su stderr, codici d'uscita per categoria), Typed Errors
 //! 1.0 (la proiezione pubblica di `PlenoraError`), Capability Discovery 2.0,
 //! Surface Bindings 1.0 (comandi `catalog`, `describe`, `validate`, `run`).
-//! Le deviazioni volute sono nel README, «CLI `plenora-data`».
+//! Le deviazioni volute sono in docs/cli.md, «CLI `plenora-data`».
 //!
 //! Struttura:
 //!

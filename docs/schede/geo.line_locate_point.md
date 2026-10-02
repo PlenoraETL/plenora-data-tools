@@ -54,7 +54,7 @@ In validazione (analisi del contratto):
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta; punto fuori
   dal dominio del CRS.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -73,7 +73,7 @@ supera la validazione OGC (`InvalidInput`) è `InvalidPlan`; un panico di
 
 Una `MultiLineString` dà null, non la frazione lungo la parte più vicina.
 Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 ### Precisione
@@ -84,7 +84,7 @@ cumulate), con errori d'arrotondamento relativi alla lunghezza della linea,
 molto sotto 1 cm per le lunghezze dei CRS reali. Dove due segmenti sono alla
 stessa distanza dal punto entro l'arrotondamento, la scelta fra i due, e
 con essa la frazione, può cambiare con l'ultimo bit delle coordinate
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

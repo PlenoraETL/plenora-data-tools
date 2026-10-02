@@ -78,7 +78,7 @@ misurata in testo con la conversione) e rifiuta oltre
 fissata da config e schema: il runner non le applica il fattore di
 espansione e dopo il passo controlla invece il numero esatto di righe,
 oltre alle righe per arco
-([README, «Esecuzione»](../README.md#esecuzione)).
+([Runner, «Esecuzione»](runner.md#esecuzione)).
 
 ### Complessità
 

@@ -141,7 +141,7 @@ def verifica_ambiente() -> None:
         raise Rifiuto(
             "ambiente diverso da quello della tabella committata: "
             f"pyproj/PROJ/EPSG trovati {trovato}, attesi {atteso}. "
-            "Installare la ruota binaria pyproj 3.7.2 (vedi README, "
+            "Installare la ruota binaria pyproj 3.7.2 (vedi docs/crs.md, "
             "'Aggiungere un codice') o aggiornare le costanti in PR."
         )
 

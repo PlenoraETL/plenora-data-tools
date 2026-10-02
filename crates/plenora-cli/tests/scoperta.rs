@@ -121,7 +121,7 @@ fn capabilities_descrive_il_binario_che_risponde() {
     }
     // Il catalogo pubblico: stesse operazioni, versioni, contratti, tipi di
     // contenuto e controlli. L'unica differenza dichiarata è l'effetto
-    // collaterale di `data.run`, che qui scrive file (README, «CLI
+    // collaterale di `data.run`, che qui scrive file (docs/cli.md, «CLI
     // `plenora-data`», deviazioni).
     let catalogo = contratto("data-tools-v1.json");
     let pubbliche = catalogo["operations"].as_array().expect("operations");

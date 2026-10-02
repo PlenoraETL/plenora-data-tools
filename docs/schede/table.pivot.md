@@ -118,9 +118,9 @@ In esecuzione (dal runner con `mapping`, o chiamando il kernel):
 Senza `mapping` il runner non esegue l'operazione (lo schema dipende dai
 dati); `table.transpose` ha lo stesso limite. Su `decimal128` e testo
 `sum` e `mean` arrotondano, perché il risultato è `float64`; su una colonna
-intera `mean` arrotonda una volta, dopo la somma esatta ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
+intera `mean` arrotonda una volta, dopo la somma esatta ([Limiti dichiarati, «Somme intere esatte e tipi delle riduzioni»](limiti.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
 L'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 ### Complessità
 

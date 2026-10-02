@@ -6,7 +6,8 @@
 //! `main.rs` passa al gestore di Ctrl-C e SIGTERM (`ctrlc`). Che il sistema
 //! operativo consegni il segnale al gestore non è provato da questi test
 //! (servirebbe inviare Ctrl-C a un sottoprocesso, cioè FFI): è un limite
-//! dichiarato nel README.
+//! dichiarato in docs/cli.md, «Annullamento dal sistema operativo non
+//! provato da un test».
 
 mod comune;
 

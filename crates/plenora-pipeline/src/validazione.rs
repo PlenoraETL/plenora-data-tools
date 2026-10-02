@@ -133,7 +133,7 @@ impl PipelineValidata {
 
     /// Schema con cui `run` restituisce l'output `nome`: lo schema del
     /// contratto con `plenora.contract.version` e `plenora.field_id` su
-    /// ogni campo (README, «Metadati Arrow»). `None` se `nome` non è un
+    /// ogni campo (docs/metadati-arrow.md, «Metadati Arrow»). `None` se `nome` non è un
     /// output del piano.
     #[must_use]
     pub fn schema_uscita(&self, nome: &str) -> Option<&SchemaRef> {
@@ -262,7 +262,7 @@ fn limiti_dei_kernel_tabellari(limiti: &Limits) -> Result<plenora_kernels_table:
 /// Solo `table.hmac_sha256`: la variabile `key_env` deve esistere, non
 /// essere vuota ed essere UTF-8, con la stessa funzione del kernel
 /// (`security::carica_chiave_hmac`). Può ancora cambiare fra `validate` e
-/// `run`; in quel caso l'errore arriva al passo (README, «Runner»).
+/// `run`; in quel caso l'errore arriva al passo (docs/runner.md, «Runner»).
 fn verifica_ambiente(preparato: &PassoPreparato) -> Result<()> {
     if let PassoPreparato::HmacSha256(config) = preparato {
         // La stessa lettura del kernel: variabile assente, vuota o non UTF-8
