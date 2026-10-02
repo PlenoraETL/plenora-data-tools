@@ -36,9 +36,11 @@ portati: la CLI `plenora-data` è nuova, scritta sui contratti pubblici
 La CI (`.github/workflows/ci.yml`) esegue i gate di
 [`AGENTS.md`](AGENTS.md) su Linux e Windows a ogni push su `main` e a ogni
 pull request, con la suite lunga, e verifica la CLI contro
-`plenora-contracts` al commit fissato. Non ci sono ancora, e si dichiarano
-assenti: fuzzing, misura della copertura, mutation testing e controllo della
-catena delle dipendenze. Non sono in programma l'identità del piano (`plan_hash`,
+`plenora-contracts` al commit fissato; compila i target di fuzz, e
+`.github/workflows/supply-chain.yml` controlla la catena delle dipendenze
+([«Fuzz»](#fuzz), [«Catena delle dipendenze»](#catena-delle-dipendenze)).
+Non ci sono ancora, e si dichiarano assenti: campagne di fuzz in CI (girano
+fuori, a mano), misura della copertura e mutation testing. Non sono in programma l'identità del piano (`plan_hash`,
 fingerprint del catalogo) e l'interruzione di un kernel a metà: scadenza e
 annullamento si controllano solo fra i passi
 ([«Scadenza e annullamento»](docs/runner.md#scadenza-e-annullamento)).
@@ -155,3 +157,53 @@ python scripts/check_docs.py                          # link, ancore, comandi, g
 python scripts/check_comments.py                      # regole oggettive dei commenti
 python -m unittest discover -s scripts -p "test_*.py" # prove delle guardie
 ```
+
+### Fuzz
+
+`fuzz/` è un crate cargo-fuzz con workspace e lock propri, così nightly e
+libFuzzer restano fuori dalla toolchain fissata; le versioni comuni sono
+quelle di `Cargo.lock`. La CI lo compila soltanto (`cargo check`, Linux e
+Windows), con `cargo fmt`. Ogni target ha in testa le invarianti che prova.
+Oltre a «mai panico», gli errori si controllano su ogni asse: mai
+`Internal` (salvo quello documentato di una dipendenza che va in panico in
+una barriera durante quell'ingresso), mai un valore di cella nel testo o
+nella diagnostica per riga (una sentinella nelle celle), e due esecuzioni
+uguali in testo, categoria, fase e diagnostica. Poi ognuno ha un oracolo:
+
+| target | superficie | oracolo |
+| --- | --- | --- |
+| `piano` | `Pipeline::from_json`, `validate` | round-trip del piano letto, validazione deterministica, rifiuti `InvalidPlan` |
+| `esecuzione_tabellare` | ogni operazione tabellare del runner, dati generati | il runner contro la chiamata diretta del kernel (uuid solo nella forma), due esecuzioni uguali |
+| `ordinamento`, `ordinamento_parallelo` | `table.sort` su dieci tipi, null, discendente; il secondo oltre 32 768 righe, nel ramo parallelo | un comparatore scritto nel target e l'ordinamento stabile di `std`; righe spostate intere; idempotenza |
+| `esecuzione_geo` | `geo.from_wkt` e un'operazione geo, WKT arbitrario | due esecuzioni uguali; ogni cella geometria d'uscita si rilegge |
+| `wkb` | decoder WKB dei kernel e camminata WKB dei file | ricodifica rileggibile e stabile; ciò che il decoder accetta il confine dei file lo accetta |
+| `lettura_ipc`, `lettura_parquet` | confine di lettura dei file | due letture uguali; riscritta (IPC file e stream, Parquet) e riletta è la stessa, o per Parquet con geometrie la trasformazione GeoParquet documentata |
+| `argomenti_cli` | grammatica della CLI | rifiuti `InvalidConfiguration`, lettura deterministica |
+
+Le campagne vogliono Linux (o WSL) con nightly e `cargo-fuzz`:
+
+```sh
+cargo +nightly fuzz build -O
+cargo +nightly fuzz run esecuzione_tabellare -- -max_total_time=600
+```
+
+I panici attesi delle dipendenze dentro una barriera
+(`plenora_core::panic_policy::barriera_di_dipendenza`) non fermano il fuzzer;
+ogni altro panico sì, anche se una rete di sicurezza lo intercetta
+(`fuzz/fuzz_targets/comune/aggancio.rs`). Corpus, crash e build restano
+fuori da Git.
+
+### Catena delle dipendenze
+
+`deny.toml` è la policy di cargo-deny: advisory rifiutate senza eccezioni,
+licenze permissive in allowlist, solo crates.io o le patch di `vendor/`. Si
+applica al grafo del workspace e a quello di `fuzz/`:
+
+```sh
+python scripts/check_cargo_deny.py   # in Docker, cargo-deny 0.20.2 fissato
+cargo deny check && cargo deny --manifest-path fuzz/Cargo.toml check   # se installato
+```
+
+La CI la esegue a ogni push e PR e ogni lunedì
+(`.github/workflows/supply-chain.yml`): un'advisory nuova può farla
+diventare rossa senza che il codice cambi.

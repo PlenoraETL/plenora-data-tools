@@ -80,13 +80,13 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 | crate | unitari | integrazione | totale |
 | --- | --- | --- | --- |
 | `plenora-cli` | 3 | 31 | 34 |
-| `plenora-core` | 172 | 65 | 237 |
+| `plenora-core` | 174 | 65 | 239 |
 | `plenora-data-py` | 0 | 0 | 0 |
-| `plenora-io` | 19 | 73 | 92 |
-| `plenora-kernels-geo` | 513 | 108 | 621 |
+| `plenora-io` | 19 | 74 | 93 |
+| `plenora-kernels-geo` | 515 | 108 | 623 |
 | `plenora-kernels-table` | 456 | 118 | 574 |
-| `plenora-pipeline` | 10 | 141 | 151 |
-| **totale** | 1173 | 536 | 1709 |
+| `plenora-pipeline` | 10 | 142 | 152 |
+| **totale** | 1177 | 538 | 1715 |
 
 ### Prove delle guardie
 
@@ -94,6 +94,7 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 
 | file | prove |
 | --- | --- |
+| `scripts/test_check_cargo_deny.py` | 4 |
 | `scripts/test_check_comments.py` | 27 |
 | `scripts/test_check_docs.py` | 14 |
 | `scripts/test_genera_inventario.py` | 5 |

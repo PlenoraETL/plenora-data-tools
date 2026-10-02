@@ -1,8 +1,10 @@
 name: ci
 
 # I gate di AGENTS.md, «Prima del commit», eseguiti su Linux e Windows a ogni
-# push su main e a ogni pull request. Fuzzing, copertura e controllo della
-# catena delle dipendenze non sono ancora qui (README, «Che cosa non c'è ancora»).
+# push su main e a ogni pull request. I target di fuzz qui si compilano
+# soltanto: le campagne girano fuori dalla CI (README, «Fuzz»); la catena
+# delle dipendenze sta in supply-chain.yml. La copertura non c'è ancora
+# (README, «Che cosa non c'è ancora»).
 
 on:
   push:
@@ -76,8 +78,15 @@ jobs:
           python-version: '3.12'
       - name: cargo fmt
         run: cargo fmt --all --check
+      - name: cargo fmt (target di fuzz)
+        run: cargo fmt --manifest-path fuzz/Cargo.toml --check
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # `fuzz/` ha workspace e lock separati per tenere nightly e libFuzzer
+      # fuori dalla toolchain fissata: senza un comando dedicato potrebbe
+      # smettere di compilare lasciando verde tutto il resto.
+      - name: cargo check (target di fuzz)
+        run: cargo check --manifest-path fuzz/Cargo.toml --all-targets --locked
       - name: cargo clippy anti-panic (librerie)
         run: >-
           cargo clippy --workspace --lib --locked --
