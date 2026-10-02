@@ -695,10 +695,6 @@ impl PipelineValidata {
             });
         }
 
-        // Tutti i passi sono finiti: l'ultima fase iniziata e' la consegna.
-        interruzione
-            .verifica("prima di consegnare gli output")
-            .map_err(|errore| errore.with_phase(ErrorPhase::Finalize))?;
         // Ultimo confine: tutti gli output residenti insieme.
         let finali = byte_vivi(vivi.values())?;
         if finali > budget {
@@ -721,6 +717,12 @@ impl PipelineValidata {
             }
             outputs.push((nome.clone(), tabella));
         }
+        // Tutti i passi sono finiti: l'ultima fase iniziata e' la consegna. Il
+        // controllo e' l'ultima cosa prima di rendere gli output: una
+        // scadenza passata durante i controlli finali non li rende.
+        interruzione
+            .verifica("prima di consegnare gli output")
+            .map_err(|errore| errore.with_phase(ErrorPhase::Finalize))?;
         Ok(Esito {
             outputs,
             report: Report {

@@ -147,9 +147,7 @@ fn con_nome(contesto: &str, errore: PlenoraError) -> PlenoraError {
         PlenoraError::DataMapping(m) => PlenoraError::DataMapping(anteponi(m)),
         PlenoraError::Internal(m) => PlenoraError::Internal(anteponi(m)),
         PlenoraError::Conflict(m) => PlenoraError::Conflict(anteponi(m)),
-        PlenoraError::Io(e) => {
-            PlenoraError::Io(std::io::Error::new(e.kind(), anteponi(e.to_string())))
-        }
+        PlenoraError::Io(e) => PlenoraError::io_con_contesto(contesto, e),
         altro => altro.con_contesto(contesto),
     }
 }

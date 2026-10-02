@@ -108,8 +108,8 @@ pub enum PlenoraError {
     /// [`PlenoraError::Crs`], che resta per i messaggi senza codice.
     #[error("CRS error: {message}")]
     CrsCoded {
-        /// [`crate::crs::CrsError::code`].
-        code: &'static str,
+        /// [`crate::crs::CrsError::code`]: valido per costruzione.
+        code: crate::crs::CodiceCrs,
         /// Il messaggio, con il codice in testa e gli eventuali contesti.
         message: String,
     },
@@ -132,6 +132,12 @@ pub enum PlenoraError {
     ResourceLimit(String),
 
     /// Errore di I/O.
+    ///
+    /// Categoria e ritentativo dipendono dall'`ErrorKind` ([`assi_io`]). Il
+    /// testo del sistema operativo può contenere percorsi: resta nel
+    /// `Display` locale, mai nel messaggio pubblico
+    /// ([`PlenoraError::public_projection`]), che porta un testo fisso per
+    /// `ErrorKind` e il solo contesto nostro ([`PlenoraError::io_con_contesto`]).
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -646,11 +652,11 @@ impl PlenoraError {
         }
     }
 
-    /// Categoria dell'errore, dichiarata per variante. Per
-    /// [`PlenoraError::Tagged`] e [`PlenoraError::RowDiagnostics`] è
-    /// delegata alla sorgente.
+    /// Categoria dell'errore, dichiarata per variante (per `Io`
+    /// dall'`ErrorKind`, [`assi_io`]). Per i wrapper è delegata alla
+    /// sorgente.
     #[must_use]
-    pub const fn category(&self) -> ErrorCategory {
+    pub fn category(&self) -> ErrorCategory {
         match self {
             Self::InvalidPlan(_) => ErrorCategory::InvalidPlan,
             Self::Unsupported(_) => ErrorCategory::Unsupported,
@@ -660,7 +666,7 @@ impl PlenoraError {
             Self::Crs(_) | Self::CrsCoded { .. } => ErrorCategory::Crs,
             Self::Cancelled(_) => ErrorCategory::Cancelled,
             Self::ResourceLimit(_) => ErrorCategory::ResourceLimit,
-            Self::Io(_) => ErrorCategory::Io,
+            Self::Io(errore) => assi_io(errore.kind()).0,
             Self::Protocol(_) => ErrorCategory::Protocol,
             Self::Timeout(_) => ErrorCategory::Timeout,
             Self::Conflict(_) => ErrorCategory::Conflict,
@@ -681,8 +687,10 @@ impl PlenoraError {
     ///   [`RetryDisposition::RequiresIdempotencyKey`] o
     ///   [`RetryDisposition::RequiresRecovery`], che restano per i componenti
     ///   con stato remoto.
-    /// - [`RetryDisposition::Safe`] per gli errori di I/O, causa
-    ///   potenzialmente transitoria, e per la scadenza e l'annullamento del
+    /// - Per gli errori di I/O dall'`ErrorKind` ([`assi_io`]): `Safe` solo
+    ///   per le cause transitorie, `Never` per le deterministiche e per
+    ///   quelle non classificate.
+    /// - [`RetryDisposition::Safe`] per la scadenza e l'annullamento del
     ///   runner (`Timeout`, `Cancelled`): scattano prima di un passo o della
     ///   consegna degli output, nessun output è stato reso e la riesecuzione
     ///   è deterministica (come nei vettori `data-run-timeout-error` e
@@ -699,9 +707,10 @@ impl PlenoraError {
     ///
     /// Il tag di fase ([`PlenoraError::Tagged`]) non cambia la disposizione.
     #[must_use]
-    pub const fn retry_disposition(&self) -> RetryDisposition {
+    pub fn retry_disposition(&self) -> RetryDisposition {
         match self {
-            Self::Io(_) | Self::Timeout(_) | Self::Cancelled(_) => RetryDisposition::Safe,
+            Self::Io(errore) => assi_io(errore.kind()).1,
+            Self::Timeout(_) | Self::Cancelled(_) => RetryDisposition::Safe,
             Self::InvalidPlan(_)
             | Self::Unsupported(_)
             | Self::Schema(_)
@@ -850,13 +859,40 @@ impl PlenoraError {
     /// più. `RemoteEffect::None` lascia l'errore com'è.
     #[must_use]
     pub fn with_remote_effect(self, remote_effect: RemoteEffect) -> Self {
-        match (remote_effect, &self) {
-            (RemoteEffect::None, _) | (_, Self::WithRemoteEffect { .. }) => self,
-            _ => Self::WithRemoteEffect {
-                remote_effect,
-                source: Box::new(self),
-            },
+        if remote_effect == RemoteEffect::None || self.ha_effetto_dichiarato() {
+            return self;
         }
+        Self::WithRemoteEffect {
+            remote_effect,
+            source: Box::new(self),
+        }
+    }
+
+    /// Un [`PlenoraError::WithRemoteEffect`] in un punto qualunque della
+    /// catena dei wrapper trasparenti.
+    fn ha_effetto_dichiarato(&self) -> bool {
+        match self {
+            Self::WithRemoteEffect { .. } => true,
+            Self::Tagged { source, .. } | Self::RowDiagnostics { source, .. } => {
+                source.ha_effetto_dichiarato()
+            }
+            _ => false,
+        }
+    }
+
+    /// Un errore di I/O con un contesto nostro (nomi del piano, mai
+    /// percorsi né dati) davanti: `Display` `"{contesto}: {causa}"`, stesso
+    /// `ErrorKind`. Il contesto entra anche nel messaggio pubblico, il testo
+    /// della causa no.
+    #[must_use]
+    pub fn io_con_contesto(contesto: &str, causa: std::io::Error) -> Self {
+        Self::Io(std::io::Error::new(
+            causa.kind(),
+            ContestoIo {
+                contesto: contesto.to_owned(),
+                causa,
+            },
+        ))
     }
 
     /// Associa un payload di diagnostica per riga senza alterare testo o
@@ -1071,6 +1107,60 @@ fn execution_suffix(execution_id: &str) -> String {
     }
 }
 
+/// Contesto nostro di un errore di I/O ([`PlenoraError::io_con_contesto`]).
+#[derive(Debug, Error)]
+#[error("{contesto}: {causa}")]
+struct ContestoIo {
+    contesto: String,
+    #[source]
+    causa: std::io::Error,
+}
+
+/// I contesti nostri di un errore di I/O, dal più esterno; vuoto se non ne
+/// ha.
+pub(crate) fn contesti_io(errore: &std::io::Error) -> Vec<&str> {
+    let mut contesti = Vec::new();
+    let mut corrente = errore;
+    while let Some(contesto) = corrente
+        .get_ref()
+        .and_then(|interno| interno.downcast_ref::<ContestoIo>())
+    {
+        contesti.push(contesto.contesto.as_str());
+        corrente = &contesto.causa;
+    }
+    contesti
+}
+
+/// Categoria e ritentativo di un errore di I/O dal suo `ErrorKind`, con le
+/// categorie più precise di `plenora-error-v1` dove ci sono.
+///
+/// - `Safe` solo per le cause transitorie: `TimedOut` (`timeout`),
+///   `Interrupted`, `WouldBlock`, `ResourceBusy` (`transient`);
+/// - `Never` per le deterministiche: `NotFound` (`not_found`),
+///   `PermissionDenied` (`authorization`), `AlreadyExists` (`conflict`),
+///   spazio o quota esauriti, file troppo grande, memoria (`resource_limit`),
+///   `Unsupported` (`unsupported`), e il resto del filesystem (`io`);
+/// - un `ErrorKind` non classificato (anche uno nuovo della libreria
+///   standard): `io` e `Never`, la scelta prudente.
+#[must_use]
+pub const fn assi_io(kind: std::io::ErrorKind) -> (ErrorCategory, RetryDisposition) {
+    use std::io::ErrorKind as K;
+    match kind {
+        K::TimedOut => (ErrorCategory::Timeout, RetryDisposition::Safe),
+        K::Interrupted | K::WouldBlock | K::ResourceBusy => {
+            (ErrorCategory::Transient, RetryDisposition::Safe)
+        }
+        K::NotFound => (ErrorCategory::NotFound, RetryDisposition::Never),
+        K::PermissionDenied => (ErrorCategory::Authorization, RetryDisposition::Never),
+        K::AlreadyExists => (ErrorCategory::Conflict, RetryDisposition::Never),
+        K::StorageFull | K::QuotaExceeded | K::FileTooLarge | K::OutOfMemory => {
+            (ErrorCategory::ResourceLimit, RetryDisposition::Never)
+        }
+        K::Unsupported => (ErrorCategory::Unsupported, RetryDisposition::Never),
+        _ => (ErrorCategory::Io, RetryDisposition::Never),
+    }
+}
+
 pub type Result<T> = std::result::Result<T, PlenoraError>;
 
 #[cfg(test)]
@@ -1220,16 +1310,14 @@ mod tests {
     }
 
     #[test]
-    fn retry_disposition_is_safe_only_for_io_and_interruptions() {
-        // La disposizione sostituisce il booleano: `Safe` solo per la causa
-        // potenzialmente transitoria (I/O) e per scadenza e annullamento del
-        // runner, tutti a effetto assente; `Never` per le cause
-        // deterministiche.
+    fn retry_disposition_is_safe_only_for_interruptions_among_the_samples() {
+        // La disposizione sostituisce il booleano: fra i campioni `Safe` solo
+        // per scadenza e annullamento del runner, a effetto assente; `Never`
+        // per le cause deterministiche e per l'`Io` non classificato del
+        // campione (`Other`). Gli `ErrorKind` hanno un test a parte.
         for (error, _) in samples() {
-            let expected = if matches!(
-                error,
-                PlenoraError::Io(_) | PlenoraError::Cancelled(_) | PlenoraError::Timeout(_)
-            ) {
+            let expected = if matches!(error, PlenoraError::Cancelled(_) | PlenoraError::Timeout(_))
+            {
                 RetryDisposition::Safe
             } else {
                 RetryDisposition::Never
@@ -1386,10 +1474,11 @@ mod tests {
     #[test]
     fn tagged_axes_are_delegated_to_the_source() {
         // Gli assi diversi dalla fase attraversano il wrapper invariati:
-        // `Io` taggato resta categoria Io, effetto None, retry `Safe` —
-        // la disposizione NON cambia col raffinamento di fase.
-        let tagged = PlenoraError::Io(std::io::Error::other("io")).with_phase(ErrorPhase::Read);
-        assert_eq!(tagged.category(), ErrorCategory::Io);
+        // `Io` transitorio taggato resta `transient`, effetto None, retry
+        // `Safe`: la disposizione NON cambia col raffinamento di fase.
+        let tagged = PlenoraError::Io(std::io::Error::new(std::io::ErrorKind::Interrupted, "io"))
+            .with_phase(ErrorPhase::Read);
+        assert_eq!(tagged.category(), ErrorCategory::Transient);
         assert_eq!(tagged.remote_effect(), RemoteEffect::None);
         assert_eq!(tagged.retry_disposition(), RetryDisposition::Safe);
         // Anche una causa deterministica taggata resta `Never`.
@@ -1766,14 +1855,19 @@ mod tests {
 
     #[test]
     fn l_effetto_dichiarato_vince_e_toglie_il_ritentativo_automatico() {
-        let io = || PlenoraError::Io(std::io::Error::other("disco"));
+        let io = || {
+            PlenoraError::Io(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "disco",
+            ))
+        };
         let parziale = io().with_remote_effect(RemoteEffect::Partial);
         assert_eq!(parziale.remote_effect(), RemoteEffect::Partial);
         assert_eq!(
             parziale.retry_disposition(),
             RetryDisposition::RequiresRecovery
         );
-        assert_eq!(parziale.category(), ErrorCategory::Io);
+        assert_eq!(parziale.category(), ErrorCategory::Transient);
         assert_eq!(parziale.to_string(), io().to_string(), "Display delegato");
         // Il primo effetto vince; `None` non avvolge.
         let due = io()
@@ -1801,6 +1895,157 @@ mod tests {
         assert_eq!(
             con_diagnostica.untag().remote_effect(),
             RemoteEffect::Partial
+        );
+    }
+
+    #[test]
+    fn il_primo_effetto_vince_sotto_ogni_wrapper() {
+        let parziale = || {
+            PlenoraError::Io(std::io::Error::from(std::io::ErrorKind::Interrupted))
+                .with_remote_effect(RemoteEffect::Partial)
+        };
+        let ordini = [
+            (
+                "tag sopra l'effetto",
+                parziale().with_phase(ErrorPhase::Commit),
+            ),
+            (
+                "diagnostica sopra l'effetto",
+                parziale().with_row_diagnostics(diagnostica()),
+            ),
+            (
+                "diagnostica e tag sopra l'effetto",
+                parziale()
+                    .with_phase(ErrorPhase::Read)
+                    .with_row_diagnostics(diagnostica()),
+            ),
+            (
+                "tag costruito a mano sopra l'effetto",
+                PlenoraError::Tagged {
+                    phase: ErrorPhase::Write,
+                    source: Box::new(parziale()),
+                },
+            ),
+        ];
+        for (ordine, errore) in ordini {
+            let ridichiarato = errore.with_remote_effect(RemoteEffect::RolledBack);
+            assert_eq!(
+                ridichiarato.remote_effect(),
+                RemoteEffect::Partial,
+                "{ordine}"
+            );
+            assert_eq!(
+                ridichiarato.public_projection().remote_effect(),
+                RemoteEffect::Partial,
+                "{ordine}"
+            );
+        }
+    }
+
+    #[test]
+    fn gli_errori_di_io_si_classificano_per_tipo() {
+        use std::io::ErrorKind as K;
+        let casi = [
+            (
+                K::NotFound,
+                ErrorCategory::NotFound,
+                RetryDisposition::Never,
+            ),
+            (
+                K::PermissionDenied,
+                ErrorCategory::Authorization,
+                RetryDisposition::Never,
+            ),
+            (
+                K::AlreadyExists,
+                ErrorCategory::Conflict,
+                RetryDisposition::Never,
+            ),
+            (K::IsADirectory, ErrorCategory::Io, RetryDisposition::Never),
+            (K::NotADirectory, ErrorCategory::Io, RetryDisposition::Never),
+            (K::InvalidInput, ErrorCategory::Io, RetryDisposition::Never),
+            (
+                K::InvalidFilename,
+                ErrorCategory::Io,
+                RetryDisposition::Never,
+            ),
+            (
+                K::ReadOnlyFilesystem,
+                ErrorCategory::Io,
+                RetryDisposition::Never,
+            ),
+            (K::InvalidData, ErrorCategory::Io, RetryDisposition::Never),
+            (
+                K::StorageFull,
+                ErrorCategory::ResourceLimit,
+                RetryDisposition::Never,
+            ),
+            (
+                K::Unsupported,
+                ErrorCategory::Unsupported,
+                RetryDisposition::Never,
+            ),
+            (K::TimedOut, ErrorCategory::Timeout, RetryDisposition::Safe),
+            (
+                K::Interrupted,
+                ErrorCategory::Transient,
+                RetryDisposition::Safe,
+            ),
+            (
+                K::WouldBlock,
+                ErrorCategory::Transient,
+                RetryDisposition::Safe,
+            ),
+            (
+                K::ResourceBusy,
+                ErrorCategory::Transient,
+                RetryDisposition::Safe,
+            ),
+            // Non classificato: la scelta prudente.
+            (K::Other, ErrorCategory::Io, RetryDisposition::Never),
+        ];
+        for (tipo, categoria, ritentativo) in casi {
+            let errore = PlenoraError::Io(std::io::Error::from(tipo));
+            assert_eq!(errore.category(), categoria, "{tipo:?}");
+            assert_eq!(errore.retry_disposition(), ritentativo, "{tipo:?}");
+            assert_eq!(errore.public_projection().category(), categoria, "{tipo:?}");
+        }
+    }
+
+    #[test]
+    fn il_messaggio_pubblico_di_io_non_porta_il_testo_del_sistema() {
+        const PERCORSO: &str = "C:/Utenti/mario.rossi/segreti/dati.parquet";
+        let causa = std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("No such file or directory at path {PERCORSO}"),
+        );
+        let errore = PlenoraError::io_con_contesto(
+            "output `b`",
+            std::io::Error::new(causa.kind(), causa.to_string()),
+        );
+        // Il testo locale tiene la causa, per chi diagnostica sul posto.
+        assert!(errore.to_string().contains(PERCORSO));
+        let pubblico = errore.public_projection();
+        assert!(
+            !pubblico.message().contains("segreti"),
+            "{}",
+            pubblico.message()
+        );
+        assert_eq!(pubblico.message(), "io error: output `b`: entity not found");
+        // Anche sotto i wrapper e con contesti annidati.
+        let annidato = PlenoraError::io_con_contesto(
+            "output `b`",
+            match PlenoraError::io_con_contesto("scrittura", causa) {
+                PlenoraError::Io(interno) => interno,
+                altro => panic!("{altro:?}"),
+            },
+        )
+        .with_phase(ErrorPhase::Commit)
+        .with_remote_effect(RemoteEffect::Partial);
+        let messaggio = annidato.public_projection().message().to_owned();
+        assert_eq!(
+            messaggio,
+            "io error: output `b`: scrittura: entity not found"
         );
     }
 }

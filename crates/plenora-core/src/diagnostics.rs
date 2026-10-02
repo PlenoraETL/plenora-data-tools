@@ -315,10 +315,21 @@ impl RowDiagnostics {
             }
             sum.checked_add(*count).ok_or("overflow conteggi")
         })?;
+        // DIAG-007: troncati se esempi osservati sono stati omessi, dal
+        // limite o perché le righe non si attribuiscono alla sorgente
+        // (`senza_attribuzione`: nessun esempio, limite di conoscenza).
+        let omessi_dal_limite =
+            self.observed_total > example_count && example_count == self.examples_limit;
+        let omessi_senza_attribuzione = example_count == 0
+            && self.observed_total > 0
+            && self
+                .knowledge_limits
+                .iter()
+                .flatten()
+                .any(|limite| limite == KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE);
         if counted != self.observed_total
             || self.counts.keys().any(|cause| !valid_cause(cause))
-            || self.examples_truncated
-                != (self.observed_total > example_count && example_count == self.examples_limit)
+            || self.examples_truncated != (omessi_dal_limite || omessi_senza_attribuzione)
             || self
                 .total
                 .is_some_and(|total| total == 0 || total < self.observed_total)
@@ -485,8 +496,8 @@ impl RowDiagnostics {
     /// Lo stesso payload senza esempi, per righe rifiutate che non si
     /// riconducono alla sorgente (DIAG-003: nessun indice indovinato).
     ///
-    /// Restano conteggi, cause e totale; gli esempi si tolgono (con
-    /// `examples_truncated` falso: non li ha omessi il limite), la
+    /// Restano conteggi, cause e totale; gli esempi si tolgono
+    /// (`examples_truncated` vero se ce n'erano di osservati, DIAG-007), la
     /// completezza `complete` diventa `partial` e
     /// [`KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE`] si aggiunge ai limiti
     /// di conoscenza. `partial` e `unknown` restano tali.
@@ -497,7 +508,7 @@ impl RowDiagnostics {
     /// valido (un payload d'ingresso già incoerente).
     pub fn senza_attribuzione(mut self) -> Result<Self, &'static str> {
         self.examples.clear();
-        self.examples_truncated = false;
+        self.examples_truncated = self.observed_total > 0;
         if self.completeness == RowDiagnosticsCompleteness::Complete {
             self.completeness = RowDiagnosticsCompleteness::Partial;
         }
@@ -848,7 +859,17 @@ pub(crate) mod tests {
         assert_eq!(completo.validate_for_emission(), Ok(()));
         let ridotto = completo.clone().senza_attribuzione().expect("valido");
         assert_eq!(ridotto.examples, Vec::new());
-        assert!(!ridotto.examples_truncated);
+        // DIAG-007: esempi osservati omessi.
+        assert!(ridotto.examples_truncated);
+        // Senza il limite di conoscenza, nessun esempio su righe osservate
+        // non e' un troncamento dichiarabile.
+        let mut senza_limite = ridotto.clone();
+        senza_limite.knowledge_limits = Some(vec!["scan.interrupted".to_owned()]);
+        assert!(senza_limite.validate_for_emission().is_err());
+        // E con il limite ma `examples_truncated` falso, il payload mente.
+        let mut falso = ridotto.clone();
+        falso.examples_truncated = false;
+        assert!(falso.validate_for_emission().is_err());
         assert_eq!(ridotto.completeness, RowDiagnosticsCompleteness::Partial);
         assert_eq!(
             ridotto.knowledge_limits,

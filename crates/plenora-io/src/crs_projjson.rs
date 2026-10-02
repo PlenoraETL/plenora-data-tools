@@ -125,8 +125,11 @@ pub fn identificativo_da_projjson(documento: &Value) -> Result<String> {
         let code = CrsError::NotBuiltin.code();
         return Err(PlenoraError::CrsCoded {
             code,
+            // Il messaggio nomina la chiave (`type`), mai il valore letto né
+            // l'identificatore: errori senza dati.
             message: format!(
-                "{code}: il PROJJSON di `{identificativo}` non e' di tipo {tipo_atteso}"
+                "{code}: il `type` del PROJJSON non e' quello del CRS integrato indicato \
+                 dal suo `id`"
             ),
         });
     }
@@ -197,6 +200,24 @@ mod tests {
                 Some("CRS_NOT_BUILTIN"),
                 "{documento}"
             );
+            // Errori senza dati: né il codice né l'autorità né il tipo letti
+            // dal metadato compaiono nel messaggio (pubblico o locale).
+            for testo in [
+                errore.to_string(),
+                errore.public_projection().message().to_owned(),
+            ] {
+                for valore in [
+                    "32632",
+                    "4979",
+                    "99999",
+                    "102100",
+                    "ESRI",
+                    "GeographicCRS",
+                    "BoundCRS",
+                ] {
+                    assert!(!testo.contains(valore), "{documento}: {testo}");
+                }
+            }
         }
         assert!(identificativo_da_projjson(&Value::String("EPSG:4326".to_owned())).is_err());
     }

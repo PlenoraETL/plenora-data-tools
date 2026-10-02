@@ -167,7 +167,7 @@ impl PlenoraError {
         match self {
             Self::Timeout(_) => Some(CODE_DEADLINE_EXCEEDED),
             Self::Cancelled(_) => Some(CODE_CANCELLED),
-            Self::CrsCoded { code, .. } => Some(*code),
+            Self::CrsCoded { code, .. } => Some(code.as_str()),
             Self::Tagged { source, .. }
             | Self::RowDiagnostics { source, .. }
             | Self::WithRemoteEffect { source, .. } => source.code(),
@@ -212,7 +212,7 @@ impl PlenoraError {
             remote_effect,
             retry,
             code: self.code(),
-            message: messaggio_limitato(&self.to_string()),
+            message: messaggio_limitato(&self.messaggio_pubblico()),
             details: match details {
                 Some(Ok(details)) => Some(details),
                 // Non serializzabile = non supera `validate_for_emission`:
@@ -229,6 +229,30 @@ impl PlenoraError {
             );
         }
         proiezione
+    }
+}
+
+impl PlenoraError {
+    /// Il testo pubblico: il `Display`, tranne per `Io`, dove il testo del
+    /// sistema operativo (che può contenere percorsi) lascia il posto a un
+    /// testo fisso per `ErrorKind`, con i soli contesti nostri davanti
+    /// (ERR-009, ERR-010).
+    fn messaggio_pubblico(&self) -> String {
+        match self {
+            Self::Io(errore) => {
+                let mut testo = String::from("io error: ");
+                for contesto in super::contesti_io(errore) {
+                    testo.push_str(contesto);
+                    testo.push_str(": ");
+                }
+                testo.push_str(&errore.kind().to_string());
+                testo
+            }
+            Self::Tagged { source, .. }
+            | Self::RowDiagnostics { source, .. }
+            | Self::WithRemoteEffect { source, .. } => source.messaggio_pubblico(),
+            altro => altro.to_string(),
+        }
     }
 }
 
@@ -275,7 +299,10 @@ fn sostitutiva(errore: &PlenoraError, motivo: &str) -> PublicError {
         remote_effect: errore.remote_effect(),
         retry: RetryDisposition::Never,
         code: Some(CODE_DETAILS_NOT_PUBLISHABLE),
-        message: messaggio_limitato(&format!("{motivo}; errore originale: {errore}")),
+        message: messaggio_limitato(&format!(
+            "{motivo}; errore originale: {}",
+            errore.messaggio_pubblico()
+        )),
         details: None,
     }
 }
@@ -371,7 +398,16 @@ mod tests {
         ];
         let mut visti = std::collections::BTreeSet::new();
         for campione in campioni {
-            let codice = campione.code();
+            let codice = campione.code().as_str();
+            assert!(
+                codice.len() >= 2
+                    && codice.len() <= 64
+                    && codice.starts_with(|c: char| c.is_ascii_uppercase())
+                    && codice
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'),
+                "{codice}: fuori dal pattern di plenora-error-v1"
+            );
             assert!(campione.to_string().starts_with(&format!("{codice}: ")));
             assert!(visti.insert(codice), "{codice} ripetuto");
             // Il codice viaggia tipizzato, anche sotto un contesto.

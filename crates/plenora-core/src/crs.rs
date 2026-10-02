@@ -688,13 +688,35 @@ pub enum CrsError {
     GridInvalid { reason: &'static str },
 }
 
-impl CrsError {
-    /// Codice stabile dell'errore, lo stesso in testa al messaggio: il
-    /// `code` di `plenora-error-v1`. Il `match` non ha ramo di default: una
-    /// variante nuova non compila senza il suo codice.
+/// Codice stabile di un [`CrsError`], il `code` di `plenora-error-v1`.
+///
+/// Pattern `^[A-Z][A-Z0-9_]{1,63}$`. Si ottiene solo da [`CrsError::code`]:
+/// il campo è privato, quindi un codice fuori dal pattern non si costruisce
+/// (il test di `error::pubblico` verifica il pattern su ogni variante).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CodiceCrs(&'static str);
+
+impl CodiceCrs {
+    /// Il codice come testo.
     #[must_use]
-    pub const fn code(&self) -> &'static str {
-        match self {
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl fmt::Display for CodiceCrs {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl CrsError {
+    /// Codice stabile dell'errore, lo stesso in testa al messaggio. Il
+    /// `match` non ha ramo di default: una variante nuova non compila senza
+    /// il suo codice.
+    #[must_use]
+    pub const fn code(&self) -> CodiceCrs {
+        CodiceCrs(match self {
             Self::Required { .. } => "CRS_REQUIRED",
             Self::InvalidDefinition { .. } => "CRS_INVALID",
             Self::BackendUnavailable => "CRS_BACKEND_UNAVAILABLE",
@@ -718,7 +740,7 @@ impl CrsError {
             Self::ReprojectionEdgeNotConverged => "REPROJECTION_EDGE_NOT_CONVERGED",
             Self::GridUnreadable => "NTV2_GRID_UNREADABLE",
             Self::GridInvalid { .. } => "NTV2_GRID_INVALID",
-        }
+        })
     }
 }
 
@@ -1128,11 +1150,8 @@ mod tests {
     fn crs_error_maps_into_plenora_error_crs_coded_variant() {
         let error = PlenoraError::from(CrsError::BackendUnavailable);
         assert!(matches!(
-            error,
-            PlenoraError::CrsCoded {
-                code: "CRS_BACKEND_UNAVAILABLE",
-                ..
-            }
+            &error,
+            PlenoraError::CrsCoded { code, .. } if code.as_str() == "CRS_BACKEND_UNAVAILABLE"
         ));
         assert!(error.to_string().contains("CRS_BACKEND_UNAVAILABLE"));
     }

@@ -327,7 +327,8 @@ fn verifica_senza_attribuzione(errore: &PlenoraError, ingresso: &str) -> RowDiag
     let report = diagnostica(errore);
     assert_eq!(report.index_basis, ROW_DIAGNOSTICS_INDEX_BASIS, "{errore}");
     assert!(report.examples.is_empty(), "{errore}");
-    assert!(!report.examples_truncated, "{errore}");
+    // DIAG-007: gli esempi osservati sono stati omessi.
+    assert!(report.examples_truncated, "{errore}");
     assert_eq!(
         report.completeness,
         RowDiagnosticsCompleteness::Partial,

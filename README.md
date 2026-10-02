@@ -1319,12 +1319,18 @@ serializzabile con serde), valido contro `schemas/error-v1.schema.json`
 copiati da `plenora-contracts@ade868c` e verificati per SHA-256):
 
 - `message` è il testo dell'errore, già senza valori di righe o colonne,
-  troncato a 2048 caratteri e mai vuoto;
+  troncato a 2048 caratteri e mai vuoto. Per un errore di I/O il testo del
+  sistema operativo (che può portare percorsi completi) resta nel solo
+  `Display` locale: il messaggio pubblico è un testo fisso per
+  `ErrorKind` con i soli contesti nostri davanti («io error: output `b`:
+  entity not found», `PlenoraError::io_con_contesto`);
 - `code`, dove l'errore ne ha uno stabile: `EXECUTION_DEADLINE_EXCEEDED`
   (`Timeout`), `EXECUTION_CANCELLED` (`Cancelled`), e il codice di
   `CrsError` (`CrsError::code`, `match` esaustivo) per un errore CRS nato
   da un `CrsError` (`PlenoraError::CrsCoded`, codice tipizzato, mai letto
-  dal messaggio). Un `PlenoraError::Crs` di solo testo non ha codice;
+  dal messaggio; `CodiceCrs` si ottiene solo da `CrsError::code`, quindi
+  un codice fuori dal pattern dello schema non si costruisce). Un
+  `PlenoraError::Crs` di solo testo non ha codice;
 - `details.row_diagnostics`: il documento `plenora-row-diagnostics-v1`
   intero, se l'errore ha una diagnostica per riga;
 - `details` oltre i limiti ERR-011/ERR-012 (byte, profondità, 128
@@ -1338,6 +1344,14 @@ copiati da `plenora-contracts@ade868c` e verificati per SHA-256):
 `provider` ed `execution_id` non ci sono: nessun errore del workspace ne
 ha uno.
 
+Gli errori di I/O si classificano per `ErrorKind`: `TimedOut` →
+`timeout`, `Interrupted`/`WouldBlock`/`ResourceBusy` → `transient`, tutti
+ritentabili (`safe`); `NotFound` → `not_found`, `PermissionDenied` →
+`authorization`, `AlreadyExists` → `conflict`, spazio, quota, file troppo
+grande o memoria → `resource_limit`, `Unsupported` → `unsupported`, il resto
+→ `io`, tutti `never`. Un `ErrorKind` non classificato è `io` e `never`, la
+scelta prudente.
+
 ### Effetto di un errore a metà della scrittura
 
 `remote_effect` è `none` per costruzione (ogni file d'uscita è scritto in
@@ -1346,7 +1360,27 @@ modo atomico), tranne dove un confine dichiara di più con
 gli output uno alla volta e marca `partial` un errore dopo il primo output
 scritto (i precedenti restano). Con un effetto già visibile un ritentativo
 automatico (`safe`, `after`, `requires_idempotency_key`) diventa
-`requires_recovery`; una causa che non si ritenta mai resta `never`.
+`requires_recovery`; una causa che non si ritenta mai resta `never`. Il
+primo effetto dichiarato vince anche sotto i wrapper di fase e di
+diagnostica.
+
+La scrittura atomica cancella il temporaneo di una scrittura fallita e ne
+controlla l'esito: se la cancellazione fallisce l'errore ha effetto
+`unknown` (e con una causa ritentabile `requires_recovery`).
+
+- **Temporaneo rimasto dopo una scrittura fallita.**
+  *Regola*: un errore di `scrivi_atomico` non lascia nulla alla
+  destinazione e cancella il temporaneo `.plenora-io-*.tmp` accanto a lei.
+  *Ambito*: `plenora_io::atomico::scrivi_atomico` (ogni scrittura di
+  `plenora-io`).
+  *Hazard*: se la cancellazione fallisce (permessi cambiati, file bloccato
+  da un altro processo), o se il processo muore prima di cancellarlo, il
+  temporaneo con i dati scritti fin lì resta nella directory della
+  destinazione. Nel primo caso l'errore dice `unknown`; nel secondo non c'è
+  errore da leggere.
+  *Rientro*: una pulizia dei `.plenora-io-*.tmp` orfani all'avvio, o
+  temporanei fuori dalla directory della destinazione dove la rinomina
+  atomica lo permette.
 
 ## Runner
 
@@ -1709,6 +1743,7 @@ prima di eseguire:
   `distinct`, `join`, `aggregate`, `explode`…). Il runner toglie gli esempi
   e tiene conteggi, cause e totale: la completezza `complete` diventa
   `partial` con il limite di conoscenza `read.row_attribution_unavailable`
+  e `examples_truncated` vero (DIAG-007: esempi osservati omessi)
   (`RowDiagnostics::senza_attribuzione`). Il testo del kernel prende
   davanti «passo `<out>`: righe rifiutate nell'ingresso `<nome>` del passo,
   non riconducibili alla sorgente (diagnostica senza esempi)». Per trovare

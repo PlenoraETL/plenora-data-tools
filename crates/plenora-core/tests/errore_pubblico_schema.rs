@@ -448,13 +448,16 @@ fn ogni_proiezione_e_valida_contro_lo_schema() {
         assert_eq!(valida_errore(&documento), Ok(()), "{documento}");
         // La proiezione non cambia gli assi (nessun errore qui ha effetto
         // ignoto) e non aggiunge testo: il messaggio e' il `Display`,
-        // eventualmente troncato.
+        // eventualmente troncato, tranne per l'I/O, che ne toglie il testo
+        // del sistema operativo.
         assert_eq!(pubblico.category(), errore.category());
         assert_eq!(pubblico.phase(), errore.phase());
         assert_eq!(pubblico.retry(), errore.retry_disposition());
         let testo = errore.to_string();
         assert!(
-            testo.starts_with(pubblico.message()) || testo.is_empty(),
+            testo.starts_with(pubblico.message())
+                || testo.is_empty()
+                || pubblico.message().starts_with("io error: "),
             "{documento}"
         );
         assert_eq!(

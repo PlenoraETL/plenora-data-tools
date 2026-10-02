@@ -300,7 +300,8 @@ fn scrittura_atomica() {
         scrivi_tabella(&ordini(), &manca, &OpzioniScrittura::default())
             .expect_err("directory mancante")
             .category(),
-        ErrorCategory::Io
+        // `Io` con `ErrorKind::NotFound`: categoria `not_found`.
+        ErrorCategory::NotFound
     );
     let sottodirectory = dir.path().join("d.arrow");
     std::fs::create_dir(&sottodirectory).unwrap();
