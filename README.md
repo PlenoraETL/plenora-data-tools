@@ -3187,12 +3187,20 @@ manifesto, `crates/plenora-cli/adozione.json`).
   thread del gestore di Ctrl-C (`ctrlc` vi chiama `expect`).
   *Hazard*: l'hook di `main.rs` conta, senza payload, ogni panico fuori
   dalle barriere di dipendenza in qualunque thread
-  (`panic_policy::panici_fuori_dalle_barriere`), e un conto cambiato
-  durante l'invocazione trasforma un successo in `internal` (exit 70,
-  effetto `unknown` per `run`). Il controllo è alla fine, non ai punti di
-  controllo dell'annullamento: se il thread del gestore muore, il comando
-  prosegue senza annullamento fino in fondo, e solo allora fallisce.
-  *Rientro*: il conto letto anche ai punti di controllo dell'`Interruzione`.
+  (`panic_policy::panici_fuori_dalle_barriere`); la base si prende subito
+  dopo l'installazione dell'hook e prima di avviare il gestore
+  (`esegui_invocazione_dal`), e un conto cambiato da allora trasforma un
+  successo in `internal` (exit 70, effetto `unknown` per `run`). Il
+  controllo è alla fine, non ai punti di controllo dell'annullamento: se il
+  thread del gestore muore, il comando prosegue senza annullamento fino in
+  fondo, e solo allora fallisce. Il conto è del processo: chi usa la
+  libreria con più invocazioni concorrenti nello stesso processo vede il
+  panico di una far fallire con `internal` anche le altre in corso. È la
+  direzione prudente, e l'unica possibile: il conto cresce soltanto, quindi
+  un panico dopo la base non lascia mai passare un `ok`, può solo
+  trasformare in `internal` un successo vero.
+  *Rientro*: il conto letto anche ai punti di controllo dell'`Interruzione`;
+  un conto per invocazione, se servirà la concorrenza in un processo.
 - **Aborti senza inviluppo.**
   *Regola*: CLI 2.0, sezione 4: un documento su stdout e niente su stderr
   in ogni caso.

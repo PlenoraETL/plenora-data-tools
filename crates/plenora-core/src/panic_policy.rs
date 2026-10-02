@@ -77,8 +77,8 @@ pub fn install(policy: PanicPolicy) -> bool {
 static PANICI_FUORI_DALLE_BARRIERE: AtomicU64 = AtomicU64::new(0);
 
 /// Conta un panico, se non è dentro una barriera (lì è atteso e diventa un
-/// errore della barriera). Separata dall'hook per essere provata senza un
-/// panico vero.
+/// errore della barriera). La provano, con delta esatti e in un processo
+/// tutto suo, `tests/conto_dei_panici.rs` e il test omologo della CLI.
 fn registra_panico(dentro_una_barriera: bool) {
     if !dentro_una_barriera {
         PANICI_FUORI_DALLE_BARRIERE.fetch_add(1, Ordering::AcqRel);
@@ -248,21 +248,6 @@ mod tests {
             "chiudere la barriera interna non chiude l'esterna"
         );
         assert!(!dentro_una_barriera_di_dipendenza());
-    }
-
-    /// Il conto cresce per un panico fuori dalle barriere, non per uno
-    /// dentro. Il conto è del processo: altri test possono farlo crescere in
-    /// parallelo, quindi si guarda solo che non diminuisca e che cresca.
-    #[test]
-    fn il_conto_dei_panici_esclude_le_barriere() {
-        let prima = super::panici_fuori_dalle_barriere();
-        super::registra_panico(false);
-        assert!(super::panici_fuori_dalle_barriere() > prima);
-        // Dentro una barriera: non conta. Con test in parallelo l'unica
-        // prova robusta è sulla funzione pura, una chiamata isolata.
-        let base = super::panici_fuori_dalle_barriere();
-        super::registra_panico(true);
-        assert!(super::panici_fuori_dalle_barriere() >= base);
     }
 
     #[test]

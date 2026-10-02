@@ -41,10 +41,35 @@ pub type Segnale = Option<Arc<AtomicBool>>;
 /// Un panico in qualunque punto diventa l'inviluppo `internal` (exit 70),
 /// senza il testo del payload; l'hook di panico che non stampa nulla lo
 /// installa `main.rs` (`plenora_core::panic_policy`).
+///
+/// Il conto dei panici di base è quello di adesso: un panico di un altro
+/// thread avvenuto prima della chiamata non conta. Il binario usa
+/// [`esegui_invocazione_dal`] con il conto letto subito dopo l'installazione
+/// dell'hook.
 #[must_use]
 pub fn esegui_invocazione(argomenti: &[String], segnale: &Segnale) -> Uscita {
+    esegui_invocazione_dal(argomenti, segnale, panici_fuori_dalle_barriere())
+}
+
+/// [`esegui_invocazione`] con il conto dei panici di base dato dal chiamante.
+///
+/// La base è `panic_policy::panici_fuori_dalle_barriere` letto subito
+/// dopo `install` e prima di avviare il gestore di Ctrl-C): ogni panico
+/// fuori dalle barriere da quel momento, in qualunque thread, impedisce un
+/// successo.
+///
+/// Il conto è del processo: con più invocazioni concorrenti nello stesso
+/// processo (un uso da libreria) un panico dell'una fa fallire anche le
+/// altre in corso con `internal`. È la direzione prudente: il conto cresce
+/// soltanto, quindi un panico avvenuto dopo la base non può mai lasciare
+/// passare un `ok`; può solo trasformare in `internal` un successo vero
+/// (README, «Panici fuori dal thread principale»).
+#[must_use]
+pub fn esegui_invocazione_dal(argomenti: &[String], segnale: &Segnale, panici_base: u64) -> Uscita {
     let identita = identita_di(argomenti::nome_comando(argomenti));
-    proteggi(identita, || invocazione(argomenti, segnale, identita))
+    proteggi(identita, panici_base, || {
+        invocazione(argomenti, segnale, identita)
+    })
 }
 
 /// Esegue `lavoro`; un panico diventa l'inviluppo `internal`, con effetto
@@ -56,12 +81,12 @@ pub fn esegui_invocazione(argomenti: &[String], segnale: &Segnale) -> Uscita {
 /// non lascia passare un successo: l'hook installato da `main.rs` conta i
 /// panici fuori dalle barriere di dipendenza
 /// (`panic_policy::panici_fuori_dalle_barriere`), e un conto cambiato
-/// durante il lavoro trasforma un `ok` nell'errore `internal`. Un errore già
-/// tipizzato resta quello: dice già che il comando non è riuscito.
-fn proteggi(identita: Identita, lavoro: impl FnOnce() -> Uscita) -> Uscita {
+/// dalla base `panici_prima` trasforma un `ok` nell'errore `internal`. Un
+/// errore già tipizzato resta quello: dice già che il comando non è
+/// riuscito.
+fn proteggi(identita: Identita, panici_prima: u64, lavoro: impl FnOnce() -> Uscita) -> Uscita {
     let con_effetti = operazioni::per_comando(identita.comando)
         .is_some_and(|operazione| operazione.effetto != operazioni::Effetto::Nessuno);
-    let panici_prima = panici_fuori_dalle_barriere();
     let uscita = catch_unwind(AssertUnwindSafe(lavoro))
         .unwrap_or_else(|_| inviluppo::panico(identita, con_effetti));
     if uscita.codice == 0 && panici_fuori_dalle_barriere() != panici_prima {
@@ -94,9 +119,13 @@ pub fn consegna(uscita: &Uscita, stdout: &mut impl std::io::Write) -> u8 {
 ///
 /// Un argomento che non è UTF-8 si rifiuta (`InvalidConfiguration`):
 /// tradurlo con caratteri sostitutivi cambierebbe in silenzio un percorso
-/// in un altro.
+/// in un altro. `panici_base` come in [`esegui_invocazione_dal`].
 #[must_use]
-pub fn esegui_invocazione_os(grezzi: Vec<std::ffi::OsString>, segnale: &Segnale) -> Uscita {
+pub fn esegui_invocazione_os(
+    grezzi: Vec<std::ffi::OsString>,
+    segnale: &Segnale,
+    panici_base: u64,
+) -> Uscita {
     let mut convertiti = Vec::with_capacity(grezzi.len());
     for (indice, argomento) in grezzi.into_iter().enumerate() {
         match argomento.into_string() {
@@ -112,7 +141,7 @@ pub fn esegui_invocazione_os(grezzi: Vec<std::ffi::OsString>, segnale: &Segnale)
             }
         }
     }
-    esegui_invocazione(&convertiti, segnale)
+    esegui_invocazione_dal(&convertiti, segnale, panici_base)
 }
 
 /// Comando e contratto dell'inviluppo per il nome canonico del comando.
@@ -394,7 +423,7 @@ mod tests {
     use serde_json::Value;
 
     use super::{consegna, identita_di, proteggi, CODICE_STDOUT_NON_SCRIVIBILE};
-    use crate::inviluppo::{self, Uscita};
+    use crate::inviluppo::Uscita;
 
     /// Uno scrittore che accetta `capienza` byte e poi fallisce.
     struct Rotto {
@@ -438,36 +467,6 @@ mod tests {
         assert_eq!(sano, uscita.stdout.as_bytes());
     }
 
-    /// Un panico in un altro thread durante il lavoro (come quello del
-    /// gestore di Ctrl-C), con l'hook silenzioso di `main.rs`: il successo
-    /// diventa `internal`, exit 70.
-    #[test]
-    fn un_panico_in_un_altro_thread_non_lascia_passare_un_successo() {
-        // L'hook che conta i panici, come in `main.rs`. In questo processo
-        // di test silenzia anche gli altri panici: nessun test ne stampa.
-        let _ =
-            plenora_core::panic_policy::install(plenora_core::panic_policy::PanicPolicy::Silent);
-        let identita = identita_di(Some("catalog"));
-        let uscita = proteggi(identita, || {
-            let figlio = std::thread::spawn(|| std::panic::panic_any(String::from("PAYLOAD")));
-            assert!(figlio.join().is_err());
-            inviluppo::successo(identita, serde_json::json!({}))
-        });
-        assert_eq!(uscita.codice, 70, "{}", uscita.stdout);
-        let documento: Value = serde_json::from_str(&uscita.stdout).expect("JSON");
-        assert_eq!(documento["error"]["category"], "internal");
-        assert!(!uscita.stdout.contains("PAYLOAD"));
-        // Per `run` l'effetto è `unknown`.
-        let identita = identita_di(Some("run"));
-        let uscita = proteggi(identita, || {
-            let figlio = std::thread::spawn(|| std::panic::panic_any(String::from("PAYLOAD")));
-            assert!(figlio.join().is_err());
-            inviluppo::successo(identita, serde_json::json!({}))
-        });
-        let documento: Value = serde_json::from_str(&uscita.stdout).expect("JSON");
-        assert_eq!(documento["error"]["remote_effect"], "unknown");
-    }
-
     /// Un panico diventa l'inviluppo `internal`, exit 70, senza il testo del
     /// payload; per `run` l'effetto è `unknown` (un output può essere già
     /// scritto), per gli altri `none`.
@@ -479,7 +478,8 @@ mod tests {
             ("catalog", "none"),
         ] {
             let identita = identita_di(Some(comando));
-            let uscita = proteggi(identita, || -> Uscita {
+            let base = plenora_core::panic_policy::panici_fuori_dalle_barriere();
+            let uscita = proteggi(identita, base, || -> Uscita {
                 std::panic::panic_any(String::from("PAYLOAD-SEGRETO"))
             });
             assert_eq!(uscita.codice, 70);
