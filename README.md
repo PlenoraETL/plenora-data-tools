@@ -3189,18 +3189,30 @@ manifesto, `crates/plenora-cli/adozione.json`).
   dalle barriere di dipendenza in qualunque thread
   (`panic_policy::panici_fuori_dalle_barriere`); la base si prende subito
   dopo l'installazione dell'hook e prima di avviare il gestore
-  (`esegui_invocazione_dal`), e un conto cambiato da allora trasforma un
-  successo in `internal` (exit 70, effetto `unknown` per `run`). Il
-  controllo è alla fine, non ai punti di controllo dell'annullamento: se il
-  thread del gestore muore, il comando prosegue senza annullamento fino in
-  fondo, e solo allora fallisce. Il conto è del processo: chi usa la
-  libreria con più invocazioni concorrenti nello stesso processo vede il
-  panico di una far fallire con `internal` anche le altre in corso. È la
-  direzione prudente, e l'unica possibile: il conto cresce soltanto, quindi
-  un panico dopo la base non lascia mai passare un `ok`, può solo
-  trasformare in `internal` un successo vero.
-  *Rientro*: il conto letto anche ai punti di controllo dell'`Interruzione`;
-  un conto per invocazione, se servirà la concorrenza in un processo.
+  (`esegui_invocazione_dal`). Un panico contato prima del controllo finale
+  dell'invocazione (l'ultima lettura del conto in `proteggi`) trasforma un
+  successo in `internal` (exit 70, effetto `unknown` per `run`); un panico
+  in corsa con quel controllo, o successivo (fino alla scrittura su
+  stdout), non si osserva, e l'invocazione resta `ok`: altre letture
+  sposterebbero solo la finestra, e il conto non è una sincronizzazione
+  con il thread che va in panico. È accettabile perché a quel punto il
+  lavoro è concluso e il suo esito è vero: si perde solo la possibilità di
+  annullarlo in quella finestra. Il controllo è alla fine, non ai punti di
+  controllo dell'annullamento: se il thread del gestore muore prima, il
+  comando prosegue senza annullamento fino in fondo, e solo allora
+  fallisce. Il conto è del processo: chi usa la libreria con più
+  invocazioni concorrenti nello stesso processo vede il panico di una,
+  contato prima del controllo finale di un'altra, far fallire anche
+  quella con un `internal` falso al posto di un successo vero. Il test
+  della CLI (`tests/panico_di_un_altro_thread.rs`) prova la base passata a
+  `esegui_invocazione_dal`; che `main.rs` la prenda prima di avviare il
+  gestore, e il passaggio da `esegui_invocazione_os`, non sono provati da
+  un test (`main.rs` resta minimo e senza test per scelta).
+  *Rientro*: un gestore dell'annullamento per invocazione, sorvegliato e
+  riunito (`join`) prima del controllo finale, così che un suo panico sia
+  sempre visto; il conto letto anche ai punti di controllo
+  dell'`Interruzione`; un conto per invocazione, se servirà la concorrenza
+  in un processo.
 - **Aborti senza inviluppo.**
   *Regola*: CLI 2.0, sezione 4: un documento su stdout e niente su stderr
   in ogni caso.

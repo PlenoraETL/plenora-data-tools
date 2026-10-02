@@ -54,16 +54,18 @@ pub fn esegui_invocazione(argomenti: &[String], segnale: &Segnale) -> Uscita {
 /// [`esegui_invocazione`] con il conto dei panici di base dato dal chiamante.
 ///
 /// La base è `panic_policy::panici_fuori_dalle_barriere` letto subito
-/// dopo `install` e prima di avviare il gestore di Ctrl-C): ogni panico
-/// fuori dalle barriere da quel momento, in qualunque thread, impedisce un
-/// successo.
+/// dopo `install` e prima di avviare il gestore di Ctrl-C: un panico fuori
+/// dalle barriere contato fra la base e il controllo finale di
+/// [`proteggi`], in qualunque thread, trasforma un `ok` in `internal`. Un
+/// panico in corsa con quel controllo o successivo non si osserva: il
+/// lavoro era già concluso e il suo esito è vero; si perde solo
+/// l'annullabilità in quella finestra.
 ///
 /// Il conto è del processo: con più invocazioni concorrenti nello stesso
-/// processo (un uso da libreria) un panico dell'una fa fallire anche le
-/// altre in corso con `internal`. È la direzione prudente: il conto cresce
-/// soltanto, quindi un panico avvenuto dopo la base non può mai lasciare
-/// passare un `ok`; può solo trasformare in `internal` un successo vero
-/// (README, «Panici fuori dal thread principale»).
+/// processo (un uso da libreria) un panico dell'una, contato prima del
+/// controllo finale di un'altra, fa fallire anche quella con `internal`,
+/// cioè un `internal` falso al posto di un successo vero (README, «Panici
+/// fuori dal thread principale»).
 #[must_use]
 pub fn esegui_invocazione_dal(argomenti: &[String], segnale: &Segnale, panici_base: u64) -> Uscita {
     let identita = identita_di(argomenti::nome_comando(argomenti));
@@ -78,10 +80,12 @@ pub fn esegui_invocazione_dal(argomenti: &[String], segnale: &Segnale, panici_ba
 /// Anche un panico in un **altro** thread durante il lavoro (il thread del
 /// gestore di Ctrl-C di `ctrlc`, staccato: con l'hook silenzioso morirebbe
 /// senza che nessuno lo veda, e l'annullamento smetterebbe di funzionare)
-/// non lascia passare un successo: l'hook installato da `main.rs` conta i
-/// panici fuori dalle barriere di dipendenza
+/// si vede, se è contato prima del controllo finale: l'hook installato da
+/// `main.rs` conta i panici fuori dalle barriere di dipendenza
 /// (`panic_policy::panici_fuori_dalle_barriere`), e un conto cambiato
-/// dalla base `panici_prima` trasforma un `ok` nell'errore `internal`. Un
+/// dalla base `panici_prima` alla lettura finale trasforma un `ok`
+/// nell'errore `internal`. Un panico in corsa con quella lettura, o dopo,
+/// non si osserva (README, «Panici fuori dal thread principale»). Un
 /// errore già tipizzato resta quello: dice già che il comando non è
 /// riuscito.
 fn proteggi(identita: Identita, panici_prima: u64, lavoro: impl FnOnce() -> Uscita) -> Uscita {

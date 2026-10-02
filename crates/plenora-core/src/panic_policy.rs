@@ -91,9 +91,11 @@ fn registra_panico(dentro_una_barriera: bool) {
 /// Serve a chi non può intercettare un panico con `catch_unwind`: un thread
 /// staccato che muore in silenzio (con [`PanicPolicy::Silent`] nessuno lo
 /// vede) lascia comunque il conto cresciuto. La CLI `plenora-data` lo legge
-/// prima di dichiarare un successo: un conto cambiato durante
-/// l'invocazione la fa finire con un errore `internal`. Senza un
-/// [`install`] riuscito il conto resta zero.
+/// prima di dichiarare un successo: un conto cambiato fino a quella
+/// lettura la fa finire con un errore `internal`. È un conto, non una
+/// sincronizzazione con il thread che va in panico: un incremento in corsa
+/// con la lettura, o successivo, non si vede. Senza un [`install`] riuscito
+/// il conto resta zero.
 #[must_use]
 pub fn panici_fuori_dalle_barriere() -> u64 {
     PANICI_FUORI_DALLE_BARRIERE.load(Ordering::Acquire)
