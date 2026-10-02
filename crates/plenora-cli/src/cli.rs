@@ -64,7 +64,7 @@ pub fn esegui_invocazione(argomenti: &[String], segnale: &Segnale) -> Uscita {
 /// Il conto è del processo: con più invocazioni concorrenti nello stesso
 /// processo (un uso da libreria) un panico dell'una, contato prima del
 /// controllo finale di un'altra, fa fallire anche quella con `internal`,
-/// cioè un `internal` falso al posto di un successo vero (README, «Panici
+/// cioè un `internal` falso al posto di un successo vero (docs/cli.md, «Panici
 /// fuori dal thread principale»).
 #[must_use]
 pub fn esegui_invocazione_dal(argomenti: &[String], segnale: &Segnale, panici_base: u64) -> Uscita {
@@ -85,7 +85,7 @@ pub fn esegui_invocazione_dal(argomenti: &[String], segnale: &Segnale, panici_ba
 /// (`panic_policy::panici_fuori_dalle_barriere`), e un conto cambiato
 /// dalla base `panici_prima` alla lettura finale trasforma un `ok`
 /// nell'errore `internal`. Un panico in corsa con quella lettura, o dopo,
-/// non si osserva (README, «Panici fuori dal thread principale»). Un
+/// non si osserva (docs/cli.md, «Panici fuori dal thread principale»). Un
 /// errore già tipizzato resta quello: dice già che il comando non è
 /// riuscito.
 fn proteggi(identita: Identita, panici_prima: u64, lavoro: impl FnOnce() -> Uscita) -> Uscita {
@@ -107,7 +107,7 @@ pub const CODICE_STDOUT_NON_SCRIVIBILE: u8 = 5;
 /// Scrive l'inviluppo su `stdout` e rende il codice d'uscita del processo.
 ///
 /// È quello dell'esito, o [`CODICE_STDOUT_NON_SCRIVIBILE`] se la scrittura o
-/// il `flush` falliscono (README, «Stdout non scrivibile»). Niente va su
+/// il `flush` falliscono (docs/cli.md, «Stdout non scrivibile»). Niente va su
 /// stderr.
 pub fn consegna(uscita: &Uscita, stdout: &mut impl std::io::Write) -> u8 {
     match stdout

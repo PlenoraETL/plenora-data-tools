@@ -4,7 +4,7 @@ Aggiunge una colonna `float64` con la lunghezza geodetica in metri della
 linea di ogni riga: la somma delle geodetiche fra vertici consecutivi
 **sull'ellissoide del datum del CRS della colonna**, con l'algoritmo di
 Karney di [`geo.geodesic_distance`](#geogeodesic_distance)
-([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono
+([Limiti dichiarati, «Misure geodetiche: l'ellissoide del datum»](limiti.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono
 longitudine e latitudine in gradi.
 
 ### Parametri
@@ -45,7 +45,7 @@ In validazione (analisi del contratto):
   dal chiamante, fuori dalla tabella integrata: `ELLIPSOID_REQUIRED`);
 - `InvalidPlan`: config con campi sconosciuti, `output_column` vuoto.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -76,7 +76,7 @@ Poi, per riga:
   era sempre WGS 84 (come [`geo.geodesic_distance`](#geogeodesic_distance)).
 - Solo `LineString`, vedi «Righe»: una `MultiLineString` ferma il passo.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 ### Precisione
@@ -85,7 +85,7 @@ Ogni tratto è una geodetica di Karney sull'ellissoide del datum, con
 errore dell'ordine dei nanometri; la somma aggiunge un arrotondamento per
 tratto, molto sotto 1 cm su ogni linea realistica. Nessun rifiuto
 `PrecisionInsufficient`
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

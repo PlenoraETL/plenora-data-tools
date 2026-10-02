@@ -5,7 +5,7 @@ ogni riga e un punto fisso della config (`other_wkb`), lungo il cerchio
 massimo di una **sfera** con il raggio medio IUGG `R1 = a (1 - f / 3)`
 dell'ellissoide del datum del CRS della colonna (per WGS 84 6 371 008,771 m,
 per Internazionale 1924 6 371 229,315 m;
-[README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono longitudine e latitudine in gradi. Il
+[Limiti dichiarati, «Misure geodetiche: l'ellissoide del datum»](limiti.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono longitudine e latitudine in gradi. Il
 nome resta `haversine`, ma il calcolo non è la formula dell'emiseno: è il
 problema inverso di `geographiclib-rs` a schiacciamento nullo, ben
 condizionato anche agli antipodi. Per la distanza sull'ellissoide c'è
@@ -54,7 +54,7 @@ In validazione (analisi del contratto):
 - `Internal`: la decodifica o la validazione OGC di `other_wkb` non
   conclude.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -91,7 +91,7 @@ Poi, per riga:
 - Solo punti, vedi «Righe»: una `MultiPoint` nella colonna ferma il
   passo.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 ### Precisione
@@ -102,7 +102,7 @@ calcolo è accurato ai nanometri ovunque, antipodi compresi (l'oracolo
 `tests/geodetica_oracolo.rs` lo confronta con GeographicLib entro un
 micrometro su ogni ellissoide della tabella); il risultato è sempre
 finito. Nessun rifiuto `PrecisionInsufficient`
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

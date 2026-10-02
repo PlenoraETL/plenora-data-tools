@@ -26,7 +26,7 @@ contratto (`sorted_by`, `row_count`).
 1:1: il runner chiama la conversione di colonna dei kernel
 (`extensions2::snap_column`) sulla colonna intera, con il riferimento letto
 una volta in validazione. Una cella nulla resta nulla. Con un riferimento
-senza vertici ogni geometria esce invariata ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+senza vertici ogni geometria esce invariata ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Ordine
 
@@ -51,7 +51,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi la conversione di colonna, che rende già `PlenoraError` (vince la
 prima cella che fallisce in ordine di riga, senza diagnostica per riga):
@@ -68,7 +68,7 @@ prima cella che fallisce in ordine di riga, senza diagnostica per riga):
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 A differenza di `ST_Snap` di PostGIS e dello snap di GEOS, si agganciano
 solo vertici a vertici: i vertici non vanno sui lati del riferimento, e i
@@ -84,7 +84,7 @@ riferimento, gli altri restano quelli d'ingresso. Solo la decisione
 «distanza `<= tolerance`» si calcola in `f64` (`hypot`): su un vertice a
 distanza pari a `tolerance` entro l'arrotondamento può cadere da una parte
 o dall'altra
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

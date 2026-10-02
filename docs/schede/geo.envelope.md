@@ -22,7 +22,7 @@ dichiarati della colonna diventano `exact` [`Point`, `LineString`,
 
 1:1: il runner chiama il kernel (`transform_geometry` con
 `Operation::Envelope`) su ogni cella non nulla, in parallelo, e rimette la
-geometria al suo posto; una cella nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+geometria al suo posto; una cella nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Ordine
 
@@ -45,7 +45,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria:
 
@@ -62,7 +62,7 @@ di riga, senza diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Una geometria vuota è un errore, dove PostGIS rende la geometria vuota.
 
@@ -70,13 +70,13 @@ Una geometria vuota è un errore, dove PostGIS rende la geometria vuota.
 
 Esatta: le coordinate d'uscita sono i minimi e i massimi delle coordinate
 d'ingresso, copiati senza calcolo
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 
 Per geometria di n vertici: tempo O(n) per l'ingombro, più la validazione
 OGC dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
 ### Esempio

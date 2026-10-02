@@ -36,7 +36,7 @@ Il `default` si converte così, e ciò che non si converte si rifiuta:
 - `Timestamp`: una stringa RFC 3339 con fuso (`"2026-07-25T00:00:00Z"`),
   convertita all'istante in millisecondi; una parte sotto il millisecondo,
   una frazione oltre il nanosecondo e un secondo intercalare si rifiutano
-  (il lettore di [README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data));
+  (il lettore di [Limiti dichiarati, «Colonne temporali e formati di data»](limiti.md#colonne-temporali-e-formati-di-data));
 - `Decimal128`: un numero JSON o una stringa, senza esponente, con un
   segno facoltativo (uno solo: `"--5"` e `"+-5"` si rifiutano) e con al
   più 10 cifre decimali (nessun arrotondamento).

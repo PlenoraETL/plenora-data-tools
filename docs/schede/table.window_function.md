@@ -108,7 +108,7 @@ In esecuzione:
 `cumsum`, `running_mean` e `pct_change` su `decimal128` e testo numerico
 leggono la cella come `f64` e arrotondano senza errore; su una colonna
 intera la media e la variazione arrotondano una volta sola, dopo la somma
-o la differenza esatta ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
+o la differenza esatta ([Limiti dichiarati, «Somme intere esatte e tipi delle riduzioni»](limiti.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
 Un `NaN` o un infinito già nei dati si propagano senza errore; solo
 l'overflow di un calcolo su valori finiti si rifiuta. Le funzioni di rango
 non arrotondano, e per questo rifiutano il testo numerico.

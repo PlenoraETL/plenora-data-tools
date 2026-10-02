@@ -60,7 +60,7 @@ In esecuzione:
   righe nulle (causa `validation.required_value_missing`). La diagnostica dà
   il conteggio per causa e fino a 10 esempi in ordine di riga, con l'indice
   (da zero) della riga nella base del runner
-  ([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga))
+  ([Runner, «Diagnostica per riga»](runner.md#diagnostica-per-riga))
   e il nome della colonna; mai i valori;
 - `Schema`: una cella `utf8` non nulla che non è un numero. Il passo
   fallisce subito, senza diagnostica per riga.
@@ -73,9 +73,9 @@ un decimale resta decimale, anche con esponente (`0.1` è un decimo, `1e-7`
 un decimo di milionesimo, non il double più vicino). Un numero che il
 double non rappresenta come è scritto (`9007199254740993.0`, un intero
 oltre `u64` non riletto esatto) si rifiuta nel piano
-([README, «Letterali JSON oltre `u64`»](../README.md#letterali-json-oltre-u64)).
+([Limiti dichiarati, «Letterali JSON oltre `u64`»](limiti.md#letterali-json-oltre-u64)).
 Il testo non numerico in una colonna `utf8` fallisce solo in esecuzione
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner)).
 
 ### Complessità
 

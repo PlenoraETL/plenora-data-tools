@@ -63,7 +63,7 @@ In esecuzione:
   senza colonna. La diagnostica dà il conteggio per causa e fino a 10
   esempi in ordine di riga, con l'indice (da zero) della riga della
   sinistra nella base del runner
-  ([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga));
+  ([Runner, «Diagnostica per riga»](runner.md#diagnostica-per-riga));
   mai i valori;
 - `ResourceLimit`: le chiavi distinte della destra superano il margine di
   memoria che il runner passa al kernel (`max_governed_memory_bytes`):
@@ -74,7 +74,7 @@ In esecuzione:
 ### Limiti e deviazioni
 
 L'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 La memoria contata è quella delle chiavi della destra, non quella della
 mappa che le contiene.
 

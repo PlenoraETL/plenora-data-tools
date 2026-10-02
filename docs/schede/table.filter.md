@@ -75,7 +75,7 @@ In esecuzione:
 ### Limiti e deviazioni
 
 Il confronto fra numeri è esatto per costruzione, anche oltre `2^53` e fra
-interi e decimali ([README, «Validazione»](../README.md#validazione)). Gli
+interi e decimali ([Runner, «Validazione»](runner.md#validazione)). Gli
 operatori ordinati confrontano le date come numero di giorni dall'epoca e i
 timestamp come numero di unità della colonna (un `timestamp(us)` in
 microsecondi): `value` è un intero, non una data in testo;

@@ -1,6 +1,6 @@
 //! plenora-io — tabelle da e verso file.
 //!
-//! Formati (README, «File»):
+//! Formati (docs/file.md, «File»):
 //!
 //! - **Arrow IPC**: lettura di file (Feather v2) e stream, scrittura di
 //!   file e stream ([`Formato::ArrowIpcStream`], estensione `.arrows`);
@@ -12,7 +12,7 @@
 //!   ritorno ([`geoparquet`]).
 //!
 //! Ogni file letto è input ostile: il confine di lettura ([`confine`],
-//! README, «Confine di lettura») verifica lunghezze e limiti prima che
+//! docs/file.md, «Confine di lettura») verifica lunghezze e limiti prima che
 //! `arrow-ipc` o `parquet` allochino, e chiama le dipendenze dentro una
 //! barriera anti-panico; un file malformato è un errore, mai un panico.
 //!
@@ -55,7 +55,7 @@ pub use formato::{CompressioneParquet, Formato, OpzioniScrittura};
 ///
 /// `formato` esplicito o dall'estensione; `residuo` è il budget in byte che
 /// la tabella può occupare (`u64::MAX` per nessun limite): oltre, la lettura
-/// si ferma con `ResourceLimit` (README, «File», per ciò che si verifica
+/// si ferma con `ResourceLimit` (docs/file.md, «File», per ciò che si verifica
 /// prima di decodificare e ciò che si verifica dopo).
 ///
 /// # Errors
@@ -70,7 +70,7 @@ pub fn leggi_tabella(
 }
 
 /// Come [`leggi_tabella`], con i limiti del confine di lettura espliciti
-/// (README, «Confine di lettura»).
+/// (docs/file.md, «Confine di lettura»).
 ///
 /// # Errors
 ///
@@ -100,10 +100,10 @@ pub fn scrivi_tabella(
     opzioni: &OpzioniScrittura,
 ) -> Result<()> {
     // Run-end e union non si scrivono: la rilettura li rifiuterebbe
-    // (README, «Run-end e union rifiutati al confine»).
+    // (docs/runner.md, «Run-end e union rifiutati al confine»).
     plenora_core::contract::arrow_schema::verifica_tipi_supportati(&tabella.schema())?;
     // Uno schema con chiavi `plenora.*` si scrive solo se conforme al
-    // confine: versione `1` e identità dei campi valide e uniche (README,
+    // confine: versione `1` e identità dei campi valide e uniche (docs/metadati-arrow.md,
     // «Metadati Arrow»). Uno schema senza chiavi `plenora.*` passa intatto.
     plenora_core::contract::arrow_schema::verifica_metadati_di_confine(&tabella.schema())?;
     match Formato::risolvi(opzioni.formato, percorso)? {

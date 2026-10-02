@@ -6,7 +6,7 @@
 //! (`catalogs/data-tools-v1.json`): `data.catalog`, `data.describe`,
 //! `data.validate`, `data.run`. Identificatori, versioni, contratti e tipi di
 //! contenuto vengono da lì; dove questo artefatto se ne scosta lo dice la
-//! voce stessa (attributi) e il README («CLI `plenora-data`», deviazioni).
+//! voce stessa (attributi) e docs/cli.md («CLI `plenora-data`», deviazioni).
 //!
 //! I kernel che un piano può usare non sono comandi: stanno nel registro
 //! che `data.catalog` restituisce ([`crate::catalogo`]), derivato dal
@@ -23,7 +23,7 @@ pub const ARROW_FILE: &str = "application/vnd.apache.arrow.file";
 pub const PARQUET: &str = "application/vnd.apache.parquet";
 
 /// Contratto degli attributi tipizzati delle operazioni (CAP-013): i campi
-/// sono descritti nel README («CLI `plenora-data`», «Attributi»).
+/// sono descritti in docs/cli.md («CLI `plenora-data`», «Attributi»).
 pub const CONTRATTO_ATTRIBUTI: &str = "plenora-data-capability-attributes-v1";
 /// Il registro dei kernel restituito da `data.catalog`.
 pub const REGISTRO_KERNEL: &str = "plenora-data-kernel-catalog-v1";

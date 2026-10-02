@@ -47,7 +47,7 @@ fn la_sequenza_delle_fixture_e_quella_dichiarata() {
 /// Due generatori appena costruiti partono dallo stesso punto.
 ///
 /// Senza questo, un seme preso dall'orologio passerebbe il test qui sopra
-/// alla prima esecuzione e renderebbe irriproducibile la seconda.
+/// in una corsa e renderebbe irriproducibile la corsa successiva.
 #[test]
 fn due_generatori_partono_uguali() {
     let mut uno = Rng::seeded();

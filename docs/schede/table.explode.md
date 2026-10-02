@@ -51,7 +51,7 @@ elemento o una riga d'uscita oltre l'indice `u32::MAX`.
 ### Limiti e deviazioni
 
 Il runner controlla sui dati righe per arco e fattore di espansione
-([README, «Esecuzione»](../README.md#esecuzione)).
+([Runner, «Esecuzione»](runner.md#esecuzione)).
 
 ### Complessità
 

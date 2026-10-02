@@ -38,7 +38,7 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: campi sconosciuti nella config, `output_column` vuoto o
   di soli spazi.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -62,20 +62,20 @@ Dal kernel (`OperationError`), per geometria:
 
 Il conteggio è quello di `ST_NPoints` di PostGIS: le coordinate ripetute
 contano tutte. Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 
 Esatta: è un conteggio
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 
 Per geometria di n vertici: tempo O(n) per il conteggio, più la
 validazione OGC dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel
 peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
 ### Esempio

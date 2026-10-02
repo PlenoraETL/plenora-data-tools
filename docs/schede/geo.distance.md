@@ -56,7 +56,7 @@ In validazione (analisi del contratto):
 - `Internal`: la decodifica o la validazione OGC di `other_wkb` non
   conclude.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -79,7 +79,7 @@ Dal kernel (`OperationError`), per geometria:
 
 Il secondo operando è uno solo per tutto il passo: la distanza fra due
 colonne o fra due tabelle non c'è. La distanza è planare, non geodetica. Errori senza indice di riga
-della sorgente ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+della sorgente ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 ### Precisione
@@ -89,7 +89,7 @@ calcolo in `f64` di `geo` (punto-segmento sulle coppie più vicine), senza un
 bilancio d'errore dichiarato rispetto alla regola di 1 cm; per linee e
 poligoni che si intersecano lo zero viene dal predicato d'intersezione di
 `geo`, non da una differenza di coordinate
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 
@@ -99,7 +99,7 @@ peggiore; la ricerca della distanza minima che segue usa R-tree o
 proiezioni ordinate dei segmenti. Più la
 validazione OGC dei due operandi (sub-quadratica nel caso tipico, O(n²)
 nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)),
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)),
 ripetuta per `other_wkb` a ogni riga.
 
 ### Esempio

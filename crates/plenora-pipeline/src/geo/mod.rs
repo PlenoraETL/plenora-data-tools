@@ -12,7 +12,7 @@
 //! - le celle si decodificano (contratto WKB strutturale) e ogni coordinata
 //!   deve stare nel **dominio di validita'** del CRS della colonna
 //!   (`validate_geometry_domain`): i kernel non ricevono un CRS, il
-//!   controllo e' del chiamante (README, «CRS integrati»);
+//!   controllo e' del chiamante (docs/crs.md, «CRS integrati»);
 //! - se il contratto dichiara i tipi geometrici con un elenco, ogni cella
 //!   deve essere di uno di quei tipi (`Schema`): la dichiarazione di un
 //!   ingresso non si prende sulla parola.

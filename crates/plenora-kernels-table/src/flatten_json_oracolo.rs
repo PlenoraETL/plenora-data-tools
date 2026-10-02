@@ -339,7 +339,7 @@ fn la_chiave_ripetuta_sostituisce_il_sotto_albero() {
 
 #[test]
 fn la_prima_chiave_raw_value_segue_value() {
-    // I casi della revisione: prima la passata unica li accettava.
+    // Casi che una passata unica accetterebbe.
     let esito = |documento: &str, output: &[&str]| {
         let config = FlattenJson {
             column: "doc".into(),

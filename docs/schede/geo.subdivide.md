@@ -71,8 +71,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -92,10 +92,10 @@ Poi il calcolo per cella (messaggi con prefisso `geo.subdivide:`):
 
 Le parti di un poligono non sono uniche: due versioni di `i_overlay`
 possono scegliere tagli diversi, con la stessa area totale
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «Hazard»). Il taglio si ferma a 32 livelli con un errore, non con parti
-sopra la soglia. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+sopra la soglia. Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+«Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
@@ -109,7 +109,7 @@ per `p`, il taglio non si esegue (`PrecisionInsufficient`). `p` è 1 cm a
 terra nelle unità del CRS della colonna (`Precision::from_crs`). Le foglie non
 sono confrontate con il poligono di partenza: sotto la precisione parti più
 sottili di 1 cm possono fondersi o sparire
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

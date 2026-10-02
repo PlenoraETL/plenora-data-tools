@@ -301,7 +301,7 @@ fn invalid_unversioned_geometry_e_rifiutato() {
 
 /// Il vettore `resolved-point` dichiara `lat_lon` per `EPSG:4326`: il piano
 /// identità lo attraversa intatto (sopra), un'operazione geo lo rifiuta
-/// perché i kernel leggono x come longitudine (README, «Metadati Arrow»).
+/// perché i kernel leggono x come longitudine (docs/metadati-arrow.md, «Metadati Arrow»).
 #[test]
 fn assi_scambiati_rifiutati_dalle_operazioni_geo() {
     let tabella = tabella_del_vettore(&vettore("resolved-point.json"));
@@ -320,7 +320,7 @@ fn assi_scambiati_rifiutati_dalle_operazioni_geo() {
 
 /// La precisione dichiarata attraversa intatta un'operazione tabellare;
 /// dopo un'operazione geo esce `float64`, anche da una che restituisce la
-/// geometria com'era come `geo.vertex_count` (limite dichiarato, README,
+/// geometria com'era come `geo.vertex_count` (limite dichiarato, docs/metadati-arrow.md,
 /// «Metadati Arrow»).
 #[test]
 fn precisione_conservata_dalle_tabellari_normalizzata_dalle_geo() {

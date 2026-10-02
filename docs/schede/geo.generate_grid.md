@@ -10,7 +10,7 @@ rettangolo. La tabella d'ingresso serve solo da innesco: né le sue colonne
 né le sue righe entrano nell'uscita.
 
 Il calcolo è `extensions2::generate_grid_rows`, che il runner chiama una
-volta per passo, qualunque sia l'ingresso ([README, «Operazioni geo»](../README.md#operazioni-geo)); il numero di
+volta per passo, qualunque sia l'ingresso ([Runner, «Operazioni geo»](runner.md#operazioni-geo)); il numero di
 celle calcolato a secco entra nel modello di costo del passo.
 
 ### Parametri
@@ -84,7 +84,7 @@ le colonne dispari, mezzo esagono.
 
 Nessun controllo dedicato: le coordinate si calcolano in `f64`, senza
 fusione delle operazioni
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Sono esatte quando `xmin`, `ymin`, `cell_size` e i loro multipli sono
 rappresentabili; altrimenti:
 

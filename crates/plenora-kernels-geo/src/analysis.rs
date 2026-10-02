@@ -237,7 +237,7 @@ fn minimum_distances_impl(
 /// emette nulla. Gli abbinamenti sono in ordine `(sinistra, destra)`
 /// crescente. La distanza e' `Euclidean.distance` di `geo`, la stessa
 /// della forza bruta: un R-tree sceglie i candidati senza cambiare il
-/// risultato (README, «`geo.nearest`: lo scarto dell'R-tree si appoggia
+/// risultato (docs/limiti.md, «`geo.nearest`: lo scarto dell'R-tree si appoggia
 /// alla stima d'errore di `geo`»).
 ///
 /// # Errors

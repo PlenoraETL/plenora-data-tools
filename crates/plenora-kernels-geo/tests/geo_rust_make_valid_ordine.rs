@@ -1,7 +1,7 @@
 //! `geo.make_valid`: l'esito non dipende dall'ordine di anelli e poligoni, e
 //! `LINEWORK` e' quello di GEOS.
 //!
-//! - I controesempi di una revisione (un buco che condivide un lato con
+//! - Due controesempi (un buco che condivide un lato con
 //!   la shell e ne sporge, le parti sovrapposte di un `MultiPolygon`) in ogni
 //!   ordine: stessa geometria, e l'area e le linee che GEOS 3.14 da' su
 //!   quegli input (`MakeValid` `LINEWORK`, sonda della campagna

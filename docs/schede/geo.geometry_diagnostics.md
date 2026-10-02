@@ -61,7 +61,7 @@ config, CRS, nomi):
 - `Crs`: CRS della colonna assente o non risolto (serve un CRS noto, di
   qualunque tipo).
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -82,14 +82,14 @@ referto direbbe un verdetto che non esiste), che diventa `Internal`, e
 - La ragione è una classificazione del messaggio di `geo`, senza posizione
   né coordinate: indica il tipo di difetto, non dove sta.
 - La validazione è quella di `geo` 0.33.1 con la ricerca rapida delle
-  auto-intersezioni ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)),
+  auto-intersezioni ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)),
   con in più il rifiuto degli anelli con una punta
   (`anello con auto-intersezione`).
 - Una coordinata fuori dal dominio del CRS non si descrive: il controllo
   del runner prima del kernel ferma il passo con `Crs`.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 ### Precisione
@@ -97,7 +97,7 @@ voce «Geo senza diagnostica per riga»).
 Esatta: nessuna coordinata si calcola. Il rettangolo è il minimo e il
 massimo delle coordinate, con i loro bit; il verdetto di validità è quello
 della validazione OGC sulle coordinate come sono, senza tolleranza
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

@@ -4,7 +4,7 @@
 //!
 //! Sotto questa soglia un risultato puo' differire dall'esatto (vertici
 //! spostati, feature sottili fuse o sparite); sopra, ogni errore e'
-//! esplicito. La politica e' in README («Limiti dichiarati») e in AGENTS.md,
+//! esplicito. La politica e' in docs/limiti.md («Limiti dichiarati») e in AGENTS.md,
 //! regola 1.
 //!
 //! La precisione si esprime nelle unita' delle coordinate, con la sola

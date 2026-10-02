@@ -2,8 +2,8 @@
 
 Sostituisce la geometria della sinistra con le parti che stanno in uno
 solo dei due lati, `(sinistra \ destra) ∪ (destra \ sinistra)`, calcolate
-dal kernel `topology::boolean_operation_validated` ([README, «Operazioni
-geo»](../README.md#operazioni-geo)). Lavora solo su `Polygon` e
+dal kernel `topology::boolean_operation_validated` ([Runner, «Operazioni
+geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
 ### Parametri
@@ -50,7 +50,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -76,16 +76,16 @@ del risultato), nella categoria del passo geo indicata fra parentesi:
   validazione OGC o l'overlay di `geo` non ha concluso.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 ### Limiti e deviazioni
 
 Solo poligoni: una geometria lineare o puntuale si rifiuta
 (`UnsupportedGeometry`). Nessun controllo a posteriori del risultato contro
-gli ingressi ([README, «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+gli ingressi ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Precisione
 
@@ -95,18 +95,18 @@ solo overlay di `i_overlay` su interi `i64`, con la griglia controllata
 prima del calcolo sull'ingombro dei due operandi. Se lo spostamento a
 priori supera mezzo centimetro, o le coordinate sono troppo rade per il
 centimetro, `PrecisionInsufficient` e nessun calcolo. Parti più sottili di
-1 cm possono sparire o fondersi senza errore; vedi [README, «Precisione
+1 cm possono sparire o fondersi senza errore; vedi [Limiti dichiarati, «Precisione
 delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 
 ### Complessità
 
 Per coppia l'overlay a scansione di `i_overlay`, di norma O((v + k) log v)
 con `v` i vertici dei due operandi e `k` gli incroci fra i lati, più la
 validazione OGC di ingressi e risultato (di norma O(v log v), nel caso
-peggiore O(v²): [README, «Validazione OGC: la
+peggiore O(v²): [Limiti dichiarati, «Validazione OGC: la
 ricerca delle auto-intersezioni non è quella di `geo`, il verdetto
-sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(v + k).
 
 ### Esempio

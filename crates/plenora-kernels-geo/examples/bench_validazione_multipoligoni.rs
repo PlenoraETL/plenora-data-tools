@@ -26,7 +26,7 @@ use geo::{Geometry, LineString, MultiPolygon, Polygon};
 use plenora_kernels_geo::check_geometry_valid;
 use plenora_kernels_geo::topology::dissolve_validated;
 
-/// Precisione dichiarata: 1 cm con coordinate in metri (README, «Limiti dichiarati»).
+/// Precisione dichiarata: 1 cm con coordinate in metri (docs/limiti.md, «Limiti dichiarati»).
 fn precisione() -> plenora_kernels_geo::rust_backend::precision::Precision {
     plenora_kernels_geo::rust_backend::precision::Precision::new(0.01).expect("precisione valida")
 }

@@ -395,7 +395,7 @@ fn i_parametri_senza_effetto_si_rifiutano_in_validazione_e_nel_kernel() {
 }
 
 /// I parametri che non hanno effetto solo con certi ingressi si accettano:
-/// lo stesso piano deve girare su tabelle diverse (decisione dell'utente),
+/// lo stesso piano deve girare su tabelle diverse,
 /// e il rifiuto dipenderebbe dallo schema, non dalla config.
 #[test]
 fn i_parametri_senza_effetto_solo_con_certi_ingressi_si_accettano() {

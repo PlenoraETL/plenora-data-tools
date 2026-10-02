@@ -1,5 +1,5 @@
 {
-  "nota": "Sorgente del manifesto di adozione v4 (schemas/adoption-manifest-v4.schema.json di plenora-contracts). Non e' il manifesto: versione e digest degli artefatti li aggiunge scripts/genera_manifesto_adozione.py dagli artefatti costruiti, al rilascio (CLI, crate Rust e wheel dell'SDK Python). Una deviazione con `surfaces` vale per ognuna e il generatore la scrive una volta per superficie. Le deviazioni sono quelle del README, «CLI `plenora-data`», e di crates/plenora-data-py/README.md.",
+  "nota": "Sorgente del manifesto di adozione v4 (schemas/adoption-manifest-v4.schema.json di plenora-contracts). Non e' il manifesto: versione e digest degli artefatti li aggiunge scripts/genera_manifesto_adozione.py dagli artefatti costruiti, al rilascio (CLI, crate Rust e wheel dell'SDK Python). Una deviazione con `surfaces` vale per ognuna e il generatore la scrive una volta per superficie. Le deviazioni sono quelle di docs/cli.md, «CLI `plenora-data`», e di crates/plenora-data-py/README.md.",
   "component": "plenora-data-tools",
   "contracts_source": {
     "repository": "https://github.com/PlenoraETL/plenora-contracts.git",
@@ -27,49 +27,49 @@
       "rule": "PLAN-003",
       "surfaces": ["cli", "python_sdk"],
       "observed_behavior": "data.validate and data.run accept only the component plan format plenora-data-plan-v1 (\"version\": 1, SSA steps); plan formats 4, 5 and 6 are rejected with invalid_plan and no plan hash is published.",
-      "tracking": "README.md, section CLI plenora-data, deviations",
+      "tracking": "docs/cli.md, section Deviazioni dai contratti",
       "detectable_before_invocation": true
     },
     {
       "rule": "PUBLIC-CATALOGS-1.0 section 6 (kernel version)",
       "surfaces": ["cli", "python_sdk"],
       "observed_behavior": "data.catalog reports each kernel with version = its semantic version (1 or more); the common registry data-kernels-v1 declares version 1 for every kernel.",
-      "tracking": "README.md, section CLI plenora-data, deviations",
+      "tracking": "docs/cli.md, section Deviazioni dai contratti",
       "detectable_before_invocation": true
     },
     {
       "rule": "PUBLIC-CATALOGS-1.0 section 6 (registry completeness)",
       "surfaces": ["cli", "python_sdk"],
       "observed_behavior": "table.transpose is reported unavailable with a reason and is absent from the embedded registry: its output schema depends on the data and the runner rejects it at validation.",
-      "tracking": "README.md, section CLI plenora-data, deviations",
+      "tracking": "docs/cli.md, section Deviazioni dai contratti",
       "detectable_before_invocation": true
     },
     {
       "rule": "SURF-006 (side_effect of data.run)",
       "surfaces": ["cli", "python_sdk"],
       "observed_behavior": "data.run advertises side_effect local, because it can write its outputs to local files (the CLI always, the Python SDK when outputs are given); the public catalog declares none.",
-      "tracking": "README.md, section CLI plenora-data, deviations",
+      "tracking": "docs/cli.md, section Deviazioni dai contratti",
       "detectable_before_invocation": true
     },
     {
       "rule": "SURFACE-BINDINGS-1.0 section 3 (data.run entrypoint)",
       "surface": "cli",
       "observed_behavior": "A plan may declare several outputs; run accepts --output NAME=PATH once per output, and the canonical --output OUTPUT.arrow only for a plan with exactly one output.",
-      "tracking": "README.md, section CLI plenora-data, deviations",
+      "tracking": "docs/cli.md, section Deviazioni dai contratti",
       "detectable_before_invocation": true
     },
     {
       "rule": "ARROW-011",
       "surfaces": ["cli", "python_sdk"],
       "observed_behavior": "describe, validate and run materialize whole tables in memory within the plan budget (a multi-batch Arrow stream given to the Python SDK is concatenated); declared through the bounded_materialization attribute.",
-      "tracking": "README.md, section CLI plenora-data, deviations",
+      "tracking": "docs/cli.md, section Deviazioni dai contratti",
       "detectable_before_invocation": true
     },
     {
       "rule": "PLAN-007",
       "surfaces": ["cli", "python_sdk"],
       "observed_behavior": "The plan limits block accepts max_governed_memory_bytes (default 536870912) and the runner row and text limits; max_domain_memory_bytes and the isolated execution profile do not exist.",
-      "tracking": "README.md, section CLI plenora-data, deviations",
+      "tracking": "docs/cli.md, section Deviazioni dai contratti",
       "detectable_before_invocation": true
     },
     {

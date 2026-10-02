@@ -2,8 +2,8 @@
 
 Aggiunge alla sinistra, di norma poligoni, una colonna con il numero di
 geometrie della destra, di norma punti, che ogni sua geometria contiene
-(kernel `analysis::count_points_in_polygons_validated`; [README,
-«Operazioni geo»](../README.md#operazioni-geo)). «Contiene» è il
+(kernel `analysis::count_points_in_polygons_validated`; [Runner,
+«Operazioni geo»](runner.md#operazioni-geo)). «Contiene» è il
 `contains` di `geo`: i punti sul bordo non contano, come il
 `predicate="within"` di Manipola, e un punto dentro più poligoni conta in
 ognuno.
@@ -55,7 +55,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -73,7 +73,7 @@ validate), nella categoria del passo geo indicata fra parentesi:
 - `PairLimitExceeded` (`ResourceLimit`): le coppie punto-poligono
   confermate superano il limite di righe dell'arco;
 - `MargineMemoria` (`ResourceLimit`): le stesse coppie non starebbero nel
-  margine di memoria del passo (64 byte ciascuna; guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  margine di memoria del passo (64 byte ciascuna; guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;
@@ -83,8 +83,8 @@ Il runner verifica che il kernel renda un conteggio per ogni riga
 sinistra, altrimenti `Internal`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 ### Limiti e deviazioni
@@ -97,9 +97,9 @@ punto dentro molti poligoni sovrapposti conta una coppia per poligono.
 Nessun calcolo di geometrie e nessuna griglia: il predicato di `geo` si
 valuta sulle coordinate `f64` d'ingresso, senza tolleranza, e la regola di
 1 cm non sposta nulla. Un punto a meno di 1 cm dal bordo conta o no
-secondo le sue coordinate esatte ([README, «Precisione delle operazioni
+secondo le sue coordinate esatte ([Limiti dichiarati, «Precisione delle operazioni
 geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «Feature d'ingresso più vicine della precisione»).
 
 ### Complessità

@@ -5,7 +5,7 @@
 //! deve stare nel tetto dei metadati; dopo, i row group entro il massimo
 //! ([`crate::confine`]). Ogni chiamata a `parquet` sui byte del file gira
 //! dentro la barriera anti-panico ([`crate::confine::barriera`]); un
-//! aborto per allocazione dentro `parquet` non si ferma (README, «File»,
+//! aborto per allocazione dentro `parquet` non si ferma (docs/file.md, «File»,
 //! limiti dichiarati). Poi si controllano i codec di tutti i
 //! column chunk (solo `UNCOMPRESSED`, `SNAPPY`, `ZSTD` sono compilati) e lo
 //! schema Arrow incorporato (`ARROW:schema`): se c'è, lo schema che
@@ -522,7 +522,7 @@ pub fn verifica_schema(percorso: &Path, scritto: &Schema) -> Result<()> {
 ///
 /// Vale [`FATTORE_SCRITTURA`] volte i byte Arrow del row group più grande (il row group in corso si tiene
 /// codificato in memoria, con i livelli e i dizionari delle colonne), più
-/// [`MARGINE_SCRITTURA`] per i buffer fissi di pagina e dei codec (README,
+/// [`MARGINE_SCRITTURA`] per i buffer fissi di pagina e dei codec (docs/file.md,
 /// «File», per le misure).
 #[must_use]
 pub fn transitorio_scrittura(tabella: &RecordBatch) -> u64 {

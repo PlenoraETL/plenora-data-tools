@@ -1,3 +1,9 @@
+//! Hash, impronte e mascheramento: `table.md5_hash`, `table.sha256_hash`,
+//! `table.stable_fingerprint`, `table.hmac_sha256`, `table.mask_data`.
+//!
+//! Semantica, schema, ordine ed errori per operazione: le schede
+//! `docs/schede/<id>.md`, raccolte in `docs/operazioni.md`.
+
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::ops::Range;

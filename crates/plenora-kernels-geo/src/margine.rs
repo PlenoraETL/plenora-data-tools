@@ -20,7 +20,7 @@
 //! capacita' vere dove si leggono. Restano fuori il transitorio dentro
 //! `geo` e `i_overlay`, gli R-tree di `rstar`, la crescita dei builder
 //! Arrow, alcuni vettori ausiliari e codifiche, l'overhead dell'allocatore
-//! (README, «Modelli di costo geo»): il tetto vero sara' un limite di
+//! (docs/runner.md, «Modelli di costo geo»): il tetto vero sara' un limite di
 //! memoria del processo imposto dal sistema operativo. Il controllo e'
 //! deterministico (conteggi nell'ordine delle righe, o un totale che non
 //! dipende dai thread).

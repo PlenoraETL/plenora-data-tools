@@ -1,3 +1,10 @@
+//! `table.formula`: una colonna calcolata da un'espressione aritmetica
+//! sulle colonne della riga.
+//!
+//! Semantica, schema ed errori: la scheda `docs/schede/table.formula.md`,
+//! raccolta in `docs/operazioni.md`; la divisione per zero in
+//! docs/runner.md, «Divisione per zero».
+
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -1553,7 +1560,7 @@ mod tests {
 
     #[test]
     fn divisione_per_zero_di_default_vale_null_e_si_conta() {
-        // Default (decisione dell'utente): la divisione per zero vale null,
+        // Default (docs/runner.md, «Divisione per zero»): la divisione per zero vale null,
         // e le righe si contano. Righe 0, 2, 3, 4, 5 dividono per zero; la
         // riga 1 ha `i` null e resta null senza contare.
         let batch = fixture();

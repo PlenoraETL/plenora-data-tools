@@ -26,7 +26,7 @@ Differenze dalle tabellari:
   conosce prima del passo (coppie candidate, sovrapposizioni, pareggi,
   forma della geometria), e coprirli renderebbe il modello di ordini di
   grandezza piu' alto sui profili ordinari. Sono un limite dichiarato
-  (README, «Limiti dichiarati del runner»); l'oracolo li salta per nome e ne
+  (docs/runner.md, «Limiti dichiarati del runner»); l'oracolo li salta per nome e ne
   riporta il rapporto.
 """
 import argparse
@@ -141,7 +141,7 @@ def rust(dati, impronta):
         "//! larghezza sono profilo per vertici per geometria, e `generate_grid` ha",
         "//! solo il termine per cella d'uscita. I profili in `esclusi` non entrano",
         "//! nel modello (motivi in `scripts/genera_costi_geo.py`): limite",
-        "//! dichiarato nel README.",
+        "//! dichiarato in docs/runner.md, «Modelli di costo geo».",
         "",
         "use crate::budget::{Costo, CostoOperazione};",
         "",

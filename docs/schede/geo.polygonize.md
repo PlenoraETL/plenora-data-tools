@@ -12,7 +12,7 @@ Gli attributi delle righe d'ingresso non passano.
 La semantica a livello di tabella è quella dell'esecuzione Arrow
 (`rust_backend::arrow::polygonize_batches`), che il runner chiama su tutta
 la tabella con la precisione del CRS della colonna e il limite di righe
-dell'arco d'uscita ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dell'arco d'uscita ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Parametri
 
@@ -66,8 +66,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto, o CRS non proiettato.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -96,8 +96,8 @@ Poi l'esecuzione Arrow:
 
 - Kernel del laboratorio qualificato contro GEOS per equivalenza semantica
   (stesse facce, stessi residui, stessa area), non per identità
-  ([README, «`geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a
-  GEOS verificata, non dimostrata»](../README.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata)).
+  ([Limiti dichiarati, «`geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a
+  GEOS verificata, non dimostrata»](limiti.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata)).
 - Forma canonica solo quando gli incroci sono esattamente rappresentabili:
   altrimenti, su ingresso permutato o invertito, classi e aree coincidono ma
   i bit di un incrocio, il segno di uno zero e l'ordine delle linee
@@ -107,16 +107,16 @@ Poi l'esecuzione Arrow:
   d'uscita valgono anche sulle facce intermedie.
 - Segni esatti dove GEOS non lo è: una faccia degenere solo per la
   precisione di GEOS resta un poligono.
-- Elenco completo: [README, «Differenze da GEOS»](../README.md#differenze-da-geos).
-- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+- Elenco completo: [Operazioni topologiche, «Differenze da GEOS»](topologia.md#differenze-da-geos).
+- Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+  «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
 
 Nessuna griglia di `i_overlay`: il solo calcolo che sposta punti è il
 noding
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
 
 - coordinate troppo rade (unità in ultima posizione del modulo massimo
   oltre `p / 64`): `PrecisionInsufficient`, prima del noding;

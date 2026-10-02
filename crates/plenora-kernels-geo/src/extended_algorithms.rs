@@ -385,7 +385,7 @@ pub fn snap_to_grid(
 /// Costruita con il caricamento in blocco di `spade` (`crate::triangolazione`):
 /// sugli ingressi senza quattro punti cocircolari i triangoli sono quelli
 /// dell'inserimento incrementale di `geo` 0.33.1, con gli stessi bit; sugli
-/// ingressi degeneri e' un'altra triangolazione di Delaunay valida (README,
+/// ingressi degeneri e' un'altra triangolazione di Delaunay valida (docs/limiti.md,
 /// «geo.delaunay e geo.voronoi»).
 ///
 /// Meno di tre punti distinti, o punti tutti collineari, danno zero

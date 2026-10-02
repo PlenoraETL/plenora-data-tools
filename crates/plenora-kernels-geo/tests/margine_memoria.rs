@@ -1,5 +1,5 @@
 //! Il margine di memoria dei kernel geo sui profili avversari che il
-//! modello di costo esclude (README, «Modelli di costo geo»): ogni kernel,
+//! modello di costo esclude (docs/runner.md, «Modelli di costo geo»): ogni kernel,
 //! chiamato direttamente, si ferma con l'errore del margine quando il
 //! margine e' piccolo, rende lo stesso risultato di prima quando e' grande,
 //! e lascia vincere il proprio limite di conteggio quando scatta prima.

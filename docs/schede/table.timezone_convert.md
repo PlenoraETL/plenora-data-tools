@@ -22,7 +22,7 @@ Una colonna temporale (`date32`, `timestamp` in secondi, millisecondi,
 microsecondi o nanosecondi, con o senza fuso) si legge dal valore nativo,
 senza `input_format` (scritto, si rifiuta): vale l'ora locale della
 colonna (del suo fuso; senza fuso, il valore com'è), e una data è la sua
-mezzanotte ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
+mezzanotte ([Limiti dichiarati, «Colonne temporali e formati di data»](limiti.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
 `input_format` obbligatorio; leggibili come testo: `utf8`, `int64`,
 `uint64`, `float64`, `bool`, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.

@@ -38,12 +38,12 @@ use plenora_kernels_geo::advanced::{voronoi_cells, AdvancedError};
 use plenora_kernels_geo::predicates::{evaluate, PredicateError, SpatialPredicate};
 use plenora_kernels_geo::topology::{dissolve, TopologyError};
 
-/// Precisione dichiarata: 1 cm con coordinate in metri (README, «Limiti dichiarati»).
+/// Precisione dichiarata: 1 cm con coordinate in metri (docs/limiti.md, «Limiti dichiarati»).
 fn precisione() -> plenora_kernels_geo::rust_backend::precision::Precision {
     plenora_kernels_geo::rust_backend::precision::Precision::new(0.01).expect("precisione valida")
 }
 
-/// Il reperto del 5 settembre 2026, decodificato **senza** validazione OGC:
+/// Il primo reperto (`fixtures/reperto_a.wkb`), decodificato **senza** validazione OGC:
 /// serve la geometria grezza, perche' il punto e' quello che i chiamanti
 /// fanno quando la validano loro.
 fn reperto() -> Geometry<f64> {

@@ -257,7 +257,7 @@ fn overlap_geometry(intersection: MultiPolygon<f64>) -> Result<Geometry<f64>, Ex
 
 /// Ogni intersezione passa dalla griglia di `i_overlay`, con il controllo a
 /// priori sull'ingombro della coppia; la decisione sull'area viene dal
-/// risultato, senza controllo a posteriori (README, «Limiti dichiarati»).
+/// risultato, senza controllo a posteriori (docs/limiti.md, «Limiti dichiarati»).
 fn coverage_validate_elements(
     elements: &[Option<CoverageElement>],
     tree: &RTree<IndexedEnvelope>,

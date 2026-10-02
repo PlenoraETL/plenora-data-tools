@@ -18,7 +18,7 @@
 //!
 //! `version` è la versione della semantica osservabile
 //! (`semantic_version`): il registro comune dei contratti dichiara 1 per
-//! tutti, ed è una deviazione dichiarata (README, «CLI `plenora-data`»).
+//! tutti, ed è una deviazione dichiarata (docs/cli.md, «CLI `plenora-data`»).
 
 use plenora_core::catalog::{
     Arity, CrsRequirement, DeterminismPolicy, Family, OperationDescriptor, ResultShape, CATALOG,

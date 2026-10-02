@@ -33,7 +33,7 @@ ereditate si tolgono dal campo. Le proprietà del contratto (`sorted_by`,
 
 1:1: il runner chiama il kernel (`extended::concave_hull`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 Una geometria senza coordinate dà un `POLYGON EMPTY`.
 
 ### Ordine
@@ -59,7 +59,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria (`ExtendedError`, che il runner porta in `PlenoraError`: `Internal` per
 `ValidazioneNonConclusa` e `CalcoloNonConcluso`, `ResourceLimit` per
@@ -82,7 +82,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il lavoro è limitato da `max_coordinates`, un argomento del kernel e non
 della config: nel runner `MAX_CELL_COORDINATES`. Il poligono non è quello
@@ -96,7 +96,7 @@ dell'ingresso, con i loro bit. Quali punti entrano nel bordo lo decidono
 distanze e confronti in `f64` di `geo`, non predicati esatti: per punti
 più vicini di 1 cm al bordo la scelta segue l'arrotondamento, il caso
 fuori ambito della regola
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Nessun rifiuto `PrecisionInsufficient`.
 
 ### Complessità

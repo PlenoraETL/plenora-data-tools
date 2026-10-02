@@ -29,7 +29,7 @@ si interpreta:
   ora con `T` o spazio e frazione facoltativa (`%Y-%m-%dT%H:%M:%S%.f`,
   `%Y-%m-%d %H:%M:%S%.f`), poi `%Y-%m-%d` a mezzanotte. Nessun formato con
   giorno e mese in un ordine da indovinare (`31/01/2024` serve un
-  `date_format`) ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Gli spazi non si tolgono.
+  `date_format`) ([Limiti dichiarati, «Colonne temporali e formati di data»](limiti.md#colonne-temporali-e-formati-di-data)). Gli spazi non si tolgono.
 
 Le parti: `year` l'anno del calendario gregoriano; `month` 1-12; `day`
 1-31; `quarter` 1-4; `weekday` 0 per il lunedì fino a 6 per la domenica;

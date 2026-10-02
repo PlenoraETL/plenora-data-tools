@@ -5,7 +5,7 @@
 //! operazioni che passano dalla griglia intera di `i_overlay` (booleane,
 //! `dissolve`, `clip`, `overlay`, `clean_topology`, buffer, `subdivide`,
 //! `coverage_validate`): passo della griglia e spostamento controllati a
-//! priori, senza controlli a posteriori del risultato (README, «Precisione
+//! priori, senza controlli a posteriori del risultato (docs/limiti.md, «Precisione
 //! delle operazioni geografiche: 1 cm a terra»).
 //!
 //! Sostituisce `geos_backend` di `plenora-data-tools@190c493` con le stesse
@@ -51,7 +51,7 @@
 //!     `PolygonizeError::NumericRange` sostituisce il segno indovinato. Un
 //!     test del laboratorio cambia attesa per questo: un triangolo di area
 //!     circa 3,45e-31 che GEOS scarta come anello invalido e' ora un
-//!     poligono (README, «Differenze da GEOS»). Nessun chiamante di [`exact`] traduce
+//!     poligono (docs/topologia.md, «Differenze da GEOS»). Nessun chiamante di [`exact`] traduce
 //!     un esito non decidibile in una decisione: `polygonize` e
 //!     `make_valid` restituiscono `NumericRange`, e `split::face_sample`
 //!     rinuncia al verso e passa a `interior_point`;
@@ -67,7 +67,7 @@
 //!     precisione da entrambi i segmenti che divide (cinque giri al piu').
 //!     Oltre, `PrecisionInsufficient`. Sotto la precisione le feature
 //!     possono fondersi o sparire, come dichiarato;
-//!   - **`make_valid` `LINEWORK` riscritto sui lati** (sesta revisione): il
+//!   - **`make_valid` `LINEWORK` riscritto sui lati**: il
 //!     laboratorio univa e sottraeva anelli con overlay, con casi speciali
 //!     per i buchi che condividono un lato con la shell e per le parti di
 //!     un multipoligono che si toccano, e l'area dipendeva dall'ordine di
@@ -124,7 +124,7 @@
 //!   della griglia, diviso fra gli overlay in catena. Gli agganci interni di
 //!   `i_overlay` allo split dei segmenti, con raggio che cresce a ogni giro,
 //!   non hanno un limite a priori e nessun controllo a posteriori li vede
-//!   (README, «Precisione delle operazioni geografiche: 1 cm a terra»,
+//!   (docs/limiti.md, «Precisione delle operazioni geografiche: 1 cm a terra»,
 //!   «Hazard»). Prima di tutto, la
 //!   spaziatura dei `f64` al modulo massimo delle coordinate non supera
 //!   `p / 64` (`precision::coordinate_abbastanza_fitte`), in `polygonize` e
@@ -155,7 +155,7 @@
 //!
 //! Le differenze operazione per operazione sono nella documentazione di
 //! [`make_valid_wkb`], [`polygonize_linework`] e
-//! [`split_polygon_by_linework`], e nel README («Differenze da GEOS»).
+//! [`split_polygon_by_linework`], e in docs/topologia.md («Differenze da GEOS»).
 
 pub mod arrow;
 pub(crate) mod buffer;

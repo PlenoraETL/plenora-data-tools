@@ -98,7 +98,7 @@ somiglianze sono `f64`; il confronto con `threshold` è sullo stesso valore
 che la colonna riporta. Le mappe dei blocchi usano un hash deterministico
 senza seme; il blocco rifiutato per `max_candidates` è il più grande, a
 parità quello con la chiave minore
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 ### Complessità
 

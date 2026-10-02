@@ -3,7 +3,7 @@
 //! Semantica delle righe come a `190c493` (`execute_geo_binary` di
 //! `executor/geo.rs` per i join, `pair_arrow` di `geo_transport/pair.rs`
 //! per ritaglio, overlay e booleane), sulle forme del contratto dell'analisi
-//! (README, «Operazioni geo»):
+//! (docs/runner.md, «Operazioni geo»):
 //!
 //! - `sjoin`, `nearest`: una riga per coppia trovata, le colonne di left
 //!   della sua riga e `__right_index` (con `distance` per `nearest`);

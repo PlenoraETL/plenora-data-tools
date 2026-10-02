@@ -8,8 +8,8 @@
 //! Tre prove:
 //!
 //! - **complete**: una scheda per ogni operazione del catalogo e nessuna in
-//!   più; le sezioni sono tutte, nell'ordine fissato; i collegamenti al
-//!   README e fra le schede puntano a titoli che esistono;
+//!   più; le sezioni sono tutte, nell'ordine fissato; i collegamenti alle
+//!   guide di `docs/` e fra le schede puntano a titoli che esistono;
 //! - **esempi**: l'esempio di ogni scheda gira dal runner come passo unico e
 //!   l'uscita è quella scritta, colonna per colonna, tipo per tipo, cella per
 //!   cella. `table.pivot` senza `mapping` e `table.transpose`, che il
@@ -1649,14 +1649,16 @@ uscita non è quella scritta fa fallire lo stesso test.
 
 Regole comuni, che le schede non ripetono:
 
-- **Politiche e limiti** stanno nel [README](../README.md): precisione
-  geografica di 1 cm ([«Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)),
-  validazione e budget del [runner](../README.md#runner), limiti dei file e
-  della riproiezione. Le schede li collegano, non li ricopiano.
+- **Politiche e limiti** stanno nelle [guide](README.md): precisione
+  geografica di 1 cm ([«Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)),
+  validazione e budget del [runner](runner.md#runner), limiti dei
+  [file](file.md#limiti-dichiarati) e della
+  [riproiezione](riproiezione.md#limiti-dichiarati-della-riproiezione). Le
+  schede li collegano, non li ricopiano.
 - **Config**: ogni config si legge con `deny_unknown_fields`; un campo
   sconosciuto, un tipo sbagliato o un valore fuori dominio è `InvalidPlan`
   in validazione. Un parametro scritto che l'operazione ignorerebbe si
-  rifiuta ([README, «Validazione»](../README.md#validazione)).
+  rifiuta ([Runner, «Validazione»](runner.md#validazione)).
 - **Errori senza dati**: i messaggi nominano colonne, parametri e limiti,
   mai i valori delle celle.
 - **Limiti di risorsa** (`max_rows_per_edge`, `max_output_rows`,
@@ -1735,21 +1737,32 @@ fn collegamenti(testo: &str) -> Vec<String> {
     uscita
 }
 
+/// I collegamenti del documento generato che non portano da nessuna parte.
+/// Un percorso si risolve da `docs/`, dove il documento vive; un'ancora si
+/// cerca fra i titoli del documento di destinazione, o fra i propri.
 fn collegamenti_rotti(documento: &str) -> Vec<String> {
-    let readme = ancore(&leggi(&radice().join("README.md")));
+    let docs = radice().join("docs");
     let proprie = ancore(documento);
     let mut rotti = Vec::new();
     for destinazione in collegamenti(documento) {
-        let readme_ancora = destinazione.strip_prefix("../README.md#");
-        let propria_ancora = destinazione.strip_prefix('#');
-        let valido = match (readme_ancora, propria_ancora) {
-            (Some(ancora), _) => readme.contains(ancora),
-            (None, Some(ancora)) => proprie.contains(ancora),
-            (None, None) => {
-                destinazione == "../README.md"
-                    || destinazione.starts_with("https://")
-                    || radice().join("docs").join(&destinazione).exists()
-            }
+        let (file, ancora) = match destinazione.split_once('#') {
+            Some((file, ancora)) => (file, Some(ancora)),
+            None => (destinazione.as_str(), None),
+        };
+        let valido = if destinazione.starts_with("https://") {
+            true
+        } else if file.is_empty() {
+            ancora.is_some_and(|ancora| proprie.contains(ancora))
+        } else {
+            let percorso = docs.join(file);
+            ancora.map_or_else(
+                || percorso.exists(),
+                |ancora| {
+                    percorso.extension().is_some_and(|e| e == "md")
+                        && percorso.is_file()
+                        && ancore(&leggi(&percorso)).contains(ancora)
+                },
+            )
         };
         if !valido {
             rotti.push(destinazione);

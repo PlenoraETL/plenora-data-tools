@@ -12,14 +12,16 @@ uscita non è quella scritta fa fallire lo stesso test.
 
 Regole comuni, che le schede non ripetono:
 
-- **Politiche e limiti** stanno nel [README](../README.md): precisione
-  geografica di 1 cm ([«Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)),
-  validazione e budget del [runner](../README.md#runner), limiti dei file e
-  della riproiezione. Le schede li collegano, non li ricopiano.
+- **Politiche e limiti** stanno nelle [guide](README.md): precisione
+  geografica di 1 cm ([«Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)),
+  validazione e budget del [runner](runner.md#runner), limiti dei
+  [file](file.md#limiti-dichiarati) e della
+  [riproiezione](riproiezione.md#limiti-dichiarati-della-riproiezione). Le
+  schede li collegano, non li ricopiano.
 - **Config**: ogni config si legge con `deny_unknown_fields`; un campo
   sconosciuto, un tipo sbagliato o un valore fuori dominio è `InvalidPlan`
   in validazione. Un parametro scritto che l'operazione ignorerebbe si
-  rifiuta ([README, «Validazione»](../README.md#validazione)).
+  rifiuta ([Runner, «Validazione»](runner.md#validazione)).
 - **Errori senza dati**: i messaggi nominano colonne, parametri e limiti,
   mai i valori delle celle.
 - **Limiti di risorsa** (`max_rows_per_edge`, `max_output_rows`,
@@ -221,7 +223,7 @@ in più aggregazioni; altrimenti `column`. Le chiavi di gruppo e i nomi
 delle aggregazioni (o `count` senza aggregazioni) sono tutti distinti: due
 aggregazioni con lo stesso nome, o un nome uguale a una chiave (anche una
 colonna aggregata senza `alias` che è anche chiave), si rifiutano
-([README, «Nomi delle colonne d'uscita»](../README.md#nomi-delle-colonne-duscita)).
+([Limiti dichiarati, «Nomi delle colonne d'uscita»](limiti.md#nomi-delle-colonne-duscita)).
 
 Funzioni:
 
@@ -289,7 +291,7 @@ in decimale. Quindi non è l'ordine dei valori: `"sud"` (`3:sud`) precede
 `"nord"` (`4:nord`), `9` precede `-1`, `-1` precede `-2` e `10`, e un
 testo di 10 byte precede uno di 1 byte (`10:` precede `1:`). Una chiave
 `timestamp` non ha come testo la sua resa RFC 3339 ma il suo istante, a
-larghezza fissa ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)):
+larghezza fissa ([Limiti dichiarati, «Colonne temporali e formati di data»](limiti.md#colonne-temporali-e-formati-di-data)):
 i suoi gruppi escono in ordine cronologico, in ogni unità e fuso. L'ordine
 è deterministico e non dipende dall'hash.
 
@@ -326,11 +328,11 @@ testo con più cifre di quante un `f64` ne tenga si arrotondano senza errore
 (con `distinct` i distinti si decidono comunque sul valore esatto); sulle
 colonne intere media e dispersione arrotondano alla fine del calcolo
 esatto, e
-`quantile` interpola i valori arrotondati ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)). Le strutture di chiavi e gruppi
+`quantile` interpola i valori arrotondati ([Limiti dichiarati, «Somme intere esatte e tipi delle riduzioni»](limiti.md#somme-intere-esatte-e-tipi-delle-riduzioni)). Le strutture di chiavi e gruppi
 non sono contabilizzate
-([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
+([Limiti dichiarati, «Memoria delle chiavi dei kernel in memoria non governata»](limiti.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
 l'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 #### Complessità
 
@@ -434,7 +436,7 @@ Il `default` si converte così, e ciò che non si converte si rifiuta:
 - `Timestamp`: una stringa RFC 3339 con fuso (`"2026-07-25T00:00:00Z"`),
   convertita all'istante in millisecondi; una parte sotto il millisecondo,
   una frazione oltre il nanosecondo e un secondo intercalare si rifiutano
-  (il lettore di [README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data));
+  (il lettore di [Limiti dichiarati, «Colonne temporali e formati di data»](limiti.md#colonne-temporali-e-formati-di-data));
 - `Decimal128`: un numero JSON o una stringa, senza esponente, con un
   segno facoltativo (uno solo: `"--5"` e `"+-5"` si rifiutano) e con al
   più 10 cifre decimali (nessun arrotondamento).
@@ -595,7 +597,7 @@ dall'intervallo delle date rappresentabili, un `date64` non allineato al
 
 Nessuna conversione fra tipi di chiave, come in `table.join`. L'insieme
 delle chiavi di destra usa un hash deterministico senza seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 #### Complessità
 
@@ -998,7 +1000,7 @@ In esecuzione:
   senza colonna. La diagnostica dà il conteggio per causa e fino a 10
   esempi in ordine di riga, con l'indice (da zero) della riga della
   sinistra nella base del runner
-  ([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga));
+  ([Runner, «Diagnostica per riga»](runner.md#diagnostica-per-riga));
   mai i valori;
 - `ResourceLimit`: le chiavi distinte della destra superano il margine di
   memoria che il runner passa al kernel (`max_governed_memory_bytes`):
@@ -1009,7 +1011,7 @@ In esecuzione:
 #### Limiti e deviazioni
 
 L'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 La memoria contata è quella delle chiavi della destra, non quella della
 mappa che le contiene.
 
@@ -1222,7 +1224,7 @@ prima colonna di `columns` in cui è nulla; causa
 `validation.required_value_missing`. La diagnostica dà il conteggio per
 causa e fino a 10 esempi in ordine di riga, con l'indice (da zero) della
 riga nella base del runner
-([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga))
+([Runner, «Diagnostica per riga»](runner.md#diagnostica-per-riga))
 e il nome della colonna; mai i valori.
 
 #### Limiti e deviazioni
@@ -1345,7 +1347,7 @@ In esecuzione:
   righe nulle (causa `validation.required_value_missing`). La diagnostica dà
   il conteggio per causa e fino a 10 esempi in ordine di riga, con l'indice
   (da zero) della riga nella base del runner
-  ([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga))
+  ([Runner, «Diagnostica per riga»](runner.md#diagnostica-per-riga))
   e il nome della colonna; mai i valori;
 - `Schema`: una cella `utf8` non nulla che non è un numero. Il passo
   fallisce subito, senza diagnostica per riga.
@@ -1358,9 +1360,9 @@ un decimale resta decimale, anche con esponente (`0.1` è un decimo, `1e-7`
 un decimo di milionesimo, non il double più vicino). Un numero che il
 double non rappresenta come è scritto (`9007199254740993.0`, un intero
 oltre `u64` non riletto esatto) si rifiuta nel piano
-([README, «Letterali JSON oltre `u64`»](../README.md#letterali-json-oltre-u64)).
+([Limiti dichiarati, «Letterali JSON oltre `u64`»](limiti.md#letterali-json-oltre-u64)).
 Il testo non numerico in una colonna `utf8` fallisce solo in esecuzione
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner)).
 
 #### Complessità
 
@@ -1461,7 +1463,7 @@ non corrisponde (causa `validation.regex_mismatch`) e, senza `allow_null`,
 righe nulle (causa `validation.required_value_missing`). La diagnostica dà il
 conteggio per causa e fino a 10 esempi in ordine di riga, con l'indice (da
 zero) della riga nella base del runner
-([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga))
+([Runner, «Diagnostica per riga»](runner.md#diagnostica-per-riga))
 e il nome della colonna; mai i valori.
 
 #### Limiti e deviazioni
@@ -1709,7 +1711,7 @@ In esecuzione:
   compresa, con causa `validation.duplicate_key` e senza colonna. La
   diagnostica dà il conteggio delle righe e fino a 10 esempi in ordine di
   riga, con l'indice (da zero) della riga nella base del runner
-  ([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga));
+  ([Runner, «Diagnostica per riga»](runner.md#diagnostica-per-riga));
   mai i valori;
 - `Schema`: una cella della chiave non si converte in testo (`date32`, `date64` o
   `timestamp` fuori dall'intervallo di calendario, `date64` non allineato al giorno, chiave di dizionario
@@ -1719,9 +1721,9 @@ In esecuzione:
 #### Limiti e deviazioni
 
 La mappa delle chiavi non si conta su `max_governed_memory_bytes`
-([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
+([Limiti dichiarati, «Memoria delle chiavi dei kernel in memoria non governata»](limiti.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
 l'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 #### Complessità
 
@@ -1863,7 +1865,7 @@ In esecuzione:
 I bordi di uguale ampiezza sono calcolati in `f64`; la classe invece la
 decide il confronto esatto del valore d'origine con il bordo, quindi un
 `int64` oltre `2^53` o un `decimal128` non cadono nella classe accanto per
-arrotondamento ([README, «Validazione»](../README.md#validazione)).
+arrotondamento ([Runner, «Validazione»](runner.md#validazione)).
 
 #### Complessità
 
@@ -2090,7 +2092,7 @@ In esecuzione, `ResourceLimit`:
 #### Limiti e deviazioni
 
 Il catalogo la dichiara N-aria, ma il runner esegue solo la forma a due
-ingressi ([README, «Validazione»](../README.md#validazione)); più tabelle
+ingressi ([Runner, «Validazione»](runner.md#validazione)); più tabelle
 si impilano con passi in catena. I metadati di campo della destra non si
 conservano.
 
@@ -2218,7 +2220,7 @@ In esecuzione, `ResourceLimit`:
 #### Limiti e deviazioni
 
 Come `table.concat`, il catalogo la dichiara N-aria e il runner esegue solo
-la forma a due ingressi ([README, «Validazione»](../README.md#validazione)).
+la forma a due ingressi ([Runner, «Validazione»](runner.md#validazione)).
 Due colonne con lo stesso nome e tipi diversi si rifiutano: nessuna
 promozione di tipo.
 
@@ -2680,7 +2682,7 @@ Una colonna temporale (`date32`, `timestamp` in secondi, millisecondi,
 microsecondi o nanosecondi, con o senza fuso) si legge dal valore nativo,
 senza `input_format` (scritto, si rifiuta): vale l'ora locale della
 colonna (del suo fuso; senza fuso, il valore com'è), e una data è la sua
-mezzanotte ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
+mezzanotte ([Limiti dichiarati, «Colonne temporali e formati di data»](limiti.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
 `input_format` obbligatorio; leggibili come testo: `utf8`, `int64`,
 `uint64`, `float64`, `bool`, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.
@@ -2746,7 +2748,7 @@ In esecuzione:
 Le date rappresentabili sono quelle di `chrono` (anni da -262143 a
 262142). Un `amount` che alcune date sopportano e quelle dei dati no
 fallisce in esecuzione
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner)).
 
 #### Complessità
 
@@ -2823,7 +2825,7 @@ Una colonna temporale (`date32`, `timestamp` in secondi, millisecondi,
 microsecondi o nanosecondi, con o senza fuso) si legge dal valore nativo,
 senza `input_format` (scritto, si rifiuta): vale l'ora locale della
 colonna (del suo fuso; senza fuso, il valore com'è), e una data è la sua
-mezzanotte ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
+mezzanotte ([Limiti dichiarati, «Colonne temporali e formati di data»](limiti.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
 `input_format` obbligatorio; leggibili come testo: `utf8`, `int64`,
 `uint64`, `float64`, `bool`, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.
@@ -2967,7 +2969,7 @@ si interpreta:
   ora con `T` o spazio e frazione facoltativa (`%Y-%m-%dT%H:%M:%S%.f`,
   `%Y-%m-%d %H:%M:%S%.f`), poi `%Y-%m-%d` a mezzanotte. Nessun formato con
   giorno e mese in un ordine da indovinare (`31/01/2024` serve un
-  `date_format`) ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Gli spazi non si tolgono.
+  `date_format`) ([Limiti dichiarati, «Colonne temporali e formati di data»](limiti.md#colonne-temporali-e-formati-di-data)). Gli spazi non si tolgono.
 
 Le parti: `year` l'anno del calendario gregoriano; `month` 1-12; `day`
 1-31; `quarter` 1-4; `weekday` 0 per il lunedì fino a 6 per la domenica;
@@ -3094,7 +3096,7 @@ Una colonna temporale (`date32`, `timestamp` in secondi, millisecondi,
 microsecondi o nanosecondi, con o senza fuso) si legge dal valore nativo,
 senza `input_format` (scritto, si rifiuta): vale l'ora locale della
 colonna (del suo fuso; senza fuso, il valore com'è), e una data è la sua
-mezzanotte ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
+mezzanotte ([Limiti dichiarati, «Colonne temporali e formati di data»](limiti.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
 `input_format` obbligatorio; leggibili come testo: `utf8`, `int64`,
 `uint64`, `float64`, `bool`, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.
@@ -3270,9 +3272,9 @@ In esecuzione:
 #### Limiti e deviazioni
 
 La mappa delle chiavi non è contabilizzata
-([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
+([Limiti dichiarati, «Memoria delle chiavi dei kernel in memoria non governata»](limiti.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
 l'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 #### Complessità
 
@@ -3395,9 +3397,9 @@ In esecuzione:
 #### Limiti e deviazioni
 
 La mappa delle chiavi non è contabilizzata
-([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
+([Limiti dichiarati, «Memoria delle chiavi dei kernel in memoria non governata»](limiti.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
 l'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 #### Complessità
 
@@ -3604,9 +3606,9 @@ In esecuzione, `ResourceLimit`: più di `u32::MAX` righe tenute.
 #### Limiti e deviazioni
 
 Le chiavi non si contano su `max_governed_memory_bytes`
-([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata)),
+([Limiti dichiarati, «Memoria delle chiavi dei kernel in memoria non governata»](limiti.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata)),
 e gli insiemi usano un hash deterministico senza seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 #### Complessità
 
@@ -3724,7 +3726,7 @@ elemento o una riga d'uscita oltre l'indice `u32::MAX`.
 #### Limiti e deviazioni
 
 Il runner controlla sui dati righe per arco e fattore di espansione
-([README, «Esecuzione»](../README.md#esecuzione)).
+([Runner, «Esecuzione»](runner.md#esecuzione)).
 
 #### Complessità
 
@@ -3953,7 +3955,7 @@ L'aritmetica e l'uscita numerica sono in `f64`: gli interi oltre `2^53` e i
 decimali si arrotondano nel calcolo, non nei confronti. `date_trunc` tronca
 in UTC e non accetta istanti con fuso. Gli errori che dipendono dai valori
 (regex e indici calcolati) arrivano in esecuzione
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner)).
 Un divisore calcolato uguale a zero dà null per default, contato in
 `righe_divisione_per_zero`; con `on_division_by_zero = "error"` rifiuta la
 riga in esecuzione. Il divisore letterale zero si vede già in validazione.
@@ -4218,7 +4220,7 @@ In esecuzione:
 #### Limiti e deviazioni
 
 Il confronto fra numeri è esatto per costruzione, anche oltre `2^53` e fra
-interi e decimali ([README, «Validazione»](../README.md#validazione)). Gli
+interi e decimali ([Runner, «Validazione»](runner.md#validazione)). Gli
 operatori ordinati confrontano le date come numero di giorni dall'epoca e i
 timestamp come numero di unità della colonna (un `timestamp(us)` in
 microsecondi): `value` è un intero, non una data in testo;
@@ -4357,7 +4359,7 @@ dominio di `f64`, surrogati isolati e annidamento oltre 128 livelli lo
 rendono invalido, anche dove il valore non verrebbe estratto. Il kernel
 chiamato fuori dal runner accetta `output_columns` vuoto e crea una colonna
 per ogni percorso trovato; il runner lo rifiuta in validazione
-([README, «Validazione»](../README.md#validazione)).
+([Runner, «Validazione»](runner.md#validazione)).
 
 #### Complessità
 
@@ -4676,7 +4678,7 @@ somiglianze sono `f64`; il confronto con `threshold` è sullo stesso valore
 che la colonna riporta. Le mappe dei blocchi usano un hash deterministico
 senza seme; il blocco rifiutato per `max_candidates` è il più grande, a
 parità quello con la chiave minore
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 #### Complessità
 
@@ -4822,7 +4824,7 @@ In esecuzione:
 
 La variabile d'ambiente si controlla in validazione, ma può cambiare prima
 dell'esecuzione: allora l'errore arriva al passo
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner)).
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner)).
 Con `empty` una cella nulla e una vuota danno lo stesso valore (con `skip`
 no: la colonna nulla manca dal messaggio). Nome e tipo Arrow
 entrano nel messaggio: rinominare o cambiare tipo cambia il risultato.
@@ -4928,9 +4930,9 @@ In esecuzione, `ResourceLimit`: più di `u32::MAX` righe tenute.
 #### Limiti e deviazioni
 
 Le chiavi non si contano su `max_governed_memory_bytes`
-([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata)),
+([Limiti dichiarati, «Memoria delle chiavi dei kernel in memoria non governata»](limiti.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata)),
 e l'insieme usa un hash deterministico senza seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 #### Complessità
 
@@ -5096,10 +5098,10 @@ nomi con `Schema` (le colonne oltre `max_columns` con `ResourceLimit`).
 Nessuna conversione fra tipi: `int64` contro `float64`, o contro un intero
 di altra larghezza, si rifiuta, e gli interi diversi da `int64`/`uint64`
 non sono chiavi. Le mappe delle chiavi usano un hash deterministico senza
-seme ([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+seme ([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 Il kernel non confronta con `max_governed_memory_bytes` né la mappa delle
 chiavi né l'uscita: il suo limite è `max_rows`; nel runner il picco lo
-prevede il modello di costo ([README, «Budget di memoria»](../README.md#budget-di-memoria)).
+prevede il modello di costo ([Runner, «Budget di memoria»](runner.md#budget-di-memoria)).
 
 #### Complessità
 
@@ -5750,7 +5752,7 @@ misurata in testo con la conversione) e rifiuta oltre
 fissata da config e schema: il runner non le applica il fattore di
 espansione e dopo il passo controlla invece il numero esatto di righe,
 oltre alle righe per arco
-([README, «Esecuzione»](../README.md#esecuzione)).
+([Runner, «Esecuzione»](runner.md#esecuzione)).
 
 #### Complessità
 
@@ -5925,9 +5927,9 @@ In esecuzione (dal runner con `mapping`, o chiamando il kernel):
 Senza `mapping` il runner non esegue l'operazione (lo schema dipende dai
 dati); `table.transpose` ha lo stesso limite. Su `decimal128` e testo
 `sum` e `mean` arrotondano, perché il risultato è `float64`; su una colonna
-intera `mean` arrotonda una volta, dopo la somma esatta ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
+intera `mean` arrotonda una volta, dopo la somma esatta ([Limiti dichiarati, «Somme intere esatte e tipi delle riduzioni»](limiti.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
 L'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 #### Complessità
 
@@ -6062,7 +6064,7 @@ In esecuzione:
 #### Limiti e deviazioni
 
 L'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 La memoria contata è quella delle chiavi, non quella delle mappe che le
 contengono.
 
@@ -6552,7 +6554,7 @@ Su `decimal128` e testo numerico `sum`, `mean` e `stddev` leggono la cella
 come `f64` e arrotondano senza errore, perché il risultato è `float64`;
 sulle colonne intere `mean` e `stddev` arrotondano alla fine del calcolo
 esatto
-([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
+([Limiti dichiarati, «Somme intere esatte e tipi delle riduzioni»](limiti.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
 Un `NaN` o un infinito già nei dati si propagano senza errore; solo
 l'overflow di un calcolo su valori finiti si rifiuta.
 
@@ -6897,7 +6899,7 @@ dall'intervallo delle date rappresentabili, un `date64` non allineato al
 
 Nessuna conversione fra tipi di chiave, come in `table.join`. L'insieme
 delle chiavi di destra usa un hash deterministico senza seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 #### Complessità
 
@@ -7517,7 +7519,7 @@ Le statistiche, sui valori non nulli del gruppo:
 I gruppi si formano sul testo della cella di `group_by`; le celle nulle
 formano un gruppo. Una statistica ripetuta in `stats` si rifiuta: darebbe
 due colonne con lo stesso nome
-([README, «Nomi delle colonne d'uscita»](../README.md#nomi-delle-colonne-duscita)).
+([Limiti dichiarati, «Nomi delle colonne d'uscita»](limiti.md#nomi-delle-colonne-duscita)).
 
 #### Schema
 
@@ -7559,7 +7561,7 @@ si convertono arrotondando e la loro somma accumula gli errori di
 arrotondamento di `f64` nell'ordine delle righe; sulle colonne intere
 la media parte dalla somma esatta, varianza e deviazione dagli scarti
 esatti, e mediana e
-quartili interpolano i valori arrotondati ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)). Un `NaN` nei valori entra
+quartili interpolano i valori arrotondati ([Limiti dichiarati, «Somme intere esatte e tipi delle riduzioni»](limiti.md#somme-intere-esatte-e-tipi-delle-riduzioni)). Un `NaN` nei valori entra
 nei calcoli: somma, media e varianza diventano `NaN`, e nell'ordinamento di
 minimo, massimo e quantili sta dopo ogni numero.
 
@@ -8037,9 +8039,9 @@ In esecuzione:
 In `_diff_old_values` un valore precedente nullo e il testo vuoto si
 scrivono allo stesso modo, e un `separator` che compare nei valori rende
 il testo ambiguo. La mappa delle chiavi non è contabilizzata
-([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
+([Limiti dichiarati, «Memoria delle chiavi dei kernel in memoria non governata»](limiti.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
 l'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 #### Complessità
 
@@ -8254,7 +8256,7 @@ Una colonna temporale (`date32`, `timestamp` in secondi, millisecondi,
 microsecondi o nanosecondi, con o senza fuso) si legge dal valore nativo,
 senza `input_format` (scritto, si rifiuta): vale l'ora locale della
 colonna (del suo fuso; senza fuso, il valore com'è), e una data è la sua
-mezzanotte ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
+mezzanotte ([Limiti dichiarati, «Colonne temporali e formati di data»](limiti.md#colonne-temporali-e-formati-di-data)). Ogni altra colonna si legge come testo, con
 `input_format` obbligatorio; leggibili come testo: `utf8`, `int64`,
 `uint64`, `float64`, `bool`, `decimal128` con scala da 0 a 38, `binary`,
 `dictionary<utf8>` con chiavi `int32`.
@@ -8530,7 +8532,7 @@ nulla; altrimenti `col_<i+1>`. Una voce di `output_columns` vuota non vale
 «assente»: si rifiuta, in validazione e nel kernel. I nomi in più di
 `output_columns` si ignorano. I nomi d'uscita, prima colonna compresa, sono
 tutti distinti
-([README, «Nomi delle colonne d'uscita»](../README.md#nomi-delle-colonne-duscita)).
+([Limiti dichiarati, «Nomi delle colonne d'uscita»](limiti.md#nomi-delle-colonne-duscita)).
 `type_policy` con colonne dati tutte dello stesso tipo si accetta e non
 cambia niente: dipende dall'ingresso.
 
@@ -8661,7 +8663,7 @@ Arrow sono `date32` e `timestamp_millis`); `int` → `int64`;
 Una colonna **temporale** (`date32`; `timestamp` in secondi,
 millisecondi, microsecondi o nanosecondi, con o senza fuso) si converte
 dal valore nativo, senza passare dal testo e senza `date_format`
-(scritto, si rifiuta) ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)):
+(scritto, si rifiuta) ([Limiti dichiarati, «Colonne temporali e formati di data»](limiti.md#colonne-temporali-e-formati-di-data)):
 
 - `str`, `binary_utf8`, `dictionary_utf8`: la data `AAAA-MM-GG`, l'istante
   in RFC 3339 nel fuso della colonna (senza fuso `+00:00`), con le cifre
@@ -8906,9 +8908,9 @@ meno.
 #### Limiti e deviazioni
 
 Le chiavi non si contano su `max_governed_memory_bytes`
-([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata)),
+([Limiti dichiarati, «Memoria delle chiavi dei kernel in memoria non governata»](limiti.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata)),
 e l'insieme usa un hash deterministico senza seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 #### Complessità
 
@@ -9434,7 +9436,7 @@ In esecuzione:
 `cumsum`, `running_mean` e `pct_change` su `decimal128` e testo numerico
 leggono la cella come `f64` e arrotondano senza errore; su una colonna
 intera la media e la variazione arrotondano una volta sola, dopo la somma
-o la differenza esatta ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
+o la differenza esatta ([Limiti dichiarati, «Somme intere esatte e tipi delle riduzioni»](limiti.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
 Un `NaN` o un infinito già nei dati si propagano senza errore; solo
 l'overflow di un calcolo su valori finiti si rifiuta. Le funzioni di rango
 non arrotondano, e per questo rifiutano il testo numerico.
@@ -9527,7 +9529,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 1:1: il runner chiama il kernel (`extended::affine_transform`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -9552,7 +9554,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria (`ExtendedError`, che il runner porta in `PlenoraError`: `Internal` per
 `ValidazioneNonConclusa` e `CalcoloNonConcluso`, `InvalidPlan` per le
@@ -9574,10 +9576,10 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Le coordinate d'uscita non si confrontano con il dominio di validità del
-CRS ([README, «CRS integrati»](../README.md#crs-integrati)): una matrice
+CRS ([«CRS integrati»](crs.md#crs-integrati)): una matrice
 che porta la geometria fuori dal dominio non è un errore qui.
 
 #### Precisione
@@ -9588,7 +9590,7 @@ fusione: l'errore resta sotto pochi ulp della somma `|a x| + |b y| +
 del CRS, ben oltre ogni dominio dei CRS integrati. Con coefficienti e
 coordinate interi (o comunque rappresentabili e con prodotti esatti) il
 risultato è esatto. Nessun rifiuto `PrecisionInsufficient`
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -9687,7 +9689,7 @@ In validazione (analisi del contratto):
   senza unità lineare;
 - `InvalidPlan`: campi sconosciuti nella config, `output_column` vuoto o di soli spazi.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -9710,7 +9712,7 @@ Dal kernel (`OperationError`), per geometria:
 
 L'area è planare, nel piano del CRS proiettato: non è l'area geodetica.
 Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
@@ -9719,13 +9721,13 @@ Nessuna griglia e nessun rifiuto `PrecisionInsufficient`: l'area è la
 formula dell'anello di `geo` in `f64` (anello traslato sul primo vertice
 prima delle somme), senza un bilancio d'errore dichiarato rispetto alla
 regola di 1 cm
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
 Per geometria di n vertici: tempo O(n) per l'area, più la validazione OGC
 dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
 #### Memoria
@@ -9783,7 +9785,7 @@ parte la geodetica, misurata in senso orario dal nord (nord 0, est 90, sud
 180, ovest 270), in `[0, 360)`. Le coordinate sono longitudine (`x`) e
 latitudine (`y`) in gradi; il calcolo è il problema inverso di Karney
 (`geographiclib-rs`) sull'ellissoide del datum del CRS della colonna
-([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)).
+([Limiti dichiarati, «Misure geodetiche: l'ellissoide del datum»](limiti.md#misure-geodetiche-lellissoide-del-datum)).
 
 #### Parametri
 
@@ -9839,7 +9841,7 @@ CRS, config):
 - `Internal`: la decodifica o la validazione OGC di `other_wkb` non
   conclude.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -9877,7 +9879,7 @@ Poi, per riga:
 - CRS proiettati rifiutati.
 - Solo `Point` nella colonna: una `MultiPoint` ferma il passo.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
@@ -9886,8 +9888,8 @@ La regola di 1 cm riguarda gli spostamenti, e qui l'uscita è un angolo:
 nessun controllo e nessun rifiuto di precisione. L'errore è quello
 dell'algoritmo di Karney in `f64` sull'ellissoide del datum; per punti a
 pochi millimetri l'azimut è mal condizionato (un nanometro di posizione
-sono gradi di direzione) ([README, «Precisione delle operazioni
-geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+sono gradi di direzione) ([Limiti dichiarati, «Precisione delle operazioni
+geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -9976,7 +9978,7 @@ si tolgono dal campo.
 
 1:1: il runner chiama il kernel (`operations::boundary`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -10001,7 +10003,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria (`OperationError`, che il runner porta in `PlenoraError`:
 `Internal` per `Internal`, `ValidazioneNonConclusa` e
@@ -10021,7 +10023,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il confine di una `GeometryCollection`, che GEOS rifiuta, qui è la
 collezione dei confini dei membri. Negli estremi di una `MultiLineString`
@@ -10031,7 +10033,7 @@ collezione dei confini dei membri. Negli estremi di una `MultiLineString`
 
 Esatta: anelli ed estremi sono coordinate d'ingresso copiate (`-0.0`
 diventa `0.0` negli estremi di una `MultiLineString`, stesso valore)
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -10039,7 +10041,7 @@ Per geometria di n vertici: tempo O(n), O(n log n) per gli estremi di una
 `MultiLineString` (mappa ordinata), memoria O(n); più la validazione OGC
 dell'ingresso e dell'uscita (sub-quadratica nel caso tipico, O(n²) nel
 peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 
 #### Memoria
 
@@ -10130,7 +10132,7 @@ In validazione (analisi del contratto):
 - `Crs`: CRS della colonna assente o non risolto, geografico, o proiettato
   senza unità lineare.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -10152,19 +10154,19 @@ Dal kernel (`OperationError`), per geometria:
 
 Il catalogo chiede un CRS proiettato, anche se il rettangolo non dipende
 dalla metrica. Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
 
 Esatta: i quattro valori sono coordinate d'ingresso, copiate senza calcolo
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
 Per geometria di n vertici: tempo O(n) per l'ingombro, più la validazione
 OGC dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
 #### Memoria
@@ -10247,7 +10249,7 @@ si tolgono dal campo.
 
 1:1: il runner chiama il kernel (`operations::buffer_with_cap`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -10270,7 +10272,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria (`OperationError`, che il runner porta in `PlenoraError`:
 `Internal` per `Internal`, `ValidazioneNonConclusa` e
@@ -10289,7 +10291,7 @@ Poi dal kernel, per geometria (`OperationError`, che il runner porta in `Plenora
 - `MargineMemoria` (`ResourceLimit`): i punti dei contorni prima di un
   overlay, le parti dopo un'unione dei blocchi o il risultato non
   starebbero nel margine di memoria del passo, per questa geometria
-  (guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»).
+  (guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»).
 
 Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
 è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza
@@ -10299,16 +10301,16 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il runner passa al kernel la precisione di 1 cm a terra nelle unità del
 CRS della colonna (`Precision::from_crs`, calcolata in validazione;
-[README, «Operazioni geo»](../README.md#operazioni-geo), voce
+[Runner, «Operazioni geo»](runner.md#operazioni-geo), voce
 «Precisione»). Non ci sono i parametri di GEOS e PostGIS per le
 giunzioni (`join`, `mitre_limit`), il numero di segmenti per quarto di
 cerchio (qui il passo degli archi viene dalla precisione) e il buffer da un
 solo lato. Nessun controllo a posteriori del risultato contro la
-definizione esatta ([README, «Limiti dichiarati»](../README.md#limiti-dichiarati),
+definizione esatta ([«Limiti dichiarati»](limiti.md#limiti-dichiarati),
 voce «Nessun controllo a posteriori»).
 
 #### Precisione
@@ -10328,7 +10330,7 @@ offset si sovrappongono su molti segmenti lontani (zig-zag stretto rispetto
 alla distanza), con estremità tonde o piatte, si bufferizza a blocchi di 8
 segmenti uniti a coppie: l'unione è lo stesso buffer entro la stessa fascia,
 e differisce dal calcolo in un solo passaggio di al più `f + p`
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 voci «Buffer», «Deviazione: archi del buffer» e «Buffer delle linee a
 blocchi: un secondo algoritmo»).
 
@@ -10339,10 +10341,10 @@ intera); non c'è una stima asintotica dichiarata. Il tratto in un solo
 passaggio calcola ogni incrocio fra gli offset dei segmenti: su una linea a
 zig-zag stretto è quadratico nei vertici, e oltre la soglia si passa ai
 blocchi (1.000 vertici a 0,8 m con 200 m: 24 ms invece di 110 s e 21 GiB). Tempi misurati (stella e
-linea da 1.000 vertici, da 1 m a 1 km) nel README, voce «Costo» di
-[«Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
+linea da 1.000 vertici, da 1 m a 1 km) in Limiti dichiarati, voce «Costo» di
+[«Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 Più la validazione OGC dell'ingresso e dell'uscita
-([README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+([Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 
 #### Memoria
 
@@ -10416,7 +10418,7 @@ si tolgono dal campo.
 
 1:1: il runner chiama il kernel (`transform_geometry` con
 `Operation::Centroid`) su ogni cella non nulla, in parallelo, e rimette la
-geometria al suo posto; una cella nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+geometria al suo posto; una cella nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -10438,7 +10440,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria:
 
@@ -10456,7 +10458,7 @@ di riga, senza diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Una geometria vuota è un errore, dove GEOS e PostGIS rendono `POINT EMPTY`.
 
@@ -10465,13 +10467,13 @@ Una geometria vuota è un errore, dove GEOS e PostGIS rendono `POINT EMPTY`.
 Nessuna griglia e nessun rifiuto `PrecisionInsufficient`: il centroide è il
 calcolo in `f64` di `geo` (ogni anello traslato sul suo primo vertice prima
 delle somme), senza un bilancio d'errore dichiarato rispetto alla regola di
-1 cm ([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+1 cm ([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
 Per geometria di n vertici: tempo O(n) per il calcolo, più la validazione
 OGC dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
 #### Memoria
@@ -10529,8 +10531,8 @@ con la chiusura dei varchi e la regola «vince la prima riga» di Manipola):
 con `fill_gaps` chiude rientranze e varchi stretti dentro ogni riga, con
 `remove_overlaps` toglie a ogni riga la parte già coperta dalle righe
 precedenti, così le righe non si sovrappongono più. Il runner lo esegue
-su tutta la tabella insieme ([README, «Operazioni
-geo»](../README.md#operazioni-geo)).
+su tutta la tabella insieme ([Runner, «Operazioni
+geo»](runner.md#operazioni-geo)).
 
 #### Parametri
 
@@ -10597,8 +10599,8 @@ colonna geometria o la colonna non è riconoscibile come geometria WKB;
 `Unsupported` se non è XY; `Crs` se il CRS non è risolto o non è
 proiettato (o non ha unità lineare).
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -10631,14 +10633,14 @@ righe. Le varianti:
 
 Gli archi della chiusura hanno freccia al più `max(p / 8, 0,001 ·
 snap_tolerance)`: oltre `snap_tolerance` di 1,25 m il bordo chiuso può
-rientrare fino allo 0,1% della tolleranza, senza errore ([README,
+rientrare fino allo 0,1% della tolleranza, senza errore ([Limiti dichiarati,
 «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «Deviazione: archi del buffer»). La nullabilità dichiarata della colonna
 geometria dell'uscita è sempre nullable, perché il kernel può rendere
 righe senza geometria. Nessuna diagnostica per riga: il passo rende il primo
-errore ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voci «Geo senza
+errore ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voci «Geo senza
 diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
@@ -10651,9 +10653,9 @@ differenza, due overlay in catena) con griglia entro `p / 4`: in tutto
 controllata prima del calcolo; oltre, `PrecisionInsufficient`. Ogni resto
 si calcola dalle righe d'ingresso vicine, non da un'unione accumulata riga
 dopo riga, così gli spostamenti non si sommano lungo la tabella. Parti più
-sottili di 1 cm possono sparire o fondersi senza errore; vedi [README,
+sottili di 1 cm possono sparire o fondersi senza errore; vedi [Limiti dichiarati,
 «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 
 #### Complessità
 
@@ -10718,8 +10720,8 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 Ritaglia ogni geometria della sinistra sulla maschera data dalla destra:
 tutte le geometrie della destra si uniscono in una sola maschera, e ogni
 riga della sinistra diventa la sua intersezione con la maschera (kernel
-`topology::clip_to_mask_validated`; [README, «Operazioni
-geo»](../README.md#operazioni-geo)). Lavora solo su `Polygon` e
+`topology::clip_to_mask_validated`; [Runner, «Operazioni
+geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon`.
 
 #### Parametri
@@ -10765,7 +10767,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -10795,17 +10797,17 @@ Il runner verifica che il kernel renda un risultato per ogni riga non
 nulla, altrimenti `Internal`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 #### Limiti e deviazioni
 
 Solo poligoni: un ritaglio che si riduce a linee o punti è vuoto, quindi
 la riga resta con la geometria nulla. Nessun controllo a posteriori del risultato
-contro gli ingressi ([README, «Precisione delle operazioni geografiche: 1
+contro gli ingressi ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1
 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Precisione
 
@@ -10816,9 +10818,9 @@ ogni riga, ognuno con la griglia controllata prima del calcolo entro un
 quarto di centimetro (la catena entro mezzo). Se lo spostamento a priori
 supera quella quota, o le coordinate sono troppo rade per il centimetro,
 `PrecisionInsufficient` e nessun calcolo. Parti più sottili di 1 cm
-possono sparire o fondersi senza errore; vedi [README, «Precisione delle
+possono sparire o fondersi senza errore; vedi [Limiti dichiarati, «Precisione delle
 operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «overlay in catena».
 
 #### Complessità
@@ -10892,7 +10894,7 @@ collegati per densità più i punti di bordo che raggiungono; gli altri punti
 sono rumore ed escono con etichetta nulla. Accetta solo geometrie `Point`.
 
 La conversione di colonna è `cluster::dbscan_column`, che il runner
-chiama su tutta la colonna e aggiunge in coda l'etichetta ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+chiama su tutta la colonna e aggiunge in coda l'etichetta ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Parametri
 
@@ -10932,8 +10934,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -10953,8 +10955,8 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
 
 Solo punti: un poligono o una linea si rifiutano, senza passare dal
 centroide, che non ne rappresenta la densità. Il rumore e la geometria
-nulla hanno la stessa etichetta nulla. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+nulla hanno la stessa etichetta nulla. Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+«Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
@@ -10963,7 +10965,7 @@ Nessuna geometria calcolata. L'appartenenza al vicinato si decide in `f64`
 come `dx² + dy² <= eps²`, senza fusione delle operazioni: un punto a
 distanza pari a `eps` entro l'arrotondamento può cadere da una parte o
 dall'altra
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -11034,7 +11036,7 @@ spariscono.
 
 Il runner forma i gruppi su tutta la tabella e per ciascuno chiama
 `extensions::collect_geometries` con le geometrie del gruppo nell'ordine
-delle righe ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+delle righe ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Parametri
 
@@ -11094,8 +11096,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -11116,14 +11118,14 @@ in `InvalidPlan`; una validazione che non conclude è `Internal`.
 
 Nessuna unione: poligoni che si sovrappongono o si toccano lungo un lato
 si rifiutano invece di fondersi (per l'unione c'è `geo.dissolve`).
-Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+«Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
 Esatta: le geometrie si copiano senza calcolo
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -11215,7 +11217,7 @@ ereditate si tolgono dal campo. Le proprietà del contratto (`sorted_by`,
 
 1:1: il runner chiama il kernel (`extended::concave_hull`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 Una geometria senza coordinate dà un `POLYGON EMPTY`.
 
 #### Ordine
@@ -11241,7 +11243,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria (`ExtendedError`, che il runner porta in `PlenoraError`: `Internal` per
 `ValidazioneNonConclusa` e `CalcoloNonConcluso`, `ResourceLimit` per
@@ -11264,7 +11266,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il lavoro è limitato da `max_coordinates`, un argomento del kernel e non
 della config: nel runner `MAX_CELL_COORDINATES`. Il poligono non è quello
@@ -11278,7 +11280,7 @@ dell'ingresso, con i loro bit. Quali punti entrano nel bordo lo decidono
 distanze e confronti in `f64` di `geo`, non predicati esatti: per punti
 più vicini di 1 cm al bordo la scelta segue l'arrotondamento, il caso
 fuori ambito della regola
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Nessun rifiuto `PrecisionInsufficient`.
 
 #### Complessità
@@ -11360,7 +11362,7 @@ si tolgono dal campo.
 
 1:1: il runner chiama il kernel (`transform_geometry` con
 `Operation::ConvexHull`) su ogni cella non nulla, in parallelo, e rimette la
-geometria al suo posto; una cella nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+geometria al suo posto; una cella nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -11383,7 +11385,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria:
 
@@ -11402,7 +11404,7 @@ di riga, senza diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Dove GEOS e PostGIS rendono un `Point` o una `LineString` per l'inviluppo
 degenere, qui c'è un errore: l'uscita dichiarata è sempre `Polygon`.
@@ -11417,14 +11419,14 @@ divisione e la moltiplicazione per il modulo massimo: due arrotondamenti,
 al più qualche ulp per coordinata, molto sotto 1 cm in ogni dominio di un
 CRS reale; esatti quando il modulo massimo è una potenza di 2. Nessuna
 griglia e nessun rifiuto `PrecisionInsufficient`
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
 Per geometria di n vertici: quickhull di `geo`, O(n log n) atteso e O(n²)
 nel caso peggiore, più la validazione OGC dell'ingresso e dell'uscita
 (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la copia scalata delle coordinate.
 
 #### Memoria
@@ -11478,8 +11480,8 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Aggiunge alla sinistra, di norma poligoni, una colonna con il numero di
 geometrie della destra, di norma punti, che ogni sua geometria contiene
-(kernel `analysis::count_points_in_polygons_validated`; [README,
-«Operazioni geo»](../README.md#operazioni-geo)). «Contiene» è il
+(kernel `analysis::count_points_in_polygons_validated`; [Runner,
+«Operazioni geo»](runner.md#operazioni-geo)). «Contiene» è il
 `contains` di `geo`: i punti sul bordo non contano, come il
 `predicate="within"` di Manipola, e un punto dentro più poligoni conta in
 ognuno.
@@ -11531,7 +11533,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -11549,7 +11551,7 @@ validate), nella categoria del passo geo indicata fra parentesi:
 - `PairLimitExceeded` (`ResourceLimit`): le coppie punto-poligono
   confermate superano il limite di righe dell'arco;
 - `MargineMemoria` (`ResourceLimit`): le stesse coppie non starebbero nel
-  margine di memoria del passo (64 byte ciascuna; guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  margine di memoria del passo (64 byte ciascuna; guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;
@@ -11559,8 +11561,8 @@ Il runner verifica che il kernel renda un conteggio per ogni riga
 sinistra, altrimenti `Internal`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 #### Limiti e deviazioni
@@ -11573,9 +11575,9 @@ punto dentro molti poligoni sovrapposti conta una coppia per poligono.
 Nessun calcolo di geometrie e nessuna griglia: il predicato di `geo` si
 valuta sulle coordinate `f64` d'ingresso, senza tolleranza, e la regola di
 1 cm non sposta nulla. Un punto a meno di 1 cm dal bordo conta o no
-secondo le sue coordinate esatte ([README, «Precisione delle operazioni
+secondo le sue coordinate esatte ([Limiti dichiarati, «Precisione delle operazioni
 geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «Feature d'ingresso più vicine della precisione»).
 
 #### Complessità
@@ -11656,7 +11658,7 @@ poligoni (gap) non si cercano: se un buco sia atteso dipende dal dominio.
 
 La conversione di colonna è `extensions3::coverage_validate_rows`, che il
 runner chiama su tutta la colonna con i default della tabella sotto e la
-precisione del CRS della colonna ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+precisione del CRS della colonna ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Parametri
 
@@ -11705,8 +11707,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -11723,7 +11725,7 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
 - `ResourceLimit`: cella oltre il limite di byte per cella; più di
   `max_issues` sovrapposizioni (`IssueLimit`); coppie candidate e
   sovrapposizioni (stimate dalla zona, con la sua codifica) oltre il
-  margine di memoria del passo (`MargineMemoria`; guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  margine di memoria del passo (`MargineMemoria`; guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `Internal`: panico di `geo`, `i_overlay` o `rstar`, validazione che non
   conclude.
 
@@ -11732,11 +11734,11 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
 - Solo sovrapposizioni: i gap non sono rilevati.
 - Oltre `max_issues` l'operazione fallisce, non tronca l'elenco.
 - La decisione sull'area è presa sul risultato passato dalla griglia di
-  `i_overlay` ([README, «Precisione delle operazioni geografiche: 1 cm a
-  terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+  `i_overlay` ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
+  terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
   «Hazard»).
-- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+- Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+  «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
@@ -11749,7 +11751,7 @@ colonna (`Precision::from_crs`). Nessun controllo a posteriori: una sovrapposizi
 più sottile della griglia può sparire (segnalazione mancata), e vertici
 diversi su lati collineari possono lasciare una scheggia (segnalazione
 spuria), con area entro la precisione per il perimetro della zona
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 `area` è calcolata in `f64` sulla zona restituita dalla griglia.
 
 #### Complessità
@@ -11865,8 +11867,8 @@ config, CRS, nomi):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -11893,23 +11895,23 @@ dell'arco),
   incrementale di `geo`: sugli ingressi con quattro o più punti
   cocircolari (griglie, reticoli) è un'altra triangolazione di Delaunay
   valida, con le stesse facce altrove; il caso peggiore resta quadratico
-  ([README, «`geo.delaunay` e `geo.voronoi`: triangolazione caricata in
-  blocco»](../README.md#geodelaunay-e-geovoronoi-triangolazione-caricata-in-blocco)).
+  ([Limiti dichiarati, «`geo.delaunay` e `geo.voronoi`: triangolazione caricata in
+  blocco»](limiti.md#geodelaunay-e-geovoronoi-triangolazione-caricata-in-blocco)).
 - Non vincolata e senza tolleranza: `ST_DelaunayTriangles` di PostGIS ha un
   parametro di tolleranza per fondere i vertici vicini, qui assente (si
   fondono solo i punti uguali, con `-0.0` uguale a `0.0`).
 - I limiti di coordinate e di triangoli sono quelli del runner, sopra; non
   si scelgono dal piano.
-- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+- Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+  «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
 Esatta: nessuna coordinata si calcola. I vertici dei triangoli sono i punti
 d'ingresso con i loro bit e i predicati d'orientazione e del cerchio sono
-esatti; nessun controllo e nessun rifiuto di precisione servono ([README,
-«Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+esatti; nessun controllo e nessun rifiuto di precisione servono ([Limiti dichiarati,
+«Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Due punti distinti a meno di 1 cm restano due vertici.
 
 #### Complessità
@@ -11998,7 +12000,7 @@ restano.
 chiama il kernel (`extended_algorithms::densify`) su ogni cella non
 nulla, in parallelo, con `MAX_CELL_COORDINATES` (4 194 304) come massimo
 di coordinate d'uscita per geometria; una cella nulla resta nulla
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -12023,7 +12025,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi il kernel rende `ExtendedAlgorithmError`, che il runner porta in
 `Internal` per `Internal`, `ValidazioneNonConclusa` e
@@ -12045,7 +12047,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 - Il limite di coordinate d'uscita è un argomento del kernel: il runner
@@ -12061,14 +12063,14 @@ Nessun controllo e nessun rifiuto di precisione. I vertici d'ingresso non
 si spostano; quelli nuovi si calcolano come `inizio + (fine - inizio) * k / n`
 in `f64` e stanno sul lato a meno di qualche ulp del modulo delle
 coordinate (nanometri in UTM), molto sotto 1 cm in ogni dominio dei CRS
-integrati ([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+integrati ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
 O(n + m) per geometria, con `n` le coordinate d'ingresso e `m` quelle
 d'uscita, più la validazione OGC dell'ingresso e dell'uscita (O(m²) nel
-caso peggiore, [README, «Validazione OGC: la ricerca delle
-auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+caso peggiore, [Limiti dichiarati, «Validazione OGC: la ricerca delle
+auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(m).
 
 #### Memoria
@@ -12124,8 +12126,8 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Sostituisce la geometria della sinistra con la parte che non sta nella
 geometria della destra, `sinistra \ destra`, calcolata dal kernel
-`topology::boolean_operation_validated` ([README, «Operazioni
-geo»](../README.md#operazioni-geo)). Lavora solo su `Polygon` e
+`topology::boolean_operation_validated` ([Runner, «Operazioni
+geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
 #### Parametri
@@ -12172,7 +12174,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -12198,8 +12200,8 @@ del risultato), nella categoria del passo geo indicata fra parentesi:
   validazione OGC o l'overlay di `geo` non ha concluso.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 #### Limiti e deviazioni
@@ -12207,8 +12209,8 @@ diagnostica per riga»).
 Solo poligoni: una destra lineare o puntuale si rifiuta
 (`UnsupportedGeometry`), dove GEOS e PostGIS renderebbero la sinistra
 invariata. Nessun controllo a posteriori del risultato contro gli ingressi
-([README, «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Precisione
 
@@ -12218,18 +12220,18 @@ solo overlay di `i_overlay` su interi `i64`, con la griglia controllata
 prima del calcolo sull'ingombro dei due operandi. Se lo spostamento a
 priori supera mezzo centimetro, o le coordinate sono troppo rade per il
 centimetro, `PrecisionInsufficient` e nessun calcolo. Parti più sottili di
-1 cm possono sparire o fondersi senza errore; vedi [README, «Precisione
+1 cm possono sparire o fondersi senza errore; vedi [Limiti dichiarati, «Precisione
 delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 
 #### Complessità
 
 Per coppia l'overlay a scansione di `i_overlay`, di norma O((v + k) log v)
 con `v` i vertici dei due operandi e `k` gli incroci fra i lati, più la
 validazione OGC di ingressi e risultato (di norma O(v log v), nel caso
-peggiore O(v²): [README, «Validazione OGC: la
+peggiore O(v²): [Limiti dichiarati, «Validazione OGC: la
 ricerca delle auto-intersezioni non è quella di `geo`, il verdetto
-sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(v + k).
 
 #### Memoria
@@ -12329,8 +12331,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: una colonna geometria non XY;
 - `Crs`: CRS non risolto, o non proiettato (o senza unità lineare).
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -12357,11 +12359,11 @@ Nessun raggruppamento per attributo: tutta la tabella diventa una
 geometria. Gli ingressi si orientano (anello esterno antiorario) prima
 dell'unione, perché `unary_union` di `geo` sceglie la regola di
 riempimento dal verso del primo anello e un poligono valido di verso
-opposto sparirebbe ([README, «Precisione delle operazioni geografiche: 1 cm
-a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+opposto sparirebbe ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm
+a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Nessun controllo a posteriori del risultato contro gli ingressi.
-Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+«Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
@@ -12372,9 +12374,9 @@ griglia controllata prima del calcolo sull'ingombro di tutti gli ingressi.
 Se lo spostamento a priori supera mezzo centimetro, o le coordinate sono
 troppo rade per il centimetro, `PrecisionInsufficient` e nessun calcolo.
 Due poligoni separati da meno di 1 cm possono fondersi, e parti più
-sottili di 1 cm sparire, senza errore; vedi [README, «Precisione delle
+sottili di 1 cm sparire, senza errore; vedi [Limiti dichiarati, «Precisione delle
 operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 
 #### Complessità
 
@@ -12487,7 +12489,7 @@ In validazione (analisi del contratto):
 - `Internal`: la decodifica o la validazione OGC di `other_wkb` non
   conclude.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -12510,7 +12512,7 @@ Dal kernel (`OperationError`), per geometria:
 
 Il secondo operando è uno solo per tutto il passo: la distanza fra due
 colonne o fra due tabelle non c'è. La distanza è planare, non geodetica. Errori senza indice di riga
-della sorgente ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+della sorgente ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
@@ -12520,7 +12522,7 @@ calcolo in `f64` di `geo` (punto-segmento sulle coppie più vicine), senza un
 bilancio d'errore dichiarato rispetto alla regola di 1 cm; per linee e
 poligoni che si intersecano lo zero viene dal predicato d'intersezione di
 `geo`, non da una differenza di coordinate
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -12530,7 +12532,7 @@ peggiore; la ricerca della distanza minima che segue usa R-tree o
 proiezioni ordinate dei segmenti. Più la
 validazione OGC dei due operandi (sub-quadratica nel caso tipico, O(n²)
 nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)),
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)),
 ripetuta per `other_wkb` a ogni riga.
 
 #### Memoria
@@ -12608,7 +12610,7 @@ dichiarati della colonna diventano `exact` [`Point`, `LineString`,
 
 1:1: il runner chiama il kernel (`transform_geometry` con
 `Operation::Envelope`) su ogni cella non nulla, in parallelo, e rimette la
-geometria al suo posto; una cella nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+geometria al suo posto; una cella nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -12631,7 +12633,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria:
 
@@ -12648,7 +12650,7 @@ di riga, senza diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Una geometria vuota è un errore, dove PostGIS rende la geometria vuota.
 
@@ -12656,13 +12658,13 @@ Una geometria vuota è un errore, dove PostGIS rende la geometria vuota.
 
 Esatta: le coordinate d'uscita sono i minimi e i massimi delle coordinate
 d'ingresso, copiati senza calcolo
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
 Per geometria di n vertici: tempo O(n) per l'ingombro, più la validazione
 OGC dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
 #### Memoria
@@ -12768,8 +12770,8 @@ In validazione (analisi del contratto):
 - `Crs`: CRS della colonna assente o non risolto (ogni CRS risolto è
   ammesso).
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -12786,21 +12788,21 @@ traduce così: `ValidazioneNonConclusa` diventa `Internal`, le altre
 #### Limiti e deviazioni
 
 Un solo livello: `ST_Dump` di PostGIS scende invece fino alle geometrie
-semplici. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+semplici. Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+«Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
 Esatta: le parti sono copiate senza calcolo
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
 Per geometria di n vertici: tempo e memoria O(n) per la copia delle parti,
 più la validazione OGC dell'ingresso (sub-quadratica nel caso tipico,
 O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 
 #### Memoria
 
@@ -12915,7 +12917,7 @@ CRS, config):
 - `Internal`: la decodifica o la validazione OGC di `other_wkb` non
   conclude.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -12948,7 +12950,7 @@ Poi, per riga:
 - La seconda linea è una costante della config, non una seconda colonna.
 - Solo `LineString`: una `MultiLineString` nella colonna ferma il passo.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
@@ -12956,8 +12958,8 @@ voce «Geo senza diagnostica per riga»).
 Nessun controllo e nessun rifiuto di precisione. Il risultato è una delle
 distanze euclidee fra un vertice della riga e uno di `other_wkb`, scelta
 con massimi e minimi esatti; ogni distanza è calcolata in `f64` con
-l'errore relativo di un arrotondamento, molto sotto 1 cm ([README,
-«Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+l'errore relativo di un arrotondamento, molto sotto 1 cm ([Limiti dichiarati,
+«Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -13052,7 +13054,7 @@ senza tipi dichiarati. I metadati di schema e le proprietà del contratto
 conversione è esatta), chiama il kernel (`construction::point_from_lon_lat`)
 riga per riga e controlla che il punto stia nel dominio di validità del
 CRS prodotto. Una x o una y nulla è un errore: la colonna prodotta è
-dichiarata non nullable ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiarata non nullable ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -13091,19 +13093,19 @@ quello della prima riga, senza diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il kernel controlla solo che le coordinate siano finite; il dominio del CRS
 lo controlla il runner su ogni punto. Un `int64` oltre `2^53` in modulo si
 rifiuta invece di arrotondarsi. Una coordinata nulla è un errore, non un
 punto nullo come nel progetto d'origine. Il catalogo chiede un CRS proiettato: punti in
 longitudine e latitudine non si costruiscono qui
-([README, «CRS integrati»](../README.md#crs-integrati)).
+([«CRS integrati»](crs.md#crs-integrati)).
 
 #### Precisione
 
 Esatta: le coordinate `float64` diventano il punto senza calcolo
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -13196,7 +13198,7 @@ schema e le proprietà del contratto (`sorted_by`, `row_count`) restano.
 
 1:1: il runner chiama la conversione di colonna dei kernel
 (`extensions::from_wkt_column_named`) sulla colonna intera. Una cella
-nulla dà una geometria nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla dà una geometria nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -13231,12 +13233,12 @@ In esecuzione (conversione di colonna):
 È l'unica operazione geo con diagnostica per riga nel runner; gli indici
 seguono la base delle tabellari: righe della sorgente, o dell'ingresso del
 passo dopo un passo che cambia le righe
-([README, «Diagnostica per riga»](../README.md#diagnostica-per-riga)).
+([Runner, «Diagnostica per riga»](runner.md#diagnostica-per-riga)).
 
 #### Limiti e deviazioni
 
 - Il costo in memoria del passo è una previsione dalle misure
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Modelli di costo geo»).
 - Solo WKT 2D: EWKT con `SRID=` e WKT con `Z`, `M`, `ZM` si rifiutano.
 - `on_error` non ha effetto (sopra).
@@ -13245,7 +13247,7 @@ passo dopo un passo che cambia le righe
 
 Esatta: le coordinate sono i `f64` più vicini ai numeri del testo, senza
 altro calcolo. Nessun controllo di precisione si applica
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -13312,7 +13314,7 @@ rettangolo. La tabella d'ingresso serve solo da innesco: né le sue colonne
 né le sue righe entrano nell'uscita.
 
 Il calcolo è `extensions2::generate_grid_rows`, che il runner chiama una
-volta per passo, qualunque sia l'ingresso ([README, «Operazioni geo»](../README.md#operazioni-geo)); il numero di
+volta per passo, qualunque sia l'ingresso ([Runner, «Operazioni geo»](runner.md#operazioni-geo)); il numero di
 celle calcolato a secco entra nel modello di costo del passo.
 
 #### Parametri
@@ -13386,7 +13388,7 @@ le colonne dispari, mezzo esagono.
 
 Nessun controllo dedicato: le coordinate si calcolano in `f64`, senza
 fusione delle operazioni
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Sono esatte quando `xmin`, `ymin`, `cell_size` e i loro multipli sono
 rappresentabili; altrimenti:
 
@@ -13456,7 +13458,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Aggiunge una colonna `float64` con l'area geodetica, in metri quadrati,
 dei poligoni e multi-poligoni di ogni riga, sull'ellissoide del datum del
-CRS della colonna ([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le
+CRS della colonna ([Limiti dichiarati, «Misure geodetiche: l'ellissoide del datum»](limiti.md#misure-geodetiche-lellissoide-del-datum)). Le
 coordinate sono longitudine (`x`) e latitudine (`y`) in gradi e i lati sono
 geodetiche fra vertici consecutivi. Il verso degli anelli non conta: ogni
 poligono si orienta prima (esterno antiorario, buchi orari), e l'area è
@@ -13504,7 +13506,7 @@ CRS, config):
 - `Crs`: CRS della colonna assente o non risolto; CRS non geografico;
   CRS senza l'ellissoide del datum (`ELLIPSOID_REQUIRED`).
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -13550,8 +13552,8 @@ Poi, per riga:
   41,1 41,1 40,-1 40))`: il lato inferiore sale oltre 70° a longitudine 0,
   e il buco a 40° è fuori dall'esterno geodetico) o di un'altra parte.
   L'area si calcola solo se la topologia delle geodetiche è dimostrabilmente
-  quella del piano ([README, «Misure geodetiche: l'ellissoide del
-  datum»](../README.md#misure-geodetiche-lellissoide-del-datum)): ogni lato
+  quella del piano ([Limiti dichiarati, «Misure geodetiche: l'ellissoide del
+  datum»](limiti.md#misure-geodetiche-lellissoide-del-datum)): ogni lato
   deve avere una lunghezza maggiorata di al più 1000 km, una latitudine
   maggiorata sotto 90° e una rotazione `K L` al più 1 (maggioranti
   certificati, senza problema inverso), e gli anelli devono stare più
@@ -13565,16 +13567,16 @@ Poi, per riga:
   meno, oltre perimetro per 1 cm già su un quadrato di 500 m).
 - Un poligono vuoto dà `-0.0`, non `0.0`.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
 
 Nessun controllo e nessun rifiuto di precisione. L'area è quella
 dell'algoritmo di Karney in `f64` sull'ellissoide del datum; la regola di
-1 cm per le aree ammette circa perimetro per 1 cm ([README, «Precisione
+1 cm per le aree ammette circa perimetro per 1 cm ([Limiti dichiarati, «Precisione
 delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 La somma non è compensata (come in `geo`): su un poligono piccolo lontano
 dall'equatore lo scarto da GeographicLib è dell'ordine di 1e-5 m²
 (l'oracolo ammette 1e-3 m²).
@@ -13642,7 +13644,7 @@ punto di ogni riga e un punto fisso della config (`other_wkb`), calcolata
 **sull'ellissoide del datum del CRS della colonna** (Internazionale 1924
 per ED50 e Monte Mario, Clarke 1866 per NAD27, Airy per OSGB36, GRS 80,
 WGS 84...) con l'algoritmo di Karney (`geographiclib-rs`), mai su un
-ellissoide di comodo ([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono longitudine e
+ellissoide di comodo ([Limiti dichiarati, «Misure geodetiche: l'ellissoide del datum»](limiti.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono longitudine e
 latitudine in gradi.
 
 #### Parametri
@@ -13688,7 +13690,7 @@ In validazione (analisi del contratto):
 - `Internal`: la decodifica o la validazione OGC di `other_wkb` non
   conclude.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -13719,7 +13721,7 @@ Poi, per riga:
 - Solo punti, vedi «Righe»: una `MultiPoint` nella colonna ferma il
   passo.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
@@ -13729,7 +13731,7 @@ Sull'ellissoide del datum l'algoritmo di Karney resta molto sotto 1 cm
 l'oracolo `tests/geodetica_oracolo.rs` lo confronta con GeographicLib e
 PROJ su ogni ellissoide della tabella entro un micrometro). Nessun
 rifiuto `PrecisionInsufficient`
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -13791,7 +13793,7 @@ Aggiunge una colonna `float64` con la lunghezza geodetica in metri della
 linea di ogni riga: la somma delle geodetiche fra vertici consecutivi
 **sull'ellissoide del datum del CRS della colonna**, con l'algoritmo di
 Karney di [`geo.geodesic_distance`](#geogeodesic_distance)
-([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono
+([Limiti dichiarati, «Misure geodetiche: l'ellissoide del datum»](limiti.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono
 longitudine e latitudine in gradi.
 
 #### Parametri
@@ -13832,7 +13834,7 @@ In validazione (analisi del contratto):
   dal chiamante, fuori dalla tabella integrata: `ELLIPSOID_REQUIRED`);
 - `InvalidPlan`: config con campi sconosciuti, `output_column` vuoto.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -13863,7 +13865,7 @@ Poi, per riga:
   era sempre WGS 84 (come [`geo.geodesic_distance`](#geogeodesic_distance)).
 - Solo `LineString`, vedi «Righe»: una `MultiLineString` ferma il passo.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
@@ -13872,7 +13874,7 @@ Ogni tratto è una geodetica di Karney sull'ellissoide del datum, con
 errore dell'ordine dei nanometri; la somma aggiunge un arrotondamento per
 tratto, molto sotto 1 cm su ogni linea realistica. Nessun rifiuto
 `PrecisionInsufficient`
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -13989,7 +13991,7 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -14007,7 +14009,7 @@ validazione che non conclude è `Internal`.
 #### Limiti e deviazioni
 
 Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
@@ -14015,7 +14017,7 @@ voce «Geo senza diagnostica per riga»).
 Esatta: conteggi e tipi non calcolano nulla, e `start_point`/`end_point`
 riportano le coordinate del vertice nel testo più corto che, riletto, dà lo
 stesso `f64`
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -14134,7 +14136,7 @@ config, CRS, nomi):
 - `Crs`: CRS della colonna assente o non risolto (serve un CRS noto, di
   qualunque tipo).
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -14155,14 +14157,14 @@ referto direbbe un verdetto che non esiste), che diventa `Internal`, e
 - La ragione è una classificazione del messaggio di `geo`, senza posizione
   né coordinate: indica il tipo di difetto, non dove sta.
 - La validazione è quella di `geo` 0.33.1 con la ricerca rapida delle
-  auto-intersezioni ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)),
+  auto-intersezioni ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)),
   con in più il rifiuto degli anelli con una punta
   (`anello con auto-intersezione`).
 - Una coordinata fuori dal dominio del CRS non si descrive: il controllo
   del runner prima del kernel ferma il passo con `Crs`.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
@@ -14170,7 +14172,7 @@ voce «Geo senza diagnostica per riga»).
 Esatta: nessuna coordinata si calcola. Il rettangolo è il minimo e il
 massimo delle coordinate, con i loro bit; il verdetto di validità è quello
 della validazione OGC sulle coordinate come sono, senza tolleranza
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -14280,7 +14282,7 @@ In validazione (analisi del contratto):
 - `Internal`: la decodifica o la validazione OGC di `other_wkb` non
   conclude.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -14313,7 +14315,7 @@ Dal kernel (`extended::hausdorff_distance`, `ExtendedError`), per riga:
   delle due geometrie): il runner passa `10^8` per riga, l'ordine di
   `MAX_NODING_WORK` dei kernel; non è un parametro della config.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
@@ -14322,7 +14324,7 @@ Le distanze fra vertici sono calcolate in `f64` (differenze e `hypot`),
 con errore relativo di pochi ulp: sotto 1 cm per ogni distanza sotto
 circa `1e13` unità del CRS. Il massimo e il minimo non arrotondano.
 Nessun rifiuto `PrecisionInsufficient`
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -14387,7 +14389,7 @@ ogni riga e un punto fisso della config (`other_wkb`), lungo il cerchio
 massimo di una **sfera** con il raggio medio IUGG `R1 = a (1 - f / 3)`
 dell'ellissoide del datum del CRS della colonna (per WGS 84 6 371 008,771 m,
 per Internazionale 1924 6 371 229,315 m;
-[README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono longitudine e latitudine in gradi. Il
+[Limiti dichiarati, «Misure geodetiche: l'ellissoide del datum»](limiti.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono longitudine e latitudine in gradi. Il
 nome resta `haversine`, ma il calcolo non è la formula dell'emiseno: è il
 problema inverso di `geographiclib-rs` a schiacciamento nullo, ben
 condizionato anche agli antipodi. Per la distanza sull'ellissoide c'è
@@ -14436,7 +14438,7 @@ In validazione (analisi del contratto):
 - `Internal`: la decodifica o la validazione OGC di `other_wkb` non
   conclude.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -14473,7 +14475,7 @@ Poi, per riga:
 - Solo punti, vedi «Righe»: una `MultiPoint` nella colonna ferma il
   passo.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
@@ -14484,7 +14486,7 @@ calcolo è accurato ai nanometri ovunque, antipodi compresi (l'oracolo
 `tests/geodetica_oracolo.rs` lo confronta con GeographicLib entro un
 micrometro su ogni ellissoide della tabella); il risultato è sempre
 finito. Nessun rifiuto `PrecisionInsufficient`
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -14544,8 +14546,8 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Sostituisce la geometria della sinistra con la sua intersezione con la
 geometria della destra, `sinistra ∩ destra`, calcolata dal kernel
-`topology::boolean_operation_validated` ([README, «Operazioni
-geo»](../README.md#operazioni-geo)). Lavora solo su `Polygon` e
+`topology::boolean_operation_validated` ([Runner, «Operazioni
+geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
 #### Parametri
@@ -14593,7 +14595,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -14619,8 +14621,8 @@ del risultato), nella categoria del passo geo indicata fra parentesi:
   validazione OGC o l'overlay di `geo` non ha concluso.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 #### Limiti e deviazioni
@@ -14628,9 +14630,9 @@ diagnostica per riga»).
 Solo poligoni: un'intersezione che si riduce a linee o punti (due quadrati
 che si toccano su un lato) è vuota, quindi la riga ha la geometria nulla,
 dove GEOS e PostGIS renderebbero la linea o il punto. Nessun controllo a posteriori del
-risultato contro gli ingressi ([README, «Precisione delle operazioni
+risultato contro gli ingressi ([Limiti dichiarati, «Precisione delle operazioni
 geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Precisione
 
@@ -14640,18 +14642,18 @@ solo overlay di `i_overlay` su interi `i64`, con la griglia controllata
 prima del calcolo sull'ingombro dei due operandi. Se lo spostamento a
 priori supera mezzo centimetro, o le coordinate sono troppo rade per il
 centimetro, `PrecisionInsufficient` e nessun calcolo. Parti più sottili di
-1 cm possono sparire o fondersi senza errore; vedi [README, «Precisione
+1 cm possono sparire o fondersi senza errore; vedi [Limiti dichiarati, «Precisione
 delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 
 #### Complessità
 
 Per coppia l'overlay a scansione di `i_overlay`, di norma O((v + k) log v)
 con `v` i vertici dei due operandi e `k` gli incroci fra i lati, più la
 validazione OGC di ingressi e risultato (di norma O(v log v), nel caso
-peggiore O(v²): [README, «Validazione OGC: la
+peggiore O(v²): [Limiti dichiarati, «Validazione OGC: la
 ricerca delle auto-intersezioni non è quella di `geo`, il verdetto
-sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(v + k).
 
 #### Memoria
@@ -14748,7 +14750,7 @@ In validazione (analisi del contratto):
   senza unità lineare;
 - `InvalidPlan`: campi sconosciuti nella config, `output_column` vuoto o di soli spazi.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -14772,7 +14774,7 @@ Dal kernel (`OperationError`), per geometria:
 Un poligono ha la lunghezza del suo perimetro, dove `ST_Length` di PostGIS
 rende 0. La lunghezza è planare, non geodetica.
 Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
@@ -14780,13 +14782,13 @@ voce «Geo senza diagnostica per riga»).
 Nessuna griglia e nessun rifiuto `PrecisionInsufficient`: la lunghezza è la
 somma in `f64` delle lunghezze dei segmenti calcolate da `geo`, senza un
 bilancio d'errore dichiarato rispetto alla regola di 1 cm
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
 Per geometria di n vertici: tempo O(n) per la somma, più la validazione OGC
 dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
 #### Memoria
@@ -14884,8 +14886,8 @@ In validazione (analisi del contratto):
 - `Crs`: CRS della colonna assente o non risolto, geografico, o proiettato
   senza unità lineare.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -14908,14 +14910,14 @@ traduce così: `ValidazioneNonConclusa` diventa `Internal`, le altre
 
 Non ci sono colonne di gruppo né d'ordine (il kernel lavora su un gruppo
 già ordinato, ma nessun parametro lo forma): una linea per gruppo non si
-può chiedere. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+può chiedere. Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+«Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
 Esatta: i vertici sono le coordinate dei punti, copiate
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -15000,7 +15002,7 @@ vuota dà null, e se la colonna d'uscita (con la nullabilità di quella
 d'ingresso) non ammette null il passo si rifiuta con `InvalidPlan`; una
 riga di altro tipo (anche `MultiLineString`) è `InvalidPlan` («tipo
 geometria non supportato»). L'analisi non controlla i tipi dichiarati
-dell'ingresso ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dell'ingresso ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -15024,7 +15026,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi, per riga: `InvalidPlan` per una geometria che non è una
 `LineString`. Il kernel rende `ExtendedAlgorithmError`, che il runner
@@ -15041,7 +15043,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 - Solo `LineString` nel kernel; solo CRS proiettati.
@@ -15054,8 +15056,8 @@ il primo vertice, con i suoi bit; negli altri casi è calcolato in `f64`
 (somma delle lunghezze dei lati, interpolazione sul lato), con un errore
 relativo dell'ordine del numero di lati per 1e-16 della lunghezza: molto
 sotto 1 cm su ogni linea realistica. Con `ratio` 1 il punto è l'ultimo
-vertice a meno di qualche ulp ([README, «Precisione delle operazioni
-geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+vertice a meno di qualche ulp ([Limiti dichiarati, «Precisione delle operazioni
+geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -15165,7 +15167,7 @@ In validazione (analisi del contratto):
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta; punto fuori
   dal dominio del CRS.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -15184,7 +15186,7 @@ supera la validazione OGC (`InvalidInput`) è `InvalidPlan`; un panico di
 
 Una `MultiLineString` dà null, non la frazione lungo la parte più vicina.
 Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
@@ -15195,7 +15197,7 @@ cumulate), con errori d'arrotondamento relativi alla lunghezza della linea,
 molto sotto 1 cm per le lunghezze dei CRS reali. Dove due segmenti sono alla
 stessa distanza dal punto entro l'arrotondamento, la scelta fra i due, e
 con essa la frazione, può cambiare con l'ultimo bit delle coordinate
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -15311,8 +15313,8 @@ config, CRS):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -15341,8 +15343,8 @@ dell'arco), `InvalidOutput` (linea fusa non valida), `Internal`
   d'uscita sono quelli descritti sopra, non quelli di GEOS.
 - I limiti di coordinate e di linee sono quelli del runner, sopra; non si
   scelgono dal piano.
-- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+- Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+  «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
@@ -15350,7 +15352,7 @@ dell'arco), `InvalidOutput` (linea fusa non valida), `Internal`
 Esatta: nessuna coordinata si calcola, i vertici d'uscita sono quelli
 d'ingresso con i loro bit. Due estremi distinti a meno di 1 cm non si
 uniscono: sono feature più vicine della precisione, fuori dalla garanzia
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -15443,7 +15445,7 @@ cella nulla resta nulla; una linea vuota dà null, e se la colonna d'uscita
 rifiuta con `InvalidPlan`; una riga di altro tipo (anche
 `MultiLineString`) è `InvalidPlan` («tipo geometria non supportato»).
 L'analisi non controlla i tipi dichiarati dell'ingresso
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -15468,7 +15470,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi, per riga: `InvalidPlan` per una geometria che non è una
 `LineString`. Il kernel rende `ExtendedAlgorithmError`, che il runner
@@ -15489,7 +15491,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 - Solo `LineString` nel kernel; solo CRS proiettati.
@@ -15502,8 +15504,8 @@ Nessun controllo e nessun rifiuto di precisione. I vertici interni sono
 quelli d'ingresso, con i loro bit. I due estremi sono calcolati in `f64`
 come in [`geo.line_interpolate_point`](#geoline_interpolate_point), con un
 errore relativo dell'ordine del numero di lati per 1e-16 della lunghezza:
-molto sotto 1 cm su ogni linea realistica ([README, «Precisione delle
-operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+molto sotto 1 cm su ogni linea realistica ([Limiti dichiarati, «Precisione delle
+operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Un vertice a distanza cumulata quasi uguale a un estremo può entrare o
 restare fuori secondo l'arrotondamento delle due somme.
 
@@ -15573,8 +15575,8 @@ punto) escono come linee o punti accanto all'area, in una
 
 La semantica a livello di tabella è quella dell'esecuzione Arrow
 (`rust_backend::arrow::make_valid_batches`), che il runner chiama su tutta
-la tabella con la precisione del CRS della colonna ([README, «Operazioni
-geo»](../README.md#operazioni-geo)).
+la tabella con la precisione del CRS della colonna ([Runner, «Operazioni
+geo»](runner.md#operazioni-geo)).
 
 #### Parametri
 
@@ -15612,8 +15614,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
 
-In esecuzione, prima del kernel, su ogni cella non nulla (runner, [README,
-«Operazioni geo»](../README.md#operazioni-geo)): la decodifica strutturale
+In esecuzione, prima del kernel, su ogni cella non nulla (runner, [Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): la decodifica strutturale
 (`InvalidPlan` per un WKB malformato o con coordinate non finite,
 `Unsupported` per dimensioni Z/M o SRID), `Crs` per una coordinata fuori
 dal dominio di validità del CRS della colonna, `Schema` per una geometria
@@ -15642,8 +15644,8 @@ riga):
   equivalenza semantica, non byte per byte: ordine delle parti, punto
   iniziale e verso degli anelli e scelta fra `Polygon`, `MultiPolygon` e
   `GeometryCollection` possono differire da GEOS a parità di geometria
-  ([README, «`geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a
-  GEOS verificata, non dimostrata»](../README.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata)).
+  ([Limiti dichiarati, «`geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a
+  GEOS verificata, non dimostrata»](limiti.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata)).
 - `LINEWORK` è una funzione dell'insieme dei lati d'ingresso: anelli e parti
   permutati, ruotati o invertiti danno la stessa geometria. Non è il
   pari-dispari su tutti gli anelli: un buco che condivide un lato con la
@@ -15655,11 +15657,11 @@ riga):
 - Oltre 10.000 segmenti un input invalido si rifiuta (GEOS non aveva
   limite); un input valido passa a ogni dimensione. Il caso peggiore dei
   giri di `LINEWORK` non ha un budget di tempo proprio.
-- Elenco completo: [README, «Differenze da GEOS»](../README.md#differenze-da-geos)
-  e [README, «Operazioni topologiche in Rust puro»](../README.md#operazioni-topologiche-in-rust-puro).
+- Elenco completo: [Operazioni topologiche, «Differenze da GEOS»](topologia.md#differenze-da-geos)
+  e [Operazioni topologiche, «Operazioni topologiche in Rust puro»](topologia.md#operazioni-topologiche-in-rust-puro).
 - Nel runner il passo rende il primo errore, senza diagnostica per riga
-  ([README, «Limiti dichiarati del
-  runner»](../README.md#limiti-dichiarati-del-runner), voci «Geo senza
+  ([Runner, «Limiti dichiarati del
+  runner»](runner.md#limiti-dichiarati-del-runner), voci «Geo senza
   diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
@@ -15667,7 +15669,7 @@ riga):
 `LINEWORK` non passa dalla griglia di `i_overlay`: l'unico calcolo che
 arrotonda è il noding del bordo, e ogni passo successivo è un'operazione
 esatta sull'insieme dei lati nodati. Le regole di 1 cm
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
 
 - coordinate troppo rade (unità in ultima posizione del modulo massimo
   oltre `p / 64`): `PrecisionInsufficient`, prima di ogni calcolo;
@@ -15752,8 +15754,8 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Abbina ogni riga della sinistra alla riga della destra più vicina, con la
 distanza planare fra le due geometrie (kernel
-`analysis::nearest_matches_validated`, [README, «Operazioni
-geo»](../README.md#operazioni-geo)): in caso di pari tutte le destre alla
+`analysis::nearest_matches_validated`, [Runner, «Operazioni
+geo»](runner.md#operazioni-geo)): in caso di pari tutte le destre alla
 distanza minima, come `sjoin_nearest` di GeoPandas.
 
 #### Parametri
@@ -15808,7 +15810,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -15833,14 +15835,14 @@ geo indicata fra parentesi:
 - `MargineMemoria` (`ResourceLimit`): gli abbinamenti, con la riga di left più larga
   che l'uscita ripete, non starebbero nel margine di memoria del passo;
   stesso conteggio e stessa precedenza del limite di righe, che vince se
-  scatta prima (guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  scatta prima (guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso` (`Internal`): un
   calcolo di `geo` (la distanza su un candidato) non ha concluso;
 - `IndexOverflow` (`InvalidPlan`): un indice non entra in `u64`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 #### Limiti e deviazioni
@@ -15849,14 +15851,14 @@ Un R-tree sceglie i candidati e scarta una destra solo quando la sua
 distanza non può essere il minimo, con un margine appoggiato alla stima
 d'errore della distanza di `geo` letta dai sorgenti, non dimostrata; le
 geometrie fuori da quella stima non si scartano mai. L'oracolo confronta
-il risultato con la forza bruta sui bit ([README, «`geo.nearest`: lo
+il risultato con la forza bruta sui bit ([Limiti dichiarati, «`geo.nearest`: lo
 scarto dell'R-tree si appoggia alla stima d'errore di
-`geo`»](../README.md#geonearest-lo-scarto-dellr-tree-si-appoggia-alla-stima-derrore-di-geo)).
+`geo`»](limiti.md#geonearest-lo-scarto-dellr-tree-si-appoggia-alla-stima-derrore-di-geo)).
 Il catalogo dichiara il vincolo `uscita / sinistra`, ma i pari possono dare
 più righe della sinistra. Gli abbinamenti dipendono dai dati: il modello di
 costo non li prevede, e li limita solo il limite di righe dell'arco
-([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo
+([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo
 geo»).
 
 #### Precisione
@@ -15868,8 +15870,8 @@ delle coordinate su geometrie regolari (circa 0,14 µm con coordinate
 fino a 10.000 km), molto sotto 1 cm. I pari sono
 uguaglianze esatte dei valori calcolati: due destre la cui distanza vera è
 uguale possono non risultare pari se i loro `f64` differiscono nell'ultima
-cifra ([README, «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+cifra ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -15942,8 +15944,8 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Sovrappone due tabelle di poligoni e ne produce i pezzi, ognuno con la
 riga sinistra e la riga destra da cui viene (kernel
-`topology::polygon_overlay_validated`; [README, «Operazioni
-geo»](../README.md#operazioni-geo)): le intersezioni delle coppie che si
+`topology::polygon_overlay_validated`; [Runner, «Operazioni
+geo»](runner.md#operazioni-geo)): le intersezioni delle coppie che si
 sovrappongono e, secondo `mode`, i resti di ciascun lato fuori dall'altro.
 Lavora solo su `Polygon` e `MultiPolygon`.
 
@@ -16010,7 +16012,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -16035,7 +16037,7 @@ parentesi:
   limite di righe dell'arco (`candidate_pairs`), o i pezzi lo superano
   (`overlay_results`), o coppie e pezzi (stimati dalla geometria, con la
   loro codifica) non starebbero nel margine di memoria del passo
-  (`memoria`; guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  (`memoria`; guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `IndexOverflow` (`InvalidPlan`): un indice non entra in `u64`;
 - `PrecisionInsufficient` (`Unsupported`): la griglia di un overlay
   sposterebbe il risultato oltre la precisione (sotto, «Precisione»);
@@ -16046,8 +16048,8 @@ Un indice di pezzo che non corrisponde a una riga d'ingresso è
 `Internal`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 #### Limiti e deviazioni
@@ -16058,11 +16060,11 @@ del catalogo il superamento del limite delle coppie candidate usciva come
 `InvalidGeometry`, e i due limiti avevano la categoria `InvalidPlan`. I
 pezzi dipendono dai
 dati: il modello di costo non li prevede, e li limita solo il limite di
-righe dell'arco ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di
+righe dell'arco ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di
 costo geo»). Nessun controllo a posteriori del risultato contro
-gli ingressi ([README, «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+gli ingressi ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Precisione
 
@@ -16074,8 +16076,8 @@ differenza), ognuno entro un quarto di centimetro. Ogni griglia è
 controllata prima del calcolo sull'ingombro dei suoi operandi; oltre, o
 con coordinate troppo rade per il centimetro, `PrecisionInsufficient` e
 nessun calcolo. Parti più sottili di 1 cm possono sparire o fondersi senza
-errore; vedi [README, «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
+errore; vedi [Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 
 #### Complessità
 
@@ -16180,7 +16182,7 @@ In validazione (analisi del contratto):
   senza unità lineare;
 - `InvalidPlan`: campi sconosciuti nella config, `output_column` vuoto o di soli spazi.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -16204,7 +16206,7 @@ Dal kernel (`OperationError`), per geometria:
 Il perimetro di una linea è la sua lunghezza, come in Manipola
 (`GeoSeries.length`), dove `ST_Perimeter` di PostGIS rende 0.
 Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
@@ -16212,13 +16214,13 @@ voce «Geo senza diagnostica per riga»).
 Nessuna griglia e nessun rifiuto `PrecisionInsufficient`: il perimetro è la
 somma in `f64` delle lunghezze dei segmenti calcolate da `geo`, senza un
 bilancio d'errore dichiarato rispetto alla regola di 1 cm
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
 Per geometria di n vertici: tempo O(n) per la somma, più la validazione OGC
 dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
 #### Memoria
@@ -16296,7 +16298,7 @@ si tolgono dal campo.
 
 1:1: il runner chiama il kernel (`operations::point_on_surface`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 Una geometria senza punto interno (vuota) dà null: la colonna d'uscita ha
 la nullabilità di quella d'ingresso, e se non ammette null il passo si
 rifiuta con `InvalidPlan`.
@@ -16321,7 +16323,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria (`OperationError`, che il runner porta in `PlenoraError`:
 `Internal` per `Internal`, `ValidazioneNonConclusa` e
@@ -16342,7 +16344,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il punto è quello di `interior_point` di `geo`, che non coincide
 necessariamente con quello di `ST_PointOnSurface` di PostGIS. Le coordinate
@@ -16357,7 +16359,7 @@ punti il risultato è un vertice d'ingresso, esatto; per i poligoni le
 coordinate sono calcolate in `f64` da `geo` (punto medio del tratto) e
 `relate` conferma che il punto sta dentro: la garanzia è topologica, senza
 un bilancio metrico rispetto alla regola di 1 cm
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -16366,7 +16368,7 @@ tutti i lati (sweep line, O(n log n) più le intersezioni) e verifica i
 tratti, dal più lungo, con `relate` finché uno è interno; per linee e punti
 O(n). Più la validazione OGC
 dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 
 #### Memoria
 
@@ -16462,8 +16464,8 @@ In validazione (analisi del contratto):
 - `Crs`: CRS della colonna assente o non risolto, geografico, o proiettato
   senza unità lineare.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -16487,20 +16489,20 @@ traduce così: `ValidazioneNonConclusa` diventa `Internal`, le altre
 Non ci sono colonne di gruppo né d'ordine (il kernel lavora su un gruppo
 già ordinato, ma nessun parametro lo forma): un poligono per gruppo non si
 può chiedere. Nessun buco,
-nessun riordino dei punti, nessuna riparazione dell'anello. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+nessun riordino dei punti, nessuna riparazione dell'anello. Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+«Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
 Esatta: i vertici sono le coordinate dei punti, copiate
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
 Tempo O(n) sulle righe più la validazione OGC del poligono (sub-quadratica
 nel caso tipico, O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n): tutta la colonna diventa una geometria.
 
 #### Memoria
@@ -16564,7 +16566,7 @@ Gli attributi delle righe d'ingresso non passano.
 La semantica a livello di tabella è quella dell'esecuzione Arrow
 (`rust_backend::arrow::polygonize_batches`), che il runner chiama su tutta
 la tabella con la precisione del CRS della colonna e il limite di righe
-dell'arco d'uscita ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dell'arco d'uscita ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Parametri
 
@@ -16618,8 +16620,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto, o CRS non proiettato.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -16648,8 +16650,8 @@ Poi l'esecuzione Arrow:
 
 - Kernel del laboratorio qualificato contro GEOS per equivalenza semantica
   (stesse facce, stessi residui, stessa area), non per identità
-  ([README, «`geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a
-  GEOS verificata, non dimostrata»](../README.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata)).
+  ([Limiti dichiarati, «`geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a
+  GEOS verificata, non dimostrata»](limiti.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata)).
 - Forma canonica solo quando gli incroci sono esattamente rappresentabili:
   altrimenti, su ingresso permutato o invertito, classi e aree coincidono ma
   i bit di un incrocio, il segno di uno zero e l'ordine delle linee
@@ -16659,16 +16661,16 @@ Poi l'esecuzione Arrow:
   d'uscita valgono anche sulle facce intermedie.
 - Segni esatti dove GEOS non lo è: una faccia degenere solo per la
   precisione di GEOS resta un poligono.
-- Elenco completo: [README, «Differenze da GEOS»](../README.md#differenze-da-geos).
-- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+- Elenco completo: [Operazioni topologiche, «Differenze da GEOS»](topologia.md#differenze-da-geos).
+- Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+  «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
 Nessuna griglia di `i_overlay`: il solo calcolo che sposta punti è il
 noding
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
 
 - coordinate troppo rade (unità in ultima posizione del modulo massimo
   oltre `p / 64`): `PrecisionInsufficient`, prima del noding;
@@ -16778,7 +16780,7 @@ geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
 primo errore in ordine di riga
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -16818,7 +16820,7 @@ riga. Prima del kernel, su ogni cella non nulla:
   geometrici e la cella è di un altro tipo.
 
 Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
-categoria di `PlenoraError` ([README, «Operazioni geo»](../README.md#operazioni-geo),
+categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
 - `InvalidPlan`: `NonFiniteCoordinate` o `InvalidGeometry` (geometria
@@ -16842,13 +16844,13 @@ voce «Errori»):
   fallire il calcolo.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
-  ripete a ogni valutazione ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+  ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 - Si calcola sempre la matrice intera: nessuna scorciatoia per il singolo
   predicato.
 - Nessuna diagnostica per riga: un errore è il primo in ordine di riga,
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
   previsione del modello geo misurato (voce «Modelli di costo geo»).
 
@@ -16860,8 +16862,8 @@ sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
 toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
 in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
 un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([README, «Precisione
-delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
+delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -16954,7 +16956,7 @@ geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
 primo errore in ordine di riga
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -16994,7 +16996,7 @@ riga. Prima del kernel, su ogni cella non nulla:
   geometrici e la cella è di un altro tipo.
 
 Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
-categoria di `PlenoraError` ([README, «Operazioni geo»](../README.md#operazioni-geo),
+categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
 - `InvalidPlan`: `NonFiniteCoordinate` o `InvalidGeometry` (geometria
@@ -17018,13 +17020,13 @@ voce «Errori»):
   fallire il calcolo.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
-  ripete a ogni valutazione ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+  ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 - Si calcola sempre la matrice intera: nessuna scorciatoia per il singolo
   predicato.
 - Nessuna diagnostica per riga: un errore è il primo in ordine di riga,
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
   previsione del modello geo misurato (voce «Modelli di costo geo»).
 
@@ -17036,8 +17038,8 @@ sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
 toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
 in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
 un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([README, «Precisione
-delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
+delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -17130,7 +17132,7 @@ geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
 primo errore in ordine di riga
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -17170,7 +17172,7 @@ riga. Prima del kernel, su ogni cella non nulla:
   geometrici e la cella è di un altro tipo.
 
 Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
-categoria di `PlenoraError` ([README, «Operazioni geo»](../README.md#operazioni-geo),
+categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
 - `InvalidPlan`: `NonFiniteCoordinate` o `InvalidGeometry` (geometria
@@ -17194,13 +17196,13 @@ voce «Errori»):
   fallire il calcolo.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
-  ripete a ogni valutazione ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+  ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 - Si calcola sempre la matrice intera: nessuna scorciatoia per il singolo
   predicato.
 - Nessuna diagnostica per riga: un errore è il primo in ordine di riga,
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
   previsione del modello geo misurato (voce «Modelli di costo geo»).
 
@@ -17212,8 +17214,8 @@ sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
 toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
 in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
 un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([README, «Precisione
-delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
+delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -17306,7 +17308,7 @@ geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
 primo errore in ordine di riga
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -17346,7 +17348,7 @@ riga. Prima del kernel, su ogni cella non nulla:
   geometrici e la cella è di un altro tipo.
 
 Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
-categoria di `PlenoraError` ([README, «Operazioni geo»](../README.md#operazioni-geo),
+categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
 - `InvalidPlan`: `NonFiniteCoordinate` o `InvalidGeometry` (geometria
@@ -17370,13 +17372,13 @@ voce «Errori»):
   fallire il calcolo.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
-  ripete a ogni valutazione ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+  ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 - Si calcola sempre la matrice intera: nessuna scorciatoia per il singolo
   predicato.
 - Nessuna diagnostica per riga: un errore è il primo in ordine di riga,
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
   previsione del modello geo misurato (voce «Modelli di costo geo»).
 
@@ -17388,8 +17390,8 @@ sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
 toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
 in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
 un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([README, «Precisione
-delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
+delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -17482,7 +17484,7 @@ geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
 primo errore in ordine di riga
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -17522,7 +17524,7 @@ riga. Prima del kernel, su ogni cella non nulla:
   geometrici e la cella è di un altro tipo.
 
 Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
-categoria di `PlenoraError` ([README, «Operazioni geo»](../README.md#operazioni-geo),
+categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
 - `InvalidPlan`: `NonFiniteCoordinate` o `InvalidGeometry` (geometria
@@ -17546,13 +17548,13 @@ voce «Errori»):
   fallire il calcolo.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
-  ripete a ogni valutazione ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+  ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 - Si calcola sempre la matrice intera: nessuna scorciatoia per il singolo
   predicato.
 - Nessuna diagnostica per riga: un errore è il primo in ordine di riga,
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
   previsione del modello geo misurato (voce «Modelli di costo geo»).
 
@@ -17564,8 +17566,8 @@ sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
 toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
 in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
 un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([README, «Precisione
-delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
+delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -17658,7 +17660,7 @@ geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
 primo errore in ordine di riga
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -17698,7 +17700,7 @@ riga. Prima del kernel, su ogni cella non nulla:
   geometrici e la cella è di un altro tipo.
 
 Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
-categoria di `PlenoraError` ([README, «Operazioni geo»](../README.md#operazioni-geo),
+categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
 - `InvalidPlan`: `NonFiniteCoordinate` o `InvalidGeometry` (geometria
@@ -17722,13 +17724,13 @@ voce «Errori»):
   fallire il calcolo.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
-  ripete a ogni valutazione ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+  ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 - Si calcola sempre la matrice intera: nessuna scorciatoia per il singolo
   predicato.
 - Nessuna diagnostica per riga: un errore è il primo in ordine di riga,
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
   previsione del modello geo misurato (voce «Modelli di costo geo»).
 
@@ -17740,8 +17742,8 @@ sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
 toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
 in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
 un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([README, «Precisione
-delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
+delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -17834,7 +17836,7 @@ geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
 primo errore in ordine di riga
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -17874,7 +17876,7 @@ riga. Prima del kernel, su ogni cella non nulla:
   geometrici e la cella è di un altro tipo.
 
 Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
-categoria di `PlenoraError` ([README, «Operazioni geo»](../README.md#operazioni-geo),
+categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
 - `InvalidPlan`: `NonFiniteCoordinate` o `InvalidGeometry` (geometria
@@ -17898,13 +17900,13 @@ voce «Errori»):
   fallire il calcolo.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
-  ripete a ogni valutazione ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+  ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 - Si calcola sempre la matrice intera: nessuna scorciatoia per il singolo
   predicato.
 - Nessuna diagnostica per riga: un errore è il primo in ordine di riga,
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
   previsione del modello geo misurato (voce «Modelli di costo geo»).
 
@@ -17916,8 +17918,8 @@ sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
 toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
 in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
 un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([README, «Precisione
-delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
+delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -18010,7 +18012,7 @@ geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
 primo errore in ordine di riga
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -18050,7 +18052,7 @@ riga. Prima del kernel, su ogni cella non nulla:
   geometrici e la cella è di un altro tipo.
 
 Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
-categoria di `PlenoraError` ([README, «Operazioni geo»](../README.md#operazioni-geo),
+categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
 - `InvalidPlan`: `NonFiniteCoordinate` o `InvalidGeometry` (geometria
@@ -18074,13 +18076,13 @@ voce «Errori»):
   fallire il calcolo.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
-  ripete a ogni valutazione ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+  ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 - Si calcola sempre la matrice intera: nessuna scorciatoia per il singolo
   predicato.
 - Nessuna diagnostica per riga: un errore è il primo in ordine di riga,
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
   previsione del modello geo misurato (voce «Modelli di costo geo»).
 
@@ -18092,8 +18094,8 @@ sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
 toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
 in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
 un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([README, «Precisione
-delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
+delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -18186,7 +18188,7 @@ geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
 primo errore in ordine di riga
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -18226,7 +18228,7 @@ riga. Prima del kernel, su ogni cella non nulla:
   geometrici e la cella è di un altro tipo.
 
 Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
-categoria di `PlenoraError` ([README, «Operazioni geo»](../README.md#operazioni-geo),
+categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
 - `InvalidPlan`: `NonFiniteCoordinate` o `InvalidGeometry` (geometria
@@ -18250,13 +18252,13 @@ voce «Errori»):
   fallire il calcolo.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
-  ripete a ogni valutazione ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+  ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 - Si calcola sempre la matrice intera: nessuna scorciatoia per il singolo
   predicato.
 - Nessuna diagnostica per riga: un errore è il primo in ordine di riga,
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
   previsione del modello geo misurato (voce «Modelli di costo geo»).
 
@@ -18268,8 +18270,8 @@ sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
 toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
 in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
 un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([README, «Precisione
-delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
+delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -18362,7 +18364,7 @@ geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
 primo errore in ordine di riga
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -18402,7 +18404,7 @@ riga. Prima del kernel, su ogni cella non nulla:
   geometrici e la cella è di un altro tipo.
 
 Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
-categoria di `PlenoraError` ([README, «Operazioni geo»](../README.md#operazioni-geo),
+categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
 - `InvalidPlan`: `NonFiniteCoordinate` o `InvalidGeometry` (geometria
@@ -18426,13 +18428,13 @@ voce «Errori»):
   fallire il calcolo.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
-  ripete a ogni valutazione ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+  ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 - Si calcola sempre la matrice intera: nessuna scorciatoia per il singolo
   predicato.
 - Nessuna diagnostica per riga: un errore è il primo in ordine di riga,
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
   previsione del modello geo misurato (voce «Modelli di costo geo»).
 
@@ -18444,8 +18446,8 @@ sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
 toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
 in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
 un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([README, «Precisione
-delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
+delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -18538,7 +18540,7 @@ geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
 primo errore in ordine di riga
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -18578,7 +18580,7 @@ riga. Prima del kernel, su ogni cella non nulla:
   geometrici e la cella è di un altro tipo.
 
 Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
-categoria di `PlenoraError` ([README, «Operazioni geo»](../README.md#operazioni-geo),
+categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
 - `InvalidPlan`: `NonFiniteCoordinate` o `InvalidGeometry` (geometria
@@ -18602,13 +18604,13 @@ voce «Errori»):
   fallire il calcolo.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
-  ripete a ogni valutazione ([README, «Validazione OGC: la ricerca delle
-  auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+  ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
+  auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 - Si calcola sempre la matrice intera: nessuna scorciatoia per il singolo
   predicato.
 - Nessuna diagnostica per riga: un errore è il primo in ordine di riga,
   e il suo indice è una riga dell'ingresso del passo, non della sorgente
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voce «Geo senza diagnostica per riga»). Il costo in memoria è una
   previsione del modello geo misurato (voce «Modelli di costo geo»).
 
@@ -18620,8 +18622,8 @@ sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
 toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
 in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
 un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([README, «Precisione
-delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
+delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -18689,7 +18691,7 @@ datum lungo un percorso di trasformazioni EPSG, proiezione diretta. Ogni
 lato si densifica perché resti entro mezza precisione dall'immagine
 esatta del lato sorgente; tipo e struttura di ogni geometria non
 cambiano. Il quadro completo è in
-[README, «Riproiezione»](../README.md#riproiezione).
+[«Riproiezione»](riproiezione.md#riproiezione).
 
 #### Parametri
 
@@ -18706,7 +18708,7 @@ quando ogni percorso ammesso sta già entro 1 cm, una griglia che nessun
 percorso ammesso usa, `convenzione_wgs84_etrs89` (con l'uno o l'altro
 valore) su una coppia che non passa da ETRS89 to WGS 84 (1). I percorsi
 imposti da `trasformazioni` restano soggetti alla regola dell'accuratezza
-([README, «La regola dell'accuratezza»](../README.md#la-regola-dellaccuratezza)).
+([Riproiezione, «La regola dell'accuratezza»](riproiezione.md#la-regola-dellaccuratezza)).
 L'analisi non legge i file delle griglie: li legge l'esecuzione.
 
 #### Schema
@@ -18726,7 +18728,7 @@ normalizzato del target. Gli altri metadati del campo restano.
 (`riproiezione::reproject_batches`) con i parametri letti in validazione:
 ogni cella non nulla si decodifica, si riproietta e si ricodifica; una
 cella nulla resta nulla; le altre colonne non cambiano
-([README, «Operazioni geo»](../README.md#operazioni-geo)). Ogni geometria usa un solo percorso fra i datum, il primo
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)). Ogni geometria usa un solo percorso fra i datum, il primo
 dell'ordine di preferenza la cui area d'uso contiene tutti i suoi punti.
 
 #### Ordine
@@ -18789,32 +18791,32 @@ riga in ordine di riga, senza diagnostica per riga.
 
 - Il cambio di datum vale quanto l'accuratezza EPSG del percorso: oltre 1
   cm solo con `accuratezza_accettata_m` dichiarata
-  ([README, «`geo.reproject`: il cambio di datum vale quanto l'accuratezza accettata»](../README.md#georeproject-il-cambio-di-datum-vale-quanto-laccuratezza-accettata));
+  ([Limiti dichiarati, «`geo.reproject`: il cambio di datum vale quanto l'accuratezza accettata»](limiti.md#georeproject-il-cambio-di-datum-vale-quanto-laccuratezza-accettata));
   WGS 84 ed ETRS89 sono equivalenti per convenzione
-  ([README, «WGS 84 = ETRS89 per convenzione»](../README.md#wgs-84--etrs89-per-convenzione)).
+  ([Riproiezione, «WGS 84 = ETRS89 per convenzione»](riproiezione.md#wgs-84--etrs89-per-convenzione)).
 - Solo i CRS della tabella integrata
-  ([README, «CRS integrati»](../README.md#crs-integrati)); aree d'uso come
+  ([«CRS integrati»](crs.md#crs-integrati)); aree d'uso come
   riquadri, accuratezze sommate, griglie non verificate contro il
   registro, densificazione a campioni e gli altri limiti in
-  [README, «Limiti dichiarati della riproiezione»](../README.md#limiti-dichiarati-della-riproiezione).
+  [Riproiezione, «Limiti dichiarati della riproiezione»](riproiezione.md#limiti-dichiarati-della-riproiezione).
 - Nel runner un errore non ha diagnostica per riga e il costo in memoria è
   una previsione dalle misure
-  ([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+  ([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
 La matematica resta entro la precisione del target: proiezioni e
 trasformazioni entro circa `1e-8` m da PROJ
-([README, «Oracolo»](../README.md#oracolo)), lati densificati entro mezza
+([Riproiezione, «Oracolo»](riproiezione.md#oracolo)), lati densificati entro mezza
 precisione del target, cioè 5 mm a terra (per un target geografico metà
 di 1 cm in gradi all'equatore;
-[README, «Densificazione dei lati»](../README.md#densificazione-dei-lati)).
+[Riproiezione, «Densificazione dei lati»](riproiezione.md#densificazione-dei-lati)).
 Stesso CRS, o CRS che differiscono solo per l'ordine d'autorità degli
 assi: coordinate invariate al bit. Il cambio di datum invece vale quanto
 l'accuratezza del percorso, che oltre 1 cm si accetta solo dichiarandola
 (sopra): è una garanzia indebolita per scelta esplicita
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -18909,7 +18911,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 1:1: il runner chiama il kernel (`extended::rotate_about`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -18933,7 +18935,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi il kernel rende `ExtendedError`, che il runner porta in `Internal`
 per `ValidazioneNonConclusa` e `CalcoloNonConcluso`, in `InvalidPlan`
@@ -18951,12 +18953,12 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Nessuna rotazione è esatta, nemmeno di 90 o 180 gradi: il coseno di 90
 gradi in `f64` vale circa `6.1e-17`, non zero (vedi l'esempio). Le
 coordinate d'uscita non si confrontano con il dominio di validità del CRS
-([README, «CRS integrati»](../README.md#crs-integrati)).
+([«CRS integrati»](crs.md#crs-integrati)).
 
 #### Precisione
 
@@ -18966,7 +18968,7 @@ applica come in [`geo.affine_transform`](#geoaffine_transform), con
 errore di pochi ulp dei termini. In tutto, sotto 1 cm finché coordinate
 e centro stanno sotto circa `1e13` unità del CRS, ben oltre ogni dominio
 dei CRS integrati. Nessun rifiuto `PrecisionInsufficient`
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -19056,7 +19058,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 1:1: il runner chiama il kernel (`extended::scale_about`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -19080,7 +19082,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi il kernel rende `ExtendedError`, che il runner porta in `Internal`
 per `ValidazioneNonConclusa` e `CalcoloNonConcluso`, in `InvalidPlan`
@@ -19100,10 +19102,10 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Le coordinate d'uscita non si confrontano con il dominio di validità del
-CRS ([README, «CRS integrati»](../README.md#crs-integrati)).
+CRS ([«CRS integrati»](crs.md#crs-integrati)).
 
 #### Precisione
 
@@ -19112,7 +19114,7 @@ senza fusione, errore di pochi ulp di `|x_factor x| + |x_origin (1 -
 x_factor)|`, sotto 1 cm finché quei termini stanno sotto circa `3e13`
 unità del CRS; esatto con fattori, origine e coordinate interi. Nessun
 rifiuto `PrecisionInsufficient`
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -19176,7 +19178,7 @@ righe, la lunghezza condivisa totale e i tratti, sul modello di
 
 La conversione di colonna è `extensions3::shared_paths_rows`, che il
 runner chiama su tutta la colonna con i default della tabella sotto
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Parametri
 
@@ -19230,8 +19232,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -19250,8 +19252,8 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
 #### Limiti e deviazioni
 
 Solo tratti esattamente collineari: nessuna tolleranza di distanza, nessuna
-fusione dei segmenti consecutivi in una linea sola. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+fusione dei segmenti consecutivi in una linea sola. Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+«Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
@@ -19261,7 +19263,7 @@ Esatta sulla geometria: la collinearità si decide con il predicato
 vertici d'ingresso. Solo le lunghezze (`shared_length`, e il confronto con
 `tolerance` e `min_length`) si calcolano in `f64`. Nessuna griglia, nessun
 controllo di precisione
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -19358,7 +19360,7 @@ passano invariati.
 
 1:1: il runner chiama il kernel (`operations::simplify_with_policy`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -19386,7 +19388,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria (`OperationError`, che il runner porta in `PlenoraError`:
 `Internal` per `Internal`, `ValidazioneNonConclusa` e
@@ -19414,7 +19416,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 `preserve_topology` non è `TopologyPreservingSimplifier` di GEOS
 (`ST_SimplifyPreserveTopology`), che usa una distanza: qui la soglia è
@@ -19434,7 +19436,7 @@ dal percorso scalato (coordinate oltre `1e150` o sotto `1e-150` in modulo,
 fuori da ogni dominio di un CRS reale), dove passano per una divisione e
 una moltiplicazione. Lo scarto dalla forma originale è quello chiesto con
 la soglia, non un errore di precisione
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -19443,7 +19445,7 @@ O(n²) nel peggiore, con una seconda traversata dello stesso costo che
 verifica le distanze; `preserve_topology` O(n log n) nel caso tipico (coda di priorità e
 indice spaziale di `geo`). Più la validazione OGC dell'ingresso e
 dell'uscita (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 
 #### Memoria
 
@@ -19497,8 +19499,8 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 Join spaziale interno: abbina ogni riga della sinistra alle righe della
 destra la cui geometria soddisfa `predicate` con la sua, e dà una riga per
 coppia, con la posizione della riga destra in `__right_index` (kernel
-`spatial_join::spatial_join_nullable_validated`, [README, «Operazioni
-geo»](../README.md#operazioni-geo)).
+`spatial_join::spatial_join_nullable_validated`, [Runner, «Operazioni
+geo»](runner.md#operazioni-geo)).
 
 #### Parametri
 
@@ -19557,7 +19559,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -19580,15 +19582,15 @@ passo geo indicata fra parentesi:
   left più larga (l'uscita ripete una riga di left per coppia), non
   starebbero nel margine di memoria del passo
   (budget meno byte vivi); stesso conteggio e stessa precedenza del limite
-  di righe, che vince se scatta prima (guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  di righe, che vince se scatta prima (guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;
 - `IndexOverflow` (`InvalidPlan`): numero di righe oltre `u64`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 #### Limiti e deviazioni
@@ -19598,8 +19600,8 @@ abbinamento, e non c'è una variante che le tenga con valori nulli. Gli
 attributi della destra non entrano nell'uscita, a differenza di `sjoin` di
 GeoPandas: si ricollegano con `__right_index`. Le coppie dipendono dai
 dati: il modello di costo non le prevede, e le limita solo il limite di
-righe dell'arco ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo
+righe dell'arco ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo
 geo»).
 
 #### Precisione
@@ -19607,9 +19609,9 @@ geo»).
 Nessun calcolo di geometrie e nessuna griglia: i predicati di `geo` si
 valutano sulle coordinate `f64` d'ingresso, senza tolleranza, e la regola
 di 1 cm non sposta nulla. Due geometrie a meno di 1 cm si toccano o no
-secondo le loro coordinate esatte ([README, «Precisione delle operazioni
+secondo le loro coordinate esatte ([Limiti dichiarati, «Precisione delle operazioni
 geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «Feature d'ingresso più vicine della precisione»).
 
 #### Complessità
@@ -19710,7 +19712,7 @@ contratto (`sorted_by`, `row_count`).
 1:1: il runner chiama la conversione di colonna dei kernel
 (`extensions2::snap_column`) sulla colonna intera, con il riferimento letto
 una volta in validazione. Una cella nulla resta nulla. Con un riferimento
-senza vertici ogni geometria esce invariata ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+senza vertici ogni geometria esce invariata ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -19735,7 +19737,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi la conversione di colonna, che rende già `PlenoraError` (vince la
 prima cella che fallisce in ordine di riga, senza diagnostica per riga):
@@ -19752,7 +19754,7 @@ prima cella che fallisce in ordine di riga, senza diagnostica per riga):
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 A differenza di `ST_Snap` di PostGIS e dello snap di GEOS, si agganciano
 solo vertici a vertici: i vertici non vanno sui lati del riferimento, e i
@@ -19768,7 +19770,7 @@ riferimento, gli altri restano quelli d'ingresso. Solo la decisione
 «distanza `<= tolerance`» si calcola in `f64` (`hypot`): su un vertice a
 distanza pari a `tolerance` entro l'arrotondamento può cadere da una parte
 o dall'altra
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -19855,7 +19857,7 @@ contratto (`sorted_by`, `row_count`) restano.
 1:1: la geometria di ogni riga diventa quella agganciata alla griglia. Il
 runner chiama il kernel (`extended_algorithms::snap_to_grid`) su ogni
 cella non nulla, in parallelo; una cella nulla resta nulla
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -19880,7 +19882,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi il kernel rende `ExtendedAlgorithmError`, che il runner porta in
 `Internal` per `Internal`, `ValidazioneNonConclusa` e
@@ -19899,7 +19901,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 - A differenza di `ST_SnapToGrid` di PostGIS, che toglie i vertici
@@ -19914,8 +19916,8 @@ voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Lo spostamento è voluto e dichiarato dal parametro: ogni vertice si sposta
 fino a `grid_size * sqrt(2) / 2`, entro 1 cm solo se `grid_size` è sotto
 circa 1,4 cm; oltre, la regola di 1 cm non si applica a questa
-operazione, perché lo spostamento è la sua definizione ([README,
-«Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+operazione, perché lo spostamento è la sua definizione ([Limiti dichiarati,
+«Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Il nodo è il prodotto `round(x / grid_size) * grid_size` arrotondato in
 `f64`: con un passo non rappresentabile esattamente (0,1) è il `f64` più
 vicino al multiplo, non il multiplo esatto. Nessun rifiuto
@@ -19924,9 +19926,9 @@ vicino al multiplo, non il multiplo esatto. Nessun rifiuto
 #### Complessità
 
 O(n) per geometria, con `n` le coordinate, più la validazione OGC
-dell'ingresso e dell'uscita (O(n²) nel caso peggiore, [README,
+dell'ingresso e dell'uscita (O(n²) nel caso peggiore, [Limiti dichiarati,
 «Validazione OGC: la ricerca delle auto-intersezioni non è quella di `geo`,
-il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(n).
 
 #### Memoria
@@ -19989,8 +19991,8 @@ punti in cui la lama la tocca, entro `tolerance`.
 La lama arriva dalla config (`other_wkb`), nello stesso CRS della colonna.
 L'esecuzione Arrow (`rust_backend::arrow::split_batches`) riceve una lama
 per riga, allineata alle sorgenti: il runner la chiama su tutta la tabella
-con la stessa lama su ogni riga ([README, «Operazioni
-geo»](../README.md#operazioni-geo)).
+con la stessa lama su ogni riga ([Runner, «Operazioni
+geo»](runner.md#operazioni-geo)).
 
 #### Parametri
 
@@ -20044,8 +20046,8 @@ In validazione (analisi del contratto):
 - `Crs`: colonna senza CRS risolto o CRS non proiettato; coordinate della
   lama fuori dal dominio del CRS.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -20071,8 +20073,8 @@ Poi l'esecuzione Arrow (vince la prima riga che fallisce):
 
 - Lo split poligonale gira sul kernel del laboratorio, qualificato contro
   GEOS per equivalenza semantica
-  ([README, «`geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a
-  GEOS verificata, non dimostrata»](../README.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata));
+  ([Limiti dichiarati, «`geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a
+  GEOS verificata, non dimostrata»](limiti.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata));
   lo split lineare è il codice precedente al porting.
 - La scelta delle facce usa un campione interno e un test pari-dispari con
   il lato del punto deciso in modo esatto, non `point_on_surface` e `covers`
@@ -20082,15 +20084,15 @@ Poi l'esecuzione Arrow (vince la prima riga che fallisce):
   interno, anche facce fuori dalla sorgente e residui scartati, non solo le
   parti tenute; il limite di coordinate vale per ciascun ingresso e per la
   somma.
-- Elenco completo: [README, «Differenze da GEOS»](../README.md#differenze-da-geos).
-- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+- Elenco completo: [Operazioni topologiche, «Differenze da GEOS»](topologia.md#differenze-da-geos).
+- Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+  «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
 Sorgenti poligonali
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
 
 - guardia di spaziatura delle coordinate e noding del polygonize interno:
   ogni incrocio arrotondato entro `p / 5` dai segmenti che divide, al più
@@ -20120,7 +20122,7 @@ test fra segmenti della sorgente e primitive della lama, entro 100.000.000.
 Le righe si calcolano una alla volta, in ordine: memoria O(n) per la riga
 più le parti prodotte; l'uscita si costruisce in un batch solo. Tempi
 misurati e oracoli nel
-[README, «`geo.make_valid`, `geo.polygonize`, `geo.split`»](../README.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata).
+[Limiti dichiarati, «`geo.make_valid`, `geo.polygonize`, `geo.split`»](limiti.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata).
 
 #### Memoria
 
@@ -20244,8 +20246,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -20265,10 +20267,10 @@ Poi il calcolo per cella (messaggi con prefisso `geo.subdivide:`):
 
 Le parti di un poligono non sono uniche: due versioni di `i_overlay`
 possono scegliere tagli diversi, con la stessa area totale
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «Hazard»). Il taglio si ferma a 32 livelli con un errore, non con parti
-sopra la soglia. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+sopra la soglia. Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+«Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
@@ -20282,7 +20284,7 @@ per `p`, il taglio non si esegue (`PrecisionInsufficient`). `p` è 1 cm a
 terra nelle unità del CRS della colonna (`Precision::from_crs`). Le foglie non
 sono confrontate con il poligono di partenza: sotto la precisione parti più
 sottili di 1 cm possono fondersi o sparire
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -20344,8 +20346,8 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Sostituisce la geometria della sinistra con le parti che stanno in uno
 solo dei due lati, `(sinistra \ destra) ∪ (destra \ sinistra)`, calcolate
-dal kernel `topology::boolean_operation_validated` ([README, «Operazioni
-geo»](../README.md#operazioni-geo)). Lavora solo su `Polygon` e
+dal kernel `topology::boolean_operation_validated` ([Runner, «Operazioni
+geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
 #### Parametri
@@ -20392,7 +20394,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -20418,16 +20420,16 @@ del risultato), nella categoria del passo geo indicata fra parentesi:
   validazione OGC o l'overlay di `geo` non ha concluso.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 #### Limiti e deviazioni
 
 Solo poligoni: una geometria lineare o puntuale si rifiuta
 (`UnsupportedGeometry`). Nessun controllo a posteriori del risultato contro
-gli ingressi ([README, «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+gli ingressi ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Precisione
 
@@ -20437,18 +20439,18 @@ solo overlay di `i_overlay` su interi `i64`, con la griglia controllata
 prima del calcolo sull'ingombro dei due operandi. Se lo spostamento a
 priori supera mezzo centimetro, o le coordinate sono troppo rade per il
 centimetro, `PrecisionInsufficient` e nessun calcolo. Parti più sottili di
-1 cm possono sparire o fondersi senza errore; vedi [README, «Precisione
+1 cm possono sparire o fondersi senza errore; vedi [Limiti dichiarati, «Precisione
 delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 
 #### Complessità
 
 Per coppia l'overlay a scansione di `i_overlay`, di norma O((v + k) log v)
 con `v` i vertici dei due operandi e `k` gli incroci fra i lati, più la
 validazione OGC di ingressi e risultato (di norma O(v log v), nel caso
-peggiore O(v²): [README, «Validazione OGC: la
+peggiore O(v²): [Limiti dichiarati, «Validazione OGC: la
 ricerca delle auto-intersezioni non è quella di `geo`, il verdetto
-sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(v + k).
 
 #### Memoria
@@ -20547,7 +20549,7 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: campi sconosciuti nella config, `output_column` vuoto o
   di soli spazi.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -20574,20 +20576,20 @@ Nessun SRID nel testo (non è EWKT) e nessuna Z/M. I numeri non si
 arrotondano: un valore grande o piccolo si scrive per intero
 (`1e21` diventa `1000000000000000000000`), dove `ST_AsText` di PostGIS
 limita le cifre significative. Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
 
 Esatta: ogni coordinata si scrive con le cifre che la rileggono bit per bit
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
 Per geometria di n vertici: tempo O(n) e memoria O(n) per il testo, più la
 validazione OGC dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel
 peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 
 #### Memoria
 
@@ -20661,7 +20663,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 1:1: il runner chiama il kernel (`extended::translate`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
 
@@ -20685,7 +20687,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi il kernel (`extended::translate`) rende `ExtendedError`, che il
 runner porta in `Internal` per `ValidazioneNonConclusa` e
@@ -20704,10 +20706,10 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Le coordinate d'uscita non si confrontano con il dominio di validità del
-CRS ([README, «CRS integrati»](../README.md#crs-integrati)).
+CRS ([«CRS integrati»](crs.md#crs-integrati)).
 
 #### Precisione
 
@@ -20715,7 +20717,7 @@ Un arrotondamento per coordinata (`1 x + 0 y` è esatto): l'errore è al
 più mezzo ulp del risultato, sotto 1 cm per coordinate d'uscita sotto
 circa `7e13` unità del CRS. Esatto quando la somma è rappresentabile, come
 con coordinate e offset interi. Nessun rifiuto `PrecisionInsufficient`
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
@@ -20773,8 +20775,8 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Sostituisce la geometria della sinistra con la sua unione con la geometria
 della destra, `sinistra ∪ destra`, calcolata dal kernel
-`topology::boolean_operation_validated` ([README, «Operazioni
-geo»](../README.md#operazioni-geo)). Lavora solo su `Polygon` e
+`topology::boolean_operation_validated` ([Runner, «Operazioni
+geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
 #### Parametri
@@ -20821,7 +20823,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -20847,8 +20849,8 @@ del risultato), nella categoria del passo geo indicata fra parentesi:
   validazione OGC o l'overlay di `geo` non ha concluso.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 #### Limiti e deviazioni
@@ -20856,9 +20858,9 @@ diagnostica per riga»).
 Solo poligoni: una geometria lineare o puntuale, da un lato o dall'altro,
 si rifiuta (`UnsupportedGeometry`), dove GEOS e PostGIS renderebbero una
 collezione. Nessun
-controllo a posteriori del risultato contro gli ingressi ([README,
+controllo a posteriori del risultato contro gli ingressi ([Limiti dichiarati,
 «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Precisione
 
@@ -20868,18 +20870,18 @@ solo overlay di `i_overlay` su interi `i64`, con la griglia controllata
 prima del calcolo sull'ingombro dei due operandi. Se lo spostamento a
 priori supera mezzo centimetro, o le coordinate sono troppo rade per il
 centimetro, `PrecisionInsufficient` e nessun calcolo. Parti più sottili di
-1 cm possono sparire o fondersi senza errore; vedi [README, «Precisione
+1 cm possono sparire o fondersi senza errore; vedi [Limiti dichiarati, «Precisione
 delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 
 #### Complessità
 
 Per coppia l'overlay a scansione di `i_overlay`, di norma O((v + k) log v)
 con `v` i vertici dei due operandi e `k` gli incroci fra i lati, più la
 validazione OGC di ingressi e risultato (di norma O(v log v), nel caso
-peggiore O(v²): [README, «Validazione OGC: la
+peggiore O(v²): [Limiti dichiarati, «Validazione OGC: la
 ricerca delle auto-intersezioni non è quella di `geo`, il verdetto
-sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(v + k).
 
 #### Memoria
@@ -20975,7 +20977,7 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: campi sconosciuti nella config, `output_column` vuoto o
   di soli spazi.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -20999,20 +21001,20 @@ Dal kernel (`OperationError`), per geometria:
 
 Il conteggio è quello di `ST_NPoints` di PostGIS: le coordinate ripetute
 contano tutte. Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 #### Precisione
 
 Esatta: è un conteggio
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
 Per geometria di n vertici: tempo O(n) per il conteggio, più la
 validazione OGC dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel
 peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
 #### Memoria
@@ -21114,8 +21116,8 @@ config, CRS):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -21148,23 +21150,23 @@ punti distinti, punti tutti collineari), `PrecisionInsufficient` e
   indipendente dalla rotazione della faccia: rispetto all'inserimento
   incrementale un vertice può differire di qualche ulp, e con quattro o più
   punti cocircolari i circocentri vengono da triangoli diversi; il caso
-  peggiore resta quadratico ([README, «`geo.delaunay` e `geo.voronoi`:
-  triangolazione caricata in blocco»](../README.md#geodelaunay-e-geovoronoi-triangolazione-caricata-in-blocco)).
+  peggiore resta quadratico ([Limiti dichiarati, «`geo.delaunay` e `geo.voronoi`:
+  triangolazione caricata in blocco»](limiti.md#geodelaunay-e-geovoronoi-triangolazione-caricata-in-blocco)).
 - Solo `Point`: un `MultiPoint` è `ExpectedPoint`. `ST_VoronoiPolygons` di
   PostGIS prende invece una geometria e rende una collezione di celle.
 - Punti tutti collineari sono un errore, non celle a striscia.
 - Ritaglio fisso sul rettangolo allargato della metà del lato maggiore:
   nessun parametro d'inviluppo.
-- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+- Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+  «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 #### Precisione
 
 La precisione `p` è 1 cm a terra nelle unità del CRS della colonna: il
 runner la ricava con `Precision::from_crs` e il kernel la riceve come
-argomento ([README, «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+argomento ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 I vertici interni delle celle sono circocentri calcolati con un maggiorante
 del loro errore d'arrotondamento: oltre `p / 4` l'operazione si rifiuta
 (`VerticeMalCondizionato`; succede con triangoli molto sottili sul bordo
@@ -21242,7 +21244,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 Aggiunge alla sinistra una colonna booleana che dice se la sua geometria
 sta dentro almeno una geometria della destra (kernel
 `analysis::within_indexes_validated`, predicato `within` del join
-spaziale; [README, «Operazioni geo»](../README.md#operazioni-geo)).
+spaziale; [Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 «Dentro» è il `contains` di `geo` letto dalla destra: una geometria sul
 solo bordo, come un punto sul lato di un poligono, non è dentro.
 
@@ -21290,7 +21292,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -21309,15 +21311,15 @@ categoria del passo geo indicata fra parentesi:
   confermate superano il limite di righe dell'arco; conta ogni destra che
   contiene una sinistra, anche se ne basta una;
 - `MargineMemoria` (`ResourceLimit`): le stesse coppie non starebbero nel
-  margine di memoria del passo (64 byte ciascuna; guardia che riduce il rischio, non un tetto garantito: [README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
+  margine di memoria del passo (64 byte ciascuna; guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`, `Internal` (`Internal`):
   l'indice o il predicato di `geo` non ha concluso, o un'invariante
   interna violata;
 - `IndexOverflow` (`InvalidPlan`): un numero di righe non entra in `u64`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 #### Limiti e deviazioni
@@ -21331,9 +21333,9 @@ può superarlo anche se la colonna ha una riga per riga sinistra.
 Nessun calcolo di geometrie e nessuna griglia: il predicato di `geo` si
 valuta sulle coordinate `f64` d'ingresso, senza tolleranza, e la regola di
 1 cm non sposta nulla. Una geometria a meno di 1 cm dal bordo è dentro o
-fuori secondo le sue coordinate esatte ([README, «Precisione delle
+fuori secondo le sue coordinate esatte ([Limiti dichiarati, «Precisione delle
 operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «Feature d'ingresso più vicine della precisione»).
 
 #### Complessità

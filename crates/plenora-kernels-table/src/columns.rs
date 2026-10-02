@@ -1,3 +1,10 @@
+//! Operazioni sulle colonne: `table.drop_columns`, `table.select_columns`,
+//! `table.align_schema`, `table.rename`, `table.reorder_columns`,
+//! `table.concat_columns`, `table.split_column`.
+//!
+//! Semantica, schema, ordine ed errori per operazione: le schede
+//! `docs/schede/<id>.md`, raccolte in `docs/operazioni.md`.
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -1448,7 +1455,7 @@ mod tests {
         assert_eq!(decimale.value(0), -50_000_000_000_i128);
     }
 
-    /// Regressione (revisione Codex): il `default` `Timestamp` passa dal
+    /// Regressione: il `default` `Timestamp` passa dal
     /// lettore centrale: secondo intercalare, frazione oltre il nanosecondo e
     /// parte sotto il millisecondo si rifiutano; senza offset anche.
     #[test]

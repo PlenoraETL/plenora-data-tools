@@ -56,7 +56,7 @@ fn quadrato(x: f64, y: f64, lato: f64, orario: bool, inizio: usize) -> LineStrin
     LineString::new(anello)
 }
 
-/// Offset, lato e area attesa: il caso della revisione, traslazioni grandi
+/// Offset, lato e area attesa: i casi limite, traslazioni grandi
 /// di segno diverso, aree minuscole.
 fn casi() -> Vec<(f64, f64, f64)> {
     let mut casi = Vec::new();

@@ -24,7 +24,7 @@
 //! Nessun valore dei dati esce: solo nomi, tipi, conteggi, byte e tempi.
 //! Le colonne entrano nel piano come il lettore le rende, `Timestamp` di
 //! ogni unita' compreso: i kernel tabellari le leggono dal valore nativo
-//! (README, «Colonne temporali e formati di data»).
+//! (docs/limiti.md, «Colonne temporali e formati di data»).
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;

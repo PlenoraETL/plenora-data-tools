@@ -839,7 +839,7 @@ pub fn strip_decided_crs_declarations(metadata: &mut Metadata) {
 /// del CRS, `schema` per tutte le altre.
 ///
 /// Fino a questo ciclo questi errori erano `InvalidPlan`; il cambio di
-/// categoria è una rottura dichiarata (README, «Metadati Arrow»).
+/// categoria è una rottura dichiarata (docs/metadati-arrow.md, «Metadati Arrow»).
 pub(crate) fn errore_di_metadato(key: &str, messaggio: String) -> PlenoraError {
     if CRS_KEYS_REPLACED_BY_DECISION.contains(&key) {
         PlenoraError::Crs(messaggio)

@@ -199,8 +199,8 @@ def test_identita_e_tipi_di_colonna() -> None:
         attesa = tabella.column(campo.name)
         trovata = uscita.column(campo.name)
         if campo.type == pa.large_string():
-            # Il runner porta LargeUtf8 a Utf8 all'ingresso (README della
-            # radice, «Metadati Arrow»): stessi valori, tipo Utf8.
+            # Il runner porta LargeUtf8 a Utf8 all'ingresso
+            # (docs/metadati-arrow.md): stessi valori, tipo Utf8.
             assert trovata.type == pa.string()
             assert trovata.equals(attesa.cast(pa.string()))
         else:

@@ -36,7 +36,7 @@
 //! della stessa allocazione esterna con inizi diversi si sommano entrambe,
 //! la parte fuori dalle viste non si conta; con lo stesso inizio si tiene la
 //! maggiore. L'API pubblica di Arrow non distingue le due deallocazioni, e
-//! il limite è dichiarato nel README di `plenora-data-tools2` («Runner»).
+//! il limite è dichiarato in docs/runner.md («Limiti dichiarati del runner»).
 
 use std::collections::BTreeMap;
 

@@ -35,7 +35,7 @@ in più aggregazioni; altrimenti `column`. Le chiavi di gruppo e i nomi
 delle aggregazioni (o `count` senza aggregazioni) sono tutti distinti: due
 aggregazioni con lo stesso nome, o un nome uguale a una chiave (anche una
 colonna aggregata senza `alias` che è anche chiave), si rifiutano
-([README, «Nomi delle colonne d'uscita»](../README.md#nomi-delle-colonne-duscita)).
+([Limiti dichiarati, «Nomi delle colonne d'uscita»](limiti.md#nomi-delle-colonne-duscita)).
 
 Funzioni:
 
@@ -103,7 +103,7 @@ in decimale. Quindi non è l'ordine dei valori: `"sud"` (`3:sud`) precede
 `"nord"` (`4:nord`), `9` precede `-1`, `-1` precede `-2` e `10`, e un
 testo di 10 byte precede uno di 1 byte (`10:` precede `1:`). Una chiave
 `timestamp` non ha come testo la sua resa RFC 3339 ma il suo istante, a
-larghezza fissa ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)):
+larghezza fissa ([Limiti dichiarati, «Colonne temporali e formati di data»](limiti.md#colonne-temporali-e-formati-di-data)):
 i suoi gruppi escono in ordine cronologico, in ogni unità e fuso. L'ordine
 è deterministico e non dipende dall'hash.
 
@@ -140,11 +140,11 @@ testo con più cifre di quante un `f64` ne tenga si arrotondano senza errore
 (con `distinct` i distinti si decidono comunque sul valore esatto); sulle
 colonne intere media e dispersione arrotondano alla fine del calcolo
 esatto, e
-`quantile` interpola i valori arrotondati ([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)). Le strutture di chiavi e gruppi
+`quantile` interpola i valori arrotondati ([Limiti dichiarati, «Somme intere esatte e tipi delle riduzioni»](limiti.md#somme-intere-esatte-e-tipi-delle-riduzioni)). Le strutture di chiavi e gruppi
 non sono contabilizzate
-([README, «Memoria delle chiavi dei kernel in memoria non governata»](../README.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
+([Limiti dichiarati, «Memoria delle chiavi dei kernel in memoria non governata»](limiti.md#memoria-delle-chiavi-dei-kernel-in-memoria-non-governata));
 l'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 
 ### Complessità
 

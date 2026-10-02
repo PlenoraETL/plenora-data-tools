@@ -1,4 +1,4 @@
-//! Il margine di memoria passato ai kernel geo dal runner (README, «Modelli
+//! Il margine di memoria passato ai kernel geo dal runner (docs/runner.md, «Modelli
 //! di costo geo»): su un profilo avversario che il modello non copre (ogni
 //! punto in ogni poligono, righe di left larghe) il passo si ferma nel
 //! kernel, con un `ResourceLimit` che nomina il margine, prima di allocare

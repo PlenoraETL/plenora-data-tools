@@ -1,10 +1,10 @@
 //! Stime di memoria su batch letti da Arrow IPC.
 //!
 //! In un batch letto da IPC tutte le colonne sono viste dello stesso buffer
-//! del messaggio, e ogni buffer dichiara come capacitÃ  l'intero messaggio.
-//! Le stime contavano quella capacitÃ  una volta per buffer: circa dieci
+//! del messaggio, e ogni buffer dichiara come capacità l'intero messaggio.
+//! Le stime contavano quella capacità una volta per buffer: circa dieci
 //! volte la memoria reale su una tabella larga. La misura del budget del
-//! runner Ã¨ il maggiore fra `byte_vivi` (ogni allocazione una volta) e
+//! runner è il maggiore fra `byte_vivi` (ogni allocazione una volta) e
 //! `byte_dati` (il costo di una copia): qui si verifica su batch letti da
 //! IPC e su colonne che sono lo stesso array.
 
@@ -91,13 +91,13 @@ fn la_stima_di_un_batch_letto_da_ipc_conta_il_messaggio_una_volta() {
         .iter()
         .map(|colonna| plenora_core::memoria::byte_viste(colonna.as_ref()))
         .sum();
-    // Il messaggio contiene i dati di tutte le colonne piÃ¹ il padding.
+    // Il messaggio contiene i dati di tutte le colonne più il padding.
     assert!(stima >= dati, "{stima} < {dati}");
     assert!(stima <= dati + dati / 10, "{stima} oltre i dati {dati}");
     // La somma per colonna lo contava una volta per buffer.
     assert!(vecchia_stima(&letta) > 5 * stima);
     // Un batch costruito in memoria: stessa misura dell'originale, a meno
-    // della capacitÃ  inutilizzata dei builder.
+    // della capacità inutilizzata dei builder.
     assert!(stima_runner(&originale) >= dati);
 }
 
@@ -108,7 +108,7 @@ fn le_stime_per_riga_non_dipendono_da_come_il_batch_e_stato_letto() {
     for (colonna_originale, colonna_letta) in originale.columns().iter().zip(letta.columns()) {
         let prima = column_bytes_per_row(colonna_originale.as_ref());
         let dopo = column_bytes_per_row(colonna_letta.as_ref());
-        // Il padding IPC a 8 byte puÃ² aggiungere al piÃ¹ un byte per riga.
+        // Il padding IPC a 8 byte può aggiungere al più un byte per riga.
         assert!(dopo <= prima + 1, "{prima} -> {dopo}");
         assert!(prima <= dopo + 1, "{prima} -> {dopo}");
     }

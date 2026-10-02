@@ -58,7 +58,7 @@
 //! un R-tree dei segmenti non la migliora (misurato su stelle da 2 000 e
 //! 10 000 vertici: stessi tempi, e 5-10 volte piu' lento su cerchi e
 //! pettini), perche' le coppie di rettangoli che si toccano sono gia'
-//! quadratiche. Vedi `README.md`, sezione «Limiti dichiarati».
+//! quadratiche. Vedi docs/limiti.md, «Validazione OGC».
 
 use geo::algorithm::validation::{
     CoordIndex, GeometryIndex, InvalidGeometry, InvalidGeometryCollection, InvalidMultiPolygon,

@@ -1,4 +1,4 @@
-//! Confine di lettura (README, «Confine di lettura»): file troncati,
+//! Confine di lettura (docs/file.md, «Confine di lettura»): file troncati,
 //! corrotti, con lunghezze dichiarate enormi o metadati oltre i limiti
 //! diventano errori espliciti; i limiti si applicano. Non si provano file
 //! Parquet costruiti per far allocare `parquet` oltre misura: quello è un

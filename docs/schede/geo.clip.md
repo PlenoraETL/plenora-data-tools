@@ -3,8 +3,8 @@
 Ritaglia ogni geometria della sinistra sulla maschera data dalla destra:
 tutte le geometrie della destra si uniscono in una sola maschera, e ogni
 riga della sinistra diventa la sua intersezione con la maschera (kernel
-`topology::clip_to_mask_validated`; [README, «Operazioni
-geo»](../README.md#operazioni-geo)). Lavora solo su `Polygon` e
+`topology::clip_to_mask_validated`; [Runner, «Operazioni
+geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon`.
 
 ### Parametri
@@ -50,7 +50,7 @@ In validazione (analisi del contratto):
   lineare), CRS dei due lati non equivalenti.
 
 In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
-([README, «Operazioni geo»](../README.md#operazioni-geo)):
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)):
 
 - `Schema`: il contratto di un lato dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo;
@@ -80,17 +80,17 @@ Il runner verifica che il kernel renda un risultato per ogni riga non
 nulla, altrimenti `Internal`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
-diagnostica per riga ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voce «Geo senza
+diagnostica per riga ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voce «Geo senza
 diagnostica per riga»).
 
 ### Limiti e deviazioni
 
 Solo poligoni: un ritaglio che si riduce a linee o punti è vuoto, quindi
 la riga resta con la geometria nulla. Nessun controllo a posteriori del risultato
-contro gli ingressi ([README, «Precisione delle operazioni geografiche: 1
+contro gli ingressi ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1
 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Precisione
 
@@ -101,9 +101,9 @@ ogni riga, ognuno con la griglia controllata prima del calcolo entro un
 quarto di centimetro (la catena entro mezzo). Se lo spostamento a priori
 supera quella quota, o le coordinate sono troppo rade per il centimetro,
 `PrecisionInsufficient` e nessun calcolo. Parti più sottili di 1 cm
-possono sparire o fondersi senza errore; vedi [README, «Precisione delle
+possono sparire o fondersi senza errore; vedi [Limiti dichiarati, «Precisione delle
 operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «overlay in catena».
 
 ### Complessità

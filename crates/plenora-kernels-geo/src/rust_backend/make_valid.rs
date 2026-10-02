@@ -141,7 +141,7 @@ pub enum MakeValidError {
     /// oltre la sua quota, la griglia di un overlay di `STRUCTURE` oltre il
     /// bilancio che resta, o in `LINEWORK` un incrocio arrotondato a meno
     /// della precisione da un altro vertice o lato. Il solo rifiuto legato
-    /// alla precisione (README, «Precisione delle operazioni geografiche: 1
+    /// alla precisione (docs/limiti.md, «Precisione delle operazioni geografiche: 1
     /// cm a terra»).
     #[error("geometria troppo estesa per la precisione dichiarata")]
     PrecisionInsufficient,
@@ -736,7 +736,7 @@ impl OverlayNormalizer {
 ///
 /// Gli agganci interni di `i_overlay` durante lo split dei segmenti (raggio
 /// che cresce a ogni giro, `split::snap_radius` di `i_overlay` 9.0.0) non
-/// sono nel bilancio, e nessun controllo a posteriori li limita (README,
+/// sono nel bilancio, e nessun controllo a posteriori li limita (docs/limiti.md,
 /// «Precisione delle operazioni geografiche: 1 cm a terra», «Hazard»).
 fn checked_grid(
     normalizer: OverlayNormalizer,
@@ -2122,7 +2122,7 @@ mod tests {
         ));
     }
 
-    /// Primo controesempio della terza revisione, in metri con 1 cm: il
+    /// Primo controesempio, in metri con 1 cm: il
     /// buco largo `2^-40` m e' sotto la precisione e puo' sparire; il resto
     /// resta entro perimetro per precisione.
     #[test]
@@ -2173,7 +2173,7 @@ mod tests {
         Ok(())
     }
 
-    /// Il controesempio di forma della terza revisione: con feature
+    /// Il controesempio di forma: con feature
     /// risolvibili l'overlay si esegue, e i due buchi restano due.
     #[test]
     fn resolvable_difference_keeps_both_holes() -> Result<(), MakeValidError> {

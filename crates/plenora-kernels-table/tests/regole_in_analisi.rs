@@ -1223,7 +1223,7 @@ fn validate_rules_analisi_e_kernel_leggono_i_valori_allo_stesso_modo() {
         }
     }
     assert!(difformi.is_empty(), "{}", difformi.join("\n"));
-    // Il caso della revisione: rifiutato gia' in analisi.
+    // Il caso limite: rifiutato gia' in analisi.
     rifiuta(
         "table.validate_rules",
         &[&w],

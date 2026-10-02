@@ -77,7 +77,7 @@ In esecuzione:
 ### Limiti e deviazioni
 
 L'hash delle chiavi non ha seme
-([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 La memoria contata è quella delle chiavi, non quella delle mappe che le
 contengono.
 

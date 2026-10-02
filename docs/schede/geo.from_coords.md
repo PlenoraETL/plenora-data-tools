@@ -32,7 +32,7 @@ senza tipi dichiarati. I metadati di schema e le proprietà del contratto
 conversione è esatta), chiama il kernel (`construction::point_from_lon_lat`)
 riga per riga e controlla che il punto stia nel dominio di validità del
 CRS prodotto. Una x o una y nulla è un errore: la colonna prodotta è
-dichiarata non nullable ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiarata non nullable ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Ordine
 
@@ -71,19 +71,19 @@ quello della prima riga, senza diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il kernel controlla solo che le coordinate siano finite; il dominio del CRS
 lo controlla il runner su ogni punto. Un `int64` oltre `2^53` in modulo si
 rifiuta invece di arrotondarsi. Una coordinata nulla è un errore, non un
 punto nullo come nel progetto d'origine. Il catalogo chiede un CRS proiettato: punti in
 longitudine e latitudine non si costruiscono qui
-([README, «CRS integrati»](../README.md#crs-integrati)).
+([«CRS integrati»](crs.md#crs-integrati)).
 
 ### Precisione
 
 Esatta: le coordinate `float64` diventano il punto senza calcolo
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

@@ -272,9 +272,10 @@ python scripts/verifica_sdk_python.py --wheel dist/plenora_data-<versione>-<tag>
   processo. *Rientro*: il catalogo distingue l'effetto per superficie.
 - Le deviazioni della CLI sul formato del piano, le versioni dei kernel,
   `table.transpose`, la materializzazione limitata e il frammento del
-  budget valgono identiche qui (README della radice, «CLI
-  `plenora-data`», deviazioni; `crates/plenora-cli/adozione.json` le
-  dichiara per entrambe le superfici).
+  budget valgono identiche qui
+  ([«Deviazioni dai contratti»](../../docs/cli.md#deviazioni-dai-contratti)
+  della CLI; `crates/plenora-cli/adozione.json` le dichiara per entrambe le
+  superfici).
 
 ## Limiti dichiarati
 
@@ -352,8 +353,9 @@ python scripts/verifica_sdk_python.py --wheel dist/plenora_data-<versione>-<tag>
   modulo e il thread di lavoro intercettano i panici (`catch_unwind`) e li
   rendono `internal`; nessuna prova Python provoca un panico (il modulo non
   ha un punto d'ingresso per farlo). Gli aborti del processo (allocazione
-  impossibile, stack esaurito) non si intercettano, come sulla CLI (README
-  della radice, «Aborti senza inviluppo»).
+  impossibile, stack esaurito) non si intercettano, come sulla CLI («Aborti
+  senza inviluppo» in
+  [«Limiti dichiarati della CLI»](../../docs/cli.md#limiti-dichiarati-della-cli)).
 - **Serie di pyarrow.** La dipendenza è `pyarrow>=25,<26`, la serie
   provata dalla suite; pyarrow non pubblica tipi, quindi per mypy i suoi
   oggetti sono `Any`.
@@ -363,8 +365,8 @@ python scripts/verifica_sdk_python.py --wheel dist/plenora_data-<versione>-<tag>
   task aspetta che il lavoro arrivi al suo controllo successivo (al più un
   passo del piano).
 - **Messaggi delle config.** Come sulla CLI, un messaggio di config non
-  valida può citare un valore scritto nel piano (README della radice,
-  «Limiti dichiarati della CLI»).
+  valida può citare un valore scritto nel piano
+  ([«Limiti dichiarati della CLI»](../../docs/cli.md#limiti-dichiarati-della-cli)).
 
 ## Aggiornamento dei contratti
 

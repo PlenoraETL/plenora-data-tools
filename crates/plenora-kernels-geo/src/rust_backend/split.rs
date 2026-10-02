@@ -696,7 +696,7 @@ fn checked_output(
             _ => return Err(SplitError::CoverageMismatch),
         }
     }
-    // Area entro la precisione dichiarata `p` (README, «Limiti dichiarati»),
+    // Area entro la precisione dichiarata `p` (docs/limiti.md, «Limiti dichiarati»),
     // con un margine **locale**: i tagli interni si compensano, e i vertici
     // d'ingresso restano esatti, quindi l'area puo' cambiare solo dove un
     // lato di bordo ha un estremo calcolato dal noding (spostato al piu' di
@@ -890,10 +890,11 @@ mod tests {
         LineString::new(points)
     }
 
-    /// Controesempio della revisione: un buco di 1 m^2 con lati da 1 cm,
-    /// omesso dall'output. Ogni lato scoperto stava sotto la tolleranza per
-    /// pezzo, e 1 m^2 sotto il perimetro (400 m) per 1 cm: passava. Ora la
-    /// copertura si somma sull'anello e l'area ha un margine locale.
+    /// Controesempio: un buco di 1 m^2 con lati da 1 cm,
+    /// omesso dall'output. Ogni lato scoperto sta sotto la tolleranza per
+    /// pezzo, e 1 m^2 sotto il perimetro (400 m) per 1 cm: un controllo per
+    /// pezzo lo lascerebbe passare. La copertura si somma sull'anello e
+    /// l'area ha un margine locale.
     #[test]
     fn an_omitted_hole_with_centimetre_edges_is_rejected() {
         let shell = subdivided_square(0.0, 0.0, 100.0, 1);

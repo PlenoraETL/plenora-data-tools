@@ -124,8 +124,8 @@ fn classifica_cella(esito: crate::EsitoValidazione) -> AdvancedError {
 /// compatibile, rifiuta i null nella costruzione del `MultiPoint`).
 ///
 /// `precision` e' la precisione dichiarata nelle unita' delle coordinate
-/// (README, «Precisione delle operazioni geografiche: 1 cm a terra»): i
-/// rifiuti per precisione sono descritti in README, «geo.delaunay e
+/// (docs/limiti.md, «Precisione delle operazioni geografiche: 1 cm a terra»): i
+/// rifiuti per precisione sono descritti in docs/limiti.md, «geo.delaunay e
 /// geo.voronoi».
 ///
 /// # Errors
@@ -238,7 +238,7 @@ fn voronoi_cells_con(
 /// minimo: stesso risultato qualunque sia la rotazione della faccia, e un
 /// errore maggiorato che si confronta con la precisione. Rispetto
 /// all'incrementale un vertice Voronoi puo' quindi differire di qualche
-/// `ulp`; sugli ingressi degeneri le facce stesse sono diverse (README,
+/// `ulp`; sugli ingressi degeneri le facce stesse sono diverse (docs/limiti.md,
 /// «geo.delaunay e geo.voronoi»).
 ///
 /// Tre controlli di precisione, tutti errori espliciti:
@@ -1519,7 +1519,7 @@ mod tests {
         }
     }
 
-    /// Il reperto della revisione: siti a `(10^15, 10^15)` piu' pochi metri,
+    /// Il reperto: siti a `(10^15, 10^15)` piu' pochi metri,
     /// distanti almeno 11 m. Con l'origine nel vertice da cui `spade` parte
     /// la faccia, incrementale e caricamento in blocco davano circocentri a
     /// 12,5 cm l'uno dall'altro. A `10^15` la spaziatura dei `f64` e'

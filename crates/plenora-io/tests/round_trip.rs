@@ -95,7 +95,7 @@ fn ipc_stream_scritto() {
 
 #[test]
 fn ipc_piu_blocchi_ricomposti() {
-    // Una tabella oltre il blocco di scrittura si scrive in piÃ¹ blocchi.
+    // Una tabella oltre il blocco di scrittura si scrive in più blocchi.
     let righe = 3_000_000_usize;
     let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
     let valori: Vec<i64> = (0..i64::try_from(righe).unwrap()).collect();
@@ -374,7 +374,7 @@ fn tipi_rari_identici_o_rifiutati() {
             }
         }
     }
-    // L'elenco dei rifiutati e' dichiarato nel README (Â«FileÂ»): un tipo che
+    // L'elenco dei rifiutati e' dichiarato in docs/file.md («File»): un tipo che
     // entra o esce da qui e' una modifica da dichiarare.
     assert_eq!(
         rifiutati,

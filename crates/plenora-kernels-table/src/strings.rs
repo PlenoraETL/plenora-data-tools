@@ -1,3 +1,9 @@
+//! Operazioni sui testi: `table.string_pad`, `table.string_length`,
+//! `table.string_extract`, `table.text_normalize`.
+//!
+//! Semantica, schema, ordine ed errori per operazione: le schede
+//! `docs/schede/<id>.md`, raccolte in `docs/operazioni.md`.
+
 use std::sync::Arc;
 
 use plenora_core::arrow::array::builder::StringBuilder;

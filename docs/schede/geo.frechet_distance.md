@@ -63,7 +63,7 @@ CRS, config):
 - `Internal`: la decodifica o la validazione OGC di `other_wkb` non
   conclude.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -96,7 +96,7 @@ Poi, per riga:
 - La seconda linea è una costante della config, non una seconda colonna.
 - Solo `LineString`: una `MultiLineString` nella colonna ferma il passo.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 ### Precisione
@@ -104,8 +104,8 @@ voce «Geo senza diagnostica per riga»).
 Nessun controllo e nessun rifiuto di precisione. Il risultato è una delle
 distanze euclidee fra un vertice della riga e uno di `other_wkb`, scelta
 con massimi e minimi esatti; ogni distanza è calcolata in `f64` con
-l'errore relativo di un arrotondamento, molto sotto 1 cm ([README,
-«Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+l'errore relativo di un arrotondamento, molto sotto 1 cm ([Limiti dichiarati,
+«Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

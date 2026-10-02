@@ -49,7 +49,7 @@ pub type CrsResolver = fn(&str, &'static str) -> Result<ResolvedCrs, crate::crs:
 /// Categoria `schema`, come chiede il vocabolario Arrow 1.0 (sezione 4: «Contradictory
 /// metadata fails with category `schema` or `crs`»); gli errori che
 /// riguardano il CRS usano `PlenoraError::Crs`. Fino a questo ciclo era
-/// `InvalidPlan`: il cambio di categoria è una rottura dichiarata (README,
+/// `InvalidPlan`: il cambio di categoria è una rottura dichiarata (docs/metadati-arrow.md,
 /// «Metadati Arrow»), non fatta di straforo.
 fn errore_di_contratto(messaggio: impl Into<String>) -> PlenoraError {
     PlenoraError::Schema(messaggio.into())
@@ -64,7 +64,7 @@ fn errore_di_contratto(messaggio: impl Into<String>) -> PlenoraError {
 /// sbaglia sulle union dense a un campo con id diverso da 0; `take` su
 /// run-end con indici nulli, sbagliato in 59.2.0, in 60.0.0 e' corretto):
 /// un caso che non si garantisce si rifiuta al confine,
-/// una volta, e nessun kernel li vede. README, «Limiti dichiarati del
+/// una volta, e nessun kernel li vede. docs/runner.md, «Limiti dichiarati del
 /// runner».
 ///
 /// # Errors
@@ -478,7 +478,7 @@ pub fn geometry_contract_from_field(
 ///   direzione: `crs_resolution = resolved` diventa `declared_unresolved`
 ///   quando il contratto porta un'incoerenza, `types_declaration =
 ///   unresolved` diventa la dichiarazione del contratto quando questo ne ha
-///   una (README, «Metadati Arrow»).
+///   una (docs/metadati-arrow.md, «Metadati Arrow»).
 /// - Il campo porta sempre `ARROW:extension:name = geoarrow.wkb`.
 /// - `plenora.contract.version` si aggiunge solo se almeno un campo porta
 ///   chiavi canoniche; uno schema senza geometrie resta invariato. È la
@@ -682,7 +682,7 @@ pub fn verifica_identita_campi(schema: &Schema) -> Result<BTreeSet<u32>, Plenora
 /// `plenora.field_id` su ogni campo di primo livello.
 ///
 /// L'identità segue la lineage dei metadati di campo: un'operazione che
-/// propaga una colonna, la rinomina o la riscrive al suo posto (README,
+/// propaga una colonna, la rinomina o la riscrive al suo posto (docs/metadati-arrow.md,
 /// «Metadati Arrow») ne clona i metadati, e con loro `plenora.field_id`;
 /// una colonna nuova nasce senza. Qui:
 ///

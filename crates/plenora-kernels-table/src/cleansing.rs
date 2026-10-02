@@ -1,3 +1,10 @@
+//! Pulizia dei valori: `table.fill_na`, `table.replace`, `table.type_cast`,
+//! e il percorso veloce di `table.coalesce` (il kernel generico è in
+//! [`crate::quality`]).
+//!
+//! Semantica, schema, ordine ed errori per operazione: le schede
+//! `docs/schede/<id>.md`, raccolte in `docs/operazioni.md`.
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

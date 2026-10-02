@@ -54,8 +54,8 @@ config, CRS, nomi):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -82,23 +82,23 @@ dell'arco),
   incrementale di `geo`: sugli ingressi con quattro o più punti
   cocircolari (griglie, reticoli) è un'altra triangolazione di Delaunay
   valida, con le stesse facce altrove; il caso peggiore resta quadratico
-  ([README, «`geo.delaunay` e `geo.voronoi`: triangolazione caricata in
-  blocco»](../README.md#geodelaunay-e-geovoronoi-triangolazione-caricata-in-blocco)).
+  ([Limiti dichiarati, «`geo.delaunay` e `geo.voronoi`: triangolazione caricata in
+  blocco»](limiti.md#geodelaunay-e-geovoronoi-triangolazione-caricata-in-blocco)).
 - Non vincolata e senza tolleranza: `ST_DelaunayTriangles` di PostGIS ha un
   parametro di tolleranza per fondere i vertici vicini, qui assente (si
   fondono solo i punti uguali, con `-0.0` uguale a `0.0`).
 - I limiti di coordinate e di triangoli sono quelli del runner, sopra; non
   si scelgono dal piano.
-- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+- Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+  «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
 
 Esatta: nessuna coordinata si calcola. I vertici dei triangoli sono i punti
 d'ingresso con i loro bit e i predicati d'orientazione e del cerchio sono
-esatti; nessun controllo e nessun rifiuto di precisione servono ([README,
-«Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+esatti; nessun controllo e nessun rifiuto di precisione servono ([Limiti dichiarati,
+«Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 Due punti distinti a meno di 1 cm restano due vertici.
 
 ### Complessità

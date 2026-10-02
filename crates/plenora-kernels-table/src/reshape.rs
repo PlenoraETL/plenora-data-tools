@@ -1,3 +1,9 @@
+//! Rimodellamento delle tabelle: `table.melt`, `table.pivot`,
+//! `table.transpose`, `table.explode`, `table.unnest`, `table.table_diff`.
+//!
+//! Semantica, schema, ordine ed errori per operazione: le schede
+//! `docs/schede/<id>.md`, raccolte in `docs/operazioni.md`.
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;

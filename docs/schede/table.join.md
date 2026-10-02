@@ -99,10 +99,10 @@ nomi con `Schema` (le colonne oltre `max_columns` con `ResourceLimit`).
 Nessuna conversione fra tipi: `int64` contro `float64`, o contro un intero
 di altra larghezza, si rifiuta, e gli interi diversi da `int64`/`uint64`
 non sono chiavi. Le mappe delle chiavi usano un hash deterministico senza
-seme ([README, «Hash delle chiavi non keyed»](../README.md#hash-delle-chiavi-non-keyed)).
+seme ([Limiti dichiarati, «Hash delle chiavi non keyed»](limiti.md#hash-delle-chiavi-non-keyed)).
 Il kernel non confronta con `max_governed_memory_bytes` né la mappa delle
 chiavi né l'uscita: il suo limite è `max_rows`; nel runner il picco lo
-prevede il modello di costo ([README, «Budget di memoria»](../README.md#budget-di-memoria)).
+prevede il modello di costo ([Runner, «Budget di memoria»](runner.md#budget-di-memoria)).
 
 ### Complessità
 

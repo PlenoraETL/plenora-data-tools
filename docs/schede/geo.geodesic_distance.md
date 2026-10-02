@@ -5,7 +5,7 @@ punto di ogni riga e un punto fisso della config (`other_wkb`), calcolata
 **sull'ellissoide del datum del CRS della colonna** (Internazionale 1924
 per ED50 e Monte Mario, Clarke 1866 per NAD27, Airy per OSGB36, GRS 80,
 WGS 84...) con l'algoritmo di Karney (`geographiclib-rs`), mai su un
-ellissoide di comodo ([README, «Misure geodetiche: l'ellissoide del datum»](../README.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono longitudine e
+ellissoide di comodo ([Limiti dichiarati, «Misure geodetiche: l'ellissoide del datum»](limiti.md#misure-geodetiche-lellissoide-del-datum)). Le coordinate sono longitudine e
 latitudine in gradi.
 
 ### Parametri
@@ -51,7 +51,7 @@ In validazione (analisi del contratto):
 - `Internal`: la decodifica o la validazione OGC di `other_wkb` non
   conclude.
 
-In esecuzione ([README, «Operazioni geo»](../README.md#operazioni-geo))
+In esecuzione ([Runner, «Operazioni geo»](runner.md#operazioni-geo))
 il passo rende il primo errore in ordine di riga, senza diagnostica per
 riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 
@@ -82,7 +82,7 @@ Poi, per riga:
 - Solo punti, vedi «Righe»: una `MultiPoint` nella colonna ferma il
   passo.
 - Errori senza indice di riga della sorgente
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voce «Geo senza diagnostica per riga»).
 
 ### Precisione
@@ -92,7 +92,7 @@ Sull'ellissoide del datum l'algoritmo di Karney resta molto sotto 1 cm
 l'oracolo `tests/geodetica_oracolo.rs` lo confronta con GeographicLib e
 PROJ su ogni ellissoide della tabella entro un micrometro). Nessun
 rifiuto `PrecisionInsufficient`
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

@@ -27,7 +27,7 @@ restano.
 chiama il kernel (`extended_algorithms::densify`) su ogni cella non
 nulla, in parallelo, con `MAX_CELL_COORDINATES` (4 194 304) come massimo
 di coordinate d'uscita per geometria; una cella nulla resta nulla
-([README, «Operazioni geo»](../README.md#operazioni-geo)).
+([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Ordine
 
@@ -52,7 +52,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi il kernel rende `ExtendedAlgorithmError`, che il runner porta in
 `Internal` per `Internal`, `ValidazioneNonConclusa` e
@@ -74,7 +74,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 - Il limite di coordinate d'uscita è un argomento del kernel: il runner
@@ -90,14 +90,14 @@ Nessun controllo e nessun rifiuto di precisione. I vertici d'ingresso non
 si spostano; quelli nuovi si calcolano come `inizio + (fine - inizio) * k / n`
 in `f64` e stanno sul lato a meno di qualche ulp del modulo delle
 coordinate (nanometri in UTM), molto sotto 1 cm in ogni dominio dei CRS
-integrati ([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+integrati ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 
 O(n + m) per geometria, con `n` le coordinate d'ingresso e `m` quelle
 d'uscita, più la validazione OGC dell'ingresso e dell'uscita (O(m²) nel
-caso peggiore, [README, «Validazione OGC: la ricerca delle
-auto-intersezioni non è quella di `geo`, il verdetto sì»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+caso peggiore, [Limiti dichiarati, «Validazione OGC: la ricerca delle
+auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(m).
 
 ### Esempio

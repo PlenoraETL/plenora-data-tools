@@ -81,7 +81,7 @@ Su `decimal128` e testo numerico `sum`, `mean` e `stddev` leggono la cella
 come `f64` e arrotondano senza errore, perché il risultato è `float64`;
 sulle colonne intere `mean` e `stddev` arrotondano alla fine del calcolo
 esatto
-([README, «Somme intere esatte e tipi delle riduzioni»](../README.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
+([Limiti dichiarati, «Somme intere esatte e tipi delle riduzioni»](limiti.md#somme-intere-esatte-e-tipi-delle-riduzioni)).
 Un `NaN` o un infinito già nei dati si propagano senza errore; solo
 l'overflow di un calcolo su valori finiti si rifiuta.
 

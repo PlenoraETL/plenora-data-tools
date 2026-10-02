@@ -56,7 +56,7 @@ pub struct CostoOperazione {
     /// Profili misurati dell'operazione.
     pub profili: &'static [&'static str],
     /// Profili misurati ma esclusi dal modello: la loro memoria cresce con
-    /// una grandezza che il runner non conosce prima del passo (README,
+    /// una grandezza che il runner non conosce prima del passo (docs/runner.md,
     /// «Limiti dichiarati del runner», voce «Modelli di costo geo»).
     pub esclusi: &'static [&'static str],
 }

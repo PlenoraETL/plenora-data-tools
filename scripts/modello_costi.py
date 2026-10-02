@@ -367,11 +367,12 @@ def adatta(punti, *, celle=False, coppie=False, senza_byte=False, c_minimo=0):
 
 
 def verifica_controesempio_rami():
-    """Il controesempio della seconda lettura dei rami di larghezza: costo
+    """Il controesempio dei rami di larghezza: costo
     vero esattamente `1000*R + B`, una classe stretta e una larga. Con gli
-    inviluppi calcolati su `y - a` il programma lineare metteva 999.500 byte
-    in `a` e il ramo per riga prevedeva 1.503.750 byte (con `S`) contro
-    2.001.000 veri per `R = 2000, B = 1000`, piu' stretto dei punti misurati.
+    inviluppi calcolati su `y - a` il programma lineare metterebbe 999.500
+    byte in `a` e il ramo per riga prevederebbe 1.503.750 byte (con `S`)
+    contro 2.001.000 veri per `R = 2000, B = 1000`, piu' stretto dei punti
+    misurati.
     Ogni generazione lo rifa': deve coprire il costo vero anche senza `S`,
     su righe piu' strette e piu' larghe di quelle misurate."""
     punti = [

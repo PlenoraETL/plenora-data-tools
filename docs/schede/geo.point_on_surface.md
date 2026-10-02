@@ -26,7 +26,7 @@ si tolgono dal campo.
 
 1:1: il runner chiama il kernel (`operations::point_on_surface`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 Una geometria senza punto interno (vuota) dà null: la colonna d'uscita ha
 la nullabilità di quella d'ingresso, e se non ammette null il passo si
 rifiuta con `InvalidPlan`.
@@ -51,7 +51,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria (`OperationError`, che il runner porta in `PlenoraError`:
 `Internal` per `Internal`, `ValidazioneNonConclusa` e
@@ -72,7 +72,7 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Il punto è quello di `interior_point` di `geo`, che non coincide
 necessariamente con quello di `ST_PointOnSurface` di PostGIS. Le coordinate
@@ -87,7 +87,7 @@ punti il risultato è un vertice d'ingresso, esatto; per i poligoni le
 coordinate sono calcolate in `f64` da `geo` (punto medio del tratto) e
 `relate` conferma che il punto sta dentro: la garanzia è topologica, senza
 un bilancio metrico rispetto alla regola di 1 cm
-([README, «Precisione delle operazioni geografiche»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 
@@ -96,7 +96,7 @@ tutti i lati (sweep line, O(n log n) più le intersezioni) e verifica i
 tratti, dal più lungo, con `relate` finché uno è interno; per linee e punti
 O(n). Più la validazione OGC
 dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[README, «Validazione OGC»](../README.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 
 ### Esempio
 

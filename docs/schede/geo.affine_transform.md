@@ -23,7 +23,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 1:1: il runner chiama il kernel (`extended::affine_transform`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
-nulla resta nulla ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Ordine
 
@@ -48,7 +48,7 @@ In esecuzione, prima del kernel, su tutta la colonna: `InvalidPlan` per
 una cella che non è WKB strutturalmente valido, `Crs` per una coordinata
 fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
-dichiara con un elenco ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 Poi dal kernel, per geometria (`ExtendedError`, che il runner porta in `PlenoraError`: `Internal` per
 `ValidazioneNonConclusa` e `CalcoloNonConcluso`, `InvalidPlan` per le
@@ -70,10 +70,10 @@ diagnostica per riga.
 
 Nel runner un errore non ha diagnostica per riga e il costo in memoria è
 una previsione dalle misure
-([README, «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+([Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 Le coordinate d'uscita non si confrontano con il dominio di validità del
-CRS ([README, «CRS integrati»](../README.md#crs-integrati)): una matrice
+CRS ([«CRS integrati»](crs.md#crs-integrati)): una matrice
 che porta la geometria fuori dal dominio non è un errore qui.
 
 ### Precisione
@@ -84,7 +84,7 @@ fusione: l'errore resta sotto pochi ulp della somma `|a x| + |b y| +
 del CRS, ben oltre ogni dominio dei CRS integrati. Con coefficienti e
 coordinate interi (o comunque rappresentabili e con prodotti esatti) il
 risultato è esatto. Nessun rifiuto `PrecisionInsufficient`
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

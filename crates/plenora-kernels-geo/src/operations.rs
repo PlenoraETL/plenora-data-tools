@@ -374,7 +374,7 @@ pub fn buffer(
 /// precisione (freccia `max(p / 2, 0.001 |d|)`, deviazione dichiarata oltre
 /// 5 m con 1 cm) e le componenti sotto la griglia bufferizzate come punti o
 /// come anelli, con la griglia controllata a priori
-/// (`rust_backend::buffer`, nessun controllo a posteriori; README,
+/// (`rust_backend::buffer`, nessun controllo a posteriori; docs/limiti.md,
 /// «Precisione delle operazioni geografiche: 1 cm a terra»). Distanza
 /// nulla: l'unione delle parti areali; negativa: l'erosione delle sole
 /// parti areali (punti e linee spariscono); estremita' piatte su soli punti:

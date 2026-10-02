@@ -29,7 +29,7 @@ Arrow sono `date32` e `timestamp_millis`); `int` → `int64`;
 Una colonna **temporale** (`date32`; `timestamp` in secondi,
 millisecondi, microsecondi o nanosecondi, con o senza fuso) si converte
 dal valore nativo, senza passare dal testo e senza `date_format`
-(scritto, si rifiuta) ([README, «Colonne temporali e formati di data»](../README.md#colonne-temporali-e-formati-di-data)):
+(scritto, si rifiuta) ([Limiti dichiarati, «Colonne temporali e formati di data»](limiti.md#colonne-temporali-e-formati-di-data)):
 
 - `str`, `binary_utf8`, `dictionary_utf8`: la data `AAAA-MM-GG`, l'istante
   in RFC 3339 nel fuso della colonna (senza fuso `+00:00`), con le cifre

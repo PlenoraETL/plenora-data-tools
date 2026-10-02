@@ -5,7 +5,7 @@
 //! Un campo nuovo fa fallire il test finche' non entra nel censimento: chi lo
 //! aggiunge decide se ha effetto con ogni combinazione, o in quali
 //! combinazioni non ne ha e con quale regola (in analisi e nel kernel,
-//! `verifica_*`) si rifiuta (README, «Parametri ignorati: censimento»).
+//! `verifica_*`) si rifiuta (docs/runner.md, «Parametri ignorati: censimento»).
 
 use std::collections::{BTreeMap, BTreeSet};
 

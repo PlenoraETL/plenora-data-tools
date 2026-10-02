@@ -8,7 +8,8 @@ documento che PROJ stesso produce, con la stessa terna pyproj/PROJ/EPSG del
 generatore della tabella (`genera_crs_integrati.py`, di cui si riusano le
 liste e il controllo d'ambiente).
 
-Uso (stesso ambiente di `genera_crs_integrati.py`, vedi README):
+Uso (stesso ambiente di `genera_crs_integrati.py`, vedi docs/crs.md,
+«Aggiungere un codice»):
 
     PYTHONPATH=<dir> python scripts/genera_projjson_integrati.py
 

@@ -7,7 +7,7 @@ collegati per densità più i punti di bordo che raggiungono; gli altri punti
 sono rumore ed escono con etichetta nulla. Accetta solo geometrie `Point`.
 
 La conversione di colonna è `cluster::dbscan_column`, che il runner
-chiama su tutta la colonna e aggiunge in coda l'etichetta ([README, «Operazioni geo»](../README.md#operazioni-geo)).
+chiama su tutta la colonna e aggiunge in coda l'etichetta ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Parametri
 
@@ -47,8 +47,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -68,8 +68,8 @@ Poi la conversione di colonna (messaggi del calcolo con prefisso
 
 Solo punti: un poligono o una linea si rifiutano, senza passare dal
 centroide, che non ne rappresenta la densità. Il rumore e la geometria
-nulla hanno la stessa etichetta nulla. Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-«Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+nulla hanno la stessa etichetta nulla. Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+«Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
 voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
@@ -78,7 +78,7 @@ Nessuna geometria calcolata. L'appartenenza al vicinato si decide in `f64`
 come `dx² + dy² <= eps²`, senza fusione delle operazioni: un punto a
 distanza pari a `eps` entro l'arrotondamento può cadere da una parte o
 dall'altra
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 

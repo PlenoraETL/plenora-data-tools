@@ -1,6 +1,6 @@
 //! `make_valid` e la precisione dichiarata: 1 cm a terra.
 //!
-//! La politica (README, «Limiti dichiarati»; AGENTS.md, regola 1): sotto la
+//! La politica (docs/limiti.md, «Limiti dichiarati»; AGENTS.md, regola 1): sotto la
 //! precisione un risultato puo' differire dall'esatto (vertici spostati,
 //! feature sottili fuse o sparite); sopra, ogni errore e' esplicito. Il solo
 //! rifiuto legato alla precisione e' uno spostamento oltre la precisione:
@@ -199,7 +199,7 @@ fn cornice_sottile_segue_la_politica_del_centimetro() {
     }
 }
 
-/// Primo controesempio di una revisione, in metri: il buco largo
+/// Primo controesempio, in metri: il buco largo
 /// `2^-40` m e' sotto la precisione e puo' sparire; il quadrato resta.
 #[test]
 fn buco_sotto_la_precisione_puo_sparire_il_resto_resta() {

@@ -12,8 +12,8 @@ punto) escono come linee o punti accanto all'area, in una
 
 La semantica a livello di tabella è quella dell'esecuzione Arrow
 (`rust_backend::arrow::make_valid_batches`), che il runner chiama su tutta
-la tabella con la precisione del CRS della colonna ([README, «Operazioni
-geo»](../README.md#operazioni-geo)).
+la tabella con la precisione del CRS della colonna ([Runner, «Operazioni
+geo»](runner.md#operazioni-geo)).
 
 ### Parametri
 
@@ -51,8 +51,8 @@ In validazione (analisi del contratto):
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
 
-In esecuzione, prima del kernel, su ogni cella non nulla (runner, [README,
-«Operazioni geo»](../README.md#operazioni-geo)): la decodifica strutturale
+In esecuzione, prima del kernel, su ogni cella non nulla (runner, [Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): la decodifica strutturale
 (`InvalidPlan` per un WKB malformato o con coordinate non finite,
 `Unsupported` per dimensioni Z/M o SRID), `Crs` per una coordinata fuori
 dal dominio di validità del CRS della colonna, `Schema` per una geometria
@@ -81,8 +81,8 @@ riga):
   equivalenza semantica, non byte per byte: ordine delle parti, punto
   iniziale e verso degli anelli e scelta fra `Polygon`, `MultiPolygon` e
   `GeometryCollection` possono differire da GEOS a parità di geometria
-  ([README, «`geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a
-  GEOS verificata, non dimostrata»](../README.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata)).
+  ([Limiti dichiarati, «`geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a
+  GEOS verificata, non dimostrata»](limiti.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata)).
 - `LINEWORK` è una funzione dell'insieme dei lati d'ingresso: anelli e parti
   permutati, ruotati o invertiti danno la stessa geometria. Non è il
   pari-dispari su tutti gli anelli: un buco che condivide un lato con la
@@ -94,11 +94,11 @@ riga):
 - Oltre 10.000 segmenti un input invalido si rifiuta (GEOS non aveva
   limite); un input valido passa a ogni dimensione. Il caso peggiore dei
   giri di `LINEWORK` non ha un budget di tempo proprio.
-- Elenco completo: [README, «Differenze da GEOS»](../README.md#differenze-da-geos)
-  e [README, «Operazioni topologiche in Rust puro»](../README.md#operazioni-topologiche-in-rust-puro).
+- Elenco completo: [Operazioni topologiche, «Differenze da GEOS»](topologia.md#differenze-da-geos)
+  e [Operazioni topologiche, «Operazioni topologiche in Rust puro»](topologia.md#operazioni-topologiche-in-rust-puro).
 - Nel runner il passo rende il primo errore, senza diagnostica per riga
-  ([README, «Limiti dichiarati del
-  runner»](../README.md#limiti-dichiarati-del-runner), voci «Geo senza
+  ([Runner, «Limiti dichiarati del
+  runner»](runner.md#limiti-dichiarati-del-runner), voci «Geo senza
   diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
@@ -106,7 +106,7 @@ riga):
 `LINEWORK` non passa dalla griglia di `i_overlay`: l'unico calcolo che
 arrotonda è il noding del bordo, e ogni passo successivo è un'operazione
 esatta sull'insieme dei lati nodati. Le regole di 1 cm
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)):
 
 - coordinate troppo rade (unità in ultima posizione del modulo massimo
   oltre `p / 64`): `PrecisionInsufficient`, prima di ogni calcolo;

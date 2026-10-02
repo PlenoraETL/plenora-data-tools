@@ -1,3 +1,8 @@
+//! Filtri e condizioni: `table.filter`, `table.conditional`.
+//!
+//! Semantica, schema, ordine ed errori per operazione: le schede
+//! `docs/schede/<id>.md`, raccolte in `docs/operazioni.md`.
+
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -1381,7 +1386,7 @@ mod tests {
             risultati_numerici(["9007199254740993", "x"]).expect("uscita testuale"),
             None
         );
-        // Oltre `i128` (seconda revisione): 10^40 + 1 non e' un double.
+        // Oltre `i128`: 10^40 + 1 non e' un double.
         assert!(risultati_numerici(["10000000000000000000000000000000000000001"]).is_err());
         // 2^140 lo e', anche se non sta in `i128`.
         assert!(risultati_numerici(["1393796574908163946345982392040522594123776"]).is_ok());

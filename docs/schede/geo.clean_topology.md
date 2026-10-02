@@ -6,8 +6,8 @@ con la chiusura dei varchi e la regola «vince la prima riga» di Manipola):
 con `fill_gaps` chiude rientranze e varchi stretti dentro ogni riga, con
 `remove_overlaps` toglie a ogni riga la parte già coperta dalle righe
 precedenti, così le righe non si sovrappongono più. Il runner lo esegue
-su tutta la tabella insieme ([README, «Operazioni
-geo»](../README.md#operazioni-geo)).
+su tutta la tabella insieme ([Runner, «Operazioni
+geo»](runner.md#operazioni-geo)).
 
 ### Parametri
 
@@ -74,8 +74,8 @@ colonna geometria o la colonna non è riconoscibile come geometria WKB;
 `Unsupported` se non è XY; `Crs` se il CRS non è risolto o non è
 proiettato (o non ha unità lineare).
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -108,14 +108,14 @@ righe. Le varianti:
 
 Gli archi della chiusura hanno freccia al più `max(p / 8, 0,001 ·
 snap_tolerance)`: oltre `snap_tolerance` di 1,25 m il bordo chiuso può
-rientrare fino allo 0,1% della tolleranza, senza errore ([README,
+rientrare fino allo 0,1% della tolleranza, senza errore ([Limiti dichiarati,
 «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra),
 «Deviazione: archi del buffer»). La nullabilità dichiarata della colonna
 geometria dell'uscita è sempre nullable, perché il kernel può rendere
 righe senza geometria. Nessuna diagnostica per riga: il passo rende il primo
-errore ([README, «Limiti dichiarati del
-runner»](../README.md#limiti-dichiarati-del-runner), voci «Geo senza
+errore ([Runner, «Limiti dichiarati del
+runner»](runner.md#limiti-dichiarati-del-runner), voci «Geo senza
 diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
@@ -128,9 +128,9 @@ differenza, due overlay in catena) con griglia entro `p / 4`: in tutto
 controllata prima del calcolo; oltre, `PrecisionInsufficient`. Ogni resto
 si calcola dalle righe d'ingresso vicine, non da un'unione accumulata riga
 dopo riga, così gli spostamenti non si sommano lungo la tabella. Parti più
-sottili di 1 cm possono sparire o fondersi senza errore; vedi [README,
+sottili di 1 cm possono sparire o fondersi senza errore; vedi [Limiti dichiarati,
 «Precisione delle operazioni geografiche: 1 cm a
-terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
+terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra).
 
 ### Complessità
 

@@ -468,7 +468,7 @@ fn subdivide_polygon_root(
 /// catena, un livello sul risultato del precedente: ognuno ha la sua parte
 /// di [`MAX_SUBDIVIDE_DEPTH`] del bilancio (`griglia::controlla_overlay_in_catena`),
 /// e la foglia piu' profonda resta entro meta' della precisione. Nessun
-/// controllo a posteriori delle foglie (README, «Limiti dichiarati»).
+/// controllo a posteriori delle foglie (docs/limiti.md, «Limiti dichiarati»).
 fn subdivide_polygon(
     polygon: &Polygon<f64>,
     max_vertices: usize,

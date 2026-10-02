@@ -56,8 +56,8 @@ config, CRS):
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
   senza unità lineare.
 
-In esecuzione, prima del kernel, su ogni cella non nulla ([README,
-«Operazioni geo»](../README.md#operazioni-geo)): `InvalidPlan` per un WKB
+In esecuzione, prima del kernel, su ogni cella non nulla ([Runner,
+«Operazioni geo»](runner.md#operazioni-geo)): `InvalidPlan` per un WKB
 malformato o con coordinate non finite, `Unsupported` per dimensioni Z/M o
 SRID, `Crs` per una coordinata fuori dal dominio di validità del CRS della
 colonna, `Schema` per una geometria di un tipo che il contratto
@@ -86,8 +86,8 @@ dell'arco), `InvalidOutput` (linea fusa non valida), `Internal`
   d'uscita sono quelli descritti sopra, non quelli di GEOS.
 - I limiti di coordinate e di linee sono quelli del runner, sopra; non si
   scelgono dal piano.
-- Nessuna diagnostica per riga: il passo rende il primo errore ([README,
-  «Limiti dichiarati del runner»](../README.md#limiti-dichiarati-del-runner),
+- Nessuna diagnostica per riga: il passo rende il primo errore ([Runner,
+  «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner),
   voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 
 ### Precisione
@@ -95,7 +95,7 @@ dell'arco), `InvalidOutput` (linea fusa non valida), `Internal`
 Esatta: nessuna coordinata si calcola, i vertici d'uscita sono quelli
 d'ingresso con i loro bit. Due estremi distinti a meno di 1 cm non si
 uniscono: sono feature più vicine della precisione, fuori dalla garanzia
-([README, «Precisione delle operazioni geografiche: 1 cm a terra»](../README.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 
