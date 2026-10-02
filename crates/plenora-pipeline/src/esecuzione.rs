@@ -124,7 +124,18 @@ pub struct Interruzione {
 
 impl Interruzione {
     /// `Cancelled` o `Timeout` se l'esecuzione va fermata `dove`.
-    fn verifica(&self, dove: &str) -> Result<()> {
+    ///
+    /// Pubblica perché la usano anche i confini sopra il runner
+    /// (`plenora-io` fra la lettura di un file e l'altro, la CLI fra le fasi
+    /// di un comando): un solo controllo, con la stessa precedenza
+    /// dell'annullamento sulla scadenza e gli stessi testi.
+    ///
+    /// # Errors
+    ///
+    /// `Cancelled` se il segnale è alzato, altrimenti `Timeout` se la
+    /// scadenza è passata; la fase è quella derivata dalla variante, e chi
+    /// conosce il momento esatto la raffina con `with_phase`.
+    pub fn verifica(&self, dove: &str) -> Result<()> {
         if self
             .annullamento
             .as_ref()

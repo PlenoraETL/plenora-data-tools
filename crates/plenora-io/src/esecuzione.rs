@@ -23,8 +23,8 @@ use std::path::{Path, PathBuf};
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::limits::Limits;
 use plenora_core::memoria::byte_vivi;
-use plenora_core::{PlenoraError, RemoteEffect, Result};
-use plenora_pipeline::{Pipeline, Report};
+use plenora_core::{ErrorPhase, PlenoraError, RemoteEffect, Result};
+use plenora_pipeline::{Interruzione, Pipeline, PipelineValidata, Report};
 
 use crate::formato::{Formato, OpzioniScrittura};
 use crate::memoria::oltre_il_budget;
@@ -155,7 +155,7 @@ fn con_nome(contesto: &str, errore: PlenoraError) -> PlenoraError {
 /// Transitorio previsto della scrittura di una tabella nel formato dato.
 fn transitorio(tabella: &RecordBatch, formato: Formato) -> u64 {
     match formato {
-        Formato::ArrowIpc => ipc::transitorio_scrittura(tabella),
+        Formato::ArrowIpc | Formato::ArrowIpcStream => ipc::transitorio_scrittura(tabella),
         Formato::Parquet => parquet_io::transitorio_scrittura(tabella),
     }
 }
@@ -181,6 +181,51 @@ pub fn esegui_da_file(
     uscite: &[FileUscita],
     opzioni: &OpzioniScrittura,
 ) -> Result<Report> {
+    esegui_da_file_interrompibile(piano, ingressi, uscite, opzioni, &Interruzione::default())
+        .map(|esito| esito.report)
+}
+
+/// Esito di [`esegui_da_file_interrompibile`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EsitoFile {
+    /// Resoconto del runner.
+    pub report: Report,
+    /// Gli output scritti, nell'ordine del piano.
+    pub uscite: Vec<UscitaScritta>,
+}
+
+/// Un output scritto: nome, forma e formato, senza il percorso.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UscitaScritta {
+    /// Nome dell'output nel piano.
+    pub nome: String,
+    pub righe: u64,
+    pub colonne: u64,
+    /// Formato effettivo del file scritto.
+    pub formato: Formato,
+}
+
+/// [`esegui_da_file`] con una scadenza e un segnale di annullamento
+/// ([`Interruzione`]).
+///
+/// Oltre ai controlli del runner (prima di ogni passo e prima di consegnare
+/// gli output) l'interruzione si controlla prima di leggere ogni input (fase
+/// `read`) e prima di scrivere ogni output (fase `write`). Mai durante la
+/// lettura o la scrittura di un file: un file grande finisce anche oltre la
+/// scadenza, e l'errore arriva al controllo successivo. Un'interruzione
+/// dopo il primo output scritto ha effetto `partial`, come ogni errore
+/// della scrittura.
+///
+/// # Errors
+///
+/// Quelli di [`esegui_da_file`]; `Cancelled` o `Timeout` a un controllo.
+pub fn esegui_da_file_interrompibile(
+    piano: &Pipeline,
+    ingressi: &[FileIngresso],
+    uscite: &[FileUscita],
+    opzioni: &OpzioniScrittura,
+    interruzione: &Interruzione,
+) -> Result<EsitoFile> {
     verifica_percorsi(piano, ingressi, uscite, *opzioni)?;
     let limiti = piano.limits.as_ref().map_or_else(
         || Ok(Limits::default()),
@@ -188,19 +233,7 @@ pub fn esegui_da_file(
     )?;
     let budget = limiti.max_governed_memory_bytes;
 
-    let mut caricate: Vec<(String, RecordBatch)> = Vec::with_capacity(ingressi.len());
-    for ingresso in ingressi {
-        let contesto = format!("input `{}`", ingresso.nome);
-        let vivi = byte_vivi(caricate.iter().map(|(_, tabella)| tabella))?;
-        let residuo = budget.saturating_sub(vivi);
-        let letta = leggi_tabella(&ingresso.percorso, ingresso.formato, residuo)
-            .map_err(|errore| con_nome(&contesto, errore))?;
-        caricate.push((ingresso.nome.clone(), letta));
-        let vivi = byte_vivi(caricate.iter().map(|(_, tabella)| tabella))?;
-        if vivi > budget {
-            return Err(con_nome(&contesto, oltre_il_budget(vivi, budget)));
-        }
-    }
+    let caricate = carica_ingressi(ingressi, budget, interruzione)?;
 
     let schemi: Vec<(&str, _)> = caricate
         .iter()
@@ -208,32 +241,108 @@ pub fn esegui_da_file(
         .collect();
     let validata = piano.validate(&schemi)?;
     drop(schemi);
-    let esito = validata.run(caricate)?;
+    let esito = validata.run_interrompibile(caricate, interruzione)?;
 
-    let mut pubblicati = 0_usize;
-    scrivi_uscite(esito.outputs, uscite, *opzioni, budget, &mut pubblicati).map_err(|errore| {
-        if pubblicati == 0 {
+    let mut pubblicati = Vec::with_capacity(esito.outputs.len());
+    scrivi_uscite(
+        esito.outputs,
+        uscite,
+        *opzioni,
+        budget,
+        interruzione,
+        &mut pubblicati,
+    )
+    .map_err(|errore| {
+        if pubblicati.is_empty() {
             errore
         } else {
             errore.with_remote_effect(RemoteEffect::Partial)
         }
     })?;
-    Ok(esito.report)
+    Ok(EsitoFile {
+        report: esito.report,
+        uscite: pubblicati,
+    })
 }
 
-/// Scrive gli output nell'ordine del piano; `pubblicati` conta quelli già
+/// Valida un piano contro gli schemi dei suoi input letti da file, senza
+/// eseguirlo.
+///
+/// Gli input si caricano come in [`esegui_da_file_interrompibile`] (stesso
+/// budget, stessa lettura, stessi controlli dell'interruzione), poi si
+/// liberano: la validazione guarda solo gli schemi. Leggere le tabelle
+/// intere per averne lo schema è un costo dichiarato (README, «CLI
+/// `plenora-data`»), limitato dal budget del piano.
+///
+/// # Errors
+///
+/// Gli errori di lettura degli input, con il loro nome, e quelli di
+/// [`Pipeline::validate`]; `Cancelled` o `Timeout` a un controllo.
+pub fn valida_da_file(
+    piano: &Pipeline,
+    ingressi: &[FileIngresso],
+    interruzione: &Interruzione,
+) -> Result<PipelineValidata> {
+    let limiti = piano.limits.as_ref().map_or_else(
+        || Ok(Limits::default()),
+        plenora_pipeline::LimitiParziali::applica,
+    )?;
+    let caricate = carica_ingressi(ingressi, limiti.max_governed_memory_bytes, interruzione)?;
+    let schemi: Vec<(&str, _)> = caricate
+        .iter()
+        .map(|(nome, tabella)| (nome.as_str(), tabella.schema()))
+        .collect();
+    piano.validate(&schemi)
+}
+
+/// Carica gli input nell'ordine dato, ciascuno con il budget residuo; dopo
+/// ogni lettura i byte vivi esatti devono stare nel budget. L'interruzione
+/// si controlla prima di ogni lettura (fase `read`).
+fn carica_ingressi(
+    ingressi: &[FileIngresso],
+    budget: u64,
+    interruzione: &Interruzione,
+) -> Result<Vec<(String, RecordBatch)>> {
+    let mut caricate: Vec<(String, RecordBatch)> = Vec::with_capacity(ingressi.len());
+    for ingresso in ingressi {
+        let contesto = format!("input `{}`", ingresso.nome);
+        interruzione
+            .verifica(&format!("prima di leggere l'{contesto}"))
+            .map_err(|errore| errore.with_phase(ErrorPhase::Read))?;
+        let vivi = byte_vivi(caricate.iter().map(|(_, tabella)| tabella))?;
+        let residuo = budget.saturating_sub(vivi);
+        // Fase `read`: l'errore nasce leggendo l'input (la derivazione per
+        // variante darebbe `write` a I/O e limiti).
+        let letta = leggi_tabella(&ingresso.percorso, ingresso.formato, residuo)
+            .map_err(|errore| con_nome(&contesto, errore).with_phase(ErrorPhase::Read))?;
+        caricate.push((ingresso.nome.clone(), letta));
+        let vivi = byte_vivi(caricate.iter().map(|(_, tabella)| tabella))?;
+        if vivi > budget {
+            return Err(
+                con_nome(&contesto, oltre_il_budget(vivi, budget)).with_phase(ErrorPhase::Read)
+            );
+        }
+    }
+    Ok(caricate)
+}
+
+/// Scrive gli output nell'ordine del piano; `pubblicati` tiene quelli già
 /// alla destinazione, anche quando la funzione poi fallisce.
 fn scrivi_uscite(
     mut restanti: Vec<(String, RecordBatch)>,
     uscite: &[FileUscita],
     opzioni: OpzioniScrittura,
     budget: u64,
-    pubblicati: &mut usize,
+    interruzione: &Interruzione,
+    pubblicati: &mut Vec<UscitaScritta>,
 ) -> Result<()> {
     let mut scritti: Vec<PathBuf> = Vec::new();
     while !restanti.is_empty() {
         let (nome, tabella) = restanti.remove(0);
         let contesto = format!("output `{nome}`");
+        interruzione
+            .verifica(&format!("prima di scrivere l'{contesto}"))
+            .map_err(|errore| errore.with_phase(ErrorPhase::Write))?;
         let destinazione = uscite
             .iter()
             .find(|uscita| uscita.nome == nome)
@@ -265,7 +374,18 @@ fn scrivi_uscite(
         };
         scrivi_tabella(&tabella, &destinazione.percorso, &opzioni_uscita)
             .map_err(|errore| con_nome(&contesto, errore))?;
-        *pubblicati += 1;
+        let conta = |n: usize| {
+            u64::try_from(n).map_err(|_| {
+                PlenoraError::Internal(format!("{contesto}: conteggio non rappresentabile"))
+            })
+        };
+        pubblicati.push(UscitaScritta {
+            nome,
+            righe: conta(tabella.num_rows())?,
+            colonne: conta(tabella.num_columns())?,
+            formato,
+        });
+        drop(tabella);
         scritti.push(std::fs::canonicalize(&destinazione.percorso)?);
     }
     Ok(())

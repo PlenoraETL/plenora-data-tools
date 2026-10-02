@@ -7,9 +7,14 @@ use plenora_core::{PlenoraError, Result};
 /// Formato di un file di tabella.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Formato {
-    /// Arrow IPC. In lettura file (Feather v2) o stream, riconosciuti dal
-    /// contenuto; in scrittura sempre formato file.
+    /// Arrow IPC, formato file (`application/vnd.apache.arrow.file`). In
+    /// lettura file (Feather v2) o stream, riconosciuti dal contenuto; in
+    /// scrittura formato file.
     ArrowIpc,
+    /// Arrow IPC, formato stream (`application/vnd.apache.arrow.stream`).
+    /// In lettura come [`Formato::ArrowIpc`] (file o stream, dal
+    /// contenuto); in scrittura formato stream, con il marcatore di fine.
+    ArrowIpcStream,
     /// Parquet; `GeoParquet` 1.1 quando c'è il metadato di file `geo` (in
     /// lettura) o una colonna geometrica nello schema (in scrittura).
     Parquet,
@@ -17,7 +22,8 @@ pub enum Formato {
 
 impl Formato {
     /// Il formato dall'estensione, senza distinzione di maiuscole:
-    /// `.arrow`, `.feather`, `.ipc`, `.arrows` → [`Formato::ArrowIpc`];
+    /// `.arrow`, `.feather`, `.ipc` → [`Formato::ArrowIpc`]; `.arrows` (il
+    /// nome che Arrow dà agli stream) → [`Formato::ArrowIpcStream`];
     /// `.parquet` → [`Formato::Parquet`].
     ///
     /// # Errors
@@ -30,7 +36,8 @@ impl Formato {
             .and_then(|estensione| estensione.to_str())
             .map(str::to_ascii_lowercase);
         match estensione.as_deref() {
-            Some("arrow" | "feather" | "ipc" | "arrows") => Ok(Self::ArrowIpc),
+            Some("arrow" | "feather" | "ipc") => Ok(Self::ArrowIpc),
+            Some("arrows") => Ok(Self::ArrowIpcStream),
             Some("parquet") => Ok(Self::Parquet),
             _ => Err(PlenoraError::Unsupported(
                 "estensione di file non riconosciuta: attese .arrow, .feather, .ipc, .arrows \
@@ -84,7 +91,8 @@ mod tests {
             ("a.arrow", Formato::ArrowIpc),
             ("a.FEATHER", Formato::ArrowIpc),
             ("dir.x/a.ipc", Formato::ArrowIpc),
-            ("a.arrows", Formato::ArrowIpc),
+            ("a.arrows", Formato::ArrowIpcStream),
+            ("a.ARROWS", Formato::ArrowIpcStream),
             ("a.Parquet", Formato::Parquet),
         ] {
             assert_eq!(Formato::da_percorso(Path::new(nome)).ok(), Some(atteso));

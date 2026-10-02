@@ -3,7 +3,8 @@
 //! Formati (README, «File»):
 //!
 //! - **Arrow IPC**: lettura di file (Feather v2) e stream, scrittura di
-//!   file; schema e metadati di schema e di campo intatti ([`ipc`]);
+//!   file e stream ([`Formato::ArrowIpcStream`], estensione `.arrows`);
+//!   schema e metadati di schema e di campo intatti ([`ipc`]);
 //! - **Parquet**: lettura con lo schema Arrow incorporato verificato,
 //!   scrittura deterministica ([`parquet_io`]);
 //! - **`GeoParquet` 1.1**: il metadato di file `geo` si mappa sul contratto
@@ -41,7 +42,10 @@ use plenora_core::arrow::array::RecordBatch;
 use plenora_core::{PlenoraError, Result};
 
 pub use confine::LimitiLettura;
-pub use esecuzione::{esegui_da_file, FileIngresso, FileUscita};
+pub use esecuzione::{
+    esegui_da_file, esegui_da_file_interrompibile, valida_da_file, EsitoFile, FileIngresso,
+    FileUscita, UscitaScritta,
+};
 pub use formato::{CompressioneParquet, Formato, OpzioniScrittura};
 
 /// Legge una tabella da file.
@@ -75,7 +79,8 @@ pub fn leggi_tabella_con_limiti(
     limiti: &LimitiLettura,
 ) -> Result<RecordBatch> {
     match Formato::risolvi(formato, percorso)? {
-        Formato::ArrowIpc => ipc::leggi(percorso, residuo, limiti),
+        // File o stream si riconoscono dal contenuto, con ogni estensione.
+        Formato::ArrowIpc | Formato::ArrowIpcStream => ipc::leggi(percorso, residuo, limiti),
         Formato::Parquet => parquet_io::leggi(percorso, residuo, limiti),
     }
 }
@@ -104,6 +109,12 @@ pub fn scrivi_tabella(
             opzioni.sovrascrivi,
             |uscita| ipc::scrivi(tabella, uscita),
             |temporaneo| ipc::verifica_schema(temporaneo, &tabella.schema()),
+        ),
+        Formato::ArrowIpcStream => atomico::scrivi_atomico(
+            percorso,
+            opzioni.sovrascrivi,
+            |uscita| ipc::scrivi_stream(tabella, uscita),
+            |temporaneo| ipc::verifica_schema_stream(temporaneo, &tabella.schema()),
         ),
         Formato::Parquet => {
             let scritto = RefCell::new(None);

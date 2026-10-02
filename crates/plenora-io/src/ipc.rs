@@ -1,4 +1,5 @@
-//! Arrow IPC: lettura di file (Feather v2) e stream, scrittura di file.
+//! Arrow IPC: lettura di file (Feather v2) e stream, scrittura di file e
+//! stream.
 //!
 //! La lettura riconosce file e stream dal contenuto (il file comincia con
 //! `ARROW1`), legge tutti i blocchi e li ricompone in un solo `RecordBatch`
@@ -41,8 +42,8 @@ use std::sync::Arc;
 
 use arrow_buffer::{Buffer, MutableBuffer};
 use plenora_core::arrow::array::RecordBatch;
-use plenora_core::arrow::ipc::reader::{FileDecoder, FileReader, StreamDecoder};
-use plenora_core::arrow::ipc::writer::FileWriter;
+use plenora_core::arrow::ipc::reader::{FileDecoder, FileReader, StreamDecoder, StreamReader};
+use plenora_core::arrow::ipc::writer::{FileWriter, StreamWriter};
 use plenora_core::arrow::ipc::MessageHeader;
 use plenora_core::arrow::schema::SchemaRef;
 use plenora_core::arrow::select::concat::concat_batches;
@@ -463,22 +464,46 @@ fn righe_per_blocco(tabella: &RecordBatch) -> usize {
 /// `DataMapping` (Arrow) e `Io` dalla codifica e dalla scrittura.
 pub fn scrivi(tabella: &RecordBatch, uscita: impl Write) -> Result<()> {
     let mut scrittore = FileWriter::try_new(uscita, &tabella.schema())?;
+    per_blocchi(tabella, |blocco| Ok(scrittore.write(blocco)?))?;
+    scrittore.finish()?;
+    Ok(())
+}
+
+/// Scrive la tabella come stream Arrow IPC, con il marcatore di fine.
+///
+/// Stessi blocchi di [`scrivi`]: cambia solo l'incapsulamento (niente
+/// intestazione `ARROW1` né footer).
+///
+/// # Errors
+///
+/// `DataMapping` (Arrow) e `Io` dalla codifica e dalla scrittura.
+pub fn scrivi_stream(tabella: &RecordBatch, uscita: impl Write) -> Result<()> {
+    let mut scrittore = StreamWriter::try_new(uscita, &tabella.schema())?;
+    per_blocchi(tabella, |blocco| Ok(scrittore.write(blocco)?))?;
+    scrittore.finish()?;
+    Ok(())
+}
+
+/// I blocchi che la scrittura emette, nell'ordine delle righe.
+fn per_blocchi(
+    tabella: &RecordBatch,
+    mut scrivi_blocco: impl FnMut(&RecordBatch) -> Result<()>,
+) -> Result<()> {
     let righe = tabella.num_rows();
     if tabella.num_columns() == 0 {
         // Senza colonne il blocco porta solo il numero di righe.
         if righe > 0 {
-            scrittore.write(tabella)?;
+            scrivi_blocco(tabella)?;
         }
     } else {
         let per_blocco = righe_per_blocco(tabella);
         let mut inizio = 0;
         while inizio < righe {
             let lunghezza = per_blocco.min(righe - inizio);
-            scrittore.write(&tabella.slice(inizio, lunghezza))?;
+            scrivi_blocco(&tabella.slice(inizio, lunghezza))?;
             inizio += lunghezza;
         }
     }
-    scrittore.finish()?;
     Ok(())
 }
 
@@ -504,6 +529,23 @@ pub fn verifica_schema(percorso: &Path, scritto: &SchemaRef) -> Result<()> {
     if lettore.schema() != *scritto {
         return Err(PlenoraError::Schema(
             "schema del file IPC scritto diverso da quello della tabella".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Rilegge il messaggio di schema in testa a uno stream appena scritto: lo
+/// schema deve essere quello scritto.
+///
+/// # Errors
+///
+/// `Schema` se lo schema dello stream è diverso; `Io`, `DataMapping` dalla
+/// lettura del messaggio di schema.
+pub fn verifica_schema_stream(percorso: &Path, scritto: &SchemaRef) -> Result<()> {
+    let lettore = StreamReader::try_new(BufReader::new(File::open(percorso)?), None)?;
+    if lettore.schema() != *scritto {
+        return Err(PlenoraError::Schema(
+            "schema dello stream IPC scritto diverso da quello della tabella".to_owned(),
         ));
     }
     Ok(())

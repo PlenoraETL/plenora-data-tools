@@ -1226,7 +1226,18 @@ fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
         .zip(&ingressi)
         .map(|(spec, batch)| (spec.nome.as_str(), batch.schema()))
         .collect();
-    match piano.validate(&schemi) {
+    // L'elenco delle operazioni che il runner non esegue mai
+    // (`plenora_pipeline::disponibilita`, pubblicato da `data.catalog`) deve
+    // dire il vero in entrambe le direzioni: un'operazione elencata non passa
+    // la validazione, e una non elencata che non la passa e' solo `pivot`
+    // senza `mapping` (rifiuto che dipende dalla config).
+    let non_eseguibile =
+        plenora_pipeline::disponibilita::motivo_non_eseguibile(scheda.operazione.id).is_some();
+    let validata = piano.validate(&schemi);
+    if non_eseguibile && validata.is_ok() {
+        return Err("dichiarata non eseguibile dal runner, ma la validazione la accetta".into());
+    }
+    match validata {
         Ok(validata) => {
             let tabelle = esempio
                 .ingressi
@@ -1250,7 +1261,10 @@ fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
             verifica_contratto(scheda, &ingressi)?;
             Ok(Verifica::Contratto)
         }
-        Err(errore) if matches!(scheda.operazione.id, "table.pivot" | "table.transpose") => {
+        // Dal kernel solo `pivot` (senza `mapping` nell'esempio) e le
+        // operazioni che il runner non esegue mai: un'altra rifiutata
+        // (`transpose` tolta dall'elenco compresa) e' un errore sotto.
+        Err(errore) if scheda.operazione.id == "table.pivot" || non_eseguibile => {
             let uscita = kernel_diretto(scheda, &ingressi[0])
                 .map_err(|e| format!("kernel: {e} (il runner: {errore})"))?;
             verifica_forma(scheda.operazione, &righe_in, uscita.num_rows(), true)?;

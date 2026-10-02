@@ -192,8 +192,23 @@ impl Pipeline {
         // Ogni numero del piano vale quello che si legge: estremi, bordi e
         // soglie esatti (`NumeroConfig`) non ricevono un double arrotondato.
         plenora_core::json::ensure_numbers_exact(testo)?;
-        let letto: modello::PipelineJson = serde_json::from_str(testo)
-            .map_err(|errore| PlenoraError::InvalidPlan(format!("piano non valido: {errore}")))?;
+        // Il testo di serde cita i valori letti (`invalid type: string
+        // "..."`): nel messaggio vanno solo il genere e la posizione, come in
+        // `From<serde_json::Error>` di `plenora-core`, con la categoria del
+        // piano.
+        let letto: modello::PipelineJson = serde_json::from_str(testo).map_err(|errore| {
+            let genere = match errore.classify() {
+                serde_json::error::Category::Io => "lettura",
+                serde_json::error::Category::Syntax => "sintassi",
+                serde_json::error::Category::Data => "struttura o tipi dei campi",
+                serde_json::error::Category::Eof => "fine inattesa",
+            };
+            PlenoraError::InvalidPlan(format!(
+                "piano non valido: {genere} alla riga {} colonna {}",
+                errore.line(),
+                errore.column()
+            ))
+        })?;
         Ok(Self {
             version: letto.version,
             inputs: letto.inputs,

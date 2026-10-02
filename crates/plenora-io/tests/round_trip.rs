@@ -58,6 +58,41 @@ fn ipc_stream_identico() {
     identiche(&tabella, &letta);
 }
 
+/// `.arrows` (o `Formato::ArrowIpcStream`) si scrive come stream: niente
+/// `ARROW1`, il marcatore di fine in coda, una lettura stream indipendente
+/// (`StreamReader` di arrow-ipc) ritrova la tabella, e la stessa tabella dà
+/// gli stessi byte.
+#[test]
+fn ipc_stream_scritto() {
+    use plenora_core::arrow::ipc::reader::StreamReader;
+
+    let tabella = tabella_larga();
+    let dir = cartella();
+    let percorso = dir.path().join("t.arrows");
+    scrivi_tabella(&tabella, &percorso, &OpzioniScrittura::default()).unwrap();
+    let byte = std::fs::read(&percorso).unwrap();
+    assert!(!byte.starts_with(b"ARROW1"));
+    assert!(byte.starts_with(&[0xFF; 4]));
+    assert!(
+        byte.ends_with(&[0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0]),
+        "marcatore di fine"
+    );
+    let lettore = StreamReader::try_new(File::open(&percorso).unwrap(), None).unwrap();
+    let blocchi: Vec<RecordBatch> = lettore.map(Result::unwrap).collect();
+    let ricomposta =
+        plenora_core::arrow::select::concat::concat_batches(&tabella.schema(), &blocchi).unwrap();
+    identiche(&tabella, &ricomposta);
+    identiche(&tabella, &leggi_tabella(&percorso, None, u64::MAX).unwrap());
+    // Formato esplicito su un'altra estensione, e determinismo.
+    let altro = dir.path().join("t.bin");
+    let opzioni = OpzioniScrittura {
+        formato: Some(Formato::ArrowIpcStream),
+        ..OpzioniScrittura::default()
+    };
+    scrivi_tabella(&tabella, &altro, &opzioni).unwrap();
+    assert_eq!(std::fs::read(&altro).unwrap(), byte);
+}
+
 #[test]
 fn ipc_piu_blocchi_ricomposti() {
     // Una tabella oltre il blocco di scrittura si scrive in piÃ¹ blocchi.

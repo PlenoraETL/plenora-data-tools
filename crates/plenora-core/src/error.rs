@@ -15,10 +15,11 @@
 //!
 //! La fase derivata dalla variante si raffina con [`PlenoraError::Tagged`]
 //! dove chi produce l'errore conosce il momento esatto; gli altri assi
-//! restano delegati alla sorgente. Oggi nessun codice del workspace tagga:
-//! i rifiuti per riga dei kernel (conversioni, divisioni per zero,
-//! asserzioni) nascono eseguendo un passo, non leggendo un supporto, e
-//! prendono la fase derivata, [`ErrorPhase::Write`].
+//! restano delegati alla sorgente. Taggano i confini (runner, `plenora-io`,
+//! CLI: [`PlenoraError::phase`]); i rifiuti per riga dei kernel
+//! (conversioni, divisioni per zero, asserzioni) nascono eseguendo un
+//! passo, non leggendo un supporto, e prendono la fase derivata,
+//! [`ErrorPhase::Write`].
 //!
 //! Alcune varianti vengono dall'engine, dalla CLI e dal trasporto fra
 //! processi di `plenora-data-tools` e qui nessun codice le produce
@@ -757,10 +758,13 @@ impl PlenoraError {
     ///
     /// Un errore taggato ([`PlenoraError::Tagged`]) riporta la fase che gli
     /// ha dato chi lo ha prodotto; uno non taggato quella derivata dalla
-    /// variante. Oggi nessun codice del workspace tagga: kernel e runner
-    /// lasciano la derivazione (un rifiuto per riga di un kernel è un
-    /// `DataMapping`, quindi [`ErrorPhase::Write`], la fase dell'esecuzione),
-    /// e `plenora-io` non tagga.
+    /// variante. I kernel lasciano la derivazione (un rifiuto per riga di un
+    /// kernel è un `DataMapping`, quindi [`ErrorPhase::Write`], la fase
+    /// dell'esecuzione); taggano i confini che sanno dove sono: il runner
+    /// (`finalize` prima di consegnare gli output), `plenora-io` (`read` per
+    /// gli errori della lettura degli input di un piano e per l'interruzione
+    /// prima di leggerli, `write` per l'interruzione prima di scrivere un
+    /// output) e la CLI (`read` per la lettura di `describe`).
     ///
     /// Derivazione per variante, con le approssimazioni dichiarate:
     ///

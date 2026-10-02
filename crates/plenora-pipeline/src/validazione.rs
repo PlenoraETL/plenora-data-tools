@@ -190,11 +190,15 @@ pub fn nel_passo_o_input(contesto: &str, errore: PlenoraError) -> PlenoraError {
 }
 
 /// Normalizzazione degli schemi di input, la stessa che `run` applica ai
-/// batch: `LargeUtf8` di primo livello diventa `Utf8`, una colonna
-/// `geoarrow.wkb` `LargeBinary` diventa `Binary` (il contratto Arrow ammette
-/// entrambe, i kernel geo leggono `Binary`), la voce `pandas` dei metadati
-/// di schema si toglie (è un secondo schema che una trasformazione
-/// renderebbe falso).
+/// batch.
+///
+/// `LargeUtf8` di primo livello diventa `Utf8`, una colonna `geoarrow.wkb`
+/// `LargeBinary` diventa `Binary` (il contratto Arrow ammette entrambe, i
+/// kernel geo leggono `Binary`), la voce `pandas` dei metadati di schema si
+/// toglie (è un secondo schema che una trasformazione renderebbe falso).
+/// Pubblica perché `data.describe` della CLI legga un input come lo
+/// leggerebbe un piano.
+#[must_use]
 pub fn normalizza_schema(schema: &Schema) -> SchemaRef {
     let mut metadati = schema.metadata().clone();
     let _ = metadati.remove(METADATI_PANDAS);
