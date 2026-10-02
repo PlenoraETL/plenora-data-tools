@@ -258,6 +258,35 @@ def _configurazione(motivo: str) -> PlenoraInvalidConfigurationError:
     )
 
 
+def _dati(motivo: str) -> PlenoraDataMappingError:
+    """Un oggetto Arrow che non si lascia leggere mentre si preparano gli
+    argomenti, senza il testo della sua eccezione: potrebbe portare dati."""
+    return PlenoraDataMappingError(
+        f"data mapping: {motivo}",
+        category="data_mapping",
+        phase="read",
+        remote_effect="none",
+        retry={"kind": "never"},
+    )
+
+
+def _annullata_alla_consegna(*, con_effetti: bool) -> PlenoraCancelledError:
+    """L'esito di un'operazione asincrona finita con successo mentre il suo
+    task veniva annullato: il risultato non si consegna, e l'errore dice
+    l'effetto vero (`committed` se gli output sono stati scritti; allora il
+    ritentativo non è automatico). Gli stessi assi dell'annullamento alla
+    consegna del modulo nativo."""
+    return PlenoraCancelledError(
+        "cancelled: esecuzione annullata alla consegna: il lavoro era finito, "
+        "il risultato non si consegna",
+        category="cancelled",
+        phase="finalize",
+        remote_effect="committed" if con_effetti else "none",
+        retry={"kind": "requires_recovery"} if con_effetti else {"kind": "safe"},
+        code="EXECUTION_CANCELLED",
+    )
+
+
 def _interno(motivo: str, *, remote_effect: str = "none") -> PlenoraInternalError:
     """Un difetto del confine (un'eccezione nativa inattesa), senza il suo
     testo: potrebbe portare dati."""

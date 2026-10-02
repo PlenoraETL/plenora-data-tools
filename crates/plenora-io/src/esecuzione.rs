@@ -274,7 +274,15 @@ pub fn esegui_da_file_interrompibile(
 }
 
 /// Il budget del piano: `max_governed_memory_bytes` dei suoi limiti.
-fn budget_del_piano(piano: &Pipeline) -> Result<u64> {
+///
+/// Il default se il piano non li dà. Lo usa anche chi importa tabelle in
+/// memoria prima di chiamare queste funzioni (l'SDK Python), per fermarsi
+/// allo stesso confine.
+///
+/// # Errors
+///
+/// Quelli di `LimitiParziali::applica` per limiti non validi.
+pub fn budget_del_piano(piano: &Pipeline) -> Result<u64> {
     let limiti = piano.limits.as_ref().map_or_else(
         || Ok(Limits::default()),
         plenora_pipeline::LimitiParziali::applica,
@@ -418,12 +426,41 @@ pub fn valida_ingressi(
 /// Carica gli input nell'ordine dato, ciascuno con il budget residuo; dopo
 /// ogni lettura (o tabella in memoria) i byte vivi esatti devono stare nel
 /// budget. L'interruzione si controlla prima di ogni input (fase `read`).
+///
+/// Le tabelle in memoria sono già residenti prima di qualunque lettura: si
+/// riservano nel budget dall'inizio, in qualunque posizione stiano, così un
+/// file letto prima di loro ha come residuo il budget meno quelle tabelle
+/// (non il budget intero, che farebbe stare in memoria file e tabelle oltre
+/// il budget prima del rifiuto). I byte vivi contano ogni allocazione una
+/// volta: una tabella in memoria già caricata non conta due volte.
 fn carica_ingressi(
     ingressi: Vec<Ingresso>,
     budget: u64,
     interruzione: &Interruzione,
 ) -> Result<Vec<(String, RecordBatch)>> {
+    let mut residenti: Vec<RecordBatch> = Vec::new();
+    for ingresso in &ingressi {
+        if let Ingresso::Tabella { nome, tabella } = ingresso {
+            residenti.push(tabella.clone());
+            let riservati = byte_vivi(&residenti)?;
+            if riservati > budget {
+                return Err(con_nome(
+                    &format!("input `{nome}`"),
+                    oltre_il_budget(riservati, budget),
+                )
+                .with_phase(ErrorPhase::Read));
+            }
+        }
+    }
     let mut caricate: Vec<(String, RecordBatch)> = Vec::with_capacity(ingressi.len());
+    let vivi_con_residenti = |caricate: &[(String, RecordBatch)]| {
+        byte_vivi(
+            caricate
+                .iter()
+                .map(|(_, tabella)| tabella)
+                .chain(residenti.iter()),
+        )
+    };
     for ingresso in ingressi {
         let contesto = format!("input `{}`", ingresso.nome());
         interruzione
@@ -431,7 +468,7 @@ fn carica_ingressi(
             .map_err(|errore| errore.with_phase(ErrorPhase::Read))?;
         let (nome, letta) = match ingresso {
             Ingresso::File(file) => {
-                let vivi = byte_vivi(caricate.iter().map(|(_, tabella)| tabella))?;
+                let vivi = vivi_con_residenti(&caricate)?;
                 let residuo = budget.saturating_sub(vivi);
                 // Fase `read`: l'errore nasce leggendo l'input (la
                 // derivazione per variante darebbe `write` a I/O e limiti).
@@ -442,7 +479,7 @@ fn carica_ingressi(
             Ingresso::Tabella { nome, tabella } => (nome, tabella),
         };
         caricate.push((nome, letta));
-        let vivi = byte_vivi(caricate.iter().map(|(_, tabella)| tabella))?;
+        let vivi = vivi_con_residenti(&caricate)?;
         if vivi > budget {
             return Err(
                 con_nome(&contesto, oltre_il_budget(vivi, budget)).with_phase(ErrorPhase::Read)

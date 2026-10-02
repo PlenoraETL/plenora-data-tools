@@ -9,6 +9,7 @@ import functools
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -81,7 +82,56 @@ def test_gettone_gia_alzato() -> None:
     with pytest.raises(pd.PlenoraCancelledError) as errore:
         pd.run(piano_identita(), {"t": tabella_semplice()}, cancel=gettone)
     assert errore.value.code == "EXECUTION_CANCELLED"
-    assert errore.value.phase == "read"
+    # Fermata all'ingresso, prima di qualunque lavoro.
+    assert errore.value.phase == "prepare"
+
+
+def test_gettone_gia_alzato_non_legge_ne_scrive(tmp_path: Any) -> None:
+    """Un input da file che non esiste: se la chiamata lo leggesse
+    fallirebbe con `not_found`; un output che non deve comparire."""
+    gettone = pd.CancellationToken()
+    gettone.cancel()
+    uscita = tmp_path / "u.arrow"
+    for chiamata in (
+        lambda: pd.run(
+            piano_identita(), {"t": tmp_path / "manca.arrow"}, outputs={"t": uscita}, cancel=gettone
+        ),
+        lambda: pd.validate(piano_identita(), {"t": tmp_path / "manca.arrow"}, cancel=gettone),
+        lambda: pd.describe(tmp_path / "manca.arrow", cancel=gettone),
+    ):
+        with pytest.raises(pd.PlenoraCancelledError) as errore:
+            chiamata()
+        assert errore.value.remote_effect == "none"
+    assert not uscita.exists()
+
+
+def test_annullamento_in_corsa_con_la_fine_non_e_mai_un_successo_taciuto(
+    tmp_path: Any,
+) -> None:
+    """Un gettone alzato a istanti diversi intorno alla fine del lavoro:
+    o la chiamata riesce e il gettone è arrivato dopo, o fallisce con
+    `cancelled` e l'effetto dice se il file d'uscita è stato scritto."""
+    piano = piano_lungo(6)
+    tabella = tabella_grande(200_000)
+    inizio = time.perf_counter()
+    pd.run(piano, {"t": tabella}, outputs={"s5": tmp_path / "misura.arrow"})
+    durata = time.perf_counter() - inizio
+    esiti = set()
+    for indice in range(24):
+        uscita = tmp_path / f"u{indice}.arrow"
+        gettone = pd.CancellationToken()
+        threading.Timer(durata * indice / 12, gettone.cancel).start()
+        try:
+            pd.run(piano, {"t": tabella}, outputs={"s5": uscita}, cancel=gettone)
+        except pd.PlenoraCancelledError as errore:
+            esiti.add(errore.remote_effect)
+            assert errore.remote_effect == ("committed" if uscita.exists() else "none")
+        else:
+            esiti.add("ok")
+            assert uscita.exists()
+    # Gli istanti vanno da subito a due volte la durata: qualche
+    # annullamento si vede di certo.
+    assert esiti & {"none", "committed"}
 
 
 def test_gettone_alzato_da_un_altro_thread() -> None:
@@ -200,3 +250,66 @@ def test_le_forme_asincrone_hanno_gli_stessi_errori() -> None:
             await pd.arun(piano_identita(), {"t": tabella_semplice()}, timeout=-1)
 
     asyncio.run(principale())
+
+
+def _causa_dell_annullamento(annullamento: BaseException) -> BaseException | None:
+    """La causa del `CancelledError` sollevato dentro il task (in 3.10 chi
+    aspetta ne riceve uno nuovo, con quello come `__context__`)."""
+    if annullamento.__cause__ is not None:
+        return annullamento.__cause__
+    contesto = annullamento.__context__
+    return None if contesto is None else contesto.__cause__
+
+
+def test_un_task_annullato_mentre_il_lavoro_finisce_dice_l_esito() -> None:
+    """Il lavoro finisce con successo dopo l'annullamento del task (qui una
+    chiamata che ignora i gettoni): il risultato non si consegna, ma la causa
+    dice l'effetto, `committed` quando gli output sono stati scritti."""
+    from plenora_data._api import _in_thread
+
+    def lavoro(_: list[pd.CancellationToken]) -> str:
+        time.sleep(0.3)
+        return "finito"
+
+    for con_effetti, effetto, ritentativo in (
+        (True, "committed", "requires_recovery"),
+        (False, "none", "safe"),
+    ):
+
+        async def principale(con_effetti: bool = con_effetti) -> BaseException:
+            compito = asyncio.create_task(_in_thread(lavoro, [], con_effetti=con_effetti))
+            await asyncio.sleep(0.05)
+            compito.cancel()
+            try:
+                await compito
+            except asyncio.CancelledError as annullamento:
+                return annullamento
+            raise AssertionError("il task doveva essere annullato")
+
+        causa = _causa_dell_annullamento(asyncio.run(principale()))
+        assert isinstance(causa, pd.PlenoraCancelledError)
+        assert causa.remote_effect == effetto
+        assert causa.retry == {"kind": ritentativo}
+        assert causa.phase == "finalize"
+
+
+def test_la_scadenza_asincrona_conta_dall_ingresso(tmp_path: Any) -> None:
+    """Con l'executor saturo la chiamata aspetta un thread libero: la
+    scadenza vale dall'ingresso di `arun`, e una scadenza passata in coda
+    ferma la chiamata prima di qualunque lavoro."""
+    uscita = tmp_path / "u.arrow"
+
+    async def principale() -> None:
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        occupato = loop.run_in_executor(None, time.sleep, 0.5)
+        with pytest.raises(pd.PlenoraTimeoutError) as errore:
+            await pd.arun(
+                piano_identita(), {"t": tabella_semplice()}, outputs={"t": uscita}, timeout=0.1
+            )
+        await occupato
+        assert errore.value.phase == "prepare"
+        assert errore.value.remote_effect == "none"
+
+    asyncio.run(principale())
+    assert not uscita.exists()

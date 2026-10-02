@@ -12,9 +12,11 @@ chiamata nativa esegue il lavoro in un thread suo, senza il GIL.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import math
 import os
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -25,7 +27,13 @@ import pyarrow as pa
 
 from . import _native
 from ._native import CancellationToken
-from .errors import PlenoraError, _configurazione, _interno
+from .errors import (
+    PlenoraError,
+    _annullata_alla_consegna,
+    _configurazione,
+    _dati,
+    _interno,
+)
 
 __all__ = [
     "ArrowStreamExportable",
@@ -102,15 +110,42 @@ def _chiama(funzione: Callable[[], _T], *, con_effetti: bool = False) -> _T:
         ) from None
 
 
+def _classificata(preparazione: Callable[..., _T]) -> Callable[..., _T]:
+    """La preparazione degli argomenti non lascia uscire eccezioni non
+    pubbliche: le sue `PlenoraError` passano, ogni altra `Exception` (un
+    `Mapping` che fallisce mentre si itera, un intero che non sta in un
+    float) diventa `invalid_configuration` con un testo fisso, senza il suo.
+    `KeyboardInterrupt`, `SystemExit` e `asyncio.CancelledError` passano."""
+
+    @functools.wraps(preparazione)
+    def classificata(*argomenti: Any, **nominati: Any) -> _T:
+        try:
+            return preparazione(*argomenti, **nominati)
+        except PlenoraError:
+            raise
+        except Exception:
+            raise _configurazione("argomenti non leggibili") from None
+
+    return classificata
+
+
 def _secondi(timeout: float | None) -> float | None:
+    """Il timeout come istante del clock monotono, fissato adesso: la
+    scadenza vale dall'ingresso della chiamata pubblica, anche se la forma
+    asincrona aspetta un thread libero prima di partire."""
     if timeout is None:
         return None
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
         raise _configurazione("`timeout`: attesi secondi (int o float) o None")
-    valore = float(timeout)
+    try:
+        valore = float(timeout)
+    except OverflowError:
+        valore = math.inf
     if not math.isfinite(valore) or valore < 0:
-        raise _configurazione("`timeout`: atteso un numero finito di secondi, non negativo")
-    return valore
+        raise _configurazione(
+            "`timeout`: atteso un numero finito di secondi, non negativo e rappresentabile"
+        )
+    return time.monotonic() + valore
 
 
 def _epoca(deadline: datetime | None) -> float | None:
@@ -135,11 +170,11 @@ def _gettone(cancel: CancellationToken | None) -> list[CancellationToken]:
 def _controlli(
     timeout: float | None, deadline: datetime | None, cancel: CancellationToken | None
 ) -> tuple[float | None, float | None, list[CancellationToken]]:
-    secondi = _secondi(timeout)
+    monotona = _secondi(timeout)
     epoca = _epoca(deadline)
-    if secondi is not None and epoca is not None:
+    if monotona is not None and epoca is not None:
         raise _configurazione("una sola fra `deadline` e `timeout`")
-    return epoca, secondi, _gettone(cancel)
+    return epoca, monotona, _gettone(cancel)
 
 
 def _sorgente(valore: object, voce: str) -> tuple[str, object]:
@@ -147,10 +182,16 @@ def _sorgente(valore: object, voce: str) -> tuple[str, object]:
     __arrow_c_stream__)`. `voce` dice quale argomento, per il messaggio."""
     if isinstance(valore, (str, os.PathLike)):
         return ("path", valore)
-    if isinstance(valore, pa.RecordBatch):
-        # Senza copia: la tabella condivide i buffer del blocco.
-        return ("arrow", pa.Table.from_batches([valore]))
-    if hasattr(valore, "__arrow_c_stream__"):
+    try:
+        if isinstance(valore, pa.RecordBatch):
+            # Senza copia: la tabella condivide i buffer del blocco.
+            return ("arrow", pa.Table.from_batches([valore]))
+        arrow = hasattr(valore, "__arrow_c_stream__")
+    except Exception:
+        # L'oggetto fallisce già mentre lo si guarda: il suo testo può
+        # portare dati, e non esce.
+        raise _dati(f"{voce}: l'oggetto Arrow non si lascia leggere") from None
+    if arrow:
         return ("arrow", valore)
     raise _configurazione(
         f"{voce}: atteso un percorso o un oggetto Arrow "
@@ -209,23 +250,25 @@ def _uscite(outputs: Mapping[str, Destination] | None) -> list[tuple[str, object
 _Preparata = Callable[[list[CancellationToken]], _T]
 
 
+@_classificata
 def _prepara_describe(
     data: Source,
     timeout: float | None,
     deadline: datetime | None,
     cancel: CancellationToken | None,
 ) -> tuple[_Preparata[dict[str, Any]], list[CancellationToken]]:
-    epoca, secondi, gettoni = _controlli(timeout, deadline, cancel)
+    epoca, monotona, gettoni = _controlli(timeout, deadline, cancel)
     tipo, oggetto = _sorgente(data, "`data`")
 
     def chiamata(tutti: list[CancellationToken]) -> dict[str, Any]:
-        testo = _chiama(lambda: _native.describe(tipo, oggetto, epoca, secondi, tutti))
+        testo = _chiama(lambda: _native.describe(tipo, oggetto, epoca, monotona, tutti))
         documento: dict[str, Any] = json.loads(testo)
         return documento
 
     return chiamata, gettoni
 
 
+@_classificata
 def _prepara_validate(
     plan: Plan,
     inputs: Mapping[str, Source] | None,
@@ -233,13 +276,13 @@ def _prepara_validate(
     deadline: datetime | None,
     cancel: CancellationToken | None,
 ) -> tuple[_Preparata[dict[str, Any]], list[CancellationToken]]:
-    epoca, secondi, gettoni = _controlli(timeout, deadline, cancel)
+    epoca, monotona, gettoni = _controlli(timeout, deadline, cancel)
     tipo_piano, piano = _piano(plan)
     voci = _ingressi(inputs)
 
     def chiamata(tutti: list[CancellationToken]) -> dict[str, Any]:
         testo = _chiama(
-            lambda: _native.validate(tipo_piano, piano, voci, epoca, secondi, tutti)
+            lambda: _native.validate(tipo_piano, piano, voci, epoca, monotona, tutti)
         )
         documento: dict[str, Any] = json.loads(testo)
         return documento
@@ -247,6 +290,7 @@ def _prepara_validate(
     return chiamata, gettoni
 
 
+@_classificata
 def _prepara_run(
     plan: Plan,
     inputs: Mapping[str, Source] | None,
@@ -256,7 +300,7 @@ def _prepara_run(
     deadline: datetime | None,
     cancel: CancellationToken | None,
 ) -> tuple[_Preparata[RunResult], list[CancellationToken]]:
-    epoca, secondi, gettoni = _controlli(timeout, deadline, cancel)
+    epoca, monotona, gettoni = _controlli(timeout, deadline, cancel)
     if not isinstance(overwrite, bool):
         raise _configurazione("`overwrite`: atteso un bool")
     tipo_piano, piano = _piano(plan)
@@ -267,7 +311,7 @@ def _prepara_run(
     def chiamata(tutti: list[CancellationToken]) -> RunResult:
         testo, tabelle = _chiama(
             lambda: _native.run(
-                tipo_piano, piano, voci, uscite, overwrite, epoca, secondi, tutti
+                tipo_piano, piano, voci, uscite, overwrite, epoca, monotona, tutti
             ),
             con_effetti=con_effetti,
         )
@@ -277,13 +321,21 @@ def _prepara_run(
     return chiamata, gettoni
 
 
-async def _in_thread(chiamata: _Preparata[_T], gettoni: list[CancellationToken]) -> _T:
+async def _in_thread(
+    chiamata: _Preparata[_T],
+    gettoni: list[CancellationToken],
+    *,
+    con_effetti: bool = False,
+) -> _T:
     """Esegue una chiamata preparata nell'executor del loop.
 
     Se il task viene annullato, il gettone interno ferma il lavoro al suo
     controllo successivo; il task aspetta che il lavoro si sia fermato (mai
     lavoro che continua dopo l'annullamento) e poi propaga
-    `asyncio.CancelledError`, con l'esito del lavoro come `__cause__`.
+    `asyncio.CancelledError`, con l'esito del lavoro come `__cause__`. Se il
+    lavoro era già finito con successo, la causa è l'annullamento alla
+    consegna con l'effetto vero (`committed` se `con_effetti`: gli output
+    sono stati scritti), mai un risultato perso senza assi.
     """
     interno = CancellationToken()
     tutti = [*gettoni, interno]
@@ -296,6 +348,7 @@ async def _in_thread(chiamata: _Preparata[_T], gettoni: list[CancellationToken])
         while True:
             try:
                 await asyncio.shield(futuro)
+                causa = _annullata_alla_consegna(con_effetti=con_effetti)
             except asyncio.CancelledError:
                 # Un altro annullamento mentre il lavoro si ferma: si
                 # continua ad aspettarlo.
@@ -446,4 +499,6 @@ async def arun(
     chiamata, gettoni = _prepara_run(
         plan, inputs, outputs, overwrite, timeout, deadline, cancel
     )
-    return await _in_thread(chiamata, gettoni)
+    # Con `outputs` il lavoro scrive file: un risultato finito e non
+    # consegnato ha effetto `committed`.
+    return await _in_thread(chiamata, gettoni, con_effetti=outputs is not None)

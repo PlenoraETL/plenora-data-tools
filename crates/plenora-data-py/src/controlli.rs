@@ -11,6 +11,12 @@
 //!   successivo, e il `KeyboardInterrupt` esce con l'esito del lavoro come
 //!   `__cause__` (gli assi veri, anche `partial` o `committed`).
 //!
+//! I gettoni si portano nel segnale anche prima di far partire il lavoro (un
+//! gettone già alzato non lascia leggere né scrivere nulla) e alla consegna:
+//! un annullamento arrivato mentre il lavoro finiva diventa `cancelled` in
+//! fase `finalize`, con effetto `committed` se gli output sono stati
+//! scritti, mai un successo.
+//!
 //! La scadenza è l'`Interruzione` del runner, la stessa della CLI: fissata
 //! all'ingresso della chiamata e controllata fra le letture, i passi e le
 //! scritture.
@@ -50,17 +56,20 @@ fn configurazione(motivo: &str) -> PlenoraError {
 fn durata(secondi: f64, nome: &str) -> Result<Duration, PlenoraError> {
     Duration::try_from_secs_f64(secondi).map_err(|_| {
         configurazione(&format!(
-            "`{nome}`: atteso un numero finito di secondi, non negativo"
+            "`{nome}`: atteso un numero finito di secondi, non negativo e \
+             rappresentabile"
         ))
     })
 }
 
 impl Controlli {
     /// I controlli di una chiamata. `scadenza` è un istante in secondi
-    /// dall'epoca Unix (`datetime.timestamp()`), `timeout` una durata in
-    /// secondi dall'ingresso: uno solo dei due, come `--deadline` e
-    /// `--timeout-ms` della CLI. Una scadenza già passata scade al primo
-    /// controllo.
+    /// dall'epoca Unix (`datetime.timestamp()`), `timeout` i secondi che
+    /// restano da adesso alla scadenza fissata quando la chiamata pubblica è
+    /// cominciata (il pacchetto Python la fissa sul clock monotono prima di
+    /// mettere in coda una chiamata asincrona): uno solo dei due, come
+    /// `--deadline` e `--timeout-ms` della CLI. Una scadenza già passata
+    /// scade al primo controllo.
     ///
     /// # Errors
     ///
@@ -131,6 +140,16 @@ impl Controlli {
     /// L'eccezione di un gestore di segnale Python (`KeyboardInterrupt`),
     /// dopo aver alzato il segnale del runner.
     fn sorveglia(&self, py: Python<'_>) -> PyResult<()> {
+        self.trasferisci();
+        py.check_signals().inspect_err(|_| {
+            self.segnale.store(true, Ordering::Release);
+        })
+    }
+
+    /// Porta nel segnale del runner un gettone già alzato. Si chiama prima
+    /// di far partire il lavoro (un gettone alzato prima della chiamata non
+    /// lascia leggere né scrivere nulla) e a ogni intervallo.
+    fn trasferisci(&self) {
         if self
             .gettoni
             .iter()
@@ -138,9 +157,24 @@ impl Controlli {
         {
             self.segnale.store(true, Ordering::Release);
         }
-        py.check_signals().inspect_err(|_| {
-            self.segnale.store(true, Ordering::Release);
-        })
+    }
+
+    /// L'annullamento visto alla consegna, dopo che il lavoro è finito con
+    /// successo: `cancelled` in fase `finalize`, con l'effetto vero
+    /// (`committed` se il lavoro ha scritto i suoi output), mai un successo
+    /// taciuto né un effetto perso.
+    fn annullato_alla_consegna(con_effetti: bool) -> PlenoraError {
+        let errore = PlenoraError::Cancelled(
+            "esecuzione annullata alla consegna: il lavoro era finito, il risultato \
+             non si consegna"
+                .to_owned(),
+        )
+        .with_phase(ErrorPhase::Finalize);
+        if con_effetti {
+            errore.with_remote_effect(RemoteEffect::Committed)
+        } else {
+            errore
+        }
     }
 
     /// Un punto di controllo sul thread del chiamante (fra un blocco Arrow e
@@ -174,6 +208,9 @@ impl Controlli {
         con_effetti: bool,
         lavoro: impl FnOnce(&Interruzione) -> Result<T, PlenoraError> + Send + 'static,
     ) -> Result<T, Errore> {
+        // Un gettone alzato prima della chiamata si vede al primo controllo
+        // del lavoro, prima di qualunque lettura.
+        self.trasferisci();
         let interruzione = self.interruzione.clone();
         let (invio, ricezione) = mpsc::channel();
         let maniglia = std::thread::Builder::new()
@@ -199,17 +236,36 @@ impl Controlli {
             });
             ricezione = indietro;
             match esito {
-                Ok(esito) => break esito.map_err(Errore::Plenora),
+                Ok(Err(errore)) => break Err(Errore::Plenora(errore)),
+                Ok(Ok(valore)) => {
+                    // Consegna: un annullamento arrivato nell'ultimo
+                    // intervallo (gettone o segnale) non diventa un successo.
+                    if let Err(eccezione) = self.sorveglia(py) {
+                        let errore = Self::annullato_alla_consegna(con_effetti);
+                        eccezione.set_cause(py, Some(in_python(py, &errore)));
+                        break Err(Errore::Python(eccezione));
+                    }
+                    if self.segnale.load(Ordering::Acquire) {
+                        break Err(Errore::Plenora(Self::annullato_alla_consegna(con_effetti)));
+                    }
+                    break Ok(valore);
+                }
                 Err(RecvTimeoutError::Timeout) => {
                     if let Err(eccezione) = self.sorveglia(py) {
                         // Il segnale è alzato: il lavoro si ferma al suo
                         // controllo successivo, e il suo esito dice che cosa
-                        // ha già fatto.
+                        // ha già fatto (finito comunque: annullato alla
+                        // consegna, con l'effetto vero).
                         let (_, esito) = py.detach(move || {
                             let esito = ricezione.recv();
                             (ricezione, esito)
                         });
-                        if let Ok(Err(errore)) = esito {
+                        let errore = match esito {
+                            Ok(Err(errore)) => Some(errore),
+                            Ok(Ok(_)) => Some(Self::annullato_alla_consegna(con_effetti)),
+                            Err(_) => None,
+                        };
+                        if let Some(errore) = errore {
                             eccezione.set_cause(py, Some(in_python(py, &errore)));
                         }
                         break Err(Errore::Python(eccezione));

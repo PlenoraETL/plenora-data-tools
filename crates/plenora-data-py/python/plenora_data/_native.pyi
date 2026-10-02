@@ -1,6 +1,9 @@
 # Stub del modulo nativo privato `plenora_data._native` (crates/plenora-data-py/src/lib.rs).
 # Non e' API pubblica: la usa solo `plenora_data._api`, che valida gli
 # argomenti prima di arrivare qui. I documenti escono come testo JSON.
+# `scadenza` e' un istante in secondi dall'epoca Unix (`deadline`),
+# `scadenza_monotona` un istante di `time.monotonic()` fissato
+# all'ingresso della chiamata pubblica (`timeout`).
 
 from typing import final
 
@@ -23,7 +26,7 @@ def describe(
     tipo: str,
     sorgente: object,
     scadenza: float | None,
-    timeout: float | None,
+    scadenza_monotona: float | None,
     gettoni: list[CancellationToken],
 ) -> str: ...
 def validate(
@@ -31,7 +34,7 @@ def validate(
     piano_dato: object,
     voci: list[tuple[str, str, object]],
     scadenza: float | None,
-    timeout: float | None,
+    scadenza_monotona: float | None,
     gettoni: list[CancellationToken],
 ) -> str: ...
 def run(
@@ -41,6 +44,6 @@ def run(
     uscite: list[tuple[str, object]] | None,
     sovrascrivi: bool,
     scadenza: float | None,
-    timeout: float | None,
+    scadenza_monotona: float | None,
     gettoni: list[CancellationToken],
 ) -> tuple[str, list[tuple[str, object]]]: ...

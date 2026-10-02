@@ -258,6 +258,47 @@ fn una_tabella_in_memoria_conta_nel_budget_del_piano() {
     }
 }
 
+/// Una tabella in memoria è residente prima di qualunque lettura: un file
+/// letto prima di lei ha come residuo il budget meno la tabella, e si
+/// ferma lui (non la tabella dopo averlo caricato tutto).
+#[test]
+fn le_tabelle_in_memoria_si_riservano_prima_di_leggere_i_file() {
+    let cartella = tempfile::tempdir().expect("cartella temporanea");
+    let sorgente = cartella.path().join("a.arrow");
+    scrivi_tabella(&tabella(), &sorgente, &OpzioniScrittura::default()).expect("sorgente");
+    let vivi = plenora_core::memoria::byte_vivi(std::iter::once(&tabella())).expect("byte");
+    // Basta per una tabella, non per due.
+    let budget = vivi + vivi / 2;
+    let piano = Pipeline::from_json(&format!(
+        r#"{{"version": 1, "inputs": ["a", "b"], "limits": {{"max_governed_memory_bytes": {budget}}},
+            "steps": [{{"out": "u", "op": "table.concat", "in": ["a", "b"], "config": {{}}}}],
+            "outputs": ["u"]}}"#
+    ))
+    .expect("piano");
+    let errore = api::esegui_in_memoria(
+        &piano,
+        vec![
+            Ingresso::File(FileIngresso {
+                nome: "a".to_owned(),
+                percorso: sorgente,
+                formato: None,
+            }),
+            Ingresso::Tabella {
+                nome: "b".to_owned(),
+                tabella: tabella(),
+            },
+        ],
+        &Interruzione::default(),
+    )
+    .expect_err("oltre il budget");
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::ResourceLimit
+    );
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Read);
+    assert!(errore.to_string().contains("input `a`"), "{errore}");
+}
+
 #[test]
 fn i_nomi_dati_dal_chiamante_si_verificano_senza_ripeterli() {
     let dichiarati = vec!["a".to_owned(), "b".to_owned()];

@@ -64,8 +64,12 @@ e controlli identici a quelli della CLI, tranne `surfaces`).
   file o stream, Parquet, letti come li legge la CLI) o un oggetto Arrow:
   `pyarrow.Table`, `pyarrow.RecordBatch`, `pyarrow.RecordBatchReader`, o
   qualunque oggetto con `__arrow_c_stream__` (Arrow PyCapsule Interface).
-  I buffer passano senza copia; schema e metadati (`plenora.*`, GeoArrow
-  `ARROW:extension:name`, chiavi sconosciute) arrivano intatti.
+  I buffer allineati passano senza copia (limite «Senza copia, non
+  sempre»); schema e metadati (`plenora.*`, GeoArrow
+  `ARROW:extension:name`, chiavi sconosciute) arrivano intatti. Ogni stream
+  si importa dentro il budget del piano (o quello di default per
+  `describe`), contando i blocchi mentre arrivano: l'import si ferma con
+  `resource_limit` al primo blocco di troppo, senza chiedere il successivo.
 - **Tabelle in uscita**: `pyarrow.Table` di un blocco, senza copia, con lo
   schema pubblicato (`plenora.contract.version`, `plenora.field_id`, blocco
   canonico delle geometrie); nel documento il loro `content_type` è
@@ -91,6 +95,11 @@ di `plenora-error-v1` (`PlenoraTimeoutError`, `PlenoraCancelledError`,
 e `to_dict()` rende il documento `error-v1` intero: nessun testo da
 leggere per decidere.
 
+Anche la preparazione degli argomenti è classificata: un'eccezione di un
+argomento (un `Mapping` che fallisce mentre si itera, un intero che non sta
+in un float, un oggetto Arrow che fallisce mentre lo si guarda) diventa
+`invalid_configuration` o `data_mapping` con un testo fisso, mai il suo.
+
 Il documento viene dalla proiezione pubblica di `PlenoraError` di
 `plenora-core` (`public_projection`), la stessa dell'inviluppo d'errore della
 CLI: stessi assi, stesso codice (`EXECUTION_DEADLINE_EXCEEDED`,
@@ -112,9 +121,21 @@ eccezioni si ricostruiscono con `pickle`.
 `timeout` (secondi) o `deadline` (`datetime` con fuso; senza fuso si
 rifiuta), uno solo dei due, e `cancel` (`CancellationToken`, alzabile da
 qualunque thread). Sono l'`Interruzione` del runner, la stessa della CLI:
-controllata prima di ogni input (anche fra un blocco Arrow e l'altro),
-prima di ogni passo, prima di consegnare gli output, prima di scrivere
-ognuno e dopo l'ultimo. `catalog` non ha controlli, come sulla CLI.
+controllata all'ingresso del modulo nativo (fase `prepare`, prima di
+qualunque lavoro), prima di ogni input (anche fra un blocco Arrow e
+l'altro), prima di ogni passo, prima di consegnare gli output, prima di
+scrivere ognuno e dopo l'ultimo, e di nuovo alla consegna del risultato.
+`catalog` non ha controlli, come sulla CLI.
+
+`timeout` vale dall'ingresso della chiamata pubblica: il pacchetto fissa
+l'istante sul clock monotono prima di mettere in coda una chiamata
+asincrona, e una scadenza passata mentre la chiamata aspettava un thread
+dell'executor la ferma prima di qualunque lavoro. Un gettone già alzato
+ferma la chiamata allo stesso punto, senza leggere né scrivere nulla. Un
+annullamento (gettone, Ctrl-C, task) arrivato mentre il lavoro finiva non
+diventa un successo: è `PlenoraCancelledError` in fase `finalize`, con
+effetto `committed` (ritentativo `requires_recovery`) se gli output sono
+stati scritti, `none` altrimenti.
 
 Il lavoro gira in un thread suo, senza il GIL; il thread del chiamante
 aspetta senza il GIL e ogni 10 ms porta i gettoni nel segnale del runner e
@@ -128,7 +149,10 @@ chiama `PyErr_CheckSignals`:
 - **Forma asincrona**: la chiamata gira nell'executor del loop, il loop non
   si blocca mai. Annullare il task alza un gettone interno, aspetta che il
   lavoro si fermi (nessun lavoro continua dopo l'annullamento) e propaga
-  `asyncio.CancelledError` con l'esito come causa.
+  `asyncio.CancelledError` con l'esito come causa, anche quando il lavoro
+  era già finito con successo (annullamento alla consegna, con l'effetto
+  vero). In Python 3.10 chi aspetta il task riceve un `CancelledError`
+  nuovo, con quello sollevato dentro il task come `__context__`.
 
 ## Scelte rispetto a plenora-database-tools
 
@@ -151,7 +175,8 @@ Scartate o migliorate:
   `dynamic = ["version"]`, una sola fonte;
 - mypy con `ignore_errors` sul pacchetto stesso: qui `--strict` copre il
   pacchetto oltre al consumatore;
-- scambio Arrow per IPC (copia): qui Arrow C Stream Interface, senza copia;
+- scambio Arrow per IPC (copia): qui Arrow C Stream Interface, senza copia
+  per i buffer allineati;
 - runtime tokio: non serve (nessun I/O di rete); un thread di lavoro per
   chiamata.
 
@@ -246,15 +271,15 @@ python scripts/verifica_sdk_python.py --wheel dist/plenora_data-<versione>-<tag>
 
 ## Limiti dichiarati
 
-- **Ctrl-C dopo l'ultimo controllo.**
-  *Regola*: un Ctrl-C ferma l'operazione e l'eccezione porta l'esito.
-  *Ambito*: forme sincrone sul thread principale.
-  *Hazard*: se il segnale arriva quando il lavoro ha già passato il suo
-  ultimo controllo, il lavoro finisce con successo, il risultato si scarta
-  e `KeyboardInterrupt` esce senza `__cause__`: con `outputs` i file sono
-  scritti. Chi riceve `KeyboardInterrupt` senza causa da un `run` con
-  `outputs` tratta l'esito come ignoto.
-  *Rientro*: rendere l'esito riuscito come attributo dell'eccezione.
+- **Annullamento dopo la consegna.**
+  *Regola*: un annullamento ferma l'operazione e l'eccezione porta l'esito.
+  *Ambito*: tutte le operazioni con controlli.
+  *Hazard*: l'ultimo controllo è alla consegna del risultato; un gettone
+  alzato, o un Ctrl-C arrivato, dopo quel controllo trova la chiamata già
+  conclusa con successo, e il `KeyboardInterrupt` esce dal codice Python
+  successivo come per qualunque funzione già ritornata. Mai un successo
+  taciuto: il risultato è stato consegnato.
+  *Rientro*: nessuno; dopo la consegna l'operazione è finita.
 - **Ctrl-C dentro un produttore Python.**
   *Regola*: Ctrl-C diventa `KeyboardInterrupt`.
   *Ambito*: un input che è un `RecordBatchReader` costruito da un
@@ -265,15 +290,31 @@ python scripts/verifica_sdk_python.py --wheel dist/plenora_data-<versione>-<tag>
   successo.
   *Rientro*: riconoscere l'interruzione dal produttore, se pyarrow la
   distinguerà nello stream.
-- **Stream di più blocchi.**
+- **Budget degli stream: conti per input, non per allocazione.**
   *Regola*: ogni tabella sta nel budget del piano.
-  *Ambito*: un input in memoria con più blocchi (una `pyarrow.Table` a più
-  chunk, un `RecordBatchReader`).
-  *Hazard*: il runner vuole un blocco per tabella: i blocchi si uniscono
-  (`concat_batches`, una copia) prima del controllo del budget, che vede
-  solo la tabella unita; la copia transitoria non è contata. Una tabella di
-  un blocco passa senza copia.
-  *Rientro*: un runner a più blocchi per tabella.
+  *Ambito*: input in memoria (`pyarrow.Table` a più chunk,
+  `RecordBatchReader`, altri produttori Arrow).
+  *Hazard*: i blocchi si contano con i loro byte di dati
+  (`plenora_core::memoria::byte_dati`) contro il budget meno le tabelle già
+  importate, e l'import si ferma al primo blocco di troppo; con più blocchi
+  l'unione (`concat_batches`, una copia) vuole spazio per blocchi e copia
+  insieme. Il blocco che supera il budget è già in memoria quando si
+  rifiuta (lo ha prodotto il produttore), e le allocazioni del produttore
+  (per esempio un generatore Python che costruisce i suoi blocchi) non si
+  vedono. Le tabelle in memoria si riservano nel budget prima di leggere
+  qualunque file (`plenora-io`, `carica_ingressi`). La tabella finale passa
+  poi dal conto per allocazione del runner.
+  *Rientro*: un runner a più blocchi per tabella, senza unione.
+- **Senza copia, non sempre.**
+  *Regola*: le tabelle passano fra Python e il runner senza copia.
+  *Ambito*: l'import per l'Arrow C Data Interface.
+  *Hazard*: `arrow-array` 60 riallinea con una copia un buffer che non
+  rispetta l'allineamento richiesto dal tipo (un produttore che esporta
+  buffer sotto-allineati); quella copia non è contata nel budget
+  dell'import. I buffer di pyarrow sono allineati e passano senza copia; in
+  uscita i buffer del runner sono quelli di arrow-rs, allineati, e pyarrow
+  li importa senza copia.
+  *Rientro*: contare i buffer riallineati, se un produttore reale li darà.
 - **Import con il GIL.** Gli oggetti Arrow si importano sul thread del
   chiamante con il GIL (lo stream C chiama il produttore): per una
   `pyarrow.Table` è una copia di puntatori, per un produttore Python è il
@@ -289,9 +330,10 @@ python scripts/verifica_sdk_python.py --wheel dist/plenora_data-<versione>-<tag>
   provata dalla suite; pyarrow non pubblica tipi, quindi per mypy i suoi
   oggetti sono `Any`.
 - **Executor del loop.** La forma asincrona usa l'executor di default del
-  loop: con l'executor saturo la chiamata aspetta un thread libero, e
-  l'annullamento di un task aspetta che il lavoro arrivi al suo controllo
-  successivo (al più un passo del piano).
+  loop: con l'executor saturo la chiamata aspetta un thread libero (la
+  scadenza corre da prima, dall'ingresso di `arun`), e l'annullamento di un
+  task aspetta che il lavoro arrivi al suo controllo successivo (al più un
+  passo del piano).
 - **Messaggi delle config.** Come sulla CLI, un messaggio di config non
   valida può citare un valore scritto nel piano (README della radice,
   «Limiti dichiarati della CLI»).

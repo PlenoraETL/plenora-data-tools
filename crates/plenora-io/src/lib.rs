@@ -45,8 +45,9 @@ use plenora_core::{PlenoraError, Result};
 
 pub use confine::LimitiLettura;
 pub use esecuzione::{
-    esegui_da_file, esegui_da_file_interrompibile, esegui_in_memoria, esegui_ingressi,
-    valida_da_file, valida_ingressi, EsitoFile, FileIngresso, FileUscita, Ingresso, UscitaScritta,
+    budget_del_piano, esegui_da_file, esegui_da_file_interrompibile, esegui_in_memoria,
+    esegui_ingressi, valida_da_file, valida_ingressi, EsitoFile, FileIngresso, FileUscita,
+    Ingresso, UscitaScritta,
 };
 pub use formato::{CompressioneParquet, Formato, OpzioniScrittura};
 

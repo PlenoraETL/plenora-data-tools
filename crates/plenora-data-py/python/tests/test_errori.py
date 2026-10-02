@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import pathlib
 import pickle
+import traceback
 from collections.abc import Callable
 from typing import Any
 
@@ -192,6 +193,80 @@ def test_argomenti_non_validi(valida: Callable[[str, object], None]) -> None:
         documento = verifica(errore.value, valida)
         assert documento["phase"] == "prepare"
         assert documento["remote_effect"] == "none"
+
+
+class _AttributoRotto:
+    """Un oggetto che fallisce già quando si cerca `__arrow_c_stream__`."""
+
+    @property
+    def __arrow_c_stream__(self) -> object:
+        raise ValueError(CANARINO)
+
+
+class _MappaRotta(dict[str, Any]):
+    """Un Mapping che fallisce mentre si itera."""
+
+    def items(self) -> Any:
+        raise ValueError(CANARINO)
+
+
+def test_la_preparazione_degli_argomenti_classifica_e_tace(
+    valida: Callable[[str, object], None],
+) -> None:
+    casi: list[tuple[Callable[[], object], type[pd.PlenoraError]]] = [
+        (
+            lambda: pd.describe(tabella_semplice(), timeout=10**400),
+            pd.PlenoraInvalidConfigurationError,
+        ),
+        (lambda: pd.describe(_AttributoRotto()), pd.PlenoraDataMappingError),  # type: ignore[arg-type]
+        (
+            lambda: pd.run(piano_identita(), {"t": _AttributoRotto()}),  # type: ignore[dict-item]
+            pd.PlenoraDataMappingError,
+        ),
+        (
+            lambda: pd.run(piano_identita(), _MappaRotta(t=tabella_semplice())),
+            pd.PlenoraInvalidConfigurationError,
+        ),
+        (
+            lambda: pd.validate(piano_identita(), _MappaRotta(t=tabella_semplice())),
+            pd.PlenoraInvalidConfigurationError,
+        ),
+    ]
+    for caso, classe in casi:
+        with pytest.raises(pd.PlenoraError) as errore:
+            caso()
+        assert type(errore.value) is classe, repr(errore.value)
+        verifica(errore.value, valida)
+        # Né nel documento né nel traceback stampato (catena compresa).
+        stampato = "".join(traceback.format_exception(errore.value))
+        testo = repr(errore.value) + json.dumps(errore.value.to_dict()) + stampato
+        assert CANARINO not in testo
+        assert errore.value.__cause__ is None
+
+
+def test_uno_stream_oltre_il_budget_si_ferma_al_primo_blocco_di_troppo(
+    valida: Callable[[str, object], None],
+) -> None:
+    """Un produttore che darebbe molti blocchi: l'import li conta mentre
+    arrivano e non chiede il blocco dopo quello che supera il budget."""
+    blocco = pa.record_batch({"id": pa.array(range(1_000), pa.int64())})
+    chiesti = 0
+
+    def blocchi() -> Any:
+        nonlocal chiesti
+        for _ in range(1_000):
+            chiesti += 1
+            yield blocco
+
+    lettore = pa.RecordBatchReader.from_batches(blocco.schema, blocchi())
+    piano = {**piano_identita(), "limits": {"max_governed_memory_bytes": 100_000}}
+    with pytest.raises(pd.PlenoraResourceLimitError) as errore:
+        pd.run(piano, {"t": lettore})
+    documento = verifica(errore.value, valida)
+    assert documento["phase"] == "read"
+    assert "input `t`" in documento["message"]
+    # 8.000 byte a blocco: il tredicesimo supera i 100.000.
+    assert chiesti < 20
 
 
 def test_le_eccezioni_si_ricostruiscono_con_pickle(valida: Callable[[str, object], None]) -> None:

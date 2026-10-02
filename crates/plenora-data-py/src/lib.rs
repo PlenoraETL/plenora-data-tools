@@ -36,8 +36,9 @@ use std::sync::Arc;
 
 use plenora_cli::api;
 use plenora_cli::capacita::{documento_della, Superficie};
+use plenora_core::memoria::byte_vivi;
 use plenora_core::panic_policy::{install, PanicPolicy};
-use plenora_core::{ErrorPhase, PlenoraError};
+use plenora_core::{ErrorPhase, PlenoraError, DEFAULT_MAX_GOVERNED_MEMORY_BYTES};
 use plenora_io::{FileIngresso, FileUscita, Ingresso, OpzioniScrittura};
 use plenora_pipeline::Pipeline;
 use pyo3::prelude::*;
@@ -112,16 +113,43 @@ fn percorso(oggetto: &Bound<'_, PyAny>, voce: &str) -> Result<PathBuf, Errore> {
         .map_err(|_| configurazione(&format!("`{voce}`: atteso un percorso (str o os.PathLike)")))
 }
 
+/// I controlli della chiamata, con un primo punto di controllo prima di
+/// qualunque lavoro: una scadenza già passata (per esempio mentre la
+/// chiamata asincrona aspettava un thread dell'executor) o un gettone già
+/// alzato fermano la chiamata qui, in fase `prepare`, senza leggere nulla.
+///
+/// `scadenza_monotona` è l'istante di `time.monotonic()` fissato dal
+/// pacchetto Python all'ingresso della chiamata pubblica (`timeout`); qui
+/// diventa il tempo che resta.
 fn controlli(
+    py: Python<'_>,
     scadenza: Option<f64>,
-    timeout: Option<f64>,
+    scadenza_monotona: Option<f64>,
     gettoni: Vec<Bound<'_, Gettone>>,
 ) -> Result<Controlli, Errore> {
     let gettoni = gettoni
         .into_iter()
         .map(|gettone| Arc::clone(&gettone.get().segnale))
         .collect();
-    Controlli::nuovi(scadenza, timeout, gettoni).map_err(Errore::Plenora)
+    let restante = match scadenza_monotona {
+        None => None,
+        Some(istante) if istante.is_finite() => {
+            let adesso = py
+                .import("time")
+                .and_then(|tempo| tempo.call_method0("monotonic"))
+                .and_then(|valore| valore.extract::<f64>())
+                .map_err(|_| interno("clock monotono di Python non leggibile"))?;
+            Some((istante - adesso).max(0.0))
+        }
+        Some(_) => {
+            return Err(configurazione(
+                "`timeout`: atteso un numero finito di secondi, non negativo e rappresentabile",
+            ))
+        }
+    };
+    let controlli = Controlli::nuovi(scadenza, restante, gettoni).map_err(Errore::Plenora)?;
+    controlli.verifica(py, "prima di cominciare", ErrorPhase::Prepare)?;
+    Ok(controlli)
 }
 
 /// Il piano: un file (`path`, letto come la CLI lo legge) o il testo JSON
@@ -147,7 +175,8 @@ fn piano(py: Python<'_>, tipo: &str, oggetto: &Bound<'_, PyAny>) -> Result<Pipel
 /// Gli input nell'ordine dato: i file restano percorsi (li legge il lavoro,
 /// con il budget del piano), gli oggetti Arrow si importano qui, con il
 /// GIL, prima di partire. I nomi si verificano contro il piano prima di
-/// importare qualunque dato.
+/// importare qualunque dato. Ogni stream si importa con il budget del piano
+/// meno le tabelle già importate, e si ferma appena lo supera.
 fn ingressi(
     py: Python<'_>,
     piano: &Pipeline,
@@ -159,21 +188,35 @@ fn ingressi(
         voci.iter().map(|(nome, _, _)| nome.as_str()),
         "inputs",
     )?;
-    voci.into_iter()
-        .map(|(nome, tipo, oggetto)| match tipo.as_str() {
-            "path" => Ok(Ingresso::File(FileIngresso {
+    let budget = plenora_io::budget_del_piano(piano)?;
+    let mut ingressi = Vec::with_capacity(voci.len());
+    for (nome, tipo, oggetto) in voci {
+        let preso = match tipo.as_str() {
+            "path" => Ingresso::File(FileIngresso {
                 percorso: percorso(&oggetto, &format!("inputs[{nome}]"))?,
                 nome,
                 formato: None,
-            })),
+            }),
             "arrow" => {
-                let tabella =
-                    arrow_py::importa(py, &oggetto, &format!("input `{nome}`"), controlli)?;
-                Ok(Ingresso::Tabella { nome, tabella })
+                let importate = ingressi.iter().filter_map(|ingresso| match ingresso {
+                    Ingresso::Tabella { tabella, .. } => Some(tabella),
+                    Ingresso::File(_) => None,
+                });
+                let residuo = budget.saturating_sub(byte_vivi(importate)?);
+                let tabella = arrow_py::importa(
+                    py,
+                    &oggetto,
+                    &format!("input `{nome}`"),
+                    controlli,
+                    residuo,
+                )?;
+                Ingresso::Tabella { nome, tabella }
             }
-            _ => Err(interno("forma dell'input sconosciuta")),
-        })
-        .collect()
+            _ => return Err(interno("forma dell'input sconosciuta")),
+        };
+        ingressi.push(preso);
+    }
+    Ok(ingressi)
 }
 
 /// La versione del pacchetto: quella del crate, che è anche quella dei
@@ -205,11 +248,11 @@ fn describe(
     tipo: &str,
     sorgente: &Bound<'_, PyAny>,
     scadenza: Option<f64>,
-    timeout: Option<f64>,
+    scadenza_monotona: Option<f64>,
     gettoni: Vec<Bound<'_, Gettone>>,
 ) -> PyResult<String> {
     proteggi(py, false, || {
-        let controlli = controlli(scadenza, timeout, gettoni)?;
+        let controlli = controlli(py, scadenza, scadenza_monotona, gettoni)?;
         let documento = match tipo {
             "path" => {
                 let percorso = percorso(sorgente, "data")?;
@@ -218,7 +261,14 @@ fn describe(
                 })?
             }
             "arrow" => {
-                let tabella = arrow_py::importa(py, sorgente, "input", &controlli)?;
+                // Lo stesso budget di default della lettura da file.
+                let tabella = arrow_py::importa(
+                    py,
+                    sorgente,
+                    "input",
+                    &controlli,
+                    DEFAULT_MAX_GOVERNED_MEMORY_BYTES,
+                )?;
                 controlli.esegui(py, false, move |interruzione| {
                     api::descrivi_tabella(&tabella, interruzione)
                 })?
@@ -237,11 +287,11 @@ fn validate(
     piano_dato: &Bound<'_, PyAny>,
     voci: Vec<(String, String, Bound<'_, PyAny>)>,
     scadenza: Option<f64>,
-    timeout: Option<f64>,
+    scadenza_monotona: Option<f64>,
     gettoni: Vec<Bound<'_, Gettone>>,
 ) -> PyResult<String> {
     proteggi(py, false, || {
-        let controlli = controlli(scadenza, timeout, gettoni)?;
+        let controlli = controlli(py, scadenza, scadenza_monotona, gettoni)?;
         let piano = piano(py, tipo_piano, piano_dato)?;
         let ingressi = ingressi(py, &piano, voci, &controlli)?;
         let documento = controlli.esegui(py, false, move |interruzione| {
@@ -267,12 +317,12 @@ fn run(
     uscite: Option<Vec<(String, Bound<'_, PyAny>)>>,
     sovrascrivi: bool,
     scadenza: Option<f64>,
-    timeout: Option<f64>,
+    scadenza_monotona: Option<f64>,
     gettoni: Vec<Bound<'_, Gettone>>,
 ) -> PyResult<Esecuzione> {
     let con_effetti = uscite.is_some();
     proteggi(py, con_effetti, || {
-        let controlli = controlli(scadenza, timeout, gettoni)?;
+        let controlli = controlli(py, scadenza, scadenza_monotona, gettoni)?;
         if uscite.is_none() && sovrascrivi {
             return Err(configurazione(
                 "`overwrite` vale solo con `outputs`: senza, nessun file si scrive",
