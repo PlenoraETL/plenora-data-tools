@@ -9500,7 +9500,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -9643,7 +9643,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -9773,7 +9773,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 2 |
+| versioni | semantica 2, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -9943,7 +9943,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -10088,7 +10088,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -10212,7 +10212,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -10389,7 +10389,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -10519,7 +10519,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 2, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -10711,7 +10711,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -10881,7 +10881,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -11021,7 +11021,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 3, kernel 3 |
+| versioni | semantica 3, config 1, analisi 4, kernel 3 |
 
 #### Che cosa fa
 
@@ -11178,7 +11178,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 1, kernel 1 |
+| versioni | semantica 3, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -11333,7 +11333,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -11472,7 +11472,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -11643,7 +11643,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -11807,7 +11807,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 2, kernel 2 |
+| versioni | semantica 3, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -11967,7 +11967,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 1, kernel 1 |
+| versioni | semantica 3, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -12118,7 +12118,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -12283,7 +12283,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -12427,7 +12427,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -12582,7 +12582,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -12712,7 +12712,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -12848,7 +12848,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -13016,7 +13016,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -13155,7 +13155,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 3, kernel 2 |
+| versioni | semantica 3, config 1, analisi 4, kernel 2 |
 
 #### Che cosa fa
 
@@ -13298,7 +13298,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -13450,7 +13450,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 2, kernel 2 |
+| versioni | semantica 3, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -13633,7 +13633,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 2 |
+| versioni | semantica 2, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -13783,7 +13783,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 2, kernel 2 |
+| versioni | semantica 3, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -13923,7 +13923,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -14069,7 +14069,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -14226,7 +14226,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -14378,7 +14378,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 2 |
+| versioni | semantica 2, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -14538,7 +14538,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -14705,7 +14705,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -14836,7 +14836,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -14967,7 +14967,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -15107,7 +15107,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -15251,7 +15251,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 3, kernel 1 |
+| versioni | semantica 3, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -15405,7 +15405,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -15557,7 +15557,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 1, kernel 2 |
+| versioni | semantica 3, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -15746,7 +15746,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -15936,7 +15936,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 2, kernel 2 |
+| versioni | semantica 3, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -16136,7 +16136,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -16266,7 +16266,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -16413,7 +16413,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -16548,7 +16548,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 3, kernel 3 |
+| versioni | semantica 3, config 1, analisi 4, kernel 3 |
 
 #### Che cosa fa
 
@@ -16743,7 +16743,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -16919,7 +16919,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -17095,7 +17095,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -17271,7 +17271,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -17447,7 +17447,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -17623,7 +17623,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -17799,7 +17799,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -17975,7 +17975,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -18151,7 +18151,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -18327,7 +18327,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -18503,7 +18503,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -18679,7 +18679,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 2, analisi 2, kernel 2 |
+| versioni | semantica 2, config 2, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -18875,7 +18875,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -19021,7 +19021,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -19164,7 +19164,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -19317,7 +19317,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 2, analisi 2, kernel 2 |
+| versioni | semantica 3, config 2, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -19490,7 +19490,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 1, analisi 2, kernel 1 |
+| versioni | semantica 3, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -19680,7 +19680,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -19825,7 +19825,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -19974,7 +19974,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 3 |
+| versioni | semantica 2, config 1, analisi 3, kernel 3 |
 
 #### Che cosa fa
 
@@ -20169,7 +20169,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -20338,7 +20338,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -20502,7 +20502,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -20634,7 +20634,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 1, kernel 1 |
+| versioni | semantica 2, config 1, analisi 2, kernel 1 |
 
 #### Che cosa fa
 
@@ -20767,7 +20767,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -20933,7 +20933,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -21062,7 +21062,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 2, kernel 2 |
+| versioni | semantica 3, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -21235,7 +21235,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 

@@ -19,11 +19,12 @@ use crate::arrow::schema::Schema;
 use crate::arrow::schema::{DataType, Field, SchemaRef};
 use crate::contract::arrow_metadata::{
     canonical_field_id, canonical_geometry_metadata, canonical_geometry_spatial_semantics,
-    canonical_schema_version_metadata, errore_di_metadato, read_contract_version,
-    read_geometry_contract_keys, strip_decided_crs_declarations, CanonicalGeometryKeys,
-    GeometryMetadataDetails, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, GEO_METADATA_KEY,
-    PLENORA_FIELD_ID_KEY, PLENORA_GEOMETRY_AXIS_ORDER_KEY, PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
-    PLENORA_GEOMETRY_NAMESPACE_PREFIX, PLENORA_GEOMETRY_PRECISION_KEY, PLENORA_GEOMETRY_SRID_KEY,
+    canonical_schema_version_metadata, errore_di_metadato, figlio_con_chiave,
+    read_contract_version, read_geometry_contract_keys, strip_decided_crs_declarations,
+    CanonicalGeometryKeys, GeometryMetadataDetails, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
+    GEO_METADATA_KEY, PLENORA_FIELD_ID_KEY, PLENORA_GEOMETRY_AXIS_ORDER_KEY,
+    PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, PLENORA_GEOMETRY_NAMESPACE_PREFIX,
+    PLENORA_GEOMETRY_PRECISION_KEY, PLENORA_GEOMETRY_SRID_KEY,
     PLENORA_GEOMETRY_TYPES_DECLARATION_KEY, PLENORA_GEOMETRY_TYPES_KEY,
 };
 use crate::contract::{
@@ -172,9 +173,11 @@ pub fn contract_from_arrow_schema(
         let geo_metadata = field.metadata().get(GEO_METADATA_KEY);
         if let Some(extension) = extension {
             if extension != GEOARROW_WKB_EXTENSION {
+                // Il valore ricevuto non entra nel messaggio («errori senza
+                // dati»): si nominano la chiave e la violazione.
                 return Err(errore_di_contratto(format!(
-                    "colonna `{}`: estensione `{extension}` non supportata \
-                     (attesa `{GEOARROW_WKB_EXTENSION}`)",
+                    "colonna `{}`: `{GEOARROW_EXTENSION_KEY}` diversa da \
+                     `{GEOARROW_WKB_EXTENSION}`: estensione non supportata",
                     field.name()
                 )));
             }
@@ -663,7 +666,7 @@ pub fn verifica_identita_campi(schema: &Schema) -> Result<BTreeSet<u32>, Plenora
                 )));
             }
         }
-        if figli_con_identita(field.data_type()) {
+        if figlio_con_chiave(field.data_type(), &|key| key == PLENORA_FIELD_ID_KEY) {
             return Err(PlenoraError::Unsupported(format!(
                 "colonna `{}`: `{PLENORA_FIELD_ID_KEY}` su un campo annidato non e' \
                  interpretata (l'identita' e' dei campi di primo livello)",
@@ -672,25 +675,6 @@ pub fn verifica_identita_campi(schema: &Schema) -> Result<BTreeSet<u32>, Plenora
         }
     }
     Ok(identita)
-}
-
-/// Un figlio, a qualunque profondità, porta `plenora.field_id`?
-fn figli_con_identita(tipo: &DataType) -> bool {
-    let con_identita = |figlio: &Field| {
-        figlio.metadata().contains_key(PLENORA_FIELD_ID_KEY)
-            || figli_con_identita(figlio.data_type())
-    };
-    match tipo {
-        DataType::List(figlio)
-        | DataType::LargeList(figlio)
-        | DataType::ListView(figlio)
-        | DataType::LargeListView(figlio)
-        | DataType::FixedSizeList(figlio, _)
-        | DataType::Map(figlio, _) => con_identita(figlio),
-        DataType::Struct(figli) => figli.iter().any(|figlio| con_identita(figlio)),
-        DataType::Dictionary(_, valore) => figli_con_identita(valore),
-        _ => false,
-    }
 }
 
 /// Lo schema che attraversa il confine del componente (ARROW-001, ARROW-003,

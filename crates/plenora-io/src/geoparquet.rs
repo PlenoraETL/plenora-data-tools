@@ -132,9 +132,10 @@ fn analizza(testo: &str) -> Result<MetadatoGeo> {
         .and_then(Value::as_str)
         .ok_or_else(|| invalido("`version` assente o non testuale"))?;
     if !VERSIONI_LETTE.contains(&versione) {
-        return Err(PlenoraError::Unsupported(format!(
-            "GeoParquet versione `{versione}` non supportata (lette: 1.0.0, 1.1.0)"
-        )));
+        // Il valore letto non entra nel messaggio («errori senza dati»).
+        return Err(PlenoraError::Unsupported(
+            "GeoParquet: versione (`version`) non supportata (lette: 1.0.0, 1.1.0)".to_owned(),
+        ));
     }
     let primaria = radice
         .get("primary_column")
@@ -565,11 +566,11 @@ fn colonna_da_scrivere(
     };
     let mut nomi = Vec::with_capacity(coppie.len());
     for (tipo, z) in coppie {
+        // Il tipo viene dai metadati o dalle celle: non entra nel messaggio.
         let etichetta = nome_geoparquet(tipo, z).ok_or_else(|| {
-            PlenoraError::Unsupported(format!(
-                "tipo `{}` fuori dai sette tipi di GeoParquet 1.1",
-                tipo.as_str()
-            ))
+            PlenoraError::Unsupported(
+                "tipo geometrico fuori dai sette tipi di GeoParquet 1.1".to_owned(),
+            )
         })?;
         nomi.push(Value::String(etichetta));
     }

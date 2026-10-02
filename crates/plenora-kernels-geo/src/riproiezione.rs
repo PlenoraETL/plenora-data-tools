@@ -258,9 +258,9 @@ pub fn richiedi_assi_normalizzati(
         return Ok(());
     }
     Err(PlenoraError::Crs(format!(
-        "{op}: colonna geometria `{}`: `axis_order` dichiarato `{dichiarato}`, ma il kernel \
-         legge e riemette le coordinate nell'ordine GIS normalizzato `{normalizzato}` del CRS \
-         sorgente: l'ordine va normalizzato a monte, mai in silenzio qui",
+        "{op}: colonna geometria `{}`: `axis_order` diverso dall'ordine GIS normalizzato del \
+         CRS sorgente, in cui il kernel legge e riemette le coordinate: l'ordine va \
+         normalizzato a monte, mai in silenzio qui",
         campo.name()
     )))
 }

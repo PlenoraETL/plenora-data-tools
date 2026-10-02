@@ -1087,10 +1087,11 @@ fn validate_declared_types(
         // Il contratto la dichiara sempre (`Unknown` e' un valore canonico,
         // non un'assenza), quindi il confronto scatta sempre.
         if parsed != geometry.dimensions {
+            // Si nominano la chiave e la violazione, mai i valori («errori
+            // senza dati»).
             return Err(PlenoraError::Schema(format!(
-                "colonna geometrica `{}`: dimensions del contratto ({}) diversa dai metadati canonici ({declared})",
-                geometry.name,
-                geometry.dimensions.as_str()
+                "colonna geometrica `{}`: dimensions del contratto diversa dai metadati canonici",
+                geometry.name
             )));
         }
     }
@@ -1106,7 +1107,7 @@ fn validate_declared_types(
         // parlano, ma la validita' sintattica sopra vale comunque.
         if geometry.encoding.is_some_and(|encoding| encoding != parsed) {
             return Err(PlenoraError::Schema(format!(
-                "colonna geometrica `{}`: encoding del contratto diverso dai metadati canonici ({declared})",
+                "colonna geometrica `{}`: encoding del contratto diverso dai metadati canonici",
                 geometry.name
             )));
         }
@@ -1176,9 +1177,8 @@ fn validate_declared_types(
     }
     if parsed_declaration != declared.declaration() {
         return Err(PlenoraError::Schema(format!(
-            "colonna geometrica `{}`: types_declaration del contratto ({}) diversa dai metadati canonici ({metadata_declaration})",
-            geometry.name,
-            declared.declaration().as_str()
+            "colonna geometrica `{}`: types_declaration del contratto diversa dai metadati canonici",
+            geometry.name
         )));
     }
     let declared_types = declared.to_canonical_list();

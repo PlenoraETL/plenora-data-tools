@@ -597,6 +597,8 @@ fn rifiuti_in_lettura() {
         let errore = errore_di(&geo, celle);
         assert_eq!(errore.category(), categoria, "{nome}: {errore}");
         assert!(errore.to_string().contains(frammento), "{nome}: {errore}");
+        // Errori senza dati: il valore letto dal metadato non compare.
+        assert!(!errore.to_string().contains("2.0.0"), "{nome}: {errore}");
     }
     // Chiavi duplicate nel testo.
     let dir = cartella();

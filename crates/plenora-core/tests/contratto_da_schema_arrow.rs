@@ -555,6 +555,62 @@ fn discovery_rejects_canonical_keys_without_contract_version() {
 }
 
 #[test]
+fn nested_plenora_keys_require_the_contract_version() {
+    // Una chiave `plenora.*` su un figlio (struct, lista, mappa, a
+    // qualunque profondita') rende lo schema uno schema Plenora come quella
+    // di un campo di primo livello: senza versione si rifiuta (ARROW-001).
+    // Prima si guardavano solo i campi di primo livello.
+    let figlio = |chiave: &str| {
+        Field::new("figlio", DataType::Float64, true)
+            .with_metadata(HashMap::from([(chiave.to_owned(), "x".to_owned())]))
+    };
+    let annidati = |chiave: &str| {
+        vec![
+            Field::new_struct("s", vec![figlio(chiave)], true),
+            Field::new_list("l", figlio(chiave), true),
+            Field::new_list(
+                "ll",
+                Field::new_struct("elemento", vec![figlio(chiave)], true),
+                true,
+            ),
+            Field::new_map(
+                "m",
+                "voci",
+                Field::new("chiave", DataType::Utf8, false),
+                figlio(chiave),
+                false,
+                true,
+            ),
+        ]
+    };
+    for chiave in ["plenora.geometry.precision", "plenora.postgres.tipo"] {
+        for campo in annidati(chiave) {
+            let nome = campo.name().clone();
+            let senza = discover_input_contract_from_schema(
+                Arc::new(Schema::new(vec![campo.clone()])),
+                resolve_crs,
+            );
+            assert!(
+                matches!(senza, Err(PlenoraError::Schema(_))),
+                "{chiave} in `{nome}`: {senza:?}"
+            );
+            assert!(
+                discover_input_contract_from_schema(schema_v1(vec![campo]), resolve_crs).is_ok(),
+                "{chiave} in `{nome}` con versione"
+            );
+        }
+    }
+    // Una chiave d'altri (non `plenora.`) su un figlio non chiede versione.
+    for campo in annidati("pandas.tipo") {
+        assert!(discover_input_contract_from_schema(
+            Arc::new(Schema::new(vec![campo])),
+            resolve_crs
+        )
+        .is_ok());
+    }
+}
+
+#[test]
 fn discovery_rejects_unknown_contract_versions() {
     // Vocabolario Arrow 1.0, sezione 1: il solo valore ammesso e' `1`, e
     // una versione sconosciuta fallisce chiusa. Una versione successiva e'

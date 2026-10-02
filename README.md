@@ -2290,7 +2290,9 @@ Stesso piano e stessi schemi d'ingresso, stesse identità
   tabella di pandas, di GDAL, di GeoPandas) e si accetta: le geometrie si
   leggono dall'estensione `geoarrow.wkb` e dal metadato `geo`, come prima.
   ARROW-001 riguarda lo schema Plenora che attraversa il confine;
-- con almeno una chiave `plenora.` (anche solo `plenora.field_id`)
+- con almeno una chiave `plenora.` (anche solo `plenora.field_id`, e
+  anche su un figlio di struct, lista o mappa, a qualunque profondità:
+  prima si guardavano solo i campi di primo livello)
   `plenora.contract.version` è obbligatoria e vale esattamente `1`: una
   versione decimale maggiore è `Unsupported` (ARROW-002), ogni altro testo
   (`0`, `01`, `1.0`) è `Schema`. Prima `0` e `01` passavano;
@@ -2339,13 +2341,22 @@ scrivere uno schema Plenora non conforme.
 
 ### Versioni del catalogo
 
-Nessuna versione d'operazione cambia. I metadati delle uscite cambiano
-per tutte le operazioni allo stesso modo, nella pubblicazione dello schema
-e nell'emissione del blocco canonico, che stanno sotto il catalogo: nessun
-kernel, nessuna analisi e nessuna config cambia comportamento, e le
-versioni del catalogo descrivono la semantica di un'operazione, non il
-contratto di trasporto. Il cambio è di contratto (Arrow Interchange 1.0),
-non di operazione.
+Ogni operazione geo prende `contract_analysis_version` + 1: la sua analisi
+passa da `analyze_geo_contract`, che ha una regola di validazione nuova
+(rifiuto degli assi scambiati) e cambia lo schema d'uscita inferito (toglie
+una `precision` ereditata diversa da `float64`), e la versione dell'analisi
+si incrementa per l'una e per l'altra cosa. Semantica, config e kernel
+restano. La tabella con le versioni prima del ciclo e l'incremento è
+`contratti_arrow_portano_l_incremento_dell_analisi` in
+`crates/plenora-core/src/catalog.rs`, e copre per costruzione ogni
+operazione geo del catalogo.
+
+Le tabellari non cambiano versione: né la loro analisi né i loro kernel
+cambiano. Versione, identità dei campi e blocco geometrico completo li
+aggiungono la pubblicazione dello schema e l'emissione canonica, che stanno
+sotto il catalogo e valgono per tutte le operazioni allo stesso modo: è un
+cambio del contratto di trasporto (Arrow Interchange 1.0), non di
+un'operazione.
 
 ### Limiti dichiarati
 

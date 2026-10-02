@@ -1183,19 +1183,54 @@ pub fn read_contract_version(schema: &Schema) -> Result<Option<u32>, PlenoraErro
 }
 
 /// Rileva la presenza di chiavi nel namespace canonico nei metadati dello
-/// schema o di un qualunque campo (che rende obbligatoria la versione).
+/// schema o di un qualunque campo, a qualunque profondità (che rende
+/// obbligatoria la versione).
+///
+/// Anche i figli contano: una chiave `plenora.*` su un figlio di struct,
+/// lista o mappa è metadato Plenora come quella di un campo di primo
+/// livello, e senza versione non si sa che cosa voglia dire. Prima si
+/// guardavano solo i campi di primo livello.
 #[must_use]
 pub fn schema_has_canonical_keys(schema: &Schema) -> bool {
-    schema
-        .metadata()
-        .keys()
-        .any(|key| key.starts_with(PLENORA_NAMESPACE_PREFIX))
-        || schema.fields().iter().any(|field| {
-            field
-                .metadata()
-                .keys()
-                .any(|key| key.starts_with(PLENORA_NAMESPACE_PREFIX))
-        })
+    let canonica = |key: &str| key.starts_with(PLENORA_NAMESPACE_PREFIX);
+    schema.metadata().keys().any(|key| canonica(key))
+        || schema
+            .fields()
+            .iter()
+            .any(|field| campo_con_chiave(field, &canonica))
+}
+
+/// Il campo o un suo figlio, a qualunque profondità, ha una chiave di
+/// metadato che soddisfa `chiave`?
+///
+/// La visita è una sola per ogni controllo sulle chiavi annidate
+/// (versione del contratto, identità dei campi): figli di liste (anche
+/// view e a dimensione fissa), mappe, struct, union, run-end e valori dei
+/// dictionary.
+pub fn campo_con_chiave(field: &Field, chiave: &dyn Fn(&str) -> bool) -> bool {
+    field.metadata().keys().any(|key| chiave(key)) || figlio_con_chiave(field.data_type(), chiave)
+}
+
+/// Un figlio di `tipo`, a qualunque profondità, ha una chiave di metadato
+/// che soddisfa `chiave`? Il campo stesso non conta.
+pub fn figlio_con_chiave(tipo: &DataType, chiave: &dyn Fn(&str) -> bool) -> bool {
+    match tipo {
+        DataType::List(figlio)
+        | DataType::LargeList(figlio)
+        | DataType::ListView(figlio)
+        | DataType::LargeListView(figlio)
+        | DataType::FixedSizeList(figlio, _)
+        | DataType::Map(figlio, _) => campo_con_chiave(figlio, chiave),
+        DataType::Struct(figli) => figli.iter().any(|figlio| campo_con_chiave(figlio, chiave)),
+        DataType::Union(figli, _) => figli
+            .iter()
+            .any(|(_, figlio)| campo_con_chiave(figlio, chiave)),
+        DataType::RunEndEncoded(fini, valori) => {
+            campo_con_chiave(fini, chiave) || campo_con_chiave(valori, chiave)
+        }
+        DataType::Dictionary(_, valore) => figlio_con_chiave(valore, chiave),
+        _ => false,
+    }
 }
 
 /// Le nozioni geometriche di un campo dopo la lettura delle chiavi
