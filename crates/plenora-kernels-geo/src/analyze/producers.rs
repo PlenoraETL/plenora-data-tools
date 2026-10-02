@@ -506,7 +506,9 @@ pub(in crate::analyze) fn analyze_generate_grid(
         .into_iter(),
         &crs,
     )
-    .map_err(|error| PlenoraError::Crs(format!("{op}: parametro `extent`: {error}")))?;
+    .map_err(|error| {
+        PlenoraError::from(error).con_contesto(&format!("{op}: parametro `extent`"))
+    })?;
     let mut fields = vec![new_geometry_field(
         DEFAULT_GEOMETRY_COLUMN,
         &crs,

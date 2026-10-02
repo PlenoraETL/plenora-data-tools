@@ -1,12 +1,12 @@
 //! Diagnostica per riga dopo passi che cambiano numero o ordine delle righe.
 //!
-//! Ogni ordine valido della catena si accetta. Gli indici della diagnostica
-//! sono righe della sorgente quando la catena a monte le conserva, righe del
-//! primo ingresso del passo altrimenti: la base si decide in validazione
-//! (`PipelineValidata::base_indici`) e l'esecuzione la scrive nel payload.
-//! L'oracolo delle posizioni è il piano spezzato: il prefisso della catena
-//! eseguito da solo dice in quale riga del suo output sta la cella che
-//! fallisce.
+//! Ogni ordine valido della catena si accetta. Gli esempi della diagnostica
+//! portano righe della sorgente quando la catena a monte le conserva;
+//! altrimenti il payload ha i soli conteggi, con il limite di conoscenza
+//! `read.row_attribution_unavailable` (DIAG-003: mai un indice di un'altra
+//! base). La decisione si prende in validazione
+//! (`PipelineValidata::base_indici`). L'oracolo dei conteggi è il piano
+//! spezzato: l'emettitore eseguito da solo sull'output del prefisso.
 
 mod comune;
 mod comune_geo;
@@ -20,8 +20,8 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::catalog::{find_operation, Family, SourceRowProvenance, CATALOG};
 use plenora_core::diagnostics::{
-    RowDiagnosticScope, RowDiagnostics, ROW_DIAGNOSTICS_INDEX_BASIS,
-    ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT,
+    RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
+    KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE, ROW_DIAGNOSTICS_INDEX_BASIS,
 };
 use plenora_core::{ErrorPhase, PlenoraError, Result};
 use plenora_pipeline::{byte_vivi, BaseIndici, Esito, Passo, Pipeline, PipelineValidata};
@@ -320,9 +320,9 @@ fn verifica_fase(errore: &PlenoraError, report: &RowDiagnostics) {
     assert_eq!(report.scope, RowDiagnosticScope::Read, "{errore}");
 }
 
-/// Posizione, nell'output del prefisso eseguito da solo, della riga che
-/// viene dalla riga cattiva della sorgente.
-fn posizione_nel_prefisso(forma: &Forma) -> u64 {
+/// La diagnostica del piano spezzato: il prefisso eseguito da solo, poi
+/// l'emettitore sul suo output come input del piano.
+fn diagnostica_spezzata(forma: &Forma, op: &str, config: Value) -> RowDiagnostics {
     let ingressi: Vec<&str> = if forma.usa_destra {
         vec!["t", "r"]
     } else {
@@ -330,24 +330,43 @@ fn posizione_nel_prefisso(forma: &Forma) -> u64 {
     };
     let prefisso = piano(&ingressi, forma.prefisso.clone(), &[forma.ingresso]);
     let esito = esegui(&prefisso, &tabelle(true, forma.usa_destra)).expect("prefisso");
-    let uscita = output(&esito, forma.ingresso);
-    let id = uscita
-        .column_by_name("id")
-        .expect("colonna id")
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .expect("id Int64");
-    let posizioni: Vec<usize> = (0..id.len())
-        .filter(|riga| id.value(*riga) == RIGA_CATTIVA)
-        .collect();
-    assert_eq!(posizioni.len(), 1, "{}: una riga cattiva", forma.nome);
-    u64::try_from(posizioni[0]).expect("posizione")
+    let intermedia = output(&esito, forma.ingresso);
+    let seconda = piano(&["t"], vec![passo("x", op, &["t"], config)], &["x"]);
+    let errore = esegui(&seconda, &[("t", intermedia)]).expect_err("cella cattiva");
+    diagnostica(&errore).clone()
+}
+
+/// Il rifiuto di un passo `x` dopo un passo che cambia le righe: conteggi
+/// senza esempi, con il limite di conoscenza, e il testo che nomina passo e
+/// ingresso.
+fn verifica_senza_attribuzione(errore: &PlenoraError, ingresso: &str) -> RowDiagnostics {
+    let report = diagnostica(errore);
+    assert_eq!(report.index_basis, ROW_DIAGNOSTICS_INDEX_BASIS, "{errore}");
+    assert!(report.examples.is_empty(), "{errore}");
+    // DIAG-007: gli esempi osservati sono stati omessi.
+    assert!(report.examples_truncated, "{errore}");
+    assert_eq!(
+        report.completeness,
+        RowDiagnosticsCompleteness::Partial,
+        "{errore}"
+    );
+    assert_eq!(
+        report.knowledge_limits,
+        Some(vec![KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE.to_owned()]),
+        "{errore}"
+    );
+    assert_eq!(report.total, Some(report.observed_total), "{errore}");
+    assert!(report.validate_for_emission().is_ok());
+    let testo = errore.to_string();
+    assert!(testo.contains("passo `x`"), "{testo}");
+    assert!(testo.contains(&format!("ingresso `{ingresso}`")), "{testo}");
+    assert!(testo.contains("non riconducibili alla sorgente"), "{testo}");
+    report.clone()
 }
 
 #[test]
-fn dopo_un_passo_che_cambia_le_righe_la_diagnostica_punta_alla_riga_dell_ingresso() {
+fn dopo_un_passo_che_cambia_le_righe_la_diagnostica_ha_solo_i_conteggi() {
     for forma in forme() {
-        let atteso = posizione_nel_prefisso(&forma);
         let ingressi: Vec<&str> = if forma.usa_destra {
             vec!["t", "r"]
         } else {
@@ -355,17 +374,18 @@ fn dopo_un_passo_che_cambia_le_righe_la_diagnostica_punta_alla_riga_dell_ingress
         };
         for (op, config) in emettitori() {
             let mut passi = forma.prefisso.clone();
-            passi.push(passo("x", op, &[forma.ingresso], config));
+            passi.push(passo("x", op, &[forma.ingresso], config.clone()));
             let pipeline = piano(&ingressi, passi, &["x"]);
             let tavole = tabelle(true, forma.usa_destra);
             let validata = valida(&pipeline, &tavole)
                 .unwrap_or_else(|errore| panic!("{} -> {op}: rifiutata: {errore}", forma.nome));
             assert_eq!(
                 validata.base_indici("x"),
-                Some(BaseIndici::IngressoDelPasso),
+                Some(BaseIndici::SenzaAttribuzione),
                 "{} -> {op}",
                 forma.nome
             );
+            let spezzata = diagnostica_spezzata(&forma, op, config);
             let errore = validata
                 .run(
                     tavole
@@ -374,27 +394,14 @@ fn dopo_un_passo_che_cambia_le_righe_la_diagnostica_punta_alla_riga_dell_ingress
                         .collect(),
                 )
                 .expect_err("cella cattiva");
-            let report = diagnostica(&errore);
-            // Validazione ed esecuzione concordano sulla base.
-            assert_eq!(
-                report.index_basis, ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT,
-                "{} -> {op}",
-                forma.nome
-            );
+            let report = verifica_senza_attribuzione(&errore, forma.ingresso);
+            // I conteggi sono quelli del piano spezzato, che ha anche
+            // l'esempio (riga dell'ingresso del passo, non della sorgente:
+            // per questo nella catena non si pubblica).
             assert_eq!(report.observed_total, 1, "{} -> {op}", forma.nome);
-            assert_eq!(report.examples.len(), 1, "{} -> {op}", forma.nome);
-            assert_eq!(
-                report.examples[0].source_index, atteso,
-                "{} -> {op}: riga dell'ingresso del passo",
-                forma.nome
-            );
-            assert!(report.validate_for_emission().is_ok());
+            assert_eq!(report.counts, spezzata.counts, "{} -> {op}", forma.nome);
+            assert_eq!(spezzata.examples.len(), 1, "{} -> {op}", forma.nome);
             let testo = errore.to_string();
-            assert!(testo.contains("passo `x`"), "{testo}");
-            assert!(
-                testo.contains(&format!("ingresso `{}`", forma.ingresso)),
-                "{testo}"
-            );
             // Errori senza dati: nessuna cella della riga cattiva nel testo.
             for valore in ["non un numero", "non una data", "7.5", "21"] {
                 assert!(!testo.contains(valore), "{op}: dato nel messaggio: {testo}");
@@ -433,7 +440,7 @@ fn con_la_catena_che_conserva_le_righe_gli_indici_restano_della_sorgente() {
             );
             // Il testo resta quello del kernel.
             assert!(
-                !errore.to_string().contains("non alla sorgente"),
+                !errore.to_string().contains("non riconducibili"),
                 "{op}: {errore}"
             );
         }
@@ -441,9 +448,9 @@ fn con_la_catena_che_conserva_le_righe_gli_indici_restano_della_sorgente() {
 }
 
 #[test]
-fn aggregate_poi_formula_riferisce_le_righe_dei_gruppi() {
-    // Le righe dell'aggregazione sono gruppi nuovi: l'indice è la riga
-    // del gruppo nell'output di `aggregate`.
+fn aggregate_poi_formula_conta_senza_esempi() {
+    // Le righe dell'aggregazione sono gruppi nuovi: nessuna riga della
+    // sorgente da riportare, solo il conteggio.
     let aggrega = passo(
         "g",
         "table.aggregate",
@@ -455,7 +462,7 @@ fn aggregate_poi_formula_riferisce_le_righe_dei_gruppi() {
     let pipeline = piano(
         &["t"],
         vec![
-            aggrega.clone(),
+            aggrega,
             passo(
                 "x",
                 "table.formula",
@@ -470,27 +477,11 @@ fn aggregate_poi_formula_riferisce_le_righe_dei_gruppi() {
     let validata = valida(&pipeline, &tavole).expect("aggregate -> formula accettata");
     assert_eq!(
         validata.base_indici("x"),
-        Some(BaseIndici::IngressoDelPasso)
+        Some(BaseIndici::SenzaAttribuzione)
     );
     let errore = esegui(&pipeline, &tavole).expect_err("divisore zero nel gruppo k7");
-    let report = diagnostica(&errore);
-    assert_eq!(report.index_basis, ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT);
-
-    let gruppi = esegui(&piano(&["t"], vec![aggrega], &["g"]), &tavole).expect("prefisso");
-    let gruppi = output(&gruppi, "g");
-    let chiavi = gruppi
-        .column_by_name("k")
-        .expect("k")
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("k Utf8");
-    let posizione = (0..chiavi.len())
-        .find(|riga| chiavi.value(*riga) == "k7")
-        .expect("gruppo k7");
-    assert_eq!(
-        report.examples[0].source_index,
-        u64::try_from(posizione).expect("posizione")
-    );
+    let report = verifica_senza_attribuzione(&errore, "g");
+    assert_eq!(report.observed_total, 1);
 }
 
 #[test]
@@ -608,7 +599,8 @@ fn foreign_key_con_destra_filtrata_resta_sulla_sorgente_di_sinistra() {
         .collect();
     assert_eq!(indici, vec![0, 1, 2, 3, 4, 5]);
 
-    // Con il lato left filtrato gli indici sono righe dell'ingresso left.
+    // Con il lato left filtrato le righe non si riconducono alla sorgente:
+    // solo il conteggio.
     let pipeline = piano(
         &["t", "r"],
         vec![
@@ -631,19 +623,12 @@ fn foreign_key_con_destra_filtrata_resta_sulla_sorgente_di_sinistra() {
     let validata = valida(&pipeline, &tavole).expect("valida");
     assert_eq!(
         validata.base_indici("x"),
-        Some(BaseIndici::IngressoDelPasso)
+        Some(BaseIndici::SenzaAttribuzione)
     );
     let errore = esegui(&pipeline, &tavole).expect_err("chiavi 4 e 5 assenti");
-    let report = diagnostica(&errore);
-    assert_eq!(report.index_basis, ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT);
-    let indici: Vec<u64> = report
-        .examples
-        .iter()
-        .map(|esempio| esempio.source_index)
-        .collect();
-    // tf tiene gli id 4..=9: 4 e 5 sono le sue righe 0 e 1.
-    assert_eq!(indici, vec![0, 1]);
-    assert!(errore.to_string().contains("ingresso `tf`"), "{errore}");
+    // tf tiene gli id 4..=9: mancano a destra 4 e 5.
+    let report = verifica_senza_attribuzione(&errore, "tf");
+    assert_eq!(report.observed_total, 2);
 }
 
 #[test]
@@ -674,7 +659,7 @@ fn la_base_non_aggiunge_memoria_ai_byte_vivi() {
 }
 
 #[test]
-fn from_wkt_dopo_un_filtro_riferisce_le_righe_dell_ingresso() {
+fn from_wkt_dopo_un_filtro_conta_senza_esempi() {
     // L'unica geo con diagnostica per riga nel runner segue la stessa base.
     let testi = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
@@ -697,13 +682,12 @@ fn from_wkt_dopo_un_filtro_riferisce_le_righe_dell_ingresso() {
         ],
     )
     .expect("testi");
-    for (prefisso, ingresso, base, atteso) in [
-        (Vec::new(), "t", BaseIndici::Sorgente, 7_u64),
+    for (prefisso, ingresso, base) in [
+        (Vec::new(), "t", BaseIndici::Sorgente),
         (
             vec![filtro("f", "t", ">", 3)],
             "f",
-            BaseIndici::IngressoDelPasso,
-            3,
+            BaseIndici::SenzaAttribuzione,
         ),
     ] {
         let mut passi = prefisso;
@@ -719,9 +703,16 @@ fn from_wkt_dopo_un_filtro_riferisce_le_righe_dell_ingresso() {
         let validata = valida(&pipeline, &tavole).expect("valida");
         assert_eq!(validata.base_indici("x"), Some(base));
         let errore = esegui(&pipeline, &tavole).expect_err("cella non WKT");
-        let report = diagnostica(&errore);
-        assert_eq!(report.index_basis, base.index_basis());
-        assert_eq!(report.examples[0].source_index, atteso, "{ingresso}");
+        if base == BaseIndici::Sorgente {
+            let report = diagnostica(&errore);
+            assert_eq!(report.index_basis, ROW_DIAGNOSTICS_INDEX_BASIS);
+            assert_eq!(report.examples[0].source_index, 7);
+        } else {
+            assert_eq!(
+                verifica_senza_attribuzione(&errore, ingresso).observed_total,
+                1
+            );
+        }
         assert!(!errore.to_string().contains("non wkt"), "{errore}");
     }
 }
@@ -1206,10 +1197,10 @@ fn le_geo_che_conservano_le_righe_le_conservano_davvero() {
 }
 
 #[test]
-fn aggregate_che_fonde_piu_righe_poi_formula_riferisce_il_gruppo() {
+fn aggregate_che_fonde_piu_righe_poi_formula_conta_senza_esempi() {
     // Sei righe in tre gruppi: `b` fonde due righe, una con divisore zero.
-    // L'indice riportato e' la posizione del gruppo nell'output di
-    // `aggregate`, non una delle due righe d'origine.
+    // Nessuna riga d'origine e' "la" riga rifiutata: il payload ha il solo
+    // conteggio, non un indice inventato.
     let righe = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("g", DataType::Utf8, false),
@@ -1277,15 +1268,9 @@ fn aggregate_che_fonde_piu_righe_poi_formula_riferisce_il_gruppo() {
     let validata = valida(&pipeline, &tavole).expect("aggregate -> formula accettata");
     assert_eq!(
         validata.base_indici("x"),
-        Some(BaseIndici::IngressoDelPasso)
+        Some(BaseIndici::SenzaAttribuzione)
     );
     let errore = esegui(&pipeline, &tavole).expect_err("divisore zero nel gruppo b");
-    let report = diagnostica(&errore);
-    assert_eq!(report.index_basis, ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT);
+    let report = verifica_senza_attribuzione(&errore, "gruppi");
     assert_eq!(report.observed_total, 1);
-    assert_eq!(
-        report.examples[0].source_index,
-        u64::try_from(posizione).expect("posizione")
-    );
-    assert!(errore.to_string().contains("ingresso `gruppi`"), "{errore}");
 }

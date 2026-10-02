@@ -12,6 +12,12 @@
 //! chiave di riga degli esempi vengono dal contratto di `plenora-data-tools`,
 //! dove li riempiva la pubblicazione verso un database; qui nessun codice li
 //! produce.
+//!
+//! Gli indici sono sempre righe della sorgente (DIAG-002). Dove il runner non
+//! sa ricondurre le righe rifiutate alla sorgente, il payload resta con i
+//! soli conteggi e un limite di conoscenza
+//! ([`RowDiagnostics::senza_attribuzione`]), mai con un indice di un'altra
+//! base (DIAG-003).
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -20,18 +26,14 @@ use serde::{Deserialize, Serialize};
 /// Nome e versione del contratto, valore obbligato di
 /// [`RowDiagnostics::contract`].
 pub const ROW_DIAGNOSTICS_CONTRACT: &str = "plenora-row-diagnostics-v1";
-/// Base degli indici di riga di default di [`RowDiagnostics::index_basis`]:
-/// indice nella sorgente, da zero. È quella che ogni kernel scrive.
+/// Base degli indici di riga, l'unica del contratto (DIAG-002): indice
+/// nella sorgente, da zero.
 pub const ROW_DIAGNOSTICS_INDEX_BASIS: &str = "source_row_zero_based";
-/// Base degli indici di riga quando la sorgente non è raggiungibile: indice,
-/// da zero, nel primo ingresso del passo che ha rifiutato le righe.
-///
-/// La scrive solo il runner (`plenora-pipeline`), riscrivendo il payload di
-/// un kernel il cui ingresso discende da un passo che cambia numero o ordine
-/// delle righe; il passo e il suo ingresso sono nominati nel testo
-/// dell'errore. Un lettore che conosce solo [`ROW_DIAGNOSTICS_INDEX_BASIS`]
-/// rifiuta il payload invece di leggere gli indici come righe della sorgente.
-pub const ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT: &str = "step_input_row_zero_based";
+/// Limite di conoscenza di un payload le cui righe rifiutate non si
+/// riconducono alla sorgente: conteggi senza esempi
+/// ([`RowDiagnostics::senza_attribuzione`]). Stesso codice di
+/// `plenora-database-tools`.
+pub const KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE: &str = "read.row_attribution_unavailable";
 
 /// Dove sono state rifiutate le righe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,11 +121,10 @@ pub enum RowDiagnosticWriteState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RowDiagnosticExample {
-    /// Indice della riga, da zero, nella base di
-    /// [`RowDiagnostics::index_basis`] (la sorgente, o il primo ingresso del
-    /// passo); unico fra gli esempi.
+    /// Indice della riga nella sorgente, da zero; unico fra gli esempi.
     pub source_index: u64,
-    /// Codice della causa (minuscole, cifre, `.`, `_`, `-`; al più 128
+    /// Codice della causa con spazio dei nomi (`conversion.invalid_date`:
+    /// segmenti separati da `.`, ciascuno da una minuscola; al più 128
     /// byte), una delle chiavi di [`RowDiagnostics::counts`].
     pub cause: String,
     /// Nome della colonna (1-256 caratteri), se la causa ne ha una.
@@ -189,10 +190,7 @@ pub struct RowDiagnostics {
     pub contract: String,
     /// Lettura o scrittura.
     pub scope: RowDiagnosticScope,
-    /// [`ROW_DIAGNOSTICS_INDEX_BASIS`] (righe della sorgente) o
-    /// [`ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT`] (righe del primo ingresso
-    /// del passo): dice a che cosa si riferisce
-    /// [`RowDiagnosticExample::source_index`].
+    /// Sempre [`ROW_DIAGNOSTICS_INDEX_BASIS`].
     pub index_basis: String,
     /// Quanto il payload conosce delle righe rifiutate.
     pub completeness: RowDiagnosticsCompleteness,
@@ -293,10 +291,7 @@ impl RowDiagnostics {
     #[allow(clippy::too_many_lines)]
     pub fn validate_for_emission(&self) -> Result<(), &'static str> {
         if self.contract != ROW_DIAGNOSTICS_CONTRACT
-            || !matches!(
-                self.index_basis.as_str(),
-                ROW_DIAGNOSTICS_INDEX_BASIS | ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT
-            )
+            || self.index_basis != ROW_DIAGNOSTICS_INDEX_BASIS
             || self.examples_limit == 0
         {
             return Err("campi radice non validi");
@@ -320,10 +315,14 @@ impl RowDiagnostics {
             }
             sum.checked_add(*count).ok_or("overflow conteggi")
         })?;
+        // DIAG-007: troncati se e solo se righe osservate mancano dagli
+        // esempi, qualunque sia il motivo (il limite, o righe che non si
+        // attribuiscono alla sorgente). Con `complete` gli esempi sono
+        // `min(observed_total, examples_limit)`, quindi lì il motivo è il
+        // limite.
         if counted != self.observed_total
-            || self.counts.keys().any(|cause| !valid_code(cause))
-            || self.examples_truncated
-                != (self.observed_total > example_count && example_count == self.examples_limit)
+            || self.counts.keys().any(|cause| !valid_cause(cause))
+            || self.examples_truncated != (self.observed_total > example_count)
             || self
                 .total
                 .is_some_and(|total| total == 0 || total < self.observed_total)
@@ -356,7 +355,7 @@ impl RowDiagnostics {
         let mut example_state_counts = [0_u64; 4];
         for example in &self.examples {
             if !source_indices.insert(example.source_index)
-                || !valid_code(&example.cause)
+                || !valid_cause(&example.cause)
                 || !self.counts.contains_key(&example.cause)
                 || example
                     .column
@@ -486,6 +485,36 @@ impl RowDiagnostics {
         }
         Ok(())
     }
+
+    /// Lo stesso payload senza esempi, per righe rifiutate che non si
+    /// riconducono alla sorgente (DIAG-003: nessun indice indovinato).
+    ///
+    /// Restano conteggi, cause e totale; gli esempi si tolgono
+    /// (`examples_truncated` vero se ce n'erano di osservati, DIAG-007), la
+    /// completezza `complete` diventa `partial` e
+    /// [`KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE`] si aggiunge ai limiti
+    /// di conoscenza. `partial` e `unknown` restano tali.
+    ///
+    /// # Errors
+    ///
+    /// Il motivo di [`Self::validate_for_emission`] se il risultato non è
+    /// valido (un payload d'ingresso già incoerente).
+    pub fn senza_attribuzione(mut self) -> Result<Self, &'static str> {
+        self.examples.clear();
+        self.examples_truncated = self.observed_total > 0;
+        if self.completeness == RowDiagnosticsCompleteness::Complete {
+            self.completeness = RowDiagnosticsCompleteness::Partial;
+        }
+        let limiti = self.knowledge_limits.get_or_insert_with(Vec::new);
+        if !limiti
+            .iter()
+            .any(|limite| limite == KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE)
+        {
+            limiti.push(KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE.to_owned());
+        }
+        self.validate_for_emission()?;
+        Ok(self)
+    }
 }
 
 const fn write_state_index(state: RowDiagnosticWriteState) -> usize {
@@ -547,22 +576,29 @@ impl Serialize for RowDiagnostics {
     }
 }
 
+/// Codice di causa, esattamente il pattern dello schema
+/// (`^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$`) e al più 128 byte: almeno
+/// due segmenti separati da `.`, ciascuno iniziato da una minuscola.
+fn valid_cause(value: &str) -> bool {
+    value.len() <= 128
+        && value.contains('.')
+        && value.split('.').all(|segmento| {
+            let mut byte = segmento.bytes();
+            byte.next().is_some_and(|b| b.is_ascii_lowercase())
+                && byte
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+        })
+}
+
+/// Codice di un limite di conoscenza, esattamente lo schema: 1-128 byte,
+/// `^[a-z][a-z0-9_.-]*$`.
 fn valid_code(value: &str) -> bool {
-    if value.is_empty() || value.len() > 128 {
-        return false;
-    }
-    let mut previous_separator = false;
-    for (index, byte) in value.bytes().enumerate() {
-        let separator = matches!(byte, b'.' | b'_' | b'-');
-        if (index == 0 && !byte.is_ascii_lowercase())
-            || (!byte.is_ascii_lowercase() && !byte.is_ascii_digit() && !separator)
-            || (separator && previous_separator)
-        {
-            return false;
-        }
-        previous_separator = separator;
-    }
-    !previous_separator
+    let mut byte = value.bytes();
+    value.len() <= 128
+        && byte.next().is_some_and(|b| b.is_ascii_lowercase())
+        && byte.all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'.' | b'-')
+        })
 }
 
 #[cfg(test)]
@@ -681,15 +717,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn le_basi_degli_indici_sono_due_e_chiuse() {
-        let mut passo = report(1, vec![example(3)]);
-        passo.index_basis = ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT.to_owned();
-        assert_eq!(passo.validate_for_emission(), Ok(()));
-        let testo = serde_json::to_string(&passo).expect("serializzabile");
-        assert!(testo.contains("\"index_basis\":\"step_input_row_zero_based\""));
-        let riletto: RowDiagnostics = serde_json::from_str(&testo).expect("rileggibile");
-        assert_eq!(riletto, passo);
-        for altra in ["", "source_row_one_based", "step_input_row"] {
+    fn la_base_degli_indici_e_solo_la_sorgente() {
+        assert_eq!(report(1, vec![example(3)]).validate_for_emission(), Ok(()));
+        for altra in [
+            "",
+            "source_row_one_based",
+            "step_input_row",
+            "step_input_row_zero_based",
+        ] {
             let mut ignota = report(1, vec![example(3)]);
             ignota.index_basis = altra.to_owned();
             assert_eq!(
@@ -787,8 +822,96 @@ pub(crate) mod tests {
         overflow.completeness = RowDiagnosticsCompleteness::Partial;
         overflow.total = None;
         overflow.knowledge_limits = Some(vec!["counter.overflow".to_owned()]);
-        overflow.counts = BTreeMap::from([("a".to_owned(), u64::MAX), ("b".to_owned(), 1)]);
-        assert!(overflow.validate_for_emission().is_err());
+        overflow.counts = BTreeMap::from([("a.x".to_owned(), u64::MAX), ("b.x".to_owned(), 1)]);
+        assert_eq!(overflow.validate_for_emission(), Err("overflow conteggi"));
+    }
+
+    #[test]
+    fn le_cause_hanno_uno_spazio_dei_nomi() {
+        for valida in [
+            "conversion.invalid_date",
+            "a.b",
+            "geo.wkb-invalido.x1",
+            "a.b__c",
+        ] {
+            assert!(valid_cause(valida), "{valida}");
+        }
+        for invalida in ["conversion", "a.1b", "a..b", "a.", ".a", "A.b", "a._b"] {
+            assert!(!valid_cause(invalida), "{invalida}");
+            let mut payload = report(1, vec![example(0)]);
+            payload.counts = BTreeMap::from([(invalida.to_owned(), 1)]);
+            invalida.clone_into(&mut payload.examples[0].cause);
+            assert!(payload.validate_for_emission().is_err(), "{invalida}");
+        }
+    }
+
+    /// DIAG-003/007: una riga attribuibile su due, l'altra no (limite di
+    /// conoscenza): un esempio, troncati; e lo stesso senza esempi.
+    #[test]
+    fn troncati_quando_righe_osservate_mancano_dagli_esempi() {
+        let mut parziale = report(2, vec![example(5)]);
+        parziale.examples_limit = 10;
+        parziale.completeness = RowDiagnosticsCompleteness::Partial;
+        parziale.knowledge_limits =
+            Some(vec![KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE.to_owned()]);
+        parziale.examples_truncated = true;
+        assert_eq!(parziale.validate_for_emission(), Ok(()));
+        let mut non_troncato = parziale.clone();
+        non_troncato.examples_truncated = false;
+        assert_eq!(
+            non_troncato.validate_for_emission(),
+            Err("conteggi incoerenti")
+        );
+        let mut senza_esempi = parziale.clone();
+        senza_esempi.examples.clear();
+        assert_eq!(senza_esempi.validate_for_emission(), Ok(()));
+        // Tutte le righe osservate negli esempi: non troncati.
+        let mut tutti = parziale;
+        tutti.examples.push(example(8));
+        assert!(tutti.validate_for_emission().is_err());
+        tutti.examples_truncated = false;
+        assert_eq!(tutti.validate_for_emission(), Ok(()));
+    }
+
+    #[test]
+    fn senza_attribuzione_tiene_i_conteggi_e_toglie_gli_esempi() {
+        let mut completo = report(3, vec![example(4), example(9)]);
+        completo.examples_truncated = true;
+        assert_eq!(completo.validate_for_emission(), Ok(()));
+        let ridotto = completo.clone().senza_attribuzione().expect("valido");
+        assert_eq!(ridotto.examples, Vec::new());
+        // DIAG-007: esempi osservati omessi.
+        assert!(ridotto.examples_truncated);
+        // Con `examples_truncated` falso il payload mente.
+        let mut falso = ridotto.clone();
+        falso.examples_truncated = false;
+        assert!(falso.validate_for_emission().is_err());
+        assert_eq!(ridotto.completeness, RowDiagnosticsCompleteness::Partial);
+        assert_eq!(
+            ridotto.knowledge_limits,
+            Some(vec![KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE.to_owned()])
+        );
+        assert_eq!(ridotto.counts, completo.counts);
+        assert_eq!(ridotto.observed_total, 3);
+        assert_eq!(ridotto.total, Some(3));
+        assert_eq!(ridotto.index_basis, ROW_DIAGNOSTICS_INDEX_BASIS);
+        // Idempotente: il limite non si ripete.
+        assert_eq!(ridotto.clone().senza_attribuzione(), Ok(ridotto));
+
+        // `unknown` resta `unknown`, il limite si aggiunge a quelli che c'erano.
+        let mut ignoto = report(1, vec![example(0)]);
+        ignoto.completeness = RowDiagnosticsCompleteness::Unknown;
+        ignoto.total = None;
+        ignoto.knowledge_limits = Some(vec!["scan.interrupted".to_owned()]);
+        let ridotto = ignoto.senza_attribuzione().expect("valido");
+        assert_eq!(ridotto.completeness, RowDiagnosticsCompleteness::Unknown);
+        assert_eq!(
+            ridotto.knowledge_limits,
+            Some(vec![
+                "scan.interrupted".to_owned(),
+                KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE.to_owned()
+            ])
+        );
     }
 
     #[test]

@@ -32,9 +32,6 @@ use plenora_core::contract::arrow_schema::{
 };
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::crs::{resolve_crs, ResolvedCrs};
-use plenora_core::diagnostics::{
-    ROW_DIAGNOSTICS_INDEX_BASIS, ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT,
-};
 use plenora_core::limits::{Limits, PlanLimits};
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::analyze::analyze_geo_contract;
@@ -57,8 +54,8 @@ pub enum KernelPasso {
     Geo(Box<PassoGeo>),
 }
 
-/// A che cosa si riferiscono gli indici di riga della diagnostica per riga
-/// di un passo (`plenora-row-diagnostics-v1`).
+/// Se gli indici di riga della diagnostica per riga di un passo
+/// (`plenora-row-diagnostics-v1`) sono righe della sorgente.
 ///
 /// Si decide in validazione, dal catalogo
 /// ([`OperationDescriptor::source_row_provenance`]), e l'esecuzione la
@@ -70,23 +67,14 @@ pub enum BaseIndici {
     /// righe: l'indice del kernel è quello della sorgente, e il payload resta
     /// quello del kernel (`source_row_zero_based`).
     Sorgente,
-    /// Righe del primo ingresso del passo: a monte un passo cambia numero o
-    /// ordine delle righe (`filter`, `sort`, `join`, `aggregate`…) e la
-    /// sorgente non è raggiungibile. Il runner riscrive la base del payload
-    /// in `step_input_row_zero_based` e nomina passo e ingresso nel testo
-    /// dell'errore.
-    IngressoDelPasso,
-}
-
-impl BaseIndici {
-    /// Valore di `index_basis` nel payload di un passo con questa base.
-    #[must_use]
-    pub const fn index_basis(self) -> &'static str {
-        match self {
-            Self::Sorgente => ROW_DIAGNOSTICS_INDEX_BASIS,
-            Self::IngressoDelPasso => ROW_DIAGNOSTICS_INDEX_BASIS_STEP_INPUT,
-        }
-    }
+    /// A monte un passo cambia numero o ordine delle righe (`filter`,
+    /// `sort`, `join`, `aggregate`…) e la riga della sorgente non si
+    /// ricostruisce. Il runner toglie gli esempi dal payload e lascia i
+    /// conteggi con il limite di conoscenza
+    /// `read.row_attribution_unavailable`
+    /// ([`plenora_core::diagnostics::RowDiagnostics::senza_attribuzione`]);
+    /// il testo dell'errore nomina passo e ingresso.
+    SenzaAttribuzione,
 }
 
 /// Un passo che ha superato la validazione.
@@ -165,8 +153,8 @@ impl PipelineValidata {
     }
 
     /// Base degli indici della diagnostica per riga del passo che produce
-    /// `out`: quella che l'esecuzione scriverà nel payload di un rifiuto del
-    /// passo. `None` se nessun passo produce `out`.
+    /// `out`: dice se un rifiuto del passo avrà esempi con l'indice della
+    /// sorgente o solo conteggi. `None` se nessun passo produce `out`.
     #[must_use]
     pub fn base_indici(&self, out: &str) -> Option<BaseIndici> {
         self.passi
@@ -613,8 +601,8 @@ impl Pipeline {
             // primo ingresso (per `assert_foreign_key` il lato left, per le
             // unarie l'unico). Sono righe della sorgente solo se nessun passo
             // a monte ha cambiato numero o ordine delle righe; altrimenti il
-            // runner li dichiara righe dell'ingresso del passo. Nessuna
-            // catena si rifiuta per questo.
+            // runner pubblica i soli conteggi. Nessuna catena si rifiuta per
+            // questo.
             let righe_della_sorgente = passo
                 .inputs
                 .first()
@@ -622,7 +610,7 @@ impl Pipeline {
             let base_indici = if righe_della_sorgente {
                 BaseIndici::Sorgente
             } else {
-                BaseIndici::IngressoDelPasso
+                BaseIndici::SenzaAttribuzione
             };
             let ingressi: Vec<DataContract> = passo
                 .inputs

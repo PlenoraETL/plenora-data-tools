@@ -26,7 +26,9 @@
 //! `190c493`, per un solo batch per arco.
 
 use std::collections::{BTreeMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use plenora_core::arrow::array::{
     Array, ArrayRef, BinaryArray, LargeBinaryArray, LargeStringArray, RecordBatch, StringArray,
@@ -37,7 +39,7 @@ use plenora_core::contract::arrow_schema::arrow_schema_from_contract;
 use plenora_core::contract::DataContract;
 use plenora_core::limits::expansion_exceeded;
 use plenora_core::memoria::{byte_dati, byte_vivi};
-use plenora_core::{PlenoraError, Result};
+use plenora_core::{ErrorPhase, PlenoraError, Result};
 use plenora_kernels_table::EffettiKernel;
 
 use crate::budget::Ingresso;
@@ -99,6 +101,49 @@ pub struct ReportPasso {
     /// altre operazioni; con `"error"` un passo riuscito ne ha zero (una
     /// divisione per zero lo fa fallire con la diagnostica per riga).
     pub righe_divisione_per_zero: u64,
+}
+
+/// Interruzione cooperativa di [`PipelineValidata::run_interrompibile`]: una
+/// scadenza assoluta e un segnale di annullamento, entrambi facoltativi.
+///
+/// Il runner li controlla prima di ogni passo e prima di consegnare gli
+/// output, mai durante un kernel: un passo lungo finisce anche oltre la
+/// scadenza, e l'errore arriva al controllo successivo (limite dichiarato
+/// nel README, «Scadenza e annullamento»). L'annullamento prevale sulla
+/// scadenza quando valgono entrambi.
+#[derive(Clone, Debug, Default)]
+pub struct Interruzione {
+    /// Istante oltre il quale l'esecuzione si ferma con `Timeout`
+    /// (`EXECUTION_DEADLINE_EXCEEDED`). Monotono: chi riceve una scadenza
+    /// RFC 3339 (`plenora.execution.deadline`) la converte prima.
+    pub scadenza: Option<Instant>,
+    /// Alzato dal chiamante (da un altro thread): l'esecuzione si ferma con
+    /// `Cancelled` (`EXECUTION_CANCELLED`).
+    pub annullamento: Option<Arc<AtomicBool>>,
+}
+
+impl Interruzione {
+    /// `Cancelled` o `Timeout` se l'esecuzione va fermata `dove`.
+    fn verifica(&self, dove: &str) -> Result<()> {
+        if self
+            .annullamento
+            .as_ref()
+            .is_some_and(|segnale| segnale.load(Ordering::Acquire))
+        {
+            return Err(PlenoraError::Cancelled(format!(
+                "esecuzione annullata {dove}"
+            )));
+        }
+        if self
+            .scadenza
+            .is_some_and(|scadenza| Instant::now() >= scadenza)
+        {
+            return Err(PlenoraError::Timeout(format!(
+                "scadenza dell'esecuzione superata {dove}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Ultimo uso degli output del piano: nessun passo li libera.
@@ -359,11 +404,12 @@ fn esegui_kernel(
 /// La diagnostica per riga di un passo nella base decisa in validazione.
 ///
 /// Con [`BaseIndici::Sorgente`] l'errore del kernel resta com'è. Con
-/// [`BaseIndici::IngressoDelPasso`] gli indici del kernel, che sono righe del
-/// primo ingresso del passo, si dichiarano tali: `index_basis` diventa
-/// `step_input_row_zero_based` e il testo nomina passo e ingresso (nomi del
-/// piano, mai valori). Gli indici non si toccano: sono già quelli giusti per
-/// quella base. Un errore senza payload resta com'è.
+/// [`BaseIndici::SenzaAttribuzione`] gli indici del kernel sono righe del
+/// primo ingresso del passo, non della sorgente: il payload perde gli esempi
+/// e tiene i conteggi con il limite di conoscenza
+/// (`RowDiagnostics::senza_attribuzione`, DIAG-003: nessun indice di
+/// un'altra base), e il testo nomina passo e ingresso (nomi del piano, mai
+/// valori). Un errore senza payload resta com'è.
 fn diagnostica_nella_base(errore: PlenoraError, passo: &PassoValidato) -> PlenoraError {
     if passo.base_indici == BaseIndici::Sorgente {
         return errore;
@@ -371,27 +417,23 @@ fn diagnostica_nella_base(errore: PlenoraError, passo: &PassoValidato) -> Plenor
     match errore {
         PlenoraError::RowDiagnostics {
             source,
-            mut diagnostics,
+            diagnostics,
         } => {
-            passo
-                .base_indici
-                .index_basis()
-                .clone_into(&mut diagnostics.index_basis);
-            if diagnostics.validate_for_emission().is_err() {
+            let Ok(diagnostics) = diagnostics.senza_attribuzione() else {
                 return PlenoraError::Internal(format!(
-                    "passo `{}`: diagnostica per riga non valida dopo il cambio di base",
+                    "passo `{}`: diagnostica per riga non valida senza gli esempi",
                     passo.out
                 ));
-            }
+            };
             let ingresso = passo.inputs.first().map_or("", String::as_str);
             let contesto = format!(
-                "passo `{}`: indici di riga riferiti all'ingresso `{ingresso}` del passo, \
-                 non alla sorgente",
+                "passo `{}`: righe rifiutate nell'ingresso `{ingresso}` del passo, \
+                 non riconducibili alla sorgente (diagnostica senza esempi)",
                 passo.out
             );
             PlenoraError::RowDiagnostics {
                 source: Box::new(con_contesto_sotto_la_fase(&contesto, *source)),
-                diagnostics,
+                diagnostics: Box::new(diagnostics),
             }
         }
         PlenoraError::Tagged { phase, source } => PlenoraError::Tagged {
@@ -471,8 +513,27 @@ impl PipelineValidata {
     ///   di un kernel;
     /// - gli errori dei kernel, con il nome del passo dove la variante porta
     ///   un messaggio.
-    #[allow(clippy::too_many_lines)] // Il ciclo dei passi in un punto solo.
     pub fn run(self, tables: Vec<(String, RecordBatch)>) -> Result<Esito> {
+        self.run_interrompibile(tables, &Interruzione::default())
+    }
+
+    /// [`Self::run`] con scadenza e annullamento cooperativi
+    /// ([`Interruzione`]), controllati prima di ogni passo e prima di
+    /// consegnare gli output.
+    ///
+    /// # Errors
+    ///
+    /// Quelli di [`Self::run`], e:
+    /// - `Cancelled`: segnale di annullamento alzato a un controllo;
+    /// - `Timeout`: scadenza passata a un controllo.
+    ///
+    /// Entrambi senza output resi (effetto `none`) e con ritentativo `safe`.
+    #[allow(clippy::too_many_lines)] // Il ciclo dei passi in un punto solo.
+    pub fn run_interrompibile(
+        self,
+        tables: Vec<(String, RecordBatch)>,
+        interruzione: &Interruzione,
+    ) -> Result<Esito> {
         let budget = self.limiti.max_governed_memory_bytes;
         // Input: esattamente quelli dichiarati, con lo schema validato.
         let mut vivi: BTreeMap<String, RecordBatch> = BTreeMap::new();
@@ -559,6 +620,7 @@ impl PipelineValidata {
         let mut passi = Vec::with_capacity(self.passi.len());
         for (indice, passo) in self.passi.iter().enumerate() {
             let op = passo.descrittore.id;
+            interruzione.verifica(&format!("prima del passo `{}` ({op})", passo.out))?;
             let nel = |errore: PlenoraError| nel_passo(&passo.out, errore);
             let ingressi: Vec<&RecordBatch> = passo
                 .inputs
@@ -689,6 +751,12 @@ impl PipelineValidata {
             })?;
             outputs.push((nome.clone(), tabella));
         }
+        // Tutti i passi sono finiti: l'ultima fase iniziata e' la consegna. Il
+        // controllo e' l'ultima cosa prima di rendere gli output: una
+        // scadenza passata durante i controlli finali non li rende.
+        interruzione
+            .verifica("prima di consegnare gli output")
+            .map_err(|errore| errore.with_phase(ErrorPhase::Finalize))?;
         Ok(Esito {
             outputs,
             report: Report {
@@ -810,5 +878,64 @@ mod tests {
             Err(PlenoraError::Internal(_))
         ));
         assert!(conforma(&batch, &DataContract::tabular(batch.schema())).is_ok());
+    }
+
+    /// Scadenza passata o annullamento alzato: nessun kernel gira, e
+    /// l'errore nomina il primo passo.
+    #[test]
+    fn un_interruzione_prima_del_primo_passo_non_chiama_kernel() {
+        use std::sync::atomic::AtomicBool;
+        use std::time::Instant;
+
+        use super::Interruzione;
+        use plenora_core::ErrorCategory;
+
+        let pipeline = Pipeline {
+            version: 1,
+            inputs: vec!["a".into()],
+            crs: None,
+            limits: None,
+            steps: vec![Passo {
+                out: "x".into(),
+                op: "table.rename".into(),
+                inputs: vec!["a".into()],
+                config: json!({"renames": [{"old_name": "k", "new_name": "k2"}]}),
+            }],
+            outputs: vec!["x".into()],
+        };
+        let a = tabella(10);
+        let casi = [
+            (
+                Interruzione {
+                    scadenza: Some(Instant::now()),
+                    annullamento: None,
+                },
+                ErrorCategory::Timeout,
+            ),
+            (
+                Interruzione {
+                    scadenza: None,
+                    annullamento: Some(Arc::new(AtomicBool::new(true))),
+                },
+                ErrorCategory::Cancelled,
+            ),
+        ];
+        for (interruzione, categoria) in casi {
+            let validata = pipeline
+                .validate(&[("a", a.schema())])
+                .expect("piano valido");
+            CHIAMATE_KERNEL.with(|chiamate| chiamate.set(0));
+            let errore = validata
+                .run_interrompibile(vec![("a".into(), a.clone())], &interruzione)
+                .expect_err("interrotta");
+            assert_eq!(errore.category(), categoria, "{errore}");
+            assert!(
+                errore
+                    .to_string()
+                    .contains("prima del passo `x` (table.rename)"),
+                "{errore}"
+            );
+            assert_eq!(CHIAMATE_KERNEL.with(std::cell::Cell::get), 0);
+        }
     }
 }

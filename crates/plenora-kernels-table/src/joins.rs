@@ -277,7 +277,8 @@ fn coalesce(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
         }
         other => {
             return Err(PlenoraError::Schema(format!(
-                "tipo chiave join non supportato: {other}"
+                "tipo chiave join non supportato: {}",
+                plenora_core::tipo_arrow::descrivi_tipo(other)
             )))
         }
     })

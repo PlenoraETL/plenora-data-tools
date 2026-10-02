@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use plenora_core::{PlenoraError, Result};
+use plenora_core::{PlenoraError, RemoteEffect, Result};
 
 fn esiste_gia() -> PlenoraError {
     PlenoraError::Conflict(
@@ -80,25 +80,124 @@ pub fn scrivi_atomico(
         .prefix(".plenora-io-")
         .suffix(".tmp")
         .tempfile_in(directory_di(destinazione))?;
-    {
-        let mut scrittore = BufWriter::new(temporaneo.as_file_mut());
-        scrivi(&mut scrittore)?;
-        scrittore.flush()?;
+    let preparato = (|| {
+        {
+            let mut scrittore = BufWriter::new(temporaneo.as_file_mut());
+            scrivi(&mut scrittore)?;
+            scrittore.flush()?;
+        }
+        temporaneo.as_file().sync_all()?;
+        verifica(temporaneo.path())
+    })();
+    if let Err(causa) = preparato {
+        return Err(scarta(temporaneo, causa));
     }
-    temporaneo.as_file().sync_all()?;
-    verifica(temporaneo.path())?;
     let esito = if sovrascrivi {
         temporaneo.persist(destinazione)
     } else {
         temporaneo.persist_noclobber(destinazione)
     };
-    // In caso di errore `PersistError` restituisce il temporaneo, che si
-    // cancella quando cade.
+    // In caso di errore `PersistError` restituisce il temporaneo.
     esito.map(|_| ()).map_err(|errore| {
-        if errore.error.kind() == std::io::ErrorKind::AlreadyExists {
+        let causa = if errore.error.kind() == std::io::ErrorKind::AlreadyExists {
             esiste_gia()
         } else {
             PlenoraError::Io(errore.error)
-        }
+        };
+        scarta(errore.file, causa)
     })
+}
+
+/// Cancella il temporaneo di una scrittura fallita, controllando l'esito
+/// (il `Drop` di `tempfile` lo ignora). Se la cancellazione fallisce, un
+/// file con i dati resta accanto alla destinazione: l'errore lo dichiara con
+/// effetto `unknown`, che **sostituisce** l'effetto che la causa dichiarava
+/// (`override_remote_effect`: un `rolled_back` del chiamante non è più
+/// vero), e il ritentativo non è più automatico.
+fn scarta(temporaneo: tempfile::NamedTempFile, causa: PlenoraError) -> PlenoraError {
+    match temporaneo.close() {
+        Ok(()) => causa,
+        Err(_) => causa.override_remote_effect(RemoteEffect::Unknown),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use plenora_core::{PlenoraError, RemoteEffect, RetryDisposition};
+
+    use super::scarta;
+
+    fn temporaneo(dir: &tempfile::TempDir) -> tempfile::NamedTempFile {
+        tempfile::Builder::new()
+            .prefix(".plenora-io-")
+            .tempfile_in(dir.path())
+            .expect("temporaneo")
+    }
+
+    #[test]
+    fn un_temporaneo_cancellato_lascia_l_errore_com_e() {
+        let dir = tempfile::tempdir().expect("directory");
+        let file = temporaneo(&dir);
+        let percorso = file.path().to_path_buf();
+        let errore = scarta(file, PlenoraError::Conflict("c".to_owned()));
+        assert_eq!(errore.remote_effect(), RemoteEffect::None);
+        assert!(!percorso.exists());
+    }
+
+    #[test]
+    fn un_temporaneo_non_cancellabile_rende_l_effetto_ignoto() {
+        // Cancellato da fuori prima di `close`: la cancellazione di `scarta`
+        // fallisce, e l'errore non puo' piu' dire che non resta nulla.
+        let dir = tempfile::tempdir().expect("directory");
+        let file = temporaneo(&dir);
+        std::fs::remove_file(file.path()).expect("cancellazione esterna");
+        let causa = || PlenoraError::Io(std::io::Error::from(std::io::ErrorKind::Interrupted));
+        let errore = scarta(file, causa());
+        assert_eq!(errore.remote_effect(), RemoteEffect::Unknown);
+        // Causa ritentabile: niente piu' ritentativo automatico.
+        assert_eq!(causa().retry_disposition(), RetryDisposition::Safe);
+        assert_eq!(
+            errore.retry_disposition(),
+            RetryDisposition::RequiresRecovery
+        );
+        let pubblico = errore.public_projection();
+        assert_eq!(pubblico.remote_effect(), RemoteEffect::Unknown);
+        assert_eq!(pubblico.retry(), RetryDisposition::RequiresRecovery);
+    }
+
+    #[test]
+    fn la_pulizia_fallita_smentisce_l_effetto_del_chiamante() {
+        // Il chiamante dichiara `rolled_back` su una causa ritentabile; la
+        // verifica cancella il temporaneo da fuori, cosi' la cancellazione
+        // di `scarta` fallisce: l'effetto diventa `unknown`.
+        let dir = tempfile::tempdir().expect("directory");
+        let destinazione = dir.path().join("t.bin");
+        let errore = super::scrivi_atomico(
+            &destinazione,
+            false,
+            |scrittore| std::io::Write::write_all(scrittore, b"dati").map_err(PlenoraError::from),
+            |percorso| {
+                std::fs::remove_file(percorso).expect("cancellazione esterna");
+                Err(PlenoraError::Timeout("t".to_owned())
+                    .with_remote_effect(RemoteEffect::RolledBack))
+            },
+        )
+        .expect_err("verifica fallita");
+        assert_eq!(errore.remote_effect(), RemoteEffect::Unknown);
+        assert_eq!(
+            errore.retry_disposition(),
+            RetryDisposition::RequiresRecovery
+        );
+        assert_eq!(
+            errore.public_projection().remote_effect(),
+            RemoteEffect::Unknown
+        );
+        assert!(!destinazione.exists());
+        // Una causa che non si ritenta mai resta `never`.
+        let mai = PlenoraError::Conflict("c".to_owned())
+            .with_remote_effect(RemoteEffect::RolledBack)
+            .override_remote_effect(RemoteEffect::Unknown);
+        assert_eq!(mai.remote_effect(), RemoteEffect::Unknown);
+        assert_eq!(mai.retry_disposition(), RetryDisposition::Never);
+    }
 }

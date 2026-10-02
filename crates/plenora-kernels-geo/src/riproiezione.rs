@@ -141,8 +141,9 @@ impl ReprojectParams {
     ) -> Result<Self, PlenoraError> {
         let parsed = ReprojectConfig::deserialize(config)
             .map_err(|_| errore_config(op, "config non valida per geo.reproject"))?;
-        let target = resolve_crs(&parsed.target_crs, "target_crs")
-            .map_err(|error| PlenoraError::Crs(format!("{op}: parametro `target_crs`: {error}")))?;
+        let target = resolve_crs(&parsed.target_crs, "target_crs").map_err(|error| {
+            PlenoraError::from(error).con_contesto(&format!("{op}: parametro `target_crs`"))
+        })?;
         let mut griglie = BTreeMap::new();
         for griglia in &parsed.griglie {
             if griglia.file.trim().is_empty()
@@ -158,10 +159,10 @@ impl ReprojectParams {
                 .insert(griglia.trasformazione, PathBuf::from(&griglia.file))
                 .is_some()
             {
-                return Err(PlenoraError::Crs(format!(
-                    "{op}: {}",
-                    CrsError::ReprojectionConfig("griglia ripetuta")
-                )));
+                return Err(
+                    PlenoraError::from(CrsError::ReprojectionConfig("griglia ripetuta"))
+                        .con_contesto(op),
+                );
             }
         }
         let opzioni = OpzioniRiproiezione {
@@ -171,7 +172,7 @@ impl ReprojectParams {
             convenzione_wgs84_etrs89: parsed.convenzione_wgs84_etrs89,
         };
         let piano = PianoRiproiezione::nuovo(sorgente, &target, &opzioni)
-            .map_err(|error| PlenoraError::Crs(format!("{op}: {error}")))?;
+            .map_err(|error| PlenoraError::from(error).con_contesto(op))?;
         Ok(Self { piano, griglie })
     }
 

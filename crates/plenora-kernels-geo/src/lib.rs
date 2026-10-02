@@ -1691,7 +1691,7 @@ mod tests {
                 None,
                 MAX_WKB_DEPTH,
             ),
-            Err(PlenoraError::Crs(_))
+            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
         ));
         assert!(matches!(
             validate_wkb_transport_for_dimensions_with_depth(
@@ -1701,7 +1701,7 @@ mod tests {
                 Some(32632),
                 MAX_WKB_DEPTH,
             ),
-            Err(PlenoraError::Crs(_))
+            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
         ));
         assert!(matches!(
             validate_wkb_contract_for_dimensions(&payload, GeometryDimensions::Xy),

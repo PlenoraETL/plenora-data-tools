@@ -104,7 +104,7 @@ impl Lato {
     /// (l'analisi lo ha gia' chiesto: qui e' una seconda difesa).
     fn ellissoide(&self, op: &str) -> Result<EllissoideGeodetico> {
         EllissoideGeodetico::da_crs(&self.crs)
-            .map_err(|errore| PlenoraError::Crs(format!("{op}: {errore}")))
+            .map_err(|errore| PlenoraError::from(errore).con_contesto(op))
     }
 
     /// Dominio di validita' e tipi dichiarati di ogni cella non-null, dopo la
@@ -147,7 +147,7 @@ fn tipi_con_elenco(geometria: &GeometryColumnContract) -> Option<Vec<GeometryTyp
 /// Ogni coordinata nel dominio di validita' del CRS.
 fn nel_dominio(op: &str, geometria: &Geometry<f64>, crs: &ResolvedCrs) -> Result<()> {
     plenora_kernels_geo::crs::validate_geometry_domain(geometria, crs)
-        .map_err(|errore| PlenoraError::Crs(format!("{op}: {errore}")))
+        .map_err(|errore| PlenoraError::from(errore).con_contesto(op))
 }
 
 /// Il tipo geometrico dal type code di una cella WKB (ISO, o EWKB con i

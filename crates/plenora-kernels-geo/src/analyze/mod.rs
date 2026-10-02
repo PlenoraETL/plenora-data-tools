@@ -427,7 +427,12 @@ mod tests {
         ] {
             let senza = [geo_contract(geographic_crs_without_ellipsoid())];
             match analyze_one(op, &senza, &config, None) {
-                Err(PlenoraError::Crs(messaggio)) => {
+                Err(
+                    PlenoraError::Crs(messaggio)
+                    | PlenoraError::CrsCoded {
+                        message: messaggio, ..
+                    },
+                ) => {
                     assert!(
                         messaggio.contains("ELLIPSOID_REQUIRED"),
                         "{op}: {messaggio}"
@@ -1655,7 +1660,10 @@ mod tests {
             let inputs = [geo_contract(geographic_crs())];
             let result = analyze_one(op, &inputs, &config, None);
             assert!(
-                matches!(result, Err(PlenoraError::Crs(_))),
+                matches!(
+                    result,
+                    Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+                ),
                 "{op}: CRS geografico accettato"
             );
         }
@@ -1750,14 +1758,20 @@ mod tests {
             let inputs = [geo_contract(projected_crs())];
             let result = analyze_one(op, &inputs, &json!({}), None);
             assert!(
-                matches!(result, Err(PlenoraError::Crs(_))),
+                matches!(
+                    result,
+                    Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+                ),
                 "{op}: CRS proiettato accettato"
             );
         }
         // Anche le distanze geodetiche "unary" con other_wkb.
         let inputs = [geo_contract(projected_crs())];
         let result = analyze_one("geo.haversine_distance", &inputs, &other_wkb_config(), None);
-        assert!(matches!(result, Err(PlenoraError::Crs(_))));
+        assert!(matches!(
+            result,
+            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+        ));
     }
 
     #[test]
@@ -1772,7 +1786,10 @@ mod tests {
         ];
         let result = analyze_one("geo.sjoin", &different, &config, None);
         assert!(
-            matches!(result, Err(PlenoraError::Crs(_))),
+            matches!(
+                result,
+                Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+            ),
             "CRS diversi accettati"
         );
 
@@ -1782,14 +1799,20 @@ mod tests {
         ];
         let result = analyze_one("geo.sjoin", &geographic_right, &config, None);
         assert!(
-            matches!(result, Err(PlenoraError::Crs(_))),
+            matches!(
+                result,
+                Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+            ),
             "right geografico accettato"
         );
 
         // Variante unaria (other_wkb): il CRS dell'input deve essere proiettato.
         let inputs = [geo_contract(geographic_crs())];
         let result = analyze_one("geo.distance", &inputs, &other_wkb_config(), None);
-        assert!(matches!(result, Err(PlenoraError::Crs(_))));
+        assert!(matches!(
+            result,
+            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+        ));
     }
 
     #[test]
@@ -1805,13 +1828,19 @@ mod tests {
             Some(&geographic_plan),
         );
         assert!(
-            matches!(result, Err(PlenoraError::Crs(_))),
+            matches!(
+                result,
+                Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+            ),
             "CRS geografico accettato"
         );
 
         // Senza config `crs` ne' CRS di piano: obbligatorio.
         let result = analyze_one("geo.from_coords", &inputs, &json!({}), None);
-        assert!(matches!(result, Err(PlenoraError::Crs(_))));
+        assert!(matches!(
+            result,
+            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+        ));
 
         // Config `crs` che coincide col piano: riuso senza backend.
         let plan = projected_crs();
@@ -2260,7 +2289,10 @@ mod tests {
         // CRS obbligatorio: senza config `crs` ne' CRS di piano fallisce.
         let result = analyze_one("geo.from_wkt", &inputs, &json!({"wkt_column": "wkt"}), None);
         assert!(
-            matches!(result, Err(PlenoraError::Crs(_))),
+            matches!(
+                result,
+                Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+            ),
             "CRS mancante accettato"
         );
         // Config `crs` coincidente col piano: riuso senza backend.
@@ -2461,7 +2493,10 @@ mod tests {
         // CRS obbligatorio: senza config `crs` ne' CRS di piano fallisce.
         let result = analyze_one("geo.generate_grid", &inputs, &extent, None);
         assert!(
-            matches!(result, Err(PlenoraError::Crs(_))),
+            matches!(
+                result,
+                Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+            ),
             "CRS mancante accettato"
         );
 
@@ -2583,7 +2618,10 @@ mod tests {
             None,
         );
         assert!(
-            matches!(result, Err(PlenoraError::Crs(_))),
+            matches!(
+                result,
+                Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+            ),
             "input geografico accettato"
         );
     }
@@ -2656,7 +2694,10 @@ mod tests {
         for op in ["geo.coverage_validate", "geo.shared_paths"] {
             let result = analyze_one(op, &geographic, &json!({}), None);
             assert!(
-                matches!(result, Err(PlenoraError::Crs(_))),
+                matches!(
+                    result,
+                    Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+                ),
                 "{op}: CRS geografico accettato"
             );
         }
@@ -2859,7 +2900,7 @@ mod tests {
             &json!({"target_crs": "EPSG:3857"}),
             None,
         ) {
-            Err(PlenoraError::Crs(message)) => {
+            Err(PlenoraError::Crs(message) | PlenoraError::CrsCoded { message, .. }) => {
                 assert!(message.contains("CRS_NOT_BUILTIN"), "{message}");
             }
             other => panic!("atteso CRS_NOT_BUILTIN: {other:?}"),
@@ -2873,7 +2914,7 @@ mod tests {
             &json!({"target_crs": "EPSG:7791"}),
             None,
         ) {
-            Err(PlenoraError::Crs(message)) => {
+            Err(PlenoraError::Crs(message) | PlenoraError::CrsCoded { message, .. }) => {
                 assert!(
                     message.contains("REPROJECTION_ACCURACY_NOT_ACCEPTED")
                         && message.contains("4 m"),
@@ -3125,7 +3166,7 @@ mod tests {
         for (op, config) in &cases {
             let result = analyze_one(op, std::slice::from_ref(&input), config, None);
             match result {
-                Err(PlenoraError::Crs(message)) => {
+                Err(PlenoraError::Crs(message) | PlenoraError::CrsCoded { message, .. }) => {
                     assert!(
                         message
                             .contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
@@ -3139,7 +3180,7 @@ mod tests {
         // Binaria: il gate scatta sul primo operando senza CRS risolto.
         let result = analyze_one("geo.union", &[input.clone(), input], &json!({}), None);
         match result {
-            Err(PlenoraError::Crs(message)) => {
+            Err(PlenoraError::Crs(message) | PlenoraError::CrsCoded { message, .. }) => {
                 assert!(
                     message.contains("nessun CRS dichiarato in alcuna rappresentazione accettata"),
                     "{message}"
@@ -3181,7 +3222,7 @@ mod tests {
         for (op, config) in &cases {
             let result = analyze_one(op, std::slice::from_ref(&input), config, None);
             match result {
-                Err(PlenoraError::Crs(message)) => {
+                Err(PlenoraError::Crs(message) | PlenoraError::CrsCoded { message, .. }) => {
                     assert!(
                         message.contains("declared_unresolved")
                             && message.contains("decisione esplicita nel piano"),

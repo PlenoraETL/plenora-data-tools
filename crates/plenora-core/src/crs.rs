@@ -612,8 +612,9 @@ pub enum CrsError {
     NotBuiltin,
     /// Tipo PROJJSON diverso da geografico o proiettato. Nessun codice di
     /// questo repository lo produce: lo produceva il risolutore PROJ del
-    /// progetto d'origine.
-    #[error("CRS_TYPE_UNSUPPORTED: tipo PROJJSON {0} non supportato")]
+    /// progetto d'origine. Il tipo letto resta nel valore, non nel
+    /// messaggio («errori senza dati»).
+    #[error("CRS_TYPE_UNSUPPORTED: tipo PROJJSON non supportato")]
     UnsupportedType(String),
     /// CRS proiettato senza un'unità lineare orizzontale finita e positiva.
     #[error(
@@ -688,9 +689,69 @@ pub enum CrsError {
     GridInvalid { reason: &'static str },
 }
 
+/// Codice stabile di un [`CrsError`], il `code` di `plenora-error-v1`.
+///
+/// Pattern `^[A-Z][A-Z0-9_]{1,63}$`. Si ottiene solo da [`CrsError::code`]:
+/// il campo è privato, quindi un codice fuori dal pattern non si costruisce
+/// (il test di `error::pubblico` verifica il pattern su ogni variante).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CodiceCrs(&'static str);
+
+impl CodiceCrs {
+    /// Il codice come testo.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl fmt::Display for CodiceCrs {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl CrsError {
+    /// Codice stabile dell'errore, lo stesso in testa al messaggio. Il
+    /// `match` non ha ramo di default: una variante nuova non compila senza
+    /// il suo codice.
+    #[must_use]
+    pub const fn code(&self) -> CodiceCrs {
+        CodiceCrs(match self {
+            Self::Required { .. } => "CRS_REQUIRED",
+            Self::InvalidDefinition { .. } => "CRS_INVALID",
+            Self::BackendUnavailable => "CRS_BACKEND_UNAVAILABLE",
+            Self::NotBuiltin => "CRS_NOT_BUILTIN",
+            Self::UnsupportedType(_) => "CRS_TYPE_UNSUPPORTED",
+            Self::MissingLinearUnit => "LINEAR_UNIT_REQUIRED",
+            Self::ProjectedRequired { .. } => "PROJECTED_CRS_REQUIRED",
+            Self::GeographicRequired { .. } => "GEOGRAPHIC_CRS_REQUIRED",
+            Self::EllipsoidRequired => "ELLIPSOID_REQUIRED",
+            Self::Mismatch => "CRS_MISMATCH",
+            Self::CoordinateOutOfDomain { .. } => "COORDINATE_OUT_OF_CRS_DOMAIN",
+            Self::InvalidContract(_) => "CRS_CONTRACT_INVALID",
+            Self::ReprojectionPathUnavailable => "REPROJECTION_PATH_UNAVAILABLE",
+            Self::ReprojectionAccuracyNotAccepted { .. } => "REPROJECTION_ACCURACY_NOT_ACCEPTED",
+            Self::ReprojectionConfig(_) => "REPROJECTION_CONFIG_INVALID",
+            Self::ReprojectionOutsideTransformationArea => {
+                "REPROJECTION_OUTSIDE_TRANSFORMATION_AREA"
+            }
+            Self::ReprojectionMixedTransformationAreas => "REPROJECTION_MIXED_TRANSFORMATION_AREAS",
+            Self::ReprojectionNotConverged => "REPROJECTION_NOT_CONVERGED",
+            Self::ReprojectionEdgeNotConverged => "REPROJECTION_EDGE_NOT_CONVERGED",
+            Self::GridUnreadable => "NTV2_GRID_UNREADABLE",
+            Self::GridInvalid { .. } => "NTV2_GRID_INVALID",
+        })
+    }
+}
+
+/// [`PlenoraError::CrsCoded`]: il codice viaggia tipizzato accanto al testo.
 impl From<CrsError> for PlenoraError {
     fn from(error: CrsError) -> Self {
-        Self::Crs(error.to_string())
+        Self::CrsCoded {
+            code: error.code(),
+            message: error.to_string(),
+        }
     }
 }
 
@@ -1087,9 +1148,12 @@ mod tests {
     }
 
     #[test]
-    fn crs_error_maps_into_plenora_error_crs_variant() {
+    fn crs_error_maps_into_plenora_error_crs_coded_variant() {
         let error = PlenoraError::from(CrsError::BackendUnavailable);
-        assert!(matches!(error, PlenoraError::Crs(_)));
+        assert!(matches!(
+            &error,
+            PlenoraError::CrsCoded { code, .. } if code.as_str() == "CRS_BACKEND_UNAVAILABLE"
+        ));
         assert!(error.to_string().contains("CRS_BACKEND_UNAVAILABLE"));
     }
 

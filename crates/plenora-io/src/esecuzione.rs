@@ -14,14 +14,16 @@
 //!    byte vivi degli output non ancora scritti più il transitorio previsto
 //!    della scrittura devono stare nel budget; ogni output si libera appena
 //!    scritto. Un errore a metà lascia scritti gli output precedenti (ogni
-//!    file è atomico, l'insieme no).
+//!    file è atomico, l'insieme no): dopo il primo output scritto l'errore
+//!    dichiara effetto `partial` (`PlenoraError::with_remote_effect`), e il
+//!    ritentativo non è più automatico.
 
 use std::path::{Path, PathBuf};
 
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::limits::Limits;
 use plenora_core::memoria::byte_vivi;
-use plenora_core::{PlenoraError, Result};
+use plenora_core::{PlenoraError, RemoteEffect, Result};
 use plenora_pipeline::{Pipeline, Report};
 
 use crate::formato::{Formato, OpzioniScrittura};
@@ -145,9 +147,7 @@ fn con_nome(contesto: &str, errore: PlenoraError) -> PlenoraError {
         PlenoraError::DataMapping(m) => PlenoraError::DataMapping(anteponi(m)),
         PlenoraError::Internal(m) => PlenoraError::Internal(anteponi(m)),
         PlenoraError::Conflict(m) => PlenoraError::Conflict(anteponi(m)),
-        PlenoraError::Io(e) => {
-            PlenoraError::Io(std::io::Error::new(e.kind(), anteponi(e.to_string())))
-        }
+        PlenoraError::Io(e) => PlenoraError::io_con_contesto(contesto, e),
         altro => altro.con_contesto(contesto),
     }
 }
@@ -172,6 +172,9 @@ fn transitorio(tabella: &RecordBatch, formato: Formato) -> u64 {
 /// - `ResourceLimit`: input, esecuzione o scrittura oltre il budget;
 /// - gli errori di lettura, esecuzione e scrittura, con il nome
 ///   dell'input o dell'output.
+///
+/// Un errore dopo che almeno un output è stato scritto ha effetto
+/// `partial`: gli output precedenti restano alla destinazione.
 pub fn esegui_da_file(
     piano: &Pipeline,
     ingressi: &[FileIngresso],
@@ -207,7 +210,26 @@ pub fn esegui_da_file(
     drop(schemi);
     let esito = validata.run(caricate)?;
 
-    let mut restanti = esito.outputs;
+    let mut pubblicati = 0_usize;
+    scrivi_uscite(esito.outputs, uscite, *opzioni, budget, &mut pubblicati).map_err(|errore| {
+        if pubblicati == 0 {
+            errore
+        } else {
+            errore.with_remote_effect(RemoteEffect::Partial)
+        }
+    })?;
+    Ok(esito.report)
+}
+
+/// Scrive gli output nell'ordine del piano; `pubblicati` conta quelli già
+/// alla destinazione, anche quando la funzione poi fallisce.
+fn scrivi_uscite(
+    mut restanti: Vec<(String, RecordBatch)>,
+    uscite: &[FileUscita],
+    opzioni: OpzioniScrittura,
+    budget: u64,
+    pubblicati: &mut usize,
+) -> Result<()> {
     let mut scritti: Vec<PathBuf> = Vec::new();
     while !restanti.is_empty() {
         let (nome, tabella) = restanti.remove(0);
@@ -239,11 +261,97 @@ pub fn esegui_da_file(
         }
         let opzioni_uscita = OpzioniScrittura {
             formato: Some(formato),
-            ..*opzioni
+            ..opzioni
         };
         scrivi_tabella(&tabella, &destinazione.percorso, &opzioni_uscita)
             .map_err(|errore| con_nome(&contesto, errore))?;
+        *pubblicati += 1;
         scritti.push(std::fs::canonicalize(&destinazione.percorso)?);
     }
-    Ok(esito.report)
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Effetto di un errore a metà della scrittura degli output.
+
+    use std::sync::Arc;
+
+    use plenora_core::arrow::array::{Int64Array, RecordBatch};
+    use plenora_core::arrow::schema::{DataType, Field, Schema};
+    use plenora_core::{ErrorCategory, RemoteEffect, RetryDisposition};
+    use plenora_pipeline::Pipeline;
+
+    use super::{esegui_da_file, FileIngresso, FileUscita};
+    use crate::formato::OpzioniScrittura;
+    use crate::{parquet_io, scrivi_tabella};
+
+    /// Due output, `primo` e `secondo`, con un budget che basta per
+    /// scrivere in Arrow IPC ma non per il transitorio fisso di Parquet.
+    fn esegui(primo: &str, secondo: &str) -> (tempfile::TempDir, plenora_core::PlenoraError) {
+        let dir = tempfile::tempdir().expect("directory temporanea");
+        let tabella = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)])),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )
+        .expect("tabella");
+        let sorgente = dir.path().join("t.arrow");
+        scrivi_tabella(&tabella, &sorgente, &OpzioniScrittura::default()).expect("sorgente");
+        let budget = parquet_io::MARGINE_SCRITTURA / 2;
+        let piano = Pipeline::from_json(&format!(
+            r#"{{"version": 1, "inputs": ["t"], "limits": {{"max_governed_memory_bytes": {budget}}},
+                "steps": [
+                  {{"out": "a", "op": "table.filter", "in": ["t"],
+                    "config": {{"column": "id", "operator": ">", "value": 0}}}},
+                  {{"out": "b", "op": "table.filter", "in": ["t"],
+                    "config": {{"column": "id", "operator": ">", "value": 1}}}}],
+                "outputs": ["a", "b"]}}"#
+        ))
+        .expect("piano");
+        let uscita = |nome: &str, file: &str| FileUscita {
+            nome: nome.to_owned(),
+            percorso: dir.path().join(file),
+            formato: None,
+        };
+        let errore = esegui_da_file(
+            &piano,
+            &[FileIngresso {
+                nome: "t".to_owned(),
+                percorso: sorgente,
+                formato: None,
+            }],
+            &[uscita("a", primo), uscita("b", secondo)],
+            &OpzioniScrittura::default(),
+        )
+        .expect_err("Parquet oltre il budget");
+        assert_eq!(errore.category(), ErrorCategory::ResourceLimit, "{errore}");
+        (dir, errore)
+    }
+
+    #[test]
+    fn errore_dopo_il_primo_output_ha_effetto_parziale() {
+        let (dir, errore) = esegui("a.arrow", "b.parquet");
+        assert!(
+            dir.path().join("a.arrow").exists(),
+            "il primo resta scritto"
+        );
+        assert!(!dir.path().join("b.parquet").exists());
+        assert_eq!(errore.remote_effect(), RemoteEffect::Partial);
+        // La causa (budget) non si ritenta mai: l'effetto non la rende
+        // ritentabile; una causa ritentabile diventerebbe `requires_recovery`.
+        assert_eq!(errore.retry_disposition(), RetryDisposition::Never);
+        let pubblico = errore.public_projection();
+        assert_eq!(pubblico.remote_effect(), RemoteEffect::Partial);
+        assert_eq!(pubblico.category(), ErrorCategory::ResourceLimit);
+        assert!(errore.to_string().contains("output `b`"), "{errore}");
+    }
+
+    #[test]
+    fn errore_sul_primo_output_non_ha_effetto() {
+        let (dir, errore) = esegui("a.parquet", "b.arrow");
+        assert!(!dir.path().join("a.parquet").exists());
+        assert!(!dir.path().join("b.arrow").exists());
+        assert_eq!(errore.remote_effect(), RemoteEffect::None);
+        assert_eq!(errore.retry_disposition(), RetryDisposition::Never);
+    }
 }

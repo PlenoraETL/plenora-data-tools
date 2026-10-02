@@ -575,6 +575,94 @@ fn errors_never_print_nested_field_metadata() {
     assert!(testo.contains("Struct<1 campi>"), "{testo}");
     assert!(!testo.contains("SEGRETO"), "{testo}");
     assert!(!testo.contains("figlio_riservato"), "{testo}");
+    // La proiezione pubblica (`plenora-error-v1`) porta la stessa
+    // categoria e nessun valore.
+    let pubblico = errore.public_projection();
+    assert_eq!(pubblico.category().as_str(), "schema");
+    assert!(
+        !pubblico.message().contains("SEGRETO"),
+        "{}",
+        pubblico.message()
+    );
+    assert!(
+        !pubblico.message().contains("figlio_riservato"),
+        "{}",
+        pubblico.message()
+    );
+}
+
+#[test]
+fn metadata_errors_project_with_their_category_and_no_values() {
+    // I metadati incoerenti escono con categoria `schema` o `crs`
+    // (vocabolario Arrow 1.0, sezione 4) anche nella proiezione pubblica, e
+    // il valore ricevuto non compare nel messaggio. Codice: nessuno (le
+    // varianti `Schema` e `Crs` non ne hanno uno).
+    let casi: Vec<(Field, Option<&str>, &str, &str)> = vec![
+        // CRS mancante con identificatore: contraddizione del CRS.
+        (
+            canonical_field(
+                DataType::Binary,
+                &[
+                    (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "missing"),
+                    (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:VALORE_RICEVUTO"),
+                    (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
+                ],
+            ),
+            Some("1"),
+            "crs",
+            "VALORE_RICEVUTO",
+        ),
+        // Estensione diversa: il nome ricevuto non compare.
+        (
+            Field::new("geometry", DataType::Binary, true).with_metadata(HashMap::from([(
+                GEOARROW_EXTENSION_KEY.to_owned(),
+                "geoarrow.VALORE_RICEVUTO".to_owned(),
+            )])),
+            None,
+            "schema",
+            "VALORE_RICEVUTO",
+        ),
+        // `crs_resolution = resolved` senza alcun CRS: il valore non compare.
+        (
+            canonical_field(
+                DataType::Binary,
+                &[(PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "declared_unresolved")],
+            ),
+            Some("1"),
+            "crs",
+            "declared_unresolved",
+        ),
+        // Formato della definizione incoerente con il testo.
+        (
+            canonical_field(
+                DataType::Binary,
+                &[
+                    (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, "PROJCS[demo]"),
+                    (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt2"),
+                    (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),
+                ],
+            ),
+            Some("1"),
+            "crs",
+            "wkt2",
+        ),
+    ];
+    for (campo, versione, categoria, valore) in casi {
+        let metadati = versione.map_or_else(HashMap::new, |versione| {
+            HashMap::from([(PLENORA_CONTRACT_VERSION_KEY.to_owned(), versione.to_owned())])
+        });
+        let schema = Arc::new(Schema::new_with_metadata(vec![campo], metadati));
+        let errore = discover_input_contract_from_schema(schema, resolve_crs)
+            .expect_err("metadati incoerenti");
+        let pubblico = errore.public_projection();
+        assert_eq!(pubblico.category().as_str(), categoria, "{errore}");
+        assert_eq!(pubblico.code(), None, "{errore}");
+        assert!(
+            !pubblico.message().contains(valore),
+            "{}",
+            pubblico.message()
+        );
+    }
 }
 
 #[test]

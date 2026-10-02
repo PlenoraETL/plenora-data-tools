@@ -351,7 +351,10 @@ fn il_crs_di_piano_si_risolve_in_validazione() {
         .crs_piano()
         .is_some());
     pipeline.crs = Some("EPSG:999999".to_owned());
-    assert!(matches!(valida_wide(&pipeline), Err(PlenoraError::Crs(_))));
+    assert!(matches!(
+        valida_wide(&pipeline),
+        Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
+    ));
 }
 
 #[test]
@@ -375,7 +378,7 @@ fn la_base_degli_indici_per_riga_si_decide_in_validazione() {
     let validata = valida_wide(&pipeline).expect("sort -> assert_not_null accettata");
     assert_eq!(
         validata.base_indici("controllata"),
-        Some(BaseIndici::IngressoDelPasso)
+        Some(BaseIndici::SenzaAttribuzione)
     );
     assert_eq!(validata.base_indici("ordinata"), Some(BaseIndici::Sorgente));
     assert_eq!(validata.base_indici("t"), None);

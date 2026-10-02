@@ -765,10 +765,10 @@ impl<'a> FastProgram<'a> {
                     Slot::Null => Ok(None),
                     // L'inferenza e' derivata dalle stesse regole di
                     // `eval_slot_row`: se diverge, e' un'invariante nostra.
-                    other @ Slot::Text(_) => Err(PlenoraError::Internal(format!(
-                        "formula: tipo statico Number ma valore {}",
-                        display_slot(other)
-                    ))),
+                    // Il valore e' una cella: non entra nel messaggio.
+                    Slot::Text(_) => Err(PlenoraError::Internal(
+                        "formula: tipo statico Number ma valore testuale".to_owned(),
+                    )),
                 })
                 .collect::<Result<Vec<_>>>()?;
             replace_or_append(
@@ -1107,10 +1107,10 @@ fn formula_generic(
             .map(|value| match value {
                 Evaluated::Number(value) => Ok(Some(value)),
                 Evaluated::Null => Ok(None),
-                other @ Evaluated::Text(_) => Err(PlenoraError::Internal(format!(
-                    "formula: tipo statico Number ma valore {}",
-                    display(other)
-                ))),
+                // Il valore e' una cella: non entra nel messaggio.
+                Evaluated::Text(_) => Err(PlenoraError::Internal(
+                    "formula: tipo statico Number ma valore testuale".to_owned(),
+                )),
             })
             .collect::<Result<Vec<_>>>()?;
         replace_or_append(
