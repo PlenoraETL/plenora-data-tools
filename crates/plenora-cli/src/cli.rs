@@ -215,9 +215,11 @@ fn risultato(invocazione: Invocazione, segnale: &Segnale) -> Result<Value> {
         Comando::Valida { piano, ingressi } => {
             let interruzione = interruzione(scadenza.as_ref(), segnale)?;
             let piano = api::leggi_piano(&piano)?;
-            verifica_nomi(
+            // I NAME sono pezzi di argomento divisi al primo `=`: il
+            // messaggio d'errore dice l'occorrenza, mai il NAME.
+            api::verifica_nomi(
                 &piano.inputs,
-                ingressi.iter().map(|(nome, _)| nome),
+                ingressi.iter().map(|(nome, _)| nome.as_str()),
                 "--input",
             )?;
             api::valida(&piano, &file_ingresso(ingressi), &interruzione)
@@ -231,12 +233,16 @@ fn risultato(invocazione: Invocazione, segnale: &Segnale) -> Result<Value> {
             let interruzione = interruzione(scadenza.as_ref(), segnale)?;
             let piano = api::leggi_piano(&piano)?;
             let uscite = file_uscita(&piano.outputs, uscite)?;
-            verifica_nomi(
+            api::verifica_nomi(
                 &piano.inputs,
-                ingressi.iter().map(|(nome, _)| nome),
+                ingressi.iter().map(|(nome, _)| nome.as_str()),
                 "--input",
             )?;
-            verifica_nomi(&piano.outputs, uscite.iter().map(|u| &u.nome), "--output")?;
+            api::verifica_nomi(
+                &piano.outputs,
+                uscite.iter().map(|u| u.nome.as_str()),
+                "--output",
+            )?;
             api::esegui(
                 &piano,
                 &file_ingresso(ingressi),
@@ -249,41 +255,6 @@ fn risultato(invocazione: Invocazione, segnale: &Segnale) -> Result<Value> {
             )
         }
     }
-}
-
-/// I NAME di `--input` (o `--output`) contro i nomi del piano, prima di
-/// leggere qualunque file: ognuno è un nome dichiarato, nessuno si ripete,
-/// nessun nome dichiarato manca.
-///
-/// Il NAME ricevuto non entra nel messaggio (una divisione al primo `=` di
-/// un percorso con `=` darebbe un pezzo di percorso): il messaggio dice
-/// quale occorrenza del flag. I nomi del piano invece sì: sono del piano.
-fn verifica_nomi<'a>(
-    dichiarati: &[String],
-    dati: impl Iterator<Item = &'a String>,
-    flag: &str,
-) -> Result<()> {
-    let mut visti: Vec<&String> = Vec::new();
-    for (indice, nome) in dati.enumerate() {
-        let occorrenza = indice + 1;
-        if !dichiarati.contains(nome) {
-            return Err(PlenoraError::InvalidConfiguration(format!(
-                "`{flag}` numero {occorrenza}: il NAME non e' un nome del piano"
-            )));
-        }
-        if visti.contains(&nome) {
-            return Err(PlenoraError::InvalidConfiguration(format!(
-                "`{flag}` numero {occorrenza}: NAME gia' dato da un altro `{flag}`"
-            )));
-        }
-        visti.push(nome);
-    }
-    if let Some(mancante) = dichiarati.iter().find(|nome| !visti.contains(nome)) {
-        return Err(PlenoraError::InvalidConfiguration(format!(
-            "`{mancante}` del piano senza `{flag}`"
-        )));
-    }
-    Ok(())
 }
 
 fn file_ingresso(ingressi: Vec<(String, PathBuf)>) -> Vec<FileIngresso> {

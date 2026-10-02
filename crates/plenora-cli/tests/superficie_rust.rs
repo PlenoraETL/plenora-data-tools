@@ -9,8 +9,9 @@ use std::path::Path;
 
 use plenora_cli::api;
 use plenora_cli::capacita::{documento, mappa_rust};
+use plenora_core::arrow::array::RecordBatch;
 use plenora_core::Result;
-use plenora_io::{FileIngresso, FileUscita, OpzioniScrittura};
+use plenora_io::{FileIngresso, FileUscita, Ingresso, OpzioniScrittura};
 use plenora_pipeline::{Interruzione, Pipeline};
 use serde_json::Value;
 
@@ -19,8 +20,12 @@ use serde_json::Value;
 const EXPORT_DOCUMENTATI: &[&str] = &[
     "plenora_cli::api::catalogo",
     "plenora_cli::api::descrivi",
+    "plenora_cli::api::descrivi_tabella",
     "plenora_cli::api::valida",
+    "plenora_cli::api::valida_ingressi",
     "plenora_cli::api::esegui",
+    "plenora_cli::api::esegui_ingressi",
+    "plenora_cli::api::esegui_in_memoria",
 ];
 
 #[test]
@@ -97,4 +102,38 @@ fn _compila_esegui(
     interruzione: &Interruzione,
 ) -> Result<Value> {
     api::esegui(piano, ingressi, uscite, &opzioni, interruzione)
+}
+
+#[allow(dead_code)]
+fn _compila_descrivi_tabella(tabella: &RecordBatch, interruzione: &Interruzione) -> Result<Value> {
+    api::descrivi_tabella(tabella, interruzione)
+}
+
+#[allow(dead_code)]
+fn _compila_valida_ingressi(
+    piano: &Pipeline,
+    ingressi: Vec<Ingresso>,
+    interruzione: &Interruzione,
+) -> Result<Value> {
+    api::valida_ingressi(piano, ingressi, interruzione)
+}
+
+#[allow(dead_code)]
+fn _compila_esegui_ingressi(
+    piano: &Pipeline,
+    ingressi: Vec<Ingresso>,
+    uscite: &[FileUscita],
+    opzioni: OpzioniScrittura,
+    interruzione: &Interruzione,
+) -> Result<Value> {
+    api::esegui_ingressi(piano, ingressi, uscite, &opzioni, interruzione)
+}
+
+#[allow(dead_code)]
+fn _compila_esegui_in_memoria(
+    piano: &Pipeline,
+    ingressi: Vec<Ingresso>,
+    interruzione: &Interruzione,
+) -> Result<(Value, Vec<(String, RecordBatch)>)> {
+    api::esegui_in_memoria(piano, ingressi, interruzione)
 }

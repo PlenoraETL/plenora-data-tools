@@ -17,6 +17,11 @@
 //!    file è atomico, l'insieme no): dopo il primo output scritto l'errore
 //!    dichiara effetto `partial` (`PlenoraError::with_remote_effect`), e il
 //!    ritentativo non è più automatico.
+//!
+//! Gli input possono essere anche tabelle già in memoria ([`Ingresso`]),
+//! per le superfici che le ricevono dal chiamante (l'SDK Python): passano
+//! dagli stessi controlli di budget e d'interruzione dei file, e
+//! [`esegui_in_memoria`] rende gli output invece di scriverli.
 
 use std::path::{Path, PathBuf};
 
@@ -24,7 +29,7 @@ use plenora_core::arrow::array::RecordBatch;
 use plenora_core::limits::Limits;
 use plenora_core::memoria::byte_vivi;
 use plenora_core::{ErrorPhase, PlenoraError, RemoteEffect, Result};
-use plenora_pipeline::{Interruzione, Pipeline, PipelineValidata, Report};
+use plenora_pipeline::{Esito, Interruzione, Pipeline, PipelineValidata, Report};
 
 use crate::formato::{Formato, OpzioniScrittura};
 use crate::memoria::oltre_il_budget;
@@ -50,14 +55,48 @@ pub struct FileUscita {
     pub formato: Option<Formato>,
 }
 
+/// Un input del piano: un file da leggere o una tabella già in memoria.
+#[derive(Clone, Debug)]
+pub enum Ingresso {
+    File(FileIngresso),
+    /// Una tabella data dal chiamante: non si legge, ma conta nel budget
+    /// come una tabella letta.
+    Tabella {
+        nome: String,
+        tabella: RecordBatch,
+    },
+}
+
+impl Ingresso {
+    /// Nome dell'input nel piano.
+    #[must_use]
+    pub fn nome(&self) -> &str {
+        match self {
+            Self::File(file) => &file.nome,
+            Self::Tabella { nome, .. } => nome,
+        }
+    }
+}
+
+impl From<FileIngresso> for Ingresso {
+    fn from(file: FileIngresso) -> Self {
+        Self::File(file)
+    }
+}
+
+fn da_file(ingressi: &[FileIngresso]) -> Vec<Ingresso> {
+    ingressi.iter().cloned().map(Ingresso::File).collect()
+}
+
 fn assoluto(percorso: &Path) -> Result<PathBuf> {
     Ok(std::path::absolute(percorso)?)
 }
 
-/// Controlli sui percorsi, prima di leggere qualunque dato.
+/// Controlli sui percorsi, prima di leggere qualunque dato. Gli input in
+/// memoria non hanno percorso e non entrano nei confronti.
 fn verifica_percorsi(
     piano: &Pipeline,
-    ingressi: &[FileIngresso],
+    ingressi: &[Ingresso],
     uscite: &[FileUscita],
     opzioni: OpzioniScrittura,
 ) -> Result<()> {
@@ -89,7 +128,10 @@ fn verifica_percorsi(
     }
     let mut visti: Vec<PathBuf> = Vec::new();
     let mut canonici_ingressi: Vec<PathBuf> = Vec::new();
-    for ingresso in ingressi {
+    for ingresso in ingressi.iter().filter_map(|ingresso| match ingresso {
+        Ingresso::File(file) => Some(file),
+        Ingresso::Tabella { .. } => None,
+    }) {
         Formato::risolvi(ingresso.formato, &ingresso.percorso)?;
         visti.push(assoluto(&ingresso.percorso)?);
         canonici_ingressi
@@ -228,22 +270,51 @@ pub fn esegui_da_file_interrompibile(
     opzioni: &OpzioniScrittura,
     interruzione: &Interruzione,
 ) -> Result<EsitoFile> {
-    verifica_percorsi(piano, ingressi, uscite, *opzioni)?;
+    esegui_ingressi(piano, da_file(ingressi), uscite, opzioni, interruzione)
+}
+
+/// Il budget del piano: `max_governed_memory_bytes` dei suoi limiti.
+fn budget_del_piano(piano: &Pipeline) -> Result<u64> {
     let limiti = piano.limits.as_ref().map_or_else(
         || Ok(Limits::default()),
         plenora_pipeline::LimitiParziali::applica,
     )?;
-    let budget = limiti.max_governed_memory_bytes;
+    Ok(limiti.max_governed_memory_bytes)
+}
 
+/// Carica gli input, valida il piano con i loro schemi e lo esegue.
+fn carica_e_esegui(
+    piano: &Pipeline,
+    ingressi: Vec<Ingresso>,
+    budget: u64,
+    interruzione: &Interruzione,
+) -> Result<Esito> {
     let caricate = carica_ingressi(ingressi, budget, interruzione)?;
-
     let schemi: Vec<(&str, _)> = caricate
         .iter()
         .map(|(nome, tabella)| (nome.as_str(), tabella.schema()))
         .collect();
     let validata = piano.validate(&schemi)?;
     drop(schemi);
-    let esito = validata.run_interrompibile(caricate, interruzione)?;
+    validata.run_interrompibile(caricate, interruzione)
+}
+
+/// [`esegui_da_file_interrompibile`] con input da file o in memoria
+/// ([`Ingresso`]). Stessi controlli, stesso budget, stessi effetti.
+///
+/// # Errors
+///
+/// Quelli di [`esegui_da_file_interrompibile`].
+pub fn esegui_ingressi(
+    piano: &Pipeline,
+    ingressi: Vec<Ingresso>,
+    uscite: &[FileUscita],
+    opzioni: &OpzioniScrittura,
+    interruzione: &Interruzione,
+) -> Result<EsitoFile> {
+    verifica_percorsi(piano, &ingressi, uscite, *opzioni)?;
+    let budget = budget_del_piano(piano)?;
+    let esito = carica_e_esegui(piano, ingressi, budget, interruzione)?;
 
     let mut pubblicati = Vec::with_capacity(esito.outputs.len());
     scrivi_uscite(
@@ -266,6 +337,23 @@ pub fn esegui_da_file_interrompibile(
         report: esito.report,
         uscite: pubblicati,
     })
+}
+
+/// Esegue un piano e ne rende gli output in memoria, senza scriverli:
+/// caricamento, validazione, budget e interruzione come in
+/// [`esegui_ingressi`]. Nessun effetto fuori dal processo.
+///
+/// # Errors
+///
+/// Quelli della lettura degli input da file, di [`Pipeline::validate`] e
+/// di [`PipelineValidata::run_interrompibile`].
+pub fn esegui_in_memoria(
+    piano: &Pipeline,
+    ingressi: Vec<Ingresso>,
+    interruzione: &Interruzione,
+) -> Result<Esito> {
+    let budget = budget_del_piano(piano)?;
+    carica_e_esegui(piano, ingressi, budget, interruzione)
 }
 
 /// L'interruzione dopo l'ultima scrittura (fase `finalize`): un annullamento
@@ -304,11 +392,22 @@ pub fn valida_da_file(
     ingressi: &[FileIngresso],
     interruzione: &Interruzione,
 ) -> Result<PipelineValidata> {
-    let limiti = piano.limits.as_ref().map_or_else(
-        || Ok(Limits::default()),
-        plenora_pipeline::LimitiParziali::applica,
-    )?;
-    let caricate = carica_ingressi(ingressi, limiti.max_governed_memory_bytes, interruzione)?;
+    valida_ingressi(piano, da_file(ingressi), interruzione)
+}
+
+/// [`valida_da_file`] con input da file o in memoria ([`Ingresso`]): anche
+/// le tabelle in memoria passano dal budget del piano, come in `run`.
+///
+/// # Errors
+///
+/// Quelli di [`valida_da_file`].
+pub fn valida_ingressi(
+    piano: &Pipeline,
+    ingressi: Vec<Ingresso>,
+    interruzione: &Interruzione,
+) -> Result<PipelineValidata> {
+    let budget = budget_del_piano(piano)?;
+    let caricate = carica_ingressi(ingressi, budget, interruzione)?;
     let schemi: Vec<(&str, _)> = caricate
         .iter()
         .map(|(nome, tabella)| (nome.as_str(), tabella.schema()))
@@ -317,26 +416,32 @@ pub fn valida_da_file(
 }
 
 /// Carica gli input nell'ordine dato, ciascuno con il budget residuo; dopo
-/// ogni lettura i byte vivi esatti devono stare nel budget. L'interruzione
-/// si controlla prima di ogni lettura (fase `read`).
+/// ogni lettura (o tabella in memoria) i byte vivi esatti devono stare nel
+/// budget. L'interruzione si controlla prima di ogni input (fase `read`).
 fn carica_ingressi(
-    ingressi: &[FileIngresso],
+    ingressi: Vec<Ingresso>,
     budget: u64,
     interruzione: &Interruzione,
 ) -> Result<Vec<(String, RecordBatch)>> {
     let mut caricate: Vec<(String, RecordBatch)> = Vec::with_capacity(ingressi.len());
     for ingresso in ingressi {
-        let contesto = format!("input `{}`", ingresso.nome);
+        let contesto = format!("input `{}`", ingresso.nome());
         interruzione
             .verifica(&format!("prima di leggere l'{contesto}"))
             .map_err(|errore| errore.with_phase(ErrorPhase::Read))?;
-        let vivi = byte_vivi(caricate.iter().map(|(_, tabella)| tabella))?;
-        let residuo = budget.saturating_sub(vivi);
-        // Fase `read`: l'errore nasce leggendo l'input (la derivazione per
-        // variante darebbe `write` a I/O e limiti).
-        let letta = leggi_tabella(&ingresso.percorso, ingresso.formato, residuo)
-            .map_err(|errore| con_nome(&contesto, errore).with_phase(ErrorPhase::Read))?;
-        caricate.push((ingresso.nome.clone(), letta));
+        let (nome, letta) = match ingresso {
+            Ingresso::File(file) => {
+                let vivi = byte_vivi(caricate.iter().map(|(_, tabella)| tabella))?;
+                let residuo = budget.saturating_sub(vivi);
+                // Fase `read`: l'errore nasce leggendo l'input (la
+                // derivazione per variante darebbe `write` a I/O e limiti).
+                let letta = leggi_tabella(&file.percorso, file.formato, residuo)
+                    .map_err(|errore| con_nome(&contesto, errore).with_phase(ErrorPhase::Read))?;
+                (file.nome, letta)
+            }
+            Ingresso::Tabella { nome, tabella } => (nome, tabella),
+        };
+        caricate.push((nome, letta));
         let vivi = byte_vivi(caricate.iter().map(|(_, tabella)| tabella))?;
         if vivi > budget {
             return Err(

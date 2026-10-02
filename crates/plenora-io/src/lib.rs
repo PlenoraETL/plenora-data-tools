@@ -22,7 +22,9 @@
 //! senza [`OpzioniScrittura::sovrascrivi`].
 //!
 //! [`esegui_da_file`] carica gli input nominati di un piano, lo valida e lo
-//! esegue con il budget del piano, e scrive gli output nominati.
+//! esegue con il budget del piano, e scrive gli output nominati;
+//! [`esegui_ingressi`], [`valida_ingressi`] ed [`esegui_in_memoria`]
+//! accettano anche tabelle già in memoria ([`Ingresso`]).
 
 pub mod atomico;
 pub mod confine;
@@ -43,8 +45,8 @@ use plenora_core::{PlenoraError, Result};
 
 pub use confine::LimitiLettura;
 pub use esecuzione::{
-    esegui_da_file, esegui_da_file_interrompibile, valida_da_file, EsitoFile, FileIngresso,
-    FileUscita, UscitaScritta,
+    esegui_da_file, esegui_da_file_interrompibile, esegui_in_memoria, esegui_ingressi,
+    valida_da_file, valida_ingressi, EsitoFile, FileIngresso, FileUscita, Ingresso, UscitaScritta,
 };
 pub use formato::{CompressioneParquet, Formato, OpzioniScrittura};
 

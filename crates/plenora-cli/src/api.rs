@@ -8,10 +8,16 @@
 //! La mappa operazione → export è [`crate::capacita::mappa_rust`]; il test
 //! `tests/superficie_rust.rs` la compila come un crate consumatore che
 //! importa solo questi export.
+//!
+//! Ogni operazione con dati ha due forme: da file (quella della CLI) e con
+//! input già in memoria ([`Ingresso`], quella dell'SDK Python). Le due
+//! forme condividono il corpo, così la stessa operazione ha la stessa
+//! validazione, lo stesso budget e lo stesso documento su ogni superficie.
 
 use std::io::Read;
 use std::path::Path;
 
+use plenora_core::arrow::array::RecordBatch;
 use plenora_core::arrow::schema::Schema;
 use plenora_core::contract::arrow_metadata::{
     GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION, PLENORA_CONTRACT_VERSION_KEY,
@@ -22,13 +28,11 @@ use plenora_core::contract::arrow_schema::{
 };
 use plenora_core::crs::resolve_crs;
 use plenora_core::limits::PlanLimits;
+use plenora_core::memoria::byte_vivi;
 use plenora_core::tipo_arrow::descrivi_tipo;
 use plenora_core::{ErrorPhase, PlenoraError, Result, DEFAULT_MAX_GOVERNED_MEMORY_BYTES};
-use plenora_io::{
-    esegui_da_file_interrompibile, leggi_tabella, valida_da_file, FileIngresso, FileUscita,
-    Formato, OpzioniScrittura,
-};
-use plenora_pipeline::{normalizza_schema, Interruzione, Pipeline};
+use plenora_io::{leggi_tabella, FileIngresso, FileUscita, Formato, Ingresso, OpzioniScrittura};
+use plenora_pipeline::{normalizza_schema, Interruzione, Pipeline, Report};
 use serde_json::{json, Value};
 
 use crate::catalogo::FORMATO_PIANO;
@@ -94,6 +98,42 @@ pub fn descrivi(ingresso: &Path, interruzione: &Interruzione) -> Result<Value> {
         .map_err(|errore| errore.with_phase(ErrorPhase::Read))?;
     let tabella = leggi_tabella(ingresso, None, DEFAULT_MAX_GOVERNED_MEMORY_BYTES)
         .map_err(|errore| nel_contesto("input", errore).with_phase(ErrorPhase::Read))?;
+    descrivi_letta(&tabella, interruzione)
+}
+
+/// [`descrivi`] di una tabella già in memoria.
+///
+/// Stesso documento, stessi controlli. La tabella deve stare nello stesso
+/// budget di default della
+/// lettura da file (`DEFAULT_MAX_GOVERNED_MEMORY_BYTES`): la stessa
+/// operazione non accetta su una superficie ciò che rifiuta sull'altra.
+///
+/// # Errors
+///
+/// `ResourceLimit` (fase `read`) per una tabella oltre il budget; quelli
+/// del contratto come in [`descrivi`]; `Cancelled` o `Timeout` prima di
+/// prendere la tabella (fase `read`) o prima di descriverla (fase
+/// `finalize`).
+pub fn descrivi_tabella(tabella: &RecordBatch, interruzione: &Interruzione) -> Result<Value> {
+    interruzione
+        .verifica("prima di leggere l'input")
+        .map_err(|errore| errore.with_phase(ErrorPhase::Read))?;
+    let vivi = byte_vivi(std::iter::once(tabella))?;
+    if vivi > DEFAULT_MAX_GOVERNED_MEMORY_BYTES {
+        return Err(nel_contesto(
+            "input",
+            PlenoraError::ResourceLimit(format!(
+                "{vivi} byte oltre il budget di {DEFAULT_MAX_GOVERNED_MEMORY_BYTES} \
+                 (max_governed_memory_bytes)"
+            )),
+        )
+        .with_phase(ErrorPhase::Read));
+    }
+    descrivi_letta(tabella, interruzione)
+}
+
+/// Il documento di `data.describe` di una tabella presa (letta o data).
+fn descrivi_letta(tabella: &RecordBatch, interruzione: &Interruzione) -> Result<Value> {
     interruzione
         .verifica("prima di descrivere l'input")
         .map_err(|errore| errore.with_phase(ErrorPhase::Finalize))?;
@@ -133,7 +173,25 @@ pub fn valida(
     ingressi: &[FileIngresso],
     interruzione: &Interruzione,
 ) -> Result<Value> {
-    let validata = valida_da_file(piano, ingressi, interruzione)?;
+    valida_ingressi(
+        piano,
+        ingressi.iter().cloned().map(Ingresso::File).collect(),
+        interruzione,
+    )
+}
+
+/// [`valida`] con input da file o in memoria ([`Ingresso`]): stesso
+/// documento, stesso budget, stessi controlli.
+///
+/// # Errors
+///
+/// Quelli di [`plenora_io::valida_ingressi`].
+pub fn valida_ingressi(
+    piano: &Pipeline,
+    ingressi: Vec<Ingresso>,
+    interruzione: &Interruzione,
+) -> Result<Value> {
+    let validata = plenora_io::valida_ingressi(piano, ingressi, interruzione)?;
     interruzione
         .verifica("prima di consegnare la validazione")
         .map_err(|errore| errore.with_phase(ErrorPhase::Finalize))?;
@@ -178,20 +236,99 @@ pub fn esegui(
     opzioni: &OpzioniScrittura,
     interruzione: &Interruzione,
 ) -> Result<Value> {
-    let esito = esegui_da_file_interrompibile(piano, ingressi, uscite, opzioni, interruzione)?;
-    Ok(json!({
-        "outputs": esito
-            .uscite
+    esegui_ingressi(
+        piano,
+        ingressi.iter().cloned().map(Ingresso::File).collect(),
+        uscite,
+        opzioni,
+        interruzione,
+    )
+}
+
+/// [`esegui`] con input da file o in memoria ([`Ingresso`]): gli output
+/// vanno nei file d'uscita, come in [`esegui`].
+///
+/// # Errors
+///
+/// Quelli di [`plenora_io::esegui_ingressi`]; dopo il primo output scritto
+/// l'effetto è `partial`.
+pub fn esegui_ingressi(
+    piano: &Pipeline,
+    ingressi: Vec<Ingresso>,
+    uscite: &[FileUscita],
+    opzioni: &OpzioniScrittura,
+    interruzione: &Interruzione,
+) -> Result<Value> {
+    let esito = plenora_io::esegui_ingressi(piano, ingressi, uscite, opzioni, interruzione)?;
+    let uscite = esito
+        .uscite
+        .iter()
+        .map(|uscita| UscitaDescritta {
+            nome: &uscita.nome,
+            tipo: tipo_di_contenuto(uscita.formato),
+            righe: uscita.righe,
+            colonne: uscita.colonne,
+        })
+        .collect::<Vec<_>>();
+    Ok(documento_esecuzione(&uscite, &esito.report))
+}
+
+/// `data.run` con gli output resi in memoria invece che scritti: il
+/// documento `plenora-data-execution-result-v1` e le tabelle d'uscita
+/// nell'ordine del piano. Nessun effetto fuori dal processo.
+///
+/// Il tipo di contenuto di un output è `application/vnd.apache.arrow.stream`:
+/// la tabella esce dalla superficie come stream Arrow (in Python, l'Arrow C
+/// Stream Interface), non come file.
+///
+/// # Errors
+///
+/// Quelli di [`plenora_io::esegui_in_memoria`].
+pub fn esegui_in_memoria(
+    piano: &Pipeline,
+    ingressi: Vec<Ingresso>,
+    interruzione: &Interruzione,
+) -> Result<(Value, Vec<(String, RecordBatch)>)> {
+    let esito = plenora_io::esegui_in_memoria(piano, ingressi, interruzione)?;
+    let conta = |n: usize, cosa: &str| {
+        u64::try_from(n).map_err(|_| PlenoraError::Internal(format!("{cosa} non rappresentabile")))
+    };
+    let uscite = esito
+        .outputs
+        .iter()
+        .map(|(nome, tabella)| {
+            Ok(UscitaDescritta {
+                nome,
+                tipo: ARROW_STREAM,
+                righe: conta(tabella.num_rows(), "numero di righe")?,
+                colonne: conta(tabella.num_columns(), "numero di colonne")?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let documento = documento_esecuzione(&uscite, &esito.report);
+    Ok((documento, esito.outputs))
+}
+
+/// Un output di `data.run` come lo dice il documento: mai il percorso.
+struct UscitaDescritta<'a> {
+    nome: &'a str,
+    tipo: &'static str,
+    righe: u64,
+    colonne: u64,
+}
+
+fn documento_esecuzione(uscite: &[UscitaDescritta<'_>], report: &Report) -> Value {
+    json!({
+        "outputs": uscite
             .iter()
             .map(|uscita| json!({
                 "name": uscita.nome,
-                "content_type": tipo_di_contenuto(uscita.formato),
+                "content_type": uscita.tipo,
                 "rows": uscita.righe,
                 "columns": uscita.colonne,
             }))
             .collect::<Vec<_>>(),
-        "steps": esito
-            .report
+        "steps": report
             .passi
             .iter()
             .map(|passo| json!({
@@ -202,7 +339,49 @@ pub fn esegui(
                 "division_by_zero_rows": passo.righe_divisione_per_zero,
             }))
             .collect::<Vec<_>>(),
-    }))
+    })
+}
+
+/// I nomi dati dal chiamante per gli input (o gli output) contro quelli
+/// del piano, prima di leggere qualunque dato: ognuno è un nome dichiarato,
+/// nessuno si ripete, nessun nome dichiarato manca.
+///
+/// Il nome ricevuto non entra nel messaggio (sulla CLI può essere un pezzo
+/// di percorso): il messaggio dice quale occorrenza di `voce`. I nomi del
+/// piano invece sì: sono del piano.
+///
+/// # Errors
+///
+/// `InvalidConfiguration` al primo nome fuori posto.
+pub fn verifica_nomi<'a>(
+    dichiarati: &[String],
+    dati: impl Iterator<Item = &'a str>,
+    voce: &str,
+) -> Result<()> {
+    let mut visti: Vec<&str> = Vec::new();
+    for (indice, nome) in dati.enumerate() {
+        let occorrenza = indice + 1;
+        if !dichiarati.iter().any(|dichiarato| dichiarato == nome) {
+            return Err(PlenoraError::InvalidConfiguration(format!(
+                "`{voce}` numero {occorrenza}: il NAME non e' un nome del piano"
+            )));
+        }
+        if visti.contains(&nome) {
+            return Err(PlenoraError::InvalidConfiguration(format!(
+                "`{voce}` numero {occorrenza}: NAME gia' dato da un altro `{voce}`"
+            )));
+        }
+        visti.push(nome);
+    }
+    if let Some(mancante) = dichiarati
+        .iter()
+        .find(|nome| !visti.contains(&nome.as_str()))
+    {
+        return Err(PlenoraError::InvalidConfiguration(format!(
+            "`{mancante}` del piano senza `{voce}`"
+        )));
+    }
+    Ok(())
 }
 
 /// Il tipo di contenuto pubblico di un formato di file.
