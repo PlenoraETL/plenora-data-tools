@@ -394,7 +394,7 @@ mod tests {
         assert!(ensure_no_duplicate_keys("non json").is_ok());
     }
 
-    /// Regressione (revisione Codex): un numero che il double non tiene si
+    /// Regressione: un numero che il double non tiene si
     /// rifiuta invece di diventare un altro numero; le forme che il double
     /// rende esattamente passano.
     #[test]

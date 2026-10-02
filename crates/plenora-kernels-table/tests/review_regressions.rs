@@ -3048,7 +3048,7 @@ fn l_analisi_di_formula_rifiuta_la_timezone_che_il_formatter_rifiuta() {
 }
 
 // ---------------------------------------------------------------------------
-// Quindicesimo giro — lo schema di output non dipende dai VALORI
+// Lo schema di output non dipende dai VALORI
 // ---------------------------------------------------------------------------
 
 /// Tre batch con lo STESSO schema: pieno, tutto null, vuoto.
@@ -3444,7 +3444,7 @@ fn il_confronto_di_un_estremo_decimale_e_esatto() {
     );
 
     // Decimale con piu' cifre di quante ne tenga la forma esatta: non ricade
-    // su un double (revisione Codex), si rifiuta.
+    // su un double, si rifiuta.
     assert_eq!(
         NumericBound::parse("0.123456789012345678901234567890123456789012345"),
         None

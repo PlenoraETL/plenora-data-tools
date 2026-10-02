@@ -572,9 +572,9 @@ mod tests {
 
     use super::*;
 
-    /// Regressione (revisione Codex): valori interi uguali oltre 2^53 hanno
+    /// Regressione: valori interi uguali oltre 2^53 hanno
     /// varianza zero. Sottraendo la media in double, tre volte `2^53 + 1`
-    /// davano 4 con `ddof = 0` e 6 con `ddof = 1`.
+    /// darebbero 4 con `ddof = 0` e 6 con `ddof = 1`.
     #[test]
     #[allow(clippy::float_cmp)] // Zero esatto.
     fn la_varianza_di_interi_uguali_e_zero() {

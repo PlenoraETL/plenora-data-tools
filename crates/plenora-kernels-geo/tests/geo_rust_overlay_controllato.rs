@@ -199,7 +199,7 @@ fn cornice_sottile_segue_la_politica_del_centimetro() {
     }
 }
 
-/// Primo controesempio di una revisione, in metri: il buco largo
+/// Primo controesempio, in metri: il buco largo
 /// `2^-40` m e' sotto la precisione e puo' sparire; il quadrato resta.
 #[test]
 fn buco_sotto_la_precisione_puo_sparire_il_resto_resta() {

@@ -2659,7 +2659,7 @@ mod tests {
         }
     }
 
-    /// Regressione (revisione Codex): varianza zero per valori uguali oltre
+    /// Regressione: varianza zero per valori uguali oltre
     /// 2^53 in `aggregate`, `rolling_window` e `statistics`.
     #[test]
     #[allow(clippy::float_cmp)] // Zero esatto.

@@ -54,9 +54,9 @@
 use plenora_core::ErrorCategory;
 use plenora_kernels_geo::geometry_from_wkb;
 
-/// Il reperto della campagna schedulata del 5 settembre 2026.
+/// Il primo reperto di una campagna schedulata (`5 settembre` nei messaggi).
 const REPERTO_A: &[u8] = include_bytes!("fixtures/reperto_a.wkb");
-/// Il reperto della campagna schedulata del 4 settembre 2026.
+/// Il secondo reperto di una campagna schedulata (`4 settembre` nei messaggi).
 const REPERTO_B: &[u8] = include_bytes!("fixtures/reperto_b.wkb");
 
 /// **Col segno esatto, entrambi i reperti sono un ingresso invalido — in

@@ -1,15 +1,15 @@
-//! La precisione dichiarata (1 cm a terra) come garanzia **locale**: i
-//! controesempi della revisione sul commit 4d8c496, ciascuno oltre il
-//! centimetro e ciascuno silenzioso prima della correzione.
+//! La precisione dichiarata (1 cm a terra) come garanzia **locale**: tre
+//! controesempi, ciascuno oltre il centimetro e ciascuno silenzioso con una
+//! verifica solo globale.
 //!
-//! - `LINEWORK` perdeva una sporgenza di 1 m^2 di un buco che condivide un
-//!   lato con la shell: la soglia d'area era globale (perimetro del buco per
-//!   precisione, 36 m^2).
-//! - L'aggancio dopo l'overlay usava due passi di griglia per asse su tutti
-//!   i vertici: con `span_x = 2^23` m un incrocio a `x = 100` finiva sull'
-//!   ascissa `100.0155` di un vertice lontano.
-//! - Il noding di `polygonize` arrotondava in `f64` il punto d'incrocio: a
-//!   `2^52` `(B + 1.5, B + 1.5)` diventava `(B + 2, B + 2)`, 0.707 m fuori
+//! - `LINEWORK` con una soglia d'area globale (perimetro del buco per
+//!   precisione, 36 m^2) perde la sporgenza di 1 m^2 di un buco che
+//!   condivide un lato con la shell.
+//! - Un aggancio dopo l'overlay con due passi di griglia per asse su tutti
+//!   i vertici, con `span_x = 2^23` m, porta un incrocio a `x = 100`
+//!   sull'ascissa `100.0155` di un vertice lontano.
+//! - Il noding di `polygonize` con il punto d'incrocio arrotondato in `f64`:
+//!   a `2^52` `(B + 1.5, B + 1.5)` diventa `(B + 2, B + 2)`, 0.707 m fuori
 //!   da uno dei segmenti.
 //!
 //! Il quarto controesempio (un buco omesso dall'output di `split`) riguarda
@@ -238,9 +238,9 @@ fn quadrato(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> LineString<f64> {
     ])
 }
 
-/// Controesempio di revisione: shell `[0, 10]^2`, buchi `A = [3, 5]^2` e
+/// Controesempio: shell `[0, 10]^2`, buchi `A = [3, 5]^2` e
 /// `B = [2, 8] x [0, 8]`, con `B` sul lato inferiore della shell e dentro.
-/// Unire `B` intero reinseriva nell'ordine `A, B` i 4 m^2 di `A`; ora si
+/// Unire `B` intero reinserirebbe nell'ordine `A, B` i 4 m^2 di `A`; si
 /// unisce solo la sporgenza di `B` fuori dalla shell (vuota). L'esito non
 /// dipende dall'ordine: `S \ A`.
 #[test]
@@ -263,7 +263,7 @@ fn linework_non_dipende_dall_ordine_dei_buchi() {
     }
 }
 
-/// Controesempio di revisione: traslato di `(B, B)` con `B = 2^52`, l'incrocio
+/// Controesempio: traslato di `(B, B)` con `B = 2^52`, l'incrocio
 /// esatto `(B, B + 1.5)` non e' rappresentabile e l'ordinata riportata
 /// sbaglia di 27.7 cm, anche se il passo della griglia e' minuscolo. Oltre
 /// `ulp(max |coordinata|) > p / 64` nessun kernel calcola: errore esplicito.

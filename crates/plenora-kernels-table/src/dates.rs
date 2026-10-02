@@ -1,3 +1,11 @@
+//! Operazioni su date e istanti: `table.date_format`, `table.date_add`,
+//! `table.date_diff`, `table.timezone_convert`, e la validazione dei
+//! formati `strftime` che usa anche `table.type_cast`.
+//!
+//! Semantica, schema, ordine ed errori per operazione: le schede
+//! `docs/schede/<id>.md`, raccolte in `docs/operazioni.md`; i limiti dei
+//! formati in docs/limiti.md, «Colonne temporali e formati di data».
+
 use std::sync::Arc;
 
 use chrono::format::{Fixed, Item, Numeric, StrftimeItems};
@@ -1337,11 +1345,11 @@ mod tests {
         assert_eq!(uscita.value(0), "2020-01-01 13:00 +0100 CET");
     }
 
-    /// Regressione (difetto 3): le operazioni su date leggono le colonne
-    /// temporali dal valore nativo, per ogni unita' e fuso. Prima un
-    /// `Timestamp` passava dal suo testo RFC 3339 (`...+00:00`), che un
-    /// formato come `%Y-%m-%d %H:%M:%S` non legge, e un `Timestamp` in
-    /// microsecondi non si leggeva affatto. Valori attesi scritti a mano.
+    /// Regressione: le operazioni su date leggono le colonne
+    /// temporali dal valore nativo, per ogni unita' e fuso. Passando dal
+    /// testo RFC 3339 di un `Timestamp` (`...+00:00`) un formato come
+    /// `%Y-%m-%d %H:%M:%S` non lo leggerebbe, e un `Timestamp` in
+    /// microsecondi non si leggerebbe affatto. Valori attesi scritti a mano.
     #[test]
     #[allow(clippy::too_many_lines, clippy::float_cmp)] // Valori scritti a mano, esatti.
     fn le_operazioni_su_date_leggono_le_colonne_temporali_senza_testo() {

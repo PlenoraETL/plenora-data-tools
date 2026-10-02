@@ -473,11 +473,11 @@ fn split_output(
 mod tests {
     use super::*;
 
-    /// Revisione, sesto giro: a `2^48` il margine numerico di `split_line`
-    /// valeva circa 1 m, e un punto a 25 cm dalla linea tagliava con
-    /// tolleranza nulla. Ora la spaziatura delle coordinate si confronta con
-    /// la precisione: errore esplicito. Vicino all'origine il punto a 25 cm
-    /// non taglia, quello sulla linea si'.
+    /// A `2^48` il margine numerico di `split_line` vale circa 1 m: un punto
+    /// a 25 cm dalla linea taglierebbe con tolleranza nulla. La spaziatura
+    /// delle coordinate si confronta con la precisione: errore esplicito.
+    /// Vicino all'origine il punto a 25 cm non taglia, quello sulla linea
+    /// si'.
     #[test]
     fn split_lineare_rispetta_la_precisione() {
         let centimetro = Precision::new(0.01).unwrap();

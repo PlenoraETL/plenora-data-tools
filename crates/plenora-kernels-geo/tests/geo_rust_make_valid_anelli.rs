@@ -57,7 +57,7 @@ fn points(geometry: &Geometry<f64>) -> usize {
 #[test]
 fn structure_fills_rings_by_nonzero_winding_like_geos() {
     let cases = [
-        // Il controesempio della revisione: cornice che gira dentro se
+        // Controesempio: cornice che gira dentro se
         // stessa come buco. GEOS: la cornice esterna e l'isola, 80 m^2.
         (
             "POLYGON((-1 -1,11 -1,11 11,-1 11,-1 -1),(0 0,10 0,10 10,0 10,0 0,2 2,2 8,8 8,8 2,2 2,0 0))",

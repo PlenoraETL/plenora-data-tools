@@ -1,3 +1,9 @@
+//! Analisi e arricchimento: `table.lookup`, `table.bin`,
+//! `table.flatten_json`, `table.statistics`, `table.sample`.
+//!
+//! Semantica, schema, ordine ed errori per operazione: le schede
+//! `docs/schede/<id>.md`, raccolte in `docs/operazioni.md`.
+
 use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};

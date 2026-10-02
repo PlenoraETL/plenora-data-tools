@@ -890,10 +890,11 @@ mod tests {
         LineString::new(points)
     }
 
-    /// Controesempio della revisione: un buco di 1 m^2 con lati da 1 cm,
-    /// omesso dall'output. Ogni lato scoperto stava sotto la tolleranza per
-    /// pezzo, e 1 m^2 sotto il perimetro (400 m) per 1 cm: passava. Ora la
-    /// copertura si somma sull'anello e l'area ha un margine locale.
+    /// Controesempio: un buco di 1 m^2 con lati da 1 cm,
+    /// omesso dall'output. Ogni lato scoperto sta sotto la tolleranza per
+    /// pezzo, e 1 m^2 sotto il perimetro (400 m) per 1 cm: un controllo per
+    /// pezzo lo lascerebbe passare. La copertura si somma sull'anello e
+    /// l'area ha un margine locale.
     #[test]
     fn an_omitted_hole_with_centimetre_edges_is_rejected() {
         let shell = subdivided_square(0.0, 0.0, 100.0, 1);

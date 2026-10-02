@@ -866,7 +866,7 @@ mod tests {
 
     #[test]
     fn divisione_per_zero_di_default_vale_null_nel_nodo_e_si_conta() {
-        // Default (decisione dell'utente): la divisione vale null nel nodo, e
+        // Default (docs/runner.md, «Divisione per zero»): la divisione vale null nel nodo, e
         // il null segue le regole dei null. Righe 0, 2, 3, 4, 5 dividono per
         // zero; la riga 1 ha `i` null e non conta.
         let batch = fixture();
@@ -1707,7 +1707,7 @@ mod tests {
         );
         // La notazione esponenziale e' un decimale esatto: 1e30 supera ogni
         // i64. Oltre la forma esatta (1e300: 301 cifre) il letterale si
-        // rifiuta invece di diventare un double (revisione Codex).
+        // rifiuta invece di diventare un double.
         assert_eq!(
             booleani(&batch, bin("less", col("i"), lit(json!(1e30))))[..],
             [Some(true), Some(true)]
@@ -1771,7 +1771,7 @@ mod tests {
         }
     }
 
-    /// Regressione (revisione Codex, classe dei panici di intervallo di
+    /// Regressione (classe dei panici di intervallo di
     /// chrono): una Date32 oltre l'intervallo di chrono e' un errore di
     /// `date_trunc`, non un panico della somma.
     #[test]
@@ -1784,8 +1784,8 @@ mod tests {
         );
     }
 
-    /// Regressione (revisione Codex): il troncamento di un timestamp vicino
-    /// a `i64::MIN` usciva dalla gamma nella sottrazione; ora e' un errore.
+    /// Regressione: il troncamento di un timestamp vicino
+    /// a `i64::MIN` esce dalla gamma nella sottrazione, ed e' un errore.
     #[test]
     fn date_trunc_su_timestamp_al_minimo_e_un_errore() {
         for unit in [

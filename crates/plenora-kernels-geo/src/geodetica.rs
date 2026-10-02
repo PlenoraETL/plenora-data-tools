@@ -555,11 +555,11 @@ mod tests {
         ));
     }
 
-    /// Il controesempio della seconda lettura: valido nel piano, nessun lato
+    /// Controesempio: valido nel piano, nessun lato
     /// oltre 180 gradi, versi giusti, ma la geodetica del lato inferiore
     /// dell'esterno sale oltre 70 gradi nord vicino alla longitudine 0, e il
-    /// «buco» a 40-41 gradi sta fuori dall'esterno geodetico. Prima si
-    /// sottraeva e l'area era un numero plausibile e sbagliato.
+    /// «buco» a 40-41 gradi sta fuori dall'esterno geodetico. Sottrarlo
+    /// darebbe un'area plausibile e sbagliata.
     #[test]
     fn un_buco_fuori_dall_esterno_geodetico_si_rifiuta() {
         use geo::{Geometry, Polygon};
@@ -676,7 +676,7 @@ mod tests {
         assert!(righe > 600);
     }
 
-    /// Il controesempio della terza lettura: sul lato (0, 1e-18)-(179.396...,
+    /// Controesempio: sul lato (0, 1e-18)-(179.396...,
     /// 1e-18) di WGS 84 `GeographicLib` arrotonda le latitudini a zero, rende
     /// azimut di 90 gradi e il vertice a 0, mentre il vero e' a 1,07e-4
     /// gradi (11,8 m dall'equatore). Il lato e' fuori dal dominio (oltre
@@ -719,11 +719,11 @@ mod tests {
         );
     }
 
-    /// Il controesempio della seconda lettura sul vertice: il lato
+    /// Controesempio sul vertice: il lato
     /// (-85, 4e-8)-(85, 4e-8) di WGS 84 ha il vertice a 4,87e-7 gradi, e
-    /// `acos` lo calcolava 0 (coseno arrotondato a 1): scarto sottostimato
+    /// `acos` lo calcola 0 (coseno arrotondato a 1): scarto sottostimato
     /// di 5 volte, e il buco sotto 3e-7 gradi, fuori dall'esterno geodetico,
-    /// passava tutti i controlli (1230,94 m^2 sottratti a torto).
+    /// passerebbe tutti i controlli (1230,94 m^2 sottratti a torto).
     #[test]
     fn il_vertice_vicino_all_equatore_non_si_perde() {
         use geo::{Geometry, LineString, Polygon};

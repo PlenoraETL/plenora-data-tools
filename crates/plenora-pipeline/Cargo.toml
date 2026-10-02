@@ -9,7 +9,7 @@ publish.workspace = true
 [dependencies]
 plenora-core.workspace = true
 plenora-kernels-table.workspace = true
-# Operazioni geo del runner (F4): analisi dei contratti, kernel e adapter
+# Operazioni geo del runner: analisi dei contratti, kernel e adapter
 # Arrow dei kernel geografici. Crate del workspace, nessun pacchetto nuovo.
 plenora-kernels-geo.workspace = true
 # Il tipo `geo::Geometry` che i kernel geografici ricevono e rendono: la

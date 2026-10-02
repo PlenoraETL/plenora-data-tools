@@ -192,7 +192,7 @@ where
 /// `table.expression` (campo `on_division_by_zero`, in JSON `"null"` o
 /// `"error"`; un altro valore si rifiuta).
 ///
-/// Decisione dell'utente: di default la divisione per un divisore zero vale
+/// Di default (docs/runner.md, «Divisione per zero») la divisione per un divisore zero vale
 /// null, e il piano puo' chiedere l'errore. Non e' un null silenzioso: il
 /// kernel conta le righe in cui e' successo ([`EffettiKernel`]) e il runner
 /// le riporta nel resoconto di ogni passo, in entrambi i modi. Un divisore
@@ -2318,7 +2318,7 @@ mod tests {
                 scale: 3
             })
         );
-        // L'esponente si legge in decimale esatto (revisione Codex).
+        // L'esponente si legge in decimale esatto.
         assert_eq!(
             NumericBound::parse("1e3"),
             Some(NumericBound::Decimal {
@@ -2506,10 +2506,10 @@ mod tests {
         );
     }
 
-    /// Regressione (revisione Codex): la notazione esponenziale si legge
-    /// esatta. `1e-7` era un double appena sotto un decimo di milionesimo, e
-    /// un `Decimal128` di quel valore risultava fuori da un `max` scritto
-    /// `0.0000001`.
+    /// Regressione: la notazione esponenziale si legge
+    /// esatta. Letto come double, `1e-7` sarebbe appena sotto un decimo di
+    /// milionesimo, e un `Decimal128` di quel valore risulterebbe fuori da un
+    /// `max` scritto `0.0000001`.
     #[test]
     fn l_esponente_si_legge_in_decimale_esatto() {
         use super::NumericBound;
@@ -2523,9 +2523,9 @@ mod tests {
             decimale(100_000_000_000_000_000_000, 0)
         );
         assert_eq!(NumericBound::parse("0e5"), decimale(0, 0));
-        // Oltre la forma esatta non c'e' un double di ripiego (revisione
-        // Codex): `1e-128` sarebbe un double diverso, `1e-400` zero, `1e400`
-        // infinito, e `1e2147483647` non espande miliardi di zeri.
+        // Oltre la forma esatta non c'e' un double di ripiego: `1e-128`
+        // sarebbe un double diverso, `1e-400` zero, `1e400` infinito, e
+        // `1e2147483647` non espande miliardi di zeri.
         for testo in ["1e400", "1e-128", "1e-400", "1e2147483647", "1e-2147483648"] {
             assert_eq!(NumericBound::parse(testo), None, "{testo}");
         }

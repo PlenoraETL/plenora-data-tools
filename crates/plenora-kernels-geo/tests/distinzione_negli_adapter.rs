@@ -11,7 +11,7 @@ use plenora_core::arrow::array::StringArray;
 use plenora_core::ErrorCategory;
 use plenora_kernels_geo::extensions::{from_wkt_column, OnWktError};
 
-/// Il reperto del 5 settembre 2026 (`barriera_validazione.rs`).
+/// Il primo reperto di `barriera_validazione.rs`.
 const REPERTO: &[u8] = include_bytes!("fixtures/reperto_a.wkb");
 
 /// La coppia di poligoni del reperto che provoca il conflitto, in WKT.

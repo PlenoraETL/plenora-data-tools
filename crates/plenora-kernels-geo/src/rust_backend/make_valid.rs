@@ -2122,7 +2122,7 @@ mod tests {
         ));
     }
 
-    /// Primo controesempio della terza revisione, in metri con 1 cm: il
+    /// Primo controesempio, in metri con 1 cm: il
     /// buco largo `2^-40` m e' sotto la precisione e puo' sparire; il resto
     /// resta entro perimetro per precisione.
     #[test]
@@ -2173,7 +2173,7 @@ mod tests {
         Ok(())
     }
 
-    /// Il controesempio di forma della terza revisione: con feature
+    /// Il controesempio di forma: con feature
     /// risolvibili l'overlay si esegue, e i due buchi restano due.
     #[test]
     fn resolvable_difference_keeps_both_holes() -> Result<(), MakeValidError> {

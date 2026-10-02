@@ -845,7 +845,7 @@ mod tests {
         );
         let un_decimo = r#"{"column": "d", "max": 0.1}"#;
         assert!(assert_range(&decimali, &config(un_decimo)).is_err());
-        // Esponente (revisione Codex): `0.0000001` riscritto da serde_json come
+        // Esponente: `0.0000001` riscritto da serde_json come
         // `1e-7` resta un decimale esatto, e il Decimal128 1e-7 e' dentro.
         let piccolo = single_column_batch(
             "d",

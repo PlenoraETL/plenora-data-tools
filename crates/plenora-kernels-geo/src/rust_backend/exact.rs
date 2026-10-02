@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(MASSIMO, 2_f64.powi(450));
     }
 
-    /// Il caso della revisione: area esatta 1, somma ingenua 0.
+    /// Il caso limite: area esatta 1, somma ingenua 0.
     #[test]
     fn il_quadrato_unitario_a_2_alla_30_e_antiorario() {
         let a = 2_f64.powi(30);

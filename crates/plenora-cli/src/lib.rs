@@ -1,7 +1,7 @@
 //! plenora-cli — la CLI pubblica `plenora-data` e la superficie Rust delle
 //! stesse operazioni.
 //!
-//! Adotta il profilo data-tools di `plenora-contracts` (revisione
+//! Adotta il profilo data-tools di `plenora-contracts` (commit
 //! `ade868cf89c6652cffe20019e7194b383384ee78`): CLI 2.0 (un documento JSON
 //! su stdout, niente su stderr, codici d'uscita per categoria), Typed Errors
 //! 1.0 (la proiezione pubblica di `PlenoraError`), Capability Discovery 2.0,

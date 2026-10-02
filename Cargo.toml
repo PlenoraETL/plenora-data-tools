@@ -23,13 +23,13 @@ publish = false
 # Arrow (60.0.0 qui, 59.2.0 li'); i backend nativi (geos, proj) e le
 # dipendenze di engine/CLI/isolamento non ci sono.
 [workspace.dependencies]
-# Arrow =60.0.0 (da 59.2.0, decisione del maintainer 2026-10-01). Il
-# passaggio porta un crate nuovo nel lockfile, `arrow-cmp` 60.0.0
+# Arrow =60.0.0 (59.2.0 in plenora-data-tools@190c493). Rispetto alla 59.2.0
+# il lockfile ha un crate in più, `arrow-cmp` 60.0.0
 # (comparatori per posizione, dipendenza non opzionale di `arrow-select` 60,
 # che lo usa in `take` sulle run-end; dipende solo da arrow-array,
 # arrow-buffer e arrow-schema), e nessuno in meno. I metadati di schema e di
-# campo sono ora `arrow_schema::Metadata` (una `BTreeMap`: iterazione in
-# ordine di chiave) invece di `HashMap<String, String>`.
+# campo sono `arrow_schema::Metadata` (una `BTreeMap`: iterazione in
+# ordine di chiave), non `HashMap<String, String>`.
 arrow-array = "=60.0.0"
 arrow-schema = "=60.0.0"
 arrow-ipc = "=60.0.0"
@@ -40,8 +40,8 @@ arrow-select = "=60.0.0"
 # di lettura»). Non e' una dipendenza nuova: arrow-array e arrow-ipc la usano
 # gia', nel lockfile nessun pacchetto nuovo.
 arrow-buffer = "=60.0.0"
-# Lettura e scrittura Parquet/GeoParquet di plenora-io (decisione del
-# maintainer 2026-09-29: formati di file Arrow IPC e Parquet). Stessa
+# Lettura e scrittura Parquet/GeoParquet di plenora-io (i formati di file
+# sono Arrow IPC e Parquet). Stessa
 # release arrow-rs dei crate Arrow sopra (60.0.0), cosi' i tipi Arrow
 # sono gli stessi e il lockfile non porta una seconda copia di Arrow.
 # Feature minime, ognuna voluta:
@@ -53,8 +53,8 @@ arrow-buffer = "=60.0.0"
 #   con `cc`, senza cmake: basta il compilatore C che il linker del target
 #   gia' richiede). Non esiste un codec ZSTD Rust puro nel crate `parquet`;
 #   senza, i file ZSTD (comuni nei dati GeoParquet pubblicati) si rifiutano.
-# - `crc`: verifica dei checksum di pagina (decisione dell'utente
-#   2026-09-30): una pagina corrotta ma ancora decodificabile che porta il
+# - `crc`: verifica dei checksum di pagina: una pagina corrotta ma ancora
+#   decodificabile che porta il
 #   suo CRC diventa un errore esplicito invece di valori sbagliati in
 #   silenzio. Porta `crc32fast` (pin sotto).
 # Escluse di proposito: `lz4`, `flate2` (GZIP), `brotli` (codec rari nei dati

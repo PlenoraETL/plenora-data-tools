@@ -1,3 +1,9 @@
+//! Operazioni di servizio: `table.add_row_number`, `table.date_extract`,
+//! `table.limit`, `table.uuid_generator`.
+//!
+//! Semantica, schema, ordine ed errori per operazione: le schede
+//! `docs/schede/<id>.md`, raccolte in `docs/operazioni.md`.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

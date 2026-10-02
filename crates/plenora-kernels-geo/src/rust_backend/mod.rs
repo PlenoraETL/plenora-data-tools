@@ -67,7 +67,7 @@
 //!     precisione da entrambi i segmenti che divide (cinque giri al piu').
 //!     Oltre, `PrecisionInsufficient`. Sotto la precisione le feature
 //!     possono fondersi o sparire, come dichiarato;
-//!   - **`make_valid` `LINEWORK` riscritto sui lati** (sesta revisione): il
+//!   - **`make_valid` `LINEWORK` riscritto sui lati**: il
 //!     laboratorio univa e sottraeva anelli con overlay, con casi speciali
 //!     per i buchi che condividono un lato con la shell e per le parti di
 //!     un multipoligono che si toccano, e l'area dipendeva dall'ordine di

@@ -1,5 +1,6 @@
 //! Divisione per zero in `table.formula` e `table.expression`: di default
-//! vale null (decisione dell'utente), con `on_division_by_zero = "error"` la
+//! vale null (docs/runner.md, «Divisione per zero»), con
+//! `on_division_by_zero = "error"` la
 //! riga si rifiuta. Il resoconto di ogni passo conta le righe con un
 //! divisore zero in entrambi i modi, mai i valori.
 

@@ -467,7 +467,7 @@ mod tests {
         }
     }
 
-    /// Regressioni della seconda revisione: un'ora incompleta si rifiuta
+    /// Regressioni: un'ora incompleta si rifiuta
     /// invece di diventare mezzanotte; con `%s` e un offset l'istante e' il
     /// timestamp, non il timestamp meno l'offset.
     #[test]
@@ -491,7 +491,7 @@ mod tests {
         }
     }
 
-    /// Regressioni della revisione Codex: frazione oltre il nanosecondo,
+    /// Regressioni: frazione oltre il nanosecondo,
     /// secondo intercalare, `%s` senza offset, ora locale oltre il massimo.
     #[test]
     fn frazioni_intercalari_timestamp_e_limiti() {
@@ -509,8 +509,8 @@ mod tests {
         assert!(
             leggi_con_items("2024-01-31T10:00:00Z .1234567891", &items("%+ .1234567891")).is_some()
         );
-        // Un punto che non precede la frazione letta non conta (revisione
-        // Codex): `%f` a nove cifre dopo un punto letterale.
+        // Un punto che non precede la frazione letta non conta: `%f` a nove
+        // cifre dopo un punto letterale.
         let valido = leggi_con_items("2024-01-31.123456123456789", &items("%Y-%m-%d.%H%M%S%f"))
             .expect("12:34:56.123456789");
         assert_eq!(valido.locale.to_string(), "2024-01-31 12:34:56.123456789");

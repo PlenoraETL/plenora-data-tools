@@ -1519,7 +1519,7 @@ mod tests {
         }
     }
 
-    /// Il reperto della revisione: siti a `(10^15, 10^15)` piu' pochi metri,
+    /// Il reperto: siti a `(10^15, 10^15)` piu' pochi metri,
     /// distanti almeno 11 m. Con l'origine nel vertice da cui `spade` parte
     /// la faccia, incrementale e caricamento in blocco davano circocentri a
     /// 12,5 cm l'uno dall'altro. A `10^15` la spaziatura dei `f64` e'
