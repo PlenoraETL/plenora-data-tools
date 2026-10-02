@@ -99,8 +99,9 @@ pub enum MakeValidError {
     /// Un anello non chiuso o con meno di quattro coordinate.
     #[error("geometria strutturalmente non valida: {0}")]
     InvalidStructure(&'static str),
-    /// Un tipo che il metodo non tratta.
-    #[error("tipo non supportato dal candidato: {0}")]
+    /// Un tipo che il metodo non tratta (il nome resta nel valore, non nel
+    /// messaggio: «errori senza dati»).
+    #[error("tipo geometria non supportato dal candidato")]
     UnsupportedGeometry(&'static str),
     /// Un limite lasciato a [`u64::MAX`] con l'ingresso limitato.
     #[error("profilo limiti incompleto: input, noding e output devono avere tetti espliciti")]

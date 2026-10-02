@@ -84,8 +84,8 @@ pub struct OverlayPiece {
 #[derive(Debug, Error)]
 pub enum TopologyError {
     /// Un ingresso non e' `Polygon` o `MultiPolygon`; porta il nome del tipo
-    /// ricevuto.
-    #[error("operazione topologica supportata solo per Polygon/MultiPolygon, ricevuto {0}")]
+    /// ricevuto, che il messaggio non riporta («errori senza dati»).
+    #[error("operazione topologica supportata solo per Polygon/MultiPolygon")]
     UnsupportedGeometry(&'static str),
     /// Un ingresso o un risultato non supera la validazione OGC (per
     /// `polygon_overlay` anche un ingresso che il join delle coppie

@@ -51,7 +51,9 @@ pub enum ExtendedAlgorithmError {
     #[error("geometria prodotta non valida: {0}")]
     InvalidOutput(String),
     /// Il tipo della geometria non e' tra quelli che l'operazione accetta.
-    #[error("tipo geometria non supportato da {operation}: {actual}")]
+    // Il tipo della cella (`actual`) non entra nel messaggio («errori
+    // senza dati»).
+    #[error("tipo geometria non supportato da {operation}")]
     UnsupportedGeometry {
         /// Nome breve dell'operazione.
         operation: &'static str,

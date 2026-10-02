@@ -71,12 +71,13 @@ impl SplitLimits {
 /// Errori dello split poligonale.
 #[derive(Debug, Error)]
 pub enum SplitError {
-    /// La sorgente non e' `Polygon` o `MultiPolygon`.
-    #[error("tipo sorgente non supportato: {0}")]
+    /// La sorgente non e' `Polygon` o `MultiPolygon`. Il tipo della cella
+    /// resta nel valore, non nel messaggio («errori senza dati»).
+    #[error("tipo sorgente non supportato: atteso Polygon o MultiPolygon")]
     UnsupportedSource(&'static str),
     /// La lama non e' linework (`LineString`, `MultiLineString`, collezioni
-    /// di linee).
-    #[error("tipo splitter non supportato: {0}")]
+    /// di linee). Come sopra, il tipo non entra nel messaggio.
+    #[error("tipo splitter non supportato: atteso linework")]
     UnsupportedSplitter(&'static str),
     /// Sorgente o lama non superano `check_validation` di `geo`.
     #[error("input non valido: {0}")]

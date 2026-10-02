@@ -169,32 +169,23 @@ fn geometria_di_config(op: &str, nome: &str, esadecimale: &str) -> Result<Geomet
 fn punto(op: &str, geometria: &Geometry<f64>) -> Result<Point<f64>> {
     match geometria {
         Geometry::Point(punto) => Ok(*punto),
-        altra => Err(tipo_inatteso(op, "Point", altra)),
+        _ => Err(tipo_inatteso(op, "Point")),
     }
 }
 
 fn linea<'a>(op: &str, geometria: &'a Geometry<f64>) -> Result<&'a LineString<f64>> {
     match geometria {
         Geometry::LineString(linea) => Ok(linea),
-        altra => Err(tipo_inatteso(op, "LineString", altra)),
+        _ => Err(tipo_inatteso(op, "LineString")),
     }
 }
 
-fn tipo_inatteso(op: &str, atteso: &str, geometria: &Geometry<f64>) -> PlenoraError {
-    let ricevuto = match geometria {
-        Geometry::Point(_) => "Point",
-        Geometry::Line(_) => "Line",
-        Geometry::LineString(_) => "LineString",
-        Geometry::Polygon(_) => "Polygon",
-        Geometry::MultiPoint(_) => "MultiPoint",
-        Geometry::MultiLineString(_) => "MultiLineString",
-        Geometry::MultiPolygon(_) => "MultiPolygon",
-        Geometry::GeometryCollection(_) => "GeometryCollection",
-        Geometry::Rect(_) => "Rect",
-        Geometry::Triangle(_) => "Triangle",
-    };
+/// Una cella di un tipo diverso da quello che l'operazione vuole. Il tipo
+/// atteso lo fissa l'operazione; quello della cella è un dato e non entra
+/// nel messaggio («errori senza dati»).
+fn tipo_inatteso(op: &str, atteso: &str) -> PlenoraError {
     PlenoraError::InvalidPlan(format!(
-        "{op}: tipo geometria non supportato: atteso {atteso}, ricevuto {ricevuto}"
+        "{op}: tipo geometria non supportato: atteso {atteso}, la cella ne ha un altro"
     ))
 }
 
@@ -453,7 +444,7 @@ impl Misura {
             })?,
             Self::AreaGeodetica(ellissoide) => reale(&|g| {
                 if !matches!(g, Geometry::Polygon(_) | Geometry::MultiPolygon(_)) {
-                    return Err(tipo_inatteso(op, "Polygon/MultiPolygon", g));
+                    return Err(tipo_inatteso(op, "Polygon/MultiPolygon"));
                 }
                 extended_algorithms::geodesic_area_m2(g, ellissoide)
                     .map(Some)

@@ -23,7 +23,9 @@ pub enum ConstructionError {
     #[error("coordinata {name} non finita")]
     NonFiniteCoordinate { name: &'static str },
     /// Una geometria del gruppo non e' un `Point`.
-    #[error("atteso Point alla posizione {index}, ricevuto {geometry_type}")]
+    // Il tipo della cella resta nel valore per chi lo ispeziona, non nel
+    // messaggio («errori senza dati»).
+    #[error("atteso Point alla posizione {index}: la geometria e' di un altro tipo")]
     ExpectedPoint {
         /// La posizione nel gruppo, contando anche le voci assenti.
         index: usize,
@@ -135,8 +137,11 @@ pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError
     if non_solo_xy(&analizzato) {
         return Err(ConstructionError::UnsupportedWktDimension);
     }
-    let geometry = Geometry::<f64>::try_from(analizzato)
-        .map_err(|error| ConstructionError::InvalidWkt(error.to_string()))?;
+    // L'errore di conversione di `wkt` puo' nominare i tipi trovati nel
+    // testo della cella: si riporta solo il motivo («errori senza dati»).
+    let geometry = Geometry::<f64>::try_from(analizzato).map_err(|_| {
+        ConstructionError::InvalidWkt("conversione in geometria non riuscita".to_owned())
+    })?;
     geometry.validazione_protetta().map_err(|esito| {
         esito.separa(
             |ragione| ConstructionError::InvalidOutput(ragione.to_string()),

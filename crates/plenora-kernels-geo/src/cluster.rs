@@ -45,7 +45,8 @@ pub enum ClusterError {
         reason: &'static str,
     },
     /// La geometria in posizione `index` non e' un `Point`.
-    #[error("geometria {index} non puntuale ({found}): attesa Point")]
+    // Il tipo trovato nella cella (`found`) non entra nel messaggio.
+    #[error("geometria {index} non puntuale: attesa Point")]
     UnsupportedGeometry { index: usize, found: &'static str },
     /// La geometria in posizione `index` non supera la validazione OGC.
     #[error("geometria {index} non valida: {reason}")]
@@ -800,7 +801,10 @@ mod tests {
         assert!(matches!(
             dbscan_column(&cells, 1.0, 2),
             Err(PlenoraError::InvalidPlan(message))
-                if message.contains("geo.cluster_dbscan") && message.contains("LineString")
+                if message.contains("geo.cluster_dbscan")
+                    && message.contains("non puntuale")
+                    // Il tipo della cella non compare («errori senza dati»).
+                    && !message.contains("LineString")
         ));
     }
 

@@ -409,10 +409,11 @@ fn split_row(
         .into_iter()
         .map(Geometry::Polygon)
         .collect()),
-        other => Err(PlenoraError::InvalidPlan(format!(
-            "split: attesa geometria LineString o Polygon/MultiPolygon, ricevuta {}",
-            crate::geometry_type_name(other)
-        ))),
+        // Il tipo della cella non entra nel messaggio («errori senza dati»).
+        _ => Err(PlenoraError::InvalidPlan(
+            "split: attesa geometria LineString o Polygon/MultiPolygon, la cella ne ha un altro tipo"
+                .to_owned(),
+        )),
     }
 }
 

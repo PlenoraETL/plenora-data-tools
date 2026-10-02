@@ -47,7 +47,8 @@ pub enum ExtensionError {
     InvalidInput(String),
     /// La geometria in posizione `index` non e' poligonale
     /// (`coverage_validate`, `shared_paths`).
-    #[error("geometria {index} non poligonale ({found}): attesa Polygon/MultiPolygon")]
+    // Il tipo trovato nella cella (`found`) non entra nel messaggio.
+    #[error("geometria {index} non poligonale: attesa Polygon/MultiPolygon")]
     UnsupportedGeometry { index: usize, found: &'static str },
     /// La geometria in posizione `index` non supera la validazione OGC.
     #[error("geometria {index} non valida: {reason}")]

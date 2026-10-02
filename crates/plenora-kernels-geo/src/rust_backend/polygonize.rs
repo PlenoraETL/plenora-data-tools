@@ -125,8 +125,9 @@ impl PolygonizeResult {
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PolygonizeError {
     /// L'ingresso non e' linework (`LineString`, `MultiLineString` o
-    /// collezioni di linee).
-    #[error("tipo geometria non supportato: {0}")]
+    /// collezioni di linee). Il tipo della cella resta nel valore, non nel
+    /// messaggio («errori senza dati»).
+    #[error("tipo geometria non supportato: atteso linework")]
     UnsupportedGeometry(&'static str),
     /// L'ingresso non supera `check_validation` di `geo`.
     #[error("geometria di input non valida: {0}")]

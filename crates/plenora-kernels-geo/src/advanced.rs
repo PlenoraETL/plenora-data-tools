@@ -29,7 +29,8 @@ pub enum AdvancedError {
     #[error("Voronoi: {actual} punti oltre il limite di {limit}")]
     PointLimitExceeded { actual: usize, limit: usize },
     /// La geometria all'indice `index` e' valida ma non e' un `Point`.
-    #[error("Voronoi accetta solo Point; riga {index}: {geometry_type}")]
+    // Il tipo della cella non entra nel messaggio («errori senza dati»).
+    #[error("Voronoi accetta solo Point; riga {index}: geometria di un altro tipo")]
     ExpectedPoint {
         /// Indice della geometria nell'ingresso.
         index: usize,

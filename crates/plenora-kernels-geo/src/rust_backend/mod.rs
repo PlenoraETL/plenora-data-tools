@@ -250,7 +250,9 @@ pub enum RustBackendError {
     /// Il tipo dell'ingresso non e' quello che l'operazione tratta
     /// (linework per `polygonize` e per la lama di `split`, poligonale per la
     /// sorgente di `split`).
-    #[error("tipo geometria non supportato da {operation}: {actual}")]
+    // Il tipo della cella (`actual`) non entra nel messaggio («errori
+    // senza dati»).
+    #[error("tipo geometria non supportato da {operation}")]
     UnsupportedGeometry {
         /// L'operazione pubblica che ha rifiutato l'ingresso.
         operation: &'static str,
