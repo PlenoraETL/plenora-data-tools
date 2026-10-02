@@ -730,3 +730,39 @@ fn ipc_metadati_con_valore_vuoto_si_leggono() {
         assert_eq!(letta.schema(), tabella.schema());
     }
 }
+
+/// Un file IPC senza blocchi, con uno schema `Map` il cui figlio non e' una
+/// struct (trovato dal target di fuzz `lettura_ipc`): la tabella vuota non
+/// si costruisce, e il confine lo dice con un errore invece di andare in
+/// panico in `RecordBatch::new_empty`.
+#[test]
+fn uno_schema_map_malformato_senza_blocchi_e_un_errore() {
+    let esadecimale: String = [
+        "4152524f57310000fffffffe5001000010000000130200000000013f310000d5",
+        "0000000000ffffffff00000000100000000c001400060008000c0010000c0000",
+        "00000004004c0000002800000040000000010000000000000000030000000000",
+        "000000000000000000002800000000000000000000000a000000000000001000",
+        "0000000000000200000000000000000000b4ffffff0400000003000000b40000",
+        "005c00000014000000100018000800060007000c001000140010000000000001",
+        "0514000000380000001c00000004000000000000000300000064696300080008",
+        "000000040008000000040000003cffffff000000012000000084ffffff80ffff",
+        "ff00000111140000001800000004000000010000001000000002000000737400",
+        "00acffffffa8ffffff0000010210000000140000000400000000000000010000",
+        "006900000094ffffff0001000040000000d4ffffff0000010c140000001c0000",
+        "0004000000010000002400000003000000657374000400040004000000100014",
+        "000800020007000c000000100010000000000001021000000020000000040000",
+        "0000000000040000006974656d0000000008000c000800070008000000000000",
+        "0120000000980100004152524f5731",
+    ]
+    .concat();
+    let byte: Vec<u8> = (0..esadecimale.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&esadecimale[i..i + 2], 16).unwrap())
+        .collect();
+    rifiutato(
+        &byte,
+        Formato::ArrowIpc,
+        ErrorCategory::DataMapping,
+        "senza tabella vuota costruibile",
+    );
+}

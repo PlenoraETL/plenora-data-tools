@@ -126,7 +126,8 @@ pub fn importa(
         )?;
     }
     match blocchi.len() {
-        0 => Ok(RecordBatch::new_empty(schema)),
+        0 => plenora_core::batch_vuoto(schema)
+            .map_err(|_| illeggibile(contesto, "lo schema non ammette una tabella vuota")),
         1 => blocchi
             .pop()
             .ok_or_else(|| Errore::Plenora(PlenoraError::Internal("blocco assente".to_owned()))),

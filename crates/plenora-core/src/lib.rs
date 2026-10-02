@@ -76,6 +76,52 @@ pub fn batch_with_rows(
     )?)
 }
 
+/// Errore comune dei costruttori senza panico: il tipo non ammette array.
+fn tipo_senza_array() -> PlenoraError {
+    PlenoraError::Schema("schema Arrow non valido: un tipo non ammette nessun array".to_owned())
+}
+
+/// L'array vuoto di `tipo`, senza panico (`new_empty_array` va in panico su
+/// un tipo che non ammette array, come [`batch_vuoto`]).
+///
+/// # Errors
+///
+/// [`PlenoraError::Schema`] se il tipo non ammette nessun array.
+pub fn array_vuoto(tipo: &arrow::schema::DataType) -> Result<arrow::array::ArrayRef> {
+    panic_policy::barriera_di_dipendenza(|| arrow::array::new_empty_array(tipo))
+        .map_err(|_| tipo_senza_array())
+}
+
+/// `righe` null di `tipo`, senza panico (`new_null_array` va in panico su un
+/// tipo che non ammette array, per esempio una `Union` senza figli, anche
+/// con zero righe).
+///
+/// # Errors
+///
+/// [`PlenoraError::Schema`] se il tipo non ammette nessun array.
+pub fn array_null(tipo: &arrow::schema::DataType, righe: usize) -> Result<arrow::array::ArrayRef> {
+    panic_policy::barriera_di_dipendenza(|| arrow::array::new_null_array(tipo, righe))
+        .map_err(|_| tipo_senza_array())
+}
+
+/// La tabella vuota di `schema`, senza panico.
+///
+/// `RecordBatch::new_empty` e' infallibile e va in panico se un tipo dello
+/// schema non corrisponde a nessun array costruibile (un `Map` il cui figlio
+/// non e' una struct): uno schema letto da un file o ricevuto da un
+/// chiamante puo' esserlo, e senza righe nessun decoder lo avrebbe gia'
+/// rifiutato. La costruzione sta in una barriera di dipendenza.
+///
+/// # Errors
+///
+/// [`PlenoraError::Schema`] se lo schema non ammette una tabella vuota.
+pub fn batch_vuoto(
+    schema: std::sync::Arc<arrow::schema::Schema>,
+) -> Result<arrow::array::RecordBatch> {
+    panic_policy::barriera_di_dipendenza(|| arrow::array::RecordBatch::new_empty(schema))
+        .map_err(|_| tipo_senza_array())
+}
+
 /// Re-export unico di Arrow: tutti i crate del workspace dipendono da Arrow
 /// solo tramite questo modulo.
 pub mod arrow {
@@ -99,6 +145,41 @@ pub mod arrow {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::arrow::schema::{DataType, Field, Schema};
+
+    /// Uno schema `Map` con un figlio che non e' una struct: nessun array lo
+    /// incarna, e la tabella vuota e' un errore, non un panico.
+    #[test]
+    fn batch_vuoto_rifiuta_uno_schema_senza_array() {
+        let mappa = DataType::Map(Arc::new(Field::new("voci", DataType::UInt64, false)), false);
+        let schema = Arc::new(Schema::new(vec![Field::new("m", mappa, true)]));
+        let errore = super::batch_vuoto(schema).unwrap_err();
+        assert_eq!(errore.category(), super::ErrorCategory::Schema);
+        let valido = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, true)]));
+        assert_eq!(super::batch_vuoto(valido).unwrap().num_rows(), 0);
+    }
+
+    /// Gli stessi tipi senza array: errore anche per l'array vuoto e per i
+    /// null, e una `Union` senza figli anche con zero righe.
+    #[test]
+    fn array_vuoto_e_array_null_rifiutano_i_tipi_senza_array() {
+        let mappa = DataType::Map(Arc::new(Field::new("voci", DataType::UInt64, false)), false);
+        let unione = DataType::Union(
+            crate::arrow::schema::UnionFields::empty(),
+            crate::arrow::schema::UnionMode::Dense,
+        );
+        assert!(super::array_vuoto(&mappa).is_err());
+        assert!(super::array_null(&mappa, 3).is_err());
+        assert!(super::array_null(&unione, 0).is_err());
+        assert_eq!(
+            super::array_null(&DataType::Utf8, 2).unwrap().null_count(),
+            2
+        );
+        assert_eq!(super::array_vuoto(&DataType::Int64).unwrap().len(), 0);
+    }
+
     /// I quattro crate Arrow del workspace sono un solo numero di versione:
     /// il test li verifica tutti, non solo `arrow-schema`.
     const CRATE_ARROW: [&str; 4] = ["arrow-array", "arrow-schema", "arrow-ipc", "arrow-select"];
