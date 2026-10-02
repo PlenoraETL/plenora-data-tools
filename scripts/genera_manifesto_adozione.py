@@ -18,8 +18,18 @@ Uso (con il Python che ha `jsonschema`, per esempio il venv dei contratti):
         --uscita manifesto-adozione.json
 
 `--artefatto NOME|SUPERFICIE|PERCORSO` si ripete (la superficie Rust è un
-archivio `.crate` di `cargo package`). Non scrive nulla se il checkout dei
-contratti non è al commit della sorgente.
+archivio `.crate` di `cargo package`). Un wheel dell'SDK Python
+(`crates/plenora-data-py`) si passa con la superficie `python_sdk` e i suoi
+modi d'API (adoption manifest v4, `api_modes`):
+
+    --artefatto "plenora_data-0.1.0-cp310-abi3-win_amd64.whl|python_sdk|dist/plenora_data-0.1.0-cp310-abi3-win_amd64.whl|sync,async"
+
+Il nome del wheel deve portare `--versione`. La sorgente dichiara
+`plenora-python-sdk-v1` conforme: senza almeno un wheel il manifesto non si
+scrive (un contratto conforme senza l'artefatto che lo prova). Una
+deviazione della sorgente con `surfaces` vale per ognuna delle superfici
+elencate e diventa una deviazione per superficie. Non scrive nulla se il
+checkout dei contratti non è al commit della sorgente.
 """
 
 from __future__ import annotations
@@ -35,6 +45,8 @@ from pathlib import Path
 RADICE = Path(__file__).resolve().parents[1]
 SORGENTE = RADICE / "crates" / "plenora-cli" / "adozione.json"
 SUPERFICI = {"rust", "cli", "python_sdk", "runtime"}
+MODI_API = {"sync", "async"}
+CONTRATTO_PYTHON = "plenora-python-sdk-v1"
 
 
 def digest(percorso: Path) -> str:
@@ -47,36 +59,67 @@ def digest(percorso: Path) -> str:
 
 def artefatto(testo: str, versione: str, verifiche: list[str]) -> dict:
     parti = testo.split("|")
-    if len(parti) != 3:
-        raise SystemExit("--artefatto: atteso NOME|SUPERFICIE|PERCORSO")
-    nome, superficie, percorso = parti
-    if superficie not in SUPERFICI or superficie == "python_sdk":
-        raise SystemExit("--artefatto: superficie non ammessa per questo componente")
+    if len(parti) not in (3, 4):
+        raise SystemExit("--artefatto: atteso NOME|SUPERFICIE|PERCORSO[|MODI]")
+    nome, superficie, percorso = parti[:3]
+    if superficie not in SUPERFICI:
+        raise SystemExit("--artefatto: superficie sconosciuta")
     percorso = Path(percorso).resolve()
     if not percorso.is_file():
         raise SystemExit("--artefatto: file assente")
-    return {
+    voce = {
         "name": nome,
         "surface": superficie,
         "version": versione,
         "digest": digest(percorso),
         "verification": verifiche,
     }
+    if superficie == "python_sdk":
+        if len(parti) != 4:
+            raise SystemExit("--artefatto: un wheel python_sdk vuole i modi d'API (sync,async)")
+        modi = parti[3].split(",")
+        if not modi or len(set(modi)) != len(modi) or not set(modi) <= MODI_API:
+            raise SystemExit("--artefatto: modi d'API ammessi: sync, async")
+        if not percorso.name.startswith(f"plenora_data-{versione}-") or percorso.suffix != ".whl":
+            raise SystemExit("--artefatto: il wheel non porta la versione data")
+        voce["api_modes"] = modi
+    elif len(parti) == 4:
+        raise SystemExit("--artefatto: i modi d'API valgono solo per python_sdk")
+    return voce
+
+
+def deviazioni(sorgente: dict) -> list[dict]:
+    """Le deviazioni della sorgente, una per superficie."""
+    uscita = []
+    for deviazione in sorgente["deviations"]:
+        superfici = deviazione.get("surfaces")
+        if superfici is None:
+            uscita.append(deviazione)
+            continue
+        base = {chiave: valore for chiave, valore in deviazione.items() if chiave != "surfaces"}
+        uscita.extend({**base, "surface": superficie} for superficie in superfici)
+    return uscita
 
 
 def manifesto(sorgente: dict, versione: str, artefatti: list[str], verifiche: list[str]) -> dict:
+    voci = [artefatto(testo, versione, verifiche) for testo in artefatti]
+    python = any(voce["surface"] == "python_sdk" for voce in voci)
+    if (CONTRATTO_PYTHON in sorgente["conforming"]) != python:
+        raise SystemExit(
+            f"{CONTRATTO_PYTHON} conforme vuole almeno un artefatto python_sdk, e viceversa"
+        )
     return {
         "schema_version": 4,
         "component": sorgente["component"],
         "contracts_source": sorgente["contracts_source"],
         "profile": sorgente["profile"],
-        "artifacts": [artefatto(testo, versione, verifiche) for testo in artefatti],
+        "artifacts": voci,
         "contracts": [
             {"id": contratto, "status": "conforming", "verification": verifiche}
             for contratto in sorgente["conforming"]
         ]
         + [{"id": contratto, "status": "not_applicable"} for contratto in sorgente["not_applicable"]],
-        "deviations": sorgente["deviations"],
+        "deviations": deviazioni(sorgente),
     }
 
 
