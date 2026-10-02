@@ -678,7 +678,7 @@ fn le_somme_di_istanti_restano_rifiutate_in_ogni_unita() {
 
 /// La catena reale che ha trovato il difetto: `first` su un
 /// `Timestamp(Microsecond, None)` letto da Parquet si rifiutava in
-/// validazione come Â«non leggibile come scalare testualeÂ», benche' scegliere
+/// validazione come «non leggibile come scalare testuale», benche' scegliere
 /// una cella non legga il testo.
 #[test]
 fn first_su_microsecondi_senza_fuso_si_valida_e_si_esegue() {

@@ -41,7 +41,7 @@ pub use window::{
 };
 // La classificazione delle varianti serve all'analizzatore, non a chi usa il
 // crate: `aggregation` e' un modulo pubblico, quindi il re-export va
-// ristretto qui â€” altrimenti un dettaglio interno diventa API.
+// ristretto qui — altrimenti un dettaglio interno diventa API.
 pub(crate) use window::{strategia, Strategia};
 
 // Simboli usati solo dai test-oracolo, che li importano con
