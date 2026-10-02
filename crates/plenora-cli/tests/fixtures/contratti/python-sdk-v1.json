@@ -1,0 +1,288 @@
+{
+  "$schema": "../schemas/surface-bindings-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-surface-bindings-v1",
+  "surface": "python_sdk",
+  "components": [
+    {
+      "component": "plenora-database-tools",
+      "artifact": "plenora-database / plenora_database",
+      "discovery": [
+        "plenora_database.version",
+        "Session.capabilities",
+        "AsyncSession.capabilities"
+      ],
+      "bindings": [
+        {
+          "operation": "database.test_connection",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "plenora_database.test_connection",
+            "plenora_database.atest_connection"
+          ]
+        },
+        {
+          "operation": "database.list_catalogs",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Session.inspect().catalogs",
+            "AsyncSession.inspect().catalogs"
+          ]
+        },
+        {
+          "operation": "database.list_schemas",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Session.inspect().schemas",
+            "AsyncSession.inspect().schemas"
+          ]
+        },
+        {
+          "operation": "database.list_objects",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Session.inspect().tables",
+            "AsyncSession.inspect().tables"
+          ]
+        },
+        {
+          "operation": "database.describe_object",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Session.inspect().describe",
+            "AsyncSession.inspect().describe"
+          ]
+        },
+        {
+          "operation": "database.read",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Session.read",
+            "AsyncSession.aread"
+          ]
+        },
+        {
+          "operation": "database.write",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Session.copy_from",
+            "AsyncSession.acopy_from"
+          ]
+        },
+        {
+          "operation": "database.query",
+          "version": 1,
+          "requirement": "conditional",
+          "entrypoints": [
+            "Session.select",
+            "AsyncSession.select"
+          ]
+        },
+        {
+          "operation": "database.execute",
+          "version": 1,
+          "requirement": "conditional",
+          "entrypoints": [
+            "Session.insert",
+            "Session.update",
+            "Session.delete",
+            "Session.upsert",
+            "Session.execute",
+            "Session.execute_scalar",
+            "Session.execute_returning_rows",
+            "AsyncSession.insert",
+            "AsyncSession.update",
+            "AsyncSession.delete",
+            "AsyncSession.upsert",
+            "AsyncSession.execute",
+            "AsyncSession.execute_scalar",
+            "AsyncSession.execute_returning_rows"
+          ]
+        },
+        {
+          "operation": "database.transaction.begin",
+          "version": 1,
+          "requirement": "conditional",
+          "entrypoints": [
+            "Session.begin",
+            "AsyncSession.begin"
+          ]
+        },
+        {
+          "operation": "database.transaction.commit",
+          "version": 1,
+          "requirement": "conditional",
+          "entrypoints": [
+            "Transaction.commit",
+            "AsyncTransaction.commit"
+          ]
+        },
+        {
+          "operation": "database.transaction.rollback",
+          "version": 1,
+          "requirement": "conditional",
+          "entrypoints": [
+            "Transaction.rollback",
+            "AsyncTransaction.rollback"
+          ]
+        },
+        {
+          "operation": "database.transaction.savepoint",
+          "version": 1,
+          "requirement": "conditional",
+          "entrypoints": [
+            "Transaction.savepoint",
+            "Transaction.release_savepoint",
+            "Transaction.rollback_to_savepoint",
+            "AsyncTransaction.savepoint",
+            "AsyncTransaction.release_savepoint",
+            "AsyncTransaction.rollback_to_savepoint"
+          ]
+        }
+      ]
+    },
+    {
+      "component": "plenora-data-tools",
+      "artifact": null,
+      "discovery": [],
+      "bindings": []
+    },
+    {
+      "component": "plenora-io-tools",
+      "artifact": null,
+      "discovery": [],
+      "bindings": []
+    },
+    {
+      "component": "plenora-rest-tools",
+      "artifact": "plenora-rest / plenora_rest",
+      "discovery": [
+        "plenora_rest.version",
+        "Engine.capabilities"
+      ],
+      "bindings": [
+        {
+          "operation": "rest.test",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Engine.test"
+          ]
+        },
+        {
+          "operation": "rest.generate",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Engine.generate"
+          ]
+        },
+        {
+          "operation": "rest.enrich",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Engine.enrich"
+          ]
+        },
+        {
+          "operation": "rest.download",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Engine.download"
+          ]
+        },
+        {
+          "operation": "rest.upload",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Engine.upload"
+          ]
+        }
+      ]
+    },
+    {
+      "component": "plenora-storage-tools",
+      "artifact": "plenora-storage / plenora_storage",
+      "discovery": [
+        "plenora_storage.version",
+        "Engine.capabilities",
+        "AsyncEngine.capabilities"
+      ],
+      "bindings": [
+        {
+          "operation": "storage.test",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Engine.test",
+            "AsyncEngine.test"
+          ]
+        },
+        {
+          "operation": "storage.list",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Engine.list",
+            "AsyncEngine.list"
+          ]
+        },
+        {
+          "operation": "storage.stat",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Engine.stat",
+            "AsyncEngine.stat"
+          ]
+        },
+        {
+          "operation": "storage.get",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Engine.get",
+            "AsyncEngine.get"
+          ]
+        },
+        {
+          "operation": "storage.put",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Engine.put",
+            "AsyncEngine.put"
+          ]
+        },
+        {
+          "operation": "storage.copy",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Engine.copy",
+            "AsyncEngine.copy"
+          ]
+        },
+        {
+          "operation": "storage.delete",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "Engine.delete",
+            "AsyncEngine.delete"
+          ]
+        }
+      ]
+    }
+  ]
+}

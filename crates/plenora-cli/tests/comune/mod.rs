@@ -157,6 +157,7 @@ impl Registro {
             "capabilities-v2.schema.json",
             "row-diagnostics-v1.schema.json",
             "operation-registry-v1.schema.json",
+            "surface-bindings-v1.schema.json",
         ] {
             let schema = contratto(nome);
             let id = schema["$id"].as_str().expect("$id").to_owned();

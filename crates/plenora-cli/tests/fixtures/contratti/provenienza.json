@@ -1,7 +1,7 @@
 {
   "sorgente": "plenora-contracts",
   "commit": "ade868cf89c6652cffe20019e7194b383384ee78",
-  "nota": "Copie byte per byte (git show <commit>:<percorso>) degli schemi, del catalogo pubblico, del registro dei kernel e dei binding CLI che i test della CLI usano come attese. Non si modificano: un file nuovo o cambiato si ricopia dal commit dei contratti e si aggiorna questo file. tests/comune/mod.rs verifica gli SHA-256 prima di usarli.",
+  "nota": "Copie byte per byte (git show <commit>:<percorso>) degli schemi, del catalogo pubblico, del registro dei kernel e dei binding CLI e Python che i test della CLI (e la suite dell'SDK Python) usano come attese. Non si modificano: un file nuovo o cambiato si ricopia dal commit dei contratti e si aggiorna questo file. tests/comune/mod.rs verifica gli SHA-256 prima di usarli.",
   "file": {
     "capabilities-v2.schema.json": ["schemas/capabilities-v2.schema.json", "f831a45ec053b9aba9a11173666878c1d0d27a8f83a9f35f8496f6e697422ad0"],
     "cli-envelope-v2.schema.json": ["schemas/cli-envelope-v2.schema.json", "28e555dc406a837bcfe5c004360d1667a134c5982ebe6e6c9962060aacbf71ff"],
@@ -10,6 +10,8 @@
     "data-tools-v1.json": ["catalogs/data-tools-v1.json", "2a9353ea24022ee365cfa4c444f233b47cfcaef845fb1f9ac6fe8f151cb96d3e"],
     "error-v1.schema.json": ["schemas/error-v1.schema.json", "15795d92adea7a6df15dd25a045699c43ad1c79949702c70158f4725f4fed4c0"],
     "operation-registry-v1.schema.json": ["schemas/operation-registry-v1.schema.json", "cd01936d6290111318e35a3f16cf4efd09bfdd9ca2d13d05cefe0acc1edf0dfe"],
-    "row-diagnostics-v1.schema.json": ["schemas/row-diagnostics-v1.schema.json", "b8765b1c5cc87325a8107ca355da51a6b0a6ba5a18b0e4b9674305e4dcb2992a"]
+    "python-sdk-v1.json": ["bindings/python-sdk-v1.json", "87d0815ac8cf8a99a005dac18ea7ca199657c28ea8e41c6b7433bff0e83f519b"],
+    "row-diagnostics-v1.schema.json": ["schemas/row-diagnostics-v1.schema.json", "b8765b1c5cc87325a8107ca355da51a6b0a6ba5a18b0e4b9674305e4dcb2992a"],
+    "surface-bindings-v1.schema.json": ["schemas/surface-bindings-v1.schema.json", "187f41f51d1b9042f15c2348ff352f1a204c96db2ea49397952baf01919b2827"]
   }
 }

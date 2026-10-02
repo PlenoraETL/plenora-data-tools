@@ -1,5 +1,6 @@
 //! La tabella delle operazioni pubbliche: l'unica fonte di comandi CLI,
-//! aiuto, Capability Discovery 2.0 e mappa degli export Rust.
+//! aiuto, Capability Discovery 2.0 (della CLI e dell'SDK Python) e mappe
+//! degli export Rust e dei simboli Python.
 //!
 //! Le operazioni sono le quattro del catalogo pubblico di `plenora-contracts`
 //! (`catalogs/data-tools-v1.json`): `data.catalog`, `data.describe`,
@@ -88,6 +89,10 @@ pub struct OperazionePubblica {
     /// Gli export Rust pubblici che la implementano (mappa della superficie
     /// Rust, Surface Bindings 1.0, sezione 2).
     pub export_rust: &'static [&'static str],
+    /// I simboli dell'SDK Python `plenora_data` che la chiamano, sincroni e
+    /// asincroni con la stessa semantica (Surface Bindings 1.0, sezione 4;
+    /// Python SDK 1.0, sezioni 4 e 12).
+    pub export_python: &'static [&'static str],
 }
 
 /// Le operazioni pubbliche dell'artefatto, nell'ordine del catalogo.
@@ -110,6 +115,7 @@ pub const OPERAZIONI: &[OperazionePubblica] = &[
         materializzazione_limitata: false,
         usa_registro: true,
         export_rust: &["plenora_cli::api::catalogo"],
+        export_python: &["plenora_data.catalog", "plenora_data.acatalog"],
     },
     OperazionePubblica {
         id: "data.describe",
@@ -128,7 +134,11 @@ pub const OPERAZIONI: &[OperazionePubblica] = &[
         estensioni_uscita: &[],
         materializzazione_limitata: true,
         usa_registro: false,
-        export_rust: &["plenora_cli::api::descrivi"],
+        export_rust: &[
+            "plenora_cli::api::descrivi",
+            "plenora_cli::api::descrivi_tabella",
+        ],
+        export_python: &["plenora_data.describe", "plenora_data.adescribe"],
     },
     OperazionePubblica {
         id: "data.validate",
@@ -148,7 +158,11 @@ pub const OPERAZIONI: &[OperazionePubblica] = &[
         estensioni_uscita: &[],
         materializzazione_limitata: true,
         usa_registro: true,
-        export_rust: &["plenora_cli::api::valida"],
+        export_rust: &[
+            "plenora_cli::api::valida",
+            "plenora_cli::api::valida_ingressi",
+        ],
+        export_python: &["plenora_data.validate", "plenora_data.avalidate"],
     },
     OperazionePubblica {
         id: "data.run",
@@ -169,7 +183,12 @@ pub const OPERAZIONI: &[OperazionePubblica] = &[
         estensioni_uscita: &[PARQUET],
         materializzazione_limitata: true,
         usa_registro: true,
-        export_rust: &["plenora_cli::api::esegui"],
+        export_rust: &[
+            "plenora_cli::api::esegui",
+            "plenora_cli::api::esegui_ingressi",
+            "plenora_cli::api::esegui_in_memoria",
+        ],
+        export_python: &["plenora_data.run", "plenora_data.arun"],
     },
 ];
 
