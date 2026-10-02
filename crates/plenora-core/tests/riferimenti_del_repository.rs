@@ -44,7 +44,7 @@ const TESTO: &[&str] = &[
     "rs", "toml", "md", "py", "pyi", "typed", "ini", "txt", "json", "csv", "lock", "yml",
 ];
 /// Nomi di file di testo senza estensione.
-const TESTO_PER_NOME: &[&str] = &[".gitignore", ".gitattributes"];
+const TESTO_PER_NOME: &[&str] = &[".gitignore", ".gitattributes", "Dockerfile"];
 /// Estensioni binarie: non si leggono, si contano. Un file con
 /// un'estensione fuori da [`TESTO`] e da questo elenco fa fallire il test,
 /// così un formato nuovo si classifica invece di sparire dalla scansione.
