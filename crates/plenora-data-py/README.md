@@ -70,6 +70,8 @@ e controlli identici a quelli della CLI, tranne `surfaces`).
   si importa dentro il budget del piano (o quello di default per
   `describe`), contando i blocchi mentre arrivano: l'import si ferma con
   `resource_limit` al primo blocco di troppo, senza chiedere il successivo.
+  È una riduzione del rischio, non un tetto di memoria (limite «Budget
+  degli stream»).
 - **Tabelle in uscita**: `pyarrow.Table` di un blocco, senza copia, con lo
   schema pubblicato (`plenora.contract.version`, `plenora.field_id`, blocco
   canonico delle geometrie); nel documento il loro `content_type` è
@@ -308,19 +310,29 @@ python scripts/verifica_sdk_python.py --wheel dist/plenora_data-<versione>-<tag>
   la copia due volte (crescita per raddoppio) i loro byte di dati e una
   bitmap di validità piena su ogni nodo (Arrow la materializza appena un
   blocco ha dei null), più 320 byte per nodo del tipo per l'arrotondamento
-  dei buffer. Un oracolo (`crates/plenora-core/tests/picco_unione.rs`) la
-  confronta con il picco vero (allocazioni di blocchi e unione) su 4.500
-  casi generati: 17 tipi (primitivi, booleani, stringhe e binari anche
-  `Large` e `View`, decimali, istanti, liste, struct, dizionari, `Null`,
-  run-end) più union sparse, fette, null assenti, sparsi o totali mescolati
-  fra i blocchi. I transitori interni di `concat` (le tabelle della fusione
-  dei dizionari) non sono nel conto né nell'oracolo. Il blocco che supera il budget è già in memoria quando si
+  dei buffer, più, per i tipi che `concat` unisce per il percorso generico
+  (`FixedSizeList`, `Union`, e sotto di loro liste, struct e map), 16 byte
+  per riga del padre per ogni discendente, che quel percorso prealloca
+  anche quando resta vuoto. Un oracolo
+  (`crates/plenora-core/tests/picco_unione.rs`) la confronta con il picco
+  vero (allocazioni di blocchi e unione) su 4.500 casi generati: 19 tipi
+  (primitivi, booleani, stringhe e binari anche `Large` e `View`,
+  decimali, istanti, liste, struct, dizionari, `Null`, run-end,
+  `FixedSizeList` di primitivi e di liste vuote) più union sparse, fette,
+  null assenti, sparsi o totali mescolati fra i blocchi. I transitori
+  interni di `concat` (le tabelle della fusione dei dizionari) non sono nel
+  conto né nell'oracolo, e un tipo annidato fuori dall'oracolo può
+  superare la stima: il budget dell'import riduce il rischio di esaurire la
+  memoria, non è un tetto. Il tetto vero è il limite di memoria del
+  processo dato dal sistema operativo. Il blocco che supera il budget è già in memoria quando si
   rifiuta (lo ha prodotto il produttore), e le allocazioni del produttore
   (per esempio un generatore Python che costruisce i suoi blocchi) non si
   vedono. Le tabelle in memoria si riservano nel budget prima di leggere
   qualunque file (`plenora-io`, `carica_ingressi`). La tabella finale passa
-  poi dal conto per allocazione del runner.
-  *Rientro*: un runner a più blocchi per tabella, senza unione.
+  poi dal conto per allocazione del runner. Hazard di un superamento:
+  esaurimento della memoria (il processo muore), mai un risultato sbagliato.
+  *Rientro*: un runner a più blocchi per tabella, senza unione; fino ad
+  allora il limite di memoria del processo.
 - **Senza copia, non sempre.**
   *Regola*: le tabelle passano fra Python e il runner senza copia.
   *Ambito*: l'import per l'Arrow C Data Interface.

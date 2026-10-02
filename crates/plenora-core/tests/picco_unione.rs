@@ -9,12 +9,12 @@
 
 use std::sync::Arc;
 
-use plenora_core::arrow::array::types::Int32Type;
+use plenora_core::arrow::array::types::{Int32Type, Int64Type};
 use plenora_core::arrow::array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, DictionaryArray,
-    FixedSizeBinaryArray, Float64Array, Int32Array, Int64Array, Int8Array, LargeStringArray,
-    ListArray, NullArray, RecordBatch, RunArray, StringArray, StringViewArray, StructArray,
-    TimestampMicrosecondArray, UnionArray,
+    FixedSizeBinaryArray, FixedSizeListArray, Float64Array, Int32Array, Int64Array, Int8Array,
+    LargeStringArray, ListArray, NullArray, RecordBatch, RunArray, StringArray, StringViewArray,
+    StructArray, TimestampMicrosecondArray, UnionArray,
 };
 use plenora_core::arrow::schema::{DataType, Field, Fields, Schema, UnionFields};
 use plenora_core::arrow::select::concat::concat_batches;
@@ -62,7 +62,7 @@ impl Nulli {
     }
 }
 
-const TIPI: usize = 17;
+const TIPI: usize = 19;
 
 /// Una colonna del tipo `tipo` (indice) di `righe` righe.
 #[allow(clippy::too_many_lines)] // Un ramo per tipo, in un punto solo.
@@ -208,6 +208,26 @@ fn colonna(tipo: usize, righe: usize, nulli: Nulli, generatore: &mut Generatore)
             Arc::new(valori.into_iter().collect::<DictionaryArray<Int32Type>>())
         }
         15 => Arc::new(NullArray::new(righe)),
+        16 => lista_fissa_di_liste(righe, nulli, generatore),
+        17 => {
+            // FixedSizeList<Int32, 3>: anche lei per il percorso generico.
+            let presenze = presenze();
+            let valori = Int32Array::from_iter(
+                (0..righe * 3).map(|i| (i % 5 != 0).then(|| i32::try_from(i % 97).expect("v"))),
+            );
+            let nulli_lista = Int8Array::from_iter(presenze.iter().map(|p| p.then_some(0)))
+                .nulls()
+                .cloned();
+            Arc::new(
+                FixedSizeListArray::try_new(
+                    Arc::new(Field::new("item", DataType::Int32, true)),
+                    3,
+                    Arc::new(valori),
+                    nulli_lista,
+                )
+                .expect("lista fissa"),
+            )
+        }
         _ => {
             // Run-end: corse di lunghezza 1..4 fino a `righe`.
             let mut estremi = Vec::new();
@@ -237,6 +257,33 @@ fn colonna(tipo: usize, righe: usize, nulli: Nulli, generatore: &mut Generatore)
             )
         }
     }
+}
+
+/// `FixedSizeList<List<Int64>, 1>` con liste interne quasi sempre vuote: il
+/// percorso generico di `concat` prealloca il figlio `Int64` dalla capacità
+/// del padre anche quando resta vuoto.
+fn lista_fissa_di_liste(righe: usize, nulli: Nulli, generatore: &mut Generatore) -> ArrayRef {
+    let interne: Vec<Option<Vec<Option<i64>>>> = (0..righe)
+        .map(|_| {
+            if nulli.nullo(generatore) {
+                None
+            } else if generatore.sotto(10) == 0 {
+                Some(vec![Some(1), None])
+            } else {
+                Some(Vec::new())
+            }
+        })
+        .collect();
+    let liste = ListArray::from_iter_primitive::<Int64Type, _, _>(interne);
+    Arc::new(
+        FixedSizeListArray::try_new(
+            Arc::new(Field::new("item", liste.data_type().clone(), true)),
+            1,
+            Arc::new(liste),
+            None,
+        )
+        .expect("lista fissa di liste"),
+    )
 }
 
 /// Una union sparsa di due figli, fuori da `colonna` perché i suoi figli
@@ -330,6 +377,38 @@ fn oracolo(seme: u64) {
         );
     }
     assert!(provati > 1_400, "casi provati: {provati}");
+}
+
+/// Il caso della verifica del percorso generico: `FixedSizeList<List<Int64>,
+/// 1>`, due blocchi da 100 000 righe con liste interne vuote. `concat`
+/// prealloca il figlio `Int64` dalla capacità del padre.
+#[test]
+fn il_percorso_generico_preallocato_si_conta() {
+    let blocco = || {
+        let liste = ListArray::from_iter_primitive::<Int64Type, _, _>(
+            (0..100_000).map(|_| Some(Vec::<Option<i64>>::new())),
+        );
+        let colonna: ArrayRef = Arc::new(
+            FixedSizeListArray::try_new(
+                Arc::new(Field::new("item", liste.data_type().clone(), true)),
+                1,
+                Arc::new(liste),
+                None,
+            )
+            .expect("lista fissa"),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c",
+            colonna.data_type().clone(),
+            true,
+        )]));
+        RecordBatch::try_new(schema, vec![colonna]).expect("blocco")
+    };
+    let blocchi = vec![blocco(), blocco()];
+    let unita = concat_batches(&blocchi[0].schema(), &blocchi).expect("unione");
+    let vero = picco_vero(&blocchi, &unita);
+    let stima = picco_unione(&blocchi);
+    assert!(stima >= vero, "stima {stima} sotto il picco vero {vero}");
 }
 
 /// Il caso della verifica: due Int8, 100 000 righe senza null e una riga

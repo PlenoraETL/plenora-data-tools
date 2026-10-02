@@ -225,6 +225,8 @@ fn validita_piena(dati: &ArrayData) -> u64 {
 ///   raddoppio), più l'arrotondamento a 64 byte di ogni buffer di ogni nodo.
 ///   Le viste (`Utf8View`) condividono i buffer di dati dei blocchi: la
 ///   stima li conta comunque, per eccesso.
+/// - Percorso generico (`FixedSizeList`, `Union`): i figli preallocati dalla
+///   capacità del padre, anche vuoti ([`preallocati`]).
 ///
 /// Un conto per input, non per allocazione; i transitori interni di
 /// `concat` (la fusione dei dizionari) non ci sono. Lo prova un oracolo
@@ -248,7 +250,54 @@ pub fn picco_unione(blocchi: &[RecordBatch]) -> u64 {
             somma.saturating_add(nodi(campo.data_type()))
         })
     });
-    totale.saturating_add(
+    let righe = blocchi.iter().fold(0_u64, |somma, blocco| {
+        somma.saturating_add(in_u64(blocco.num_rows()))
+    });
+    let generici = blocchi.first().map_or(0, |blocco| {
+        blocco.schema().fields().iter().fold(0_u64, |somma, campo| {
+            somma.saturating_add(preallocati(campo.data_type(), righe, false))
+        })
+    });
+    totale.saturating_add(generici).saturating_add(
         nodi_dello_schema.saturating_mul((BUFFER_PER_NODO + 1).saturating_mul(ARROTONDAMENTO)),
     )
+}
+
+/// Byte per riga contati per ogni nodo preallocato, per eccesso: il più
+/// largo fra i valori fissi (16 byte, `Decimal128`, viste) e gli offset.
+const LARGHEZZA_PREALLOCATA: u64 = 16;
+
+/// I figli che il percorso generico di `concat` (`MutableArrayData`, per
+/// `FixedSizeList` e `Union`) prealloca dalla capacità del padre, anche se
+/// vuoti: [`LARGHEZZA_PREALLOCATA`] byte per riga del padre (per la
+/// dimensione fissa della lista) per ogni discendente, a ogni livello.
+/// Sotto un nodo generico anche liste, struct e map ereditano la capacità.
+fn preallocati(tipo: &DataType, righe: u64, generico: bool) -> u64 {
+    let figlio = |campo: &DataType, righe: u64, generico: bool| {
+        let proprio = if generico {
+            righe.saturating_mul(LARGHEZZA_PREALLOCATA)
+        } else {
+            0
+        };
+        proprio.saturating_add(preallocati(campo, righe, generico))
+    };
+    match tipo {
+        DataType::FixedSizeList(campo, dimensione) => figlio(
+            campo.data_type(),
+            righe.saturating_mul(u64::try_from(*dimensione).unwrap_or(u64::MAX)),
+            true,
+        ),
+        DataType::Union(campi, _) => campi.iter().fold(0_u64, |somma, (_, campo)| {
+            somma.saturating_add(figlio(campo.data_type(), righe, true))
+        }),
+        DataType::List(campo)
+        | DataType::LargeList(campo)
+        | DataType::ListView(campo)
+        | DataType::LargeListView(campo)
+        | DataType::Map(campo, _) => figlio(campo.data_type(), righe, generico),
+        DataType::Struct(campi) => campi.iter().fold(0_u64, |somma, campo| {
+            somma.saturating_add(figlio(campo.data_type(), righe, generico))
+        }),
+        _ => 0,
+    }
 }
