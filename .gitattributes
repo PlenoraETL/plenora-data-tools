@@ -17,3 +17,4 @@ crates/plenora-io/tests/fixtures/contratti/**/*.json -text
 # Schemi copiati da plenora-contracts: i byte restano quelli del contratto,
 # cosi' lo SHA-256 verificato dal test resta vero.
 crates/plenora-core/tests/fixtures/contratti/*.json -text
+crates/plenora-cli/tests/fixtures/contratti/*.json -text

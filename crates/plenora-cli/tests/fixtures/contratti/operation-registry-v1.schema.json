@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.plenora.dev/operation-registry-v1.schema.json",
+  "title": "Plenora embedded operation registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "contract", "component", "registry", "operations"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "schema_version": {"const": 1},
+    "contract": {"const": "plenora-operation-registry-v1"},
+    "component": {
+      "type": "string",
+      "pattern": "^plenora-[a-z][a-z0-9-]+-tools$"
+    },
+    "registry": {
+      "type": "string",
+      "pattern": "^plenora-[a-z0-9-]+-v[1-9][0-9]*$"
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version", "family"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$"
+          },
+          "version": {"type": "integer", "minimum": 1},
+          "family": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"}
+        }
+      }
+    }
+  }
+}

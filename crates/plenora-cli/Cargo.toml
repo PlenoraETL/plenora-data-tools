@@ -1,0 +1,39 @@
+[package]
+name = "plenora-cli"
+description = "CLI pubblica `plenora-data` di plenora-data-tools2 (CLI 2.0 di plenora-contracts) e la sua superficie Rust"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "plenora_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "plenora-data"
+path = "src/main.rs"
+
+[dependencies]
+plenora-core.workspace = true
+plenora-pipeline.workspace = true
+plenora-io.workspace = true
+serde_json.workspace = true
+# Scadenza assoluta `--deadline` in RFC 3339, la stessa forma di
+# `plenora.execution.deadline` del binding di runtime: gia' nel workspace
+# (feature `std`, che da' la conversione in `SystemTime`), nessun pacchetto
+# nuovo nel lockfile.
+chrono.workspace = true
+# Ctrl-C e SIGTERM come annullamento cooperativo (motivazione al pin nel
+# Cargo.toml del workspace). Lo usa solo `main.rs`.
+ctrlc.workspace = true
+
+[dev-dependencies]
+# Validatore JSON Schema minimo dei test (tests/comune/schema.rs) e SHA-256
+# degli schemi dei contratti copiati: gia' nel lockfile.
+regex.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

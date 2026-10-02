@@ -1,0 +1,247 @@
+{
+  "$schema": "../schemas/surface-bindings-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-surface-bindings-v1",
+  "surface": "cli",
+  "components": [
+    {
+      "component": "plenora-database-tools",
+      "artifact": "plenora-database",
+      "discovery": [
+        "--help",
+        "--version --format json",
+        "capabilities --format json"
+      ],
+      "bindings": [
+        {
+          "operation": "database.test_connection",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "test-connection --input REQUEST.json --format json"
+          ]
+        },
+        {
+          "operation": "database.list_catalogs",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "list-catalogs --input REQUEST.json --format json"
+          ]
+        },
+        {
+          "operation": "database.list_schemas",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "list-schemas --input REQUEST.json --format json"
+          ]
+        },
+        {
+          "operation": "database.list_objects",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "list-objects --input REQUEST.json --format json"
+          ]
+        },
+        {
+          "operation": "database.describe_object",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "describe-object --input REQUEST.json --format json"
+          ]
+        },
+        {
+          "operation": "database.read",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "read --input REQUEST.json --output OUTPUT.arrow --format json"
+          ]
+        },
+        {
+          "operation": "database.write",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "write --input REQUEST.json --data INPUT.arrow --format json"
+          ]
+        },
+        {
+          "operation": "database.query",
+          "version": 1,
+          "requirement": "conditional",
+          "entrypoints": [
+            "query --input REQUEST.json --format json"
+          ]
+        },
+        {
+          "operation": "database.execute",
+          "version": 1,
+          "requirement": "conditional",
+          "entrypoints": [
+            "execute --input REQUEST.json --format json"
+          ]
+        }
+      ]
+    },
+    {
+      "component": "plenora-data-tools",
+      "artifact": "plenora-data",
+      "discovery": [
+        "--help",
+        "--version --format json",
+        "capabilities --format json"
+      ],
+      "bindings": [
+        {
+          "operation": "data.catalog",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "catalog --format json"
+          ]
+        },
+        {
+          "operation": "data.describe",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "describe --input INPUT.arrow --format json"
+          ],
+          "deprecated_aliases": [
+            "inspect-dataset"
+          ]
+        },
+        {
+          "operation": "data.validate",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "validate --plan PLAN.json --input NAME=INPUT.arrow --format json"
+          ]
+        },
+        {
+          "operation": "data.run",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "run --plan PLAN.json --input NAME=INPUT.arrow --output OUTPUT.arrow --format json"
+          ],
+          "deprecated_aliases": [
+            "transform",
+            "spatial-join",
+            "transform-arrow",
+            "pair-arrow"
+          ]
+        }
+      ]
+    },
+    {
+      "component": "plenora-io-tools",
+      "artifact": "plenora-io",
+      "discovery": [
+        "--help",
+        "--version --format json",
+        "capabilities --format json"
+      ],
+      "bindings": [
+        {
+          "operation": "io.catalog",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "catalog --format json"
+          ]
+        },
+        {
+          "operation": "io.inspect",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "inspect SOURCE --format json"
+          ]
+        },
+        {
+          "operation": "io.layers",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "layers SOURCE --format json"
+          ]
+        },
+        {
+          "operation": "io.read",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "read SOURCE --output OUTPUT.arrow --format json"
+          ]
+        },
+        {
+          "operation": "io.write",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "write --input INPUT.arrow --output SINK --format json"
+          ]
+        },
+        {
+          "operation": "io.convert",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "convert SOURCE SINK --format json"
+          ]
+        }
+      ]
+    },
+    {
+      "component": "plenora-rest-tools",
+      "artifact": null,
+      "discovery": [],
+      "bindings": []
+    },
+    {
+      "component": "plenora-storage-tools",
+      "artifact": "plenora-storage",
+      "discovery": [
+        "--help",
+        "--version --format json",
+        "capabilities --format json"
+      ],
+      "bindings": [
+        {
+          "operation": "storage.test", "version": 1, "requirement": "required",
+          "entrypoints": ["test --connection CONNECTION.json --allow-experimental-contracts --format json"]
+        },
+        {
+          "operation": "storage.list", "version": 1, "requirement": "required",
+          "entrypoints": ["list --connection CONNECTION.json --allow-experimental-contracts --format json"]
+        },
+        {
+          "operation": "storage.stat", "version": 1, "requirement": "required",
+          "entrypoints": ["stat --connection CONNECTION.json --key KEY --allow-experimental-contracts --format json"]
+        },
+        {
+          "operation": "storage.get", "version": 1, "requirement": "required",
+          "entrypoints": ["get --connection CONNECTION.json --key KEY --output OUTPUT --overwrite false --allow-experimental-contracts --format json"]
+        },
+        {
+          "operation": "storage.put", "version": 1, "requirement": "required",
+          "entrypoints": ["put --connection CONNECTION.json --key KEY --input INPUT --overwrite false --publication-policy atomic-required --allow-experimental-contracts --format json"]
+        },
+        {
+          "operation": "storage.copy", "version": 1, "requirement": "required",
+          "entrypoints": ["copy --connection CONNECTION.json --source-key SOURCE --destination-key DESTINATION --overwrite false --publication-policy atomic-required --allow-experimental-contracts --format json"]
+        },
+        {
+          "operation": "storage.delete", "version": 1, "requirement": "required",
+          "entrypoints": ["delete --connection CONNECTION.json --key KEY --ignore-missing false --allow-experimental-contracts --format json"]
+        }
+      ]
+    }
+  ]
+}

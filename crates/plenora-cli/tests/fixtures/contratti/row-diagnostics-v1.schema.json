@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.plenora.dev/row-diagnostics-v1.schema.json",
+  "title": "Plenora row diagnostics v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract", "scope", "index_basis", "completeness", "observed_total",
+    "counts", "examples_limit", "examples_truncated", "examples"
+  ],
+  "properties": {
+    "contract": {"const": "plenora-row-diagnostics-v1"},
+    "scope": {"enum": ["read", "write"]},
+    "index_basis": {"const": "source_row_zero_based"},
+    "completeness": {"enum": ["complete", "partial", "unknown"]},
+    "knowledge_limits": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/code"}
+    },
+    "observed_total": {"$ref": "#/$defs/count"},
+    "total": {"$ref": "#/$defs/count"},
+    "input_total": {"$ref": "#/$defs/count"},
+    "counts": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$"},
+      "additionalProperties": {"$ref": "#/$defs/count"}
+    },
+    "examples_limit": {"$ref": "#/$defs/count"},
+    "examples_truncated": {"type": "boolean"},
+    "examples": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/example"}
+    },
+    "diagnostic_state_counts": {"$ref": "#/$defs/stateCounts"},
+    "write_outcome": {"$ref": "#/$defs/writeOutcome"}
+  },
+  "$defs": {
+    "count": {"type": "integer", "minimum": 0},
+    "code": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9_.-]*$"
+    },
+    "keyValue": {
+      "oneOf": [
+        {"type": "string", "maxLength": 1024},
+        {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        {"type": "boolean"}
+      ]
+    },
+    "key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "state"],
+      "properties": {
+        "field": {"type": "string", "minLength": 1, "maxLength": 256},
+        "state": {"enum": ["value", "redacted", "unavailable"]},
+        "value": {"$ref": "#/$defs/keyValue"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"const": "value"}}, "required": ["state"]},
+          "then": {"required": ["value"]}
+        },
+        {
+          "if": {
+            "properties": {"state": {"enum": ["redacted", "unavailable"]}},
+            "required": ["state"]
+          },
+          "then": {"not": {"required": ["value"]}}
+        }
+      ]
+    },
+    "example": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_index", "cause"],
+      "properties": {
+        "source_index": {"$ref": "#/$defs/count"},
+        "cause": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)+$",
+          "maxLength": 128
+        },
+        "column": {"type": "string", "minLength": 1, "maxLength": 256},
+        "key": {"$ref": "#/$defs/key"},
+        "write_state": {
+          "enum": [
+            "certainly_rejected", "certainly_not_attempted",
+            "certainly_rolled_back", "effect_unknown"
+          ]
+        }
+      }
+    },
+    "stateCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "certainly_rejected", "certainly_not_attempted",
+        "certainly_rolled_back", "effect_unknown"
+      ],
+      "properties": {
+        "certainly_rejected": {"$ref": "#/$defs/count"},
+        "certainly_not_attempted": {"$ref": "#/$defs/count"},
+        "certainly_rolled_back": {"$ref": "#/$defs/count"},
+        "effect_unknown": {"$ref": "#/$defs/count"}
+      }
+    },
+    "partitionCount": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "value"],
+          "properties": {
+            "state": {"const": "known"},
+            "value": {"$ref": "#/$defs/count"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "properties": {"state": {"const": "unknown"}}
+        }
+      ]
+    },
+    "writeOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "certainly_rejected", "certainly_not_attempted",
+        "certainly_rolled_back", "effect_unknown"
+      ],
+      "properties": {
+        "certainly_rejected": {"$ref": "#/$defs/partitionCount"},
+        "certainly_not_attempted": {"$ref": "#/$defs/partitionCount"},
+        "certainly_rolled_back": {"$ref": "#/$defs/partitionCount"},
+        "effect_unknown": {"$ref": "#/$defs/partitionCount"}
+      }
+    }
+  }
+}

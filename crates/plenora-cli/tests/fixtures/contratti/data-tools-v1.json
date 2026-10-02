@@ -1,0 +1,62 @@
+{
+  "$schema": "../schemas/public-catalog-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-public-catalog-v1",
+  "component": "plenora-data-tools",
+  "profile": "plenora-data-tools-profile-v1",
+  "status": "normative",
+  "target_surfaces": {
+    "rust": "required",
+    "cli": "required",
+    "python_sdk": "not_applicable",
+    "runtime": "conditional"
+  },
+  "operations": [
+    {
+      "id": "data.catalog",
+      "version": 1,
+      "requirement": "required",
+      "summary": "Return the versioned registry of table and geospatial kernels exposed by the artifact.",
+      "surfaces": ["rust", "cli", "runtime"],
+      "input": {"contract": "plenora-data-catalog-query-v1", "content_types": ["application/json"], "interchange_contracts": []},
+      "output": {"contract": "plenora-data-kernel-catalog-v1", "content_types": ["application/json"], "interchange_contracts": []},
+      "side_effect": "none",
+      "controls": {"cancellation": false, "deadline": false, "idempotency_key": false},
+      "attributes": {"registry": "catalogs/data-kernels-v1.json"}
+    },
+    {
+      "id": "data.describe",
+      "version": 1,
+      "requirement": "required",
+      "summary": "Describe an Arrow dataset without changing it.",
+      "surfaces": ["rust", "cli", "runtime"],
+      "input": {"contract": "plenora-data-describe-input-v1", "content_types": ["application/vnd.apache.arrow.stream", "application/vnd.apache.arrow.file"], "interchange_contracts": ["plenora-arrow-interchange-v1"]},
+      "output": {"contract": "plenora-data-description-v1", "content_types": ["application/json"], "interchange_contracts": []},
+      "side_effect": "none",
+      "controls": {"cancellation": true, "deadline": true, "idempotency_key": false}
+    },
+    {
+      "id": "data.validate",
+      "version": 1,
+      "requirement": "required",
+      "summary": "Validate a versioned transformation plan against named Arrow input contracts.",
+      "surfaces": ["rust", "cli", "runtime"],
+      "input": {"contract": "plenora-data-plan-validation-input-v1", "content_types": ["application/json", "application/vnd.apache.arrow.stream", "application/vnd.apache.arrow.file"], "interchange_contracts": ["plenora-arrow-interchange-v1"]},
+      "output": {"contract": "plenora-data-plan-validation-result-v1", "content_types": ["application/json"], "interchange_contracts": []},
+      "side_effect": "none",
+      "controls": {"cancellation": true, "deadline": true, "idempotency_key": false}
+    },
+    {
+      "id": "data.run",
+      "version": 1,
+      "requirement": "required",
+      "summary": "Execute a versioned plan over named Arrow inputs and return its declared Arrow result.",
+      "surfaces": ["rust", "cli", "runtime"],
+      "input": {"contract": "plenora-data-execution-input-v1", "content_types": ["application/json", "application/vnd.apache.arrow.stream", "application/vnd.apache.arrow.file"], "interchange_contracts": ["plenora-arrow-interchange-v1"]},
+      "output": {"contract": "plenora-data-execution-result-v1", "content_types": ["application/vnd.apache.arrow.stream", "application/vnd.apache.arrow.file"], "interchange_contracts": ["plenora-arrow-interchange-v1"]},
+      "side_effect": "none",
+      "controls": {"cancellation": true, "deadline": true, "idempotency_key": false},
+      "attributes": {"kernel_registry": "plenora-data-kernel-catalog-v1"}
+    }
+  ]
+}

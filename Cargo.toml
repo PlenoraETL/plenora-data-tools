@@ -6,6 +6,7 @@ members = [
     "crates/plenora-kernels-geo",
     "crates/plenora-pipeline",
     "crates/plenora-io",
+    "crates/plenora-cli",
 ]
 # Sorgenti vendorizzate per [patch.crates-io] (vedi sotto): raggiunte solo da
 # [patch], mai membri del workspace.
@@ -116,6 +117,19 @@ md-5 = "=0.11.0"
 sha2 = "=0.11.0"
 uuid = { version = "=1.26.1", features = ["v4"] }
 tempfile = "=3.27.0"
+# Annullamento della CLI `plenora-data` (crates/plenora-cli): Ctrl-C
+# (SIGINT, CTRL_C_EVENT) e, con la feature `termination`, SIGTERM e
+# CTRL_CLOSE/CTRL_BREAK diventano un segnale cooperativo che il runner legge
+# fra i passi, e l'invocazione finisce con l'inviluppo `cancelled` ed exit
+# 130 (CLI 2.0, sezione 9) invece di morire senza documento su stdout. La
+# libreria standard non ha un'API per i segnali, e scriverla qui vorrebbe
+# FFI (`unsafe`, vietato nel workspace): `ctrlc` contiene quell'`unsafe`, in
+# un crate piccolo e diffuso. Pacchetti nuovi nel lockfile (7): `ctrlc`
+# 3.5.2; per Unix `nix` 0.31.3 con `cfg_aliases` 0.2.2 (build); per Apple
+# `dispatch2` 0.3.1, `block2` 0.6.2, `objc2` 0.6.4, `objc2-encode` 4.1.0
+# (target non compilati qui, ma nel lockfile). Su Windows usa il
+# `windows-sys` 0.61.2 gia' nel lockfile; `libc` e `bitflags` c'erano gia'.
+ctrlc = { version = "=3.5.2", features = ["termination"] }
 # Dev
 proptest = "=1.11.0"
 
