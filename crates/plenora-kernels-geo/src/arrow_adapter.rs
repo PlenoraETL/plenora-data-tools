@@ -23,7 +23,6 @@
 //! Errori: [`PlenoraError`], con i messaggi del validatore WKB.
 
 use geo::Geometry;
-use geozero::{CoordDimensions, ToWkb};
 use plenora_core::arrow::array::{Array, BinaryArray};
 use plenora_core::arrow::RecordBatch;
 use plenora_core::PlenoraError;
@@ -84,14 +83,22 @@ pub fn decode_geometry_cell(payload: &[u8]) -> Result<Geometry<f64>, PlenoraErro
 /// Codifica una geometria gia' validata dal kernel in WKB 2D entro il limite
 /// per cella.
 ///
+/// L'encoder e' quello di `rust_backend::wkb`: i byte dell'encoder canonico
+/// (`geozero`), tranne il poligono vuoto, scritto a zero anelli
+/// (`POLYGON EMPTY`) perche' [`geometry_from_wkb`] lo rilegga. Con
+/// l'encoder canonico la cella avrebbe un anello esterno senza coordinate,
+/// che il decoder rifiuta: un `POLYGON EMPTY` letto da WKT non sarebbe
+/// arrivato al passo dopo.
+///
 /// # Errors
 ///
-/// `PlenoraError::InvalidPlan` se la serializzazione WKB della geometria
-/// fallisce; `PlenoraError::ResourceLimit` se il payload prodotto supera
-/// [`MAX_CELL_BYTES`].
+/// `PlenoraError::ResourceLimit` se il payload prodotto supera
+/// [`MAX_CELL_BYTES`] (o un conteggio WKB supera `u32`, che lo implica).
 pub fn encode_geometry(geometry: &Geometry<f64>) -> Result<Vec<u8>, PlenoraError> {
-    let payload = geometry.to_wkb(CoordDimensions::xy()).map_err(|error| {
-        PlenoraError::InvalidPlan(format!("geometria prodotta non valida: {error}"))
+    let payload = crate::rust_backend::wkb::wkb_xy(geometry).map_err(|_| {
+        PlenoraError::ResourceLimit(format!(
+            "cella WKB con un conteggio oltre u32, oltre il limite {MAX_CELL_BYTES}"
+        ))
     })?;
     if payload.len() as u64 > MAX_CELL_BYTES {
         return Err(cell_too_large(payload.len() as u64));

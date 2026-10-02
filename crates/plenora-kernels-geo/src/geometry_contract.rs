@@ -1,16 +1,16 @@
 //! Contratto di geometria su forme decodificate.
 //!
 //! Riproduce su `Geometry<f64>` cio' che si ottiene con il round-trip WKB
-//! (encode canonico `to_wkb` + validazione del decoder), senza passare dal
-//! WKB:
+//! (l'encoder dell'uscita, `rust_backend::wkb::wkb_xy`, + validazione del
+//! decoder), senza passare dal WKB:
 //! [`wkb_size_xy`] da' la dimensione ESATTA del WKB ISO XY senza
 //! serializzare; [`validate_geometry_structural`] applica le regole di
 //! `wkb_decoder` nello stesso ordine e con gli stessi messaggi.
 //!
-//! Parita' con l'encoder canonico (geozero 0.15), verificata dai test: un
-//! `Polygon` e' sempre codificato con l'anello esterno, quindi il poligono
-//! vuoto e' rifiutato come nel round-trip; `Line` vale come
-//! `LineString` di due coordinate, `Rect` e `Triangle` come poligoni.
+//! Parita' con l'encoder dell'uscita, verificata dai test: i byte di
+//! geozero 0.15 tranne il poligono vuoto, scritto a zero anelli e quindi
+//! accettato come nel round-trip; `Line` vale come `LineString` di due
+//! coordinate, `Rect` e `Triangle` come poligoni.
 //! L'incoerenza di tipo dei figli delle multi-geometrie non e'
 //! rappresentabile in `geo`.
 
@@ -29,11 +29,12 @@ const COORD_BYTES: u64 = 16;
 
 /// Dimensione esatta in byte del WKB ISO XY di `geometry`.
 ///
-/// Camminata strutturale speculare all'encoder canonico
-/// (`geozero::ToWkb::to_wkb(CoordDimensions::xy())`): un header per ogni
+/// Camminata strutturale speculare all'encoder dell'uscita
+/// (`rust_backend::wkb::wkb_xy`): un header per ogni
 /// geometria (figli di multi e collezioni inclusi), un conteggio per ogni
 /// sequenza di coordinate, anelli o figli, 16 byte per coordinata. Le
-/// geometrie vuote mantengono i propri header e conteggi. Il risultato e'
+/// geometrie vuote mantengono i propri header e conteggi; il poligono
+/// vuoto ha zero anelli (9 byte). Il risultato e'
 /// funzione pura della struttura: nessuna stima, nessuna serializzazione.
 #[must_use]
 pub fn wkb_size_xy(geometry: &Geometry<f64>) -> u64 {
@@ -67,8 +68,12 @@ const fn linestring_size_xy(line: &LineString<f64>) -> u64 {
 }
 
 /// Poligono codificato: header + numero anelli + (conteggio + coordinate)
-/// per ogni anello. L'anello esterno e' sempre presente, anche se vuoto.
+/// per ogni anello. Il poligono vuoto (esterno senza coordinate, nessun
+/// interno) ha zero anelli; altrimenti l'anello esterno c'e' sempre.
 fn polygon_size_xy(polygon: &Polygon<f64>) -> u64 {
+    if polygon_is_empty(polygon) {
+        return HEADER_BYTES + COUNT_BYTES;
+    }
     HEADER_BYTES
         + COUNT_BYTES
         + std::iter::once(polygon.exterior())
@@ -194,9 +199,18 @@ fn check_linestring(line: &LineString<f64>) -> Result<(), PlenoraError> {
     line.0.iter().try_for_each(check_finite)
 }
 
-/// Poligono: anello esterno sempre presente (come nell'encoder canonico:
-/// un poligono vuoto e' rifiutato) piu' gli anelli interni.
+/// Il poligono vuoto dell'encoder: esterno senza coordinate e nessun
+/// interno. Un esterno vuoto con interni resta un anello da validare.
+fn polygon_is_empty(polygon: &Polygon<f64>) -> bool {
+    polygon.exterior().0.is_empty() && polygon.interiors().is_empty()
+}
+
+/// Poligono: vuoto (zero anelli, come lo scrive l'encoder e lo accetta il
+/// decoder) o anello esterno piu' gli anelli interni.
 fn check_polygon(polygon: &Polygon<f64>) -> Result<(), PlenoraError> {
+    if polygon_is_empty(polygon) {
+        return Ok(());
+    }
     std::iter::once(polygon.exterior())
         .chain(polygon.interiors())
         .try_for_each(check_ring)
@@ -226,6 +240,7 @@ mod tests {
     use geozero::{CoordDimensions, ToWkb};
 
     use super::*;
+    use crate::rust_backend::wkb::wkb_xy;
     use crate::test_support::{corpus_holed, corpus_triangle, valid_corpus};
     use crate::{wkb_decoder, MAX_WKB_COMPONENTS, MAX_WKB_DEPTH};
 
@@ -273,13 +288,11 @@ mod tests {
     }
 
     /// Parita' di misura: la camminata strutturale deve dare
-    /// esattamente la lunghezza del WKB prodotto dall'encoder canonico.
+    /// esattamente la lunghezza del WKB prodotto dall'encoder dell'uscita.
     #[test]
-    fn wkb_size_xy_matches_canonical_encoder() {
+    fn wkb_size_xy_matches_output_encoder() {
         for (label, geometry) in valid_fixtures() {
-            let encoded = geometry
-                .to_wkb(CoordDimensions::xy())
-                .expect("encode fixture");
+            let encoded = wkb_xy(&geometry).expect("encode fixture");
             assert_eq!(
                 wkb_size_xy(&geometry),
                 encoded.len() as u64,
@@ -288,24 +301,32 @@ mod tests {
         }
     }
 
-    /// Anche il poligono vuoto: l'encoder scrive un anello esterno a zero
-    /// coordinate e la misura deve combaciare lo stesso.
+    /// Il poligono vuoto: zero anelli, 9 byte, da solo o dentro una multi o
+    /// una collezione; l'esterno vuoto con interni conta i propri anelli.
     #[test]
     fn wkb_size_xy_matches_encoder_on_empty_polygon() {
-        let empty = Geometry::Polygon(Polygon::new(
-            LineString::from(Vec::<(f64, f64)>::new()),
-            Vec::new(),
-        ));
-        let encoded = empty.to_wkb(CoordDimensions::xy()).expect("encode fixture");
-        assert_eq!(wkb_size_xy(&empty), encoded.len() as u64);
+        let empty = Polygon::new(LineString::from(Vec::<(f64, f64)>::new()), Vec::new());
+        let ring = LineString::from(vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]);
+        for geometry in [
+            Geometry::Polygon(empty.clone()),
+            Geometry::MultiPolygon(MultiPolygon::new(vec![empty.clone(), empty.clone()])),
+            Geometry::GeometryCollection(GeometryCollection::new_from(vec![
+                Geometry::Polygon(empty.clone()),
+                Geometry::Point(Point::new(1.0, 2.0)),
+            ])),
+            Geometry::Polygon(Polygon::new(LineString::new(Vec::new()), vec![ring])),
+        ] {
+            let encoded = wkb_xy(&geometry).expect("encode fixture");
+            assert_eq!(wkb_size_xy(&geometry), encoded.len() as u64, "{geometry:?}");
+        }
+        assert_eq!(wkb_size_xy(&Geometry::Polygon(empty)), 9);
     }
 
     /// Parita' di validazione: l'esito (e il messaggio d'errore)
-    /// deve coincidere con il round-trip, cioe' encode canonico +
+    /// deve coincidere con il round-trip, cioe' encoder dell'uscita +
     /// decode validante.
     fn assert_validation_parity(geometry: &Geometry<f64>, label: &str) {
-        let reference = geometry
-            .to_wkb(CoordDimensions::xy())
+        let reference = wkb_xy(geometry)
             .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))
             .and_then(|payload| wkb_decoder::decode_validated(&payload).map(|_| ()));
         let validated = validate_geometry_structural(geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS);
@@ -325,6 +346,29 @@ mod tests {
     fn validation_parity_on_valid_geometries() {
         for (label, geometry) in valid_fixtures() {
             assert_validation_parity(&geometry, label);
+        }
+    }
+
+    /// Il poligono vuoto e' accettato da entrambi i percorsi, anche annidato.
+    #[test]
+    fn validation_parity_accepts_the_empty_polygon() {
+        let empty = Polygon::new(LineString::from(Vec::<(f64, f64)>::new()), Vec::new());
+        for (label, geometry) in [
+            ("poligono vuoto", Geometry::Polygon(empty.clone())),
+            (
+                "multipolygon con un vuoto",
+                Geometry::MultiPolygon(MultiPolygon::new(vec![empty.clone()])),
+            ),
+            (
+                "collection con un vuoto",
+                Geometry::GeometryCollection(GeometryCollection::new_from(vec![
+                    Geometry::Polygon(empty),
+                ])),
+            ),
+        ] {
+            assert_validation_parity(&geometry, label);
+            validate_geometry_structural(&geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS)
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
         }
     }
 
@@ -392,10 +436,15 @@ mod tests {
                 )),
             ),
             (
-                "poligono vuoto",
+                "esterno vuoto con un interno",
                 Geometry::Polygon(Polygon::new(
                     LineString::from(Vec::<(f64, f64)>::new()),
-                    Vec::new(),
+                    vec![LineString::from(vec![
+                        (0.0, 0.0),
+                        (1.0, 0.0),
+                        (1.0, 1.0),
+                        (0.0, 0.0),
+                    ])],
                 )),
             ),
             (

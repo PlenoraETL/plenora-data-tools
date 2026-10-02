@@ -469,8 +469,7 @@ pub struct CoverageIssueRow {
 /// - `PlenoraError::InvalidPlan`: una cella WKB viola il contratto strutturale
 ///   o non supera la validazione OGC (come `decode_geometry_cell`), il kernel
 ///   rifiuta l'input (errori `ExtensionError` tradotti da
-///   [`ExtensionError::del_passo`], messaggio preservato) o la codifica WKB
-///   di una issue fallisce.
+///   [`ExtensionError::del_passo`], messaggio preservato).
 /// - `PlenoraError::Unsupported`: una cella porta dimensioni Z/M o SRID non
 ///   preservabili nel protocollo 2D, o il kernel rende
 ///   `PrecisionInsufficient`.
@@ -739,8 +738,7 @@ pub struct SharedPathRow {
 /// - `PlenoraError::InvalidPlan`: una cella WKB viola il contratto strutturale
 ///   o non supera la validazione OGC (come `decode_geometry_cell`), il kernel
 ///   rifiuta l'input (errori `ExtensionError` tradotti da
-///   [`ExtensionError::del_passo`], messaggio preservato) o la codifica WKB
-///   di un tratto fallisce.
+///   [`ExtensionError::del_passo`], messaggio preservato).
 /// - `PlenoraError::Unsupported`: una cella porta dimensioni Z/M o SRID non
 ///   preservabili nel protocollo 2D.
 /// - `PlenoraError::ResourceLimit`: una cella, o la geometria di un tratto,

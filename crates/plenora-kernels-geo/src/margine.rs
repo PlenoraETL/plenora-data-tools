@@ -297,6 +297,10 @@ pub fn byte_wkb(geometria: &Geometry<f64>) -> u64 {
     let n = |quanti: usize| u64::try_from(quanti).unwrap_or(u64::MAX);
     let anello = |quanti: usize| CONTEGGIO.saturating_add(n(quanti).saturating_mul(PUNTO));
     let poligono = |p: &Polygon<f64>| {
+        // Il poligono vuoto si scrive a zero anelli (`rust_backend::wkb`).
+        if p.exterior().0.is_empty() && p.interiors().is_empty() {
+            return TESTA + CONTEGGIO;
+        }
         p.interiors().iter().fold(
             (TESTA + CONTEGGIO).saturating_add(anello(p.exterior().0.len())),
             |totale, interno| totale.saturating_add(anello(interno.0.len())),
@@ -394,6 +398,12 @@ mod tests {
                 line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 1.0)],
                 line_string![(x: 2.0, y: 0.0), (x: 3.0, y: 1.0), (x: 4.0, y: 0.0)],
             ])),
+            // Il poligono vuoto: zero anelli, da solo e dentro una multi.
+            Geometry::Polygon(Polygon::new(LineString::new(Vec::new()), Vec::new())),
+            Geometry::MultiPolygon(MultiPolygon::new(vec![Polygon::new(
+                LineString::new(Vec::new()),
+                Vec::new(),
+            )])),
         ];
         for caso in &casi {
             let wkb = crate::arrow_adapter::encode_geometry(caso).unwrap();

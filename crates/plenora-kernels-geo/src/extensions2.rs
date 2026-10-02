@@ -387,9 +387,9 @@ fn grid_error(error: &ExtensionError) -> PlenoraError {
 /// # Errors
 ///
 /// `PlenoraError::InvalidPlan` per gli errori di [`generate_grid`] (messaggio
-/// con prefisso `geo.generate_grid:`) o per una serializzazione WKB fallita;
+/// con prefisso `geo.generate_grid:`);
 /// `PlenoraError::ResourceLimit` per una cella oltre il limite di byte per
-/// cella.
+/// cella (anche l'unico modo in cui la codifica WKB fallisce).
 pub fn generate_grid_rows(
     extent: &GridExtent,
     cell_size: f64,

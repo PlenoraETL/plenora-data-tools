@@ -17,7 +17,7 @@ cambiano solo i campi del backend: nessuna capability `geos`, maturità
 | `crates/plenora-kernels-geo/src/rust_backend/mod.rs` | le firme di `geos_backend@190c493`: `make_valid_wkb`, `make_valid_geometry`, `polygonize_linework`, `split_polygon_by_linework` (le due riparazioni e lo split con in più la precisione) |
 | `crates/plenora-kernels-geo/src/rust_backend/precision.rs` | la precisione dichiarata, 1 cm a terra nelle unità del CRS |
 | `crates/plenora-kernels-geo/src/rust_backend/arrow.rs` | il trasporto Arrow di `190c493`: `make_valid_batches`, `polygonize_batches`, `split_batches` |
-| `crates/plenora-kernels-geo/src/rust_backend/wkb.rs` | WKB dell'output con `POLYGON EMPTY` a zero anelli, come GEOS |
+| `crates/plenora-kernels-geo/src/rust_backend/wkb.rs` | WKB dell'output con `POLYGON EMPTY` a zero anelli, come GEOS; è l'encoder di ogni cella geometria d'uscita (`arrow_adapter::encode_geometry`), non solo di questi kernel |
 
 Provenienza: `plenora-memory-lab/operations/geo_rust`, sorgenti con gli
 SHA-256 registrati in `results/geo-rust/fuzz-provenance.json`. Nessuna

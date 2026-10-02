@@ -1659,3 +1659,37 @@ fn pivot_ordine_dei_rifiuti_in_validazione() {
         assert!(matches!(senza, PlenoraError::InvalidPlan(_)), "{senza}");
     }
 }
+
+/// Il poligono vuoto letto da WKT resta leggibile dai passi successivi: la
+/// cella WKB che `geo.from_wkt` scrive è a zero anelli (`POLYGON EMPTY`),
+/// non un anello esterno senza coordinate, che il decoder rifiuterebbe.
+/// Trovato dal target di fuzz `wkb`.
+#[test]
+fn il_poligono_vuoto_da_wkt_si_rilegge_nel_passo_dopo() {
+    let testi = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("wkt", DataType::Utf8, true)])),
+        vec![Arc::new(StringArray::from(vec![
+            Some("POLYGON EMPTY"),
+            Some("MULTIPOLYGON (EMPTY, ((500000 5000000, 500010 5000000, 500010 5000010, 500000 5000000)))"),
+            Some("GEOMETRYCOLLECTION (POLYGON EMPTY, POINT (500000 5000000))"),
+        ]))],
+    )
+    .unwrap();
+    let mut pipeline = piano(
+        &["t"],
+        vec![
+            passo("g", "geo.from_wkt", &["t"], json!({"wkt_column": "wkt"})),
+            passo("a", "geo.area", &["g"], json!({})),
+        ],
+        &["g", "a"],
+    );
+    pipeline.crs = Some(UTM.to_owned());
+    let esito = esegui(&pipeline, &[("t", testi)]).unwrap();
+    let celle = esito.outputs[0].1.column_by_name("geometry").unwrap();
+    let celle = celle.as_any().downcast_ref::<BinaryArray>().unwrap();
+    assert_eq!(celle.value(0), [1, 3, 0, 0, 0, 0, 0, 0, 0]);
+    for riga in 0..celle.len() {
+        plenora_kernels_geo::geometry_from_wkb(celle.value(riga)).unwrap();
+    }
+    assert_eq!(esito.outputs[1].1.num_rows(), 3);
+}
