@@ -40,7 +40,10 @@
 
 use std::collections::BTreeMap;
 
+use arrow_data::ArrayData;
+
 use crate::arrow::array::{Array, RecordBatch};
+use crate::arrow::DataType;
 use crate::{PlenoraError, Result};
 
 /// Un buffer visto da una colonna: inizio e capacità dell'allocazione,
@@ -162,4 +165,90 @@ pub fn byte_dati(tabella: &RecordBatch) -> usize {
     tabella.columns().iter().fold(0_usize, |totale, colonna| {
         totale.saturating_add(byte_viste(colonna.as_ref()))
     })
+}
+
+/// Arrotondamento delle capacità dei buffer che Arrow alloca.
+const ARROTONDAMENTO: u64 = 64;
+/// Buffer di un nodo della copia contati per il loro arrotondamento, per
+/// eccesso: validità, offset, valori, dati delle viste.
+const BUFFER_PER_NODO: u64 = 4;
+
+fn in_u64(byte: usize) -> u64 {
+    u64::try_from(byte).unwrap_or(u64::MAX)
+}
+
+/// I nodi di un tipo: lui e i figli, ricorsivamente (struct, liste, map,
+/// dizionari, run-end, union).
+fn nodi(tipo: &DataType) -> u64 {
+    let figli = match tipo {
+        DataType::Struct(campi) => campi.iter().fold(0_u64, |totale, campo| {
+            totale.saturating_add(nodi(campo.data_type()))
+        }),
+        DataType::Union(campi, _) => campi.iter().fold(0_u64, |totale, (_, campo)| {
+            totale.saturating_add(nodi(campo.data_type()))
+        }),
+        DataType::List(campo)
+        | DataType::LargeList(campo)
+        | DataType::ListView(campo)
+        | DataType::LargeListView(campo)
+        | DataType::FixedSizeList(campo, _)
+        | DataType::Map(campo, _) => nodi(campo.data_type()),
+        DataType::Dictionary(_, valori) => nodi(valori),
+        DataType::RunEndEncoded(estremi, valori) => {
+            nodi(estremi.data_type()).saturating_add(nodi(valori.data_type()))
+        }
+        _ => 0,
+    };
+    figli.saturating_add(1)
+}
+
+/// Byte di una bitmap di validità piena su ogni nodo di una colonna, con la
+/// lunghezza di ogni nodo (i figli di una lista o i valori di un dizionario
+/// possono essere più lunghi della colonna).
+fn validita_piena(dati: &ArrayData) -> u64 {
+    dati.child_data()
+        .iter()
+        .fold(in_u64(dati.len()).div_ceil(8), |totale, figlio| {
+            totale.saturating_add(validita_piena(figlio))
+        })
+}
+
+/// Picco di memoria dell'unione di più blocchi (`concat_batches`), per
+/// eccesso: i blocchi restano vivi mentre si alloca la copia.
+///
+/// - Blocchi: `get_array_memory_size` di ogni colonna (capacità dei buffer,
+///   anche condivisi più volte: per eccesso).
+/// - Copia: i byte di dati dei blocchi ([`byte_dati`]: offset, valori,
+///   viste, dizionari, figli), più una bitmap di validità piena su ogni
+///   nodo (Arrow la materializza sull'intera lunghezza appena un blocco ha
+///   dei null), il tutto per due (i buffer della copia crescono per
+///   raddoppio), più l'arrotondamento a 64 byte di ogni buffer di ogni nodo.
+///   Le viste (`Utf8View`) condividono i buffer di dati dei blocchi: la
+///   stima li conta comunque, per eccesso.
+///
+/// Un conto per input, non per allocazione; i transitori interni di
+/// `concat` (la fusione dei dizionari) non ci sono. Lo prova un oracolo
+/// (`tests/picco_unione.rs`) contro l'unione vera.
+#[must_use]
+pub fn picco_unione(blocchi: &[RecordBatch]) -> u64 {
+    let mut originali = 0_u64;
+    let mut copia = 0_u64;
+    for blocco in blocchi {
+        copia = copia.saturating_add(in_u64(byte_dati(blocco)));
+        for colonna in blocco.columns() {
+            originali = originali.saturating_add(in_u64(colonna.get_array_memory_size()));
+            copia = copia.saturating_add(validita_piena(&colonna.to_data()));
+        }
+    }
+    // I buffer della copia crescono per raddoppio (`MutableBuffer`): la
+    // capacità finale arriva al doppio di ciò che serve.
+    let totale = originali.saturating_add(copia.saturating_mul(2));
+    let nodi_dello_schema = blocchi.first().map_or(0, |blocco| {
+        blocco.schema().fields().iter().fold(0_u64, |somma, campo| {
+            somma.saturating_add(nodi(campo.data_type()))
+        })
+    });
+    totale.saturating_add(
+        nodi_dello_schema.saturating_mul((BUFFER_PER_NODO + 1).saturating_mul(ARROTONDAMENTO)),
+    )
 }

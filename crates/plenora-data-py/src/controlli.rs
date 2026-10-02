@@ -43,10 +43,16 @@ const INTERVALLO: Duration = Duration::from_millis(10);
 static SONDA: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
 
 /// Registra o toglie la sonda della consegna.
+///
+/// La sonda precedente esce dal lucchetto e si rilascia dopo averlo
+/// liberato: il suo `__del__` può richiamare questa funzione, e rilasciarla
+/// con il lucchetto preso sarebbe un deadlock.
 pub fn registra_sonda(sonda: Option<Py<PyAny>>) {
-    if let Ok(mut registrata) = SONDA.lock() {
-        *registrata = sonda;
-    }
+    let precedente = SONDA
+        .lock()
+        .ok()
+        .and_then(|mut registrata| std::mem::replace(&mut *registrata, sonda));
+    drop(precedente);
 }
 
 /// Chiama la sonda, se c'è; la sua eccezione passa com'è.

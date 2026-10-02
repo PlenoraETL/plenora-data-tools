@@ -7,6 +7,8 @@ import _thread
 import asyncio
 import contextlib
 import functools
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -145,6 +147,33 @@ def _sonda(azione: Callable[[], object]) -> Any:
         yield
     finally:
         _native._sonda_consegna(None)
+
+
+def test_sostituire_la_sonda_non_si_blocca_sul_suo_del() -> None:
+    """La sonda tolta si rilascia fuori dal lucchetto: il suo `__del__` può
+    richiamare `_sonda_consegna`. In un processo a parte, con un tempo
+    massimo: un deadlock non deve fermare la suite."""
+    programma = (
+        "from plenora_data import _native\n"
+        "class Sonda:\n"
+        "    def __call__(self):\n"
+        "        pass\n"
+        "    def __del__(self):\n"
+        "        _native._sonda_consegna(None)\n"
+        "_native._sonda_consegna(Sonda())\n"
+        "_native._sonda_consegna(Sonda())\n"
+        "_native._sonda_consegna(None)\n"
+        "print('ok')\n"
+    )
+    esito = subprocess.run(
+        [sys.executable, "-c", programma],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert esito.returncode == 0, esito.stderr
+    assert esito.stdout.strip() == "ok"
 
 
 def test_gettone_alzato_fra_la_fine_e_la_consegna(tmp_path: Any) -> None:

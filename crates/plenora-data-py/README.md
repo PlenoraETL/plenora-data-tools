@@ -303,10 +303,18 @@ python scripts/verifica_sdk_python.py --wheel dist/plenora_data-<versione>-<tag>
   (`plenora_core::memoria::byte_dati`) contro il budget meno le tabelle già
   importate, e l'import si ferma al primo blocco di troppo; con più blocchi
   l'unione (`concat_batches`, una copia) vuole spazio per blocchi e copia
-  insieme, e la copia si stima per eccesso: i suoi byte di dati più 128
-  byte per ogni buffer di ogni colonna (quattro per nodo del tipo, figli
-  compresi), che coprono l'arrotondamento a 64 byte delle capacità di
-  Arrow. Il blocco che supera il budget è già in memoria quando si
+  insieme, e il picco si stima per eccesso
+  (`plenora_core::memoria::picco_unione`): la memoria dei blocchi, più per
+  la copia due volte (crescita per raddoppio) i loro byte di dati e una
+  bitmap di validità piena su ogni nodo (Arrow la materializza appena un
+  blocco ha dei null), più 320 byte per nodo del tipo per l'arrotondamento
+  dei buffer. Un oracolo (`crates/plenora-core/tests/picco_unione.rs`) la
+  confronta con il picco vero (allocazioni di blocchi e unione) su 4.500
+  casi generati: 17 tipi (primitivi, booleani, stringhe e binari anche
+  `Large` e `View`, decimali, istanti, liste, struct, dizionari, `Null`,
+  run-end) più union sparse, fette, null assenti, sparsi o totali mescolati
+  fra i blocchi. I transitori interni di `concat` (le tabelle della fusione
+  dei dizionari) non sono nel conto né nell'oracolo. Il blocco che supera il budget è già in memoria quando si
   rifiuta (lo ha prodotto il produttore), e le allocazioni del produttore
   (per esempio un generatore Python che costruisce i suoi blocchi) non si
   vedono. Le tabelle in memoria si riservano nel budget prima di leggere

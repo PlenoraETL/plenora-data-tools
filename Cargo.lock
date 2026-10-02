@@ -935,6 +935,7 @@ name = "plenora-core"
 version = "0.1.0"
 dependencies = [
  "arrow-array",
+ "arrow-data",
  "arrow-ipc",
  "arrow-schema",
  "arrow-select",

@@ -35,6 +35,11 @@ arrow-array = "=60.0.0"
 arrow-schema = "=60.0.0"
 arrow-ipc = "=60.0.0"
 arrow-select = "=60.0.0"
+# `ArrayData` per visitare i nodi di una colonna (lunghezze dei figli) nella
+# stima del picco di un'unione di blocchi (`plenora_core::memoria`). Non e'
+# una dipendenza nuova: arrow-array la usa gia', stessa release, nessun
+# pacchetto nuovo nel lockfile.
+arrow-data = "=60.0.0"
 # `Buffer` di Arrow per plenora-io: la lettura IPC legge il file intero in un
 # buffer allineato e lo decodifica con `FileDecoder`/`StreamDecoder` di
 # arrow-ipc sugli stessi byte che il confine ha verificato (README, «Confine
