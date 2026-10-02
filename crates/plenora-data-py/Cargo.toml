@@ -1,0 +1,37 @@
+[package]
+name = "plenora-data-py"
+description = "SDK Python `plenora-data` di plenora-data-tools2: il modulo nativo PyO3 `plenora_data._native`"
+# La versione del pacchetto Python e' questa (pyproject.toml la legge da qui,
+# `dynamic = ["version"]`): `plenora_data.version()`, i metadati installati e
+# il nome del wheel non possono divergere, e coincidono con la versione del
+# componente che il documento delle capacita' dichiara.
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+# Il nome della libreria e' quello del file nativo nel wheel; il modulo
+# Python e' `plenora_data._native` (pyproject.toml, `module-name`).
+name = "plenora_data_native"
+crate-type = ["cdylib"]
+# Nessun test Rust in questo crate: il comportamento si prova dal pacchetto
+# installato (python/tests, contro il wheel), e la logica che non dipende da
+# Python sta in plenora-cli (api, capacita) con i suoi test. Un binario di
+# test qui dovrebbe trovare libpython anche a runtime, su ogni sistema.
+test = false
+doctest = false
+
+[dependencies]
+plenora-core.workspace = true
+plenora-pipeline.workspace = true
+plenora-io.workspace = true
+plenora-cli.workspace = true
+serde_json.workspace = true
+# Modulo nativo e scambio Arrow con PyArrow (motivazione ai pin nel
+# Cargo.toml del workspace).
+pyo3.workspace = true
+arrow-pyarrow.workspace = true
+
+[lints]
+workspace = true

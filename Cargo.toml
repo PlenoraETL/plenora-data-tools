@@ -7,6 +7,7 @@ members = [
     "crates/plenora-pipeline",
     "crates/plenora-io",
     "crates/plenora-cli",
+    "crates/plenora-data-py",
 ]
 # Sorgenti vendorizzate per [patch.crates-io] (vedi sotto): raggiunte solo da
 # [patch], mai membri del workspace.
@@ -130,6 +131,32 @@ tempfile = "=3.27.0"
 # (target non compilati qui, ma nel lockfile). Su Windows usa il
 # `windows-sys` 0.61.2 gia' nel lockfile; `libc` e `bitflags` c'erano gia'.
 ctrlc = { version = "=3.5.2", features = ["termination"] }
+# SDK Python `plenora-data` (crates/plenora-data-py): il modulo nativo
+# `plenora_data._native`. Python SDK 1.0 di plenora-contracts vuole un
+# pacchetto Python con PEP 561, eccezioni tipizzate e tabelle PyArrow al
+# confine; chiamare il runner da Python senza un binding vorrebbe FFI
+# scritta qui (`unsafe`, vietato nel workspace) o un sottoprocesso della CLI
+# (una copia delle tabelle per ogni passaggio, niente Arrow in memoria).
+# `pyo3` 0.29.2 e' la versione di plenora-database-tools (stesso binding,
+# stessa ABI stabile `abi3-py310`: un wheel per piattaforma per Python
+# >= 3.10). Senza `extension-module` qui: la build di maturin la aggiunge
+# (pyproject.toml), cosi' `cargo test --workspace` collega libpython invece
+# di lasciare simboli indefiniti. `unsafe` sta dentro `pyo3` e nelle sue
+# espansioni (macro esterne, che il lint `unsafe_code` del workspace non
+# esamina), mai nel codice del crate: README del crate, «unsafe e macro
+# PyO3». Pacchetti nuovi nel lockfile con `arrow-pyarrow` (9): `pyo3`,
+# `pyo3-ffi`, `pyo3-macros`, `pyo3-macros-backend`, `pyo3-build-config`
+# 0.29.2, `heck` 0.5.0 (nomi delle macro), `target-lexicon` 0.13.5 (build),
+# `portable-atomic` 1.15.0, `arrow-pyarrow` 60.0.0; ognuno in una sola
+# versione, nessuno gia' presente in un'altra.
+pyo3 ={ version = "=0.29.2", default-features = false, features = ["macros", "abi3-py310"] }
+# Scambio delle tabelle con PyArrow per l'Arrow C Data/Stream Interface
+# (PyCapsule `__arrow_c_stream__`): le tabelle passano senza copia nei due
+# versi. E' il crate di arrow-rs per pyarrow, alla stessa release 60.0.0
+# dei crate Arrow sopra (stessi tipi, nessuna seconda copia di Arrow), e
+# chiede `pyo3` `^0.29.0`, compatibile con il pin sopra. Attiva la feature
+# `ffi` di `arrow-array` (l'`unsafe` della C Data Interface sta li').
+arrow-pyarrow = "=60.0.0"
 # Dev
 proptest = "=1.11.0"
 
@@ -139,6 +166,7 @@ plenora-kernels-table = { path = "crates/plenora-kernels-table" }
 plenora-kernels-geo = { path = "crates/plenora-kernels-geo" }
 plenora-pipeline = { path = "crates/plenora-pipeline" }
 plenora-io = { path = "crates/plenora-io" }
+plenora-cli = { path = "crates/plenora-cli" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

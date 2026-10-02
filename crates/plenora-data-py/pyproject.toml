@@ -1,0 +1,47 @@
+[build-system]
+# Il pin esatto della build sta in requirements-sdk-build.txt (maturin
+# 1.15.0, la versione di plenora-database-tools); qui il vincolo che il
+# pin deve rispettare.
+requires = ["maturin>=1.15,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "plenora-data"
+# Dal Cargo.toml del crate (che eredita la versione del workspace):
+# `plenora_data.version()`, i metadati installati e il nome del wheel hanno
+# una sola fonte.
+dynamic = ["version"]
+description = "SDK Python di plenora-data-tools: catalogo, descrizione, validazione ed esecuzione di piani su tabelle Arrow"
+readme = "README.md"
+requires-python = ">=3.10"
+# PyArrow e' il confine delle tabelle (Python SDK 1.0, sezione 3). La serie
+# qualificata dalla suite e' la 25 (requirements-sdk-tests.txt): un'altra
+# serie si dichiara dopo averla provata, non prima.
+dependencies = ["pyarrow>=25,<26"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Typing :: Typed",
+]
+
+[tool.maturin]
+# I moduli Python in python/plenora_data, il modulo nativo compilato come
+# plenora_data._native.
+python-source = "python"
+module-name = "plenora_data._native"
+# Solo nella build del wheel: `cargo build` e `cargo test` del workspace
+# collegano libpython (motivazione nel Cargo.toml del workspace).
+features = ["pyo3/extension-module"]
+# Marcatore PEP 561 e stub del modulo nativo nel wheel.
+include = [
+    "python/plenora_data/py.typed",
+    "python/plenora_data/*.pyi",
+]
+# Le prove non sono parte del pacchetto.
+exclude = ["python/tests/**"]

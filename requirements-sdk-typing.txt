@@ -1,0 +1,14 @@
+# Gate PEP 561 dell'SDK Python (crates/plenora-data-py/typing): mypy
+# --strict sul pacchetto e sul consumatore di prova. Chiusura completa con
+# versioni esatte, generata con
+#   uv pip compile --universal --python-version 3.10
+# da mypy==2.3.1 (il pin di plenora-database-tools). pyarrow non serve:
+# la serie 25 non pubblica tipi (niente py.typed), e mypy.ini la tratta
+# come modulo senza tipi.
+ast-serialize==0.11.2
+librt==0.16.0 ; platform_python_implementation != 'PyPy'
+mypy==2.3.1
+mypy-extensions==1.1.0
+pathspec==1.1.1
+tomli==2.4.1 ; python_full_version < '3.11'
+typing-extensions==4.16.0

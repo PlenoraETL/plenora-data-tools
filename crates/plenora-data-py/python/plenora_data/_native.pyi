@@ -1,0 +1,46 @@
+# Stub del modulo nativo privato `plenora_data._native` (crates/plenora-data-py/src/lib.rs).
+# Non e' API pubblica: la usa solo `plenora_data._api`, che valida gli
+# argomenti prima di arrivare qui. I documenti escono come testo JSON.
+
+from typing import final
+
+@final
+class CancellationToken:
+    """Segnale di annullamento cooperativo, condivisibile fra thread."""
+
+    def __init__(self) -> None: ...
+    def cancel(self) -> None:
+        """Alza il segnale (idempotente): l'operazione si ferma al suo
+        controllo successivo con `PlenoraCancelledError`."""
+    @property
+    def cancelled(self) -> bool:
+        """Se il segnale e' alzato."""
+
+def version() -> str: ...
+def capabilities() -> str: ...
+def catalog() -> str: ...
+def describe(
+    tipo: str,
+    sorgente: object,
+    scadenza: float | None,
+    timeout: float | None,
+    gettoni: list[CancellationToken],
+) -> str: ...
+def validate(
+    tipo_piano: str,
+    piano_dato: object,
+    voci: list[tuple[str, str, object]],
+    scadenza: float | None,
+    timeout: float | None,
+    gettoni: list[CancellationToken],
+) -> str: ...
+def run(
+    tipo_piano: str,
+    piano_dato: object,
+    voci: list[tuple[str, str, object]],
+    uscite: list[tuple[str, object]] | None,
+    sovrascrivi: bool,
+    scadenza: float | None,
+    timeout: float | None,
+    gettoni: list[CancellationToken],
+) -> tuple[str, list[tuple[str, object]]]: ...

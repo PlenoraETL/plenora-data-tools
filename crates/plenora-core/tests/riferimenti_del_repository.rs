@@ -38,7 +38,11 @@ const VIETATI: &[&str] = &[
 
 /// Estensioni di testo: ogni file si legge per intero come UTF-8, e un
 /// errore di lettura fa fallire il test.
-const TESTO: &[&str] = &["rs", "toml", "md", "py", "json", "csv", "lock", "yml"];
+/// `pyi`, `typed` (il marcatore PEP 561, vuoto), `ini` e `txt` sono
+/// dell'SDK Python: stub, configurazione di mypy, requisiti fissati.
+const TESTO: &[&str] = &[
+    "rs", "toml", "md", "py", "pyi", "typed", "ini", "txt", "json", "csv", "lock", "yml",
+];
 /// Nomi di file di testo senza estensione.
 const TESTO_PER_NOME: &[&str] = &[".gitignore", ".gitattributes"];
 /// Estensioni binarie: non si leggono, si contano. Un file con
