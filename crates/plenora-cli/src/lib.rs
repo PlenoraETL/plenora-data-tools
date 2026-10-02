@@ -30,8 +30,8 @@ pub mod inviluppo;
 pub mod operazioni;
 
 pub use cli::{
-    esegui_invocazione, esegui_invocazione_os, testo_aiuto, Segnale, CONTRATTO_AIUTO,
-    CONTRATTO_VERSIONE,
+    consegna, esegui_invocazione, esegui_invocazione_os, testo_aiuto, Segnale,
+    CODICE_STDOUT_NON_SCRIVIBILE, CONTRATTO_AIUTO, CONTRATTO_VERSIONE,
 };
 pub use inviluppo::Uscita;
 

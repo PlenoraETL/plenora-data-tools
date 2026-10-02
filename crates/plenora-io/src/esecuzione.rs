@@ -210,11 +210,13 @@ pub struct UscitaScritta {
 ///
 /// Oltre ai controlli del runner (prima di ogni passo e prima di consegnare
 /// gli output) l'interruzione si controlla prima di leggere ogni input (fase
-/// `read`) e prima di scrivere ogni output (fase `write`). Mai durante la
-/// lettura o la scrittura di un file: un file grande finisce anche oltre la
-/// scadenza, e l'errore arriva al controllo successivo. Un'interruzione
-/// dopo il primo output scritto ha effetto `partial`, come ogni errore
-/// della scrittura.
+/// `read`), prima di scrivere ogni output (fase `write`) e dopo l'ultimo
+/// (fase `finalize`). Mai durante la lettura o la scrittura di un file: un
+/// file grande finisce anche oltre la scadenza, e l'errore arriva al
+/// controllo successivo, anche quello dopo l'ultima scrittura (un
+/// annullamento arrivato durante l'ultima scrittura non diventa un
+/// successo). Un'interruzione dopo il primo output scritto ha effetto
+/// `partial`, come ogni errore della scrittura; dopo l'ultimo `committed`.
 ///
 /// # Errors
 ///
@@ -259,10 +261,29 @@ pub fn esegui_da_file_interrompibile(
             errore.with_remote_effect(RemoteEffect::Partial)
         }
     })?;
+    verifica_finale(interruzione, &pubblicati)?;
     Ok(EsitoFile {
         report: esito.report,
         uscite: pubblicati,
     })
+}
+
+/// L'interruzione dopo l'ultima scrittura (fase `finalize`): un annullamento
+/// o una scadenza arrivati mentre si scriveva l'ultimo output non diventano
+/// un successo. Gli output sono tutti alla destinazione, quindi l'effetto è
+/// `committed` (con almeno un output; `none` senza) e il ritentativo non è
+/// automatico: il chiamante sa che cosa è stato pubblicato e decide.
+fn verifica_finale(interruzione: &Interruzione, pubblicati: &[UscitaScritta]) -> Result<()> {
+    interruzione
+        .verifica("dopo aver scritto gli output")
+        .map_err(|errore| {
+            let errore = errore.with_phase(ErrorPhase::Finalize);
+            if pubblicati.is_empty() {
+                errore
+            } else {
+                errore.with_remote_effect(RemoteEffect::Committed)
+            }
+        })
 }
 
 /// Valida un piano contro gli schemi dei suoi input letti da file, senza
@@ -473,5 +494,52 @@ mod tests {
         assert!(!dir.path().join("b.arrow").exists());
         assert_eq!(errore.remote_effect(), RemoteEffect::None);
         assert_eq!(errore.retry_disposition(), RetryDisposition::Never);
+    }
+
+    /// Un'interruzione arrivata durante l'ultima scrittura si vede al
+    /// controllo finale: `cancelled` o `timeout`, fase `finalize`, effetto
+    /// `committed` con gli output alla destinazione, mai un successo.
+    #[test]
+    fn interruzione_dopo_l_ultima_scrittura() {
+        use std::sync::atomic::AtomicBool;
+        use std::time::Instant;
+
+        use plenora_core::ErrorPhase;
+        use plenora_pipeline::Interruzione;
+
+        use super::{verifica_finale, UscitaScritta};
+        use crate::Formato;
+
+        let scritta = UscitaScritta {
+            nome: "a".to_owned(),
+            righe: 1,
+            colonne: 1,
+            formato: Formato::ArrowIpc,
+        };
+        let annullata = Interruzione {
+            scadenza: None,
+            annullamento: Some(Arc::new(AtomicBool::new(true))),
+        };
+        let scaduta = Interruzione {
+            scadenza: Some(Instant::now()),
+            annullamento: None,
+        };
+        for (interruzione, categoria) in [
+            (&annullata, ErrorCategory::Cancelled),
+            (&scaduta, ErrorCategory::Timeout),
+        ] {
+            let errore = verifica_finale(interruzione, std::slice::from_ref(&scritta))
+                .expect_err("interrotta");
+            assert_eq!(errore.category(), categoria);
+            assert_eq!(errore.phase(), ErrorPhase::Finalize);
+            assert_eq!(errore.remote_effect(), RemoteEffect::Committed);
+            assert_eq!(
+                errore.retry_disposition(),
+                RetryDisposition::RequiresRecovery
+            );
+            let senza_output = verifica_finale(interruzione, &[]).expect_err("interrotta");
+            assert_eq!(senza_output.remote_effect(), RemoteEffect::None);
+        }
+        assert!(verifica_finale(&Interruzione::default(), &[scritta]).is_ok());
     }
 }

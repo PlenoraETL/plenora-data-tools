@@ -1364,7 +1364,8 @@ dati alla riga 1 colonna 15»), mai il testo che cita il valore letto.
 modo atomico), tranne dove un confine dichiara di più con
 `PlenoraError::with_remote_effect`: oggi solo `esegui_da_file`, che scrive
 gli output uno alla volta e marca `partial` un errore dopo il primo output
-scritto (i precedenti restano). Con un effetto già visibile un ritentativo
+scritto (i precedenti restano), e `committed` un'interruzione vista dopo
+l'ultimo (`esegui_da_file_interrompibile`). Con un effetto già visibile un ritentativo
 automatico (`safe`, `after`, `requires_idempotency_key`) diventa
 `requires_recovery`; una causa che non si ritenta mai resta `never`. Il
 primo effetto dichiarato vince anche sotto i wrapper di fase e di
@@ -3033,9 +3034,12 @@ binding di runtime) e `--timeout-ms` (dall'avvio del comando), uno solo dei
 due, diventano la scadenza dell'`Interruzione`; Ctrl-C e SIGTERM (crate
 `ctrlc`, feature `termination`) alzano il segnale di annullamento. Si
 controllano prima di leggere ogni input, prima di ogni passo, prima di
-consegnare gli output e prima di scrivere ognuno: `timeout` (exit 5,
-`EXECUTION_DEADLINE_EXCEEDED`) o `cancelled` (exit 130,
-`EXECUTION_CANCELLED`), con la fase del punto di controllo. Se il gestore
+consegnare gli output, prima di scrivere ognuno e dopo l'ultimo: `timeout`
+(exit 5, `EXECUTION_DEADLINE_EXCEEDED`) o `cancelled` (exit 130,
+`EXECUTION_CANCELLED`), con la fase del punto di controllo. Dopo l'ultima
+scrittura (fase `finalize`) gli output sono tutti alla destinazione e
+l'effetto è `committed`, ritentativo `requires_recovery`: un annullamento
+arrivato durante l'ultima scrittura non diventa un successo. Se il gestore
 dei segnali non si installa, `describe`, `validate` e `run` non partono
 (`internal`): dichiarano l'annullamento, e non girano senza.
 
@@ -3167,6 +3171,28 @@ manifesto, `crates/plenora-cli/adozione.json`).
   controllano fra letture, passi e scritture ([«Limiti dichiarati del
   runner»](#limiti-dichiarati-del-runner)): la lettura di un file grande o
   un passo lungo finiscono anche oltre la scadenza.
+- **Stdout non scrivibile.**
+  *Regola*: CLI 2.0, sezione 4: un documento JSON completo su stdout.
+  *Ambito*: ogni comando (`plenora_cli::consegna`).
+  *Hazard*: con una pipe chiusa o un disco pieno il documento manca o è
+  troncato; il processo esce con 5 (la categoria `io`), mai 0, non scrive un
+  secondo documento e niente su stderr. Il codice non dice più l'esito del
+  comando: un `run` può aver scritto i suoi output, quindi chi riceve 5
+  senza un documento completo tratta l'esito come ignoto.
+  *Rientro*: nessuno dentro il processo (stdout è il solo canale del
+  contratto); un chiamante che legge stdout fino in fondo non lo vede.
+- **Panici fuori dal thread principale.**
+  *Regola*: un panico diventa `internal` (CLI 2.0, sezione 6).
+  *Ambito*: i thread che la CLI non intercetta con `catch_unwind`: il
+  thread del gestore di Ctrl-C (`ctrlc` vi chiama `expect`).
+  *Hazard*: l'hook di `main.rs` conta, senza payload, ogni panico fuori
+  dalle barriere di dipendenza in qualunque thread
+  (`panic_policy::panici_fuori_dalle_barriere`), e un conto cambiato
+  durante l'invocazione trasforma un successo in `internal` (exit 70,
+  effetto `unknown` per `run`). Il controllo è alla fine, non ai punti di
+  controllo dell'annullamento: se il thread del gestore muore, il comando
+  prosegue senza annullamento fino in fondo, e solo allora fallisce.
+  *Rientro*: il conto letto anche ai punti di controllo dell'`Interruzione`.
 - **Aborti senza inviluppo.**
   *Regola*: CLI 2.0, sezione 4: un documento su stdout e niente su stderr
   in ogni caso.

@@ -6,6 +6,8 @@
 
 use std::fmt::Write as _;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+
+use plenora_core::panic_policy::panici_fuori_dalle_barriere;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -47,11 +49,45 @@ pub fn esegui_invocazione(argomenti: &[String], segnale: &Segnale) -> Uscita {
 
 /// Esegue `lavoro`; un panico diventa l'inviluppo `internal`, con effetto
 /// `unknown` per il comando che scrive file (`run`).
+///
+/// Anche un panico in un **altro** thread durante il lavoro (il thread del
+/// gestore di Ctrl-C di `ctrlc`, staccato: con l'hook silenzioso morirebbe
+/// senza che nessuno lo veda, e l'annullamento smetterebbe di funzionare)
+/// non lascia passare un successo: l'hook installato da `main.rs` conta i
+/// panici fuori dalle barriere di dipendenza
+/// (`panic_policy::panici_fuori_dalle_barriere`), e un conto cambiato
+/// durante il lavoro trasforma un `ok` nell'errore `internal`. Un errore già
+/// tipizzato resta quello: dice già che il comando non è riuscito.
 fn proteggi(identita: Identita, lavoro: impl FnOnce() -> Uscita) -> Uscita {
     let con_effetti = operazioni::per_comando(identita.comando)
         .is_some_and(|operazione| operazione.effetto != operazioni::Effetto::Nessuno);
-    catch_unwind(AssertUnwindSafe(lavoro))
-        .unwrap_or_else(|_| inviluppo::panico(identita, con_effetti))
+    let panici_prima = panici_fuori_dalle_barriere();
+    let uscita = catch_unwind(AssertUnwindSafe(lavoro))
+        .unwrap_or_else(|_| inviluppo::panico(identita, con_effetti));
+    if uscita.codice == 0 && panici_fuori_dalle_barriere() != panici_prima {
+        return inviluppo::panico(identita, con_effetti);
+    }
+    uscita
+}
+
+/// Codice d'uscita quando il documento non si può consegnare su stdout
+/// (pipe chiusa, disco pieno): la categoria `io` di CLI 2.0, sezione 8. Il
+/// documento manca o è troncato, e non se ne scrive un secondo.
+pub const CODICE_STDOUT_NON_SCRIVIBILE: u8 = 5;
+
+/// Scrive l'inviluppo su `stdout` e rende il codice d'uscita del processo.
+///
+/// È quello dell'esito, o [`CODICE_STDOUT_NON_SCRIVIBILE`] se la scrittura o
+/// il `flush` falliscono (README, «Stdout non scrivibile»). Niente va su
+/// stderr.
+pub fn consegna(uscita: &Uscita, stdout: &mut impl std::io::Write) -> u8 {
+    match stdout
+        .write_all(uscita.stdout.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        Ok(()) => uscita.codice,
+        Err(_) => CODICE_STDOUT_NON_SCRIVIBILE,
+    }
 }
 
 /// [`esegui_invocazione`] sugli argomenti del sistema operativo.
@@ -357,8 +393,80 @@ pub fn testo_aiuto() -> String {
 mod tests {
     use serde_json::Value;
 
-    use super::{identita_di, proteggi};
-    use crate::inviluppo::Uscita;
+    use super::{consegna, identita_di, proteggi, CODICE_STDOUT_NON_SCRIVIBILE};
+    use crate::inviluppo::{self, Uscita};
+
+    /// Uno scrittore che accetta `capienza` byte e poi fallisce.
+    struct Rotto {
+        capienza: usize,
+        scritti: Vec<u8>,
+    }
+
+    impl std::io::Write for Rotto {
+        fn write(&mut self, byte: &[u8]) -> std::io::Result<usize> {
+            if self.scritti.len() >= self.capienza {
+                return Err(std::io::ErrorKind::BrokenPipe.into());
+            }
+            let quanti = byte.len().min(self.capienza - self.scritti.len());
+            self.scritti.extend_from_slice(&byte[..quanti]);
+            Ok(quanti)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Stdout chiuso o pieno: codice della categoria `io`, mai 0, e nessun
+    /// secondo documento; con uno stdout sano il codice dell'esito.
+    #[test]
+    fn stdout_non_scrivibile() {
+        let uscita = Uscita {
+            stdout: "{\"status\":\"ok\"}\n".to_owned(),
+            codice: 0,
+        };
+        for capienza in [0, 5] {
+            let mut rotto = Rotto {
+                capienza,
+                scritti: Vec::new(),
+            };
+            assert_eq!(consegna(&uscita, &mut rotto), CODICE_STDOUT_NON_SCRIVIBILE);
+            assert_eq!(rotto.scritti, uscita.stdout.as_bytes()[..capienza]);
+        }
+        let mut sano = Vec::new();
+        assert_eq!(consegna(&uscita, &mut sano), 0);
+        assert_eq!(sano, uscita.stdout.as_bytes());
+    }
+
+    /// Un panico in un altro thread durante il lavoro (come quello del
+    /// gestore di Ctrl-C), con l'hook silenzioso di `main.rs`: il successo
+    /// diventa `internal`, exit 70.
+    #[test]
+    fn un_panico_in_un_altro_thread_non_lascia_passare_un_successo() {
+        // L'hook che conta i panici, come in `main.rs`. In questo processo
+        // di test silenzia anche gli altri panici: nessun test ne stampa.
+        let _ =
+            plenora_core::panic_policy::install(plenora_core::panic_policy::PanicPolicy::Silent);
+        let identita = identita_di(Some("catalog"));
+        let uscita = proteggi(identita, || {
+            let figlio = std::thread::spawn(|| std::panic::panic_any(String::from("PAYLOAD")));
+            assert!(figlio.join().is_err());
+            inviluppo::successo(identita, serde_json::json!({}))
+        });
+        assert_eq!(uscita.codice, 70, "{}", uscita.stdout);
+        let documento: Value = serde_json::from_str(&uscita.stdout).expect("JSON");
+        assert_eq!(documento["error"]["category"], "internal");
+        assert!(!uscita.stdout.contains("PAYLOAD"));
+        // Per `run` l'effetto è `unknown`.
+        let identita = identita_di(Some("run"));
+        let uscita = proteggi(identita, || {
+            let figlio = std::thread::spawn(|| std::panic::panic_any(String::from("PAYLOAD")));
+            assert!(figlio.join().is_err());
+            inviluppo::successo(identita, serde_json::json!({}))
+        });
+        let documento: Value = serde_json::from_str(&uscita.stdout).expect("JSON");
+        assert_eq!(documento["error"]["remote_effect"], "unknown");
+    }
 
     /// Un panico diventa l'inviluppo `internal`, exit 70, senza il testo del
     /// payload; per `run` l'effetto è `unknown` (un output può essere già

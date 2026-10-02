@@ -19,6 +19,7 @@
 //! posizione nel sorgente e forma del payload, mai il payload.
 
 use std::panic::PanicHookInfo;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Once;
 
 /// Cosa deve fare l'hook quando un panico attraversa il processo.
@@ -52,13 +53,16 @@ pub fn install(policy: PanicPolicy) -> bool {
     INSTALLAZIONE.call_once(|| {
         installato = true;
         match policy {
-            PanicPolicy::Silent => std::panic::set_hook(Box::new(|_| {})),
+            PanicPolicy::Silent => std::panic::set_hook(Box::new(|_| {
+                registra_panico(dentro_una_barriera_di_dipendenza());
+            })),
             PanicPolicy::Sanitized => {
                 std::panic::set_hook(Box::new(|info| {
+                    use std::io::Write as _;
+                    registra_panico(dentro_una_barriera_di_dipendenza());
                     // `eprintln!` andrebbe in panico se stderr fosse chiuso,
                     // e un panico dentro l'hook aborta il processo: si scrive
                     // ignorando l'esito.
-                    use std::io::Write as _;
                     let mut stderr = std::io::stderr();
                     let _ = writeln!(stderr, "{}", riga_sanitizzata(info));
                 }));
@@ -66,6 +70,33 @@ pub fn install(policy: PanicPolicy) -> bool {
         }
     });
     installato
+}
+
+/// Panici fuori da una [`barriera_di_dipendenza`] osservati dall'hook di
+/// [`install`], da qualunque thread.
+static PANICI_FUORI_DALLE_BARRIERE: AtomicU64 = AtomicU64::new(0);
+
+/// Conta un panico, se non è dentro una barriera (lì è atteso e diventa un
+/// errore della barriera). Separata dall'hook per essere provata senza un
+/// panico vero.
+fn registra_panico(dentro_una_barriera: bool) {
+    if !dentro_una_barriera {
+        PANICI_FUORI_DALLE_BARRIERE.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+/// Quanti panici fuori dalle barriere di dipendenza l'hook installato da
+/// [`install`] ha visto finora, in qualunque thread (senza payload).
+///
+/// Serve a chi non può intercettare un panico con `catch_unwind`: un thread
+/// staccato che muore in silenzio (con [`PanicPolicy::Silent`] nessuno lo
+/// vede) lascia comunque il conto cresciuto. La CLI `plenora-data` lo legge
+/// prima di dichiarare un successo: un conto cambiato durante
+/// l'invocazione la fa finire con un errore `internal`. Senza un
+/// [`install`] riuscito il conto resta zero.
+#[must_use]
+pub fn panici_fuori_dalle_barriere() -> u64 {
+    PANICI_FUORI_DALLE_BARRIERE.load(Ordering::Acquire)
 }
 
 /// Riga pubblicata da [`PanicPolicy::Sanitized`].
@@ -217,6 +248,21 @@ mod tests {
             "chiudere la barriera interna non chiude l'esterna"
         );
         assert!(!dentro_una_barriera_di_dipendenza());
+    }
+
+    /// Il conto cresce per un panico fuori dalle barriere, non per uno
+    /// dentro. Il conto è del processo: altri test possono farlo crescere in
+    /// parallelo, quindi si guarda solo che non diminuisca e che cresca.
+    #[test]
+    fn il_conto_dei_panici_esclude_le_barriere() {
+        let prima = super::panici_fuori_dalle_barriere();
+        super::registra_panico(false);
+        assert!(super::panici_fuori_dalle_barriere() > prima);
+        // Dentro una barriera: non conta. Con test in parallelo l'unica
+        // prova robusta è sulla funzione pura, una chiamata isolata.
+        let base = super::panici_fuori_dalle_barriere();
+        super::registra_panico(true);
+        assert!(super::panici_fuori_dalle_barriere() >= base);
     }
 
     #[test]
