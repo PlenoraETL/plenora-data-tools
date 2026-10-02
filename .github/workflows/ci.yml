@@ -23,6 +23,36 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Guardie statiche in Python, senza toolchain Rust: documenti, commenti,
+  # documento generato e le prove delle guardie stesse. Solo libreria
+  # standard, quindi nessun requisito da installare. Una guardia offline
+  # nuova entra in questo job.
+  guardie:
+    name: guardie statiche (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      # Testo UTF-8 anche sulla console di Windows.
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: scripts/check_docs.py
+        run: python scripts/check_docs.py
+      - name: scripts/check_comments.py
+        run: python scripts/check_comments.py
+      # `docs/inventario.md` è generato: se resta indietro rispetto ai
+      # sorgenti, è un documento che ha l'aria di essere sempre vero.
+      - name: scripts/genera_inventario.py --check
+        run: python scripts/genera_inventario.py --check
+      - name: prove delle guardie
+        run: python -m unittest discover -s scripts -p "test_*.py"
+
   gate:
     name: gate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

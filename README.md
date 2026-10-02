@@ -128,11 +128,14 @@ cargo test --workspace --locked
 PLENORA_TEST_LUNGHI=1 cargo test --workspace --locked   # prima del merge
 ```
 
-Modelli di costo e inventario generato hanno guardie Python (3.11 o
+Modelli di costo, documentazione e commenti hanno guardie Python (3.11 o
 successivo, solo libreria standard):
 
 ```sh
 python scripts/genera_costi_operazioni.py --verifica  # modello di costo tabellare
 python scripts/genera_costi_geo.py --verifica         # modello di costo geo
 python scripts/genera_inventario.py --check           # docs/inventario.md aggiornato
+python scripts/check_docs.py                          # link, ancore, comandi, generati
+python scripts/check_comments.py                      # regole oggettive dei commenti
+python -m unittest discover -s scripts -p "test_*.py" # prove delle guardie
 ```

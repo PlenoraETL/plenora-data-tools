@@ -85,3 +85,13 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 | `plenora-kernels-table` | 456 | 118 | 574 |
 | `plenora-pipeline` | 10 | 141 | 151 |
 | **totale** | 1173 | 527 | 1700 |
+
+### Prove delle guardie
+
+Funzioni `test_*` dei self-test Python in `scripts/`.
+
+| file | prove |
+| --- | --- |
+| `scripts/test_check_comments.py` | 20 |
+| `scripts/test_check_docs.py` | 12 |
+| `scripts/test_genera_inventario.py` | 5 |

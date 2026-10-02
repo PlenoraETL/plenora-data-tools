@@ -20,7 +20,8 @@ cronologia delle modifiche si consulta in Git.
 
 `scripts/genera_inventario.py` genera `inventario.md`;
 `crates/plenora-io/tests/operazioni_doc.rs` genera `operazioni.md` dalle
-schede. I documenti generati non si modificano a mano.
+schede. `scripts/check_docs.py` verifica documenti generati, link, ancore e
+comandi. I documenti generati non si modificano a mano.
 
 Le schede in `schede/` non si leggono da sole: entrano in `operazioni.md`, e
 i loro link sono relativi a questa cartella, non a `schede/`.

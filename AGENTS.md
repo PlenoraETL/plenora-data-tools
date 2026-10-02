@@ -51,8 +51,8 @@ l'unico posto in cui sono scritte.
 
 I comandi stanno nel [`README.md`](README.md#cosa-fa-girare-le-prove) e in
 `.github/workflows/ci.yml`: sono la fonte, e ricopiarli qui li farebbe
-divergere al primo cambiamento. Comprendono le guardie Python dei modelli di
-costo e dell'inventario generato, che la CI esegue con gli altri gate.
+divergere al primo cambiamento. Comprendono le guardie Python di documenti,
+commenti e modelli di costo, che la CI esegue con gli altri gate.
 
 La suite lunga ([`README.md`, «Suite lunga»](README.md#suite-lunga)) è
 obbligatoria prima del merge: la suite di default ne gira un sottoinsieme
