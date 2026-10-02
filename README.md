@@ -18,7 +18,7 @@ progetto d'origine si portano qui senza rinomine.
 | `plenora-io` | tabelle da e verso file: Arrow IPC (file e stream), Parquet, GeoParquet 1.1; scrittura atomica; un piano da file a file ([«File»](docs/file.md#file)) |
 | `plenora-cli` | la CLI pubblica `plenora-data` (CLI 2.0 di `plenora-contracts`: `catalog`, `describe`, `validate`, `run`, `capabilities`) e la stessa superficie in Rust ([«CLI `plenora-data`»](docs/cli.md#cli-plenora-data)) |
 | `plenora-data-py` | l'SDK Python `plenora-data` (`plenora_data`): le stesse operazioni su tabelle PyArrow o file ([«SDK Python»](#sdk-python)) |
-| `vendor/` | `geo` (con il porting a `i_overlay` 9.0.0) e `wkt` con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`) |
+| `vendor/` | `geo` (con il porting a `i_overlay` 9.0.0), `wkt` e `parquet` (il protocollo thrift che non girava a vuoto su file malformati) con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`) |
 
 ## Che cosa non c'è ancora
 

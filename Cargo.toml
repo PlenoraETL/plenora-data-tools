@@ -73,6 +73,9 @@ arrow-buffer = "=60.0.0"
 # hashbrown, num-*, chrono, flatbuffers) c'era gia'. Con `parquet` 60.0.0
 # `zstd` passa a 0.14.0 e `zstd-safe` a 8.0.0 (richiesti da `parquet`),
 # `zstd-sys` resta 2.1.0 (stessa libzstd 1.5.7).
+# Il sorgente e' vendorizzato con una patch (`[patch.crates-io]` sotto,
+# `vendor/parquet-60.0.0-eof/PROVENANCE.md`): il protocollo thrift della
+# 60.0.0 gira a vuoto su un header di pagina malformato.
 parquet = { version = "=60.0.0", default-features = false, features = ["arrow", "snap", "zstd", "crc"] }
 # CRC32 dei checksum di pagina Parquet (feature `crc` sopra): l'unico crate
 # nuovo nel lockfile per quella feature (la sua dipendenza `cfg-if` c'era
@@ -215,3 +218,4 @@ overflow-checks = true
 # geo-0.33.1-exact-filtered/PROVENANCE.md).
 geo = { path = "vendor/geo-0.33.1-exact-filtered" } # orientamento esatto + logging + filtro veloce + i_overlay 9 (PROVENANCE*.md)
 wkt = { path = "vendor/wkt-0.14.0-v2" }          # wkt-v2.patch (componenti vuoti, InteriorWithoutExterior, try_wkt_string)
+parquet = { path = "vendor/parquet-60.0.0-eof" }   # parquet-eof.patch: il protocollo thrift segnala la fine dei dati invece di girare a vuoto (PROVENANCE.md)
