@@ -1,18 +1,18 @@
 {
-  "nota": "Sorgente del manifesto di adozione v4 (schemas/adoption-manifest-v4.schema.json di plenora-contracts). Non e' il manifesto: versione e digest degli artefatti li aggiunge scripts/genera_manifesto_adozione.py dagli artefatti costruiti, al rilascio (CLI, crate Rust e wheel dell'SDK Python). Una deviazione con `surfaces` vale per ognuna e il generatore la scrive una volta per superficie. Le deviazioni sono quelle di docs/cli.md, «CLI `plenora-data`», e di crates/plenora-data-py/README.md.",
+  "nota": "Sorgente del manifesto di adozione v4 (schemas/adoption-manifest-v4.schema.json di plenora-contracts). Non e' il manifesto: versione e digest degli artefatti li aggiunge scripts/genera_manifesto_adozione.py dagli artefatti costruiti, al rilascio (CLI, crate Rust e wheel dell'SDK Python). Il profilo e' data-tools versione 2 (decisione 0007 dei contratti), che ha portato nei contratti le deviazioni dichiarate alla revisione ade868c: nessuna resta.",
   "component": "plenora-data-tools",
   "contracts_source": {
     "repository": "https://github.com/PlenoraETL/plenora-contracts.git",
-    "revision": "ade868cf89c6652cffe20019e7194b383384ee78"
+    "revision": "e7e9d3d9fd37696e1abe6679c028afacbf74847b"
   },
-  "profile": "plenora-data-tools-profile-v1",
+  "profile": "plenora-data-tools-profile-v2",
   "conforming": [
     "plenora-public-surfaces-v1",
     "plenora-capabilities-v2",
     "plenora-error-v1",
     "plenora-public-security-v1",
     "plenora-arrow-interchange-v1",
-    "plenora-plan-budget-v1",
+    "plenora-data-plan-v1",
     "plenora-row-diagnostics-v1",
     "plenora-cli-v2",
     "plenora-python-sdk-v1",
@@ -22,62 +22,5 @@
   "not_applicable": [
     "plenora-runtime-binding-v1"
   ],
-  "deviations": [
-    {
-      "rule": "PLAN-003",
-      "surfaces": ["cli", "python_sdk"],
-      "observed_behavior": "data.validate and data.run accept only the component plan format plenora-data-plan-v1 (\"version\": 1, SSA steps); plan formats 4, 5 and 6 are rejected with invalid_plan and no plan hash is published.",
-      "tracking": "docs/cli.md, section Deviazioni dai contratti",
-      "detectable_before_invocation": true
-    },
-    {
-      "rule": "PUBLIC-CATALOGS-1.0 section 6 (kernel version)",
-      "surfaces": ["cli", "python_sdk"],
-      "observed_behavior": "data.catalog reports each kernel with version = its semantic version (1 or more); the common registry data-kernels-v1 declares version 1 for every kernel.",
-      "tracking": "docs/cli.md, section Deviazioni dai contratti",
-      "detectable_before_invocation": true
-    },
-    {
-      "rule": "PUBLIC-CATALOGS-1.0 section 6 (registry completeness)",
-      "surfaces": ["cli", "python_sdk"],
-      "observed_behavior": "table.transpose is reported unavailable with a reason and is absent from the embedded registry: its output schema depends on the data and the runner rejects it at validation.",
-      "tracking": "docs/cli.md, section Deviazioni dai contratti",
-      "detectable_before_invocation": true
-    },
-    {
-      "rule": "SURF-006 (side_effect of data.run)",
-      "surfaces": ["cli", "python_sdk"],
-      "observed_behavior": "data.run advertises side_effect local, because it can write its outputs to local files (the CLI always, the Python SDK when outputs are given); the public catalog declares none.",
-      "tracking": "docs/cli.md, section Deviazioni dai contratti",
-      "detectable_before_invocation": true
-    },
-    {
-      "rule": "SURFACE-BINDINGS-1.0 section 3 (data.run entrypoint)",
-      "surface": "cli",
-      "observed_behavior": "A plan may declare several outputs; run accepts --output NAME=PATH once per output, and the canonical --output OUTPUT.arrow only for a plan with exactly one output.",
-      "tracking": "docs/cli.md, section Deviazioni dai contratti",
-      "detectable_before_invocation": true
-    },
-    {
-      "rule": "ARROW-011",
-      "surfaces": ["cli", "python_sdk"],
-      "observed_behavior": "describe, validate and run materialize whole tables in memory within the plan budget (a multi-batch Arrow stream given to the Python SDK is concatenated); declared through the bounded_materialization attribute.",
-      "tracking": "docs/cli.md, section Deviazioni dai contratti",
-      "detectable_before_invocation": true
-    },
-    {
-      "rule": "PLAN-007",
-      "surfaces": ["cli", "python_sdk"],
-      "observed_behavior": "The plan limits block accepts max_governed_memory_bytes (default 536870912) and the runner row and text limits; max_domain_memory_bytes and the isolated execution profile do not exist.",
-      "tracking": "docs/cli.md, section Deviazioni dai contratti",
-      "detectable_before_invocation": true
-    },
-    {
-      "rule": "PUBLIC-CATALOGS-1.0 (python_sdk applicability of data-tools-v1)",
-      "surface": "python_sdk",
-      "observed_behavior": "catalogs/data-tools-v1.json selects python_sdk as not_applicable and no operation lists the python_sdk surface, and bindings/python-sdk-v1.json has artifact null for this component; the component ships the plenora-data / plenora_data SDK, which binds all four operations and advertises them on the python_sdk surface.",
-      "tracking": "crates/plenora-data-py/README.md, deviations",
-      "detectable_before_invocation": true
-    }
-  ]
+  "deviations": []
 }

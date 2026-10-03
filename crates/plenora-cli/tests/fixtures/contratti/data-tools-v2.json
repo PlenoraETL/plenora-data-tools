@@ -1,0 +1,64 @@
+{
+  "$schema": "../schemas/public-catalog-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-public-catalog-v1",
+  "component": "plenora-data-tools",
+  "profile": "plenora-data-tools-profile-v2",
+  "status": "normative",
+  "target_surfaces": {
+    "rust": "required",
+    "cli": "required",
+    "python_sdk": "conditional",
+    "runtime": "conditional"
+  },
+  "operations": [
+    {
+      "id": "data.catalog",
+      "version": 2,
+      "requirement": "required",
+      "summary": "Return every registered table and geospatial kernel at its semantic version, with its availability in the artifact and its descriptor.",
+      "surfaces": ["rust", "cli", "python_sdk", "runtime"],
+      "input": {"contract": "plenora-data-catalog-query-v1", "content_types": ["application/json"], "interchange_contracts": []},
+      "output": {"contract": "plenora-data-catalog-result-v2", "content_types": ["application/json"], "interchange_contracts": []},
+      "side_effect": "none",
+      "controls": {"cancellation": false, "deadline": false, "idempotency_key": false},
+      "attributes": {"registry": "catalogs/data-kernels-v2.json", "kernel_registry": "plenora-data-kernel-catalog-v2"}
+    },
+    {
+      "id": "data.describe",
+      "version": 1,
+      "requirement": "required",
+      "summary": "Describe an Arrow dataset without changing it.",
+      "surfaces": ["rust", "cli", "python_sdk", "runtime"],
+      "input": {"contract": "plenora-data-describe-input-v1", "content_types": ["application/vnd.apache.arrow.stream", "application/vnd.apache.arrow.file"], "interchange_contracts": ["plenora-arrow-interchange-v1"]},
+      "output": {"contract": "plenora-data-description-v1", "content_types": ["application/json"], "interchange_contracts": []},
+      "side_effect": "none",
+      "controls": {"cancellation": true, "deadline": true, "idempotency_key": false},
+      "attributes": {"bounded_materialization": true, "extension_content_types": {"input": ["application/vnd.apache.parquet"], "output": []}}
+    },
+    {
+      "id": "data.validate",
+      "version": 2,
+      "requirement": "required",
+      "summary": "Validate a plenora-data-plan-v1 plan against named Arrow input contracts, without reading rows.",
+      "surfaces": ["rust", "cli", "python_sdk", "runtime"],
+      "input": {"contract": "plenora-data-plan-validation-input-v2", "content_types": ["application/json", "application/vnd.apache.arrow.stream", "application/vnd.apache.arrow.file"], "interchange_contracts": ["plenora-arrow-interchange-v1"]},
+      "output": {"contract": "plenora-data-plan-validation-result-v1", "content_types": ["application/json"], "interchange_contracts": []},
+      "side_effect": "none",
+      "controls": {"cancellation": true, "deadline": true, "idempotency_key": false},
+      "attributes": {"plan_contract": "plenora-data-plan-v1", "kernel_registry": "plenora-data-kernel-catalog-v2", "bounded_materialization": true, "extension_content_types": {"input": ["application/vnd.apache.parquet"], "output": []}}
+    },
+    {
+      "id": "data.run",
+      "version": 2,
+      "requirement": "required",
+      "summary": "Execute a plenora-data-plan-v1 plan over named Arrow inputs and return its named Arrow outputs, written to local files when the surface takes output paths.",
+      "surfaces": ["rust", "cli", "python_sdk"],
+      "input": {"contract": "plenora-data-execution-input-v2", "content_types": ["application/json", "application/vnd.apache.arrow.stream", "application/vnd.apache.arrow.file"], "interchange_contracts": ["plenora-arrow-interchange-v1"]},
+      "output": {"contract": "plenora-data-execution-result-v2", "content_types": ["application/vnd.apache.arrow.stream", "application/vnd.apache.arrow.file"], "interchange_contracts": ["plenora-arrow-interchange-v1"]},
+      "side_effect": "local",
+      "controls": {"cancellation": true, "deadline": true, "idempotency_key": false},
+      "attributes": {"plan_contract": "plenora-data-plan-v1", "kernel_registry": "plenora-data-kernel-catalog-v2", "bounded_materialization": true, "extension_content_types": {"input": ["application/vnd.apache.parquet"], "output": ["application/vnd.apache.parquet"]}}
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-//! Il registro dei kernel (`plenora-data-kernel-catalog-v1`), risultato di
+//! Il registro dei kernel (`plenora-data-kernel-catalog-v2`) nel risultato di
 //! `data.catalog`.
 //!
 //! Deriva per intero da `plenora_core::catalog::CATALOG` e dall'elenco delle
@@ -17,8 +17,8 @@
 //!   per componente.
 //!
 //! `version` è la versione della semantica osservabile
-//! (`semantic_version`): il registro comune dei contratti dichiara 1 per
-//! tutti, ed è una deviazione dichiarata (docs/cli.md, «CLI `plenora-data`»).
+//! (`semantic_version`), la stessa del registro comune `data-kernels-v2` dei
+//! contratti.
 
 use plenora_core::catalog::{
     Arity, CrsRequirement, DeterminismPolicy, Family, OperationDescriptor, ResultShape, CATALOG,
@@ -114,7 +114,8 @@ fn descrittore(operazione: &OperationDescriptor) -> Value {
     voce
 }
 
-/// Il documento `plenora-data-kernel-catalog-v1` di questo artefatto.
+/// Il documento `plenora-data-catalog-result-v2` di questo artefatto
+/// (profilo data-tools v2, DT-001).
 #[must_use]
 pub fn documento() -> Value {
     let operazioni = ordinate();

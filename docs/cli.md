@@ -2,7 +2,7 @@
 
 `crates/plenora-cli` è la superficie pubblica del componente
 `plenora-data-tools` secondo il profilo data-tools di `plenora-contracts`,
-fissato al commit `ade868cf89c6652cffe20019e7194b383384ee78`: il binario
+versione 2, fissato al commit `e7e9d3d9fd37696e1abe6679c028afacbf74847b`: il binario
 `plenora-data` (CLI 2.0) e le stesse quattro operazioni come funzioni Rust
 (`plenora_cli::api`). Una sola tabella (`plenora_cli::operazioni::OPERAZIONI`)
 dà comandi, aiuto, Capability Discovery 2.0 e la mappa degli export Rust; il
@@ -22,10 +22,10 @@ plenora-data run --plan PLAN.json [--input NAME=INPUT.arrow]... --output [NAME=]
 
 | comando | operazione | contratto del risultato | controlli |
 | --- | --- | --- | --- |
-| `catalog` | `data.catalog` | `plenora-data-kernel-catalog-v1` | nessuno |
+| `catalog` | `data.catalog` | `plenora-data-catalog-result-v2` | nessuno |
 | `describe` | `data.describe` | `plenora-data-description-v1` | scadenza, annullamento |
 | `validate` | `data.validate` | `plenora-data-plan-validation-result-v1` | scadenza, annullamento |
-| `run` | `data.run` | `plenora-data-execution-result-v1` | scadenza, annullamento |
+| `run` | `data.run` | `plenora-data-execution-result-v2` | scadenza, annullamento |
 
 ## Uscita e codici
 
@@ -125,7 +125,8 @@ catalogo pubblico con i suoi contratti, tipi di contenuto e controlli. Gli
 | campo | significato |
 | --- | --- |
 | `contract` | `plenora-data-capability-attributes-v1` |
-| `kernel_registry` | `plenora-data-kernel-catalog-v1`: l'operazione usa il registro di `catalog` |
+| `kernel_registry` | `plenora-data-kernel-catalog-v2`: l'operazione usa il registro di `catalog` |
+| `plan_contract` | `plenora-data-plan-v1`: il formato del piano di `validate` e `run` |
 | `extension_content_types.input`, `.output` | tipi in più rispetto al catalogo pubblico: `application/vnd.apache.parquet` |
 | `bounded_materialization` | `true`: le tabelle si materializzano intere, entro il budget (ARROW-011) |
 
@@ -146,8 +147,9 @@ vengono le capacità dell'SDK Python e la sua mappa dei simboli
   stderr, codice, documento intero) contro gli schemi dei contratti copiati
   in `crates/plenora-cli/tests/fixtures/contratti/` con il loro SHA-256
   (`provenienza.json`): inviluppo, errore, capacità (più CAP-005 e
-  CAP-007), registro dei kernel contro `data-kernels-v1`, operazioni contro
-  `data-tools-v1`, comandi contro `bindings/cli-v1.json`, diagnostica per
+  CAP-007), registro dei kernel contro `data-kernels-v2` (DT-001),
+  operazioni, contratti, effetti e attributi contro `data-tools-v2`, comandi
+  contro `bindings/cli-v1.json`, diagnostica per
   riga, canarini (dati e percorsi) mai nell'uscita;
 - `python scripts/verifica_cli_contratti.py --binario <plenora-data>
   --contratti <checkout di plenora-contracts>`: le stesse verifiche di
@@ -155,75 +157,39 @@ vengono le capacità dell'SDK Python e la sua mappa dei simboli
   contratti (il venv dei contratti ha i pacchetti);
 - `python scripts/genera_manifesto_adozione.py`: il manifesto v4 dagli
   artefatti costruiti (versione e digest), con la sorgente
-  `crates/plenora-cli/adozione.json` (pin, contratti, deviazioni). Non c'è
+  `crates/plenora-cli/adozione.json` (pin, profilo, contratti). Non c'è
   un manifesto nel repository: senza un artefatto rilasciato il digest
   sarebbe di una build qualsiasi.
 
-## Deviazioni dai contratti
+## Contratti adottati
 
-Volute, da portare nell'aggiornamento dei contratti (e nella sorgente del
-manifesto, `crates/plenora-cli/adozione.json`).
+Il profilo è data-tools versione 2 (`plenora-data-tools-profile-v2`, decisione
+0007 di `plenora-contracts`), con il catalogo `catalogs/data-tools-v2.json`:
+le differenze che alla revisione `ade868c` erano deviazioni dichiarate sono
+diventate contratto, e la sorgente del manifesto
+(`crates/plenora-cli/adozione.json`) non ne dichiara nessuna.
 
-- **Formato del piano.**
-  *Regola*: il profilo data-tools e Plan Budget 1.0 (PLAN-003) vogliono i
-  piani `schema_version` 4, 5 e 6 con l'hash di piano, e l'equivalenza 4 =
-  5.
-  *Ambito*: `validate`, `run`, `plenora_cli::api`.
-  *Hazard*: si accetta solo `plenora-data-plan-v1` (`"version": 1`, passi
-  SSA, [«Il piano»](runner.md#il-piano)); un piano 4, 5 o 6 si rifiuta con
-  `invalid_plan`, e non c'è un hash di piano. Nessun rischio silenzioso: il
-  rifiuto è esplicito, e `catalog` dichiara `plan_format`.
-  *Rientro*: il formato `plenora-data-plan-v1` nei contratti, al loro
-  aggiornamento.
-- **Versioni dei kernel.**
-  *Regola*: Public Catalogs 1.0, sezione 6: identità e versione dei kernel
-  uguali al registro comune `data-kernels-v1`, che dice 1 per tutti.
-  *Ambito*: `catalog`.
-  *Hazard*: `version` è la versione della semantica osservabile (104 kernel
-  su 146 oltre 1), con le quattro versioni in `versions`; un consumatore che
-  confronta con il registro comune vede la differenza, non la perde.
-  *Rientro*: un registro `data-kernels-v2` con le versioni vere.
-- **`table.transpose` non eseguibile.**
-  *Regola*: il registro dichiara 146 kernel.
-  *Ambito*: `catalog`, `validate`, `run`.
-  *Hazard*: `transpose` è `unavailable` con il motivo e non sta nel
-  `registry`; un piano che la usa fallisce in validazione (`unsupported`).
-  *Rientro*: uno schema d'uscita di `transpose` fissato dalla config.
-- **Effetto di `data.run`.**
-  *Regola*: il catalogo pubblico dichiara `side_effect: none`.
-  *Ambito*: `capabilities`, `run`.
-  *Hazard*: la CLI scrive i file d'uscita, quindi dichiara `local`:
-  dichiarare `none` per un comando che scrive file sarebbe falso.
-  *Rientro*: il catalogo distingue l'effetto della superficie CLI (file) da
-  quello del runtime (byte resi).
-- **Più output.**
-  *Regola*: il binding CLI ha un solo `--output OUTPUT.arrow`.
-  *Ambito*: `run`.
-  *Hazard*: nessuno per un piano con un output (la forma canonica vale);
-  con più output ognuno si nomina, e `--output PATH` senza nome si rifiuta.
-  *Rientro*: il binding con `--output NAME=PATH`.
-- **Materializzazione limitata.**
-  *Regola*: ARROW-011, lo stream si consuma senza materializzare tutto,
-  salvo dichiarazione.
-  *Ambito*: `describe`, `validate`, `run` (anche lo stream d'uscita si
-  scrive da una tabella intera).
-  *Hazard*: dichiarato (`bounded_materialization`); le tabelle stanno nel
+- **Piano**: `plenora-data-plan-v1` (Data Plan 1.0, [«Il piano»](runner.md#il-piano)),
+  senza hash di piano; un piano dei formati 4, 5 o 6 si rifiuta con
+  `invalid_plan` (DPLAN-013).
+- **Kernel**: la versione è quella della semantica osservabile, uguale al
+  registro comune `data-kernels-v2`; `table.transpose` è `unavailable` con
+  il motivo e fuori dal `registry` del risultato (DT-001).
+- **`data.run`**: `side_effect: local`, output nominati
+  (`--output NAME=OUTPUT.arrow`, o `--output OUTPUT.arrow` per un piano con
+  un solo output); non è legato al runtime.
+- **Parquet**: estensione dichiarata negli attributi
+  (`extension_content_types`), fuori da `content_types`.
+- **Materializzazione**: `describe`, `validate` e `run` dichiarano
+  `bounded_materialization` (ARROW-011 lo ammette): le tabelle stanno nel
   budget del piano ([«Budget di memoria»](runner.md#budget-di-memoria)).
-  *Rientro*: nessuno previsto (decisione del maintainer: niente streaming).
-- **Parquet.**
-  *Regola*: il profilo scambia Arrow.
-  *Ambito*: `describe`, `validate`, `run`.
-  *Hazard*: Parquet in ingresso e in uscita è un'estensione dichiarata
-  negli attributi, fuori da `content_types`.
-  *Rientro*: un tipo Parquet nel catalogo pubblico, se servirà.
-- **Frammento del budget.**
-  *Regola*: Plan Budget 1.0 (PLAN-007..PLAN-021: `max_domain_memory_bytes`,
-  formato 6, profilo isolato).
-  *Ambito*: `limits` del piano.
-  *Hazard*: c'è solo `max_governed_memory_bytes` (default pubblicato
-  `DEFAULT_MAX_GOVERNED_MEMORY_BYTES`, 536 870 912 byte) con i limiti di
-  righe e testi; il profilo isolato non esiste.
-  *Rientro*: con l'isolamento, se arriverà.
+- **Budget**: `max_governed_memory_bytes` (default pubblicato
+  `DEFAULT_MAX_GOVERNED_MEMORY_BYTES`, 536 870 912 byte) e i limiti del
+  runner (DPLAN-009..DPLAN-011); il profilo isolato non esiste.
+- **SDK Python**: superficie condizionale, binding `plenora-data` /
+  `plenora_data` ([README del crate](../crates/plenora-data-py/README.md)).
+- **Metadati Arrow**: le regole DT-ARROW-001..DT-ARROW-004 del profilo sono
+  quelle di [«Metadati Arrow»](metadati-arrow.md#metadati-arrow).
 
 ## Limiti dichiarati della CLI
 

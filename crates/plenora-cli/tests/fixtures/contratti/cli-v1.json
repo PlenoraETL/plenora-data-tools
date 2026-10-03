@@ -136,6 +136,30 @@
             "transform-arrow",
             "pair-arrow"
           ]
+        },
+        {
+          "operation": "data.catalog",
+          "version": 2,
+          "requirement": "required",
+          "entrypoints": [
+            "catalog --format json"
+          ]
+        },
+        {
+          "operation": "data.validate",
+          "version": 2,
+          "requirement": "required",
+          "entrypoints": [
+            "validate --plan PLAN.json --input NAME=INPUT.arrow --format json"
+          ]
+        },
+        {
+          "operation": "data.run",
+          "version": 2,
+          "requirement": "required",
+          "entrypoints": [
+            "run --plan PLAN.json --input NAME=INPUT.arrow --output NAME=OUTPUT.arrow --format json"
+          ]
         }
       ]
     },

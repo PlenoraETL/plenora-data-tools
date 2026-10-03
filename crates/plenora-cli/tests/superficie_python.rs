@@ -70,23 +70,16 @@ fn le_capacita_dell_sdk_sono_quelle_della_cli_sulla_superficie_python() {
 #[test]
 fn la_mappa_python_e_una_sezione_valida_dei_binding_dei_contratti() {
     let mappa = mappa_python();
-    // Al commit fissato i contratti non hanno ancora un artefatto Python per
-    // questo componente: la mappa è ciò che il loro aggiornamento scriverà.
-    let mut documento_python = contratto("python-sdk-v1.json");
-    let componenti = documento_python["components"]
-        .as_array_mut()
-        .expect("components");
-    let nostra = componenti
-        .iter_mut()
+    // Al commit fissato la sezione Python di questo componente è nei
+    // contratti: la mappa dell'artefatto è, alla lettera, quella sezione.
+    let documento_python = contratto("python-sdk-v1.json");
+    let nostra = documento_python["components"]
+        .as_array()
+        .expect("components")
+        .iter()
         .find(|sezione| sezione["component"] == "plenora-data-tools")
         .expect("sezione di plenora-data-tools");
-    assert_eq!(
-        *nostra,
-        json!({"component": "plenora-data-tools", "artifact": null,
-               "discovery": [], "bindings": []}),
-        "i contratti fissati hanno gia' la sezione Python: allineare la mappa"
-    );
-    *nostra = mappa.clone();
+    assert_eq!(*nostra, mappa, "mappa Python diversa dai contratti fissati");
     Registro::dei_contratti()
         .valida("surface-bindings-v1.schema.json", &documento_python)
         .unwrap_or_else(|motivo| panic!("surface-bindings-v1: {motivo}"));
@@ -99,7 +92,7 @@ fn la_mappa_python_e_una_sezione_valida_dei_binding_dei_contratti() {
     // Ogni operazione del catalogo pubblico, con la sua versione e il suo
     // requisito; ogni simbolo una volta sola (validate_specs.py dei
     // contratti: niente entrypoint ripetuti in un componente).
-    let catalogo = contratto("data-tools-v1.json");
+    let catalogo = contratto("data-tools-v2.json");
     let pubbliche = catalogo["operations"].as_array().expect("operations");
     let binding = mappa["bindings"].as_array().expect("bindings");
     assert_eq!(binding.len(), pubbliche.len());

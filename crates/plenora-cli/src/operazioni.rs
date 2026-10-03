@@ -3,10 +3,10 @@
 //! degli export Rust e dei simboli Python.
 //!
 //! Le operazioni sono le quattro del catalogo pubblico di `plenora-contracts`
-//! (`catalogs/data-tools-v1.json`): `data.catalog`, `data.describe`,
-//! `data.validate`, `data.run`. Identificatori, versioni, contratti e tipi di
-//! contenuto vengono da lì; dove questo artefatto se ne scosta lo dice la
-//! voce stessa (attributi) e docs/cli.md («CLI `plenora-data`», deviazioni).
+//! (`catalogs/data-tools-v2.json`, profilo `plenora-data-tools-profile-v2`):
+//! `data.catalog` 2, `data.describe` 1, `data.validate` 2, `data.run` 2.
+//! Identificatori, versioni, contratti e tipi di contenuto vengono da lì; gli
+//! attributi dicono ciò che i campi comuni non dicono.
 //!
 //! I kernel che un piano può usare non sono comandi: stanno nel registro
 //! che `data.catalog` restituisce ([`crate::catalogo`]), derivato dal
@@ -26,7 +26,7 @@ pub const PARQUET: &str = "application/vnd.apache.parquet";
 /// sono descritti in docs/cli.md («CLI `plenora-data`», «Attributi»).
 pub const CONTRATTO_ATTRIBUTI: &str = "plenora-data-capability-attributes-v1";
 /// Il registro dei kernel restituito da `data.catalog`.
-pub const REGISTRO_KERNEL: &str = "plenora-data-kernel-catalog-v1";
+pub const REGISTRO_KERNEL: &str = "plenora-data-kernel-catalog-v2";
 
 /// Classe d'effetto collaterale pubblica (Public Surfaces 1.0, SURF-006).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,19 +93,22 @@ pub struct OperazionePubblica {
     /// asincroni con la stessa semantica (Surface Bindings 1.0, sezione 4;
     /// Python SDK 1.0, sezioni 4 e 12).
     pub export_python: &'static [&'static str],
+    /// L'operazione legge un piano `plenora-data-plan-v1` (attributo
+    /// `plan_contract`).
+    pub usa_piano: bool,
 }
 
 /// Le operazioni pubbliche dell'artefatto, nell'ordine del catalogo.
 pub const OPERAZIONI: &[OperazionePubblica] = &[
     OperazionePubblica {
         id: "data.catalog",
-        versione: 1,
+        versione: 2,
         comando: "catalog",
         sintassi: "catalog",
         riassunto: "registro dei kernel che un piano puo' usare",
         ingresso: "plenora-data-catalog-query-v1",
         tipi_ingresso: &[JSON],
-        uscita: "plenora-data-kernel-catalog-v1",
+        uscita: "plenora-data-catalog-result-v2",
         tipi_uscita: &[JSON],
         effetto: Effetto::Nessuno,
         annullamento: false,
@@ -116,6 +119,7 @@ pub const OPERAZIONI: &[OperazionePubblica] = &[
         usa_registro: true,
         export_rust: &["plenora_cli::api::catalogo"],
         export_python: &["plenora_data.catalog", "plenora_data.acatalog"],
+        usa_piano: false,
     },
     OperazionePubblica {
         id: "data.describe",
@@ -139,15 +143,16 @@ pub const OPERAZIONI: &[OperazionePubblica] = &[
             "plenora_cli::api::descrivi_tabella",
         ],
         export_python: &["plenora_data.describe", "plenora_data.adescribe"],
+        usa_piano: false,
     },
     OperazionePubblica {
         id: "data.validate",
-        versione: 1,
+        versione: 2,
         comando: "validate",
         sintassi: "validate --plan PLAN.json [--input NAME=INPUT.arrow]... \
                    [--deadline RFC3339 | --timeout-ms MS]",
         riassunto: "valida un piano contro gli schemi degli input, senza eseguirlo",
-        ingresso: "plenora-data-plan-validation-input-v1",
+        ingresso: "plenora-data-plan-validation-input-v2",
         tipi_ingresso: &[JSON, ARROW_STREAM, ARROW_FILE],
         uscita: "plenora-data-plan-validation-result-v1",
         tipi_uscita: &[JSON],
@@ -163,18 +168,19 @@ pub const OPERAZIONI: &[OperazionePubblica] = &[
             "plenora_cli::api::valida_ingressi",
         ],
         export_python: &["plenora_data.validate", "plenora_data.avalidate"],
+        usa_piano: true,
     },
     OperazionePubblica {
         id: "data.run",
-        versione: 1,
+        versione: 2,
         comando: "run",
         sintassi: "run --plan PLAN.json [--input NAME=INPUT.arrow]... \
                    --output [NAME=]OUTPUT.arrow... [--overwrite] \
                    [--deadline RFC3339 | --timeout-ms MS]",
         riassunto: "esegue un piano e scrive i suoi output (.arrow file, .arrows stream, .parquet)",
-        ingresso: "plenora-data-execution-input-v1",
+        ingresso: "plenora-data-execution-input-v2",
         tipi_ingresso: &[JSON, ARROW_STREAM, ARROW_FILE],
-        uscita: "plenora-data-execution-result-v1",
+        uscita: "plenora-data-execution-result-v2",
         tipi_uscita: &[ARROW_STREAM, ARROW_FILE],
         effetto: Effetto::Locale,
         annullamento: true,
@@ -189,6 +195,7 @@ pub const OPERAZIONI: &[OperazionePubblica] = &[
             "plenora_cli::api::esegui_in_memoria",
         ],
         export_python: &["plenora_data.run", "plenora_data.arun"],
+        usa_piano: true,
     },
 ];
 

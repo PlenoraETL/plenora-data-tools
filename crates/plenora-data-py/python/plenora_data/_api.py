@@ -79,7 +79,7 @@ Destination = Union[str, "os.PathLike[str]"]
 class RunResult:
     """Il risultato di `run` e `arun`.
 
-    `result` è il documento `plenora-data-execution-result-v1` (output e
+    `result` è il documento `plenora-data-execution-result-v2` (output e
     passi, mai percorsi). `tables` ha le tabelle d'uscita, nell'ordine degli
     output del piano, quando non sono state scritte su file (`outputs`
     assente); altrimenti è vuoto.
@@ -394,7 +394,7 @@ def capabilities() -> dict[str, Any]:
 
 def catalog() -> dict[str, Any]:
     """`data.catalog`: il registro dei kernel che un piano può usare
-    (`plenora-data-kernel-catalog-v1`)."""
+    (`plenora-data-catalog-result-v2`)."""
     documento: dict[str, Any] = json.loads(_chiama(_native.catalog))
     return documento
 
@@ -475,7 +475,7 @@ def run(
     deadline: datetime | None = None,
     cancel: CancellationToken | None = None,
 ) -> RunResult:
-    """`data.run`: esegue un piano (`plenora-data-execution-result-v1`).
+    """`data.run`: esegue un piano (`plenora-data-execution-result-v2`).
 
     Senza `outputs` le tabelle d'uscita tornano in `RunResult.tables` come
     `pyarrow.Table`, e nulla si scrive. Con `outputs` (un percorso per ogni

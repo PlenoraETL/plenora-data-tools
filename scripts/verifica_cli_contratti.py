@@ -27,7 +27,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-REVISIONE = "ade868cf89c6652cffe20019e7194b383384ee78"
+REVISIONE = "e7e9d3d9fd37696e1abe6679c028afacbf74847b"
 
 
 class Verifica:
@@ -108,17 +108,32 @@ def verifica(contratti: Path, binario: Path) -> list[str]:
     capacita = documento["result"]
     v.valido("capabilities-v2", capacita, "capabilities")
     v.controlla(not v.semantica.capability_errors(capacita), "capabilities: CAP-005/CAP-007")
-    catalogo = json.loads((contratti / "catalogs" / "data-tools-v1.json").read_text("utf-8"))
-    pubbliche = {(op["id"], op["version"]) for op in catalogo["operations"]}
-    nostre = {(op["id"], op["version"]) for op in capacita["operations"]}
-    v.controlla(pubbliche == nostre, "capabilities: operazioni del catalogo pubblico")
+    catalogo = json.loads((contratti / "catalogs" / "data-tools-v2.json").read_text("utf-8"))
+    pubbliche = {
+        (op["id"], op["version"], op["input"]["contract"], op["output"]["contract"], op["side_effect"])
+        for op in catalogo["operations"]
+    }
+    nostre = {
+        (op["id"], op["version"], op["input"]["contract"], op["output"]["contract"], op["side_effect"])
+        for op in capacita["operations"]
+    }
+    v.controlla(pubbliche == nostre, "capabilities: operazioni, contratti ed effetti del catalogo v2")
 
     codice, documento = v.invoca("catalog", "--format", "json")
+    v.controlla(documento["contract"] == "plenora-data-catalog-result-v2", "catalog: contratto del risultato")
     v.valido("operation-registry-v1", documento["result"]["registry"], "catalog: registry")
-    registro = json.loads((contratti / "catalogs" / "data-kernels-v1.json").read_text("utf-8"))
-    comuni = {(op["id"], op["family"]) for op in registro["operations"]}
-    nostri = {(k["id"], k["family"]) for k in documento["result"]["kernels"]}
-    v.controlla(comuni == nostri, "catalog: id e famiglie del registro comune")
+    registro = json.loads((contratti / "catalogs" / "data-kernels-v2.json").read_text("utf-8"))
+    comuni = {(op["id"], op["version"], op["family"]) for op in registro["operations"]}
+    kernel = documento["result"]["kernels"]
+    nostri = {(k["id"], k["version"], k["family"]) for k in kernel}
+    v.controlla(comuni == nostri, "catalog: id, versioni e famiglie del registro v2 (DT-001)")
+    disponibili = {(k["id"], k["version"], k["family"]) for k in kernel if k["status"] == "available"}
+    nel_registro = {(op["id"], op["version"], op["family"]) for op in documento["result"]["registry"]["operations"]}
+    v.controlla(disponibili == nel_registro, "catalog: registry = kernel disponibili (DT-001)")
+    v.controlla(
+        all(k.get("reason") for k in kernel if k["status"] != "available"),
+        "catalog: motivo dei kernel non disponibili (DT-001)",
+    )
 
     codice, _ = v.invoca("--help", "--format", "json")
     v.controlla(codice == 0, "help json")

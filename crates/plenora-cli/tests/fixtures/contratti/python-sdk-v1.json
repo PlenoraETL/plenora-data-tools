@@ -150,9 +150,49 @@
     },
     {
       "component": "plenora-data-tools",
-      "artifact": null,
-      "discovery": [],
-      "bindings": []
+      "artifact": "plenora-data / plenora_data",
+      "discovery": [
+        "plenora_data.version",
+        "plenora_data.capabilities"
+      ],
+      "bindings": [
+        {
+          "operation": "data.catalog",
+          "version": 2,
+          "requirement": "required",
+          "entrypoints": [
+            "plenora_data.catalog",
+            "plenora_data.acatalog"
+          ]
+        },
+        {
+          "operation": "data.describe",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "plenora_data.describe",
+            "plenora_data.adescribe"
+          ]
+        },
+        {
+          "operation": "data.validate",
+          "version": 2,
+          "requirement": "required",
+          "entrypoints": [
+            "plenora_data.validate",
+            "plenora_data.avalidate"
+          ]
+        },
+        {
+          "operation": "data.run",
+          "version": 2,
+          "requirement": "required",
+          "entrypoints": [
+            "plenora_data.run",
+            "plenora_data.arun"
+          ]
+        }
+      ]
     },
     {
       "component": "plenora-io-tools",

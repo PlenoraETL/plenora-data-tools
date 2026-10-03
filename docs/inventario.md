@@ -65,10 +65,10 @@ ricava aiuto, `capabilities` e mappa degli export Rust
 
 | id | versione | comando | effetto | annullamento | scadenza | tabelle intere in memoria |
 | --- | --- | --- | --- | --- | --- | --- |
-| `data.catalog` | 1 | `catalog` | `Nessuno` | false | false | false |
+| `data.catalog` | 2 | `catalog` | `Nessuno` | false | false | false |
 | `data.describe` | 1 | `describe` | `Nessuno` | true | true | true |
-| `data.validate` | 1 | `validate` | `Nessuno` | true | true | true |
-| `data.run` | 1 | `run` | `Locale` | true | true | true |
+| `data.validate` | 2 | `validate` | `Nessuno` | true | true | true |
+| `data.run` | 2 | `run` | `Locale` | true | true | true |
 
 ## Test
 
