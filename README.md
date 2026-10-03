@@ -18,7 +18,7 @@ progetto d'origine si portano qui senza rinomine.
 | `plenora-io` | tabelle da e verso file: Arrow IPC (file e stream), Parquet, GeoParquet 1.1; scrittura atomica; un piano da file a file ([«File»](docs/file.md#file)) |
 | `plenora-cli` | la CLI pubblica `plenora-data` (CLI 2.0 di `plenora-contracts`: `catalog`, `describe`, `validate`, `run`, `capabilities`) e la stessa superficie in Rust ([«CLI `plenora-data`»](docs/cli.md#cli-plenora-data)) |
 | `plenora-data-py` | l'SDK Python `plenora-data` (`plenora_data`): le stesse operazioni su tabelle PyArrow o file ([«SDK Python»](#sdk-python)) |
-| `vendor/` | `geo` (con il porting a `i_overlay` 9.0.0) e `wkt` con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`) |
+| `vendor/` | `geo` (con il porting a `i_overlay` 9.0.0), `wkt` e `parquet` (il protocollo thrift che non girava a vuoto su file malformati) con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`) |
 
 ## Che cosa non c'è ancora
 
@@ -186,6 +186,14 @@ Le campagne vogliono Linux (o WSL) con nightly e `cargo-fuzz`:
 cargo +nightly fuzz build -O
 cargo +nightly fuzz run esecuzione_tabellare -- -max_total_time=600
 ```
+
+`lettura_parquet` gira con `-fork=1 -ignore_ooms=1 -malloc_limit_mb=1024
+-rss_limit_mb=2048`: dentro `parquet` restano allocazioni dalle dimensioni
+dichiarate nel file (limite «File costruiti apposta» in
+[`docs/file.md`](docs/file.md#limiti-dichiarati)), e un caso di sola memoria
+si conta e si salva senza fermare la campagna, che resta sui blocchi e sui
+risultati sbagliati. Senza tetto, un caso così può far ripartire la VM di
+WSL.
 
 I panici attesi delle dipendenze dentro una barriera
 (`plenora_core::panic_policy::barriera_di_dipendenza`) non fermano il fuzzer;

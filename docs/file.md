@@ -269,11 +269,17 @@ limite della tabella.
   dichiarata).
   *Hazard*: un file Parquet malformato o costruito apposta (e i casi IPC non
   coperti) può far terminare il processo: `parquet` e `arrow-ipc` allocano
-  dalle lunghezze dichiarate prima di verificarle (per esempio
-  `Vec::with_capacity` sulla lunghezza di una lista Thrift del footer, la
-  dimensione non compressa di una pagina, le righe dichiarate; in IPC le
-  copie di buffer sovrapposti e non allineati), e un'allocazione impossibile
-  è un aborto, che la barriera anti-panico non ferma. Anche uno schema
+  dalle lunghezze dichiarate prima di verificarle, e un'allocazione
+  impossibile è un aborto, che la barriera anti-panico non ferma. La patch
+  di `parquet` (`vendor/parquet-60.0.0-eof/PROVENANCE.md`) chiude i casi
+  trovati dal fuzz: header di pagina che giravano a vuoto per minuti,
+  footer che riservavano gigabyte per i row group o le posizioni
+  dell'offset index, interi Thrift troncati. Restano, anche upstream, le
+  allocazioni dai figli dichiarati dello schema, dalle dimensioni di pagina
+  (compressa e non compressa) prima di leggerla, dai conteggi dei
+  dizionari e delle codifiche delta, dalla larghezza dei
+  `FixedLenByteArray`; in IPC le copie di buffer sovrapposti e non
+  allineati. Il tetto vero resta il limite di memoria del processo. Anche uno schema
   Parquet annidato per migliaia di livelli esaurisce lo stack. I file
   scritti da scrittori conformi non lo fanno.
   *Rientro*: se si devono leggere file di fonti non fidate, aggiungere una

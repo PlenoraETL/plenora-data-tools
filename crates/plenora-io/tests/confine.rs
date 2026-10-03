@@ -766,3 +766,61 @@ fn uno_schema_map_malformato_senza_blocchi_e_un_errore() {
         "senza tabella vuota costruibile",
     );
 }
+
+fn da_esadecimale(parti: &[&str]) -> Vec<u8> {
+    let esadecimale = parti.concat();
+    (0..esadecimale.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&esadecimale[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+/// Due Parquet trovati dal target di fuzz `lettura_parquet`: l'header di
+/// una pagina dichiara liste thrift da miliardi di elementi oltre la fine
+/// dei dati, o un footer dichiara miliardi di row group. Con `parquet`
+/// 60.0.0 invariato la lettura girava a vuoto per minuti (il salto dei byte a
+/// EOF «riusciva») o riservava gigabyte; con `patches/parquet-eof.patch` e' un
+/// errore immediato.
+#[test]
+fn un_header_di_pagina_oltre_la_fine_dei_dati_e_un_errore_immediato() {
+    let casi = [
+        da_esadecimale(&[
+            "504152b11500154c154c15b2562739fde3eaf7e800a504000000000000150615",
+            "061c00000000001504192c35001806736368656d611502001504250218017600",
+            "1608191c191c26001c1504192506001918017615001608167e167e2608491c15",
+            "0015001502003c290619260008000000167e16082608167e0028207061527175",
+            "65742d6370702d6172726f772076657273696f6e2032362e0116042608168400",
+            "007a00000050415231",
+        ]),
+        da_esadecimale(&[
+            "504152311500154c15afafafafafafafafafafafafafafafafafafafafafaf09",
+            "0909f7f6f6ee0909090909090909090909090909090909090909090909090909",
+            "0909090909090909090909afafafafafafafafafafafafafafafafafafafafaf",
+            "afafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafaf",
+            "afafafaf4c15b2aad8ffffffffffffffff1504192c35001806736368656d6115",
+            "020015042502180176001608191c191c26001c15041925060019180176150016",
+            "08167e167e2608491c150015001502003c290619260008000000167e16082608",
+            "167e002820706172717565742d6370702d6172726f772076657273696f6e2032",
+            "352e0116042608168400007a00000050415231",
+        ]),
+        // Footer che dichiara miliardi di row group in 147 byte: la capacita'
+        // si riservava dal conteggio dichiarato (5 GB), prima di leggere.
+        da_esadecimale(&[
+            "50415231150000080101000000000008001504192c35001806736368656d6115",
+            "0200150425021801161c00191c76081926001c15041925060019180176150028",
+            "08167e167e2608491c15ff010021fcffc3d619f4260008000000127e16082608",
+            "167e002820ffffffffffffff256370702d6172726f77207665a673696f6e2032",
+            "352e302e31191c1c0000007a00000050415231",
+        ]),
+    ];
+    for byte in casi {
+        let inizio = std::time::Instant::now();
+        let errore = errore(&byte, Formato::Parquet, &LimitiLettura::default());
+        assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+        assert!(
+            inizio.elapsed() < std::time::Duration::from_secs(5),
+            "lettura durata {:?}",
+            inizio.elapsed()
+        );
+    }
+}
