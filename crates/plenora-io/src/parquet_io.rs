@@ -51,7 +51,9 @@ use plenora_core::contract::arrow_metadata::GEO_METADATA_KEY;
 use plenora_core::memoria::byte_vivi;
 use plenora_core::{PlenoraError, Result};
 
-use crate::confine::{barriera, oltre_il_limite, verifica_metadati_custom, LimitiLettura};
+use crate::confine::{
+    barriera, malformato, oltre_il_limite, verifica_metadati_custom, LimitiLettura,
+};
 use crate::formato::CompressioneParquet;
 use crate::geoparquet;
 use crate::memoria::{oltre_il_budget, stima_byte};
@@ -392,7 +394,8 @@ pub fn leggi(percorso: &Path, residuo: u64, limiti: &LimitiLettura) -> Result<Re
         Ok(lettore.collect::<std::result::Result<Vec<_>, _>>()?)
     })?;
     let tabella = match blocchi.len() {
-        0 => RecordBatch::new_empty(Arc::clone(&schema)),
+        0 => plenora_core::batch_vuoto(Arc::clone(&schema))
+            .map_err(|_| malformato("Parquet", "uno schema senza tabella vuota costruibile"))?,
         1 => blocchi
             .into_iter()
             .next()

@@ -5,3 +5,8 @@ target-*/
 /.agent-temp/
 /.claude/
 __pycache__/
+# Prodotti di cargo-fuzz: corpus, crash e build restano locali.
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/

@@ -165,10 +165,9 @@ pub mod make_valid;
 pub mod polygonize;
 pub mod precision;
 pub mod split;
-mod wkb;
+pub(crate) mod wkb;
 
 use geo::{CoordsIter, Geometry, LineString, Polygon};
-use geozero::{CoordDimensions, ToWkb};
 use plenora_core::contract::arrow_metadata::MAX_CELL_COORDINATES;
 use plenora_core::PlenoraError;
 use serde::{Deserialize, Serialize};
@@ -504,9 +503,9 @@ fn checked_input(geometry: &Geometry<f64>, max_coordinates: u64) -> Result<(), R
             limit: max_coordinates,
         });
     }
-    let payload = geometry
-        .to_wkb(CoordDimensions::xy())
-        .map_err(|_| RustBackendError::Internal("codifica WKB intermedia"))?;
+    // Stesso encoder dell'uscita: con quello canonico un poligono vuoto
+    // d'ingresso non si rileggerebbe e verrebbe rifiutato come invalido.
+    let payload = wkb::wkb_xy(geometry)?;
     geometry_from_wkb(&payload)?;
     Ok(())
 }
@@ -855,6 +854,7 @@ pub fn residual_classes(result: &PolygonizeResult) -> [(&'static str, &[LineStri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use geozero::{CoordDimensions, ToWkb};
 
     /// Precisione dei test: coordinate astratte fino a qualche decina di
     /// unita', un milionesimo di unita' (la griglia degli overlay resta sotto).

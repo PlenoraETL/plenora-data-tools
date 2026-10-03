@@ -1,0 +1,112 @@
+[package]
+name = "plenora-data-tools-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Workspace e lock separati: nightly e libFuzzer restano fuori dal workspace
+# stabile e dalla sua toolchain fissata (rust-toolchain.toml).
+[workspace]
+
+# Versioni esatte, identiche a [workspace.dependencies] del manifesto
+# principale. `libfuzzer-sys` è l'unica dipendenza che esiste solo qui: è il
+# driver di cargo-fuzz (motore libFuzzer di LLVM), lo stesso pin di
+# plenora-database-tools.
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+plenora-core = { path = "../crates/plenora-core" }
+plenora-kernels-table = { path = "../crates/plenora-kernels-table" }
+plenora-kernels-geo = { path = "../crates/plenora-kernels-geo" }
+plenora-pipeline = { path = "../crates/plenora-pipeline" }
+plenora-io = { path = "../crates/plenora-io" }
+plenora-cli = { path = "../crates/plenora-cli" }
+geo = "=0.33.1"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151", features = ["raw_value"] }
+tempfile = "=3.27.0"
+
+# Stessi vendor del manifesto principale: un workspace separato non eredita
+# il suo [patch], e senza questo i target proverebbero un `geo` diverso da
+# quello che il prodotto usa.
+[patch.crates-io]
+geo = { path = "../vendor/geo-0.33.1-exact-filtered" }
+wkt = { path = "../vendor/wkt-0.14.0-v2" }
+
+# Piano: lettura del testo JSON, round-trip e validazione.
+[[bin]]
+name = "piano"
+path = "fuzz_targets/piano.rs"
+test = false
+doc = false
+bench = false
+
+# Runner: ogni operazione tabellare del catalogo su dati generati, contro la
+# chiamata diretta del kernel e contro una seconda esecuzione.
+[[bin]]
+name = "esecuzione_tabellare"
+path = "fuzz_targets/esecuzione_tabellare.rs"
+test = false
+doc = false
+bench = false
+
+# `table.sort` contro un oracolo indipendente (runner e chiamata diretta
+# usano lo stesso kernel: il loro confronto non prova l'ordinamento).
+[[bin]]
+name = "ordinamento"
+path = "fuzz_targets/ordinamento.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ordinamento_parallelo"
+path = "fuzz_targets/ordinamento_parallelo.rs"
+test = false
+doc = false
+bench = false
+
+# Runner geo: WKT arbitrario, poi un'operazione unaria o binaria.
+[[bin]]
+name = "esecuzione_geo"
+path = "fuzz_targets/esecuzione_geo.rs"
+test = false
+doc = false
+bench = false
+
+# Decodifica WKB di una cella geometria.
+[[bin]]
+name = "wkb"
+path = "fuzz_targets/wkb.rs"
+test = false
+doc = false
+bench = false
+
+# Confine di lettura dei file: Arrow IPC (file e stream) e Parquet.
+[[bin]]
+name = "lettura_ipc"
+path = "fuzz_targets/lettura_ipc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lettura_parquet"
+path = "fuzz_targets/lettura_parquet.rs"
+test = false
+doc = false
+bench = false
+
+# Argomenti della CLI `plenora-data`.
+[[bin]]
+name = "argomenti_cli"
+path = "fuzz_targets/argomenti_cli.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1
+overflow-checks = true

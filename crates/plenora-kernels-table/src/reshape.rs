@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use num_traits::ToPrimitive;
 use plenora_core::arrow::array::{
-    builder::StringBuilder, new_null_array, Array, ArrayRef, BooleanArray, Float64Array,
-    Int64Array, ListArray, RecordBatch, StringArray, StructArray, UInt32Array, UInt64Array,
+    builder::StringBuilder, Array, ArrayRef, BooleanArray, Float64Array, Int64Array, ListArray,
+    RecordBatch, StringArray, StructArray, UInt32Array, UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde::Deserialize;
@@ -1377,7 +1377,7 @@ fn select_rows_except(
         .enumerate()
         .map(|(position, column)| {
             if position == skip_index {
-                Ok(new_null_array(column.data_type(), rows.len()))
+                plenora_core::array_null(column.data_type(), rows.len())
             } else {
                 plenora_core::arrow::select::take::take(column.as_ref(), &indices, None)
                     .map_err(PlenoraError::from)

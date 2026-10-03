@@ -453,7 +453,7 @@ fn split_output(
                 .map(|batch| batch.column(index).as_ref())
                 .collect::<Vec<_>>();
             let column = if parts.is_empty() {
-                plenora_core::arrow::array::new_empty_array(left_schema.field(index).data_type())
+                plenora_core::array_vuoto(left_schema.field(index).data_type())?
             } else {
                 concat(&parts)?
             };

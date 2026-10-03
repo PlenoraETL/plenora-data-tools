@@ -1,0 +1,42 @@
+name: supply-chain
+
+# Applica la policy di `deny.toml` a `Cargo.lock` e al lock separato di
+# `fuzz/`: la superficie da controllare è quella che il repository dichiara,
+# compresi PyO3 e il driver di fuzz, non solo quella che `cargo build` tocca.
+#
+# Gira anche a calendario perché il rischio qui non arriva da un commit:
+# un'advisory pubblicata domani riguarda il codice fermo di oggi, e senza una
+# corsa schedulata resterebbe invisibile fino alla PR successiva.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Lunedì 05:23 UTC. Minuto non tondo: gli orari tondi sono i più
+    # congestionati su Actions e le corse schedulate vengono rimandate.
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-deny:
+    name: cargo deny (Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      # Stesso strumento, versione e comando dell'uso locale. `advisories`
+      # dipende dal database RustSec e può diventare rosso senza modifiche al
+      # commit; licenses, bans e sources dipendono dal lockfile e da deny.toml.
+      - name: advisories, licenses, bans e sources
+        run: python scripts/check_cargo_deny.py

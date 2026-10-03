@@ -1,5 +1,6 @@
 //! Codifica WKB ISO XY little-endian dell'output dei kernel, con il
-//! poligono vuoto a **zero anelli**.
+//! poligono vuoto a **zero anelli**: la usa ogni cella geometria d'uscita,
+//! attraverso `arrow_adapter::encode_geometry`.
 //!
 //! L'encoder canonico (`geozero` 0.15, `to_wkb(CoordDimensions::xy())`)
 //! scrive sempre l'anello esterno, anche vuoto, e il decoder del workspace

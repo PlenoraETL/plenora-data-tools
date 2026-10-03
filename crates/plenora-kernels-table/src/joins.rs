@@ -1291,16 +1291,11 @@ pub fn concat_by_name(
                 .iter()
                 .map(|input| {
                     input.schema().index_of(field.name()).map_or_else(
-                        |_| {
-                            plenora_core::arrow::array::new_null_array(
-                                field.data_type(),
-                                input.num_rows(),
-                            )
-                        },
-                        |index| Arc::clone(input.column(index)),
+                        |_| plenora_core::array_null(field.data_type(), input.num_rows()),
+                        |index| Ok(Arc::clone(input.column(index))),
                     )
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             let refs: Vec<&dyn Array> = parts.iter().map(AsRef::as_ref).collect();
             plenora_core::arrow::select::concat::concat(&refs).map_err(PlenoraError::from)
         })

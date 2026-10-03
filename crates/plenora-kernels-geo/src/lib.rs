@@ -47,7 +47,6 @@ pub mod wkb_decoder;
 use geo::{
     BoundingRect, Centroid, ConvexHull, Coord, CoordsIter, Geometry, LineString, MapCoords, Point,
 };
-use geozero::{CoordDimensions, ToWkb};
 use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
 use plenora_core::PlenoraError;
 use serde::{Deserialize, Serialize};
@@ -88,10 +87,6 @@ impl Operation {
 /// Costruttori degli errori di geometria su `PlenoraError`.
 fn empty_geometry(operation: &'static str) -> PlenoraError {
     PlenoraError::InvalidPlan(format!("geometria vuota non supportata da {operation}"))
-}
-
-fn wkb_serialization(error: impl std::fmt::Display) -> PlenoraError {
-    PlenoraError::InvalidPlan(format!("serializzazione WKB fallita: {error}"))
 }
 
 fn unsupported_wkb_dimension() -> PlenoraError {
@@ -1099,17 +1094,19 @@ fn transform_geometry_validated(
 ///
 /// # Errors
 ///
-/// `PlenoraError::InvalidPlan` per gli errori di decode, trasformazione,
-/// serializzazione WKB o validazione del risultato;
+/// `PlenoraError::InvalidPlan` per gli errori di decode, trasformazione
+/// o validazione del risultato;
+/// `PlenoraError::ResourceLimit` per un risultato oltre il limite per
+/// cella ([`arrow_adapter::encode_geometry`]);
 /// `PlenoraError::Unsupported` se il payload in ingresso porta dimensioni
 /// Z/M o SRID non preservabili nel protocollo 2D;
 /// `PlenoraError::Internal` come in [`transform_geometry`].
 pub fn transform_wkb(operation: Operation, payload: &[u8]) -> Result<Vec<u8>, PlenoraError> {
     let geometry = geometry_from_wkb(payload)?;
     let transformed = transform_geometry_validated(operation, &geometry)?;
-    let output = transformed
-        .to_wkb(CoordDimensions::xy())
-        .map_err(|error| wkb_serialization(error.to_string()))?;
+    // Lo stesso encoder di ogni cella d'uscita: il poligono vuoto (l'inviluppo
+    // convesso di una geometria vuota) a zero anelli, che il decoder rilegge.
+    let output = arrow_adapter::encode_geometry(&transformed)?;
     validate_wkb_contract(&output)?;
     Ok(output)
 }
@@ -1138,6 +1135,7 @@ mod tests {
         push_header, rect,
     };
     use geo::{line_string, polygon, Area};
+    use geozero::{CoordDimensions, ToWkb};
     use proptest::prelude::*;
 
     fn round_trip(operation: Operation, geometry: &Geometry<f64>) -> Geometry<f64> {
@@ -1146,6 +1144,24 @@ mod tests {
             .expect("encode fixture");
         geometry_from_wkb(&transform_wkb(operation, &payload).expect("transform"))
             .expect("decode result")
+    }
+
+    /// L'inviluppo convesso di una geometria vuota e' il poligono vuoto: esce
+    /// a zero anelli e si rilegge (con l'encoder
+    /// canonico avrebbe un anello esterno senza coordinate, rifiutato).
+    #[test]
+    fn transform_wkb_scrive_il_poligono_vuoto_rileggibile() {
+        for vuota in [
+            Geometry::MultiPoint(geo::MultiPoint::new(Vec::new())),
+            Geometry::LineString(LineString::new(Vec::new())),
+            Geometry::GeometryCollection(geo::GeometryCollection::new_from(Vec::new())),
+        ] {
+            let payload = vuota.to_wkb(CoordDimensions::xy()).expect("encode fixture");
+            let uscita = transform_wkb(Operation::ConvexHull, &payload)
+                .unwrap_or_else(|errore| panic!("{vuota:?}: {errore}"));
+            assert_eq!(uscita, [1, 3, 0, 0, 0, 0, 0, 0, 0], "{vuota:?}");
+            geometry_from_wkb(&uscita).expect("uscita rileggibile");
+        }
     }
 
     /// La condizione d'errore e' identificata dal messaggio.

@@ -101,7 +101,8 @@ pub fn leggi(percorso: &Path, residuo: u64, limiti: &LimitiLettura) -> Result<Re
         decodifica_stream(&byte, residuo, tetto, limiti)?
     };
     let tabella = match blocchi.len() {
-        0 => RecordBatch::new_empty(schema),
+        0 => plenora_core::batch_vuoto(schema)
+            .map_err(|_| malformato("Arrow IPC", "uno schema senza tabella vuota costruibile"))?,
         1 => blocchi
             .into_iter()
             .next()
