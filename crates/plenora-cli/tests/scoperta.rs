@@ -138,7 +138,11 @@ fn capabilities_descrive_il_binario_che_risponde() {
             );
         }
         assert_eq!(nostra["controls"], pubblica["controls"]);
-        assert_eq!(nostra["side_effect"], pubblica["side_effect"], "{}", pubblica["id"]);
+        assert_eq!(
+            nostra["side_effect"], pubblica["side_effect"],
+            "{}",
+            pubblica["id"]
+        );
         // Gli attributi del catalogo pubblico, con i loro valori; i nostri
         // aggiungono solo il contratto degli attributi.
         let mut attributi = nostra["attributes"].clone();
@@ -168,7 +172,10 @@ fn catalog_pubblica_il_registro_dei_kernel_del_runner() {
         esito.documento["contract"],
         "plenora-data-catalog-result-v2"
     );
-    assert_eq!(esito.documento["result"]["plan_format"], "plenora-data-plan-v1");
+    assert_eq!(
+        esito.documento["result"]["plan_format"],
+        "plenora-data-plan-v1"
+    );
     let risultato = &esito.documento["result"];
     let registro = Registro::dei_contratti();
     registro
@@ -200,7 +207,10 @@ fn catalog_pubblica_il_registro_dei_kernel_del_runner() {
         .collect();
     let kernel = risultato["kernels"].as_array().expect("kernels");
     let nostri: BTreeSet<_> = kernel.iter().map(identita).collect();
-    assert_eq!(nostri, comuni, "id, versioni e famiglie del registro comune");
+    assert_eq!(
+        nostri, comuni,
+        "id, versioni e famiglie del registro comune"
+    );
     let disponibili: BTreeSet<_> = kernel
         .iter()
         .filter(|voce| voce["status"] == "available")
@@ -215,7 +225,9 @@ fn catalog_pubblica_il_registro_dei_kernel_del_runner() {
     assert_eq!(nel_registro, disponibili, "registry = kernel disponibili");
     for voce in kernel.iter().filter(|voce| voce["status"] != "available") {
         assert_eq!(voce["status"], "unavailable");
-        assert!(voce["reason"].as_str().is_some_and(|motivo| !motivo.is_empty()));
+        assert!(voce["reason"]
+            .as_str()
+            .is_some_and(|motivo| !motivo.is_empty()));
     }
     assert_eq!(kernel.len(), CATALOG.len());
 
