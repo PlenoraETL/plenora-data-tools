@@ -119,11 +119,9 @@ fn capabilities_descrive_il_binario_che_risponde() {
             );
         }
     }
-    // Il catalogo pubblico: stesse operazioni, versioni, contratti, tipi di
-    // contenuto e controlli. L'unica differenza dichiarata è l'effetto
-    // collaterale di `data.run`, che qui scrive file (docs/cli.md, «CLI
-    // `plenora-data`», deviazioni).
-    let catalogo = contratto("data-tools-v1.json");
+    // Il catalogo pubblico v2: stesse operazioni, versioni, contratti, tipi
+    // di contenuto, controlli ed effetti, senza eccezioni.
+    let catalogo = contratto("data-tools-v2.json");
     let pubbliche = catalogo["operations"].as_array().expect("operations");
     assert_eq!(pubbliche.len(), operazioni.len());
     for pubblica in pubbliche {
@@ -140,12 +138,27 @@ fn capabilities_descrive_il_binario_che_risponde() {
             );
         }
         assert_eq!(nostra["controls"], pubblica["controls"]);
-        let effetto_atteso = if pubblica["id"] == "data.run" {
-            Value::from("local")
-        } else {
-            pubblica["side_effect"].clone()
-        };
-        assert_eq!(nostra["side_effect"], effetto_atteso, "{}", pubblica["id"]);
+        assert_eq!(
+            nostra["side_effect"], pubblica["side_effect"],
+            "{}",
+            pubblica["id"]
+        );
+        // Gli attributi del catalogo pubblico, con i loro valori; i nostri
+        // aggiungono solo il contratto degli attributi.
+        let mut attributi = nostra["attributes"].clone();
+        if let Some(campi) = attributi.as_object_mut() {
+            assert_eq!(
+                campi.remove("contract"),
+                Some(Value::from("plenora-data-capability-attributes-v1"))
+            );
+        }
+        let mut attesi = pubblica["attributes"].clone();
+        if let Some(campi) = attesi.as_object_mut() {
+            // `registry` è il percorso del file nei contratti, non un attributo
+            // dell'artefatto.
+            campi.remove("registry");
+        }
+        assert_eq!(attributi, attesi, "{}", pubblica["id"]);
         assert_eq!(nostra["status"], "available");
         assert_eq!(nostra["surfaces"], serde_json::json!(["cli"]));
     }
@@ -157,7 +170,11 @@ fn catalog_pubblica_il_registro_dei_kernel_del_runner() {
     assert_eq!(esito.codice, 0);
     assert_eq!(
         esito.documento["contract"],
-        "plenora-data-kernel-catalog-v1"
+        "plenora-data-catalog-result-v2"
+    );
+    assert_eq!(
+        esito.documento["result"]["plan_format"],
+        "plenora-data-plan-v1"
     );
     let risultato = &esito.documento["result"];
     let registro = Registro::dei_contratti();
@@ -166,36 +183,52 @@ fn catalog_pubblica_il_registro_dei_kernel_del_runner() {
         .unwrap_or_else(|motivo| panic!("operation-registry-v1: {motivo}"));
     assert_eq!(
         risultato["registry"]["registry"],
-        "plenora-data-kernel-catalog-v1"
+        "plenora-data-kernel-catalog-v2"
     );
     assert_eq!(risultato["registry"]["component"], "plenora-data-tools");
 
-    // Identità e famiglie del registro comune dei contratti: gli stessi id,
-    // tutti. Le versioni differiscono per scelta (deviazione dichiarata:
-    // qui la versione è la semantica osservabile, il registro dice 1).
-    let registro_comune = contratto("data-kernels-v1.json");
-    let comuni: BTreeSet<(String, String)> = registro_comune["operations"]
+    // DT-001 (profilo v2): ogni kernel del registro comune `data-kernels-v2`
+    // ha un descrittore con id, versione e famiglia del registro; quelli
+    // disponibili sono, alla lettera, il `registry` del risultato; quelli
+    // non disponibili hanno un motivo e mancano dal `registry`.
+    let identita = |voce: &Value| {
+        (
+            voce["id"].as_str().expect("id").to_owned(),
+            voce["version"].as_u64().expect("version"),
+            voce["family"].as_str().expect("family").to_owned(),
+        )
+    };
+    let registro_comune = contratto("data-kernels-v2.json");
+    let comuni: BTreeSet<_> = registro_comune["operations"]
         .as_array()
         .expect("operations")
         .iter()
-        .map(|voce| {
-            (
-                voce["id"].as_str().expect("id").to_owned(),
-                voce["family"].as_str().expect("family").to_owned(),
-            )
-        })
+        .map(identita)
         .collect();
     let kernel = risultato["kernels"].as_array().expect("kernels");
-    let nostri: BTreeSet<(String, String)> = kernel
+    let nostri: BTreeSet<_> = kernel.iter().map(identita).collect();
+    assert_eq!(
+        nostri, comuni,
+        "id, versioni e famiglie del registro comune"
+    );
+    let disponibili: BTreeSet<_> = kernel
         .iter()
-        .map(|voce| {
-            (
-                voce["id"].as_str().expect("id").to_owned(),
-                voce["family"].as_str().expect("family").to_owned(),
-            )
-        })
+        .filter(|voce| voce["status"] == "available")
+        .map(identita)
         .collect();
-    assert_eq!(nostri, comuni, "id e famiglie del registro comune");
+    let nel_registro: BTreeSet<_> = risultato["registry"]["operations"]
+        .as_array()
+        .expect("operations")
+        .iter()
+        .map(identita)
+        .collect();
+    assert_eq!(nel_registro, disponibili, "registry = kernel disponibili");
+    for voce in kernel.iter().filter(|voce| voce["status"] != "available") {
+        assert_eq!(voce["status"], "unavailable");
+        assert!(voce["reason"]
+            .as_str()
+            .is_some_and(|motivo| !motivo.is_empty()));
+    }
     assert_eq!(kernel.len(), CATALOG.len());
 
     // Il registro elenca solo i kernel eseguibili; i non eseguibili hanno

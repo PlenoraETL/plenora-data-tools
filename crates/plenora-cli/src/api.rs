@@ -39,7 +39,7 @@ use crate::catalogo::FORMATO_PIANO;
 use crate::operazioni::{ARROW_FILE, ARROW_STREAM, PARQUET};
 
 /// `data.catalog`: il registro dei kernel di questo artefatto
-/// (`plenora-data-kernel-catalog-v1`).
+/// (`plenora-data-catalog-result-v2`).
 #[must_use]
 pub fn catalogo() -> Value {
     crate::catalogo::documento()
@@ -219,7 +219,7 @@ pub fn valida_ingressi(
 }
 
 /// `data.run`: esegue un piano da file a file
-/// (`plenora-data-execution-result-v1`).
+/// (`plenora-data-execution-result-v2`).
 ///
 /// I dati escono nei file d'uscita; il documento dice per ogni output nome,
 /// tipo di contenuto, righe e colonne (mai il percorso), e per ogni passo
@@ -274,7 +274,7 @@ pub fn esegui_ingressi(
 }
 
 /// `data.run` con gli output resi in memoria invece che scritti: il
-/// documento `plenora-data-execution-result-v1` e le tabelle d'uscita
+/// documento `plenora-data-execution-result-v2` e le tabelle d'uscita
 /// nell'ordine del piano. Nessun effetto fuori dal processo.
 ///
 /// Il tipo di contenuto di un output è `application/vnd.apache.arrow.stream`:

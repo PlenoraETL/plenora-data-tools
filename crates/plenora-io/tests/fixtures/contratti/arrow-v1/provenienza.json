@@ -1,6 +1,6 @@
 {
   "sorgente": "plenora-contracts",
-  "commit": "ade868cf89c6652cffe20019e7194b383384ee78",
+  "commit": "e7e9d3d9fd37696e1abe6679c028afacbf74847b",
   "percorso": "vectors/arrow-v1",
   "nota": "Copie byte per byte dei vettori di conformita' Arrow Metadata Vocabulary 1.0 (git show <commit>:<percorso>/<file>). Non si modificano: un vettore nuovo o cambiato si ricopia dal commit dei contratti e si aggiorna questo file. Il test tests/contratti_arrow.rs verifica gli SHA-256.",
   "file": {

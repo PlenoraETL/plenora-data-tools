@@ -2,7 +2,11 @@
 
 Gli schemi che entrano ed escono dal componente seguono i contratti
 pubblici *Arrow Interchange 1.0* e *Arrow Metadata Vocabulary 1.0* di
-`plenora-contracts` (commit `ade868c`). I quattro vettori di conformità
+`plenora-contracts` (commit `e7e9d3d`), con le regole DT-ARROW-001..004 del
+profilo data-tools versione 2 per i casi che quei contratti lasciano alle
+operazioni: identità nelle collisioni e nelle concatenazioni (sotto,
+«Identità dei campi»), chiavi mancanti in ingresso e rifiuti delle operazioni
+geo («In ingresso»). I quattro vettori di conformità
 del vocabolario sono copiati byte per byte, con provenienza e SHA-256, in
 `crates/plenora-io/tests/fixtures/contratti/arrow-v1/`, e
 `crates/plenora-io/tests/contratti_arrow.rs` li fa passare dal confine
@@ -152,7 +156,8 @@ un'operazione.
 
 - **Identità persa nelle collisioni.**
   *Regola*: ARROW-004 chiede di conservare l'identità di un campo
-  invariato.
+  invariato; DT-ARROW-001 del profilo v2 stabilisce che, in una collisione,
+  l'identità si perde (è il comportamento sotto, ora contratto).
   *Ambito*: `pubblica_schema`, uscite di `run`.
   *Hazard*: un campo invariato perde l'identità quando lo stesso numero è
   dichiarato da due ingressi del piano o compare su due campi dell'uscita;
@@ -210,7 +215,8 @@ un'operazione.
 - **Chiavi mancanti tollerate in ingresso.**
   *Regola*: il vocabolario (sezione 4) vuole su ogni campo `geoarrow.wkb`
   identità, encoding, dimensionalità, semantica, precisione, dichiarazione
-  dei tipi e stato del CRS.
+  dei tipi e stato del CRS; DT-ARROW-003 del profilo v2 ammette la lettura
+  di un campo che ne omette, con i completamenti sotto.
   *Ambito*: `contract_from_arrow_schema`.
   *Hazard*: uno schema versionato a cui ne manca qualcuna si legge con i
   completamenti di sempre (encoding dall'estensione, dimensionalità

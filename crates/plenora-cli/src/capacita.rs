@@ -4,6 +4,7 @@
 
 use serde_json::{json, Value};
 
+use crate::catalogo::FORMATO_PIANO;
 use crate::operazioni::{OperazionePubblica, CONTRATTO_ATTRIBUTI, OPERAZIONI, REGISTRO_KERNEL};
 use crate::{
     ARTEFATTO_CLI, ARTEFATTO_PYTHON, ARTEFATTO_RUST, COMPONENTE, IMPORT_PYTHON, PROTOCOLLO_CLI,
@@ -53,6 +54,9 @@ fn attributi(operazione: &OperazionePubblica) -> Option<Value> {
     let mut campi = serde_json::Map::new();
     if operazione.usa_registro {
         campi.insert("kernel_registry".to_owned(), json!(REGISTRO_KERNEL));
+    }
+    if operazione.usa_piano {
+        campi.insert("plan_contract".to_owned(), json!(FORMATO_PIANO));
     }
     if !operazione.estensioni_ingresso.is_empty() || !operazione.estensioni_uscita.is_empty() {
         campi.insert(
@@ -164,11 +168,12 @@ pub fn mappa_rust() -> Value {
 /// La sezione di questo componente in `bindings/python-sdk-v1.json`.
 ///
 /// È un elemento di `components` dello schema `surface-bindings-v1` di
-/// `plenora-contracts`, dalla stessa tabella: ciò che l'aggiornamento dei
-/// contratti deve scrivere, e ciò che il pacchetto Python espone.
+/// `plenora-contracts`, dalla stessa tabella: la sezione di questo
+/// componente in `bindings/python-sdk-v1.json`, e ciò che il pacchetto
+/// Python espone.
 ///
 /// `requirement` è `required` per tutte e quattro: lo dice il catalogo
-/// pubblico (`catalogs/data-tools-v1.json`) per ogni operazione.
+/// pubblico (`catalogs/data-tools-v2.json`) per ogni operazione.
 #[must_use]
 pub fn mappa_python() -> Value {
     json!({

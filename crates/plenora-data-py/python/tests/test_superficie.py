@@ -103,7 +103,7 @@ def test_le_capacita_sono_un_documento_capabilities_v2(
 
 
 def test_le_operazioni_sono_quelle_del_catalogo_pubblico(contratti: pathlib.Path) -> None:
-    catalogo = leggi(contratti, "data-tools-v1.json")
+    catalogo = leggi(contratti, "data-tools-v2.json")
     nostre = {op["id"]: op for op in pd.capabilities()["operations"]}
     assert set(nostre) == {op["id"] for op in catalogo["operations"]}
     for pubblica in catalogo["operations"]:
@@ -114,10 +114,7 @@ def test_le_operazioni_sono_quelle_del_catalogo_pubblico(contratti: pathlib.Path
             assert nostra[lato]["contract"] == pubblica[lato]["contract"]
             assert nostra[lato]["content_types"] == pubblica[lato]["content_types"]
         assert nostra["controls"] == pubblica["controls"]
-        # `data.run` può scrivere file (`outputs`): effetto `local`, la
-        # deviazione dichiarata anche dalla CLI.
-        atteso = "local" if pubblica["id"] == "data.run" else pubblica["side_effect"]
-        assert nostra["side_effect"] == atteso
+        assert nostra["side_effect"] == pubblica["side_effect"]
 
 
 def _simboli(operazione: str) -> list[Callable[..., Any]]:

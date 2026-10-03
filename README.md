@@ -94,8 +94,7 @@ modificano a mano: cambia la sorgente e si rigenera.
 distribuzione `plenora-data`, pacchetto `plenora_data`, le quattro
 operazioni della CLI in forma sincrona e asincrona su tabelle PyArrow o
 file, chiamando le stesse funzioni di `plenora_cli::api`. Uso, errori,
-scadenza e annullamento, deviazioni, limiti dichiarati e ciò che
-l'aggiornamento dei contratti deve aggiungere sono nel
+scadenza e annullamento, contratti adottati e limiti dichiarati sono nel
 [README del crate](crates/plenora-data-py/README.md); la CI è
 `.github/workflows/sdk-python.yml`.
 

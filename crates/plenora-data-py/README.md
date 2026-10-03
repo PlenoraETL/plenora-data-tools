@@ -1,8 +1,9 @@
 # plenora-data
 
 SDK Python di plenora-data-tools: distribuzione `plenora-data`, pacchetto
-d'import `plenora_data` (*Python SDK 1.0* di `plenora-contracts`, commit
-`ade868cf89c6652cffe20019e7194b383384ee78`). Espone le quattro operazioni
+d'import `plenora_data` (*Python SDK 1.0* e profilo data-tools versione 2 di
+`plenora-contracts`, commit `e7e9d3d9fd37696e1abe6679c028afacbf74847b`).
+Espone le quattro operazioni
 del catalogo pubblico, le stesse della CLI `plenora-data`, sulle tabelle
 Arrow in memoria o su file.
 
@@ -36,7 +37,7 @@ pd.describe(tabella)                      # plenora-data-description-v1
 pd.validate(piano, {"t": tabella})        # plenora-data-plan-validation-result-v1
 risultato = pd.run(piano, {"t": tabella}, timeout=30)
 risultato.tables["ordinati"]              # pyarrow.Table
-risultato.result                          # plenora-data-execution-result-v1
+risultato.result                          # plenora-data-execution-result-v2
 
 # Output su file (formato dall'estensione: .arrow/.feather/.ipc, .arrows, .parquet)
 pd.run(piano, {"t": "dati.parquet"},
@@ -49,7 +50,7 @@ risultato = await pd.arun(piano, {"t": tabella}, cancel=pd.CancellationToken())
 
 | operazione | sincrona | asincrona | risultato |
 | --- | --- | --- | --- |
-| `data.catalog` | `catalog()` | `acatalog()` | `dict`, `plenora-data-kernel-catalog-v1` |
+| `data.catalog` | `catalog()` | `acatalog()` | `dict`, `plenora-data-catalog-result-v2` |
 | `data.describe` | `describe(data, ...)` | `adescribe` | `dict`, `plenora-data-description-v1` |
 | `data.validate` | `validate(plan, inputs, ...)` | `avalidate` | `dict`, `plenora-data-plan-validation-result-v1` |
 | `data.run` | `run(plan, inputs, *, outputs, overwrite, ...)` | `arun` | `RunResult(result, tables)` |
@@ -254,28 +255,17 @@ python scripts/verifica_sdk_python.py --wheel dist/plenora_data-<versione>-<tag>
 | 11, compatibilità | SemVer del componente (versione del workspace) |
 | 12, identità delle operazioni | `export_python` in `plenora_cli::operazioni::OPERAZIONI`, `plenora_cli::capacita::mappa_python` |
 
-## Deviazioni dai contratti
+## Contratti adottati
 
-- **Python SDK fuori dal catalogo di data-tools.**
-  *Regola*: Public Catalogs 1.0 e il profilo data-tools: `data-tools-v1`
-  seleziona `python_sdk` come `not_applicable`, nessuna operazione elenca la
-  superficie `python_sdk`, e `bindings/python-sdk-v1.json` ha `artifact:
-  null` per questo componente.
-  *Ambito*: tutto il pacchetto.
-  *Hazard*: un consumatore che legge solo il catalogo comune non sa che
-  l'SDK esiste; chi lo usa vede la superficie dichiarata da
-  `capabilities()` (`surfaces: ["python_sdk"]`), che è la verità
-  dell'artefatto.
-  *Rientro*: l'aggiornamento dei contratti (sotto).
-- **Effetto di `data.run`.** Come sulla CLI: `side_effect: local`, perché
-  con `outputs` scrive file; senza `outputs` non ha effetti fuori dal
-  processo. *Rientro*: il catalogo distingue l'effetto per superficie.
-- Le deviazioni della CLI sul formato del piano, le versioni dei kernel,
-  `table.transpose`, la materializzazione limitata e il frammento del
-  budget valgono identiche qui
-  ([«Deviazioni dai contratti»](../../docs/cli.md#deviazioni-dai-contratti)
-  della CLI; `crates/plenora-cli/adozione.json` le dichiara per entrambe le
-  superfici).
+Il catalogo `data-tools-v2` seleziona la superficie `python_sdk` per le quattro
+operazioni, e la sezione di questo componente in `bindings/python-sdk-v1.json`
+è, alla lettera, `plenora_cli::capacita::mappa_python()`
+(`tests/superficie_python.rs` lo verifica sul commit fissato). `data.run`
+dichiara `side_effect: local`: con `outputs` scrive file, senza non ha effetti
+fuori dal processo. Le altre scelte del profilo v2 (piano, versioni dei
+kernel, `table.transpose`, materializzazione, budget) valgono identiche
+sulla CLI ([«Contratti adottati»](../../docs/cli.md#contratti-adottati)).
+Nessuna deviazione.
 
 ## Limiti dichiarati
 
@@ -367,32 +357,3 @@ python scripts/verifica_sdk_python.py --wheel dist/plenora_data-<versione>-<tag>
 - **Messaggi delle config.** Come sulla CLI, un messaggio di config non
   valida può citare un valore scritto nel piano
   ([«Limiti dichiarati della CLI»](../../docs/cli.md#limiti-dichiarati-della-cli)).
-
-## Aggiornamento dei contratti
-
-Ciò che l'unico aggiornamento di `plenora-contracts` deve dire per questo
-componente:
-
-1. `catalogs/data-tools-v1.json`: `target_surfaces.python_sdk` da
-   `not_applicable` a `conditional` (il profilo non richiede l'SDK, ma
-   quando c'è vale Python SDK 1.0); `"python_sdk"` in `surfaces` di
-   `data.catalog`, `data.describe`, `data.validate`, `data.run`; per
-   `data.run` l'effetto per superficie (`local` quando la superficie scrive
-   file), o la deviazione resta.
-2. `bindings/python-sdk-v1.json`, sezione `plenora-data-tools`: il documento
-   di `plenora_cli::capacita::mappa_python()`, cioè
-   `"artifact": "plenora-data / plenora_data"`, `"discovery":
-   ["plenora_data.version", "plenora_data.capabilities"]` e per ognuna delle
-   quattro operazioni (versione 1, `"requirement": "required"`, come nel
-   catalogo) gli entrypoint `plenora_data.catalog`/`acatalog`,
-   `describe`/`adescribe`, `validate`/`avalidate`, `run`/`arun`. La prova
-   `superficie_python.rs` fallisce quando i contratti fissati hanno già la
-   sezione, per riallinearla.
-3. `specs/surfaces/SURFACE-BINDINGS-1.0.md`, sezione 4: la riga
-   `data-tools | plenora-data | plenora_data`.
-4. `profiles/data-tools.md`: Python SDK 1.0 fra i contratti applicabili
-   «when exposed», e «Python SDK: optional» fra le superfici.
-5. Il manifesto di adozione v4 del componente porterà il wheel con
-   `api_modes: ["sync", "async"]` e `plenora-python-sdk-v1` conforme
-   (`scripts/genera_manifesto_adozione.py`); la deviazione «Python SDK
-   fuori dal catalogo» cade con i punti 1-3.
