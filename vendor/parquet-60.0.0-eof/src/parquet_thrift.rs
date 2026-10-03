@@ -316,10 +316,12 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         let mut shift = 7;
         loop {
             let byte = self.read_byte()?;
-            // PLENORA: al decimo byte (shift 63) resta un solo bit: un byte
-            // piu' grande o un'ulteriore continuazione supera u64, e
-            // `wrapping_shl` lo avrebbe troncato in silenzio. Il limite tiene
-            // anche la lunghezza della sequenza entro dieci byte.
+            // PLENORA: al decimo byte (shift 63) resta un solo bit. Un byte
+            // piu' grande supera u64 (`wrapping_shl` lo avrebbe troncato in
+            // silenzio); un'ulteriore continuazione allungherebbe la sequenza
+            // oltre dieci byte. Entrambi si rifiutano: anche una codifica
+            // non minima con zeri in coda oltre il decimo byte, che nessuno
+            // scrittore produce.
             if shift == 63 && byte > 1 {
                 return Err(ThriftProtocolError::IntegerOverflow);
             }
@@ -450,13 +452,17 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     }
 
     /// Read an `i16`.
+    ///
+    /// PLENORA: a value outside `i16` is an error, not a truncated `as` cast.
     fn read_i16(&mut self) -> ThriftProtocolResult<i16> {
-        Ok(self.read_zig_zag()? as _)
+        Ok(i16::try_from(self.read_zig_zag()?)?)
     }
 
     /// Read an `i32`.
+    ///
+    /// PLENORA: a value outside `i32` is an error, not a truncated `as` cast.
     fn read_i32(&mut self) -> ThriftProtocolResult<i32> {
-        Ok(self.read_zig_zag()? as _)
+        Ok(i32::try_from(self.read_zig_zag()?)?)
     }
 
     /// Read an `i64`.
@@ -785,6 +791,27 @@ where
         res.push(val);
     }
     Ok(res)
+}
+
+/// PLENORA: capacity for a vector of `size` declared list elements, under the
+/// same rule as [`read_thrift_vec`]: each element occupies at least one byte,
+/// so a count above the remaining input is malformed and rejected before
+/// reserving. Without a finite buffer no capacity is reserved in advance (the
+/// vector grows with the elements actually read).
+pub(crate) fn capacita_dichiarata<'a, R>(prot: &R, size: i32) -> Result<usize>
+where
+    R: ThriftCompactInputProtocol<'a>,
+{
+    let size = usize::try_from(size).map_err(|_| general_err!("negative Thrift list size"))?;
+    match prot.remaining_bytes() {
+        Some(remaining) if size > remaining => Err(general_err!(
+            "Thrift list size {} exceeds remaining input length {}",
+            size,
+            remaining
+        )),
+        Some(_) => Ok(size),
+        None => Ok(0),
+    }
 }
 
 pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) -> Result<()> {

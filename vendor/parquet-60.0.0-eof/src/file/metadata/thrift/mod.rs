@@ -820,7 +820,9 @@ pub(crate) fn parquet_metadata_from_bytes(
                 let list_ident = prot.read_list_begin()?;
                 // check for list of struct
                 validate_list_type(ElementType::Struct, &list_ident)?;
-                let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
+                // PLENORA: capacity bounded by the remaining footer bytes.
+                let mut rg_vec =
+                    Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&prot, list_ident.size)?);
 
                 for _ in 0..list_ident.size {
                     rg_vec.push(read_row_group(&mut prot, schema_descr, options)?);

@@ -777,9 +777,10 @@ fn da_esadecimale(parti: &[&str]) -> Vec<u8> {
 
 /// Due Parquet trovati dal target di fuzz `lettura_parquet`: l'header di
 /// una pagina dichiara liste thrift da miliardi di elementi oltre la fine
-/// dei dati. Con `parquet` 60.0.0 invariato la lettura girava a vuoto per
-/// minuti (il salto dei byte a EOF «riusciva»); con `patches/parquet-eof.patch`
-/// e' un errore immediato.
+/// dei dati, o un footer dichiara miliardi di row group. Con `parquet`
+/// 60.0.0 invariato la lettura girava a vuoto per minuti (il salto dei byte a
+/// EOF «riusciva») o riservava gigabyte; con `patches/parquet-eof.patch` e' un
+/// errore immediato.
 #[test]
 fn un_header_di_pagina_oltre_la_fine_dei_dati_e_un_errore_immediato() {
     let casi = [
@@ -801,6 +802,15 @@ fn un_header_di_pagina_oltre_la_fine_dei_dati_e_un_errore_immediato() {
             "08167e167e2608491c150015001502003c290619260008000000167e16082608",
             "167e002820706172717565742d6370702d6172726f772076657273696f6e2032",
             "352e0116042608168400007a00000050415231",
+        ]),
+        // Footer che dichiara miliardi di row group in 147 byte: la capacita'
+        // si riservava dal conteggio dichiarato (5 GB), prima di leggere.
+        da_esadecimale(&[
+            "50415231150000080101000000000008001504192c35001806736368656d6115",
+            "0200150425021801161c00191c76081926001c15041925060019180176150028",
+            "08167e167e2608491c15ff010021fcffc3d619f4260008000000127e16082608",
+            "167e002820ffffffffffffff256370702d6172726f77207665a673696f6e2032",
+            "352e302e31191c1c0000007a00000050415231",
         ]),
     ];
     for byte in casi {

@@ -6,9 +6,10 @@ nei due `Cargo.toml`).
 - Pacchetto: `parquet-60.0.0.crate`, `source = registry+https://github.com/rust-lang/crates.io-index`.
 - Checksum del pacchetto (dal `Cargo.lock` prima del vendor):
   `8af83d2940bc0510f9aef86d865f56fdc6095f87ab115ac885a80b7c5226d3ba`.
-- Contenuto: il pacchetto pubblicato, intero, tolti solo i marcatori di
-  Cargo (`.cargo-ok`, `.cargo_vcs_info.json`); l'unico file cambiato è
-  `src/parquet_thrift.rs`, con `patches/parquet-eof.patch`.
+- Contenuto: il pacchetto pubblicato, intero, tolto solo il marcatore di
+  Cargo `.cargo-ok`; i file cambiati, con
+  `patches/parquet-eof.patch`, sono `src/parquet_thrift.rs`,
+  `src/file/metadata/thrift/mod.rs` e `src/file/page_index/offset_index.rs`.
 - Licenza: Apache-2.0 (`LICENSE.txt`, `NOTICE.txt` invariati). Il file
   modificato porta i commenti `PLENORA:` sulle righe cambiate.
 
@@ -40,6 +41,14 @@ su dati malformati: un Parquet di 169 byte bloccava la lettura per minuti
    `skip_vlq` applica gli stessi limiti di `read_vlq`.
 5. `skip_element` rispetta lo stesso limite di profondità di
    `skip_till_depth`, booleani compresi.
+6. Interi Thrift (`read_i16`, `read_i32`): il valore letto si convertiva
+   con `as`, troncandolo in silenzio; ora un valore fuori tipo è un errore.
+7. Capacità dai conteggi dichiarati: `read_thrift_vec` rifiutava già un
+   conteggio oltre i byte rimasti, ma i row group del footer
+   (`parquet_metadata_from_bytes`) e le posizioni dell'offset index
+   costruivano il vettore a mano con `Vec::with_capacity(dichiarato)`: un
+   footer di 147 byte chiedeva 5 GB (stesso target di fuzz). Ora entrambi
+   passano da `capacita_dichiarata`, la stessa regola.
 
 Il salto e le letture sono metodi di default del trait: le correzioni
 valgono anche per il lettore su slice (footer), che saltava gli elementi
@@ -47,6 +56,28 @@ booleani di una collezione senza avanzare.
 
 ## Limiti che restano
 
+Correzione mirata, non un irrobustimento completo contro file ostili
+(scelta del 2 ottobre 2026, limite «File costruiti apposta» in
+`docs/file.md`). La seconda lettura di Codex ha trovato, anche upstream,
+altre allocazioni da dimensioni dichiarate prima di verificarle:
+
+- `schema/types.rs` riserva i figli dichiarati da `num_children`;
+- `file/reader.rs` e `file/serialized_reader.rs` riservano la dimensione
+  compressa di una pagina (o del bloom filter) prima di leggerla, e quella
+  non compressa prima di decomprimere;
+- i dizionari (`encodings/decoding.rs`, `arrow/array_reader/byte_array*.rs`)
+  riservano il conteggio dell'intestazione di pagina;
+- `arrow/array_reader/fixed_len_byte_array.rs` moltiplica la larghezza
+  dichiarata nello schema per le righe richieste;
+- le codifiche delta riservano il conteggio dichiarato nella pagina.
+
+Un file piccolo costruito apposta può quindi chiedere gigabyte. Il target di
+fuzz `lettura_parquet` gira con `-malloc_limit_mb` e `-ignore_ooms`
+(README, «Fuzz»): questi casi si contano senza fermare la campagna.
+
+- Le lunghezze di binari si convertono in `usize` con `as`: su un target a
+  32 bit una lunghezza oltre `u32` si troncherebbe (il workspace gira a
+  64 bit).
 - `read_bytes_owned` alloca quanto il file contiene davvero (non più quanto
   dichiara): una statistica di pagina grande quanto il file occupa memoria
   proporzionale al file, che il confine di lettura ha già misurato.

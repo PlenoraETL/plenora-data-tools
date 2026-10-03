@@ -187,6 +187,14 @@ cargo +nightly fuzz build -O
 cargo +nightly fuzz run esecuzione_tabellare -- -max_total_time=600
 ```
 
+`lettura_parquet` gira con `-fork=1 -ignore_ooms=1 -malloc_limit_mb=1024
+-rss_limit_mb=2048`: dentro `parquet` restano allocazioni dalle dimensioni
+dichiarate nel file (limite «File costruiti apposta» in
+[`docs/file.md`](docs/file.md#limiti-dichiarati)), e un caso di sola memoria
+si conta e si salva senza fermare la campagna, che resta sui blocchi e sui
+risultati sbagliati. Senza tetto, un caso così può far ripartire la VM di
+WSL.
+
 I panici attesi delle dipendenze dentro una barriera
 (`plenora_core::panic_policy::barriera_di_dipendenza`) non fermano il fuzzer;
 ogni altro panico sì, anche se una rete di sicurezza lo intercetta

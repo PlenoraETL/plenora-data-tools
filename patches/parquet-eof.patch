@@ -1,14 +1,16 @@
 --- a/src/parquet_thrift.rs
 +++ b/src/parquet_thrift.rs
-@@ -316,7 +316,14 @@
+@@ -316,7 +316,16 @@
          let mut shift = 7;
          loop {
              let byte = self.read_byte()?;
 -            in_progress |= ((byte & 0x7F) as u64).wrapping_shl(shift);
-+            // PLENORA: al decimo byte (shift 63) resta un solo bit: un byte
-+            // piu' grande o un'ulteriore continuazione supera u64, e
-+            // `wrapping_shl` lo avrebbe troncato in silenzio. Il limite tiene
-+            // anche la lunghezza della sequenza entro dieci byte.
++            // PLENORA: al decimo byte (shift 63) resta un solo bit. Un byte
++            // piu' grande supera u64 (`wrapping_shl` lo avrebbe troncato in
++            // silenzio); un'ulteriore continuazione allungherebbe la sequenza
++            // oltre dieci byte. Entrambi si rifiutano: anche una codifica
++            // non minima con zeri in coda oltre il decimo byte, che nessuno
++            // scrittore produce.
 +            if shift == 63 && byte > 1 {
 +                return Err(ThriftProtocolError::IntegerOverflow);
 +            }
@@ -16,7 +18,27 @@
              if byte & 0x80 == 0 {
                  return Ok(in_progress);
              }
-@@ -461,13 +468,12 @@
+@@ -443,13 +452,17 @@
+     }
+ 
+     /// Read an `i16`.
++    ///
++    /// PLENORA: a value outside `i16` is an error, not a truncated `as` cast.
+     fn read_i16(&mut self) -> ThriftProtocolResult<i16> {
+-        Ok(self.read_zig_zag()? as _)
++        Ok(i16::try_from(self.read_zig_zag()?)?)
+     }
+ 
+     /// Read an `i32`.
++    ///
++    /// PLENORA: a value outside `i32` is an error, not a truncated `as` cast.
+     fn read_i32(&mut self) -> ThriftProtocolResult<i32> {
+-        Ok(self.read_zig_zag()? as _)
++        Ok(i32::try_from(self.read_zig_zag()?)?)
+     }
+ 
+     /// Read an `i64`.
+@@ -461,13 +474,12 @@
      fn read_double(&mut self) -> ThriftProtocolResult<f64>;
  
      /// Skip a ULEB128 encoded varint.
@@ -35,7 +57,7 @@
      }
  
      /// Skip a thrift [binary].
-@@ -497,6 +503,21 @@
+@@ -497,6 +509,21 @@
          }
      }
  
@@ -57,7 +79,7 @@
      /// Skip a field with type `field_type` recursively up to `depth` levels.
      fn skip_till_depth(&mut self, field_type: FieldType, depth: i8) -> ThriftProtocolResult<()> {
          if depth == 0 {
-@@ -530,7 +551,7 @@
+@@ -530,7 +557,7 @@
                  let list_ident = self.read_list_begin()?;
                  let element_type = FieldType::from(list_ident.element_type);
                  for _ in 0..list_ident.size {
@@ -66,7 +88,7 @@
                  }
                  Ok(())
              }
-@@ -542,8 +563,8 @@
+@@ -542,8 +569,8 @@
                      let key_type = FieldType::from(ElementType::try_from(kv >> 4)?);
                      let val_type = FieldType::from(ElementType::try_from(kv & 0xf)?);
                      for _ in 0..size {
@@ -77,7 +99,7 @@
                      }
                  }
                  Ok(())
-@@ -639,17 +660,29 @@
+@@ -639,17 +666,29 @@
      }
  
      fn read_bytes_owned(&mut self) -> ThriftProtocolResult<Vec<u8>> {
@@ -111,3 +133,57 @@
          Ok(())
      }
  
+@@ -754,6 +793,27 @@
+     Ok(res)
+ }
+ 
++/// PLENORA: capacity for a vector of `size` declared list elements, under the
++/// same rule as [`read_thrift_vec`]: each element occupies at least one byte,
++/// so a count above the remaining input is malformed and rejected before
++/// reserving. Without a finite buffer no capacity is reserved in advance (the
++/// vector grows with the elements actually read).
++pub(crate) fn capacita_dichiarata<'a, R>(prot: &R, size: i32) -> Result<usize>
++where
++    R: ThriftCompactInputProtocol<'a>,
++{
++    let size = usize::try_from(size).map_err(|_| general_err!("negative Thrift list size"))?;
++    match prot.remaining_bytes() {
++        Some(remaining) if size > remaining => Err(general_err!(
++            "Thrift list size {} exceeds remaining input length {}",
++            size,
++            remaining
++        )),
++        Some(_) => Ok(size),
++        None => Ok(0),
++    }
++}
++
+ pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) -> Result<()> {
+     if got.element_type != expected {
+         return Err(general_err!(
+--- a/src/file/metadata/thrift/mod.rs
++++ b/src/file/metadata/thrift/mod.rs
+@@ -820,7 +820,9 @@
+                 let list_ident = prot.read_list_begin()?;
+                 // check for list of struct
+                 validate_list_type(ElementType::Struct, &list_ident)?;
+-                let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
++                // PLENORA: capacity bounded by the remaining footer bytes.
++                let mut rg_vec =
++                    Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&prot, list_ident.size)?);
+ 
+                 for _ in 0..list_ident.size {
+                     rg_vec.push(read_row_group(&mut prot, schema_descr, options)?);
+--- a/src/file/page_index/offset_index.rs
++++ b/src/file/page_index/offset_index.rs
+@@ -91,7 +91,9 @@
+         // we have to do this manually because we want to use the fast PageLocation decoder
+         let list_ident = prot.read_list_begin()?;
+         validate_list_type(ElementType::Struct, &list_ident)?;
+-        let mut page_locations = Vec::with_capacity(list_ident.size as usize);
++        // PLENORA: capacity bounded by the remaining input bytes.
++        let mut page_locations =
++            Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&*prot, list_ident.size)?);
+         for _ in 0..list_ident.size {
+             page_locations.push(read_page_location(prot)?);
+         }

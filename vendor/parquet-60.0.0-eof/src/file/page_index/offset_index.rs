@@ -91,7 +91,9 @@ impl OffsetIndexMetaData {
         // we have to do this manually because we want to use the fast PageLocation decoder
         let list_ident = prot.read_list_begin()?;
         validate_list_type(ElementType::Struct, &list_ident)?;
-        let mut page_locations = Vec::with_capacity(list_ident.size as usize);
+        // PLENORA: capacity bounded by the remaining input bytes.
+        let mut page_locations =
+            Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&*prot, list_ident.size)?);
         for _ in 0..list_ident.size {
             page_locations.push(read_page_location(prot)?);
         }
