@@ -33,16 +33,19 @@ pub struct DeltaByteArrayDecoder {
 
 impl DeltaByteArrayDecoder {
     /// Create a new [`DeltaByteArrayDecoder`] with the provided data page
-    pub fn new(data: Bytes) -> Result<Self> {
+    ///
+    /// PLENORA: `massimo` is the page value count, which bounds the counts the
+    /// two delta headers declare.
+    pub fn new(data: Bytes, massimo: usize) -> Result<Self> {
         let mut prefix = DeltaBitPackDecoder::<Int32Type>::new();
-        prefix.set_data(data.clone(), 0)?;
+        prefix.set_data(data.clone(), massimo)?;
 
         let num_prefix = prefix.values_left();
         let mut prefix_lengths = vec![0; num_prefix];
         assert_eq!(prefix.get(&mut prefix_lengths)?, num_prefix);
 
         let mut suffix = DeltaBitPackDecoder::<Int32Type>::new();
-        suffix.set_data(data.slice(prefix.get_offset()..), 0)?;
+        suffix.set_data(data.slice(prefix.get_offset()..), massimo)?;
 
         let num_suffix = suffix.values_left();
         let mut suffix_lengths = vec![0; num_suffix];

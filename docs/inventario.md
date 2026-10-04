@@ -82,11 +82,11 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 | `plenora-cli` | 3 | 31 | 34 |
 | `plenora-core` | 174 | 65 | 239 |
 | `plenora-data-py` | 0 | 0 | 0 |
-| `plenora-io` | 19 | 75 | 94 |
+| `plenora-io` | 19 | 82 | 101 |
 | `plenora-kernels-geo` | 515 | 108 | 623 |
 | `plenora-kernels-table` | 456 | 118 | 574 |
 | `plenora-pipeline` | 10 | 142 | 152 |
-| **totale** | 1177 | 539 | 1716 |
+| **totale** | 1177 | 546 | 1723 |
 
 ### Prove delle guardie
 

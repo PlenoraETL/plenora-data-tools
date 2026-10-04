@@ -97,6 +97,17 @@ impl ChunkReader for File {
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
+        // PLENORA: the length comes from a page header or the footer; a range
+        // past the end of the file is an EOF before any capacity is reserved.
+        let file_len = self.metadata()?.len();
+        let end = start.checked_add(length as u64);
+        if end.is_none_or(|end| end > file_len) {
+            return Err(eof_err!(
+                "Expected to read {} bytes at offset {}, past the end of the file",
+                length,
+                start
+            ));
+        }
         let mut buffer = Vec::with_capacity(length);
         let mut reader = self.try_clone()?;
         reader.seek(SeekFrom::Start(start))?;

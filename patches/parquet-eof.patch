@@ -1,3 +1,325 @@
+--- a/src/arrow/array_reader/byte_array.rs
++++ b/src/arrow/array_reader/byte_array.rs
+@@ -288,12 +288,13 @@
+             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => ByteArrayDecoder::Dictionary(
+                 ByteArrayDecoderDictionary::new(data, num_levels, num_values)?,
+             ),
++            // PLENORA: the page value count bounds the delta header counts.
+             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
+-                ByteArrayDecoderDeltaLength::new(data, validate_utf8)?,
++                ByteArrayDecoderDeltaLength::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
++            ),
++            Encoding::DELTA_BYTE_ARRAY => ByteArrayDecoder::DeltaByteArray(
++                ByteArrayDecoderDelta::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
+             ),
+-            Encoding::DELTA_BYTE_ARRAY => {
+-                ByteArrayDecoder::DeltaByteArray(ByteArrayDecoderDelta::new(data, validate_utf8)?)
+-            }
+             _ => {
+                 return Err(general_err!(
+                     "unsupported encoding for byte array: {}",
+@@ -451,9 +452,9 @@
+ }
+ 
+ impl ByteArrayDecoderDeltaLength {
+-    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
++    fn new(data: Bytes, massimo: usize, validate_utf8: bool) -> Result<Self> {
+         let mut len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
+-        len_decoder.set_data(data.clone(), 0)?;
++        len_decoder.set_data(data.clone(), massimo)?; // PLENORA
+         let values = len_decoder.values_left();
+ 
+         let mut lengths = vec![0; values];
+@@ -543,9 +544,9 @@
+ }
+ 
+ impl ByteArrayDecoderDelta {
+-    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
++    fn new(data: Bytes, massimo: usize, validate_utf8: bool) -> Result<Self> {
+         Ok(Self {
+-            decoder: DeltaByteArrayDecoder::new(data)?,
++            decoder: DeltaByteArrayDecoder::new(data, massimo)?, // PLENORA
+             validate_utf8,
+         })
+     }
+--- a/src/arrow/array_reader/byte_view_array.rs
++++ b/src/arrow/array_reader/byte_view_array.rs
+@@ -249,11 +249,12 @@
+                     data, num_levels, num_values,
+                 )?)
+             }
++            // PLENORA: the page value count bounds the delta header counts.
+             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteViewArrayDecoder::DeltaLength(
+-                ByteViewArrayDecoderDeltaLength::new(data, validate_utf8)?,
++                ByteViewArrayDecoderDeltaLength::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
+             ),
+             Encoding::DELTA_BYTE_ARRAY => ByteViewArrayDecoder::DeltaByteArray(
+-                ByteViewArrayDecoderDelta::new(data, validate_utf8)?,
++                ByteViewArrayDecoderDelta::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
+             ),
+             _ => {
+                 return Err(general_err!(
+@@ -577,9 +578,9 @@
+ }
+ 
+ impl ByteViewArrayDecoderDeltaLength {
+-    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
++    fn new(data: Bytes, massimo: usize, validate_utf8: bool) -> Result<Self> {
+         let mut len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
+-        len_decoder.set_data(data.clone(), 0)?;
++        len_decoder.set_data(data.clone(), massimo)?; // PLENORA
+         let values = len_decoder.values_left();
+ 
+         let mut lengths = vec![0; values];
+@@ -668,9 +669,9 @@
+ }
+ 
+ impl ByteViewArrayDecoderDelta {
+-    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
++    fn new(data: Bytes, massimo: usize, validate_utf8: bool) -> Result<Self> {
+         Ok(Self {
+-            decoder: DeltaByteArrayDecoder::new(data)?,
++            decoder: DeltaByteArrayDecoder::new(data, massimo)?, // PLENORA
+             validate_utf8,
+         })
+     }
+--- a/src/arrow/array_reader/fixed_len_byte_array.rs
++++ b/src/arrow/array_reader/fixed_len_byte_array.rs
+@@ -412,7 +412,10 @@
+                 encoding
+             ));
+         }
+-        let expected_len = num_values as usize * self.byte_length;
++        // PLENORA: a wrapped product would accept a short dictionary.
++        let expected_len = (num_values as usize)
++            .checked_mul(self.byte_length)
++            .ok_or_else(|| general_err!("dictionary page size overflows"))?;
+         if expected_len > buf.len() {
+             return Err(general_err!(
+                 "too few bytes in dictionary page, expected {} got {}",
+@@ -441,7 +444,8 @@
+                 decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
+             },
+             Encoding::DELTA_BYTE_ARRAY => Decoder::Delta {
+-                decoder: DeltaByteArrayDecoder::new(data)?,
++                // PLENORA: the page value count bounds the delta header counts.
++                decoder: DeltaByteArrayDecoder::new(data, num_values.unwrap_or(num_levels))?,
+             },
+             Encoding::BYTE_STREAM_SPLIT => Decoder::ByteStreamSplit {
+                 buf: data,
+--- a/src/arrow/decoder/delta_byte_array.rs
++++ b/src/arrow/decoder/delta_byte_array.rs
+@@ -33,16 +33,19 @@
+ 
+ impl DeltaByteArrayDecoder {
+     /// Create a new [`DeltaByteArrayDecoder`] with the provided data page
+-    pub fn new(data: Bytes) -> Result<Self> {
++    ///
++    /// PLENORA: `massimo` is the page value count, which bounds the counts the
++    /// two delta headers declare.
++    pub fn new(data: Bytes, massimo: usize) -> Result<Self> {
+         let mut prefix = DeltaBitPackDecoder::<Int32Type>::new();
+-        prefix.set_data(data.clone(), 0)?;
++        prefix.set_data(data.clone(), massimo)?;
+ 
+         let num_prefix = prefix.values_left();
+         let mut prefix_lengths = vec![0; num_prefix];
+         assert_eq!(prefix.get(&mut prefix_lengths)?, num_prefix);
+ 
+         let mut suffix = DeltaBitPackDecoder::<Int32Type>::new();
+-        suffix.set_data(data.slice(prefix.get_offset()..), 0)?;
++        suffix.set_data(data.slice(prefix.get_offset()..), massimo)?;
+ 
+         let num_suffix = suffix.values_left();
+         let mut suffix_lengths = vec![0; num_suffix];
+--- a/src/encodings/decoding.rs
++++ b/src/encodings/decoding.rs
+@@ -673,8 +673,12 @@
+     T::T: Default + FromPrimitive + FromBitpacked + WrappingAdd + Copy,
+ {
+     // # of total values is derived from encoding
++    // PLENORA: `num_values` is the most values the page can hold (its value
++    // count, nulls included); a header declaring more is malformed, and is
++    // rejected before a caller sizes a buffer by it. A miniblock of bit width
++    // zero encodes any count in a few bytes, so the bytes cannot bound it.
+     #[inline]
+-    fn set_data(&mut self, data: Bytes, _index: usize) -> Result<()> {
++    fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
+         self.bit_reader = BitReader::new(data);
+         self.initialized = true;
+ 
+@@ -703,6 +707,12 @@
+             .ok_or_else(|| eof_err!("Not enough data to decode 'values_left'"))?
+             .try_into()
+             .map_err(|_| general_err!("invalid 'values_left'"))?;
++        if self.values_left > num_values {
++            // PLENORA
++            return Err(general_err!(
++                "delta header declares more values than the page holds"
++            ));
++        }
+ 
+         let first_value = self
+             .bit_reader
+--- a/src/file/metadata/thrift/mod.rs
++++ b/src/file/metadata/thrift/mod.rs
+@@ -820,7 +820,9 @@
+                 let list_ident = prot.read_list_begin()?;
+                 // check for list of struct
+                 validate_list_type(ElementType::Struct, &list_ident)?;
+-                let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
++                // PLENORA: capacity bounded by the remaining footer bytes.
++                let mut rg_vec =
++                    Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&prot, list_ident.size)?);
+ 
+                 for _ in 0..list_ident.size {
+                     rg_vec.push(read_row_group(&mut prot, schema_descr, options)?);
+--- a/src/file/page_index/offset_index.rs
++++ b/src/file/page_index/offset_index.rs
+@@ -91,7 +91,9 @@
+         // we have to do this manually because we want to use the fast PageLocation decoder
+         let list_ident = prot.read_list_begin()?;
+         validate_list_type(ElementType::Struct, &list_ident)?;
+-        let mut page_locations = Vec::with_capacity(list_ident.size as usize);
++        // PLENORA: capacity bounded by the remaining input bytes.
++        let mut page_locations =
++            Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&*prot, list_ident.size)?);
+         for _ in 0..list_ident.size {
+             page_locations.push(read_page_location(prot)?);
+         }
+--- a/src/file/reader.rs
++++ b/src/file/reader.rs
+@@ -97,6 +97,17 @@
+     }
+ 
+     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
++        // PLENORA: the length comes from a page header or the footer; a range
++        // past the end of the file is an EOF before any capacity is reserved.
++        let file_len = self.metadata()?.len();
++        let end = start.checked_add(length as u64);
++        if end.is_none_or(|end| end > file_len) {
++            return Err(eof_err!(
++                "Expected to read {} bytes at offset {}, past the end of the file",
++                length,
++                start
++            ));
++        }
+         let mut buffer = Vec::with_capacity(length);
+         let mut reader = self.try_clone()?;
+         reader.seek(SeekFrom::Start(start))?;
+--- a/src/file/serialized_reader.rs
++++ b/src/file/serialized_reader.rs
+@@ -482,6 +482,16 @@
+                 ParquetError::General("Missing dictionary page header".to_string())
+             })?;
+             let is_sorted = dict_header.is_sorted.unwrap_or(false);
++            // PLENORA: a dictionary is PLAIN-encoded, at least one bit per
++            // value, so a count above eight per byte of the page is malformed:
++            // rejected before a decoder reserves one slot per declared value.
++            let dichiarati = u64::try_from(dict_header.num_values)
++                .map_err(|_| general_err!("negative dictionary page value count"))?;
++            if dichiarati > (buffer.len() as u64).saturating_mul(8) {
++                return Err(general_err!(
++                    "dictionary page declares more values than its bytes can encode"
++                ));
++            }
+             Page::DictionaryPage {
+                 buf: buffer,
+                 num_values: dict_header.num_values.try_into()?,
+@@ -585,6 +595,61 @@
+     state: SerializedPageReaderState,
+ 
+     context: SerializedPageReaderContext,
++
++    /// PLENORA: what the column chunk metadata declares, which a reader can
++    /// check against its memory budget before any page is read
++    /// ([`LimitiPagina`]).
++    limiti: LimitiPagina,
++}
++
++/// PLENORA: bounds a page header must respect. A page can neither expand
++/// beyond the uncompressed size of its column chunk nor hold more values
++/// than the chunk: a header that declares more is malformed, and is
++/// rejected before its decompression buffer or its decoders reserve memory.
++#[derive(Clone, Copy, Debug)]
++struct LimitiPagina {
++    /// `total_uncompressed_size` of the column chunk.
++    non_compressi: u64,
++    /// `num_values` of the column chunk.
++    valori: u64,
++}
++
++impl LimitiPagina {
++    fn dal_chunk(meta: &ColumnChunkMetaData) -> Result<Self> {
++        let non_compressi = u64::try_from(meta.uncompressed_size())
++            .map_err(|_| general_err!("negative column chunk uncompressed size"))?;
++        let valori = u64::try_from(meta.num_values())
++            .map_err(|_| general_err!("negative column chunk value count"))?;
++        Ok(Self {
++            non_compressi,
++            valori,
++        })
++    }
++
++    fn verifica(&self, header: &PageHeader) -> Result<()> {
++        let non_compressi = u64::try_from(header.uncompressed_page_size)
++            .map_err(|_| general_err!("negative uncompressed page size"))?;
++        if non_compressi > self.non_compressi {
++            return Err(general_err!(
++                "page uncompressed size exceeds the column chunk uncompressed size"
++            ));
++        }
++        let valori = match (&header.data_page_header, &header.data_page_header_v2) {
++            (Some(v1), _) => Some(v1.num_values),
++            (None, Some(v2)) => Some(v2.num_values),
++            (None, None) => None,
++        };
++        if let Some(valori) = valori {
++            let valori = u64::try_from(valori)
++                .map_err(|_| general_err!("negative page value count"))?;
++            if valori > self.valori {
++                return Err(general_err!(
++                    "page value count exceeds the column chunk value count"
++                ));
++            }
++        }
++        Ok(())
++    }
+ }
+ 
+ impl<R: ChunkReader> SerializedPageReader<R> {
+@@ -648,6 +713,7 @@
+     ) -> Result<Self> {
+         let decompressor = create_codec(meta.compression(), props.codec_options())?;
+         let (start, len) = meta.byte_range();
++        let limiti = LimitiPagina::dal_chunk(meta)?; // PLENORA
+ 
+         let state = match page_locations {
+             Some(locations) => {
+@@ -687,6 +753,7 @@
+             state,
+             physical_type: meta.column_type(),
+             context,
++            limiti, // PLENORA
+         })
+     }
+ 
+@@ -956,6 +1023,7 @@
+                         header.uncompressed_page_size,
+                         *remaining,
+                     )?;
++                    self.limiti.verifica(&header)?; // PLENORA
+                     let data_len = header.compressed_page_size as usize;
+                     let data_start = *offset;
+                     *offset += data_len as u64;
+@@ -1007,6 +1075,7 @@
+                         *page_index,
+                         is_dictionary_page,
+                     )?;
++                    self.limiti.verifica(&header)?; // PLENORA
+                     let bytes = buffer.slice(offset..);
+                     let bytes =
+                         self.context
 --- a/src/parquet_thrift.rs
 +++ b/src/parquet_thrift.rs
 @@ -316,7 +316,16 @@
@@ -161,29 +483,22 @@
  pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) -> Result<()> {
      if got.element_type != expected {
          return Err(general_err!(
---- a/src/file/metadata/thrift/mod.rs
-+++ b/src/file/metadata/thrift/mod.rs
-@@ -820,7 +820,9 @@
-                 let list_ident = prot.read_list_begin()?;
-                 // check for list of struct
-                 validate_list_type(ElementType::Struct, &list_ident)?;
--                let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
-+                // PLENORA: capacity bounded by the remaining footer bytes.
-+                let mut rg_vec =
-+                    Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&prot, list_ident.size)?);
+--- a/src/schema/types.rs
++++ b/src/schema/types.rs
+@@ -1532,7 +1532,15 @@
+         Some(n) => {
+             let repetition = element.repetition_type;
  
-                 for _ in 0..list_ident.size {
-                     rg_vec.push(read_row_group(&mut prot, schema_descr, options)?);
---- a/src/file/page_index/offset_index.rs
-+++ b/src/file/page_index/offset_index.rs
-@@ -91,7 +91,9 @@
-         // we have to do this manually because we want to use the fast PageLocation decoder
-         let list_ident = prot.read_list_begin()?;
-         validate_list_type(ElementType::Struct, &list_ident)?;
--        let mut page_locations = Vec::with_capacity(list_ident.size as usize);
-+        // PLENORA: capacity bounded by the remaining input bytes.
-+        let mut page_locations =
-+            Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&*prot, list_ident.size)?);
-         for _ in 0..list_ident.size {
-             page_locations.push(read_page_location(prot)?);
-         }
+-            let mut fields = Vec::with_capacity(usize::try_from(n)?);
++            // PLENORA: every child is one of the elements after this one; a
++            // count above them is malformed and rejected before reserving.
++            let figli = usize::try_from(n)?;
++            if figli > num_elements.saturating_sub(index + 1) {
++                return Err(general_err!(
++                    "schema element declares more children than elements remain"
++                ));
++            }
++            let mut fields = Vec::with_capacity(figli);
+             let mut next_index = index + 1;
+             for _ in 0..n {
+                 let child_result = schema_from_array_helper(elements, num_elements, next_index)?;

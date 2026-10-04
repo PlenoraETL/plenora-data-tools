@@ -482,6 +482,16 @@ pub(crate) fn decode_page(
                 ParquetError::General("Missing dictionary page header".to_string())
             })?;
             let is_sorted = dict_header.is_sorted.unwrap_or(false);
+            // PLENORA: a dictionary is PLAIN-encoded, at least one bit per
+            // value, so a count above eight per byte of the page is malformed:
+            // rejected before a decoder reserves one slot per declared value.
+            let dichiarati = u64::try_from(dict_header.num_values)
+                .map_err(|_| general_err!("negative dictionary page value count"))?;
+            if dichiarati > (buffer.len() as u64).saturating_mul(8) {
+                return Err(general_err!(
+                    "dictionary page declares more values than its bytes can encode"
+                ));
+            }
             Page::DictionaryPage {
                 buf: buffer,
                 num_values: dict_header.num_values.try_into()?,
@@ -585,6 +595,61 @@ pub struct SerializedPageReader<R: ChunkReader> {
     state: SerializedPageReaderState,
 
     context: SerializedPageReaderContext,
+
+    /// PLENORA: what the column chunk metadata declares, which a reader can
+    /// check against its memory budget before any page is read
+    /// ([`LimitiPagina`]).
+    limiti: LimitiPagina,
+}
+
+/// PLENORA: bounds a page header must respect. A page can neither expand
+/// beyond the uncompressed size of its column chunk nor hold more values
+/// than the chunk: a header that declares more is malformed, and is
+/// rejected before its decompression buffer or its decoders reserve memory.
+#[derive(Clone, Copy, Debug)]
+struct LimitiPagina {
+    /// `total_uncompressed_size` of the column chunk.
+    non_compressi: u64,
+    /// `num_values` of the column chunk.
+    valori: u64,
+}
+
+impl LimitiPagina {
+    fn dal_chunk(meta: &ColumnChunkMetaData) -> Result<Self> {
+        let non_compressi = u64::try_from(meta.uncompressed_size())
+            .map_err(|_| general_err!("negative column chunk uncompressed size"))?;
+        let valori = u64::try_from(meta.num_values())
+            .map_err(|_| general_err!("negative column chunk value count"))?;
+        Ok(Self {
+            non_compressi,
+            valori,
+        })
+    }
+
+    fn verifica(&self, header: &PageHeader) -> Result<()> {
+        let non_compressi = u64::try_from(header.uncompressed_page_size)
+            .map_err(|_| general_err!("negative uncompressed page size"))?;
+        if non_compressi > self.non_compressi {
+            return Err(general_err!(
+                "page uncompressed size exceeds the column chunk uncompressed size"
+            ));
+        }
+        let valori = match (&header.data_page_header, &header.data_page_header_v2) {
+            (Some(v1), _) => Some(v1.num_values),
+            (None, Some(v2)) => Some(v2.num_values),
+            (None, None) => None,
+        };
+        if let Some(valori) = valori {
+            let valori = u64::try_from(valori)
+                .map_err(|_| general_err!("negative page value count"))?;
+            if valori > self.valori {
+                return Err(general_err!(
+                    "page value count exceeds the column chunk value count"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<R: ChunkReader> SerializedPageReader<R> {
@@ -648,6 +713,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
     ) -> Result<Self> {
         let decompressor = create_codec(meta.compression(), props.codec_options())?;
         let (start, len) = meta.byte_range();
+        let limiti = LimitiPagina::dal_chunk(meta)?; // PLENORA
 
         let state = match page_locations {
             Some(locations) => {
@@ -687,6 +753,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
             state,
             physical_type: meta.column_type(),
             context,
+            limiti, // PLENORA
         })
     }
 
@@ -956,6 +1023,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         header.uncompressed_page_size,
                         *remaining,
                     )?;
+                    self.limiti.verifica(&header)?; // PLENORA
                     let data_len = header.compressed_page_size as usize;
                     let data_start = *offset;
                     *offset += data_len as u64;
@@ -1007,6 +1075,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *page_index,
                         is_dictionary_page,
                     )?;
+                    self.limiti.verifica(&header)?; // PLENORA
                     let bytes = buffer.slice(offset..);
                     let bytes =
                         self.context
