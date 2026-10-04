@@ -1,0 +1,7 @@
+# Strumenti Python del job di copertura dell'SDK e del binding nativo
+# (.github/workflows/coverage.yml), come in plenora-database-tools;
+# cargo-llvm-cov e llvm-tools-preview sono fissati nel workflow.
+-r requirements-sdk-tests.txt
+coverage==7.16.1
+maturin==1.15.0
+pytest-cov==7.1.0
