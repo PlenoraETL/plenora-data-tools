@@ -412,7 +412,10 @@ impl ColumnValueDecoder for ValueDecoder {
                 encoding
             ));
         }
-        let expected_len = num_values as usize * self.byte_length;
+        // PLENORA: a wrapped product would accept a short dictionary.
+        let expected_len = (num_values as usize)
+            .checked_mul(self.byte_length)
+            .ok_or_else(|| general_err!("dictionary page size overflows"))?;
         if expected_len > buf.len() {
             return Err(general_err!(
                 "too few bytes in dictionary page, expected {} got {}",
@@ -441,7 +444,8 @@ impl ColumnValueDecoder for ValueDecoder {
                 decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
             },
             Encoding::DELTA_BYTE_ARRAY => Decoder::Delta {
-                decoder: DeltaByteArrayDecoder::new(data)?,
+                // PLENORA: the page value count bounds the delta header counts.
+                decoder: DeltaByteArrayDecoder::new(data, num_values.unwrap_or(num_levels))?,
             },
             Encoding::BYTE_STREAM_SPLIT => Decoder::ByteStreamSplit {
                 buf: data,

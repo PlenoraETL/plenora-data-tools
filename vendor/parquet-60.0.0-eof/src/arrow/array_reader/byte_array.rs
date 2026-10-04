@@ -288,12 +288,13 @@ impl ByteArrayDecoder {
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => ByteArrayDecoder::Dictionary(
                 ByteArrayDecoderDictionary::new(data, num_levels, num_values)?,
             ),
+            // PLENORA: the page value count bounds the delta header counts.
             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
-                ByteArrayDecoderDeltaLength::new(data, validate_utf8)?,
+                ByteArrayDecoderDeltaLength::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
             ),
-            Encoding::DELTA_BYTE_ARRAY => {
-                ByteArrayDecoder::DeltaByteArray(ByteArrayDecoderDelta::new(data, validate_utf8)?)
-            }
+            Encoding::DELTA_BYTE_ARRAY => ByteArrayDecoder::DeltaByteArray(
+                ByteArrayDecoderDelta::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
+            ),
             _ => {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",
@@ -451,9 +452,9 @@ pub struct ByteArrayDecoderDeltaLength {
 }
 
 impl ByteArrayDecoderDeltaLength {
-    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
+    fn new(data: Bytes, massimo: usize, validate_utf8: bool) -> Result<Self> {
         let mut len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
-        len_decoder.set_data(data.clone(), 0)?;
+        len_decoder.set_data(data.clone(), massimo)?; // PLENORA
         let values = len_decoder.values_left();
 
         let mut lengths = vec![0; values];
@@ -543,9 +544,9 @@ pub struct ByteArrayDecoderDelta {
 }
 
 impl ByteArrayDecoderDelta {
-    fn new(data: Bytes, validate_utf8: bool) -> Result<Self> {
+    fn new(data: Bytes, massimo: usize, validate_utf8: bool) -> Result<Self> {
         Ok(Self {
-            decoder: DeltaByteArrayDecoder::new(data)?,
+            decoder: DeltaByteArrayDecoder::new(data, massimo)?, // PLENORA
             validate_utf8,
         })
     }

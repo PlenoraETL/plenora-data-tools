@@ -274,12 +274,13 @@ limite della tabella.
   di `parquet` (`vendor/parquet-60.0.0-eof/PROVENANCE.md`) chiude i casi
   trovati dal fuzz: header di pagina che giravano a vuoto per minuti,
   footer che riservavano gigabyte per i row group o le posizioni
-  dell'offset index, interi Thrift troncati. Restano, anche upstream, le
-  allocazioni dai figli dichiarati dello schema, dalle dimensioni di pagina
-  (compressa e non compressa) prima di leggerla, dai conteggi dei
-  dizionari e delle codifiche delta, dalla larghezza dei
-  `FixedLenByteArray`; in IPC le copie di buffer sovrapposti e non
-  allineati. Il tetto vero resta il limite di memoria del processo. Anche uno schema
+  dell'offset index, interi Thrift troncati; e le dimensioni che un
+  header di pagina, un dizionario, una codifica delta o lo schema
+  dichiarano oltre i metadati del column chunk, che il budget ha già
+  confrontato prima di leggere. Restano le espansioni vere (dizionari
+  ripetuti, `FixedLenByteArray` larghi), che il budget stima per un
+  fattore fisso; in IPC le copie di buffer sovrapposti e non allineati. Il
+  tetto vero resta il limite di memoria del processo. Anche uno schema
   Parquet annidato per migliaia di livelli esaurisce lo stack. I file
   scritti da scrittori conformi non lo fanno.
   *Rientro*: se si devono leggere file di fonti non fidate, aggiungere una

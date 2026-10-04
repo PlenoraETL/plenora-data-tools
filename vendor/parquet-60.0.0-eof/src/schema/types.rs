@@ -1532,7 +1532,15 @@ fn schema_from_array_helper(
         Some(n) => {
             let repetition = element.repetition_type;
 
-            let mut fields = Vec::with_capacity(usize::try_from(n)?);
+            // PLENORA: every child is one of the elements after this one; a
+            // count above them is malformed and rejected before reserving.
+            let figli = usize::try_from(n)?;
+            if figli > num_elements.saturating_sub(index + 1) {
+                return Err(general_err!(
+                    "schema element declares more children than elements remain"
+                ));
+            }
+            let mut fields = Vec::with_capacity(figli);
             let mut next_index = index + 1;
             for _ in 0..n {
                 let child_result = schema_from_array_helper(elements, num_elements, next_index)?;

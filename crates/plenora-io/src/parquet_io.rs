@@ -261,6 +261,10 @@ pub fn stima_decodificata(metadati: &ParquetMetaData) -> u64 {
     let mut non_compressi = 0_u64;
     let mut larghezze = 0_u64;
     for gruppo in metadati.row_groups() {
+        // `parquet` riserva per le righe del batch, non per i valori del
+        // chunk: un chunk che dichiara meno valori delle righe non abbassa la
+        // stima (larghezza FIXED_LEN_BYTE_ARRAY per righe).
+        let righe = u64::try_from(gruppo.num_rows()).unwrap_or(0);
         for chunk in gruppo.columns() {
             non_compressi =
                 non_compressi.saturating_add(u64::try_from(chunk.uncompressed_size()).unwrap_or(0));
@@ -282,6 +286,7 @@ pub fn stima_decodificata(metadati: &ParquetMetaData) -> u64 {
                 .saturating_add(
                     u64::try_from(chunk.num_values())
                         .unwrap_or(0)
+                        .max(righe)
                         .saturating_mul(per_valore),
                 )
                 .saturating_add(decodificati);

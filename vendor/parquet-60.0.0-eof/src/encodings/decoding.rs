@@ -673,8 +673,12 @@ where
     T::T: Default + FromPrimitive + FromBitpacked + WrappingAdd + Copy,
 {
     // # of total values is derived from encoding
+    // PLENORA: `num_values` is the most values the page can hold (its value
+    // count, nulls included); a header declaring more is malformed, and is
+    // rejected before a caller sizes a buffer by it. A miniblock of bit width
+    // zero encodes any count in a few bytes, so the bytes cannot bound it.
     #[inline]
-    fn set_data(&mut self, data: Bytes, _index: usize) -> Result<()> {
+    fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         self.bit_reader = BitReader::new(data);
         self.initialized = true;
 
@@ -703,6 +707,12 @@ where
             .ok_or_else(|| eof_err!("Not enough data to decode 'values_left'"))?
             .try_into()
             .map_err(|_| general_err!("invalid 'values_left'"))?;
+        if self.values_left > num_values {
+            // PLENORA
+            return Err(general_err!(
+                "delta header declares more values than the page holds"
+            ));
+        }
 
         let first_value = self
             .bit_reader
