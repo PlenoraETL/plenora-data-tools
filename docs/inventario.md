@@ -88,6 +88,20 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 | `plenora-pipeline` | 10 | 142 | 152 |
 | **totale** | 1177 | 539 | 1716 |
 
+### Prove Python dell'SDK
+
+Funzioni `test_*` (anche `async`) della suite pytest di `plenora-data-py`,
+che gira sul wheel installato (`scripts/verifica_sdk_python.py`): il
+`plenora-data-py` della tabella sopra conta solo i `#[test]` Rust.
+
+| file | prove |
+| --- | --- |
+| `crates/plenora-data-py/python/tests/test_controlli.py` | 18 |
+| `crates/plenora-data-py/python/tests/test_errori.py` | 12 |
+| `crates/plenora-data-py/python/tests/test_operazioni.py` | 12 |
+| `crates/plenora-data-py/python/tests/test_superficie.py` | 9 |
+| **totale** | 51 |
+
 ### Prove delle guardie
 
 Funzioni `test_*` dei self-test Python in `scripts/`.
@@ -97,5 +111,5 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 | `scripts/test_check_cargo_deny.py` | 4 |
 | `scripts/test_check_comments.py` | 27 |
 | `scripts/test_check_docs.py` | 14 |
-| `scripts/test_genera_inventario.py` | 5 |
+| `scripts/test_genera_inventario.py` | 6 |
 | `scripts/test_genera_sbom_rilascio.py` | 5 |

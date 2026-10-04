@@ -50,6 +50,10 @@ jobs:
             --out dist
             --manifest-path crates/plenora-data-py/Cargo.toml
           manylinux: '2_34'
+          # L'immagine manylinux per digest (quella del rilascio 1.0.0): il
+          # tag `latest` cambierebbe la toolchain C del wheel Linux fra due
+          # build dello stesso commit. Su Windows l'input non si usa.
+          container: 'quay.io/pypa/manylinux_2_34_x86_64@sha256:e4ca528d41ab66b3654110295d7a2c7bfa599ddbb6efb269ec21f7f73b88f1b6'
           rust-toolchain: '1.98.0'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
