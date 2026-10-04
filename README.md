@@ -36,11 +36,13 @@ portati: la CLI `plenora-data` è nuova, scritta sui contratti pubblici
 La CI (`.github/workflows/ci.yml`) esegue i gate di
 [`AGENTS.md`](AGENTS.md) su Linux e Windows a ogni push su `main` e a ogni
 pull request, con la suite lunga, e verifica la CLI contro
-`plenora-contracts` al commit fissato; compila i target di fuzz, e
-`.github/workflows/supply-chain.yml` controlla la catena delle dipendenze
-([«Fuzz»](#fuzz), [«Catena delle dipendenze»](#catena-delle-dipendenze)).
-Non ci sono ancora, e si dichiarano assenti: campagne di fuzz in CI (girano
-fuori, a mano), misura della copertura e mutation testing. Non sono in programma l'identità del piano (`plan_hash`,
+`plenora-contracts` al commit fissato; compila i target di fuzz, che
+`.github/workflows/fuzz.yml` fa girare ogni settimana;
+`.github/workflows/supply-chain.yml` controlla la catena delle dipendenze e
+`.github/workflows/coverage.yml` misura la copertura contro le soglie di
+`scripts/coverage_budget.json` ([«Fuzz»](#fuzz), [«Catena delle dipendenze»](#catena-delle-dipendenze),
+[«Copertura»](#copertura)). Non c'è ancora, e si dichiara assente, il
+mutation testing. Non sono in programma l'identità del piano (`plan_hash`,
 fingerprint del catalogo) e l'interruzione di un kernel a metà: scadenza e
 annullamento si controllano solo fra i passi
 ([«Scadenza e annullamento»](docs/runner.md#scadenza-e-annullamento)).
@@ -179,7 +181,11 @@ uguali in testo, categoria, fase e diagnostica. Poi ognuno ha un oracolo:
 | `lettura_ipc`, `lettura_parquet` | confine di lettura dei file | due letture uguali; riscritta (IPC file e stream, Parquet) e riletta è la stessa, o per Parquet con geometrie la trasformazione GeoParquet documentata |
 | `argomenti_cli` | grammatica della CLI | rifiuti `InvalidConfiguration`, lettura deterministica |
 
-Le campagne vogliono Linux (o WSL) con nightly e `cargo-fuzz`:
+`.github/workflows/fuzz.yml` fa girare ogni target ogni domenica (e a mano)
+per 10 minuti, e per un minuto sulle PR che toccano `fuzz/`, con i corpus
+iniziali di `scripts/genera_corpus_fuzz.py`; un crash fa fallire il job e i
+reperti restano come artefatto. In locale le
+campagne vogliono Linux (o WSL) con nightly e `cargo-fuzz`:
 
 ```sh
 cargo +nightly fuzz build -O
@@ -214,6 +220,19 @@ cargo deny check && cargo deny --manifest-path fuzz/Cargo.toml check   # se inst
 La CI la esegue a ogni push e PR e ogni lunedì
 (`.github/workflows/supply-chain.yml`): un'advisory nuova può farla
 diventare rossa senza che il codice cambi.
+
+### Copertura
+
+`.github/workflows/coverage.yml`, a ogni push e PR, misura tre superfici con
+soglie separate in `scripts/coverage_budget.json`: il prodotto Rust
+(`cargo-llvm-cov`, senza l'SDK), l'SDK Python (coverage.py, righe e rami) e il
+suo binding nativo, misurato dal wheel instrumentato mentre gira la suite
+Python. `scripts/check_coverage.py` fallisce chiuso su un report incompleto o
+incoerente. In locale:
+
+```sh
+cargo llvm-cov --workspace --exclude plenora-data-py --summary-only
+```
 
 ### Rilascio
 

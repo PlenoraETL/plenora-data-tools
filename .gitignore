@@ -10,3 +10,6 @@ __pycache__/
 /fuzz/corpus/
 /fuzz/artifacts/
 /fuzz/coverage/
+
+# Report di copertura (coverage.yml) generati in locale.
+/coverage/
