@@ -227,8 +227,11 @@ diventare rossa senza che il codice cambi.
 soglie separate in `scripts/coverage_budget.json`: il prodotto Rust
 (`cargo-llvm-cov`, senza l'SDK), l'SDK Python (coverage.py, righe e rami) e il
 suo binding nativo, misurato dal wheel instrumentato mentre gira la suite
-Python. `scripts/check_coverage.py` fallisce chiuso su un report incompleto o
-incoerente. In locale:
+Python. `scripts/check_coverage.py` fallisce chiuso su un report incompleto,
+incoerente o che misura file fuori dai sorgenti dichiarati della superficie.
+Le soglie sono la prima misura della CI (4 ottobre 2026) meno un margine di
+circa un elemento sulle superfici piccole; si alzano a mano quando la
+copertura sale, mai si abbassano per far passare una modifica. In locale:
 
 ```sh
 cargo llvm-cov --workspace --exclude plenora-data-py --summary-only
