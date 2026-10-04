@@ -1,0 +1,41 @@
+{
+  "$schema": "../../schemas/runtime-vector-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-runtime-vector-v1",
+  "kind": "success",
+  "content_type": "application/json",
+  "metadata": {
+    "plenora.message.id": "018f3d84-7b2c-7f00-8000-000000000131",
+    "plenora.capability.operation": "data.run",
+    "plenora.operation.version": "3",
+    "plenora.output.contract": "plenora-data-execution-result-v3",
+    "plenora.trace.correlation_id": "018f3d84-7b2c-7f00-8000-000000000030"
+  },
+  "payload": {
+    "schema_version": 1,
+    "outputs": [
+      {
+        "name": "large",
+        "reference": "artifact://output/data-run-v3-large",
+        "rows": 12,
+        "columns": 3,
+        "artifact": {
+          "content_type": "application/vnd.apache.arrow.stream",
+          "size": 1184,
+          "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "out": "large",
+        "op": "table.filter",
+        "rows_in": [
+          40
+        ],
+        "rows_out": 12,
+        "division_by_zero_rows": 0
+      }
+    ]
+  }
+}

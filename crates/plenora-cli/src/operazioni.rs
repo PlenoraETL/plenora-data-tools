@@ -2,9 +2,12 @@
 //! aiuto, Capability Discovery 2.0 (della CLI e dell'SDK Python) e mappe
 //! degli export Rust e dei simboli Python.
 //!
-//! Le operazioni sono le quattro del catalogo pubblico di `plenora-contracts`
+//! Le operazioni sono le cinque del catalogo pubblico di `plenora-contracts`
 //! (`catalogs/data-tools-v2.json`, profilo `plenora-data-tools-profile-v2`):
-//! `data.catalog` 2, `data.describe` 1, `data.validate` 2, `data.run` 2.
+//! `data.catalog` 2, `data.describe` 1, `data.validate` 2, `data.run` 2 e
+//! `data.run` 3. Quest'ultima sta solo sulla superficie Rust (e sul runtime,
+//! che l'applicazione costruisce sopra): niente comando CLI, niente simbolo
+//! Python, niente voce nei documenti delle capacità della CLI e dell'SDK.
 //! Identificatori, versioni, contratti e tipi di contenuto vengono da lì; gli
 //! attributi dicono ciò che i campi comuni non dicono.
 //!
@@ -35,6 +38,9 @@ pub enum Effetto {
     Nessuno,
     /// Effetti locali (file scritti), mai remoti.
     Locale,
+    /// Effetti che possono essere remoti (artefatti pubblicati da un
+    /// risolutore dell'applicazione): la classe prudente.
+    Remoto,
 }
 
 impl Effetto {
@@ -44,6 +50,7 @@ impl Effetto {
         match self {
             Self::Nessuno => "none",
             Self::Locale => "local",
+            Self::Remoto => "remote",
         }
     }
 }
@@ -96,6 +103,9 @@ pub struct OperazionePubblica {
     /// L'operazione legge un piano `plenora-data-plan-v1` (attributo
     /// `plan_contract`).
     pub usa_piano: bool,
+    /// Solo sulla superficie Rust: niente comando CLI, niente simbolo
+    /// Python, assente dai documenti delle capacità della CLI e dell'SDK.
+    pub solo_rust: bool,
 }
 
 /// Le operazioni pubbliche dell'artefatto, nell'ordine del catalogo.
@@ -120,6 +130,7 @@ pub const OPERAZIONI: &[OperazionePubblica] = &[
         export_rust: &["plenora_cli::api::catalogo"],
         export_python: &["plenora_data.catalog", "plenora_data.acatalog"],
         usa_piano: false,
+        solo_rust: false,
     },
     OperazionePubblica {
         id: "data.describe",
@@ -144,6 +155,7 @@ pub const OPERAZIONI: &[OperazionePubblica] = &[
         ],
         export_python: &["plenora_data.describe", "plenora_data.adescribe"],
         usa_piano: false,
+        solo_rust: false,
     },
     OperazionePubblica {
         id: "data.validate",
@@ -169,6 +181,7 @@ pub const OPERAZIONI: &[OperazionePubblica] = &[
         ],
         export_python: &["plenora_data.validate", "plenora_data.avalidate"],
         usa_piano: true,
+        solo_rust: false,
     },
     OperazionePubblica {
         id: "data.run",
@@ -196,6 +209,29 @@ pub const OPERAZIONI: &[OperazionePubblica] = &[
         ],
         export_python: &["plenora_data.run", "plenora_data.arun"],
         usa_piano: true,
+        solo_rust: false,
+    },
+    OperazionePubblica {
+        id: "data.run",
+        versione: 3,
+        comando: "",
+        sintassi: "",
+        riassunto: "esegue un piano da sorgenti a destinazioni artefatto (runtime)",
+        ingresso: "plenora-data-execution-input-v3",
+        tipi_ingresso: &[JSON],
+        uscita: "plenora-data-execution-result-v3",
+        tipi_uscita: &[JSON],
+        effetto: Effetto::Remoto,
+        annullamento: true,
+        scadenza: true,
+        estensioni_ingresso: &[PARQUET],
+        estensioni_uscita: &[PARQUET],
+        materializzazione_limitata: true,
+        usa_registro: true,
+        export_rust: &["plenora_cli::api::esegui_artefatti"],
+        export_python: &[],
+        usa_piano: true,
+        solo_rust: true,
     },
 ];
 
@@ -204,11 +240,14 @@ pub const OPERAZIONI: &[OperazionePubblica] = &[
 pub fn per_comando(comando: &str) -> Option<&'static OperazionePubblica> {
     OPERAZIONI
         .iter()
-        .find(|operazione| operazione.comando == comando)
+        .find(|operazione| !operazione.solo_rust && operazione.comando == comando)
 }
 
-/// L'operazione dal suo identificatore.
+/// L'operazione dal suo identificatore, sulle superfici CLI e Python
+/// (`data.run` 2: la 3 è solo Rust).
 #[must_use]
 pub fn per_id(id: &str) -> Option<&'static OperazionePubblica> {
-    OPERAZIONI.iter().find(|operazione| operazione.id == id)
+    OPERAZIONI
+        .iter()
+        .find(|operazione| !operazione.solo_rust && operazione.id == id)
 }

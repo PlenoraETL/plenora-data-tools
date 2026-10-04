@@ -93,7 +93,16 @@ fn la_mappa_python_e_una_sezione_valida_dei_binding_dei_contratti() {
     // requisito; ogni simbolo una volta sola (validate_specs.py dei
     // contratti: niente entrypoint ripetuti in un componente).
     let catalogo = contratto("data-tools-v2.json");
-    let pubbliche = catalogo["operations"].as_array().expect("operations");
+    let pubbliche: Vec<&Value> = catalogo["operations"]
+        .as_array()
+        .expect("operations")
+        .iter()
+        .filter(|operazione| {
+            operazione["surfaces"]
+                .as_array()
+                .is_some_and(|superfici| superfici.contains(&Value::from("python_sdk")))
+        })
+        .collect();
     let binding = mappa["bindings"].as_array().expect("bindings");
     assert_eq!(binding.len(), pubbliche.len());
     let mut simboli = BTreeSet::new();

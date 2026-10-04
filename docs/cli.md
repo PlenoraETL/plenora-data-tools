@@ -2,7 +2,7 @@
 
 `crates/plenora-cli` è la superficie pubblica del componente
 `plenora-data-tools` secondo il profilo data-tools di `plenora-contracts`,
-versione 2, fissato al commit `e7e9d3d9fd37696e1abe6679c028afacbf74847b`: il binario
+versione 2, fissato al commit `4c1569d4b7fb7f0b451566b71e0f01165f9d6bcc`: il binario
 `plenora-data` (CLI 2.0) e le stesse quattro operazioni come funzioni Rust
 (`plenora_cli::api`). Una sola tabella (`plenora_cli::operazioni::OPERAZIONI`)
 dà comandi, aiuto, Capability Discovery 2.0 e la mappa degli export Rust; il
@@ -117,8 +117,9 @@ dei segnali non si installa, `describe`, `validate` e `run` non partono
 ## Capacità e attributi
 
 `capabilities` descrive il binario che risponde: un'interfaccia (`cli`,
-`plenora-cli-v2`, artefatto `plenora-data`) e le quattro operazioni del
-catalogo pubblico con i suoi contratti, tipi di contenuto e controlli. Gli
+`plenora-cli-v2`, artefatto `plenora-data`) e le quattro operazioni che il
+catalogo pubblico mette sulla CLI (non `data.run` 3, che sta solo su Rust e
+runtime) con i suoi contratti, tipi di contenuto e controlli. Gli
 `attributes` seguono il contratto `plenora-data-capability-attributes-v1`
 (di questo componente; CAP-013):
 
@@ -136,10 +137,41 @@ esegui}` con le forme che prendono anche tabelle in memoria
 `esegui_in_memoria`: stesso corpo, quelle che l'SDK Python chiama); la mappa
 operazione → export (`plenora_cli::capacita::mappa_rust`, contratto
 `plenora-data-rust-surface-v1`) nasce dalla stessa tabella, e
-`tests/superficie_rust.rs` la compila da consumatore. Dalla stessa tabella
+`tests/superficie_rust.rs` la compila da consumatore. La mappa comprende
+anche `data.run` 3 ([«`data.run` 3»](#datarun-3-sul-runtime)). Dalla stessa tabella
 vengono le capacità dell'SDK Python e la sua mappa dei simboli
 (`capacita::documento_della`, `capacita::mappa_python`; README di
 `crates/plenora-data-py`).
+
+## `data.run` 3 sul runtime
+
+`plenora_cli::api::esegui_artefatti` è `data.run` versione 3 (profilo
+data-tools v2, DT-RUN-001..DT-RUN-008, decisione 0008 di
+`plenora-contracts`): la rappresentazione runtime di un piano con output
+nominati. Prende il testo della richiesta
+`plenora-data-execution-input-v3` (il piano e, per ogni input e output, un
+riferimento opaco ad artefatto) e un `RisolutoreArtefatti` dell'applicazione,
+che legge le sorgenti, prepara e pubblica le destinazioni (RT-015);
+restituisce il manifesto `plenora-data-execution-result-v3`. Non ha comando
+CLI né simbolo Python, e i documenti `capabilities` della CLI e dell'SDK non
+la elencano; il trasporto runtime (messaggi, autorizzazione, risoluzione dei
+riferimenti) lo costruisce l'applicazione sopra questa funzione.
+
+Il percorso, in ordine: richiesta chiusa (chiavi ripetute, campi sconosciuti,
+riferimenti con la forma di un percorso e tipi fuori elenco sono
+`invalid_configuration`; il piano si legge dal suo testo con le regole di un
+file di piano); nomi uguali a quelli del piano e destinazioni distinte;
+`prepara` del risolutore; ogni sorgente in un file temporaneo privato con
+byte, SHA-256 e firma del formato dichiarato verificati; il piano con la
+semantica di `data.run` 2, uscite in file temporanei; poi la pubblicazione,
+una destinazione alla volta nell'ordine del piano. Fino alla pubblicazione
+un errore non ha effetti (`remote_effect: none`); un fallimento della
+pubblicazione porta l'effetto che il risolutore sa provare
+(`PubblicazioneFallita`: `none` solo se nulla è stato scritto e nulla prima,
+`partial`, `unknown`), e un'interruzione dopo la prima pubblicazione è
+`partial`. `tests/run_artefatti.rs` lo prova con un risolutore strumentato
+che registra l'ordine di letture e pubblicazioni e inietta i guasti; le
+tabelle pubblicate sono quelle di `esegui_in_memoria` sullo stesso piano.
 
 ## Verifica e adozione
 
@@ -175,9 +207,11 @@ diventate contratto, e la sorgente del manifesto
 - **Kernel**: la versione è quella della semantica osservabile, uguale al
   registro comune `data-kernels-v2`; `table.transpose` è `unavailable` con
   il motivo e fuori dal `registry` del risultato (DT-001).
-- **`data.run`**: `side_effect: local`, output nominati
+- **`data.run`**: la versione 2 ha `side_effect: local`, output nominati
   (`--output NAME=OUTPUT.arrow`, o `--output OUTPUT.arrow` per un piano con
-  un solo output); non è legato al runtime.
+  un solo output) e non è legata al runtime; la versione 3
+  (`side_effect: remote`, solo superficie Rust) ne è la rappresentazione
+  runtime ([«`data.run` 3»](#datarun-3-sul-runtime)).
 - **Parquet**: estensione dichiarata negli attributi
   (`extension_content_types`), fuori da `content_types`.
 - **Materializzazione**: `describe`, `validate` e `run` dichiarano
@@ -192,6 +226,23 @@ diventate contratto, e la sorgente del manifesto
   quelle di [«Metadati Arrow»](metadati-arrow.md#metadati-arrow).
 
 ## Limiti dichiarati della CLI
+
+- **`data.run` 3: interruzione fra le fasi, non durante il risolutore.**
+  *Regola*: scadenza e annullamento si controllano prima di leggere ogni
+  sorgente, nel runner e prima di ogni pubblicazione.
+  *Ambito*: `api::esegui_artefatti`.
+  *Hazard*: una lettura o una pubblicazione lenta del risolutore non si
+  interrompe dall'interno; un'interruzione che arriva durante una
+  pubblicazione ha effetto alla successiva.
+  *Rientro*: un risolutore che riceva l'`Interruzione`.
+- **`data.run` 3: le sorgenti passano dal disco.**
+  *Regola*: ogni sorgente e ogni uscita si scrivono in una cartella
+  temporanea privata, tolta alla fine, per riusare il confine di lettura e
+  la scrittura atomica di `plenora-io`.
+  *Ambito*: `api::esegui_artefatti`.
+  *Hazard*: serve spazio su disco pari a sorgenti più uscite; un processo
+  terminato a forza può lasciare la cartella temporanea.
+  *Rientro*: una lettura del confine da un flusso in memoria.
 
 - **`validate` legge le tabelle intere.**
   *Regola*: la validazione guarda solo gli schemi.

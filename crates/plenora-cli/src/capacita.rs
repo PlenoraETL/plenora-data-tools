@@ -131,6 +131,7 @@ pub fn documento_della(superficie: Superficie) -> Value {
         "interfaces": [interfaccia],
         "operations": OPERAZIONI
             .iter()
+            .filter(|operazione| !operazione.solo_rust)
             .map(|operazione| descrittore(operazione, superficie))
             .collect::<Vec<_>>(),
     })
@@ -146,6 +147,8 @@ pub fn documento() -> Value {
 /// La mappa versionata delle operazioni verso gli export Rust pubblici
 /// (Surface Bindings 1.0, sezione 2), dalla stessa tabella delle capacità:
 /// un'operazione nuova non si pubblica senza il suo export.
+///
+/// Comprende `data.run` 3, che sta solo sulla superficie Rust.
 #[must_use]
 pub fn mappa_rust() -> Value {
     json!({
@@ -182,6 +185,7 @@ pub fn mappa_python() -> Value {
         "discovery": SCOPERTA_PYTHON,
         "bindings": OPERAZIONI
             .iter()
+            .filter(|operazione| !operazione.solo_rust)
             .map(|operazione| json!({
                 "operation": operazione.id,
                 "version": operazione.versione,

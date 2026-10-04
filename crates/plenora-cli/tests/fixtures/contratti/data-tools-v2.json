@@ -59,6 +59,18 @@
       "side_effect": "local",
       "controls": {"cancellation": true, "deadline": true, "idempotency_key": false},
       "attributes": {"plan_contract": "plenora-data-plan-v1", "kernel_registry": "plenora-data-kernel-catalog-v2", "bounded_materialization": true, "extension_content_types": {"input": ["application/vnd.apache.parquet"], "output": ["application/vnd.apache.parquet"]}}
+    },
+    {
+      "id": "data.run",
+      "version": 3,
+      "requirement": "conditional",
+      "summary": "Execute a plenora-data-plan-v1 plan over named artifact sources and publish its named outputs to artifact sinks, returning the manifest of the published artifacts.",
+      "surfaces": ["rust", "runtime"],
+      "input": {"contract": "plenora-data-execution-input-v3", "content_types": ["application/json"], "interchange_contracts": []},
+      "output": {"contract": "plenora-data-execution-result-v3", "content_types": ["application/json"], "interchange_contracts": []},
+      "side_effect": "remote",
+      "controls": {"cancellation": true, "deadline": true, "idempotency_key": false},
+      "attributes": {"plan_contract": "plenora-data-plan-v1", "kernel_registry": "plenora-data-kernel-catalog-v2", "bounded_materialization": true, "artifact_content_types": {"source": ["application/vnd.apache.arrow.stream", "application/vnd.apache.arrow.file"], "sink": ["application/vnd.apache.arrow.stream", "application/vnd.apache.arrow.file"]}, "artifact_interchange_contracts": ["plenora-arrow-interchange-v1"], "extension_content_types": {"source": ["application/vnd.apache.parquet"], "sink": ["application/vnd.apache.parquet"]}}
     }
   ]
 }

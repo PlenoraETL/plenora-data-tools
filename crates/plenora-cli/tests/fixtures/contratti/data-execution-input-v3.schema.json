@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.plenora.dev/data-execution-input-v3.schema.json",
+  "title": "Plenora data.run version 3 request",
+  "description": "Request of data.run version 3 (plenora-data-execution-input-v3, profile data-tools v2, DT-RUN-001..DT-RUN-008): a plenora-data-plan-v1 plan, one artifact source per plan input and one artifact sink per plan output. Name relations with the plan are checked semantically.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "plan", "inputs", "outputs"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "schema_version": {"const": 1},
+    "plan": {"$ref": "data-plan-v1.schema.json"},
+    "inputs": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/name"},
+      "additionalProperties": {"$ref": "#/$defs/source"}
+    },
+    "outputs": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/name"},
+      "additionalProperties": {"$ref": "#/$defs/sink"}
+    }
+  },
+  "$defs": {
+    "name": {"type": "string", "minLength": 1},
+    "reference": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 2048,
+      "pattern": "^[a-z][a-z0-9+.-]{1,31}:(//)?[^\\s\\\\]+$",
+      "not": {"anyOf": [{"pattern": "^[Ff][Ii][Ll][Ee]:"}, {"pattern": "(^|[/:])\\.{1,2}(/|$)"}, {"pattern": "%2[Ee]"}, {"pattern": "\\s"}]}
+    },
+    "content_type": {
+      "enum": [
+        "application/vnd.apache.arrow.stream",
+        "application/vnd.apache.arrow.file",
+        "application/vnd.apache.parquet"
+      ]
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "size": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "sha256": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "content_type"],
+      "properties": {
+        "reference": {"$ref": "#/$defs/reference"},
+        "content_type": {"$ref": "#/$defs/content_type"},
+        "expected": {"$ref": "#/$defs/expected"}
+      }
+    },
+    "sink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "content_type", "overwrite"],
+      "properties": {
+        "reference": {"$ref": "#/$defs/reference"},
+        "content_type": {"$ref": "#/$defs/content_type"},
+        "overwrite": {"type": "boolean"}
+      }
+    }
+  }
+}

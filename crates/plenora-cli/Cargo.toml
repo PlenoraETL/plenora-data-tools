@@ -27,13 +27,18 @@ chrono.workspace = true
 # Ctrl-C e SIGTERM come annullamento cooperativo (motivazione al pin nel
 # Cargo.toml del workspace). Lo usa solo `main.rs`.
 ctrlc.workspace = true
+# `data.run` 3 (src/artefatti.rs): richiesta chiusa letta con serde, SHA-256
+# delle sorgenti e degli artefatti pubblicati, file temporanei privati per
+# sorgenti e uscite prima della pubblicazione. Tutti gia' nel workspace e nel
+# lockfile: nessun pacchetto nuovo.
+serde.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 # Validatore JSON Schema minimo dei test (tests/comune/schema.rs) e SHA-256
 # degli schemi dei contratti copiati: gia' nel lockfile.
 regex.workspace = true
-sha2.workspace = true
-tempfile.workspace = true
 
 [lints]
 workspace = true

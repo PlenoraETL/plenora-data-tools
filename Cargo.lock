@@ -923,6 +923,7 @@ dependencies = [
  "plenora-io",
  "plenora-pipeline",
  "regex",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",

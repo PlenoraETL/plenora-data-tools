@@ -4,10 +4,14 @@
 //! Le funzioni `_compila_*` non girano: la loro compilazione prova che un
 //! crate esterno può chiamare ogni export della mappa con i tipi pubblici.
 
+mod comune;
+
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use comune::contratto;
 use plenora_cli::api;
+use plenora_cli::api::{Destinazione, PubblicazioneFallita, RisolutoreArtefatti};
 use plenora_cli::capacita::{documento, mappa_rust};
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::Result;
@@ -26,6 +30,7 @@ const EXPORT_DOCUMENTATI: &[&str] = &[
     "plenora_cli::api::esegui",
     "plenora_cli::api::esegui_ingressi",
     "plenora_cli::api::esegui_in_memoria",
+    "plenora_cli::api::esegui_artefatti",
 ];
 
 #[test]
@@ -44,10 +49,18 @@ fn la_mappa_copre_esattamente_le_operazioni_pubblicate() {
             )
         })
         .collect();
-    let pubblicate: BTreeSet<(String, u64)> = documento()["operations"]
+    // Le operazioni che il catalogo pubblico mette sulla superficie Rust:
+    // quelle della CLI e `data.run` 3.
+    let catalogo = contratto("data-tools-v2.json");
+    let pubblicate: BTreeSet<(String, u64)> = catalogo["operations"]
         .as_array()
         .expect("operations")
         .iter()
+        .filter(|operazione| {
+            operazione["surfaces"]
+                .as_array()
+                .is_some_and(|superfici| superfici.contains(&Value::from("rust")))
+        })
         .map(|operazione| {
             (
                 operazione["id"].as_str().expect("id").to_owned(),
@@ -56,6 +69,9 @@ fn la_mappa_copre_esattamente_le_operazioni_pubblicate() {
         })
         .collect();
     assert_eq!(mappate, pubblicate);
+    // La CLI pubblica le stesse tranne `data.run` 3.
+    let della_cli = documento()["operations"].as_array().map_or(0, Vec::len);
+    assert_eq!(della_cli + 1, mappate.len());
     let export: BTreeSet<&str> = legami
         .iter()
         .flat_map(|legame| legame["entrypoints"].as_array().expect("entrypoints"))
@@ -136,4 +152,36 @@ fn _compila_esegui_in_memoria(
     interruzione: &Interruzione,
 ) -> Result<(Value, Vec<(String, RecordBatch)>)> {
     api::esegui_in_memoria(piano, ingressi, interruzione)
+}
+
+#[allow(dead_code)]
+fn _compila_esegui_artefatti(
+    richiesta: &str,
+    risolutore: &dyn RisolutoreArtefatti,
+    interruzione: &Interruzione,
+) -> Result<Value> {
+    api::esegui_artefatti(richiesta, risolutore, interruzione)
+}
+
+/// Un risolutore scritto fuori dal crate con i soli tipi pubblici.
+#[allow(dead_code)]
+struct RisolutoreEsterno;
+
+impl RisolutoreArtefatti for RisolutoreEsterno {
+    fn leggi(&self, _: &str, _: &mut dyn std::io::Write) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn prepara(&self, _: &[Destinazione<'_>]) -> Result<()> {
+        Ok(())
+    }
+    fn pubblica(
+        &self,
+        _: &Destinazione<'_>,
+        _: &mut dyn std::io::Read,
+        _: u64,
+    ) -> std::result::Result<(), PubblicazioneFallita> {
+        Err(PubblicazioneFallita::Ignoto(
+            std::io::ErrorKind::Other.into(),
+        ))
+    }
 }

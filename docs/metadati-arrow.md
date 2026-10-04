@@ -2,7 +2,7 @@
 
 Gli schemi che entrano ed escono dal componente seguono i contratti
 pubblici *Arrow Interchange 1.0* e *Arrow Metadata Vocabulary 1.0* di
-`plenora-contracts` (commit `e7e9d3d`), con le regole DT-ARROW-001..004 del
+`plenora-contracts` (commit `4c1569d`), con le regole DT-ARROW-001..004 del
 profilo data-tools versione 2 per i casi che quei contratti lasciano alle
 operazioni: identità nelle collisioni e nelle concatenazioni (sotto,
 «Identità dei campi»), chiavi mancanti in ingresso e rifiuti delle operazioni
