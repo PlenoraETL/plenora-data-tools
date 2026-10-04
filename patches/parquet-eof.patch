@@ -226,7 +226,7 @@
              Page::DictionaryPage {
                  buf: buffer,
                  num_values: dict_header.num_values.try_into()?,
-@@ -585,6 +595,61 @@
+@@ -585,6 +595,64 @@
      state: SerializedPageReaderState,
  
      context: SerializedPageReaderContext,
@@ -269,10 +269,13 @@
 +                "page uncompressed size exceeds the column chunk uncompressed size"
 +            ));
 +        }
-+        let valori = match (&header.data_page_header, &header.data_page_header_v2) {
-+            (Some(v1), _) => Some(v1.num_values),
-+            (None, Some(v2)) => Some(v2.num_values),
-+            (None, None) => None,
++        // The header `decode_page` will use, chosen by the page type: a page
++        // may carry both a v1 and a v2 header, and checking the other one
++        // would let the decoded count through unchecked.
++        let valori = match header.r#type {
++            PageType::DATA_PAGE => header.data_page_header.as_ref().map(|v1| v1.num_values),
++            PageType::DATA_PAGE_V2 => header.data_page_header_v2.as_ref().map(|v2| v2.num_values),
++            _ => None,
 +        };
 +        if let Some(valori) = valori {
 +            let valori = u64::try_from(valori)
@@ -288,7 +291,7 @@
  }
  
  impl<R: ChunkReader> SerializedPageReader<R> {
-@@ -648,6 +713,7 @@
+@@ -648,6 +716,7 @@
      ) -> Result<Self> {
          let decompressor = create_codec(meta.compression(), props.codec_options())?;
          let (start, len) = meta.byte_range();
@@ -296,7 +299,7 @@
  
          let state = match page_locations {
              Some(locations) => {
-@@ -687,6 +753,7 @@
+@@ -687,6 +756,7 @@
              state,
              physical_type: meta.column_type(),
              context,
@@ -304,7 +307,7 @@
          })
      }
  
-@@ -956,6 +1023,7 @@
+@@ -956,6 +1026,7 @@
                          header.uncompressed_page_size,
                          *remaining,
                      )?;
@@ -312,7 +315,7 @@
                      let data_len = header.compressed_page_size as usize;
                      let data_start = *offset;
                      *offset += data_len as u64;
-@@ -1007,6 +1075,7 @@
+@@ -1007,6 +1078,7 @@
                          *page_index,
                          is_dictionary_page,
                      )?;

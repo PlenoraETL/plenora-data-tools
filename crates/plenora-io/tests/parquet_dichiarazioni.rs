@@ -17,9 +17,10 @@ mod comune;
 use std::fs::File;
 use std::sync::Arc;
 
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, Encoding};
+use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::properties::{WriterProperties, WriterVersion};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::schema::types::ColumnPath;
@@ -97,20 +98,47 @@ fn rifiutato(byte: &[u8], motivo: &str) {
     let errore = leggi(byte).expect_err("il file doveva essere rifiutato");
     assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
     assert!(inizio.elapsed() < std::time::Duration::from_secs(5));
-    let messaggio = messaggio_parquet(byte);
+    let messaggio = messaggio_parquet(byte, false);
     assert!(messaggio.contains(motivo), "{messaggio}");
 }
 
-/// L'errore di `parquet` sullo stesso file, letto fino in fondo.
-fn messaggio_parquet(byte: &[u8]) -> String {
+/// Come [`rifiutato`], e anche letto con il page index: `parquet` legge
+/// allora le pagine dalle posizioni dell'offset index (l'altro stato del
+/// lettore di pagine), e la verifica deve valere lì.
+fn rifiutato_nei_due_stati(byte: &[u8], motivo: &str) {
+    rifiutato(byte, motivo);
+    let messaggio = messaggio_parquet(byte, true);
+    assert!(messaggio.contains(motivo), "{messaggio}");
+}
+
+/// L'errore di `parquet` sullo stesso file, letto fino in fondo; con
+/// `indice` l'offset index è obbligatorio e deve essere caricato.
+fn messaggio_parquet(byte: &[u8], indice: bool) -> String {
     let dir = cartella();
     let percorso = dir.path().join("q.parquet");
     std::fs::write(&percorso, byte).unwrap();
-    let costruttore = match ParquetRecordBatchReaderBuilder::try_new(File::open(&percorso).unwrap())
-    {
+    let opzioni = if indice {
+        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required)
+    } else {
+        ArrowReaderOptions::new()
+    };
+    let costruttore = match ParquetRecordBatchReaderBuilder::try_new_with_options(
+        File::open(&percorso).unwrap(),
+        opzioni,
+    ) {
         Ok(costruttore) => costruttore,
         Err(errore) => return errore.to_string(),
     };
+    if indice {
+        assert!(
+            costruttore
+                .metadata()
+                .page_index_for_row_group(0)
+                .offset_index(0)
+                .is_some(),
+            "offset index non caricato"
+        );
+    }
     for batch in costruttore.build().unwrap() {
         if let Err(errore) = batch {
             return errore.to_string();
@@ -123,6 +151,7 @@ fn messaggio_parquet(byte: &[u8]) -> String {
 /// dizionario, dimensione non compressa e valori.
 struct Chunk {
     pagina_dati: usize,
+    compressi: i64,
     dizionario: Option<usize>,
     non_compressi: i64,
     valori: i64,
@@ -136,6 +165,7 @@ fn chunk(byte: &[u8]) -> Chunk {
     let colonna = lettore.metadata().row_group(0).column(0);
     Chunk {
         pagina_dati: usize::try_from(colonna.data_page_offset()).unwrap(),
+        compressi: colonna.compressed_size(),
         dizionario: colonna
             .dictionary_page_offset()
             .map(|o| usize::try_from(o).unwrap()),
@@ -221,7 +251,7 @@ fn una_pagina_piu_grande_del_suo_chunk_e_rifiutata() {
         assert!(nuovo > chunk.non_compressi);
         let mut byte = originale.clone();
         riscrivi_zigzag(&mut byte, campi.non_compressi, nuovo);
-        rifiutato(&byte, "exceeds the column chunk uncompressed size");
+        rifiutato_nei_due_stati(&byte, "exceeds the column chunk uncompressed size");
     }
 }
 
@@ -237,7 +267,7 @@ fn una_pagina_con_piu_valori_del_chunk_e_rifiutata() {
     assert!(nuovo > chunk.valori);
     let mut byte = originale;
     riscrivi_zigzag(&mut byte, campi.valori, nuovo);
-    rifiutato(&byte, "exceeds the column chunk value count");
+    rifiutato_nei_due_stati(&byte, "exceeds the column chunk value count");
 }
 
 #[test]
@@ -377,5 +407,230 @@ fn byte_oltre_la_fine_del_file_sono_un_errore_senza_riserva() {
             errore.to_string().contains("past the end of the file"),
             "{errore}"
         );
+    }
+}
+
+/// Righe lette da `parquet` con l'offset index caricato (le pagine dalle
+/// sue posizioni).
+fn righe_con_indice(byte: &[u8]) -> usize {
+    let dir = cartella();
+    let percorso = dir.path().join("i.parquet");
+    std::fs::write(&percorso, byte).unwrap();
+    let opzioni = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+    let costruttore = ParquetRecordBatchReaderBuilder::try_new_with_options(
+        File::open(&percorso).unwrap(),
+        opzioni,
+    )
+    .unwrap();
+    assert!(costruttore
+        .metadata()
+        .page_index_for_row_group(0)
+        .offset_index(0)
+        .is_some());
+    costruttore
+        .build()
+        .unwrap()
+        .map(|batch| batch.unwrap().num_rows())
+        .sum()
+}
+
+/// Scrittore minimo del protocollo Thrift compact, per un header di pagina
+/// costruito a mano.
+#[derive(Default)]
+struct Compact(Vec<u8>, Vec<i16>);
+
+impl Compact {
+    fn campo(&mut self, id: i16, tipo: u8) {
+        let ultimo = self.1.last().copied().unwrap_or(0);
+        let delta = id - ultimo;
+        assert!((1..=15).contains(&delta));
+        self.0.push((u8::try_from(delta).unwrap() << 4) | tipo);
+        *self.1.last_mut().unwrap() = id;
+    }
+    fn varint(&mut self, mut valore: u64) {
+        loop {
+            let b = (valore & 0x7f) as u8;
+            valore >>= 7;
+            if valore == 0 {
+                self.0.push(b);
+                return;
+            }
+            self.0.push(b | 0x80);
+        }
+    }
+    fn i32(&mut self, id: i16, valore: i32) {
+        self.campo(id, 5);
+        self.varint(u64::from(((valore << 1) ^ (valore >> 31)).cast_unsigned()));
+    }
+    fn bool(&mut self, id: i16, valore: bool) {
+        self.campo(id, if valore { 1 } else { 2 });
+    }
+    fn inizio(&mut self, id: i16) {
+        self.campo(id, 12);
+        self.1.push(0);
+    }
+    fn fine(&mut self) {
+        self.0.push(0);
+        self.1.pop();
+    }
+    fn binario(&mut self, id: i16, lunghezza: usize) {
+        self.campo(id, 8);
+        self.varint(lunghezza as u64);
+        self.0.extend(std::iter::repeat_n(b'x', lunghezza));
+    }
+}
+
+/// Una pagina con l'header v1 e l'header v2 insieme, di tipo v2: l'header
+/// v1 dichiara i valori del chunk, quello v2 (che la decodifica usa) un
+/// miliardo. Il controllo deve guardare l'header che il tipo seleziona.
+/// L'header costruito prende il posto di quello originale, alla stessa
+/// lunghezza grazie a un campo sconosciuto di riempimento (Thrift lo salta).
+#[test]
+fn il_controllo_guarda_l_header_del_tipo_di_pagina() {
+    // Valori lunghi con le statistiche nell'header: l'header originale ha
+    // lo spazio per i due header costruiti.
+    let lunghi = colonna(Arc::new(StringArray::from_iter_values(
+        (0..10).map(|i| format!("{i:0>60}")),
+    )));
+    let proprieta = WriterProperties::builder()
+        .set_compression(Compression::UNCOMPRESSED)
+        .set_dictionary_enabled(false)
+        .set_writer_version(WriterVersion::PARQUET_1_0)
+        .set_write_page_header_statistics(true)
+        .set_column_encoding(ColumnPath::from("x"), Encoding::DELTA_LENGTH_BYTE_ARRAY)
+        .build();
+    let originale = scrivi(&lunghi, proprieta);
+    let chunk = chunk(&originale);
+    let campi = header(&originale, chunk.pagina_dati);
+    let compressi = varint(
+        &originale,
+        campi.non_compressi.0 + campi.non_compressi.1 + 1,
+    )
+    .2;
+    let compressi = i32::try_from(compressi >> 1).unwrap();
+    let lunghezza_header =
+        usize::try_from(chunk.compressi).unwrap() - usize::try_from(compressi).unwrap();
+    let costruisci = |riempimento: Option<usize>| {
+        let mut c = Compact::default();
+        c.1.push(0);
+        c.i32(1, 3); // DATA_PAGE_V2
+        c.i32(2, compressi);
+        c.i32(3, compressi);
+        c.inizio(5);
+        c.i32(1, 10);
+        c.i32(2, 6); // DELTA_LENGTH_BYTE_ARRAY
+        c.i32(3, 3);
+        c.i32(4, 3);
+        c.fine();
+        c.inizio(8);
+        c.i32(1, 1_000_000_000);
+        c.i32(2, 0);
+        c.i32(3, 10);
+        c.i32(4, 6);
+        c.i32(5, 0);
+        c.i32(6, 0);
+        c.bool(7, false);
+        c.fine();
+        if let Some(n) = riempimento {
+            c.binario(9, n);
+        }
+        c.0.push(0);
+        c.0
+    };
+    let senza = costruisci(None).len();
+    // Campo di riempimento: un byte di intestazione, un varint, i dati.
+    let n = (0..lunghezza_header)
+        .find(|&n| senza + 1 + (n.max(1).ilog2() as usize / 7 + 1) + n == lunghezza_header)
+        .expect("l'header originale e' troppo corto per il riempimento");
+    let nuovo = costruisci(Some(n));
+    assert_eq!(nuovo.len(), lunghezza_header);
+    let mut byte = originale;
+    byte[chunk.pagina_dati..chunk.pagina_dati + lunghezza_header].copy_from_slice(&nuovo);
+    rifiutato(&byte, "exceeds the column chunk value count");
+}
+
+/// Nulli, colonne tutte nulle e liste (più valori per riga) si rileggono
+/// uguali con pagine v1 e v2 e con le codifiche delta: sono i casi in cui
+/// livelli, valori e righe di una pagina differiscono.
+#[test]
+fn nulli_e_ripetizioni_si_rileggono_uguali() {
+    use plenora_core::arrow::array::builder::{Int64Builder, ListBuilder};
+    let nullabile = |valori: ArrayRef| {
+        let campo = Field::new("x", valori.data_type().clone(), true);
+        RecordBatch::try_new(Arc::new(Schema::new(vec![campo])), vec![valori]).unwrap()
+    };
+    let mut liste = ListBuilder::new(Int64Builder::new());
+    for riga in 0..500_i64 {
+        if riga % 7 == 0 {
+            liste.append_null();
+            continue;
+        }
+        for valore in 0..(riga % 5) {
+            if valore == 2 {
+                liste.values().append_null();
+            } else {
+                liste.values().append_value(riga * 10 + valore);
+            }
+        }
+        liste.append(true);
+    }
+    let casi: Vec<(RecordBatch, Option<Encoding>)> = vec![
+        (
+            nullabile(Arc::new(Int64Array::from_iter(
+                (0..2000_i64).map(|i| (i % 3 != 0).then_some(i)),
+            ))),
+            Some(Encoding::DELTA_BINARY_PACKED),
+        ),
+        (
+            nullabile(Arc::new(Int64Array::from_iter(
+                (0..2000).map(|_| None::<i64>),
+            ))),
+            Some(Encoding::DELTA_BINARY_PACKED),
+        ),
+        (
+            nullabile(Arc::new(StringArray::from_iter(
+                (0..2000).map(|i| (i % 4 != 0).then(|| format!("v{}", i % 9))),
+            ))),
+            Some(Encoding::DELTA_LENGTH_BYTE_ARRAY),
+        ),
+        (
+            nullabile(Arc::new(StringArray::from_iter(
+                (0..2000).map(|i| (i % 4 != 0).then(|| format!("prefisso-{}", i % 9))),
+            ))),
+            Some(Encoding::DELTA_BYTE_ARRAY),
+        ),
+        (
+            nullabile(Arc::new(liste.finish())),
+            Some(Encoding::DELTA_BINARY_PACKED),
+        ),
+        (
+            nullabile(Arc::new(StringArray::from_iter(
+                (0..2000).map(|i| (i % 2 == 0).then_some("d")),
+            ))),
+            None,
+        ),
+    ];
+    for (tabella, codifica) in &casi {
+        for versione in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+            let mut costruttore = WriterProperties::builder()
+                .set_writer_version(versione)
+                .set_data_page_row_count_limit(300);
+            costruttore = match codifica {
+                Some(codifica) => costruttore
+                    .set_dictionary_enabled(false)
+                    .set_encoding(*codifica),
+                None => costruttore.set_dictionary_enabled(true),
+            };
+            let byte = scrivi(tabella, costruttore.build());
+            let letta =
+                leggi(&byte).unwrap_or_else(|errore| panic!("{codifica:?} {versione:?}: {errore}"));
+            identiche(tabella, &letta);
+            // Anche dalle posizioni dell'offset index.
+            assert_eq!(
+                righe_con_indice(&byte),
+                tabella.num_rows(),
+                "{codifica:?} {versione:?}"
+            );
+        }
     }
 }

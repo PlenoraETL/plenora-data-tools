@@ -634,10 +634,13 @@ impl LimitiPagina {
                 "page uncompressed size exceeds the column chunk uncompressed size"
             ));
         }
-        let valori = match (&header.data_page_header, &header.data_page_header_v2) {
-            (Some(v1), _) => Some(v1.num_values),
-            (None, Some(v2)) => Some(v2.num_values),
-            (None, None) => None,
+        // The header `decode_page` will use, chosen by the page type: a page
+        // may carry both a v1 and a v2 header, and checking the other one
+        // would let the decoded count through unchecked.
+        let valori = match header.r#type {
+            PageType::DATA_PAGE => header.data_page_header.as_ref().map(|v1| v1.num_values),
+            PageType::DATA_PAGE_V2 => header.data_page_header_v2.as_ref().map(|v2| v2.num_values),
+            _ => None,
         };
         if let Some(valori) = valori {
             let valori = u64::try_from(valori)

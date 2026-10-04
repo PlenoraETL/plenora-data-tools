@@ -70,7 +70,9 @@ i byte davvero presenti.
 9. Header di pagina (`file/serialized_reader.rs`, `LimitiPagina`), nei due
    stati del lettore: la dimensione non compressa di una pagina non supera
    `total_uncompressed_size` del column chunk (che la comprende), e i valori
-   di una pagina dati (v1 e v2) non superano `num_values` del chunk. Il
+   di una pagina dati non superano `num_values` del chunk, letti
+   dall'header che il tipo di pagina seleziona (lo stesso che usa
+   `decode_page`: una pagina può portare sia l'header v1 sia il v2). Il
    buffer di decompressione e i decodificatori restano così entro ciò che il
    budget ha visto. La dimensione compressa era già limitata ai byte rimasti
    del chunk (`verify_page_size`).
@@ -98,7 +100,10 @@ grande nello stesso numero di byte, e verificano il rifiuto in dt2 e il
 messaggio di `parquet`; senza la patch due di quei file (pagina più grande
 del chunk, conteggio delta) si leggevano senza errore. Le codifiche valide
 (dizionario, delta, `BYTE_STREAM_SPLIT`, `FixedLenByteArray`, pagine v1 e v2,
-senza compressione, SNAPPY, ZSTD) si rileggono uguali.
+senza compressione, SNAPPY, ZSTD) si rileggono uguali, anche con nulli,
+colonne tutte nulle e liste. Le mutazioni si leggono anche con l'offset index
+caricato, cioè dall'altro stato del lettore di pagine; una pagina v2 con
+anche l'header v1 prova che il controllo guarda l'header del tipo.
 
 ## Limiti che restano
 
