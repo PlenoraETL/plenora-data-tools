@@ -44,8 +44,8 @@ jobs:
       - name: misura e report
         env:
           # Il binding Python ha la sua superficie (job sotto); i moduli di
-          # test e gli oracoli non sono prodotto.
-          IGNORA: '(^|/)(crates/plenora-data-py/|vendor/)|(_oracolo|test_support)\.rs$'
+          # test e gli oracoli (tutti `#[cfg(test)]`) non sono prodotto.
+          IGNORA: '(^|/)(crates/plenora-data-py/|vendor/)|(_oracolo|test_support)\.rs$|/oracolo(_chiavi)?\.rs$'
         run: |
           mkdir -p coverage/rust
           cargo llvm-cov --locked --workspace --exclude plenora-data-py \
@@ -93,6 +93,9 @@ jobs:
       - name: wheel instrumentato, suite Python, report
         shell: bash
         env:
+          # Le dipendenze vendorizzate (`[patch.crates-io]`) entrano nella
+          # libreria nativa ma non sono il binding.
+          IGNORA: '(^|/)vendor/'
           PLENORA_DATA_CONTRATTI: ${{ github.workspace }}/crates/plenora-cli/tests/fixtures/contratti
         run: |
           mkdir -p coverage/python-binding/dist coverage/python-sdk
@@ -112,11 +115,14 @@ jobs:
           python -m coverage html -d coverage/python-sdk/html
           cargo llvm-cov report -p plenora-data-py \
             --json --summary-only \
-            --output-path coverage/python-binding/summary.json
+            --output-path coverage/python-binding/summary.json \
+            --ignore-filename-regex "$IGNORA"
           cargo llvm-cov report -p plenora-data-py \
-            --lcov --output-path coverage/python-binding/lcov.info
+            --lcov --output-path coverage/python-binding/lcov.info \
+            --ignore-filename-regex "$IGNORA"
           cargo llvm-cov report -p plenora-data-py \
-            --html --output-dir coverage/python-binding/html
+            --html --output-dir coverage/python-binding/html \
+            --ignore-filename-regex "$IGNORA"
       - name: soglie dell'SDK Python
         run: >-
           python3 scripts/check_coverage.py

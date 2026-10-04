@@ -80,7 +80,9 @@ jobs:
         run: |
           extra=""
           if [ "$TARGET" = lettura_parquet ]; then
-            extra="-fork=1 -ignore_ooms=1 -malloc_limit_mb=1024"
+            # Con -fork libFuzzer conta i timeout e prosegue (ignore_timeouts
+            # vale 1): un blocco deve invece far fallire la campagna.
+            extra="-fork=1 -ignore_ooms=1 -ignore_timeouts=0 -malloc_limit_mb=1024"
           fi
           mkdir -p "fuzz/artifacts/$TARGET"
           cargo +"$NIGHTLY" fuzz run "$TARGET" --fuzz-dir fuzz "fuzz/corpus/$TARGET" -- \
