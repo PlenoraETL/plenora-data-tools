@@ -12,13 +12,13 @@ esegue.
 
 | crate | versione | descrizione |
 | --- | --- | --- |
-| `plenora-cli` | 0.1.0 | CLI pubblica `plenora-data` di plenora-data-tools2 (CLI 2.0 di plenora-contracts) e la sua superficie Rust |
-| `plenora-core` | 0.1.0 | Fondamenta condivise di plenora-data-tools2: re-export Arrow, errori, limiti, catalogo, CRS |
-| `plenora-data-py` | 0.1.0 | SDK Python `plenora-data` di plenora-data-tools2: il modulo nativo PyO3 `plenora_data._native` |
-| `plenora-io` | 0.1.0 | Ingresso e uscita su file: Arrow IPC (file e stream), Parquet e GeoParquet 1.1, scrittura atomica, esecuzione di un piano da file a file |
-| `plenora-kernels-geo` | 0.1.0 | Kernel geografici su geo::Geometry e adapter Arrow GeoArrow-WKB |
-| `plenora-kernels-table` | 0.1.0 | Kernel tabellari puri su RecordBatch |
-| `plenora-pipeline` | 0.1.0 | Runner minimo di pipeline: piano SSA di kernel tabellari e geografici su RecordBatch interi in memoria |
+| `plenora-cli` | 1.0.0 | CLI pubblica `plenora-data` di plenora-data-tools2 (CLI 2.0 di plenora-contracts) e la sua superficie Rust |
+| `plenora-core` | 1.0.0 | Fondamenta condivise di plenora-data-tools2: re-export Arrow, errori, limiti, catalogo, CRS |
+| `plenora-data-py` | 1.0.0 | SDK Python `plenora-data` di plenora-data-tools2: il modulo nativo PyO3 `plenora_data._native` |
+| `plenora-io` | 1.0.0 | Ingresso e uscita su file: Arrow IPC (file e stream), Parquet e GeoParquet 1.1, scrittura atomica, esecuzione di un piano da file a file |
+| `plenora-kernels-geo` | 1.0.0 | Kernel geografici su geo::Geometry e adapter Arrow GeoArrow-WKB |
+| `plenora-kernels-table` | 1.0.0 | Kernel tabellari puri su RecordBatch |
+| `plenora-pipeline` | 1.0.0 | Runner minimo di pipeline: piano SSA di kernel tabellari e geografici su RecordBatch interi in memoria |
 
 ## Catalogo delle operazioni
 
@@ -98,3 +98,4 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 | `scripts/test_check_comments.py` | 27 |
 | `scripts/test_check_docs.py` | 14 |
 | `scripts/test_genera_inventario.py` | 5 |
+| `scripts/test_genera_sbom_rilascio.py` | 4 |

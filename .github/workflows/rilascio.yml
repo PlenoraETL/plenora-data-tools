@@ -1,0 +1,264 @@
+name: rilascio
+
+# Costruisce, verifica e allega alla release GitHub gli artefatti di un
+# rilascio, sul modello di plenora-database-tools (python-wheel.yml):
+#
+# - la CLI `plenora-data` per Linux e Windows (x86_64);
+# - il wheel abi3 dell'SDK Python per Linux (manylinux 2_34) e Windows;
+# - il sorgente (`git archive`), artefatto della superficie Rust;
+# - lo SBOM CycloneDX (scripts/genera_sbom_rilascio.py);
+# - il manifesto di adozione v4 (scripts/genera_manifesto_adozione.py),
+#   generato dagli artefatti veri contro i contratti al commit fissato;
+# - le attestazioni di provenienza.
+#
+# Ogni artefatto si prova prima dell'upload: il wheel installato con la suite
+# completa su ogni Python dichiarato (3.10-3.14), la CLI contro i contratti.
+# GitHub Releases è l'unica superficie di distribuzione: niente package
+# index, niente token di pubblicazione.
+#
+# Eventi:
+#   - `workflow_dispatch`: prova generale, artefatti scaricabili dalla run,
+#     nessuna release toccata;
+#   - `release` (published): gli stessi passi, poi gli allegati. Il tag deve
+#     essere `v` + la versione del workspace.
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Il commit di plenora-contracts adottato (crates/plenora-cli/adozione.json).
+  CONTRATTI: e7e9d3d9fd37696e1abe6679c028afacbf74847b
+
+jobs:
+  costruzione:
+    name: costruzione (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cli: plenora-data-linux-x86_64
+          - os: windows-latest
+            cli: plenora-data-windows-x86_64.exe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: wheel (maturin)
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          maturin-version: '1.15.0'
+          command: build
+          args: >-
+            --release
+            --locked
+            --out dist
+            --manifest-path crates/plenora-data-py/Cargo.toml
+          manylinux: '2_34'
+          rust-toolchain: '1.98.0'
+      - name: Rust 1.98.0
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
+        with:
+          toolchain: '1.98.0'
+      - name: CLI
+        shell: bash
+        run: |
+          cargo build --release --locked -p plenora-cli
+          if [ -f target/release/plenora-data.exe ]; then
+            cp target/release/plenora-data.exe "dist/${{ matrix.cli }}"
+          else
+            cp target/release/plenora-data "dist/${{ matrix.cli }}"
+          fi
+      - name: sorgente
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          versione="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["version"])')"
+          git archive --format=tar.gz \
+            --prefix="plenora-data-tools-${versione}/" \
+            --output="dist/plenora-data-tools-${versione}-source.tar.gz" \
+            HEAD
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: wheel installato e suite Python
+        shell: bash
+        env:
+          PYTHONUTF8: '1'
+        run: |
+          python -m pip install -r requirements-sdk-tests.txt
+          python -m pip install --no-deps dist/*.whl
+          python scripts/verifica_sdk_python.py \
+            --wheel "$(ls dist/*.whl)" \
+            --cartella "$RUNNER_TEMP/sdk-python"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rilascio-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  # Il modulo nativo si carica davvero su ogni Python dichiarato: lo stesso
+  # wheel scaricato, installato e provato con la suite completa.
+  abi3:
+    name: abi3 (${{ matrix.os }}, Python ${{ matrix.python }})
+    needs: [costruzione]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rilascio-${{ matrix.os }}
+          path: dist
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: wheel scaricato e suite Python
+        shell: bash
+        env:
+          PYTHONUTF8: '1'
+        run: |
+          python -m pip install -r requirements-sdk-tests.txt
+          python -m pip install --no-deps dist/*.whl
+          python scripts/verifica_sdk_python.py \
+            --wheel "$(ls dist/*.whl)" \
+            --cartella "$RUNNER_TEMP/sdk-python"
+
+  sbom:
+    name: SBOM
+    needs: [costruzione]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: rilascio-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: scoperta dei componenti degli artefatti
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: dist
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/native.sbom.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: SBOM del rilascio
+        shell: bash
+        run: |
+          versione="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["version"])')"
+          sbom="dist/plenora-data-tools-${versione}.sbom.cdx.json"
+          python scripts/genera_sbom_rilascio.py --artifact-sbom "$RUNNER_TEMP/native.sbom.json" --dist dist --output "$sbom"
+          python scripts/genera_sbom_rilascio.py --check "$sbom" --dist dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rilascio-sbom
+          path: dist/*.sbom.cdx.json
+          if-no-files-found: error
+
+  pubblicazione:
+    name: verifica, manifesto, attestazioni e allegati
+    needs: [costruzione, abi3, sbom]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: plenora-contracts al commit adottato
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: PlenoraETL/plenora-contracts
+          ref: ${{ env.CONTRATTI }}
+          path: .plenora-contracts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: rilascio-*
+          path: dist
+          merge-multiple: true
+      - name: artefatti raccolti e versione
+        run: |
+          ls -la dist/
+          echo "VERSIONE=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["version"])')" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: validatore dei contratti
+        run: python -m pip install -r .plenora-contracts/requirements-validation.txt
+      - name: la sorgente del manifesto fissa lo stesso commit
+        run: |
+          python3 -c 'import json,os,sys; r=json.load(open("crates/plenora-cli/adozione.json"))["contracts_source"]["revision"]; sys.exit(0 if r==os.environ["CONTRATTI"] else "adozione.json fissa un altro commit")'
+      - name: il tag e' la versione del workspace
+        if: github.event_name == 'release'
+        run: test "${GITHUB_REF_NAME}" = "v${VERSIONE}"
+      - name: la CLI rilasciata contro i contratti
+        run: |
+          chmod +x dist/plenora-data-linux-x86_64
+          python3 scripts/verifica_cli_contratti.py \
+            --binario dist/plenora-data-linux-x86_64 \
+            --contratti .plenora-contracts
+      - name: manifesto di adozione
+        shell: bash
+        run: |
+          versione="$VERSIONE"
+          artefatti=()
+          for wheel in dist/*.whl; do
+            artefatti+=(--artefatto "$(basename "$wheel")|python_sdk|$wheel|sync,async")
+          done
+          artefatti+=(--artefatto "plenora-data-linux-x86_64|cli|dist/plenora-data-linux-x86_64")
+          artefatti+=(--artefatto "plenora-data-windows-x86_64.exe|cli|dist/plenora-data-windows-x86_64.exe")
+          sorgente="dist/plenora-data-tools-${versione}-source.tar.gz"
+          artefatti+=(--artefatto "$(basename "$sorgente")|rust|$sorgente")
+          python3 scripts/genera_manifesto_adozione.py \
+            --contratti .plenora-contracts \
+            --versione "$versione" \
+            "${artefatti[@]}" \
+            --verifica "python3 scripts/verifica_cli_contratti.py --binario dist/plenora-data-linux-x86_64 --contratti .plenora-contracts" \
+            --verifica "python scripts/verifica_sdk_python.py (Python 3.10-3.14, Linux e Windows)" \
+            --verifica "cargo test --workspace --locked (ci.yml, Linux e Windows)" \
+            --uscita "dist/plenora-data-tools-${versione}.adoption-manifest.json"
+      - name: SBOM verificato prima dell'attestazione
+        run: python3 scripts/genera_sbom_rilascio.py --check "dist/plenora-data-tools-${VERSIONE}.sbom.cdx.json" --dist dist
+      - name: attestazione di provenienza
+        if: github.event_name == 'release'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/plenora-data-linux-x86_64
+            dist/plenora-data-windows-x86_64.exe
+            dist/*-source.tar.gz
+      - name: attestazione dello SBOM
+        if: github.event_name == 'release'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/plenora-data-linux-x86_64
+            dist/plenora-data-windows-x86_64.exe
+            dist/*-source.tar.gz
+          sbom-path: dist/plenora-data-tools-${{ env.VERSIONE }}.sbom.cdx.json
+      - name: allegati alla release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: dist/*
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rilascio-completo
+          path: dist/*
+          if-no-files-found: error
