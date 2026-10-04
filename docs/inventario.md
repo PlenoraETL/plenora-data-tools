@@ -98,4 +98,4 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 | `scripts/test_check_comments.py` | 27 |
 | `scripts/test_check_docs.py` | 14 |
 | `scripts/test_genera_inventario.py` | 5 |
-| `scripts/test_genera_sbom_rilascio.py` | 4 |
+| `scripts/test_genera_sbom_rilascio.py` | 5 |

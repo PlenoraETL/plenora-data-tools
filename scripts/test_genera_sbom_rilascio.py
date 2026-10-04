@@ -50,6 +50,20 @@ class SbomRilascioTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 sbom.render(sbom.ROOT, Path(cartella), NATIVO)
 
+    def test_il_wheel_dipende_da_pyarrow_a_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as cartella:
+            dist = Path(cartella)
+            nome = wheel(dist).name
+            bom = sbom.render(sbom.ROOT, dist, NATIVO)
+            archi = {voce["ref"]: voce["dependsOn"] for voce in bom["dependencies"]}
+            self.assertEqual(archi["wheel:" + nome], ["pkg:pypi/pyarrow@25.0.1"])
+            pyarrow = next(c for c in bom["components"] if c["bom-ref"] == "pkg:pypi/pyarrow@25.0.1")
+            self.assertIn("wheel runtime", pyarrow["properties"][0]["value"])
+            archi["wheel:" + nome] = []
+            bom["dependencies"] = [{"ref": r, "dependsOn": v} for r, v in archi.items()]
+            with self.assertRaises(ValueError):
+                sbom.validate(sbom.ROOT, dist, bom)
+
     def test_un_lock_cambiato_rende_lo_sbom_stantio(self) -> None:
         with tempfile.TemporaryDirectory() as cartella:
             dist = Path(cartella)

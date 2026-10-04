@@ -17,8 +17,9 @@ Uso (con il Python che ha `jsonschema`, per esempio il venv dei contratti):
         --verifica "cargo test -p plenora-cli --locked" \
         --uscita manifesto-adozione.json
 
-`--artefatto NOME|SUPERFICIE|PERCORSO` si ripete (la superficie Rust è un
-archivio `.crate` di `cargo package`). Un wheel dell'SDK Python
+`--artefatto NOME|SUPERFICIE|PERCORSO` si ripete (la superficie Rust è
+l'archivio del sorgente, `plenora-data-tools-<versione>-source.tar.gz`, che il
+workflow di rilascio produce con `git archive`). Un wheel dell'SDK Python
 (`crates/plenora-data-py`) si passa con la superficie `python_sdk` e i suoi
 modi d'API (adoption manifest v4, `api_modes`):
 

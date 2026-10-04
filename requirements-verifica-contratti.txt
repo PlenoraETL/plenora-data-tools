@@ -1,0 +1,11 @@
+# Verifica degli artefatti contro plenora-contracts nel workflow di rilascio
+# (scripts/verifica_cli_contratti.py, scripts/genera_manifesto_adozione.py):
+# jsonschema al pin dei contratti (requirements-validation.txt) e le sue
+# dipendenze transitive fissate, così due rilasci dello stesso commit
+# validano con le stesse versioni.
+attrs==26.1.0
+jsonschema==4.23.0
+jsonschema-specifications==2025.9.1
+referencing==0.37.0
+rpds-py==2026.6.3
+typing_extensions==4.16.0

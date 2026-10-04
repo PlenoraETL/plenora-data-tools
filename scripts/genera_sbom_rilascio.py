@@ -29,6 +29,26 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Le dipendenze runtime dichiarate dal wheel (pyproject.toml) e il pin con cui
+# la suite le qualifica (requirements-sdk-tests.txt).
+DIPENDENZE_RUNTIME = {"pyarrow>=25,<26": "pyarrow==25.0.1"}
+PIN_RUNTIME = set(DIPENDENZE_RUNTIME.values())
+
+
+def wheel_edges(wheels: dict, python: dict) -> dict:
+    """Ogni wheel dipende dai componenti PyPI dei pin che qualificano le sue
+    dipendenze runtime; un pin assente dai requirements ferma lo script."""
+    targets = set()
+    for pin in PIN_RUNTIME:
+        name, version = pin.split("==")
+        ref = f"pkg:pypi/{quote(name)}@{quote(version)}"
+        if ref not in python:
+            raise ValueError("runtime dependency pin missing from the requirements")
+        targets.add(ref)
+    return {ref: set(targets) for ref in wheels}
+
+
+
 
 def property_value(name: str, value: str) -> dict[str, str]:
     return {"name": "plenora:" + name, "value": value}
@@ -122,10 +142,18 @@ def python_inventory(root: Path) -> dict:
                 raise ValueError(f"unresolved Python requirement in {path.name}")
             name = re.sub(r"[-_.]+", "-", match[1]).lower()
             ref = f"pkg:pypi/{quote(name)}@{quote(match[2])}"
+            # Il pin che qualifica una dipendenza runtime del wheel è anche
+            # quella dipendenza: lo dice l'ambito, e un arco dal wheel.
+            runtime = f"{name}=={match[2]}" in PIN_RUNTIME
             component = components.setdefault(ref, {
                 "type": "library", "bom-ref": ref, "purl": ref,
                 "name": name, "version": match[2], "properties": [
-                    property_value("scope", "qualification-environment; not wheel runtime"),
+                    property_value(
+                        "scope",
+                        "wheel runtime dependency (Requires-Dist) and qualification-environment"
+                        if runtime
+                        else "qualification-environment; not wheel runtime",
+                    ),
                 ],
             })
             component["properties"].append(property_value("requirement", path.relative_to(root).as_posix() + ": " + line))
@@ -166,11 +194,6 @@ def dependency_graph(items: list) -> dict:
 def check_graph(graph: dict, known: set) -> None:
     if any(ref not in known or not values <= known for ref, values in graph.items()):
         raise ValueError("dangling SBOM dependency reference")
-
-
-# Le dipendenze runtime dichiarate dal wheel (pyproject.toml) e il pin con cui
-# la suite le qualifica (requirements-sdk-tests.txt).
-DIPENDENZE_RUNTIME = {"pyarrow>=25,<26": "pyarrow==25.0.1"}
 
 
 def wheel_inventory(dist: Path, version: str) -> dict:
@@ -229,7 +252,11 @@ def render(root: Path, dist: Path, artifact_bom: dict) -> dict:
     dependencies = dependency_graph(bom.get("dependencies", []))
     if dependencies.keys() & (edges.keys() | {root_ref}):
         raise ValueError("duplicate SBOM dependency reference")
+    runtime_edges = wheel_edges(wheels, python)
+    if dependencies.keys() & runtime_edges.keys():
+        raise ValueError("duplicate SBOM dependency reference")
     dependencies.update(edges)
+    dependencies.update(runtime_edges)
     dependencies[root_ref] = set(supplied)
     bom["dependencies"] = [{"ref": ref, "dependsOn": sorted(values)} for ref, values in sorted(dependencies.items())]
     known = set(supplied) | {root_ref}
@@ -267,7 +294,9 @@ def validate(root: Path, dist: Path, bom: dict) -> None:
     }.items()):
         raise ValueError("SBOM identity mismatch")
     cargo, edges = cargo_inventory(root)
-    expected = cargo | python_inventory(root) | wheel_inventory(dist, version)
+    python = python_inventory(root)
+    wheels = wheel_inventory(dist, version)
+    expected = cargo | python | wheels
     actual = index_references(bom["components"], "bom-ref")
     if root_ref in actual:
         raise ValueError("duplicate SBOM root reference")
@@ -279,6 +308,8 @@ def validate(root: Path, dist: Path, bom: dict) -> None:
         raise ValueError("SBOM aggregate graph incomplete or stale")
     if any(dependencies.get(ref) != values for ref, values in edges.items()):
         raise ValueError("SBOM Cargo graph incomplete or stale")
+    if any(dependencies.get(ref) != values for ref, values in wheel_edges(wheels, python).items()):
+        raise ValueError("SBOM wheel runtime graph incomplete or stale")
 
 
 if __name__ == "__main__":

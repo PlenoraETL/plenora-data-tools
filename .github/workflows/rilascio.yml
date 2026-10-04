@@ -12,7 +12,10 @@ name: rilascio
 # - le attestazioni di provenienza.
 #
 # Ogni artefatto si prova prima dell'upload: il wheel installato con la suite
-# completa su ogni Python dichiarato (3.10-3.14), la CLI contro i contratti.
+# completa su ogni Python dichiarato (3.10-3.14), la CLI di ogni sistema
+# contro i contratti; i gate di ci.yml girano sul commit rilasciato.
+# L'immagine manylinux la sceglie maturin-action per tag (`2_34`), come in
+# plenora-database-tools: non e' fissata per digest.
 # GitHub Releases è l'unica superficie di distribuzione: niente package
 # index, niente token di pubblicazione.
 #
@@ -36,6 +39,42 @@ env:
   CONTRATTI: e7e9d3d9fd37696e1abe6679c028afacbf74847b
 
 jobs:
+  # I gate di ci.yml sul commit che si rilascia, sui due sistemi: il
+  # manifesto li cita come prova, quindi devono girare qui, non solo sulle PR.
+  gate:
+    name: gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust 1.98.0 + rustfmt + clippy
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
+        with:
+          toolchain: '1.98.0'
+          components: rustfmt, clippy
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: cargo fmt
+        run: cargo fmt --all --check
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: cargo clippy anti-panic (librerie)
+        run: >-
+          cargo clippy --workspace --lib --locked --
+          -D unsafe-code
+          -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+          -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
+      # La suite lunga comprende tests/superficie_rust.rs, la mappa degli
+      # export Rust compilata da consumatore.
+      - name: cargo test (suite lunga)
+        env:
+          PLENORA_TEST_LUNGHI: '1'
+        run: cargo test --workspace --locked
+
   costruzione:
     name: costruzione (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -74,6 +113,12 @@ jobs:
           else
             cp target/release/plenora-data "dist/${{ matrix.cli }}"
           fi
+      - name: plenora-contracts al commit adottato
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: PlenoraETL/plenora-contracts
+          ref: ${{ env.CONTRATTI }}
+          path: .plenora-contracts
       - name: sorgente
         if: runner.os == 'Linux'
         shell: bash
@@ -86,15 +131,29 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
+      # La CLI di questo sistema contro i contratti, prima dell'upload: la
+      # CLI Windows si prova sul runner Windows.
+      - name: la CLI contro i contratti
+        shell: bash
+        env:
+          PYTHONUTF8: '1'
+        run: |
+          python -m pip install -r requirements-verifica-contratti.txt
+          python scripts/verifica_cli_contratti.py \
+            --binario "dist/${{ matrix.cli }}" \
+            --contratti .plenora-contracts
       - name: wheel installato e suite Python
         shell: bash
         env:
           PYTHONUTF8: '1'
         run: |
+          shopt -s nullglob
+          wheel=(dist/*.whl)
+          test "${#wheel[@]}" -eq 1
           python -m pip install -r requirements-sdk-tests.txt
-          python -m pip install --no-deps dist/*.whl
+          python -m pip install --no-deps "${wheel[0]}"
           python scripts/verifica_sdk_python.py \
-            --wheel "$(ls dist/*.whl)" \
+            --wheel "${wheel[0]}" \
             --cartella "$RUNNER_TEMP/sdk-python"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -127,10 +186,13 @@ jobs:
         env:
           PYTHONUTF8: '1'
         run: |
+          shopt -s nullglob
+          wheel=(dist/*.whl)
+          test "${#wheel[@]}" -eq 1
           python -m pip install -r requirements-sdk-tests.txt
-          python -m pip install --no-deps dist/*.whl
+          python -m pip install --no-deps "${wheel[0]}"
           python scripts/verifica_sdk_python.py \
-            --wheel "$(ls dist/*.whl)" \
+            --wheel "${wheel[0]}" \
             --cartella "$RUNNER_TEMP/sdk-python"
 
   sbom:
@@ -170,7 +232,7 @@ jobs:
 
   pubblicazione:
     name: verifica, manifesto, attestazioni e allegati
-    needs: [costruzione, abi3, sbom]
+    needs: [gate, costruzione, abi3, sbom]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -197,8 +259,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-      - name: validatore dei contratti
-        run: python -m pip install -r .plenora-contracts/requirements-validation.txt
+      - name: dipendenze della verifica
+        run: python -m pip install -r requirements-verifica-contratti.txt
       - name: la sorgente del manifesto fissa lo stesso commit
         run: |
           python3 -c 'import json,os,sys; r=json.load(open("crates/plenora-cli/adozione.json"))["contracts_source"]["revision"]; sys.exit(0 if r==os.environ["CONTRATTI"] else "adozione.json fissa un altro commit")'
@@ -227,9 +289,9 @@ jobs:
             --contratti .plenora-contracts \
             --versione "$versione" \
             "${artefatti[@]}" \
-            --verifica "python3 scripts/verifica_cli_contratti.py --binario dist/plenora-data-linux-x86_64 --contratti .plenora-contracts" \
-            --verifica "python scripts/verifica_sdk_python.py (Python 3.10-3.14, Linux e Windows)" \
-            --verifica "cargo test --workspace --locked (ci.yml, Linux e Windows)" \
+            --verifica "rilascio.yml costruzione: scripts/verifica_cli_contratti.py sulla CLI di ogni sistema (Linux, Windows)" \
+            --verifica "rilascio.yml abi3: scripts/verifica_sdk_python.py sul wheel installato (Python 3.10-3.14, Linux e Windows)" \
+            --verifica "rilascio.yml gate: fmt, clippy, PLENORA_TEST_LUNGHI=1 cargo test --workspace --locked, superficie Rust compresa (Linux, Windows)" \
             --uscita "dist/plenora-data-tools-${versione}.adoption-manifest.json"
       - name: SBOM verificato prima dell'attestazione
         run: python3 scripts/genera_sbom_rilascio.py --check "dist/plenora-data-tools-${VERSIONE}.sbom.cdx.json" --dist dist
