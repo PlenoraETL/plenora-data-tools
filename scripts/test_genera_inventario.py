@@ -41,5 +41,13 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(genera_inventario.main(["--check"]), 0)
 
 
+class ProvePythonTests(unittest.TestCase):
+    def test_conta_anche_le_prove_asincrone(self) -> None:
+        testo = "\n".join(
+            ["def test_a():", "    pass", "async def test_b():", "    pass", "def aiuto():", "    pass"]
+        )
+        self.assertEqual(genera_inventario.PROVA_PYTHON.findall(testo), ["test_a", "test_b"])
+
+
 if __name__ == "__main__":
     unittest.main()

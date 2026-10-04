@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "surfaces": {
+    "python_binding": {
+      "report_format": "llvm",
+      "minimum_percent": {"functions": 76.0, "lines": 84.0, "regions": 83.5},
+      "sources": ["crates/plenora-data-py/src/"]
+    },
+    "rust_product": {
+      "report_format": "llvm",
+      "minimum_percent": {"functions": 90.0, "lines": 94.0, "regions": 93.8},
+      "sources": ["crates/plenora-cli/src/", "crates/plenora-core/src/", "crates/plenora-io/src/", "crates/plenora-kernels-geo/src/", "crates/plenora-kernels-table/src/", "crates/plenora-pipeline/src/"]
+    },
+    "python_sdk": {
+      "report_format": "coverage.py",
+      "minimum_percent": {"lines": 95.0, "branches": 88.0},
+      "sources": ["plenora_data/"]
+    }
+  }
+}

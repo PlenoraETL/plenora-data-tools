@@ -1,0 +1,145 @@
+name: coverage
+
+# Misura della copertura, sul modello di plenora-database-tools: il prodotto
+# Rust (cargo-llvm-cov) e, a parte, l'SDK Python con il suo binding nativo
+# misurati dal wheel instrumentato. Ogni superficie ha le sue soglie in
+# scripts/coverage_budget.json, verificate da scripts/check_coverage.py (che
+# fallisce chiuso su report incompleti o incoerenti): una superficie grande non
+# nasconde la regressione di un'altra.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-product:
+    name: prodotto Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Rust 1.98.0 + llvm-tools
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
+        with:
+          toolchain: '1.98.0'
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: cargo-llvm-cov 0.9.1
+        run: cargo install cargo-llvm-cov --version 0.9.1 --locked
+      - name: misura e report
+        env:
+          # Il binding Python ha la sua superficie (job sotto); i moduli di
+          # test e gli oracoli (tutti `#[cfg(test)]`) non sono prodotto.
+          IGNORA: '(^|/)(crates/plenora-data-py/|vendor/)|(_oracolo|test_support)\.rs$|/oracolo(_chiavi)?\.rs$'
+        run: |
+          mkdir -p coverage/rust
+          cargo llvm-cov --locked --workspace --exclude plenora-data-py \
+            --json --summary-only \
+            --output-path coverage/rust/summary.json \
+            --ignore-filename-regex "$IGNORA"
+          cargo llvm-cov report \
+            --lcov --output-path coverage/rust/lcov.info \
+            --ignore-filename-regex "$IGNORA"
+          cargo llvm-cov report \
+            --html --output-dir coverage/rust/html \
+            --ignore-filename-regex "$IGNORA"
+      - name: soglie del prodotto Rust
+        run: >-
+          python3 scripts/check_coverage.py
+          --summary coverage/rust/summary.json
+          --surface rust_product
+      - name: report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-rust
+          path: coverage/rust
+          if-no-files-found: error
+          retention-days: 14
+
+  python:
+    name: SDK Python e binding nativo dal wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: dipendenze della suite e della misura
+        run: python3 -m pip install -r requirements-coverage.txt
+      - name: Rust 1.98.0 + llvm-tools
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
+        with:
+          toolchain: '1.98.0'
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: cargo-llvm-cov 0.9.1
+        run: cargo install cargo-llvm-cov --version 0.9.1 --locked
+      - name: wheel instrumentato, suite Python, report
+        shell: bash
+        env:
+          # Le dipendenze vendorizzate (`[patch.crates-io]`) entrano nella
+          # libreria nativa ma non sono il binding.
+          IGNORA: '(^|/)vendor/'
+          PLENORA_DATA_CONTRATTI: ${{ github.workspace }}/crates/plenora-cli/tests/fixtures/contratti
+        run: |
+          mkdir -p coverage/python-binding/dist coverage/python-sdk
+          source <(cargo llvm-cov show-env --sh)
+          cargo llvm-cov clean --workspace
+          maturin build --locked \
+            --out coverage/python-binding/dist \
+            --manifest-path crates/plenora-data-py/Cargo.toml
+          python -m pip install --force-reinstall --no-deps coverage/python-binding/dist/*.whl
+          # La suite gira fuori dal checkout, contro il pacchetto installato.
+          cp -r crates/plenora-data-py/python/tests "$RUNNER_TEMP/prove-sdk"
+          export COVERAGE_FILE="$GITHUB_WORKSPACE/coverage/python-sdk/.coverage"
+          ( cd "$RUNNER_TEMP/prove-sdk" && python -m pytest -q -p no:cacheprovider \
+              --cov=plenora_data --cov-branch --cov-report= . )
+          python -m coverage json --pretty-print -o coverage/python-sdk/summary.json
+          python -m coverage xml -o coverage/python-sdk/coverage.xml
+          python -m coverage html -d coverage/python-sdk/html
+          cargo llvm-cov report -p plenora-data-py \
+            --json --summary-only \
+            --output-path coverage/python-binding/summary.json \
+            --ignore-filename-regex "$IGNORA"
+          cargo llvm-cov report -p plenora-data-py \
+            --lcov --output-path coverage/python-binding/lcov.info \
+            --ignore-filename-regex "$IGNORA"
+          cargo llvm-cov report -p plenora-data-py \
+            --html --output-dir coverage/python-binding/html \
+            --ignore-filename-regex "$IGNORA"
+      - name: soglie dell'SDK Python
+        run: >-
+          python3 scripts/check_coverage.py
+          --summary coverage/python-sdk/summary.json
+          --surface python_sdk
+      - name: soglie del binding nativo
+        run: >-
+          python3 scripts/check_coverage.py
+          --summary coverage/python-binding/summary.json
+          --surface python_binding
+      - name: report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-python
+          path: |
+            coverage/python-sdk
+            coverage/python-binding
+          if-no-files-found: error
+          retention-days: 14

@@ -46,6 +46,9 @@ CAMPI_OP = (
 )
 ATTRIBUTO_TEST = re.compile(r"^\s*#\[test\]", re.MULTILINE)
 SELF_TEST = re.compile(r"^\s*def (test_\w+)\(", re.MULTILINE)
+# Le prove pytest dell'SDK Python, anche asincrone.
+PROVA_PYTHON = re.compile(r"^\s*(?:async\s+)?def (test_\w+)\(", re.MULTILINE)
+CARTELLA_PROVE_PYTHON = Path("crates/plenora-data-py/python/tests")
 
 
 class ErroreInventario(RuntimeError):
@@ -210,6 +213,15 @@ def self_test_script() -> list[tuple[str, int]]:
     ]
 
 
+def prove_python() -> list[tuple[str, int]]:
+    """Le prove pytest dell'SDK Python, per file (`test_*.py`)."""
+    cartella = RADICE / CARTELLA_PROVE_PYTHON
+    return [
+        (percorso.name, len(PROVA_PYTHON.findall(percorso.read_text(encoding="utf-8"))))
+        for percorso in sorted(cartella.glob("test_*.py"))
+    ] if cartella.is_dir() else []
+
+
 def tabella(intestazione: list[str], righe: list[list[str]]) -> list[str]:
     linee = ["| " + " | ".join(intestazione) + " |"]
     linee.append("| " + " | ".join("---" for _ in intestazione) + " |")
@@ -316,6 +328,22 @@ def render() -> str:
             str(sum(src + tst for _, src, tst in test)),
         ]],
     )
+    python = prove_python()
+    if python:
+        linee += [
+            "",
+            "### Prove Python dell'SDK",
+            "",
+            "Funzioni `test_*` (anche `async`) della suite pytest di `plenora-data-py`,",
+            "che gira sul wheel installato (`scripts/verifica_sdk_python.py`): il",
+            "`plenora-data-py` della tabella sopra conta solo i `#[test]` Rust.",
+            "",
+        ]
+        linee += tabella(
+            ["file", "prove"],
+            [[f"`{CARTELLA_PROVE_PYTHON.as_posix()}/{nome}`", str(numero)] for nome, numero in python]
+            + [["**totale**", str(sum(numero for _, numero in python))]],
+        )
     script = self_test_script()
     if script:
         linee += [
