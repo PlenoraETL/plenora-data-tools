@@ -549,6 +549,73 @@ fn il_controllo_guarda_l_header_del_tipo_di_pagina() {
     rifiutato(&byte, "exceeds the column chunk value count");
 }
 
+/// Una pagina v1 compressa con un header v2 aggiunto che dichiara
+/// `is_compressed = false`: l'header v2 non conta su una pagina v1, la pagina
+/// si decomprime e si rilegge uguale. Scelto per presenza, l'header v2
+/// spegneva la decompressione (e la verifica della dimensione) e i byte
+/// compressi arrivavano al decodificatore come valori.
+#[test]
+fn un_header_v2_non_conta_su_una_pagina_v1() {
+    let lunghi = colonna(Arc::new(StringArray::from_iter_values(
+        (0..10).map(|i| format!("{i:0>60}")),
+    )));
+    let proprieta = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .set_dictionary_enabled(false)
+        .set_writer_version(WriterVersion::PARQUET_1_0)
+        .set_write_page_header_statistics(true)
+        .build();
+    let originale = scrivi(&lunghi, proprieta);
+    identiche(&lunghi, &leggi(&originale).unwrap());
+    let chunk = chunk(&originale);
+    let campi = header(&originale, chunk.pagina_dati);
+    let non_compressi = i32::try_from(campi.non_compressi.2 >> 1).unwrap();
+    let compressi = varint(
+        &originale,
+        campi.non_compressi.0 + campi.non_compressi.1 + 1,
+    )
+    .2;
+    let compressi = i32::try_from(compressi >> 1).unwrap();
+    let lunghezza_header =
+        usize::try_from(chunk.compressi).unwrap() - usize::try_from(compressi).unwrap();
+    let costruisci = |riempimento: Option<usize>| {
+        let mut c = Compact::default();
+        c.1.push(0);
+        c.i32(1, 0); // DATA_PAGE
+        c.i32(2, non_compressi);
+        c.i32(3, compressi);
+        c.inizio(5);
+        c.i32(1, 10);
+        c.i32(2, 0); // PLAIN
+        c.i32(3, 3);
+        c.i32(4, 3);
+        c.fine();
+        c.inizio(8);
+        c.i32(1, 10);
+        c.i32(2, 0);
+        c.i32(3, 10);
+        c.i32(4, 0);
+        c.i32(5, 0);
+        c.i32(6, 0);
+        c.bool(7, false);
+        c.fine();
+        if let Some(n) = riempimento {
+            c.binario(9, n);
+        }
+        c.0.push(0);
+        c.0
+    };
+    let senza = costruisci(None).len();
+    let n = (0..lunghezza_header)
+        .find(|&n| senza + 1 + (n.max(1).ilog2() as usize / 7 + 1) + n == lunghezza_header)
+        .expect("l'header originale e' troppo corto per il riempimento");
+    let nuovo = costruisci(Some(n));
+    assert_eq!(nuovo.len(), lunghezza_header);
+    let mut byte = originale;
+    byte[chunk.pagina_dati..chunk.pagina_dati + lunghezza_header].copy_from_slice(&nuovo);
+    identiche(&lunghi, &leggi(&byte).unwrap());
+}
+
 /// Nulli, colonne tutte nulle e liste (più valori per riga) si rileggono
 /// uguali con pagine v1 e v2 e con le codifiche delta: sono i casi in cui
 /// livelli, valori e righe di una pagina differiscono.

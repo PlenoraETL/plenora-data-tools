@@ -418,8 +418,15 @@ pub(crate) fn decode_page(
     //
     // We always use 0 offset for other pages other than v2, `true` flag means
     // that compression will be applied if decompressor is defined
-    let (offset, can_decompress): (usize, bool) = match page_header.data_page_header_v2 {
-        Some(ref header_v2) => {
+    // PLENORA: the v2 header counts only on a v2 page. Chosen by presence, a
+    // v2 header added to a v1 or dictionary page switched decompression off
+    // (and its size check with it) for a page decoded with its own header.
+    let header_v2 = match page_header.r#type {
+        PageType::DATA_PAGE_V2 => page_header.data_page_header_v2.as_ref(),
+        _ => None,
+    };
+    let (offset, can_decompress): (usize, bool) = match header_v2 {
+        Some(header_v2) => {
             if header_v2.definition_levels_byte_length < 0
                 || header_v2.repetition_levels_byte_length < 0
                 || header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length

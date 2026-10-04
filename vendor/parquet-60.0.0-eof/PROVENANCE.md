@@ -72,7 +72,11 @@ i byte davvero presenti.
    `total_uncompressed_size` del column chunk (che la comprende), e i valori
    di una pagina dati non superano `num_values` del chunk, letti
    dall'header che il tipo di pagina seleziona (lo stesso che usa
-   `decode_page`: una pagina può portare sia l'header v1 sia il v2). Il
+   `decode_page`: una pagina può portare sia l'header v1 sia il v2). Anche
+   in `decode_page` l'header v2 (livelli non compressi, `is_compressed`)
+   conta solo su una pagina v2: scelto per presenza, su una pagina v1 o
+   dizionario spegneva la decompressione e la verifica della sua
+   dimensione, e i byte compressi arrivavano al decodificatore. Il
    buffer di decompressione e i decodificatori restano così entro ciò che il
    budget ha visto. La dimensione compressa era già limitata ai byte rimasti
    del chunk (`verify_page_size`).
