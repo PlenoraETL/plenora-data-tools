@@ -214,3 +214,24 @@ cargo deny check && cargo deny --manifest-path fuzz/Cargo.toml check   # se inst
 La CI la esegue a ogni push e PR e ogni lunedì
 (`.github/workflows/supply-chain.yml`): un'advisory nuova può farla
 diventare rossa senza che il codice cambi.
+
+### Rilascio
+
+GitHub Releases è l'unica distribuzione. Pubblicare una release con tag
+`v<versione del workspace>` avvia `.github/workflows/rilascio.yml`, che
+costruisce e prova gli artefatti e li allega alla release:
+
+| artefatto | superficie |
+| --- | --- |
+| `plenora-data-linux-x86_64`, `plenora-data-windows-x86_64.exe` | CLI |
+| `plenora_data-<versione>-cp310-abi3-*.whl` (manylinux 2_34, Windows) | SDK Python |
+| `plenora-data-tools-<versione>-source.tar.gz` | Rust (crate dal sorgente) |
+| `plenora-data-tools-<versione>.sbom.cdx.json` | SBOM CycloneDX (`scripts/genera_sbom_rilascio.py`) |
+| `plenora-data-tools-<versione>.adoption-manifest.json` | manifesto di adozione v4 |
+
+Prima degli allegati: ogni wheel installato con la suite Python completa su
+Python 3.10–3.14, Linux e Windows; la CLI Linux contro `plenora-contracts` al
+commit adottato (`scripts/verifica_cli_contratti.py`); il manifesto generato
+dagli artefatti veri e validato da schema e controlli dei contratti; lo SBOM
+verificato contro i lock; poi le attestazioni di provenienza. Lanciato a mano
+(`workflow_dispatch`) il workflow fa gli stessi passi senza toccare release.
