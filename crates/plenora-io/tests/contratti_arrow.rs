@@ -146,7 +146,7 @@ fn i_vettori_sono_le_copie_registrate() {
     let provenienza = vettore("provenienza.json");
     assert_eq!(
         provenienza["commit"],
-        "23fed27d5736e5f32906a0116553fed16a1fb239"
+        "1e902dfaab5819c1d9ce785878d5b26dbeae48b3"
     );
     let registrati: BTreeMap<String, String> = provenienza["file"]
         .as_object()
