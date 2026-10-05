@@ -40,7 +40,9 @@ pub struct SchemaExpectation {
     /// precisione e scala), `binary`, `dictionary_utf8` (chiavi `Int32`),
     /// `list` (qualunque elemento), `struct` (qualunque campo).
     pub data_type: String,
-    /// Nullabilita' attesa; assente (default), non si controlla.
+    /// Nullabilita' attesa; assente (default), non si controlla. `null` si
+    /// rifiuta: un parametro facoltativo si omette.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub nullable: Option<bool>,
 }
 

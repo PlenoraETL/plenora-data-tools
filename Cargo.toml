@@ -32,8 +32,11 @@ publish = false
 # campo sono `arrow_schema::Metadata` (una `BTreeMap`: iterazione in
 # ordine di chiave), non `HashMap<String, String>`.
 arrow-array = "=60.0.0"
+# Tipi di schema e campo di Arrow, riesportati da plenora-core.
 arrow-schema = "=60.0.0"
+# Formato IPC di Arrow (file e stream), riesportato da plenora-core.
 arrow-ipc = "=60.0.0"
+# Kernel di selezione di Arrow (`take`, `filter`, `concat`), riesportati da plenora-core.
 arrow-select = "=60.0.0"
 # `ArrayData` per visitare i nodi di una colonna (lunghezze dei figli) nella
 # stima del picco di un'unione di blocchi (`plenora_core::memoria`). Non e'
@@ -91,9 +94,13 @@ crc32fast = { version = "=1.5.2", default-features = false }
 base64 = { version = "=0.23.1", default-features = false, features = ["std"] }
 # Geometrie
 geo = "=0.33.1"
+# Codifica e decodifica WKB delle geometrie `geo` in plenora-kernels-geo.
 geozero = { version = "=0.15.1", default-features = false, features = ["with-geo", "with-wkb"] }
+# Lettura e scrittura WKT (`geo.from_wkt`, `geo.to_wkt`); vendorizzato con patch (sotto).
 wkt = "=0.14.0"
+# Parallelismo dati nei kernel (raccolta posizionale: uscita identica al sequenziale).
 rayon = "=1.12.0"
+# R-tree degli indici spaziali di plenora-kernels-geo (join, cluster, vicini).
 rstar = "=0.12.2"
 # Triangolazione di Delaunay di `geo.delaunay` e `geo.voronoi` con il
 # caricamento in blocco (`bulk_load`): `geo` 0.33.1 inserisce i punti uno
@@ -114,17 +121,29 @@ geographiclib-rs = { version = "=0.2.7", default-features = false }
 # direttamente.
 log = "=0.4.33"
 # Comuni
+# Deserializzazione dei piani, delle config e dei contratti.
 serde = { version = "=1.0.229", features = ["derive"] }
+# JSON di piani, config, metadati e inviluppi; `raw_value` per il piano grezzo della CLI.
 serde_json = { version = "=1.0.151", features = ["raw_value"] }
+# Derivazione di `Error` per gli errori pubblici di plenora-core e plenora-kernels-geo.
 thiserror = "=2.0.21"
+# Date e orari delle operazioni tabellari e della scadenza della CLI (RFC 3339).
 chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
+# Database dei fusi IANA di `table.timezone_convert` e delle date con fuso.
 chrono-tz = "=0.10.4"
+# Espressioni regolari delle operazioni su stringhe, qualita' e pulizia.
 regex = "=1.13.1"
+# Normalizzazione Unicode (NFC/NFD, segni combinanti) delle operazioni su stringhe.
 unicode-normalization = "=0.1.25"
+# Tratti numerici generici delle aggregazioni e delle finestre tabellari.
 num-traits = "=0.2.19"
+# Digest di `table.md5_hash`.
 md-5 = "=0.11.0"
+# SHA-256 di `table.sha256_hash` e `table.hmac_sha256`, e delle attese sugli artefatti della CLI.
 sha2 = "=0.11.0"
+# UUID v4 di `table.uuid_generator`.
 uuid = { version = "=1.26.1", features = ["v4"] }
+# File temporanei della scrittura atomica (plenora-io) e degli artefatti della CLI.
 tempfile = "=3.27.0"
 # Annullamento della CLI `plenora-data` (crates/plenora-cli): Ctrl-C
 # (SIGINT, CTRL_C_EVENT) e, con la feature `termination`, SIGTERM e

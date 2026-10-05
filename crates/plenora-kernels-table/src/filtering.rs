@@ -73,7 +73,9 @@ pub struct Filter {
     pub operator: Operator,
     /// Termine di confronto (assente vale `null`, cioe' testo vuoto). Con
     /// `isnull` e `notnull` non ha effetto: scritto, anche `null`, si
-    /// rifiuta ([`verifica_valore`]).
+    /// rifiuta ([`verifica_valore`]). `null` scritto e' ammesso, con un
+    /// significato proprio dichiarato nella scheda: il testo vuoto, e conta
+    /// come scritto.
     #[serde(default, deserialize_with = "crate::cleansing::valore_scritto")]
     pub value: Option<serde_json::Value>,
 }
@@ -110,11 +112,13 @@ pub struct Condition {
     #[serde(default = "default_operator")]
     pub operator: Operator,
     /// Termine di confronto (assente vale `null`); con `isnull` e `notnull`
-    /// scritto si rifiuta ([`verifica_valore`]).
+    /// scritto si rifiuta ([`verifica_valore`]). `null` scritto e' ammesso
+    /// come in `table.filter`: il testo vuoto, e conta come scritto.
     #[serde(default, deserialize_with = "crate::cleansing::valore_scritto")]
     pub value: Option<serde_json::Value>,
     /// Valore scritto se questa e' la prima condizione vera (default
-    /// `null`); vale il suo testo JSON.
+    /// `null`); vale il suo testo JSON. `null` e' un valore d'uscita (il
+    /// testo vuoto, dichiarato nella scheda), quindi scritto e' ammesso.
     #[serde(default)]
     pub result: serde_json::Value,
 }
@@ -140,7 +144,8 @@ pub struct Conditional {
     /// Condizioni in ordine di precedenza (obbligatorio; l'analisi rifiuta
     /// la lista vuota).
     pub conditions: Vec<Condition>,
-    /// Valore delle righe senza condizioni vere (default `null`).
+    /// Valore delle righe senza condizioni vere (default `null`). `null` e'
+    /// un valore d'uscita, come per `result`: scritto e' ammesso.
     #[serde(default)]
     pub default_value: serde_json::Value,
     /// Colonna d'uscita (default `"result"`); se esiste si sostituisce.

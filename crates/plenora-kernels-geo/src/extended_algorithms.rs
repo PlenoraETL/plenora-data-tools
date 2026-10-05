@@ -167,14 +167,16 @@ fn checked_densified_line_count(
         let dy = segment.end.y - segment.start.y;
         let length = dx.hypot(dy);
         let pieces = (length / max_segment_length).ceil();
-        // Soglia 2^64: esatta in f64 e uguale a `u64::MAX as f64`, che
-        // arrotonda per eccesso.
-        if !pieces.is_finite() || pieces > 18_446_744_073_709_551_616.0 {
+        // Soglia 2^64, esatta in f64: `u64::MAX as f64` arrotonda per
+        // eccesso proprio a 2^64, che non e' un `u64`. Si rifiuta anche
+        // l'uguaglianza: con `>` il valore 2^64 passerebbe e il cast
+        // saturante lo renderebbe `u64::MAX`, un conteggio sbagliato.
+        if !pieces.is_finite() || pieces >= 18_446_744_073_709_551_616.0 {
             return Err(ExtendedAlgorithmError::IndexOverflow);
         }
-        // Guardia sopra: pieces finito, in [0, 2^64] e a valore intero
+        // Guardia sopra: pieces finito, in [0, 2^64) e a valore intero
         // (ceil di un rapporto non negativo, max_segment_length > 0); il
-        // cast saturante non puo' perdere segno ne' troncare.
+        // cast non puo' perdere segno, troncare ne' saturare.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let pieces_u64 = (pieces as u64).max(1);
         total = total
@@ -1583,6 +1585,33 @@ mod tests {
     use crate::test_support::rect;
     use geo::{line_string, polygon, Area};
     use proptest::prelude::*;
+
+    /// **Al bordo di 2^64 il conteggio si rifiuta, sotto e' esatto.**
+    ///
+    /// Un lato di lunghezza 2^64 con passo 1 vuole 2^64 pezzi, che non
+    /// stanno in un `u64`: il cast saturante li renderebbe `u64::MAX`. Il
+    /// double appena sotto (2^64 - 2048) e' un `u64` esatto e passa.
+    ///
+    /// Con la guardia `>` di prima l'errore arrivava lo stesso, dalla
+    /// somma controllata successiva (`1 + u64::MAX` trabocca): la prova
+    /// fissa il bordo, non distingue le due guardie. Quella che le
+    /// distingue e' in `extensions2`, dove nessuna somma segue il cast.
+    #[test]
+    fn il_conteggio_dei_pezzi_rifiuta_2_alla_64() {
+        let due_alla_64 = 18_446_744_073_709_551_616.0_f64;
+        let al_bordo = line_string![(x: 0.0, y: 0.0), (x: due_alla_64, y: 0.0)];
+        assert!(matches!(
+            checked_densified_line_count(&al_bordo, 1.0),
+            Err(ExtendedAlgorithmError::IndexOverflow)
+        ));
+        let sotto = 18_446_744_073_709_549_568.0_f64;
+        assert_eq!(sotto, due_alla_64 - 2048.0);
+        let appena_sotto = line_string![(x: 0.0, y: 0.0), (x: sotto, y: 0.0)];
+        assert_eq!(
+            checked_densified_line_count(&appena_sotto, 1.0).unwrap(),
+            18_446_744_073_709_549_569
+        );
+    }
 
     #[test]
     fn densify_preflights_output_and_preserves_shape() {

@@ -3,6 +3,11 @@
 //! Pubbliche perche' l'esecutore (`plenora-pipeline`) legga la config con
 //! gli stessi tipi dell'analisi: una sola lettura della config, nessuna
 //! seconda copia dei nomi e dei default che potrebbe divergere.
+//!
+//! Ogni campo facoltativo omesso vale il suo default; scritto `null` si
+//! rifiuta ([`plenora_core::json::mai_null`]): `null` non e' l'assenza, e un
+//! parametro scritto non si ignora. Nessuna config geo da' a `null` un
+//! significato proprio.
 
 use serde::Deserialize;
 
@@ -29,6 +34,7 @@ pub struct OutputColumnConfig {
     /// Nome della colonna aggiunta; assente vale il nome di default
     /// dell'operazione (l'id senza `geo.`, `wkt` per `to_wkt`). Deve essere
     /// un nome valido e libero nello schema d'ingresso.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub output_column: Option<String>,
 }
 
@@ -66,6 +72,7 @@ pub struct BufferConfig {
     /// negativa erode le parti areali, nulla ne da' l'unione.
     pub distance: f64,
     /// Estremita' delle linee; assente vale `round`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub cap: Option<BufferCapParam>,
 }
 
@@ -82,13 +89,16 @@ pub struct SimplifyConfig {
     /// Con `douglas_peucker`, obbligatoria: distanza massima di un vertice
     /// tolto dalla linea semplificata (unita' del CRS), finita e non
     /// negativa. Con `preserve_topology` si rifiuta.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub tolerance: Option<f64>,
     /// Con `preserve_topology`, obbligatoria: area del triangolo di un
     /// vertice con i due vicini (unita' del CRS al quadrato) sotto la quale,
     /// uguaglianza compresa, il vertice si toglie; finita e non negativa.
     /// Con `douglas_peucker` si rifiuta.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub min_area: Option<f64>,
     /// Algoritmo; assente vale `douglas_peucker`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub policy: Option<SimplifyPolicyParam>,
 }
 
@@ -171,8 +181,10 @@ pub struct ScaleConfig {
     /// Facoltativo, finito: x dell'origine che resta ferma. Il valore
     /// usato quando manca non e' deciso qui: il kernel riceve l'origine
     /// esplicita, e il runner passa `0`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub x_origin: Option<f64>,
     /// Facoltativo, finito: y dell'origine, come `x_origin`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub y_origin: Option<f64>,
 }
 
@@ -186,8 +198,10 @@ pub struct RotateConfig {
     /// Facoltativo, finito: x del centro di rotazione. Il valore usato
     /// quando manca non e' deciso qui: il kernel riceve il centro esplicito,
     /// e il runner passa `0`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub x_origin: Option<f64>,
     /// Facoltativo, finito: y del centro di rotazione, come `x_origin`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub y_origin: Option<f64>,
 }
 
@@ -201,6 +215,7 @@ pub struct ConcaveHullConfig {
     /// Facoltativo, finito e non negativo: lunghezza sotto la quale un
     /// lato non si scava. Il valore usato quando manca non e' deciso qui:
     /// il kernel lo riceve esplicito, e il runner passa `0`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub length_threshold: Option<f64>,
 }
 
@@ -266,6 +281,7 @@ pub struct CleanTopologyConfig {
 pub struct VoronoiConfig {
     /// Numero massimo di punti (righe) dell'ingresso; almeno 2 se presente.
     /// Senza, l'analisi non fissa un limite.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub max_points: Option<u64>,
 }
 
@@ -274,8 +290,10 @@ pub struct VoronoiConfig {
 #[serde(deny_unknown_fields)]
 pub struct PolygonizeConfig {
     /// Noda le linee negli incroci prima del grafo; assente vale `true`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub node_input: Option<bool>,
     /// Fallisce se restano residui; assente vale `false`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub require_complete: Option<bool>,
 }
 
@@ -284,15 +302,19 @@ pub struct PolygonizeConfig {
 #[serde(deny_unknown_fields)]
 pub struct FromCoordsConfig {
     /// Colonna della x, `float64` o `int64`; assente vale `x`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub x_column: Option<String>,
     /// Colonna della y, `float64` o `int64`; assente vale `y`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub y_column: Option<String>,
     /// Nome della colonna geometria prodotta, libero; assente vale
     /// `geometry`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub geometry_column: Option<String>,
     /// CRS della colonna prodotta (tabella integrata, o la definizione del
     /// CRS di piano scritta uguale); assente vale il CRS di piano, e senza
     /// nessuno dei due il passo si rifiuta. Deve essere proiettato.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub crs: Option<String>,
 }
 
@@ -310,6 +332,7 @@ pub struct OtherWkbConfig {
     pub other_wkb: String,
     /// Nome della colonna aggiunta; assente vale l'id dell'operazione senza
     /// `geo.`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub output_column: Option<String>,
 }
 
@@ -322,6 +345,7 @@ pub struct SplitConfig {
     pub other_wkb: String,
     /// Tolleranza del taglio delle sorgenti `LineString`, finita e non
     /// negativa; assente vale `0`. Sulle sorgenti poligonali non ha effetto.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub tolerance: Option<f64>,
 }
 
@@ -343,6 +367,7 @@ pub struct NearestConfig {
     /// Distanza massima, nelle unita' del CRS: una riga sinistra il cui
     /// vicino e' piu' lontano non ha abbinamenti. Facoltativa (assente:
     /// nessun limite); finita e non negativa (`InvalidPlan` altrimenti).
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub max_distance: Option<f64>,
 }
 
@@ -365,10 +390,13 @@ pub struct FromWktConfig {
     /// La colonna `Utf8` da leggere; non vuota.
     pub wkt_column: String,
     /// Nome della colonna geometria creata; assente vale `geometry`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub output_column: Option<String>,
     /// `null` o `fail`; assente vale `null`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub on_error: Option<crate::extensions::OnWktError>,
     /// CRS della colonna creata; assente vale il CRS di piano.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub crs: Option<String>,
 }
 
@@ -412,8 +440,10 @@ pub struct GeometryAccessorsConfig {
     /// Colonne da aggiungere, non vuota e senza ripetizioni; assente vale
     /// tutte e sei. Escono sempre nell'ordine di
     /// [`super::ACCESSOR_COLUMNS`].
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub fields: Option<Vec<AccessorFieldParam>>,
     /// Prefisso dei nomi delle colonne aggiunte; assente vale `""`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub output_prefix: Option<String>,
 }
 
@@ -435,6 +465,7 @@ pub struct LineLocatePointConfig {
     /// della colonna.
     pub point_wkb: String,
     /// Nome della colonna aggiunta; assente vale `fraction`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub output_column: Option<String>,
 }
 
@@ -464,10 +495,13 @@ pub struct GenerateGridConfig {
     /// Lato della cella, finito e positivo.
     pub cell_size: f64,
     /// `square` o `hex`; assente vale `square`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub shape: Option<crate::extensions2::GridShape>,
     /// CRS della griglia; assente vale il CRS di piano.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub crs: Option<String>,
     /// Aggiunge `centroid_x` e `centroid_y`; assente vale `false`.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub include_centroid: Option<bool>,
 }
 
@@ -480,6 +514,7 @@ pub struct SubdivideConfig {
     /// [`crate::extensions2::MIN_SUBDIVIDE_VERTICES`].
     pub max_vertices: usize,
     /// Nuovo nome della colonna geometria; assente la lascia com'e'.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub output_column: Option<String>,
 }
 
@@ -501,8 +536,10 @@ pub struct SnapConfig {
 pub struct CoverageValidateConfig {
     /// Area minima segnalata (strettamente maggiore), finita e non
     /// negativa.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub tolerance: Option<f64>,
     /// Sovrapposizioni massime, maggiore di zero: oltre, errore.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub max_issues: Option<usize>,
 }
 
@@ -513,9 +550,11 @@ pub struct CoverageValidateConfig {
 pub struct SharedPathsConfig {
     /// Lunghezza sotto cui (compresa) un tratto condiviso si scarta,
     /// finita e non negativa.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub tolerance: Option<f64>,
     /// Lunghezza condivisa totale minima di una coppia, finita e non
     /// negativa.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub min_length: Option<f64>,
 }
 
@@ -529,5 +568,149 @@ pub struct ClusterDbscanConfig {
     /// Punti minimi del vicinato di un core, almeno 1.
     pub min_points: usize,
     /// Nome della colonna dell'etichetta.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub output_column: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::riproiezione::{GrigliaConfig, ReprojectConfig};
+    use serde::de::DeserializeOwned;
+    use serde_json::json;
+
+    /// I campi di `T` come li elenca serde per un campo sconosciuto.
+    fn campi<T: DeserializeOwned>() -> Vec<String> {
+        let errore = serde_json::from_value::<T>(json!({"zz_campo_sconosciuto": 0}))
+            .err()
+            .map(|errore| errore.to_string())
+            .unwrap_or_default();
+        errore.split_once(", expected ").map_or_else(
+            || {
+                assert!(errore.contains("there are no fields"), "{errore}");
+                Vec::new()
+            },
+            |(_, elenco)| {
+                elenco
+                    .split('`')
+                    .skip(1)
+                    .step_by(2)
+                    .map(str::to_owned)
+                    .collect()
+            },
+        )
+    }
+
+    /// I campi di `T` che leggono un `null` scritto come se mancassero:
+    /// con `{campo: null}` serde visita il campo prima di cercare quelli
+    /// obbligatori, quindi un `null` rifiutato da' un errore che non e' il
+    /// campo mancante.
+    fn null_letti_come_assenti<T: DeserializeOwned>(nome: &str) -> Vec<String> {
+        campi::<T>()
+            .into_iter()
+            .filter(|campo| {
+                serde_json::from_value::<T>(json!({ campo.clone(): null })).map_or_else(
+                    |errore| errore.to_string().starts_with("missing field"),
+                    |_| true,
+                )
+            })
+            .map(|campo| format!("{nome}.{campo}"))
+            .collect()
+    }
+
+    macro_rules! config_geo {
+        ($($tipo:ident),* $(,)?) => {
+            (
+                vec![$(null_letti_come_assenti::<$tipo>(stringify!($tipo))),*]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<String>>(),
+                vec![$(stringify!($tipo)),*],
+            )
+        };
+    }
+
+    /// **Nessun campo di nessuna config geo legge `null` come assente.**
+    ///
+    /// L'elenco dei tipi si confronta con le `pub struct` di questo file:
+    /// una config nuova fa fallire la prova finche' non entra qui.
+    #[test]
+    fn nessun_campo_geo_legge_null_come_assente() {
+        let (difetti, provati) = config_geo!(
+            EmptyConfig,
+            OutputColumnConfig,
+            BufferConfig,
+            SimplifyConfig,
+            AffineTransformConfig,
+            TranslateConfig,
+            ScaleConfig,
+            RotateConfig,
+            ConcaveHullConfig,
+            DensifyConfig,
+            SnapToGridConfig,
+            LineSubstringConfig,
+            LineInterpolatePointConfig,
+            CleanTopologyConfig,
+            VoronoiConfig,
+            PolygonizeConfig,
+            FromCoordsConfig,
+            OtherWkbConfig,
+            SplitConfig,
+            SJoinConfig,
+            NearestConfig,
+            OverlayConfig,
+            FromWktConfig,
+            GeometryAccessorsConfig,
+            CollectConfig,
+            LineLocatePointConfig,
+            GridExtentConfig,
+            GenerateGridConfig,
+            SubdivideConfig,
+            SnapConfig,
+            CoverageValidateConfig,
+            SharedPathsConfig,
+            ClusterDbscanConfig,
+            ReprojectConfig,
+            GrigliaConfig,
+        );
+        assert!(difetti.is_empty(), "null letto come assente: {difetti:?}");
+        let dichiarati: Vec<&str> = include_str!("config.rs")
+            .lines()
+            .filter_map(|riga| riga.strip_prefix("pub struct "))
+            .filter_map(|resto| resto.split([' ', '{']).next())
+            .chain(["ReprojectConfig", "GrigliaConfig"])
+            .collect();
+        let mut attesi = dichiarati.clone();
+        attesi.sort_unstable();
+        let mut visti = provati;
+        visti.sort_unstable();
+        assert_eq!(visti, attesi, "config geo non provate");
+    }
+
+    /// **Omesso vale il default, `null` si rifiuta con il messaggio fisso.**
+    #[test]
+    fn omesso_e_null_si_distinguono() {
+        let omessa: ScaleConfig =
+            serde_json::from_value(json!({"x_factor": 2.0, "y_factor": 2.0})).expect("omesso");
+        assert_eq!(omessa.x_origin, None);
+        let errore = serde_json::from_value::<ScaleConfig>(
+            json!({"x_factor": 2.0, "y_factor": 2.0, "x_origin": null}),
+        )
+        .expect_err("null non e' l'assenza")
+        .to_string();
+        assert!(
+            errore.contains(plenora_core::json::MESSAGGIO_NULL_NON_AMMESSO),
+            "{errore}"
+        );
+        // `on_error` di `from_wkt`: la stringa `"null"` e' un valore, il
+        // `null` JSON no.
+        let stringa: FromWktConfig =
+            serde_json::from_value(json!({"wkt_column": "w", "on_error": "null"}))
+                .expect("la stringa \"null\" e' un valore");
+        assert_eq!(stringa.on_error, Some(crate::extensions::OnWktError::Null));
+        assert!(serde_json::from_value::<FromWktConfig>(
+            json!({"wkt_column": "w", "on_error": null})
+        )
+        .is_err());
+    }
 }

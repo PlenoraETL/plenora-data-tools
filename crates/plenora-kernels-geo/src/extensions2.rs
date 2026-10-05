@@ -149,13 +149,15 @@ fn check_cell_size(cell_size: f64) -> Result<(), ExtensionError> {
 
 fn checked_axis_cells(span: f64, cell_size: f64) -> Result<u64, ExtensionError> {
     let cells = (span / cell_size).ceil();
-    // Soglia 2^64: esatta in f64 e uguale a `u64::MAX as f64`, che
-    // arrotonda per eccesso.
-    if !cells.is_finite() || cells > 18_446_744_073_709_551_616.0 {
+    // Soglia 2^64, esatta in f64: `u64::MAX as f64` arrotonda per eccesso
+    // proprio a 2^64, che non e' un `u64`. Si rifiuta anche l'uguaglianza:
+    // con `>` il valore 2^64 passerebbe e il cast saturante lo renderebbe
+    // `u64::MAX`, un numero di celle sbagliato.
+    if !cells.is_finite() || cells >= 18_446_744_073_709_551_616.0 {
         return Err(ExtensionError::IndexOverflow);
     }
-    // Guardia sopra: cells finito e <= 2^64; uno span negativo satura a 0
-    // (extent degenere -> griglia vuota).
+    // Guardia sopra: cells finito e < 2^64, quindi il cast e' esatto; uno
+    // span negativo satura a 0 (extent degenere -> griglia vuota).
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let cells_u64 = cells as u64;
     Ok(cells_u64)
@@ -786,6 +788,27 @@ mod tests {
     use crate::test_support::{assert_close, rect};
     use geo::{line_string, GeometryCollection, MultiLineString, Point};
     use geozero::{CoordDimensions, ToWkb};
+
+    /// **Al bordo di 2^64 le celle per asse si rifiutano, sotto sono
+    /// esatte.**
+    ///
+    /// 2^64 celle non stanno in un `u64`: il cast saturante le renderebbe
+    /// `u64::MAX`. Il double appena sotto (2^64 - 2048) e' un `u64` esatto.
+    #[test]
+    #[allow(clippy::float_cmp)] // Valori interi esatti in f64.
+    fn le_celle_per_asse_rifiutano_2_alla_64() {
+        let due_alla_64 = 18_446_744_073_709_551_616.0_f64;
+        assert!(matches!(
+            checked_axis_cells(due_alla_64, 1.0),
+            Err(ExtensionError::IndexOverflow)
+        ));
+        let sotto = 18_446_744_073_709_549_568.0_f64;
+        assert_eq!(sotto, due_alla_64 - 2048.0);
+        assert_eq!(
+            checked_axis_cells(sotto, 1.0).unwrap(),
+            18_446_744_073_709_549_568
+        );
+    }
 
     /// Gli adapter v2 non accusano il piano di cio' che non ha concluso.
     #[test]

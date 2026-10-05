@@ -184,11 +184,8 @@ pub(crate) const MESSAGGIO_FUSO_NON_VALIDO: &str =
     "timezone non valida: atteso un nome IANA (per esempio Europe/Rome o UTC)";
 
 /// Deserializzazione di un parametro facoltativo che rifiuta il `null`
-/// esplicito.
-///
-/// Con `#[serde(default)]` un `null` scritto varrebbe «assente», e un
-/// parametro scritto (anche `null`) sfuggirebbe alle regole sui parametri
-/// senza effetto. Un parametro si omette, non si scrive `null`.
+/// esplicito: [`plenora_core::json::mai_null`], la stessa regola delle
+/// config geo.
 ///
 /// # Errors
 ///
@@ -198,15 +195,24 @@ where
     D: serde::Deserializer<'de>,
     T: serde::Deserialize<'de>,
 {
-    use serde::de::Error as _;
-    Option::<T>::deserialize(deserializer)?.map_or_else(
-        || {
-            Err(D::Error::custom(
-                plenora_core::json::MESSAGGIO_NULL_NON_AMMESSO,
-            ))
-        },
-        |valore| Ok(Some(valore)),
-    )
+    plenora_core::json::mai_null(deserializer)
+}
+
+/// Un valore JSON facoltativo che rifiuta il `null` scritto, per i campi di
+/// tipo `serde_json::Value` dove l'assenza e' `Value::Null`
+/// (`#[serde(default)]`): [`mai_null`], con il `null` del tipo riservato
+/// all'assenza.
+///
+/// # Errors
+///
+/// Quelli di [`mai_null`].
+pub(crate) fn valore_mai_null<'de, D>(
+    deserializer: D,
+) -> std::result::Result<serde_json::Value, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    mai_null::<D, serde_json::Value>(deserializer).map(Option::unwrap_or_default)
 }
 
 /// Che cosa rende una divisione per zero in `table.formula` e

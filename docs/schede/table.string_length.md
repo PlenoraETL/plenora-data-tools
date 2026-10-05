@@ -9,7 +9,7 @@ Il null dà null.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna `utf8` dell'ingresso | testo da misurare |
-| `output_column` | stringa o `null` | `null` | nome non vuoto, al più 1024 byte | colonna d'uscita; `null` vale `<column>_length` |
+| `output_column` | stringa | assente | nome non vuoto, al più 1024 byte; `null` non ammesso | colonna d'uscita; assente, `<column>_length` |
 
 ### Schema
 
@@ -35,7 +35,7 @@ In validazione, `InvalidPlan`:
 
 - `column` assente o non `utf8`;
 - il nome d'uscita (scritto o derivato) vuoto, di soli spazi o oltre 1024
-  byte;
+  byte; `output_column` scritto `null` (il parametro si omette);
 - config con campi sconosciuti.
 
 In esecuzione, `ResourceLimit`: una lunghezza che non sta in `int64`

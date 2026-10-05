@@ -9,7 +9,7 @@ righe. Il tipo delle colonne non cambia.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `column` | stringa o `null` | `null` | colonna dell'ingresso di tipo `utf8`, `int64`, `float64` o `bool` | colonna da riempire; `null` le riempie tutte |
+| `column` | stringa | assente | colonna dell'ingresso di tipo `utf8`, `int64`, `float64` o `bool`; `null` non ammesso | colonna da riempire; assente, le riempie tutte |
 | `method` | stringa | `"value"` | `value`, `ffill`, `bfill` | come si riempie |
 | `value` | JSON | assente | convertibile nel tipo di ogni colonna da riempire (sotto); testo al più `max_string_bytes` byte | valore di riempimento, solo con `method = "value"` |
 
@@ -53,7 +53,8 @@ cercano il valore.
 
 In validazione, `InvalidPlan`:
 
-- `column` assente dall'ingresso;
+- `column` assente dall'ingresso, o scritto `null` (per riempire tutte le
+  colonne si omette);
 - una colonna da riempire di tipo diverso da `utf8`, `int64`, `float64`,
   `bool` (senza `column`: una qualunque colonna dell'ingresso);
 - `value` non convertibile nel tipo di una colonna da riempire;

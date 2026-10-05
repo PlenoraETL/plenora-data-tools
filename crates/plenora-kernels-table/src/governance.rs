@@ -945,13 +945,15 @@ pub struct ValidateRule {
     /// Operatore (obbligatorio).
     pub operator: RuleOperator,
     /// Colonna su cui si valuta la regola. Facoltativa per serde, ma una
-    /// regola senza `column` si rifiuta con `InvalidPlan`.
-    #[serde(default)]
+    /// regola senza `column` si rifiuta con `InvalidPlan`; `null` si
+    /// rifiuta gia' nella deserializzazione.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub column: Option<String>,
     /// Termine di confronto: obbligatorio per ogni operatore tranne
     /// `isnull`/`notnull`, dove non e' ammesso. Una stringa vale il suo
-    /// testo, un altro valore il suo testo JSON; `null` vale assente.
-    #[serde(default)]
+    /// testo, un altro valore il suo testo JSON; `null` si rifiuta (un
+    /// parametro facoltativo si omette).
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub value: Option<serde_json::Value>,
     /// Gravita' (default `error`).
     #[serde(default)]

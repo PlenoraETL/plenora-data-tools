@@ -52,14 +52,18 @@ const fn default_fill_method() -> FillMethod {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FillNa {
-    /// Colonna da riempire; assente o `null`: tutte le colonne, che devono
-    /// essere tutte `Utf8`, `Int64`, `Float64` o `Boolean`.
+    /// Colonna da riempire; assente: tutte le colonne, che devono essere
+    /// tutte `Utf8`, `Int64`, `Float64` o `Boolean`. `null` si rifiuta: un
+    /// parametro facoltativo si omette.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub column: Option<String>,
     /// Metodo di riempimento (default `value`).
     #[serde(default = "default_fill_method")]
     pub method: FillMethod,
     /// Valore di riempimento di `method = value`. Assente: nessun valore
-    /// (null, quindi nessun cambiamento). Scritto, anche `null`, e' `Some`:
+    /// (null, quindi nessun cambiamento). `null` scritto e' ammesso, con il
+    /// significato dichiarato nella scheda: riempie con null, e conta come
+    /// scritto. Scritto, anche `null`, e' `Some`:
     /// con `ffill`/`bfill` non avrebbe effetto e si rifiuta
     /// ([`FillNa::verifica_parametri`]). Si converte nel tipo della colonna:
     /// per `Utf8` una stringa com'e' e ogni altro valore come testo JSON; per
