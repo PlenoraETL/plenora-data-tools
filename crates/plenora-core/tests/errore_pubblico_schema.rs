@@ -2,7 +2,7 @@
 //! gli schemi JSON del contratto (`plenora-contracts`).
 //!
 //! Gli schemi sono copiati in `tests/fixtures/contratti/` da
-//! `plenora-contracts` al commit `4c1569d4b7fb7f0b451566b71e0f01165f9d6bcc`
+//! `plenora-contracts` al commit `23fed27d5736e5f32906a0116553fed16a1fb239`
 //! (`schemas/error-v1.schema.json`, `schemas/row-diagnostics-v1.schema.json`):
 //! il test ne verifica lo SHA-256, così una copia cambiata a mano non passa.
 //!

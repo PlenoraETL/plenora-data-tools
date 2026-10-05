@@ -8,7 +8,7 @@ quelle dello schema (`concurrent_modification` e il ritentativo
 `PlenoraError::public_projection` dà il documento pubblico (`PublicError`,
 serializzabile con serde), valido contro `schemas/error-v1.schema.json`
 (test `crates/plenora-core/tests/errore_pubblico_schema.rs`, con gli schemi
-copiati da `plenora-contracts@4c1569d` e verificati per SHA-256):
+copiati da `plenora-contracts@23fed27` e verificati per SHA-256):
 
 - `message` è il testo dell'errore, già senza valori di righe o colonne,
   troncato a 2048 caratteri e mai vuoto. Per un errore di I/O il testo del

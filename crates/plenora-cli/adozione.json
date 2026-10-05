@@ -3,7 +3,7 @@
   "component": "plenora-data-tools",
   "contracts_source": {
     "repository": "https://github.com/PlenoraETL/plenora-contracts.git",
-    "revision": "4c1569d4b7fb7f0b451566b71e0f01165f9d6bcc"
+    "revision": "23fed27d5736e5f32906a0116553fed16a1fb239"
   },
   "profile": "plenora-data-tools-profile-v2",
   "conforming": [
