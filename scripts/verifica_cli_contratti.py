@@ -27,7 +27,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-REVISIONE = "e7e9d3d9fd37696e1abe6679c028afacbf74847b"
+REVISIONE = "23fed27d5736e5f32906a0116553fed16a1fb239"
 
 
 class Verifica:
@@ -112,12 +112,13 @@ def verifica(contratti: Path, binario: Path) -> list[str]:
     pubbliche = {
         (op["id"], op["version"], op["input"]["contract"], op["output"]["contract"], op["side_effect"])
         for op in catalogo["operations"]
+        if "cli" in op["surfaces"]
     }
     nostre = {
         (op["id"], op["version"], op["input"]["contract"], op["output"]["contract"], op["side_effect"])
         for op in capacita["operations"]
     }
-    v.controlla(pubbliche == nostre, "capabilities: operazioni, contratti ed effetti del catalogo v2")
+    v.controlla(pubbliche == nostre, "capabilities: operazioni CLI, contratti ed effetti del catalogo v2")
 
     codice, documento = v.invoca("catalog", "--format", "json")
     v.controlla(documento["contract"] == "plenora-data-catalog-result-v2", "catalog: contratto del risultato")

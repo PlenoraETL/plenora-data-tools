@@ -122,7 +122,22 @@ fn capabilities_descrive_il_binario_che_risponde() {
     // Il catalogo pubblico v2: stesse operazioni, versioni, contratti, tipi
     // di contenuto, controlli ed effetti, senza eccezioni.
     let catalogo = contratto("data-tools-v2.json");
-    let pubbliche = catalogo["operations"].as_array().expect("operations");
+    // Le operazioni che il catalogo mette sulla CLI (`data.run` 3 sta solo
+    // su Rust e runtime).
+    let pubbliche: Vec<&Value> = catalogo["operations"]
+        .as_array()
+        .expect("operations")
+        .iter()
+        .filter(|operazione| {
+            operazione["surfaces"]
+                .as_array()
+                .is_some_and(|superfici| superfici.contains(&Value::from("cli")))
+        })
+        .collect();
+    assert_eq!(
+        pubbliche.len() + 1,
+        catalogo["operations"].as_array().map_or(0, Vec::len)
+    );
     assert_eq!(pubbliche.len(), operazioni.len());
     for pubblica in pubbliche {
         let nostra = operazioni

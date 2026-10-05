@@ -360,6 +360,7 @@ fn comandi_compilati() -> Vec<Value> {
     comandi.extend(
         OPERAZIONI
             .iter()
+            .filter(|op| !op.solo_rust)
             .map(|op| json!({"command": op.comando, "operation": op.id})),
     );
     comandi
@@ -376,7 +377,7 @@ pub fn testo_aiuto() -> String {
          plenora-data --version [--format json]\n  \
          plenora-data capabilities [--format json]\n"
     );
-    for operazione in OPERAZIONI {
+    for operazione in OPERAZIONI.iter().filter(|operazione| !operazione.solo_rust) {
         // Scrivere su una `String` non fallisce.
         let _ = write!(
             testo,

@@ -141,7 +141,14 @@ pub fn provenienza_completa() {
 // ---------------------------------------------------------------------------
 
 const ANNOTAZIONI: &[&str] = &[
-    "$schema", "$id", "title", "$defs", "then", "else", "$comment",
+    "$schema",
+    "$id",
+    "title",
+    "$defs",
+    "then",
+    "else",
+    "$comment",
+    "description",
 ];
 const STRUTTURALE: &str = "schema: ";
 
@@ -159,6 +166,18 @@ impl Registro {
             "operation-registry-v1.schema.json",
             "surface-bindings-v1.schema.json",
         ] {
+            let schema = contratto(nome);
+            let id = schema["$id"].as_str().expect("$id").to_owned();
+            per_id.insert(id, schema);
+        }
+        Self(per_id)
+    }
+
+    /// Gli schemi dei contratti `nomi` (file della cartella copiata).
+    #[allow(dead_code)]
+    pub fn con(nomi: &[&str]) -> Self {
+        let mut per_id = BTreeMap::new();
+        for nome in nomi {
             let schema = contratto(nome);
             let id = schema["$id"].as_str().expect("$id").to_owned();
             per_id.insert(id, schema);
@@ -211,9 +230,18 @@ fn valida(
                     }
                     valida(registro, radice, definizione, istanza, dove)?;
                 } else {
+                    // Per `$id` intero, o relativo alla stessa base
+                    // (`data-plan-v1.schema.json`).
                     let altro = registro
                         .0
                         .get(riferimento)
+                        .or_else(|| {
+                            registro
+                                .0
+                                .iter()
+                                .find(|(id, _)| id.ends_with(&format!("/{riferimento}")))
+                                .map(|(_, schema)| schema)
+                        })
                         .ok_or_else(|| strutturale("$ref verso uno schema assente"))?;
                     valida(registro, altro, altro, istanza, dove)?;
                 }
@@ -320,6 +348,24 @@ fn valida(
                     if (parola == "minItems" && numero < limite)
                         || (parola == "maxItems" && numero > limite)
                     {
+                        return errore(parola);
+                    }
+                }
+            }
+            "minProperties" => {
+                let minimo = valore
+                    .as_u64()
+                    .ok_or_else(|| strutturale("minProperties"))?;
+                if istanza
+                    .as_object()
+                    .is_some_and(|campi| (campi.len() as u64) < minimo)
+                {
+                    return errore(parola);
+                }
+            }
+            "exclusiveMinimum" => {
+                if let (Some(numero), Some(limite)) = (istanza.as_f64(), valore.as_f64()) {
+                    if numero <= limite {
                         return errore(parola);
                     }
                 }

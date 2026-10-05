@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.plenora.dev/data-execution-result-v3.schema.json",
+  "title": "Plenora data.run version 3 result",
+  "description": "Result of data.run version 3 (plenora-data-execution-result-v3, profile data-tools v2, DT-RUN-005): every plan output, in plan order, with the artifact published to its sink, and the per-step counts of the execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "outputs", "steps"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "schema_version": {"const": 1},
+    "outputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "reference", "rows", "columns", "artifact"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "reference": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 2048,
+            "pattern": "^[a-z][a-z0-9+.-]{1,31}:(//)?[^\\s\\\\]+$",
+            "not": {"anyOf": [{"pattern": "^[Ff][Ii][Ll][Ee]:"}, {"pattern": "(^|[/:])\\.{1,2}(/|$)"}, {"pattern": "%2[Ee]"}, {"pattern": "\\s"}]}
+          },
+          "rows": {"$ref": "#/$defs/count"},
+          "columns": {"$ref": "#/$defs/count"},
+          "artifact": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["content_type", "size", "sha256"],
+            "properties": {
+              "content_type": {
+                "enum": [
+                  "application/vnd.apache.arrow.stream",
+                  "application/vnd.apache.arrow.file",
+                  "application/vnd.apache.parquet"
+                ]
+              },
+              "size": {"$ref": "#/$defs/count"},
+              "sha256": {"type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$"}
+            }
+          }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["out", "op", "rows_in", "rows_out", "division_by_zero_rows"],
+        "properties": {
+          "out": {"type": "string", "minLength": 1},
+          "op": {"type": "string", "pattern": "^(table|geo)\\.[a-z][a-z0-9_]*$"},
+          "rows_in": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/count"}},
+          "rows_out": {"$ref": "#/$defs/count"},
+          "division_by_zero_rows": {"$ref": "#/$defs/count"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "count": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+  }
+}

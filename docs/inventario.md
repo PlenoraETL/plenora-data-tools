@@ -69,6 +69,7 @@ ricava aiuto, `capabilities` e mappa degli export Rust
 | `data.describe` | 1 | `describe` | `Nessuno` | true | true | true |
 | `data.validate` | 2 | `validate` | `Nessuno` | true | true | true |
 | `data.run` | 2 | `run` | `Locale` | true | true | true |
+| `data.run` | 3 | `` | `Remoto` | true | true | true |
 
 ## Test
 
@@ -79,14 +80,14 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 
 | crate | unitari | integrazione | totale |
 | --- | --- | --- | --- |
-| `plenora-cli` | 3 | 31 | 34 |
+| `plenora-cli` | 3 | 49 | 52 |
 | `plenora-core` | 174 | 65 | 239 |
 | `plenora-data-py` | 0 | 0 | 0 |
 | `plenora-io` | 19 | 85 | 104 |
 | `plenora-kernels-geo` | 515 | 108 | 623 |
 | `plenora-kernels-table` | 456 | 118 | 574 |
-| `plenora-pipeline` | 10 | 142 | 152 |
-| **totale** | 1177 | 549 | 1726 |
+| `plenora-pipeline` | 10 | 143 | 153 |
+| **totale** | 1177 | 568 | 1745 |
 
 ### Prove Python dell'SDK
 

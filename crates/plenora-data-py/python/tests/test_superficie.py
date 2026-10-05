@@ -104,9 +104,14 @@ def test_le_capacita_sono_un_documento_capabilities_v2(
 
 def test_le_operazioni_sono_quelle_del_catalogo_pubblico(contratti: pathlib.Path) -> None:
     catalogo = leggi(contratti, "data-tools-v2.json")
+    # Le operazioni che il catalogo mette sulla superficie Python, per
+    # identita' (`data.run` 3 sta solo su Rust e runtime).
+    pubbliche = [op for op in catalogo["operations"] if "python_sdk" in op["surfaces"]]
+    assert len(pubbliche) == len(catalogo["operations"]) - 1
     nostre = {op["id"]: op for op in pd.capabilities()["operations"]}
-    assert set(nostre) == {op["id"] for op in catalogo["operations"]}
-    for pubblica in catalogo["operations"]:
+    assert len(nostre) == len(pd.capabilities()["operations"])
+    assert set(nostre) == {op["id"] for op in pubbliche}
+    for pubblica in pubbliche:
         nostra = nostre[pubblica["id"]]
         assert nostra["version"] == pubblica["version"]
         assert nostra["status"] == "available"

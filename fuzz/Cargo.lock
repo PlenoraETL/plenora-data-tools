@@ -895,7 +895,10 @@ dependencies = [
  "plenora-core",
  "plenora-io",
  "plenora-pipeline",
+ "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
