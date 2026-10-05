@@ -31,15 +31,19 @@ pub struct AddRowNumber {
     #[serde(default = "default_start")]
     pub start: i64,
     /// Colonna le cui celle con lo stesso testo formano una partizione
-    /// (i null sono una partizione); assente: una numerazione sola.
+    /// (i null sono una partizione); assente: una numerazione sola. `null`
+    /// si rifiuta: un parametro facoltativo si omette.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub partition_column: Option<String>,
-    /// Non supportato: se scritto (non nullo) si rifiuta. Per numerare
-    /// secondo un ordine serve un `table.sort` prima.
+    /// Non supportato: scritto si rifiuta (`null` compreso, dalla
+    /// deserializzazione). Per numerare secondo un ordine serve un
+    /// `table.sort` prima.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub order_column: Option<String>,
     /// Verso di `order_column`. `order_column` si rifiuta, quindi un verso
     /// dichiarato non avrebbe effetto: si rifiuta ([`verifica_ascending`])
     /// invece di essere ignorato.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub ascending: Option<bool>,
 }
 
@@ -172,6 +176,7 @@ pub struct DateExtract {
     /// come sola data. Se omesso si usano i soli formati ISO 8601 di
     /// default (`parse_datetime`). Legge un testo: con una colonna temporale
     /// si rifiuta.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub date_format: Option<String>,
     /// Non ammesso: un valore non interpretabile fa sempre fallire il passo,
     /// quindi nessuna politica avrebbe effetto. Scritto si rifiuta

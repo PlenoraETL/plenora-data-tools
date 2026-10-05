@@ -13,7 +13,7 @@ lo schema, mai i valori: nel runner l'esito si decide in validazione.
 | `fields` | lista di oggetti | obbligatorio | almeno una voce, nomi non ripetuti, al più 4096 | colonne attese, ciascuna con `name`, `data_type`, `nullable` |
 | `fields[].name` | stringa | obbligatorio | nome non vuoto, al più 1024 byte | nome della colonna attesa |
 | `fields[].data_type` | stringa | obbligatorio | vedi sotto (maiuscole e spazi ai lati ignorati) | famiglia di tipo attesa |
-| `fields[].nullable` | booleano | assente | `true`, `false` | nullabilità attesa; assente, non si controlla |
+| `fields[].nullable` | booleano | assente | `true`, `false`; `null` non ammesso | nullabilità attesa; assente, non si controlla |
 | `allow_extra` | booleano | `false` | `true`, `false` | con `false` l'ingresso ha esattamente tante colonne quante voci in `fields` |
 | `ordered` | booleano | `true` | `true`, `false` | con `true` la voce *i* descrive la colonna in posizione *i*; con `false` la colonna si cerca per nome |
 
@@ -57,7 +57,8 @@ In validazione, `InvalidPlan`:
   `ordered=false`), o in posizione con un nome diverso;
 - tipo della colonna fuori dalla famiglia attesa, o `data_type` non in
   elenco;
-- `nullable` scritto e diverso da quello della colonna;
+- `nullable` scritto e diverso da quello della colonna, o scritto `null`
+  (per non controllarla si omette);
 - config con campi sconosciuti.
 
 In esecuzione: nel runner nessuno, perché lo schema dei dati è quello del

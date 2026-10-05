@@ -13,7 +13,7 @@ sono code point Unicode, non byte e non grafemi.
 | `width` | intero | `5` | da 1 a `max_string_bytes` | lunghezza minima in caratteri |
 | `side` | stringa | `"left"` | `left`, `right` | lato su cui si aggiunge il riempimento |
 | `fill_char` | stringa | `"0"` | esattamente un code point | carattere di riempimento |
-| `output_column` | stringa o `null` | `null` | nome non vuoto, al più 1024 byte | colonna d'uscita; `null` sostituisce `column` |
+| `output_column` | stringa | assente | nome non vuoto, al più 1024 byte; `null` non ammesso | colonna d'uscita; assente, sostituisce `column` |
 
 ### Schema
 
@@ -42,7 +42,8 @@ In validazione, `InvalidPlan`:
 - `width` oltre `max_string_bytes` (o negativo, che la config non legge);
 - `width = 0`: nessun testo si allungherebbe, e `side` e `fill_char` non
   avrebbero effetto;
-- `output_column` vuoto, di soli spazi o oltre 1024 byte;
+- `output_column` vuoto, di soli spazi, oltre 1024 byte o `null` (il
+  parametro si omette);
 - `side` fuori elenco, config con campi sconosciuti.
 
 In esecuzione, `ResourceLimit`: un valore allungato oltre

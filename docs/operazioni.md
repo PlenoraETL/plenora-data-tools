@@ -76,9 +76,9 @@ prima un `table.sort`.
 | --- | --- | --- | --- | --- |
 | `output_column` | stringa | `"row_number"` | nome non vuoto, al più 1024 byte | colonna d'uscita |
 | `start` | intero | `1` | intero a 64 bit | numero della prima riga (di ogni partizione) |
-| `partition_column` | stringa o `null` | `null` | colonna dell'ingresso leggibile come testo | colonna le cui righe uguali formano una partizione |
-| `order_column` | stringa o `null` | `null` | solo `null` | non supportato: scritto, si rifiuta |
-| `ascending` | booleano o `null` | `null` | solo `null` | vale solo con `order_column`: scritto, si rifiuta |
+| `partition_column` | stringa | assente | colonna dell'ingresso leggibile come testo; `null` non ammesso | colonna le cui righe uguali formano una partizione; assente, una numerazione sola |
+| `order_column` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | non supportato |
+| `ascending` | booleano | assente | nessuno: scritto si rifiuta, anche `null` | vale solo con `order_column` |
 
 Le partizioni si distinguono per il testo della cella (lo stesso di
 [`table.type_cast`](#tabletype_cast) verso `str`); tutte le celle null
@@ -109,8 +109,8 @@ righe, dentro ogni partizione.
 In validazione, `InvalidPlan`:
 
 - `output_column` vuoto, di soli spazi o oltre 1024 byte;
-- `order_column` scritto (non nullo);
-- `ascending` scritto;
+- `order_column` o `ascending` scritti, anche `null`;
+- `partition_column` scritto `null` (il parametro si omette);
 - `partition_column` assente o di un tipo che non si legge come testo;
 - config con campi sconosciuti.
 
@@ -413,7 +413,7 @@ scartano, o con `keep_extra` si tengono in coda.
 | `columns` | lista di oggetti | obbligatorio | da 1 a 4096 colonne, nomi senza ripetizioni | schema d'uscita, nell'ordine d'uscita |
 | `columns[].name` | stringa | obbligatorio | nome non vuoto, al più 1024 byte | nome della colonna |
 | `columns[].type` | stringa | obbligatorio | `Utf8`, `Int64`, `UInt64`, `Float64`, `Boolean`, `Date32`, `Timestamp`, `Decimal128`, `Binary` | tipo della colonna (tabella sotto) |
-| `columns[].default` | JSON | assente | valore convertibile nel tipo (sotto); `null` vale assente | valore di ogni cella di una colonna aggiunta |
+| `columns[].default` | JSON | assente | valore convertibile nel tipo (sotto), o `null` | valore di ogni cella di una colonna aggiunta; `null` (il valore nullo) e assente danno la colonna tutta null |
 | `keep_extra` | booleano | `false` | `true`, `false`; `null` non ammesso | tiene in coda, nell'ordine d'ingresso, le colonne non dichiarate |
 
 I tipi: `Utf8` → `utf8`, `Int64` → `int64`, `UInt64` → `uint64`,
@@ -679,7 +679,7 @@ coincidenti, per esempio a ogni ordine l'ultimo prezzo noto.
 | `left_by` | lista di stringhe | `[]` | colonne della sinistra, senza ripetizioni | gruppo: si abbinano solo righe con gli stessi valori |
 | `right_by` | lista di stringhe | `[]` | colonne della destra, tante quante `left_by`, senza ripetizioni | colonne di gruppo del lato destro, nello stesso ordine |
 | `direction` | stringa | `backward` | `backward`, `forward`, `nearest` | `backward`: il più grande `<=` del valore; `forward`: il più piccolo `>=`; `nearest`: il più vicino dei due |
-| `tolerance` | numero o `null` | `null` | finito, `>= 0`; se intero, esatto in `f64`; non `0` con `allow_exact: false` | distanza massima fra i due valori; `null` nessun limite |
+| `tolerance` | numero | assente | finito, `>= 0`; se intero, esatto in `f64`; non `0` con `allow_exact: false`; `null` non ammesso | distanza massima fra i due valori; assente, nessun limite |
 | `allow_exact` | booleano | `true` | `true`, `false` | `false`: un candidato con valore uguale non si abbina (`<` e `>` stretti) |
 
 Le colonne `by` di ogni coppia hanno lo stesso tipo Arrow, fra quelli
@@ -729,9 +729,10 @@ In validazione, `InvalidPlan`:
   `right_on` assenti;
 - `left_by` e `right_by` di lunghezza diversa, con nomi ripetuti o oltre
   `max_columns`;
-- `tolerance` negativa, o intera e non esatta in `f64` (oltre `2^53` con
-  bit bassi non nulli: diventerebbe un'altra soglia); `tolerance` zero con
-  `allow_exact: false` (nessun candidato si abbinerebbe mai);
+- `tolerance` scritta `null` (per nessun limite si omette), negativa, o
+  intera e non esatta in `f64` (oltre `2^53` con bit bassi non nulli:
+  diventerebbe un'altra soglia); `tolerance` zero con `allow_exact: false`
+  (nessun candidato si abbinerebbe mai);
 - colonna assente; `left_on` e `right_on` non dello stesso tipo, o di tipo
   diverso da `int64` e `float64`; colonne `by` di tipi diversi nella
   coppia, o di tipo non ammesso;
@@ -1542,7 +1543,7 @@ lo schema, mai i valori: nel runner l'esito si decide in validazione.
 | `fields` | lista di oggetti | obbligatorio | almeno una voce, nomi non ripetuti, al più 4096 | colonne attese, ciascuna con `name`, `data_type`, `nullable` |
 | `fields[].name` | stringa | obbligatorio | nome non vuoto, al più 1024 byte | nome della colonna attesa |
 | `fields[].data_type` | stringa | obbligatorio | vedi sotto (maiuscole e spazi ai lati ignorati) | famiglia di tipo attesa |
-| `fields[].nullable` | booleano | assente | `true`, `false` | nullabilità attesa; assente, non si controlla |
+| `fields[].nullable` | booleano | assente | `true`, `false`; `null` non ammesso | nullabilità attesa; assente, non si controlla |
 | `allow_extra` | booleano | `false` | `true`, `false` | con `false` l'ingresso ha esattamente tante colonne quante voci in `fields` |
 | `ordered` | booleano | `true` | `true`, `false` | con `true` la voce *i* descrive la colonna in posizione *i*; con `false` la colonna si cerca per nome |
 
@@ -1586,7 +1587,8 @@ In validazione, `InvalidPlan`:
   `ordered=false`), o in posizione con un nome diverso;
 - tipo della colonna fuori dalla famiglia attesa, o `data_type` non in
   elenco;
-- `nullable` scritto e diverso da quello della colonna;
+- `nullable` scritto e diverso da quello della colonna, o scritto `null`
+  (per non controllarla si omette);
 - config con campi sconosciuti.
 
 In esecuzione: nel runner nessuno, perché lo schema dei dati è quello del
@@ -2953,7 +2955,7 @@ righe.
 | `column` | stringa | obbligatorio | colonna temporale o leggibile come testo | date da leggere |
 | `parts` | lista di stringhe | `["year"]` | non vuota, senza ripetizioni, fra `year`, `month`, `day`, `quarter`, `weekday`, `week`, `hour`, `minute`, `second` | parti da estrarre, nell'ordine delle colonne d'uscita |
 | `prefix` | stringa | `""` | qualunque; `""` vale `<column>_` | prefisso dei nomi d'uscita (`<prefix><parte>`) |
-| `date_format` | stringa o `null` | `null` | formato strftime di chrono, non vuoto, al più `max_string_bytes` byte; solo con una colonna di testo | formato delle date; `null` usa i formati ISO di default |
+| `date_format` | stringa | assente | formato strftime di chrono, non vuoto, al più `max_string_bytes` byte; solo con una colonna di testo; `null` non ammesso | formato delle date; assente, i formati ISO di default |
 | `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non interpretabile fa sempre fallire il passo, nessun valore avrebbe effetto |
 
 Una colonna temporale (`date32`, `timestamp` di ogni unità, con o senza
@@ -3004,7 +3006,7 @@ In validazione, `InvalidPlan`:
 
 - `column` assente o di un tipo che non si legge come testo;
 - `date_format` vuoto, oltre `max_string_bytes`, con un elemento strftime
-  non riconosciuto, o scritto con una colonna temporale;
+  non riconosciuto, scritto con una colonna temporale, o scritto `null`;
 - un nome d'uscita `<prefix><parte>` vuoto, di soli spazi o oltre 1024
   byte;
 - `parts` vuota o con una parte ripetuta;
@@ -4027,7 +4029,7 @@ righe. Il tipo delle colonne non cambia.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `column` | stringa o `null` | `null` | colonna dell'ingresso di tipo `utf8`, `int64`, `float64` o `bool` | colonna da riempire; `null` le riempie tutte |
+| `column` | stringa | assente | colonna dell'ingresso di tipo `utf8`, `int64`, `float64` o `bool`; `null` non ammesso | colonna da riempire; assente, le riempie tutte |
 | `method` | stringa | `"value"` | `value`, `ffill`, `bfill` | come si riempie |
 | `value` | JSON | assente | convertibile nel tipo di ogni colonna da riempire (sotto); testo al più `max_string_bytes` byte | valore di riempimento, solo con `method = "value"` |
 
@@ -4071,7 +4073,8 @@ cercano il valore.
 
 In validazione, `InvalidPlan`:
 
-- `column` assente dall'ingresso;
+- `column` assente dall'ingresso, o scritto `null` (per riempire tutte le
+  colonne si omette);
 - una colonna da riempire di tipo diverso da `utf8`, `int64`, `float64`,
   `bool` (senza `column`: una qualunque colonna dell'ingresso);
 - `value` non convertibile nel tipo di una colonna da riempire;
@@ -5288,7 +5291,7 @@ una nuova.
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna leggibile come testo | colonna da tradurre |
 | `mapping` | oggetto | obbligatorio | chiavi stringa, valori JSON qualsiasi il cui testo è al più `max_string_bytes` byte; al più `max_rows` voci | corrispondenze testo della cella → valore |
-| `default` | JSON | `null` | qualsiasi, con testo al più `max_string_bytes` byte | valore delle celle non nulle senza voce; `null` le lascia invariate |
+| `default` | JSON | assente | qualsiasi tranne `null`, con testo al più `max_string_bytes` byte | valore delle celle non nulle senza voce; assente, le lascia invariate |
 | `output_column` | stringa | `column` | nome valido (non vuoto, al più 1024 byte) | colonna d'uscita; assente, sovrascrive `column` |
 
 Leggibile come testo: `utf8`, `int64`, `uint64`, `float64`, `bool`,
@@ -5328,7 +5331,9 @@ In validazione, `InvalidPlan`:
 - il testo di un valore di `mapping` o di `default` oltre
   `max_string_bytes` byte;
 - `output_column` vuoto o oltre 1024 byte, o `null` esplicito (il
-  parametro si omette; `default: null` resta ammesso);
+  parametro si omette);
+- `default: null`: letto come assente lascerebbe invariate le celle a chi
+  chiedeva un valore nullo, e si rifiuta;
 - config con campi sconosciuti.
 
 In esecuzione, `Schema`: una cella che non si converte in testo (`binary`
@@ -7637,7 +7642,7 @@ con `","` i valori di tutti i match.
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna `utf8` dell'ingresso | testo in cui cercare |
 | `pattern` | stringa | obbligatorio | regex non vuota della sintassi del crate `regex`, al più `max_regex_bytes` byte | espressione da cercare |
-| `output_column` | stringa o `null` | `null` | nome non vuoto, al più 1024 byte | colonna d'uscita senza gruppi con nome; `null` vale `<column>_extracted` |
+| `output_column` | stringa | assente | nome non vuoto, al più 1024 byte; `null` non ammesso | colonna d'uscita senza gruppi con nome; assente, `<column>_extracted` |
 | `extract_all` | booleano | `false` | `true`, `false` | estrae tutti i match invece del primo |
 
 Con gruppi con nome `output_column` ed `extract_all` si rifiutano: le
@@ -7677,6 +7682,7 @@ In validazione, `InvalidPlan`:
   di gruppo ripetuti e i pattern troppo grandi una volta compilati);
 - gruppi con nome insieme a `output_column` o a `extract_all`;
 - un nome d'uscita (scritto, derivato o di gruppo) oltre 1024 byte;
+  `output_column` scritto `null` (il parametro si omette);
 - config con campi sconosciuti.
 
 In esecuzione, `ResourceLimit`: con `extract_all`, il testo unito di una
@@ -7754,7 +7760,7 @@ Il null dà null.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna `utf8` dell'ingresso | testo da misurare |
-| `output_column` | stringa o `null` | `null` | nome non vuoto, al più 1024 byte | colonna d'uscita; `null` vale `<column>_length` |
+| `output_column` | stringa | assente | nome non vuoto, al più 1024 byte; `null` non ammesso | colonna d'uscita; assente, `<column>_length` |
 
 #### Schema
 
@@ -7780,7 +7786,7 @@ In validazione, `InvalidPlan`:
 
 - `column` assente o non `utf8`;
 - il nome d'uscita (scritto o derivato) vuoto, di soli spazi o oltre 1024
-  byte;
+  byte; `output_column` scritto `null` (il parametro si omette);
 - config con campi sconosciuti.
 
 In esecuzione, `ResourceLimit`: una lunghezza che non sta in `int64`
@@ -7859,7 +7865,7 @@ sono code point Unicode, non byte e non grafemi.
 | `width` | intero | `5` | da 1 a `max_string_bytes` | lunghezza minima in caratteri |
 | `side` | stringa | `"left"` | `left`, `right` | lato su cui si aggiunge il riempimento |
 | `fill_char` | stringa | `"0"` | esattamente un code point | carattere di riempimento |
-| `output_column` | stringa o `null` | `null` | nome non vuoto, al più 1024 byte | colonna d'uscita; `null` sostituisce `column` |
+| `output_column` | stringa | assente | nome non vuoto, al più 1024 byte; `null` non ammesso | colonna d'uscita; assente, sostituisce `column` |
 
 #### Schema
 
@@ -7888,7 +7894,8 @@ In validazione, `InvalidPlan`:
 - `width` oltre `max_string_bytes` (o negativo, che la config non legge);
 - `width = 0`: nessun testo si allungherebbe, e `side` e `fill_char` non
   avrebbero effetto;
-- `output_column` vuoto, di soli spazi o oltre 1024 byte;
+- `output_column` vuoto, di soli spazi, oltre 1024 byte o `null` (il
+  parametro si omette);
 - `side` fuori elenco, config con campi sconosciuti.
 
 In esecuzione, `ResourceLimit`: un valore allungato oltre
@@ -9188,7 +9195,7 @@ quale elenco o conteggio finisce la violazione.
 | `rules[].name` | stringa | obbligatorio | non vuoto, al più 1024 byte, unico fra le regole | nome della regola nell'uscita |
 | `rules[].operator` | stringa | obbligatorio | `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `isnull`, `notnull`, `regex`, `range` | condizione che la cella deve soddisfare |
 | `rules[].column` | stringa | obbligatorio | colonna dell'ingresso, di un tipo ammesso dall'operatore | colonna su cui si valuta la regola |
-| `rules[].value` | JSON | assente | vedi sotto; `null` vale assente | termine di confronto; una stringa vale il suo testo, un altro valore il suo testo JSON |
+| `rules[].value` | JSON | assente | vedi sotto; `null` non ammesso | termine di confronto; una stringa vale il suo testo, un altro valore il suo testo JSON |
 | `rules[].severity` | stringa | `error` | `error`, `warning` | gravità della violazione |
 | `output_mode` | stringa | `annotate` | `annotate`, `summary` | forma dell'uscita |
 
@@ -9253,7 +9260,7 @@ In validazione, `InvalidPlan`:
 - `rules` vuoto o oltre 4096 regole; nome vuoto, oltre 1024 byte o
   ripetuto; regola senza `column`, o colonna assente;
 - `value` mancante per un operatore che lo usa, o presente per `isnull` e
-  `notnull`;
+  `notnull`; `value` o `column` scritti `null` (si omettono);
 - tipo della colonna non ammesso dall'operatore; `value` non numerico dove
   serve un numero; `range` senza virgola o con un estremo non numerico;
   regex oltre `max_regex_bytes` o non compilabile;

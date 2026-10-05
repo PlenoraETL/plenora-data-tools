@@ -345,12 +345,6 @@ fn rifiuta_null(op: &str, config: &serde_json::Value) -> Result<(), String> {
 fn nessun_campo_accetta_null_salvo_quelli_dichiarati() {
     let ammessi: &[(&str, &str, &str)] = &[
         (
-            "table.add_row_number",
-            "order_column",
-            "scheda: solo `null`",
-        ),
-        ("table.add_row_number", "ascending", "scheda: solo `null`"),
-        (
             "table.filter",
             "value",
             "`null` scritto e' il testo vuoto, e conta come scritto",
@@ -361,49 +355,9 @@ fn nessun_campo_accetta_null_salvo_quelli_dichiarati() {
             "`null` e' un valore d'uscita",
         ),
         (
-            "table.lookup",
-            "default",
-            "`null` lascia le celle invariate",
-        ),
-        (
             "table.fill_na",
             "value",
             "`null` scritto conta come scritto (valore_scritto)",
-        ),
-        (
-            "table.add_row_number",
-            "partition_column",
-            "scheda: `null` nessuna partizione",
-        ),
-        (
-            "table.fill_na",
-            "column",
-            "scheda: `null` riempie tutte le colonne",
-        ),
-        (
-            "table.date_extract",
-            "date_format",
-            "scheda: `null` usa i formati di default",
-        ),
-        (
-            "table.string_extract",
-            "output_column",
-            "scheda: `null` vale `<column>_extracted`",
-        ),
-        (
-            "table.string_length",
-            "output_column",
-            "scheda: `null` vale `<column>_length`",
-        ),
-        (
-            "table.string_pad",
-            "output_column",
-            "scheda: `null` sostituisce `column`",
-        ),
-        (
-            "table.asof_join",
-            "tolerance",
-            "scheda: `null` nessun limite",
         ),
     ];
     let mut difetti = Vec::new();
@@ -446,14 +400,24 @@ fn nessun_campo_accetta_null_salvo_quelli_dichiarati() {
             "table.conditional",
             json!({"column": "a", "conditions": [{"operator": null}]}),
         ),
-        // Ammessi e dichiarati: `result` di `conditional` (`null` e' un
-        // valore d'uscita), `value` e `column` di una regola di
-        // `validate_rules` (`null` vale assente, e una regola senza `column`
-        // si rifiuta comunque), `default` di `align_schema` (`null`: colonna
-        // di null).
+        // Ammessi e dichiarati nella scheda: `result` di `conditional`
+        // (`null` e' un valore d'uscita), `default` di `align_schema`
+        // (`null`: colonna di null).
         (
             "table.validate_rules",
             json!({"rules": [{"name": "r", "operator": "gt", "severity": null}]}),
+        ),
+        (
+            "table.validate_rules",
+            json!({"rules": [{"name": "r", "operator": "gt", "column": null}]}),
+        ),
+        (
+            "table.validate_rules",
+            json!({"rules": [{"name": "r", "operator": "isnull", "value": null}]}),
+        ),
+        (
+            "table.assert_schema",
+            json!({"fields": [{"name": "a", "data_type": "utf8", "nullable": null}]}),
         ),
         (
             "table.rename",

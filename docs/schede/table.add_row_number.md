@@ -12,9 +12,9 @@ prima un `table.sort`.
 | --- | --- | --- | --- | --- |
 | `output_column` | stringa | `"row_number"` | nome non vuoto, al più 1024 byte | colonna d'uscita |
 | `start` | intero | `1` | intero a 64 bit | numero della prima riga (di ogni partizione) |
-| `partition_column` | stringa o `null` | `null` | colonna dell'ingresso leggibile come testo | colonna le cui righe uguali formano una partizione |
-| `order_column` | stringa o `null` | `null` | solo `null` | non supportato: scritto, si rifiuta |
-| `ascending` | booleano o `null` | `null` | solo `null` | vale solo con `order_column`: scritto, si rifiuta |
+| `partition_column` | stringa | assente | colonna dell'ingresso leggibile come testo; `null` non ammesso | colonna le cui righe uguali formano una partizione; assente, una numerazione sola |
+| `order_column` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | non supportato |
+| `ascending` | booleano | assente | nessuno: scritto si rifiuta, anche `null` | vale solo con `order_column` |
 
 Le partizioni si distinguono per il testo della cella (lo stesso di
 [`table.type_cast`](#tabletype_cast) verso `str`); tutte le celle null
@@ -45,8 +45,8 @@ righe, dentro ogni partizione.
 In validazione, `InvalidPlan`:
 
 - `output_column` vuoto, di soli spazi o oltre 1024 byte;
-- `order_column` scritto (non nullo);
-- `ascending` scritto;
+- `order_column` o `ascending` scritti, anche `null`;
+- `partition_column` scritto `null` (il parametro si omette);
 - `partition_column` assente o di un tipo che non si legge come testo;
 - config con campi sconosciuti.
 

@@ -206,8 +206,10 @@ pub struct AlignColumn {
     #[serde(rename = "type")]
     pub align_type: AlignType,
     /// Valore di ogni cella se la colonna manca nell'ingresso: la colonna
-    /// aggiunta e' costante e non nullable. Assente (o `null`): colonna di
-    /// null, nullable. Su una colonna che l'ingresso ha gia' non si legge:
+    /// aggiunta e' costante e non nullable. Assente: colonna di null,
+    /// nullable. `null` scritto e' ammesso, con un significato proprio
+    /// dichiarato nella scheda: il valore delle celle e' null, quindi la
+    /// stessa colonna di null. Su una colonna che l'ingresso ha gia' non si legge:
     /// dipende dall'ingresso, quindi si accetta (lo stesso piano allinea
     /// tabelle con e senza la colonna). Le conversioni ammesse sono quelle
     /// di [`check_align_default`].

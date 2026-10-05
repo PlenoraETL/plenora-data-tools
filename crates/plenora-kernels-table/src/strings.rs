@@ -36,7 +36,9 @@ pub struct StringPad {
     /// Carattere di riempimento, esattamente un code point (default `"0"`).
     #[serde(default = "default_fill")]
     pub fill_char: String,
-    /// Colonna d'uscita; assente o `null`: si sostituisce `column`.
+    /// Colonna d'uscita; assente: si sostituisce `column` (`null` si
+    /// rifiuta: un parametro facoltativo si omette).
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub output_column: Option<String>,
 }
 
@@ -156,7 +158,8 @@ pub fn string_pad(batch: &RecordBatch, config: &StringPad, limits: &Limits) -> R
 pub struct StringLength {
     /// Colonna `Utf8` da misurare (obbligatorio).
     pub column: String,
-    /// Colonna d'uscita; assente o `null`: `<column>_length`.
+    /// Colonna d'uscita; assente: `<column>_length` (`null` si rifiuta).
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub output_column: Option<String>,
 }
 
@@ -206,8 +209,10 @@ pub struct StringExtract {
     /// Espressione regolare (sintassi del crate `regex`, obbligatorio);
     /// l'analisi rifiuta il pattern vuoto.
     pub pattern: String,
-    /// Colonna d'uscita senza gruppi con nome; assente o `null`:
-    /// `<column>_extracted`. Con gruppi con nome si rifiuta.
+    /// Colonna d'uscita senza gruppi con nome; assente:
+    /// `<column>_extracted` (`null` si rifiuta). Con gruppi con nome si
+    /// rifiuta.
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub output_column: Option<String>,
     /// Unisce con `","` i valori di tutti i match (default `false`). Con
     /// gruppi con nome si rifiuta.
@@ -984,10 +989,12 @@ mod tests {
 
     #[test]
     fn serde_defaults_and_padding_guards_are_covered() {
-        let pad: StringPad = serde_json::from_value(json!({
-            "column": "text", "output_column": null
-        }))
-        .expect("defaults");
+        let pad: StringPad = serde_json::from_value(json!({"column": "text"})).expect("defaults");
+        assert!(
+            serde_json::from_value::<StringPad>(json!({"column": "text", "output_column": null}))
+                .is_err(),
+            "null non e' l'assenza"
+        );
         assert_eq!(pad.width, 5);
         assert_eq!(pad.fill_char, "0");
         assert!(matches!(pad.side, PadSide::Left));

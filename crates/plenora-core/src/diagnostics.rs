@@ -99,7 +99,11 @@ pub struct RowDiagnosticKey {
     /// Se il valore è riportato, oscurato o non disponibile.
     pub state: RowDiagnosticKeyState,
     /// Il valore, presente se e solo se `state` è `Value`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::json::presente",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub value: Option<RowDiagnosticKeyValue>,
 }
 
@@ -128,14 +132,26 @@ pub struct RowDiagnosticExample {
     /// byte), una delle chiavi di [`RowDiagnostics::counts`].
     pub cause: String,
     /// Nome della colonna (1-256 caratteri), se la causa ne ha una.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::json::presente",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub column: Option<String>,
     /// Chiave di riga (vedi [`RowDiagnosticKey`]).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::json::presente",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub key: Option<RowDiagnosticKey>,
     /// Esito di scrittura: obbligatorio con `scope` `write`, vietato con
     /// `read`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::json::presente",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub write_state: Option<RowDiagnosticWriteState>,
 }
 
@@ -227,20 +243,20 @@ struct RowDiagnosticsOwnedWire {
     scope: RowDiagnosticScope,
     index_basis: String,
     completeness: RowDiagnosticsCompleteness,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::json::presente")]
     knowledge_limits: Option<Vec<String>>,
     observed_total: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::json::presente")]
     total: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::json::presente")]
     input_total: Option<u64>,
     counts: BTreeMap<String, u64>,
     examples_limit: u64,
     examples_truncated: bool,
     examples: Vec<RowDiagnosticExample>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::json::presente")]
     diagnostic_state_counts: Option<WriteDiagnosticStateCounts>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::json::presente")]
     write_outcome: Option<RowDiagnosticWriteOutcome>,
 }
 
@@ -957,6 +973,57 @@ pub(crate) mod tests {
         let mut missing_state = confirmed_write_report();
         missing_state.examples[0].write_state = None;
         assert!(missing_state.validate_for_emission().is_err());
+    }
+
+    /// **`null` non e' l'assenza.** Lo schema `plenora-row-diagnostics-v1`
+    /// dichiara ogni campo facoltativo di un tipo che non e' `null`: scritto
+    /// `null` il documento si rifiuta, omesso si legge. Ogni caso e' scelto
+    /// dove l'assenza e' valida, quindi un `null` letto come assente
+    /// passerebbe; `total`, che con `complete` e' obbligatorio, e' nel caso
+    /// `partial`.
+    #[test]
+    fn un_campo_facoltativo_null_si_rifiuta_omesso_si_legge() {
+        let lettura = serde_json::to_value(report(1, vec![example(0)])).expect("valida");
+        let scrittura = serde_json::to_value(confirmed_write_report()).expect("valida");
+        let mut parziale = report(1, vec![example(0)]);
+        parziale.completeness = RowDiagnosticsCompleteness::Partial;
+        parziale.knowledge_limits = Some(vec!["source.truncated".to_owned()]);
+        let parziale = serde_json::to_value(parziale).expect("valida");
+        let casi: [(&serde_json::Value, &str); 10] = [
+            (&lettura, "/knowledge_limits"),
+            (&parziale, "/total"),
+            (&lettura, "/input_total"),
+            (&lettura, "/diagnostic_state_counts"),
+            (&lettura, "/write_outcome"),
+            (&lettura, "/examples/0/column"),
+            (&lettura, "/examples/0/key"),
+            (&lettura, "/examples/0/write_state"),
+            (&scrittura, "/examples/0/key/value"),
+            (&scrittura, "/examples/0/column"),
+        ];
+        for (base, percorso) in casi {
+            let (genitore, campo) = percorso.rsplit_once('/').expect("percorso");
+            let mut con_null = base.clone();
+            con_null
+                .pointer_mut(genitore)
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("oggetto")
+                .insert(campo.to_owned(), serde_json::Value::Null);
+            assert!(
+                serde_json::from_value::<RowDiagnostics>(con_null).is_err(),
+                "{percorso}: null letto come assente"
+            );
+            let mut omesso = base.clone();
+            omesso
+                .pointer_mut(genitore)
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("oggetto")
+                .remove(campo);
+            assert!(
+                serde_json::from_value::<RowDiagnostics>(omesso).is_ok(),
+                "{percorso}: omesso deve leggersi"
+            );
+        }
     }
 
     #[test]

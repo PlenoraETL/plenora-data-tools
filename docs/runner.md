@@ -151,10 +151,20 @@ rifiuta, nell'analisi e nel kernel, con la stessa funzione
 `verifica_gruppi_con_nome`, `verifica_politiche`, `verifica_valore`,
 `verifica_null_literal`, `verifica_separatore`, `verifica_colonne`,
 `verifica_parti`, `verifica_risultati`, `nomi_uscita`; il `null` lo rifiuta
-la deserializzazione, `mai_null`); il censimento di ogni campo di ogni
+la deserializzazione, `plenora_core::json::mai_null`). Il `null` esplicito
+si rifiuta in ogni config, tabellare e geo, anche nei campi annidati; i soli
+campi dove `null` ha un significato proprio, dichiarato nella scheda, sono
+`value` di `filter` e delle condizioni di `conditional` (il testo vuoto),
+`result` e `default_value` di `conditional` (un valore d'uscita), `value`
+di `fill_na` (riempie con null) e `default` delle colonne di `align_schema`
+(la colonna di null). Il censimento di ogni campo di ogni
 config tabellare è in `crates/plenora-pipeline/tests/censimento_parametri.rs`
 e la parità analisi–kernel di ogni regola in
-`crates/plenora-pipeline/tests/parametri_senza_effetto.rs`. Le
+`crates/plenora-pipeline/tests/parametri_senza_effetto.rs`; il `null` di
+ogni campo geo lo provano i test di
+`crates/plenora-kernels-geo/src/analyze/config.rs`, e `null` contro assente
+per ogni operazione con un campo facoltativo
+`crates/plenora-pipeline/tests/null_nelle_config.rs`. Le
 asserzioni vacue (`assert_not_null`, `assert_unique`, `assert_schema` senza
 colonne, `assert_range` senza estremi, `assert_cardinality` senza vincoli,
 `assert_metadata` senza chiavi, `conditional` senza condizioni, `sha256_hash`
