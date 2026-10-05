@@ -3895,7 +3895,12 @@ mod tests {
             json!({"column": "value", "operator": "==", "value": 1, "bogus": true}),
         );
         assert_invalid_plan(&error, "config non valida");
-        assert_invalid_plan(&error, "unknown field `bogus`");
+        assert_invalid_plan(
+            &error,
+            "campo sconosciuto; campi ammessi: `column`, `operator`, `value`",
+        );
+        // Errori senza dati: la chiave scritta non torna nel messaggio.
+        assert!(!error.to_string().contains("bogus"), "{error}");
     }
 
     // -- Cross-check analyze vs kernel su batch reali --------------------------

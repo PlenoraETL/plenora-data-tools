@@ -162,6 +162,27 @@ pub(crate) const NON_FINITE_RESULT_MESSAGE: &str = "risultato non finito";
 /// valore di una cella.
 pub(crate) const INVALID_REGEX_MESSAGE: &str = "regex calcolata non valida";
 
+/// Il motivo di una regex scritta nel piano (config, letterale di
+/// un'espressione) che il crate `regex` rifiuta, senza il testo del crate:
+/// riporta il pattern, e il pattern scritto e' un valore del piano. Si
+/// distingue solo il limite di dimensione dalla sintassi; una variante
+/// futura del crate resta generica.
+pub(crate) const fn motivo_regex_non_valida(errore: &regex::Error) -> &'static str {
+    match errore {
+        regex::Error::Syntax(_) => "regex non valida: sintassi",
+        regex::Error::CompiledTooBig(_) => {
+            "regex non valida: oltre il limite di dimensione della regex compilata"
+        }
+        _ => "regex non valida",
+    }
+}
+
+/// Rifiuto di un fuso orario della config che non e' un nome della banca
+/// dati IANA: fisso, senza il testo scritto (un testo del piano, che non
+/// entra nei messaggi).
+pub(crate) const MESSAGGIO_FUSO_NON_VALIDO: &str =
+    "timezone non valida: atteso un nome IANA (per esempio Europe/Rome o UTC)";
+
 /// Deserializzazione di un parametro facoltativo che rifiuta il `null`
 /// esplicito: [`plenora_core::json::mai_null`], la stessa regola delle
 /// config geo.
@@ -1499,9 +1520,7 @@ impl<'de> Deserialize<'de> for NumeroConfig {
     ) -> std::result::Result<Self, D::Error> {
         let numero = serde_json::Number::deserialize(deserializer)?;
         Self::da_json(&numero).ok_or_else(|| {
-            serde::de::Error::custom(
-                "numero non rappresentabile esattamente (oltre 38 cifre significative o scala)",
-            )
+            serde::de::Error::custom(plenora_core::json::MESSAGGIO_NUMERO_NON_ESATTO)
         })
     }
 }
@@ -2099,6 +2118,30 @@ pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
 
 #[cfg(test)]
 mod tests {
+    /// **Il motivo di una regex rifiutata non cita il pattern**: il testo
+    /// del crate `regex` lo riporterebbe. Sintassi e limite di dimensione
+    /// restano distinti.
+    #[test]
+    fn il_motivo_della_regex_non_cita_il_pattern() {
+        // Il pattern passa da una variabile: e' invalido apposta.
+        let pattern = String::from("(PATTERN_SEGRETO");
+        let sintassi = regex::Regex::new(&pattern).expect_err("sintassi");
+        assert!(sintassi.to_string().contains("PATTERN_SEGRETO"));
+        assert_eq!(
+            super::motivo_regex_non_valida(&sintassi),
+            "regex non valida: sintassi"
+        );
+        let grande = regex::RegexBuilder::new("PATTERN_SEGRETO{100}")
+            .size_limit(16)
+            .build()
+            .expect_err("oltre il limite");
+        assert!(matches!(grande, regex::Error::CompiledTooBig(_)));
+        assert_eq!(
+            super::motivo_regex_non_valida(&grande),
+            "regex non valida: oltre il limite di dimensione della regex compilata"
+        );
+    }
+
     /// Valori limite piu' una sequenza deterministica, senza duplicati.
     fn interi_e_double_di_prova() -> (Vec<i128>, Vec<f64>) {
         let mut doppi = vec![

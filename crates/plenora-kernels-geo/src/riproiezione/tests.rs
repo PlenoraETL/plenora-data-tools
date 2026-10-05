@@ -395,6 +395,33 @@ fn una_config_illeggibile_e_un_piano_non_valido() {
     }
 }
 
+/// **Il messaggio di una config illeggibile non cita i valori scritti**
+/// (errori senza dati): il testo di serde citerebbe la chiave sconosciuta e
+/// il valore del tipo sbagliato.
+#[test]
+fn la_config_illeggibile_non_cita_i_valori_scritti() {
+    let sorgente = crs("EPSG:4326");
+    for (config, atteso) in [
+        (
+            json!({"target_crs": "EPSG:7791", "CHIAVE_SEGRETA": 1}),
+            "campo sconosciuto; campi ammessi:",
+        ),
+        (
+            json!({"target_crs": 98_765_431}),
+            "tipo, valore o forma di un campo non validi",
+        ),
+        (json!({}), "campo obbligatorio assente: `target_crs`"),
+    ] {
+        let errore = ReprojectParams::da_config("geo.reproject", &config, &sorgente)
+            .expect_err("config illeggibile")
+            .to_string();
+        assert!(errore.contains(atteso), "{config}: {errore}");
+        for scritto in ["CHIAVE_SEGRETA", "98765431"] {
+            assert!(!errore.contains(scritto), "{config}: {errore}");
+        }
+    }
+}
+
 fn campo_geometria(definizione: &str) -> Field {
     let mut metadata = HashMap::new();
     metadata.insert(

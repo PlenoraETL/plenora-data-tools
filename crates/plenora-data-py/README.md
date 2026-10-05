@@ -354,6 +354,3 @@ Nessuna deviazione.
   scadenza corre da prima, dall'ingresso di `arun`), e l'annullamento di un
   task aspetta che il lavoro arrivi al suo controllo successivo (al più un
   passo del piano).
-- **Messaggi delle config.** Come sulla CLI, un messaggio di config non
-  valida può citare un valore scritto nel piano
-  ([«Limiti dichiarati della CLI»](../../docs/cli.md#limiti-dichiarati-della-cli)).

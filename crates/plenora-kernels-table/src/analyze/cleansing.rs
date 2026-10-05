@@ -130,7 +130,7 @@ pub(in crate::analyze) fn analyze_replace(
     check_text_len(op, &config.new_value, limits.max_string_bytes, "new_value")?;
     if config.regex {
         regex::Regex::new(&config.old_value).map_err(|error| {
-            PlenoraError::InvalidPlan(format!("{op}: regex non valida: {error}"))
+            PlenoraError::InvalidPlan(format!("{op}: {}", crate::motivo_regex_non_valida(&error)))
         })?;
     }
     // Tipo invariato (Utf8 -> Utf8): i metadati del campo sorgente restano
@@ -219,7 +219,7 @@ pub(in crate::analyze) fn analyze_type_cast(
         cleansing::TargetType::TimestampMillis => {
             if let Some(timezone) = &config.timezone {
                 timezone.parse::<chrono_tz::Tz>().map_err(|_| {
-                    PlenoraError::InvalidPlan(format!("{op}: timezone non valida: {timezone}"))
+                    PlenoraError::InvalidPlan(format!("{op}: {}", crate::MESSAGGIO_FUSO_NON_VALIDO))
                 })?;
             }
             DataType::Timestamp(

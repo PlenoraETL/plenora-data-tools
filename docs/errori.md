@@ -47,6 +47,31 @@ resta `Io` con il suo `ErrorKind`; uno di sintassi, di dati o di fine
 inattesa è `data_mapping` con il solo genere e la posizione («json error:
 dati alla riga 1 colonna 15»), mai il testo che cita il valore letto.
 
+Neanche il testo di una dipendenza attraversa il messaggio quando può
+citare un valore. Una config di un passo che serde rifiuta
+(`config non valida: …`) si descrive con
+`plenora_core::json::descrivi_errore_config`: il nome di un campo mancante
+o ripetuto, l'elenco dei campi o dei valori ammessi per un campo o un
+valore sconosciuto (mai quello scritto), i messaggi fissi del workspace;
+un tipo, un valore o una lunghezza non validi danno il solo genere («tipo,
+valore o forma di un campo non validi»), senza il campo né il valore. Una
+regex scritta nel piano che il crate `regex` rifiuta dice solo se è la
+sintassi o il limite di dimensione, mai il testo del crate, che riporta il
+pattern.
+
+Lo stesso vale per i testi che il workspace scrive da sé: un letterale
+della config fuori elenco (l'unità di `date_trunc`, il `data_type` di
+`assert_schema`) si rifiuta con l'elenco dei valori ammessi, un fuso orario
+non riconosciuto (`timezone_convert`, `type_cast`) con un messaggio fisso,
+una chiave JSON ripetuta nello stesso oggetto con la sola posizione nel
+documento: le chiavi di `mapping` di `lookup` sono valori dei dati.
+Restano nel messaggio il contesto che serve a trovare l'errore: il passo,
+l'operazione, la colonna per nome, il nome di una regola, e i limiti
+numerici configurati (`max_candidates`, `max_points`, `max_issues`, i
+`limits.max_*` del piano, il budget di memoria) nei messaggi di
+superamento: sono parametri di configurazione, non valori di righe o
+colonne, e senza di loro il superamento non si diagnostica.
+
 ## Effetto di un errore a metà della scrittura
 
 `remote_effect` è `none` per costruzione (ogni file d'uscita è scritto in

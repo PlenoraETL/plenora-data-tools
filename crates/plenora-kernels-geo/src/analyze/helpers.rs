@@ -54,8 +54,13 @@ pub(in crate::analyze) fn parse_config<T: serde::de::DeserializeOwned>(
     op: &str,
     config: &Value,
 ) -> Result<T> {
-    serde_json::from_value(config.clone())
-        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: config non valida: {error}")))
+    // Senza il testo di serde, che cita i valori scritti.
+    serde_json::from_value(config.clone()).map_err(|error| {
+        PlenoraError::InvalidPlan(format!(
+            "{op}: config non valida: {}",
+            plenora_core::json::descrivi_errore_config(&error)
+        ))
+    })
 }
 
 /// Il `crs_requirement` dichiarato dal catalogo per l'op; la sua assenza e'

@@ -1169,8 +1169,9 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
                 }
                 regex = Some(regex::Regex::new(&expected).map_err(|error| {
                     PlenoraError::InvalidPlan(format!(
-                        "validate_rules: regola {}: regex non valida: {error}",
-                        rule.name
+                        "validate_rules: regola {}: {}",
+                        rule.name,
+                        crate::motivo_regex_non_valida(&error)
                     ))
                 })?);
             }

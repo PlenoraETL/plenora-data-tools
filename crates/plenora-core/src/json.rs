@@ -75,6 +75,190 @@ where
     )
 }
 
+/// Messaggio di un numero della config che `NumeroConfig` dei kernel
+/// tabellari non rappresenta esattamente.
+pub const MESSAGGIO_NUMERO_NON_ESATTO: &str =
+    "numero non rappresentabile esattamente (oltre 38 cifre significative o scala)";
+
+/// Messaggio di `include_unchanged` di `table.table_diff` fuori dominio.
+pub const MESSAGGIO_INCLUDE_UNCHANGED: &str = "include_unchanged ammette solo \"yes\" o \"no\"";
+
+/// I messaggi `custom` di serde scritti da noi, statici e senza valori: gli
+/// unici che [`descrivi_errore_config`] riporta per intero. Un messaggio
+/// custom nuovo che deve arrivare a chi scrive il piano si aggiunge qui.
+const MESSAGGI_STATICI: &[&str] = &[
+    MESSAGGIO_NULL_NON_AMMESSO,
+    MESSAGGIO_NUMERO_NON_ESATTO,
+    MESSAGGIO_INCLUDE_UNCHANGED,
+];
+
+/// Descrive un errore di `serde_json` su una config senza il testo di
+/// terzi.
+///
+/// Il testo di serde cita il valore letto (``invalid type: integer `7`,
+/// expected a string``, il nome scritto di `unknown variant` e `unknown
+/// field`): un valore scritto nel piano non deve attraversare il messaggio
+/// pubblico (AGENTS.md, «Errori senza dati»). Delle forme di serde 1.0.229
+/// si tiene solo cio' che viene dal codice e non dal documento:
+///
+/// - `missing field` e `duplicate field`: il nome del campo, che serde
+///   prende dalla struttura;
+/// - `unknown field` e `unknown variant`: l'elenco dei nomi ammessi, mai il
+///   nome scritto;
+/// - i messaggi custom del registro `MESSAGGI_STATICI` (le costanti
+///   `MESSAGGIO_*` di questo modulo), per intero.
+///
+/// Un nome si riporta solo se e' fatto dei caratteri dei nomi del codice
+/// (`[A-Za-z0-9_$-]` e gli operatori `=<>!`, non vuoto). L'elenco si legge
+/// dalla fine e si ferma al primo `, expected` da destra, che e' quello di
+/// serde: il nome scritto, che sta prima, non entra mai nell'elenco; il
+/// controllo dei caratteri e' una seconda difesa. Tutto il resto
+/// (tipo, valore o lunghezza non validi, messaggi custom fuori registro)
+/// diventa il solo genere di [`serde_json::error::Category`], con riga e
+/// colonna quando il documento era testo (una config letta da un `Value`
+/// non ha posizione).
+///
+/// Il contesto che la regola di `error.rs` ammette resta nei messaggi dei
+/// chiamanti: il passo, l'operazione, la colonna per nome, il nome di una
+/// regola, il motivo. Non e' un valore scritto: e' quello che serve per
+/// trovare l'errore nel piano.
+#[must_use]
+pub fn descrivi_errore_config(errore: &serde_json::Error) -> String {
+    use serde_json::error::Category;
+    let testo = errore.to_string();
+    // `serde_json` aggiunge la posizione in coda quando la riga e' nota.
+    let coda = format!(" at line {} column {}", errore.line(), errore.column());
+    let messaggio = if errore.line() == 0 {
+        testo.as_str()
+    } else {
+        testo.strip_suffix(coda.as_str()).unwrap_or(testo.as_str())
+    };
+    if errore.classify() == Category::Data {
+        if let Some(descrizione) = descrivi_forma_nota(messaggio) {
+            return descrizione;
+        }
+    }
+    let genere = match errore.classify() {
+        Category::Io => "lettura non riuscita",
+        Category::Syntax => "sintassi JSON non valida",
+        Category::Data => "tipo, valore o forma di un campo non validi",
+        Category::Eof => "documento JSON incompleto",
+    };
+    if errore.line() == 0 {
+        genere.to_owned()
+    } else {
+        format!(
+            "{genere} alla riga {} colonna {}",
+            errore.line(),
+            errore.column()
+        )
+    }
+}
+
+/// Le forme di serde di cui si tiene la parte statica; `None` per tutte le
+/// altre.
+fn descrivi_forma_nota(messaggio: &str) -> Option<String> {
+    if MESSAGGI_STATICI.contains(&messaggio) {
+        return Some(messaggio.to_owned());
+    }
+    let nome_singolo = |prefisso: &str| {
+        messaggio
+            .strip_prefix(prefisso)
+            .and_then(|resto| resto.strip_suffix('`'))
+            .filter(|nome| identificatore(nome))
+    };
+    if let Some(nome) = nome_singolo("missing field `") {
+        return Some(format!("campo obbligatorio assente: `{nome}`"));
+    }
+    if let Some(nome) = nome_singolo("duplicate field `") {
+        return Some(format!("campo ripetuto: `{nome}`"));
+    }
+    for (prefisso, sconosciuto, nessuno, ammessi) in [
+        (
+            "unknown field `",
+            "campo sconosciuto",
+            ", there are no fields",
+            "campi ammessi",
+        ),
+        (
+            "unknown variant `",
+            "valore sconosciuto",
+            ", there are no variants",
+            "valori ammessi",
+        ),
+    ] {
+        if !messaggio.starts_with(prefisso) {
+            continue;
+        }
+        if messaggio.ends_with(nessuno) {
+            return Some(format!("{sconosciuto}: nessuno ammesso"));
+        }
+        return Some(nomi_attesi(messaggio).map_or_else(
+            || sconosciuto.to_owned(),
+            |nomi| format!("{sconosciuto}; {ammessi}: {}", nomi.join(", ")),
+        ));
+    }
+    None
+}
+
+/// I nomi dell'elenco `expected ...` in coda a un `unknown field` o
+/// `unknown variant`, letti dalla fine: il nome scritto, che precede, puo'
+/// contenere qualunque testo. Le forme di `serde::de::OneOf` sono
+/// `` `a` ``, `` `a` or `b` `` e `` one of `a`, `b`, `c` ``; ogni nome si
+/// restituisce fra backtick, `None` se la coda non ha una di queste forme
+/// esatte.
+fn nomi_attesi(messaggio: &str) -> Option<Vec<String>> {
+    let mut resto = messaggio;
+    let mut elenco = Vec::new();
+    let mut giunzioni: Vec<&str> = Vec::new();
+    loop {
+        let senza_chiusa = resto.strip_suffix('`')?;
+        let apertura = senza_chiusa.rfind('`')?;
+        let nome = &senza_chiusa[apertura + 1..];
+        if !identificatore(nome) {
+            return None;
+        }
+        elenco.push(format!("`{nome}`"));
+        resto = &senza_chiusa[..apertura];
+        if resto.ends_with(", expected one of ") {
+            // Tre o piu' nomi, tutti separati da virgola.
+            if elenco.len() < 3 || giunzioni.iter().any(|separatore| *separatore != ", ") {
+                return None;
+            }
+            break;
+        }
+        if resto.ends_with(", expected ") {
+            // Un nome, o due separati da `or`.
+            let valido = match elenco.len() {
+                1 => true,
+                2 => giunzioni == [" or "],
+                _ => false,
+            };
+            if !valido {
+                return None;
+            }
+            break;
+        }
+        let separatore = [", ", " or "]
+            .into_iter()
+            .find(|separatore| resto.ends_with(separatore))?;
+        giunzioni.push(separatore);
+        resto = &resto[..resto.len() - separatore.len()];
+    }
+    elenco.reverse();
+    Some(elenco)
+}
+
+/// Un nome che serde prende dal codice: non vuoto, solo `[A-Za-z0-9_$-]`
+/// e i caratteri degli operatori rinominati (`==`, `!=`, `<=`, ...).
+fn identificatore(nome: &str) -> bool {
+    !nome.is_empty()
+        && nome.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b'_' | b'$' | b'-' | b'=' | b'<' | b'>' | b'!')
+        })
+}
+
 /// Verifica che nessun oggetto del documento JSON abbia chiavi ripetute.
 ///
 /// La visita non costruisce nulla: attraversa il documento e tiene per ogni
@@ -87,20 +271,44 @@ where
 ///
 /// `PlenoraError::InvalidPlan` se una chiave e' ripetuta nello stesso
 /// oggetto, o se un oggetto usa la chiave riservata di `serde_json`,
-/// nominando in entrambi i casi la chiave.
+/// con un messaggio fisso e la posizione nel documento. La chiave ripetuta
+/// non si nomina: e' testo scritto dall'utente, e in un documento di dati
+/// (le chiavi di `mapping` di `table.lookup`) e' un valore.
 pub fn ensure_no_duplicate_keys(json_text: &str) -> Result<()> {
     let mut deserializer = serde_json::Deserializer::from_str(json_text);
     let esito = serde::de::DeserializeSeed::deserialize(UniqueKeys, &mut deserializer);
     // `Category::Data` e' la classe degli errori prodotti dal visitatore, cioe'
     // esattamente la chiave duplicata; sintassi ed EOF spettano al parse vero e
     // qui non sono un errore.
+    // Il messaggio si ricompone dalle costanti: il testo dell'errore serde
+    // non attraversa il confine nemmeno quando e' nostro.
     if let Err(error) = esito {
         if error.classify() == serde_json::error::Category::Data {
-            return Err(PlenoraError::InvalidPlan(error.to_string()));
+            let motivo = if error.to_string().starts_with(MESSAGGIO_CHIAVE_RISERVATA) {
+                MESSAGGIO_CHIAVE_RISERVATA
+            } else {
+                MESSAGGIO_CHIAVE_DUPLICATA
+            };
+            return Err(PlenoraError::InvalidPlan(format!(
+                "{motivo} (riga {} colonna {})",
+                error.line(),
+                error.column()
+            )));
         }
     }
     Ok(())
 }
+
+/// Rifiuto di una chiave ripetuta nello stesso oggetto: fisso, senza la
+/// chiave.
+const MESSAGGIO_CHIAVE_DUPLICATA: &str = "chiave JSON duplicata nello stesso oggetto: il \
+     documento e' ambiguo e non viene risolto con «vince l'ultima»";
+
+/// Rifiuto della chiave riservata di `serde_json`. Nomina la chiave perche'
+/// e' una costante del formato, non un testo dell'utente.
+const MESSAGGIO_CHIAVE_RISERVATA: &str = "chiave JSON riservata \
+     `$serde_json::private::RawValue`: `serde_json` la usa per trasportare JSON grezzo e \
+     non la legge come una chiave, quindi il documento non e' quello che dichiara di essere";
 
 /// Verifica che ogni numero del documento valga esattamente quello che
 /// `serde_json` ne legge.
@@ -263,17 +471,10 @@ impl<'de> Visitor<'de> for UniqueKeysVisitor {
             // chiavi — `$` viene prima di ogni lettera, quindi una chiave
             // innocua in coda diventa la prima del canonico.
             if key == CHIAVE_RISERVATA_SERDE_JSON {
-                return Err(serde::de::Error::custom(format!(
-                    "chiave JSON riservata `{key}`: `serde_json` la usa per trasportare \
-                     JSON grezzo e non la legge come una chiave, quindi il documento \
-                     non e' quello che dichiara di essere"
-                )));
+                return Err(serde::de::Error::custom(MESSAGGIO_CHIAVE_RISERVATA));
             }
-            if !seen.insert(key.clone()) {
-                return Err(serde::de::Error::custom(format!(
-                    "chiave JSON duplicata `{key}`: il documento e' ambiguo e non viene risolto \
-                     con «vince l'ultima»"
-                )));
+            if !seen.insert(key) {
+                return Err(serde::de::Error::custom(MESSAGGIO_CHIAVE_DUPLICATA));
             }
         }
         Ok(())
@@ -321,6 +522,225 @@ impl<'de> Visitor<'de> for UniqueKeysVisitor {
 mod tests {
     use super::*;
 
+    /// Una config nel tipo `T` letta da un `Value`, e l'errore descritto.
+    fn descritto<T: serde::de::DeserializeOwned + std::fmt::Debug>(
+        config: serde_json::Value,
+    ) -> String {
+        let errore = serde_json::from_value::<T>(config).expect_err("config rifiutata");
+        descrivi_errore_config(&errore)
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)] // I campi servono solo alla forma della config.
+    struct TreCampi {
+        alfa: String,
+        beta: Option<u32>,
+        gamma: Option<Modo>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct DueCampi {
+        alfa: u32,
+        beta: Option<u32>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct UnCampo {
+        alfa: u32,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Vuota {}
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Modo {
+        Primo,
+        Secondo,
+        Terzo,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum DueModi {
+        Primo,
+        Secondo,
+    }
+
+    /// Il sentinella che nessun messaggio deve contenere.
+    const SENTINELLA: &str = "VALORE_SEGRETO_42";
+
+    /// **Il campo mancante si nomina: il nome viene dalla struttura.**
+    #[test]
+    fn il_campo_mancante_si_nomina() {
+        assert_eq!(
+            descritto::<TreCampi>(serde_json::json!({})),
+            "campo obbligatorio assente: `alfa`"
+        );
+    }
+
+    /// **Il campo ripetuto si nomina** (da una mappa che serde non
+    /// deduplica: il testo).
+    #[test]
+    fn il_campo_ripetuto_si_nomina() {
+        let errore = serde_json::from_str::<UnCampo>(r#"{"alfa": 1, "alfa": 2}"#)
+            .expect_err("campo ripetuto");
+        assert_eq!(descrivi_errore_config(&errore), "campo ripetuto: `alfa`");
+    }
+
+    /// **Il campo sconosciuto non si cita: si elencano gli ammessi**, in
+    /// tutte le forme di `OneOf` (uno, due, tre o piu', nessuno).
+    #[test]
+    fn il_campo_sconosciuto_elenca_gli_ammessi_e_non_se_stesso() {
+        let casi = [
+            (
+                descritto::<TreCampi>(serde_json::json!({ SENTINELLA: 1 })),
+                "campo sconosciuto; campi ammessi: `alfa`, `beta`, `gamma`",
+            ),
+            (
+                descritto::<DueCampi>(serde_json::json!({ SENTINELLA: 1 })),
+                "campo sconosciuto; campi ammessi: `alfa`, `beta`",
+            ),
+            (
+                descritto::<UnCampo>(serde_json::json!({ SENTINELLA: 1 })),
+                "campo sconosciuto; campi ammessi: `alfa`",
+            ),
+            (
+                descritto::<Vuota>(serde_json::json!({ SENTINELLA: 1 })),
+                "campo sconosciuto: nessuno ammesso",
+            ),
+        ];
+        for (avuto, atteso) in casi {
+            assert_eq!(avuto, atteso);
+            assert!(!avuto.contains(SENTINELLA), "{avuto}");
+        }
+    }
+
+    /// **La variante sconosciuta non si cita: si elencano le ammesse.**
+    #[test]
+    fn la_variante_sconosciuta_elenca_le_ammesse_e_non_se_stessa() {
+        let tre = descritto::<TreCampi>(serde_json::json!({"alfa": "a", "gamma": SENTINELLA}));
+        assert_eq!(
+            tre,
+            "valore sconosciuto; valori ammessi: `primo`, `secondo`, `terzo`"
+        );
+        let due = serde_json::from_value::<DueModi>(serde_json::json!(SENTINELLA))
+            .expect_err("variante sconosciuta");
+        assert_eq!(
+            descrivi_errore_config(&due),
+            "valore sconosciuto; valori ammessi: `primo`, `secondo`"
+        );
+    }
+
+    /// **Tipo e valore non validi: solo il genere.** Il testo di serde
+    /// citerebbe l'intero `7` e la stringa scritta.
+    #[test]
+    fn tipo_e_valore_non_validi_non_citano_il_valore() {
+        for (config, scritto) in [
+            (serde_json::json!({"alfa": 7}), "7"),
+            (
+                serde_json::json!({"alfa": "a", "beta": SENTINELLA}),
+                SENTINELLA,
+            ),
+            (serde_json::json!({"alfa": "a", "beta": -12345}), "12345"),
+        ] {
+            let avuto = descritto::<TreCampi>(config);
+            assert_eq!(avuto, "tipo, valore o forma di un campo non validi");
+            assert!(!avuto.contains(scritto), "{avuto}");
+        }
+    }
+
+    /// **Una chiave che imita la coda di serde non passa nel messaggio.**
+    ///
+    /// Il nome scritto precede l'elenco e puo' contenere backtick e
+    /// `, expected`: l'elenco si legge dalla fine, e solo identificatori.
+    #[test]
+    fn una_chiave_che_imita_serde_non_entra_nel_messaggio() {
+        for chiave in [
+            format!("{SENTINELLA}`, expected `x"),
+            format!("x`, expected one of `{SENTINELLA} spazio`, `y"),
+            format!("{SENTINELLA}`"),
+            "`".to_owned(),
+            format!("a` or `{SENTINELLA}"),
+        ] {
+            let avuto = descritto::<TreCampi>(serde_json::json!({ chiave.clone(): 1 }));
+            assert!(
+                avuto == "campo sconosciuto; campi ammessi: `alfa`, `beta`, `gamma`",
+                "{chiave}: {avuto}"
+            );
+            assert!(!avuto.contains(SENTINELLA), "{chiave}: {avuto}");
+        }
+    }
+
+    /// **Una coda che non e' una forma esatta di serde non da' elenco.**
+    #[test]
+    fn una_coda_irregolare_non_da_elenco() {
+        assert_eq!(
+            nomi_attesi("unknown field `x`, expected `a` or `b` or `c`"),
+            None
+        );
+        assert_eq!(
+            nomi_attesi("unknown field `x`, expected one of `a`, `b`"),
+            None
+        );
+        assert_eq!(nomi_attesi("unknown field `x`, expected `a`, `b`"), None);
+        assert_eq!(nomi_attesi("unknown field `x`, expected `a b`"), None);
+        assert_eq!(
+            nomi_attesi("unknown variant `x`, expected `==` or `!=`"),
+            Some(vec!["`==`".to_owned(), "`!=`".to_owned()])
+        );
+        assert_eq!(nomi_attesi("unknown field `x`, expected ``"), None);
+        assert_eq!(
+            nomi_attesi("unknown field `x`, expected one of `a`, `b`, `c`"),
+            Some(vec!["`a`".to_owned(), "`b`".to_owned(), "`c`".to_owned()])
+        );
+    }
+
+    /// **I messaggi custom del registro passano interi, gli altri no.**
+    #[test]
+    fn solo_i_messaggi_custom_del_registro_passano() {
+        use serde::de::Error as _;
+        for statico in MESSAGGI_STATICI {
+            let errore = serde_json::Error::custom(statico);
+            assert_eq!(descrivi_errore_config(&errore), *statico);
+        }
+        let estraneo = serde_json::Error::custom(format!("pattern {SENTINELLA} non valido"));
+        let avuto = descrivi_errore_config(&estraneo);
+        assert_eq!(avuto, "tipo, valore o forma di un campo non validi");
+    }
+
+    /// **Dal testo: sintassi e fine inattesa con la sola posizione.**
+    #[test]
+    fn il_testo_porta_solo_genere_e_posizione() {
+        let sintassi = serde_json::from_str::<UnCampo>("{\"alfa\": x}").expect_err("sintassi");
+        assert_eq!(
+            descrivi_errore_config(&sintassi),
+            "sintassi JSON non valida alla riga 1 colonna 10"
+        );
+        let fine = serde_json::from_str::<UnCampo>("{\"alfa\": ").expect_err("fine");
+        assert!(descrivi_errore_config(&fine).starts_with("documento JSON incompleto alla riga 1"));
+        let tipo =
+            serde_json::from_str::<TreCampi>(&format!("{{\"alfa\": 7, \"{SENTINELLA}\": 1}}"))
+                .expect_err("tipo");
+        let avuto = descrivi_errore_config(&tipo);
+        assert!(
+            avuto.starts_with("tipo, valore o forma di un campo non validi alla riga 1"),
+            "{avuto}"
+        );
+        // Dal testo la forma nota resta riconosciuta: la posizione si toglie.
+        let mancante = serde_json::from_str::<TreCampi>("{}").expect_err("mancante");
+        assert_eq!(
+            descrivi_errore_config(&mancante),
+            "campo obbligatorio assente: `alfa`"
+        );
+    }
+
     #[test]
     fn i_documenti_senza_duplicati_passano() {
         for text in [
@@ -345,6 +765,8 @@ mod tests {
         ] {
             let error = ensure_no_duplicate_keys(text).expect_err(text);
             assert!(error.to_string().contains("duplicata"), "{text}: {error}");
+            // La chiave scritta non entra nel messaggio.
+            assert!(!error.to_string().contains('`'), "{text}: {error}");
         }
     }
 

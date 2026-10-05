@@ -31,6 +31,12 @@ pub enum TruncUnit {
     Second,
 }
 
+/// Rifiuto di un'unita' di `date_trunc` fuori elenco: dice le unita'
+/// ammesse, non quella scritta (un testo del piano, che non entra nei
+/// messaggi).
+pub const MESSAGGIO_UNITA_TRUNC_NON_VALIDA: &str =
+    "date_trunc: unita' non valida; ammesse: year, month, day, hour, minute, second";
+
 fn trunc_unit(value: &str) -> Result<TruncUnit> {
     match value {
         "year" => Ok(TruncUnit::Year),
@@ -39,9 +45,9 @@ fn trunc_unit(value: &str) -> Result<TruncUnit> {
         "hour" => Ok(TruncUnit::Hour),
         "minute" => Ok(TruncUnit::Minute),
         "second" => Ok(TruncUnit::Second),
-        other => Err(PlenoraError::InvalidPlan(format!(
-            "date_trunc: unita' non valida: {other}"
-        ))),
+        _ => Err(PlenoraError::InvalidPlan(
+            MESSAGGIO_UNITA_TRUNC_NON_VALIDA.into(),
+        )),
     }
 }
 

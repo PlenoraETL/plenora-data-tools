@@ -184,9 +184,11 @@ impl Parser<'_> {
         if current.is_ascii_alphabetic() || current == b'_' {
             return self.identifier();
         }
+        // La posizione, non il carattere: il testo della formula e' scritto
+        // nel piano e non entra nel messaggio.
         Err(PlenoraError::InvalidPlan(format!(
-            "carattere formula non ammesso: {}",
-            char::from(current)
+            "carattere formula non ammesso alla posizione {} (byte, da zero)",
+            self.position
         )))
     }
     fn text(&mut self, quote: u8) -> Result<Expr> {

@@ -685,7 +685,7 @@ pub fn replace_con_limiti(
         .regex
         .then(|| Regex::new(&config.old_value))
         .transpose()
-        .map_err(|e| PlenoraError::InvalidPlan(format!("regex non valida: {e}")))?;
+        .map_err(|e| PlenoraError::InvalidPlan(crate::motivo_regex_non_valida(&e).into()))?;
     let out: StringArray = values
         .iter()
         .map(|item| {

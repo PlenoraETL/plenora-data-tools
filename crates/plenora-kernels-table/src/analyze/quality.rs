@@ -85,7 +85,7 @@ pub(in crate::analyze) fn analyze_assert_schema(
                 format!(
                     "tipo errato per {}: atteso {}, trovato {}",
                     expectation.name,
-                    expectation.data_type,
+                    crate::quality::nome_canonico_tipo(&expectation.data_type).unwrap_or("?"),
                     plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
                 ),
             );
@@ -127,7 +127,7 @@ fn expected_type(op: &str, value: &str) -> Result<DataType> {
         "struct" => Ok(DataType::Struct(
             plenora_core::arrow::schema::Fields::empty(),
         )),
-        other => contract_error(op, format!("tipo non supportato {other}")),
+        _ => contract_error(op, crate::quality::MESSAGGIO_TIPO_ATTESO_NON_SUPPORTATO),
     }
 }
 
@@ -208,8 +208,9 @@ pub(in crate::analyze) fn analyze_assert_regex(
     }
     check_text_len(op, &config.pattern, limits.max_regex_bytes, "pattern")?;
     require_utf8(op, input, &config.column)?;
-    regex::Regex::new(&config.pattern)
-        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: regex non valida: {error}")))?;
+    regex::Regex::new(&config.pattern).map_err(|error| {
+        PlenoraError::InvalidPlan(format!("{op}: {}", crate::motivo_regex_non_valida(&error)))
+    })?;
     Ok(input.clone())
 }
 
@@ -545,8 +546,9 @@ pub(in crate::analyze) fn analyze_validate_rules(
                 }
                 regex::Regex::new(&expected).map_err(|error| {
                     PlenoraError::InvalidPlan(format!(
-                        "{op}: regola {}: regex non valida: {error}",
-                        rule.name
+                        "{op}: regola {}: {}",
+                        rule.name,
+                        crate::motivo_regex_non_valida(&error)
                     ))
                 })?;
             }

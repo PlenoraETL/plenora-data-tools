@@ -66,7 +66,8 @@ vince sempre su una successiva nelle sovrapposizioni.
 In validazione (analisi del contratto), `InvalidPlan`:
 
 - config con campi sconosciuti, `snap_tolerance`, `remove_overlaps` o
-  `fill_gaps` assente («missing field»), o un campo del tipo sbagliato;
+  `fill_gaps` assente («campo obbligatorio assente»), o un campo del tipo
+  sbagliato;
 - `snap_tolerance` negativa o non finita.
 
 Sempre in validazione: `Schema` se l'ingresso non ha esattamente una

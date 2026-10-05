@@ -1658,7 +1658,7 @@ impl TryFrom<String> for IncludeUnchanged {
         match testo.as_str() {
             "yes" => Ok(Self::Yes),
             "no" => Ok(Self::No),
-            _ => Err("include_unchanged ammette solo \"yes\" o \"no\""),
+            _ => Err(plenora_core::json::MESSAGGIO_INCLUDE_UNCHANGED),
         }
     }
 }

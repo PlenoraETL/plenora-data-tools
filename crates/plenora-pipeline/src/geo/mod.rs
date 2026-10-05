@@ -261,8 +261,13 @@ fn binaria(celle: &[Option<Vec<u8>>]) -> ArrayRef {
 /// La config nei tipi dell'analisi: l'analisi l'ha gia' accettata con lo
 /// stesso tipo, un rifiuto qui e' comunque un errore di piano.
 fn config<T: DeserializeOwned>(op: &str, config: &Value) -> Result<T> {
-    T::deserialize(config)
-        .map_err(|errore| PlenoraError::InvalidPlan(format!("{op}: config non valida: {errore}")))
+    // Senza il testo di serde, che cita i valori scritti.
+    T::deserialize(config).map_err(|errore| {
+        PlenoraError::InvalidPlan(format!(
+            "{op}: config non valida: {}",
+            plenora_core::json::descrivi_errore_config(&errore)
+        ))
+    })
 }
 
 /// Il kernel di un passo geo, con la config gia' letta.
@@ -436,6 +441,24 @@ mod tests {
     use plenora_core::contract::GeometryType;
 
     use super::tipo_wkb;
+
+    /// **La config riletta dal runner non cita i valori scritti** (errori
+    /// senza dati): l'analisi la accetta prima con lo stesso tipo, ma un
+    /// rifiuto qui avrebbe il testo di serde.
+    #[test]
+    fn la_config_rifiutata_non_cita_i_valori_scritti() {
+        let errore = super::config::<plenora_kernels_geo::analyze::config::BufferConfig>(
+            "geo.buffer",
+            &serde_json::json!({"distance": "VALORE_SEGRETO", "CHIAVE_SEGRETA": 1}),
+        )
+        .expect_err("config rifiutata")
+        .to_string();
+        assert!(
+            errore.contains("geo.buffer: config non valida: "),
+            "{errore}"
+        );
+        assert!(!errore.contains("SEGRET"), "{errore}");
+    }
 
     #[test]
     fn il_tipo_si_legge_dal_type_code_iso_ed_ewkb() {

@@ -302,7 +302,8 @@ fn verifica_letterali_della_funzione(
                 if !solo_null(0)? && !solo_null(2)? {
                     regex::Regex::new(pattern).map_err(|error| {
                         PlenoraError::InvalidPlan(format!(
-                            "{op}: regex_replace: regex non valida: {error}"
+                            "{op}: regex_replace: {}",
+                            crate::motivo_regex_non_valida(&error)
                         ))
                     })?;
                 }
@@ -648,7 +649,7 @@ fn infer_date_trunc(
         unit.as_str(),
         "year" | "month" | "day" | "hour" | "minute" | "second"
     ) {
-        return errore(op, format!("date_trunc: unita' non valida: {unit}"));
+        return errore(op, super::temporal::MESSAGGIO_UNITA_TRUNC_NON_VALIDA);
     }
     temporal_kind(op, &args[1], unit, lookup)
 }

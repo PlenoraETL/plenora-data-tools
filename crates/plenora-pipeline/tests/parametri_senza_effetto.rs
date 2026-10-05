@@ -194,7 +194,7 @@ fn casi() -> Vec<Caso> {
             "table.expression",
             Wide,
             json!({"output_column": "e", "expression": {"kind": "column", "name": "id", "type": "int"}}),
-            "unknown field",
+            "campo sconosciuto",
             json!({"output_column": "e", "expression": {"kind": "column", "name": "id"}}),
         ),
         caso(

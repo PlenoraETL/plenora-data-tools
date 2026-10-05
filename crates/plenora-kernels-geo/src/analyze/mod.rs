@@ -1689,7 +1689,7 @@ mod tests {
             match analyze_one("geo.clean_topology", &inputs, &config, None) {
                 Err(PlenoraError::InvalidPlan(messaggio)) => {
                     assert!(
-                        messaggio.contains(&format!("missing field `{manca}`")),
+                        messaggio.contains(&format!("campo obbligatorio assente: `{manca}`")),
                         "{config}: {messaggio}"
                     );
                 }
@@ -1878,19 +1878,19 @@ mod tests {
                 "geo.buffer",
                 json!({}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: missing field `distance`",
+                "config non valida: campo obbligatorio assente: `distance`",
             ),
             (
                 "geo.buffer",
                 json!({"distance": 1.0, "bogus": 1}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: unknown field `bogus`",
+                "config non valida: campo sconosciuto",
             ),
             (
                 "geo.buffer",
                 json!({"distance": "molto"}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: invalid type",
+                "config non valida: tipo, valore o forma di un campo non validi",
             ),
             (
                 "geo.simplify",
@@ -1908,7 +1908,7 @@ mod tests {
                 "geo.translate",
                 json!({"x_offset": 1.0}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: missing field `y_offset`",
+                "config non valida: campo obbligatorio assente: `y_offset`",
             ),
             (
                 "geo.concave_hull",
@@ -1944,7 +1944,7 @@ mod tests {
                 "geo.clean_topology",
                 json!({}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: missing field `snap_tolerance`",
+                "config non valida: campo obbligatorio assente: `snap_tolerance`",
             ),
             (
                 "geo.voronoi",
@@ -1974,7 +1974,7 @@ mod tests {
                 "geo.geometry_accessors",
                 json!({"fields": ["bogus"]}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: unknown variant `bogus`",
+                "config non valida: valore sconosciuto",
             ),
             (
                 "geo.collect",
@@ -1998,7 +1998,7 @@ mod tests {
                 "geo.line_locate_point",
                 json!({}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: missing field `point_wkb`",
+                "config non valida: campo obbligatorio assente: `point_wkb`",
             ),
             (
                 "geo.line_locate_point",
@@ -2010,7 +2010,7 @@ mod tests {
                 "geo.generate_grid",
                 json!({}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: missing field `extent`",
+                "config non valida: campo obbligatorio assente: `extent`",
             ),
             (
                 "geo.generate_grid",
@@ -2028,19 +2028,19 @@ mod tests {
                 "geo.generate_grid",
                 json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 1.0, "shape": "triangle"}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: unknown variant `triangle`",
+                "config non valida: valore sconosciuto",
             ),
             (
                 "geo.generate_grid",
                 json!({"extent": {"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}, "cell_size": 1.0, "bogus": 1}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: unknown field `bogus`",
+                "config non valida: campo sconosciuto",
             ),
             (
                 "geo.subdivide",
                 json!({}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: missing field `max_vertices`",
+                "config non valida: campo obbligatorio assente: `max_vertices`",
             ),
             (
                 "geo.subdivide",
@@ -2052,7 +2052,7 @@ mod tests {
                 "geo.snap",
                 json!({"tolerance": 0.5}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: missing field `reference_wkb`",
+                "config non valida: campo obbligatorio assente: `reference_wkb`",
             ),
             (
                 "geo.snap",
@@ -2076,7 +2076,7 @@ mod tests {
                 "geo.coverage_validate",
                 json!({"bogus": 1}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: unknown field `bogus`",
+                "config non valida: campo sconosciuto",
             ),
             (
                 "geo.shared_paths",
@@ -2088,13 +2088,13 @@ mod tests {
                 "geo.shared_paths",
                 json!({"tolerance": 1.0, "bogus": true}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: unknown field `bogus`",
+                "config non valida: campo sconosciuto",
             ),
             (
                 "geo.cluster_dbscan",
                 json!({"min_points": 3}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: missing field `eps`",
+                "config non valida: campo obbligatorio assente: `eps`",
             ),
             (
                 "geo.cluster_dbscan",
@@ -2112,7 +2112,7 @@ mod tests {
                 "geo.cluster_dbscan",
                 json!({"eps": 1.0, "min_points": 3, "bogus": 1}),
                 ErrorCategory::InvalidPlan,
-                "config non valida: unknown field `bogus`",
+                "config non valida: campo sconosciuto",
             ),
         ];
         for (op, config, categoria, frammento) in bad_configs {
@@ -2128,6 +2128,14 @@ mod tests {
                 errore.category() == categoria && errore.to_string().contains(&atteso),
                 "{op} con config {config}: atteso {categoria:?} con «{atteso}», ottenuto {errore:?}"
             );
+            // Errori senza dati: il nome o il valore scritti non tornano
+            // nel messaggio (il testo di serde li citerebbe).
+            for scritto in ["bogus", "molto", "triangle"] {
+                assert!(
+                    !errore.to_string().contains(scritto),
+                    "{op} con config {config}: il messaggio cita `{scritto}`: {errore}"
+                );
+            }
         }
 
         // other_wkb esadecimale ma con byte residui dopo la geometria.
@@ -2168,22 +2176,22 @@ mod tests {
             (
                 "geo.sjoin",
                 json!({}),
-                "config non valida: missing field `predicate`",
+                "config non valida: campo obbligatorio assente: `predicate`",
             ),
             (
                 "geo.sjoin",
                 json!({"predicate": "nope"}),
-                "config non valida: unknown variant `nope`",
+                "config non valida: valore sconosciuto",
             ),
             (
                 "geo.overlay",
                 json!({}),
-                "config non valida: missing field `mode`",
+                "config non valida: campo obbligatorio assente: `mode`",
             ),
             (
                 "geo.overlay",
                 json!({"mode": "intersection", "x": 1}),
-                "config non valida: unknown field `x`",
+                "config non valida: campo sconosciuto",
             ),
             (
                 "geo.nearest",
@@ -2197,6 +2205,10 @@ mod tests {
             assert!(
                 matches!(&result, Err(PlenoraError::InvalidPlan(messaggio)) if messaggio.starts_with(&atteso)),
                 "{op} con config {config}: atteso «{atteso}», ottenuto {result:?}"
+            );
+            assert!(
+                !matches!(&result, Err(errore) if errore.to_string().contains("nope")),
+                "{op} con config {config}: il messaggio cita il valore scritto: {result:?}"
             );
         }
     }

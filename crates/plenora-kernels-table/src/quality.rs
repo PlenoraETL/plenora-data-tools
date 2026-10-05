@@ -67,6 +67,38 @@ const fn default_true() -> bool {
     true
 }
 
+/// Rifiuto di un `data_type` di `assert_schema` fuori elenco: dice i tipi
+/// ammessi, non quello scritto (un testo del piano, che non entra nei
+/// messaggi). Lo usano il kernel e l'analisi del contratto.
+pub(crate) const MESSAGGIO_TIPO_ATTESO_NON_SUPPORTATO: &str = "data_type non supportato; \
+     ammessi: utf8, string, int64, integer, float64, float, double, boolean, bool, uint64, \
+     unsigned, date32, timestamp_seconds, timestamp_millis, timestamp_micros, \
+     timestamp_nanos, decimal128, binary, dictionary_utf8, list, struct";
+
+/// Il nome canonico della famiglia di tipo di un `data_type` riconosciuto
+/// (`"  StRiNg "` vale `utf8`), per i messaggi: il testo scritto nel piano
+/// non entra nel messaggio. `None` fuori elenco.
+pub(crate) fn nome_canonico_tipo(value: &str) -> Option<&'static str> {
+    Some(match value.trim().to_ascii_lowercase().as_str() {
+        "utf8" | "string" => "utf8",
+        "int64" | "integer" => "int64",
+        "float64" | "float" | "double" => "float64",
+        "boolean" | "bool" => "boolean",
+        "uint64" | "unsigned" => "uint64",
+        "date32" => "date32",
+        "timestamp_seconds" => "timestamp_seconds",
+        "timestamp_millis" => "timestamp_millis",
+        "timestamp_micros" => "timestamp_micros",
+        "timestamp_nanos" => "timestamp_nanos",
+        "decimal128" => "decimal128",
+        "binary" => "binary",
+        "dictionary_utf8" => "dictionary_utf8",
+        "list" => "list",
+        "struct" => "struct",
+        _ => return None,
+    })
+}
+
 fn expected_type(value: &str) -> Result<DataType> {
     match value.trim().to_ascii_lowercase().as_str() {
         "utf8" | "string" => Ok(DataType::Utf8),
@@ -103,8 +135,8 @@ fn expected_type(value: &str) -> Result<DataType> {
         "struct" => Ok(DataType::Struct(
             plenora_core::arrow::schema::Fields::empty(),
         )),
-        other => Err(PlenoraError::InvalidPlan(format!(
-            "assert_schema: tipo non supportato {other}"
+        _ => Err(PlenoraError::InvalidPlan(format!(
+            "assert_schema: {MESSAGGIO_TIPO_ATTESO_NON_SUPPORTATO}"
         ))),
     }
 }
@@ -169,7 +201,7 @@ pub fn assert_schema(batch: &RecordBatch, config: &AssertSchema) -> Result<Recor
             return Err(PlenoraError::Schema(format!(
                 "assert_schema: tipo errato per {}: atteso {}, trovato {}",
                 expectation.name,
-                expectation.data_type,
+                nome_canonico_tipo(&expectation.data_type).unwrap_or("?"),
                 plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
             )));
         }
@@ -590,8 +622,9 @@ pub fn assert_regex(batch: &RecordBatch, config: &AssertRegex) -> Result<RecordB
             "assert_regex richiede una colonna Utf8".into(),
         ));
     }
-    let pattern = Regex::new(&config.pattern)
-        .map_err(|error| PlenoraError::InvalidPlan(format!("regex non valida: {error}")))?;
+    let pattern = Regex::new(&config.pattern).map_err(|error| {
+        PlenoraError::InvalidPlan(crate::motivo_regex_non_valida(&error).into())
+    })?;
     let mut rejections = Vec::new();
     for row in 0..batch.num_rows() {
         match scalar_as_string(batch.column(index).as_ref(), row)? {
@@ -718,6 +751,50 @@ pub(crate) fn coalesce_generic(batch: &RecordBatch, indices: &[usize]) -> Result
 mod tests {
     use plenora_core::arrow::array::{Float64Array, Int64Array, StringArray};
     use plenora_core::arrow::schema::{Field, Schema};
+
+    /// **Il nome canonico e il tipo atteso riconoscono gli stessi testi.**
+    /// Ogni alias ha il nome canonico della sua famiglia, che e' a sua volta
+    /// un `data_type` valido dello stesso tipo; un testo fuori elenco non ha
+    /// ne' l'uno ne' l'altro.
+    #[test]
+    fn nome_canonico_e_tipo_atteso_concordano() {
+        for scritto in [
+            "utf8",
+            "string",
+            " StRiNg ",
+            "int64",
+            "integer",
+            "float64",
+            "float",
+            "double",
+            "boolean",
+            "bool",
+            "uint64",
+            "unsigned",
+            "date32",
+            "timestamp_seconds",
+            "timestamp_millis",
+            "timestamp_micros",
+            "timestamp_nanos",
+            "decimal128",
+            "binary",
+            "dictionary_utf8",
+            "list",
+            "struct",
+        ] {
+            let canonico = super::nome_canonico_tipo(scritto).expect(scritto);
+            assert_eq!(
+                super::expected_type(scritto).expect(scritto),
+                super::expected_type(canonico).expect(canonico),
+                "{scritto}"
+            );
+            assert_eq!(super::nome_canonico_tipo(canonico), Some(canonico));
+        }
+        for fuori in ["", "text", "int32", "SEGRETO"] {
+            assert!(super::nome_canonico_tipo(fuori).is_none(), "{fuori}");
+            assert!(super::expected_type(fuori).is_err(), "{fuori}");
+        }
+    }
 
     use super::*;
     use crate::test_support::single_column_batch;

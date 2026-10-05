@@ -476,9 +476,15 @@ pub fn nomi_input(numero: usize) -> Vec<String> {
         .collect()
 }
 
+/// Come la decodifica del runner: senza il testo di serde, che cita i
+/// valori scritti.
 fn de<T: DeserializeOwned>(config: &Value) -> Result<T> {
-    T::deserialize(config)
-        .map_err(|errore| PlenoraError::InvalidPlan(format!("config non valida: {errore}")))
+    T::deserialize(config).map_err(|errore| {
+        PlenoraError::InvalidPlan(format!(
+            "config non valida: {}",
+            plenora_core::json::descrivi_errore_config(&errore)
+        ))
+    })
 }
 
 /// La chiamata diretta del kernel, senza runner e senza analisi: l'oracolo

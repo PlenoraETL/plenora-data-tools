@@ -139,8 +139,16 @@ impl ReprojectParams {
         config: &Value,
         sorgente: &ResolvedCrs,
     ) -> Result<Self, PlenoraError> {
-        let parsed = ReprojectConfig::deserialize(config)
-            .map_err(|_| errore_config(op, "config non valida per geo.reproject"))?;
+        // Senza il testo di serde, che cita i valori scritti.
+        let parsed = ReprojectConfig::deserialize(config).map_err(|errore| {
+            errore_config(
+                op,
+                format!(
+                    "config non valida per geo.reproject: {}",
+                    plenora_core::json::descrivi_errore_config(&errore)
+                ),
+            )
+        })?;
         let target = resolve_crs(&parsed.target_crs, "target_crs").map_err(|error| {
             PlenoraError::from(error).con_contesto(&format!("{op}: parametro `target_crs`"))
         })?;

@@ -16,7 +16,9 @@ use plenora_kernels_table::Limits;
 use serde_json::json;
 
 /// Campi elencati da serde per la config di `op`: la config
-/// `{"zz_campo_sconosciuto": 0}` si rifiuta con `expected one of ...`.
+/// `{"zz_campo_sconosciuto": 0}` si rifiuta con `campo sconosciuto; campi
+/// ammessi: ...` (`plenora_core::json::descrivi_errore_config`, che tiene
+/// l'elenco di serde e toglie la chiave scritta).
 fn campi_serde(op: &str) -> BTreeSet<String> {
     let schema = std::sync::Arc::new(plenora_core::arrow::schema::Schema::empty());
     let ingressi: Vec<DataContract> = (0..2)
@@ -35,9 +37,16 @@ fn campi_serde(op: &str) -> BTreeSet<String> {
     )
     .expect_err("un campo sconosciuto si rifiuta")
     .to_string();
-    let Some((_, elenco)) = errore.split_once(", expected ") else {
-        // `there are no fields`: una config senza campi.
-        assert!(errore.contains("there are no fields"), "{op}: {errore}");
+    assert!(
+        !errore.contains("zz_campo_sconosciuto"),
+        "{op}: la chiave scritta torna nel messaggio: {errore}"
+    );
+    let Some((_, elenco)) = errore.split_once("campo sconosciuto; campi ammessi: ") else {
+        // Una config senza campi.
+        assert!(
+            errore.contains("campo sconosciuto: nessuno ammesso"),
+            "{op}: {errore}"
+        );
         return BTreeSet::new();
     };
     elenco
@@ -327,7 +336,7 @@ fn rifiuta_null(op: &str, config: &serde_json::Value) -> Result<(), String> {
         // `null` non si e' letto (anche un enum senza tag lo rifiuta cosi').
         Err(errore)
             if errore.to_string().contains("config non valida")
-                && !errore.to_string().contains("missing field") =>
+                && !errore.to_string().contains("campo obbligatorio assente") =>
         {
             Ok(())
         }
