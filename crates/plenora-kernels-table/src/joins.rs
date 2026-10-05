@@ -1618,9 +1618,10 @@ pub struct AsOfJoin {
     /// Direzione della ricerca; default `backward`.
     #[serde(default = "default_asof_direction")]
     pub direction: AsOfDirection,
-    /// Distanza massima `|destra - sinistra|`, finita e `>= 0`; assente o
-    /// `null`: nessun limite. Letta esatta ([`NumeroConfig`]): un intero
+    /// Distanza massima `|destra - sinistra|`, finita e `>= 0`; assente:
+    /// nessun limite (`null` si rifiuta: si omette). Letta esatta ([`NumeroConfig`]): un intero
     /// che il double non rappresenta si rifiuta ([`AsOfJoin::tolleranza`]).
+    #[serde(default, deserialize_with = "crate::mai_null")]
     pub tolerance: Option<NumeroConfig>,
     /// Default `true`; con `false` un candidato con valore uguale non si
     /// abbina.

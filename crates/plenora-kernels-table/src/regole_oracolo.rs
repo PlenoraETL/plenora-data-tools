@@ -366,6 +366,11 @@ const OPERATORI: [&str; 10] = [
     "eq", "ne", "gt", "ge", "lt", "le", "isnull", "notnull", "regex", "range",
 ];
 
+/// Quanti sono i [`valori`]: l'indice della proptest li copre tutti.
+const NUMERO_VALORI: usize = 18;
+
+/// I `value` provati. Niente `null`: la deserializzazione lo rifiuta
+/// (`mai_null`), e come assente era gia' il caso `None`.
 fn valori() -> Vec<Option<Value>> {
     vec![
         None,
@@ -385,7 +390,6 @@ fn valori() -> Vec<Option<Value>> {
         Some(json!("^[a-z]*$")),
         Some(json!("(")),
         Some(json!(true)),
-        Some(json!(null)),
         Some(json!("10.00")),
     ]
 }
@@ -481,7 +485,7 @@ proptest! {
     #[test]
     fn regole_come_il_riferimento_su_insiemi_casuali(
         scelte in prop::collection::vec(
-            (0_usize..10, 0_usize..10, 0_usize..19, any::<bool>()),
+            (0_usize..10, 0_usize..10, 0_usize..NUMERO_VALORI, any::<bool>()),
             1..6,
         ),
         inizio in 0_usize..8,
@@ -492,6 +496,7 @@ proptest! {
         let lunghezza = lunghezza.min(batch.num_rows() - inizio);
         let batch = batch.slice(inizio, lunghezza);
         let valori = valori();
+        prop_assert_eq!(valori.len(), NUMERO_VALORI);
         let regole = scelte
             .iter()
             .enumerate()

@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use serde::de::{Deserializer, MapAccess, SeqAccess, Visitor};
+use serde::Deserialize as _;
 
 use crate::error::{PlenoraError, Result};
 
@@ -38,6 +39,40 @@ where
     T: serde::Deserialize<'de>,
 {
     T::deserialize(deserializer).map(Some)
+}
+
+/// Messaggio di [`mai_null`]: fisso, senza valori.
+pub const MESSAGGIO_NULL_NON_AMMESSO: &str = "null non ammesso: un parametro facoltativo si omette";
+
+/// Un parametro facoltativo di una config: omesso vale il suo default,
+/// `null` scritto si rifiuta.
+///
+/// Con `#[serde(default, deserialize_with = "plenora_core::json::mai_null")]`
+/// un campo omesso resta `None`. Un `null` scritto non vale «assente»: un
+/// parametro scritto (anche `null`) sfuggirebbe alle regole sui parametri
+/// senza effetto, e chi lo scrive pensando a un valore («nessun limite»,
+/// «colonna nulla») avrebbe il default in silenzio. Diversamente da
+/// [`presente`] il rifiuto vale per ogni `T`, anche per `serde_json::Value`,
+/// che leggerebbe il `null` come un valore, e il messaggio e' fisso
+/// ([`MESSAGGIO_NULL_NON_AMMESSO`]).
+///
+/// Dove `null` ha un significato proprio, diverso dall'assenza, il campo non
+/// usa questa funzione e lo dichiara nel rustdoc e nella scheda.
+///
+/// # Errors
+///
+/// [`MESSAGGIO_NULL_NON_AMMESSO`] per un `null`; per un altro valore
+/// quelli di `T::deserialize`.
+pub fn mai_null<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    use serde::de::Error as _;
+    Option::<T>::deserialize(deserializer)?.map_or_else(
+        || Err(D::Error::custom(MESSAGGIO_NULL_NON_AMMESSO)),
+        |valore| Ok(Some(valore)),
+    )
 }
 
 /// Verifica che nessun oggetto del documento JSON abbia chiavi ripetute.

@@ -42,9 +42,11 @@ pub struct Lookup {
     /// testo: una stringa com'e', un numero o un booleano con il suo testo
     /// JSON, `null` come stringa vuota.
     pub mapping: BTreeMap<String, Value>,
-    /// Valore delle celle non nulle senza voce in `mapping`; `null`
-    /// (default) le lascia invariate.
-    #[serde(default)]
+    /// Valore delle celle non nulle senza voce in `mapping`; assente le
+    /// lascia invariate. Nel tipo l'assenza e' `Value::Null`; un `null`
+    /// scritto si rifiuta ([`crate::valore_mai_null`]): letto come assente
+    /// lascerebbe invariate le celle a chi chiedeva un valore nullo.
+    #[serde(default, deserialize_with = "crate::valore_mai_null")]
     pub default: Value,
     /// Colonna d'uscita (`Utf8`); assente, sovrascrive `column`.
     #[serde(default, deserialize_with = "crate::mai_null")]

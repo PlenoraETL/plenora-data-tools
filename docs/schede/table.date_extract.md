@@ -13,7 +13,7 @@ righe.
 | `column` | stringa | obbligatorio | colonna temporale o leggibile come testo | date da leggere |
 | `parts` | lista di stringhe | `["year"]` | non vuota, senza ripetizioni, fra `year`, `month`, `day`, `quarter`, `weekday`, `week`, `hour`, `minute`, `second` | parti da estrarre, nell'ordine delle colonne d'uscita |
 | `prefix` | stringa | `""` | qualunque; `""` vale `<column>_` | prefisso dei nomi d'uscita (`<prefix><parte>`) |
-| `date_format` | stringa o `null` | `null` | formato strftime di chrono, non vuoto, al più `max_string_bytes` byte; solo con una colonna di testo | formato delle date; `null` usa i formati ISO di default |
+| `date_format` | stringa | assente | formato strftime di chrono, non vuoto, al più `max_string_bytes` byte; solo con una colonna di testo; `null` non ammesso | formato delle date; assente, i formati ISO di default |
 | `invalid` | stringa | assente | nessuno: scritto si rifiuta, anche `null` | un valore non interpretabile fa sempre fallire il passo, nessun valore avrebbe effetto |
 
 Una colonna temporale (`date32`, `timestamp` di ogni unità, con o senza
@@ -64,7 +64,7 @@ In validazione, `InvalidPlan`:
 
 - `column` assente o di un tipo che non si legge come testo;
 - `date_format` vuoto, oltre `max_string_bytes`, con un elemento strftime
-  non riconosciuto, o scritto con una colonna temporale;
+  non riconosciuto, scritto con una colonna temporale, o scritto `null`;
 - un nome d'uscita `<prefix><parte>` vuoto, di soli spazi o oltre 1024
   byte;
 - `parts` vuota o con una parte ripetuta;

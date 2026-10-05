@@ -13,7 +13,7 @@ con `","` i valori di tutti i match.
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna `utf8` dell'ingresso | testo in cui cercare |
 | `pattern` | stringa | obbligatorio | regex non vuota della sintassi del crate `regex`, al più `max_regex_bytes` byte | espressione da cercare |
-| `output_column` | stringa o `null` | `null` | nome non vuoto, al più 1024 byte | colonna d'uscita senza gruppi con nome; `null` vale `<column>_extracted` |
+| `output_column` | stringa | assente | nome non vuoto, al più 1024 byte; `null` non ammesso | colonna d'uscita senza gruppi con nome; assente, `<column>_extracted` |
 | `extract_all` | booleano | `false` | `true`, `false` | estrae tutti i match invece del primo |
 
 Con gruppi con nome `output_column` ed `extract_all` si rifiutano: le
@@ -53,6 +53,7 @@ In validazione, `InvalidPlan`:
   di gruppo ripetuti e i pattern troppo grandi una volta compilati);
 - gruppi con nome insieme a `output_column` o a `extract_all`;
 - un nome d'uscita (scritto, derivato o di gruppo) oltre 1024 byte;
+  `output_column` scritto `null` (il parametro si omette);
 - config con campi sconosciuti.
 
 In esecuzione, `ResourceLimit`: con `extract_all`, il testo unito di una

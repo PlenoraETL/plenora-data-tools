@@ -15,7 +15,7 @@ quale elenco o conteggio finisce la violazione.
 | `rules[].name` | stringa | obbligatorio | non vuoto, al più 1024 byte, unico fra le regole | nome della regola nell'uscita |
 | `rules[].operator` | stringa | obbligatorio | `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `isnull`, `notnull`, `regex`, `range` | condizione che la cella deve soddisfare |
 | `rules[].column` | stringa | obbligatorio | colonna dell'ingresso, di un tipo ammesso dall'operatore | colonna su cui si valuta la regola |
-| `rules[].value` | JSON | assente | vedi sotto; `null` vale assente | termine di confronto; una stringa vale il suo testo, un altro valore il suo testo JSON |
+| `rules[].value` | JSON | assente | vedi sotto; `null` non ammesso | termine di confronto; una stringa vale il suo testo, un altro valore il suo testo JSON |
 | `rules[].severity` | stringa | `error` | `error`, `warning` | gravità della violazione |
 | `output_mode` | stringa | `annotate` | `annotate`, `summary` | forma dell'uscita |
 
@@ -80,7 +80,7 @@ In validazione, `InvalidPlan`:
 - `rules` vuoto o oltre 4096 regole; nome vuoto, oltre 1024 byte o
   ripetuto; regola senza `column`, o colonna assente;
 - `value` mancante per un operatore che lo usa, o presente per `isnull` e
-  `notnull`;
+  `notnull`; `value` o `column` scritti `null` (si omettono);
 - tipo della colonna non ammesso dall'operatore; `value` non numerico dove
   serve un numero; `range` senza virgola o con un estremo non numerico;
   regex oltre `max_regex_bytes` o non compilabile;

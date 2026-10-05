@@ -15,7 +15,7 @@ coincidenti, per esempio a ogni ordine l'ultimo prezzo noto.
 | `left_by` | lista di stringhe | `[]` | colonne della sinistra, senza ripetizioni | gruppo: si abbinano solo righe con gli stessi valori |
 | `right_by` | lista di stringhe | `[]` | colonne della destra, tante quante `left_by`, senza ripetizioni | colonne di gruppo del lato destro, nello stesso ordine |
 | `direction` | stringa | `backward` | `backward`, `forward`, `nearest` | `backward`: il più grande `<=` del valore; `forward`: il più piccolo `>=`; `nearest`: il più vicino dei due |
-| `tolerance` | numero o `null` | `null` | finito, `>= 0`; se intero, esatto in `f64`; non `0` con `allow_exact: false` | distanza massima fra i due valori; `null` nessun limite |
+| `tolerance` | numero | assente | finito, `>= 0`; se intero, esatto in `f64`; non `0` con `allow_exact: false`; `null` non ammesso | distanza massima fra i due valori; assente, nessun limite |
 | `allow_exact` | booleano | `true` | `true`, `false` | `false`: un candidato con valore uguale non si abbina (`<` e `>` stretti) |
 
 Le colonne `by` di ogni coppia hanno lo stesso tipo Arrow, fra quelli
@@ -65,9 +65,10 @@ In validazione, `InvalidPlan`:
   `right_on` assenti;
 - `left_by` e `right_by` di lunghezza diversa, con nomi ripetuti o oltre
   `max_columns`;
-- `tolerance` negativa, o intera e non esatta in `f64` (oltre `2^53` con
-  bit bassi non nulli: diventerebbe un'altra soglia); `tolerance` zero con
-  `allow_exact: false` (nessun candidato si abbinerebbe mai);
+- `tolerance` scritta `null` (per nessun limite si omette), negativa, o
+  intera e non esatta in `f64` (oltre `2^53` con bit bassi non nulli:
+  diventerebbe un'altra soglia); `tolerance` zero con `allow_exact: false`
+  (nessun candidato si abbinerebbe mai);
 - colonna assente; `left_on` e `right_on` non dello stesso tipo, o di tipo
   diverso da `int64` e `float64`; colonne `by` di tipi diversi nella
   coppia, o di tipo non ammesso;

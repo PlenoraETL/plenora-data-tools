@@ -86,13 +86,13 @@ pub struct ReprojectConfig {
     /// (assente: nessuna, e un percorso oltre 1 cm si rifiuta). Non finita,
     /// negativa o senza effetto (ogni percorso ammesso gia' entro 1 cm): si
     /// rifiuta.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub accuratezza_accettata_m: Option<f64>,
     /// Trasformazioni EPSG imposte, nell'ordine: il percorso fra i datum e'
     /// esattamente questo, per tutte le geometrie, e resta soggetto alla
     /// regola dell'accuratezza (assente: si provano tutti i percorsi
     /// ammessi).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub trasformazioni: Option<Vec<u32>>,
     /// Griglie `NTv2` fornite (assente: nessuna); una griglia che nessun
     /// percorso ammesso usa si rifiuta.
@@ -102,7 +102,7 @@ pub struct ReprojectConfig {
     /// usa l'accuratezza EPSG di ETRS89 to WGS 84 (1), 1 m. Scritta, con
     /// l'uno o l'altro valore, su una coppia che non passa da quella
     /// trasformazione si rifiuta.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
     pub convenzione_wgs84_etrs89: Option<bool>,
 }
 
