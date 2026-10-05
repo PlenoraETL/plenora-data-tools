@@ -156,24 +156,27 @@ pub(in crate::analyze) fn analyze_conditional(
         limits.max_string_bytes,
         "default_value",
     )?;
-    // Il tipo dipende solo dai letterali di config: tutti vuoti o numerici ->
-    // Float64 nullable, altrimenti Utf8 non nullable. La regola e' quella del
-    // kernel (`risultati_numerici`), con il suo rifiuto degli interi inesatti.
+    // Il tipo dipende solo dai letterali di config: tutti null o numerici ->
+    // Float64 nullable, altrimenti Utf8, nullable solo se un risultato e'
+    // null. La regola e' quella del kernel (`risultati_numerici`,
+    // `testo_risultato`), con il suo rifiuto degli interi inesatti.
     let testi = config
         .conditions
         .iter()
-        .map(|condition| json_text(&condition.result))
-        .chain(std::iter::once(json_text(&config.default_value)))
+        .map(|condition| filtering::testo_risultato(&condition.result))
+        .chain(std::iter::once(filtering::testo_risultato(
+            &config.default_value,
+        )))
         .collect::<Vec<_>>();
     let numeric = super::helpers::con_op(
         op,
-        filtering::risultati_numerici(testi.iter().map(String::as_str)),
+        filtering::risultati_numerici(testi.iter().map(Option::as_deref)),
     )?
     .is_some();
     let (data_type, nullable) = if numeric {
         (DataType::Float64, true)
     } else {
-        (DataType::Utf8, false)
+        (DataType::Utf8, testi.iter().any(Option::is_none))
     };
     analyze_append(
         input,

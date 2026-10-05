@@ -4271,6 +4271,32 @@ mod tests {
                 json!({"column": "value", "conditions": [{"operator": ">", "value": 2, "result": "hi"}], "default_value": "lo"}),
                 |b, config| filtering::conditional(b, &cfg(config)),
             );
+            // `null` come risultato: la cella nulla, e la colonna utf8
+            // nullable nel kernel come nell'analisi.
+            check_unary(
+                "table.conditional",
+                &batch,
+                json!({"column": "value", "conditions": [{"operator": ">", "value": 2, "result": "hi"}]}),
+                |b, config| filtering::conditional(b, &cfg(config)),
+            );
+            check_unary(
+                "table.conditional",
+                &batch,
+                json!({"column": "value", "conditions": [{"operator": ">", "value": 2, "result": null}], "default_value": ""}),
+                |b, config| filtering::conditional(b, &cfg(config)),
+            );
+            check_unary(
+                "table.conditional",
+                &batch,
+                json!({"column": "value", "conditions": [{"operator": ">", "value": 2, "result": 1}], "default_value": ""}),
+                |b, config| filtering::conditional(b, &cfg(config)),
+            );
+            check_unary(
+                "table.lookup",
+                &batch,
+                json!({"column": "name", "mapping": {"a": null, "b": ""}}),
+                |b, config| analysis::lookup(b, &cfg(config)),
+            );
             check_unary(
                 "table.lookup",
                 &batch,

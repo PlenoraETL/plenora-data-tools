@@ -1,9 +1,9 @@
 {
-  "nota": "Sorgente del manifesto di adozione v4 (schemas/adoption-manifest-v4.schema.json di plenora-contracts). Non e' il manifesto: versione e digest degli artefatti li aggiunge scripts/genera_manifesto_adozione.py dagli artefatti costruiti, al rilascio (CLI, crate Rust e wheel dell'SDK Python). Il profilo e' data-tools versione 2 (decisione 0007 dei contratti), che ha portato nei contratti le deviazioni dichiarate alla revisione ade868c: nessuna resta. data.run 3 (decisione 0008) e' esposta sulla superficie Rust (api::esegui_artefatti); il binding runtime resta all'applicazione.",
+  "nota": "Sorgente del manifesto di adozione v4 (schemas/adoption-manifest-v4.schema.json di plenora-contracts). Non e' il manifesto: versione e digest degli artefatti li aggiunge scripts/genera_manifesto_adozione.py dagli artefatti costruiti, al rilascio (CLI, crate Rust e wheel dell'SDK Python). Il profilo e' data-tools versione 2 (decisione 0007 dei contratti), che ha portato nei contratti le deviazioni dichiarate alla revisione ade868c: nessuna resta. data.run 3 (decisione 0008) e' esposta sulla superficie Rust (api::esegui_artefatti); il binding runtime resta all'applicazione. Revisione 1e902df (dal 23fed27): fra le due nessuno schema, catalogo, binding, vettore o conformance_checks.py cambia, quindi le copie dei fixture e i loro SHA-256 restano quelli.",
   "component": "plenora-data-tools",
   "contracts_source": {
     "repository": "https://github.com/PlenoraETL/plenora-contracts.git",
-    "revision": "23fed27d5736e5f32906a0116553fed16a1fb239"
+    "revision": "1e902dfaab5819c1d9ce785878d5b26dbeae48b3"
   },
   "profile": "plenora-data-tools-profile-v2",
   "conforming": [

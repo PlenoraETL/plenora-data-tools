@@ -438,7 +438,8 @@ pub(in crate::analyze) fn analyze_validate_rules(
             rule.operator,
             governance::RuleOperator::Isnull | governance::RuleOperator::Notnull
         );
-        if needs_value != rule.value.is_some() {
+        let value = con_op(op, rule.valore())?;
+        if needs_value != value.is_some() {
             return contract_error(
                 op,
                 format!(
@@ -452,7 +453,7 @@ pub(in crate::analyze) fn analyze_validate_rules(
                 ),
             );
         }
-        let expected = rule.value.as_ref().map_or_else(String::new, json_text);
+        let expected = value.map_or_else(String::new, json_text);
         match rule.operator {
             governance::RuleOperator::Isnull | governance::RuleOperator::Notnull => {}
             governance::RuleOperator::Eq | governance::RuleOperator::Ne => {

@@ -2,7 +2,7 @@
 
 `crates/plenora-cli` è la superficie pubblica del componente
 `plenora-data-tools` secondo il profilo data-tools di `plenora-contracts`,
-versione 2, fissato al commit `23fed27d5736e5f32906a0116553fed16a1fb239`: il binario
+versione 2, fissato al commit `1e902dfaab5819c1d9ce785878d5b26dbeae48b3`: il binario
 `plenora-data` (CLI 2.0) e le stesse quattro operazioni come funzioni Rust
 (`plenora_cli::api`). Una sola tabella (`plenora_cli::operazioni::OPERAZIONI`)
 dà comandi, aiuto, Capability Discovery 2.0 e la mappa degli export Rust; il

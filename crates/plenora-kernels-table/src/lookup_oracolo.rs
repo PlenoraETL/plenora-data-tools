@@ -15,13 +15,14 @@ use serde_json::json;
 use super::*;
 use crate::test_support::{assert_same_outcome_bits, nullable_batch};
 
-// Copia letterale del percorso precedente: una `String` per riga e il testo
-// della voce convertito a ogni riga.
-fn value_text_riferimento(value: &Value) -> String {
+// Copia del percorso precedente: una `String` per riga e il testo della
+// voce convertito a ogni riga. Unica modifica, con la 2.0.0: una voce `null`
+// da' la cella nulla invece del testo vuoto.
+fn value_text_riferimento(value: &Value) -> Option<String> {
     match value {
-        Value::String(v) => v.clone(),
-        Value::Null => String::new(),
-        other => other.to_string(),
+        Value::String(v) => Some(v.clone()),
+        Value::Null => None,
+        other => Some(other.to_string()),
     }
 }
 
@@ -33,11 +34,11 @@ fn lookup_riferimento(batch: &RecordBatch, config: &Lookup) -> Result<RecordBatc
     let values = (0..batch.num_rows())
         .map(|row| {
             scalar_as_string(source.as_ref(), row).map(|value| {
-                value.map(|value| {
+                value.and_then(|value| {
                     config.mapping.get(&value).map_or_else(
                         || {
                             if config.default.is_null() {
-                                value
+                                Some(value)
                             } else {
                                 value_text_riferimento(&config.default)
                             }
@@ -82,7 +83,8 @@ fn confronta(batch: &RecordBatch, config: &Lookup) {
 }
 
 /// Mappa avversaria: chiavi vuote, con spazi, Unicode, simili ai testi dei
-/// numeri; valori di ogni tipo JSON (il null diventa testo vuoto).
+/// numeri; valori di ogni tipo JSON (il null diventa la cella nulla, il `""` il
+/// testo vuoto).
 fn mappa() -> BTreeMap<String, Value> {
     [
         ("", json!("vuota")),
