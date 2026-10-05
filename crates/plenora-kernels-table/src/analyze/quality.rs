@@ -127,7 +127,7 @@ fn expected_type(op: &str, value: &str) -> Result<DataType> {
         "struct" => Ok(DataType::Struct(
             plenora_core::arrow::schema::Fields::empty(),
         )),
-        other => contract_error(op, format!("tipo non supportato {other}")),
+        _ => contract_error(op, crate::quality::MESSAGGIO_TIPO_ATTESO_NON_SUPPORTATO),
     }
 }
 

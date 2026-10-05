@@ -177,6 +177,12 @@ pub(crate) const fn motivo_regex_non_valida(errore: &regex::Error) -> &'static s
     }
 }
 
+/// Rifiuto di un fuso orario della config che non e' un nome della banca
+/// dati IANA: fisso, senza il testo scritto (un testo del piano, che non
+/// entra nei messaggi).
+pub(crate) const MESSAGGIO_FUSO_NON_VALIDO: &str =
+    "timezone non valida: atteso un nome IANA (per esempio Europe/Rome o UTC)";
+
 /// Deserializzazione di un parametro facoltativo che rifiuta il `null`
 /// esplicito.
 ///

@@ -71,6 +71,27 @@ const fn caso(
     (op, config, frammento)
 }
 
+/// **Una chiave ripetuta non entra nel messaggio.** Le chiavi di
+/// `mapping` di `table.lookup` sono valori dei dati: il rifiuto e' fisso,
+/// con la sola posizione nel documento.
+#[test]
+fn la_chiave_ripetuta_non_entra_nel_messaggio() {
+    for testo in [
+        r#"{"version": 1, "inputs": ["t"], "steps": [], "outputs": [], "SEGRETO": 1,
+            "SEGRETO": 2}"#,
+        r#"{"version": 1, "inputs": ["t"], "outputs": ["u"], "steps": [{"out": "u",
+            "op": "table.lookup", "in": ["t"], "config": {"column": "name",
+            "mapping": {"SEGRETO": "a", "SEGRETO": "b"}}}]}"#,
+    ] {
+        let errore = Pipeline::from_json(testo).expect_err("chiave ripetuta");
+        let messaggio = errore.to_string();
+        assert!(e_piano(&errore), "{messaggio}");
+        assert!(messaggio.contains("chiave JSON duplicata"), "{messaggio}");
+        assert!(messaggio.contains("(riga "), "{messaggio}");
+        assert!(!messaggio.contains(SENTINELLA), "{messaggio}");
+    }
+}
+
 #[test]
 fn nessun_messaggio_cita_il_valore_scritto() {
     let casi = [
@@ -122,6 +143,27 @@ fn nessun_messaggio_cita_il_valore_scritto() {
                             {"kind": "literal", "value": "x"}]}}),
             "regex non valida: sintassi",
         ),
+        // Letterali della config fuori elenco: il messaggio dice gli
+        // ammessi, non quello scritto.
+        caso(
+            "table.expression",
+            json!({"output_column": "e", "expression": {"kind": "function",
+                   "name": "date_trunc",
+                   "args": [{"kind": "literal", "value": "SEGRETO"},
+                            {"kind": "column", "name": "date"}]}}),
+            "unita' non valida; ammesse: year, month, day, hour, minute, second",
+        ),
+        caso(
+            "table.assert_schema",
+            json!({"fields": [{"name": "id", "data_type": "SEGRETO"}], "allow_extra": true}),
+            "data_type non supportato; ammessi: utf8",
+        ),
+        caso(
+            "table.timezone_convert",
+            json!({"column": "date", "input_format": "%Y-%m-%d", "source_timezone": "UTC",
+                   "target_timezone": "SEGRETO", "output_column": "d"}),
+            "timezone non valida",
+        ),
     ];
     let mut difetti = Vec::new();
     for (op, config, frammento) in casi {
@@ -146,4 +188,21 @@ fn nessun_messaggio_cita_il_valore_scritto() {
         }
     }
     assert!(difetti.is_empty(), "{}", difetti.join("\n"));
+}
+
+/// **Il fuso di `type_cast` non entra nel messaggio.** La validazione lo
+/// rifiuta con il messaggio fisso; il kernel chiamato da solo non lo
+/// verifica prima e rifiuta le righe (diagnostica per riga, senza valori).
+#[test]
+fn il_fuso_di_type_cast_non_entra_nel_messaggio() {
+    let config = json!({"column": "date", "target_type": "timestamp_millis",
+                        "timezone": "SEGRETO"});
+    let validazione = valida("table.type_cast", Fixture::Wide, &config);
+    let testo = validazione.to_string();
+    assert!(e_piano(&validazione), "{testo}");
+    assert!(testo.contains("timezone non valida"), "{testo}");
+    assert!(!testo.contains(SENTINELLA), "{testo}");
+    let kernel = chiamata_diretta("table.type_cast", &config, &tabelle(Fixture::Wide))
+        .expect_err("il fuso non e' valido");
+    assert!(!format!("{kernel:?}").contains(SENTINELLA), "{kernel:?}");
 }

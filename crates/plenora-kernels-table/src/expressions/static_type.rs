@@ -649,7 +649,7 @@ fn infer_date_trunc(
         unit.as_str(),
         "year" | "month" | "day" | "hour" | "minute" | "second"
     ) {
-        return errore(op, format!("date_trunc: unita' non valida: {unit}"));
+        return errore(op, super::temporal::MESSAGGIO_UNITA_TRUNC_NON_VALIDA);
     }
     temporal_kind(op, &args[1], unit, lookup)
 }

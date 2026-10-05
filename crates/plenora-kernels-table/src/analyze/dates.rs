@@ -195,7 +195,7 @@ pub(in crate::analyze) fn analyze_timezone_convert(
     let mut fusi = Vec::with_capacity(2);
     for timezone in [&config.source_timezone, &config.target_timezone] {
         fusi.push(timezone.parse::<chrono_tz::Tz>().map_err(|_| {
-            PlenoraError::InvalidPlan(format!("{op}: timezone non valida: {timezone}"))
+            PlenoraError::InvalidPlan(format!("{op}: {}", crate::MESSAGGIO_FUSO_NON_VALIDO))
         })?);
     }
     check_input(

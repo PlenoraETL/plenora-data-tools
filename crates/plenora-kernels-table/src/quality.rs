@@ -65,6 +65,14 @@ const fn default_true() -> bool {
     true
 }
 
+/// Rifiuto di un `data_type` di `assert_schema` fuori elenco: dice i tipi
+/// ammessi, non quello scritto (un testo del piano, che non entra nei
+/// messaggi). Lo usano il kernel e l'analisi del contratto.
+pub(crate) const MESSAGGIO_TIPO_ATTESO_NON_SUPPORTATO: &str = "data_type non supportato; \
+     ammessi: utf8, string, int64, integer, float64, float, double, boolean, bool, uint64, \
+     unsigned, date32, timestamp_seconds, timestamp_millis, timestamp_micros, \
+     timestamp_nanos, decimal128, binary, dictionary_utf8, list, struct";
+
 fn expected_type(value: &str) -> Result<DataType> {
     match value.trim().to_ascii_lowercase().as_str() {
         "utf8" | "string" => Ok(DataType::Utf8),
@@ -101,8 +109,8 @@ fn expected_type(value: &str) -> Result<DataType> {
         "struct" => Ok(DataType::Struct(
             plenora_core::arrow::schema::Fields::empty(),
         )),
-        other => Err(PlenoraError::InvalidPlan(format!(
-            "assert_schema: tipo non supportato {other}"
+        _ => Err(PlenoraError::InvalidPlan(format!(
+            "assert_schema: {MESSAGGIO_TIPO_ATTESO_NON_SUPPORTATO}"
         ))),
     }
 }

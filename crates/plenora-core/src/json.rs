@@ -86,6 +86,11 @@ const MESSAGGI_STATICI: &[&str] = &[
 /// diventa il solo genere di [`serde_json::error::Category`], con riga e
 /// colonna quando il documento era testo (una config letta da un `Value`
 /// non ha posizione).
+///
+/// Il contesto che la regola di `error.rs` ammette resta nei messaggi dei
+/// chiamanti: il passo, l'operazione, la colonna per nome, il nome di una
+/// regola, il motivo. Non e' un valore scritto: e' quello che serve per
+/// trovare l'errore nel piano.
 #[must_use]
 pub fn descrivi_errore_config(errore: &serde_json::Error) -> String {
     use serde_json::error::Category;
@@ -235,20 +240,44 @@ fn identificatore(nome: &str) -> bool {
 ///
 /// `PlenoraError::InvalidPlan` se una chiave e' ripetuta nello stesso
 /// oggetto, o se un oggetto usa la chiave riservata di `serde_json`,
-/// nominando in entrambi i casi la chiave.
+/// con un messaggio fisso e la posizione nel documento. La chiave ripetuta
+/// non si nomina: e' testo scritto dall'utente, e in un documento di dati
+/// (le chiavi di `mapping` di `table.lookup`) e' un valore.
 pub fn ensure_no_duplicate_keys(json_text: &str) -> Result<()> {
     let mut deserializer = serde_json::Deserializer::from_str(json_text);
     let esito = serde::de::DeserializeSeed::deserialize(UniqueKeys, &mut deserializer);
     // `Category::Data` e' la classe degli errori prodotti dal visitatore, cioe'
     // esattamente la chiave duplicata; sintassi ed EOF spettano al parse vero e
     // qui non sono un errore.
+    // Il messaggio si ricompone dalle costanti: il testo dell'errore serde
+    // non attraversa il confine nemmeno quando e' nostro.
     if let Err(error) = esito {
         if error.classify() == serde_json::error::Category::Data {
-            return Err(PlenoraError::InvalidPlan(error.to_string()));
+            let motivo = if error.to_string().starts_with(MESSAGGIO_CHIAVE_RISERVATA) {
+                MESSAGGIO_CHIAVE_RISERVATA
+            } else {
+                MESSAGGIO_CHIAVE_DUPLICATA
+            };
+            return Err(PlenoraError::InvalidPlan(format!(
+                "{motivo} (riga {} colonna {})",
+                error.line(),
+                error.column()
+            )));
         }
     }
     Ok(())
 }
+
+/// Rifiuto di una chiave ripetuta nello stesso oggetto: fisso, senza la
+/// chiave.
+const MESSAGGIO_CHIAVE_DUPLICATA: &str = "chiave JSON duplicata nello stesso oggetto: il \
+     documento e' ambiguo e non viene risolto con «vince l'ultima»";
+
+/// Rifiuto della chiave riservata di `serde_json`. Nomina la chiave perche'
+/// e' una costante del formato, non un testo dell'utente.
+const MESSAGGIO_CHIAVE_RISERVATA: &str = "chiave JSON riservata \
+     `$serde_json::private::RawValue`: `serde_json` la usa per trasportare JSON grezzo e \
+     non la legge come una chiave, quindi il documento non e' quello che dichiara di essere";
 
 /// Verifica che ogni numero del documento valga esattamente quello che
 /// `serde_json` ne legge.
@@ -411,17 +440,10 @@ impl<'de> Visitor<'de> for UniqueKeysVisitor {
             // chiavi — `$` viene prima di ogni lettera, quindi una chiave
             // innocua in coda diventa la prima del canonico.
             if key == CHIAVE_RISERVATA_SERDE_JSON {
-                return Err(serde::de::Error::custom(format!(
-                    "chiave JSON riservata `{key}`: `serde_json` la usa per trasportare \
-                     JSON grezzo e non la legge come una chiave, quindi il documento \
-                     non e' quello che dichiara di essere"
-                )));
+                return Err(serde::de::Error::custom(MESSAGGIO_CHIAVE_RISERVATA));
             }
-            if !seen.insert(key.clone()) {
-                return Err(serde::de::Error::custom(format!(
-                    "chiave JSON duplicata `{key}`: il documento e' ambiguo e non viene risolto \
-                     con «vince l'ultima»"
-                )));
+            if !seen.insert(key) {
+                return Err(serde::de::Error::custom(MESSAGGIO_CHIAVE_DUPLICATA));
             }
         }
         Ok(())
@@ -712,6 +734,8 @@ mod tests {
         ] {
             let error = ensure_no_duplicate_keys(text).expect_err(text);
             assert!(error.to_string().contains("duplicata"), "{text}: {error}");
+            // La chiave scritta non entra nel messaggio.
+            assert!(!error.to_string().contains('`'), "{text}: {error}");
         }
     }
 

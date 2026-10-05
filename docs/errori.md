@@ -59,6 +59,15 @@ regex scritta nel piano che il crate `regex` rifiuta dice solo se è la
 sintassi o il limite di dimensione, mai il testo del crate, che riporta il
 pattern.
 
+Lo stesso vale per i testi che il workspace scrive da sé: un letterale
+della config fuori elenco (l'unità di `date_trunc`, il `data_type` di
+`assert_schema`) si rifiuta con l'elenco dei valori ammessi, un fuso orario
+non riconosciuto (`timezone_convert`, `type_cast`) con un messaggio fisso,
+una chiave JSON ripetuta nello stesso oggetto con la sola posizione nel
+documento: le chiavi di `mapping` di `lookup` sono valori dei dati.
+Restano nel messaggio il contesto che serve a trovare l'errore: il passo,
+l'operazione, la colonna per nome, il nome di una regola.
+
 ## Effetto di un errore a metà della scrittura
 
 `remote_effect` è `none` per costruzione (ogni file d'uscita è scritto in
