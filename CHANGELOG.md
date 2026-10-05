@@ -40,7 +40,7 @@ significato proprio. Rifiutati ora:
 - i campi facoltativi del payload `plenora-row-diagnostics-v1` letto da
   `plenora-core`.
 
-**`null` non vale più il testo vuoto** (PR `fix/null-come-testo-vuoto`).
+**`null` non vale più il testo vuoto** (#115).
 Fino alla 1.1.0 un `null` in quattro punti delle config si leggeva come
 `""`. Così `{"operator": "==", "value": null}` teneva le celle vuote invece
 delle celle nulle, e un `null` scelto come uscita diventava una cella `""`.
@@ -94,7 +94,7 @@ di `table.fill_na` (riempie con null), `default` delle colonne di
 
 ### Contratti
 
-- `plenora-contracts` passa da `23fed27` a `1e902df`. Fra i due commit non
+- `plenora-contracts` passa da `23fed27` a `1e902df` (#116). Fra i due commit non
   cambia nessuno schema, catalogo, binding, vettore né
   `conformance_checks.py`: le copie dei fixture e i loro SHA-256 restano
   gli stessi.
