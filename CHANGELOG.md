@@ -57,7 +57,11 @@ Ora:
   risultati numerici rende l'uscita `utf8`, mentre prima dava un `float64`
   nullo;
 - i valori `null` di `mapping` di `table.lookup` danno la cella nulla
-  invece di `""`.
+  invece di `""`;
+- una regola di `table.validate_rules` costruita dall'API Rust con
+  `value: Some(Value::Null)` si rifiuta con `InvalidPlan`. Prima passava il
+  controllo di presenza, e confrontava con `""` o compilava la regex vuota.
+  Dal piano JSON `null` era già rifiutato.
 
 Dove `null` resta ammesso, con il significato dichiarato nella scheda:
 `result` e `default_value` di `table.conditional` (la cella nulla), `value`
