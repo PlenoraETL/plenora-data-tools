@@ -239,9 +239,12 @@ cargo llvm-cov --workspace --exclude plenora-data-py --summary-only
 
 ### Rilascio
 
-GitHub Releases è l'unica distribuzione. Pubblicare una release con tag
-`v<versione del workspace>` avvia `.github/workflows/rilascio.yml`, che
-costruisce e prova gli artefatti e li allega alla release:
+GitHub Releases è l'unica distribuzione. Le modifiche di ogni versione
+stanno in [`CHANGELOG.md`](CHANGELOG.md), e il corpo della release le
+riprende. Pubblicare una release con tag `v<versione del workspace>` avvia
+`.github/workflows/rilascio.yml`, che verifica che il CHANGELOG abbia la
+voce datata della versione, costruisce e prova gli artefatti e li allega
+alla release:
 
 | artefatto | superficie |
 | --- | --- |
