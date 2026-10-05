@@ -11,7 +11,7 @@ quindi anche i null.
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | nome di una colonna dell'ingresso | colonna su cui si valuta la condizione |
 | `operator` | stringa | obbligatorio | `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains`, `startswith`, `endswith`, `isnull`, `notnull`, `between` | confronto fra la cella e `value` |
-| `value` | JSON | `null` | stringa, numero, booleano o `null`; per `between` il testo `"min,max"`; con `isnull`, `notnull` non si scrive | termine di confronto; un non-stringa vale il suo testo JSON, `null` vale `""` |
+| `value` | JSON | obbligatorio, tranne con `isnull`, `notnull` | stringa, numero o booleano, mai `null`; per `between` il testo `"min,max"`; con `isnull`, `notnull` non si scrive | termine di confronto; un non-stringa vale il suo testo JSON |
 
 Come si confronta, per operatore:
 
@@ -34,6 +34,12 @@ Come si confronta, per operatore:
 - `isnull`, `notnull`: sulla nullità logica della cella (anche la voce
   nulla di un dizionario). `value` non avrebbe effetto: scritto, anche
   `null`, si rifiuta.
+
+`value: null` non è un termine di confronto e si rifiuta, come `value`
+assente con un operatore che lo legge: le celle nulle si cercano con
+`isnull` e `notnull`, il testo vuoto si scrive `""`. Fino alla 1.1.0 un
+`null`, scritto o implicito nell'assenza, valeva `""`, e `{"operator":
+"==", "value": null}` teneva le celle vuote invece delle celle nulle.
 
 ### Schema
 
@@ -61,6 +67,7 @@ In validazione (analisi del contratto), `InvalidPlan`:
 - `contains`, `startswith`, `endswith` (e `==`/`!=` fuori da `int64` e
   `float64`) su una colonna che non si legge come testo scalare;
 - `value` scritto (anche `null`) con `isnull` o `notnull`;
+- `value` `null`, o assente, con ogni altro operatore;
 - config con campi sconosciuti o `operator` fuori elenco.
 
 In esecuzione:

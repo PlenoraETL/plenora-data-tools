@@ -154,10 +154,13 @@ rifiuta, nell'analisi e nel kernel, con la stessa funzione
 la deserializzazione, `plenora_core::json::mai_null`). Il `null` esplicito
 si rifiuta in ogni config, tabellare e geo, anche nei campi annidati; i soli
 campi dove `null` ha un significato proprio, dichiarato nella scheda, sono
-`value` di `filter` e delle condizioni di `conditional` (il testo vuoto),
-`result` e `default_value` di `conditional` (un valore d'uscita), `value`
-di `fill_na` (riempie con null) e `default` delle colonne di `align_schema`
-(la colonna di null). Il censimento di ogni campo di ogni
+`result` e `default_value` di `conditional` (la cella nulla), `value`
+di `fill_na` (riempie con null), `default` delle colonne di `align_schema`
+(la colonna di null) e i valori di `mapping` di `lookup` (la cella nulla).
+`null` non vale mai il testo vuoto: `value` di `filter` e delle condizioni
+di `conditional`, che fino alla 1.1.0 lo leggevano come `""`, rifiutano
+`null` e l'assenza con ogni operatore tranne `isnull` e `notnull`
+(`verifica_valore`). Il censimento di ogni campo di ogni
 config tabellare è in `crates/plenora-pipeline/tests/censimento_parametri.rs`
 e la parità analisi–kernel di ogni regola in
 `crates/plenora-pipeline/tests/parametri_senza_effetto.rs`; il `null` di

@@ -11,7 +11,7 @@ una nuova.
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `column` | stringa | obbligatorio | colonna leggibile come testo | colonna da tradurre |
-| `mapping` | oggetto | obbligatorio | chiavi stringa, valori JSON qualsiasi il cui testo è al più `max_string_bytes` byte; al più `max_rows` voci | corrispondenze testo della cella → valore |
+| `mapping` | oggetto | obbligatorio | chiavi stringa, valori JSON qualsiasi (`null`: la cella nulla) il cui testo è al più `max_string_bytes` byte; al più `max_rows` voci | corrispondenze testo della cella → valore |
 | `default` | JSON | assente | qualsiasi tranne `null`, con testo al più `max_string_bytes` byte | valore delle celle non nulle senza voce; assente, le lascia invariate |
 | `output_column` | stringa | `column` | nome valido (non vuoto, al più 1024 byte) | colonna d'uscita; assente, sovrascrive `column` |
 
@@ -23,7 +23,8 @@ della cella byte per byte: un `int64` `5` è `"5"`, un `float64` `2.0` è
 
 Il valore scritto è il testo del valore JSON: una stringa vale sé stessa, un
 numero o un booleano il suo testo JSON (`1.50` diventa `1.5`), un `null` la
-stringa vuota (non una cella nulla). Una chiave ripetuta in `mapping` vale
+cella nulla (fino alla 1.1.0 la stringa vuota; la stringa vuota si scrive
+`""`). Una chiave ripetuta in `mapping` vale
 l'ultima occorrenza.
 
 ### Schema
@@ -37,7 +38,8 @@ sovrascritta.
 
 ### Righe
 
-1:1. Una cella nulla resta nulla, anche con `default`.
+1:1. Una cella nulla resta nulla, anche con `default`; una cella la cui
+voce di `mapping` è `null` diventa nulla.
 
 ### Ordine
 
