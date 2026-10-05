@@ -66,7 +66,11 @@ non riconosciuto (`timezone_convert`, `type_cast`) con un messaggio fisso,
 una chiave JSON ripetuta nello stesso oggetto con la sola posizione nel
 documento: le chiavi di `mapping` di `lookup` sono valori dei dati.
 Restano nel messaggio il contesto che serve a trovare l'errore: il passo,
-l'operazione, la colonna per nome, il nome di una regola.
+l'operazione, la colonna per nome, il nome di una regola, e i limiti
+numerici configurati (`max_candidates`, `max_points`, `max_issues`, i
+`limits.max_*` del piano, il budget di memoria) nei messaggi di
+superamento: sono parametri di configurazione, non valori di righe o
+colonne, e senza di loro il superamento non si diagnostica.
 
 ## Effetto di un errore a metà della scrittura
 

@@ -85,7 +85,7 @@ pub(in crate::analyze) fn analyze_assert_schema(
                 format!(
                     "tipo errato per {}: atteso {}, trovato {}",
                     expectation.name,
-                    expectation.data_type,
+                    crate::quality::nome_canonico_tipo(&expectation.data_type).unwrap_or("?"),
                     plenora_core::tipo_arrow::descrivi_tipo(field.data_type())
                 ),
             );

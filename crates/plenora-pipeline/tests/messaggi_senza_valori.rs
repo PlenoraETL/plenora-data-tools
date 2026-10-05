@@ -190,6 +190,73 @@ fn nessun_messaggio_cita_il_valore_scritto() {
     assert!(difetti.is_empty(), "{}", difetti.join("\n"));
 }
 
+/// **Un testo della config riconosciuto o rifiutato non torna nel
+/// messaggio.** Per ogni caso: l'operazione, la config, il frammento atteso
+/// e il testo scritto che non deve comparire, in validazione e nel kernel.
+#[test]
+fn i_testi_della_config_non_tornano_nel_messaggio() {
+    let casi = [
+        // Tipo riconosciuto ma diverso: il nome canonico, non lo scritto.
+        (
+            "table.assert_schema",
+            json!({"fields": [{"name": "id", "data_type": "  StRiNg  "}], "allow_extra": true}),
+            "atteso utf8, trovato",
+            "StRiNg",
+        ),
+        // Carattere non ammesso: la posizione, non il carattere.
+        (
+            "table.formula",
+            json!({"new_column": "f", "formula": "value * #2"}),
+            "carattere formula non ammesso alla posizione 8",
+            "#",
+        ),
+        // Prefisso configurato: resta il nome della colonna d'uscita.
+        (
+            "table.flatten_json",
+            json!({"column": "json", "prefix": "SEGRETO_", "output_columns": ["json_a"]}),
+            "non inizia con",
+            SENTINELLA,
+        ),
+    ];
+    let mut difetti = Vec::new();
+    for (op, config, frammento, scritto) in casi {
+        let validazione = valida(op, Fixture::Wide, &config);
+        let kernel = chiamata_diretta(op, &config, &tabelle(Fixture::Wide));
+        for (dove, esito) in [
+            ("validazione", Err(validazione)),
+            ("kernel", kernel.map(|_| ())),
+        ] {
+            match esito {
+                Err(errore)
+                    if errore.to_string().contains(frammento)
+                        && !errore.to_string().contains(scritto) => {}
+                altro => difetti.push(format!(
+                    "{op}: {dove}, atteso «{frammento}» senza «{scritto}», avuto {altro:?}"
+                )),
+            }
+        }
+    }
+    assert!(difetti.is_empty(), "{}", difetti.join("\n"));
+}
+
+/// **La versione del piano scritta non entra nel messaggio.**
+#[test]
+fn la_versione_scritta_non_entra_nel_messaggio() {
+    let mut pipeline = piano("table.limit", &["ingresso_0"], json!({"n": 1}));
+    pipeline.version = 4242;
+    let tavole = tabelle(Fixture::Wide);
+    let errore = pipeline
+        .validate(&[("ingresso_0", tavole[0].schema())])
+        .expect_err("versione non supportata");
+    let testo = errore.to_string();
+    assert!(e_piano(&errore), "{testo}");
+    assert!(
+        testo.contains("versione del piano non supportata: attesa 1"),
+        "{testo}"
+    );
+    assert!(!testo.contains("4242"), "{testo}");
+}
+
 /// **Il fuso di `type_cast` non entra nel messaggio.** La validazione lo
 /// rifiuta con il messaggio fisso; il kernel chiamato da solo non lo
 /// verifica prima e rifiuta le righe (diagnostica per riga, senza valori).

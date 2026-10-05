@@ -139,7 +139,7 @@ pub(in crate::analyze) fn analyze_flatten_json(
         if !name.starts_with(&prefix) {
             return contract_error(
                 op,
-                format!("output column {name:?} non inizia con il prefix {prefix:?}"),
+                format!("output column {name:?} non inizia con il prefix configurato"),
             );
         }
         check_output_name(op, name)?;

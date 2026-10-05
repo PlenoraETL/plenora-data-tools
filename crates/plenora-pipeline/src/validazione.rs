@@ -414,9 +414,9 @@ impl Pipeline {
     #[allow(clippy::too_many_lines)] // Passi sequenziali della validazione: spezzarli nuocerebbe alla lettura.
     pub fn validate(&self, schemas: &[(&str, SchemaRef)]) -> Result<PipelineValidata> {
         if self.version != VERSIONE_PIANO {
+            // Il valore ricevuto e' scritto nel piano: non entra nel messaggio.
             return Err(PlenoraError::InvalidPlan(format!(
-                "versione del piano {} non supportata: attesa {VERSIONE_PIANO}",
-                self.version
+                "versione del piano non supportata: attesa {VERSIONE_PIANO}"
             )));
         }
         // Senza sostituzioni restano i default, validati allo stesso modo.
