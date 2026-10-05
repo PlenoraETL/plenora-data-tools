@@ -302,7 +302,8 @@ fn verifica_letterali_della_funzione(
                 if !solo_null(0)? && !solo_null(2)? {
                     regex::Regex::new(pattern).map_err(|error| {
                         PlenoraError::InvalidPlan(format!(
-                            "{op}: regex_replace: regex non valida: {error}"
+                            "{op}: regex_replace: {}",
+                            crate::motivo_regex_non_valida(&error)
                         ))
                     })?;
                 }

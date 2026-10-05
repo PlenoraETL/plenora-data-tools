@@ -588,8 +588,9 @@ pub fn assert_regex(batch: &RecordBatch, config: &AssertRegex) -> Result<RecordB
             "assert_regex richiede una colonna Utf8".into(),
         ));
     }
-    let pattern = Regex::new(&config.pattern)
-        .map_err(|error| PlenoraError::InvalidPlan(format!("regex non valida: {error}")))?;
+    let pattern = Regex::new(&config.pattern).map_err(|error| {
+        PlenoraError::InvalidPlan(crate::motivo_regex_non_valida(&error).into())
+    })?;
     let mut rejections = Vec::new();
     for row in 0..batch.num_rows() {
         match scalar_as_string(batch.column(index).as_ref(), row)? {

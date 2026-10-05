@@ -501,6 +501,29 @@ mod tests {
     /// La colonna `nan` contiene NaN: la lettura deve fallire in entrambi i
     /// percorsi ("numero non finito in ingresso"). `ts` e `tstz`
     /// coprono i timestamp nativi (naive e timezone-aware) di `date_trunc`.
+    /// **Un pattern letterale non valido non torna nel messaggio**, ne'
+    /// dal percorso veloce ne' dal generico (il testo del crate `regex`
+    /// riporta il pattern).
+    #[test]
+    fn la_regex_letterale_non_valida_non_cita_il_pattern() {
+        let batch = fixture();
+        let cfg = config(
+            func(
+                "regex_replace",
+                vec![col("s"), lit(json!("(PATTERN_SEGRETO")), lit(json!("x"))],
+            ),
+            None,
+        );
+        for esito in [
+            expression(&batch, &cfg),
+            interpreter::expression_generic(&batch, &cfg),
+        ] {
+            let errore = esito.expect_err("pattern non valido").to_string();
+            assert!(errore.contains("regex non valida: sintassi"), "{errore}");
+            assert!(!errore.contains("PATTERN_SEGRETO"), "{errore}");
+        }
+    }
+
     fn fixture() -> RecordBatch {
         RecordBatch::try_new(
             Arc::new(Schema::new(vec![

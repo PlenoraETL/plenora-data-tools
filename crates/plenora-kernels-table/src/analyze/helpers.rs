@@ -25,8 +25,17 @@ use crate::validate_output_name;
 
 /// Deserializza la config tipizzata (fail-closed: `deny_unknown_fields`).
 pub(in crate::analyze) fn typed<T: DeserializeOwned>(op: &str, config: &Value) -> Result<T> {
-    serde_json::from_value(config.clone())
-        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: config non valida: {error}")))
+    serde_json::from_value(config.clone()).map_err(|error| config_non_valida(op, &error))
+}
+
+/// L'errore di piano di una config che serde rifiuta, senza il testo di
+/// serde, che cita i valori scritti
+/// ([`plenora_core::json::descrivi_errore_config`]).
+pub(in crate::analyze) fn config_non_valida(op: &str, error: &serde_json::Error) -> PlenoraError {
+    PlenoraError::InvalidPlan(format!(
+        "{op}: config non valida: {}",
+        plenora_core::json::descrivi_errore_config(error)
+    ))
 }
 
 pub(in crate::analyze) fn contract_error<T>(op: &str, message: impl Into<String>) -> Result<T> {

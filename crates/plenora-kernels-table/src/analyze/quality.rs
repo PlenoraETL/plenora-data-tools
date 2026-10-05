@@ -208,8 +208,9 @@ pub(in crate::analyze) fn analyze_assert_regex(
     }
     check_text_len(op, &config.pattern, limits.max_regex_bytes, "pattern")?;
     require_utf8(op, input, &config.column)?;
-    regex::Regex::new(&config.pattern)
-        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: regex non valida: {error}")))?;
+    regex::Regex::new(&config.pattern).map_err(|error| {
+        PlenoraError::InvalidPlan(format!("{op}: {}", crate::motivo_regex_non_valida(&error)))
+    })?;
     Ok(input.clone())
 }
 
@@ -545,8 +546,9 @@ pub(in crate::analyze) fn analyze_validate_rules(
                 }
                 regex::Regex::new(&expected).map_err(|error| {
                     PlenoraError::InvalidPlan(format!(
-                        "{op}: regola {}: regex non valida: {error}",
-                        rule.name
+                        "{op}: regola {}: {}",
+                        rule.name,
+                        crate::motivo_regex_non_valida(&error)
                     ))
                 })?;
             }

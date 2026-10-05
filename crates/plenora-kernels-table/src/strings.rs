@@ -291,8 +291,9 @@ pub fn string_extract(
             "pattern oltre max_regex_bytes".into(),
         ));
     }
-    let regex = Regex::new(&config.pattern)
-        .map_err(|error| PlenoraError::InvalidPlan(format!("regex non valida: {error}")))?;
+    let regex = Regex::new(&config.pattern).map_err(|error| {
+        PlenoraError::InvalidPlan(crate::motivo_regex_non_valida(&error).into())
+    })?;
     verifica_gruppi_con_nome(config, &regex)?;
     let input = utf8_column(batch, &config.column)?;
     let named: Vec<(usize, String)> = regex
@@ -698,8 +699,9 @@ mod tests {
                 "pattern oltre max_regex_bytes".into(),
             ));
         }
-        let regex = Regex::new(&config.pattern)
-            .map_err(|error| PlenoraError::InvalidPlan(format!("regex non valida: {error}")))?;
+        let regex = Regex::new(&config.pattern).map_err(|error| {
+            PlenoraError::InvalidPlan(crate::motivo_regex_non_valida(&error).into())
+        })?;
         verifica_gruppi_con_nome(config, &regex)?;
         let input = utf8_column(batch, &config.column)?;
         let named: Vec<(usize, String)> = regex

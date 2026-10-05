@@ -47,6 +47,18 @@ resta `Io` con il suo `ErrorKind`; uno di sintassi, di dati o di fine
 inattesa è `data_mapping` con il solo genere e la posizione («json error:
 dati alla riga 1 colonna 15»), mai il testo che cita il valore letto.
 
+Neanche il testo di una dipendenza attraversa il messaggio quando può
+citare un valore. Una config di un passo che serde rifiuta
+(`config non valida: …`) si descrive con
+`plenora_core::json::descrivi_errore_config`: il nome di un campo mancante
+o ripetuto, l'elenco dei campi o dei valori ammessi per un campo o un
+valore sconosciuto (mai quello scritto), i messaggi fissi del workspace;
+un tipo, un valore o una lunghezza non validi danno il solo genere («tipo,
+valore o forma di un campo non validi»), senza il campo né il valore. Una
+regex scritta nel piano che il crate `regex` rifiuta dice solo se è la
+sintassi o il limite di dimensione, mai il testo del crate, che riporta il
+pattern.
+
 ## Effetto di un errore a metà della scrittura
 
 `remote_effect` è `none` per costruzione (ogni file d'uscita è scritto in

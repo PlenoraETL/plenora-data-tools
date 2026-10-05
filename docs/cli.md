@@ -335,17 +335,6 @@ diventate contratto, e la sorgente del manifesto
   documento su stdout deve trattare l'esito come ignoto.
   *Rientro*: la CLI in un processo figlio sorvegliato da un processo padre
   che trasforma l'aborto in un errore `internal` con effetto `unknown`.
-- **Messaggi delle config con i valori del piano.**
-  *Regola*: i messaggi pubblici non portano valori di righe o colonne
-  ([«Errori»](errori.md#errori)).
-  *Ambito*: config dei passi rifiutate dalla deserializzazione
-  (`config non valida: …`), con il testo di `serde`.
-  *Hazard*: il testo può citare un valore scritto nella config del piano
-  (un tipo sbagliato, una variante sconosciuta): è testo del piano, non dei
-  dati, ma finisce nel messaggio pubblico. La lettura del piano intero
-  (`Pipeline::from_json`) invece dice solo genere e posizione.
-  *Rientro*: la stessa riduzione per le config, quando i messaggi dei
-  campi sconosciuti (oggi utili a chi scrive il piano) avranno un codice.
 - **Attributi senza schema JSON.** Il contratto
   `plenora-data-capability-attributes-v1` e i documenti dei risultati
   (`plenora-data-*-v1`) sono descritti qui, non da uno schema JSON

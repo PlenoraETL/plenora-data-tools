@@ -285,9 +285,12 @@ fn regex_letterale_non_valida(name: Function, pattern: Option<String>) -> Option
     let (Function::RegexReplace, Some(pattern)) = (name, pattern) else {
         return None;
     };
-    regex::Regex::new(&pattern)
-        .err()
-        .map(|error| PlenoraError::InvalidPlan(format!("regex_replace: regex non valida: {error}")))
+    regex::Regex::new(&pattern).err().map(|error| {
+        PlenoraError::InvalidPlan(format!(
+            "regex_replace: {}",
+            crate::motivo_regex_non_valida(&error)
+        ))
+    })
 }
 
 pub fn evaluate(

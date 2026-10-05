@@ -896,8 +896,9 @@ fn compile_regex_replace<'a>(args: &'a [Expression], batch: &'a RecordBatch) -> 
         Expression::Literal {
             value: Value::String(pattern),
         } => RegexSource::Compiled(
-            regex::Regex::new(pattern)
-                .map_err(|error| format!("regex_replace: regex non valida: {error}")),
+            regex::Regex::new(pattern).map_err(|error| {
+                format!("regex_replace: {}", crate::motivo_regex_non_valida(&error))
+            }),
             pattern.as_str(),
         ),
         other => RegexSource::Dynamic(Box::new(compile_expression(other, batch))),

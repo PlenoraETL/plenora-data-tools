@@ -70,8 +70,9 @@ pub(in crate::analyze) fn analyze_string_extract(
     if config.pattern.len() > limits.max_regex_bytes {
         return contract_error(op, "pattern oltre max_regex_bytes");
     }
-    let pattern = regex::Regex::new(&config.pattern)
-        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: regex non valida: {error}")))?;
+    let pattern = regex::Regex::new(&config.pattern).map_err(|error| {
+        PlenoraError::InvalidPlan(format!("{op}: {}", crate::motivo_regex_non_valida(&error)))
+    })?;
     con_op(op, strings::verifica_gruppi_con_nome(&config, &pattern))?;
     let named: Vec<String> = pattern
         .capture_names()
