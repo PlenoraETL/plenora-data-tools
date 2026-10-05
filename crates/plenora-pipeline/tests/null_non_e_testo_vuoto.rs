@@ -265,3 +265,40 @@ fn il_messaggio_del_rifiuto_e_leggibile() {
     assert!(!MESSAGGIO_VALUE_NULL.contains("  "));
     assert!(MESSAGGIO_VALUE_NULL.contains("le celle nulle si cercano con isnull e notnull"));
 }
+
+/// `table.validate_rules` dall'API Rust: una regola con `value:
+/// Some(Value::Null)` (che il piano JSON rifiuta già con `mai_null`)
+/// passava il controllo di presenza e confrontava con `""`
+/// (`["", "a", null]` dava `_valid` `[true, false, false]`), o compilava la
+/// regex vuota. Ora si rifiuta, con ogni operatore, nel kernel e
+/// nell'analisi.
+#[test]
+fn validate_rules_rifiuta_value_null_dall_api() {
+    use plenora_kernels_table::governance::{
+        validate_rules, RuleOperator, RuleSeverity, ValidateOutputMode, ValidateRule,
+        ValidateRules, MESSAGGIO_VALUE_NULL_REGOLA,
+    };
+    for operatore in [
+        RuleOperator::Eq,
+        RuleOperator::Ne,
+        RuleOperator::Regex,
+        RuleOperator::Isnull,
+        RuleOperator::Notnull,
+    ] {
+        let config = ValidateRules {
+            rules: vec![ValidateRule {
+                name: "r".into(),
+                operator: operatore,
+                column: Some("s".into()),
+                value: Some(Value::Null),
+                severity: RuleSeverity::default(),
+            }],
+            output_mode: ValidateOutputMode::default(),
+        };
+        let errore = validate_rules(&tabella(), &config).expect_err("value null");
+        assert_eq!(
+            messaggio(&errore).as_deref(),
+            Some(MESSAGGIO_VALUE_NULL_REGOLA)
+        );
+    }
+}

@@ -990,7 +990,36 @@ struct CompiledRule {
     regex: Option<regex::Regex>,
 }
 
-/// Replica `json_text` del kernel filtering.
+impl ValidateRule {
+    /// `value` letto: `None` se assente; `null` si rifiuta.
+    ///
+    /// Dal piano JSON `null` lo rifiuta gia' la deserializzazione
+    /// (`mai_null`), ma una regola costruita dall'API Rust con
+    /// `Some(Value::Null)` passava il controllo di presenza e il suo testo
+    /// diventava `""`: `eq` confrontava con il testo vuoto invece di
+    /// rifiutare, e `regex` compilava la regex vuota. La chiamano il kernel
+    /// e l'analisi dei contratti.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidPlan` se `value` e' `Some(Value::Null)`.
+    pub fn valore(&self) -> Result<Option<&serde_json::Value>> {
+        match &self.value {
+            Some(serde_json::Value::Null) => Err(PlenoraError::InvalidPlan(
+                MESSAGGIO_VALUE_NULL_REGOLA.into(),
+            )),
+            value => Ok(value.as_ref()),
+        }
+    }
+}
+
+/// Il rifiuto di `value: null` in una regola di `table.validate_rules`
+/// ([`ValidateRule::valore`]).
+pub const MESSAGGIO_VALUE_NULL_REGOLA: &str =
+    "validate_rules: value null non ammesso in una regola (con isnull e notnull si omette)";
+
+/// Replica `json_text` del kernel filtering. Mai chiamata su `null`, che
+/// [`ValidateRule::valore`] rifiuta prima.
 fn rule_json_text(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(text) => text.clone(),
@@ -1085,7 +1114,8 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
         let column_index = column_index(batch, column)?;
         let data_type = batch.column(column_index).data_type().clone();
         let needs_value = !matches!(rule.operator, RuleOperator::Isnull | RuleOperator::Notnull);
-        if needs_value != rule.value.is_some() {
+        let value = rule.valore()?;
+        if needs_value != value.is_some() {
             return Err(PlenoraError::InvalidPlan(format!(
                 "validate_rules: regola {}: value {} per l'operatore {:?}",
                 rule.name,
@@ -1097,7 +1127,7 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
                 rule.operator
             )));
         }
-        let expected = rule.value.as_ref().map_or_else(String::new, rule_json_text);
+        let expected = value.map_or_else(String::new, rule_json_text);
         let mut expected_bound = None;
         let mut expected_high_bound = None;
         let mut regex = None;
