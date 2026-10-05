@@ -35,7 +35,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   # Il commit di plenora-contracts adottato (crates/plenora-cli/adozione.json).
-  CONTRATTI: 23fed27d5736e5f32906a0116553fed16a1fb239
+  CONTRATTI: 1e902dfaab5819c1d9ce785878d5b26dbeae48b3
 
 jobs:
   # I gate di ci.yml sul commit che si rilascia, sui due sistemi: il
