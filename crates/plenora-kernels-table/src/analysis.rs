@@ -40,7 +40,7 @@ pub struct Lookup {
     pub column: String,
     /// Corrispondenze testo della cella -> valore. Il valore si scrive come
     /// testo: una stringa com'e', un numero o un booleano con il suo testo
-    /// JSON, `null` come stringa vuota.
+    /// JSON; `null` da' la cella nulla, mai il testo vuoto.
     pub mapping: BTreeMap<String, Value>,
     /// Valore delle celle non nulle senza voce in `mapping`; assente le
     /// lascia invariate. Nel tipo l'assenza e' `Value::Null`; un `null`
@@ -61,6 +61,13 @@ fn value_text(value: &Value) -> String {
     }
 }
 
+/// Il testo d'uscita di un valore di `mapping` o del `default` di
+/// `table.lookup`: `None` per `null` (la cella nulla), altrimenti come
+/// [`value_text`].
+fn testo_voce(value: &Value) -> Option<String> {
+    (!value.is_null()).then(|| value_text(value))
+}
+
 /// Esito del lookup di una riga, deciso senza copiare testo.
 #[derive(Clone, Copy)]
 enum Traduzione {
@@ -69,15 +76,16 @@ enum Traduzione {
     /// Chiave assente e `default` null: resta il valore d'ingresso.
     Invariata,
     /// Il testo in posizione data di `Traduttore::testi` (una voce della
-    /// mappa, o il `default`).
+    /// mappa, o il `default`); una voce `null` da' la cella nulla.
     Testo(usize),
 }
 
 /// Mappa del lookup risolta una volta per batch: chiave -> posizione del suo
-/// testo, e i testi di voci e `default` gia' convertiti con `value_text`.
+/// testo, e i testi di voci e `default` gia' convertiti con `testo_voce`.
 struct Traduttore<'a> {
     posizioni: HashMap<&'a str, usize, FastHasher>,
-    testi: Vec<String>,
+    /// `None` per una voce `null`: la cella nulla.
+    testi: Vec<Option<String>>,
     /// Posizione in `testi` del `default`, se non null.
     predefinito: Option<usize>,
 }
@@ -89,10 +97,10 @@ impl<'a> Traduttore<'a> {
         let mut testi = Vec::with_capacity(config.mapping.len().saturating_add(1));
         for (posizione, (chiave, valore)) in config.mapping.iter().enumerate() {
             posizioni.insert(chiave.as_str(), posizione);
-            testi.push(value_text(valore));
+            testi.push(testo_voce(valore));
         }
         let predefinito = (!config.default.is_null()).then(|| {
-            testi.push(value_text(&config.default));
+            testi.push(testo_voce(&config.default));
             testi.len() - 1
         });
         Self {
@@ -112,14 +120,14 @@ impl<'a> Traduttore<'a> {
             .map_or(Traduzione::Invariata, Traduzione::Testo)
     }
 
-    /// Testo d'uscita di una riga non nulla.
-    fn testo<'t>(&'t self, traduzione: Traduzione, originale: &'t str) -> Result<&'t str> {
+    /// Testo d'uscita di una riga non nulla (`None`: una voce `null`).
+    fn testo<'t>(&'t self, traduzione: Traduzione, originale: &'t str) -> Result<Option<&'t str>> {
         match traduzione {
-            Traduzione::Invariata => Ok(originale),
+            Traduzione::Invariata => Ok(Some(originale)),
             Traduzione::Testo(posizione) => self
                 .testi
                 .get(posizione)
-                .map(String::as_str)
+                .map(Option::as_deref)
                 .ok_or_else(lookup_incoerente),
             Traduzione::Nulla => Err(lookup_incoerente()),
         }
@@ -139,7 +147,8 @@ const RIGHE_PER_CHUNK_LOOKUP: usize = if cfg!(test) { 16 } else { 65_536 };
 /// (o sostituito da `default`, se non null; altrimenti resta invariato).
 ///
 /// Il risultato e' una colonna `Utf8` nullable, `output_column` o `column`;
-/// una cella nulla resta nulla.
+/// una cella nulla resta nulla, e una voce di `mapping` `null` da' la cella
+/// nulla (mai il testo vuoto).
 ///
 /// Su una colonna Utf8 le chiavi si cercano in prestito, per chunk contigui
 /// di righe in parallelo (rayon), e l'uscita si scrive in ordine di riga;
@@ -194,7 +203,7 @@ pub fn lookup(batch: &RecordBatch, config: &Lookup) -> Result<RecordBatch> {
             if matches!(traduzione, Traduzione::Nulla) {
                 builder.append_null();
             } else {
-                builder.append_value(traduttore.testo(traduzione, valori.value(row))?);
+                builder.append_option(traduttore.testo(traduzione, valori.value(row))?);
             }
         }
         builder.finish()
@@ -203,7 +212,7 @@ pub fn lookup(batch: &RecordBatch, config: &Lookup) -> Result<RecordBatch> {
         for row in 0..righe {
             match scalar_as_string(source.as_ref(), row)? {
                 Some(valore) => {
-                    builder.append_value(traduttore.testo(traduttore.traduci(&valore), &valore)?);
+                    builder.append_option(traduttore.testo(traduttore.traduci(&valore), &valore)?);
                 }
                 None => builder.append_null(),
             }

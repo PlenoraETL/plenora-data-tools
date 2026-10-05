@@ -117,7 +117,7 @@ fn censimento() -> BTreeMap<&'static str, Vec<(&'static str, &'static str)>> {
         ]),
         ("table.conditional", &[
             ("column", "-"),
-            ("conditions", "filtering::verifica_valore: value con isnull/notnull"),
+            ("conditions", "filtering::verifica_valore: value con isnull/notnull; null o assente con gli altri operatori"),
             ("default_value", "-"),
             ("output_column", "-"),
         ]),
@@ -163,7 +163,7 @@ fn censimento() -> BTreeMap<&'static str, Vec<(&'static str, &'static str)>> {
         ]),
         ("table.filter", &[
             ("column", "-"), ("operator", "-"),
-            ("value", "filtering::verifica_valore: con isnull/notnull"),
+            ("value", "filtering::verifica_valore: con isnull/notnull; null o assente con gli altri operatori"),
         ]),
         ("table.flatten_json", &[("column", "-"), ("max_level", "-"), ("output_columns", "-"), ("prefix", "-")]),
         ("table.formula", &[
@@ -356,7 +356,7 @@ fn nessun_campo_accetta_null_salvo_quelli_dichiarati() {
         (
             "table.filter",
             "value",
-            "`null` scritto e' il testo vuoto, e conta come scritto",
+            "`null` scritto passa la deserializzazione come scritto e lo rifiuta verifica_valore (null_non_e_testo_vuoto.rs)",
         ),
         (
             "table.conditional",

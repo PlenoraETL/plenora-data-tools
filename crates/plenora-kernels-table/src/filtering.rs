@@ -22,7 +22,8 @@ use plenora_core::{PlenoraError, Result};
 ///
 /// Una cella nulla (null logico, voce nulla di un dizionario compresa) non
 /// soddisfa nessun operatore tranne `Isnull`. `value` vale il suo testo
-/// JSON (una stringa com'e', `null` come testo vuoto).
+/// JSON (una stringa com'e'); `null` non e' un termine di confronto e si
+/// rifiuta ([`verifica_valore`]).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Operator {
@@ -71,17 +72,16 @@ pub struct Filter {
     pub column: String,
     /// Operatore di confronto (obbligatorio).
     pub operator: Operator,
-    /// Termine di confronto (assente vale `null`, cioe' testo vuoto). Con
-    /// `isnull` e `notnull` non ha effetto: scritto, anche `null`, si
-    /// rifiuta ([`verifica_valore`]). `null` scritto e' ammesso, con un
-    /// significato proprio dichiarato nella scheda: il testo vuoto, e conta
-    /// come scritto.
+    /// Termine di confronto: obbligatorio e non `null` con ogni operatore
+    /// tranne `isnull` e `notnull`, con cui non ha effetto e scritto (anche
+    /// `null`) si rifiuta ([`verifica_valore`]).
     #[serde(default, deserialize_with = "crate::cleansing::valore_scritto")]
     pub value: Option<serde_json::Value>,
 }
 
 impl Filter {
-    /// Il termine di confronto (`null` se assente).
+    /// Il termine di confronto (`null` se assente, cioe' con `isnull` e
+    /// `notnull` dopo [`verifica_valore`]).
     #[must_use]
     pub fn valore(&self) -> &serde_json::Value {
         self.value.as_ref().unwrap_or(&serde_json::Value::Null)
@@ -89,20 +89,38 @@ impl Filter {
 }
 
 /// `value` con `isnull` o `notnull` non si legge: scritto (anche `null`) si
-/// rifiuta invece di essere ignorato. La chiamano i kernel `filter` e
+/// rifiuta invece di essere ignorato. Con ogni altro operatore e'
+/// obbligatorio e non `null`.
+///
+/// Fino alla 1.1.0 un `null`, scritto o implicito nell'assenza, valeva il
+/// testo vuoto, e `{"operator": "==", "value": null}` teneva le celle `""`
+/// invece delle celle nulle. Le celle nulle si cercano con `isnull` e
+/// `notnull`, il testo vuoto si scrive `""`. La chiamano i kernel `filter` e
 /// `conditional` e l'analisi dei contratti.
 ///
 /// # Errors
 ///
-/// `InvalidPlan` se `value` e' scritto con `isnull` o `notnull`.
+/// `InvalidPlan` se `value` e' scritto con `isnull` o `notnull`, oppure
+/// manca o e' `null` con un altro operatore.
 pub fn verifica_valore(operator: &Operator, value: Option<&serde_json::Value>) -> Result<()> {
-    if value.is_some() && matches!(operator, Operator::Isnull | Operator::Notnull) {
-        return Err(PlenoraError::InvalidPlan(
+    let senza_valore = matches!(operator, Operator::Isnull | Operator::Notnull);
+    match value {
+        Some(_) if senza_valore => Err(PlenoraError::InvalidPlan(
             "value non ha effetto con isnull e notnull".into(),
-        ));
+        )),
+        None if !senza_valore => Err(PlenoraError::InvalidPlan(
+            "value obbligatorio con ogni operatore tranne isnull e notnull".into(),
+        )),
+        Some(serde_json::Value::Null) => {
+            Err(PlenoraError::InvalidPlan(MESSAGGIO_VALUE_NULL.into()))
+        }
+        _ => Ok(()),
     }
-    Ok(())
 }
+
+/// Il rifiuto di `value: null` in `table.filter` e nelle condizioni di
+/// `table.conditional` ([`verifica_valore`]).
+pub const MESSAGGIO_VALUE_NULL: &str = "value null non e' un termine di confronto: le celle nulle si cercano con isnull e notnull, il testo vuoto si scrive \"\"";
 
 /// Una condizione di `table.conditional`.
 #[derive(Debug, Clone, Deserialize)]
@@ -111,20 +129,21 @@ pub struct Condition {
     /// Operatore (default `"=="`), valutato come in `table.filter`.
     #[serde(default = "default_operator")]
     pub operator: Operator,
-    /// Termine di confronto (assente vale `null`); con `isnull` e `notnull`
-    /// scritto si rifiuta ([`verifica_valore`]). `null` scritto e' ammesso
-    /// come in `table.filter`: il testo vuoto, e conta come scritto.
+    /// Termine di confronto, come in `table.filter`: obbligatorio e non
+    /// `null` tranne con `isnull` e `notnull`, con cui scritto si rifiuta
+    /// ([`verifica_valore`]).
     #[serde(default, deserialize_with = "crate::cleansing::valore_scritto")]
     pub value: Option<serde_json::Value>,
     /// Valore scritto se questa e' la prima condizione vera (default
-    /// `null`); vale il suo testo JSON. `null` e' un valore d'uscita (il
-    /// testo vuoto, dichiarato nella scheda), quindi scritto e' ammesso.
+    /// `null`); vale il suo testo JSON. `null` e' un valore d'uscita, la
+    /// cella nulla (come `THEN NULL` di SQL), quindi scritto e' ammesso.
     #[serde(default)]
     pub result: serde_json::Value,
 }
 
 impl Condition {
-    /// Il termine di confronto (`null` se assente).
+    /// Il termine di confronto (`null` se assente, cioe' con `isnull` e
+    /// `notnull` dopo [`verifica_valore`]).
     #[must_use]
     pub fn valore(&self) -> &serde_json::Value {
         self.value.as_ref().unwrap_or(&serde_json::Value::Null)
@@ -144,8 +163,9 @@ pub struct Conditional {
     /// Condizioni in ordine di precedenza (obbligatorio; l'analisi rifiuta
     /// la lista vuota).
     pub conditions: Vec<Condition>,
-    /// Valore delle righe senza condizioni vere (default `null`). `null` e'
-    /// un valore d'uscita, come per `result`: scritto e' ammesso.
+    /// Valore delle righe senza condizioni vere (default `null`, la cella
+    /// nulla, come un `CASE` di SQL senza `ELSE`). `null` e' un valore
+    /// d'uscita, come per `result`: scritto e' ammesso.
     #[serde(default)]
     pub default_value: serde_json::Value,
     /// Colonna d'uscita (default `"result"`); se esiste si sostituisce.
@@ -163,6 +183,16 @@ fn json_text(value: &serde_json::Value) -> String {
         serde_json::Value::Null => String::new(),
         other => other.to_string(),
     }
+}
+
+/// Il testo di un `result` o del `default_value` di `table.conditional`:
+/// `None` per `null`, la cella nulla; altrimenti il testo JSON.
+///
+/// Mai il testo vuoto al posto di `null`: `""` e `null` restano distinti
+/// fino alla cella. La chiamano il kernel e l'analisi dei contratti.
+#[must_use]
+pub fn testo_risultato(value: &serde_json::Value) -> Option<String> {
+    (!value.is_null()).then(|| json_text(value))
 }
 
 impl Conditional {
@@ -212,9 +242,9 @@ struct PreparedCondition {
     between: std::cell::OnceCell<std::result::Result<(NumericBound, NumericBound), String>>,
     /// Forma minuscola per `contains`, alla prima riga del ramo.
     expected_lowercase: std::cell::OnceCell<String>,
-    /// `json_text` del risultato (solo `conditional`): calcolato al
-    /// costruttore, clonato per riga invece che ri-serializzato.
-    result: String,
+    /// [`testo_risultato`] del risultato (solo `conditional`): calcolato al
+    /// costruttore, `None` per la cella nulla.
+    result: Option<String>,
 }
 
 impl PreparedCondition {
@@ -225,7 +255,7 @@ impl PreparedCondition {
             bound: std::cell::OnceCell::new(),
             between: std::cell::OnceCell::new(),
             expected_lowercase: std::cell::OnceCell::new(),
-            result: json_text(result),
+            result: testo_risultato(result),
         }
     }
 
@@ -587,7 +617,8 @@ fn fast_rows(
 ///   non numerica sotto un operatore ordinato o `between`;
 /// - `InvalidPlan`: valore di confronto non numerico per i confronti
 ///   numerici o ordinati; `between` senza estremi `min,max` validi; `value`
-///   scritto con `isnull` o `notnull` ([`verifica_valore`]);
+///   scritto con `isnull` o `notnull`, o `null` o assente con un altro
+///   operatore ([`verifica_valore`]);
 /// - `ResourceLimit`: riga tenuta con indice oltre `u32::MAX`
 ///   ([`select_rows`]);
 /// - `DataMapping`: errore Arrow nella selezione delle righe;
@@ -617,46 +648,48 @@ pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
 /// Il tipo d'uscita di `table.conditional` e, se numerico, il valore di ogni
 /// testo di risultato: l'unica regola, del kernel e dell'analisi.
 ///
-/// Numerico se ogni testo e' vuoto (null) o un numero per il parse `f64`
-/// (virgola decimale ammessa). Un risultato scritto come **intero** che il
+/// Numerico se ogni risultato e' `None` (null) o un testo che e' un numero
+/// per il parse `f64` (virgola decimale ammessa); il testo vuoto non e' un
+/// numero, e rende l'uscita testuale. Un risultato scritto come **intero** che il
 /// double non rappresenta esattamente (oltre 2^53) e' un errore: diventando
 /// il double piu' vicino sarebbe un altro intero, senza errore. Un decimale
 /// diventa il double piu' vicino, come ogni `Float64`.
 ///
 /// Rende `None` se l'uscita e' testuale, altrimenti i valori nell'ordine
-/// dei testi.
+/// dei risultati (`None` per un risultato null).
 ///
 /// # Errors
 ///
 /// `InvalidPlan` per un risultato intero non rappresentabile in `Float64`.
 pub fn risultati_numerici<'a>(
-    testi: impl IntoIterator<Item = &'a str>,
+    testi: impl IntoIterator<Item = Option<&'a str>>,
 ) -> Result<Option<Vec<Option<f64>>>> {
     // Due passate: il tipo si decide su tutti i testi prima di giudicare
     // l'esattezza, che conta solo se l'uscita e' numerica.
     let normalizzati = testi
         .into_iter()
-        .map(|testo| testo.replace(',', "."))
+        .map(|testo| testo.map(|scritto| scritto.replace(',', ".")))
         .collect::<Vec<_>>();
     if !normalizzati
         .iter()
-        .all(|testo| testo.is_empty() || testo.parse::<f64>().is_ok())
+        .flatten()
+        .all(|testo| testo.parse::<f64>().is_ok())
     {
         return Ok(None);
     }
     let mut numeri = Vec::with_capacity(normalizzati.len());
-    for normalizzato in normalizzati {
-        if normalizzato.is_empty() {
+    for voce in normalizzati {
+        let Some(scritto) = voce else {
             numeri.push(None);
             continue;
-        }
-        let Ok(valore) = normalizzato.parse::<f64>() else {
+        };
+        let Ok(valore) = scritto.parse::<f64>() else {
             return Ok(None);
         };
-        let intero_inesatto = intero_scritto(&normalizzato).map_or_else(
+        let intero_inesatto = intero_scritto(&scritto).map_or_else(
             || {
                 matches!(
-                    NumericBound::parse(&normalizzato),
+                    NumericBound::parse(&scritto),
                     Some(NumericBound::Decimal { unscaled, scale: 0 })
                         if crate::exact_f64_from_i128(unscaled).is_none()
                 )
@@ -696,10 +729,11 @@ fn intero_scritto(testo: &str) -> Option<String> {
 /// `default_value` (`table.conditional`).
 ///
 /// Il tipo d'uscita dipende solo dai letterali: se ogni `result` e il
-/// `default_value`, letti come testo, sono vuoti o numeri (virgola
-/// decimale ammessa: `"1,5"` vale 1,5), l'uscita e' `Float64` nullable e il
-/// testo vuoto da' null; altrimenti e' `Utf8` non nullable e il null da'
-/// `""`. Un risultato intero oltre la precisione del double si rifiuta
+/// `default_value` sono `null` o, letti come testo, numeri (virgola
+/// decimale ammessa: `"1,5"` vale 1,5), l'uscita e' `Float64` nullable;
+/// altrimenti e' `Utf8`, nullable solo se uno di loro e' `null`. In
+/// entrambi i casi `null` da' la cella nulla, mai il testo vuoto. Un
+/// risultato intero oltre la precisione del double si rifiuta
 /// ([`risultati_numerici`]).
 ///
 /// # Errors
@@ -707,8 +741,9 @@ fn intero_scritto(testo: &str) -> Option<String> {
 /// - `Schema`: colonna assente; tipo della colonna che gli operatori non
 ///   sanno leggere; cella `Utf8` non numerica sotto un operatore ordinato;
 /// - `InvalidPlan`: come [`filter`] per la valutazione delle condizioni
-///   (valore di confronto non numerico, `between` malformato); un risultato
-///   intero non rappresentabile esattamente in `Float64`;
+///   (valore di confronto non numerico, `between` malformato, `value`
+///   rifiutato da [`verifica_valore`]); un risultato intero non
+///   rappresentabile esattamente in `Float64`;
 /// - `DataMapping`: errore Arrow nella sostituzione (guardia interna, non
 ///   attesa);
 /// - `Internal`: invariante interna violata.
@@ -728,14 +763,14 @@ pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBa
             PreparedCondition::new(&condition.operator, condition.valore(), &condition.result)
         })
         .collect();
-    let default_text = json_text(&config.default_value);
+    let default_text = testo_risultato(&config.default_value);
     // Il tipo e i valori numerici si decidono sui letterali, prima dei dati:
     // un risultato intero inesatto si rifiuta anche su un batch vuoto.
     let numerici = risultati_numerici(
         conditions
             .iter()
-            .map(|condition| condition.result.as_str())
-            .chain(std::iter::once(default_text.as_str())),
+            .map(|condition| condition.result.as_deref())
+            .chain(std::iter::once(default_text.as_deref())),
     )?;
     // Per riga, l'indice del risultato scelto: le condizioni, poi il default.
     let scelte = (0..batch.num_rows())
@@ -761,19 +796,25 @@ pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBa
             Arc::new(Float64Array::from(out)),
         )
     } else {
+        let nullable = default_text.is_none()
+            || conditions
+                .iter()
+                .any(|condition| condition.result.is_none());
         let testi = scelte
             .into_iter()
             .map(|indice| {
                 conditions
                     .get(indice)
-                    .map_or(default_text.as_str(), |condition| condition.result.as_str())
+                    .map_or(default_text.as_deref(), |condition| {
+                        condition.result.as_deref()
+                    })
             })
             .collect::<Vec<_>>();
         replace_or_append(
             batch,
             &config.output_column,
             DataType::Utf8,
-            false,
+            nullable,
             Arc::new(StringArray::from(testi)),
         )
     }
@@ -1388,13 +1429,17 @@ mod tests {
         let testo = conditional(&batch, &config(json!("alto"))).expect("testo");
         assert_eq!(testo.schema().field(1).data_type(), &DataType::Utf8);
         assert_eq!(
-            risultati_numerici(["9007199254740993", "x"]).expect("uscita testuale"),
+            risultati_numerici(["9007199254740993", "x"].map(Some)).expect("uscita testuale"),
             None
         );
         // Oltre `i128`: 10^40 + 1 non e' un double.
-        assert!(risultati_numerici(["10000000000000000000000000000000000000001"]).is_err());
+        assert!(
+            risultati_numerici(["10000000000000000000000000000000000000001"].map(Some)).is_err()
+        );
         // 2^140 lo e', anche se non sta in `i128`.
-        assert!(risultati_numerici(["1393796574908163946345982392040522594123776"]).is_ok());
-        assert!(risultati_numerici(["-0007", "0"]).is_ok());
+        assert!(
+            risultati_numerici(["1393796574908163946345982392040522594123776"].map(Some)).is_ok()
+        );
+        assert!(risultati_numerici(["-0007", "0"].map(Some)).is_ok());
     }
 }

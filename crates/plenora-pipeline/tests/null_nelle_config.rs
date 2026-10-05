@@ -3,9 +3,11 @@
 //! campo si valida e la stessa config con il campo `null` si rifiuta con
 //! `InvalidPlan` e il messaggio fisso di `plenora_core::json::mai_null`.
 //!
-//! I campi dove `null` ha un significato proprio (`value` di `filter` e
-//! `fill_na`, `default_value` e `result` di `conditional`, `default` di
-//! `align_schema`) restano ammessi e dichiarati nelle schede; il censimento
+//! I campi dove `null` ha un significato proprio (`value` di `fill_na`,
+//! `default_value` e `result` di `conditional`, `default` di
+//! `align_schema`) restano ammessi e dichiarati nelle schede; `value` di
+//! `filter` e di `conditional`, dove `null` valeva il testo vuoto, lo
+//! prova `null_non_e_testo_vuoto.rs`; il censimento
 //! di ogni campo tabellare è in `censimento_parametri.rs`, quello di ogni
 //! campo geo nei test di `plenora_kernels_geo::analyze::config`.
 
