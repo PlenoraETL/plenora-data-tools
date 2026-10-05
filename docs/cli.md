@@ -168,8 +168,12 @@ una destinazione alla volta nell'ordine del piano. Fino alla pubblicazione
 un errore non ha effetti (`remote_effect: none`); un fallimento della
 pubblicazione porta l'effetto che il risolutore sa provare
 (`PubblicazioneFallita`: `none` solo se nulla è stato scritto e nulla prima,
-`partial`, `unknown`), e un'interruzione dopo la prima pubblicazione è
-`partial`. `tests/run_artefatti.rs` lo prova con un risolutore strumentato
+`partial`, `unknown`); un'interruzione dopo la prima pubblicazione è
+`partial`, e una arrivata durante l'ultima è `committed`, mai un successo.
+Degli errori del risolutore passa solo il tipo (`RifiutoDestinazioni`, il
+`ErrorKind` delle letture e delle pubblicazioni), mai il testo, che può dire
+ciò a cui un riferimento si è risolto (DT-RUN-008). Un campo facoltativo
+scritto `null` è una richiesta malformata, come nel piano. `tests/run_artefatti.rs` lo prova con un risolutore strumentato
 che registra l'ordine di letture e pubblicazioni e inietta i guasti; le
 tabelle pubblicate sono quelle di `esegui_in_memoria` sullo stesso piano.
 
@@ -240,9 +244,18 @@ diventate contratto, e la sorgente del manifesto
   temporanea privata, tolta alla fine, per riusare il confine di lettura e
   la scrittura atomica di `plenora-io`.
   *Ambito*: `api::esegui_artefatti`.
-  *Hazard*: serve spazio su disco pari a sorgenti più uscite; un processo
-  terminato a forza può lasciare la cartella temporanea.
+  *Hazard*: serve spazio su disco pari a sorgenti più uscite. Dopo un
+  successo la cartella si toglie e la rimozione si verifica (un fallimento
+  è un errore `committed`); dopo un errore la toglie il distruttore, senza
+  verifica, e un processo terminato a forza la lascia.
   *Rientro*: una lettura del confine da un flusso in memoria.
+- **`data.run` 3: interi scritti con frazione o esponente.**
+  *Regola*: `schema_version` e `expected.size` si leggono come interi JSON
+  scritti come interi.
+  *Ambito*: `api::esegui_artefatti`.
+  *Hazard*: `1.0` o `1e0`, che JSON Schema conta come interi, sono
+  `invalid_configuration`: un rifiuto, mai una conversione.
+  *Rientro*: una lettura decimale esatta delle forme integrali.
 
 - **`validate` legge le tabelle intere.**
   *Regola*: la validazione guarda solo gli schemi.

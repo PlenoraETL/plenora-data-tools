@@ -11,7 +11,9 @@ use std::path::Path;
 
 use comune::contratto;
 use plenora_cli::api;
-use plenora_cli::api::{Destinazione, PubblicazioneFallita, RisolutoreArtefatti};
+use plenora_cli::api::{
+    Destinazione, PubblicazioneFallita, RifiutoDestinazioni, RisolutoreArtefatti,
+};
 use plenora_cli::capacita::{documento, mappa_rust};
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::Result;
@@ -171,8 +173,8 @@ impl RisolutoreArtefatti for RisolutoreEsterno {
     fn leggi(&self, _: &str, _: &mut dyn std::io::Write) -> std::io::Result<()> {
         Ok(())
     }
-    fn prepara(&self, _: &[Destinazione<'_>]) -> Result<()> {
-        Ok(())
+    fn prepara(&self, _: &[Destinazione<'_>]) -> std::result::Result<(), RifiutoDestinazioni> {
+        Err(RifiutoDestinazioni::StessoArtefatto)
     }
     fn pubblica(
         &self,

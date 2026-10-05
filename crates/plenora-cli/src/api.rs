@@ -36,8 +36,8 @@ use plenora_pipeline::{normalizza_schema, Interruzione, Pipeline, Report};
 use serde_json::{json, Value};
 
 pub use crate::artefatti::{
-    esegui_artefatti, Destinazione, PubblicazioneFallita, RisolutoreArtefatti, CONTRATTO_RICHIESTA,
-    CONTRATTO_RISULTATO,
+    esegui_artefatti, Destinazione, PubblicazioneFallita, RifiutoDestinazioni, RisolutoreArtefatti,
+    CONTRATTO_RICHIESTA, CONTRATTO_RISULTATO,
 };
 use crate::catalogo::FORMATO_PIANO;
 use crate::operazioni::{ARROW_FILE, ARROW_STREAM, PARQUET};

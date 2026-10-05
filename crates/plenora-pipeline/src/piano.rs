@@ -76,9 +76,11 @@ mod modello {
     pub(super) struct PipelineJson {
         pub(super) version: u32,
         pub(super) inputs: Vec<String>,
-        #[serde(default)]
+        // `null` non è l'assenza (data-plan-v1: `crs` stringa, `limits`
+        // oggetto): un `null` scritto è un piano malformato.
+        #[serde(default, deserialize_with = "plenora_core::json::presente")]
         pub(super) crs: Option<String>,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "plenora_core::json::presente")]
         pub(super) limits: Option<LimitiParziali>,
         pub(super) steps: Vec<PassoJson>,
         pub(super) outputs: Vec<String>,
@@ -110,22 +112,50 @@ mod modello {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LimitiParziali {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "plenora_core::json::presente",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_input_rows: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "plenora_core::json::presente",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_output_rows: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "plenora_core::json::presente",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_rows_per_edge: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "plenora_core::json::presente",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_expansion_factor: Option<f64>,
     /// Budget di memoria del runner: byte vivi delle tabelle residenti più
     /// il picco previsto di ogni passo (docs/runner.md, «Budget di memoria»); ai
     /// kernel arriva il margine rimasto.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "plenora_core::json::presente",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_governed_memory_bytes: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "plenora_core::json::presente",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_string_bytes: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "plenora_core::json::presente",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_regex_bytes: Option<usize>,
 }
 

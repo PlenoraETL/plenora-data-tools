@@ -17,7 +17,8 @@ use std::sync::Arc;
 
 use comune::{contratto, Registro};
 use plenora_cli::api::{
-    esegui_artefatti, esegui_in_memoria, Destinazione, PubblicazioneFallita, RisolutoreArtefatti,
+    esegui_artefatti, esegui_in_memoria, Destinazione, PubblicazioneFallita, RifiutoDestinazioni,
+    RisolutoreArtefatti,
 };
 use plenora_core::arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
@@ -36,6 +37,9 @@ const PIANO: &str = r#"{"version": 1, "inputs": ["t"],
 
 /// Un riferimento che non deve mai comparire in un messaggio d'errore.
 const SEGRETO: &str = "artifact://segreto-7f3a91/uscita";
+/// Il testo che il risolutore mette nei suoi errori: ciò a cui un
+/// riferimento si è risolto (DT-RUN-008), mai nell'errore restituito.
+const RISOLTO: &str = "C:/privato-9c1e/clienti.parquet";
 
 fn tabella() -> RecordBatch {
     RecordBatch::try_new(
@@ -84,6 +88,8 @@ fn sha256(byte: &[u8]) -> String {
         })
 }
 
+/// Una modifica della richiesta.
+type Mutatore = dyn Fn(&mut Value);
 /// Una mutazione della richiesta, con il suo nome.
 type Mutazione = (&'static str, Box<dyn Fn(&mut Value)>);
 /// Una mutazione della richiesta che vede il risolutore.
@@ -102,7 +108,7 @@ struct Strumentato {
     sorgenti: BTreeMap<String, Vec<u8>>,
     pubblicati: RefCell<Vec<(String, String, Vec<u8>)>>,
     eventi: RefCell<Vec<String>>,
-    preparazione: Option<fn() -> PlenoraError>,
+    preparazione: Option<RifiutoDestinazioni>,
     guasti: BTreeMap<usize, Guasto>,
     /// Alzato durante la pubblicazione numero `.1`.
     annulla_durante: Option<(Arc<AtomicBool>, usize)>,
@@ -116,15 +122,18 @@ impl RisolutoreArtefatti for Strumentato {
         let byte = self
             .sorgenti
             .get(riferimento)
-            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, RISOLTO))?;
         destinazione.write_all(byte)
     }
 
-    fn prepara(&self, destinazioni: &[Destinazione<'_>]) -> Result<()> {
+    fn prepara(
+        &self,
+        destinazioni: &[Destinazione<'_>],
+    ) -> std::result::Result<(), RifiutoDestinazioni> {
         self.eventi
             .borrow_mut()
             .push(format!("prepara {}", destinazioni.len()));
-        self.preparazione.map_or(Ok(()), |errore| Err(errore()))
+        self.preparazione.map_or(Ok(()), Err)
     }
 
     fn pubblica(
@@ -152,7 +161,7 @@ impl RisolutoreArtefatti for Strumentato {
             self.eventi
                 .borrow_mut()
                 .push(format!("fallita {}", destinazione.nome));
-            let causa = std::io::Error::from(std::io::ErrorKind::Other);
+            let causa = std::io::Error::other(RISOLTO);
             return Err(match guasto {
                 Guasto::NienteScritto => PubblicazioneFallita::NienteScritto(causa),
                 Guasto::Parziale => PubblicazioneFallita::Parziale(causa),
@@ -218,9 +227,22 @@ fn esegui(richiesta: &Value, risolutore: &Strumentato) -> Result<Value> {
 
 fn errore(richiesta: &Value, risolutore: &Strumentato) -> PlenoraError {
     let errore = esegui(richiesta, risolutore).expect_err("doveva fallire");
-    let pubblico = errore.to_string();
-    assert!(!pubblico.contains("segreto"), "{pubblico}");
+    senza_posizioni(&errore);
     errore
+}
+
+/// DT-RUN-008: né il testo Rust né la proiezione pubblica portano un
+/// riferimento o ciò a cui si è risolto.
+fn senza_posizioni(errore: &PlenoraError) {
+    let testi = [
+        errore.to_string(),
+        format!("{errore:?}"),
+        serde_json::to_string(&errore.public_projection()).unwrap(),
+    ];
+    for testo in testi {
+        assert!(!testo.contains("segreto"), "{testo}");
+        assert!(!testo.contains("privato"), "{testo}");
+    }
 }
 
 fn registro() -> Registro {
@@ -453,12 +475,33 @@ fn una_sorgente_irrisolta_e_not_found_senza_effetto() {
 #[test]
 fn il_rifiuto_della_preparazione_ferma_prima_di_leggere() {
     let mut risolutore = risolutore();
-    risolutore.preparazione = Some(|| {
-        PlenoraError::InvalidConfiguration("due destinazioni sono lo stesso artefatto".to_owned())
-    });
-    let errore = errore(&richiesta(), &risolutore);
-    assert_eq!(errore.category(), ErrorCategory::InvalidConfiguration);
-    assert_eq!(*risolutore.eventi.borrow(), ["prepara 2"]);
+    let casi = [
+        (
+            RifiutoDestinazioni::StessoArtefatto,
+            ErrorCategory::InvalidConfiguration,
+        ),
+        (RifiutoDestinazioni::NonTrovata, ErrorCategory::NotFound),
+        (
+            RifiutoDestinazioni::NonAutorizzata,
+            ErrorCategory::Authorization,
+        ),
+        (
+            RifiutoDestinazioni::SovrascritturaNonAtomica,
+            ErrorCategory::Unsupported,
+        ),
+        (
+            RifiutoDestinazioni::Io(std::io::ErrorKind::TimedOut),
+            ErrorCategory::Timeout,
+        ),
+    ];
+    for (rifiuto, categoria) in casi {
+        risolutore.preparazione = Some(rifiuto);
+        risolutore.eventi.borrow_mut().clear();
+        let errore = errore(&richiesta(), &risolutore);
+        assert_eq!(errore.category(), categoria, "{rifiuto:?}");
+        assert_eq!(errore.remote_effect(), RemoteEffect::None);
+        assert_eq!(*risolutore.eventi.borrow(), ["prepara 2"]);
+    }
 }
 
 #[test]
@@ -576,4 +619,200 @@ fn il_vettore_di_richiesta_dei_contratti_si_legge() {
         *risolutore.eventi.borrow(),
         ["prepara 1", "leggi artifact://input/data-run-v3-parcels"]
     );
+}
+
+/// DT-RUN-007: un'interruzione arrivata durante l'ultima pubblicazione non
+/// è un successo; tutto è pubblicato, l'effetto è `committed`. Anche con un
+/// solo output.
+#[test]
+fn l_annullamento_durante_l_ultima_pubblicazione_non_e_un_successo() {
+    let un_output = {
+        let mut r = richiesta();
+        r["outputs"].as_object_mut().unwrap().remove("primo");
+        r
+    };
+    let piano_un_output = PIANO.replace(
+        r#""outputs": ["positivi", "primo"]"#,
+        r#""outputs": ["positivi"]"#,
+    );
+    for (testo, ultimo, attesi) in [
+        (testo(&richiesta()), 1, 2),
+        (
+            serde_json::to_string(&un_output)
+                .unwrap()
+                .replace("\"PIANO\"", &piano_un_output),
+            0,
+            1,
+        ),
+    ] {
+        let segnale = Arc::new(AtomicBool::new(false));
+        let interruzione = Interruzione {
+            scadenza: None,
+            annullamento: Some(Arc::clone(&segnale)),
+        };
+        let mut risolutore = risolutore();
+        risolutore.annulla_durante = Some((Arc::clone(&segnale), ultimo));
+        let errore = esegui_artefatti(&testo, &risolutore, &interruzione).unwrap_err();
+        assert_eq!(errore.category(), ErrorCategory::Cancelled);
+        assert_eq!(errore.remote_effect(), RemoteEffect::Committed);
+        assert_ne!(errore.retry_disposition(), RetryDisposition::Safe);
+        assert_eq!(risolutore.pubblicati.borrow().len(), attesi);
+    }
+}
+
+/// DT-RUN-008: il testo degli errori del risolutore (lettura, pubblicazione)
+/// non arriva all'errore restituito, né al testo Rust né alla proiezione.
+#[test]
+fn il_testo_degli_errori_del_risolutore_non_passa() {
+    let mut senza_sorgente = risolutore();
+    senza_sorgente.sorgenti.clear();
+    let lettura = errore(&richiesta(), &senza_sorgente);
+    assert_eq!(lettura.category(), ErrorCategory::NotFound);
+    for guasto in [Guasto::NienteScritto, Guasto::Parziale, Guasto::Ignoto] {
+        let mut risolutore = risolutore();
+        risolutore.guasti.insert(0, guasto);
+        errore(&richiesta(), &risolutore);
+    }
+}
+
+/// `null` non è l'assenza: un campo facoltativo scritto `null` è una
+/// richiesta che lo schema rifiuta.
+#[test]
+fn un_campo_null_non_e_un_campo_omesso() {
+    let casi: Vec<Box<Mutatore>> = vec![
+        Box::new(|r| r["$schema"] = Value::Null),
+        Box::new(|r| r["inputs"]["t"]["expected"] = Value::Null),
+        Box::new(|r| {
+            r["inputs"]["t"]["expected"] = json!({"size": null, "sha256": "0".repeat(64)});
+        }),
+        Box::new(|r| r["inputs"]["t"]["expected"] = json!({"sha256": null, "size": 1})),
+    ];
+    for muta in casi {
+        let mut r = richiesta();
+        muta(&mut r);
+        let risolutore = risolutore();
+        let errore = errore(&r, &risolutore);
+        assert_eq!(
+            errore.category(),
+            ErrorCategory::InvalidConfiguration,
+            "{errore}"
+        );
+        assert!(risolutore.eventi.borrow().is_empty());
+    }
+    // `$schema` stringa e' ammesso.
+    let mut r = richiesta();
+    r["$schema"] = json!("../../schemas/data-execution-input-v3.schema.json");
+    esegui(&r, &risolutore()).unwrap();
+}
+
+/// I confini della regola dei riferimenti dello schema: ammessi e rifiutati
+/// come li ammette e rifiuta il `pattern` (semantica ECMAScript, lunghezza in
+/// caratteri).
+#[test]
+fn i_riferimenti_seguono_il_pattern_dello_schema() {
+    let lungo = format!("aa:{}", "é".repeat(1024));
+    let ammessi = [
+        "aa://",
+        "aa:.:x",
+        "aa:..:x",
+        "aa:x\u{85}",
+        lungo.as_str(),
+        "aa:/x/.../y",
+    ];
+    let rifiutati = [
+        "aa:x\u{feff}",
+        "aa:x\u{a0}y",
+        "aa:./x",
+        "aa:x/..",
+        "aa:%2Ex",
+        "FILE:x",
+        "a:xx",
+        "aa:",
+        "Aa:xx",
+        "aa:x\\y",
+    ];
+    for riferimento in ammessi {
+        let mut r = richiesta();
+        r["outputs"]["positivi"]["reference"] = json!(riferimento);
+        let risolutore = risolutore();
+        esegui(&r, &risolutore)
+            .unwrap_or_else(|errore| panic!("{riferimento:?} rifiutato: {errore}"));
+    }
+    for riferimento in rifiutati {
+        let mut r = richiesta();
+        r["outputs"]["positivi"]["reference"] = json!(riferimento);
+        let risolutore = risolutore();
+        let errore = errore(&r, &risolutore);
+        assert_eq!(
+            errore.category(),
+            ErrorCategory::InvalidConfiguration,
+            "{riferimento:?}"
+        );
+        assert!(risolutore.eventi.borrow().is_empty());
+    }
+}
+
+/// DT-RUN-005: il primo output si codifica, il secondo no (una tabella senza
+/// colonne non si scrive in Parquet): nessuna pubblicazione, nessun effetto.
+#[test]
+fn un_fallimento_della_codifica_non_pubblica_nulla() {
+    let piano = PIANO.replace(
+        r#"{"out": "primo", "op": "table.limit", "in": ["t"], "config": {"n": 1}}"#,
+        r#"{"out": "primo", "op": "table.drop_columns", "in": ["t"], "config": {"columns": ["id", "nome", "valore"]}}"#,
+    );
+    let testo = serde_json::to_string(&richiesta())
+        .unwrap()
+        .replace("\"PIANO\"", &piano);
+    let risolutore = risolutore();
+    let errore = esegui_artefatti(&testo, &risolutore, &Interruzione::default()).unwrap_err();
+    assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+    assert_eq!(errore.remote_effect(), RemoteEffect::None);
+    assert!(risolutore.pubblicati.borrow().is_empty());
+    assert_eq!(
+        *risolutore.eventi.borrow(),
+        ["prepara 2", "leggi artifact://input/t"]
+    );
+}
+
+/// L'ordine di pubblicazione è quello del piano, non quello alfabetico dei
+/// nomi.
+#[test]
+fn si_pubblica_nell_ordine_del_piano() {
+    let piano = PIANO.replace(
+        r#""outputs": ["positivi", "primo"]"#,
+        r#""outputs": ["primo", "positivi"]"#,
+    );
+    let testo = serde_json::to_string(&richiesta())
+        .unwrap()
+        .replace("\"PIANO\"", &piano);
+    let risolutore = risolutore();
+    let manifesto = esegui_artefatti(&testo, &risolutore, &Interruzione::default()).unwrap();
+    assert_eq!(
+        *risolutore.eventi.borrow(),
+        [
+            "prepara 2",
+            "leggi artifact://input/t",
+            "pubblica primo",
+            "pubblica positivi"
+        ]
+    );
+    assert_eq!(manifesto["outputs"][0]["name"], "primo");
+    assert_eq!(manifesto["outputs"][1]["name"], "positivi");
+}
+
+/// Limite dichiarato: un intero scritto con frazione o esponente (`1.0`,
+/// `1e0`), che JSON Schema conta come intero, si rifiuta invece di essere
+/// convertito.
+#[test]
+fn un_intero_scritto_con_la_frazione_si_rifiuta() {
+    for (da, a) in [
+        ("\"schema_version\":1", "\"schema_version\":1.0"),
+        ("\"schema_version\":1", "\"schema_version\":1e0"),
+    ] {
+        let testo = testo(&richiesta()).replace(da, a);
+        let risolutore = risolutore();
+        let errore = esegui_artefatti(&testo, &risolutore, &Interruzione::default()).unwrap_err();
+        assert_eq!(errore.category(), ErrorCategory::InvalidConfiguration);
+        assert!(risolutore.eventi.borrow().is_empty());
+    }
 }

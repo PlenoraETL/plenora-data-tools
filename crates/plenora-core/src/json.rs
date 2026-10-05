@@ -21,6 +21,25 @@ use serde::de::{Deserializer, MapAccess, SeqAccess, Visitor};
 
 use crate::error::{PlenoraError, Result};
 
+/// Un campo facoltativo presente: `null` non è l'assenza.
+///
+/// Con `#[serde(default, deserialize_with = "plenora_core::json::presente")]`
+/// un campo omesso resta `None` e un `null` scritto è un errore di forma,
+/// come vuole uno schema che dichiara il campo di un tipo che non è `null`:
+/// letto come assente, un `null` farebbe passare in silenzio un documento che
+/// il contratto rifiuta (un'attesa non verificata, un CRS non dichiarato).
+///
+/// # Errors
+///
+/// Quelli di `T::deserialize`, anche per `null`.
+pub fn presente<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 /// Verifica che nessun oggetto del documento JSON abbia chiavi ripetute.
 ///
 /// La visita non costruisce nulla: attraversa il documento e tiene per ogni
