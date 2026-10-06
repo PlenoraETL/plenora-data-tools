@@ -270,6 +270,19 @@ jobs:
       - name: il tag e' la versione del workspace
         if: github.event_name == 'release'
         run: test "${GITHUB_REF_NAME}" = "v${VERSIONE}"
+      # CHANGELOG.md e' la fonte delle note: la versione ha una voce, e una
+      # release pubblicata la vuole datata (non piu' «non rilasciata»).
+      - name: il CHANGELOG ha la voce della versione
+        run: >-
+          python3 -c 'import os,re,sys;
+          v=re.escape(os.environ["VERSIONE"]);
+          sys.exit(0 if re.search(r"^## \[" + v + r"\] - ", open("CHANGELOG.md", encoding="utf-8").read(), re.M) else "CHANGELOG.md senza la voce della versione")'
+      - name: la voce del CHANGELOG e' datata
+        if: github.event_name == 'release'
+        run: >-
+          python3 -c 'import os,re,sys;
+          v=re.escape(os.environ["VERSIONE"]);
+          sys.exit(0 if re.search(r"^## \[" + v + r"\] - \d{4}-\d{2}-\d{2}$", open("CHANGELOG.md", encoding="utf-8").read(), re.M) else "voce del CHANGELOG non datata")'
       - name: la CLI rilasciata contro i contratti
         run: |
           chmod +x dist/plenora-data-linux-x86_64
