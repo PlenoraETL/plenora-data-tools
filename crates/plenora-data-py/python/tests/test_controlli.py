@@ -258,36 +258,36 @@ def test_ctrl_c_durante_la_scrittura_dice_l_effetto(tmp_path: Any) -> None:
     assert not (tmp_path / "u.arrow").exists()
 
 
-async def _con_ticker(lavoro: Callable[[], Any]) -> tuple[Any, int]:
-    """Esegue `lavoro` (una coroutine) mentre un ticker conta i giri del
-    loop: se il lavoro bloccasse il loop, il conto resterebbe fermo."""
-    giri = 0
-    fine = asyncio.Event()
-
-    async def ticker() -> None:
-        nonlocal giri
-        while not fine.is_set():
-            giri += 1
-            await asyncio.sleep(0.01)
-
-    compito = asyncio.create_task(ticker())
-    try:
-        esito = await lavoro()
-    finally:
-        fine.set()
-        await compito
-    return esito, giri
+# Tetto di attesa delle prove a eventi: non misura niente, ferma con un
+# fallimento (invece di un blocco della suite) una prova il cui evento non
+# arriva mai.
+TETTO = 60
 
 
 def test_la_forma_asincrona_non_blocca_il_loop() -> None:
-    piano = piano_lungo(20)
+    """Deterministico, senza contare giri a tempo: la sonda gira nel thread
+    del lavoro, a lavoro finito e prima della consegna, e aspetta un evento
+    che solo il loop può alzare. Se `arun` tenesse il loop (il lavoro nel
+    thread del loop), il callback non girerebbe e l'attesa scadrebbe."""
+    alzato = threading.Event()
+    nella_sonda: list[tuple[bool, bool]] = []
 
-    async def principale() -> tuple[Any, int]:
-        return await _con_ticker(lambda: pd.arun(piano, {"t": grande()}))
+    async def principale() -> Any:
+        loop = asyncio.get_running_loop()
+        thread_del_loop = threading.get_ident()
 
-    risultato, giri = asyncio.run(principale())
-    assert risultato.tables
-    assert giri > 3
+        def sonda() -> None:
+            loop.call_soon_threadsafe(alzato.set)
+            nella_sonda.append((threading.get_ident() != thread_del_loop, alzato.wait(TETTO)))
+
+        with _sonda(sonda):
+            return await pd.arun(piano_identita(), {"t": tabella_semplice()})
+
+    risultato = asyncio.run(principale())
+    assert risultato.tables["t"].num_rows == 5
+    # Il lavoro è fuori dal thread del loop, e il loop ha girato mentre la
+    # chiamata era in corso.
+    assert nella_sonda == [(True, True)]
 
 
 def test_annullare_il_task_ferma_il_lavoro() -> None:
@@ -344,19 +344,34 @@ def test_un_task_annullato_mentre_il_lavoro_finisce_dice_l_esito() -> None:
     dice l'effetto, `committed` quando gli output sono stati scritti."""
     from plenora_data._api import _in_thread
 
-    def lavoro(_: list[pd.CancellationToken]) -> str:
-        time.sleep(0.3)
-        return "finito"
-
     for con_effetti, effetto, ritentativo in (
         (True, "committed", "requires_recovery"),
         (False, "none", "safe"),
     ):
+        # Deterministico: il lavoro parte, il task si annulla mentre il
+        # lavoro aspetta, poi il lavoro finisce. Nessuna durata conta.
+        partito = threading.Event()
+        procedi = threading.Event()
 
-        async def principale(con_effetti: bool = con_effetti) -> BaseException:
+        def lavoro(
+            _: list[pd.CancellationToken],
+            partito: threading.Event = partito,
+            procedi: threading.Event = procedi,
+        ) -> str:
+            partito.set()
+            assert procedi.wait(TETTO)
+            return "finito"
+
+        async def principale(
+            con_effetti: bool = con_effetti,
+            lavoro: Callable[[list[pd.CancellationToken]], str] = lavoro,
+            partito: threading.Event = partito,
+            procedi: threading.Event = procedi,
+        ) -> BaseException:
             compito = asyncio.create_task(_in_thread(lavoro, [], con_effetti=con_effetti))
-            await asyncio.sleep(0.05)
+            assert await asyncio.to_thread(partito.wait, TETTO)
             compito.cancel()
+            procedi.set()
             try:
                 await compito
             except asyncio.CancelledError as annullamento:
@@ -375,16 +390,34 @@ def test_la_scadenza_asincrona_conta_dall_ingresso(tmp_path: Any) -> None:
     scadenza vale dall'ingresso di `arun`, e una scadenza passata in coda
     ferma la chiamata prima di qualunque lavoro."""
     uscita = tmp_path / "u.arrow"
+    scadenza = 0.1
 
     async def principale() -> None:
         loop = asyncio.get_running_loop()
         loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
-        occupato = loop.run_in_executor(None, time.sleep, 0.5)
-        with pytest.raises(pd.PlenoraTimeoutError) as errore:
-            await pd.arun(
-                piano_identita(), {"t": tabella_semplice()}, outputs={"t": uscita}, timeout=0.1
+        # L'unico thread resta occupato finché la scadenza non è passata
+        # davvero: una condizione sull'orologio, non una durata supposta.
+        libera = threading.Event()
+        occupato = loop.run_in_executor(None, libera.wait, TETTO)
+        chiamata = asyncio.create_task(
+            pd.arun(
+                piano_identita(),
+                {"t": tabella_semplice()},
+                outputs={"t": uscita},
+                timeout=scadenza,
             )
-        await occupato
+        )
+        # Il task entra in `arun` (e fissa la scadenza) al primo giro del
+        # loop: l'orologio si legge dopo, quindi la scadenza vera non è
+        # più tarda di `inizio + scadenza`.
+        await asyncio.sleep(0)
+        inizio = time.monotonic()
+        while time.monotonic() - inizio <= scadenza:
+            await asyncio.sleep(scadenza)
+        libera.set()
+        with pytest.raises(pd.PlenoraTimeoutError) as errore:
+            await chiamata
+        assert await occupato
         assert errore.value.phase == "prepare"
         assert errore.value.remote_effect == "none"
 
