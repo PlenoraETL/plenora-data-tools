@@ -10,7 +10,7 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
-## [2.0.0] - non rilasciata
+## [2.0.0] - 2026-10-06
 
 Adotta il profilo data-tools versione 2 di `plenora-contracts` al commit
 `1e902df` (dal `23fed27` della 1.1.0), senza deviazioni.
