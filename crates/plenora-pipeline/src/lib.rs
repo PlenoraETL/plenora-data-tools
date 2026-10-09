@@ -26,6 +26,8 @@ pub mod disponibilita;
 mod esecuzione;
 mod geo;
 pub mod piano;
+#[doc(hidden)]
+pub mod sonda;
 mod validazione;
 
 pub use esecuzione::{Esito, Interruzione, Report, ReportPasso};

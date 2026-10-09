@@ -83,11 +83,11 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 | `plenora-cli` | 3 | 49 | 52 |
 | `plenora-core` | 184 | 65 | 249 |
 | `plenora-data-py` | 0 | 0 | 0 |
-| `plenora-io` | 19 | 85 | 104 |
+| `plenora-io` | 19 | 86 | 105 |
 | `plenora-kernels-geo` | 520 | 108 | 628 |
 | `plenora-kernels-table` | 459 | 118 | 577 |
 | `plenora-pipeline` | 12 | 159 | 171 |
-| **totale** | 1197 | 584 | 1781 |
+| **totale** | 1197 | 585 | 1782 |
 
 ### Prove Python dell'SDK
 
@@ -97,11 +97,11 @@ che gira sul wheel installato (`scripts/verifica_sdk_python.py`): il
 
 | file | prove |
 | --- | --- |
-| `crates/plenora-data-py/python/tests/test_controlli.py` | 19 |
+| `crates/plenora-data-py/python/tests/test_controlli.py` | 20 |
 | `crates/plenora-data-py/python/tests/test_errori.py` | 12 |
 | `crates/plenora-data-py/python/tests/test_operazioni.py` | 12 |
 | `crates/plenora-data-py/python/tests/test_superficie.py` | 9 |
-| **totale** | 52 |
+| **totale** | 53 |
 
 ### Prove delle guardie
 

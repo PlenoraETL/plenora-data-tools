@@ -19,10 +19,10 @@ import pytest
 
 import plenora_data as pd
 from plenora_data import _native
-from aiuti import piano_identita, piano_lungo, tabella_semplice
+from aiuti import piano_filtro_e_ordine, piano_identita, piano_lungo, tabella_semplice
 
-# Passi del piano delle prove che fermano il lavoro in corso: una fermata
-# prima dell'ultimo passo non scrive l'output.
+# Passi del piano delle prove che fermano il lavoro in corso: il controllo
+# fra il primo e il secondo passo ferma il lavoro prima della fine.
 PASSI = 3
 
 # Tetto di attesa delle prove a eventi: non misura niente, ferma con un
@@ -30,11 +30,16 @@ PASSI = 3
 # arriva mai.
 TETTO = 60
 
-# La fase di un'interruzione vista dal lavoro in corso al suo primo
-# controllo, prima di caricare gli input (la sonda del lavoro gira prima):
-# né `prepare` (il controllo d'ingresso, sul thread del chiamante) né
-# `finalize` (la consegna, a lavoro finito).
-FASE_DEL_LAVORO = "read"
+# La fase di un'interruzione vista dal lavoro al suo primo controllo, prima
+# di caricare gli input: né `prepare` (il controllo d'ingresso, sul thread
+# del chiamante) né `finalize` (la consegna, a lavoro finito).
+FASE_PRIMA = "read"
+
+# Il controllo del runner prima del secondo passo (`s1`): fase `write`,
+# quella che `PlenoraError` deriva per un annullamento o una scadenza del
+# runner, e il messaggio che dice dove.
+FASE_FRA_PASSI = "write"
+FRA_PASSI = "prima del passo `s1`"
 
 
 def test_scadenza_passata_e_timeout_zero() -> None:
@@ -76,30 +81,16 @@ def test_controlli_non_validi() -> None:
 
 
 def test_la_scadenza_ferma_il_lavoro_in_corso() -> None:
-    """Deterministico: la sonda tiene il lavoro, già partito, finché la sua
-    scadenza non scatta; il lavoro si ferma allora al suo primo controllo.
-    Se la scadenza non arrivasse al lavoro, la sonda aspetterebbe fino al
-    tetto e la chiamata riuscirebbe.
-
-    Una scadenza scattata già al controllo d'ingresso (fase `prepare`,
-    sonda mai chiamata: il thread fermo più a lungo della scadenza) non
-    prova il lavoro in corso: si riprova con una scadenza doppia."""
-    scadenza = 0.05
-    while True:
-        chiamate: list[None] = []
-
-        def sonda(chiamate: list[None] = chiamate) -> float:
-            chiamate.append(None)
-            return TETTO
-
-        with _sonda_lavoro(sonda), pytest.raises(pd.PlenoraTimeoutError) as errore:
-            pd.run(piano_lungo(PASSI), {"t": tabella_semplice()}, timeout=scadenza)
-        if chiamate or scadenza > TETTO:
-            break
-        assert errore.value.phase == "prepare"
-        scadenza *= 2
-    assert chiamate == [None]
-    assert errore.value.phase == FASE_DEL_LAVORO
+    """Deterministico, senza tempo reale: con una scadenza lontana (un'ora)
+    la sonda, nel thread del lavoro già partito, porta la scadenza del
+    lavoro ad adesso; il primo controllo del lavoro scade. Se la scadenza
+    della chiamata non arrivasse al lavoro, non ci sarebbe niente da
+    anticipare e la chiamata riuscirebbe."""
+    sonda = _Sonda({"prima": "scadenza"})
+    with _sonda_lavoro(sonda), pytest.raises(pd.PlenoraTimeoutError) as errore:
+        pd.run(piano_lungo(PASSI), {"t": tabella_semplice()}, timeout=3600)
+    assert sonda.punti == ["prima"]
+    assert errore.value.phase == FASE_PRIMA
     assert errore.value.code == "EXECUTION_DEADLINE_EXCEEDED"
     assert errore.value.remote_effect == "none"
     assert errore.value.retry == {"kind": "safe"}
@@ -139,22 +130,22 @@ def test_annullamento_in_corsa_con_la_fine_non_e_mai_un_successo_taciuto(
 ) -> None:
     """Un gettone alzato in ognuno degli istanti intorno al lavoro, ciascuno
     raggiunto in modo deterministico (nessun timer): prima della chiamata,
-    a lavoro in corso (sonda del lavoro), fra la fine del lavoro e la
-    consegna (sonda della consegna), dopo la consegna. O la chiamata riesce
-    e il gettone è arrivato dopo, o fallisce con `cancelled` e l'effetto
-    dice se il file d'uscita è stato scritto."""
+    fra due passi (sonda del lavoro), fra la fine del lavoro e la consegna
+    (sonda della consegna), dopo la consegna. O la chiamata riesce e il
+    gettone è arrivato dopo, o fallisce con `cancelled` e l'effetto dice se
+    il file d'uscita è stato scritto."""
     piano = piano_lungo(PASSI)
     uscita_del_piano = f"s{PASSI - 1}"
 
     def nessuna(_: pd.CancellationToken) -> contextlib.AbstractContextManager[None]:
         return contextlib.nullcontext()
 
-    def durante(gettone: pd.CancellationToken) -> contextlib.AbstractContextManager[None]:
-        def sonda() -> float:
+    def fra_passi(gettone: pd.CancellationToken) -> contextlib.AbstractContextManager[None]:
+        def alza() -> float:
             gettone.cancel()
             return TETTO
 
-        return _sonda_lavoro(sonda)
+        return _sonda_lavoro(_Sonda({"fra_passi": alza}))
 
     def alla_consegna(gettone: pd.CancellationToken) -> contextlib.AbstractContextManager[None]:
         return _sonda(gettone.cancel)
@@ -168,7 +159,7 @@ def test_annullamento_in_corsa_con_la_fine_non_e_mai_un_successo_taciuto(
         ]
     ] = [
         ("prima", True, nessuna, "none"),
-        ("durante", False, durante, "none"),
+        ("fra passi", False, fra_passi, "none"),
         ("alla consegna", False, alla_consegna, "committed"),
         ("dopo", False, nessuna, "ok"),
     ]
@@ -206,35 +197,70 @@ def _sonda(azione: Callable[[], object]) -> Any:
         _native._sonda_consegna(None)
 
 
+Risposta = float | str | None
+
+
+class _Sonda:
+    """La sonda del lavoro di una prova: a ogni punto registra il nome e,
+    alla prima volta che il lavoro passa da un punto di `azioni`, fa
+    l'azione (un callable che restituisce la risposta, o la risposta
+    stessa); altrove lascia proseguire."""
+
+    def __init__(self, azioni: dict[str, Risposta | Callable[[], Risposta]]) -> None:
+        self.azioni = dict(azioni)
+        self.punti: list[str] = []
+
+    def __call__(self, punto: str) -> Risposta:
+        self.punti.append(punto)
+        azione = self.azioni.pop(punto, None)
+        return azione() if callable(azione) else azione
+
+
 @contextlib.contextmanager
-def _sonda_lavoro(azione: Callable[[], float | None]) -> Any:
-    """Registra la sonda privata del lavoro: `azione` gira nel thread del
-    lavoro prima che cominci; se restituisce dei secondi, il lavoro aspetta
-    al più per quel tempo che scatti la sua interruzione."""
-    _native._sonda_lavoro(azione)
+def _sonda_lavoro(sonda: Callable[[str], Risposta]) -> Any:
+    """Registra la sonda privata del lavoro: gira nel thread del lavoro ai
+    punti `prima`, `fra_passi` e `fra_scritture`; se restituisce dei
+    secondi il lavoro aspetta al più per quel tempo che scatti la sua
+    interruzione, con `"scadenza"` (solo a `prima`) la scadenza del lavoro
+    diventa adesso."""
+    _native._sonda_lavoro(sonda)
     try:
         yield
     finally:
         _native._sonda_lavoro(None)
 
 
-def test_una_sonda_del_lavoro_che_fallisce_non_passa_in_silenzio() -> None:
-    """Una sonda del lavoro che solleva, o che chiede un'attesa che non è
-    un numero di secondi valido, ferma la chiamata con `internal`: una
-    prova scritta male non diventa una prova passata."""
+def test_la_sonda_del_lavoro_passa_dai_suoi_punti(tmp_path: Any) -> None:
+    """Senza azioni la sonda vede i punti nell'ordine del lavoro: prima,
+    fra ognuno dei passi, fra le scritture dei due output."""
+    sonda = _Sonda({})
+    piano = piano_lungo(PASSI)
+    piano["outputs"] = ["s0", f"s{PASSI - 1}"]
+    with _sonda_lavoro(sonda):
+        pd.run(
+            piano,
+            {"t": tabella_semplice()},
+            outputs={"s0": tmp_path / "a.arrow", f"s{PASSI - 1}": tmp_path / "b.arrow"},
+        )
+    assert sonda.punti == ["prima"] + ["fra_passi"] * (PASSI - 1) + ["fra_scritture"]
 
-    def solleva() -> float:
+
+def test_una_sonda_del_lavoro_che_fallisce_non_passa_in_silenzio() -> None:
+    """Una sonda del lavoro che solleva, o che risponde con qualcosa che
+    non è un'attesa valida (o chiede la scadenza dove non si può), ferma la
+    chiamata con `internal`: una prova scritta male non passa."""
+
+    def solleva() -> Risposta:
         raise RuntimeError("sonda")
 
-    def negativa() -> float:
-        return -1.0
-
-    def testo() -> Any:
-        return "1"
-
-    for sonda in (solleva, negativa, testo):
-        with _sonda_lavoro(sonda), pytest.raises(pd.PlenoraInternalError):
-            pd.run(piano_identita(), {"t": tabella_semplice()})
+    for azioni in (
+        {"prima": solleva},
+        {"prima": -1.0},
+        {"prima": "1"},
+        {"fra_passi": "scadenza"},
+    ):
+        with _sonda_lavoro(_Sonda(azioni)), pytest.raises(pd.PlenoraInternalError):
+            pd.run(piano_lungo(PASSI), {"t": tabella_semplice()})
 
 
 def test_sostituire_la_sonda_non_si_blocca_sul_suo_del() -> None:
@@ -300,30 +326,33 @@ def test_ctrl_c_fra_la_fine_e_la_consegna(tmp_path: Any) -> None:
 
 
 def test_gettone_alzato_da_un_altro_thread() -> None:
-    """Deterministico: a lavoro in corso la sonda alza il gettone da un
-    altro thread e tiene il lavoro finché il segnale non gli arriva. Il
-    thread del chiamante porta il gettone nel lavoro mentre aspetta: senza,
-    la sonda aspetterebbe fino al tetto e l'annullamento si vedrebbe solo
-    alla consegna (fase `finalize`)."""
+    """Deterministico: fra il primo e il secondo passo la sonda alza il
+    gettone da un altro thread e tiene il lavoro finché il segnale non gli
+    arriva; il lavoro si ferma al controllo prima del secondo passo. Senza
+    la sorveglianza dei gettoni durante l'attesa del chiamante, o senza
+    quel controllo, l'annullamento si vedrebbe solo alla consegna."""
     gettone = pd.CancellationToken()
 
-    def sonda() -> float:
+    def alza() -> float:
         altro = threading.Thread(target=gettone.cancel)
         altro.start()
         altro.join()
         return TETTO
 
+    sonda = _Sonda({"fra_passi": alza})
     with _sonda_lavoro(sonda), pytest.raises(pd.PlenoraCancelledError) as errore:
         pd.run(piano_lungo(PASSI), {"t": tabella_semplice()}, cancel=gettone)
-    assert errore.value.phase == FASE_DEL_LAVORO
+    assert sonda.punti == ["prima", "fra_passi"]
+    assert errore.value.phase == FASE_FRA_PASSI
+    assert FRA_PASSI in str(errore.value)
     assert errore.value.remote_effect == "none"
     assert errore.value.code == "EXECUTION_CANCELLED"
 
 
-def _ctrl_c_a_lavoro_in_corso() -> float:
-    """Sonda del lavoro: arma SIGINT (`interrupt_main`, lo stesso segnale
-    di Ctrl-C) e tiene il lavoro finché il thread del chiamante non l'ha
-    visto e ha alzato il segnale del lavoro."""
+def _ctrl_c() -> float:
+    """Azione di sonda: arma SIGINT (`interrupt_main`, lo stesso segnale di
+    Ctrl-C) e tiene il lavoro finché il thread del chiamante non l'ha visto
+    e ha alzato il segnale del lavoro."""
     _thread.interrupt_main()
     return TETTO
 
@@ -331,37 +360,39 @@ def _ctrl_c_a_lavoro_in_corso() -> float:
 def test_ctrl_c_annulla_e_propaga_keyboard_interrupt() -> None:
     """Ctrl-C mentre il lavoro gira: il lavoro si ferma al controllo
     successivo e `KeyboardInterrupt` esce con l'esito come causa.
-    Deterministico: il segnale si arma a lavoro in corso, e senza la
-    sorveglianza dei segnali durante l'attesa l'esito sarebbe
-    l'annullamento alla consegna (fase `finalize`)."""
-    with _sonda_lavoro(_ctrl_c_a_lavoro_in_corso), pytest.raises(
-        KeyboardInterrupt
-    ) as interruzione:
+    Deterministico: il segnale si arma fra il primo e il secondo passo."""
+    sonda = _Sonda({"fra_passi": _ctrl_c})
+    with _sonda_lavoro(sonda), pytest.raises(KeyboardInterrupt) as interruzione:
         pd.run(piano_lungo(PASSI), {"t": tabella_semplice()})
     causa = interruzione.value.__cause__
     assert isinstance(causa, pd.PlenoraCancelledError), repr(causa)
-    assert causa.phase == FASE_DEL_LAVORO
+    assert sonda.punti == ["prima", "fra_passi"]
+    assert causa.phase == FASE_FRA_PASSI
+    assert FRA_PASSI in str(causa)
     assert causa.remote_effect == "none"
 
 
 def test_ctrl_c_durante_la_scrittura_dice_l_effetto(tmp_path: Any) -> None:
     """Con output su file l'esito che accompagna il Ctrl-C porta l'effetto
-    vero: nessun file scritto se il lavoro si è fermato prima della fine.
-    Deterministico come la prova sopra."""
-    uscita = tmp_path / "u.arrow"
-    with _sonda_lavoro(_ctrl_c_a_lavoro_in_corso), pytest.raises(
-        KeyboardInterrupt
-    ) as interruzione:
+    vero. Deterministico: il segnale si arma dopo il primo dei due output
+    scritti e prima del secondo; il lavoro si ferma al controllo prima del
+    secondo, con effetto `partial`: il primo file c'è, il secondo no."""
+    primo, secondo = tmp_path / "primo.arrow", tmp_path / "secondo.arrow"
+    sonda = _Sonda({"fra_scritture": _ctrl_c})
+    with _sonda_lavoro(sonda), pytest.raises(KeyboardInterrupt) as interruzione:
         pd.run(
-            piano_lungo(PASSI),
+            piano_filtro_e_ordine(),
             {"t": tabella_semplice()},
-            outputs={f"s{PASSI - 1}": uscita},
+            outputs={"alti": primo, "ordinati": secondo},
         )
     causa = interruzione.value.__cause__
-    assert isinstance(causa, pd.PlenoraCancelledError)
-    assert causa.phase == FASE_DEL_LAVORO
-    assert causa.remote_effect == "none"
-    assert not uscita.exists()
+    assert isinstance(causa, pd.PlenoraCancelledError), repr(causa)
+    assert sonda.punti[-1] == "fra_scritture"
+    assert causa.phase == "write"
+    assert causa.remote_effect == "partial"
+    assert causa.retry == {"kind": "requires_recovery"}
+    assert primo.exists()
+    assert not secondo.exists()
 
 
 def test_la_forma_asincrona_non_blocca_il_loop() -> None:
@@ -391,20 +422,20 @@ def test_la_forma_asincrona_non_blocca_il_loop() -> None:
 
 
 def test_annullare_il_task_ferma_il_lavoro() -> None:
-    """Deterministico: a lavoro in corso la sonda annulla il task dal loop
-    e tiene il lavoro finché l'annullamento non gli arriva. Se annullare il
-    task non fermasse il lavoro, la sonda aspetterebbe fino al tetto e la
-    causa sarebbe l'annullamento alla consegna (fase `finalize`)."""
+    """Deterministico: fra il primo e il secondo passo la sonda annulla il
+    task dal loop e tiene il lavoro finché l'annullamento non gli arriva.
+    Se annullare il task non fermasse il lavoro, la causa sarebbe
+    l'annullamento alla consegna (fase `finalize`)."""
 
     async def principale() -> BaseException:
         loop = asyncio.get_running_loop()
         compiti: list[asyncio.Task[Any]] = []
 
-        def sonda() -> float:
+        def annulla() -> float:
             loop.call_soon_threadsafe(compiti[0].cancel)
             return TETTO
 
-        with _sonda_lavoro(sonda):
+        with _sonda_lavoro(_Sonda({"fra_passi": annulla})):
             compiti.append(
                 asyncio.create_task(pd.arun(piano_lungo(PASSI), {"t": tabella_semplice()}))
             )
@@ -421,7 +452,8 @@ def test_annullare_il_task_ferma_il_lavoro() -> None:
     sollevato = annullamento if annullamento.__cause__ is not None else annullamento.__context__
     assert sollevato is not None
     assert isinstance(sollevato.__cause__, pd.PlenoraCancelledError)
-    assert sollevato.__cause__.phase == FASE_DEL_LAVORO
+    assert sollevato.__cause__.phase == FASE_FRA_PASSI
+    assert FRA_PASSI in str(sollevato.__cause__)
     assert sollevato.__cause__.remote_effect == "none"
 
 

@@ -224,12 +224,15 @@ lint, `--workspace --lib`) passa sul crate.
   (`_native._sonda_consegna`, non API, inerte senza registrazione): la prova
   alza il gettone o arma SIGINT esattamente lì, e fallisce se il controllo
   alla consegna manca (verificato togliendolo). Allo stesso modo il lavoro
-  in corso: una seconda sonda (`_native._sonda_lavoro`) gira nel thread
-  del lavoro prima che cominci, alza gettone, SIGINT o annullamento del
-  task e tiene il lavoro finché l'interruzione non gli arriva (o la sua
-  scadenza non scatta). Nessuna prova dei controlli dipende da sleep,
-  timer o durate misurate: senza la sorveglianza durante l'attesa, o senza
-  la scadenza passata al lavoro, le prove falliscono (verificato).
+  in corso: una seconda sonda (`_native._sonda_lavoro`, registrata in
+  `plenora_pipeline::sonda`) gira nel thread del lavoro prima che cominci,
+  fra due passi del piano e fra la scrittura di due output. La prova vi
+  alza gettone, SIGINT o annullamento del task e tiene il lavoro finché
+  l'interruzione non gli arriva, oppure porta ad adesso la scadenza del
+  lavoro. Nessuna prova dei controlli dipende da sleep, timer o durate
+  misurate. Verificato in negativo: togliendo il controllo fra i passi,
+  quello fra le scritture, la sorveglianza durante l'attesa o la scadenza
+  passata al lavoro, le prove falliscono.
 - La suite Python (`python/tests`) valida errori, capacità e diagnostica
   con `jsonschema` contro le copie degli schemi dei contratti
   (`crates/plenora-cli/tests/fixtures/contratti`, SHA-256 verificato).

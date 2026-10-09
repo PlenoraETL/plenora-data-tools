@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use plenora_core::{ErrorPhase, PlenoraError, RemoteEffect};
+use plenora_pipeline::sonda::{Azione, Punto};
 use plenora_pipeline::Interruzione;
 use pyo3::prelude::*;
 
@@ -51,21 +52,80 @@ pub fn registra_sonda(sonda: Option<Py<PyAny>>) {
     sostituisci(&SONDA, sonda);
 }
 
-/// Sonda delle prove dentro il lavoro: un callable Python chiamato nel
-/// thread del lavoro, con il GIL, prima che il lavoro cominci. È l'istante
-/// in cui il lavoro è certamente in corso, che una prova non sa raggiungere
-/// dall'esterno se non a tempo. Se restituisce un numero di secondi, il
-/// lavoro aspetta che la sua interruzione scatti (annullamento o scadenza),
-/// al più per quel tempo, e poi prosegue: così una prova sa che il segnale
-/// alzato dalla sonda è arrivato al lavoro mentre girava, senza contare su
-/// quanto dura. Privata (`_native._sonda_lavoro`), non è API: senza sonda
-/// registrata (sempre, fuori dalle prove) non prende il GIL e non fa nulla.
-static SONDA_LAVORO: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
-
-/// Registra o toglie la sonda del lavoro (vedi [`registra_sonda`] per il
-/// rilascio della precedente).
+/// Sonda delle prove dentro il lavoro: un callable Python chiamato con il
+/// GIL, nel thread del lavoro, ai punti di `plenora_pipeline::sonda`
+/// (prima del lavoro, fra due passi, fra due scritture), con il nome del
+/// punto. Sono gli istanti in cui il lavoro è certamente in corso, che una
+/// prova non sa raggiungere dall'esterno se non a tempo. Restituisce:
+///
+/// - `None`: il lavoro prosegue;
+/// - un numero di secondi: il lavoro aspetta che la sua interruzione scatti
+///   (annullamento o scadenza), al più per quel tempo, e poi prosegue; così
+///   una prova sa che il segnale alzato dalla sonda è arrivato al lavoro
+///   mentre girava, senza contare su quanto dura;
+/// - `"scadenza"`, solo a `prima`: la scadenza del lavoro, se c'è, diventa
+///   adesso, e il primo controllo scade.
+///
+/// Privata (`_native._sonda_lavoro`), non è API. La registrazione vive in
+/// `plenora_pipeline::sonda`: senza sonda registrata (sempre, fuori dalle
+/// prove) ogni punto costa una lettura atomica.
 pub fn registra_sonda_lavoro(sonda: Option<Py<PyAny>>) {
-    sostituisci(&SONDA_LAVORO, sonda);
+    plenora_pipeline::sonda::registra(sonda.map(|sonda| {
+        let sonda: plenora_pipeline::sonda::Sonda =
+            Arc::new(move |punto, interruzione| chiama_sonda_lavoro(&sonda, punto, interruzione));
+        sonda
+    }));
+}
+
+/// Che cosa chiede la sonda del lavoro.
+enum Risposta {
+    Prosegui,
+    Attendi(Duration),
+    Scadenza,
+}
+
+/// Chiama la sonda del lavoro a `punto` e fa ciò che chiede.
+///
+/// # Errors
+///
+/// `Internal` se la sonda solleva o restituisce qualcosa che non è `None`,
+/// un numero di secondi valido o `"scadenza"`.
+fn chiama_sonda_lavoro(
+    sonda: &Py<PyAny>,
+    punto: Punto,
+    interruzione: &Interruzione,
+) -> Result<Azione, PlenoraError> {
+    let fallita = || PlenoraError::Internal("sonda del lavoro fallita".to_owned());
+    // L'eccezione della sonda si scarta con il GIL preso.
+    let risposta = Python::attach(|py| {
+        let valore = sonda.call1(py, (punto.nome(),)).map_err(|_| fallita())?;
+        let valore = valore.bind(py);
+        if valore.is_none() {
+            return Ok(Risposta::Prosegui);
+        }
+        if let Ok(testo) = valore.extract::<String>() {
+            return if testo == "scadenza" {
+                Ok(Risposta::Scadenza)
+            } else {
+                Err(fallita())
+            };
+        }
+        let secondi = valore.extract::<f64>().map_err(|_| fallita())?;
+        Duration::try_from_secs_f64(secondi)
+            .map(Risposta::Attendi)
+            .map_err(|_| fallita())
+    })?;
+    match risposta {
+        Risposta::Prosegui => Ok(Azione::Prosegui),
+        Risposta::Scadenza => Ok(Azione::AnticipaScadenza),
+        Risposta::Attendi(tetto) => {
+            let inizio = Instant::now();
+            while interruzione.verifica("").is_ok() && inizio.elapsed() < tetto {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Ok(Azione::Prosegui)
+        }
+    }
 }
 
 /// Mette `sonda` al posto della registrata. La precedente esce dal
@@ -85,46 +145,6 @@ fn chiama_sonda(py: Python<'_>) -> PyResult<()> {
         .ok()
         .and_then(|registrata| registrata.as_ref().map(|sonda| sonda.clone_ref(py)));
     sonda.map_or_else(|| Ok(()), |sonda| sonda.call0(py).map(|_| ()))
-}
-
-/// Chiama la sonda del lavoro, se c'è, nel thread del lavoro; se chiede
-/// un'attesa, aspetta senza il GIL che `interruzione` scatti o che
-/// l'attesa finisca. Il controllo vero resta quello del lavoro, subito
-/// dopo: qui non si produce nessun esito.
-///
-/// # Errors
-///
-/// `Internal` se la sonda solleva o restituisce qualcosa che non è `None`
-/// né un numero di secondi valido.
-fn sonda_del_lavoro(interruzione: &Interruzione) -> Result<(), PlenoraError> {
-    let registrata = SONDA_LAVORO
-        .lock()
-        .is_ok_and(|registrata| registrata.is_some());
-    if !registrata {
-        return Ok(());
-    }
-    let fallita = || PlenoraError::Internal("sonda del lavoro fallita".to_owned());
-    // L'eccezione della sonda si scarta con il GIL preso.
-    let attesa = Python::attach(|py| {
-        let sonda = SONDA_LAVORO
-            .lock()
-            .ok()
-            .and_then(|registrata| registrata.as_ref().map(|sonda| sonda.clone_ref(py)));
-        sonda.map_or(Ok(None), |sonda| {
-            sonda
-                .call0(py)
-                .and_then(|valore| valore.extract::<Option<f64>>(py))
-                .map_err(|_| fallita())
-        })
-    })?;
-    if let Some(secondi) = attesa {
-        let tetto = Duration::try_from_secs_f64(secondi).map_err(|_| fallita())?;
-        let inizio = Instant::now();
-        while interruzione.verifica("").is_ok() && inizio.elapsed() < tetto {
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    }
-    Ok(())
 }
 
 /// Scadenza e segnali di una chiamata.
@@ -302,13 +322,13 @@ impl Controlli {
         // Un gettone alzato prima della chiamata si vede al primo controllo
         // del lavoro, prima di qualunque lettura.
         self.trasferisci();
-        let interruzione = self.interruzione.clone();
+        let mut interruzione = self.interruzione.clone();
         let (invio, ricezione) = mpsc::channel();
         let maniglia = std::thread::Builder::new()
             .name("plenora-data".to_owned())
             .spawn(move || {
                 let esito = catch_unwind(AssertUnwindSafe(|| {
-                    sonda_del_lavoro(&interruzione)?;
+                    plenora_pipeline::sonda::chiama_prima(&mut interruzione)?;
                     lavoro(&interruzione)
                 }))
                 .unwrap_or_else(|payload| Err(panico(payload.as_ref(), con_effetti)));

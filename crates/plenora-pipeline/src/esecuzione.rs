@@ -631,6 +631,9 @@ impl PipelineValidata {
         let mut passi = Vec::with_capacity(self.passi.len());
         for (indice, passo) in self.passi.iter().enumerate() {
             let op = passo.descrittore.id;
+            if indice > 0 {
+                crate::sonda::chiama(crate::sonda::Punto::FraPassi, interruzione)?;
+            }
             interruzione.verifica(&format!("prima del passo `{}` ({op})", passo.out))?;
             let nel = |errore: PlenoraError| nel_passo(&passo.out, errore);
             let ingressi: Vec<&RecordBatch> = passo

@@ -24,10 +24,12 @@ def version() -> str: ...
 def _sonda_consegna(sonda: Callable[[], object] | None) -> None:
     """Solo per le prove: un callable chiamato fra la fine del lavoro e il
     controllo della consegna; None lo toglie."""
-def _sonda_lavoro(sonda: Callable[[], float | None] | None) -> None:
-    """Solo per le prove: un callable chiamato nel thread del lavoro prima
-    che cominci; se restituisce dei secondi, il lavoro aspetta al piu' per
-    quel tempo che scatti la sua interruzione. None lo toglie."""
+def _sonda_lavoro(sonda: Callable[[str], float | str | None] | None) -> None:
+    """Solo per le prove: un callable chiamato nel thread del lavoro ai
+    punti `prima`, `fra_passi` e `fra_scritture`, con il nome del punto.
+    None: il lavoro prosegue; dei secondi: il lavoro aspetta al piu' per
+    quel tempo che scatti la sua interruzione; "scadenza" (solo a `prima`):
+    la scadenza del lavoro diventa adesso. None lo toglie."""
 def capabilities() -> str: ...
 def catalog() -> str: ...
 def describe(
