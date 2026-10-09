@@ -624,6 +624,17 @@ pub fn esegui_artefatti(
     risolutore: &dyn RisolutoreArtefatti,
     interruzione: &Interruzione,
 ) -> Result<Value> {
+    esegui_artefatti_in(richiesta, risolutore, interruzione, tempfile::tempdir)
+}
+
+/// [`esegui_artefatti`] con la cartella temporanea data da `crea_cartella`:
+/// le prove la mettono dove possono impedirne la rimozione.
+fn esegui_artefatti_in(
+    richiesta: &str,
+    risolutore: &dyn RisolutoreArtefatti,
+    interruzione: &Interruzione,
+    crea_cartella: impl FnOnce() -> std::io::Result<tempfile::TempDir>,
+) -> Result<Value> {
     let (letta, piano) = leggi_richiesta(richiesta)?;
     // Le destinazioni nell'ordine del piano: l'ordine di pubblicazione.
     let destinazioni: Vec<Destinazione<'_>> = piano
@@ -642,7 +653,7 @@ pub fn esegui_artefatti(
         .prepara(&destinazioni)
         .map_err(RifiutoDestinazioni::errore)?;
 
-    let cartella = tempfile::tempdir()
+    let cartella = crea_cartella()
         .map_err(|errore| PlenoraError::io_con_contesto("cartella temporanea", errore))?;
     let ingressi = leggi_sorgenti(&letta, &piano, risolutore, interruzione, cartella.path())?;
     let uscite: Vec<FileUscita> = destinazioni
@@ -736,10 +747,156 @@ pub fn esegui_artefatti(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use plenora_core::{ErrorPhase, RemoteEffect, RetryDisposition};
+    use std::cell::RefCell;
+    use std::io::{Read, Write};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
 
-    use super::pulizia_fallita;
+    use plenora_core::arrow::array::{Int64Array, RecordBatch};
+    use plenora_core::arrow::schema::{DataType, Field, Schema};
+    use plenora_core::{ErrorPhase, RemoteEffect, RetryDisposition};
+    use plenora_io::{scrivi_tabella, Formato, OpzioniScrittura};
+    use plenora_pipeline::Interruzione;
+    use serde_json::json;
+
+    use super::{
+        esegui_artefatti_in, pulizia_fallita, Destinazione, PubblicazioneFallita,
+        RifiutoDestinazioni, RisolutoreArtefatti, ARROW_FILE,
+    };
+
+    /// Impedisce la rimozione di `cartella` finché vive: su Windows un file
+    /// aperto senza condivisione, altrove la cartella senza permesso di
+    /// scrittura (le prove non girano come root).
+    struct Blocco {
+        #[cfg(not(windows))]
+        cartella: PathBuf,
+        #[cfg(windows)]
+        _aperto: std::fs::File,
+    }
+
+    impl Blocco {
+        fn su(cartella: &Path) -> Self {
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                let aperto = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .share_mode(0)
+                    .open(cartella.join("bloccato"))
+                    .expect("file bloccato");
+                Self { _aperto: aperto }
+            }
+            #[cfg(not(windows))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(cartella, std::fs::Permissions::from_mode(0o500))
+                    .expect("permessi");
+                Self {
+                    cartella: cartella.to_owned(),
+                }
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    impl Drop for Blocco {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ =
+                std::fs::set_permissions(&self.cartella, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+
+    /// Un risolutore in memoria che, pubblicato l'output, blocca la cartella
+    /// temporanea dell'esecuzione (l'unica sotto `base`).
+    struct BloccaLaPulizia {
+        sorgente: Vec<u8>,
+        base: PathBuf,
+        pubblicati: RefCell<usize>,
+        blocco: RefCell<Option<Blocco>>,
+    }
+
+    impl RisolutoreArtefatti for BloccaLaPulizia {
+        fn leggi(&self, _: &str, destinazione: &mut dyn Write) -> std::io::Result<()> {
+            destinazione.write_all(&self.sorgente)
+        }
+
+        fn prepara(&self, _: &[Destinazione<'_>]) -> Result<(), RifiutoDestinazioni> {
+            Ok(())
+        }
+
+        fn pubblica(
+            &self,
+            _: &Destinazione<'_>,
+            contenuto: &mut dyn Read,
+            _: u64,
+        ) -> Result<(), PubblicazioneFallita> {
+            std::io::copy(contenuto, &mut std::io::sink()).expect("contenuto");
+            *self.pubblicati.borrow_mut() += 1;
+            let cartelle: Vec<PathBuf> = std::fs::read_dir(&self.base)
+                .expect("base")
+                .map(|voce| voce.expect("voce").path())
+                .collect();
+            assert_eq!(cartelle.len(), 1, "una sola cartella temporanea");
+            *self.blocco.borrow_mut() = Some(Blocco::su(&cartelle[0]));
+            Ok(())
+        }
+    }
+
+    /// ERR-015 con un fallimento vero di `TempDir::close`: l'output è
+    /// pubblicato, la cartella temporanea non si toglie, e l'errore è
+    /// `cleanup`, `committed`, `never`, anche nella proiezione pubblica.
+    #[test]
+    fn la_cartella_temporanea_non_rimovibile_dopo_la_pubblicazione_e_err_015() {
+        let tabella = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)])),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        let appoggio = tempfile::tempdir().unwrap();
+        let file = appoggio.path().join("t.arrow");
+        let opzioni = OpzioniScrittura {
+            formato: Some(Formato::ArrowIpc),
+            ..OpzioniScrittura::default()
+        };
+        scrivi_tabella(&tabella, &file, &opzioni).unwrap();
+        let base = tempfile::tempdir().unwrap();
+        let risolutore = BloccaLaPulizia {
+            sorgente: std::fs::read(&file).unwrap(),
+            base: base.path().to_owned(),
+            pubblicati: RefCell::new(0),
+            blocco: RefCell::new(None),
+        };
+        let richiesta = json!({
+            "schema_version": 1,
+            "plan": {"version": 1, "inputs": ["t"], "steps": [], "outputs": ["t"]},
+            "inputs": {"t": {"reference": "artifact://sorgente", "content_type": ARROW_FILE}},
+            "outputs": {"t": {
+                "reference": "artifact://uscita",
+                "content_type": ARROW_FILE,
+                "overwrite": false,
+            }},
+        })
+        .to_string();
+        let errore = esegui_artefatti_in(&richiesta, &risolutore, &Interruzione::default(), || {
+            tempfile::Builder::new().tempdir_in(base.path())
+        })
+        .expect_err("la pulizia doveva fallire");
+        assert_eq!(*risolutore.pubblicati.borrow(), 1, "output pubblicato");
+        assert_eq!(errore.phase(), ErrorPhase::Cleanup);
+        assert_eq!(errore.remote_effect(), RemoteEffect::Committed);
+        assert_eq!(errore.retry_disposition(), RetryDisposition::Never);
+        let pubblico = errore.public_projection();
+        assert_eq!(pubblico.phase(), ErrorPhase::Cleanup);
+        assert_eq!(pubblico.remote_effect(), RemoteEffect::Committed);
+        assert_eq!(pubblico.retry(), RetryDisposition::Never);
+        // Il residuo è davvero rimasto; tolto il blocco, `base` si toglie.
+        assert_eq!(std::fs::read_dir(base.path()).unwrap().count(), 1);
+        drop(risolutore.blocco.borrow_mut().take());
+    }
 
     /// ERR-015: dopo la pubblicazione la pulizia fallita è `cleanup`,
     /// `committed` e `never`, qualunque sia il tipo dell'errore di I/O,

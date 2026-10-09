@@ -85,7 +85,14 @@ automatico (`safe`, `after`, `requires_idempotency_key`) diventa
 Fa eccezione la pulizia fallita dopo una pubblicazione provata (fase
 `cleanup`, effetto `committed`, oggi solo la cartella temporanea di
 `data.run` 3): è `never` con qualunque causa, perché il residuo è solo
-locale e un nuovo tentativo pubblicherebbe di nuovo (ERR-015). Il
+locale e un nuovo tentativo pubblicherebbe di nuovo (ERR-015). «Residuo
+remoto» in ERR-015 è un residuo sul sistema remoto oggetto
+dell'operazione, cioè la destinazione degli artefatti. La cartella
+temporanea di lavoro del processo è un residuo locale su qualunque
+filesystem si trovi, anche di rete: ritentare l'operazione la
+ripubblicherebbe senza pulirla. La prova
+(`crates/plenora-cli/src/artefatti.rs`) blocca davvero la rimozione e
+controlla gli assi anche nella proiezione pubblica. Il
 primo effetto dichiarato vince anche sotto i wrapper di fase e di
 diagnostica.
 

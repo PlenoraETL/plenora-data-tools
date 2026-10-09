@@ -718,7 +718,12 @@ impl PlenoraError {
     /// - [`RetryDisposition::Never`] con effetto [`RemoteEffect::Committed`]
     ///   in fase [`ErrorPhase::Cleanup`]: la pulizia fallita dopo una
     ///   pubblicazione provata (ERR-015), il cui residuo in questa libreria è
-    ///   solo locale. Una pulizia con residuo remoto, che per ERR-015 sarebbe
+    ///   solo locale. In ERR-015 «residuo remoto» è un residuo sul sistema
+    ///   remoto oggetto dell'operazione (la destinazione degli artefatti);
+    ///   la cartella temporanea di lavoro del processo è un residuo locale
+    ///   su qualunque filesystem stia, anche di rete, e ritentare
+    ///   l'operazione la ripubblicherebbe senza pulirla. Una pulizia con
+    ///   residuo sul sistema oggetto, che per ERR-015 sarebbe
     ///   `requires_recovery`, qui non esiste.
     /// - [`RetryDisposition::After`] e [`RetryDisposition::Quarantine`] non
     ///   sono mai prodotti.
