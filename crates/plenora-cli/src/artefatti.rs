@@ -766,12 +766,17 @@ mod tests {
         RifiutoDestinazioni, RisolutoreArtefatti, ARROW_FILE,
     };
 
-    /// Impedisce la rimozione di `cartella` finché vive: su Windows un file
-    /// aperto senza condivisione, altrove la cartella senza permesso di
-    /// scrittura (le prove non girano come root).
+    /// Impedisce la rimozione di `cartella` finché vive, con un meccanismo
+    /// che regge anche da amministratore o da root (niente permessi):
+    ///
+    /// - Windows: un file aperto dentro la cartella senza condivisione; la
+    ///   modalità di condivisione vale anche per l'amministratore;
+    /// - Unix: la cartella si sposta accanto e al suo posto c'è un file
+    ///   regolare; `remove_dir_all` su un file fallisce (`ENOTDIR`) per
+    ///   chiunque, root compreso.
+    ///
+    /// La rimozione di `base` (la `TempDir` della prova) toglie tutto.
     struct Blocco {
-        #[cfg(not(windows))]
-        cartella: PathBuf,
         #[cfg(windows)]
         _aperto: std::fs::File,
     }
@@ -791,22 +796,11 @@ mod tests {
             }
             #[cfg(not(windows))]
             {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(cartella, std::fs::Permissions::from_mode(0o500))
-                    .expect("permessi");
-                Self {
-                    cartella: cartella.to_owned(),
-                }
+                let spostata = cartella.with_extension("spostata");
+                std::fs::rename(cartella, &spostata).expect("cartella spostata");
+                std::fs::write(cartella, b"al posto della cartella").expect("file");
+                Self {}
             }
-        }
-    }
-
-    #[cfg(not(windows))]
-    impl Drop for Blocco {
-        fn drop(&mut self) {
-            use std::os::unix::fs::PermissionsExt;
-            let _ =
-                std::fs::set_permissions(&self.cartella, std::fs::Permissions::from_mode(0o700));
         }
     }
 
@@ -894,7 +888,7 @@ mod tests {
         assert_eq!(pubblico.remote_effect(), RemoteEffect::Committed);
         assert_eq!(pubblico.retry(), RetryDisposition::Never);
         // Il residuo è davvero rimasto; tolto il blocco, `base` si toglie.
-        assert_eq!(std::fs::read_dir(base.path()).unwrap().count(), 1);
+        assert!(std::fs::read_dir(base.path()).unwrap().count() >= 1);
         drop(risolutore.blocco.borrow_mut().take());
     }
 
