@@ -1,11 +1,11 @@
 {
   "sorgente": "plenora-contracts",
-  "commit": "1e902dfaab5819c1d9ce785878d5b26dbeae48b3",
+  "commit": "3c395a8db96df739024e203b22794af340dc8a7f",
   "nota": "Copie byte per byte (git show <commit>:<percorso>) degli schemi, del catalogo pubblico, del registro dei kernel e dei binding CLI e Python che i test della CLI (e la suite dell'SDK Python) usano come attese. Non si modificano: un file nuovo o cambiato si ricopia dal commit dei contratti e si aggiorna questo file. tests/comune/mod.rs verifica gli SHA-256 prima di usarli.",
   "file": {
     "capabilities-v2.schema.json": ["schemas/capabilities-v2.schema.json", "f831a45ec053b9aba9a11173666878c1d0d27a8f83a9f35f8496f6e697422ad0"],
     "cli-envelope-v2.schema.json": ["schemas/cli-envelope-v2.schema.json", "28e555dc406a837bcfe5c004360d1667a134c5982ebe6e6c9962060aacbf71ff"],
-    "cli-v1.json": ["bindings/cli-v1.json", "71606659041fa5b360895a3f68be262568839e64e94a6524032b17897162f664"],
+    "cli-v1.json": ["bindings/cli-v1.json", "7907b837f1d1e6b5c8bb1198452d044865ff77ca4ce1bc767005cb53c0c14af5"],
     "data-execution-input-v3.schema.json": ["schemas/data-execution-input-v3.schema.json", "4676c56f05a766d45a725cf9c4714c00f5c4e86c634e9c1ea97ef1f71ccf6277"],
     "data-execution-result-v3.schema.json": ["schemas/data-execution-result-v3.schema.json", "fab51c06c1f5892eb18da4859ae978f93a39e378015f97685da7ea8c1ac7d2ee"],
     "data-kernels-v2.json": ["catalogs/data-kernels-v2.json", "9eec95cbeac64aaf134f751f564e31e5e4fd632319ee1c35eabe4c0c4f3ecd43"],

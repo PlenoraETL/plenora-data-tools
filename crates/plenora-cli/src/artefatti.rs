@@ -147,6 +147,16 @@ fn solo_tipo(contesto: &str, tipo: std::io::ErrorKind) -> PlenoraError {
     PlenoraError::io_con_contesto(contesto, std::io::Error::from(tipo))
 }
 
+/// La rimozione della cartella temporanea fallita dopo che ogni output è
+/// pubblicato (ERR-015): fase `cleanup`, effetto `committed` perché la
+/// pubblicazione è provata, e ritentativo `never` perché il residuo è solo
+/// locale e un nuovo tentativo pubblicherebbe di nuovo.
+fn pulizia_fallita(tipo: std::io::ErrorKind) -> PlenoraError {
+    solo_tipo("cartella temporanea", tipo)
+        .with_phase(ErrorPhase::Cleanup)
+        .with_remote_effect(RemoteEffect::Committed)
+}
+
 /// Il risolutore dei riferimenti, fornito dall'applicazione (RT-015).
 ///
 /// Risolve i riferimenti solo nei namespace che autorizza e mai come
@@ -684,12 +694,9 @@ pub fn esegui_artefatti(
     pubblica(&pronti, risolutore, interruzione)?;
     // La cartella temporanea si toglie e la rimozione si verifica: un
     // fallimento lascerebbe sul disco copie delle sorgenti e delle uscite.
-    // Gli output sono già pubblicati, quindi l'effetto è `committed`.
-    cartella.close().map_err(|errore| {
-        solo_tipo("cartella temporanea", errore.kind())
-            .with_phase(ErrorPhase::Finalize)
-            .with_remote_effect(RemoteEffect::Committed)
-    })?;
+    cartella
+        .close()
+        .map_err(|errore| pulizia_fallita(errore.kind()))?;
 
     let outputs: Vec<Value> = pronti
         .iter()
@@ -726,4 +733,45 @@ pub fn esegui_artefatti(
         "outputs": outputs,
         "steps": steps,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use plenora_core::{ErrorPhase, RemoteEffect, RetryDisposition};
+
+    use super::pulizia_fallita;
+
+    /// ERR-015: dopo la pubblicazione la pulizia fallita è `cleanup`,
+    /// `committed` e `never`, qualunque sia il tipo dell'errore di I/O,
+    /// anche uno che da solo si ritenterebbe.
+    #[test]
+    fn la_pulizia_dopo_la_pubblicazione_e_committed_e_non_si_ritenta() {
+        use std::io::ErrorKind as K;
+        for tipo in [
+            K::Interrupted,
+            K::TimedOut,
+            K::WouldBlock,
+            K::ResourceBusy,
+            K::PermissionDenied,
+            K::NotFound,
+            K::Other,
+        ] {
+            let errore = pulizia_fallita(tipo);
+            assert_eq!(errore.phase(), ErrorPhase::Cleanup, "{tipo:?}");
+            assert_eq!(errore.remote_effect(), RemoteEffect::Committed, "{tipo:?}");
+            assert_eq!(
+                errore.retry_disposition(),
+                RetryDisposition::Never,
+                "{tipo:?}"
+            );
+            let pubblico = errore.public_projection();
+            assert_eq!(pubblico.phase(), ErrorPhase::Cleanup, "{tipo:?}");
+            assert_eq!(
+                pubblico.remote_effect(),
+                RemoteEffect::Committed,
+                "{tipo:?}"
+            );
+            assert_eq!(pubblico.retry(), RetryDisposition::Never, "{tipo:?}");
+        }
+    }
 }

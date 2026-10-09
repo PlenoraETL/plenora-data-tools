@@ -2,7 +2,7 @@
 //! stesse operazioni.
 //!
 //! Adotta il profilo data-tools versione 2 di `plenora-contracts` (commit
-//! `1e902dfaab5819c1d9ce785878d5b26dbeae48b3`): CLI 2.0 (un documento JSON
+//! `3c395a8db96df739024e203b22794af340dc8a7f`): CLI 2.0 (un documento JSON
 //! su stdout, niente su stderr, codici d'uscita per categoria), Typed Errors
 //! 1.0 (la proiezione pubblica di `PlenoraError`), Capability Discovery 2.0,
 //! Surface Bindings 1.0 (comandi `catalog`, `describe`, `validate`, `run`).
