@@ -889,7 +889,7 @@ mod tests {
         assert_eq!(pubblico.retry(), RetryDisposition::Never);
         // Il residuo è davvero rimasto; tolto il blocco, `base` si toglie.
         assert!(std::fs::read_dir(base.path()).unwrap().count() >= 1);
-        drop(risolutore.blocco.borrow_mut().take());
+        *risolutore.blocco.borrow_mut() = None;
     }
 
     /// ERR-015: dopo la pubblicazione la pulizia fallita è `cleanup`,
