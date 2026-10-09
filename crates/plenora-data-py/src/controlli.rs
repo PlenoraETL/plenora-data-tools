@@ -48,7 +48,30 @@ static SONDA: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
 /// liberato: il suo `__del__` può richiamare questa funzione, e rilasciarla
 /// con il lucchetto preso sarebbe un deadlock.
 pub fn registra_sonda(sonda: Option<Py<PyAny>>) {
-    let precedente = SONDA
+    sostituisci(&SONDA, sonda);
+}
+
+/// Sonda delle prove dentro il lavoro: un callable Python chiamato nel
+/// thread del lavoro, con il GIL, prima che il lavoro cominci. È l'istante
+/// in cui il lavoro è certamente in corso, che una prova non sa raggiungere
+/// dall'esterno se non a tempo. Se restituisce un numero di secondi, il
+/// lavoro aspetta che la sua interruzione scatti (annullamento o scadenza),
+/// al più per quel tempo, e poi prosegue: così una prova sa che il segnale
+/// alzato dalla sonda è arrivato al lavoro mentre girava, senza contare su
+/// quanto dura. Privata (`_native._sonda_lavoro`), non è API: senza sonda
+/// registrata (sempre, fuori dalle prove) non prende il GIL e non fa nulla.
+static SONDA_LAVORO: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
+
+/// Registra o toglie la sonda del lavoro (vedi [`registra_sonda`] per il
+/// rilascio della precedente).
+pub fn registra_sonda_lavoro(sonda: Option<Py<PyAny>>) {
+    sostituisci(&SONDA_LAVORO, sonda);
+}
+
+/// Mette `sonda` al posto della registrata. La precedente esce dal
+/// lucchetto e si rilascia dopo averlo liberato.
+fn sostituisci(posto: &Mutex<Option<Py<PyAny>>>, sonda: Option<Py<PyAny>>) {
+    let precedente = posto
         .lock()
         .ok()
         .and_then(|mut registrata| std::mem::replace(&mut *registrata, sonda));
@@ -62,6 +85,46 @@ fn chiama_sonda(py: Python<'_>) -> PyResult<()> {
         .ok()
         .and_then(|registrata| registrata.as_ref().map(|sonda| sonda.clone_ref(py)));
     sonda.map_or_else(|| Ok(()), |sonda| sonda.call0(py).map(|_| ()))
+}
+
+/// Chiama la sonda del lavoro, se c'è, nel thread del lavoro; se chiede
+/// un'attesa, aspetta senza il GIL che `interruzione` scatti o che
+/// l'attesa finisca. Il controllo vero resta quello del lavoro, subito
+/// dopo: qui non si produce nessun esito.
+///
+/// # Errors
+///
+/// `Internal` se la sonda solleva o restituisce qualcosa che non è `None`
+/// né un numero di secondi valido.
+fn sonda_del_lavoro(interruzione: &Interruzione) -> Result<(), PlenoraError> {
+    let registrata = SONDA_LAVORO
+        .lock()
+        .is_ok_and(|registrata| registrata.is_some());
+    if !registrata {
+        return Ok(());
+    }
+    let fallita = || PlenoraError::Internal("sonda del lavoro fallita".to_owned());
+    // L'eccezione della sonda si scarta con il GIL preso.
+    let attesa = Python::attach(|py| {
+        let sonda = SONDA_LAVORO
+            .lock()
+            .ok()
+            .and_then(|registrata| registrata.as_ref().map(|sonda| sonda.clone_ref(py)));
+        sonda.map_or(Ok(None), |sonda| {
+            sonda
+                .call0(py)
+                .and_then(|valore| valore.extract::<Option<f64>>(py))
+                .map_err(|_| fallita())
+        })
+    })?;
+    if let Some(secondi) = attesa {
+        let tetto = Duration::try_from_secs_f64(secondi).map_err(|_| fallita())?;
+        let inizio = Instant::now();
+        while interruzione.verifica("").is_ok() && inizio.elapsed() < tetto {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    Ok(())
 }
 
 /// Scadenza e segnali di una chiamata.
@@ -244,8 +307,11 @@ impl Controlli {
         let maniglia = std::thread::Builder::new()
             .name("plenora-data".to_owned())
             .spawn(move || {
-                let esito = catch_unwind(AssertUnwindSafe(|| lavoro(&interruzione)))
-                    .unwrap_or_else(|payload| Err(panico(payload.as_ref(), con_effetti)));
+                let esito = catch_unwind(AssertUnwindSafe(|| {
+                    sonda_del_lavoro(&interruzione)?;
+                    lavoro(&interruzione)
+                }))
+                .unwrap_or_else(|payload| Err(panico(payload.as_ref(), con_effetti)));
                 // Il chiamante aspetta sempre l'esito: un invio fallito vuol
                 // dire solo che non c'è più nessuno ad aspettarlo.
                 let _ = invio.send(esito);

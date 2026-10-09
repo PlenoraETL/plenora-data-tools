@@ -382,6 +382,16 @@ fn sonda_consegna(sonda: Option<Py<PyAny>>) {
     controlli::registra_sonda(sonda);
 }
 
+/// Sonda delle prove nel thread del lavoro, prima che cominci
+/// (`controlli::registra_sonda_lavoro`); `None` la toglie. Privata, non è
+/// API.
+#[pyfunction]
+#[pyo3(name = "_sonda_lavoro")]
+#[allow(clippy::needless_pass_by_value)] // PyO3 estrae l'argomento per valore.
+fn sonda_lavoro(sonda: Option<Py<PyAny>>) {
+    controlli::registra_sonda_lavoro(sonda);
+}
+
 #[pymodule]
 fn _native(modulo: &Bound<'_, PyModule>) -> PyResult<()> {
     // Nessun testo di panico su stderr: il payload può contenere valori di
@@ -397,5 +407,6 @@ fn _native(modulo: &Bound<'_, PyModule>) -> PyResult<()> {
     modulo.add_function(wrap_pyfunction!(validate, modulo)?)?;
     modulo.add_function(wrap_pyfunction!(run, modulo)?)?;
     modulo.add_function(wrap_pyfunction!(sonda_consegna, modulo)?)?;
+    modulo.add_function(wrap_pyfunction!(sonda_lavoro, modulo)?)?;
     Ok(())
 }
