@@ -24,11 +24,10 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use plenora_core::{ErrorPhase, PlenoraError, RemoteEffect};
-use plenora_pipeline::sonda::{Azione, Punto};
 use plenora_pipeline::Interruzione;
 use pyo3::prelude::*;
 
@@ -36,116 +35,6 @@ use crate::errori::{in_python, panico, Errore};
 
 /// Ogni quanto il thread del chiamante guarda gettoni e segnali.
 const INTERVALLO: Duration = Duration::from_millis(10);
-
-/// Sonda delle prove: un callable Python chiamato fra la fine del lavoro e
-/// il controllo della consegna, l'unico istante che una prova non sa
-/// raggiungere dall'esterno. Privata (`_native._sonda_consegna`), non è
-/// API: senza sonda registrata (sempre, fuori dalle prove) non fa nulla.
-static SONDA: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
-
-/// Registra o toglie la sonda della consegna.
-///
-/// La sonda precedente esce dal lucchetto e si rilascia dopo averlo
-/// liberato: il suo `__del__` può richiamare questa funzione, e rilasciarla
-/// con il lucchetto preso sarebbe un deadlock.
-pub fn registra_sonda(sonda: Option<Py<PyAny>>) {
-    sostituisci(&SONDA, sonda);
-}
-
-/// Sonda delle prove dentro il lavoro: un callable Python chiamato con il
-/// GIL, nel thread del lavoro, ai punti di `plenora_pipeline::sonda`
-/// (prima del lavoro, fra due passi, fra due scritture), con il nome del
-/// punto. Sono gli istanti in cui il lavoro è certamente in corso, che una
-/// prova non sa raggiungere dall'esterno se non a tempo. Restituisce:
-///
-/// - `None`: il lavoro prosegue;
-/// - un numero di secondi: il lavoro aspetta che la sua interruzione scatti
-///   (annullamento o scadenza), al più per quel tempo, e poi prosegue; così
-///   una prova sa che il segnale alzato dalla sonda è arrivato al lavoro
-///   mentre girava, senza contare su quanto dura;
-/// - `"scadenza"`, solo a `prima`: la scadenza del lavoro, se c'è, diventa
-///   adesso, e il primo controllo scade.
-///
-/// Privata (`_native._sonda_lavoro`), non è API. La registrazione vive in
-/// `plenora_pipeline::sonda`: senza sonda registrata (sempre, fuori dalle
-/// prove) ogni punto costa una lettura atomica.
-pub fn registra_sonda_lavoro(sonda: Option<Py<PyAny>>) {
-    plenora_pipeline::sonda::registra(sonda.map(|sonda| {
-        let sonda: plenora_pipeline::sonda::Sonda =
-            Arc::new(move |punto, interruzione| chiama_sonda_lavoro(&sonda, punto, interruzione));
-        sonda
-    }));
-}
-
-/// Che cosa chiede la sonda del lavoro.
-enum Risposta {
-    Prosegui,
-    Attendi(Duration),
-    Scadenza,
-}
-
-/// Chiama la sonda del lavoro a `punto` e fa ciò che chiede.
-///
-/// # Errors
-///
-/// `Internal` se la sonda solleva o restituisce qualcosa che non è `None`,
-/// un numero di secondi valido o `"scadenza"`.
-fn chiama_sonda_lavoro(
-    sonda: &Py<PyAny>,
-    punto: Punto,
-    interruzione: &Interruzione,
-) -> Result<Azione, PlenoraError> {
-    let fallita = || PlenoraError::Internal("sonda del lavoro fallita".to_owned());
-    // L'eccezione della sonda si scarta con il GIL preso.
-    let risposta = Python::attach(|py| {
-        let valore = sonda.call1(py, (punto.nome(),)).map_err(|_| fallita())?;
-        let valore = valore.bind(py);
-        if valore.is_none() {
-            return Ok(Risposta::Prosegui);
-        }
-        if let Ok(testo) = valore.extract::<String>() {
-            return if testo == "scadenza" {
-                Ok(Risposta::Scadenza)
-            } else {
-                Err(fallita())
-            };
-        }
-        let secondi = valore.extract::<f64>().map_err(|_| fallita())?;
-        Duration::try_from_secs_f64(secondi)
-            .map(Risposta::Attendi)
-            .map_err(|_| fallita())
-    })?;
-    match risposta {
-        Risposta::Prosegui => Ok(Azione::Prosegui),
-        Risposta::Scadenza => Ok(Azione::AnticipaScadenza),
-        Risposta::Attendi(tetto) => {
-            let inizio = Instant::now();
-            while interruzione.verifica("").is_ok() && inizio.elapsed() < tetto {
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            Ok(Azione::Prosegui)
-        }
-    }
-}
-
-/// Mette `sonda` al posto della registrata. La precedente esce dal
-/// lucchetto e si rilascia dopo averlo liberato.
-fn sostituisci(posto: &Mutex<Option<Py<PyAny>>>, sonda: Option<Py<PyAny>>) {
-    let precedente = posto
-        .lock()
-        .ok()
-        .and_then(|mut registrata| std::mem::replace(&mut *registrata, sonda));
-    drop(precedente);
-}
-
-/// Chiama la sonda, se c'è; la sua eccezione passa com'è.
-fn chiama_sonda(py: Python<'_>) -> PyResult<()> {
-    let sonda = SONDA
-        .lock()
-        .ok()
-        .and_then(|registrata| registrata.as_ref().map(|sonda| sonda.clone_ref(py)));
-    sonda.map_or_else(|| Ok(()), |sonda| sonda.call0(py).map(|_| ()))
-}
 
 /// Scadenza e segnali di una chiamata.
 pub struct Controlli {
@@ -322,12 +211,16 @@ impl Controlli {
         // Un gettone alzato prima della chiamata si vede al primo controllo
         // del lavoro, prima di qualunque lettura.
         self.trasferisci();
-        let mut interruzione = self.interruzione.clone();
+        let interruzione = self.interruzione.clone();
         let (invio, ricezione) = mpsc::channel();
         let maniglia = std::thread::Builder::new()
             .name("plenora-data".to_owned())
             .spawn(move || {
+                // Solo nelle build delle prove (feature `sonde-di-prova`).
+                #[cfg(feature = "sonde-di-prova")]
+                let mut interruzione = interruzione;
                 let esito = catch_unwind(AssertUnwindSafe(|| {
+                    #[cfg(feature = "sonde-di-prova")]
                     plenora_pipeline::sonda::chiama_prima(&mut interruzione)?;
                     lavoro(&interruzione)
                 }))
@@ -352,7 +245,8 @@ impl Controlli {
             match esito {
                 Ok(Err(errore)) => break Err(Errore::Plenora(errore)),
                 Ok(Ok(valore)) => {
-                    if let Err(eccezione) = chiama_sonda(py) {
+                    #[cfg(feature = "sonde-di-prova")]
+                    if let Err(eccezione) = crate::sonde::chiama_consegna(py) {
                         break Err(Errore::Python(eccezione));
                     }
                     // Consegna: un annullamento arrivato nell'ultimo

@@ -631,6 +631,7 @@ impl PipelineValidata {
         let mut passi = Vec::with_capacity(self.passi.len());
         for (indice, passo) in self.passi.iter().enumerate() {
             let op = passo.descrittore.id;
+            #[cfg(feature = "sonde-di-prova")]
             if indice > 0 {
                 crate::sonda::chiama(crate::sonda::Punto::FraPassi, interruzione)?;
             }

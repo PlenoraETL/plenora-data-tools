@@ -28,6 +28,8 @@
 mod arrow_py;
 mod controlli;
 mod errori;
+#[cfg(feature = "sonde-di-prova")]
+mod sonde;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -373,25 +375,6 @@ fn run(
     })
 }
 
-/// Sonda delle prove fra la fine del lavoro e il controllo della consegna
-/// (`controlli::registra_sonda`); `None` la toglie. Privata, non è API.
-#[pyfunction]
-#[pyo3(name = "_sonda_consegna")]
-#[allow(clippy::needless_pass_by_value)] // PyO3 estrae l'argomento per valore.
-fn sonda_consegna(sonda: Option<Py<PyAny>>) {
-    controlli::registra_sonda(sonda);
-}
-
-/// Sonda delle prove nel thread del lavoro, prima che cominci
-/// (`controlli::registra_sonda_lavoro`); `None` la toglie. Privata, non è
-/// API.
-#[pyfunction]
-#[pyo3(name = "_sonda_lavoro")]
-#[allow(clippy::needless_pass_by_value)] // PyO3 estrae l'argomento per valore.
-fn sonda_lavoro(sonda: Option<Py<PyAny>>) {
-    controlli::registra_sonda_lavoro(sonda);
-}
-
 #[pymodule]
 fn _native(modulo: &Bound<'_, PyModule>) -> PyResult<()> {
     // Nessun testo di panico su stderr: il payload può contenere valori di
@@ -406,7 +389,8 @@ fn _native(modulo: &Bound<'_, PyModule>) -> PyResult<()> {
     modulo.add_function(wrap_pyfunction!(describe, modulo)?)?;
     modulo.add_function(wrap_pyfunction!(validate, modulo)?)?;
     modulo.add_function(wrap_pyfunction!(run, modulo)?)?;
-    modulo.add_function(wrap_pyfunction!(sonda_consegna, modulo)?)?;
-    modulo.add_function(wrap_pyfunction!(sonda_lavoro, modulo)?)?;
+    // Le sonde delle prove, solo nelle build delle prove.
+    #[cfg(feature = "sonde-di-prova")]
+    sonde::aggiungi(modulo)?;
     Ok(())
 }

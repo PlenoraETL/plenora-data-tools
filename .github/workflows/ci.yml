@@ -97,6 +97,19 @@ jobs:
         env:
           PLENORA_TEST_LUNGHI: '1'
         run: cargo test --workspace --locked
+      # Le sonde delle prove (feature `sonde-di-prova`, disattivata per
+      # default e assente dalle build di rilascio) si compilano solo con la
+      # feature: lint, anti-panic e la prova dei loro punti a parte.
+      - name: cargo clippy (sonde-di-prova)
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: cargo clippy anti-panic (sonde-di-prova)
+        run: >-
+          cargo clippy --workspace --lib --all-features --locked --
+          -D unsafe-code
+          -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+          -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
+      - name: cargo test (punti delle sonde)
+        run: cargo test -p plenora-io --features sonde-di-prova --test sonda_dei_controlli --locked
       - name: modello dei costi
         run: |
           python scripts/genera_costi_operazioni.py --verifica

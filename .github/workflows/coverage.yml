@@ -102,6 +102,7 @@ jobs:
           source <(cargo llvm-cov show-env --sh)
           cargo llvm-cov clean --workspace
           maturin build --locked \
+            --features sonde-di-prova \
             --out coverage/python-binding/dist \
             --manifest-path crates/plenora-data-py/Cargo.toml
           python -m pip install --force-reinstall --no-deps coverage/python-binding/dist/*.whl

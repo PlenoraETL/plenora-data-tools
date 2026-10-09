@@ -147,6 +147,18 @@ cargo test --workspace --locked
 PLENORA_TEST_LUNGHI=1 cargo test --workspace --locked   # prima del merge
 ```
 
+Le sonde delle prove dei controlli dell'SDK (feature `sonde-di-prova`,
+disattivata per default, mai nelle build di rilascio) si compilano solo con
+la feature; la CI ripete per loro lint e anti-panic e prova i loro punti:
+
+```sh
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo clippy --workspace --lib --all-features --locked -- -D unsafe-code \
+  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
+  -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
+cargo test -p plenora-io --features sonde-di-prova --test sonda_dei_controlli --locked
+```
+
 Modelli di costo, documentazione e commenti hanno guardie Python (3.11 o
 successivo, solo libreria standard):
 

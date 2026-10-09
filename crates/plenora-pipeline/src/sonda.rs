@@ -3,12 +3,14 @@
 //! fra due passi del piano, fra la scrittura di due output).
 //!
 //! Non è API: la registra solo il modulo nativo dell'SDK Python, nelle sue
-//! prove. Senza sonda registrata ogni punto costa una lettura atomica
-//! (`Acquire`) e non fa nient'altro: nessun lucchetto, nessuna allocazione.
-//! La sonda è del processo; chi la registra la toglie.
+//! prove. Esiste solo con la feature `sonde-di-prova`, disattivata per
+//! default: nelle build di rilascio il modulo e i punti di chiamata non si
+//! compilano. Con la feature e senza sonda registrata ogni punto costa una
+//! lettura atomica (`Acquire`): nessun lucchetto, nessuna allocazione. La
+//! sonda è del processo; chi la registra la toglie.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use plenora_core::{PlenoraError, Result};
@@ -59,28 +61,30 @@ pub type Sonda = Arc<dyn Fn(Punto, &Interruzione) -> Result<Azione> + Send + Syn
 static ATTIVA: AtomicBool = AtomicBool::new(false);
 static SONDA: Mutex<Option<Sonda>> = Mutex::new(None);
 
-/// Registra o toglie (`None`) la sonda. La precedente si rilascia fuori dal
-/// lucchetto.
+/// Registra o toglie (`None`) la sonda.
+///
+/// Flag e sonda cambiano insieme, sotto lo stesso lucchetto: chi legge il
+/// flag acceso trova la sonda che lo ha acceso, o una più recente. La
+/// precedente si rilascia fuori dal lucchetto (il suo `Drop` può
+/// richiamare questa funzione). Un lucchetto avvelenato si riprende: il
+/// valore protetto è un `Option`, sempre valido.
 pub fn registra(sonda: Option<Sonda>) {
-    let attiva = sonda.is_some();
-    let precedente = SONDA
-        .lock()
-        .ok()
-        .and_then(|mut registrata| std::mem::replace(&mut *registrata, sonda));
-    ATTIVA.store(attiva, Ordering::Release);
+    let precedente = {
+        let mut registrata = SONDA.lock().unwrap_or_else(PoisonError::into_inner);
+        ATTIVA.store(sonda.is_some(), Ordering::Release);
+        std::mem::replace(&mut *registrata, sonda)
+    };
     drop(precedente);
 }
 
-/// Lo snapshot della sonda registrata, letto una volta; `None` senza
-/// lucchetto se non ce n'è.
-fn attuale() -> Result<Option<Sonda>> {
+/// Lo snapshot della sonda registrata, letto una volta: `None` senza
+/// lucchetto se il flag è spento, altrimenti un `Arc` clonato sotto il
+/// lucchetto e chiamato fuori.
+fn attuale() -> Option<Sonda> {
     if !ATTIVA.load(Ordering::Acquire) {
-        return Ok(None);
+        return None;
     }
-    SONDA
-        .lock()
-        .map(|registrata| registrata.clone())
-        .map_err(|_| PlenoraError::Internal("sonda del lavoro non leggibile".to_owned()))
+    SONDA.lock().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
 /// Chiama la sonda a `punto`, se c'è.
@@ -90,7 +94,7 @@ fn attuale() -> Result<Option<Sonda>> {
 /// Quello della sonda; `Internal` se la sonda chiede di anticipare la
 /// scadenza fuori da [`Punto::Prima`].
 pub fn chiama(punto: Punto, interruzione: &Interruzione) -> Result<()> {
-    let Some(sonda) = attuale()? else {
+    let Some(sonda) = attuale() else {
         return Ok(());
     };
     match sonda(punto, interruzione)? {
@@ -108,7 +112,7 @@ pub fn chiama(punto: Punto, interruzione: &Interruzione) -> Result<()> {
 ///
 /// Quello della sonda.
 pub fn chiama_prima(interruzione: &mut Interruzione) -> Result<()> {
-    let Some(sonda) = attuale()? else {
+    let Some(sonda) = attuale() else {
         return Ok(());
     };
     if sonda(Punto::Prima, interruzione)? == Azione::AnticipaScadenza {

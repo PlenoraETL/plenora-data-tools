@@ -214,14 +214,20 @@ lint, `--workspace --lib`) passa sul crate.
   e 3.14 da `scripts/verifica_sdk_python.py` (nome, metadati, PEP 561,
   import da `site-packages`, versioni, modulo nativo byte per byte, suite
   pytest intera senza test saltati); mypy `--strict` su 3.10 e 3.14
-  (`typing/mypy.ini`, `typing/sdk_contract.py`).
+  (`typing/mypy.ini`, `typing/sdk_contract.py`). Due wheel per sistema:
+  quello delle prove, con le sonde (feature Cargo `sonde-di-prova`), su cui
+  gira la suite intera, e quello di rilascio, senza feature, verificato con
+  `--rilascio`: niente sonde fra gli attributi del modulo né fra i nomi del
+  binario nativo, e la suite senza le prove marcate `sonde`.
 - `cargo test -p plenora-cli --test superficie_python`: il documento delle
   capacità dell'SDK contro `capabilities-v2`, la sezione Python contro
   `surface-bindings-v1` dei contratti, l'equivalenza fra le forme in memoria
   e da file dell'API (stessi documenti, stesse tabelle).
 - L'istante fra la fine del lavoro e il controllo della consegna si prova
   in modo deterministico con una sonda privata del modulo nativo
-  (`_native._sonda_consegna`, non API, inerte senza registrazione): la prova
+  (`_native._sonda_consegna`, non API, solo nelle build con la feature
+  `sonde-di-prova`, disattivata per default e mai nel wheel di rilascio,
+  inerte senza registrazione): la prova
   alza il gettone o arma SIGINT esattamente lì, e fallisce se il controllo
   alla consegna manca (verificato togliendolo). Allo stesso modo il lavoro
   in corso: una seconda sonda (`_native._sonda_lavoro`, registrata in
@@ -229,8 +235,10 @@ lint, `--workspace --lib`) passa sul crate.
   fra due passi del piano e fra la scrittura di due output. La prova vi
   alza gettone, SIGINT o annullamento del task e tiene il lavoro finché
   l'interruzione non gli arriva, oppure porta ad adesso la scadenza del
-  lavoro. Nessuna prova dei controlli dipende da sleep, timer o durate
-  misurate. Verificato in negativo: togliendo il controllo fra i passi,
+  lavoro. La scadenza asincrona contata dall'ingresso si prova a tempo
+  controllato: `time.monotonic` salta avanti mentre la chiamata è in coda.
+  Nessuna prova dei controlli dipende da sleep, timer o durate misurate.
+  Verificato in negativo: togliendo il controllo fra i passi,
   quello fra le scritture, la sorveglianza durante l'attesa o la scadenza
   passata al lavoro, le prove falliscono.
 - La suite Python (`python/tests`) valida errori, capacità e diagnostica
@@ -242,10 +250,15 @@ Costruire e provare in locale (Python >= 3.10 nel `PATH` anche per
 
 ```sh
 pip install -r requirements-sdk-build.txt
-maturin build --release --locked --out dist -m crates/plenora-data-py/Cargo.toml
+# wheel delle prove, con le sonde: la suite intera
+maturin build --release --locked --features sonde-di-prova --out dist -m crates/plenora-data-py/Cargo.toml
 pip install -r requirements-sdk-tests.txt
 pip install --no-deps dist/plenora_data-*.whl
 python scripts/verifica_sdk_python.py --wheel dist/plenora_data-<versione>-<tag>.whl
+# wheel di rilascio, senza sonde
+maturin build --release --locked --out dist-rilascio -m crates/plenora-data-py/Cargo.toml
+pip install --no-deps --force-reinstall dist-rilascio/plenora_data-*.whl
+python scripts/verifica_sdk_python.py --wheel dist-rilascio/plenora_data-<versione>-<tag>.whl --rilascio
 ```
 
 ## Corrispondenza con Python SDK 1.0

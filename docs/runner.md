@@ -269,7 +269,9 @@ Fra un passo e il controllo del successivo, e in `plenora-io` fra un output
 scritto e il controllo del successivo, gira una sonda delle prove
 (`plenora_pipeline::sonda`, non API): la registra solo l'SDK Python nelle
 sue prove dei controlli, per alzare un annullamento in un punto deciso
-invece che a tempo. Senza sonda registrata il punto costa una lettura
+invece che a tempo. Esiste solo con la feature `sonde-di-prova`,
+disattivata per default: nelle build di rilascio i punti non si compilano.
+Con la feature e senza sonda registrata un punto costa una lettura
 atomica.
 
 ## Divisione per zero

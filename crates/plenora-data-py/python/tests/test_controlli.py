@@ -80,6 +80,7 @@ def test_controlli_non_validi() -> None:
             pd.describe(tabella_semplice(), **argomenti)
 
 
+@pytest.mark.sonde
 def test_la_scadenza_ferma_il_lavoro_in_corso() -> None:
     """Deterministico, senza tempo reale: con una scadenza lontana (un'ora)
     la sonda, nel thread del lavoro già partito, porta la scadenza del
@@ -125,6 +126,7 @@ def test_gettone_gia_alzato_non_legge_ne_scrive(tmp_path: Any) -> None:
     assert not uscita.exists()
 
 
+@pytest.mark.sonde
 def test_annullamento_in_corsa_con_la_fine_non_e_mai_un_successo_taciuto(
     tmp_path: Any,
 ) -> None:
@@ -230,6 +232,7 @@ def _sonda_lavoro(sonda: Callable[[str], Risposta]) -> Any:
         _native._sonda_lavoro(None)
 
 
+@pytest.mark.sonde
 def test_la_sonda_del_lavoro_passa_dai_suoi_punti(tmp_path: Any) -> None:
     """Senza azioni la sonda vede i punti nell'ordine del lavoro: prima,
     fra ognuno dei passi, fra le scritture dei due output."""
@@ -245,6 +248,7 @@ def test_la_sonda_del_lavoro_passa_dai_suoi_punti(tmp_path: Any) -> None:
     assert sonda.punti == ["prima"] + ["fra_passi"] * (PASSI - 1) + ["fra_scritture"]
 
 
+@pytest.mark.sonde
 def test_una_sonda_del_lavoro_che_fallisce_non_passa_in_silenzio() -> None:
     """Una sonda del lavoro che solleva, o che risponde con qualcosa che
     non è un'attesa valida (o chiede la scadenza dove non si può), ferma la
@@ -263,6 +267,7 @@ def test_una_sonda_del_lavoro_che_fallisce_non_passa_in_silenzio() -> None:
             pd.run(piano_lungo(PASSI), {"t": tabella_semplice()})
 
 
+@pytest.mark.sonde
 def test_sostituire_la_sonda_non_si_blocca_sul_suo_del() -> None:
     """La sonda tolta si rilascia fuori dal lucchetto: il suo `__del__` può
     richiamare `_sonda_consegna`. In un processo a parte, con un tempo
@@ -290,6 +295,7 @@ def test_sostituire_la_sonda_non_si_blocca_sul_suo_del() -> None:
     assert esito.stdout.strip() == "ok"
 
 
+@pytest.mark.sonde
 def test_gettone_alzato_fra_la_fine_e_la_consegna(tmp_path: Any) -> None:
     """Deterministico: il gettone si alza esattamente dopo che il lavoro è
     finito con successo e prima della consegna."""
@@ -310,6 +316,7 @@ def test_gettone_alzato_fra_la_fine_e_la_consegna(tmp_path: Any) -> None:
     assert uscita.exists()
 
 
+@pytest.mark.sonde
 def test_ctrl_c_fra_la_fine_e_la_consegna(tmp_path: Any) -> None:
     """Deterministico: SIGINT armato dopo la fine del lavoro e prima della
     consegna esce come `KeyboardInterrupt` con l'annullamento alla consegna
@@ -325,6 +332,7 @@ def test_ctrl_c_fra_la_fine_e_la_consegna(tmp_path: Any) -> None:
     assert uscita.exists()
 
 
+@pytest.mark.sonde
 def test_gettone_alzato_da_un_altro_thread() -> None:
     """Deterministico: fra il primo e il secondo passo la sonda alza il
     gettone da un altro thread e tiene il lavoro finché il segnale non gli
@@ -357,6 +365,7 @@ def _ctrl_c() -> float:
     return TETTO
 
 
+@pytest.mark.sonde
 def test_ctrl_c_annulla_e_propaga_keyboard_interrupt() -> None:
     """Ctrl-C mentre il lavoro gira: il lavoro si ferma al controllo
     successivo e `KeyboardInterrupt` esce con l'esito come causa.
@@ -372,6 +381,7 @@ def test_ctrl_c_annulla_e_propaga_keyboard_interrupt() -> None:
     assert causa.remote_effect == "none"
 
 
+@pytest.mark.sonde
 def test_ctrl_c_durante_la_scrittura_dice_l_effetto(tmp_path: Any) -> None:
     """Con output su file l'esito che accompagna il Ctrl-C porta l'effetto
     vero. Deterministico: il segnale si arma dopo il primo dei due output
@@ -395,6 +405,7 @@ def test_ctrl_c_durante_la_scrittura_dice_l_effetto(tmp_path: Any) -> None:
     assert not secondo.exists()
 
 
+@pytest.mark.sonde
 def test_la_forma_asincrona_non_blocca_il_loop() -> None:
     """Deterministico, senza contare giri a tempo: la sonda gira nel thread
     del lavoro, a lavoro finito e prima della consegna, e aspetta un evento
@@ -421,6 +432,7 @@ def test_la_forma_asincrona_non_blocca_il_loop() -> None:
     assert nella_sonda == [(True, True)]
 
 
+@pytest.mark.sonde
 def test_annullare_il_task_ferma_il_lavoro() -> None:
     """Deterministico: fra il primo e il secondo passo la sonda annulla il
     task dal loop e tiene il lavoro finché l'annullamento non gli arriva.
@@ -530,18 +542,28 @@ def test_un_task_annullato_mentre_il_lavoro_finisce_dice_l_esito() -> None:
         assert causa.phase == "finalize"
 
 
-def test_la_scadenza_asincrona_conta_dall_ingresso(tmp_path: Any) -> None:
+def test_la_scadenza_asincrona_conta_dall_ingresso(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Con l'executor saturo la chiamata aspetta un thread libero: la
     scadenza vale dall'ingresso di `arun`, e una scadenza passata in coda
-    ferma la chiamata prima di qualunque lavoro."""
+    ferma la chiamata prima di qualunque lavoro.
+
+    A tempo controllato: `time.monotonic`, il clock su cui il pacchetto fissa
+    la scadenza all'ingresso e da cui il modulo nativo calcola quanto resta,
+    salta avanti di un'ora mentre la chiamata è in coda. La scadenza (60 s)
+    è passata solo se è stata fissata prima del salto, cioè all'ingresso;
+    fissata alla partenza dal thread dell'executor, la chiamata riuscirebbe.
+    Nessuna attesa reale decide l'esito."""
     uscita = tmp_path / "u.arrow"
-    scadenza = 0.1
+    vero = time.monotonic
+    salto = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: vero() + salto[0])
 
     async def principale() -> None:
         loop = asyncio.get_running_loop()
         loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
-        # L'unico thread resta occupato finché la scadenza non è passata
-        # davvero: una condizione sull'orologio, non una durata supposta.
+        # L'unico thread resta occupato finché la prova non lo libera.
         libera = threading.Event()
         occupato = loop.run_in_executor(None, libera.wait, TETTO)
         chiamata = asyncio.create_task(
@@ -549,16 +571,14 @@ def test_la_scadenza_asincrona_conta_dall_ingresso(tmp_path: Any) -> None:
                 piano_identita(),
                 {"t": tabella_semplice()},
                 outputs={"t": uscita},
-                timeout=scadenza,
+                timeout=60,
             )
         )
-        # Il task entra in `arun` (e fissa la scadenza) al primo giro del
-        # loop: l'orologio si legge dopo, quindi la scadenza vera non è
-        # più tarda di `inizio + scadenza`.
+        # Il primo passo del task (pianificato prima di questa ripresa)
+        # entra in `arun`, fissa la scadenza e si mette in coda.
         await asyncio.sleep(0)
-        inizio = time.monotonic()
-        while time.monotonic() - inizio <= scadenza:
-            await asyncio.sleep(scadenza)
+        assert not chiamata.done()
+        salto[0] = 3600.0
         libera.set()
         with pytest.raises(pd.PlenoraTimeoutError) as errore:
             await chiamata
