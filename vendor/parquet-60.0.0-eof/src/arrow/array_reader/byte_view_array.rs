@@ -250,12 +250,20 @@ impl ByteViewArrayDecoder {
                 )?)
             }
             // PLENORA: the page value count bounds the delta header counts.
-            Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteViewArrayDecoder::DeltaLength(
-                ByteViewArrayDecoderDeltaLength::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
-            ),
-            Encoding::DELTA_BYTE_ARRAY => ByteViewArrayDecoder::DeltaByteArray(
-                ByteViewArrayDecoderDelta::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
-            ),
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => {
+                ByteViewArrayDecoder::DeltaLength(ByteViewArrayDecoderDeltaLength::new(
+                    data,
+                    num_values.unwrap_or(num_levels),
+                    validate_utf8,
+                )?)
+            }
+            Encoding::DELTA_BYTE_ARRAY => {
+                ByteViewArrayDecoder::DeltaByteArray(ByteViewArrayDecoderDelta::new(
+                    data,
+                    num_values.unwrap_or(num_levels),
+                    validate_utf8,
+                )?)
+            }
             _ => {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",

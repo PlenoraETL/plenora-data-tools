@@ -83,6 +83,13 @@ mod inner {
             }
         }
 
+        /// PLENORA: the footer memory budget of the options, if any.
+        pub(crate) fn footer_memory_budget(&self) -> Option<u64> {
+            self.metadata_options
+                .as_deref()
+                .and_then(ParquetMetaDataOptions::footer_memory_budget)
+        }
+
         pub(crate) fn decode_metadata(
             &self,
             buf: &[u8],
@@ -184,6 +191,13 @@ mod inner {
             Self {
                 metadata_options: options,
             }
+        }
+
+        /// PLENORA: the footer memory budget of the options, if any.
+        pub(crate) fn footer_memory_budget(&self) -> Option<u64> {
+            self.metadata_options
+                .as_deref()
+                .and_then(ParquetMetaDataOptions::footer_memory_budget)
         }
 
         pub(crate) fn decode_metadata(

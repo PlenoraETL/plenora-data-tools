@@ -94,7 +94,18 @@ pub struct ParquetMetaDataOptions {
     encoding_stats_policy: ParquetStatisticsPolicy,
     column_stats_policy: ParquetStatisticsPolicy,
     size_stats_policy: ParquetStatisticsPolicy,
+    // PLENORA: limits on what decoding the footer may cost. See
+    // `DEFAULT_MAX_SCHEMA_DEPTH` and `set_footer_memory_budget`.
+    max_schema_depth: usize,
+    footer_memory_budget: Option<u64>,
 }
+
+/// PLENORA: the default maximum depth of the footer schema.
+///
+/// Converting the schema is recursive, and an unbounded depth is a way to
+/// exhaust the stack (an abort, not an error). Real schemas nest a few levels;
+/// GeoParquet native geometries reach five or six.
+pub const DEFAULT_MAX_SCHEMA_DEPTH: usize = 64;
 
 impl Default for ParquetMetaDataOptions {
     fn default() -> Self {
@@ -104,6 +115,8 @@ impl Default for ParquetMetaDataOptions {
             encoding_stats_policy: ParquetStatisticsPolicy::KeepAll,
             column_stats_policy: ParquetStatisticsPolicy::KeepAll,
             size_stats_policy: ParquetStatisticsPolicy::KeepAll,
+            max_schema_depth: DEFAULT_MAX_SCHEMA_DEPTH,
+            footer_memory_budget: None,
         }
     }
 }
@@ -128,6 +141,49 @@ impl ParquetMetaDataOptions {
     /// Call [`Self::set_schema`] and return `Self` for chaining.
     pub fn with_schema(mut self, val: SchemaDescPtr) -> Self {
         self.set_schema(val);
+        self
+    }
+
+    /// PLENORA: the maximum depth of the footer schema (defaults to
+    /// [`DEFAULT_MAX_SCHEMA_DEPTH`]). A deeper schema is an error before it is
+    /// converted.
+    pub fn max_schema_depth(&self) -> usize {
+        self.max_schema_depth
+    }
+
+    /// PLENORA: set [`Self::max_schema_depth`].
+    pub fn set_max_schema_depth(&mut self, val: usize) {
+        self.max_schema_depth = val;
+    }
+
+    /// PLENORA: call [`Self::set_max_schema_depth`] and return `Self` for chaining.
+    pub fn with_max_schema_depth(mut self, val: usize) -> Self {
+        self.set_max_schema_depth(val);
+        self
+    }
+
+    /// PLENORA: the memory budget for decoding the footer, if any (defaults to
+    /// `None`, no budget).
+    pub fn footer_memory_budget(&self) -> Option<u64> {
+        self.footer_memory_budget
+    }
+
+    /// PLENORA: bound what decoding the footer may reserve.
+    ///
+    /// The decoder sizes lists from the counts the footer declares, copies its
+    /// strings, and builds one path per leaf column from the root (depth times
+    /// leaves). With a budget, every such reservation is charged **before** it
+    /// is made -- the footer bytes themselves (twice: the buffer and the owned
+    /// copies of its strings and binaries), each list (`count * size_of`),
+    /// each column chunk, and the cost of the leaf paths -- and exceeding the
+    /// budget is an error instead of an allocation.
+    pub fn set_footer_memory_budget(&mut self, val: u64) {
+        self.footer_memory_budget = Some(val);
+    }
+
+    /// PLENORA: call [`Self::set_footer_memory_budget`] and return `Self` for chaining.
+    pub fn with_footer_memory_budget(mut self, val: u64) -> Self {
+        self.set_footer_memory_budget(val);
         self
     }
 

@@ -28,6 +28,14 @@ la cui versione non ha qui una voce datata.
 
 ### Corretto
 
+- **Schema Parquet profondo e footer costoso: errori, non aborti.** Uno
+  schema valido annidato per migliaia di livelli esauriva lo stack nella
+  lettura (un aborto del processo, senza inviluppo). Ora oltre 64 livelli
+  e oltre il tetto di memoria della decodifica del footer
+  (`plenora_io::parquet_io::budget_del_footer`) la lettura è
+  `ResourceLimit`. Il delta del fork è quello di plenora-IO-tools
+  (`patches/parquet-footer-budget.patch`); prove in
+  `crates/plenora-io/tests/parquet_footer.rs`.
 - **`parquet`: i decoder non si fidano più dei valori del file.** Lunghezze,
   indici ed estremi letti dal file passano da conversioni fallibili e
   aritmetica controllata in tutti i decoder (`patches/parquet-decoder.patch`,

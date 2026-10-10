@@ -554,6 +554,8 @@ fn read_column_chunk(
     col_index: usize,
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<ColumnChunkMetaData> {
+    // PLENORA: the column chunks are charged by `read_row_group`, all at once,
+    // before `RowGroupMetaDataBuilder::new` reserves their capacity.
     // create a default initialized ColumnMetaData
     let mut col = ColumnChunkMetaDataBuilder::new(column_descr.clone()).build()?;
 
@@ -641,6 +643,13 @@ fn read_row_group(
     schema_descr: &Arc<SchemaDescriptor>,
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<RowGroupMetaData> {
+    // PLENORA: `RowGroupMetaDataBuilder::new` reserves one `ColumnChunkMetaData`
+    // per leaf column of the schema before a single chunk is read: the whole
+    // capacity is charged to the budget here, once, and not again per chunk.
+    prot.reserve(
+        schema_descr.num_columns(),
+        std::mem::size_of::<ColumnChunkMetaData>(),
+    )?;
     // create default initialized RowGroupMetaData
     let mut row_group = RowGroupMetaDataBuilder::new(schema_descr.clone()).build_unchecked();
 
@@ -741,6 +750,9 @@ pub(crate) fn parquet_schema_from_bytes(buf: &[u8]) -> Result<SchemaDescriptor> 
             2 => {
                 // read schema and convert to SchemaDescriptor for use when reading row groups
                 let val = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
+                // PLENORA: the same depth bound as the footer decoder; there
+                // is no budget on this path.
+                schema_cost(&val, crate::file::metadata::DEFAULT_MAX_SCHEMA_DEPTH)?;
                 let val = parquet_schema_from_array(val)?;
                 return Ok(SchemaDescriptor::new(val));
             }
@@ -751,13 +763,85 @@ pub(crate) fn parquet_schema_from_bytes(buf: &[u8]) -> Result<SchemaDescriptor> 
     Err(general_err!("Input does not contain a schema"))
 }
 
+// PLENORA: what converting the flattened schema will cost, and whether it is
+// too deep to convert.
+//
+// `parquet_schema_from_array` recurses once per level, with no bound of its
+// own, and `SchemaDescriptor::new` gives every leaf column its whole path from
+// the root (a `String` per level): depth times leaves, quadratic in the bytes
+// of the footer. The walk here is iterative and mirrors the conversion: an
+// element with `num_children` above zero opens a group that the following
+// elements fill, any other element is a leaf if it has a physical type. The
+// cost is an upper bound -- the root's name is counted in every path -- and
+// a malformed tree is left to the conversion, which rejects it.
+fn schema_cost(elements: &[SchemaElement<'_>], max_depth: usize) -> Result<usize> {
+    use crate::schema::types::{ColumnDescriptor, Type};
+    use std::mem::size_of;
+
+    let too_costly = || general_err!("Parquet schema too costly to convert");
+    // (children still to read, path cost up to and including this group)
+    let mut open: Vec<(usize, usize)> = Vec::new();
+    let mut cost: usize = 0;
+    for element in elements {
+        if open.len() >= max_depth {
+            return Err(general_err!(
+                "Parquet schema deeper than {} levels",
+                max_depth
+            ));
+        }
+        let parent_path = open.last().map_or(0, |(_, path)| *path);
+        let path = parent_path
+            .checked_add(size_of::<String>() + element.name.len())
+            .ok_or_else(too_costly)?;
+        // every element becomes a type node behind an `Arc`, and a pointer in
+        // its parent's list of fields
+        cost = cost
+            .checked_add(size_of::<Type>() + 3 * size_of::<usize>())
+            .ok_or_else(too_costly)?;
+        if let Some(parent) = open.last_mut() {
+            parent.0 = parent.0.saturating_sub(1);
+        }
+        match element.num_children {
+            Some(n) if n > 0 => {
+                let n = usize::try_from(n).map_err(|_| too_costly())?;
+                open.push((n, path));
+            }
+            _ => {
+                if element.r#type.is_some() {
+                    // the descriptor behind its `Arc`, its slot in the leaves
+                    // and in `leaf_to_base`, and the path
+                    cost = cost
+                        .checked_add(size_of::<ColumnDescriptor>() + 4 * size_of::<usize>())
+                        .and_then(|c| c.checked_add(path))
+                        .ok_or_else(too_costly)?;
+                }
+            }
+        }
+        while open.last().is_some_and(|(left, _)| *left == 0) {
+            open.pop();
+        }
+    }
+    Ok(cost)
+}
+
 /// Create [`ParquetMetaData`] from thrift input. Note that this only decodes the file metadata in
 /// the Parquet footer. Page indexes will need to be added later.
 pub(crate) fn parquet_metadata_from_bytes(
     buf: &[u8],
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<ParquetMetaData> {
-    let mut prot = ThriftSliceInputProtocol::new(buf);
+    // PLENORA: with a budget, every reservation the decoder makes is charged
+    // before it is made. The footer bytes count twice: the buffer, and the
+    // owned copies of its strings and binaries, which are at most as many.
+    let mut prot = ThriftSliceInputProtocol::with_budget(
+        buf,
+        options.and_then(ParquetMetaDataOptions::footer_memory_budget),
+    );
+    prot.reserve(buf.len(), 2)?;
+    let max_schema_depth = options.map_or(
+        crate::file::metadata::DEFAULT_MAX_SCHEMA_DEPTH,
+        ParquetMetaDataOptions::max_schema_depth,
+    );
 
     // begin reading the file metadata
     let mut version: Option<i32> = None;
@@ -805,6 +889,10 @@ pub(crate) fn parquet_metadata_from_bytes(
                     // read schema and convert to SchemaDescriptor for use when reading row groups
                     let val =
                         read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
+                    // PLENORA: depth and leaf-path cost, before the recursive
+                    // conversion and before `SchemaDescriptor::new`.
+                    let cost = schema_cost(&val, max_schema_depth)?;
+                    prot.reserve(cost, 1)?;
                     let val = parquet_schema_from_array(val)?;
                     schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
                 }
@@ -821,8 +909,10 @@ pub(crate) fn parquet_metadata_from_bytes(
                 // check for list of struct
                 validate_list_type(ElementType::Struct, &list_ident)?;
                 // PLENORA: capacity bounded by the remaining footer bytes.
-                let mut rg_vec =
-                    Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&prot, list_ident.size)?);
+                let capacity = crate::parquet_thrift::capacita_dichiarata(&prot, list_ident.size)?;
+                // PLENORA: and charged to the budget.
+                prot.reserve(capacity, std::mem::size_of::<RowGroupMetaData>())?;
+                let mut rg_vec = Vec::with_capacity(capacity);
 
                 for _ in 0..list_ident.size {
                     rg_vec.push(read_row_group(&mut prot, schema_descr, options)?);

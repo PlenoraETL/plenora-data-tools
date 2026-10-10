@@ -205,6 +205,26 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// PLENORA: bound what decoding the footer may reserve; see
+    /// [`ParquetMetaDataOptions::set_footer_memory_budget`].
+    ///
+    /// [`ParquetMetaDataOptions::set_footer_memory_budget`]:
+    /// crate::file::metadata::ParquetMetaDataOptions::set_footer_memory_budget
+    pub fn with_footer_memory_budget(mut self, val: u64) -> Self {
+        self.metadata_options.set_footer_memory_budget(val);
+        self
+    }
+
+    /// PLENORA: the maximum depth of the footer schema; see
+    /// [`ParquetMetaDataOptions::set_max_schema_depth`].
+    ///
+    /// [`ParquetMetaDataOptions::set_max_schema_depth`]:
+    /// crate::file::metadata::ParquetMetaDataOptions::set_max_schema_depth
+    pub fn with_max_schema_depth(mut self, val: usize) -> Self {
+        self.metadata_options.set_max_schema_depth(val);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         let props = self
@@ -270,8 +290,11 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
 
         // If page indexes are desired, build them with the filtered set of row groups
         if options.enable_page_index {
+            // PLENORA: the same metadata options as the footer, so that a
+            // footer memory budget also governs (and refuses) the page index.
             let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
-                .with_page_index_policy(PageIndexPolicy::Required);
+                .with_page_index_policy(PageIndexPolicy::Required)
+                .with_metadata_options(Some(options.metadata_options.clone()));
             reader.read_page_indexes(&chunk_reader)?;
             metadata = reader.finish()?;
         }
@@ -653,8 +676,8 @@ impl LimitiPagina {
             _ => None,
         };
         if let Some(valori) = valori {
-            let valori = u64::try_from(valori)
-                .map_err(|_| general_err!("negative page value count"))?;
+            let valori =
+                u64::try_from(valori).map_err(|_| general_err!("negative page value count"))?;
             if valori > self.valori {
                 return Err(general_err!(
                     "page value count exceeds the column chunk value count"

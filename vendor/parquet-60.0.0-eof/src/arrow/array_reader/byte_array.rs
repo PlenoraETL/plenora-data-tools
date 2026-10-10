@@ -293,9 +293,13 @@ impl ByteArrayDecoder {
                 ByteArrayDecoderDictionary::new(data, num_levels, num_values)?,
             ),
             // PLENORA: the page value count bounds the delta header counts.
-            Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
-                ByteArrayDecoderDeltaLength::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
-            ),
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => {
+                ByteArrayDecoder::DeltaLength(ByteArrayDecoderDeltaLength::new(
+                    data,
+                    num_values.unwrap_or(num_levels),
+                    validate_utf8,
+                )?)
+            }
             Encoding::DELTA_BYTE_ARRAY => ByteArrayDecoder::DeltaByteArray(
                 ByteArrayDecoderDelta::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
             ),

@@ -2,7 +2,11 @@
 //! deterministica.
 //!
 //! **Lettura.** Prima che `parquet` lo decodifichi, il footer dichiarato
-//! deve stare nel tetto dei metadati; dopo, i row group entro il massimo
+//! deve stare nel tetto dei metadati; la decodifica stessa ha un tetto di
+//! memoria ([`budget_del_footer`]) e una profondità massima dello schema
+//! ([`MAX_PROFONDITA_SCHEMA`]), entrambi del fork `parquet` (lo schema si
+//! converte per ricorsione: senza tetto uno schema profondo esauriva lo
+//! stack, un aborto); dopo, i row group entro il massimo
 //! ([`crate::confine`]). Ogni chiamata a `parquet` sui byte del file gira
 //! dentro la barriera anti-panico ([`crate::confine::barriera`]); un
 //! aborto per allocazione dentro `parquet` non si ferma (docs/file.md, «File»,
@@ -31,7 +35,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use base64::Engine;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::{ArrowWriter, ARROW_SCHEMA_META_KEY};
 use parquet::basic::{Compression, Type as TipoFisico, ZstdLevel};
 use parquet::errors::ParquetError;
@@ -61,10 +65,68 @@ use crate::memoria::{oltre_il_budget, stima_byte};
 /// Righe massime per row group in scrittura.
 pub const RIGHE_PER_ROW_GROUP: usize = 1024 * 1024;
 
+/// Profondità massima dello schema del footer.
+///
+/// È quella predefinita del fork `parquet` (`DEFAULT_MAX_SCHEMA_DEPTH`),
+/// dichiarata qui perché la lettura non dipenda da un default. Gli schemi reali hanno pochi livelli; le
+/// geometrie native `GeoParquet` ne raggiungono cinque o sei.
+pub const MAX_PROFONDITA_SCHEMA: usize = parquet::file::metadata::DEFAULT_MAX_SCHEMA_DEPTH;
+
+/// Quante volte il tetto dei metadati può occupare la decodifica del footer.
+///
+/// Le strutture Rust dei metadati (un `ColumnChunkMetaData` per colonna e
+/// row group, i percorsi delle foglie) pesano più dei byte Thrift che le
+/// descrivono. Con il tetto predefinito (16 MiB) sono 256 MiB.
+pub const FATTORE_FOOTER: u64 = 16;
+
+/// Il tetto di memoria della decodifica del footer.
+///
+/// [`FATTORE_FOOTER`] volte il tetto dei metadati, e mai oltre il budget
+/// residuo. È un limite anche
+/// con un budget illimitato: il costo dei percorsi delle foglie cresce col
+/// quadrato dei byte del footer.
+#[must_use]
+pub fn budget_del_footer(residuo: u64, limiti: &LimitiLettura) -> u64 {
+    limiti
+        .metadati_entro(residuo)
+        .saturating_mul(FATTORE_FOOTER)
+        .min(residuo)
+}
+
+/// Le opzioni di lettura di ogni footer: profondità e tetto di memoria.
+fn opzioni_di_lettura(budget_footer: u64) -> ArrowReaderOptions {
+    ArrowReaderOptions::new()
+        .with_max_schema_depth(MAX_PROFONDITA_SCHEMA)
+        .with_footer_memory_budget(budget_footer)
+}
+
+/// I rifiuti dei limiti di decodifica del footer del fork `parquet`
+/// (`vendor/parquet-60.0.0-eof`, `patches/parquet-footer-budget.patch`):
+/// il prefisso del testo di `ParquetError::General`. Sono testi costanti
+/// del fork, senza valori del file; la prova `tests/parquet_footer.rs` li
+/// esercita.
+const LIMITI_DEL_FOOTER: [&str; 3] = [
+    "Parquet schema deeper than ",
+    "Parquet schema too costly to convert",
+    "Parquet footer metadata exceeds the decoding memory budget",
+];
+
 /// Errore di `parquet` con un codice nostro, mai il testo della dipendenza
 /// (che può contenere valori): la stessa regola di `arrow_error_code`.
 #[must_use]
 pub fn da_parquet(errore: &ParquetError) -> PlenoraError {
+    if let ParquetError::General(testo) = errore {
+        if LIMITI_DEL_FOOTER
+            .iter()
+            .any(|limite| testo.starts_with(limite))
+        {
+            return PlenoraError::ResourceLimit(
+                "footer Parquet oltre i limiti di decodifica (profondita' dello schema o \
+                 memoria)"
+                    .to_owned(),
+            );
+        }
+    }
     let codice = match errore {
         ParquetError::General(_) => "general",
         ParquetError::NYI(_) => "not_yet_implemented",
@@ -355,8 +417,10 @@ fn verifica_righe(metadati: &ParquetMetaData) -> Result<usize> {
 pub fn leggi(percorso: &Path, residuo: u64, limiti: &LimitiLettura) -> Result<RecordBatch> {
     let mut file = File::open(percorso)?;
     verifica_footer(&mut file, limiti.metadati_entro(residuo))?;
+    let opzioni = opzioni_di_lettura(budget_del_footer(residuo, limiti));
     let costruttore = barriera("parquet", || {
-        ParquetRecordBatchReaderBuilder::try_new(file).map_err(da_parquet_valore)
+        ParquetRecordBatchReaderBuilder::try_new_with_options(file, opzioni)
+            .map_err(da_parquet_valore)
     })?;
     let metadati = Arc::clone(costruttore.metadata());
     let gruppi = u64::try_from(metadati.num_row_groups()).unwrap_or(u64::MAX);
@@ -513,8 +577,12 @@ pub fn scrivi(
 /// `Schema` se lo schema incorporato manca, è diverso da `scritto` o non si
 /// applica; `DataMapping`, `Io` dalla lettura del footer.
 pub fn verifica_schema(percorso: &Path, scritto: &Schema) -> Result<()> {
-    let costruttore = ParquetRecordBatchReaderBuilder::try_new(File::open(percorso)?)
-        .map_err(da_parquet_valore)?;
+    // Il file l'ha appena scritto questo crate: gli stessi limiti di una
+    // lettura con il budget pieno.
+    let opzioni = opzioni_di_lettura(budget_del_footer(u64::MAX, &LimitiLettura::default()));
+    let costruttore =
+        ParquetRecordBatchReaderBuilder::try_new_with_options(File::open(percorso)?, opzioni)
+            .map_err(da_parquet_valore)?;
     let incorporato = schema_incorporato(costruttore.metadata())?.ok_or_else(|| {
         PlenoraError::Schema("schema Arrow incorporato assente nel file scritto".to_owned())
     })?;

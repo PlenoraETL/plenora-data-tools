@@ -285,9 +285,12 @@ limite della tabella.
   confrontato prima di leggere. Restano le espansioni vere (dizionari
   ripetuti, `FixedLenByteArray` larghi), che il budget stima per un
   fattore fisso; in IPC le copie di buffer sovrapposti e non allineati. Il
-  tetto vero resta il limite di memoria del processo. Anche uno schema
-  Parquet annidato per migliaia di livelli esaurisce lo stack. I file
-  scritti da scrittori conformi non lo fanno.
+  tetto vero resta il limite di memoria del processo. Uno schema Parquet
+  annidato oltre 64 livelli (`MAX_PROFONDITA_SCHEMA`), che esauriva lo
+  stack, e un footer la cui decodifica supera il suo tetto
+  (`budget_del_footer`: 16 volte il tetto dei metadati, mai oltre il budget
+  residuo) sono `ResourceLimit`. I file scritti da scrittori conformi non
+  fanno nulla di tutto questo.
   *Rientro*: se si devono leggere file di fonti non fidate, aggiungere una
   pre-validazione (footer e intestazioni di pagina percorsi prima di
   `parquet`, contenuto dei messaggi IPC prima di Arrow).

@@ -92,8 +92,10 @@ impl OffsetIndexMetaData {
         let list_ident = prot.read_list_begin()?;
         validate_list_type(ElementType::Struct, &list_ident)?;
         // PLENORA: capacity bounded by the remaining input bytes.
-        let mut page_locations =
-            Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&*prot, list_ident.size)?);
+        let mut page_locations = Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(
+            &*prot,
+            list_ident.size,
+        )?);
         for _ in 0..list_ident.size {
             page_locations.push(read_page_location(prot)?);
         }

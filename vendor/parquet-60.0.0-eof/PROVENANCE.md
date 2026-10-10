@@ -16,6 +16,7 @@ con la chiave `parquet` (`Cargo.toml`, «Copie vendorizzate»).
   patch -p1 < patches/parquet-nome-proprio.patch  # pacchetto `plenora-parquet`
   patch -p1 < patches/parquet-flba-bss.patch      # larghezza 0, BYTE_STREAM_SPLIT oltre i byte
   patch -p1 < patches/parquet-decoder.patch       # decoder che si fidavano del file
+  patch -p1 < patches/parquet-footer-budget.patch # profondità dello schema, tetto del footer
   ```
 
   Il risultato è questa cartella byte per byte, tolto questo file
@@ -222,6 +223,33 @@ Non coperti, e perché: il lettore asincrono e la cifratura non sono
 compilati (feature non abilitate); le funzioni pubbliche
 `decode_column_index`/`decode_offset_index` decodificano indici di pagina
 che questo workspace non chiede.
+
+### Profondità dello schema e tetto di memoria del footer (10 ottobre 2026)
+
+Da `patches/parquet-footer-budget.patch`: è il delta del fork di
+plenora-IO-tools (PR #47, `vendor/parquet` a `dd96c3a`, con le due
+correzioni chieste dalla sua revisione), adottato identico; la patch
+porta anche la formattazione delle righe dei delta precedenti che quel
+fork ha già, così i due alberi coincidono (tolti `data_type.rs` della
+patch sopra e `parquet-decoder.patch`, solo di qui per ora).
+
+1. `parquet` converte lo schema del footer per ricorsione senza limite: uno
+   schema valido di qualche migliaio di livelli esauriva lo stack, un
+   aborto. `ParquetMetaDataOptions::max_schema_depth` (default
+   `DEFAULT_MAX_SCHEMA_DEPTH`, 64) lo rifiuta prima della conversione, con
+   una visita iterativa (`schema_cost`); anche `parquet_schema_from_bytes`.
+2. `footer_memory_budget`: ogni prenotazione del decoder del footer si
+   addebita prima di farla (il buffer del footer due volte, ogni elenco di
+   `read_thrift_vec`, i row group, la capacità di colonne di ogni row group
+   prima di `RowGroupMetaDataBuilder::new`, il costo dei percorsi delle
+   foglie, quadratico nei byte del footer). Oltre il tetto è un errore.
+3. Column index e offset index si decodificano senza tetto: con un tetto
+   sono rifiutati prima di leggerne un byte (lettore Arrow e seriale).
+
+`plenora-io` passa la profondità e il tetto (`budget_del_footer`) a ogni
+lettura; un rifiuto è `ResourceLimit`. Prove in
+`crates/plenora-io/tests/parquet_footer.rs`; i file dello schema profondo
+e del costo quadratico sono semi del fuzz (`tests/dati/fuzz-footer/`).
 
 ## Limiti che restano
 
