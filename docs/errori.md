@@ -31,7 +31,16 @@ copiati da `plenora-contracts@3c395a8` (tag `v1.1.0`) e verificati per SHA-256):
   `ERROR_DETAILS_NOT_PUBLISHABLE`, senza `details`. Con i limiti di esempi
   dei kernel (10) non scatta;
 - effetto `unknown` con un ritentativo automatico diventa
-  `requires_recovery` (ERR-006); oggi nessun errore ha effetto `unknown`.
+  `requires_recovery` (ERR-006). Hanno effetto `unknown`: il panico
+  intercettato in un'operazione che scrive file (`run` della CLI,
+  `inviluppo::panico`; `run` dell'SDK Python, anche quando il thread di
+  lavoro finisce senza esito), l'inviluppo di riserva della CLI quando
+  nemmeno l'errore si serializza (questi tre sono `internal`, ritentativo
+  `never`), la scrittura atomica il cui temporaneo non si cancella (sotto)
+  e, in `data.run` 3, la pubblicazione che il risolutore segnala come
+  `PubblicazioneFallita::Ignoto` (la categoria viene dall'`ErrorKind`, il
+  ritentativo è `requires_recovery` se la causa era ritentabile,
+  altrimenti `never`).
 
 `provider` ed `execution_id` non ci sono: nessun errore del workspace ne
 ha uno.

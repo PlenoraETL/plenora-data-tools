@@ -4,7 +4,8 @@
 `plenora-data-tools` secondo il profilo data-tools di `plenora-contracts`,
 versione 2, fissato al commit `3c395a8db96df739024e203b22794af340dc8a7f`: il binario
 `plenora-data` (CLI 2.0) e le stesse quattro operazioni come funzioni Rust
-(`plenora_cli::api`). Una sola tabella (`plenora_cli::operazioni::OPERAZIONI`)
+(`plenora_cli::api`), più `data.run` 3, che sta solo su Rust
+([«`data.run` 3 sul runtime»](#datarun-3-sul-runtime)). Una sola tabella (`plenora_cli::operazioni::OPERAZIONI`)
 dà comandi, aiuto, Capability Discovery 2.0 e la mappa degli export Rust; il
 registro dei kernel di `data.catalog` deriva dal catalogo di `plenora-core`.
 

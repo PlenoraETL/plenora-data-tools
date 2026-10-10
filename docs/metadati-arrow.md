@@ -32,7 +32,7 @@ file di `esegui_da_file`:
 
 | chiave | valore |
 | --- | --- |
-| `encoding` | quello del contratto; non dichiarato: `wkb`, come la lettura lo completa dal nome d'estensione |
+| `encoding` | quello del contratto; non dichiarato: `wkb`, come la lettura lo completa dal nome d'estensione. Un ingresso `ewkb` esce `ewkb`, anche dopo un'operazione geo: le celle che un kernel scrive sono WKB ISO senza SRID incorporato, EWKB valido; un EWKB con SRID incorporato attraversa intatto le operazioni tabellari e un'operazione geo lo rifiuta (`unsupported`). Prove: `crates/plenora-io/tests/contratti_arrow.rs` |
 | `dimensions` | quella del contratto, anche `unknown` |
 | `spatial_semantics` | `geometry`: i kernel sono planari, e `geography` si rifiuta in ingresso |
 | `precision` | quella ereditata, che attraversa intatta le operazioni tabellari; dopo un'operazione geo, o se nessuno la dichiara, `float64` (ogni kernel geo ricodifica le coordinate in `f64`, e ogni coordinata WKB è un double) |
