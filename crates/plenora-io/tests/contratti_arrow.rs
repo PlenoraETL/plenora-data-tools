@@ -386,3 +386,135 @@ fn precisione_conservata_dalle_tabellari_normalizzata_dalle_geo() {
         Some("float64")
     );
 }
+
+/// `resolved-point` con un CRS proiettato (le operazioni geo che producono
+/// geometrie lo vogliono) e, se dato, un'altra cella geometria.
+fn punto_ewkb_proiettato(cella: Option<&[u8]>) -> RecordBatch {
+    let tabella = tabella_del_vettore(&vettore("resolved-point.json"));
+    let schema = tabella.schema();
+    let campi: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|campo| {
+            let mut metadati = campo.metadata().clone();
+            if metadati.contains_key("ARROW:extension:name") {
+                for (chiave, valore) in [
+                    ("plenora.geometry.axis_order", "easting_northing"),
+                    ("plenora.geometry.srid", "32632"),
+                    ("plenora.geometry.crs_id", "EPSG:32632"),
+                ] {
+                    metadati.insert(chiave.to_owned(), valore.to_owned());
+                }
+            }
+            campo.as_ref().clone().with_metadata(metadati)
+        })
+        .collect();
+    let mut colonne = tabella.columns().to_vec();
+    if let Some(cella) = cella {
+        colonne[1] = Arc::new(BinaryArray::from(vec![Some(cella)]));
+    }
+    RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(campi, schema.metadata().clone())),
+        colonne,
+    )
+    .expect("schema")
+}
+
+/// Esegue un passo `o` su `t` e rilegge encoding e prima cella geometria.
+fn encoding_e_cella(
+    tabella: &RecordBatch,
+    passo: &str,
+) -> Result<(Option<String>, Vec<u8>), PlenoraError> {
+    let dir = tempfile::tempdir().expect("cartella");
+    let ingresso = dir.path().join("in.arrow");
+    scrivi_tabella(tabella, &ingresso, &OpzioniScrittura::default()).expect("scrittura");
+    let uscita = dir.path().join("out.arrow");
+    let piano_json =
+        format!(r#"{{"version": 1, "inputs": ["t"], "steps": [{passo}], "outputs": ["o"]}}"#);
+    esegui(&piano(&piano_json), &ingresso, &uscita)?;
+    let letta = leggi_tabella(&uscita, None, u64::MAX).expect("uscita");
+    let encoding = letta
+        .schema()
+        .field_with_name("geometry")
+        .expect("geometria")
+        .metadata()
+        .get("plenora.geometry.encoding")
+        .cloned();
+    let colonna = letta.column_by_name("geometry").expect("colonna");
+    let celle = colonna
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .expect("binary");
+    Ok((encoding, celle.value(0).to_vec()))
+}
+
+const FILTRO: &str = r#"{"out": "o", "op": "table.filter", "in": ["t"],
+    "config": {"column": "id", "operator": ">", "value": 0}}"#;
+const CENTROIDE: &str = r#"{"out": "o", "op": "geo.centroid", "in": ["t"], "config": {}}"#;
+const BUFFER: &str =
+    r#"{"out": "o", "op": "geo.buffer", "in": ["t"], "config": {"distance": 1.0}}"#;
+
+/// La colonna geometrica d'ingresso `ewkb` esce `ewkb`, dopo
+/// un'operazione tabellare come dopo una geo che la riscrive al suo posto
+/// (docs/metadati-arrow.md, «In uscita»). I byte di un'operazione geo sono
+/// WKB ISO senza SRID incorporato, che è anche EWKB valido: la
+/// dichiarazione resta vera. Una colonna geometrica nuova
+/// (`geo.coverage_validate`, su un `geo.buffer` che resta `ewkb`) non
+/// eredita l'encoding ed esce `wkb`.
+#[test]
+fn un_ingresso_ewkb_esce_ewkb() {
+    let tabella = punto_ewkb_proiettato(None);
+    let (encoding, cella) = encoding_e_cella(&tabella, FILTRO).expect("filtro");
+    assert_eq!(encoding.as_deref(), Some("ewkb"));
+    assert_eq!(cella, punto_wkb(), "una tabellare copia i byte");
+    for passo in [CENTROIDE, BUFFER] {
+        let (encoding, cella) = encoding_e_cella(&tabella, passo).expect(passo);
+        assert_eq!(encoding.as_deref(), Some("ewkb"), "{passo}");
+        // Little-endian, tipo senza il bit SRID di EWKB (0x20000000).
+        assert_eq!(cella[0], 1, "{passo}");
+        assert_eq!(cella[4] & 0x20, 0, "{passo}: niente SRID incorporato");
+    }
+    let dir = tempfile::tempdir().expect("cartella");
+    let ingresso = dir.path().join("in.arrow");
+    scrivi_tabella(&tabella, &ingresso, &OpzioniScrittura::default()).expect("scrittura");
+    let uscita = dir.path().join("out.arrow");
+    let copertura = piano(
+        r#"{"version": 1, "inputs": ["t"],
+            "steps": [{"out": "b", "op": "geo.buffer", "in": ["t"], "config": {"distance": 1.0}},
+                      {"out": "o", "op": "geo.coverage_validate", "in": ["b"], "config": {}}],
+            "outputs": ["o"]}"#,
+    );
+    esegui(&copertura, &ingresso, &uscita).expect("copertura");
+    let letta = leggi_tabella(&uscita, None, u64::MAX).expect("uscita");
+    let schema = letta.schema();
+    let nuove: Vec<_> = schema
+        .fields()
+        .iter()
+        .filter(|campo| campo.metadata().contains_key("ARROW:extension:name"))
+        .map(|campo| campo.metadata().get("plenora.geometry.encoding").cloned())
+        .collect();
+    assert_eq!(nuove, vec![Some("wkb".to_owned())]);
+}
+
+/// Un EWKB con SRID incorporato attraversa intatto un'operazione tabellare
+/// (le celle non si leggono) e un'operazione geo lo rifiuta con un errore
+/// esplicito: non si scarta lo SRID in silenzio.
+#[test]
+fn un_ewkb_con_srid_incorporato_passa_le_tabellari_e_si_rifiuta_nelle_geo() {
+    let mut ewkb = vec![1_u8, 1, 0, 0, 0x20];
+    ewkb.extend_from_slice(&32632_u32.to_le_bytes());
+    ewkb.extend_from_slice(&12.5_f64.to_le_bytes());
+    ewkb.extend_from_slice(&41.9_f64.to_le_bytes());
+    let tabella = punto_ewkb_proiettato(Some(&ewkb));
+    let (encoding, cella) = encoding_e_cella(&tabella, FILTRO).expect("filtro");
+    assert_eq!(encoding.as_deref(), Some("ewkb"));
+    assert_eq!(cella, ewkb);
+    for passo in [CENTROIDE, BUFFER] {
+        let errore = encoding_e_cella(&tabella, passo).expect_err(passo);
+        assert_eq!(
+            errore.category().as_str(),
+            "unsupported",
+            "{passo}: {errore}"
+        );
+    }
+}

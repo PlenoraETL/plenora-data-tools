@@ -4,8 +4,11 @@
 
 use serde_json::{json, Value};
 
+use crate::artefatti::CONTRATTO_RICHIESTA;
 use crate::catalogo::FORMATO_PIANO;
-use crate::operazioni::{OperazionePubblica, CONTRATTO_ATTRIBUTI, OPERAZIONI, REGISTRO_KERNEL};
+use crate::operazioni::{
+    OperazionePubblica, ARROW_FILE, ARROW_STREAM, CONTRATTO_ATTRIBUTI, OPERAZIONI, REGISTRO_KERNEL,
+};
 use crate::{
     ARTEFATTO_CLI, ARTEFATTO_PYTHON, ARTEFATTO_RUST, COMPONENTE, IMPORT_PYTHON, PROTOCOLLO_CLI,
     VERSIONE_COMPONENTE,
@@ -26,6 +29,10 @@ pub const CONTRATTO_MAPPA_RUST: &str = "plenora-data-rust-surface-v1";
 pub const CONTRATTO_BINDING: &str = "plenora-surface-bindings-v1";
 /// Simboli di scoperta dell'SDK Python: versione e capacità.
 pub const SCOPERTA_PYTHON: &[&str] = &["plenora_data.version", "plenora_data.capabilities"];
+
+/// Contratto di interscambio degli artefatti Arrow di `data.run` 3
+/// (attributo `artifact_interchange_contracts` del catalogo).
+const CONTRATTO_INTERSCAMBIO: &str = "plenora-arrow-interchange-v1";
 
 /// Una superficie che risponde con un documento delle capacità.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +57,21 @@ impl Superficie {
 /// Attributi tipizzati (`plenora-data-capability-attributes-v1`): ciò che
 /// un consumatore usa per scegliere l'operazione e che i campi comuni non
 /// dicono. Vuoti se l'operazione non ha nulla da aggiungere.
+///
+/// Un'operazione su artefatti (`data.run` 3, la cui richiesta è
+/// [`CONTRATTO_RICHIESTA`]) legge sorgenti e pubblica destinazioni per
+/// riferimento: i suoi tipi stanno sotto `source`/`sink`, con i tipi Arrow
+/// degli artefatti e il contratto di interscambio, come nel catalogo
+/// pubblico; le altre hanno `input`/`output`. `data.run` 3 non entra nei
+/// documenti delle capacità della CLI e dell'SDK, ma la forma è la stessa
+/// del catalogo per tutte le operazioni (prova in fondo al file).
 fn attributi(operazione: &OperazionePubblica) -> Option<Value> {
+    let su_artefatti = operazione.ingresso == CONTRATTO_RICHIESTA;
+    let (lato_ingresso, lato_uscita) = if su_artefatti {
+        ("source", "sink")
+    } else {
+        ("input", "output")
+    };
     let mut campi = serde_json::Map::new();
     if operazione.usa_registro {
         campi.insert("kernel_registry".to_owned(), json!(REGISTRO_KERNEL));
@@ -58,12 +79,25 @@ fn attributi(operazione: &OperazionePubblica) -> Option<Value> {
     if operazione.usa_piano {
         campi.insert("plan_contract".to_owned(), json!(FORMATO_PIANO));
     }
+    if su_artefatti {
+        campi.insert(
+            "artifact_content_types".to_owned(),
+            json!({
+                lato_ingresso: [ARROW_STREAM, ARROW_FILE],
+                lato_uscita: [ARROW_STREAM, ARROW_FILE],
+            }),
+        );
+        campi.insert(
+            "artifact_interchange_contracts".to_owned(),
+            json!([CONTRATTO_INTERSCAMBIO]),
+        );
+    }
     if !operazione.estensioni_ingresso.is_empty() || !operazione.estensioni_uscita.is_empty() {
         campi.insert(
             "extension_content_types".to_owned(),
             json!({
-                "input": operazione.estensioni_ingresso,
-                "output": operazione.estensioni_uscita,
+                lato_ingresso: operazione.estensioni_ingresso,
+                lato_uscita: operazione.estensioni_uscita,
             }),
         );
     }
@@ -194,4 +228,46 @@ pub fn mappa_python() -> Value {
             }))
             .collect::<Vec<_>>(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::attributi;
+    use crate::operazioni::{CONTRATTO_ATTRIBUTI, OPERAZIONI};
+
+    /// Gli attributi di ogni operazione della tabella, `data.run` 3
+    /// compresa (che i documenti delle capacità non elencano e la prova di
+    /// `tests/scoperta.rs` quindi non vede), sono quelli del catalogo
+    /// pubblico, più il solo contratto degli attributi.
+    #[test]
+    fn gli_attributi_di_ogni_operazione_sono_quelli_del_catalogo() {
+        let catalogo: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/contratti/data-tools-v2.json"
+        ))
+        .expect("catalogo pubblico");
+        let pubbliche = catalogo["operations"].as_array().expect("operations");
+        assert_eq!(pubbliche.len(), OPERAZIONI.len());
+        for operazione in OPERAZIONI {
+            let pubblica = pubbliche
+                .iter()
+                .find(|voce| voce["id"] == operazione.id && voce["version"] == operazione.versione)
+                .expect("operazione nel catalogo");
+            let mut nostri = attributi(operazione).unwrap_or(Value::Null);
+            if let Some(campi) = nostri.as_object_mut() {
+                assert_eq!(
+                    campi.remove("contract"),
+                    Some(Value::from(CONTRATTO_ATTRIBUTI))
+                );
+            }
+            let mut attesi = pubblica["attributes"].clone();
+            if let Some(campi) = attesi.as_object_mut() {
+                // `registry` è il percorso del file nei contratti, non un
+                // attributo dell'artefatto.
+                campi.remove("registry");
+            }
+            assert_eq!(nostri, attesi, "{} {}", operazione.id, operazione.versione);
+        }
+    }
 }
