@@ -14,9 +14,11 @@
 //! fuori dal workspace, che dipende per percorso da ogni crate di libreria,
 //! e legge con `cargo metadata` il grafo che Cargo compilerebbe: lo stesso
 //! controllo vale per il workspace e per quello separato di `fuzz/`.
-//! `cargo metadata` gira con `--offline` sul `Cargo.lock` del workspace
-//! copiato accanto al consumatore: nessuna rete, e il risultato non dipende
-//! dalle release uscite dopo.
+//! Il consumatore ha accanto una copia del `Cargo.lock` del workspace, così
+//! il risultato non dipende dalle release uscite dopo; il workspace e
+//! `fuzz/` si risolvono con `--locked`. Niente `--offline`: un job che non
+//! ha scaricato le dipendenze di `fuzz/` (la copertura) non le troverebbe
+//! nella cache, e `cargo metadata` le scarica come farebbe una build.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -60,13 +62,18 @@ fn cargo() -> String {
     std::env::var("CARGO").unwrap_or_else(|_| env!("CARGO").to_owned())
 }
 
-fn metadati(manifesto: &Path) -> Value {
-    let uscita = Command::new(cargo())
-        .args(["metadata", "--format-version", "1", "--offline"])
+/// Il grafo risolto di `manifesto`; `bloccato` aggiunge `--locked` (il
+/// lockfile non può cambiare).
+fn metadati(manifesto: &Path, bloccato: bool) -> Value {
+    let mut comando = Command::new(cargo());
+    comando
+        .args(["metadata", "--format-version", "1"])
         .arg("--manifest-path")
-        .arg(manifesto)
-        .output()
-        .expect("cargo metadata si avvia");
+        .arg(manifesto);
+    if bloccato {
+        comando.arg("--locked");
+    }
+    let uscita = comando.output().expect("cargo metadata si avvia");
     assert!(
         uscita.status.success(),
         "cargo metadata fallisce su {}: {}",
@@ -208,7 +215,7 @@ fn un_consumatore_fuori_dal_workspace_riceve_i_fork() {
     )
     .expect("Cargo.lock");
 
-    let metadati = metadati(&manifesto);
+    let metadati = metadati(&manifesto, false);
     // Il consumatore è davvero fuori: la radice del suo workspace è la sua.
     assert_eq!(
         canonico(Path::new(
@@ -222,9 +229,9 @@ fn un_consumatore_fuori_dal_workspace_riceve_i_fork() {
 #[test]
 fn il_workspace_e_quello_di_fuzz_ricevono_i_fork() {
     let radice = radice();
-    verifica_grafo(&metadati(&radice.join("Cargo.toml")), "workspace");
+    verifica_grafo(&metadati(&radice.join("Cargo.toml"), true), "workspace");
     verifica_grafo(
-        &metadati(&radice.join("fuzz").join("Cargo.toml")),
+        &metadati(&radice.join("fuzz").join("Cargo.toml"), true),
         "workspace di fuzz",
     );
 }
