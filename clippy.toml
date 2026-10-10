@@ -6,6 +6,23 @@
 # lì salterebbe in silenzio le correzioni di `patches/wkt-v2.patch`
 # (componenti vuoti, interni orfani). Il WKT dei dati passa solo da
 # `plenora-wkt` (`wkt::Wkt`, `TryFromWkt`, `try_wkt_string`).
+#
+# Sono vietate tutte le API di `geozero` 0.15.1 che arrivano a quel
+# lettore, non solo quelle che nominano `wkt`:
+# - `geozero::wkt` (lettore WKT ed EWKT, `src/wkt/wkt_reader.rs`);
+# - `geozero::csv` (feature `with-csv`): `Csv`, `CsvString` e `CsvReader`
+#   leggono la colonna geometria con `process_csv_geom` e
+#   `process_csv_features`, che chiamano `wkt::Wkt::from_str` e `read_wkt`
+#   (`src/csv/csv_reader.rs`, righe 121, 134 e 190).
+# Le altre chiamate a `wkt::` dentro `geozero` stanno nei suoi test.
+#
+# Il modulo `csv` esiste solo con `with-csv`, che questo workspace non
+# attiva: `allow-invalid = true` dichiara che quei percorsi possono non
+# risolversi (clippy 1.98 non lo segnala comunque). Il divieto scatta
+# appena la feature c'è, anche attivata da un'altra dipendenza per
+# unificazione (verificato con una sonda). La prova testuale
+# (`crates/plenora-cli/tests/consumatore_esterno.rs`) copre i due moduli
+# per intero, con gli alias e i costruttori scritti per esteso.
 disallowed-types = [
     { path = "geozero::wkt::Wkt", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
     { path = "geozero::wkt::WktStr", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
@@ -14,7 +31,12 @@ disallowed-types = [
     { path = "geozero::wkt::EwktStr", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
     { path = "geozero::wkt::EwktString", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
     { path = "geozero::wkt::WktReader", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
+    { path = "geozero::csv::Csv", reason = "legge il WKT con il wkt di crates.io", allow-invalid = true },
+    { path = "geozero::csv::CsvString", reason = "legge il WKT con il wkt di crates.io", allow-invalid = true },
+    { path = "geozero::csv::CsvReader", reason = "legge il WKT con il wkt di crates.io", allow-invalid = true },
 ]
 disallowed-methods = [
     { path = "geozero::wkt::read_wkt", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
+    { path = "geozero::csv::process_csv_geom", reason = "legge il WKT con il wkt di crates.io", allow-invalid = true },
+    { path = "geozero::csv::process_csv_features", reason = "legge il WKT con il wkt di crates.io", allow-invalid = true },
 ]

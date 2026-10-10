@@ -258,7 +258,9 @@ overflow-checks = true
 # (la sua feature `with-wkb` attiva `with-wkt`, non separabile): prima la
 # `[patch]` lo sostituiva con il vendor. `geozero` lo usa solo nel lettore
 # WKT (`geozero::wkt::{Wkt, WktStr, WktString, Ewkt, EwktStr, EwktString,
-# WktReader, read_wkt}`); la scrittura WKT e la codifica e decodifica WKB di
-# `geozero` sono sue e non lo toccano. Nessun crate del workspace usa quel
-# lettore e `clippy.toml` lo vieta: il WKT dei dati passa solo da
+# WktReader, read_wkt}`) e nel lettore CSV che lo chiama (`geozero::csv`,
+# feature `with-csv`, non attiva qui); la scrittura WKT e la codifica e
+# decodifica WKB di `geozero` sono sue e non lo toccano. Nessun crate del
+# workspace usa quei lettori, e `clippy.toml` e la prova
+# `consumatore_esterno` li vietano: il WKT dei dati passa solo da
 # `plenora-wkt`.
