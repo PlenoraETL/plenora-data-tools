@@ -275,6 +275,10 @@ fn la_ricerca_di_geozero_wkt_riconosce_le_forme() {
         "use geozero::{wkt, ToGeo};",
         "use geozero::{wkt as w};",
         "use geozero::{\n    wkb::Wkb,\n    wkt::{Ewkt, Wkt},\n};",
+        "use geozero as gz;\nlet g = gz::wkt::Wkt(\"POINT(1 2)\");",
+        "extern crate geozero as gz;\nuse gz::{wkt::WktStr};",
+        "use geozero::{self as gz};\nuse gz::wkt;",
+        "use geozero as gz;\nuse gz as g2;\nuse g2::wkt::Wkt;",
     ] {
         assert!(usa_geozero_wkt(vietato), "{vietato}");
     }
@@ -283,6 +287,8 @@ fn la_ricerca_di_geozero_wkt_riconosce_le_forme() {
         "use wkt::TryFromWkt;",
         "let s = geometria.try_wkt_string();",
         "use geozero::{wkt_like, ToWkb};",
+        "use geozero as gz;\nuse gz::{wkb::Wkb, ToGeo};",
+        "use altro::wkt::Wkt;",
     ] {
         assert!(!usa_geozero_wkt(ammesso), "{ammesso}");
     }
@@ -305,49 +311,106 @@ fn raccogli_rs(cartella: &Path, file: &mut Vec<PathBuf>) {
     }
 }
 
-/// `geozero::wkt` per esteso o dentro un gruppo `geozero::{...}`, a
-/// qualunque profondità, con o senza spazi.
+/// `geozero::wkt` in qualunque forma di percorso: per esteso, dentro un
+/// gruppo `geozero::{...}` a qualunque profondità, o attraverso un alias
+/// del crate (`use geozero as gz;`, `extern crate geozero as gz;`,
+/// `use geozero::{self as gz};`). Prudente: conta anche le stringhe e i
+/// commenti.
 fn usa_geozero_wkt(testo: &str) -> bool {
-    let compatto: String = testo.chars().filter(|c| !c.is_whitespace()).collect();
-    let mut resto = compatto.as_str();
-    while let Some(posizione) = resto.find("geozero::") {
-        resto = &resto[posizione + "geozero::".len()..];
-        if inizia_con_wkt(resto) {
-            return true;
-        }
-        if let Some(gruppo) = resto.strip_prefix('{') {
-            let mut profondita = 1_usize;
-            let mut fine = gruppo.len();
-            for (indice, carattere) in gruppo.char_indices() {
-                match carattere {
-                    '{' => profondita += 1,
-                    '}' => {
-                        profondita -= 1;
-                        if profondita == 0 {
-                            fine = indice;
-                            break;
-                        }
-                    }
-                    _ => {}
+    let simboli = simboli(testo);
+    let mut nomi = vec!["geozero".to_owned()];
+    // Gli alias del crate, anche a catena (`use gz as g2;`).
+    let mut cambiato = true;
+    while cambiato {
+        cambiato = false;
+        for (indice, simbolo) in simboli.iter().enumerate() {
+            if !nomi.contains(simbolo) {
+                continue;
+            }
+            let dopo = &simboli[indice + 1..];
+            let alias = match dopo {
+                [as_, alias, ..] if as_ == "as" => Some(alias),
+                [sep, graffa, self_, as_, alias, ..]
+                    if sep == "::" && graffa == "{" && self_ == "self" && as_ == "as" =>
+                {
+                    Some(alias)
+                }
+                _ => None,
+            };
+            if let Some(alias) = alias {
+                if !nomi.contains(alias) {
+                    nomi.push(alias.clone());
+                    cambiato = true;
                 }
             }
-            if gruppo[..fine].split([',', '{']).any(inizia_con_wkt) {
-                return true;
-            }
         }
+    }
+    simboli.iter().enumerate().any(|(indice, simbolo)| {
+        nomi.contains(simbolo)
+            && simboli.get(indice + 1).is_some_and(|sep| sep == "::")
+            && match simboli.get(indice + 2).map(String::as_str) {
+                Some("wkt") => true,
+                Some("{") => gruppo_nomina_wkt(&simboli[indice + 3..]),
+                _ => false,
+            }
+    })
+}
+
+/// Il gruppo `{...}` (aperto prima di `simboli`) contiene un percorso che
+/// comincia con `wkt`, a qualunque profondità.
+fn gruppo_nomina_wkt(simboli: &[String]) -> bool {
+    let mut profondita = 1_usize;
+    let mut inizio_percorso = true;
+    for simbolo in simboli {
+        match simbolo.as_str() {
+            "{" => {
+                profondita += 1;
+                inizio_percorso = true;
+                continue;
+            }
+            "}" => {
+                profondita -= 1;
+                if profondita == 0 {
+                    return false;
+                }
+            }
+            "," => {
+                inizio_percorso = true;
+                continue;
+            }
+            "wkt" if inizio_percorso => return true,
+            _ => {}
+        }
+        inizio_percorso = false;
     }
     false
 }
 
-/// Il segmento comincia con il modulo `wkt` (`wkt`, `wkt::...`, `wkt as`,
-/// spazi già tolti), non con un nome che ne è solo il prefisso.
-fn inizia_con_wkt(segmento: &str) -> bool {
-    segmento.strip_prefix("wkt").is_some_and(|dopo| {
-        dopo.is_empty()
-            || dopo.starts_with("::")
-            || dopo.starts_with('}')
-            || dopo.starts_with(',')
-            || dopo.starts_with(';')
-            || dopo.starts_with("as")
-    })
+/// Identificatori, `::` e i singoli caratteri di punteggiatura; gli spazi
+/// separano e si scartano.
+fn simboli(testo: &str) -> Vec<String> {
+    let lettere: Vec<char> = testo.chars().collect();
+    let mut simboli = Vec::new();
+    let mut indice = 0;
+    while indice < lettere.len() {
+        let attuale = lettere[indice];
+        if attuale.is_whitespace() {
+            indice += 1;
+        } else if attuale.is_alphanumeric() || attuale == '_' {
+            let inizio = indice;
+            while indice < lettere.len()
+                && (lettere[indice].is_alphanumeric() || lettere[indice] == '_')
+            {
+                indice += 1;
+            }
+            simboli.push(lettere[inizio..indice].iter().collect());
+        } else if attuale == ':' && lettere.get(indice + 1) == Some(&':') {
+            simboli.push("::".to_owned());
+            indice += 2;
+        } else {
+            simboli.push(attuale.to_string());
+            indice += 1;
+        }
+    }
+    simboli
 }
