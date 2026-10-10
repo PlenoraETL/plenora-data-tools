@@ -1,9 +1,9 @@
 {
-  "nota": "Sorgente del manifesto di adozione v4 (schemas/adoption-manifest-v4.schema.json di plenora-contracts). Non e' il manifesto: versione e digest degli artefatti li aggiunge scripts/genera_manifesto_adozione.py dagli artefatti costruiti, al rilascio (CLI, crate Rust e wheel dell'SDK Python). Il profilo e' data-tools versione 2 (decisione 0007 dei contratti), che ha portato nei contratti le deviazioni dichiarate alla revisione ade868c: nessuna resta. data.run 3 (decisione 0008) e' esposta sulla superficie Rust (api::esegui_artefatti); il binding runtime resta all'applicazione. Revisione 1e902df (dal 23fed27): fra le due nessuno schema, catalogo, binding, vettore o conformance_checks.py cambia, quindi le copie dei fixture e i loro SHA-256 restano quelli.",
+  "nota": "Sorgente del manifesto di adozione v4 (schemas/adoption-manifest-v4.schema.json di plenora-contracts). Non e' il manifesto: versione e digest degli artefatti li aggiunge scripts/genera_manifesto_adozione.py dagli artefatti costruiti, al rilascio (CLI, crate Rust e wheel dell'SDK Python). Il profilo e' data-tools versione 2 (decisione 0007 dei contratti), che ha portato nei contratti le deviazioni dichiarate alla revisione ade868c: nessuna resta. data.run 3 (decisione 0008) e' esposta sulla superficie Rust (api::esegui_artefatti); il binding runtime resta all'applicazione, quindi le sonde di vectors/runtime-probes-v1 (RT-016..RT-023) non si applicano: nessuna superficie di questo componente ne annuncia la richiesta di base. Revisione 3c395a8 (tag v1.1.0, dal 1e902df): dei file copiati nei fixture cambia solo bindings/cli-v1.json, nelle sezioni di io-tools e rest-tools; la pulizia fallita dopo la pubblicazione di data.run 3 segue ERR-015 (fase cleanup, committed, ritentativo never). SB-001: nessuna superficie aggiunge un effetto oltre il side_effect dell'operazione.",
   "component": "plenora-data-tools",
   "contracts_source": {
     "repository": "https://github.com/PlenoraETL/plenora-contracts.git",
-    "revision": "1e902dfaab5819c1d9ce785878d5b26dbeae48b3"
+    "revision": "3c395a8db96df739024e203b22794af340dc8a7f"
   },
   "profile": "plenora-data-tools-profile-v2",
   "conforming": [

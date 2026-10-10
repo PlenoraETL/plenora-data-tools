@@ -715,10 +715,21 @@ impl PlenoraError {
     /// - [`RetryDisposition::RequiresRecovery`] al posto di un ritentativo
     ///   automatico quando [`PlenoraError::WithRemoteEffect`] dichiara un
     ///   effetto gia' visibile.
+    /// - [`RetryDisposition::Never`] con effetto [`RemoteEffect::Committed`]
+    ///   in fase [`ErrorPhase::Cleanup`]: la pulizia fallita dopo una
+    ///   pubblicazione provata (ERR-015), il cui residuo in questa libreria è
+    ///   solo locale. In ERR-015 «residuo remoto» è un residuo sul sistema
+    ///   remoto oggetto dell'operazione (la destinazione degli artefatti);
+    ///   la cartella temporanea di lavoro del processo è un residuo locale
+    ///   su qualunque filesystem stia, anche di rete, e ritentare
+    ///   l'operazione la ripubblicherebbe senza pulirla. Una pulizia con
+    ///   residuo sul sistema oggetto, che per ERR-015 sarebbe
+    ///   `requires_recovery`, qui non esiste.
     /// - [`RetryDisposition::After`] e [`RetryDisposition::Quarantine`] non
     ///   sono mai prodotti.
     ///
-    /// Il tag di fase ([`PlenoraError::Tagged`]) non cambia la disposizione.
+    /// Il tag di fase ([`PlenoraError::Tagged`]) non cambia la disposizione,
+    /// salvo per la pulizia dopo una pubblicazione provata.
     #[must_use]
     pub fn retry_disposition(&self) -> RetryDisposition {
         match self {
@@ -742,13 +753,18 @@ impl PlenoraError {
             // Un effetto gia' visibile (parziale, definitivo o ignoto) esclude
             // il ritentativo automatico: prima va accertato lo stato
             // (ERR-006 per `unknown`, la stessa regola per gli altri). Una
-            // causa che non si ritenta mai resta `Never`.
+            // causa che non si ritenta mai resta `Never`. La pulizia fallita
+            // dopo una pubblicazione provata e' `Never` (ERR-015): qui il suo
+            // residuo e' solo locale, e ritentare pubblicherebbe di nuovo.
             Self::WithRemoteEffect {
                 remote_effect,
                 source,
             } => match (remote_effect, source.retry_disposition()) {
                 (RemoteEffect::None | RemoteEffect::RolledBack, retry)
                 | (_, retry @ (RetryDisposition::Never | RetryDisposition::Quarantine)) => retry,
+                (RemoteEffect::Committed, _) if matches!(source.phase(), ErrorPhase::Cleanup) => {
+                    RetryDisposition::Never
+                }
                 (_, _) => RetryDisposition::RequiresRecovery,
             },
         }
@@ -1958,6 +1974,32 @@ mod tests {
         let mai =
             PlenoraError::ResourceLimit("budget".into()).with_remote_effect(RemoteEffect::Partial);
         assert_eq!(mai.retry_disposition(), RetryDisposition::Never);
+        // ERR-015: la pulizia fallita dopo una pubblicazione provata non si
+        // ritenta, anche con una causa transitoria e in qualunque ordine dei
+        // wrapper; la stessa causa in un'altra fase o con un altro effetto
+        // resta `RequiresRecovery`.
+        for pulizia in [
+            io().with_phase(ErrorPhase::Cleanup)
+                .with_remote_effect(RemoteEffect::Committed),
+            io().with_remote_effect(RemoteEffect::Committed)
+                .with_phase(ErrorPhase::Cleanup),
+        ] {
+            assert_eq!(pulizia.phase(), ErrorPhase::Cleanup);
+            assert_eq!(pulizia.retry_disposition(), RetryDisposition::Never);
+        }
+        for (fase, effetto) in [
+            (ErrorPhase::Finalize, RemoteEffect::Committed),
+            (ErrorPhase::Cleanup, RemoteEffect::Partial),
+            (ErrorPhase::Cleanup, RemoteEffect::Unknown),
+        ] {
+            assert_eq!(
+                io().with_phase(fase)
+                    .with_remote_effect(effetto)
+                    .retry_disposition(),
+                RetryDisposition::RequiresRecovery,
+                "{fase:?} {effetto:?}"
+            );
+        }
         // Fase e diagnostica attraversano il wrapper.
         let taggato = io()
             .with_remote_effect(RemoteEffect::Partial)

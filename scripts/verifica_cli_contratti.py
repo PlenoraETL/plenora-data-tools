@@ -27,7 +27,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-REVISIONE = "1e902dfaab5819c1d9ce785878d5b26dbeae48b3"
+REVISIONE = "3c395a8db96df739024e203b22794af340dc8a7f"
 
 
 class Verifica:

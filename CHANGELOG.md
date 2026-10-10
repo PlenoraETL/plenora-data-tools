@@ -10,6 +10,32 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [Non rilasciata]
+
+### Contratti
+
+- `plenora-contracts` passa da `1e902df` al tag `v1.1.0`
+  (`3c395a8db96df739024e203b22794af340dc8a7f`), sempre profilo data-tools
+  versione 2, senza deviazioni. Delle copie dei fixture cambia solo
+  `bindings/cli-v1.json`, nelle sezioni di io-tools e rest-tools; le altre
+  e i loro SHA-256 restano gli stessi.
+- SB-001 e CAP-013 (decisione 0009): nessuna superficie aggiunge un effetto
+  oltre il `side_effect` dell'operazione, e le capacità non usano chiavi
+  `plenora.`.
+- Le sonde runtime RT-016..RT-023 (decisione 0010) non si applicano: il
+  trasporto runtime di `data.run` 3 resta all'applicazione, e nessuna
+  superficie del componente annuncia la loro richiesta di base.
+
+### Corretto
+
+- **Pulizia dopo la pubblicazione di `data.run` 3** (ERR-015). Se la
+  cartella temporanea non si toglie dopo che ogni output è pubblicato,
+  l'errore ha fase `cleanup` (era `finalize`) ed effetto `committed`, con
+  ritentativo `never` qualunque sia la causa: il residuo è solo locale e un
+  nuovo tentativo pubblicherebbe di nuovo. Prima una causa transitoria
+  (`Interrupted`, `TimedOut`, `WouldBlock`, `ResourceBusy`) dava
+  `requires_recovery`.
+
 ## [2.0.0] - 2026-10-06
 
 Adotta il profilo data-tools versione 2 di `plenora-contracts` al commit

@@ -2,7 +2,7 @@
 
 `crates/plenora-cli` è la superficie pubblica del componente
 `plenora-data-tools` secondo il profilo data-tools di `plenora-contracts`,
-versione 2, fissato al commit `1e902dfaab5819c1d9ce785878d5b26dbeae48b3`: il binario
+versione 2, fissato al commit `3c395a8db96df739024e203b22794af340dc8a7f`: il binario
 `plenora-data` (CLI 2.0) e le stesse quattro operazioni come funzioni Rust
 (`plenora_cli::api`). Una sola tabella (`plenora_cli::operazioni::OPERAZIONI`)
 dà comandi, aiuto, Capability Discovery 2.0 e la mappa degli export Rust; il
@@ -228,6 +228,18 @@ diventate contratto, e la sorgente del manifesto
   `plenora_data` ([README del crate](../crates/plenora-data-py/README.md)).
 - **Metadati Arrow**: le regole DT-ARROW-001..DT-ARROW-004 del profilo sono
   quelle di [«Metadati Arrow»](metadati-arrow.md#metadati-arrow).
+- **Effetto delle superfici** (SB-001, decisione 0009): nessuna superficie
+  aggiunge un effetto oltre il `side_effect` dell'operazione (`run` scrive
+  solo dove il chiamante dice, ed è già `local`), quindi le capacità non
+  hanno `plenora.surface_side_effects` né altre chiavi `plenora.`
+  (CAP-013).
+- **Sonde runtime** (`vectors/runtime-probes-v1`, RT-016..RT-023,
+  decisione 0010): non si applicano. Le sonde di `data.run` 3 mutano i
+  metadati del trasporto runtime, che resta all'applicazione; nessuna
+  superficie di questo componente annuncia la loro richiesta di base.
+- **Pulizia dopo la pubblicazione** (ERR-015): la rimozione fallita della
+  cartella temporanea di `data.run` 3 è un errore in fase `cleanup`,
+  `committed`, ritentativo `never`.
 
 ## Limiti dichiarati della CLI
 
@@ -246,7 +258,8 @@ diventate contratto, e la sorgente del manifesto
   *Ambito*: `api::esegui_artefatti`.
   *Hazard*: serve spazio su disco pari a sorgenti più uscite. Dopo un
   successo la cartella si toglie e la rimozione si verifica (un fallimento
-  è un errore `committed`); dopo un errore la toglie il distruttore, senza
+  è un errore in fase `cleanup`, `committed`, ritentativo `never`:
+  ERR-015); dopo un errore la toglie il distruttore, senza
   verifica, e un processo terminato a forza la lascia.
   *Rientro*: una lettura del confine da un flusso in memoria.
 - **`data.run` 3: interi scritti con frazione o esponente.**

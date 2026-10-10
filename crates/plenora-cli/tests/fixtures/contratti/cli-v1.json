@@ -181,6 +181,14 @@
           ]
         },
         {
+          "operation": "io.catalog",
+          "version": 2,
+          "requirement": "required",
+          "entrypoints": [
+            "catalog --format json"
+          ]
+        },
+        {
           "operation": "io.inspect",
           "version": 1,
           "requirement": "required",
@@ -205,8 +213,24 @@
           ]
         },
         {
+          "operation": "io.read",
+          "version": 2,
+          "requirement": "required",
+          "entrypoints": [
+            "read SOURCE --output OUTPUT.arrow --format json"
+          ]
+        },
+        {
           "operation": "io.write",
           "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "write --input INPUT.arrow --output SINK --format json"
+          ]
+        },
+        {
+          "operation": "io.write",
+          "version": 2,
           "requirement": "required",
           "entrypoints": [
             "write --input INPUT.arrow --output SINK --format json"
@@ -224,9 +248,54 @@
     },
     {
       "component": "plenora-rest-tools",
-      "artifact": null,
-      "discovery": [],
-      "bindings": []
+      "artifact": "plenora-rest",
+      "discovery": [
+        "--help",
+        "--version --format json",
+        "capabilities --format json"
+      ],
+      "bindings": [
+        {
+          "operation": "rest.test",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "test --input REQUEST.json --format json"
+          ]
+        },
+        {
+          "operation": "rest.generate",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "generate --input REQUEST.json --format json"
+          ]
+        },
+        {
+          "operation": "rest.enrich",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "enrich --input REQUEST.json --format json"
+          ]
+        },
+        {
+          "operation": "rest.download",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "download --input REQUEST.json --format json"
+          ]
+        },
+        {
+          "operation": "rest.upload",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": [
+            "upload --input REQUEST.json --format json"
+          ]
+        }
+      ]
     },
     {
       "component": "plenora-storage-tools",
