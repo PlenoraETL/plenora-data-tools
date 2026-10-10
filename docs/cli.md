@@ -143,6 +143,18 @@ vengono le capacità dell'SDK Python e la sua mappa dei simboli
 (`capacita::documento_della`, `capacita::mappa_python`; README di
 `crates/plenora-data-py`).
 
+Un crate che dipende da questi crate per percorso o git riceve gli stessi
+`geo`, `wkt` e `parquet` vendorizzati del workspace: sono pacchetti con
+nome proprio (`plenora-geo`, `plenora-wkt`, `plenora-parquet`), non
+`[patch.crates-io]`, che Cargo applica solo al workspace radice. Non serve
+copiare nessuna `[patch]` nel consumatore; `tests/consumatore_esterno.rs`
+risolve un consumatore fuori dal workspace e ne controlla il grafo. Nel
+grafo resta anche il `wkt` di crates.io, dipendenza di `geozero` per un
+lettore WKT che nessun crate usa (`clippy.toml` lo vieta). Il profilo di
+compilazione invece è quello del consumatore: serve `overflow-checks =
+true` anche nel suo `[profile.release]`
+([«Profilo di compilazione di chi usa i crate come dipendenza»](limiti.md#profilo-di-compilazione-di-chi-usa-i-crate-come-dipendenza)).
+
 ## `data.run` 3 sul runtime
 
 `plenora_cli::api::esegui_artefatti` è `data.run` versione 3 (profilo

@@ -93,7 +93,7 @@ jobs:
       - name: wheel instrumentato, suite Python, report
         shell: bash
         env:
-          # Le dipendenze vendorizzate (`[patch.crates-io]`) entrano nella
+          # Le dipendenze vendorizzate (`plenora-geo`, ...) entrano nella
           # libreria nativa ma non sono il binding.
           IGNORA: '(^|/)vendor/'
           PLENORA_DATA_CONTRATTI: ${{ github.workspace }}/crates/plenora-cli/tests/fixtures/contratti

@@ -67,7 +67,7 @@ GENERATED = {
 }
 # Gate che il README deve nominare: sono quelli che la CI esegue.
 CANONICAL_GATES = (
-    "cargo fmt --all --check",
+    "cargo fmt --check",
     "cargo clippy --workspace --all-targets --locked -- -D warnings",
     "PLENORA_TEST_LUNGHI=1 cargo test --workspace --locked",
     "python scripts/genera_costi_operazioni.py --verifica",

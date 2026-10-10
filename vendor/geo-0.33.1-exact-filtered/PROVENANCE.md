@@ -1,7 +1,8 @@
 # Provenienza — `geo` 0.33.1, candidato esatto
 
-**Adottato**: è il `geo` del workspace (`[patch.crates-io]` in
-`Cargo.toml`), con il filtro veloce di `orient2d`
+**Adottato**: è il `geo` del workspace, di `fuzz/` e di chi dipende dai
+crate di data-tools: pacchetto `plenora-geo`, dipendenza per percorso con
+la chiave `geo` (`Cargo.toml`, «Copie vendorizzate»), con il filtro veloce di `orient2d`
 (`PROVENANCE-FILTRO-SPERIMENTALE.md`) e il porting a `i_overlay` 9.0.0
 (sotto).
 
@@ -24,6 +25,10 @@
   3. (dopo `orient2d-filtro-sperimentale.patch`, vedi
      `PROVENANCE-FILTRO-SPERIMENTALE.md`) `geo-i-overlay-9.patch` — porting a
      `i_overlay` 9.0.0 (sezione sotto).
+  4. `geo-nome-proprio.patch` — il pacchetto si chiama `plenora-geo` (la
+     libreria resta `geo`): una `[patch.crates-io]` vale solo nel workspace
+     radice, e un consumatore dei crate di data-tools riceveva il `geo` di
+     crates.io con `i_overlay` 4.5.2.
 - Digest dell'albero risultante: non fissato qui (cambierebbe a ogni
   rigenerazione delle patch); la radice di fiducia e' il checksum del
   pacchetto sopra.

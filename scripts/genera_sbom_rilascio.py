@@ -57,7 +57,16 @@ def property_value(name: str, value: str) -> dict[str, str]:
 def cargo_inventory(root: Path) -> tuple[dict, dict]:
     components, edges = {}, {}
     manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
-    patches = manifest.get("patch", {}).get("crates-io", {})
+    # Le copie vendorizzate sono dipendenze per percorso con un nome di
+    # pacchetto proprio (Cargo.toml, «Copie vendorizzate»), non piu'
+    # `[patch.crates-io]`: si riconoscono dal percorso sotto `vendor/`.
+    patches = {
+        entry.get("package", key): entry
+        for key, entry in manifest["workspace"]["dependencies"].items()
+        if isinstance(entry, dict) and entry.get("path", "").startswith("vendor/")
+    }
+    if manifest.get("patch") or manifest.get("replace"):
+        raise ValueError("Cargo [patch]/[replace] does not reach dependents; vendor with a package name")
     for relative in ("Cargo.lock", "fuzz/Cargo.lock"):
         packages = tomllib.loads((root / relative).read_text(encoding="utf-8"))["package"]
         refs = {}

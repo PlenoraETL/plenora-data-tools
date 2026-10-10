@@ -23,18 +23,16 @@ plenora-kernels-geo = { path = "../crates/plenora-kernels-geo" }
 plenora-pipeline = { path = "../crates/plenora-pipeline" }
 plenora-io = { path = "../crates/plenora-io" }
 plenora-cli = { path = "../crates/plenora-cli" }
-geo = "=0.33.1"
+# Lo stesso `geo` vendorizzato del prodotto (nome proprio `plenora-geo`,
+# Cargo.toml radice, «Copie vendorizzate»), con la chiave d'uso `geo`.
+geo = { package = "plenora-geo", path = "../vendor/geo-0.33.1-exact-filtered", version = "=0.33.1" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.151", features = ["raw_value"] }
 tempfile = "=3.27.0"
 
-# Stessi vendor del manifesto principale: un workspace separato non eredita
-# il suo [patch], e senza questo i target proverebbero un `geo` diverso da
-# quello che il prodotto usa.
-[patch.crates-io]
-geo = { path = "../vendor/geo-0.33.1-exact-filtered" }
-wkt = { path = "../vendor/wkt-0.14.0-v2" }
-parquet = { path = "../vendor/parquet-60.0.0-eof" }   # parquet-eof.patch: il protocollo thrift segnala la fine dei dati invece di girare a vuoto (PROVENANCE.md)
+# Niente [patch.crates-io]: `geo`, `wkt` e `parquet` vendorizzati hanno un
+# nome di pacchetto proprio e arrivano dai crate del prodotto come
+# dipendenze normali, anche in questo workspace separato.
 
 # Piano: lettura del testo JSON, round-trip e validazione.
 [[bin]]
