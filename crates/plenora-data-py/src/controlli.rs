@@ -24,7 +24,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use plenora_core::{ErrorPhase, PlenoraError, RemoteEffect};
@@ -35,34 +35,6 @@ use crate::errori::{in_python, panico, Errore};
 
 /// Ogni quanto il thread del chiamante guarda gettoni e segnali.
 const INTERVALLO: Duration = Duration::from_millis(10);
-
-/// Sonda delle prove: un callable Python chiamato fra la fine del lavoro e
-/// il controllo della consegna, l'unico istante che una prova non sa
-/// raggiungere dall'esterno. Privata (`_native._sonda_consegna`), non è
-/// API: senza sonda registrata (sempre, fuori dalle prove) non fa nulla.
-static SONDA: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
-
-/// Registra o toglie la sonda della consegna.
-///
-/// La sonda precedente esce dal lucchetto e si rilascia dopo averlo
-/// liberato: il suo `__del__` può richiamare questa funzione, e rilasciarla
-/// con il lucchetto preso sarebbe un deadlock.
-pub fn registra_sonda(sonda: Option<Py<PyAny>>) {
-    let precedente = SONDA
-        .lock()
-        .ok()
-        .and_then(|mut registrata| std::mem::replace(&mut *registrata, sonda));
-    drop(precedente);
-}
-
-/// Chiama la sonda, se c'è; la sua eccezione passa com'è.
-fn chiama_sonda(py: Python<'_>) -> PyResult<()> {
-    let sonda = SONDA
-        .lock()
-        .ok()
-        .and_then(|registrata| registrata.as_ref().map(|sonda| sonda.clone_ref(py)));
-    sonda.map_or_else(|| Ok(()), |sonda| sonda.call0(py).map(|_| ()))
-}
 
 /// Scadenza e segnali di una chiamata.
 pub struct Controlli {
@@ -244,8 +216,15 @@ impl Controlli {
         let maniglia = std::thread::Builder::new()
             .name("plenora-data".to_owned())
             .spawn(move || {
-                let esito = catch_unwind(AssertUnwindSafe(|| lavoro(&interruzione)))
-                    .unwrap_or_else(|payload| Err(panico(payload.as_ref(), con_effetti)));
+                // Solo nelle build delle prove (feature `sonde-di-prova`).
+                #[cfg(feature = "sonde-di-prova")]
+                let mut interruzione = interruzione;
+                let esito = catch_unwind(AssertUnwindSafe(|| {
+                    #[cfg(feature = "sonde-di-prova")]
+                    plenora_pipeline::sonda::chiama_prima(&mut interruzione)?;
+                    lavoro(&interruzione)
+                }))
+                .unwrap_or_else(|payload| Err(panico(payload.as_ref(), con_effetti)));
                 // Il chiamante aspetta sempre l'esito: un invio fallito vuol
                 // dire solo che non c'è più nessuno ad aspettarlo.
                 let _ = invio.send(esito);
@@ -266,7 +245,8 @@ impl Controlli {
             match esito {
                 Ok(Err(errore)) => break Err(Errore::Plenora(errore)),
                 Ok(Ok(valore)) => {
-                    if let Err(eccezione) = chiama_sonda(py) {
+                    #[cfg(feature = "sonde-di-prova")]
+                    if let Err(eccezione) = crate::sonde::chiama_consegna(py) {
                         break Err(Errore::Python(eccezione));
                     }
                     // Consegna: un annullamento arrivato nell'ultimo

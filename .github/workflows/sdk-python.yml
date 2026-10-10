@@ -4,7 +4,9 @@ name: sdk-python
 # Linux (manylinux 2_34) e per Windows, costruito con maturin, poi installato
 # e provato su ogni piattaforma con il Python minimo e il piu' recente
 # dichiarati (Python SDK 1.0, sezione 10: il wheel si prova installato, fuori
-# dal checkout). I tipi PEP 561 si controllano con mypy --strict sugli
+# dal checkout). La suite gira sul wheel delle prove, con le sonde (feature
+# `sonde-di-prova`); il wheel di rilascio, senza, si verifica senza sonde.
+# I tipi PEP 561 si controllano con mypy --strict sugli
 # stessi due Python. Niente pubblicazione: i wheel restano artefatti della
 # run.
 
@@ -39,7 +41,10 @@ jobs:
       # L'action e maturin sono dipendenze distinte e si fissano entrambe:
       # maturin e' quella di requirements-sdk-build.txt, il compilatore
       # quello di rust-toolchain.toml. `manylinux` vale solo su Linux.
-      - name: build del wheel (maturin)
+      # Il wheel delle prove ha le sonde (feature `sonde-di-prova`): la
+      # suite intera le usa. Il wheel di rilascio e' costruito come in
+      # rilascio.yml, senza feature, e si verifica che non le abbia.
+      - name: build del wheel delle prove (maturin, sonde-di-prova)
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           maturin-version: '1.15.0'
@@ -47,7 +52,24 @@ jobs:
           args: >-
             --release
             --locked
+            --features sonde-di-prova
             --out dist
+            --manifest-path crates/plenora-data-py/Cargo.toml
+          manylinux: '2_34'
+          # L'immagine manylinux per digest (quella del rilascio 1.0.0): il
+          # tag `latest` cambierebbe la toolchain C del wheel Linux fra due
+          # build dello stesso commit. Su Windows l'input non si usa.
+          container: 'quay.io/pypa/manylinux_2_34_x86_64@sha256:e4ca528d41ab66b3654110295d7a2c7bfa599ddbb6efb269ec21f7f73b88f1b6'
+          rust-toolchain: '1.98.0'
+      - name: build del wheel di rilascio (maturin, senza feature)
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          maturin-version: '1.15.0'
+          command: build
+          args: >-
+            --release
+            --locked
+            --out dist-rilascio
             --manifest-path crates/plenora-data-py/Cargo.toml
           manylinux: '2_34'
           # L'immagine manylinux per digest (quella del rilascio 1.0.0): il
@@ -59,6 +81,11 @@ jobs:
         with:
           name: wheel-${{ matrix.os }}
           path: dist/*.whl
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheel-rilascio-${{ matrix.os }}
+          path: dist-rilascio/*.whl
           if-no-files-found: error
 
   prove:
@@ -92,6 +119,20 @@ jobs:
           python scripts/verifica_sdk_python.py
           --wheel "$(ls dist/*.whl)"
           --cartella "$RUNNER_TEMP/sdk-python"
+      # Il wheel di rilascio: niente sonde (attributi del modulo e nomi nel
+      # binario nativo) e la suite senza le prove marcate `sonde`.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wheel-rilascio-${{ matrix.os }}
+          path: dist-rilascio
+      - name: wheel di rilascio senza sonde
+        shell: bash
+        run: |
+          python -m pip install --no-deps --force-reinstall dist-rilascio/*.whl
+          python scripts/verifica_sdk_python.py \
+            --wheel "$(ls dist-rilascio/*.whl)" \
+            --cartella "$RUNNER_TEMP/sdk-python-rilascio" \
+            --rilascio
 
   tipi:
     name: tipi PEP 561 (Python ${{ matrix.python }})

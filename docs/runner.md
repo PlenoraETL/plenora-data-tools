@@ -265,6 +265,15 @@ in `Instant` chi la riceve. Con una scadenza l'esito (output o `Timeout`) dipend
 dal tempo, per natura; gli output resi sono sempre quelli di `run`. Il controllo è fra i passi, mai dentro un
 kernel (limite in [«Limiti dichiarati del runner»](#limiti-dichiarati-del-runner)).
 
+Fra un passo e il controllo del successivo, e in `plenora-io` fra un output
+scritto e il controllo del successivo, gira una sonda delle prove
+(`plenora_pipeline::sonda`, non API): la registra solo l'SDK Python nelle
+sue prove dei controlli, per alzare un annullamento in un punto deciso
+invece che a tempo. Esiste solo con la feature `sonde-di-prova`,
+disattivata per default: nelle build di rilascio i punti non si compilano.
+Con la feature e senza sonda registrata un punto costa una lettura
+atomica.
+
 ## Divisione per zero
 
 **Semantica dichiarata** (decisione dell'utente): in `table.formula` e

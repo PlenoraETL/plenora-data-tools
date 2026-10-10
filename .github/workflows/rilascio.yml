@@ -103,6 +103,25 @@ jobs:
           # build dello stesso commit. Su Windows l'input non si usa.
           container: 'quay.io/pypa/manylinux_2_34_x86_64@sha256:e4ca528d41ab66b3654110295d7a2c7bfa599ddbb6efb269ec21f7f73b88f1b6'
           rust-toolchain: '1.98.0'
+      # Solo per la suite: lo stesso commit con le sonde delle prove
+      # (feature `sonde-di-prova`), fuori da `dist`, mai allegato.
+      - name: wheel delle prove (maturin, sonde-di-prova)
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          maturin-version: '1.15.0'
+          command: build
+          args: >-
+            --release
+            --locked
+            --features sonde-di-prova
+            --out prove
+            --manifest-path crates/plenora-data-py/Cargo.toml
+          manylinux: '2_34'
+          # L'immagine manylinux per digest (quella del rilascio 1.0.0): il
+          # tag `latest` cambierebbe la toolchain C del wheel Linux fra due
+          # build dello stesso commit. Su Windows l'input non si usa.
+          container: 'quay.io/pypa/manylinux_2_34_x86_64@sha256:e4ca528d41ab66b3654110295d7a2c7bfa599ddbb6efb269ec21f7f73b88f1b6'
+          rust-toolchain: '1.98.0'
       - name: Rust 1.98.0
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
         with:
@@ -153,11 +172,20 @@ jobs:
           shopt -s nullglob
           wheel=(dist/*.whl)
           test "${#wheel[@]}" -eq 1
+          prove=(prove/*.whl)
+          test "${#prove[@]}" -eq 1
           python -m pip install -r requirements-sdk-tests.txt
-          python -m pip install --no-deps "${wheel[0]}"
+          # La suite intera sul wheel delle prove, poi il wheel allegato:
+          # senza sonde e con la suite senza le prove marcate `sonde`.
+          python -m pip install --no-deps "${prove[0]}"
+          python scripts/verifica_sdk_python.py \
+            --wheel "${prove[0]}" \
+            --cartella "$RUNNER_TEMP/sdk-python-prove"
+          python -m pip install --no-deps --force-reinstall "${wheel[0]}"
           python scripts/verifica_sdk_python.py \
             --wheel "${wheel[0]}" \
-            --cartella "$RUNNER_TEMP/sdk-python"
+            --cartella "$RUNNER_TEMP/sdk-python" \
+            --rilascio
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rilascio-${{ matrix.os }}
@@ -196,7 +224,8 @@ jobs:
           python -m pip install --no-deps "${wheel[0]}"
           python scripts/verifica_sdk_python.py \
             --wheel "${wheel[0]}" \
-            --cartella "$RUNNER_TEMP/sdk-python"
+            --cartella "$RUNNER_TEMP/sdk-python" \
+            --rilascio
 
   sbom:
     name: SBOM

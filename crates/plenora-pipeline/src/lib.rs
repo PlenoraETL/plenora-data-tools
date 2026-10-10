@@ -26,6 +26,9 @@ pub mod disponibilita;
 mod esecuzione;
 mod geo;
 pub mod piano;
+#[cfg(feature = "sonde-di-prova")]
+#[doc(hidden)]
+pub mod sonda;
 mod validazione;
 
 pub use esecuzione::{Esito, Interruzione, Report, ReportPasso};

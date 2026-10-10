@@ -4,6 +4,10 @@
 # `scadenza` e' un istante in secondi dall'epoca Unix (`deadline`),
 # `scadenza_monotona` un istante di `time.monotonic()` fissato
 # all'ingresso della chiamata pubblica (`timeout`).
+# Le sonde delle prove (`_sonda_consegna`, `_sonda_lavoro`,
+# `_sonda_scadenza`) esistono solo
+# nelle build con la feature Cargo `sonde-di-prova`, mai nel wheel di
+# rilascio: non sono qui.
 
 from collections.abc import Callable
 from typing import final
@@ -21,9 +25,6 @@ class CancellationToken:
         """Se il segnale e' alzato."""
 
 def version() -> str: ...
-def _sonda_consegna(sonda: Callable[[], object] | None) -> None:
-    """Solo per le prove: un callable chiamato fra la fine del lavoro e il
-    controllo della consegna; None lo toglie."""
 def capabilities() -> str: ...
 def catalog() -> str: ...
 def describe(

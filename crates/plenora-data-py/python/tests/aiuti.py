@@ -82,8 +82,8 @@ def piano_identita(nome: str = "t") -> dict[str, Any]:
 
 
 def piano_lungo(passi: int) -> dict[str, Any]:
-    """Una catena di ordinamenti: abbastanza passi da durare secondi, ognuno
-    breve, così un annullamento si vede al controllo fra due passi."""
+    """Una catena di `passi` ordinamenti: un lavoro fermato prima
+    dell'ultimo passo non produce l'output."""
     lista = []
     precedente = "t"
     for indice in range(passi):
@@ -97,7 +97,3 @@ def piano_lungo(passi: int) -> dict[str, Any]:
         )
         precedente = f"s{indice}"
     return {"version": 1, "inputs": ["t"], "steps": lista, "outputs": [precedente]}
-
-
-def tabella_grande(righe: int = 1_000_000) -> pa.Table:
-    return pa.table({"id": pa.array([(i * 7919) % righe for i in range(righe)], pa.int64())})

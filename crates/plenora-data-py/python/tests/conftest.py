@@ -31,6 +31,16 @@ SCHEMI = (
 )
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "sonde: usa le sonde private del modulo nativo, che esistono solo nelle "
+        "build delle prove (feature Cargo `sonde-di-prova`); sul wheel di "
+        "rilascio scripts/verifica_sdk_python.py --rilascio le deseleziona e "
+        "ne verifica l'assenza",
+    )
+
+
 @pytest.fixture(scope="session")
 def contratti() -> pathlib.Path:
     valore = os.environ.get(VARIABILE)

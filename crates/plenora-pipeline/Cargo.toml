@@ -25,5 +25,10 @@ proptest.workspace = true
 # SHA-256 del catalogo delle misure contro quello registrato nel modello.
 sha2.workspace = true
 
+[features]
+# Sonde delle prove dei controlli (plenora_pipeline::sonda): solo nelle build
+# delle prove, mai in quelle di rilascio. Disattivata per default.
+sonde-di-prova = []
+
 [lints]
 workspace = true

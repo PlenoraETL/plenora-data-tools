@@ -33,5 +33,10 @@ serde_json.workspace = true
 pyo3.workspace = true
 arrow-pyarrow.workspace = true
 
+[features]
+# Sonde delle prove dei controlli (plenora_pipeline::sonda): solo nelle build
+# delle prove, mai in quelle di rilascio. Disattivata per default.
+sonde-di-prova = ["plenora-pipeline/sonde-di-prova", "plenora-io/sonde-di-prova"]
+
 [lints]
 workspace = true

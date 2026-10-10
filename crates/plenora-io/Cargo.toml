@@ -46,5 +46,16 @@ sha2.workspace = true
 name = "catena_da_file"
 test = true
 
+[features]
+# Sonde delle prove dei controlli (plenora_pipeline::sonda): solo nelle build
+# delle prove, mai in quelle di rilascio. Disattivata per default.
+sonde-di-prova = ["plenora-pipeline/sonde-di-prova"]
+
+# La prova dei punti di sonda esiste solo con la feature: la CI la fa
+# girare a parte (`cargo test -p plenora-io --features sonde-di-prova`).
+[[test]]
+name = "sonda_dei_controlli"
+required-features = ["sonde-di-prova"]
+
 [lints]
 workspace = true

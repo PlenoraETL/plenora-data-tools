@@ -503,6 +503,14 @@ fn scrivi_uscite(
     while !restanti.is_empty() {
         let (nome, tabella) = restanti.remove(0);
         let contesto = format!("output `{nome}`");
+        #[cfg(feature = "sonde-di-prova")]
+        if !scritti.is_empty() {
+            plenora_pipeline::sonda::chiama(
+                plenora_pipeline::sonda::Punto::FraScritture,
+                interruzione,
+            )
+            .map_err(|errore| errore.with_phase(ErrorPhase::Write))?;
+        }
         interruzione
             .verifica(&format!("prima di scrivere l'{contesto}"))
             .map_err(|errore| errore.with_phase(ErrorPhase::Write))?;
