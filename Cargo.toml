@@ -9,8 +9,8 @@ members = [
     "crates/plenora-cli",
     "crates/plenora-data-py",
 ]
-# Sorgenti vendorizzate per [patch.crates-io] (vedi sotto): raggiunte solo da
-# [patch], mai membri del workspace.
+# Sorgenti vendorizzate («Copie vendorizzate» in fondo): dipendenze per
+# percorso con nome proprio, mai membri del workspace.
 exclude = ["vendor"]
 
 [workspace.package]
@@ -76,10 +76,11 @@ arrow-buffer = "=60.0.0"
 # hashbrown, num-*, chrono, flatbuffers) c'era gia'. Con `parquet` 60.0.0
 # `zstd` passa a 0.14.0 e `zstd-safe` a 8.0.0 (richiesti da `parquet`),
 # `zstd-sys` resta 2.1.0 (stessa libzstd 1.5.7).
-# Il sorgente e' vendorizzato con una patch (`[patch.crates-io]` sotto,
+# Il sorgente e' vendorizzato con una patch e un nome proprio
+# (`plenora-parquet`, «Copie vendorizzate» in fondo;
 # `vendor/parquet-60.0.0-eof/PROVENANCE.md`): il protocollo thrift della
 # 60.0.0 gira a vuoto su un header di pagina malformato.
-parquet = { version = "=60.0.0", default-features = false, features = ["arrow", "snap", "zstd", "crc"] }
+parquet = { package = "plenora-parquet", path = "vendor/parquet-60.0.0-eof", version = "=60.0.0", default-features = false, features = ["arrow", "snap", "zstd", "crc"] }
 # CRC32 dei checksum di pagina Parquet (feature `crc` sopra): l'unico crate
 # nuovo nel lockfile per quella feature (la sua dipendenza `cfg-if` c'era
 # gia'). Versione esatta, la piu' recente compatibile con `^1.4.2` di
@@ -93,11 +94,16 @@ crc32fast = { version = "=1.5.2", default-features = false }
 # `parquet` usa (0.23.1, feature `std`).
 base64 = { version = "=0.23.1", default-features = false, features = ["std"] }
 # Geometrie
-geo = "=0.33.1"
+# Vendorizzato con patch e nome proprio (`plenora-geo`, «Copie
+# vendorizzate» in fondo): orientamento esatto, logging statico, filtro
+# veloce di `orient2d`, `i_overlay` 9.0.0 (vendor/geo-*/PROVENANCE*.md).
+geo = { package = "plenora-geo", path = "vendor/geo-0.33.1-exact-filtered", version = "=0.33.1" }
 # Codifica e decodifica WKB delle geometrie `geo` in plenora-kernels-geo.
 geozero = { version = "=0.15.1", default-features = false, features = ["with-geo", "with-wkb"] }
-# Lettura e scrittura WKT (`geo.from_wkt`, `geo.to_wkt`); vendorizzato con patch (sotto).
-wkt = "=0.14.0"
+# Lettura e scrittura WKT (`geo.from_wkt`, `geo.to_wkt`); vendorizzato con
+# patch e nome proprio (`plenora-wkt`, «Copie vendorizzate» in fondo):
+# componenti vuoti, `InteriorWithoutExterior`, `try_wkt_string`.
+wkt = { package = "plenora-wkt", path = "vendor/wkt-0.14.0-v2", version = "=0.14.0" }
 # Parallelismo dati nei kernel (raccolta posizionale: uscita identica al sequenziale).
 rayon = "=1.12.0"
 # R-tree degli indici spaziali di plenora-kernels-geo (join, cluster, vicini).
@@ -217,7 +223,19 @@ strip = "symbols"
 overflow-checks = true
 
 # Copie vendorizzate (provenienza: vendor/*/PROVENANCE.md, patch in patches/).
-[patch.crates-io]
+#
+# `geo`, `wkt` e `parquet` sono dipendenze per percorso con un nome di
+# pacchetto proprio (`plenora-geo`, `plenora-wkt`, `plenora-parquet`;
+# `patches/*-nome-proprio.patch`), dichiarate sopra in [workspace.dependencies]
+# con la chiave d'uso invariata (`geo`, `wkt`, `parquet`). Non piu'
+# `[patch.crates-io]`: Cargo applica le patch solo al workspace radice, e chi
+# dipendeva da questi crate (per percorso o git: un worker, una suite di
+# interoperabilita') riceveva in silenzio `geo` con `i_overlay` 4.5.2, `wkt`
+# e `parquet` di crates.io, cioe' geometrie, WKT e letture Parquet diverse.
+# Con un nome proprio il pacchetto esiste solo in `vendor/`, e il resolver
+# di un consumatore non ha un'alternativa da scegliere. La prova e'
+# `crates/plenora-cli/tests/consumatore_esterno.rs` (un crate fuori dal
+# workspace, risolto con `cargo metadata`).
 #
 # `i_overlay` (transitiva, via `geo`) e' pinnata esatta a `=9.0.0` nel
 # manifesto del `geo` vendorizzato (`patches/geo-i-overlay-9.patch`), al posto
@@ -235,6 +253,12 @@ overflow-checks = true
 # `i_shape` 5 non ha piu' la funzione, e l'offset di `i_overlay` 9 salta i
 # percorsi con meno di tre punti prima di calcolarne l'area (vendor/
 # geo-0.33.1-exact-filtered/PROVENANCE.md).
-geo = { path = "vendor/geo-0.33.1-exact-filtered" } # orientamento esatto + logging + filtro veloce + i_overlay 9 (PROVENANCE*.md)
-wkt = { path = "vendor/wkt-0.14.0-v2" }          # wkt-v2.patch (componenti vuoti, InteriorWithoutExterior, try_wkt_string)
-parquet = { path = "vendor/parquet-60.0.0-eof" }   # parquet-eof.patch: il protocollo thrift segnala la fine dei dati invece di girare a vuoto (PROVENANCE.md)
+#
+# `wkt` 0.14.0 di crates.io torna nel lockfile come dipendenza di `geozero`
+# (la sua feature `with-wkb` attiva `with-wkt`, non separabile): prima la
+# `[patch]` lo sostituiva con il vendor. `geozero` lo usa solo nel lettore
+# WKT (`geozero::wkt::{Wkt, WktStr, WktString, Ewkt, EwktStr, EwktString,
+# WktReader, read_wkt}`); la scrittura WKT e la codifica e decodifica WKB di
+# `geozero` sono sue e non lo toccano. Nessun crate del workspace usa quel
+# lettore e `clippy.toml` lo vieta: il WKT dei dati passa solo da
+# `plenora-wkt`.

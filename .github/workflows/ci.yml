@@ -76,8 +76,11 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
+      # Senza `--all`: `--all` formatta anche le dipendenze per percorso,
+      # cioe' i crate di `vendor/` (codice upstream, non nostro); senza, il
+      # controllo copre tutti i membri del workspace.
       - name: cargo fmt
-        run: cargo fmt --all --check
+        run: cargo fmt --check
       - name: cargo fmt (target di fuzz)
         run: cargo fmt --manifest-path fuzz/Cargo.toml --check
       - name: cargo clippy

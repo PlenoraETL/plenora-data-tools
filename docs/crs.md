@@ -137,7 +137,7 @@ rettangolo.
    controlla la terna pyproj/PROJ/EPSG e si rifiuta di girare se non coincide.
    Cambiare versione è una decisione da prendere in PR, con il diff dei dati;
 3. rigenerare con `PYTHONPATH=<dir> python scripts/genera_crs_integrati.py` e
-   formattare con `cargo fmt --all`;
+   formattare con `cargo fmt`;
 4. aggiornare l'elenco atteso in
    `crates/plenora-core/src/crs/integrati/tests.rs`;
 5. rigenerare i parametri di riproiezione e l'oracolo

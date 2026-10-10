@@ -35,7 +35,18 @@ class SbomRilascioTests(unittest.TestCase):
             sbom.validate(sbom.ROOT, dist, bom)
             self.assertEqual(bom["metadata"]["component"]["name"], "plenora-data-tools")
             nomi = {componente["name"] for componente in bom["components"]}
-            self.assertIn("parquet", nomi)  # il vendor con patch
+            # I vendor con patch, con il nome proprio e la provenienza.
+            for nome, cartella in (
+                ("plenora-geo", "vendor/geo-0.33.1-exact-filtered"),
+                ("plenora-wkt", "vendor/wkt-0.14.0-v2"),
+                ("plenora-parquet", "vendor/parquet-60.0.0-eof"),
+            ):
+                componente = next(c for c in bom["components"] if c["name"] == nome)
+                proprieta = {p["name"]: p["value"] for p in componente["properties"]}
+                self.assertEqual(proprieta["plenora:patch-path"], cartella)
+                self.assertIn("plenora:patch-source-sha256", proprieta)
+            self.assertNotIn("geo", nomi)  # nessun geo senza fork
+            self.assertNotIn("parquet", nomi)
             self.assertIn("pyarrow", nomi)  # pin di qualifica
 
     def test_identita_del_wheel_diversa_si_rifiuta(self) -> None:

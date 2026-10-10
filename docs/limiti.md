@@ -1058,3 +1058,28 @@ funzioni tornano a chiamare `geo`, e gli oracoli restano come regressione.
 Per i rifiuti di `VerticeMalCondizionato`: un circocentro calcolato in
 aritmetica estesa (differenze esatte, prodotti in doppia-doppia), che
 riduce il maggiorante di circa `2^-53`.
+
+## Profilo di compilazione di chi usa i crate come dipendenza
+
+**Regola.** Un overflow aritmetico intero è un panico dichiarato anche in
+release, mai un valore avvolto in silenzio: `[profile.release]` del
+`Cargo.toml` radice ha `overflow-checks = true`, e così `fuzz/`.
+
+**Ambito.** Chi compila i crate di data-tools come dipendenza (per percorso
+o git) con un proprio workspace. Cargo applica i profili, come le
+`[patch]`, solo dal workspace radice: il profilo del consumatore decide
+anche per il codice di data-tools e delle sue dipendenze. Le copie
+vendorizzate di `geo`, `wkt` e `parquet` invece arrivano al consumatore
+(pacchetti con nome proprio, `tests/consumatore_esterno.rs` di
+`plenora-cli`).
+
+**Hazard.** In una build di release con il profilo di default di Cargo
+(`overflow-checks = false`) l'aritmetica intera non controllata avvolge.
+Dove questo workspace conta sul panico, per esempio la somma non
+controllata di `concat_run_arrays` di Arrow 60.0.0 su fini `Int16`
+([«Runner»](runner.md#runner)), il consumatore avrebbe un valore sbagliato
+invece di un errore. Nessuna prova lo rileva dal consumatore.
+
+**Condizione di rientro.** Il consumatore dichiara `overflow-checks = true`
+nel proprio `[profile.release]`, oppure una guardia a runtime che rifiuta
+di eseguire un piano in una build senza controlli di overflow.

@@ -1,7 +1,7 @@
 # Filtro veloce di `orient2d`
 
-**Adottato**: `geo` risolve a questa cartella (`[patch.crates-io]` in
-`Cargo.toml`). Il nome «sperimentale» viene dal progetto d'origine, dove
+**Adottato**: `geo` risolve a questa cartella (pacchetto `plenora-geo`,
+`Cargo.toml`, «Copie vendorizzate»). Il nome «sperimentale» viene dal progetto d'origine, dove
 il filtro nacque accanto a un candidato sempre-esatto senza filtro
 (`vendor/geo-0.33.1-exact`, non portato qui).
 
