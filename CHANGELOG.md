@@ -28,6 +28,20 @@ la cui versione non ha qui una voce datata.
 
 ### Corretto
 
+- **I fork di `geo`, `wkt` e `parquet` valgono anche per i consumatori.**
+  Erano `[patch.crates-io]`, che Cargo applica solo al workspace radice: un
+  crate che dipendeva da data-tools per percorso o git (un worker, una
+  suite di interoperabilità) riceveva `geo` 0.33.1 con `i_overlay` 4.5.2
+  (regioni perse senza errore oltre circa 16.000 segmenti), `wkt` e
+  `parquet` di crates.io. Ora sono pacchetti con nome proprio
+  (`plenora-geo`, `plenora-wkt`, `plenora-parquet`) dichiarati come
+  dipendenze per percorso, con le chiavi d'uso invariate; le patch dei
+  nomi sono in `patches/*-nome-proprio.patch`. Il `wkt` di crates.io resta
+  nel grafo solo per il lettore WKT di `geozero`, vietato da `clippy.toml`.
+  La prova `consumatore_esterno` risolve un crate fuori dal workspace e
+  controlla il grafo, anche del workspace e di `fuzz/`. Stessa classe, non
+  corretta: il profilo (`overflow-checks = true` in release) vale solo nel
+  workspace radice; limite dichiarato in `docs/limiti.md`.
 - **Pulizia dopo la pubblicazione di `data.run` 3** (ERR-015). Se la
   cartella temporanea non si toglie dopo che ogni output è pubblicato,
   l'errore ha fase `cleanup` (era `finalize`) ed effetto `committed`, con

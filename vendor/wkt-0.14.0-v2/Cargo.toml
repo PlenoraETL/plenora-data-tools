@@ -11,7 +11,7 @@
 
 [package]
 edition = "2021"
-name = "wkt"
+name = "plenora-wkt"
 version = "0.14.0"
 build = false
 autolib = false

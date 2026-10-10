@@ -457,25 +457,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "geo"
-version = "0.33.1"
-dependencies = [
- "earcut",
- "float_next_after",
- "geo-types",
- "geographiclib-rs",
- "i_overlay",
- "log",
- "num-traits",
- "rand",
- "rand_pcg",
- "robust",
- "rstar",
- "sif-itree",
- "spade",
-]
-
-[[package]]
 name = "geo-traits"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -831,32 +812,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "parquet"
-version = "60.0.0"
-dependencies = [
- "ahash",
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-ipc",
- "arrow-schema",
- "arrow-select",
- "base64",
- "bytes",
- "chrono",
- "crc32fast",
- "half",
- "hashbrown 0.17.1",
- "num-bigint",
- "num-integer",
- "num-traits",
- "seq-macro",
- "snap",
- "twox-hash",
- "zstd",
-]
-
-[[package]]
 name = "phf"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -919,10 +874,10 @@ dependencies = [
 name = "plenora-data-tools-fuzz"
 version = "0.0.0"
 dependencies = [
- "geo",
  "libfuzzer-sys",
  "plenora-cli",
  "plenora-core",
+ "plenora-geo",
  "plenora-io",
  "plenora-kernels-geo",
  "plenora-kernels-table",
@@ -933,14 +888,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "plenora-geo"
+version = "0.33.1"
+dependencies = [
+ "earcut",
+ "float_next_after",
+ "geo-types",
+ "geographiclib-rs",
+ "i_overlay",
+ "log",
+ "num-traits",
+ "rand",
+ "rand_pcg",
+ "robust",
+ "rstar",
+ "sif-itree",
+ "spade",
+]
+
+[[package]]
 name = "plenora-io"
 version = "2.0.0"
 dependencies = [
  "arrow-buffer",
  "base64",
  "crc32fast",
- "parquet",
  "plenora-core",
+ "plenora-parquet",
  "plenora-pipeline",
  "serde_json",
  "tempfile",
@@ -950,18 +924,18 @@ dependencies = [
 name = "plenora-kernels-geo"
 version = "2.0.0"
 dependencies = [
- "geo",
  "geographiclib-rs",
  "geozero",
  "plenora-core",
+ "plenora-geo",
  "plenora-kernels-table",
+ "plenora-wkt",
  "rayon",
  "rstar",
  "serde",
  "serde_json",
  "spade",
  "thiserror 2.0.21",
- "wkt",
 ]
 
 [[package]]
@@ -983,15 +957,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "plenora-parquet"
+version = "60.0.0"
+dependencies = [
+ "ahash",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-ipc",
+ "arrow-schema",
+ "arrow-select",
+ "base64",
+ "bytes",
+ "chrono",
+ "crc32fast",
+ "half",
+ "hashbrown 0.17.1",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "seq-macro",
+ "snap",
+ "twox-hash",
+ "zstd",
+]
+
+[[package]]
 name = "plenora-pipeline"
 version = "2.0.0"
 dependencies = [
- "geo",
  "plenora-core",
+ "plenora-geo",
  "plenora-kernels-geo",
  "plenora-kernels-table",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "plenora-wkt"
+version = "0.14.0"
+dependencies = [
+ "geo-traits",
+ "geo-types",
+ "log",
+ "num-traits",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1548,6 +1559,8 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 [[package]]
 name = "wkt"
 version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "efb2b923ccc882312e559ffaa832a055ba9d1ac0cc8e86b3e25453247e4b81d7"
 dependencies = [
  "geo-traits",
  "geo-types",

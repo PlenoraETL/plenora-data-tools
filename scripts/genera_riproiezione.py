@@ -11,7 +11,7 @@ Uso:
 
     python -m pip install --only-binary=:all: --target <dir> pyproj==3.7.2
     PYTHONPATH=<dir> python -B scripts/genera_riproiezione.py
-    cargo fmt --all
+    cargo fmt
 
 Che cosa scrive:
 

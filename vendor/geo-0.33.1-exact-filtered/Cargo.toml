@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 rust-version = "1.88"
-name = "geo"
+name = "plenora-geo"
 version = "0.33.1"
 build = false
 autolib = false

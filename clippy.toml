@@ -1,0 +1,20 @@
+# Configurazione di clippy per il workspace (le soglie dei lint restano
+# quelle di default; qui solo i divieti).
+#
+# Il lettore WKT di `geozero` usa il `wkt` 0.14.0 di crates.io, non il
+# vendor `plenora-wkt` (Cargo.toml, «Copie vendorizzate»): un WKT letto da
+# lì salterebbe in silenzio le correzioni di `patches/wkt-v2.patch`
+# (componenti vuoti, interni orfani). Il WKT dei dati passa solo da
+# `plenora-wkt` (`wkt::Wkt`, `TryFromWkt`, `try_wkt_string`).
+disallowed-types = [
+    { path = "geozero::wkt::Wkt", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
+    { path = "geozero::wkt::WktStr", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
+    { path = "geozero::wkt::WktString", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
+    { path = "geozero::wkt::Ewkt", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
+    { path = "geozero::wkt::EwktStr", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
+    { path = "geozero::wkt::EwktString", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
+    { path = "geozero::wkt::WktReader", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
+]
+disallowed-methods = [
+    { path = "geozero::wkt::read_wkt", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
+]

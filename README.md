@@ -18,7 +18,7 @@ progetto d'origine si portano qui senza rinomine.
 | `plenora-io` | tabelle da e verso file: Arrow IPC (file e stream), Parquet, GeoParquet 1.1; scrittura atomica; un piano da file a file ([«File»](docs/file.md#file)) |
 | `plenora-cli` | la CLI pubblica `plenora-data` (CLI 2.0 di `plenora-contracts`: `catalog`, `describe`, `validate`, `run`, `capabilities`) e la stessa superficie in Rust ([«CLI `plenora-data`»](docs/cli.md#cli-plenora-data)) |
 | `plenora-data-py` | l'SDK Python `plenora-data` (`plenora_data`): le stesse operazioni su tabelle PyArrow o file ([«SDK Python»](#sdk-python)) |
-| `vendor/` | `geo` (con il porting a `i_overlay` 9.0.0), `wkt` e `parquet` (il protocollo thrift che non girava a vuoto su file malformati) con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`) |
+| `vendor/` | `geo` (con il porting a `i_overlay` 9.0.0), `wkt` e `parquet` (il protocollo thrift che non girava a vuoto su file malformati) con le patch di `patches/` (provenienza in `vendor/*/PROVENANCE*.md`). Sono pacchetti con nome proprio (`plenora-geo`, `plenora-wkt`, `plenora-parquet`), non `[patch.crates-io]`: valgono anche per chi dipende dai crate di data-tools per percorso o git (prova: `crates/plenora-cli/tests/consumatore_esterno.rs`) |
 
 ## Che cosa non c'è ancora
 
@@ -138,7 +138,7 @@ I comandi dei gate, gli stessi che la CI (`.github/workflows/ci.yml`)
 esegue su Linux e Windows:
 
 ```sh
-cargo fmt --all --check
+cargo fmt --check   # senza `--all`, che formatterebbe anche `vendor/`
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --workspace --lib --locked -- -D unsafe-code \
   -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
@@ -221,7 +221,7 @@ fuori da Git.
 ### Catena delle dipendenze
 
 `deny.toml` è la policy di cargo-deny: advisory rifiutate senza eccezioni,
-licenze permissive in allowlist, solo crates.io o le patch di `vendor/`. Si
+licenze permissive in allowlist, solo crates.io o i crate di `vendor/`. Si
 applica al grafo del workspace e a quello di `fuzz/`:
 
 ```sh

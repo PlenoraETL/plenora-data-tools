@@ -9,7 +9,7 @@ Uso:
 
     python -m pip install --target <dir> pyproj==3.7.2
     PYTHONPATH=<dir> python scripts/genera_crs_integrati.py
-    cargo fmt --all
+    cargo fmt
 
 Per aggiungere un codice: aggiungerlo a una delle liste qui sotto, rigenerare,
 formattare e rieseguire i test di `plenora-core` (che verificano le invarianti

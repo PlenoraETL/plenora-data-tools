@@ -1,14 +1,18 @@
 # Provenienza — `parquet` 60.0.0, eof
 
-**Adottato**: è il `parquet` del workspace e di `fuzz/` (`[patch.crates-io]`
-nei due `Cargo.toml`).
+**Adottato**: è il `parquet` del workspace, di `fuzz/` e di chi dipende dai
+crate di data-tools: pacchetto `plenora-parquet`, dipendenza per percorso
+con la chiave `parquet` (`Cargo.toml`, «Copie vendorizzate»).
 
 - Pacchetto: `parquet-60.0.0.crate`, `source = registry+https://github.com/rust-lang/crates.io-index`.
 - Checksum del pacchetto (dal `Cargo.lock` prima del vendor):
   `8af83d2940bc0510f9aef86d865f56fdc6095f87ab115ac885a80b7c5226d3ba`.
 - Contenuto: il pacchetto pubblicato, intero, tolto solo il marcatore di
   Cargo `.cargo-ok`; i file cambiati sono quelli di
-  `patches/parquet-eof.patch`. Il pacchetto più la patch ricostruisce questa
+  `patches/parquet-eof.patch` e il nome del pacchetto in `Cargo.toml`
+  (`patches/parquet-nome-proprio.patch`: `plenora-parquet`, la libreria
+  resta `parquet`; una `[patch.crates-io]` non vale per chi dipende dai
+  crate di data-tools). Il pacchetto più la patch ricostruisce questa
   cartella byte per byte (verificato il 4 ottobre 2026 estraendo il
   `.crate` dal checksum sopra e applicando la patch con `patch -p1`).
 - Licenza: Apache-2.0 (`LICENSE.txt`, `NOTICE.txt` invariati). Il file

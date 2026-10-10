@@ -1,6 +1,6 @@
 # Policy della catena delle dipendenze (cargo-deny), sul modello di
 # plenora-database-tools: advisory rifiutate senza eccezioni, licenze
-# permissive in allowlist, solo sorgenti crates.io o patch locali in vendor/.
+# permissive in allowlist, solo sorgenti crates.io o i crate locali di vendor/.
 # Il workflow supply-chain la applica al grafo del workspace e a quello
 # separato di fuzz/.
 

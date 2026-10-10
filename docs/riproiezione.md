@@ -255,7 +255,7 @@ Mercator resta fuori (la forma di Karney è stabile fino al polo).
 
 Rigenerare: `PYTHONPATH=<dir> python -B scripts/genera_riproiezione.py`,
 poi `PYTHONPATH=<dir> python -B scripts/genera_oracolo_riproiezione.py`,
-`cargo fmt --all` e i test. I generatori controllano la terna
+`cargo fmt` e i test. I generatori controllano la terna
 pyproj/PROJ/EPSG come `genera_crs_integrati.py`.
 
 ## Limiti dichiarati della riproiezione
