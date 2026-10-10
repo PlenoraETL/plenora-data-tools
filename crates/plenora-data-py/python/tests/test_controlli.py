@@ -551,14 +551,21 @@ def test_la_scadenza_asincrona_conta_dall_ingresso(
 
     A tempo controllato: `time.monotonic`, il clock su cui il pacchetto fissa
     la scadenza all'ingresso e da cui il modulo nativo calcola quanto resta,
-    salta avanti di un'ora mentre la chiamata è in coda. La scadenza (60 s)
-    è passata solo se è stata fissata prima del salto, cioè all'ingresso;
-    fissata alla partenza dal thread dell'executor, la chiamata riuscirebbe.
-    Nessuna attesa reale decide l'esito."""
+    è fermo a 1000 e salta a 4600 mentre la chiamata è in coda; nessuna
+    sua lettura dipende dal tempo reale. La scadenza (60 s) è passata solo
+    se è stata fissata prima del salto, cioè all'ingresso: 1060 contro
+    4600, resto zero, e il primo controllo scade.
+
+    Fissata invece alla partenza dal thread dell'executor (la regressione),
+    resterebbero 60 s, che il modulo nativo converte in un `Instant` reale:
+    è l'unica componente reale, ed è fuori dal clock della prova. Un falso
+    verde vorrebbe 60 s reali fra quella conversione e il primo controllo,
+    che la seguono subito in `controlli()`. Un falso rosso non c'è: con la
+    scadenza fissata all'ingresso l'esito è deciso dai due valori del clock
+    finto, qualunque sia la velocità della macchina."""
     uscita = tmp_path / "u.arrow"
-    vero = time.monotonic
     salto = [0.0]
-    monkeypatch.setattr(time, "monotonic", lambda: vero() + salto[0])
+    monkeypatch.setattr(time, "monotonic", lambda: 1000.0 + salto[0])
 
     async def principale() -> None:
         loop = asyncio.get_running_loop()

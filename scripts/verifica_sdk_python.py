@@ -153,8 +153,13 @@ def sonda(
         )
 
 
-def raccolte(copia: Path, cartella: Path, ambiente: dict[str, str], *selezione: str) -> int:
-    """Le prove raccolte senza eseguirle, con la selezione data."""
+def raccolte(
+    copia: Path, cartella: Path, ambiente: dict[str, str], fallite: list[str], *selezione: str
+) -> int | None:
+    """Le prove raccolte senza eseguirle, con la selezione data; `None`, con
+    una verifica fallita, se la raccolta non esce con 0. Gli id stampati
+    prima di un errore di raccolta non contano: il conteggio vale solo per
+    una raccolta riuscita. Il messaggio dice solo il codice d'uscita."""
     esito = subprocess.run(
         [sys.executable, "-m", "pytest", str(copia), "--collect-only", "-q",
          "-p", "no:cacheprovider", *selezione],
@@ -164,6 +169,9 @@ def raccolte(copia: Path, cartella: Path, ambiente: dict[str, str], *selezione: 
         text=True,
         check=False,
     )
+    if esito.returncode != 0:
+        fallite.append(f"raccolta delle prove fallita (codice {esito.returncode})")
+        return None
     return sum(1 for riga in esito.stdout.splitlines() if "::" in riga)
 
 
@@ -209,8 +217,10 @@ def prove(cartella: Path, rilascio: bool, fallite: list[str]) -> None:
         fallite.append("la suite non e' passata per intero")
     if rilascio:
         # Le sole prove escluse sono quelle delle sonde, e ce ne sono.
-        marcate = raccolte(copia, cartella, ambiente, "-m", "sonde")
-        tutte = raccolte(copia, cartella, ambiente)
+        marcate = raccolte(copia, cartella, ambiente, fallite, "-m", "sonde")
+        tutte = raccolte(copia, cartella, ambiente, fallite)
+        if marcate is None or tutte is None:
+            return
         print(f"verifica-sdk: {marcate} prove delle sonde deselezionate (rilascio)")
         if marcate == 0 or raccolti + marcate != tutte:
             fallite.append("le prove deselezionate non sono esattamente quelle delle sonde")
