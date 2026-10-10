@@ -150,7 +150,8 @@ nome proprio (`plenora-geo`, `plenora-wkt`, `plenora-parquet`), non
 copiare nessuna `[patch]` nel consumatore; `tests/consumatore_esterno.rs`
 risolve un consumatore fuori dal workspace e ne controlla il grafo. Nel
 grafo resta anche il `wkt` di crates.io, dipendenza di `geozero` per un
-lettore WKT che nessun crate usa (`clippy.toml` lo vieta). Il profilo di
+lettore WKT (e il lettore CSV che lo chiama) che nessun crate usa
+(`clippy.toml` e la prova li vietano). Il profilo di
 compilazione invece è quello del consumatore: serve `overflow-checks =
 true` anche nel suo `[profile.release]`
 ([«Profilo di compilazione di chi usa i crate come dipendenza»](limiti.md#profilo-di-compilazione-di-chi-usa-i-crate-come-dipendenza)).
