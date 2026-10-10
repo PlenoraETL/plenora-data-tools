@@ -54,8 +54,8 @@ la cui versione non ha qui una voce datata.
 
 - `docs/errori.md` non dice più che nessun errore ha effetto `unknown`:
   elenca chi lo produce (panico in un'operazione che scrive file,
-  inviluppo di riserva, temporaneo non cancellato, pubblicazione
-  `Ignoto` di `data.run` 3). `docs/cli.md` conta anche `data.run` 3 fra
+  documento di riserva della CLI e dell'SDK Python, temporaneo non
+  cancellato, pubblicazione `Ignoto` di `data.run` 3). `docs/cli.md` conta anche `data.run` 3 fra
   le funzioni Rust. `docs/metadati-arrow.md` dichiara, con le prove, che
   una colonna `ewkb` esce `ewkb` (anche riscritta da un'operazione geo),
   che una colonna geometrica nuova esce `wkb` e che un EWKB con SRID
