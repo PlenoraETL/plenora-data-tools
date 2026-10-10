@@ -56,7 +56,19 @@ pub fn make_fixed_len_byte_array_reader(
     };
 
     let byte_length = match column_desc.physical_type() {
-        Type::FIXED_LEN_BYTE_ARRAY => column_desc.type_length() as usize,
+        // PLENORA: la larghezza viene dallo schema del file, che ammette 0 (e
+        // il cast `as usize` trasformerebbe un negativo in un valore enorme).
+        // Con larghezza 0 i decoder PLAIN e BYTE_STREAM_SPLIT di questo lettore
+        // dividono per zero: un panico. Si rifiuta qui, prima di costruirli.
+        Type::FIXED_LEN_BYTE_ARRAY if column_desc.type_length() > 0 => {
+            column_desc.type_length() as usize
+        }
+        Type::FIXED_LEN_BYTE_ARRAY => {
+            return Err(general_err!(
+                "invalid FIXED_LEN_BYTE_ARRAY width {} for the arrow reader",
+                column_desc.type_length()
+            ));
+        }
         t => {
             return Err(general_err!(
                 "invalid physical type for fixed length byte array reader - {}",

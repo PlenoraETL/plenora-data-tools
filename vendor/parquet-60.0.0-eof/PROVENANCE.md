@@ -113,6 +113,36 @@ colonne tutte nulle e liste. Le mutazioni si leggono anche con l'offset index
 caricato, cioè dall'altro stato del lettore di pagine; una pagina v2 con
 anche l'header v1 prova che il controllo guarda l'header del tipo.
 
+### Larghezza 0 e BYTE_STREAM_SPLIT (10 ottobre 2026)
+
+Da `patches/parquet-flba-bss.patch`, portata da plenora-IO-tools (PR #46,
+`vendor/parquet` a `1b3e264`, che adotta questo stesso fork): i delta di
+`fixed_len_byte_array.rs` e `byte_stream_split_decoder.rs` sono quelli,
+identici; quello di `data_type.rs` è di qui, sulla stessa classe.
+
+1. `FIXED_LEN_BYTE_ARRAY` di larghezza 0 (lo schema la ammette): il
+   lettore Arrow divideva per la larghezza nei decoder `PLAIN` e
+   `BYTE_STREAM_SPLIT` (`attempt to divide by zero`); ora il lettore si
+   rifiuta di costruirsi (`invalid FIXED_LEN_BYTE_ARRAY width`), e una
+   larghezza negativa non diventa più un `usize` enorme. Il decoder a
+   larghezza variabile di `BYTE_STREAM_SPLIT` rifiuta la larghezza 0 in
+   `set_data`; il decoder `PLAIN` generico (API per colonne,
+   `data_type.rs`) aveva un `assert!` sulla larghezza, ora un errore.
+2. `BYTE_STREAM_SPLIT`: il decoder indicizzava `src[values_decoded + i + j *
+   stride]` senza confronto con i byte; valori dichiarati oltre i byte della
+   pagina, in modo concorde in header di pagina e metadati di colonna (che
+   il controllo del column chunk sopra non vede), erano `index out of
+   bounds`. Ora `values_decoded + num_values <= stride`, altrimenti un
+   errore, nei due decoder. Il difetto è ancora in `parquet` 60.0.0 a monte.
+
+Raggiungibili da `plenora-io`: un file senza `ARROW:schema` con una colonna
+di larghezza 0, e un `DOUBLE` in `BYTE_STREAM_SPLIT` con i conteggi
+gonfiati, facevano panicare `parquet`; la barriera di lettura li rendeva un
+errore `data_mapping` («parquet in panico»), non un risultato, ma un
+panico in un decoder resta un difetto. Prove rosse:
+`crates/plenora-io/tests/parquet_fork.rs` (file costruiti, un campo
+alterato, sul decoder diretto e dal confine).
+
 ## Limiti che restano
 
 Correzione mirata, non un irrobustimento completo contro file ostili

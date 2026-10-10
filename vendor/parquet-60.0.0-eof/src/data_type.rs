@@ -1143,7 +1143,14 @@ pub(crate) mod private {
 
         #[inline]
         fn decode(buffer: &mut [Self], decoder: &mut PlainDecoderDetails) -> Result<usize> {
-            assert!(decoder.type_length > 0);
+            // PLENORA: la larghezza viene dallo schema del file, che ammette 0:
+            // un errore, non un panico (era `assert!`).
+            if decoder.type_length <= 0 {
+                return Err(general_err!(
+                    "invalid FIXED_LEN_BYTE_ARRAY width {} for the plain decoder",
+                    decoder.type_length
+                ));
+            }
 
             let data = decoder
                 .data
@@ -1167,7 +1174,13 @@ pub(crate) mod private {
         }
 
         fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
-            assert!(decoder.type_length > 0);
+            // PLENORA: come in `decode`.
+            if decoder.type_length <= 0 {
+                return Err(general_err!(
+                    "invalid FIXED_LEN_BYTE_ARRAY width {} for the plain decoder",
+                    decoder.type_length
+                ));
+            }
 
             let data = decoder
                 .data

@@ -28,6 +28,14 @@ la cui versione non ha qui una voce datata.
 
 ### Corretto
 
+- **`parquet`: larghezza 0 e `BYTE_STREAM_SPLIT` non panicano più.** Un
+  `FIXED_LEN_BYTE_ARRAY` di larghezza 0 faceva dividere per zero il
+  lettore Arrow, e `BYTE_STREAM_SPLIT` con conteggi dichiarati oltre i byte
+  della pagina indicizzava fuori limite; dal confine di lettura erano un
+  errore della barriera anti-panico. Ora sono errori del decoder
+  (`patches/parquet-flba-bss.patch`, dal fork di plenora-IO-tools, più
+  l'`assert!` del decoder `PLAIN` per colonne); prove in
+  `crates/plenora-io/tests/parquet_fork.rs`.
 - **I fork di `geo`, `wkt` e `parquet` valgono anche per i consumatori.**
   Erano `[patch.crates-io]`, che Cargo applica solo al workspace radice: un
   crate che dipendeva da data-tools per percorso o git (un worker, una
