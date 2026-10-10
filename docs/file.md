@@ -276,7 +276,10 @@ limite della tabella.
   footer che riservavano gigabyte per i row group o le posizioni
   dell'offset index, interi Thrift troncati, `FIXED_LEN_BYTE_ARRAY` di
   larghezza 0 e `BYTE_STREAM_SPLIT` con valori dichiarati oltre i byte
-  della pagina (panici del decoder); e le dimensioni che un
+  della pagina (panici del decoder), e i decoder che si fidavano delle
+  lunghezze, degli indici e dei conteggi letti dal file (panici, e tre
+  letture sbagliate senza errore: prefissi `DELTA_BYTE_ARRAY`, resti delle
+  pagine a larghezza fissa, corse RLE oltre `u32`); e le dimensioni che un
   header di pagina, un dizionario, una codifica delta o lo schema
   dichiarano oltre i metadati del column chunk, che il budget ha già
   confrontato prima di leggere. Restano le espansioni vere (dizionari

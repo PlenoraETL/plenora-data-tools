@@ -208,9 +208,11 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         }
 
         let decoder = if encoding == Encoding::RLE_DICTIONARY {
+            // PLENORA: a dictionary-encoded page in a column chunk with no
+            // dictionary page is an error, not a panic.
             self.decoders[encoding as usize]
                 .as_mut()
-                .expect("Decoder for dict should have been set")
+                .ok_or_else(|| general_err!("missing dictionary page for column"))?
         } else {
             let slot = encoding as usize;
             if self.decoders[slot].is_none() {

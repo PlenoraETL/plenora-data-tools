@@ -151,6 +151,9 @@ def file_tabellari(corpus: Corpus) -> None:
             corpus.salva("lettura_parquet", buffer.getvalue())
     for esistente in sorted((RADICE / "crates/plenora-io/tests/dati").glob("*.parquet")):
         corpus.salva("lettura_parquet", esistente.read_bytes())
+    # I file malformati delle prove dei decoder (`tests/parquet_decoder.rs`).
+    for seme in sorted((RADICE / "crates/plenora-io/tests/dati/fuzz-decoder").glob("*.parquet")):
+        corpus.salva("lettura_parquet", seme.read_bytes())
 
 
 def ordinamento(corpus: Corpus) -> None:

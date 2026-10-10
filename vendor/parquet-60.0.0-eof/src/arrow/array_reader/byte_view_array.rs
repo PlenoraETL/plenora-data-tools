@@ -454,8 +454,13 @@ impl ByteViewArrayDecoderPlain {
             }
             let len_bytes: [u8; 4] = buf[self.offset..self.offset + 4].try_into().unwrap();
             let len = u32::from_le_bytes(len_bytes) as usize;
+            // PLENORA: as in the byte array decoder.
+            let end = (self.offset + 4)
+                .checked_add(len)
+                .filter(|end| *end <= buf.len())
+                .ok_or_else(|| ParquetError::EOF("eof skipping byte array".into()))?;
             skip += 1;
-            self.offset = self.offset + 4 + len;
+            self.offset = end;
         }
         self.max_remaining_values -= skip;
         Ok(skip)
@@ -584,24 +589,11 @@ impl ByteViewArrayDecoderDeltaLength {
         let values = len_decoder.values_left();
 
         let mut lengths = vec![0; values];
-        len_decoder.get(&mut lengths)?;
-
-        let mut total_bytes = 0;
-
-        for l in &lengths {
-            if *l < 0 {
-                return Err(ParquetError::General(
-                    "negative delta length byte array length".to_string(),
-                ));
-            }
-            total_bytes += *l as usize;
+        // PLENORA: a short read is an error.
+        if len_decoder.get(&mut lengths)? != values {
+            return Err(eof_err!("eof decoding delta length byte array lengths"));
         }
-
-        if total_bytes + len_decoder.get_offset() > data.len() {
-            return Err(ParquetError::General(
-                "Insufficient delta length byte array bytes".to_string(),
-            ));
-        }
+        crate::encodings::decoding::check_delta_lengths(&lengths, len_decoder.get_offset(), data.len())?;
 
         Ok(Self {
             lengths,

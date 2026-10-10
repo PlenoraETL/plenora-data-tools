@@ -28,6 +28,16 @@ la cui versione non ha qui una voce datata.
 
 ### Corretto
 
+- **`parquet`: i decoder non si fidano più dei valori del file.** Lunghezze,
+  indici ed estremi letti dal file passano da conversioni fallibili e
+  aritmetica controllata in tutti i decoder (`patches/parquet-decoder.patch`,
+  `vendor/parquet-60.0.0-eof/PROVENANCE.md`). Erano panici, che il confine
+  rendeva un errore della barriera, e tre accettazioni silenziose: un
+  prefisso `DELTA_BYTE_ARRAY` oltre il valore precedente (un valore
+  sbagliato), il resto di una pagina `PLAIN`/`BYTE_STREAM_SPLIT` a
+  larghezza fissa, una corsa RLE oltre `u32`. Prove in
+  `crates/plenora-io/tests/parquet_decoder.rs`, semi del fuzz in
+  `tests/dati/fuzz-decoder/`.
 - **`parquet`: larghezza 0 e `BYTE_STREAM_SPLIT` non panicano più.** Un
   `FIXED_LEN_BYTE_ARRAY` di larghezza 0 faceva dividere per zero il
   lettore Arrow, e `BYTE_STREAM_SPLIT` con conteggi dichiarati oltre i byte

@@ -621,6 +621,10 @@ fn parse_v1_level(
         Encoding::BIT_PACKED => {
             let bit_width = num_required_bits(max_level as u64);
             let num_bytes = ceil(num_buffered_values as usize * bit_width as usize, 8);
+            // PLENORA: the levels the header declares must be in the page.
+            if num_bytes > buf.len() {
+                return Err(general_err!("not enough data to read levels"));
+            }
             Ok((num_bytes, buf.slice(..num_bytes)))
         }
         _ => Err(general_err!("invalid level encoding: {}", encoding)),

@@ -628,7 +628,13 @@ where
                 *b = 0;
             }
             remaining = remaining.saturating_sub(self.values_per_mini_block);
-            offset += *b as usize * self.values_per_mini_block / 8;
+            // PLENORA: `values_per_mini_block` comes from the header (a block
+            // size up to `usize::MAX`): the product and the sum are checked.
+            offset = (*b as usize)
+                .checked_mul(self.values_per_mini_block)
+                .map(|bits| bits / 8)
+                .and_then(|bytes| offset.checked_add(bytes))
+                .ok_or_else(|| general_err!("delta block size overflows"))?;
         }
         self.block_end_offset = offset;
 
@@ -944,6 +950,24 @@ where
 // ----------------------------------------------------------------------
 // DELTA_LENGTH_BYTE_ARRAY Decoding
 
+/// PLENORA: the lengths of a DELTA_LENGTH_BYTE_ARRAY page, read from the file,
+/// are non-negative and their values fit in the page after the lengths
+/// (`offset`, the end of the lengths, up to `data_len`). A negative length
+/// converted to `usize` overflowed the offsets, and one beyond the bytes
+/// sliced past the page.
+pub(crate) fn check_delta_lengths(lengths: &[i32], offset: usize, data_len: usize) -> Result<()> {
+    let mut end = offset;
+    for length in lengths {
+        let length = usize::try_from(*length)
+            .map_err(|_| general_err!("negative delta length byte array length"))?;
+        end = end
+            .checked_add(length)
+            .filter(|end| *end <= data_len)
+            .ok_or_else(|| general_err!("Insufficient delta length byte array bytes"))?;
+    }
+    Ok(())
+}
+
 /// Delta length byte array decoder.
 ///
 /// Only applied to byte arrays to separate the length values and the data, the lengths
@@ -999,7 +1023,13 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
                 len_decoder.set_data(data.clone(), num_values)?;
                 let num_lengths = len_decoder.values_left();
                 self.lengths.resize(num_lengths, 0);
-                len_decoder.get(&mut self.lengths[..])?;
+                // PLENORA: every length is non-negative and the values fit in
+                // the bytes after the lengths, checked once here; `get` and
+                // `skip` then cannot go past the page.
+                if len_decoder.get(&mut self.lengths[..])? != num_lengths {
+                    return Err(eof_err!("eof decoding delta length byte array lengths"));
+                }
+                check_delta_lengths(&self.lengths, len_decoder.get_offset(), data.len())?;
 
                 self.data = Some(data.slice(len_decoder.get_offset()..));
                 self.offset = 0;
@@ -1051,13 +1081,16 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
             Type::BYTE_ARRAY => {
                 let num_values = cmp::min(num_values, self.num_values);
 
-                let next_offset: i32 = self.lengths
+                // PLENORA: summed in `usize` (the lengths are non-negative,
+                // checked in `set_data`); the `i32` sum overflowed.
+                let next_offset: usize = self.lengths
                     [self.current_idx..self.current_idx + num_values]
                     .iter()
+                    .map(|length| *length as usize)
                     .sum();
 
                 self.current_idx += num_values;
-                self.offset += next_offset as usize;
+                self.offset += next_offset;
 
                 self.num_values -= num_values;
                 Ok(num_values)

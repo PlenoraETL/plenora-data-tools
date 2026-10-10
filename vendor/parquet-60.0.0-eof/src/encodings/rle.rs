@@ -628,10 +628,16 @@ impl RleDecoder {
             if indicator_value == 0 {
                 return Ok(false);
             }
+            // PLENORA: a run count beyond `u32` was truncated in silence (a
+            // different count of values); now an error.
+            let run = u32::try_from(indicator_value >> 1)
+                .map_err(|_| general_err!("RLE run length out of range"))?;
             if indicator_value & 1 == 1 {
-                self.bit_packed_left = ((indicator_value >> 1) * BIT_PACK_GROUP_SIZE as i64) as u32;
+                self.bit_packed_left = run
+                    .checked_mul(BIT_PACK_GROUP_SIZE as u32)
+                    .ok_or_else(|| general_err!("RLE run length out of range"))?;
             } else {
-                self.rle_left = (indicator_value >> 1) as u32;
+                self.rle_left = run;
                 let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);
                 self.current_value = bit_reader.get_aligned::<u64>(value_width);
                 self.current_value.ok_or_else(|| {

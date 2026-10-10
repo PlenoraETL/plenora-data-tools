@@ -178,9 +178,19 @@ fn una_larghezza_zero_e_un_errore_e_non_una_divisione_per_zero() {
                             ),
                         }
                     }
+                    // La categoria esatta: con `ARROW:schema` il confine
+                    // rifiuta prima lo schema incorporato non applicabile
+                    // (`Schema`); senza, il decoder (`DataMapping`), e mai
+                    // con il testo della barriera, che converte un panico
+                    // proprio in `DataMapping` («parquet in panico»).
                     let errore = dal_confine(&alterato).expect_err("larghezza 0 rifiutata");
-                    assert_ne!(errore.category(), ErrorCategory::Internal, "{errore}");
-                    assert!(!errore.to_string().contains("panic"), "{errore}");
+                    let attesa = if schema_arrow {
+                        ErrorCategory::Schema
+                    } else {
+                        ErrorCategory::DataMapping
+                    };
+                    assert_eq!(errore.category(), attesa, "{errore}");
+                    assert!(!errore.to_string().contains("panico"), "{errore}");
                 }
                 Ok(_) => {}
             }
@@ -232,4 +242,7 @@ fn num_values_concordi_oltre_i_byte_della_pagina_sono_un_errore() {
     }
     let errore = dal_confine(&alterato).expect_err("pagina oltre i byte rifiutata");
     assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+    // La barriera converte un panico proprio in `DataMapping`: la categoria
+    // da sola non distingue l'errore del decoder dal panico.
+    assert!(!errore.to_string().contains("panico"), "{errore}");
 }

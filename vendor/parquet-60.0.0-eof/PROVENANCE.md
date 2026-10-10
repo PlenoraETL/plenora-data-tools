@@ -8,13 +8,21 @@ con la chiave `parquet` (`Cargo.toml`, «Copie vendorizzate»).
 - Checksum del pacchetto (dal `Cargo.lock` prima del vendor):
   `8af83d2940bc0510f9aef86d865f56fdc6095f87ab115ac885a80b7c5226d3ba`.
 - Contenuto: il pacchetto pubblicato, intero, tolto solo il marcatore di
-  Cargo `.cargo-ok`; i file cambiati sono quelli di
-  `patches/parquet-eof.patch` e il nome del pacchetto in `Cargo.toml`
-  (`patches/parquet-nome-proprio.patch`: `plenora-parquet`, la libreria
-  resta `parquet`; una `[patch.crates-io]` non vale per chi dipende dai
-  crate di data-tools). Il pacchetto più la patch ricostruisce questa
-  cartella byte per byte (verificato il 4 ottobre 2026 estraendo il
-  `.crate` dal checksum sopra e applicando la patch con `patch -p1`).
+  Cargo `.cargo-ok`, più le patch di `patches/`. Ricetta, in quest'ordine:
+
+  ```sh
+  tar -xzf parquet-60.0.0.crate && cd parquet-60.0.0 && rm .cargo-ok
+  patch -p1 < patches/parquet-eof.patch           # protocollo thrift, dimensioni dichiarate
+  patch -p1 < patches/parquet-nome-proprio.patch  # pacchetto `plenora-parquet`
+  patch -p1 < patches/parquet-flba-bss.patch      # larghezza 0, BYTE_STREAM_SPLIT oltre i byte
+  patch -p1 < patches/parquet-decoder.patch       # decoder che si fidavano del file
+  ```
+
+  Il risultato è questa cartella byte per byte, tolto questo file
+  (verificato il 10 ottobre 2026 dal `.crate` con il checksum sopra).
+  Il nome del pacchetto: `plenora-parquet`, la libreria resta `parquet`
+  (una `[patch.crates-io]` non vale per chi dipende dai crate di
+  data-tools).
 - Licenza: Apache-2.0 (`LICENSE.txt`, `NOTICE.txt` invariati). Il file
   modificato porta i commenti `PLENORA:` sulle righe cambiate.
 
@@ -142,6 +150,78 @@ errore `data_mapping` («parquet in panico»), non un risultato, ma un
 panico in un decoder resta un difetto. Prove rosse:
 `crates/plenora-io/tests/parquet_fork.rs` (file costruiti, un campo
 alterato, sul decoder diretto e dal confine).
+
+### Decoder che si fidavano dei valori del file (10 ottobre 2026)
+
+Da `patches/parquet-decoder.patch`, su rilievo della seconda lettura
+(Codex) della patch precedente: la stessa classe dei due difetti sopra,
+cercata in tutti i decoder di `encodings/`, `arrow/decoder/`,
+`arrow/array_reader/`, `arrow/buffer/` e nei livelli delle pagine. Ogni
+valore letto dal file che diventa una lunghezza, un indice o un estremo
+di slice passa da una conversione fallibile e da aritmetica controllata;
+il caso limite è un errore. Prove rosse in
+`crates/plenora-io/tests/parquet_decoder.rs` (un file costruito a mano
+per caso; i file sono anche semi del fuzz, `tests/dati/fuzz-decoder/`):
+
+1. `arrow/decoder/delta_byte_array.rs`: un prefisso più lungo del valore
+   precedente passava a `truncate`, che non fa nulla: il valore usciva
+   sbagliato **senza errore**; una lunghezza di suffisso negativa,
+   convertita in `usize`, faceva traboccare la fine del suffisso
+   (`checked_value`, in lettura e nel salto). Gli `assert_eq!` sui
+   conteggi letti sono errori.
+2. `arrow/array_reader/fixed_len_byte_array.rs`: un indice di
+   `RLE_DICTIONARY` oltre il dizionario FLBA (o negativo) tagliava una
+   slice fuori dai limiti; ora `try_from`, `checked_mul`, `get`. Una
+   pagina `PLAIN` o `BYTE_STREAM_SPLIT` che non è un multiplo della
+   larghezza perdeva il resto **in silenzio**; ora si rifiuta. La
+   dimensione del buffer prima di `build_unchecked` è un errore in ogni
+   build (era un `debug_assert`).
+3. `encodings/decoding.rs`: `DELTA_LENGTH_BYTE_ARRAY` (anche dentro
+   `DELTA_BYTE_ARRAY`) con una lunghezza negativa o oltre i byte tagliava
+   fuori dalla pagina, e la somma in `i32` del salto traboccava; ora
+   `check_delta_lengths` una volta in `set_data` (lo stesso controllo dei
+   decoder Arrow, che lo usano anche loro) e la somma in `usize`.
+   `DELTA_BINARY_PACKED`: l'estremo del blocco con `block_size` fino a
+   `usize::MAX` (2^62 passa i controlli dell'header) era
+   `larghezza * valori` non controllato; ora `checked_mul`/`checked_add`.
+4. `encodings/decoding/byte_stream_split_decoder.rs`: il resto della
+   divisione per la larghezza era scartato **in silenzio** (65 byte di otto
+   `DOUBLE`); ora un errore in `set_data`. I due `skip` dichiaravano
+   saltati valori oltre i byte; ora lo stesso controllo di `get`.
+5. `arrow/arrow_reader/statistics.rs`: una statistica decimale vuota o
+   più lunga del tipo mandava in panico `sign_extend_be`; ora
+   `sign_extend_be_checked` e la statistica manca (`None`). Nei dati, un
+   decimale `BYTE_ARRAY` vuoto o più largo del tipo è un errore
+   (`check_decimal_widths`).
+6. Stessa classe, trovati cercandola: `ByteArrayDecoderPlain::read`
+   dichiarava letti tutti i valori chiesti anche quando la pagina finiva
+   prima (il chiamante, che confronta i conteggi con i livelli, non poteva
+   vederlo); i salti `PLAIN` di `BYTE_ARRAY` e delle viste e il decoder
+   `PLAIN` generico (`data_type.rs`) non avevano limiti; un offset oltre il
+   tipo d'indice era un `expect`; una chiave di dizionario negativa faceva
+   traboccare `index + 1` (`offset_buffer.rs`); i valori del dizionario FLBA
+   della larghezza sbagliata facevano panicare `FixedSizeBinaryArray::new`
+   (`dictionary_buffer.rs`); una corsa RLE oltre `u32` si troncava in
+   silenzio (`rle.rs`); le lunghezze dei livelli di una pagina v2 si
+   sommavano in `i32` e si confrontavano con la dimensione dichiarata
+   invece che con i byte letti (`serialized_reader.rs`); i livelli
+   `BIT_PACKED` dichiarati oltre la pagina (`column/reader.rs`); una pagina
+   a dizionario senza la pagina di dizionario (`column/reader/decoder.rs`,
+   un `expect`).
+
+Le prove unitarie del pacchetto (`cargo test --lib` con le feature del
+workspace e i dati di `apache/parquet-testing` e `apache/arrow-testing`):
+1375 passano, le stesse 5 falliscono con e senza questa patch. Sono prove
+che costruiscono dichiarazioni incoerenti e che la patch `-eof` rifiuta
+già (`test_delta_bit_packed_padding`,
+`test_delta_bit_packed_skip_wide_miniblocks`,
+`test_decode_unsupported_page`, `test_page_writer_data_pages`,
+`test_page_writer_dict_pages`).
+
+Non coperti, e perché: il lettore asincrono e la cifratura non sono
+compilati (feature non abilitate); le funzioni pubbliche
+`decode_column_index`/`decode_offset_index` decodificano indici di pagina
+che questo workspace non chiede.
 
 ## Limiti che restano
 

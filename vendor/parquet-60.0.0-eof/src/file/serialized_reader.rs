@@ -427,10 +427,16 @@ pub(crate) fn decode_page(
     };
     let (offset, can_decompress): (usize, bool) = match header_v2 {
         Some(header_v2) => {
+            // PLENORA: the sum in `i64` (in `i32` it overflowed, a panic), and
+            // the levels inside the bytes of the page as read too: with no
+            // decompression the buffer is the compressed size, and the column
+            // reader slices the levels out of it.
+            let livelli = i64::from(header_v2.definition_levels_byte_length)
+                + i64::from(header_v2.repetition_levels_byte_length);
             if header_v2.definition_levels_byte_length < 0
                 || header_v2.repetition_levels_byte_length < 0
-                || header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length
-                    > page_header.uncompressed_page_size
+                || livelli > i64::from(page_header.uncompressed_page_size)
+                || livelli > i64::try_from(buffer.len()).unwrap_or(i64::MAX)
             {
                 return Err(general_err!(
                     "DataPage v2 header contains implausible values \
@@ -443,10 +449,7 @@ pub(crate) fn decode_page(
                 ));
             }
             (
-                usize::try_from(
-                    header_v2.definition_levels_byte_length
-                        + header_v2.repetition_levels_byte_length,
-                )?,
+                usize::try_from(livelli)?,
                 // When is_compressed flag is missing the page is considered compressed
                 header_v2.is_compressed.unwrap_or(true),
             )

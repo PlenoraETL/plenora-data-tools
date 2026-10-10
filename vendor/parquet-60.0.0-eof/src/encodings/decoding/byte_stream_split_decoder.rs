@@ -95,8 +95,24 @@ fn valori_disponibili(stride: usize, values_decoded: usize, num_values: usize) -
     }
 }
 
+impl<T: DataType> ByteStreamSplitDecoder<T> {
+    /// PLENORA: the values the page holds.
+    fn stride(&self) -> usize {
+        self.encoded_bytes.len() / T::get_type_size()
+    }
+}
+
 impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
+        // PLENORA: the page holds whole values; a remainder was dropped in
+        // silence by `stride = len / type_size`.
+        if !data.len().is_multiple_of(T::get_type_size()) {
+            return Err(general_err!(
+                "byte stream split: {} bytes is not a whole number of {}-byte values",
+                data.len(),
+                T::get_type_size()
+            ));
+        }
         self.encoded_bytes = data;
         self.total_num_values = num_values;
         self.values_decoded = 0;
@@ -152,6 +168,8 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
 
     fn skip(&mut self, num_values: usize) -> Result<usize> {
         let to_skip = usize::min(self.values_left(), num_values);
+        // PLENORA: skipped values must be in the page too, as for `get`.
+        valori_disponibili(self.stride(), self.values_decoded, to_skip)?;
         self.values_decoded += to_skip;
         Ok(to_skip)
     }
@@ -174,6 +192,14 @@ impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
             values_decoded: 0,
             type_width: type_length as usize,
         }
+    }
+}
+
+impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
+    /// PLENORA: the values the page holds (`type_width` is checked non-zero
+    /// in `set_data`, before any `get` or `skip`).
+    fn stride(&self) -> usize {
+        self.encoded_bytes.len().checked_div(self.type_width).unwrap_or(0)
     }
 }
 
@@ -279,6 +305,8 @@ impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
 
     fn skip(&mut self, num_values: usize) -> Result<usize> {
         let to_skip = usize::min(self.values_left(), num_values);
+        // PLENORA: skipped values must be in the page too, as for `get`.
+        valori_disponibili(self.stride(), self.values_decoded, to_skip)?;
         self.values_decoded += to_skip;
         Ok(to_skip)
     }
