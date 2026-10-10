@@ -17,6 +17,7 @@ con la chiave `parquet` (`Cargo.toml`, «Copie vendorizzate»).
   patch -p1 < patches/parquet-flba-bss.patch      # larghezza 0, BYTE_STREAM_SPLIT oltre i byte
   patch -p1 < patches/parquet-decoder.patch       # decoder che si fidavano del file
   patch -p1 < patches/parquet-footer-budget.patch # profondità dello schema, tetto del footer
+  patch -p1 < patches/parquet-decoder-2.patch     # decoder, secondo giro
   ```
 
   Il risultato è questa cartella byte per byte, tolto questo file
@@ -156,11 +157,14 @@ alterato, sul decoder diretto e dal confine).
 
 Da `patches/parquet-decoder.patch`, su rilievo della seconda lettura
 (Codex) della patch precedente: la stessa classe dei due difetti sopra,
-cercata in tutti i decoder di `encodings/`, `arrow/decoder/`,
-`arrow/array_reader/`, `arrow/buffer/` e nei livelli delle pagine. Ogni
-valore letto dal file che diventa una lunghezza, un indice o un estremo
-di slice passa da una conversione fallibile e da aritmetica controllata;
-il caso limite è un errore. Prove rosse in
+cercata nei decoder di `encodings/`, `arrow/decoder/`,
+`arrow/array_reader/`, `arrow/buffer/` e nei livelli delle pagine. Nei
+punti elencati sotto (e solo in quelli: non è una garanzia su tutto il
+pacchetto, che è grande e che una seconda lettura ha già mostrato
+incompleto, sezione seguente) un valore letto dal file che diventa una
+lunghezza, un indice o un estremo di slice passa da una conversione
+fallibile e da aritmetica controllata, e il caso limite è un errore.
+Prove rosse in
 `crates/plenora-io/tests/parquet_decoder.rs` (un file costruito a mano
 per caso; i file sono anche semi del fuzz, `tests/dati/fuzz-decoder/`):
 
@@ -223,6 +227,49 @@ Non coperti, e perché: il lettore asincrono e la cifratura non sono
 compilati (feature non abilitate); le funzioni pubbliche
 `decode_column_index`/`decode_offset_index` decodificano indici di pagina
 che questo workspace non chiede.
+
+### Decoder, secondo giro (10 ottobre 2026)
+
+Da `patches/parquet-decoder-2.patch` (dopo `parquet-footer-budget.patch`),
+sulla seconda lettura (Codex) della patch precedente, che ha trovato altri
+punti della stessa classe. Prove rosse in
+`crates/plenora-io/tests/parquet_decoder.rs` (sezione «Secondo giro»):
+
+1. FLBA `RLE_DICTIONARY` senza pagina di dizionario: un `unwrap`.
+2. Dizionario FLBA: gli indici erano confrontati con i byte della pagina e
+   non con le voci dichiarate; un indice fra le une e gli altri leggeva
+   byte che non sono una voce **in silenzio**. Ora il dizionario si taglia
+   alle voci dichiarate.
+3. `DELTA_BYTE_ARRAY` generico: con meno suffissi che prefissi il valore
+   riusava il suffisso precedente (["a", "a"] da un suffisso solo), **in
+   silenzio**; ora conteggi diversi e un suffisso mancante sono errori.
+4. `DELTA_BINARY_PACKED`: la fine dell'ultimo blocco conta il padding, che
+   una pagina troncata non ha; l'offset dopo le lunghezze cadeva oltre la
+   pagina e la sezione seguente si tagliava fuori dai limiti. Ora l'offset
+   si confronta con la pagina (decoder generici e Arrow,
+   `check_delta_lengths`).
+5. Varint (`BitReader::get_vlq_int`): oltre 10 byte un `assert!`, e i bit
+   oltre i 64 scartati **in silenzio**. Ora `get_vlq_int_checked` li
+   rifiuta, e il decoder RLE distingue un varint malformato dalla fine dei
+   dati.
+6. Il decoder ottimizzato dei livelli Arrow (`definition_levels.rs`,
+   larghezza 1) non aveva le correzioni del decoder RLE: una corsa
+   bit-packed oltre i dati leggeva bit fuori dal payload, la corsa di 2^32
+   era accettata, il varint troncava, e un valore RLE diverso da 0 e 1 era
+   letto come 1 **in silenzio**.
+7. Chiavi di dizionario strette (`Int8`, ...): l'indice si decodificava
+   direttamente nel tipo della chiave, con `as`, e 256 diventava 0 prima di
+   ogni controllo (**in silenzio**). Ora si decodifica in `i32` e si
+   converte con controllo.
+8. Dizionario `FixedSizeBinary`: si controllava solo la lunghezza totale,
+   ["a", "bcd"] diventava ["ab", "cd"] **in silenzio**; ora ogni voce.
+9. Lo `skip` di `DELTA_BINARY_PACKED` (larghezza 0) rifiutava pagine
+   valide per il prodotto intermedio fuori da `i32`; ora avvolge come la
+   lettura (verificato sui valori).
+
+Non coperto da una prova: un offset oltre il tipo d'indice (`i32`) in
+`ByteArrayDecoderDeltaLength::read` richiede più di 2 GiB di valori in
+una tabella.
 
 ### Profondità dello schema e tetto di memoria del footer (10 ottobre 2026)
 

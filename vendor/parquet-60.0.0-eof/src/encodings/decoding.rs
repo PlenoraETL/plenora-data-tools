@@ -896,7 +896,16 @@ where
                 // When min_delta == 0 there is nothing to do: last_value is
                 // unchanged and no bytes are consumed from the bit reader.
                 if min_delta != 0 {
+                    // PLENORA: the same wrapping arithmetic as `get`. The
+                    // product wraps in `i64`; for a 32-bit type its low 32 bits
+                    // are the product modulo 2^32, which `from_i64` rejected
+                    // when out of range: a valid page failed in `skip` only.
                     let total = min_delta.wrapping_mul(mini_block_to_skip as i64);
+                    let total = if std::mem::size_of::<T::T>() == 4 {
+                        i64::from(total as i32)
+                    } else {
+                        total
+                    };
                     let step = T::T::from_i64(total)
                         .ok_or_else(|| general_err!("delta*n overflow in skip"))?;
                     self.last_value = self.last_value.wrapping_add(&step);
@@ -956,6 +965,11 @@ where
 /// converted to `usize` overflowed the offsets, and one beyond the bytes
 /// sliced past the page.
 pub(crate) fn check_delta_lengths(lengths: &[i32], offset: usize, data_len: usize) -> Result<()> {
+    // The end of the lengths counts the padding of their last block, which a
+    // truncated page lacks: it must be inside the page too.
+    if offset > data_len {
+        return Err(general_err!("Insufficient delta length byte array bytes"));
+    }
     let mut end = offset;
     for length in lengths {
         let length = usize::try_from(*length)
@@ -1030,6 +1044,7 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
                     return Err(eof_err!("eof decoding delta length byte array lengths"));
                 }
                 check_delta_lengths(&self.lengths, len_decoder.get_offset(), data.len())?;
+                // (`check_delta_lengths` also bounds the offset itself.)
 
                 self.data = Some(data.slice(len_decoder.get_offset()..));
                 self.offset = 0;
@@ -1166,8 +1181,20 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                 prefix_len_decoder.get(&mut self.prefix_lengths[..])?;
 
                 let mut suffix_decoder = DeltaLengthByteArrayDecoder::new();
-                suffix_decoder
-                    .set_data(data.slice(prefix_len_decoder.get_offset()..), num_values)?;
+                // PLENORA: the offset after the prefixes counts the padding of
+                // their last block, which a truncated page lacks.
+                let fine_prefissi = prefix_len_decoder.get_offset();
+                if fine_prefissi > data.len() {
+                    return Err(eof_err!("DELTA_BYTE_ARRAY prefix lengths beyond the page"));
+                }
+                suffix_decoder.set_data(data.slice(fine_prefissi..), num_values)?;
+                if suffix_decoder.values_left() != num_prefixes {
+                    return Err(general_err!(
+                        "inconsistent DELTA_BYTE_ARRAY lengths, prefixes: {}, suffixes: {}",
+                        num_prefixes,
+                        suffix_decoder.values_left()
+                    ));
+                }
                 self.suffix_decoder = Some(suffix_decoder);
                 self.num_values = num_prefixes;
                 self.current_idx = 0;
@@ -1192,7 +1219,11 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                         .suffix_decoder
                         .as_mut()
                         .expect("decoder not initialized");
-                    suffix_decoder.get(&mut v[..])?;
+                    // PLENORA: a missing suffix is an error; the previous one
+                    // stayed in `v` and was used again in silence.
+                    if suffix_decoder.get(&mut v[..])? != 1 {
+                        return Err(eof_err!("DELTA_BYTE_ARRAY has fewer suffixes than prefixes"));
+                    }
                     let suffix = v[0].data();
 
                     // Extract current prefix length, can be 0

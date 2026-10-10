@@ -322,17 +322,39 @@ struct PackedDecoder {
 impl PackedDecoder {
     fn next_rle_block(&mut self) -> Result<()> {
         let indicator_value = self.decode_header()?;
+        // PLENORA: the same rules as `RleDecoder::reload`: a run count beyond
+        // `u32` is an error, a bit-packed run must be inside the data (its
+        // bits were read past the payload), and a level of bit width 1 is 0 or
+        // 1 (any other byte was read as 1 in silence).
+        let run = usize::try_from(
+            u32::try_from(indicator_value >> 1)
+                .map_err(|_| general_err!("RLE run length out of range"))?,
+        )
+        .map_err(|_| general_err!("RLE run length out of range"))?;
         if indicator_value & 1 == 1 {
-            let len = (indicator_value >> 1) as usize;
-            self.packed_count = len * 8;
+            self.data_offset
+                .checked_add(run)
+                .filter(|end| *end <= self.data.len())
+                .ok_or_else(|| {
+                    ParquetError::EOF(
+                        "unexpected end of file whilst decoding definition levels bit-packed run"
+                            .into(),
+                    )
+                })?;
+            self.packed_count = run
+                .checked_mul(8)
+                .ok_or_else(|| general_err!("RLE run length out of range"))?;
             self.packed_offset = 0;
         } else {
-            self.rle_left = (indicator_value >> 1) as usize;
+            self.rle_left = run;
             let byte = *self.data.as_ref().get(self.data_offset).ok_or_else(|| {
                 ParquetError::EOF(
                     "unexpected end of file whilst decoding definition levels rle value".into(),
                 )
             })?;
+            if byte > 1 {
+                return Err(general_err!("invalid definition level in an RLE run"));
+            }
 
             self.data_offset += 1;
             self.rle_value = byte != 0;
@@ -356,6 +378,10 @@ impl PackedDecoder {
                     )
                 })?;
 
+            // PLENORA: bits beyond 64 were dropped in silence.
+            if offset == 9 && byte & 0x7F > 1 {
+                return Err(general_err!("varint beyond 64 bits"));
+            }
             v |= ((byte & 0x7F) as i64) << (offset * 7);
             offset += 1;
             if byte & 0x80 == 0 {

@@ -78,12 +78,21 @@ impl DeltaByteArrayDecoder {
         }
 
         let mut suffix = DeltaBitPackDecoder::<Int32Type>::new();
+        // PLENORA: the offsets count the padding of the last block, which a
+        // truncated page lacks: both must be inside the page.
+        if prefix.get_offset() > data.len() {
+            return Err(eof_err!("DELTA_BYTE_ARRAY prefix lengths beyond the page"));
+        }
         suffix.set_data(data.slice(prefix.get_offset()..), massimo)?;
 
         let num_suffix = suffix.values_left();
         let mut suffix_lengths = vec![0; num_suffix];
         if suffix.get(&mut suffix_lengths)? != num_suffix {
             return Err(eof_err!("eof decoding DELTA_BYTE_ARRAY suffix lengths"));
+        }
+
+        if prefix.get_offset().saturating_add(suffix.get_offset()) > data.len() {
+            return Err(eof_err!("DELTA_BYTE_ARRAY suffix lengths beyond the page"));
         }
 
         if num_prefix != num_suffix {

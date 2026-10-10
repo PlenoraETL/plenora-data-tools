@@ -438,7 +438,10 @@ impl ColumnValueDecoder for ValueDecoder {
             ));
         }
 
-        self.dict_page = Some(buf);
+        // PLENORA: the dictionary holds the values its header declares; bytes
+        // after them are not entries, and an index into them was read as a
+        // value in silence.
+        self.dict_page = Some(buf.slice(..expected_len));
         Ok(())
     }
 
@@ -515,7 +518,12 @@ impl ColumnValueDecoder for ValueDecoder {
                 Ok(to_read)
             }
             Decoder::Dict { decoder } => {
-                let dict = self.dict_page.as_ref().unwrap();
+                // PLENORA: a dictionary-encoded page with no dictionary page is
+                // an error, not a panic.
+                let dict = self
+                    .dict_page
+                    .as_ref()
+                    .ok_or_else(|| general_err!("missing dictionary page for column"))?;
                 // All data must be NULL
                 if dict.is_empty() {
                     return Ok(0);

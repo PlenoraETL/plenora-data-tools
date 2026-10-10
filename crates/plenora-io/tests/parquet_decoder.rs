@@ -19,13 +19,17 @@
 
 mod comune;
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::column::reader::get_typed_column_reader;
-use parquet::data_type::{ByteArrayType, DoubleType};
+use parquet::data_type::{ByteArrayType, DoubleType, Int32Type};
 use parquet::file::reader::{FileReader, SerializedFileReader};
+use plenora_core::arrow::array::cast::AsArray;
+use plenora_core::arrow::array::{Array, RecordBatch};
+use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::ErrorCategory;
 use plenora_io::{leggi_tabella_con_limiti, Formato, LimitiLettura};
 
@@ -788,6 +792,7 @@ fn una_pagina_a_dizionario_senza_dizionario_e_un_errore() {
 /// target di fuzz `lettura_parquet` (`scripts/genera_corpus_fuzz.py` li
 /// prende da `tests/dati/fuzz-decoder/`). Con `PLENORA_RIGENERA_SEMI=1` la
 /// prova li riscrive; senza, pretende che i file versionati siano questi.
+#[allow(clippy::too_many_lines)] // Un elenco di casi, uno per voce.
 fn semi() -> Vec<(&'static str, Vec<u8>)> {
     let flba = Colonna {
         larghezza: Some(2),
@@ -825,7 +830,7 @@ fn semi() -> Vec<(&'static str, Vec<u8>)> {
     let mut largo = 17_u32.to_le_bytes().to_vec();
     largo.extend_from_slice(&[1; 17]);
     let testo = colonna(BYTE_ARRAY);
-    vec![
+    let mut semi = vec![
         (
             "prefisso-oltre-il-valore",
             parquet(&testo, 2, DELTA_BYTE_ARRAY, &prefisso, None, None),
@@ -888,6 +893,91 @@ fn semi() -> Vec<(&'static str, Vec<u8>)> {
             "dizionario-mancante",
             parquet(&colonna(INT32), 1, RLE_DICTIONARY, &[1, 2, 0], None, None),
         ),
+    ];
+    semi.extend(semi_del_secondo_giro());
+    semi
+}
+
+/// I file malformati del secondo giro (letti con lo schema dedotto).
+fn semi_del_secondo_giro() -> Vec<(&'static str, Vec<u8>)> {
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let mut suffissi = delta_costante(&[0, 1]);
+    suffissi.extend(delta_costante(&[1]));
+    suffissi.extend_from_slice(b"a");
+    let mut troncato = Vec::new();
+    varint(128, &mut troncato);
+    varint(4, &mut troncato);
+    varint(2, &mut troncato);
+    varint(zigzag(0), &mut troncato);
+    varint(zigzag(0), &mut troncato);
+    troncato.extend_from_slice(&[8, 0, 0, 0, 1]);
+    let mut lungo = vec![1_u8];
+    lungo.extend_from_slice(&[0xFF; 10]);
+    lungo.push(0x01);
+    let mut oltre = Vec::new();
+    varint((100 << 1) | 1, &mut oltre);
+    oltre.push(0xFF);
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    vec![
+        (
+            "flba-senza-dizionario",
+            parquet(&flba, 1, RLE_DICTIONARY, &[1, 2, 0], None, None),
+        ),
+        (
+            "indice-oltre-le-voci",
+            parquet(
+                &flba,
+                1,
+                RLE_DICTIONARY,
+                &[1, 2, 1],
+                Some((1, b"zzyy")),
+                None,
+            ),
+        ),
+        (
+            "suffissi-mancanti",
+            parquet(
+                &colonna(BYTE_ARRAY),
+                2,
+                DELTA_BYTE_ARRAY,
+                &suffissi,
+                None,
+                None,
+            ),
+        ),
+        (
+            "blocco-delta-troncato",
+            parquet(
+                &colonna(BYTE_ARRAY),
+                2,
+                DELTA_BYTE_ARRAY,
+                &troncato,
+                None,
+                None,
+            ),
+        ),
+        (
+            "varint-di-11-byte",
+            parquet(
+                &colonna(BYTE_ARRAY),
+                1,
+                RLE_DICTIONARY,
+                &lungo,
+                Some((1, &testo_plain(&[b"a"]))),
+                None,
+            ),
+        ),
+        (
+            "livelli-bit-packed-oltre-i-dati",
+            opzionale_con_livelli(2, &oltre, &dati),
+        ),
+        (
+            "livello-rle-di-valore-2",
+            opzionale_con_livelli(2, &[2 << 1, 2], &dati),
+        ),
     ]
 }
 
@@ -916,4 +1006,412 @@ fn i_semi_del_fuzz_sono_quelli_delle_prove_e_si_rifiutano() {
     }
     let versionati = std::fs::read_dir(&cartella).unwrap().count();
     assert_eq!(versionati, semi.len(), "semi in eccesso nella cartella");
+}
+
+// --- Secondo giro (`patches/parquet-decoder-2.patch`) ------------------------
+
+/// Il lettore Arrow con uno schema Arrow dato (`with_schema`): i batch letti
+/// o l'errore; un panico fa fallire la prova.
+fn arrow_con_schema(byte: &[u8], schema: Schema) -> Result<Vec<RecordBatch>, String> {
+    su_file(byte, |file| {
+        std::panic::catch_unwind(move || {
+            let opzioni = ArrowReaderOptions::new().with_schema(Arc::new(schema));
+            let lettore = ParquetRecordBatchReaderBuilder::try_new_with_options(file, opzioni)
+                .map_err(|e| e.to_string())?
+                .build()
+                .map_err(|e| e.to_string())?;
+            lettore
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())
+        })
+        .unwrap_or_else(|carico| panic!("il lettore Arrow va in panico: {}", panico(&*carico)))
+    })
+}
+
+/// I valori letti dal lettore Arrow, come testo di debug della colonna.
+fn valori_arrow(byte: &[u8]) -> Vec<String> {
+    su_file(byte, |file| {
+        let lettore = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
+        let mut valori = Vec::new();
+        for batch in lettore {
+            let colonna = batch.unwrap().column(0).clone();
+            for riga in 0..colonna.len() {
+                valori.push(testo_della_cella(colonna.as_ref(), riga));
+            }
+        }
+        valori
+    })
+}
+
+/// Una cella come testo: i tipi delle prove (`Utf8`/`Binary` come testo,
+/// `Int32` in decimale, `FixedSizeBinary` in esadecimale).
+fn testo_della_cella(colonna: &dyn Array, riga: usize) -> String {
+    match colonna.data_type() {
+        DataType::Utf8 => colonna.as_string::<i32>().value(riga).to_owned(),
+        DataType::Binary => {
+            String::from_utf8(colonna.as_binary::<i32>().value(riga).to_vec()).unwrap()
+        }
+        DataType::Int32 => colonna
+            .as_primitive::<plenora_core::arrow::array::types::Int32Type>()
+            .value(riga)
+            .to_string(),
+        DataType::FixedSizeBinary(_) => colonna.as_fixed_size_binary().value(riga).iter().fold(
+            String::new(),
+            |mut testo, byte| {
+                write!(testo, "{byte:02x}").unwrap();
+                testo
+            },
+        ),
+        altro => panic!("tipo non previsto dalle prove: {altro}"),
+    }
+}
+
+fn testo_plain(valori: &[&[u8]]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for valore in valori {
+        out.extend_from_slice(&u32::try_from(valore.len()).unwrap().to_le_bytes());
+        out.extend_from_slice(valore);
+    }
+    out
+}
+
+/// I controfattuali verificano i valori, non solo il numero di righe.
+#[test]
+fn i_file_validi_danno_i_valori_scritti() {
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        2,
+        PLAIN,
+        &testo_plain(&[b"ab", b"c"]),
+        None,
+        None,
+    );
+    assert_eq!(valori_arrow(&byte), ["ab", "c"]);
+
+    let mut delta = delta_costante(&[0, 1]);
+    delta.extend(delta_costante(&[1, 1]));
+    delta.extend_from_slice(b"ab");
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        2,
+        DELTA_BYTE_ARRAY,
+        &delta,
+        None,
+        None,
+    );
+    assert_eq!(valori_arrow(&byte), ["a", "ab"]);
+
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let byte = parquet(&flba, 1, RLE_DICTIONARY, &[1, 2, 0], Some((1, b"zz")), None);
+    assert_eq!(valori_arrow(&byte), ["7a7a"]);
+
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &[1, 2, 0],
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    assert_eq!(valori_arrow(&byte), ["a"]);
+}
+
+/// Secondo giro, punto 1: FLBA `RLE_DICTIONARY` senza pagina di dizionario: un
+/// `unwrap` (panico).
+#[test]
+fn una_pagina_flba_a_dizionario_senza_dizionario_e_un_errore() {
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let byte = parquet(&flba, 1, RLE_DICTIONARY, &[1, 2, 0], None, None);
+    contiene(arrow(&byte), "missing dictionary page");
+    rifiutato_dal_confine(&byte);
+}
+
+/// Secondo giro, punto 2: il dizionario FLBA dichiara una voce ma la pagina ne
+/// porta i byte di due. L'indice 1 era confrontato con i byte, non con le
+/// voci dichiarate, e leggeva «yy» in silenzio.
+#[test]
+fn un_indice_oltre_le_voci_dichiarate_e_un_errore() {
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let byte = parquet(
+        &flba,
+        1,
+        RLE_DICTIONARY,
+        &[1, 2, 1],
+        Some((1, b"zzyy")),
+        None,
+    );
+    contiene(arrow(&byte), "dictionary index out of bounds");
+    rifiutato_dal_confine(&byte);
+}
+
+/// Secondo giro, punto 3: `DELTA_BYTE_ARRAY` generico (API per colonne) con due
+/// prefissi e un solo suffisso: il secondo valore riusava il suffisso del
+/// primo, `["a", "a"]` in silenzio.
+#[test]
+fn i_suffissi_mancanti_sono_un_errore() {
+    let mut delta = delta_costante(&[0, 1]);
+    delta.extend(delta_costante(&[1]));
+    delta.extend_from_slice(b"a");
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        2,
+        DELTA_BYTE_ARRAY,
+        &delta,
+        None,
+        None,
+    );
+    contiene(colonna_api::<ByteArrayType>(&byte, None), "suffix");
+    assert!(arrow(&byte).is_err());
+    rifiutato_dal_confine(&byte);
+}
+
+/// Secondo giro, punto 4: un blocco `DELTA_BINARY_PACKED` senza il padding del
+/// miniblocco (un byte su 32): la fine del blocco cadeva oltre la pagina e
+/// la sezione dei suffissi si tagliava fuori dai limiti.
+#[test]
+fn un_blocco_delta_troncato_e_un_errore() {
+    // Prefissi [0, 1]: un blocco, miniblocco di larghezza 8 (32 byte
+    // dichiarati), un solo byte presente.
+    let mut contenuto = Vec::new();
+    varint(128, &mut contenuto);
+    varint(4, &mut contenuto);
+    varint(2, &mut contenuto);
+    varint(zigzag(0), &mut contenuto);
+    varint(zigzag(0), &mut contenuto);
+    contenuto.extend_from_slice(&[8, 0, 0, 0, 1]);
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        2,
+        DELTA_BYTE_ARRAY,
+        &contenuto,
+        None,
+        None,
+    );
+    contiene(arrow(&byte), "beyond the page");
+    contiene(colonna_api::<ByteArrayType>(&byte, None), "beyond the page");
+    rifiutato_dal_confine(&byte);
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        2,
+        DELTA_LENGTH_BYTE_ARRAY,
+        &contenuto,
+        None,
+        None,
+    );
+    assert!(arrow(&byte).is_err());
+    assert!(colonna_api::<ByteArrayType>(&byte, None).is_err());
+    rifiutato_dal_confine(&byte);
+}
+
+/// Secondo giro, punto 5: un varint di 11 byte (panico) e uno di 10 con bit oltre
+/// i 64 (troncati in silenzio), nell'indicatore RLE degli indici.
+#[test]
+fn un_varint_malformato_e_un_errore() {
+    let dizionario = testo_plain(&[b"a"]);
+    let mut lungo = vec![1_u8];
+    lungo.extend_from_slice(&[0xFF; 10]);
+    lungo.push(0x01);
+    let mut largo = vec![1_u8];
+    largo.extend_from_slice(&[0x80; 9]);
+    largo.push(0x7F);
+    for (nome, indici) in [("11 byte", lungo), ("oltre 64 bit", largo)] {
+        let byte = parquet(
+            &colonna(BYTE_ARRAY),
+            1,
+            RLE_DICTIONARY,
+            &indici,
+            Some((1, &dizionario)),
+            None,
+        );
+        assert!(arrow(&byte).is_err(), "{nome}");
+        rifiutato_dal_confine(&byte);
+    }
+}
+
+/// Un Parquet di una colonna `OPTIONAL` `INT32` con livelli di definizione
+/// RLE dati (pagina v1: lunghezza in 4 byte, poi i livelli) e i valori.
+fn opzionale_con_livelli(valori: i64, livelli: &[u8], dati: &[u8]) -> Vec<u8> {
+    let mut contenuto = u32::try_from(livelli.len()).unwrap().to_le_bytes().to_vec();
+    contenuto.extend_from_slice(livelli);
+    contenuto.extend_from_slice(dati);
+    let opzionale = Colonna {
+        ripetizione: 1,
+        ..colonna(INT32)
+    };
+    parquet(&opzionale, valori, PLAIN, &contenuto, None, None)
+}
+
+/// Secondo giro, punto 6: il decoder ottimizzato dei livelli Arrow (larghezza 1)
+/// non aveva le correzioni del decoder RLE: una corsa bit-packed oltre il
+/// payload leggeva bit fuori dai dati, una corsa di 2^32 era accettata, e un
+/// valore RLE diverso da 0 e 1 era letto come 1.
+#[test]
+fn i_livelli_rle_malformati_sono_un_errore() {
+    let mut oltre = Vec::new();
+    varint((100 << 1) | 1, &mut oltre); // 100 gruppi bit-packed, 100 byte
+    oltre.push(0xFF);
+    let mut enorme = Vec::new();
+    varint(1 << 33, &mut enorme); // corsa RLE di 2^32
+    enorme.push(1);
+    let valore_due = [2_u8 << 1, 2]; // corsa di 2, valore 2
+    for (nome, livelli) in [
+        ("bit-packed oltre i dati", oltre),
+        ("corsa di 2^32", enorme),
+        ("valore 2", valore_due.to_vec()),
+    ] {
+        let byte = opzionale_con_livelli(2, &livelli, &[1, 0, 0, 0, 2, 0, 0, 0]);
+        assert!(arrow(&byte).is_err(), "{nome}");
+        rifiutato_dal_confine(&byte);
+    }
+    // Controfattuale: una corsa di 2 valori presenti.
+    let byte = opzionale_con_livelli(2, &[2 << 1, 1], &[1, 0, 0, 0, 2, 0, 0, 0]);
+    assert_eq!(valori_arrow(&byte), ["1", "2"]);
+}
+
+/// Secondo giro, punto 7: con una chiave Arrow stretta (`Int8`) l'indice 256 si
+/// troncava a 0 con `as` prima di ogni controllo, e leggeva «a» in silenzio.
+#[test]
+fn un_indice_oltre_la_chiave_stretta_e_un_errore() {
+    let mut indici = vec![9_u8]; // larghezza 9 bit
+    indici.push(2); // corsa RLE di 1
+    indici.extend_from_slice(&256_u16.to_le_bytes());
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &indici,
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    let schema = Schema::new(vec![Field::new(
+        "x",
+        DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Binary)),
+        false,
+    )]);
+    contiene(
+        arrow_con_schema(&byte, schema.clone()).map(|batch| batch.len()),
+        "out of range for the key type",
+    );
+    // Controfattuale: l'indice 0 con la stessa chiave si legge.
+    let mut zero = vec![9_u8, 2];
+    zero.extend_from_slice(&0_u16.to_le_bytes());
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &zero,
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    assert_eq!(
+        arrow_con_schema(&byte, schema).map(|batch| batch.len()),
+        Ok(1)
+    );
+}
+
+/// Secondo giro, punto 8: un dizionario FLBA di larghezza 2 letto come
+/// `Dictionary(Int32, FixedSizeBinary(2))` con le voci «a» e «bcd»: il totale
+/// (4 byte) quadrava e diventava `["ab", "cd"]` in silenzio.
+#[test]
+fn le_voci_del_dizionario_della_larghezza_sbagliata_sono_un_errore() {
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let byte = parquet(
+        &flba,
+        1,
+        RLE_DICTIONARY,
+        &[1, 2, 0],
+        Some((2, &testo_plain(&[b"a", b"bcd"]))),
+        None,
+    );
+    let schema = Schema::new(vec![Field::new(
+        "x",
+        DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::FixedSizeBinary(2)),
+        ),
+        false,
+    )]);
+    contiene(
+        arrow_con_schema(&byte, schema).map(|batch| batch.len()),
+        "dictionary values of the wrong width",
+    );
+}
+
+/// Secondo giro, punto 9: lo skip `DELTA_BINARY_PACKED` rifiutava una pagina
+/// valida (delta minimo 2^30, larghezza 0) per il prodotto intermedio fuori
+/// da `i32`, che la lettura invece avvolge. Saltati tre valori, il quarto è
+/// quello della lettura completa.
+#[test]
+fn lo_skip_delta_avvolge_come_la_lettura() {
+    let passo = 1_i64 << 30;
+    let mut contenuto = Vec::new();
+    varint(128, &mut contenuto);
+    varint(4, &mut contenuto);
+    varint(4, &mut contenuto);
+    varint(zigzag(0), &mut contenuto);
+    varint(zigzag(passo), &mut contenuto);
+    contenuto.extend_from_slice(&[0, 0, 0, 0]);
+    let byte = parquet(
+        &colonna(INT32),
+        4,
+        DELTA_BINARY_PACKED,
+        &contenuto,
+        None,
+        None,
+    );
+    assert_eq!(
+        valori_arrow(&byte),
+        ["0", "1073741824", "-2147483648", "-1073741824"]
+    );
+    su_file(&byte, |file| {
+        let lettore = SerializedFileReader::new(file).unwrap();
+        let gruppo = lettore.get_row_group(0).unwrap();
+        let colonna = gruppo.get_column_reader(0).unwrap();
+        let mut tipizzata = get_typed_column_reader::<Int32Type>(colonna);
+        assert_eq!(tipizzata.skip_records(3).unwrap(), 3);
+        let mut valori = Vec::new();
+        tipizzata.read_records(1, None, None, &mut valori).unwrap();
+        assert_eq!(valori, [-1_073_741_824]);
+    });
+}
+
+/// Livelli v2 oltre i byte letti davvero (non solo oltre la dimensione
+/// dichiarata): dichiarati 20 byte non compressi (entro il column chunk), 4
+/// letti, 8 di livelli.
+#[test]
+fn i_livelli_v2_oltre_i_byte_letti_sono_un_errore() {
+    let contenuto = 7_i32.to_le_bytes();
+    let header = Struttura::default()
+        .i32(1, 3)
+        .i32(2, 20)
+        .i32(3, 4)
+        .struttura(
+            8,
+            Struttura::default()
+                .i32(1, 1)
+                .i32(2, 0)
+                .i32(3, 1)
+                .i32(4, PLAIN)
+                .i32(5, 8)
+                .i32(6, 0),
+        )
+        .fine();
+    let byte = parquet_con_header(&colonna(INT32), 1, PLAIN, &contenuto, &header, None, None);
+    contiene(arrow(&byte), "implausible");
+    rifiutato_dal_confine(&byte);
 }

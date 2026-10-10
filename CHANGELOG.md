@@ -43,7 +43,12 @@ la cui versione non ha qui una voce datata.
   rendeva un errore della barriera, e tre accettazioni silenziose: un
   prefisso `DELTA_BYTE_ARRAY` oltre il valore precedente (un valore
   sbagliato), il resto di una pagina `PLAIN`/`BYTE_STREAM_SPLIT` a
-  larghezza fissa, una corsa RLE oltre `u32`. Prove in
+  larghezza fissa, una corsa RLE oltre `u32`. Un secondo giro
+  (`patches/parquet-decoder-2.patch`) ne chiude altre cinque: voci del
+  dizionario FLBA oltre quelle dichiarate, suffissi `DELTA_BYTE_ARRAY`
+  mancanti, varint oltre i 64 bit, livelli RLE di valore diverso da 0 e 1,
+  chiavi di dizionario strette troncate, voci `FixedSizeBinary` della
+  larghezza sbagliata. Prove in
   `crates/plenora-io/tests/parquet_decoder.rs`, semi del fuzz in
   `tests/dati/fuzz-decoder/`.
 - **`parquet`: larghezza 0 e `BYTE_STREAM_SPLIT` non panicano più.** Un

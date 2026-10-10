@@ -878,28 +878,41 @@ impl BitReader {
     /// Panics if the encoded integer is longer than [`MAX_VLQ_BYTE_LEN`]
     /// bytes (bad input).
     pub fn get_vlq_int(&mut self) -> Option<i64> {
+        // PLENORA: a malformed varint is `None` too, like the end of the
+        // data; callers that must tell them apart use `get_vlq_int_checked`.
+        self.get_vlq_int_checked().ok().flatten()
+    }
+
+    /// PLENORA: [`Self::get_vlq_int`] that tells a malformed varint (an
+    /// error) from the end of the data (`Ok(None)`). A varint longer than
+    /// [`MAX_VLQ_BYTE_LEN`] bytes panicked, and bits beyond 64 were dropped in
+    /// silence (`<< 63` of a 7-bit group): both are errors now.
+    pub fn get_vlq_int_checked(&mut self) -> Result<Option<i64>> {
         // Align to byte boundary once, then read bytes directly
         self.byte_offset = self.get_byte_offset();
         self.bit_offset = 0;
 
         let buf = &self.buffer[self.byte_offset..];
-        let mut shift = 0;
-        let mut v: i64 = 0;
+        let mut v: u64 = 0;
 
         for (i, &byte) in buf.iter().enumerate() {
-            v |= ((byte & 0x7F) as i64) << shift;
-            shift += 7;
-            assert!(
-                shift <= MAX_VLQ_BYTE_LEN * 7,
-                "Num of bytes exceed MAX_VLQ_BYTE_LEN ({MAX_VLQ_BYTE_LEN})"
-            );
+            if i >= MAX_VLQ_BYTE_LEN {
+                return Err(general_err!("varint longer than {} bytes", MAX_VLQ_BYTE_LEN));
+            }
+            let group = u64::from(byte & 0x7F);
+            let shift = 7 * i;
+            if shift == 63 && group > 1 {
+                return Err(general_err!("varint beyond 64 bits"));
+            }
+            v |= group << shift;
             if byte & 0x80 == 0 {
                 self.byte_offset += i + 1;
-                return Some(v);
+                return Ok(Some(v as i64));
             }
         }
-        None
+        Ok(None)
     }
+
 
     /// Reads a zigzag-VLQ-encoded little-endian integer from the
     /// stream.

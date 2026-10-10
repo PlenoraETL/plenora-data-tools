@@ -621,7 +621,8 @@ impl RleDecoder {
             .as_mut()
             .ok_or_else(|| general_err!("bit_reader should be set"))?;
 
-        if let Some(indicator_value) = bit_reader.get_vlq_int() {
+        // PLENORA: a malformed varint is an error, not the end of the data.
+        if let Some(indicator_value) = bit_reader.get_vlq_int_checked()? {
             // fastparquet adds padding to the end of pages. This is not spec-compliant
             // but is handled by the C++ implementation
             // <https://github.com/apache/arrow/blob/8074496cb41bc8ec8fe9fc814ca5576d89a6eb94/cpp/src/arrow/util/rle_encoding.h#L653>
