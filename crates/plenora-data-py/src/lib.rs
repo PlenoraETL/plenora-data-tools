@@ -149,6 +149,9 @@ fn controlli(
             ))
         }
     };
+    // Solo nelle build delle prove: il tempo che resta, letto da una prova.
+    #[cfg(feature = "sonde-di-prova")]
+    sonde::chiama_scadenza(py, restante).map_err(Errore::Python)?;
     let controlli = Controlli::nuovi(scadenza, restante, gettoni).map_err(Errore::Plenora)?;
     controlli.verifica(py, "prima di cominciare", ErrorPhase::Prepare)?;
     Ok(controlli)

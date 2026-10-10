@@ -17,7 +17,7 @@ ambiente che non importa il checkout per sbaglio. Lo script:
    SHA-256): fallisce con un test fallito, saltato o con nessun test
    eseguito (un controllo saltato non è un controllo passato);
 5. le sonde delle prove (`_native._sonda_consegna`, `_native._sonda_lavoro`,
-   feature Cargo `sonde-di-prova`): un wheel delle prove le deve avere; con
+   `_native._sonda_scadenza`, feature Cargo `sonde-di-prova`): un wheel delle prove le deve avere; con
    `--rilascio` il wheel non le deve avere, né come attributi del modulo né
    come nomi nel binario nativo, e la suite gira senza le prove marcate
    `sonde`, che devono essere almeno una e le uniche deselezionate.
@@ -55,7 +55,7 @@ NOME_WHEEL = re.compile(
 NATIVO = re.compile(r"^plenora_data/_native(\.[A-Za-z0-9_-]+)*\.(pyd|so)$")
 # Le sonde delle prove: nomi nel modulo nativo e testi che solo il loro
 # codice porta. Nessuno deve stare nel binario di un wheel di rilascio.
-SONDE = ("_sonda_consegna", "_sonda_lavoro")
+SONDE = ("_sonda_consegna", "_sonda_lavoro", "_sonda_scadenza")
 TRACCE_DELLE_SONDE = (*(nome.encode() for nome in SONDE), b"sonda del lavoro")
 
 
@@ -116,7 +116,11 @@ print(json.dumps({
     "componente": plenora_data.capabilities()["component_version"],
     "nativo": [hashlib.sha256(p.read_bytes()).hexdigest() for p in nativo],
     "tipi": (radice / "py.typed").is_file() and (radice / "_native.pyi").is_file(),
-    "sonde": sorted(nome for nome in ("_sonda_consegna", "_sonda_lavoro") if hasattr(_native, nome)),
+    "sonde": sorted(
+        nome
+        for nome in ("_sonda_consegna", "_sonda_lavoro", "_sonda_scadenza")
+        if hasattr(_native, nome)
+    ),
 }))
 """
 

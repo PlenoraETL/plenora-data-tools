@@ -97,11 +97,11 @@ che gira sul wheel installato (`scripts/verifica_sdk_python.py`): il
 
 | file | prove |
 | --- | --- |
-| `crates/plenora-data-py/python/tests/test_controlli.py` | 20 |
+| `crates/plenora-data-py/python/tests/test_controlli.py` | 21 |
 | `crates/plenora-data-py/python/tests/test_errori.py` | 12 |
 | `crates/plenora-data-py/python/tests/test_operazioni.py` | 12 |
 | `crates/plenora-data-py/python/tests/test_superficie.py` | 9 |
-| **totale** | 53 |
+| **totale** | 54 |
 
 ### Prove delle guardie
 

@@ -4,7 +4,8 @@
 # `scadenza` e' un istante in secondi dall'epoca Unix (`deadline`),
 # `scadenza_monotona` un istante di `time.monotonic()` fissato
 # all'ingresso della chiamata pubblica (`timeout`).
-# Le sonde delle prove (`_sonda_consegna`, `_sonda_lavoro`) esistono solo
+# Le sonde delle prove (`_sonda_consegna`, `_sonda_lavoro`,
+# `_sonda_scadenza`) esistono solo
 # nelle build con la feature Cargo `sonde-di-prova`, mai nel wheel di
 # rilascio: non sono qui.
 

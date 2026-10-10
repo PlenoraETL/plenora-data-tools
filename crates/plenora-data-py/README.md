@@ -236,11 +236,17 @@ lint, `--workspace --lib`) passa sul crate.
   alza gettone, SIGINT o annullamento del task e tiene il lavoro finché
   l'interruzione non gli arriva, oppure porta ad adesso la scadenza del
   lavoro. La scadenza asincrona contata dall'ingresso si prova a tempo
-  controllato: `time.monotonic` salta avanti mentre la chiamata è in coda.
-  Nessuna prova dei controlli dipende da sleep, timer o durate misurate.
-  Verificato in negativo: togliendo il controllo fra i passi,
-  quello fra le scritture, la sorveglianza durante l'attesa o la scadenza
-  passata al lavoro, le prove falliscono.
+  controllato: `time.monotonic`, finto, salta avanti mentre la chiamata è
+  in coda, e una terza sonda (`_native._sonda_scadenza`) legge il tempo
+  che resta calcolato al confine nativo, che deve essere esattamente 0.
+  Nessuna prova dei controlli dipende da sleep, timer o durate misurate;
+  resta solo il watchdog `TETTO` (60 s reali), che ferma con un messaggio
+  esplicito una prova il cui evento non arriva, ed è un limite
+  dell'infrastruttura delle prove, non dei controlli. Verificato in
+  negativo: togliendo il controllo fra i passi, quello fra le scritture,
+  la sorveglianza durante l'attesa o la scadenza passata al lavoro, o
+  contando la scadenza dalla partenza invece che dall'ingresso, le prove
+  falliscono.
 - La suite Python (`python/tests`) valida errori, capacità e diagnostica
   con `jsonschema` contro le copie degli schemi dei contratti
   (`crates/plenora-cli/tests/fixtures/contratti`, SHA-256 verificato).

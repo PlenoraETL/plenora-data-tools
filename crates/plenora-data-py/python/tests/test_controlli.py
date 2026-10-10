@@ -542,32 +542,26 @@ def test_un_task_annullato_mentre_il_lavoro_finisce_dice_l_esito() -> None:
         assert causa.phase == "finalize"
 
 
-def test_la_scadenza_asincrona_conta_dall_ingresso(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Con l'executor saturo la chiamata aspetta un thread libero: la
-    scadenza vale dall'ingresso di `arun`, e una scadenza passata in coda
-    ferma la chiamata prima di qualunque lavoro.
+def _scadenza_in_coda(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> pd.PlenoraError:
+    """Una chiamata asincrona con `timeout=60` aspetta in coda dietro
+    l'unico thread dell'executor, occupato; mentre aspetta il clock
+    monotono finto salta avanti di un'ora. Restituisce l'errore della
+    chiamata.
 
-    A tempo controllato: `time.monotonic`, il clock su cui il pacchetto fissa
-    la scadenza all'ingresso e da cui il modulo nativo calcola quanto resta,
-    è fermo a 1000 e salta a 4600 mentre la chiamata è in coda; nessuna
-    sua lettura dipende dal tempo reale. La scadenza (60 s) è passata solo
-    se è stata fissata prima del salto, cioè all'ingresso: 1060 contro
-    4600, resto zero, e il primo controllo scade.
+    `time.monotonic`, il clock su cui il pacchetto fissa la scadenza
+    all'ingresso e da cui il modulo nativo calcola quanto resta, è fermo a
+    1000 e salta a 4600: nessuna sua lettura dipende dal tempo reale.
 
-    Fissata invece alla partenza dal thread dell'executor (la regressione),
-    resterebbero 60 s, che il modulo nativo converte in un `Instant` reale:
-    è l'unica componente reale, ed è fuori dal clock della prova. Un falso
-    verde vorrebbe 60 s reali fra quella conversione e il primo controllo,
-    che la seguono subito in `controlli()`. Un falso rosso non c'è: con la
-    scadenza fissata all'ingresso l'esito è deciso dai due valori del clock
-    finto, qualunque sia la velocità della macchina."""
+    Limite dell'infrastruttura, non dei controlli: il thread occupante si
+    libera da solo dopo TETTO secondi reali (il watchdog che impedisce a un
+    evento mancato di bloccare la suite). Se la macchina resta ferma più di
+    TETTO prima che la prova lo liberi, la prova fallisce dicendo che è
+    scaduto il watchdog, non un controllo."""
     uscita = tmp_path / "u.arrow"
     salto = [0.0]
     monkeypatch.setattr(time, "monotonic", lambda: 1000.0 + salto[0])
 
-    async def principale() -> None:
+    async def principale() -> pd.PlenoraError:
         loop = asyncio.get_running_loop()
         loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
         # L'unico thread resta occupato finché la prova non lo libera.
@@ -587,11 +581,55 @@ def test_la_scadenza_asincrona_conta_dall_ingresso(
         assert not chiamata.done()
         salto[0] = 3600.0
         libera.set()
+        if not await occupato:
+            pytest.fail(
+                "watchdog TETTO scaduto: l'executor si è liberato da solo prima "
+                "del salto del clock (macchina ferma oltre TETTO); limite "
+                "dell'infrastruttura della prova, non un difetto dei controlli"
+            )
         with pytest.raises(pd.PlenoraTimeoutError) as errore:
             await chiamata
-        assert await occupato
-        assert errore.value.phase == "prepare"
-        assert errore.value.remote_effect == "none"
+        return errore.value
 
-    asyncio.run(principale())
+    errore = asyncio.run(principale())
     assert not uscita.exists()
+    return errore
+
+
+def test_la_scadenza_asincrona_conta_dall_ingresso(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Con l'executor saturo la chiamata aspetta un thread libero: la
+    scadenza vale dall'ingresso di `arun`, e una scadenza passata in coda
+    ferma la chiamata prima di qualunque lavoro (fase `prepare`).
+
+    Questa prova gira anche sul wheel di rilascio, senza sonde, e guarda
+    solo l'esito. Da sola non esclude ogni falso verde: con la regressione
+    (scadenza fissata alla partenza dal thread dell'executor) resterebbero
+    60 s, convertiti in un `Instant` reale, e una macchina ferma per 60 s
+    fra la conversione e il controllo che la segue darebbe lo stesso
+    esito. L'asserzione deterministica è nella prova seguente, sul tempo
+    che resta al confine nativo."""
+    errore = _scadenza_in_coda(tmp_path, monkeypatch)
+    assert errore.phase == "prepare"
+    assert errore.remote_effect == "none"
+
+
+@pytest.mark.sonde
+def test_la_scadenza_asincrona_arriva_scaduta_al_confine_nativo(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deterministico, senza tempo reale: la sonda della scadenza legge il
+    tempo che resta calcolato dal modulo nativo, dai due valori del clock
+    finto, prima che diventi un `Instant`. Fissata all'ingresso (1060) e
+    letta dopo il salto (4600), la scadenza resta esattamente 0. Fissata
+    alla partenza dal thread dell'executor, ne resterebbero 60."""
+    restanti: list[float | None] = []
+    _native._sonda_scadenza(restanti.append)
+    try:
+        errore = _scadenza_in_coda(tmp_path, monkeypatch)
+    finally:
+        _native._sonda_scadenza(None)
+    assert restanti == [0.0]
+    assert errore.phase == "prepare"
+    assert errore.remote_effect == "none"
