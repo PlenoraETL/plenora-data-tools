@@ -887,9 +887,17 @@ mod tests {
         assert_eq!(pubblico.phase(), ErrorPhase::Cleanup);
         assert_eq!(pubblico.remote_effect(), RemoteEffect::Committed);
         assert_eq!(pubblico.retry(), RetryDisposition::Never);
-        // Il residuo è davvero rimasto; tolto il blocco, `base` si toglie.
+        // Il residuo è davvero rimasto. Tolto il blocco (l'handle Windows si
+        // chiude), le cartelle della prova si tolgono e la rimozione si
+        // verifica: il `Drop` di `TempDir` ne scarterebbe l'errore.
         assert!(std::fs::read_dir(base.path()).unwrap().count() >= 1);
         *risolutore.blocco.borrow_mut() = None;
+        let percorso_base = base.path().to_owned();
+        base.close().expect("pulizia di base");
+        assert!(!percorso_base.exists(), "base rimasta");
+        let percorso_appoggio = appoggio.path().to_owned();
+        appoggio.close().expect("pulizia dell'appoggio");
+        assert!(!percorso_appoggio.exists(), "appoggio rimasto");
     }
 
     /// ERR-015: dopo la pubblicazione la pulizia fallita è `cleanup`,
