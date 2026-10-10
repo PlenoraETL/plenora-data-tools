@@ -2,7 +2,7 @@
 
 SDK Python di plenora-data-tools: distribuzione `plenora-data`, pacchetto
 d'import `plenora_data` (*Python SDK 1.0* e profilo data-tools versione 2 di
-`plenora-contracts`, commit `1e902dfaab5819c1d9ce785878d5b26dbeae48b3`).
+`plenora-contracts`, commit `3c395a8db96df739024e203b22794af340dc8a7f`).
 Espone le quattro operazioni
 del catalogo pubblico, le stesse della CLI `plenora-data`, sulle tabelle
 Arrow in memoria o su file.

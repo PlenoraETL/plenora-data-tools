@@ -125,7 +125,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: PlenoraETL/plenora-contracts
-          ref: 1e902dfaab5819c1d9ce785878d5b26dbeae48b3
+          ref: 3c395a8db96df739024e203b22794af340dc8a7f
           path: .plenora-contracts
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:

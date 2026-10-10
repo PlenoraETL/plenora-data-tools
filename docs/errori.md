@@ -8,7 +8,7 @@ quelle dello schema (`concurrent_modification` e il ritentativo
 `PlenoraError::public_projection` dà il documento pubblico (`PublicError`,
 serializzabile con serde), valido contro `schemas/error-v1.schema.json`
 (test `crates/plenora-core/tests/errore_pubblico_schema.rs`, con gli schemi
-copiati da `plenora-contracts@1e902df` e verificati per SHA-256):
+copiati da `plenora-contracts@3c395a8` (tag `v1.1.0`) e verificati per SHA-256):
 
 - `message` è il testo dell'errore, già senza valori di righe o colonne,
   troncato a 2048 caratteri e mai vuoto. Per un errore di I/O il testo del
@@ -81,7 +81,18 @@ gli output uno alla volta e marca `partial` un errore dopo il primo output
 scritto (i precedenti restano), e `committed` un'interruzione vista dopo
 l'ultimo (`esegui_da_file_interrompibile`). Con un effetto già visibile un ritentativo
 automatico (`safe`, `after`, `requires_idempotency_key`) diventa
-`requires_recovery`; una causa che non si ritenta mai resta `never`. Il
+`requires_recovery`; una causa che non si ritenta mai resta `never`.
+Fa eccezione la pulizia fallita dopo una pubblicazione provata (fase
+`cleanup`, effetto `committed`, oggi solo la cartella temporanea di
+`data.run` 3): è `never` con qualunque causa, perché il residuo è solo
+locale e un nuovo tentativo pubblicherebbe di nuovo (ERR-015). «Residuo
+remoto» in ERR-015 è un residuo sul sistema remoto oggetto
+dell'operazione, cioè la destinazione degli artefatti. La cartella
+temporanea di lavoro del processo è un residuo locale su qualunque
+filesystem si trovi, anche di rete: ritentare l'operazione la
+ripubblicherebbe senza pulirla. La prova
+(`crates/plenora-cli/src/artefatti.rs`) blocca davvero la rimozione e
+controlla gli assi anche nella proiezione pubblica. Il
 primo effetto dichiarato vince anche sotto i wrapper di fase e di
 diagnostica.
 
