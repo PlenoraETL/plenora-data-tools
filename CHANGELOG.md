@@ -50,6 +50,22 @@ la cui versione non ha qui una voce datata.
   (`Interrupted`, `TimedOut`, `WouldBlock`, `ResourceBusy`) dava
   `requires_recovery`.
 
+### Documentazione
+
+- `docs/errori.md` non dice più che nessun errore ha effetto `unknown`:
+  elenca chi lo produce (panico in un'operazione che scrive file,
+  documento di riserva della CLI e dell'SDK Python, temporaneo non
+  cancellato, pubblicazione `Ignoto` di `data.run` 3). `docs/cli.md` conta anche `data.run` 3 fra
+  le funzioni Rust. `docs/metadati-arrow.md` dichiara, con le prove, che
+  una colonna `ewkb` esce `ewkb` (anche riscritta da un'operazione geo),
+  che una colonna geometrica nuova esce `wkb` e che un EWKB con SRID
+  incorporato si rifiuta nelle operazioni geo.
+- Gli attributi di capacità di un'operazione su artefatti (`data.run` 3)
+  usano `source`/`sink` e portano `artifact_content_types` e
+  `artifact_interchange_contracts`, come il catalogo pubblico. Nessun
+  documento delle capacità cambia: `data.run` 3 non vi compare; una prova
+  confronta gli attributi di ogni operazione con il catalogo.
+
 ## [2.0.0] - 2026-10-06
 
 Adotta il profilo data-tools versione 2 di `plenora-contracts` al commit
