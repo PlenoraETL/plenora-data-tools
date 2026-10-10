@@ -236,10 +236,17 @@ fn il_workspace_e_quello_di_fuzz_ricevono_i_fork() {
     );
 }
 
-/// `geozero::wkt` legge il WKT con il `wkt` di crates.io. `clippy.toml`
-/// vieta i suoi tipi nelle posizioni di tipo e negli `use`, ma non un
-/// costruttore scritto per esteso (`geozero::wkt::Wkt(...)`): questa prova
-/// chiude il caso cercando il modulo nei sorgenti del workspace e di `fuzz/`.
+/// I moduli di `geozero` che leggono il WKT con il `wkt` di crates.io:
+/// `wkt` (il lettore) e `csv` (feature `with-csv`: `process_csv_geom` e
+/// `process_csv_features` chiamano `wkt::Wkt::from_str` e `read_wkt`,
+/// `geozero` 0.15.1 `src/csv/csv_reader.rs:121,134,190`). Le altre
+/// chiamate a `wkt::` dentro `geozero` stanno nei suoi test.
+const MODULI_VIETATI: [&str; 2] = ["wkt", "csv"];
+
+/// `clippy.toml` vieta i tipi e le funzioni di [`MODULI_VIETATI`] nelle
+/// posizioni di tipo, nelle chiamate e negli `use`, ma non un costruttore
+/// scritto per esteso (`geozero::wkt::Wkt(...)`): questa prova chiude il
+/// caso cercando i moduli nei sorgenti del workspace e di `fuzz/`.
 #[test]
 fn nessun_sorgente_usa_il_lettore_wkt_di_geozero() {
     let radice = radice();
@@ -256,7 +263,7 @@ fn nessun_sorgente_usa_il_lettore_wkt_di_geozero() {
             continue;
         }
         let testo = fs::read_to_string(&percorso).expect("sorgente UTF-8");
-        if usa_geozero_wkt(&testo) {
+        if usa_lettore_wkt_di_geozero(&testo) {
             violazioni.push(percorso);
         }
     }
@@ -279,8 +286,10 @@ fn la_ricerca_di_geozero_wkt_riconosce_le_forme() {
         "extern crate geozero as gz;\nuse gz::{wkt::WktStr};",
         "use geozero::{self as gz};\nuse gz::wkt;",
         "use geozero as gz;\nuse gz as g2;\nuse g2::wkt::Wkt;",
+        "use geozero::*;",
+        "use geozero as gz;\nuse gz::*;",
     ] {
-        assert!(usa_geozero_wkt(vietato), "{vietato}");
+        assert!(usa_lettore_wkt_di_geozero(vietato), "{vietato}");
     }
     for ammesso in [
         "use geozero::{wkb::Wkb, CoordDimensions, ToGeo, ToWkb};",
@@ -289,8 +298,27 @@ fn la_ricerca_di_geozero_wkt_riconosce_le_forme() {
         "use geozero::{wkt_like, ToWkb};",
         "use geozero as gz;\nuse gz::{wkb::Wkb, ToGeo};",
         "use altro::wkt::Wkt;",
+        "use csv::Reader;",
+        "use geozero::{csv_like, ToWkb};",
     ] {
-        assert!(!usa_geozero_wkt(ammesso), "{ammesso}");
+        assert!(!usa_lettore_wkt_di_geozero(ammesso), "{ammesso}");
+    }
+}
+
+/// Le API di `geozero` che arrivano al lettore WKT senza nominarlo: il
+/// modulo `csv`, in ogni forma di percorso.
+#[test]
+fn la_ricerca_vieta_le_api_csv_di_geozero_che_leggono_wkt() {
+    for vietato in [
+        "let righe = geozero::csv::Csv::new(\"g\", testo);",
+        "geozero::csv::process_csv_geom(ingresso, &mut processore, \"g\")",
+        "use geozero::csv::{process_csv_features, CsvReader};",
+        "use geozero::{csv::CsvString, ToGeo};",
+        "use geozero::{csv, wkb::Wkb};",
+        "use geozero as gz;\nlet r = gz::csv::CsvReader::new(\"g\", file);",
+        "use geozero::{\n    wkb::{Wkb, WkbDialect},\n    csv::{Csv},\n};",
+    ] {
+        assert!(usa_lettore_wkt_di_geozero(vietato), "{vietato}");
     }
 }
 
@@ -311,12 +339,13 @@ fn raccogli_rs(cartella: &Path, file: &mut Vec<PathBuf>) {
     }
 }
 
-/// `geozero::wkt` in qualunque forma di percorso: per esteso, dentro un
-/// gruppo `geozero::{...}` a qualunque profondità, o attraverso un alias
-/// del crate (`use geozero as gz;`, `extern crate geozero as gz;`,
-/// `use geozero::{self as gz};`). Prudente: conta anche le stringhe e i
-/// commenti.
-fn usa_geozero_wkt(testo: &str) -> bool {
+/// Un modulo di [`MODULI_VIETATI`] in qualunque forma di percorso: per
+/// esteso, dentro un gruppo `geozero::{...}` a qualunque profondità, o
+/// attraverso un alias del crate (`use geozero as gz;`, `extern crate
+/// geozero as gz;`, `use geozero::{self as gz};`); e l'import glob
+/// `geozero::*`, che porterebbe i moduli in scope senza nominarli.
+/// Prudente: conta anche le stringhe e i commenti.
+fn usa_lettore_wkt_di_geozero(testo: &str) -> bool {
     let simboli = simboli(testo);
     let mut nomi = vec!["geozero".to_owned()];
     // Gli alias del crate, anche a catena (`use gz as g2;`).
@@ -349,16 +378,17 @@ fn usa_geozero_wkt(testo: &str) -> bool {
         nomi.contains(simbolo)
             && simboli.get(indice + 1).is_some_and(|sep| sep == "::")
             && match simboli.get(indice + 2).map(String::as_str) {
-                Some("wkt") => true,
-                Some("{") => gruppo_nomina_wkt(&simboli[indice + 3..]),
+                Some("*") => true,
+                Some(modulo) if MODULI_VIETATI.contains(&modulo) => true,
+                Some("{") => gruppo_nomina_un_modulo_vietato(&simboli[indice + 3..]),
                 _ => false,
             }
     })
 }
 
 /// Il gruppo `{...}` (aperto prima di `simboli`) contiene un percorso che
-/// comincia con `wkt`, a qualunque profondità.
-fn gruppo_nomina_wkt(simboli: &[String]) -> bool {
+/// comincia con un modulo di [`MODULI_VIETATI`], a qualunque profondità.
+fn gruppo_nomina_un_modulo_vietato(simboli: &[String]) -> bool {
     let mut profondita = 1_usize;
     let mut inizio_percorso = true;
     for simbolo in simboli {
@@ -378,7 +408,7 @@ fn gruppo_nomina_wkt(simboli: &[String]) -> bool {
                 inizio_percorso = true;
                 continue;
             }
-            "wkt" if inizio_percorso => return true,
+            modulo if inizio_percorso && MODULI_VIETATI.contains(&modulo) => return true,
             _ => {}
         }
         inizio_percorso = false;

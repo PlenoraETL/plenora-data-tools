@@ -42,6 +42,12 @@ la cui versione non ha qui una voce datata.
   controlla il grafo, anche del workspace e di `fuzz/`. Stessa classe, non
   corretta: il profilo (`overflow-checks = true` in release) vale solo nel
   workspace radice; limite dichiarato in `docs/limiti.md`.
+- **Il divieto del lettore WKT di `geozero` copre anche il CSV.**
+  `geozero::csv` (feature `with-csv`) legge la colonna geometria con il
+  `wkt` di crates.io senza nominare il modulo `wkt`: `clippy.toml` vieta
+  `Csv`, `CsvString`, `CsvReader`, `process_csv_geom` e
+  `process_csv_features`, e la prova sui sorgenti vieta il modulo `csv` e
+  l'import glob di `geozero` in ogni forma di percorso.
 - **Pulizia dopo la pubblicazione di `data.run` 3** (ERR-015). Se la
   cartella temporanea non si toglie dopo che ogni output è pubblicato,
   l'errore ha fase `cleanup` (era `finalize`) ed effetto `committed`, con
