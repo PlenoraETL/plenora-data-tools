@@ -43,8 +43,9 @@ la cui versione non ha qui una voce datata.
   inviluppo di riserva, temporaneo non cancellato, pubblicazione
   `Ignoto` di `data.run` 3). `docs/cli.md` conta anche `data.run` 3 fra
   le funzioni Rust. `docs/metadati-arrow.md` dichiara, con le prove, che
-  un ingresso `ewkb` esce `ewkb` e che un EWKB con SRID incorporato si
-  rifiuta nelle operazioni geo.
+  una colonna `ewkb` esce `ewkb` (anche riscritta da un'operazione geo),
+  che una colonna geometrica nuova esce `wkb` e che un EWKB con SRID
+  incorporato si rifiuta nelle operazioni geo.
 - Gli attributi di capacità di un'operazione su artefatti (`data.run` 3)
   usano `source`/`sink` e portano `artifact_content_types` e
   `artifact_interchange_contracts`, come il catalogo pubblico. Nessun

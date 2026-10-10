@@ -454,10 +454,13 @@ const CENTROIDE: &str = r#"{"out": "o", "op": "geo.centroid", "in": ["t"], "conf
 const BUFFER: &str =
     r#"{"out": "o", "op": "geo.buffer", "in": ["t"], "config": {"distance": 1.0}}"#;
 
-/// Un ingresso `ewkb` esce `ewkb`, dopo un'operazione tabellare come dopo
-/// una geo (docs/metadati-arrow.md, «In uscita»): l'encoding non si
-/// riscrive in `wkb`. I byte di un'operazione geo sono WKB ISO senza SRID
-/// incorporato, che è anche EWKB valido: la dichiarazione resta vera.
+/// La colonna geometrica d'ingresso `ewkb` esce `ewkb`, dopo
+/// un'operazione tabellare come dopo una geo che la riscrive al suo posto
+/// (docs/metadati-arrow.md, «In uscita»). I byte di un'operazione geo sono
+/// WKB ISO senza SRID incorporato, che è anche EWKB valido: la
+/// dichiarazione resta vera. Una colonna geometrica nuova
+/// (`geo.coverage_validate`, su un `geo.buffer` che resta `ewkb`) non
+/// eredita l'encoding ed esce `wkb`.
 #[test]
 fn un_ingresso_ewkb_esce_ewkb() {
     let tabella = punto_ewkb_proiettato(None);
@@ -471,6 +474,26 @@ fn un_ingresso_ewkb_esce_ewkb() {
         assert_eq!(cella[0], 1, "{passo}");
         assert_eq!(cella[4] & 0x20, 0, "{passo}: niente SRID incorporato");
     }
+    let dir = tempfile::tempdir().expect("cartella");
+    let ingresso = dir.path().join("in.arrow");
+    scrivi_tabella(&tabella, &ingresso, &OpzioniScrittura::default()).expect("scrittura");
+    let uscita = dir.path().join("out.arrow");
+    let copertura = piano(
+        r#"{"version": 1, "inputs": ["t"],
+            "steps": [{"out": "b", "op": "geo.buffer", "in": ["t"], "config": {"distance": 1.0}},
+                      {"out": "o", "op": "geo.coverage_validate", "in": ["b"], "config": {}}],
+            "outputs": ["o"]}"#,
+    );
+    esegui(&copertura, &ingresso, &uscita).expect("copertura");
+    let letta = leggi_tabella(&uscita, None, u64::MAX).expect("uscita");
+    let schema = letta.schema();
+    let nuove: Vec<_> = schema
+        .fields()
+        .iter()
+        .filter(|campo| campo.metadata().contains_key("ARROW:extension:name"))
+        .map(|campo| campo.metadata().get("plenora.geometry.encoding").cloned())
+        .collect();
+    assert_eq!(nuove, vec![Some("wkb".to_owned())]);
 }
 
 /// Un EWKB con SRID incorporato attraversa intatto un'operazione tabellare
