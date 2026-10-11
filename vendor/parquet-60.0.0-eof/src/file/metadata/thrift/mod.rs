@@ -239,9 +239,7 @@ fn convert_stats(
             // width (bytes in excess were dropped in silence: `01 00 00 00 FF`
             // was the INT32 1), and a boolean is 0 or 1.
             fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
-                let fuori_forma = |valore: &[u8]| {
-                    valore.len() != len || (len == 1 && valore.first().is_some_and(|b| *b > 1))
-                };
+                let fuori_forma = |valore: &[u8]| valore.len() != len;
                 if min.is_some_and(fuori_forma) || max.is_some_and(fuori_forma) {
                     return Err(general_err!("statistic of the wrong width for its type"));
                 }
@@ -260,10 +258,25 @@ fn convert_stats(
 
             let physical_type = column_descr.physical_type();
             match physical_type {
-                Type::BOOLEAN => check_len(min, max, 1),
+                Type::BOOLEAN => {
+                    // PLENORA: a boolean statistic is one byte, 0 or 1 (the
+                    // rule is the boolean's, not every width 1: a FLBA of
+                    // width 1 holds any byte).
+                    check_len(min, max, 1)?;
+                    if min.into_iter().chain(max).any(|valore| valore[0] > 1) {
+                        Err(general_err!("statistic of the wrong width for its type"))
+                    } else {
+                        Ok(())
+                    }
+                }
                 Type::INT32 | Type::FLOAT => check_len(min, max, 4),
                 Type::INT64 | Type::DOUBLE => check_len(min, max, 8),
                 Type::INT96 => check_len(min, max, 12),
+                // PLENORA: FLBA values have the width of the type.
+                Type::FIXED_LEN_BYTE_ARRAY => match usize::try_from(column_descr.type_length()) {
+                    Ok(larghezza) => check_len(min, max, larghezza),
+                    Err(_) => Err(general_err!("statistic of the wrong width for its type")),
+                },
                 _ => Ok(()),
             }?;
 
@@ -423,6 +436,10 @@ fn read_encoding_stats_as_mask(prot: &mut ThriftSliceInputProtocol<'_>) -> Resul
 
     for _ in 0..list_ident.size {
         let pes = PageEncodingStats::read_thrift(prot)?;
+        // PLENORA: a count of pages is not negative.
+        if pes.count < 0 {
+            return Err(negativo_nel_footer());
+        }
         match pes.page_type {
             PageType::DATA_PAGE | PageType::DATA_PAGE_V2 => mask |= 1 << pes.encoding as i32,
             _ => {}
@@ -532,6 +549,10 @@ fn read_column_metadata(
                 } else {
                     let val =
                         read_thrift_vec::<PageEncodingStats, ThriftSliceInputProtocol>(&mut *prot)?;
+                    // PLENORA: a count of pages is not negative.
+                    if val.iter().any(|voce| voce.count < 0) {
+                        return Err(negativo_nel_footer());
+                    }
                     column.encoding_stats = Some(ParquetPageEncodingStats::Full(val));
                 }
             }
@@ -543,6 +564,18 @@ fn read_column_metadata(
             }
             16 if !skip_size_stats => {
                 let val = SizeStatistics::read_thrift(&mut *prot)?;
+                // PLENORA: a size and the counts of a level histogram are
+                // not negative.
+                if val.unencoded_byte_array_data_bytes.is_some_and(|v| v < 0)
+                    || val
+                        .repetition_level_histogram
+                        .iter()
+                        .chain(val.definition_level_histogram.iter())
+                        .flatten()
+                        .any(|v| *v < 0)
+                {
+                    return Err(negativo_nel_footer());
+                }
                 column.unencoded_byte_array_data_bytes = val.unencoded_byte_array_data_bytes;
                 column.repetition_level_histogram =
                     val.repetition_level_histogram.map(LevelHistogram::from);
@@ -656,6 +689,13 @@ fn read_column_chunk(
     Ok(col)
 }
 
+/// PLENORA: a footer field that is a count, a size or an offset is
+/// negative (`tests/parquet_campi_thrift.rs` in `plenora-io` keeps the
+/// inventory of every integer field of the footer and its rule).
+fn negativo_nel_footer() -> ParquetError {
+    general_err!("footer field with a negative count, size or offset")
+}
+
 /// PLENORA: the offsets, sizes and counts of a column chunk are not negative.
 /// They were cast to unsigned with `as` (a negative offset became a huge one)
 /// or reached an `assert!` (`byte_range`, a panic).
@@ -759,14 +799,29 @@ fn read_row_group(
             }
             4 => {
                 let val = read_thrift_vec::<SortingColumn, ThriftSliceInputProtocol>(&mut *prot)?;
+                // PLENORA: a column index is not negative.
+                if val.iter().any(|colonna| colonna.column_idx < 0) {
+                    return Err(negativo_nel_footer());
+                }
                 row_group.sorting_columns = Some(val);
             }
             5 => {
                 row_group.file_offset = Some(i64::read_thrift(&mut *prot)?);
             }
             // 6: we don't expose total_compressed_size
+            // PLENORA: read to be checked: a size is not negative.
+            6 => {
+                if i64::read_thrift(&mut *prot)? < 0 {
+                    return Err(negativo_nel_footer());
+                }
+            }
             7 => {
-                row_group.ordinal = Some(i16::read_thrift(&mut *prot)? as i32);
+                let ordinale = i16::read_thrift(&mut *prot)?;
+                // PLENORA: the ordinal of a row group is not negative.
+                if ordinale < 0 {
+                    return Err(negativo_nel_footer());
+                }
+                row_group.ordinal = Some(i32::from(ordinale));
             }
             _ => {
                 prot.skip(field_ident.field_type)?;
@@ -963,7 +1018,12 @@ pub(crate) fn parquet_metadata_from_bytes(
                 }
             }
             3 => {
-                num_rows = Some(i64::read_thrift(&mut prot)?);
+                let righe = i64::read_thrift(&mut prot)?;
+                // PLENORA: the rows of the file are not negative.
+                if righe < 0 {
+                    return Err(negativo_nel_footer());
+                }
+                num_rows = Some(righe);
             }
             4 => {
                 if schema_descr.is_none() {

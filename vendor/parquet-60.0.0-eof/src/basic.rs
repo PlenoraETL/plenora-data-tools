@@ -1530,6 +1530,17 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
 pub const SKIP_NOT_QUALIFIED: &str =
     "Parquet skip inside a page or without a page header not qualified for reading";
 
+/// PLENORA: the fixed text of the rejection of a page index (column index
+/// and offset index): not qualified for reading. Their counts, histograms,
+/// cardinalities and boundaries reached unchecked arithmetic, and data and
+/// IO-tools do not read them.
+pub const PAGE_INDEX_NOT_QUALIFIED: &str = "Parquet page index not qualified for reading";
+
+/// PLENORA: the fixed text of the rejection of a bloom filter: not
+/// qualified for reading (its header sizes reached unchecked arithmetic, and
+/// data and IO-tools do not read them).
+pub const BLOOM_FILTER_NOT_QUALIFIED: &str = "Parquet bloom filter not qualified for reading";
+
 /// PLENORA: the fixed text of a data page whose streams (levels, values,
 /// dictionary indices) do not end where its values end: bytes or values
 /// after the last one the page declares.

@@ -388,15 +388,21 @@ fn un_file_vero_largo_si_legge_entro_il_tetto() {
 }
 
 /// Indici di pagina chiesti con un tetto: un errore esplicito, prima di
-/// leggerli; senza tetto si leggono come prima. Questo crate non li chiede
-/// (`PageIndexPolicy::Skip`, il default): con il tetto la lettura resta
-/// possibile.
+/// leggerli. Senza tetto non sono qualificati (`PAGE_INDEX_NOT_QUALIFIED`):
+/// questo crate non li chiede (`PageIndexPolicy::Skip`, il default), e la
+/// lettura resta possibile.
 #[test]
 fn gli_indici_di_pagina_con_un_tetto_sono_rifiutati() {
     let byte = scrivi_colonne(1, 100);
     for politica in [PageIndexPolicy::Optional, PageIndexPolicy::Required] {
         let senza_tetto = ArrowReaderOptions::new().with_page_index_policy(politica);
-        assert_eq!(diretto(&byte, senza_tetto), Ok(()), "senza tetto");
+        let Err(messaggio) = diretto(&byte, senza_tetto) else {
+            panic!("indici di pagina letti ({politica:?})");
+        };
+        assert!(
+            messaggio.contains(parquet::basic::PAGE_INDEX_NOT_QUALIFIED),
+            "{messaggio}"
+        );
         let con_tetto = ArrowReaderOptions::new()
             .with_page_index_policy(politica)
             .with_footer_memory_budget(1 << 30);
@@ -445,13 +451,22 @@ fn anche_il_lettore_seriale_rifiuta_gli_indici_con_un_tetto() {
         "{errore}"
     );
     let senza_tetto = ReadOptionsBuilder::new().with_page_index().build();
-    assert!(SerializedFileReader::new_with_options(apri(), senza_tetto).is_ok());
+    let Err(errore) = SerializedFileReader::new_with_options(apri(), senza_tetto).map(|_| ())
+    else {
+        panic!("indici di pagina letti dal lettore seriale");
+    };
+    assert!(
+        errore
+            .to_string()
+            .contains(parquet::basic::PAGE_INDEX_NOT_QUALIFIED),
+        "{errore}"
+    );
 }
 
-// --- Offset index -----------------------------------------------------------
+// --- Indici di pagina e bloom filter non qualificati --------------------------------
 
 /// Un Parquet di una colonna `INT32` di 300 righe in tre pagine da 100, con
-/// gli indici di pagina (li scrive `ArrowWriter`).
+/// gli indici di pagina e un bloom filter (li scrive `ArrowWriter`).
 fn tre_pagine() -> Vec<u8> {
     let schema = Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, false)]));
     let valori = Int32Array::from((0..300).collect::<Vec<i32>>());
@@ -460,6 +475,7 @@ fn tre_pagine() -> Vec<u8> {
     let proprieta = WriterProperties::builder()
         .set_data_page_row_count_limit(100)
         .set_write_batch_size(100)
+        .set_bloom_filter_enabled(true)
         .build();
     let mut byte = Vec::new();
     let mut scrittore = ArrowWriter::try_new(&mut byte, schema, Some(proprieta)).unwrap();
@@ -468,185 +484,133 @@ fn tre_pagine() -> Vec<u8> {
     byte
 }
 
-/// Gli indici di pagina caricati e, se data, una selezione di righe: le
-/// righe lette o l'errore; un panico fa fallire la prova.
-fn con_indici(
-    byte: &[u8],
-    selezione: Option<parquet::arrow::arrow_reader::RowSelection>,
-) -> Result<usize, String> {
-    let dir = cartella();
-    let percorso = dir.path().join("i.parquet");
-    std::fs::write(&percorso, byte).unwrap();
-    let file = std::fs::File::open(&percorso).unwrap();
-    std::panic::catch_unwind(move || {
-        let opzioni = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
-        let mut costruttore = ParquetRecordBatchReaderBuilder::try_new_with_options(file, opzioni)
-            .map_err(|e| e.to_string())?;
-        if let Some(selezione) = selezione {
-            costruttore = costruttore.with_row_selection(selezione);
-        }
-        let lettore = costruttore.build().map_err(|e| e.to_string())?;
-        let mut righe = 0;
-        for batch in lettore {
-            righe += batch.map_err(|e| e.to_string())?.num_rows();
-        }
-        Ok(righe)
-    })
-    .unwrap_or_else(|_| panic!("la lettura con gli indici di pagina va in panico"))
-}
-
-/// Le posizioni dell'offset index della colonna nel file.
-fn intervallo_dell_offset_index(byte: &[u8]) -> std::ops::Range<usize> {
-    let dir = cartella();
-    let percorso = dir.path().join("m.parquet");
-    std::fs::write(&percorso, byte).unwrap();
-    let file = std::fs::File::open(&percorso).unwrap();
-    let costruttore = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-    let colonna = costruttore.metadata().row_group(0).column(0);
-    let inizio = usize::try_from(colonna.offset_index_offset().unwrap()).unwrap();
-    let lunghezza = usize::try_from(colonna.offset_index_length().unwrap()).unwrap();
-    inizio..inizio + lunghezza
-}
-
-/// `first_row_index` di una pagina (campo 3, `i64`): il varint di `prima`
-/// diventa quello di `dopo`, della stessa lunghezza (due byte).
-fn cambia_prima_riga(byte: &[u8], prima: [u8; 2], dopo: [u8; 2]) -> Vec<u8> {
-    let intervallo = intervallo_dell_offset_index(byte);
-    let mut nuovo = byte.to_vec();
-    let indice = &mut nuovo[intervallo];
-    let posizione = indice
-        .windows(3)
-        .position(|finestra| finestra == [0x16, prima[0], prima[1]])
-        .unwrap();
-    indice[posizione + 1..posizione + 3].copy_from_slice(&dopo);
-    nuovo
-}
-
-/// L'offset index dava `first_row_index` (`i64`) ai lettori, che lo
-/// convertivano con `as usize` e lo sottraevano senza controlli: negativo,
-/// fuori ordine o oltre le righe del row group, una sottrazione traboccava
-/// (un panico) o un conteggio di righe diventava enorme. Ora le posizioni si
-/// verificano contro il row group e il column chunk quando l'indice si
-/// legge: un errore esplicito.
+/// Gli indici di pagina (column index e offset index) e i bloom filter non
+/// sono qualificati: i loro conteggi, istogrammi, cardinalità e posizioni
+/// arrivavano ad aritmetica non controllata, e data non li legge. Ogni loro
+/// lettura è un errore esplicito (`PAGE_INDEX_NOT_QUALIFIED`,
+/// `BLOOM_FILTER_NOT_QUALIFIED`), anche di un indice valido: dal lettore
+/// Arrow, dal lettore dei metadati, dai decoder pubblici, dal lettore di
+/// pagine costruito sulle posizioni dell'indice e dal lettore dei bloom
+/// filter. La lettura del file senza indici resta.
 #[test]
-fn un_offset_index_incoerente_e_un_errore() {
-    let byte = tre_pagine();
-    // Controfattuale: indici 0, 100, 200; si leggono le 300 righe.
-    assert_eq!(con_indici(&byte, None), Ok(300));
-    // Varint zigzag: 100 -> 0xc8 0x01, 200 -> 0x90 0x03, -100 -> 0xc7 0x01,
-    // 250 -> 0xf4 0x03, 400 -> 0xa0 0x06.
-    for (nome, prima, dopo) in [
-        ("negativo", [0xC8, 0x01], [0xC7, 0x01]),
-        ("fuori ordine", [0xC8, 0x01], [0xF4, 0x03]),
-        ("oltre le righe", [0x90, 0x03], [0xA0, 0x06]),
-    ] {
-        let rotto = cambia_prima_riga(&byte, prima, dopo);
-        let Err(errore) = con_indici(&rotto, None) else {
-            panic!("{nome}: offset index incoerente letto");
-        };
-        assert!(errore.contains("invalid offset index"), "{nome}: {errore}");
-    }
-}
-
-/// Le stesse posizioni date da chi chiama al lettore di pagine pubblico del
-/// fork (`SerializedPageReader::new_with_properties`): verificate prima di
-/// ogni sottrazione.
-#[test]
-fn le_posizioni_date_al_lettore_di_pagine_si_verificano() {
+fn indici_di_pagina_e_bloom_filter_non_sono_qualificati() {
+    use parquet::file::page_index::index_reader::{decode_column_index, decode_offset_index};
     use parquet::file::page_index::offset_index::PageLocation;
     use parquet::file::properties::ReaderProperties;
-    use parquet::file::serialized_reader::SerializedPageReader;
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::{
+        ReadOptionsBuilder, SerializedFileReader, SerializedPageReader,
+    };
+
+    let indice = parquet::basic::PAGE_INDEX_NOT_QUALIFIED;
     let byte = tre_pagine();
     let dir = cartella();
     let percorso = dir.path().join("p.parquet");
     std::fs::write(&percorso, &byte).unwrap();
-    let file = std::fs::File::open(&percorso).unwrap();
-    let costruttore = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+    let apri = || std::fs::File::open(&percorso).unwrap();
+    // Il lettore Arrow con l'indice, e i lettori dei metadati.
+    for politica in [PageIndexPolicy::Optional, PageIndexPolicy::Required] {
+        let opzioni = ArrowReaderOptions::new().with_page_index_policy(politica);
+        let Err(errore) = diretto(&byte, opzioni) else {
+            panic!("indice di pagina letto ({politica:?})");
+        };
+        assert!(errore.contains(indice), "{errore}");
+    }
+    let errore = ParquetMetaDataReader::new()
+        .with_page_index_policy(PageIndexPolicy::Required)
+        .parse_and_finish(&apri())
+        .unwrap_err()
+        .to_string();
+    assert!(errore.contains(indice), "{errore}");
+    // I decoder pubblici, anche su byte qualunque.
+    let errore = decode_offset_index(&[0x19, 0x1C, 0x00])
+        .unwrap_err()
+        .to_string();
+    assert!(errore.contains(indice), "{errore}");
+    let errore = decode_column_index(&[], parquet::basic::Type::INT32)
+        .unwrap_err()
+        .to_string();
+    assert!(errore.contains(indice), "{errore}");
+    // Il lettore di pagine sulle posizioni dell'indice.
+    let costruttore = ParquetRecordBatchReaderBuilder::try_new(apri()).unwrap();
     let colonna = costruttore.metadata().row_group(0).column(0).clone();
     let (inizio, lunghezza) = colonna.byte_range();
-    let inizio = i64::try_from(inizio).unwrap();
-    let lunghezza = i32::try_from(lunghezza).unwrap();
-    let pagina = |offset: i64, dimensione: i32, prima_riga: i64| PageLocation {
-        offset,
-        compressed_page_size: dimensione,
-        first_row_index: prima_riga,
+    let posizioni = vec![PageLocation {
+        offset: i64::try_from(inizio).unwrap(),
+        compressed_page_size: i32::try_from(lunghezza).unwrap(),
+        first_row_index: 0,
+    }];
+    let errore = SerializedPageReader::new_with_properties(
+        Arc::new(apri()),
+        &colonna,
+        300,
+        Some(posizioni),
+        Arc::new(ReaderProperties::builder().build()),
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(errore.contains(indice), "{errore}");
+    // Il bloom filter, chiesto al lettore seriale.
+    let opzioni = ReadOptionsBuilder::new()
+        .with_reader_properties(
+            ReaderProperties::builder()
+                .set_read_bloom_filter(true)
+                .build(),
+        )
+        .build();
+    let esito = SerializedFileReader::new_with_options(apri(), opzioni).and_then(|lettore| {
+        lettore
+            .get_row_group(0)
+            .map(|g| g.get_column_bloom_filter(0).is_some())
+    });
+    let Err(errore) = esito else {
+        panic!("bloom filter letto");
     };
-    for (nome, posizioni) in [
-        ("riga negativa", vec![pagina(inizio, lunghezza, -1)]),
-        (
-            "fuori ordine",
-            vec![pagina(inizio, 1, 200), pagina(inizio + 1, 1, 100)],
-        ),
-        ("oltre le righe", vec![pagina(inizio, lunghezza, 301)]),
-        ("prima del chunk", vec![pagina(inizio - 1, 1, 0)]),
-        ("oltre il chunk", vec![pagina(inizio, lunghezza + 1, 0)]),
-    ] {
-        let lettore = std::fs::File::open(&percorso).unwrap();
-        let esito = SerializedPageReader::new_with_properties(
-            Arc::new(lettore),
-            &colonna,
-            300,
-            Some(posizioni),
-            Arc::new(ReaderProperties::builder().build()),
-        );
-        let Err(errore) = esito else {
-            panic!("{nome}: posizioni incoerenti accettate");
-        };
-        assert!(
-            errore.to_string().contains("invalid offset index"),
-            "{nome}: {errore}"
-        );
-    }
+    assert!(
+        errore
+            .to_string()
+            .contains(parquet::basic::BLOOM_FILTER_NOT_QUALIFIED),
+        "{errore}"
+    );
+    // Controfattuale: senza indici e bloom filter il file si legge.
+    assert_eq!(diretto(&byte, ArrowReaderOptions::new()), Ok(()));
+    assert_eq!(
+        dal_confine(&byte, &LimitiLettura::default()).map_err(|e| e.to_string()),
+        Ok(300)
+    );
 }
 
-/// Una selezione di righe salta pagine attraverso l'offset index, senza
-/// leggerne l'header (la codifica non si controlla), o dentro una pagina,
-/// senza decodificare ciò che salta: non qualificata, un errore con il testo
-/// fisso. La lettura completa con gli stessi indici resta.
+/// Una selezione di righe senza indici: le pagine si saltano dai loro
+/// header. Un salto dentro una pagina non è qualificato
+/// (`SKIP_NOT_QUALIFIED`); un salto di pagine intere si legge.
 #[test]
 fn una_selezione_di_righe_non_e_qualificata() {
     use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     let byte = tre_pagine();
-    for selezione in [
-        vec![RowSelector::skip(150), RowSelector::select(150)],
-        vec![RowSelector::skip(100), RowSelector::select(200)],
-    ] {
-        let Err(errore) = con_indici(&byte, Some(RowSelection::from(selezione))) else {
-            panic!("selezione di righe letta");
-        };
-        assert!(
-            errore.contains(parquet::basic::SKIP_NOT_QUALIFIED),
-            "{errore}"
-        );
-    }
-    assert_eq!(con_indici(&byte, None), Ok(300));
-}
-
-/// La pagina dell'offset index è il suo header e la dimensione compressa
-/// che l'header dichiara: le due dimensioni non si confrontavano. La
-/// dimensione della seconda pagina nell'indice cresce di un byte (entro il
-/// column chunk): errore, non una pagina con un byte in più.
-#[test]
-fn la_dimensione_della_pagina_nell_indice_si_confronta_con_l_header() {
-    let byte = tre_pagine();
-    let intervallo = intervallo_dell_offset_index(&byte);
-    let mut rotto = byte;
-    let indice = &mut rotto[intervallo];
-    // Campo 2 (`i32`, 0x15) della seconda pagina, prima di `first_row_index`
-    // 100 (0x16, 0xc8 0x01): un varint zigzag di due byte, aumentato di uno.
-    let posizione = indice
-        .windows(6)
-        .position(|f| f[0] == 0x15 && f[3] == 0x16 && f[4] == 0xC8 && f[5] == 0x01)
-        .unwrap();
-    let zigzag = u16::from(indice[posizione + 1] & 0x7F) | (u16::from(indice[posizione + 2]) << 7);
-    let nuovo = zigzag + 2;
-    indice[posizione + 1] = u8::try_from(nuovo & 0x7F).unwrap() | 0x80;
-    indice[posizione + 2] = u8::try_from(nuovo >> 7).unwrap();
-    let Err(errore) = con_indici(&rotto, None) else {
-        panic!("dimensione della pagina incoerente letta");
+    let leggi = |selezione: Vec<RowSelector>| {
+        let dir = cartella();
+        let percorso = dir.path().join("s.parquet");
+        std::fs::write(&percorso, &byte).unwrap();
+        let lettore =
+            ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(&percorso).unwrap())
+                .unwrap()
+                .with_row_selection(RowSelection::from(selezione))
+                .build()
+                .unwrap();
+        let mut righe = 0;
+        for batch in lettore {
+            righe += batch.map_err(|e| e.to_string())?.num_rows();
+        }
+        Ok::<usize, String>(righe)
     };
+    let errore = leggi(vec![RowSelector::skip(150), RowSelector::select(150)]).unwrap_err();
     assert!(
-        errore.contains("page size and page header disagree"),
+        errore.contains(parquet::basic::SKIP_NOT_QUALIFIED),
         "{errore}"
+    );
+    assert_eq!(
+        leggi(vec![RowSelector::skip(100), RowSelector::select(200)]),
+        Ok(200)
     );
 }

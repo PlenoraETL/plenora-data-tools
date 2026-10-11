@@ -419,6 +419,10 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
     }
 }
 
+/// PLENORA: the offset index is not qualified: a page reader built on its
+/// locations is an error.
+const PAGINE_DALL_INDICE_NON_QUALIFICATE: bool = true;
+
 /// PLENORA: a page skipped whole is rejected for its value encoding like a
 /// page read (an excluded page was skipped in silence). Only from its header:
 /// a page reached through the offset index has none and is skipped without
@@ -442,11 +446,24 @@ fn verifica_codifica_saltata(header: &PageHeader) -> Result<()> {
     }
 }
 
+#[cfg(test)] // PLENORA: the readers pass the width of the column.
 /// Decodes a [`Page`] from the provided `buffer`
 pub(crate) fn decode_page(
     page_header: PageHeader,
     buffer: Bytes,
     physical_type: Type,
+    decompressor: Option<&mut Box<dyn Codec>>,
+) -> Result<Page> {
+    decode_page_con_larghezza(page_header, buffer, physical_type, -1, decompressor)
+}
+
+/// PLENORA: as [`decode_page`], with the width of a `FIXED_LEN_BYTE_ARRAY`
+/// column (its page statistics have that width; -1 for other types).
+pub(crate) fn decode_page_con_larghezza(
+    page_header: PageHeader,
+    buffer: Bytes,
+    physical_type: Type,
+    larghezza: i32,
     decompressor: Option<&mut Box<dyn Codec>>,
 ) -> Result<Page> {
     // Verify the 32-bit CRC checksum of the page
@@ -580,7 +597,11 @@ pub(crate) fn decode_page(
                 encoding: header.encoding,
                 def_level_encoding: header.definition_level_encoding,
                 rep_level_encoding: header.repetition_level_encoding,
-                statistics: statistics::from_thrift_page_stats(physical_type, header.statistics)?,
+                statistics: statistics::from_thrift_page_stats_con_larghezza(
+                    physical_type,
+                    Some(larghezza),
+                    header.statistics,
+                )?,
             }
         }
         PageType::DATA_PAGE_V2 => {
@@ -597,7 +618,11 @@ pub(crate) fn decode_page(
                 def_levels_byte_len: header.definition_levels_byte_length.try_into()?,
                 rep_levels_byte_len: header.repetition_levels_byte_length.try_into()?,
                 is_compressed,
-                statistics: statistics::from_thrift_page_stats(physical_type, header.statistics)?,
+                statistics: statistics::from_thrift_page_stats_con_larghezza(
+                    physical_type,
+                    Some(larghezza),
+                    header.statistics,
+                )?,
             }
         }
         PageType::INDEX_PAGE => {
@@ -662,6 +687,10 @@ pub struct SerializedPageReader<R: ChunkReader> {
 
     /// Column chunk type.
     physical_type: Type,
+
+    /// PLENORA: the width of a `FIXED_LEN_BYTE_ARRAY` column (-1 otherwise),
+    /// for its page statistics.
+    larghezza: i32,
 
     state: SerializedPageReaderState,
 
@@ -791,6 +820,12 @@ impl<R: ChunkReader> SerializedPageReader<R> {
 
         let state = match page_locations {
             Some(locations) => {
+                // PLENORA: page locations are the offset index, not
+                // qualified for reading.
+                let _ = &locations;
+                if PAGINE_DALL_INDICE_NON_QUALIFICATE {
+                    return Err(nyi_err!("{}", crate::basic::PAGE_INDEX_NOT_QUALIFIED));
+                }
                 // PLENORA: the locations come from the caller: checked
                 // against the chunk before any subtraction below.
                 crate::file::page_index::offset_index::verifica_posizioni(
@@ -834,6 +869,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
             decompressor,
             state,
             physical_type: meta.column_type(),
+            larghezza: meta.column_descr().type_length(),
             context,
             limiti, // PLENORA
         })
@@ -1121,10 +1157,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         self.context
                             .decrypt_page_data(buffer, *page_index, *require_dictionary)?;
 
-                    let page = decode_page(
+                    let page = decode_page_con_larghezza(
                         header,
                         buffer,
                         self.physical_type,
+                        self.larghezza,
                         self.decompressor.as_mut(),
                     )?;
                     if page.is_data_page() {
@@ -1174,10 +1211,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     if !is_dictionary_page {
                         *page_index += 1;
                     }
-                    decode_page(
+                    decode_page_con_larghezza(
                         header,
                         bytes,
                         self.physical_type,
+                        self.larghezza,
                         self.decompressor.as_mut(),
                     )?
                 }

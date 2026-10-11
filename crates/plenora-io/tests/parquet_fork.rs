@@ -150,7 +150,12 @@ fn una_larghezza_zero_e_un_errore_e_non_una_divisione_per_zero() {
     // `BYTE_STREAM_SPLIT` non è più qualificata per la lettura (prova sotto):
     // la larghezza 0 si prova in `PLAIN`, con e senza `ARROW:schema`.
     for (bss, schema_arrow) in [(false, false), (false, true)] {
-        let mut proprieta = WriterProperties::builder().set_dictionary_enabled(false);
+        // Senza statistiche: con la larghezza 0 una statistica di 1 byte è
+        // della larghezza sbagliata, e il footer si rifiuterebbe prima del
+        // decoder che la prova esercita.
+        let mut proprieta = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::None);
         if bss {
             proprieta = proprieta
                 .set_writer_version(WriterVersion::PARQUET_2_0)

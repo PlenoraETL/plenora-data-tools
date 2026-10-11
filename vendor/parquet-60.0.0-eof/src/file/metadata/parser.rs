@@ -260,6 +260,10 @@ pub(crate) fn decode_metadata(
 ///   Required, Optional, Skip).
 /// * `bytes` - The byte slice containing the page index data.
 /// * `start_offset` - The offset where `bytes` begin in the file.
+/// PLENORA: the page index is not qualified: every read of it is an error
+/// (the decoders after this point stay, unreachable, for the day it is).
+const PAGE_INDEX_REJECTED: bool = true;
+
 pub(crate) fn parse_page_index(
     metadata: &mut ParquetMetaData,
     column_index_policy: PageIndexPolicy,
@@ -270,6 +274,10 @@ pub(crate) fn parse_page_index(
     if column_index_policy == PageIndexPolicy::Skip && offset_index_policy == PageIndexPolicy::Skip
     {
         return Ok(());
+    }
+    // PLENORA: the page index is not qualified for reading.
+    if PAGE_INDEX_REJECTED {
+        return Err(nyi_err!("{}", crate::basic::PAGE_INDEX_NOT_QUALIFIED));
     }
     let num_row_groups = metadata.num_row_groups();
     let num_columns = metadata.file_metadata().schema_descr().num_columns();

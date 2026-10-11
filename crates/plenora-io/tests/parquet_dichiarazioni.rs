@@ -93,13 +93,16 @@ fn rifiutato(byte: &[u8], motivo: &str) {
     assert!(messaggio.contains(motivo), "{messaggio}");
 }
 
-/// Come [`rifiutato`], e anche letto con il page index: `parquet` legge
-/// allora le pagine dalle posizioni dell'offset index (l'altro stato del
-/// lettore di pagine), e la verifica deve valere lì.
+/// Come [`rifiutato`]; letto con il page index, l'indice non è qualificato
+/// (`PAGE_INDEX_NOT_QUALIFIED`): l'altro stato del lettore di pagine, sulle
+/// posizioni dell'offset index, non si raggiunge.
 fn rifiutato_nei_due_stati(byte: &[u8], motivo: &str) {
     rifiutato(byte, motivo);
     let messaggio = messaggio_parquet(byte, true);
-    assert!(messaggio.contains(motivo), "{messaggio}");
+    assert!(
+        messaggio.contains(parquet::basic::PAGE_INDEX_NOT_QUALIFIED),
+        "{messaggio}"
+    );
 }
 
 /// L'errore di `parquet` sullo stesso file, letto fino in fondo; con
@@ -120,16 +123,6 @@ fn messaggio_parquet(byte: &[u8], indice: bool) -> String {
         Ok(costruttore) => costruttore,
         Err(errore) => return errore.to_string(),
     };
-    if indice {
-        assert!(
-            costruttore
-                .metadata()
-                .page_index_for_row_group(0)
-                .offset_index(0)
-                .is_some(),
-            "offset index non caricato"
-        );
-    }
     for batch in costruttore.build().unwrap() {
         if let Err(errore) = batch {
             return errore.to_string();
@@ -411,28 +404,20 @@ fn byte_oltre_la_fine_del_file_sono_un_errore_senza_riserva() {
     }
 }
 
-/// Righe lette da `parquet` con l'offset index caricato (le pagine dalle
-/// sue posizioni).
-fn righe_con_indice(byte: &[u8]) -> usize {
+/// L'offset index di un file valido non si carica: non è qualificato
+/// (`PAGE_INDEX_NOT_QUALIFIED`).
+fn indice_non_qualificato(byte: &[u8]) -> bool {
     let dir = cartella();
     let percorso = dir.path().join("i.parquet");
     std::fs::write(&percorso, byte).unwrap();
     let opzioni = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
-    let costruttore = ParquetRecordBatchReaderBuilder::try_new_with_options(
-        File::open(&percorso).unwrap(),
-        opzioni,
-    )
-    .unwrap();
-    assert!(costruttore
-        .metadata()
-        .page_index_for_row_group(0)
-        .offset_index(0)
-        .is_some());
-    costruttore
-        .build()
-        .unwrap()
-        .map(|batch| batch.unwrap().num_rows())
-        .sum()
+    ParquetRecordBatchReaderBuilder::try_new_with_options(File::open(&percorso).unwrap(), opzioni)
+        .err()
+        .is_some_and(|errore| {
+            errore
+                .to_string()
+                .contains(parquet::basic::PAGE_INDEX_NOT_QUALIFIED)
+        })
 }
 
 /// Scrittore minimo del protocollo Thrift compact, per un header di pagina
@@ -690,12 +675,8 @@ fn nulli_e_ripetizioni_si_rileggono_uguali() {
             let letta =
                 leggi(&byte).unwrap_or_else(|errore| panic!("{codifica:?} {versione:?}: {errore}"));
             identiche(tabella, &letta);
-            // Anche dalle posizioni dell'offset index.
-            assert_eq!(
-                righe_con_indice(&byte),
-                tabella.num_rows(),
-                "{codifica:?} {versione:?}"
-            );
+            // L'offset index non si carica: non è qualificato.
+            assert!(indice_non_qualificato(&byte), "{codifica:?} {versione:?}");
         }
     }
 }

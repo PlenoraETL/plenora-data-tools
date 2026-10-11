@@ -1157,6 +1157,33 @@ DuckDB di completare i blocchi con byte vecchi, e i loro file in uso sono
 riscritti; oppure una dichiarazione dello scrittore nei metadati del file
 che permetta di tollerare le forme solo per i suoi file.
 
+## Indici di pagina e bloom filter Parquet
+
+**Regola.** Il lettore Parquet decodifica solo strutture qualificate: ogni
+loro campo intero ha una regola (non negativo, o un valore con il suo
+motivo) e ogni lunghezza è esatta.
+
+**Ambito.** Il fork `vendor/parquet-60.0.0-eof`: column index e offset
+index (gli indici di pagina) e bloom filter, in ogni loro ingresso — il
+lettore Arrow e quello seriale con l'indice chiesto, il lettore dei
+metadati, i decoder pubblici `decode_column_index` e
+`decode_offset_index`, il lettore di pagine costruito sulle posizioni
+dell'offset index, la lettura dei bloom filter. La scrittura non cambia.
+
+**Hazard.** Chiedere un indice di pagina o un bloom filter è un errore
+esplicito (`PAGE_INDEX_NOT_QUALIFIED`, `BLOOM_FILTER_NOT_QUALIFIED`;
+`Unsupported` dal confine), anche su un file valido. `plenora-io` non li
+chiede mai (lettura per intero, `PageIndexPolicy::Skip`, bloom filter non
+letti) e non lo raggiunge; lo raggiunge chi usa il fork come libreria per
+filtrare righe o pagine. I loro conteggi, istogrammi, cardinalità e
+posizioni arrivavano ad aritmetica non controllata.
+
+**Condizione di rientro.** Qualificarli con le regole delle statistiche:
+lunghezze esatte per tipo, `BOOLEAN` 0 o 1, conteggi non negativi, una
+voce per pagina, `num_bytes` del bloom filter esatto, posizioni dentro il
+column chunk; le prove e la campagna di fuzz di quelle regole; e un uso
+in data o IO-tools che li chieda.
+
 ## Record su più pagine Parquet v2
 
 **Regola.** Una pagina di dati v2 comincia su un confine di record: il suo

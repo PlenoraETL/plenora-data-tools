@@ -580,7 +580,7 @@
          _ => Err(nyi_err!(
              "Invalid/Unsupported encoding type for dictionary: {}",
              encoding
-@@ -1519,6 +1522,19 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
+@@ -1519,6 +1522,30 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
      }
  }
  
@@ -592,6 +592,17 @@
 +pub const SKIP_NOT_QUALIFIED: &str =
 +    "Parquet skip inside a page or without a page header not qualified for reading";
 +
++/// PLENORA: the fixed text of the rejection of a page index (column index
++/// and offset index): not qualified for reading. Their counts, histograms,
++/// cardinalities and boundaries reached unchecked arithmetic, and data and
++/// IO-tools do not read them.
++pub const PAGE_INDEX_NOT_QUALIFIED: &str = "Parquet page index not qualified for reading";
++
++/// PLENORA: the fixed text of the rejection of a bloom filter: not
++/// qualified for reading (its header sizes reached unchecked arithmetic, and
++/// data and IO-tools do not read them).
++pub const BLOOM_FILTER_NOT_QUALIFIED: &str = "Parquet bloom filter not qualified for reading";
++
 +/// PLENORA: the fixed text of a data page whose streams (levels, values,
 +/// dictionary indices) do not end where its values end: bytes or values
 +/// after the last one the page declares.
@@ -600,6 +611,30 @@
  /// PLENORA: the fixed text of a dictionary page whose entries are not the
  /// entries its header declares (fewer values, or bytes after the last one).
  pub const DICTIONARY_NOT_AS_DECLARED: &str =
+--- a/src/bloom_filter/mod.rs
++++ b/src/bloom_filter/mod.rs
+@@ -347,6 +347,11 @@ pub(crate) fn read_bloom_filter_header_and_length(
+ fn read_bloom_filter_header_and_length_from_bytes(
+     buffer: &[u8],
+ ) -> Result<(BloomFilterHeader, u64), ParquetError> {
++    // PLENORA: the bloom filter is not qualified for reading; every read of
++    // one passes from here.
++    if NON_QUALIFICATO {
++        return Err(nyi_err!("{}", crate::basic::BLOOM_FILTER_NOT_QUALIFIED));
++    }
+     let total_length = buffer.len();
+     let mut prot = ThriftSliceInputProtocol::new(buffer);
+     let header = BloomFilterHeader::read_thrift(&mut prot)
+@@ -354,6 +359,9 @@ fn read_bloom_filter_header_and_length_from_bytes(
+     Ok((header, (total_length - prot.as_slice().len()) as u64))
+ }
+ 
++/// PLENORA: the bloom filter is not qualified for reading.
++const NON_QUALIFICATO: bool = true;
++
+ /// The minimum number of bytes for a bloom filter bitset.
+ pub const BITSET_MIN_LENGTH: usize = 32;
+ /// The maximum number of bytes for a bloom filter bitset.
 --- a/src/column/reader.rs
 +++ b/src/column/reader.rs
 @@ -141,11 +141,15 @@ pub struct GenericColumnReader<R, D, V> {
@@ -1624,6 +1659,30 @@
      }
  
      #[test]
+--- a/src/file/metadata/parser.rs
++++ b/src/file/metadata/parser.rs
+@@ -260,6 +260,10 @@ pub(crate) fn decode_metadata(
+ ///   Required, Optional, Skip).
+ /// * `bytes` - The byte slice containing the page index data.
+ /// * `start_offset` - The offset where `bytes` begin in the file.
++/// PLENORA: the page index is not qualified: every read of it is an error
++/// (the decoders after this point stay, unreachable, for the day it is).
++const PAGE_INDEX_REJECTED: bool = true;
++
+ pub(crate) fn parse_page_index(
+     metadata: &mut ParquetMetaData,
+     column_index_policy: PageIndexPolicy,
+@@ -271,6 +275,10 @@ pub(crate) fn parse_page_index(
+     {
+         return Ok(());
+     }
++    // PLENORA: the page index is not qualified for reading.
++    if PAGE_INDEX_REJECTED {
++        return Err(nyi_err!("{}", crate::basic::PAGE_INDEX_NOT_QUALIFIED));
++    }
+     let num_row_groups = metadata.num_row_groups();
+     let num_columns = metadata.file_metadata().schema_descr().num_columns();
+     let mut builder = PageIndexBuilder::default();
 --- a/src/file/metadata/thrift/mod.rs
 +++ b/src/file/metadata/thrift/mod.rs
 @@ -198,7 +198,15 @@ fn convert_stats(
@@ -1643,7 +1702,7 @@
              // Generic nan count for floating point types
              let nan_count = stats
                  .nan_count
-@@ -227,7 +235,16 @@ fn convert_stats(
+@@ -227,7 +235,14 @@ fn convert_stats(
                  stats.max_value
              };
  
@@ -1651,16 +1710,82 @@
 +            // width (bytes in excess were dropped in silence: `01 00 00 00 FF`
 +            // was the INT32 1), and a boolean is 0 or 1.
              fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
-+                let fuori_forma = |valore: &[u8]| {
-+                    valore.len() != len || (len == 1 && valore.first().is_some_and(|b| *b > 1))
-+                };
++                let fuori_forma = |valore: &[u8]| valore.len() != len;
 +                if min.is_some_and(fuori_forma) || max.is_some_and(fuori_forma) {
 +                    return Err(general_err!("statistic of the wrong width for its type"));
 +                }
                  if let Some(min) = min
                      && min.len() < len
                  {
-@@ -634,10 +651,48 @@ fn read_column_chunk(
+@@ -243,10 +258,25 @@ fn convert_stats(
+ 
+             let physical_type = column_descr.physical_type();
+             match physical_type {
+-                Type::BOOLEAN => check_len(min, max, 1),
++                Type::BOOLEAN => {
++                    // PLENORA: a boolean statistic is one byte, 0 or 1 (the
++                    // rule is the boolean's, not every width 1: a FLBA of
++                    // width 1 holds any byte).
++                    check_len(min, max, 1)?;
++                    if min.into_iter().chain(max).any(|valore| valore[0] > 1) {
++                        Err(general_err!("statistic of the wrong width for its type"))
++                    } else {
++                        Ok(())
++                    }
++                }
+                 Type::INT32 | Type::FLOAT => check_len(min, max, 4),
+                 Type::INT64 | Type::DOUBLE => check_len(min, max, 8),
+                 Type::INT96 => check_len(min, max, 12),
++                // PLENORA: FLBA values have the width of the type.
++                Type::FIXED_LEN_BYTE_ARRAY => match usize::try_from(column_descr.type_length()) {
++                    Ok(larghezza) => check_len(min, max, larghezza),
++                    Err(_) => Err(general_err!("statistic of the wrong width for its type")),
++                },
+                 _ => Ok(()),
+             }?;
+ 
+@@ -406,6 +436,10 @@ fn read_encoding_stats_as_mask(prot: &mut ThriftSliceInputProtocol<'_>) -> Resul
+ 
+     for _ in 0..list_ident.size {
+         let pes = PageEncodingStats::read_thrift(prot)?;
++        // PLENORA: a count of pages is not negative.
++        if pes.count < 0 {
++            return Err(negativo_nel_footer());
++        }
+         match pes.page_type {
+             PageType::DATA_PAGE | PageType::DATA_PAGE_V2 => mask |= 1 << pes.encoding as i32,
+             _ => {}
+@@ -515,6 +549,10 @@ fn read_column_metadata(
+                 } else {
+                     let val =
+                         read_thrift_vec::<PageEncodingStats, ThriftSliceInputProtocol>(&mut *prot)?;
++                    // PLENORA: a count of pages is not negative.
++                    if val.iter().any(|voce| voce.count < 0) {
++                        return Err(negativo_nel_footer());
++                    }
+                     column.encoding_stats = Some(ParquetPageEncodingStats::Full(val));
+                 }
+             }
+@@ -526,6 +564,18 @@ fn read_column_metadata(
+             }
+             16 if !skip_size_stats => {
+                 let val = SizeStatistics::read_thrift(&mut *prot)?;
++                // PLENORA: a size and the counts of a level histogram are
++                // not negative.
++                if val.unencoded_byte_array_data_bytes.is_some_and(|v| v < 0)
++                    || val
++                        .repetition_level_histogram
++                        .iter()
++                        .chain(val.definition_level_histogram.iter())
++                        .flatten()
++                        .any(|v| *v < 0)
++                {
++                    return Err(negativo_nel_footer());
++                }
+                 column.unencoded_byte_array_data_bytes = val.unencoded_byte_array_data_bytes;
+                 column.repetition_level_histogram =
+                     val.repetition_level_histogram.map(LevelHistogram::from);
+@@ -634,10 +684,55 @@ fn read_column_chunk(
  
      // not encrypted, so make sure all required fields were read
      validate_column_metadata(col_meta_mask)?;
@@ -1669,6 +1794,13 @@
      Ok(col)
  }
  
++/// PLENORA: a footer field that is a count, a size or an offset is
++/// negative (`tests/parquet_campi_thrift.rs` in `plenora-io` keeps the
++/// inventory of every integer field of the footer and its rule).
++fn negativo_nel_footer() -> ParquetError {
++    general_err!("footer field with a negative count, size or offset")
++}
++
 +/// PLENORA: the offsets, sizes and counts of a column chunk are not negative.
 +/// They were cast to unsigned with `as` (a negative offset became a huge one)
 +/// or reached an `assert!` (`byte_range`, a panic).
@@ -1709,7 +1841,38 @@
  fn read_row_group(
      prot: &mut ThriftSliceInputProtocol,
      schema_descr: &Arc<SchemaDescriptor>,
-@@ -720,6 +775,16 @@ fn read_row_group(
+@@ -704,14 +799,29 @@ fn read_row_group(
+             }
+             4 => {
+                 let val = read_thrift_vec::<SortingColumn, ThriftSliceInputProtocol>(&mut *prot)?;
++                // PLENORA: a column index is not negative.
++                if val.iter().any(|colonna| colonna.column_idx < 0) {
++                    return Err(negativo_nel_footer());
++                }
+                 row_group.sorting_columns = Some(val);
+             }
+             5 => {
+                 row_group.file_offset = Some(i64::read_thrift(&mut *prot)?);
+             }
+             // 6: we don't expose total_compressed_size
++            // PLENORA: read to be checked: a size is not negative.
++            6 => {
++                if i64::read_thrift(&mut *prot)? < 0 {
++                    return Err(negativo_nel_footer());
++                }
++            }
+             7 => {
+-                row_group.ordinal = Some(i16::read_thrift(&mut *prot)? as i32);
++                let ordinale = i16::read_thrift(&mut *prot)?;
++                // PLENORA: the ordinal of a row group is not negative.
++                if ordinale < 0 {
++                    return Err(negativo_nel_footer());
++                }
++                row_group.ordinal = Some(i32::from(ordinale));
+             }
+             _ => {
+                 prot.skip(field_ident.field_type)?;
+@@ -720,6 +830,16 @@ fn read_row_group(
          last_field_id = field_ident.id;
      }
  
@@ -1726,7 +1889,21 @@
      if mask != RG_ALL_REQUIRED {
          if mask & RG_COLUMNS == 0 {
              return Err(general_err!("Required field columns is missing"));
-@@ -2036,14 +2101,14 @@ pub(crate) mod tests {
+@@ -898,7 +1018,12 @@ pub(crate) fn parquet_metadata_from_bytes(
+                 }
+             }
+             3 => {
+-                num_rows = Some(i64::read_thrift(&mut prot)?);
++                let righe = i64::read_thrift(&mut prot)?;
++                // PLENORA: the rows of the file are not negative.
++                if righe < 0 {
++                    return Err(negativo_nel_footer());
++                }
++                num_rows = Some(righe);
+             }
+             4 => {
+                 if schema_descr.is_none() {
+@@ -2036,14 +2161,14 @@ pub(crate) mod tests {
              .unwrap_err();
          assert_eq!(
              err.to_string(),
@@ -1743,9 +1920,81 @@
          );
      }
  
+--- a/src/file/page_index/index_reader.rs
++++ b/src/file/page_index/index_reader.rs
+@@ -42,6 +42,9 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
+     }
+ }
+ 
++/// PLENORA: the page index is not qualified: its public decoders are errors.
++const NON_QUALIFICATO: bool = true;
++
+ /// Decode a Thrift [`OffsetIndex`] from the provided bytes.
+ ///
+ /// The passed in bytes contain a serialized Thrift `OffsetIndex` struct as
+@@ -98,6 +101,11 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
+ ///
+ /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/e94a5d090b324a0c0ee1adbb8ea6b099852dc3cc/src/main/thrift/parquet.thrift#L1253-L1273
+ pub fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, ParquetError> {
++    // PLENORA: the page index is not qualified for reading.
++    let _ = data;
++    if NON_QUALIFICATO {
++        return Err(nyi_err!("{}", crate::basic::PAGE_INDEX_NOT_QUALIFIED));
++    }
+     let mut prot = ThriftSliceInputProtocol::new(data);
+ 
+     // Try to read fast-path first. If that fails, fall back to slower but more robust
+@@ -192,6 +200,10 @@ pub fn decode_column_index(
+     data: &[u8],
+     column_type: Type,
+ ) -> Result<ColumnIndexMetaData, ParquetError> {
++    // PLENORA: the page index is not qualified for reading.
++    if NON_QUALIFICATO {
++        return Err(nyi_err!("{}", crate::basic::PAGE_INDEX_NOT_QUALIFIED));
++    }
+     let mut prot = ThriftSliceInputProtocol::new(data);
+     let index = ThriftColumnIndex::read_thrift(&mut prot)?;
+ 
 --- a/src/file/serialized_reader.rs
 +++ b/src/file/serialized_reader.rs
-@@ -514,8 +514,12 @@ pub(crate) fn decode_page(
+@@ -419,6 +419,10 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
+     }
+ }
+ 
++/// PLENORA: the offset index is not qualified: a page reader built on its
++/// locations is an error.
++const PAGINE_DALL_INDICE_NON_QUALIFICATE: bool = true;
++
+ /// PLENORA: a page skipped whole is rejected for its value encoding like a
+ /// page read (an excluded page was skipped in silence). Only from its header:
+ /// a page reached through the offset index has none and is skipped without
+@@ -442,12 +446,25 @@ fn verifica_codifica_saltata(header: &PageHeader) -> Result<()> {
+     }
+ }
+ 
++#[cfg(test)] // PLENORA: the readers pass the width of the column.
+ /// Decodes a [`Page`] from the provided `buffer`
+ pub(crate) fn decode_page(
+     page_header: PageHeader,
+     buffer: Bytes,
+     physical_type: Type,
+     decompressor: Option<&mut Box<dyn Codec>>,
++) -> Result<Page> {
++    decode_page_con_larghezza(page_header, buffer, physical_type, -1, decompressor)
++}
++
++/// PLENORA: as [`decode_page`], with the width of a `FIXED_LEN_BYTE_ARRAY`
++/// column (its page statistics have that width; -1 for other types).
++pub(crate) fn decode_page_con_larghezza(
++    page_header: PageHeader,
++    buffer: Bytes,
++    physical_type: Type,
++    larghezza: i32,
++    decompressor: Option<&mut Box<dyn Codec>>,
+ ) -> Result<Page> {
+     // Verify the 32-bit CRC checksum of the page
+     #[cfg(feature = "crc")]
+@@ -514,8 +531,12 @@ pub(crate) fn decode_page(
              decompressed.extend_from_slice(&buffer[..offset]);
              // decompressed size of zero corresponds to a page with no non-null values
              // see https://github.com/apache/parquet-format/blob/master/README.md#data-pages
@@ -1760,7 +2009,7 @@
                  decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
              }
  
-@@ -529,7 +533,18 @@ pub(crate) fn decode_page(
+@@ -529,7 +550,18 @@ pub(crate) fn decode_page(
  
              Bytes::from(decompressed)
          }
@@ -1780,7 +2029,78 @@
      };
  
      let result = match page_header.r#type {
-@@ -1144,6 +1159,14 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+@@ -565,7 +597,11 @@ pub(crate) fn decode_page(
+                 encoding: header.encoding,
+                 def_level_encoding: header.definition_level_encoding,
+                 rep_level_encoding: header.repetition_level_encoding,
+-                statistics: statistics::from_thrift_page_stats(physical_type, header.statistics)?,
++                statistics: statistics::from_thrift_page_stats_con_larghezza(
++                    physical_type,
++                    Some(larghezza),
++                    header.statistics,
++                )?,
+             }
+         }
+         PageType::DATA_PAGE_V2 => {
+@@ -582,7 +618,11 @@ pub(crate) fn decode_page(
+                 def_levels_byte_len: header.definition_levels_byte_length.try_into()?,
+                 rep_levels_byte_len: header.repetition_levels_byte_length.try_into()?,
+                 is_compressed,
+-                statistics: statistics::from_thrift_page_stats(physical_type, header.statistics)?,
++                statistics: statistics::from_thrift_page_stats_con_larghezza(
++                    physical_type,
++                    Some(larghezza),
++                    header.statistics,
++                )?,
+             }
+         }
+         PageType::INDEX_PAGE => {
+@@ -648,6 +688,10 @@ pub struct SerializedPageReader<R: ChunkReader> {
+     /// Column chunk type.
+     physical_type: Type,
+ 
++    /// PLENORA: the width of a `FIXED_LEN_BYTE_ARRAY` column (-1 otherwise),
++    /// for its page statistics.
++    larghezza: i32,
++
+     state: SerializedPageReaderState,
+ 
+     context: SerializedPageReaderContext,
+@@ -776,6 +820,12 @@ impl<R: ChunkReader> SerializedPageReader<R> {
+ 
+         let state = match page_locations {
+             Some(locations) => {
++                // PLENORA: page locations are the offset index, not
++                // qualified for reading.
++                let _ = &locations;
++                if PAGINE_DALL_INDICE_NON_QUALIFICATE {
++                    return Err(nyi_err!("{}", crate::basic::PAGE_INDEX_NOT_QUALIFIED));
++                }
+                 // PLENORA: the locations come from the caller: checked
+                 // against the chunk before any subtraction below.
+                 crate::file::page_index::offset_index::verifica_posizioni(
+@@ -819,6 +869,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
+             decompressor,
+             state,
+             physical_type: meta.column_type(),
++            larghezza: meta.column_descr().type_length(),
+             context,
+             limiti, // PLENORA
+         })
+@@ -1106,10 +1157,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+                         self.context
+                             .decrypt_page_data(buffer, *page_index, *require_dictionary)?;
+ 
+-                    let page = decode_page(
++                    let page = decode_page_con_larghezza(
+                         header,
+                         buffer,
+                         self.physical_type,
++                        self.larghezza,
+                         self.decompressor.as_mut(),
+                     )?;
+                     if page.is_data_page() {
+@@ -1144,6 +1196,14 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                      )?;
                      self.limiti.verifica(&header)?; // PLENORA
                      let bytes = buffer.slice(offset..);
@@ -1795,7 +2115,20 @@
                      let bytes =
                          self.context
                              .decrypt_page_data(bytes, *page_index, is_dictionary_page)?;
-@@ -1303,11 +1326,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+@@ -1151,10 +1211,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+                     if !is_dictionary_page {
+                         *page_index += 1;
+                     }
+-                    decode_page(
++                    decode_page_con_larghezza(
+                         header,
+                         bytes,
+                         self.physical_type,
++                        self.larghezza,
+                         self.decompressor.as_mut(),
+                     )?
+                 }
+@@ -1303,11 +1364,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                  if dictionary_page.is_some() {
                      // If a dictionary page exists, consume it by taking it (sets to None)
                      dictionary_page.take();
@@ -1815,7 +2148,28 @@
                  Ok(())
 --- a/src/file/statistics.rs
 +++ b/src/file/statistics.rs
-@@ -138,7 +138,15 @@ pub(crate) fn from_thrift_page_stats(
+@@ -119,9 +119,20 @@ macro_rules! statistics_enum_func {
+ }
+ 
+ /// Converts Thrift definition into `Statistics`.
++#[cfg(test)] // PLENORA: the readers pass the width of the column.
+ pub(crate) fn from_thrift_page_stats(
+     physical_type: Type,
+     thrift_stats: Option<PageStatistics>,
++) -> Result<Option<Statistics>> {
++    from_thrift_page_stats_con_larghezza(physical_type, None, thrift_stats)
++}
++
++/// PLENORA: as [`from_thrift_page_stats`], with the width of a
++/// `FIXED_LEN_BYTE_ARRAY` column: its statistics have that width exactly.
++pub(crate) fn from_thrift_page_stats_con_larghezza(
++    physical_type: Type,
++    larghezza: Option<i32>,
++    thrift_stats: Option<PageStatistics>,
+ ) -> Result<Option<Statistics>> {
+     Ok(match thrift_stats {
+         Some(stats) => {
+@@ -138,7 +149,15 @@ pub(crate) fn from_thrift_page_stats(
                  })
                  .transpose()?;
              // Generic distinct count (count of distinct values occurring)
@@ -1832,7 +2186,7 @@
              // Generic nan count for floating point types
              let nan_count = stats
                  .nan_count
-@@ -166,7 +174,16 @@ pub(crate) fn from_thrift_page_stats(
+@@ -166,7 +185,14 @@ pub(crate) fn from_thrift_page_stats(
                  stats.max_value
              };
  
@@ -1840,16 +2194,44 @@
 +            // width (bytes in excess were dropped in silence: `01 00 00 00 FF`
 +            // was the INT32 1), and a boolean is 0 or 1.
              fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
-+                let fuori_forma = |valore: &[u8]| {
-+                    valore.len() != len || (len == 1 && valore.first().is_some_and(|b| *b > 1))
-+                };
++                let fuori_forma = |valore: &[u8]| valore.len() != len;
 +                if min.is_some_and(fuori_forma) || max.is_some_and(fuori_forma) {
 +                    return Err(general_err!("statistic of the wrong width for its type"));
 +                }
                  if let Some(min) = min
                      && min.len() < len
                  {
-@@ -1186,7 +1203,7 @@ mod tests {
+@@ -187,10 +213,28 @@ pub(crate) fn from_thrift_page_stats(
+             {
+                 let (min, max) = (min.as_deref(), max.as_deref());
+                 match physical_type {
+-                    Type::BOOLEAN => check_len(min, max, 1),
++                    Type::BOOLEAN => {
++                        // PLENORA: a boolean statistic is one byte, 0 or 1 (the
++                        // rule is the boolean's, not every width 1: a FLBA of
++                        // width 1 holds any byte).
++                        check_len(min, max, 1)?;
++                        if min.into_iter().chain(max).any(|valore| valore[0] > 1) {
++                            Err(general_err!("statistic of the wrong width for its type"))
++                        } else {
++                            Ok(())
++                        }
++                    }
+                     Type::INT32 | Type::FLOAT => check_len(min, max, 4),
+                     Type::INT64 | Type::DOUBLE => check_len(min, max, 8),
+                     Type::INT96 => check_len(min, max, 12),
++                    // PLENORA: FLBA values have the width of the type.
++                    Type::FIXED_LEN_BYTE_ARRAY => match larghezza.map(usize::try_from) {
++                        Some(Ok(larghezza)) => check_len(min, max, larghezza),
++                        Some(Err(_)) => {
++                            Err(general_err!("statistic of the wrong width for its type"))
++                        }
++                        None => Ok(()),
++                    },
+                     _ => Ok(()),
+                 }?;
+             }
+@@ -1186,7 +1230,7 @@ mod tests {
          let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats.clone())).unwrap_err();
          assert_eq!(
              err.to_string(),
@@ -1858,7 +2240,7 @@
          );
  
          thrift_stats.min = None;
-@@ -1194,7 +1211,7 @@ mod tests {
+@@ -1194,7 +1238,7 @@ mod tests {
          let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats)).unwrap_err();
          assert_eq!(
              err.to_string(),

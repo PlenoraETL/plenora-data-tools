@@ -74,7 +74,11 @@ la cui versione non ha qui una voce datata.
   nei lettori Arrow (prima la seconda sostituiva la prima). Le
   statistiche hanno conteggi non negativi e la lunghezza esatta del loro
   tipo, e offset, dimensioni e conteggi negativi nei metadati del footer
-  sono un errore (prima diventavano interi enormi, o un panico). Una pagina v2
+  sono un errore (prima diventavano interi enormi, o un panico); ogni
+  campo intero del footer ha una regola, verificata da un inventario. Le
+  statistiche FLBA hanno la larghezza del tipo. La lettura degli indici di
+  pagina e dei bloom filter non è qualificata (`docs/limiti.md`): data non
+  li legge. Una pagina v2
   comincia su un confine di record (i record spezzati fra pagine v2 si
   rifiutano, `docs/limiti.md`). Una pagina vuota non
   ferma più la lettura delle pagine dopo. Le righe di una pagina v2 si

@@ -347,12 +347,20 @@ pub(crate) fn read_bloom_filter_header_and_length(
 fn read_bloom_filter_header_and_length_from_bytes(
     buffer: &[u8],
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
+    // PLENORA: the bloom filter is not qualified for reading; every read of
+    // one passes from here.
+    if NON_QUALIFICATO {
+        return Err(nyi_err!("{}", crate::basic::BLOOM_FILTER_NOT_QUALIFIED));
+    }
     let total_length = buffer.len();
     let mut prot = ThriftSliceInputProtocol::new(buffer);
     let header = BloomFilterHeader::read_thrift(&mut prot)
         .map_err(|e| ParquetError::General(format!("Could not read bloom filter header: {e}")))?;
     Ok((header, (total_length - prot.as_slice().len()) as u64))
 }
+
+/// PLENORA: the bloom filter is not qualified for reading.
+const NON_QUALIFICATO: bool = true;
 
 /// The minimum number of bytes for a bloom filter bitset.
 pub const BITSET_MIN_LENGTH: usize = 32;

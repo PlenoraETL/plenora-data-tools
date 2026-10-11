@@ -78,6 +78,11 @@ impl Struttura {
         varint(zigzag(valore), &mut self.byte);
         self
     }
+    /// Un booleano: nel protocollo compatto il valore è il tipo del campo.
+    fn campo_booleano(mut self, id: u8, valore: bool) -> Self {
+        self.campo(id, if valore { 1 } else { 2 });
+        self
+    }
     fn i32(self, id: u8, valore: i64) -> Self {
         self.intero(id, valore, I32)
     }
@@ -504,9 +509,11 @@ fn un_resto_nella_pagina_e_un_errore() {
 }
 
 /// Punto 7: Statistiche di un decimale FLBA vuote o oltre 16 byte:
-/// `sign_extend_be::<16>` andava in panico. Ora la statistica manca.
+/// `sign_extend_be::<16>` andava in panico. Poi la statistica mancava; ora
+/// una statistica FLBA deve avere la larghezza del tipo (qui 4), e una
+/// diversa è un errore alla lettura del footer.
 #[test]
-fn una_statistica_decimale_malformata_manca_e_non_va_in_panico() {
+fn una_statistica_decimale_malformata_e_un_errore() {
     let decimale = Colonna {
         tipo: FLBA,
         larghezza: Some(4),
@@ -517,26 +524,31 @@ fn una_statistica_decimale_malformata_manca_e_non_va_in_panico() {
     for (minimo, massimo) in [
         (&[][..], &[0_u8, 0, 0, 2][..]),
         (&[1_u8; 17][..], &[0, 0, 0, 2][..]),
+        (&[0_u8, 0, 1][..], &[0, 0, 0, 2][..]),
     ] {
         let byte = parquet(&decimale, 2, PLAIN, &valori, None, Some((minimo, massimo)));
-        su_file(&byte, |file| {
-            let costruttore = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-            let convertitore = StatisticsConverter::try_new(
-                "x",
-                costruttore.schema(),
-                costruttore.parquet_schema(),
-            )
-            .unwrap();
-            let gruppi = costruttore.metadata().row_groups();
-            let minimi = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                convertitore.row_group_mins(gruppi).unwrap()
-            }))
-            .unwrap_or_else(|carico| panic!("statistica in panico: {}", panico(&*carico)));
-            assert_eq!(minimi.null_count(), 1, "{minimo:?}");
-            let massimi = convertitore.row_group_maxes(gruppi).unwrap();
-            assert_eq!(massimi.null_count(), 0);
-        });
+        contiene(arrow(&byte), "statistic of the wrong width");
+        rifiutato_dal_confine(&byte);
     }
+    // Controfattuale: 4 byte ciascuna, la statistica c'è.
+    let byte = parquet(
+        &decimale,
+        2,
+        PLAIN,
+        &valori,
+        None,
+        Some((&[0, 0, 0, 1], &[0, 0, 0, 2])),
+    );
+    su_file(&byte, |file| {
+        let costruttore = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let convertitore =
+            StatisticsConverter::try_new("x", costruttore.schema(), costruttore.parquet_schema())
+                .unwrap();
+        let minimi = convertitore
+            .row_group_mins(costruttore.metadata().row_groups())
+            .unwrap();
+        assert_eq!(minimi.null_count(), 0);
+    });
 }
 
 /// Stessa classe nei dati: un decimale `BYTE_ARRAY` di 17 byte (o vuoto)
@@ -3215,6 +3227,16 @@ fn l_oracolo_dei_livelli_copre_v2_blocchi_e_guasti() {
                             Ok(_) => panic!("{decoder} ha letto un guasto: v2 {v2}, {stream:02x?}"),
                         }
                     }
+                    // Lo stesso messaggio, esatto: il lettore Arrow lo
+                    // avvolge soltanto nel suo prefisso.
+                    let (Err(a), Err(b)) = (&ottimizzato, &generico) else {
+                        unreachable!()
+                    };
+                    assert_eq!(
+                        a.strip_prefix("Parquet argument error: ").unwrap_or(a),
+                        b,
+                        "v2 {v2}, {stream:02x?}"
+                    );
                     rifiutati += 1;
                 }
             }
@@ -3263,11 +3285,21 @@ fn il_blocco_in_v2_a_larghezza_due_e_un_errore() {
 /// Un Parquet `INT32` di un valore con le statistiche del column chunk date
 /// come campi Thrift (`ColumnMetaData.statistics`, campo 12).
 fn con_statistiche(statistiche: Struttura) -> Vec<u8> {
-    let byte = parquet(&colonna(INT32), 1, PLAIN, &7_i32.to_le_bytes(), None, None);
-    // Le statistiche si aggiungono alla fine della struct ColumnMetaData:
-    // il costruttore le scrive solo da `statistiche`; qui si ricostruisce il
-    // file con il campo 12 dato.
-    let _ = byte;
+    con_campi(
+        |metadati| metadati.struttura(12, statistiche),
+        |gruppo| gruppo,
+        1,
+    )
+}
+
+/// Un Parquet `INT32` di un valore, con campi aggiunti in coda a
+/// `ColumnMetaData` (dopo il campo 9) e a `RowGroup` (dopo il campo 3), e
+/// le righe del file date.
+fn con_campi(
+    metadati_in_piu: impl FnOnce(Struttura) -> Struttura,
+    gruppo_in_piu: impl FnOnce(Struttura) -> Struttura,
+    righe_del_file: i64,
+) -> Vec<u8> {
     let mut file = b"PAR1".to_vec();
     let inizio = i64::try_from(file.len()).unwrap();
     let contenuto = 7_i32.to_le_bytes();
@@ -3282,8 +3314,8 @@ fn con_statistiche(statistiche: Struttura) -> Vec<u8> {
         .i64(5, 1)
         .i64(6, pagine)
         .i64(7, pagine)
-        .i64(9, inizio)
-        .struttura(12, statistiche);
+        .i64(9, inizio);
+    let metadati = metadati_in_piu(metadati);
     let chunk = Struttura::default()
         .i64(2, inizio)
         .struttura(3, metadati)
@@ -3291,8 +3323,8 @@ fn con_statistiche(statistiche: Struttura) -> Vec<u8> {
     let gruppo = Struttura::default()
         .elenco(1, STRUCT, vec![chunk])
         .i64(2, pagine)
-        .i64(3, 1)
-        .fine();
+        .i64(3, 1);
+    let gruppo = gruppo_in_piu(gruppo).fine();
     let radice = Struttura::default().testo(4, "schema").i32(5, 1).fine();
     let foglia = Struttura::default()
         .i32(1, INT32)
@@ -3302,7 +3334,7 @@ fn con_statistiche(statistiche: Struttura) -> Vec<u8> {
     let footer = Struttura::default()
         .i32(1, 1)
         .elenco(2, STRUCT, vec![radice, foglia])
-        .i64(3, 1)
+        .i64(3, righe_del_file)
         .elenco(4, STRUCT, vec![gruppo])
         .fine();
     let lunghezza = u32::try_from(footer.len()).unwrap();
@@ -3381,4 +3413,178 @@ fn i_metadati_negativi_sono_un_errore() {
         rifiutato_dal_confine(&rotto);
     }
     assert_eq!(arrow(&byte), Ok(1));
+}
+
+/// Conteggi e dimensioni negativi in campi del footer che il fork leggeva
+/// senza controllo: il conteggio delle pagine di `PageEncodingStats` (nei
+/// due decoder, a maschera e completo), gli istogrammi e i byte di
+/// `SizeStatistics`, `RowGroup.total_compressed_size` (prima non letto),
+/// `RowGroup.ordinal`, `SortingColumn.column_idx` e le righe del file. Ora
+/// un errore; l'inventario di ogni campo intero e della sua regola è in
+/// `tests/parquet_campi_thrift.rs`.
+#[test]
+fn i_campi_negativi_del_footer_sono_un_errore() {
+    let atteso = "negative count, size or offset";
+    // `PageEncodingStats { page_type: DATA_PAGE, encoding: PLAIN, count }`.
+    let statistica_di_pagina = |conteggio: i64| {
+        Struttura::default()
+            .i32(1, 0)
+            .i32(2, PLAIN)
+            .i32(3, conteggio)
+            .fine()
+    };
+    let casi: Vec<(&str, Vec<u8>)> = vec![
+        (
+            "PageEncodingStats.count",
+            con_campi(
+                |m| m.elenco(13, STRUCT, vec![statistica_di_pagina(-1)]),
+                |g| g,
+                1,
+            ),
+        ),
+        (
+            "SizeStatistics.unencoded_byte_array_data_bytes",
+            con_campi(
+                |m| m.struttura(16, Struttura::default().i64(1, -1)),
+                |g| g,
+                1,
+            ),
+        ),
+        (
+            "SizeStatistics.definition_level_histogram",
+            con_campi(
+                |m| {
+                    m.struttura(
+                        16,
+                        Struttura::default().elenco(3, I64, vec![intero_di_elenco(-1)]),
+                    )
+                },
+                |g| g,
+                1,
+            ),
+        ),
+        (
+            "SortingColumn.column_idx",
+            con_campi(
+                |m| m,
+                |g| {
+                    g.elenco(
+                        4,
+                        STRUCT,
+                        vec![Struttura::default()
+                            .i32(1, -1)
+                            .campo_booleano(2, false)
+                            .campo_booleano(3, false)
+                            .fine()],
+                    )
+                },
+                1,
+            ),
+        ),
+        (
+            "RowGroup.total_compressed_size",
+            con_campi(|m| m, |g| g.i64(6, -1), 1),
+        ),
+        (
+            "RowGroup.ordinal",
+            con_campi(|m| m, |g| g.intero(7, -1, 4), 1),
+        ),
+        ("FileMetaData.num_rows", con_campi(|m| m, |g| g, -1)),
+    ];
+    for (nome, byte) in casi {
+        match arrow(&byte) {
+            Err(errore) => assert!(errore.contains(atteso), "{nome}: {errore}"),
+            Ok(righe) => panic!("{nome}: letto ({righe} righe)"),
+        }
+        rifiutato_dal_confine(&byte);
+    }
+    // Controfattuali: gli stessi campi non negativi.
+    for byte in [
+        con_campi(
+            |m| m.elenco(13, STRUCT, vec![statistica_di_pagina(1)]),
+            |g| g.i64(6, 10).intero(7, 0, 4),
+            1,
+        ),
+        con_campi(
+            |m| {
+                m.struttura(
+                    16,
+                    Struttura::default()
+                        .i64(1, 0)
+                        .elenco(3, I64, vec![intero_di_elenco(0)]),
+                )
+            },
+            |g| g,
+            1,
+        ),
+    ] {
+        assert_eq!(arrow(&byte), Ok(1));
+    }
+}
+
+/// Le statistiche di pagina di una colonna FLBA hanno la larghezza del
+/// tipo: il lettore delle statistiche di pagina non riceveva la larghezza,
+/// e un valore più lungo o più corto passava. Lette con le statistiche di
+/// pagina attive (`set_read_page_statistics`).
+#[test]
+fn le_statistiche_di_pagina_flba_hanno_la_larghezza_del_tipo() {
+    use parquet::file::properties::ReaderProperties;
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::{ReadOptionsBuilder, SerializedFileReader};
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let pagina = |minimo: &[u8], massimo: &[u8]| {
+        let contenuto = b"zz";
+        let header = Struttura::default()
+            .i32(1, 0)
+            .i32(2, 2)
+            .i32(3, 2)
+            .struttura(
+                5,
+                Struttura::default()
+                    .i32(1, 1)
+                    .i32(2, PLAIN)
+                    .i32(3, RLE)
+                    .i32(4, RLE)
+                    .struttura(
+                        5,
+                        Struttura::default().binario(5, massimo).binario(6, minimo),
+                    ),
+            )
+            .fine();
+        parquet_con_header(&flba, 1, PLAIN, contenuto, &header, None, None)
+    };
+    let leggi = |byte: &[u8]| {
+        su_file(byte, |file| {
+            let opzioni = ReadOptionsBuilder::new()
+                .with_reader_properties(
+                    ReaderProperties::builder()
+                        .set_read_page_statistics(true)
+                        .build(),
+                )
+                .build();
+            let lettore =
+                SerializedFileReader::new_with_options(file, opzioni).map_err(|e| e.to_string())?;
+            let gruppo = lettore.get_row_group(0).map_err(|e| e.to_string())?;
+            let mut lettore_di_pagine = gruppo
+                .get_column_page_reader(0)
+                .map_err(|e| e.to_string())?;
+            let mut lette = 0;
+            while let Some(letta) = lettore_di_pagine
+                .get_next_page()
+                .map_err(|e| e.to_string())?
+            {
+                assert!(letta.statistics().is_some());
+                lette += 1;
+            }
+            Ok::<usize, String>(lette)
+        })
+    };
+    for (minimo, massimo) in [(&b"z"[..], &b"zz"[..]), (&b"zzz"[..], &b"zz"[..])] {
+        let errore = leggi(&pagina(minimo, massimo)).unwrap_err();
+        assert!(errore.contains("statistic of the wrong width"), "{errore}");
+    }
+    assert_eq!(leggi(&pagina(b"zz", b"zz")), Ok(1));
 }

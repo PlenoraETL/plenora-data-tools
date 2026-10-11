@@ -119,8 +119,19 @@ macro_rules! statistics_enum_func {
 }
 
 /// Converts Thrift definition into `Statistics`.
+#[cfg(test)] // PLENORA: the readers pass the width of the column.
 pub(crate) fn from_thrift_page_stats(
     physical_type: Type,
+    thrift_stats: Option<PageStatistics>,
+) -> Result<Option<Statistics>> {
+    from_thrift_page_stats_con_larghezza(physical_type, None, thrift_stats)
+}
+
+/// PLENORA: as [`from_thrift_page_stats`], with the width of a
+/// `FIXED_LEN_BYTE_ARRAY` column: its statistics have that width exactly.
+pub(crate) fn from_thrift_page_stats_con_larghezza(
+    physical_type: Type,
+    larghezza: Option<i32>,
     thrift_stats: Option<PageStatistics>,
 ) -> Result<Option<Statistics>> {
     Ok(match thrift_stats {
@@ -178,9 +189,7 @@ pub(crate) fn from_thrift_page_stats(
             // width (bytes in excess were dropped in silence: `01 00 00 00 FF`
             // was the INT32 1), and a boolean is 0 or 1.
             fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
-                let fuori_forma = |valore: &[u8]| {
-                    valore.len() != len || (len == 1 && valore.first().is_some_and(|b| *b > 1))
-                };
+                let fuori_forma = |valore: &[u8]| valore.len() != len;
                 if min.is_some_and(fuori_forma) || max.is_some_and(fuori_forma) {
                     return Err(general_err!("statistic of the wrong width for its type"));
                 }
@@ -204,10 +213,28 @@ pub(crate) fn from_thrift_page_stats(
             {
                 let (min, max) = (min.as_deref(), max.as_deref());
                 match physical_type {
-                    Type::BOOLEAN => check_len(min, max, 1),
+                    Type::BOOLEAN => {
+                        // PLENORA: a boolean statistic is one byte, 0 or 1 (the
+                        // rule is the boolean's, not every width 1: a FLBA of
+                        // width 1 holds any byte).
+                        check_len(min, max, 1)?;
+                        if min.into_iter().chain(max).any(|valore| valore[0] > 1) {
+                            Err(general_err!("statistic of the wrong width for its type"))
+                        } else {
+                            Ok(())
+                        }
+                    }
                     Type::INT32 | Type::FLOAT => check_len(min, max, 4),
                     Type::INT64 | Type::DOUBLE => check_len(min, max, 8),
                     Type::INT96 => check_len(min, max, 12),
+                    // PLENORA: FLBA values have the width of the type.
+                    Type::FIXED_LEN_BYTE_ARRAY => match larghezza.map(usize::try_from) {
+                        Some(Ok(larghezza)) => check_len(min, max, larghezza),
+                        Some(Err(_)) => {
+                            Err(general_err!("statistic of the wrong width for its type"))
+                        }
+                        None => Ok(()),
+                    },
                     _ => Ok(()),
                 }?;
             }

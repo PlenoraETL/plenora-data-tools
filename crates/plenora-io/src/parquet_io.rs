@@ -123,6 +123,13 @@ fn rifiuto_del_fork(testo: &str) -> Option<PlenoraError> {
             "colonna FIXED_LEN_BYTE_ARRAY letta come dizionario Arrow: non supportata".to_owned(),
         ));
     }
+    if testo.contains(parquet::basic::PAGE_INDEX_NOT_QUALIFIED)
+        || testo.contains(parquet::basic::BLOOM_FILTER_NOT_QUALIFIED)
+    {
+        return Some(PlenoraError::Unsupported(
+            "indici di pagina o bloom filter Parquet: non supportati in lettura".to_owned(),
+        ));
+    }
     if testo.contains(parquet::basic::SKIP_NOT_QUALIFIED) {
         return Some(PlenoraError::Unsupported(
             "salto dentro una pagina Parquet o selezione di righe: non supportato".to_owned(),
