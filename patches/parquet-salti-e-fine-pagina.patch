@@ -287,6 +287,15 @@
  // `src` is an array laid out like a NxM matrix where N == `data_width` and
 --- a/src/arrow/arrow_reader/mod.rs
 +++ b/src/arrow/arrow_reader/mod.rs
+@@ -1336,7 +1336,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
+                 self.input.0.get_bytes(bitset_offset, bitset_length)?
+             }
+         };
+-        Ok(Some(Sbbf::new(&bitset)))
++        Ok(Some(Sbbf::new(&bitset)?))
+     }
+ 
+     /// Build a [`ParquetRecordBatchReader`]
 @@ -1816,7 +1816,7 @@ pub(crate) mod tests {
      use std::sync::Arc;
  
@@ -330,7 +339,7 @@
          println!("test_row_numbers_with_multiple_row_groups seed: {seed}");
          let mut rng = StdRng::seed_from_u64(seed);
  
-@@ -6167,4 +6174,45 @@ pub(crate) mod tests {
+@@ -6167,4 +6174,53 @@ pub(crate) mod tests {
  
          (Bytes::from(buf), metadata)
      }
@@ -356,26 +365,45 @@
 +            .unwrap();
 +        writer.close().unwrap();
 +        let byte = Bytes::from(buffer);
-+        let leggi = |selezione: Vec<RowSelector>| -> std::result::Result<usize, String> {
++        let leggi = |selezione: Vec<RowSelector>| -> std::result::Result<Vec<i32>, String> {
 +            let lettore = ParquetRecordBatchReaderBuilder::try_new(byte.clone())
 +                .unwrap()
 +                .with_row_selection(RowSelection::from(selezione))
 +                .build()
 +                .map_err(|e| e.to_string())?;
-+            let mut righe = 0;
++            let mut valori = Vec::new();
 +            for batch in lettore {
-+                righe += batch.map_err(|e| e.to_string())?.num_rows();
++                let batch = batch.map_err(|e| e.to_string())?;
++                valori.extend(
++                    batch
++                        .column(0)
++                        .as_primitive::<arrow_array::types::Int32Type>()
++                        .values()
++                        .iter(),
++                );
 +            }
-+            Ok(righe)
++            Ok(valori)
 +        };
++        // The values selected, not only their count: the rows 100 to 199.
 +        assert_eq!(
 +            leggi(vec![RowSelector::skip(100), RowSelector::select(100)]),
-+            Ok(100)
++            Ok((100..200).collect::<Vec<i32>>())
 +        );
 +        let errore = leggi(vec![RowSelector::skip(1), RowSelector::select(199)]).unwrap_err();
 +        assert!(errore.contains("skip inside a page"), "{errore}");
 +    }
  }
+--- a/src/arrow/async_reader/mod.rs
++++ b/src/arrow/async_reader/mod.rs
+@@ -649,7 +649,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
+                     .await?
+             }
+         };
+-        Ok(Some(Sbbf::new(&bitset)))
++        Ok(Some(Sbbf::new(&bitset)?))
+     }
+ 
+     /// Select row groups and rows using row-group-local coordinates.
 --- a/src/arrow/decoder/dictionary_index.rs
 +++ b/src/arrow/decoder/dictionary_index.rs
 @@ -77,7 +77,12 @@ impl DictIndexDecoder {
@@ -423,7 +451,7 @@
  }
  
  impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
-@@ -317,29 +326,48 @@ struct PackedDecoder {
+@@ -317,38 +326,57 @@ struct PackedDecoder {
      rle_value: bool,
      packed_count: usize,
      packed_offset: usize,
@@ -477,8 +505,21 @@
 +            self.gruppi_della_corsa = run;
          } else {
              self.rle_left = run;
++            // PLENORA: the errors of `RleDecoder`, the same text for the
++            // same stream in the two level decoders.
              let byte = *self.data.as_ref().get(self.data_offset).ok_or_else(|| {
-@@ -357,6 +385,32 @@ impl PackedDecoder {
+-                ParquetError::EOF(
+-                    "unexpected end of file whilst decoding definition levels rle value".into(),
+-                )
++                general_err!("parquet_data_error: not enough data for RLE decoding")
+             })?;
+             if byte > 1 {
+-                return Err(general_err!("invalid definition level in an RLE run"));
++                return Err(general_err!("RLE value wider than the bit width"));
+             }
+ 
+             self.data_offset += 1;
+@@ -357,26 +385,55 @@ impl PackedDecoder {
          Ok(())
      }
  
@@ -509,9 +550,32 @@
 +    }
 +
      /// Decodes a VLQ encoded little endian integer and returns it
++    /// PLENORA: with the rules and the errors of
++    /// `BitReader::get_vlq_int_checked`, the same text for the same stream in
++    /// the two level decoders.
      fn decode_header(&mut self) -> Result<i64> {
          let mut offset = 0;
-@@ -377,6 +431,10 @@ impl PackedDecoder {
+         let mut v: i64 = 0;
+-        while offset < 10 {
+-            let byte = *self
+-                .data
+-                .as_ref()
+-                .get(self.data_offset + offset)
+-                .ok_or_else(|| {
+-                    ParquetError::EOF(
+-                        "unexpected end of file whilst decoding definition levels rle header"
+-                            .into(),
+-                    )
+-                })?;
++        loop {
++            let Some(&byte) = self.data.as_ref().get(self.data_offset + offset) else {
++                return Err(general_err!("varint truncated at the end of the data"));
++            };
++            if offset >= 10 {
++                return Err(general_err!("varint longer than 10 bytes"));
++            }
+ 
+             // PLENORA: bits beyond 64 were dropped in silence.
              if offset == 9 && byte & 0x7F > 1 {
                  return Err(general_err!("varint beyond 64 bits"));
              }
@@ -522,7 +586,15 @@
              v |= ((byte & 0x7F) as i64) << (offset * 7);
              offset += 1;
              if byte & 0x80 == 0 {
-@@ -397,6 +455,8 @@ impl PackedDecoder {
+@@ -384,7 +441,6 @@ impl PackedDecoder {
+                 return Ok(v);
+             }
+         }
+-        Err(general_err!("too many bytes for VLQ"))
+     }
+ }
+ 
+@@ -397,6 +453,8 @@ impl PackedDecoder {
              rle_value: false,
              packed_count: 0,
              packed_offset: 0,
@@ -531,7 +603,7 @@
          }
      }
  
-@@ -420,6 +480,7 @@ impl PackedDecoder {
+@@ -420,6 +478,7 @@ impl PackedDecoder {
          };
          self.data = data;
          self.data_offset = 0;
@@ -539,7 +611,7 @@
          Ok(())
      }
  
-@@ -434,7 +495,7 @@ impl PackedDecoder {
+@@ -434,7 +493,7 @@ impl PackedDecoder {
      fn try_consume_all_valid(&mut self, len: usize) -> Result<Option<usize>> {
          // If no active run and no packed data pending, try to parse the next RLE block
          if self.rle_left == 0 && self.packed_count == self.packed_offset {
@@ -548,7 +620,7 @@
                  self.next_rle_block()?;
              } else {
                  // No more data available
-@@ -472,7 +533,7 @@ impl PackedDecoder {
+@@ -472,7 +531,7 @@ impl PackedDecoder {
                  if self.packed_offset == self.packed_count {
                      self.data_offset += self.packed_count / 8;
                  }
@@ -557,7 +629,7 @@
                  break;
              } else {
                  self.next_rle_block()?
-@@ -506,7 +567,7 @@ impl PackedDecoder {
+@@ -506,7 +565,7 @@ impl PackedDecoder {
                  if self.packed_offset == self.packed_count {
                      self.data_offset += self.packed_count / 8;
                  }
@@ -635,6 +707,93 @@
  /// The minimum number of bytes for a bloom filter bitset.
  pub const BITSET_MIN_LENGTH: usize = 32;
  /// The maximum number of bytes for a bloom filter bitset.
+@@ -400,7 +408,21 @@ impl Sbbf {
+     }
+ 
+     /// Creates a new [Sbbf] from a raw byte slice.
+-    pub fn new(bitset: &[u8]) -> Self {
++    ///
++    /// PLENORA: not public: it was an entry around the rejection of the bloom
++    /// filters (`BLOOM_FILTER_NOT_QUALIFIED`) that read any bytes, dropped a
++    /// remainder (33 bytes were one block) and let `check` index out of an
++    /// empty filter (fewer than 32 bytes). Now a crate entry, after a header,
++    /// and the bitset is whole blocks, at least one, within the maximum.
++    pub(crate) fn new(bitset: &[u8]) -> Result<Self, ParquetError> {
++        if bitset.is_empty()
++            || !bitset.len().is_multiple_of(size_of::<Block>())
++            || bitset.len() > BITSET_MAX_LENGTH
++        {
++            return Err(ParquetError::General(
++                "bloom filter bitset is not a whole number of blocks".to_string(),
++            ));
++        }
+         let data = bitset
+             .as_chunks::<32>()
+             .0
+@@ -414,7 +436,7 @@ impl Sbbf {
+                 block
+             })
+             .collect::<Vec<Block>>();
+-        Self(data)
++        Ok(Self(data))
+     }
+ 
+     /// Write the bloom filter data (header and then bitset) to the output. This doesn't
+@@ -517,7 +539,7 @@ impl Sbbf {
+             }
+         };
+ 
+-        Ok(Some(Self::new(&bitset)))
++        Ok(Some(Self::new(&bitset)?))
+     }
+ 
+     /// Map a 64-bit hash to a block index in `[0, num_blocks)`.
+@@ -752,7 +774,7 @@ impl Sbbf {
+             .get(start..end)
+             .ok_or_else(|| ParquetError::General("Bloom filter bitset is invalid".to_string()))?;
+ 
+-        Ok(Self::new(bitset))
++        Self::new(bitset)
+     }
+ }
+ 
+@@ -766,6 +788,18 @@ fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
+ 
+ #[cfg(test)]
+ mod tests {
++    /// PLENORA: the constructor from raw bytes is a crate entry and takes
++    /// whole blocks only: 33 bytes dropped one, fewer than 32 left `check`
++    /// indexing an empty filter.
++    #[test]
++    fn test_sbbf_new_takes_whole_blocks_only() {
++        assert!(Sbbf::new(&[0; 33]).is_err());
++        assert!(Sbbf::new(&[0; 31]).is_err());
++        assert!(Sbbf::new(&[]).is_err());
++        let filtro = Sbbf::new(&[0; 32]).unwrap();
++        assert!(!filtro.check(&1_i32));
++    }
++
+     use super::*;
+ 
+     #[test]
+@@ -809,7 +843,7 @@ mod tests {
+             200, 1, 80, 20, 64, 68, 8, 109, 6, 37, 4, 67, 144, 80, 96, 32, 8, 132, 43, 33, 0, 5,
+             99, 65, 2, 0, 224, 44, 64, 78, 96, 4,
+         ];
+-        let sbbf = Sbbf::new(bitset);
++        let sbbf = Sbbf::new(bitset).unwrap();
+         for a in 0..10i64 {
+             let value = format!("a{a}");
+             assert!(sbbf.check(&value.as_str()));
+@@ -965,7 +999,7 @@ mod tests {
+     fn test_sbbf_write_round_trip() {
+         // Create a bloom filter with a 32-byte bitset (minimum size)
+         let bitset_bytes = vec![0u8; 32];
+-        let mut original = Sbbf::new(&bitset_bytes);
++        let mut original = Sbbf::new(&bitset_bytes).unwrap();
+ 
+         // Insert some test values
+         let test_values = ["hello", "world", "rust", "parquet", "bloom", "filter"];
 --- a/src/column/reader.rs
 +++ b/src/column/reader.rs
 @@ -141,11 +141,15 @@ pub struct GenericColumnReader<R, D, V> {
@@ -1717,7 +1876,7 @@
                  if let Some(min) = min
                      && min.len() < len
                  {
-@@ -243,10 +258,25 @@ fn convert_stats(
+@@ -243,10 +258,30 @@ fn convert_stats(
  
              let physical_type = column_descr.physical_type();
              match physical_type {
@@ -1738,13 +1897,18 @@
                  Type::INT96 => check_len(min, max, 12),
 +                // PLENORA: FLBA values have the width of the type.
 +                Type::FIXED_LEN_BYTE_ARRAY => match usize::try_from(column_descr.type_length()) {
-+                    Ok(larghezza) => check_len(min, max, larghezza),
++                    Ok(larghezza) => {
++                        use crate::file::statistics::verifica_statistica_flba;
++                        verifica_statistica_flba(min, stats.is_min_value_exact, larghezza).and_then(
++                            |()| verifica_statistica_flba(max, stats.is_max_value_exact, larghezza),
++                        )
++                    }
 +                    Err(_) => Err(general_err!("statistic of the wrong width for its type")),
 +                },
                  _ => Ok(()),
              }?;
  
-@@ -406,6 +436,10 @@ fn read_encoding_stats_as_mask(prot: &mut ThriftSliceInputProtocol<'_>) -> Resul
+@@ -406,6 +441,10 @@ fn read_encoding_stats_as_mask(prot: &mut ThriftSliceInputProtocol<'_>) -> Resul
  
      for _ in 0..list_ident.size {
          let pes = PageEncodingStats::read_thrift(prot)?;
@@ -1755,7 +1919,7 @@
          match pes.page_type {
              PageType::DATA_PAGE | PageType::DATA_PAGE_V2 => mask |= 1 << pes.encoding as i32,
              _ => {}
-@@ -515,6 +549,10 @@ fn read_column_metadata(
+@@ -515,6 +554,10 @@ fn read_column_metadata(
                  } else {
                      let val =
                          read_thrift_vec::<PageEncodingStats, ThriftSliceInputProtocol>(&mut *prot)?;
@@ -1766,7 +1930,7 @@
                      column.encoding_stats = Some(ParquetPageEncodingStats::Full(val));
                  }
              }
-@@ -526,6 +564,18 @@ fn read_column_metadata(
+@@ -526,6 +569,18 @@ fn read_column_metadata(
              }
              16 if !skip_size_stats => {
                  let val = SizeStatistics::read_thrift(&mut *prot)?;
@@ -1785,7 +1949,7 @@
                  column.unencoded_byte_array_data_bytes = val.unencoded_byte_array_data_bytes;
                  column.repetition_level_histogram =
                      val.repetition_level_histogram.map(LevelHistogram::from);
-@@ -634,10 +684,55 @@ fn read_column_chunk(
+@@ -634,10 +689,55 @@ fn read_column_chunk(
  
      // not encrypted, so make sure all required fields were read
      validate_column_metadata(col_meta_mask)?;
@@ -1841,7 +2005,7 @@
  fn read_row_group(
      prot: &mut ThriftSliceInputProtocol,
      schema_descr: &Arc<SchemaDescriptor>,
-@@ -704,14 +799,29 @@ fn read_row_group(
+@@ -704,14 +804,29 @@ fn read_row_group(
              }
              4 => {
                  let val = read_thrift_vec::<SortingColumn, ThriftSliceInputProtocol>(&mut *prot)?;
@@ -1872,7 +2036,7 @@
              }
              _ => {
                  prot.skip(field_ident.field_type)?;
-@@ -720,6 +830,16 @@ fn read_row_group(
+@@ -720,6 +835,16 @@ fn read_row_group(
          last_field_id = field_ident.id;
      }
  
@@ -1889,7 +2053,7 @@
      if mask != RG_ALL_REQUIRED {
          if mask & RG_COLUMNS == 0 {
              return Err(general_err!("Required field columns is missing"));
-@@ -898,7 +1018,12 @@ pub(crate) fn parquet_metadata_from_bytes(
+@@ -898,7 +1023,12 @@ pub(crate) fn parquet_metadata_from_bytes(
                  }
              }
              3 => {
@@ -1903,7 +2067,7 @@
              }
              4 => {
                  if schema_descr.is_none() {
-@@ -2036,14 +2161,14 @@ pub(crate) mod tests {
+@@ -2036,14 +2166,14 @@ pub(crate) mod tests {
              .unwrap_err();
          assert_eq!(
              err.to_string(),
@@ -2148,9 +2312,33 @@
                  Ok(())
 --- a/src/file/statistics.rs
 +++ b/src/file/statistics.rs
-@@ -119,9 +119,20 @@ macro_rules! statistics_enum_func {
+@@ -118,10 +118,44 @@ macro_rules! statistics_enum_func {
+     }};
  }
  
++/// PLENORA: a `FIXED_LEN_BYTE_ARRAY` statistic against the width of the
++/// type. An exact one (`is_*_value_exact` true, or no flag: the deprecated
++/// fields, and the writers that do not set it) has the width exactly; one
++/// marked not exact (`is_*_value_exact` false) is a truncated prefix, 1 to
++/// the width bytes (the writer of this crate truncates min and max to 64
++/// bytes and marks them).
++pub(crate) fn verifica_statistica_flba(
++    valore: Option<&[u8]>,
++    esatta: Option<bool>,
++    larghezza: usize,
++) -> Result<()> {
++    let ammessa = match (valore, esatta) {
++        (None, _) => true,
++        (Some(valore), Some(false)) => (1..=larghezza).contains(&valore.len()),
++        (Some(valore), _) => valore.len() == larghezza,
++    };
++    if ammessa {
++        Ok(())
++    } else {
++        Err(general_err!("statistic of the wrong width for its type"))
++    }
++}
++
  /// Converts Thrift definition into `Statistics`.
 +#[cfg(test)] // PLENORA: the readers pass the width of the column.
  pub(crate) fn from_thrift_page_stats(
@@ -2169,7 +2357,7 @@
  ) -> Result<Option<Statistics>> {
      Ok(match thrift_stats {
          Some(stats) => {
-@@ -138,7 +149,15 @@ pub(crate) fn from_thrift_page_stats(
+@@ -138,7 +172,15 @@ pub(crate) fn from_thrift_page_stats(
                  })
                  .transpose()?;
              // Generic distinct count (count of distinct values occurring)
@@ -2186,7 +2374,7 @@
              // Generic nan count for floating point types
              let nan_count = stats
                  .nan_count
-@@ -166,7 +185,14 @@ pub(crate) fn from_thrift_page_stats(
+@@ -166,7 +208,14 @@ pub(crate) fn from_thrift_page_stats(
                  stats.max_value
              };
  
@@ -2201,7 +2389,7 @@
                  if let Some(min) = min
                      && min.len() < len
                  {
-@@ -187,10 +213,28 @@ pub(crate) fn from_thrift_page_stats(
+@@ -187,10 +236,37 @@ pub(crate) fn from_thrift_page_stats(
              {
                  let (min, max) = (min.as_deref(), max.as_deref());
                  match physical_type {
@@ -2222,7 +2410,16 @@
                      Type::INT96 => check_len(min, max, 12),
 +                    // PLENORA: FLBA values have the width of the type.
 +                    Type::FIXED_LEN_BYTE_ARRAY => match larghezza.map(usize::try_from) {
-+                        Some(Ok(larghezza)) => check_len(min, max, larghezza),
++                        Some(Ok(larghezza)) => {
++                            verifica_statistica_flba(min, stats.is_min_value_exact, larghezza)
++                                .and_then(|()| {
++                                    verifica_statistica_flba(
++                                        max,
++                                        stats.is_max_value_exact,
++                                        larghezza,
++                                    )
++                                })
++                        }
 +                        Some(Err(_)) => {
 +                            Err(general_err!("statistic of the wrong width for its type"))
 +                        }
@@ -2231,7 +2428,30 @@
                      _ => Ok(()),
                  }?;
              }
-@@ -1186,7 +1230,7 @@ mod tests {
+@@ -753,6 +829,22 @@ impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
+ 
+ #[cfg(test)]
+ mod tests {
++    /// PLENORA: a FLBA statistic: exact (flag true or absent) has the width
++    /// of the type; marked not exact is a prefix of 1 to the width bytes.
++    #[test]
++    fn test_flba_statistic_width_follows_exactness() {
++        let w = 4;
++        assert!(verifica_statistica_flba(Some(&[1; 4]), None, w).is_ok());
++        assert!(verifica_statistica_flba(Some(&[1; 4]), Some(true), w).is_ok());
++        assert!(verifica_statistica_flba(Some(&[1; 3]), None, w).is_err());
++        assert!(verifica_statistica_flba(Some(&[1; 5]), Some(true), w).is_err());
++        assert!(verifica_statistica_flba(Some(&[1; 3]), Some(false), w).is_ok());
++        assert!(verifica_statistica_flba(Some(&[1; 4]), Some(false), w).is_ok());
++        assert!(verifica_statistica_flba(Some(&[]), Some(false), w).is_err());
++        assert!(verifica_statistica_flba(Some(&[1; 5]), Some(false), w).is_err());
++        assert!(verifica_statistica_flba(None, Some(false), w).is_ok());
++    }
++
+     use core::f32;
+ 
+     use super::*;
+@@ -1186,7 +1278,7 @@ mod tests {
          let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats.clone())).unwrap_err();
          assert_eq!(
              err.to_string(),
@@ -2240,7 +2460,7 @@
          );
  
          thrift_stats.min = None;
-@@ -1194,7 +1238,7 @@ mod tests {
+@@ -1194,7 +1286,7 @@ mod tests {
          let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats)).unwrap_err();
          assert_eq!(
              err.to_string(),

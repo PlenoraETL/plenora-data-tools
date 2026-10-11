@@ -483,6 +483,45 @@ ripetizione troncati).
    parte compressa, e un suffisso qualunque spariva. Ora si decomprime e
    deve dare zero byte (lo stream vuoto di un codec si legge).
 
+**Dodicesimo giro.**
+
+1. Statistiche `FIXED_LEN_BYTE_ARRAY`: la larghezza esatta dell'undicesimo
+   giro rifiutava le statistiche troncate, e lo scrittore di questo crate
+   tronca minimo e massimo a 64 byte e li marca non esatti: un FLBA di 65
+   byte scritto dal fork non si rileggeva. Ora una statistica esatta
+   (`is_*_value_exact` vero o assente) ha la larghezza del tipo; una marcata
+   non esatta è un prefisso da 1 alla larghezza
+   (`verifica_statistica_flba`, nel column chunk e nella pagina). pyarrow
+   25 e 26 (FLBA di 16, 64, 65 e 200 byte, pagine v1 e v2, con e senza
+   dizionario) e DuckDB (`UUID`) scrivono la larghezza piena senza segno:
+   si leggono tutti.
+2. `Sbbf::new` era pubblico: costruiva un bloom filter da byte qualunque
+   aggirando `BLOOM_FILTER_NOT_QUALIFIED`, perdeva un resto (33 byte erano
+   un blocco) e con meno di 32 byte `check` indicizzava un filtro vuoto.
+   Ora è del crate e rifiuta un bitset vuoto, non fatto di blocchi interi o
+   oltre il massimo. Gli altri costruttori pubblici non leggono byte di un
+   file: `from_bytes` passa dall'header (`BLOOM_FILTER_NOT_QUALIFIED`),
+   `new_with_ndv_fpp` e `new_with_num_of_bytes` costruiscono un filtro
+   vuoto per lo scrittore; gli indici si costruiscono da byte solo nel
+   crate (`try_from_thrift`, `ReadThrift` non pubblico) e dai decoder
+   pubblici, rifiutati.
+3. L'inventario dei campi Thrift non dipende più dagli a capo: la prova
+   divide i sorgenti in token, legge i campi delle macro `thrift_struct!` e
+   quelli dei decoder scritti a mano dai rami del `match` sugli id, non dai
+   commenti; una prova sintetica (struttura su una riga, campo spezzato,
+   commenti, decoder in un `impl`) lo verifica. I campi sono 60 (prima se
+   ne contavano 59).
+4. I due decoder dei livelli danno lo stesso messaggio per lo stesso
+   stream (lo ha trovato l'oracolo con i messaggi esatti su `80 06`): il
+   decoder ottimizzato usa i testi di `RleDecoder` per la fine dei dati,
+   il valore più largo della larghezza e i varint troncati o lunghi.
+5. `test_row_selection_inside_a_page_or_on_a_boundary` verifica anche i
+   valori selezionati (le righe da 100 a 199), non solo il loro numero.
+
+Prove unitarie del pacchetto: le stesse 147 (due esecuzioni identiche); le
+prove nuove di `Sbbf::new` e della regola FLBA passano. Scrittori della
+matrice e 106 file di prova: lo stesso esito dei giri precedenti.
+
 **Undicesimo giro.**
 
 1. Indici di pagina e bloom filter non qualificati: ogni loro lettura è un

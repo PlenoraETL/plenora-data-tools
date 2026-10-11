@@ -118,6 +118,29 @@ macro_rules! statistics_enum_func {
     }};
 }
 
+/// PLENORA: a `FIXED_LEN_BYTE_ARRAY` statistic against the width of the
+/// type. An exact one (`is_*_value_exact` true, or no flag: the deprecated
+/// fields, and the writers that do not set it) has the width exactly; one
+/// marked not exact (`is_*_value_exact` false) is a truncated prefix, 1 to
+/// the width bytes (the writer of this crate truncates min and max to 64
+/// bytes and marks them).
+pub(crate) fn verifica_statistica_flba(
+    valore: Option<&[u8]>,
+    esatta: Option<bool>,
+    larghezza: usize,
+) -> Result<()> {
+    let ammessa = match (valore, esatta) {
+        (None, _) => true,
+        (Some(valore), Some(false)) => (1..=larghezza).contains(&valore.len()),
+        (Some(valore), _) => valore.len() == larghezza,
+    };
+    if ammessa {
+        Ok(())
+    } else {
+        Err(general_err!("statistic of the wrong width for its type"))
+    }
+}
+
 /// Converts Thrift definition into `Statistics`.
 #[cfg(test)] // PLENORA: the readers pass the width of the column.
 pub(crate) fn from_thrift_page_stats(
@@ -229,7 +252,16 @@ pub(crate) fn from_thrift_page_stats_con_larghezza(
                     Type::INT96 => check_len(min, max, 12),
                     // PLENORA: FLBA values have the width of the type.
                     Type::FIXED_LEN_BYTE_ARRAY => match larghezza.map(usize::try_from) {
-                        Some(Ok(larghezza)) => check_len(min, max, larghezza),
+                        Some(Ok(larghezza)) => {
+                            verifica_statistica_flba(min, stats.is_min_value_exact, larghezza)
+                                .and_then(|()| {
+                                    verifica_statistica_flba(
+                                        max,
+                                        stats.is_max_value_exact,
+                                        larghezza,
+                                    )
+                                })
+                        }
                         Some(Err(_)) => {
                             Err(general_err!("statistic of the wrong width for its type"))
                         }
@@ -797,6 +829,22 @@ impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
 
 #[cfg(test)]
 mod tests {
+    /// PLENORA: a FLBA statistic: exact (flag true or absent) has the width
+    /// of the type; marked not exact is a prefix of 1 to the width bytes.
+    #[test]
+    fn test_flba_statistic_width_follows_exactness() {
+        let w = 4;
+        assert!(verifica_statistica_flba(Some(&[1; 4]), None, w).is_ok());
+        assert!(verifica_statistica_flba(Some(&[1; 4]), Some(true), w).is_ok());
+        assert!(verifica_statistica_flba(Some(&[1; 3]), None, w).is_err());
+        assert!(verifica_statistica_flba(Some(&[1; 5]), Some(true), w).is_err());
+        assert!(verifica_statistica_flba(Some(&[1; 3]), Some(false), w).is_ok());
+        assert!(verifica_statistica_flba(Some(&[1; 4]), Some(false), w).is_ok());
+        assert!(verifica_statistica_flba(Some(&[]), Some(false), w).is_err());
+        assert!(verifica_statistica_flba(Some(&[1; 5]), Some(false), w).is_err());
+        assert!(verifica_statistica_flba(None, Some(false), w).is_ok());
+    }
+
     use core::f32;
 
     use super::*;

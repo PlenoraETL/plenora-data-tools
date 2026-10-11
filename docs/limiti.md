@@ -1169,6 +1169,10 @@ lettore Arrow e quello seriale con l'indice chiesto, il lettore dei
 metadati, i decoder pubblici `decode_column_index` e
 `decode_offset_index`, il lettore di pagine costruito sulle posizioni
 dell'offset index, la lettura dei bloom filter. La scrittura non cambia.
+Gli indici e i bloom filter costruiti in memoria da chi usa il fork come
+libreria (i builder dello scrittore, `set_page_index`,
+`Sbbf::new_with_ndv_fpp`) non vengono da byte di un file e restano fuori;
+il costruttore da byte grezzi `Sbbf::new` non è più pubblico.
 
 **Hazard.** Chiedere un indice di pagina o un bloom filter è un errore
 esplicito (`PAGE_INDEX_NOT_QUALIFIED`, `BLOOM_FILTER_NOT_QUALIFIED`;

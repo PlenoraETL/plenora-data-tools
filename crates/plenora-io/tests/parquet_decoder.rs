@@ -2841,7 +2841,11 @@ fn i_due_decoder_dei_livelli_danno_lo_stesso_esito() {
                 assert_eq!(a, b, "{righe} righe, livelli {livelli:02x?}");
                 letti += 1;
             }
-            (Err(_), Err(_)) => {}
+            (Err(a), Err(b)) => assert_eq!(
+                a.strip_prefix("Parquet argument error: ").unwrap_or(a),
+                b,
+                "{righe} righe, livelli {livelli:02x?}"
+            ),
             _ => panic!(
                 "esiti diversi su {righe} righe, livelli {livelli:02x?}: {ottimizzato:?} {generico:?}"
             ),
@@ -3197,7 +3201,11 @@ fn l_oracolo_dei_livelli_copre_v2_blocchi_e_guasti() {
             let generico = livelli_generici(&byte);
             match (&ottimizzato, &generico) {
                 (Ok(a), Ok(b)) => assert_eq!(a, b, "v2 {v2}, livelli {stream:02x?}"),
-                (Err(_), Err(_)) => {}
+                (Err(a), Err(b)) => assert_eq!(
+                    a.strip_prefix("Parquet argument error: ").unwrap_or(a),
+                    b,
+                    "v2 {v2}, livelli {stream:02x?}"
+                ),
                 _ => {
                     panic!("esiti diversi (v2 {v2}) su {stream:02x?}: {ottimizzato:?} {generico:?}")
                 }
@@ -3587,4 +3595,50 @@ fn le_statistiche_di_pagina_flba_hanno_la_larghezza_del_tipo() {
         assert!(errore.contains("statistic of the wrong width"), "{errore}");
     }
     assert_eq!(leggi(&pagina(b"zz", b"zz")), Ok(1));
+}
+
+/// Lo scrittore del fork tronca il minimo e il massimo a 64 byte e li marca
+/// non esatti: una colonna FLBA di 65 byte, scritta dal fork stesso, non si
+/// rileggeva dopo la regola della larghezza esatta. Ora una statistica
+/// marcata non esatta è un prefisso fra 1 e la larghezza; una esatta (o
+/// senza segno, come scrivono pyarrow e `DuckDB`) ha la larghezza esatta.
+#[test]
+fn una_colonna_flba_lunga_scritta_dal_fork_si_rilegge() {
+    use parquet::arrow::ArrowWriter;
+    use plenora_core::arrow::array::{ArrayRef, FixedSizeBinaryArray};
+    let valori = (0..5_u8).map(|i| vec![i; 65]);
+    let colonna: ArrayRef = Arc::new(FixedSizeBinaryArray::try_from_iter(valori).unwrap());
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "x",
+        colonna.data_type().clone(),
+        false,
+    )]));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![colonna]).unwrap();
+    let mut byte = Vec::new();
+    let mut scrittore = ArrowWriter::try_new(&mut byte, schema, None).unwrap();
+    scrittore.write(&batch).unwrap();
+    scrittore.close().unwrap();
+    // Le statistiche del column chunk sono troncate e marcate non esatte.
+    su_file(&byte, |file| {
+        let costruttore = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let statistiche = costruttore
+            .metadata()
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .unwrap();
+        assert!(!statistiche.max_is_exact());
+    });
+    assert_eq!(arrow(&byte), Ok(5));
+    let dir = cartella();
+    let percorso = dir.path().join("flba65.parquet");
+    std::fs::write(&percorso, &byte).unwrap();
+    let tabella = leggi_tabella_con_limiti(
+        &percorso,
+        Some(Formato::Parquet),
+        u64::MAX,
+        &LimitiLettura::default(),
+    )
+    .unwrap();
+    assert_eq!(tabella.num_rows(), 5);
 }

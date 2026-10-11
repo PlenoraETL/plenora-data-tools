@@ -76,7 +76,8 @@ la cui versione non ha qui una voce datata.
   tipo, e offset, dimensioni e conteggi negativi nei metadati del footer
   sono un errore (prima diventavano interi enormi, o un panico); ogni
   campo intero del footer ha una regola, verificata da un inventario. Le
-  statistiche FLBA hanno la larghezza del tipo. La lettura degli indici di
+  statistiche FLBA esatte hanno la larghezza del tipo, quelle marcate non
+  esatte (troncate, come le scrive parquet-rs) da 1 alla larghezza. La lettura degli indici di
   pagina e dei bloom filter non è qualificata (`docs/limiti.md`): data non
   li legge. Una pagina v2
   comincia su un confine di record (i record spezzati fra pagine v2 si

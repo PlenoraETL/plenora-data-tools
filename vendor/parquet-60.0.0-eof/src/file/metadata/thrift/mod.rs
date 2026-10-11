@@ -274,7 +274,12 @@ fn convert_stats(
                 Type::INT96 => check_len(min, max, 12),
                 // PLENORA: FLBA values have the width of the type.
                 Type::FIXED_LEN_BYTE_ARRAY => match usize::try_from(column_descr.type_length()) {
-                    Ok(larghezza) => check_len(min, max, larghezza),
+                    Ok(larghezza) => {
+                        use crate::file::statistics::verifica_statistica_flba;
+                        verifica_statistica_flba(min, stats.is_min_value_exact, larghezza).and_then(
+                            |()| verifica_statistica_flba(max, stats.is_max_value_exact, larghezza),
+                        )
+                    }
                     Err(_) => Err(general_err!("statistic of the wrong width for its type")),
                 },
                 _ => Ok(()),

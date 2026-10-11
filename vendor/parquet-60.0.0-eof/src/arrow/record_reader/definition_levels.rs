@@ -370,13 +370,13 @@ impl PackedDecoder {
             self.gruppi_della_corsa = run;
         } else {
             self.rle_left = run;
+            // PLENORA: the errors of `RleDecoder`, the same text for the
+            // same stream in the two level decoders.
             let byte = *self.data.as_ref().get(self.data_offset).ok_or_else(|| {
-                ParquetError::EOF(
-                    "unexpected end of file whilst decoding definition levels rle value".into(),
-                )
+                general_err!("parquet_data_error: not enough data for RLE decoding")
             })?;
             if byte > 1 {
-                return Err(general_err!("invalid definition level in an RLE run"));
+                return Err(general_err!("RLE value wider than the bit width"));
             }
 
             self.data_offset += 1;
@@ -412,20 +412,19 @@ impl PackedDecoder {
     }
 
     /// Decodes a VLQ encoded little endian integer and returns it
+    /// PLENORA: with the rules and the errors of
+    /// `BitReader::get_vlq_int_checked`, the same text for the same stream in
+    /// the two level decoders.
     fn decode_header(&mut self) -> Result<i64> {
         let mut offset = 0;
         let mut v: i64 = 0;
-        while offset < 10 {
-            let byte = *self
-                .data
-                .as_ref()
-                .get(self.data_offset + offset)
-                .ok_or_else(|| {
-                    ParquetError::EOF(
-                        "unexpected end of file whilst decoding definition levels rle header"
-                            .into(),
-                    )
-                })?;
+        loop {
+            let Some(&byte) = self.data.as_ref().get(self.data_offset + offset) else {
+                return Err(general_err!("varint truncated at the end of the data"));
+            };
+            if offset >= 10 {
+                return Err(general_err!("varint longer than 10 bytes"));
+            }
 
             // PLENORA: bits beyond 64 were dropped in silence.
             if offset == 9 && byte & 0x7F > 1 {
@@ -442,7 +441,6 @@ impl PackedDecoder {
                 return Ok(v);
             }
         }
-        Err(general_err!("too many bytes for VLQ"))
     }
 }
 

@@ -649,7 +649,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
                     .await?
             }
         };
-        Ok(Some(Sbbf::new(&bitset)))
+        Ok(Some(Sbbf::new(&bitset)?))
     }
 
     /// Select row groups and rows using row-group-local coordinates.

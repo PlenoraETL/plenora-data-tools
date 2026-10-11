@@ -1336,7 +1336,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                 self.input.0.get_bytes(bitset_offset, bitset_length)?
             }
         };
-        Ok(Some(Sbbf::new(&bitset)))
+        Ok(Some(Sbbf::new(&bitset)?))
     }
 
     /// Build a [`ParquetRecordBatchReader`]
@@ -6196,21 +6196,29 @@ pub(crate) mod tests {
             .unwrap();
         writer.close().unwrap();
         let byte = Bytes::from(buffer);
-        let leggi = |selezione: Vec<RowSelector>| -> std::result::Result<usize, String> {
+        let leggi = |selezione: Vec<RowSelector>| -> std::result::Result<Vec<i32>, String> {
             let lettore = ParquetRecordBatchReaderBuilder::try_new(byte.clone())
                 .unwrap()
                 .with_row_selection(RowSelection::from(selezione))
                 .build()
                 .map_err(|e| e.to_string())?;
-            let mut righe = 0;
+            let mut valori = Vec::new();
             for batch in lettore {
-                righe += batch.map_err(|e| e.to_string())?.num_rows();
+                let batch = batch.map_err(|e| e.to_string())?;
+                valori.extend(
+                    batch
+                        .column(0)
+                        .as_primitive::<arrow_array::types::Int32Type>()
+                        .values()
+                        .iter(),
+                );
             }
-            Ok(righe)
+            Ok(valori)
         };
+        // The values selected, not only their count: the rows 100 to 199.
         assert_eq!(
             leggi(vec![RowSelector::skip(100), RowSelector::select(100)]),
-            Ok(100)
+            Ok((100..200).collect::<Vec<i32>>())
         );
         let errore = leggi(vec![RowSelector::skip(1), RowSelector::select(199)]).unwrap_err();
         assert!(errore.contains("skip inside a page"), "{errore}");
