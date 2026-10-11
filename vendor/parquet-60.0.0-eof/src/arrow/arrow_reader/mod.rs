@@ -1816,7 +1816,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use rand::rngs::StdRng;
-    use rand::{Rng, RngExt, SeedableRng, random, rng};
+    use rand::{Rng, RngExt, SeedableRng, rng};
     use tempfile::tempfile;
 
     use crate::arrow::arrow_reader::{
@@ -3331,7 +3331,9 @@ pub(crate) mod tests {
         fn with_row_selections(self) -> Self {
             assert!(self.row_filter.is_none(), "Must set row selection first");
 
-            let mut rng = rng();
+            // PLENORA: a fixed seed: where the selection falls (inside a
+            // page, not qualified, or on a boundary) decides the outcome.
+            let mut rng = StdRng::seed_from_u64(0x5EED_0001);
             let step = rng.random_range(self.record_batch_size..self.num_rows);
             let row_selections = create_test_selection(
                 step,
@@ -3350,7 +3352,8 @@ pub(crate) mod tests {
                 None => self.num_row_groups * self.num_rows,
             };
 
-            let mut rng = rng();
+            // PLENORA: a fixed seed, as for the row selections.
+            let mut rng = StdRng::seed_from_u64(0x5EED_0002);
             Self {
                 row_filter: Some((0..row_count).map(|_| rng.random_bool(0.9)).collect()),
                 ..self
@@ -6067,7 +6070,11 @@ pub(crate) mod tests {
     ) where
         F: FnOnce(PathBuf, RowSelection, Option<RowFilter>, usize) -> Vec<RecordBatch>,
     {
-        let seed: u64 = random();
+        // PLENORA: a fixed seed: with a random one the selection fell inside
+        // a page (`SKIP_NOT_QUALIFIED`) or not, and the outcome changed from
+        // run to run. The two cases are explicit in
+        // `test_row_selection_inside_a_page_or_on_a_boundary`.
+        let seed: u64 = 0x5EED_0003;
         println!("test_row_numbers_with_multiple_row_groups seed: {seed}");
         let mut rng = StdRng::seed_from_u64(seed);
 
@@ -6166,5 +6173,46 @@ pub(crate) mod tests {
         let metadata = writer.close().expect("Could not close writer");
 
         (Bytes::from(buf), metadata)
+    }
+
+    /// PLENORA: the two outcomes of a row selection, deterministic: a skip
+    /// on a row group boundary (whole pages) reads; a skip inside a page is
+    /// `SKIP_NOT_QUALIFIED`.
+    #[test]
+    fn test_row_selection_inside_a_page_or_on_a_boundary() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            ArrowDataType::Int32,
+            false,
+        )]));
+        let mut buffer = Vec::new();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(100))
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
+        let valori = Int32Array::from_iter_values(0..200);
+        writer
+            .write(&RecordBatch::try_new(schema, vec![Arc::new(valori)]).unwrap())
+            .unwrap();
+        writer.close().unwrap();
+        let byte = Bytes::from(buffer);
+        let leggi = |selezione: Vec<RowSelector>| -> std::result::Result<usize, String> {
+            let lettore = ParquetRecordBatchReaderBuilder::try_new(byte.clone())
+                .unwrap()
+                .with_row_selection(RowSelection::from(selezione))
+                .build()
+                .map_err(|e| e.to_string())?;
+            let mut righe = 0;
+            for batch in lettore {
+                righe += batch.map_err(|e| e.to_string())?.num_rows();
+            }
+            Ok(righe)
+        };
+        assert_eq!(
+            leggi(vec![RowSelector::skip(100), RowSelector::select(100)]),
+            Ok(100)
+        );
+        let errore = leggi(vec![RowSelector::skip(1), RowSelector::select(199)]).unwrap_err();
+        assert!(errore.contains("skip inside a page"), "{errore}");
     }
 }

@@ -783,8 +783,9 @@ mod tests {
         let column_desc = utf8_column();
         let mut decoder = DictionaryDecoder::new(&column_desc);
 
+        // PLENORA: the dictionary of no data has no entry.
         decoder
-            .set_dict(encoded_dictionary, 4, Encoding::PLAIN_DICTIONARY, false)
+            .set_dict(encoded_dictionary, 0, Encoding::PLAIN_DICTIONARY, false)
             .unwrap();
 
         for (encoding, page) in pages.clone() {

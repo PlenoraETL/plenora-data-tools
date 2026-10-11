@@ -512,11 +512,30 @@ ripetizione troncati).
    decoder, e il rifiuto del blocco di 32 gruppi in v2; una prova a parte
    lo verifica a larghezza 2, negli indici.
 
-Prove unitarie del pacchetto: falliscono 78 o 79 prove, le 52 di partenza
-e le 27 attese, meno `test_row_numbers_with_multiple_row_groups`, che usa
-un seme casuale e fallisce solo quando la selezione casuale salta dentro
-una pagina (`SKIP_NOT_QUALIFIED`). Due prove a monte sulle statistiche
-`INT96` aspettano ora il testo del nuovo errore.
+Due prove a monte sulle statistiche `INT96` aspettano ora il testo del
+nuovo errore.
+
+**Prove unitarie del pacchetto, deterministiche.** Le prove a monte che
+generano le selezioni di righe e i filtri con un seme casuale
+(`with_row_selections`, `with_row_filter`,
+`test_row_numbers_with_multiple_row_groups_helper`) usano un seme fisso:
+con un seme casuale una selezione cadeva dentro una pagina
+(`SKIP_NOT_QUALIFIED`) o su un confine, e l'esito cambiava da
+un'esecuzione all'altra (78 o 79 fallimenti). I due casi sono espliciti in
+`test_row_selection_inside_a_page_or_on_a_boundary` (un salto su un confine
+di row group legge, uno dentro una pagina è `SKIP_NOT_QUALIFIED`). Gli
+altri semi casuali delle prove generano valori, non selezioni: cinque
+esecuzioni complete danno gli stessi fallimenti. Due prove a monte
+dichiaravano un dizionario di 4 voci per una pagina vuota
+(`test_byte_array_decoder_nulls`, `test_nulls`): ora 0.
+
+Prove unitarie del pacchetto con `parquet-testing`: **79** falliscono, sempre le stesse (verificato su cinque esecuzioni), ciascuna per una delle cause seguenti.
+
+- codifica non qualificata (`ENCODING_NOT_QUALIFIED`: `DELTA_*`, `BYTE_STREAM_SPLIT`; `test_byte_stream_split_extended` per l'API a righe, che non stampa l'errore), 42: `test_byte_stream_split_extended`, `test_byte_array_decoder`, `test_byte_array_decoder_nulls`, `test_byte_array_decoder_skip`, `test_dictionary_fallback`, `test_dictionary_skip_fallback`, `test_nulls`, `test_byte_array_string_view_decoder`, `test_fixed_length_binary_column_reader`, `test_interval_day_time_column_reader`, `test_read_extended_byte_stream_split`, `test_read_float32_float64_byte_stream_split`, `test_unsigned_primitive_single_column_reader_test`, `test_utf8_single_column_reader_test`, `all_null_primitive_single_column`, `arrow_writer_binary`, `arrow_writer_non_null`, `binary_column_bloom_filter`, `binary_single_column`, `empty_string_null_column_bloom_filter`, `f32_single_column`, `f64_single_column`, `fallback_flush_data_page`, `i16_single_column`, `i32_column_bloom_filter`, `i32_column_bloom_filter_at_end`, `i32_column_bloom_filter_fixed_ndv`, `i32_single_column`, `i64_single_column`, `i8_single_column`, `large_binary_single_column`, `large_string_single_column`, `statistics_null_counts_only_nulls`, `string_single_column`, `u16_single_column`, `u32_min_max`, `u32_single_column`, `u64_min_max`, `u64_single_column`, `u8_single_column`, `test_column_writer_dictionary_disabled_v2`, `test_byte_stream_split_extended_roundtrip`.
+- salto dentro una pagina o selezione di righe (`SKIP_NOT_QUALIFIED`), 28: `test_int96_single_column_reader_test`, `test_list_selection`, `test_list_selection_fuzz`, `test_list_skip`, `test_primitive_single_column_reader_test`, `test_read_nested_lists`, `test_row_numbers_with_multiple_row_groups`, `test_row_numbers_with_multiple_row_groups_and_filter`, `test_scan_row_with_selection`, `test_decoder_filter_with_row_selection_and_limit`, `test_decoder_multi_filters`, `test_decoder_multi_filters_with_limit`, `test_decoder_offset_limit`, `test_decoder_row_group_local_selections`, `test_decoder_row_selection`, `test_decoder_single_filter_and_row_selection`, `test_decoder_try_next_reader_offset_limit`, `test_into_builder_installs_filter_between_row_groups`, `test_into_builder_preserves_local_selections_with_row_filter`, `test_into_builder_preserves_remaining_row_group_local_selections`, `test_legacy_row_groups_and_row_selection_remain_composable`, `test_row_group_local_selections_respect_offset_and_limit`, `test_row_group_local_selections_with_row_filter`, `test_short_row_group_local_selection_skips_trailing_rows`, `test_skip_optional_records`, `test_skip_required_records`, `test_skip_records_v2_page_skip_accounts_for_partial`, `test_skip_page_with_offset_index`.
+- dichiarazioni incoerenti costruite dalla prova, rifiutate dalla patch `-eof` e dal controllo delle dimensioni, 5: `test_delta_bit_packed_padding`, `test_delta_bit_packed_skip_wide_miniblocks`, `test_decode_unsupported_page`, `test_page_writer_data_pages`, `test_page_writer_dict_pages`.
+- colonna FLBA letta come dizionario Arrow (`FLBA_AS_DICTIONARY`), 2: `test_read_dict_fixed_size_binary`, `test_fixed_size_binary_in_dict`.
+- tipo testo su byte non annotati (`STRING_WITHOUT_ANNOTATION`), 2: `test_read_binary_as_utf8`, `test_read_non_utf8_binary_as_utf8`.
 
 **Nono giro.**
 

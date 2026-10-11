@@ -833,8 +833,10 @@ mod tests {
         let column_desc = utf8_column();
         let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
 
+        // PLENORA: the dictionary of no data has no entry (4 declared and
+        // none in the page is a dictionary not as declared).
         decoder
-            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
+            .set_dict(encoded_dictionary, 0, Encoding::PLAIN, false)
             .unwrap();
 
         // test nulls read
