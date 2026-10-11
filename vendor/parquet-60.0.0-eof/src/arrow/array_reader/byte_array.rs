@@ -244,15 +244,8 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
         encoding: Encoding,
         _is_sorted: bool,
     ) -> Result<()> {
-        if !matches!(
-            encoding,
-            Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
-        ) {
-            return Err(nyi_err!(
-                "Invalid/Unsupported encoding type for dictionary: {}",
-                encoding
-            ));
-        }
+        // PLENORA: an excluded encoding has the text of every other rejection.
+        crate::basic::check_dictionary_page_encoding(encoding)?;
 
         let mut buffer = OffsetBuffer::with_capacity(0);
         let mut decoder = ByteArrayDecoderPlain::new(
@@ -261,7 +254,9 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             Some(num_values as usize),
             self.validate_utf8,
         );
-        decoder.read(&mut buffer, usize::MAX)?;
+        let letti = decoder.read(&mut buffer, usize::MAX)?;
+        // PLENORA: the count was ignored; a short dictionary was kept.
+        decoder.verifica_dizionario(letti, num_values as usize)?;
         self.dict = Some(buffer);
         Ok(())
     }
@@ -448,9 +443,11 @@ impl ByteArrayDecoderPlain {
             return Ok(0);
         }
 
+        // PLENORA: `checked_div`: no values left over a non-empty buffer
+        // divided by zero.
         let estimated_bytes = remaining_bytes
             .checked_mul(to_read)
-            .map(|x| x / self.max_remaining_values)
+            .and_then(|x| x.checked_div(self.max_remaining_values))
             .unwrap_or_default();
 
         output.values.reserve(estimated_bytes);
@@ -485,6 +482,15 @@ impl ByteArrayDecoderPlain {
             output.check_valid_utf8(initial_values_length)?;
         }
         Ok(read)
+    }
+
+    /// PLENORA: a dictionary page holds exactly the values its header
+    /// declares: `letti` of `dichiarati`, and every byte consumed.
+    pub fn verifica_dizionario(&self, letti: usize, dichiarati: usize) -> Result<()> {
+        if letti != dichiarati || self.offset != self.buf.len() {
+            return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
+        }
+        Ok(())
     }
 
     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {

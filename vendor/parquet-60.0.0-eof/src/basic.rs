@@ -1475,6 +1475,11 @@ pub const STRING_WITHOUT_ANNOTATION: &str =
 pub const FLBA_AS_DICTIONARY: &str =
     "FIXED_LEN_BYTE_ARRAY read as an Arrow dictionary is not supported";
 
+/// PLENORA: the fixed text of the rejection of a binary Arrow dictionary over
+/// a column annotated as text (the dictionary values are decoded as text).
+pub const BINARY_DICTIONARY_OVER_TEXT: &str =
+    "binary Arrow dictionary over a byte array column annotated as text";
+
 /// PLENORA: whether a value encoding is qualified for reading in this fork.
 ///
 /// Qualified: `PLAIN`, `PLAIN_DICTIONARY` and `RLE_DICTIONARY` for values,
@@ -1499,6 +1504,25 @@ pub fn check_qualified_value_encoding(encoding: Encoding) -> Result<()> {
         Err(nyi_err!("{}: {}", ENCODING_NOT_QUALIFIED, encoding))
     }
 }
+
+/// PLENORA: the encodings of a dictionary page: an encoding excluded from
+/// this fork is rejected as such (the same text as on a data page), a
+/// qualified encoding that cannot hold a dictionary keeps its own rejection.
+pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
+    check_qualified_value_encoding(encoding)?;
+    match encoding {
+        Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => Ok(()),
+        _ => Err(nyi_err!(
+            "Invalid/Unsupported encoding type for dictionary: {}",
+            encoding
+        )),
+    }
+}
+
+/// PLENORA: the fixed text of a dictionary page whose entries are not the
+/// entries its header declares (fewer values, or bytes after the last one).
+pub const DICTIONARY_NOT_AS_DECLARED: &str =
+    "dictionary page does not hold the values its header declares";
 
 #[cfg(test)]
 #[expect(deprecated)] // allow BIT_PACKED encoding for the whole test module

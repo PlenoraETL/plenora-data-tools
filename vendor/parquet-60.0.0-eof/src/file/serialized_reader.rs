@@ -419,6 +419,29 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
     }
 }
 
+/// PLENORA: a page skipped whole is rejected for its value encoding like a
+/// page read (an excluded page was skipped in silence). Only from its header:
+/// a page reached through the offset index has none and is skipped without
+/// this check. The level encodings of a skipped page are not checked: the
+/// header names one even for a column without levels.
+fn verifica_codifica_saltata(header: &PageHeader) -> Result<()> {
+    match header.r#type {
+        PageType::DICTIONARY_PAGE => match header.dictionary_page_header.as_ref() {
+            Some(dizionario) => crate::basic::check_dictionary_page_encoding(dizionario.encoding),
+            None => Ok(()),
+        },
+        PageType::DATA_PAGE => match header.data_page_header.as_ref() {
+            Some(pagina) => crate::basic::check_qualified_value_encoding(pagina.encoding),
+            None => Ok(()),
+        },
+        PageType::DATA_PAGE_V2 => match header.data_page_header_v2.as_ref() {
+            Some(pagina) => crate::basic::check_qualified_value_encoding(pagina.encoding),
+            None => Ok(()),
+        },
+        _ => Ok(()),
+    }
+}
+
 /// Decodes a [`Page`] from the provided `buffer`
 pub(crate) fn decode_page(
     page_header: PageHeader,
@@ -753,6 +776,14 @@ impl<R: ChunkReader> SerializedPageReader<R> {
 
         let state = match page_locations {
             Some(locations) => {
+                // PLENORA: the locations come from the caller: checked
+                // against the chunk before any subtraction below.
+                crate::file::page_index::offset_index::verifica_posizioni(
+                    &locations,
+                    total_rows as u64,
+                    start,
+                    len,
+                )?;
                 // If the offset of the first page doesn't match the start of the column chunk
                 // then the preceding space must contain a dictionary page.
                 let dictionary_page = match locations.first() {
@@ -1189,13 +1220,25 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         is_dict: true,
                     }))
                 } else if let Some(page) = page_locations.front() {
-                    let next_rows = page_locations
-                        .get(1)
-                        .map(|x| x.first_row_index as usize)
-                        .unwrap_or(*total_rows);
+                    // PLENORA: checked conversions and subtraction (the
+                    // locations are verified at construction; no wrap here).
+                    let riga = |indice: i64| {
+                        usize::try_from(indice).map_err(|_| {
+                            general_err!("invalid offset index: negative first row index")
+                        })
+                    };
+                    let next_rows = match page_locations.get(1) {
+                        Some(next) => riga(next.first_row_index)?,
+                        None => *total_rows,
+                    };
+                    let rows = next_rows
+                        .checked_sub(riga(page.first_row_index)?)
+                        .ok_or_else(|| {
+                            general_err!("invalid offset index: first row indexes out of order")
+                        })?;
 
                     Ok(Some(PageMetadata {
-                        num_rows: Some(next_rows - page.first_row_index as usize),
+                        num_rows: Some(rows),
                         num_levels: None,
                         is_dict: false,
                     }))
@@ -1216,6 +1259,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 require_dictionary,
             } => {
                 if let Some(buffered_header) = next_page_header.take() {
+                    verifica_codifica_saltata(&buffered_header)?;
                     verify_page_size(
                         buffered_header.compressed_page_size,
                         buffered_header.uncompressed_page_size,
@@ -1233,6 +1277,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *require_dictionary,
                     )?;
                     verify_page_header_len(header_len, *remaining_bytes)?;
+                    verifica_codifica_saltata(&header)?;
                     verify_page_size(
                         header.compressed_page_size,
                         header.uncompressed_page_size,

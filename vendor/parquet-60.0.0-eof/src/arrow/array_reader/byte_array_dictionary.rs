@@ -32,7 +32,7 @@ use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::{dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
-use crate::basic::{ConvertedType, Encoding};
+use crate::basic::Encoding;
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::encodings::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
@@ -96,6 +96,21 @@ pub fn make_byte_array_dictionary_reader(
         column_desc.as_ref(),
         &data_type,
     )?;
+    // PLENORA: over a column annotated as text the dictionary values are
+    // decoded as text; a binary value type was read from them as binary and
+    // panicked. Not qualified: a binary dictionary over text is refused.
+    if let ArrowType::Dictionary(_, valori) = &data_type
+        && matches!(
+            valori.as_ref(),
+            ArrowType::Binary
+                | ArrowType::LargeBinary
+                | ArrowType::BinaryView
+                | ArrowType::FixedSizeBinary(_)
+        )
+        && crate::arrow::array_reader::byte_array::annotated_as_text(column_desc.as_ref())
+    {
+        return Err(nyi_err!("{}", crate::basic::BINARY_DICTIONARY_OVER_TEXT));
+    }
 
     match &data_type {
         ArrowType::Dictionary(key_type, value_type) => {
@@ -322,7 +337,10 @@ where
         // PLENORA: `JSON` and `ENUM` are text too.
         let validate_utf8 = crate::arrow::array_reader::byte_array::annotated_as_text(col);
 
-        let value_type = match (V::IS_LARGE, col.converted_type() == ConvertedType::UTF8) {
+        // PLENORA: the value type follows the same annotation (it followed
+        // `UTF8` alone, and a `JSON` or `ENUM` dictionary held binary values
+        // that the text conversions read as text).
+        let value_type = match (V::IS_LARGE, validate_utf8) {
             (true, true) => ArrowType::LargeUtf8,
             (true, false) => ArrowType::LargeBinary,
             (false, true) => ArrowType::Utf8,
@@ -345,15 +363,8 @@ where
         encoding: Encoding,
         _is_sorted: bool,
     ) -> Result<()> {
-        if !matches!(
-            encoding,
-            Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
-        ) {
-            return Err(nyi_err!(
-                "Invalid/Unsupported encoding type for dictionary: {}",
-                encoding
-            ));
-        }
+        // PLENORA: an excluded encoding has the text of every other rejection.
+        crate::basic::check_dictionary_page_encoding(encoding)?;
 
         if K::from_usize(num_values as usize).is_none() {
             return Err(general_err!("dictionary too large for index type"));
@@ -362,7 +373,9 @@ where
         let len = num_values as usize;
         let mut buffer = OffsetBuffer::<V>::with_capacity(0);
         let mut decoder = ByteArrayDecoderPlain::new(buf, len, Some(len), self.validate_utf8);
-        decoder.read(&mut buffer, usize::MAX)?;
+        let letti = decoder.read(&mut buffer, usize::MAX)?;
+        // PLENORA: the count was ignored; a short dictionary was kept.
+        decoder.verifica_dizionario(letti, len)?;
 
         let array = buffer.into_array(None, self.value_type.clone());
         self.dict = Some(array);

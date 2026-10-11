@@ -231,7 +231,7 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
 
     fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
         match &mut self.decoder {
-            MaybePacked::Packed(d) => d.set_data(encoding, data),
+            MaybePacked::Packed(d) => d.set_data(encoding, data)?,
             MaybePacked::Fallback(d) => d.set_data(encoding, data)?,
         }
         Ok(())
@@ -400,18 +400,27 @@ impl PackedDecoder {
         }
     }
 
-    fn set_data(&mut self, encoding: Encoding, data: Bytes) {
+    fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
         self.rle_left = 0;
         self.rle_value = false;
         self.packed_offset = 0;
+        // PLENORA: only RLE levels. `BIT_PACKED` was read in the RLE bit
+        // order (the nulls moved in silence) and any other encoding reached
+        // `unreachable!`; both are errors.
         self.packed_count = match encoding {
             Encoding::RLE => 0,
             #[expect(deprecated)]
-            Encoding::BIT_PACKED => data.len() * 8,
-            _ => unreachable!("invalid level encoding: {}", encoding),
+            Encoding::BIT_PACKED => {
+                return Err(nyi_err!(
+                    "{}: BIT_PACKED levels",
+                    crate::basic::ENCODING_NOT_QUALIFIED
+                ));
+            }
+            _ => return Err(general_err!("invalid level encoding: {}", encoding)),
         };
         self.data = data;
         self.data_offset = 0;
+        Ok(())
     }
 
     /// Try to consume `len` levels if all are valid (max definition level).
@@ -550,7 +559,7 @@ mod tests {
 
         let encoded = encoder.consume();
         let mut decoder = PackedDecoder::new();
-        decoder.set_data(Encoding::RLE, encoded.into());
+        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
 
         // Decode data in random length intervals
         let mut decoded = BooleanBufferBuilder::new(len);
@@ -589,7 +598,7 @@ mod tests {
 
         let encoded = encoder.consume();
         let mut decoder = PackedDecoder::new();
-        decoder.set_data(Encoding::RLE, encoded.into());
+        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
 
         let mut skip_value = 0;
         let mut read_value = 0;
@@ -637,7 +646,7 @@ mod tests {
         }
         let encoded = encoder.consume();
         let mut decoder = PackedDecoder::new();
-        decoder.set_data(Encoding::RLE, encoded.into());
+        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
 
         // try_consume_all_valid now parses the RLE block itself, no need to read first
         let result = decoder.try_consume_all_valid(len).unwrap();
@@ -650,7 +659,7 @@ mod tests {
         }
         let encoded = encoder.consume();
         let mut decoder = PackedDecoder::new();
-        decoder.set_data(Encoding::RLE, encoded.into());
+        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
 
         // Should return None because rle_value is false (all nulls)
         let result = decoder.try_consume_all_valid(len).unwrap();
@@ -666,7 +675,7 @@ mod tests {
         }
         let encoded = encoder.consume();
         let mut decoder = PackedDecoder::new();
-        decoder.set_data(Encoding::RLE, encoded.into());
+        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
 
         // Request more than the valid run - should return None
         // (because we don't look ahead to next block)
@@ -674,16 +683,18 @@ mod tests {
         assert_eq!(result, None);
 
         // Reset decoder and try requesting within the run
-        decoder.set_data(Encoding::RLE, {
-            let mut encoder = RleEncoder::new(1, 1024);
-            for _ in 0..10 {
-                encoder.put(1);
-            }
-            for _ in 0..10 {
-                encoder.put(0);
-            }
-            encoder.consume().into()
-        });
+        decoder
+            .set_data(Encoding::RLE, {
+                let mut encoder = RleEncoder::new(1, 1024);
+                for _ in 0..10 {
+                    encoder.put(1);
+                }
+                for _ in 0..10 {
+                    encoder.put(0);
+                }
+                encoder.consume().into()
+            })
+            .unwrap();
 
         let result = decoder.try_consume_all_valid(5).unwrap();
         assert_eq!(result, Some(5));

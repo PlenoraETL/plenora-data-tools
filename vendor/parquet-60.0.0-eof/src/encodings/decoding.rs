@@ -306,6 +306,18 @@ impl<T: DataType> PlainDecoder<T> {
     }
 }
 
+impl<T: DataType> PlainDecoder<T> {
+    /// PLENORA: whether every byte of the data was consumed (for booleans,
+    /// up to the last partial byte).
+    pub(crate) fn tutto_consumato(&self) -> bool {
+        match (&self.inner.data, &self.inner.bit_reader) {
+            (Some(data), _) => self.inner.start == data.len(),
+            (None, Some(lettore)) => lettore.get_byte_offset() == lettore.buffer_len(),
+            (None, None) => false,
+        }
+    }
+}
+
 impl<T: DataType> Decoder<T> for PlainDecoder<T> {
     #[inline]
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
@@ -374,12 +386,27 @@ impl<T: DataType> DictDecoder<T> {
     }
 
     /// Decodes and sets values for dictionary using `decoder` decoder.
+    ///
+    /// PLENORA: test only; the column reader decodes and checks the
+    /// dictionary itself, then calls `con_valori`.
+    #[cfg(test)]
     pub fn set_dict(&mut self, mut decoder: Box<dyn Decoder<T>>) -> Result<()> {
         let num_values = decoder.values_left();
         self.dictionary.resize(num_values, T::T::default());
-        let _ = decoder.get(&mut self.dictionary)?;
+        // PLENORA: the count was ignored; a short dictionary kept default
+        // values as entries.
+        let letti = decoder.get(&mut self.dictionary)?;
+        if letti != num_values {
+            return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
+        }
         self.has_dictionary = true;
         Ok(())
+    }
+
+    /// PLENORA: sets the dictionary from values already decoded and checked.
+    pub(crate) fn con_valori(&mut self, valori: Vec<T::T>) {
+        self.dictionary = valori;
+        self.has_dictionary = true;
     }
 }
 

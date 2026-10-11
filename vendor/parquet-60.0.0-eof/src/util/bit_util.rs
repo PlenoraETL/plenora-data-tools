@@ -647,6 +647,11 @@ impl BitReader {
         self.bit_offset = 0;
     }
 
+    /// PLENORA: the length of the buffer, to check it was consumed.
+    pub(crate) fn buffer_len(&self) -> usize {
+        self.buffer.len()
+    }
+
     /// Returns the current byte offset, rounded up to the next whole byte.
     ///
     /// This is the index of the next byte that a byte-aligned

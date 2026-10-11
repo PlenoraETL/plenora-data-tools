@@ -417,31 +417,19 @@ impl ColumnValueDecoder for ValueDecoder {
         encoding: Encoding,
         _is_sorted: bool,
     ) -> Result<()> {
-        if !matches!(
-            encoding,
-            Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
-        ) {
-            return Err(nyi_err!(
-                "Invalid/Unsupported encoding type for dictionary: {}",
-                encoding
-            ));
-        }
+        // PLENORA: an excluded encoding has the text of every other rejection.
+        crate::basic::check_dictionary_page_encoding(encoding)?;
         // PLENORA: a wrapped product would accept a short dictionary.
         let expected_len = (num_values as usize)
             .checked_mul(self.byte_length)
             .ok_or_else(|| general_err!("dictionary page size overflows"))?;
-        if expected_len > buf.len() {
-            return Err(general_err!(
-                "too few bytes in dictionary page, expected {} got {}",
-                expected_len,
-                buf.len()
-            ));
+        // PLENORA: the dictionary holds exactly the values its header
+        // declares; bytes after them are not entries (an index into them was
+        // read as a value in silence), and are rejected like a short page.
+        if expected_len != buf.len() {
+            return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
         }
-
-        // PLENORA: the dictionary holds the values its header declares; bytes
-        // after them are not entries, and an index into them was read as a
-        // value in silence.
-        self.dict_page = Some(buf.slice(..expected_len));
+        self.dict_page = Some(buf);
         Ok(())
     }
 

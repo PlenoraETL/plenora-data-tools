@@ -220,9 +220,10 @@ difesa da file costruiti apposta (limiti dichiarati sotto).
   ammette una voce senza valore, ma qui sparirebbe in silenzio, quindi si
   rifiuta; pyarrow e arrow-rs scrivono sempre il valore, anche vuoto.
 - **Codifiche Parquet lette**: solo `PLAIN`, `PLAIN_DICTIONARY` e
-  `RLE_DICTIONARY` per i valori, `RLE` per i booleani, `RLE` e
-  `BIT_PACKED` per i livelli
+  `RLE_DICTIONARY` per i valori, `RLE` per i booleani e per i livelli
   ([«Codifiche Parquet non qualificate»](limiti.md#codifiche-parquet-non-qualificate)).
+  Livelli `BIT_PACKED` (deprecata) sono `Unsupported`; una codifica che
+  non esiste nella specifica è un file malformato (`DataMapping`).
   `DELTA_BINARY_PACKED`, `DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY` e
   `BYTE_STREAM_SPLIT` (e ogni altra) sono `Unsupported`, con un testo
   fisso. Il controllo è doppio: le codifiche che il column chunk dichiara
@@ -234,8 +235,9 @@ difesa da file costruiti apposta (limiti dichiarati sotto).
 - **Tipi letti**: un tipo Arrow testo (`Utf8`, `LargeUtf8`, `Utf8View`,
   anche come valori di un dizionario) solo su una colonna annotata come
   testo (`UTF8`, `JSON`, `ENUM`), perché la validazione UTF-8 segue
-  l'annotazione; una colonna `FIXED_LEN_BYTE_ARRAY` letta come dizionario
-  Arrow; entrambe altrimenti `Unsupported`. Per la stessa ragione un
+  l'annotazione; un dizionario Arrow di valori binari solo su una colonna
+  non annotata come testo; una colonna `FIXED_LEN_BYTE_ARRAY` letta come
+  dizionario Arrow; tutte altrimenti `Unsupported`. Per la stessa ragione un
   dizionario di `FixedSizeBinary` non si scrive (`ArrowWriter` ne
   scriverebbe il dizionario con i prefissi di lunghezza, fuori dalla
   specifica). Un `INT32` annotato `INT_8`,

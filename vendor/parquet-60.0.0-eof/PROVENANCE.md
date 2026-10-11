@@ -19,10 +19,11 @@ con la chiave `parquet` (`Cargo.toml`, «Copie vendorizzate»).
   patch -p1 < patches/parquet-footer-budget.patch # profondità dello schema, tetto del footer
   patch -p1 < patches/parquet-decoder-2.patch     # decoder, secondo giro
   patch -p1 < patches/parquet-codifiche-e-livelli.patch  # codifiche lette, terzo giro, formattazione
+  patch -p1 < patches/parquet-livelli-dizionari-indici.patch  # BIT_PACKED, dizionari, pagine v2, offset index
   ```
 
   Il risultato è questa cartella byte per byte, tolto questo file
-  (verificato il 10 ottobre 2026 dal `.crate` con il checksum sopra).
+  (verificato l'11 ottobre 2026 dal `.crate` con il checksum sopra).
   Il nome del pacchetto: `plenora-parquet`, la libreria resta `parquet`
   (una `[patch.crates-io]` non vale per chi dipende dai crate di
   data-tools).
@@ -111,7 +112,8 @@ i byte davvero presenti.
     superano gli elementi che restano dopo il nodo.
 13. Dizionario `FixedLenByteArray`: il prodotto valori × larghezza usava una
     moltiplicazione che in release si avvolge e avrebbe accettato un
-    dizionario corto; ora `checked_mul`, e un overflow è un errore.
+    dizionario corto; ora `checked_mul`, e un overflow è un errore (dal
+    quarto giro la pagina deve avere esattamente i byte delle voci).
 
 Le prove (`crates/plenora-io/tests/parquet_dichiarazioni.rs`) prendono un
 file valido di `parquet-rs`, riscrivono un solo intero dichiarato con uno più
@@ -211,7 +213,8 @@ per caso; i file sono anche semi del fuzz, `tests/dati/fuzz-decoder/`):
    silenzio (`rle.rs`); le lunghezze dei livelli di una pagina v2 si
    sommavano in `i32` e si confrontavano con la dimensione dichiarata
    invece che con i byte letti (`serialized_reader.rs`); i livelli
-   `BIT_PACKED` dichiarati oltre la pagina (`column/reader.rs`); una pagina
+   `BIT_PACKED` dichiarati oltre la pagina (`column/reader.rs`; dal quarto
+   giro `BIT_PACKED` per i livelli non è qualificata); una pagina
    a dizionario senza la pagina di dizionario (`column/reader/decoder.rs`,
    un `expect`).
 
@@ -227,7 +230,9 @@ già (`test_delta_bit_packed_padding`,
 Non coperti, e perché: il lettore asincrono e la cifratura non sono
 compilati (feature non abilitate); le funzioni pubbliche
 `decode_column_index`/`decode_offset_index` decodificano indici di pagina
-che questo workspace non chiede.
+che questo workspace non chiede (dal quarto giro le posizioni dell'offset
+index si verificano quando il lettore dei metadati le carica, non in
+`decode_offset_index`).
 
 ### Decoder, secondo giro (10 ottobre 2026)
 
@@ -240,7 +245,8 @@ punti della stessa classe. Prove rosse in
 2. Dizionario FLBA: gli indici erano confrontati con i byte della pagina e
    non con le voci dichiarate; un indice fra le une e gli altri leggeva
    byte che non sono una voce **in silenzio**. Ora il dizionario si taglia
-   alle voci dichiarate.
+   alle voci dichiarate (dal quarto giro: byte oltre le voci sono un
+   errore).
 3. `DELTA_BYTE_ARRAY` generico: con meno suffissi che prefissi il valore
    riusava il suffisso precedente (["a", "a"] da un suffisso solo), **in
    silenzio**; ora conteggi diversi e un suffisso mancante sono errori.
@@ -278,13 +284,15 @@ Da `patches/parquet-codifiche-e-livelli.patch`.
 
 **Codifiche qualificate.** `basic::is_qualified_value_encoding` e
 `check_qualified_value_encoding`: si leggono solo `PLAIN`,
-`PLAIN_DICTIONARY`, `RLE_DICTIONARY` e `RLE` (booleani). Il controllo è in
-ogni punto che sceglie un decoder di valori per una pagina
+`PLAIN_DICTIONARY`, `RLE_DICTIONARY` e `RLE` (booleani). Il controllo è
+dove si sceglie un decoder di valori per una pagina di dati
 (`column/reader/decoder.rs` e i decoder Arrow dei byte array, delle viste
 e dei FLBA): `DELTA_*` e `BYTE_STREAM_SPLIT` sono un errore `NYI` con il
-testo fisso `ENCODING_NOT_QUALIFIED`. Le correzioni dei loro decoder
-(sezioni sopra) restano, non raggiungibili; `plenora-io` controlla anche le
-codifiche dichiarate nel footer.
+testo fisso `ENCODING_NOT_QUALIFIED`. Dal quarto giro anche le pagine di
+dizionario, i livelli e le pagine saltate intere; restano fuori le pagine
+saltate attraverso l'offset index (sezione seguente). Le correzioni dei
+loro decoder (sezioni sopra) restano, non raggiungibili; `plenora-io`
+controlla anche le codifiche dichiarate nel footer.
 
 **Terzo giro di revisione** (Codex), con prove in
 `crates/plenora-io/tests/parquet_decoder.rs`:
@@ -297,7 +305,10 @@ codifiche dichiarate nel footer.
    nella larghezza dichiarata. Una corsa bit-packed finale più corta dei
    suoi gruppi resta lecita, come a monte e in C++ (`test_truncated_rle`:
    alcuni writer non la completano): si legge fino ai suoi byte, e il
-   lettore confronta i livelli e i valori ottenuti con quelli dichiarati.
+   lettore confronta i livelli ottenuti con quelli dichiarati. I valori si
+   confrontano con quelli dichiarati solo in una pagina v2 (dal quarto
+   giro): una pagina v1 non dichiara i suoi valori, e sono i livelli a
+   deciderli.
    Il decoder ottimizzato dei livelli (`definition_levels.rs`) ora segue la
    stessa regola invece di rifiutarla.
 2. Colonna FLBA con tipo Arrow dizionario: passava dal lettore dei byte
@@ -329,6 +340,64 @@ non qualificate, compresa una via l'API per righe, 2 testo su byte non
 annotati, 2 FLBA come dizionario, 1 lettura di byte non UTF-8 come testo).
 Letti con `plenora-io`, i file di `parquet-testing` cambiano esito solo
 dove usano codifiche non qualificate (9 file).
+
+### Livelli BIT_PACKED, dizionari, pagine v2, offset index (11 ottobre 2026)
+
+Da `patches/parquet-livelli-dizionari-indici.patch`, sul quarto giro di revisione (Codex). Prove
+rosse in `crates/plenora-io/tests/parquet_decoder.rs` («Dizionari, pagine
+v2, valori di testo») e `parquet_footer.rs` («Offset index»), contro il
+fork del terzo giro; i file malformati sono anche semi del fuzz.
+
+1. Livelli `BIT_PACKED`: impacchettati dal bit più significativo, i due
+   decoder dei livelli li leggevano nell'ordine dell'RLE ibrido, dal meno
+   significativo. Un payload `0x80` su 8 righe metteva il valore
+   nell'ultima riga invece che nella prima, **in silenzio**. Deprecata,
+   non scritta dai writer attuali: non qualificata (`parse_v1_level`,
+   `LevelDecoder`, il decoder ottimizzato di `definition_levels.rs`, che
+   prima arrivava a `unreachable!` con una codifica sconosciuta). Nessuno
+   dei 106 file di `parquet-testing` e `arrow-testing` ha una pagina letta
+   che la usi; 40 la dichiarano nel footer, per i livelli assenti.
+2. Dizionari: `set_dict` ignorava il conteggio letto. Una pagina con meno
+   voci delle dichiarate si accettava (il decoder generico teneva valori di
+   default come voci), e zero voci dichiarate con dei byte dividevano per
+   zero nel lettore `PLAIN` dei byte array. Ora ogni pagina di dizionario
+   (byte array, viste, dizionari Arrow, FLBA, decoder generico) deve avere
+   esattamente le voci dichiarate e nessun byte dopo l'ultima
+   (`DICTIONARY_NOT_AS_DECLARED`); la divisione è `checked_div`. Una codifica
+   esclusa nella pagina di dizionario ha il testo `ENCODING_NOT_QUALIFIED`.
+3. Pagine v2: i livelli decidono quanti valori si leggono, e una pagina i
+   cui livelli contraddicevano `num_values - num_nulls` si leggeva (livelli
+   `05 00` su 8 righe senza nulli dichiarati: 8 null con 8 valori nella
+   pagina, **in silenzio**). Ora alla fine della pagina i valori letti o
+   saltati sono quelli dichiarati. Il costruttore di pagine delle prove
+   unitarie (`util/test_common/page_util.rs`) dichiarava `num_nulls` 0 per
+   ogni pagina: ora conta i livelli sotto il massimo.
+4. Il tipo dei valori di un dizionario di byte array seguiva solo
+   l'annotazione `UTF8`: `JSON` ed `ENUM`, validati come testo dal terzo
+   giro, tenevano valori binari, e `Dictionary(_, Utf8)` su `JSON` andava
+   in panico. Ora il tipo segue `annotated_as_text`, e un dizionario Arrow
+   binario su una colonna annotata come testo è `Unsupported`
+   (`BINARY_DICTIONARY_OVER_TEXT`; prima, su `ENUM`, si leggeva).
+5. Offset index: `first_row_index` (`i64`) si convertiva con `as usize` e
+   si sottraeva senza controlli. Ora le posizioni di ogni pagina si
+   verificano quando il lettore dei metadati carica l'indice e quando
+   `SerializedPageReader::new_with_properties` le riceve: prima riga non
+   negativa, non decrescente, entro le righe del row group; pagina dentro
+   il column chunk. La sottrazione di `peek_next_page` è controllata.
+6. Una pagina saltata intera (`skip_records`) si rifiuta per la sua
+   codifica di valori come una pagina letta, dall'header. Senza header,
+   attraverso l'offset index, il salto non la controlla; i livelli di una
+   pagina saltata non si controllano (l'header ne nomina una codifica anche
+   per una colonna senza livelli).
+
+Una codifica sconosciuta (un identificatore fuori dall'enumerazione) è un
+errore del Thrift, non `ENCODING_NOT_QUALIFIED`: dal confine `DataMapping`,
+come un footer malformato.
+
+Prove unitarie del pacchetto con `parquet-testing`: le stesse 52 di prima
+falliscono (le 5 di partenza e le 47 attese). Letti con `plenora-io` e
+direttamente (anche con gli indici di pagina caricati), i 106 file di
+`parquet-testing` e `arrow-testing` hanno lo stesso esito del terzo giro.
 
 ### Profondità dello schema e tetto di memoria del footer (10 ottobre 2026)
 

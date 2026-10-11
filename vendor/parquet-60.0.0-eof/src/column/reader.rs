@@ -28,7 +28,7 @@ use crate::column::reader::decoder::{
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::{ceil, num_required_bits, read_num_bytes};
+use crate::util::bit_util::read_num_bytes;
 
 pub(crate) mod decoder;
 
@@ -136,6 +136,16 @@ pub struct GenericColumnReader<R, D, V> {
 
     /// The decoder for the values
     values_decoder: V,
+
+    /// PLENORA: the values a V2 data page declares (`num_values - num_nulls`),
+    /// none for a V1 page.
+    valori_dichiarati: Option<usize>,
+
+    /// PLENORA: the values read or skipped from the current page so far, and
+    /// whether that count is complete (a skip that exhausts the page on the
+    /// repetition levels does not decode its values).
+    valori_della_pagina: usize,
+    valori_contati: bool,
 }
 
 impl<V> GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelDecoderImpl, V>
@@ -184,6 +194,9 @@ where
             num_decoded_values: 0,
             values_decoder,
             has_record_delimiter: false,
+            valori_dichiarati: None,
+            valori_della_pagina: 0,
+            valori_contati: false,
         }
     }
 
@@ -296,6 +309,8 @@ where
             }
 
             self.num_decoded_values += levels_to_read;
+            self.valori_della_pagina += values_read;
+            self.verifica_fine_pagina()?;
             total_records_read += records_read;
             total_levels_read += levels_to_read;
             total_values_read += values_read;
@@ -375,6 +390,8 @@ where
 
             if self.num_buffered_values == self.num_decoded_values {
                 // Exhausted buffered page - no need to advance other decoders
+                // PLENORA: its values were not decoded, so not counted.
+                self.valori_contati = false;
                 continue;
             }
 
@@ -399,8 +416,28 @@ where
                     values_read
                 ));
             }
+            self.valori_della_pagina += values;
+            self.verifica_fine_pagina()?;
         }
         Ok(num_records - remaining_records)
+    }
+
+    /// PLENORA: at the end of a V2 data page, the values read must be the
+    /// values it declares (`num_values - num_nulls`). The levels decide how
+    /// many values are read; a page whose levels and declared nulls disagree
+    /// (for instance a short bit-packed run read as nulls) was accepted.
+    fn verifica_fine_pagina(&self) -> Result<()> {
+        if self.num_decoded_values != self.num_buffered_values || !self.valori_contati {
+            return Ok(());
+        }
+        match self.valori_dichiarati {
+            Some(dichiarati) if dichiarati != self.valori_della_pagina => Err(general_err!(
+                "data page V2 declares {} values but its levels read {}",
+                dichiarati,
+                self.valori_della_pagina
+            )),
+            _ => Ok(()),
+        }
     }
 
     /// Read the next page as a dictionary page. If the next page is not a dictionary page,
@@ -451,6 +488,9 @@ where
                         } => {
                             self.num_buffered_values = num_values as _;
                             self.num_decoded_values = 0;
+                            self.valori_dichiarati = None;
+                            self.valori_della_pagina = 0;
+                            self.valori_contati = true;
 
                             let max_rep_level = self.descr.max_rep_level();
                             let max_def_level = self.descr.max_def_level();
@@ -520,6 +560,9 @@ where
 
                             self.num_buffered_values = num_values as _;
                             self.num_decoded_values = 0;
+                            self.valori_dichiarati = Some((num_values - num_nulls) as usize);
+                            self.valori_della_pagina = 0;
+                            self.valori_contati = true;
 
                             // DataPage v2 only supports RLE encoding for repetition
                             // levels
@@ -603,6 +646,7 @@ fn parse_v1_level(
     encoding: Encoding,
     buf: Bytes,
 ) -> Result<(usize, Bytes)> {
+    let _ = (max_level, num_buffered_values);
     match encoding {
         Encoding::RLE => {
             let i32_size = std::mem::size_of::<i32>();
@@ -617,16 +661,17 @@ fn parse_v1_level(
             }
             Err(general_err!("not enough data to read levels"))
         }
+        // PLENORA: `BIT_PACKED` levels are packed from the most significant
+        // bit, the RLE hybrid from the least; both decoders of this fork read
+        // them in the RLE order, and the nulls moved in silence (a payload
+        // `0x80` over 8 rows put the value in the last row instead of the
+        // first). Deprecated and not written by current writers: not
+        // qualified.
         #[expect(deprecated)]
-        Encoding::BIT_PACKED => {
-            let bit_width = num_required_bits(max_level as u64);
-            let num_bytes = ceil(num_buffered_values as usize * bit_width as usize, 8);
-            // PLENORA: the levels the header declares must be in the page.
-            if num_bytes > buf.len() {
-                return Err(general_err!("not enough data to read levels"));
-            }
-            Ok((num_bytes, buf.slice(..num_bytes)))
-        }
+        Encoding::BIT_PACKED => Err(nyi_err!(
+            "{}: BIT_PACKED levels",
+            crate::basic::ENCODING_NOT_QUALIFIED
+        )),
         _ => Err(general_err!("invalid level encoding: {}", encoding)),
     }
 }

@@ -25,7 +25,7 @@ use crate::encodings::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::{BitReader, num_required_bits};
+use crate::util::bit_util::num_required_bits;
 
 /// Decodes level data
 pub trait ColumnLevelDecoder {
@@ -171,6 +171,8 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         mut encoding: Encoding,
         _is_sorted: bool,
     ) -> Result<()> {
+        // PLENORA: an excluded encoding has the text of every other rejection.
+        crate::basic::check_dictionary_page_encoding(encoding)?;
         if encoding == Encoding::PLAIN || encoding == Encoding::PLAIN_DICTIONARY {
             encoding = Encoding::RLE_DICTIONARY
         }
@@ -182,9 +184,16 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         if encoding == Encoding::RLE_DICTIONARY {
             let mut dictionary = PlainDecoder::<T>::new(self.descr.type_length());
             dictionary.set_data(buf, num_values as usize)?;
+            // PLENORA: the dictionary holds exactly the values its header
+            // declares (the count was ignored, a short dictionary was kept).
+            let mut valori = vec![T::T::default(); num_values as usize];
+            let letti = dictionary.get(&mut valori)?;
+            if letti != valori.len() || !dictionary.tutto_consumato() {
+                return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
+            }
 
             let mut decoder = DictDecoder::new();
-            decoder.set_dict(Box::new(dictionary))?;
+            decoder.con_valori(valori);
             self.decoders[encoding as usize] = Some(Box::new(decoder));
             self.decoder_mask.insert(encoding);
             Ok(())
@@ -264,8 +273,8 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
 
 const SKIP_BUFFER_SIZE: usize = 1024;
 
+// PLENORA: the `Packed` variant is gone with `BIT_PACKED` levels.
 enum LevelDecoder {
-    Packed(BitReader, u8, i16),
     Rle(RleDecoder, i16),
 }
 
@@ -277,8 +286,12 @@ impl LevelDecoder {
                 decoder.set_data(data)?;
                 Ok(Self::Rle(decoder, max_level))
             }
+            // PLENORA: not qualified (wrong bit order, see `parse_v1_level`).
             #[expect(deprecated)]
-            Encoding::BIT_PACKED => Ok(Self::Packed(BitReader::new(data), bit_width, max_level)),
+            Encoding::BIT_PACKED => Err(nyi_err!(
+                "{}: BIT_PACKED levels",
+                crate::basic::ENCODING_NOT_QUALIFIED
+            )),
             // PLENORA: an error, not `unreachable!`.
             _ => Err(general_err!("invalid level encoding: {}", encoding)),
         }
@@ -286,10 +299,6 @@ impl LevelDecoder {
 
     fn read(&mut self, out: &mut [i16]) -> Result<usize> {
         let (read, max_level) = match self {
-            Self::Packed(reader, bit_width, max_level) => (
-                reader.get_batch::<i16>(out, *bit_width as usize),
-                *max_level,
-            ),
             Self::Rle(reader, max_level) => (reader.get_batch(out)?, *max_level),
         };
         // PLENORA: a level above the maximum fits the bit width but is no

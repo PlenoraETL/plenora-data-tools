@@ -1090,7 +1090,11 @@ di eseguire un piano in una build senza controlli di overflow.
 i suoi decoder hanno avuto una revisione e prove su file costruiti per
 romperli, e lo saranno con una campagna di fuzz propria. Lette:
 `PLAIN`, `PLAIN_DICTIONARY` e `RLE_DICTIONARY` per i valori, `RLE` per i
-booleani, `RLE` e `BIT_PACKED` per i livelli.
+booleani e per i livelli. Si controllano la codifica di ogni pagina di
+dati e di dizionario letta o saltata intera dal suo header, i livelli delle
+pagine lette, e le codifiche che il column chunk dichiara nel footer;
+`BIT_PACKED` nell'elenco del footer passa, perché parquet-mr la dichiara
+per i livelli assenti.
 
 **Ambito.** La lettura Parquet di `plenora-io` (CLI, SDK Python,
 `data.run` 3) e il fork `vendor/parquet-60.0.0-eof`
@@ -1098,8 +1102,11 @@ booleani, `RLE` e `BIT_PACKED` per i livelli.
 
 **Hazard.** Un file valido che usa `DELTA_BINARY_PACKED`,
 `DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY` o `BYTE_STREAM_SPLIT` (o
-un'altra codifica, per esempio la nuova `ALP`) si rifiuta con
-`Unsupported`. Le scrivono pyarrow con `column_encoding` o
+un'altra codifica, per esempio la nuova `ALP`), o livelli `BIT_PACKED`
+(deprecata; nessun file di prova la usa in una pagina), si rifiuta con
+`Unsupported`. Una pagina saltata attraverso l'offset index non ha header
+e non si controlla: `plenora-io` non carica l'offset index, quindi non lo
+raggiunge. Le scrivono pyarrow con `column_encoding` o
 `use_byte_stream_split`, i writer v2 di parquet-mr e Spark, DuckDB con le
 opzioni v2; non le scrivono pyarrow (anche con pagine v2), data e
 IO-tools con le impostazioni predefinite. Di `apache/parquet-testing`

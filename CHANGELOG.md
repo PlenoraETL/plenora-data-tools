@@ -30,7 +30,9 @@ la cui versione non ha qui una voce datata.
 
 - **Codifiche Parquet lette ristrette.** Si leggono solo `PLAIN`,
   `PLAIN_DICTIONARY` e `RLE_DICTIONARY` per i valori, `RLE` per i booleani
-  e i livelli, `BIT_PACKED` per i livelli. `DELTA_BINARY_PACKED`,
+  e i livelli. Livelli `BIT_PACKED` (deprecata, letti nell'ordine di bit
+  sbagliato: i null cambiavano riga in silenzio) sono `Unsupported`, come
+  `DELTA_BINARY_PACKED`,
   `DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY` e `BYTE_STREAM_SPLIT` sono
   `Unsupported` finché ciascuna non è qualificata con un suo fuzz
   (`docs/limiti.md`, «Codifiche Parquet non qualificate»), sia dichiarate
@@ -42,10 +44,19 @@ la cui versione non ha qui una voce datata.
   dizionario, sono `Unsupported` (prima: byte non validati come UTF-8 in
   una stringa, e un dizionario FLBA valido rifiutato o letto male). Un
   dizionario di `FixedSizeBinary` non si scrive più in Parquet: il file
-  scritto non si rileggeva.
+  scritto non si rileggeva. Un dizionario Arrow di valori binari su una
+  colonna annotata come testo (`ENUM` prima si leggeva) è `Unsupported`.
 
 ### Corretto
 
+- **Dizionari, pagine v2 e offset index nel fork `parquet`** (quarto giro
+  di revisione): una pagina di dizionario con meno voci delle dichiarate,
+  o con byte dopo l'ultima, si accettava (zero voci con dei byte
+  dividevano per zero); una pagina v2 i cui livelli contraddicevano i
+  nulli dichiarati dava null in silenzio; un `first_row_index` negativo o
+  fuori ordine nell'offset index traboccava; una pagina saltata intera non
+  si controllava per la codifica; un dizionario `JSON` o `ENUM` teneva
+  valori binari. Ora errori. `patches/parquet-livelli-dizionari-indici.patch`.
 - **Livelli, interi stretti e varint nel fork `parquet`** (terzo giro di
   revisione): un livello oltre il massimo della colonna (contato come
   nullo), un valore RLE più largo della sua larghezza, un `INT32` annotato

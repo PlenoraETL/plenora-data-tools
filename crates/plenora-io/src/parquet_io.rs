@@ -123,6 +123,12 @@ fn rifiuto_del_fork(testo: &str) -> Option<PlenoraError> {
             "colonna FIXED_LEN_BYTE_ARRAY letta come dizionario Arrow: non supportata".to_owned(),
         ));
     }
+    if testo.contains(parquet::basic::BINARY_DICTIONARY_OVER_TEXT) {
+        return Some(PlenoraError::Unsupported(
+            "dizionario Arrow binario su una colonna di byte annotata come testo: non supportato"
+                .to_owned(),
+        ));
+    }
     if testo.contains(parquet::basic::STRING_WITHOUT_ANNOTATION) {
         return Some(PlenoraError::Unsupported(
             "tipo Arrow testo su una colonna di byte senza annotazione di testo: non supportato"
@@ -148,7 +154,7 @@ fn da_arrow_lettura(errore: plenora_core::arrow::ArrowError) -> PlenoraError {
 fn codifica_non_qualificata() -> PlenoraError {
     PlenoraError::Unsupported(
         "codifica Parquet non qualificata per la lettura (lette: PLAIN, PLAIN_DICTIONARY, \
-         RLE_DICTIONARY; RLE per i booleani e i livelli, BIT_PACKED per i livelli)"
+         RLE_DICTIONARY; RLE per i booleani e i livelli)"
             .to_owned(),
     )
 }
@@ -157,16 +163,25 @@ fn codifica_non_qualificata() -> PlenoraError {
 /// statistiche delle pagine) sono fra quelle lette. Il fork `parquet`
 /// controlla anche ogni pagina letta davvero: un footer che dichiara una
 /// codifica e una pagina che ne usa un'altra si rifiutano entrambi.
-#[allow(deprecated)] // BIT_PACKED: deprecata, ma una codifica dei livelli.
+///
+/// `BIT_PACKED` dichiarata nell'elenco passa: l'elenco non dice se è dei
+/// livelli o dei valori, e parquet-mr la dichiara per i livelli assenti di
+/// ogni colonna (40 dei 106 file di `parquet-testing` e `arrow-testing`;
+/// nessuno ha una pagina letta che la usi). I livelli `BIT_PACKED` si rifiutano pagina per pagina nel fork;
+/// `BIT_PACKED` come codifica di valori, nelle statistiche delle pagine o in
+/// una pagina, si rifiuta come ogni codifica non qualificata.
+#[allow(deprecated)] // BIT_PACKED: deprecata, dichiarata dai livelli assenti.
 fn verifica_codifiche(chunk: &parquet::file::metadata::ColumnChunkMetaData) -> Result<()> {
     use parquet::basic::{is_qualified_value_encoding, Encoding};
     let ammessa = |codifica: Encoding| {
         is_qualified_value_encoding(codifica) || codifica == Encoding::BIT_PACKED
     };
     let dichiarate_ok = chunk.encodings().all(ammessa);
-    let pagine_ok = chunk
-        .page_encoding_stats()
-        .is_none_or(|statistiche| statistiche.iter().all(|voce| ammessa(voce.encoding)));
+    let pagine_ok = chunk.page_encoding_stats().is_none_or(|statistiche| {
+        statistiche
+            .iter()
+            .all(|voce| is_qualified_value_encoding(voce.encoding))
+    });
     if dichiarate_ok && pagine_ok {
         Ok(())
     } else {

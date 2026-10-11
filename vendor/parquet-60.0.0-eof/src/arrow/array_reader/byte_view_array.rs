@@ -171,21 +171,18 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
         encoding: Encoding,
         _is_sorted: bool,
     ) -> Result<()> {
-        if !matches!(
-            encoding,
-            Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
-        ) {
-            return Err(nyi_err!(
-                "Invalid/Unsupported encoding type for dictionary: {}",
-                encoding
-            ));
-        }
+        // PLENORA: an excluded encoding has the text of every other rejection.
+        crate::basic::check_dictionary_page_encoding(encoding)?;
 
         let num_values = num_values as usize;
         let mut buffer = ViewBuffer::with_capacity(num_values);
         let mut decoder =
             ByteViewArrayDecoderPlain::new(buf, num_values, Some(num_values), self.validate_utf8);
-        decoder.read(&mut buffer, usize::MAX)?;
+        let letti = decoder.read(&mut buffer, usize::MAX)?;
+        // PLENORA: the count was ignored; a short dictionary was kept.
+        if letti != num_values || decoder.offset != decoder.buf.len() {
+            return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
+        }
         self.dict = Some(buffer);
         Ok(())
     }

@@ -356,8 +356,8 @@ fn rifiutato_dal_confine(byte: &[u8]) {
 
 /// L'API per colonne (decoder di `encodings::decoding`): legge tutti i
 /// valori della colonna, o ne salta `salta`. Un salto di una pagina intera
-/// non passa dal decoder (il lettore salta la pagina): i salti delle prove
-/// sono parziali. Un panico fa fallire la prova.
+/// non passa dal decoder (il lettore salta la pagina, controllandone solo la
+/// codifica dall'header). Un panico fa fallire la prova.
 fn colonna_api<T: parquet::data_type::DataType>(
     byte: &[u8],
     salta: Option<usize>,
@@ -636,31 +636,71 @@ fn i_livelli_di_una_pagina_v2_oltre_i_byte_sono_un_errore() {
     }
 }
 
-/// Stessa classe, pagina v1: i livelli `BIT_PACKED` dichiarati (cento valori,
-/// tredici byte) oltre i byte della pagina tagliavano fuori dai limiti.
-#[test]
-fn i_livelli_bit_packed_oltre_la_pagina_sono_un_errore() {
+/// Una colonna `OPTIONAL` `INT32` con i livelli di definizione `BIT_PACKED`
+/// (pagina v1: i livelli senza lunghezza, poi i valori).
+fn livelli_bit_packed(valori: i64, contenuto: &[u8]) -> Vec<u8> {
     let opzionale = Colonna {
         ripetizione: 1,
         ..colonna(INT32)
     };
-    let contenuto = [0xFF_u8, 0xFF];
+    let lunghezza = i64::try_from(contenuto.len()).unwrap();
     let header = Struttura::default()
         .i32(1, 0)
-        .i32(2, 2)
-        .i32(3, 2)
+        .i32(2, lunghezza)
+        .i32(3, lunghezza)
         .struttura(
             5,
             Struttura::default()
-                .i32(1, 100)
+                .i32(1, valori)
                 .i32(2, PLAIN)
                 .i32(3, 4) // BIT_PACKED
                 .i32(4, RLE),
         )
         .fine();
-    let byte = parquet_con_header(&opzionale, 100, PLAIN, &contenuto, &header, None, None);
-    contiene(arrow(&byte), "not enough data to read levels");
-    rifiutato_dal_confine(&byte);
+    parquet_con_header(&opzionale, valori, PLAIN, contenuto, &header, None, None)
+}
+
+/// I livelli `BIT_PACKED` si impacchettano dal bit più significativo, l'RLE
+/// ibrido dal meno significativo; i due decoder del fork li leggevano
+/// nell'ordine RLE. Un payload `0x80` su 8 righe (il valore 42 nella prima)
+/// dava 42 nell'ultima riga e null nella prima, in silenzio. Non qualificati:
+/// `Unsupported`, anche con livelli oltre la pagina (cento valori, due byte),
+/// e nell'API per colonne.
+#[test]
+fn i_livelli_bit_packed_non_sono_qualificati() {
+    let mut contenuto = vec![0x80_u8];
+    contenuto.extend_from_slice(&42_i32.to_le_bytes());
+    let byte = livelli_bit_packed(8, &contenuto);
+    non_qualificata(&byte);
+    contiene(
+        colonna_api::<Int32Type>(&byte, None),
+        parquet::basic::ENCODING_NOT_QUALIFIED,
+    );
+    non_qualificata(&livelli_bit_packed(100, &[0xFF, 0xFF]));
+    // Controfattuale: gli stessi livelli in RLE (un gruppo bit-packed da 8,
+    // il primo bit acceso) danno 42 nella prima riga.
+    let byte = opzionale_con_livelli(8, &[(1 << 1) | 1, 0x01], &42_i32.to_le_bytes());
+    let valori = su_file(&byte, |file| {
+        let lettore = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
+        let batch = lettore.into_iter().next().unwrap().unwrap();
+        let colonna = batch.column(0).clone();
+        (0..colonna.len())
+            .map(|riga| {
+                if colonna.is_null(riga) {
+                    "null".to_owned()
+                } else {
+                    testo_della_cella(colonna.as_ref(), riga)
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        valori,
+        ["42", "null", "null", "null", "null", "null", "null", "null"]
+    );
 }
 
 /// Stessa classe: una pagina `RLE_DICTIONARY` senza pagina di dizionario
@@ -786,6 +826,7 @@ fn semi() -> Vec<(&'static str, Vec<u8>)> {
 }
 
 /// I file malformati del secondo giro (letti con lo schema dedotto).
+#[allow(clippy::too_many_lines)] // Un elenco di casi, uno per voce.
 fn semi_del_secondo_giro() -> Vec<(&'static str, Vec<u8>)> {
     let flba = Colonna {
         larghezza: Some(2),
@@ -865,6 +906,36 @@ fn semi_del_secondo_giro() -> Vec<(&'static str, Vec<u8>)> {
             opzionale_con_livelli(2, &[2 << 1, 2], &dati),
         ),
         (
+            "livelli-bit-packed",
+            livelli_bit_packed(8, &[0x80, 42, 0, 0, 0]),
+        ),
+        (
+            "dizionario-vuoto-con-byte",
+            parquet(
+                &colonna(BYTE_ARRAY),
+                1,
+                RLE_DICTIONARY,
+                &[1, 2, 0],
+                Some((0, &testo_plain(&[b"a"]))),
+                None,
+            ),
+        ),
+        (
+            "dizionario-piu-corto",
+            parquet(
+                &colonna(BYTE_ARRAY),
+                1,
+                RLE_DICTIONARY,
+                &[1, 2, 0],
+                Some((2, &testo_plain(&[b"a"]))),
+                None,
+            ),
+        ),
+        (
+            "v2-livelli-contro-valori",
+            v2_livelli_contro_valori(&[5, 0]),
+        ),
+        (
             "dichiarata-plain-usata-delta",
             parquet_con_header(
                 &colonna(INT32),
@@ -882,7 +953,7 @@ fn semi_del_secondo_giro() -> Vec<(&'static str, Vec<u8>)> {
 /// I semi che usano una codifica non qualificata: si rifiutano come
 /// `Unsupported` prima di arrivare al decoder (le correzioni dei decoder di
 /// quelle codifiche restano nel fork, non raggiungibili).
-const NON_QUALIFICATI: [&str; 8] = [
+const NON_QUALIFICATI: [&str; 9] = [
     "prefisso-oltre-il-valore",
     "suffisso-negativo",
     "lunghezza-delta-negativa",
@@ -891,6 +962,7 @@ const NON_QUALIFICATI: [&str; 8] = [
     "suffissi-mancanti",
     "blocco-delta-troncato",
     "dichiarata-plain-usata-delta",
+    "livelli-bit-packed",
 ];
 
 #[test]
@@ -1063,7 +1135,8 @@ fn una_pagina_flba_a_dizionario_senza_dizionario_e_un_errore() {
 
 /// Secondo giro, punto 2: il dizionario FLBA dichiara una voce ma la pagina ne
 /// porta i byte di due. L'indice 1 era confrontato con i byte, non con le
-/// voci dichiarate, e leggeva «yy» in silenzio.
+/// voci dichiarate, e leggeva «yy» in silenzio. Ora la pagina di dizionario
+/// stessa, con byte oltre le voci dichiarate, è un errore.
 #[test]
 fn un_indice_oltre_le_voci_dichiarate_e_un_errore() {
     let flba = Colonna {
@@ -1078,7 +1151,7 @@ fn un_indice_oltre_le_voci_dichiarate_e_un_errore() {
         Some((1, b"zzyy")),
         None,
     );
-    contiene(arrow(&byte), "dictionary index out of bounds");
+    contiene(arrow(&byte), parquet::basic::DICTIONARY_NOT_AS_DECLARED);
     rifiutato_dal_confine(&byte);
 }
 
@@ -1360,24 +1433,31 @@ fn le_codifiche_non_qualificate_si_rifiutano_in_ogni_forma() {
     }
 }
 
-/// L'API per colonne del fork rifiuta le stesse codifiche.
+/// L'API per colonne del fork rifiuta le stesse codifiche, anche quando
+/// salta la pagina intera (prima la saltava senza guardarla).
 #[test]
 fn l_api_per_colonne_rifiuta_le_codifiche_non_qualificate() {
     for (nome, codifica, colonna, valori, contenuto) in pagine_non_qualificate() {
         let byte = parquet(&colonna, valori, codifica, &contenuto, None, None);
-        let esito = match colonna.tipo {
-            INT32 => colonna_api::<Int32Type>(&byte, None),
-            DOUBLE => colonna_api::<DoubleType>(&byte, None),
-            _ => colonna_api::<ByteArrayType>(&byte, None),
-        };
-        match esito {
-            Err(testo) => assert!(
-                testo.contains(parquet::basic::ENCODING_NOT_QUALIFIED),
-                "{nome}: {testo}"
-            ),
-            Ok(righe) => panic!("{nome}: letto ({righe} righe)"),
+        let tutte = Some(usize::try_from(valori).unwrap());
+        for salta in [None, tutte] {
+            let esito = match colonna.tipo {
+                INT32 => colonna_api::<Int32Type>(&byte, salta),
+                DOUBLE => colonna_api::<DoubleType>(&byte, salta),
+                _ => colonna_api::<ByteArrayType>(&byte, salta),
+            };
+            match esito {
+                Err(testo) => assert!(
+                    testo.contains(parquet::basic::ENCODING_NOT_QUALIFIED),
+                    "{nome} ({salta:?}): {testo}"
+                ),
+                Ok(righe) => panic!("{nome} ({salta:?}): letto ({righe} righe)"),
+            }
         }
     }
+    // Controfattuale: la stessa pagina intera in PLAIN si salta.
+    let byte = parquet(&colonna(INT32), 1, PLAIN, &7_i32.to_le_bytes(), None, None);
+    assert_eq!(colonna_api::<Int32Type>(&byte, Some(1)), Ok(1));
 }
 
 // --- Livelli, interi stretti, UTF-8, varint ----------------------------------
@@ -1590,26 +1670,265 @@ fn un_tipo_testo_su_byte_non_annotati_e_non_supportato() {
 
 /// Il rovescio della lettura: un dizionario di `FixedSizeBinary` non si
 /// scrive (`ArrowWriter` lo scriverebbe in una forma che la lettura rifiuta),
-/// nemmeno dentro una lista; il file non nasce.
+/// né da solo né dentro una lista; il file non nasce.
 #[test]
 fn un_dizionario_di_binari_fissi_non_si_scrive() {
+    use plenora_core::arrow::array::builder::{FixedSizeBinaryDictionaryBuilder, ListBuilder};
     use plenora_core::arrow::array::types::Int32Type as Chiave;
-    use plenora_core::arrow::array::{DictionaryArray, FixedSizeBinaryArray, Int32Array};
+    use plenora_core::arrow::array::{ArrayRef, DictionaryArray, FixedSizeBinaryArray, Int32Array};
     let valori =
         FixedSizeBinaryArray::try_from_iter(vec![vec![1_u8, 2], vec![3, 4]].into_iter()).unwrap();
-    let dizionario =
+    let dizionario: ArrayRef = Arc::new(
         DictionaryArray::<Chiave>::try_new(Int32Array::from(vec![0, 1, 0]), Arc::new(valori))
-            .unwrap();
-    let schema = Schema::new(vec![Field::new("x", dizionario.data_type().clone(), false)]);
-    let tabella = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dizionario)]).unwrap();
-    let dir = cartella();
-    let percorso = dir.path().join("fsb.parquet");
-    let errore = plenora_io::scrivi_tabella(
-        &tabella,
-        &percorso,
-        &plenora_io::OpzioniScrittura::default(),
-    )
-    .expect_err("dizionario di FixedSizeBinary");
-    assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
-    assert!(!percorso.exists());
+            .unwrap(),
+    );
+    let mut costruttore = ListBuilder::new(FixedSizeBinaryDictionaryBuilder::<Chiave>::new(2));
+    costruttore.values().append([1_u8, 2]).unwrap();
+    costruttore.values().append([3_u8, 4]).unwrap();
+    costruttore.append(true);
+    let lista: ArrayRef = Arc::new(costruttore.finish());
+    for (nome, colonna) in [("da solo", dizionario), ("in una lista", lista)] {
+        let schema = Schema::new(vec![Field::new("x", colonna.data_type().clone(), false)]);
+        let tabella = RecordBatch::try_new(Arc::new(schema), vec![colonna]).unwrap();
+        let dir = cartella();
+        let percorso = dir.path().join("fsb.parquet");
+        let errore = plenora_io::scrivi_tabella(
+            &tabella,
+            &percorso,
+            &plenora_io::OpzioniScrittura::default(),
+        )
+        .expect_err(nome);
+        assert_eq!(
+            errore.category(),
+            ErrorCategory::Unsupported,
+            "{nome}: {errore}"
+        );
+        assert!(!percorso.exists(), "{nome}");
+    }
+}
+
+// --- Dizionari, pagine v2, valori di testo ------------------------------------
+
+/// Una pagina di dizionario che non tiene le voci dichiarate. `BYTE_ARRAY`:
+/// zero voci dichiarate con dei byte dividevano per zero (panico); meno voci
+/// delle dichiarate, o byte dopo l'ultima, si accettavano (il conteggio letto
+/// era ignorato). Lo stesso nei tre lettori Arrow (byte, dizionario, viste),
+/// nel decoder generico (`INT32`) e per FLBA.
+#[test]
+fn un_dizionario_diverso_dal_dichiarato_e_un_errore() {
+    let un_valore = testo_plain(&[b"a"]);
+    let due_valori = testo_plain(&[b"a", b"b"]);
+    let dizionario_binario =
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary));
+    for (nome, voci, dizionario) in [
+        ("zero voci con byte", 0, un_valore.clone()),
+        ("due voci, una presente", 2, un_valore),
+        ("una voce, byte di due", 1, due_valori),
+    ] {
+        let byte = parquet(
+            &colonna(BYTE_ARRAY),
+            1,
+            RLE_DICTIONARY,
+            &[1, 2, 0],
+            Some((voci, &dizionario)),
+            None,
+        );
+        contiene(arrow(&byte), parquet::basic::DICTIONARY_NOT_AS_DECLARED);
+        rifiutato_dal_confine(&byte);
+        // Il lettore dei dizionari Arrow e quello delle viste: un errore (le
+        // viste riconoscono la fine dei dati prima, con il loro testo).
+        for tipo in [dizionario_binario.clone(), DataType::BinaryView] {
+            let schema = Schema::new(vec![Field::new("x", tipo.clone(), false)]);
+            assert!(arrow_con_schema(&byte, schema).is_err(), "{nome} {tipo}");
+        }
+        assert!(colonna_api::<ByteArrayType>(&byte, None).is_err(), "{nome}");
+    }
+    // Il decoder generico: due voci dichiarate e i byte di una, o una voce e
+    // i byte di due.
+    for (voci, byte_dizionario) in [(2, 4), (1, 8)] {
+        let dizionario: Vec<u8> = (0..byte_dizionario).collect();
+        let byte = parquet(
+            &colonna(INT32),
+            1,
+            RLE_DICTIONARY,
+            &[1, 2, 0],
+            Some((voci, &dizionario)),
+            None,
+        );
+        if voci == 1 {
+            contiene(arrow(&byte), parquet::basic::DICTIONARY_NOT_AS_DECLARED);
+            contiene(
+                colonna_api::<Int32Type>(&byte, None),
+                parquet::basic::DICTIONARY_NOT_AS_DECLARED,
+            );
+        } else {
+            // Meno byte delle voci: l'errore di fine dati del decoder.
+            assert!(arrow(&byte).is_err());
+            assert!(colonna_api::<Int32Type>(&byte, None).is_err());
+        }
+        rifiutato_dal_confine(&byte);
+    }
+    // FLBA: una voce dichiarata, un byte solo.
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let byte = parquet(&flba, 1, RLE_DICTIONARY, &[1, 2, 0], Some((1, b"z")), None);
+    contiene(arrow(&byte), parquet::basic::DICTIONARY_NOT_AS_DECLARED);
+    // Controfattuali: le voci dichiarate, esatte.
+    let byte = parquet(
+        &colonna(INT32),
+        1,
+        RLE_DICTIONARY,
+        &[1, 2, 0],
+        Some((1, &7_i32.to_le_bytes())),
+        None,
+    );
+    assert_eq!(valori_arrow(&byte), ["7"]);
+    assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(1));
+}
+
+/// Una pagina di dizionario in una codifica esclusa ha il testo di ogni altro
+/// rifiuto (`Unsupported` al confine), non quello generico del dizionario.
+#[test]
+fn un_dizionario_in_una_codifica_esclusa_non_e_qualificato() {
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    for (colonna, dizionario) in [
+        (colonna(BYTE_ARRAY), testo_plain(&[b"a"])),
+        (colonna(INT32), 7_i32.to_le_bytes().to_vec()),
+        (flba, b"zz".to_vec()),
+    ] {
+        let mut byte = parquet(
+            &colonna,
+            1,
+            RLE_DICTIONARY,
+            &[1, 2, 0],
+            Some((1, &dizionario)),
+            None,
+        );
+        // L'header del dizionario: `num_values` 1 e `encoding` PLAIN (0), il
+        // primo campo della struct annidata; diventa DELTA_BINARY_PACKED.
+        let codifica = byte
+            .windows(4)
+            .position(|finestra| finestra == [0x15, 0x02, 0x15, 0x00])
+            .unwrap()
+            + 3;
+        byte[codifica] = u8::try_from(zigzag(DELTA_BINARY_PACKED)).unwrap();
+        non_qualificata(&byte);
+    }
+}
+
+/// Una pagina v2 `OPTIONAL` `INT32`: 8 righe, `num_nulls` dato, i livelli RLE
+/// dati e 8 valori `PLAIN`.
+fn v2_livelli_contro_valori(livelli: &[u8]) -> Vec<u8> {
+    v2_opzionale(8, 0, livelli)
+}
+
+fn v2_opzionale(righe: i64, nulli: i64, livelli: &[u8]) -> Vec<u8> {
+    let opzionale = Colonna {
+        ripetizione: 1,
+        ..colonna(INT32)
+    };
+    let mut contenuto = livelli.to_vec();
+    for valore in 0..8_i32 {
+        contenuto.extend_from_slice(&valore.to_le_bytes());
+    }
+    let lunghezza = i64::try_from(contenuto.len()).unwrap();
+    let header = Struttura::default()
+        .i32(1, 3) // DATA_PAGE_V2
+        .i32(2, lunghezza)
+        .i32(3, lunghezza)
+        .struttura(
+            8,
+            Struttura::default()
+                .i32(1, righe)
+                .i32(2, nulli)
+                .i32(3, righe)
+                .i32(4, PLAIN)
+                .i32(5, i64::try_from(livelli.len()).unwrap())
+                .i32(6, 0),
+        )
+        .fine();
+    parquet_con_header(&opzionale, righe, PLAIN, &contenuto, &header, None, None)
+}
+
+/// Una pagina v2 dichiara i suoi valori (`num_values - num_nulls`); i livelli
+/// decidono quanti se ne leggono. Livelli `05 00` (una corsa bit-packed di
+/// due gruppi con un byte solo, tutti zero) su 8 righe senza null
+/// dichiarati: 8 null in silenzio, con 8 valori nella pagina. Ora la fine
+/// della pagina confronta i valori letti con quelli dichiarati.
+#[test]
+fn una_pagina_v2_con_livelli_contro_i_valori_e_un_errore() {
+    let byte = v2_livelli_contro_valori(&[5, 0]);
+    contiene(arrow(&byte), "data page V2 declares");
+    rifiutato_dal_confine(&byte);
+    // Controfattuale: una corsa RLE di 8 livelli 1, gli 8 valori.
+    let byte = v2_livelli_contro_valori(&[8 << 1, 1]);
+    assert_eq!(
+        valori_arrow(&byte),
+        ["0", "1", "2", "3", "4", "5", "6", "7"]
+    );
+}
+
+/// Il tipo dei valori di un dizionario di testo seguiva solo `UTF8`: una
+/// colonna `JSON` o `ENUM` letta come `Dictionary(Int32, Binary)` andava in
+/// panico, e come `Dictionary(Int32, Utf8)` teneva valori binari. Ora il
+/// tipo segue la stessa annotazione della validazione UTF-8 (`UTF8`, `JSON`,
+/// `ENUM`), e un dizionario binario su testo è un errore: `Unsupported` dal
+/// lettore, esplicito (prima, su `ENUM`, i valori binari passavano perché il
+/// tipo interno non seguiva l'annotazione).
+#[test]
+fn un_dizionario_di_testo_segue_l_annotazione() {
+    for (nome, convertito) in [("UTF8", 0), ("ENUM", 4), ("JSON", 19)] {
+        let annotata = Colonna {
+            convertito: Some(convertito),
+            ..colonna(BYTE_ARRAY)
+        };
+        let byte = parquet(
+            &annotata,
+            1,
+            RLE_DICTIONARY,
+            &[1, 2, 0],
+            Some((1, &testo_plain(&[b"a"]))),
+            None,
+        );
+        for valori in [
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::BinaryView,
+            DataType::FixedSizeBinary(1),
+        ] {
+            // `ENUM` si deduce `Binary`: lo schema dato passa il confronto e
+            // arriva al lettore, che lo rifiuta. `UTF8` e `JSON` si deducono
+            // `Utf8`, e lo schema si rifiuta già al confronto (anche
+            // `FixedSizeBinary` su `ENUM`).
+            let al_lettore = convertito == 4 && !matches!(valori, DataType::FixedSizeBinary(_));
+            let tipo = DataType::Dictionary(Box::new(DataType::Int32), Box::new(valori));
+            let schema = Schema::new(vec![Field::new("x", tipo.clone(), false)]);
+            let esito = arrow_con_schema(&byte, schema).map(|batch| batch.len());
+            if al_lettore {
+                contiene(esito, parquet::basic::BINARY_DICTIONARY_OVER_TEXT);
+            } else {
+                assert!(esito.is_err(), "{nome} {tipo}");
+            }
+        }
+        for valori in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            let tipo = DataType::Dictionary(Box::new(DataType::Int32), Box::new(valori.clone()));
+            let schema = Schema::new(vec![Field::new("x", tipo, false)]);
+            let batch = arrow_con_schema(&byte, schema)
+                .unwrap_or_else(|errore| panic!("{nome} {valori}: {errore}"));
+            let colonna = batch[0].column(0);
+            let dizionario = colonna.as_any_dictionary();
+            let testo = match dizionario.values().data_type() {
+                DataType::Utf8 => dizionario.values().as_string::<i32>().value(0).to_owned(),
+                DataType::LargeUtf8 => dizionario.values().as_string::<i64>().value(0).to_owned(),
+                DataType::Utf8View => dizionario.values().as_string_view().value(0).to_owned(),
+                altro => panic!("{nome}: valori {altro}"),
+            };
+            assert_eq!(testo, "a", "{nome} {valori}");
+        }
+    }
 }
