@@ -57,17 +57,23 @@ la cui versione non ha qui una voce datata.
   fuori ordine nell'offset index traboccava; una pagina saltata intera non
   si controllava per la codifica; un dizionario `JSON` o `ENUM` teneva
   valori binari. Ora errori. `patches/parquet-livelli-dizionari-indici.patch`.
-- **Fine della pagina nel fork `parquet`** (quinto e sesto giro): valori
-  `PLAIN`, livelli, indici di dizionario o booleani `RLE` in più dopo
-  quelli di una pagina letta per intero si ignoravano in silenzio; ora
-  sono un errore, tranne due forme di scrittori reali: fino a 8 byte a
-  zero dopo i valori di una pagina v1 (fastparquet: una pagina v1 `PLAIN`
-  con valori a zero in più entro quegli 8 byte si legge senza di essi,
-  `docs/limiti.md`) e il riempimento di un blocco bit-packed di 32 gruppi
-  (DuckDB). Una pagina vuota non ferma più la lettura delle pagine dopo;
-  le righe di una pagina v2 si confrontano con i suoi livelli; gli stream
-  di livelli assenti dallo schema devono essere vuoti; una pagina
-  compressa senza valori non nasconde più un suffisso. Un salto dentro una
+- **Fine della pagina nel fork `parquet`** (quinto, sesto e settimo
+  giro): valori `PLAIN`, livelli, indici di dizionario o booleani `RLE` in
+  più dopo quelli di una pagina letta per intero si ignoravano in
+  silenzio; ora sono un errore, tranne due deviazioni dichiarate, solo
+  nelle pagine v1 e solo nella forma esatta di due scrittori reali: fino a
+  8 byte a zero dopo i valori (fastparquet: una pagina v1 `PLAIN` con
+  valori a zero in più entro quegli 8 byte si legge senza di essi) e il
+  riempimento di un blocco bit-packed di 32 gruppi (DuckDB);
+  `docs/limiti.md`, «Fine delle pagine Parquet». Una pagina vuota non
+  ferma più la lettura delle pagine dopo. Le righe di una pagina v2 si
+  confrontano con i livelli: senza ripetizione, con il numero dei livelli,
+  nell'header; con ripetizione, con i livelli di ripetizione 0 letti, alla
+  fine della pagina (un salto su una colonna ripetuta non è qualificato).
+  Gli stream di livelli assenti dallo schema devono essere vuoti; una
+  pagina compressa senza valori non nasconde più un suffisso; la
+  dimensione non compressa di una pagina non decompressa e quella
+  dell'offset index si confrontano con i byte. Un salto dentro una
   pagina, che non decodificava ciò che saltava (e con livelli troncati non
   terminava), non è più qualificato: `Unsupported`; data legge sempre per
   intero.

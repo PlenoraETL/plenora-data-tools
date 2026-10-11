@@ -27,6 +27,42 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 
+/// PLENORA: what the end of a data page may carry after its last level or
+/// value, declared deviations from an exact end, each for a writer and only
+/// in its exact form (`docs/limiti.md`, «Fine delle pagine Parquet»).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FinePagina {
+    /// Zero bytes after the stream (fastparquet, after the values of a v1
+    /// page: `CODA_FASTPARQUET`; 0 elsewhere).
+    pub coda_di_zeri: usize,
+    /// Whole groups of padding in a last bit-packed run of exactly
+    /// `BLOCCO_DUCKDB` groups, bit width above 0 (DuckDB, v1 pages).
+    pub blocco_duckdb: bool,
+}
+
+impl FinePagina {
+    /// An exact end: nothing after the last value.
+    pub const ESATTA: Self = Self {
+        coda_di_zeri: 0,
+        blocco_duckdb: false,
+    };
+
+    /// The end of a v1 data page: the padding of DuckDB, and the zero bytes
+    /// of fastparquet after the values.
+    pub const V1: Self = Self {
+        coda_di_zeri: crate::util::bit_util::CODA_FASTPARQUET,
+        blocco_duckdb: true,
+    };
+
+    /// The same end for a level stream: no zero bytes after it.
+    pub fn livelli(self) -> Self {
+        Self {
+            coda_di_zeri: 0,
+            ..self
+        }
+    }
+}
+
 /// Decodes level data
 pub trait ColumnLevelDecoder {
     type Buffer;
@@ -35,9 +71,9 @@ pub trait ColumnLevelDecoder {
     fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()>;
 
     /// PLENORA: at the end of a page, after its last level, the level stream
-    /// is consumed exactly (see `RleDecoder::fine_esatta`), otherwise
-    /// `PAGE_NOT_AS_DECLARED`.
-    fn verifica_fine_pagina(&self) -> Result<()>;
+    /// is consumed exactly, up to `fine` (see `RleDecoder::fine_esatta`),
+    /// otherwise `PAGE_NOT_AS_DECLARED`.
+    fn verifica_fine_pagina(&self, fine: FinePagina) -> Result<()>;
 }
 
 pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
@@ -68,6 +104,10 @@ pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
 
     /// Flush any partially read or skipped record
     fn flush_partial(&mut self) -> bool;
+
+    /// PLENORA: the repetition levels 0 read since the page was set, the
+    /// rows that started in it (a v2 page declares them, `num_rows`).
+    fn righe_iniziate(&self) -> usize;
 }
 
 pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
@@ -141,10 +181,10 @@ pub trait ColumnValueDecoder {
     /// PLENORA: at the end of a page, after its last value, the value stream
     /// is consumed exactly: every byte of a `PLAIN` page, the dictionary
     /// indices to the end of their stream, the `RLE` booleans to their
-    /// prefixed length. After it at most `coda` zero bytes (the padding of
-    /// fastparquet after the values of a v1 page, 0 elsewhere). Otherwise
+    /// prefixed length. After it only what `fine` declares (the padding of
+    /// fastparquet and DuckDB in a v1 page). Otherwise
     /// `PAGE_NOT_AS_DECLARED`.
-    fn verifica_fine_pagina(&self, coda: usize) -> Result<()>;
+    fn verifica_fine_pagina(&self, fine: FinePagina) -> Result<()>;
 }
 
 /// PLENORA: the error of a page whose streams do not end with its values.
@@ -297,11 +337,11 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         current_decoder.skip(num_values)
     }
 
-    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
+    fn verifica_fine_pagina(&self, fine: FinePagina) -> Result<()> {
         let esatta = self
             .current_encoding
             .and_then(|encoding| self.decoders[encoding as usize].as_ref())
-            .is_some_and(|decoder| decoder.fine_esatta(coda));
+            .is_some_and(|decoder| decoder.fine_esatta(fine));
         fine_esatta(esatta)
     }
 }
@@ -332,10 +372,10 @@ impl LevelDecoder {
         }
     }
 
-    /// PLENORA: the level stream ends with the levels read.
-    fn fine_esatta(&self) -> bool {
+    /// PLENORA: the level stream ends with the levels read, up to `fine`.
+    fn fine_esatta(&self, fine: FinePagina) -> bool {
         match self {
-            Self::Rle(reader, _) => reader.fine_esatta(0),
+            Self::Rle(reader, _) => reader.fine_esatta(fine.livelli()),
         }
     }
 
@@ -387,8 +427,12 @@ impl ColumnLevelDecoder for DefinitionLevelDecoderImpl {
         Ok(())
     }
 
-    fn verifica_fine_pagina(&self) -> Result<()> {
-        fine_esatta(self.decoder.as_ref().is_some_and(LevelDecoder::fine_esatta))
+    fn verifica_fine_pagina(&self, fine: FinePagina) -> Result<()> {
+        fine_esatta(
+            self.decoder
+                .as_ref()
+                .is_some_and(|decoder| decoder.fine_esatta(fine)),
+        )
     }
 }
 
@@ -443,6 +487,8 @@ pub struct RepetitionLevelDecoderImpl {
     buffer_len: usize,
     buffer_offset: usize,
     has_partial: bool,
+    /// PLENORA: the repetition levels 0 read since the page was set.
+    righe_iniziate: usize,
 }
 
 impl RepetitionLevelDecoderImpl {
@@ -456,6 +502,7 @@ impl RepetitionLevelDecoderImpl {
             buffer_offset: 0,
             buffer_len: 0,
             has_partial: false,
+            righe_iniziate: 0,
         }
     }
 
@@ -510,13 +557,17 @@ impl ColumnLevelDecoder for RepetitionLevelDecoderImpl {
         )?);
         self.buffer_len = 0;
         self.buffer_offset = 0;
+        self.righe_iniziate = 0;
         Ok(())
     }
 
-    fn verifica_fine_pagina(&self) -> Result<()> {
+    fn verifica_fine_pagina(&self, fine: FinePagina) -> Result<()> {
         fine_esatta(
             self.buffer_offset == self.buffer_len
-                && self.decoder.as_ref().is_some_and(LevelDecoder::fine_esatta),
+                && self
+                    .decoder
+                    .as_ref()
+                    .is_some_and(|decoder| decoder.fine_esatta(fine)),
         )
     }
 }
@@ -547,6 +598,11 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
             out.extend_from_slice(
                 &self.buffer[self.buffer_offset..self.buffer_offset + levels_read],
             );
+            self.righe_iniziate += self.buffer
+                [self.buffer_offset..self.buffer_offset + levels_read]
+                .iter()
+                .filter(|livello| **livello == 0)
+                .count();
 
             total_levels_read += levels_read;
             total_records_read += records_read;
@@ -583,6 +639,10 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
 
     fn flush_partial(&mut self) -> bool {
         std::mem::take(&mut self.has_partial)
+    }
+
+    fn righe_iniziate(&self) -> usize {
+        self.righe_iniziate
     }
 }
 

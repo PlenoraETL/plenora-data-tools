@@ -490,7 +490,8 @@ fn un_indice_negativo_del_dizionario_e_un_errore() {
 }
 
 /// `PLAIN` a larghezza fissa: un resto della divisione per la larghezza era
-/// scartato in silenzio (5 byte di valori da 2: l'ultimo ignorato).
+/// scartato in silenzio (5 byte di valori da 2: l'ultimo ignorato). Ora il
+/// resto si giudica alla fine della pagina, con il resto dello stream.
 #[test]
 fn un_resto_nella_pagina_e_un_errore() {
     let flba = Colonna {
@@ -498,7 +499,7 @@ fn un_resto_nella_pagina_e_un_errore() {
         ..colonna(FLBA)
     };
     let byte = parquet(&flba, 2, PLAIN, b"abcde", None, None);
-    contiene(arrow(&byte), "not a whole number");
+    contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
     rifiutato_dal_confine(&byte);
 }
 
@@ -2382,4 +2383,248 @@ fn una_pagina_compressa_senza_valori_verifica_il_suffisso() {
             rifiutato_dal_confine(&byte);
         }
     }
+}
+
+// --- Righe v2 ripetute, corse vuote, forme esatte ---------------
+
+/// Una pagina v2 di una lista (ripetizione e definizione a massimo 1): i
+/// livelli di ripetizione `[0, 1]` (una riga di due elementi), due valori.
+fn lista_v2(righe: i64) -> Vec<u8> {
+    let lista = Colonna {
+        ripetizione: 2,
+        ..colonna(INT32)
+    };
+    let mut contenuto = vec![1 << 1, 0, 1 << 1, 1]; // ripetizione
+    contenuto.extend_from_slice(&[2 << 1, 1]); // definizione
+    contenuto.extend_from_slice(&[1, 0, 0, 0, 2, 0, 0, 0]);
+    let header = header_v2(righe, 0, 2, PLAIN, 2, 4, contenuto.len(), contenuto.len());
+    parquet_con_header(&lista, 2, PLAIN, &contenuto, &header, None, None)
+}
+
+/// Le righe di una pagina v2 di una colonna ripetuta sono i suoi livelli di
+/// ripetizione 0: il conteggio dell'header non si confrontava con quelli
+/// letti (2 righe dichiarate su una passavano). Ora alla fine della pagina;
+/// un salto non legge quei livelli, e su una colonna ripetuta non è
+/// qualificato.
+#[test]
+fn le_righe_di_una_pagina_v2_ripetuta_si_contano() {
+    contiene(arrow(&lista_v2(2)), "rows but its levels start");
+    rifiutato_dal_confine(&lista_v2(2));
+    assert_eq!(arrow(&lista_v2(1)), Ok(1));
+    contiene(
+        colonna_api::<Int32Type>(&lista_v2(1), Some(1)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+}
+
+/// Un indicatore RLE 0 (la fine con cui fastparquet riempie) o una corsa
+/// vuota si leggevano prima della fine della pagina, e i loro byte non
+/// contavano più: 9 zeri dopo gli indici di una pagina v1, uno in una
+/// pagina v2, `80 00` (uno zero in un varint non minimo) passavano. Ora la
+/// coda si misura da dove cominciano le corse vuote.
+#[test]
+#[allow(clippy::too_many_lines)] // Un caso per forma di coda.
+fn le_corse_vuote_in_coda_contano_come_byte() {
+    let atteso = parquet::basic::PAGE_NOT_AS_DECLARED;
+    let dizionario = testo_plain(&[b"a"]);
+    let indici = |coda: &[u8]| {
+        let mut indici = vec![1_u8, 2, 0];
+        indici.extend_from_slice(coda);
+        indici
+    };
+    for coda in [vec![0_u8; 9], vec![0x80, 0x00], vec![0x01]] {
+        let byte = parquet(
+            &colonna(BYTE_ARRAY),
+            1,
+            RLE_DICTIONARY,
+            &indici(&coda),
+            Some((1, &dizionario)),
+            None,
+        );
+        contiene(arrow(&byte), atteso);
+        contiene(colonna_api::<ByteArrayType>(&byte, None), atteso);
+    }
+    // Pagina v2: nessuno zero dopo gli indici.
+    let contenuto = indici(&[0]);
+    let byte = parquet_con_header(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &contenuto,
+        &header_v2(
+            1,
+            0,
+            1,
+            RLE_DICTIONARY,
+            0,
+            0,
+            contenuto.len(),
+            contenuto.len(),
+        ),
+        Some((1, &dizionario)),
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+    // Livelli: uno zero dopo, nel decoder generico e in quello ottimizzato.
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    let byte = ripetuta(2, &[1 << 1, 0, 1 << 1, 1, 0], &[2 << 1, 1], &dati);
+    contiene(arrow(&byte), atteso);
+    let byte = opzionale_con_livelli(2, &[2 << 1, 1, 0x80, 0], &dati);
+    contiene(arrow(&byte), atteso);
+    // Una pagina tutta nulla: lo stream degli indici è solo la sua
+    // larghezza e la coda, e il primo indicatore si leggeva già nel
+    // `set_data` (9 zeri passavano come 8, uno in v2 come nessuno).
+    let nulla = Colonna {
+        ripetizione: 1,
+        ..colonna(BYTE_ARRAY)
+    };
+    let tutta_nulla = |coda: &[u8]| {
+        let mut contenuto = 2_u32.to_le_bytes().to_vec();
+        contenuto.extend_from_slice(&[1 << 1, 0]); // un livello 0
+        contenuto.push(1); // larghezza degli indici
+        contenuto.extend_from_slice(coda);
+        parquet(
+            &nulla,
+            1,
+            RLE_DICTIONARY,
+            &contenuto,
+            Some((1, &dizionario)),
+            None,
+        )
+    };
+    for coda in [
+        vec![0_u8; 9],
+        vec![0x80, 0x00, 0, 0, 0, 0, 0, 0],
+        vec![0x01],
+    ] {
+        contiene(arrow(&tutta_nulla(&coda)), atteso);
+    }
+    assert_eq!(arrow(&tutta_nulla(&[0; 8])), Ok(1));
+    let mut v2 = vec![1 << 1, 0, 1, 0];
+    let lunghezza = v2.len();
+    let byte = parquet_con_header(
+        &nulla,
+        1,
+        RLE_DICTIONARY,
+        &v2,
+        &header_v2(1, 1, 1, RLE_DICTIONARY, 2, 0, lunghezza, lunghezza),
+        Some((1, &dizionario)),
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+    v2.pop();
+    let byte = parquet_con_header(
+        &nulla,
+        1,
+        RLE_DICTIONARY,
+        &v2,
+        &header_v2(1, 1, 1, RLE_DICTIONARY, 2, 0, v2.len(), v2.len()),
+        Some((1, &dizionario)),
+        None,
+    );
+    assert_eq!(arrow(&byte), Ok(1));
+    // Controfattuale: 8 zeri dopo gli indici di una pagina v1.
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &indici(&[0; 8]),
+        Some((1, &dizionario)),
+        None,
+    );
+    assert_eq!(valori_arrow(&byte), ["a"]);
+}
+
+/// La coda di fastparquet vale anche per FLBA (il lettore Arrow rifiutava il
+/// resto prima della fine della pagina): 8 zeri dopo valori di larghezza 3
+/// in una pagina v1 si leggono; in una pagina v2 no.
+#[test]
+fn la_coda_di_fastparquet_vale_anche_per_flba() {
+    let flba = Colonna {
+        larghezza: Some(3),
+        ..colonna(FLBA)
+    };
+    let mut contenuto = b"abcdef".to_vec();
+    contenuto.extend_from_slice(&[0; 8]);
+    let byte = parquet(&flba, 2, PLAIN, &contenuto, None, None);
+    assert_eq!(valori_arrow(&byte), ["616263", "646566"]);
+    let byte = parquet_con_header(
+        &flba,
+        2,
+        PLAIN,
+        &contenuto,
+        &header_v2(2, 0, 2, PLAIN, 0, 0, contenuto.len(), contenuto.len()),
+        None,
+        None,
+    );
+    contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+}
+
+/// Il riempimento di `DuckDB` solo nella sua forma: pagina v1, larghezza
+/// sopra 0, corsa di 32 gruppi. In una pagina v2, o a larghezza 0 (32 gruppi
+/// senza byte), un gruppo in più è un errore.
+#[test]
+fn il_riempimento_di_duckdb_solo_nella_sua_forma() {
+    let atteso = parquet::basic::PAGE_NOT_AS_DECLARED;
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    let opzionale = Colonna {
+        ripetizione: 1,
+        ..colonna(INT32)
+    };
+    let livelli = corsa_bit_packed(32, 0xA5);
+    let mut contenuto = livelli.clone();
+    contenuto.extend_from_slice(&dati);
+    let byte = parquet_con_header(
+        &opzionale,
+        2,
+        PLAIN,
+        &contenuto,
+        &header_v2(
+            2,
+            0,
+            2,
+            PLAIN,
+            i64::try_from(livelli.len()).unwrap(),
+            0,
+            contenuto.len(),
+            contenuto.len(),
+        ),
+        None,
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+    // Larghezza 0: un dizionario di una voce, un blocco di 32 gruppi.
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &[0, (32 << 1) | 1],
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+}
+
+/// Una pagina non decompressa (codec `UNCOMPRESSED`) dichiara la sua
+/// dimensione non compressa: non si confrontava con i byte, e un header
+/// poteva dichiararne qualunque.
+#[test]
+fn la_dimensione_non_compressa_di_una_pagina_si_confronta() {
+    let dati = 7_i32.to_le_bytes();
+    let header = Struttura::default()
+        .i32(1, 0)
+        .i32(2, 3)
+        .i32(3, 4)
+        .struttura(
+            5,
+            Struttura::default()
+                .i32(1, 1)
+                .i32(2, PLAIN)
+                .i32(3, RLE)
+                .i32(4, RLE),
+        )
+        .fine();
+    let byte = parquet_con_header(&colonna(INT32), 1, PLAIN, &dati, &header, None, None);
+    contiene(arrow(&byte), "declares 3 bytes");
+    rifiutato_dal_confine(&byte);
 }

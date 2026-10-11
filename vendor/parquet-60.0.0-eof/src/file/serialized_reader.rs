@@ -533,7 +533,18 @@ pub(crate) fn decode_page(
 
             Bytes::from(decompressed)
         }
-        _ => buffer,
+        // PLENORA: a page not decompressed is its declared uncompressed size
+        // (the size was not compared, and a header could declare any).
+        _ => {
+            if usize::try_from(page_header.uncompressed_page_size).ok() != Some(buffer.len()) {
+                return Err(general_err!(
+                    "uncompressed page of {} bytes declares {} bytes",
+                    buffer.len(),
+                    page_header.uncompressed_page_size
+                ));
+            }
+            buffer
+        }
     };
 
     let result = match page_header.r#type {
@@ -1148,6 +1159,14 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     )?;
                     self.limiti.verifica(&header)?; // PLENORA
                     let bytes = buffer.slice(offset..);
+                    // PLENORA: the page of the offset index is its header and
+                    // the compressed size the header declares, no more, no
+                    // less (the two sizes were not compared).
+                    if usize::try_from(header.compressed_page_size).ok() != Some(bytes.len()) {
+                        return Err(general_err!(
+                            "invalid offset index: page size and page header disagree"
+                        ));
+                    }
                     let bytes =
                         self.context
                             .decrypt_page_data(bytes, *page_index, is_dictionary_page)?;

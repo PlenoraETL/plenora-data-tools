@@ -364,6 +364,13 @@ pub struct RleDecoder {
     // PLENORA: the groups the current bit-packed run declares.
     gruppi_della_corsa: u32,
 
+    // PLENORA: where the runs of no value at the end of the stream start (an
+    // indicator 0, the end that fastparquet pads with, or an empty
+    // bit-packed run): reading them consumed their bytes before the end of
+    // the page was checked, and 9 zeros, or `80 00`, passed. None after a
+    // run with values.
+    inizio_corse_vuote: Option<usize>,
+
     // The current value for the case of RLE mode
     current_value: Option<u64>,
 }
@@ -380,6 +387,7 @@ impl RleDecoder {
             rle_left: 0,
             bit_packed_left: 0,
             gruppi_della_corsa: 0,
+            inizio_corse_vuote: None,
             bit_reader: None,
             index_buf: None,
             current_value: None,
@@ -393,6 +401,9 @@ impl RleDecoder {
         } else {
             self.bit_reader = Some(BitReader::new(data));
         }
+        self.inizio_corse_vuote = None;
+        self.rle_left = 0;
+        self.bit_packed_left = 0;
 
         // Initialize decoder state. The boolean only reports whether the first run contained data,
         // and `get`/`get_batch` already interpret that result to drive iteration. We only need
@@ -620,14 +631,15 @@ impl RleDecoder {
 
     /// PLENORA: whether the stream ends where the values read end, counting
     /// the values left, not only the bytes (at bit width 0 a group takes no
-    /// byte). No value left in an RLE run. In a bit-packed run: the rest of
-    /// the current group of 8 (the padding of the last group); whole groups
-    /// after it only in a run of `BLOCCO_DUCKDB` groups (DuckDB pads its last
-    /// block), whatever they hold; a run truncated by the end of the data
-    /// (some writers) holds only the values its bytes carry. No run after;
-    /// then at most `coda` zero bytes (`CODA_FASTPARQUET` after the values of
-    /// a v1 page, 0 elsewhere).
-    pub(crate) fn fine_esatta(&self, coda: usize) -> bool {
+    /// byte), up to what `fine` declares. No value left in an RLE run. In a
+    /// bit-packed run: the rest of the current group of 8 (the padding of the
+    /// last group); whole groups after it only in a run of exactly
+    /// `BLOCCO_DUCKDB` groups at a bit width above 0, when `fine` admits it
+    /// (DuckDB pads its last block); a run truncated by the end of the data
+    /// (some writers) holds only the values its bytes carry. After the run,
+    /// from where the runs of no value start, at most `fine.coda_di_zeri`
+    /// zero bytes.
+    pub(crate) fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
         if self.rle_left > 0 {
             return false;
         }
@@ -646,13 +658,24 @@ impl RleDecoder {
             0 => resto,
             _ => resto.min(fine_dei_dati.saturating_sub(posizione) / larghezza),
         };
-        if presenti > nel_gruppo && self.gruppi_della_corsa as usize != bit_util::BLOCCO_DUCKDB {
+        let blocco = fine.blocco_duckdb
+            && larghezza > 0
+            && self.gruppi_della_corsa as usize == bit_util::BLOCCO_DUCKDB;
+        if presenti > nel_gruppo && !blocco {
             return false;
         }
         let fine_della_corsa = posizione
             .saturating_add(resto.saturating_mul(larghezza))
             .min(fine_dei_dati);
-        bit_util::coda_di_zeri(dati, bit_util::ceil(fine_della_corsa, 8), coda)
+        let fine_dello_stream = match self.inizio_corse_vuote {
+            Some(inizio) if resto == 0 => inizio,
+            _ => fine_della_corsa,
+        };
+        bit_util::coda_di_zeri(
+            dati,
+            bit_util::ceil(fine_dello_stream, 8),
+            fine.coda_di_zeri,
+        )
     }
 
     #[inline]
@@ -662,11 +685,19 @@ impl RleDecoder {
             .as_mut()
             .ok_or_else(|| general_err!("bit_reader should be set"))?;
 
+        let inizio = bit_reader.bit_letti();
         // PLENORA: a malformed varint is an error, not the end of the data.
         if let Some(indicator_value) = bit_reader.get_vlq_int_checked()? {
             // fastparquet adds padding to the end of pages. This is not spec-compliant
             // but is handled by the C++ implementation
             // <https://github.com/apache/arrow/blob/8074496cb41bc8ec8fe9fc814ca5576d89a6eb94/cpp/src/arrow/util/rle_encoding.h#L653>
+            // PLENORA: a run of no value (this end, or an empty bit-packed
+            // run) is remembered where it starts, for the end of the page.
+            if indicator_value >> 1 == 0 {
+                self.inizio_corse_vuote.get_or_insert(inizio);
+            } else {
+                self.inizio_corse_vuote = None;
+            }
             if indicator_value == 0 {
                 return Ok(false);
             }

@@ -1109,25 +1109,42 @@ lettura (leggi e butta), con una guardia di avanzamento in ogni ciclo e le
 prove di questo giro, oppure il bisogno di una selezione di righe da
 parte di data o IO-tools.
 
-## Coda di zeri delle pagine Parquet di fastparquet
+## Fine delle pagine Parquet
 
-**Regola.** Una pagina Parquet finisce dove finiscono i suoi livelli e i
-suoi valori (`PAGE_NOT_AS_DECLARED` altrimenti).
+**Regola.** Una pagina Parquet letta fino al suo ultimo livello finisce
+dove finiscono i suoi livelli e i suoi valori: nessun valore, gruppo o
+byte dopo (`PAGE_NOT_AS_DECLARED`), salvo il riempimento dell'ultimo
+gruppo bit-packed e un'ultima corsa troncata dalla fine dei dati.
 
-**Ambito.** Il fork `vendor/parquet-60.0.0-eof`, fine dello stream dei
-valori delle pagine di dati v1 (`CODA_FASTPARQUET`).
+**Ambito.** Il fork `vendor/parquet-60.0.0-eof`, fine delle pagine di dati
+v1 (`FinePagina::V1`, `column/reader/decoder.rs`); le pagine v2 finiscono
+esatte (`FinePagina::ESATTA`). Due deviazioni dichiarate, ciascuna per uno
+scrittore e solo nella sua forma esatta:
 
-**Hazard.** fastparquet aggiunge 8 byte a zero a ogni pagina v1, dopo i
-valori, anche `PLAIN` (`writer.py`, `8 * b'\x00'`): rifiutarli
-rifiuterebbe ogni suo file. Dopo lo stream dei valori di una pagina v1 si
-tollerano al più 8 byte, tutti zero: una pagina v1 `PLAIN` con valori a
-zero in più, entro 8 byte (due `INT32`, un `INT64`), si legge senza quei
-valori invece di essere rifiutata. Mai dopo i livelli, mai in una pagina
-v2, mai byte diversi da zero. Della stessa natura, per DuckDB: gruppi di
-riempimento nell'ultima corsa bit-packed, solo se la corsa è di 32 gruppi.
+- fastparquet aggiunge 8 byte a zero a ogni pagina v1, dopo i valori,
+  anche `PLAIN` (`writer.py`, `8 * b'\x00'`). Si tollerano dopo lo stream
+  dei valori di una pagina v1, misurati da dove finisce l'ultimo valore
+  (anche quando lo stream finisce con un indicatore RLE 0): al più 8 byte,
+  tutti zero (`CODA_FASTPARQUET`). Mai dopo i livelli, mai in una pagina
+  v2, mai byte diversi da zero, mai un varint non minimo (`80 00`).
+- DuckDB scrive le corse bit-packed a blocchi di 32 gruppi e completa
+  l'ultimo con byte vecchi, non zeri. Gruppi interi dopo l'ultimo valore si
+  tollerano solo in una corsa che dichiara esattamente 32 gruppi
+  (`BLOCCO_DUCKDB`), a larghezza in bit sopra 0, in una pagina v1, nei
+  livelli e negli indici; il loro contenuto non si legge.
 
-**Condizione di rientro.** fastparquet smette di aggiungere la coda (o la
-dichiara nell'header della pagina), e i suoi file in uso sono riscritti.
+**Hazard.** Una pagina v1 `PLAIN` con valori a zero in più, entro 8 byte
+(due `INT32`, un `INT64`, due `FLOAT`), si legge senza quei valori invece
+di essere rifiutata. Un'ultima corsa bit-packed di 32 gruppi in una pagina
+v1 può portare fino a 255 livelli o indici in più, qualunque, che non si
+leggono. Rifiutarle rifiuterebbe ogni file v1 di fastparquet e i file
+DuckDB V1 da qualche centinaio di righe in su (misurato su fastparquet
+2026.9.0 e DuckDB 1.5.6, `vendor/parquet-60.0.0-eof/PROVENANCE.md`).
+
+**Condizione di rientro.** fastparquet smette di aggiungere la coda e
+DuckDB di completare i blocchi con byte vecchi, e i loro file in uso sono
+riscritti; oppure una dichiarazione dello scrittore nei metadati del file
+che permetta di tollerare le forme solo per i suoi file.
 
 ## Codifiche Parquet non qualificate
 

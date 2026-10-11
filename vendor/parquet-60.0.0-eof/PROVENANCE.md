@@ -404,9 +404,9 @@ direttamente (anche con gli indici di pagina caricati), i 106 file di
 
 ### Salti dentro una pagina, fine della pagina (11 ottobre 2026)
 
-Da `patches/parquet-salti-e-fine-pagina.patch`, sul quinto e sul sesto
-giro di revisione (Codex), che hanno trovato le stesse classi nei salti e
-nella fine delle pagine. Due regole
+Da `patches/parquet-salti-e-fine-pagina.patch`, sul quinto, sesto e
+settimo giro di revisione (Codex), che hanno trovato le stesse classi nei
+salti e nella fine delle pagine. Due regole
 generali invece dei casi. Prove rosse in
 `crates/plenora-io/tests/parquet_decoder.rs` («Salti e fine della
 pagina») e `parquet_footer.rs` (selezione di righe), contro il fork del
@@ -426,7 +426,9 @@ ripetizione troncati).
    sono qualificati. Restano i salti di pagine intere dall'header, che ne
    controllano la codifica; ogni giro del loro ciclo consuma una pagina o
    termina. Il salto di pagine intere confronta le righe dell'header con
-   i suoi livelli e lo schema (sesto giro, sotto). Non tutte le selezioni
+   i suoi livelli e lo schema (sesto giro, sotto); su una colonna ripetuta
+   le righe sono i livelli di ripetizione 0, che un salto non legge, e il
+   salto non è qualificato (settimo giro). Non tutte le selezioni
    del lettore Arrow saltano: la selezione dei row group esclude chunk
    interi senza leggerli; `limit` può solo fermare la lettura (e una
    lettura fermata a metà pagina non arriva alla fine di quella pagina,
@@ -443,21 +445,22 @@ ripetizione troncati).
    byte), booleani `RLE` fino alla lunghezza prefissata. Gli stream di
    livelli che lo schema non ha devono essere vuoti (sesto giro). Prima i
    valori, i livelli o i byte in più si ignoravano **in silenzio**.
-   `PAGE_NOT_AS_DECLARED`. Tre forme ammesse, misurate su scrittori reali e
-   limitate:
-   - il riempimento dell'ultimo gruppo bit-packed, e un'ultima corsa
-     troncata dalla fine dei dati (come a monte), che porta solo i valori
-     dei suoi byte;
-   - DuckDB (1.5) scrive le corse bit-packed a blocchi di 32 gruppi e
-     completa l'ultimo con byte vecchi, non zeri: gruppi interi di
-     riempimento dopo l'ultimo valore solo in una corsa di esattamente 32
-     gruppi (`BLOCCO_DUCKDB`), qualunque cosa contengano;
+   `PAGE_NOT_AS_DECLARED`. Ammessi il riempimento dell'ultimo gruppo
+   bit-packed e un'ultima corsa troncata dalla fine dei dati (come a
+   monte), che porta solo i valori dei suoi byte. Due deviazioni
+   dichiarate (`docs/limiti.md`, «Fine delle pagine Parquet»), solo nelle
+   pagine v1 (`FinePagina::V1`; le v2 finiscono esatte) e solo nella forma
+   esatta misurata su scrittori reali:
    - fastparquet (2026.9) aggiunge 8 byte a zero a ogni pagina v1, dopo i
-     valori, anche `PLAIN` (`writer.py`, `8 * b'\x00'`): solo dopo lo
-     stream dei valori di una pagina v1, al più 8 byte, tutti zero
-     (`CODA_FASTPARQUET`; dopo i livelli e in una pagina v2 nessuna coda).
-     È una deviazione tollerata: due `INT32` a zero in coda a una pagina v1
-     si scartano come riempimento (`docs/limiti.md`). Perché il controllo distingua il riempimento
+     valori, anche `PLAIN` (`writer.py`, `8 * b'\x00'`): dopo lo stream
+     dei valori al più 8 byte, tutti zero (`CODA_FASTPARQUET`), misurati
+     da dove cominciano le corse vuote in coda (settimo giro: il primo
+     indicatore RLE 0 si leggeva già nel `set_data`, e 9 zeri passavano
+     come 8, `80 00` come niente); mai dopo i livelli;
+   - DuckDB (1.5) scrive le corse bit-packed a blocchi di 32 gruppi e
+     completa l'ultimo con byte vecchi, non zeri: gruppi interi dopo
+     l'ultimo valore solo in una corsa che dichiara esattamente 32 gruppi
+     (`BLOCCO_DUCKDB`), a larghezza sopra 0, qualunque cosa contengano. Perché il controllo distingua il riempimento
    dagli eccessi, i decoder dei livelli di ripetizione e degli indici di
    dizionario Arrow non leggono più in avanti oltre i valori chiesti.
 
@@ -480,6 +483,26 @@ ripetizione troncati).
    parte compressa, e un suffisso qualunque spariva. Ora si decomprime e
    deve dare zero byte (lo stream vuoto di un codec si legge).
 
+**Settimo giro.**
+
+1. Le righe di una pagina v2 di una colonna ripetuta si contano alla fine
+   della pagina (i livelli di ripetizione 0 letti, `righe_iniziate`); il
+   salto su una colonna ripetuta, che non li legge, non è qualificato. Il
+   costruttore di pagine delle prove unitarie dichiarava `num_rows` uguale
+   ai livelli: ora conta gli zeri di ripetizione.
+2. Le corse vuote in coda (un indicatore RLE 0, anche come varint non
+   minimo, o una corsa bit-packed di zero gruppi) si leggevano prima della
+   fine della pagina e i loro byte non si misuravano: ora la coda si misura
+   da dove cominciano (`RleDecoder` e il decoder ottimizzato dei livelli).
+3. FLBA nel lettore Arrow: il resto di una pagina `PLAIN` si rifiutava in
+   `set_data`, prima che la fine della pagina potesse riconoscere la coda
+   di fastparquet; ora il resto si giudica alla fine della pagina.
+4. La dimensione non compressa di una pagina non decompressa si confronta
+   con i suoi byte; nell'offset index la dimensione di una pagina si
+   confronta con il suo header.
+5. Le due deviazioni valgono solo nelle pagine v1, e quella di DuckDB solo
+   a larghezza sopra 0.
+
 Scrittori reali (11 ottobre 2026), su tipi comuni con null, stringhe,
 date, timestamp, dizionari e liste, da 3 a 20000 righe, con e senza
 compressione: pyarrow 25.0.1 e 26.0.0 (pagine v1 e v2, con e senza
@@ -492,9 +515,11 @@ fastparquet, SNAPPY e ZSTD) si leggono; GZIP, BROTLI e LZ4 non sono
 compilati (`Unsupported`, come prima). Letti con `plenora-io` e
 direttamente, i 106 file di prova hanno lo stesso esito del quarto giro.
 
-Prove unitarie del pacchetto con `parquet-testing`: 79 falliscono, le 52
+Prove unitarie del pacchetto con `parquet-testing`: 80 falliscono, le 52
 di prima più 27 attese, tutte su salti dentro una pagina o selezioni di
-righe (`SKIP_NOT_QUALIFIED`).
+righe (`SKIP_NOT_QUALIFIED`), e `test_read_dict_v2_int32_small`, che
+genera pagine v2 di una colonna ripetuta senza un livello di ripetizione 0
+(0 righe su livelli presenti, una pagina v2 fuori specifica).
 
 ### Profondità dello schema e tetto di memoria del footer (10 ottobre 2026)
 

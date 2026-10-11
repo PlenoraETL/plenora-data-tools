@@ -237,10 +237,12 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
         Ok(())
     }
 
-    fn verifica_fine_pagina(&self) -> Result<()> {
+    fn verifica_fine_pagina(&self, fine: crate::column::reader::decoder::FinePagina) -> Result<()> {
         match &self.decoder {
-            MaybePacked::Packed(d) => crate::column::reader::decoder::fine_esatta(d.fine_esatta()),
-            MaybePacked::Fallback(d) => d.verifica_fine_pagina(),
+            MaybePacked::Packed(d) => {
+                crate::column::reader::decoder::fine_esatta(d.fine_esatta(fine))
+            }
+            MaybePacked::Fallback(d) => d.verifica_fine_pagina(fine),
         }
     }
 }
@@ -326,11 +328,21 @@ struct PackedDecoder {
     packed_offset: usize,
     /// PLENORA: the groups the current bit-packed run declares.
     gruppi_della_corsa: usize,
+    /// PLENORA: where the runs of no value at the end of the stream start
+    /// (see `RleDecoder`); None after a run with values.
+    inizio_corse_vuote: Option<usize>,
 }
 
 impl PackedDecoder {
     fn next_rle_block(&mut self) -> Result<()> {
+        let inizio = self.data_offset;
         let indicator_value = self.decode_header()?;
+        // PLENORA: a run of no value is remembered where it starts.
+        if indicator_value >> 1 == 0 {
+            self.inizio_corse_vuote.get_or_insert(inizio);
+        } else {
+            self.inizio_corse_vuote = None;
+        }
         // PLENORA: the same rules as `RleDecoder::reload`: a run count beyond
         // `u32` is an error; a bit-packed run is read only as far as the data
         // goes (its bits were read past the payload; a final run shorter than
@@ -373,7 +385,7 @@ impl PackedDecoder {
     /// in an RLE run; in a bit-packed run the rest of the current byte, whole
     /// bytes after it only in a run of `BLOCCO_DUCKDB` groups; no run and no
     /// byte after.
-    fn fine_esatta(&self) -> bool {
+    fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
         use crate::util::bit_util::{BLOCCO_DUCKDB, coda_di_zeri};
         if self.rle_left != 0 {
             return false;
@@ -381,12 +393,14 @@ impl PackedDecoder {
         let dati = self.data.as_ref();
         if self.packed_count != self.packed_offset {
             let resto = self.packed_count - self.packed_offset;
-            if resto > resto % 8 && self.gruppi_della_corsa != BLOCCO_DUCKDB {
+            if resto > resto % 8
+                && !(fine.blocco_duckdb && self.gruppi_della_corsa == BLOCCO_DUCKDB)
+            {
                 return false;
             }
             return coda_di_zeri(dati, self.data_offset + self.packed_count / 8, 0);
         }
-        coda_di_zeri(dati, self.data_offset, 0)
+        coda_di_zeri(dati, self.inizio_corse_vuote.unwrap_or(self.data_offset), 0)
     }
 
     /// Decodes a VLQ encoded little endian integer and returns it
@@ -430,6 +444,7 @@ impl PackedDecoder {
             packed_count: 0,
             packed_offset: 0,
             gruppi_della_corsa: 0,
+            inizio_corse_vuote: None,
         }
     }
 
@@ -453,6 +468,7 @@ impl PackedDecoder {
         };
         self.data = data;
         self.data_offset = 0;
+        self.inizio_corse_vuote = None;
         Ok(())
     }
 

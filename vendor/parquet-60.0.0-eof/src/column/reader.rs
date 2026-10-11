@@ -144,9 +144,12 @@ pub struct GenericColumnReader<R, D, V> {
     /// PLENORA: the values read from the current page so far.
     valori_della_pagina: usize,
 
-    /// PLENORA: the zero bytes the value stream of the current page may be
-    /// followed by (`CODA_FASTPARQUET` in a v1 page, 0 in a v2 page).
-    coda_dei_valori: usize,
+    /// PLENORA: what the end of the current page may carry (the padding of
+    /// fastparquet and DuckDB in a v1 page, nothing in a v2 page).
+    fine_della_pagina: crate::column::reader::decoder::FinePagina,
+
+    /// PLENORA: the rows a v2 page of a repeated column declares.
+    righe_dichiarate: Option<usize>,
 }
 
 impl<V> GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelDecoderImpl, V>
@@ -197,7 +200,8 @@ where
             has_record_delimiter: false,
             valori_dichiarati: None,
             valori_della_pagina: 0,
-            coda_dei_valori: 0,
+            fine_della_pagina: crate::column::reader::decoder::FinePagina::ESATTA,
+            righe_dichiarate: None,
         }
     }
 
@@ -360,6 +364,12 @@ where
             if let (Some(righe), Some(livelli)) = (metadata.num_rows, metadata.num_levels) {
                 verifica_righe_v2(self.rep_level_decoder.is_some(), righe, livelli)?;
             }
+            // PLENORA: the rows of a page of a repeated column are its
+            // repetition levels 0, which a skip does not read: the header
+            // cannot be checked, and the skip is not qualified.
+            if self.rep_level_decoder.is_some() {
+                return Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED));
+            }
             let rows = metadata.num_rows.or_else(|| {
                 // If no repetition levels, num_levels == num_rows
                 self.rep_level_decoder
@@ -399,14 +409,25 @@ where
                 self.valori_della_pagina
             ));
         }
+        let fine = self.fine_della_pagina;
         if let Some(decoder) = self.rep_level_decoder.as_ref() {
-            decoder.verifica_fine_pagina()?;
+            decoder.verifica_fine_pagina(fine.livelli())?;
+            // PLENORA: the rows a v2 page declares are the rows that start
+            // in it (its repetition levels 0).
+            if let Some(righe) = self.righe_dichiarate
+                && righe != decoder.righe_iniziate()
+            {
+                return Err(general_err!(
+                    "data page V2 declares {} rows but its levels start {}",
+                    righe,
+                    decoder.righe_iniziate()
+                ));
+            }
         }
         if let Some(decoder) = self.def_level_decoder.as_ref() {
-            decoder.verifica_fine_pagina()?;
+            decoder.verifica_fine_pagina(fine.livelli())?;
         }
-        self.values_decoder
-            .verifica_fine_pagina(self.coda_dei_valori)
+        self.values_decoder.verifica_fine_pagina(fine)
     }
 
     /// Read the next page as a dictionary page. If the next page is not a dictionary page,
@@ -459,7 +480,8 @@ where
                             self.num_decoded_values = 0;
                             self.valori_dichiarati = None;
                             self.valori_della_pagina = 0;
-                            self.coda_dei_valori = crate::util::bit_util::CODA_FASTPARQUET;
+                            self.fine_della_pagina = crate::column::reader::decoder::FinePagina::V1;
+                            self.righe_dichiarate = None;
 
                             let max_rep_level = self.descr.max_rep_level();
                             let max_def_level = self.descr.max_def_level();
@@ -547,7 +569,10 @@ where
                             self.num_decoded_values = 0;
                             self.valori_dichiarati = Some((num_values - num_nulls) as usize);
                             self.valori_della_pagina = 0;
-                            self.coda_dei_valori = 0;
+                            self.fine_della_pagina =
+                                crate::column::reader::decoder::FinePagina::ESATTA;
+                            self.righe_dichiarate =
+                                (self.descr.max_rep_level() > 0).then_some(num_rows as usize);
 
                             // DataPage v2 only supports RLE encoding for repetition
                             // levels

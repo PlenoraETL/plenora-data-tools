@@ -182,8 +182,8 @@ pub trait Decoder<T: DataType>: Send {
     /// PLENORA: whether the data ends where the values read end. Only the
     /// decoders of the qualified encodings answer; the others are not
     /// verified, and answer `false` (an error at the end of the page).
-    fn fine_esatta(&self, coda: usize) -> bool {
-        let _ = coda;
+    fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
+        let _ = fine;
         false
     }
 
@@ -348,11 +348,13 @@ impl<T: DataType> Decoder<T> for PlainDecoder<T> {
         T::T::decode(buffer, &mut self.inner)
     }
 
-    fn fine_esatta(&self, coda: usize) -> bool {
+    fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
         use crate::util::bit_util::coda_di_zeri;
         match (&self.inner.data, &self.inner.bit_reader) {
-            (Some(data), _) => coda_di_zeri(data, self.inner.start, coda),
-            (None, Some(lettore)) => coda_di_zeri(lettore.dati(), lettore.get_byte_offset(), coda),
+            (Some(data), _) => coda_di_zeri(data, self.inner.start, fine.coda_di_zeri),
+            (None, Some(lettore)) => {
+                coda_di_zeri(lettore.dati(), lettore.get_byte_offset(), fine.coda_di_zeri)
+            }
             (None, None) => false,
         }
     }
@@ -456,10 +458,10 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
         rle.get_batch_with_dict(&self.dictionary[..], buffer, num_values)
     }
 
-    fn fine_esatta(&self, coda: usize) -> bool {
+    fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
         self.rle_decoder
             .as_ref()
-            .is_some_and(|decoder| decoder.fine_esatta(coda))
+            .is_some_and(|decoder| decoder.fine_esatta(fine))
     }
 
     /// Number of values left in this decoder stream
@@ -539,8 +541,9 @@ where
         Ok(())
     }
 
-    fn fine_esatta(&self, coda: usize) -> bool {
-        crate::util::bit_util::coda_di_zeri(&self.dopo, 0, coda) && self.decoder.fine_esatta(0)
+    fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
+        crate::util::bit_util::coda_di_zeri(&self.dopo, 0, fine.coda_di_zeri)
+            && self.decoder.fine_esatta(fine.livelli())
     }
 
     #[inline]

@@ -621,3 +621,32 @@ fn una_selezione_di_righe_non_e_qualificata() {
     }
     assert_eq!(con_indici(&byte, None), Ok(300));
 }
+
+/// La pagina dell'offset index è il suo header e la dimensione compressa
+/// che l'header dichiara: le due dimensioni non si confrontavano. La
+/// dimensione della seconda pagina nell'indice cresce di un byte (entro il
+/// column chunk): errore, non una pagina con un byte in più.
+#[test]
+fn la_dimensione_della_pagina_nell_indice_si_confronta_con_l_header() {
+    let byte = tre_pagine();
+    let intervallo = intervallo_dell_offset_index(&byte);
+    let mut rotto = byte;
+    let indice = &mut rotto[intervallo];
+    // Campo 2 (`i32`, 0x15) della seconda pagina, prima di `first_row_index`
+    // 100 (0x16, 0xc8 0x01): un varint zigzag di due byte, aumentato di uno.
+    let posizione = indice
+        .windows(6)
+        .position(|f| f[0] == 0x15 && f[3] == 0x16 && f[4] == 0xC8 && f[5] == 0x01)
+        .unwrap();
+    let zigzag = u16::from(indice[posizione + 1] & 0x7F) | (u16::from(indice[posizione + 2]) << 7);
+    let nuovo = zigzag + 2;
+    indice[posizione + 1] = u8::try_from(nuovo & 0x7F).unwrap() | 0x80;
+    indice[posizione + 2] = u8::try_from(nuovo >> 7).unwrap();
+    let Err(errore) = con_indici(&rotto, None) else {
+        panic!("dimensione della pagina incoerente letta");
+    };
+    assert!(
+        errore.contains("page size and page header disagree"),
+        "{errore}"
+    );
+}

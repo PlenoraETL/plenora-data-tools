@@ -442,12 +442,12 @@ impl ColumnValueDecoder for ValueDecoder {
     ) -> Result<()> {
         // PLENORA: only the qualified encodings are read, page by page.
         crate::basic::check_qualified_value_encoding(encoding)?;
-        // PLENORA: PLAIN and BYTE_STREAM_SPLIT pages hold whole values; a
-        // remainder was dropped in silence (65 bytes of 8-byte values read 8
-        // values and ignored the last byte).
-        if matches!(encoding, Encoding::PLAIN | Encoding::BYTE_STREAM_SPLIT)
-            && !data.len().is_multiple_of(self.byte_length)
-        {
+        // PLENORA: BYTE_STREAM_SPLIT pages hold whole values; a remainder was
+        // dropped in silence (65 bytes of 8-byte values read 8 values and
+        // ignored the last byte). A PLAIN remainder is judged at the end of
+        // the page, with the rest of the stream (`verifica_fine_pagina`): the
+        // zero bytes fastparquet appends to a v1 page are not a whole value.
+        if encoding == Encoding::BYTE_STREAM_SPLIT && !data.len().is_multiple_of(self.byte_length) {
             return Err(general_err!(
                 "{} page of {} bytes is not a whole number of {}-byte values",
                 encoding,
@@ -591,12 +591,12 @@ impl ColumnValueDecoder for ValueDecoder {
         }
     }
 
-    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
+    fn verifica_fine_pagina(&self, fine: crate::column::reader::decoder::FinePagina) -> Result<()> {
         let esatta = match self.decoder.as_ref() {
             Some(Decoder::Plain { buf, offset }) => {
-                crate::util::bit_util::coda_di_zeri(buf, *offset, coda)
+                crate::util::bit_util::coda_di_zeri(buf, *offset, fine.coda_di_zeri)
             }
-            Some(Decoder::Dict { decoder }) => decoder.fine_esatta(coda),
+            Some(Decoder::Dict { decoder }) => decoder.fine_esatta(fine),
             Some(Decoder::Delta { .. } | Decoder::ByteStreamSplit { .. }) | None => false,
         };
         crate::column::reader::decoder::fine_esatta(esatta)
