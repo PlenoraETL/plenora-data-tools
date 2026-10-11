@@ -1,0 +1,611 @@
+--- a/src/arrow/array_reader/builder.rs
++++ b/src/arrow/array_reader/builder.rs
+@@ -560,13 +560,13 @@ impl<'a> ArrayReaderBuilder<'a> {
+                 )?,
+             },
+             PhysicalType::FIXED_LEN_BYTE_ARRAY => match arrow_type {
+-                Some(DataType::Dictionary(_, _)) => make_byte_array_dictionary_reader(
+-                    page_iterator,
+-                    column_desc,
+-                    arrow_type,
+-                    self.batch_size,
+-                    padding_threshold,
+-                )?,
++                // PLENORA: this reader decodes the dictionary page as
++                // length-prefixed byte arrays, which a FIXED_LEN_BYTE_ARRAY
++                // dictionary is not: a valid dictionary was rejected (or
++                // misread). Unsupported until the path reads it correctly.
++                Some(DataType::Dictionary(_, _)) => {
++                    return Err(nyi_err!("{}", crate::basic::FLBA_AS_DICTIONARY));
++                }
+                 _ => make_fixed_len_byte_array_reader(
+                     page_iterator,
+                     column_desc,
+--- a/src/arrow/array_reader/byte_array.rs
++++ b/src/arrow/array_reader/byte_array.rs
+@@ -37,6 +37,40 @@ use bytes::Bytes;
+ use std::any::Any;
+ use std::sync::Arc;
+ 
++/// PLENORA: the column is annotated as text (`UTF8`, `JSON`, `ENUM`): its
++/// values are validated as UTF-8 while decoding.
++pub(crate) fn annotated_as_text(desc: &crate::schema::types::ColumnDescriptor) -> bool {
++    matches!(
++        desc.converted_type(),
++        ConvertedType::UTF8 | ConvertedType::JSON | ConvertedType::ENUM
++    )
++}
++
++/// PLENORA: a string Arrow type (also as dictionary values) is read only from
++/// a column annotated as text. The decoders validate UTF-8 from the
++/// annotation, not from the Arrow type: an Arrow schema (embedded or given)
++/// that asked for strings over a plain byte array produced a string array of
++/// unvalidated bytes (a panic in debug builds, invalid UTF-8 in release).
++pub(crate) fn check_text_annotation(
++    desc: &crate::schema::types::ColumnDescriptor,
++    data_type: &ArrowType,
++) -> Result<()> {
++    let stringa = |t: &ArrowType| {
++        matches!(
++            t,
++            ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View
++        )
++    };
++    let chiede_testo = match data_type {
++        ArrowType::Dictionary(_, valori) => stringa(valori),
++        altro => stringa(altro),
++    };
++    if chiede_testo && !annotated_as_text(desc) {
++        return Err(nyi_err!("{}", crate::basic::STRING_WITHOUT_ANNOTATION));
++    }
++    Ok(())
++}
++
+ /// Returns an [`ArrayReader`] that decodes the provided byte array column
+ pub fn make_byte_array_reader(
+     pages: Box<dyn PageIterator>,
+@@ -52,6 +86,7 @@ pub fn make_byte_array_reader(
+             .data_type()
+             .clone(),
+     };
++    check_text_annotation(column_desc.as_ref(), &data_type)?;
+ 
+     match data_type {
+         ArrowType::Binary
+@@ -193,7 +228,8 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
+     type Buffer = OffsetBuffer<I>;
+ 
+     fn new(desc: &ColumnDescPtr) -> Self {
+-        let validate_utf8 = desc.converted_type() == ConvertedType::UTF8;
++        // PLENORA: `JSON` and `ENUM` are text too.
++        let validate_utf8 = annotated_as_text(desc);
+         Self {
+             dict: None,
+             decoder: None,
+@@ -282,6 +318,8 @@ impl ByteArrayDecoder {
+         num_values: Option<usize>,
+         validate_utf8: bool,
+     ) -> Result<Self> {
++        // PLENORA: only the qualified encodings are read, page by page.
++        crate::basic::check_qualified_value_encoding(encoding)?;
+         let decoder = match encoding {
+             Encoding::PLAIN => ByteArrayDecoder::Plain(ByteArrayDecoderPlain::new(
+                 data,
+@@ -494,7 +532,11 @@ impl ByteArrayDecoderDeltaLength {
+         if len_decoder.get(&mut lengths)? != values {
+             return Err(eof_err!("eof decoding delta length byte array lengths"));
+         }
+-        crate::encodings::decoding::check_delta_lengths(&lengths, len_decoder.get_offset(), data.len())?;
++        crate::encodings::decoding::check_delta_lengths(
++            &lengths,
++            len_decoder.get_offset(),
++            data.len(),
++        )?;
+ 
+         Ok(Self {
+             lengths,
+--- a/src/arrow/array_reader/byte_array_dictionary.rs
++++ b/src/arrow/array_reader/byte_array_dictionary.rs
+@@ -92,6 +92,10 @@ pub fn make_byte_array_dictionary_reader(
+             .data_type()
+             .clone(),
+     };
++    crate::arrow::array_reader::byte_array::check_text_annotation(
++        column_desc.as_ref(),
++        &data_type,
++    )?;
+ 
+     match &data_type {
+         ArrowType::Dictionary(key_type, value_type) => {
+@@ -315,7 +319,8 @@ where
+     type Buffer = DictionaryBuffer<K, V>;
+ 
+     fn new(col: &ColumnDescPtr) -> Self {
+-        let validate_utf8 = col.converted_type() == ConvertedType::UTF8;
++        // PLENORA: `JSON` and `ENUM` are text too.
++        let validate_utf8 = crate::arrow::array_reader::byte_array::annotated_as_text(col);
+ 
+         let value_type = match (V::IS_LARGE, col.converted_type() == ConvertedType::UTF8) {
+             (true, true) => ArrowType::LargeUtf8,
+--- a/src/arrow/array_reader/byte_view_array.rs
++++ b/src/arrow/array_reader/byte_view_array.rs
+@@ -20,7 +20,7 @@ use crate::arrow::buffer::view_buffer::ViewBuffer;
+ use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
+ use crate::arrow::record_reader::GenericRecordReader;
+ use crate::arrow::schema::parquet_to_arrow_field;
+-use crate::basic::{ConvertedType, Encoding};
++use crate::basic::Encoding;
+ use crate::column::page::PageIterator;
+ use crate::column::reader::decoder::ColumnValueDecoder;
+ use crate::data_type::Int32Type;
+@@ -56,6 +56,10 @@ pub fn make_byte_view_array_reader(
+             _ => ArrowType::BinaryView,
+         },
+     };
++    crate::arrow::array_reader::byte_array::check_text_annotation(
++        column_desc.as_ref(),
++        &data_type,
++    )?;
+ 
+     match data_type {
+         ArrowType::BinaryView | ArrowType::Utf8View => {
+@@ -151,7 +155,8 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
+     type Buffer = ViewBuffer;
+ 
+     fn new(desc: &ColumnDescPtr) -> Self {
+-        let validate_utf8 = desc.converted_type() == ConvertedType::UTF8;
++        // PLENORA: `JSON` and `ENUM` are text too.
++        let validate_utf8 = crate::arrow::array_reader::byte_array::annotated_as_text(desc);
+         Self {
+             dict: None,
+             decoder: None,
+@@ -237,6 +242,8 @@ impl ByteViewArrayDecoder {
+         num_values: Option<usize>,
+         validate_utf8: bool,
+     ) -> Result<Self> {
++        // PLENORA: only the qualified encodings are read, page by page.
++        crate::basic::check_qualified_value_encoding(encoding)?;
+         let decoder = match encoding {
+             Encoding::PLAIN => ByteViewArrayDecoder::Plain(ByteViewArrayDecoderPlain::new(
+                 data,
+@@ -601,7 +608,11 @@ impl ByteViewArrayDecoderDeltaLength {
+         if len_decoder.get(&mut lengths)? != values {
+             return Err(eof_err!("eof decoding delta length byte array lengths"));
+         }
+-        crate::encodings::decoding::check_delta_lengths(&lengths, len_decoder.get_offset(), data.len())?;
++        crate::encodings::decoding::check_delta_lengths(
++            &lengths,
++            len_decoder.get_offset(),
++            data.len(),
++        )?;
+ 
+         Ok(Self {
+             lengths,
+--- a/src/arrow/array_reader/fixed_len_byte_array.rs
++++ b/src/arrow/array_reader/fixed_len_byte_array.rs
+@@ -452,6 +452,8 @@ impl ColumnValueDecoder for ValueDecoder {
+         num_levels: usize,
+         num_values: Option<usize>,
+     ) -> Result<()> {
++        // PLENORA: only the qualified encodings are read, page by page.
++        crate::basic::check_qualified_value_encoding(encoding)?;
+         // PLENORA: PLAIN and BYTE_STREAM_SPLIT pages hold whole values; a
+         // remainder was dropped in silence (65 bytes of 8-byte values read 8
+         // values and ignored the last byte).
+@@ -537,7 +539,9 @@ impl ColumnValueDecoder for ValueDecoder {
+                         let val = usize::try_from(*key)
+                             .ok()
+                             .and_then(|key| key.checked_mul(self.byte_length))
+-                            .and_then(|offset| dict.get(offset..offset.checked_add(self.byte_length)?))
++                            .and_then(|offset| {
++                                dict.get(offset..offset.checked_add(self.byte_length)?)
++                            })
+                             .ok_or_else(|| {
+                                 general_err!(
+                                     "dictionary index out of bounds: the dictionary has {} values",
+--- a/src/arrow/array_reader/primitive_array.rs
++++ b/src/arrow/array_reader/primitive_array.rs
+@@ -258,19 +258,51 @@ fn coerce_array(array: ArrayRef, target_type: &ArrowType) -> Result<ArrayRef> {
+ fn coerce_i32(array: &Int32Array, target_type: &ArrowType) -> Result<ArrayRef> {
+     Ok(match target_type {
+         ArrowType::UInt8 => {
+-            let array = array.unary(|i| i as u8) as UInt8Array;
++            // PLENORA: a value outside the annotated width is an error (`as`
++            // truncated it: INT32 256 with INT_8 became 0).
++            let array: UInt8Array = array.try_unary(|i| {
++                u8::try_from(i).map_err(|_| {
++                    arrow_schema::ArrowError::CastError(
++                        "INT32 value outside its annotated integer width".to_owned(),
++                    )
++                })
++            })?;
+             Arc::new(array) as ArrayRef
+         }
+         ArrowType::Int8 => {
+-            let array = array.unary(|i| i as i8) as Int8Array;
++            // PLENORA: a value outside the annotated width is an error (`as`
++            // truncated it: INT32 256 with INT_8 became 0).
++            let array: Int8Array = array.try_unary(|i| {
++                i8::try_from(i).map_err(|_| {
++                    arrow_schema::ArrowError::CastError(
++                        "INT32 value outside its annotated integer width".to_owned(),
++                    )
++                })
++            })?;
+             Arc::new(array) as ArrayRef
+         }
+         ArrowType::UInt16 => {
+-            let array = array.unary(|i| i as u16) as UInt16Array;
++            // PLENORA: a value outside the annotated width is an error (`as`
++            // truncated it: INT32 256 with INT_8 became 0).
++            let array: UInt16Array = array.try_unary(|i| {
++                u16::try_from(i).map_err(|_| {
++                    arrow_schema::ArrowError::CastError(
++                        "INT32 value outside its annotated integer width".to_owned(),
++                    )
++                })
++            })?;
+             Arc::new(array) as ArrayRef
+         }
+         ArrowType::Int16 => {
+-            let array = array.unary(|i| i as i16) as Int16Array;
++            // PLENORA: a value outside the annotated width is an error (`as`
++            // truncated it: INT32 256 with INT_8 became 0).
++            let array: Int16Array = array.try_unary(|i| {
++                i16::try_from(i).map_err(|_| {
++                    arrow_schema::ArrowError::CastError(
++                        "INT32 value outside its annotated integer width".to_owned(),
++                    )
++                })
++            })?;
+             Arc::new(array) as ArrayRef
+         }
+         ArrowType::Int32 => Arc::new(array.clone()),
+--- a/src/arrow/buffer/dictionary_buffer.rs
++++ b/src/arrow/buffer/dictionary_buffer.rs
+@@ -166,9 +166,11 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
+                     // PLENORA: every value has the declared width: `try_new`
+                     // checks only the total, and ["a", "bcd"] became
+                     // ["ab", "cd"] in silence.
+-                    if binary.value_offsets().windows(2).any(|w| {
+-                        i64::from(w[1]) - i64::from(w[0]) != i64::from(size)
+-                    }) {
++                    if binary
++                        .value_offsets()
++                        .windows(2)
++                        .any(|w| i64::from(w[1]) - i64::from(w[0]) != i64::from(size))
++                    {
+                         return Err(general_err!("dictionary values of the wrong width"));
+                     }
+                     // PLENORA: dictionary values of the wrong width are an
+--- a/src/arrow/buffer/offset_buffer.rs
++++ b/src/arrow/buffer/offset_buffer.rs
+@@ -99,7 +99,10 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
+             let index = key.as_usize();
+             // PLENORA: a negative key becomes `usize::MAX`, and `index + 1`
+             // overflowed (a panic) instead of being out of bounds.
+-            if index.checked_add(1).is_none_or(|end| end >= dict_offsets.len()) {
++            if index
++                .checked_add(1)
++                .is_none_or(|end| end >= dict_offsets.len())
++            {
+                 return Err(general_err!(
+                     "dictionary key beyond bounds of dictionary: 0..{}",
+                     dict_offsets.len().saturating_sub(1)
+--- a/src/arrow/decoder/delta_byte_array.rs
++++ b/src/arrow/decoder/delta_byte_array.rs
+@@ -134,8 +134,13 @@ impl DeltaByteArrayDecoder {
+         let data = self.data.as_ref();
+ 
+         for (prefix_length, suffix_length) in iter {
+-            let (prefix_length, end) =
+-                checked_value(*prefix_length, *suffix_length, self.last_value.len(), self.data_offset, data.len())?;
++            let (prefix_length, end) = checked_value(
++                *prefix_length,
++                *suffix_length,
++                self.last_value.len(),
++                self.data_offset,
++                data.len(),
++            )?;
+ 
+             self.last_value.truncate(prefix_length);
+             self.last_value
+@@ -161,8 +166,13 @@ impl DeltaByteArrayDecoder {
+         let data = self.data.as_ref();
+ 
+         for (prefix_length, suffix_length) in iter {
+-            let (prefix_length, end) =
+-                checked_value(*prefix_length, *suffix_length, self.last_value.len(), self.data_offset, data.len())?;
++            let (prefix_length, end) = checked_value(
++                *prefix_length,
++                *suffix_length,
++                self.last_value.len(),
++                self.data_offset,
++                data.len(),
++            )?;
+ 
+             self.last_value.truncate(prefix_length);
+             self.last_value
+--- a/src/arrow/record_reader/definition_levels.rs
++++ b/src/arrow/record_reader/definition_levels.rs
+@@ -323,25 +323,20 @@ impl PackedDecoder {
+     fn next_rle_block(&mut self) -> Result<()> {
+         let indicator_value = self.decode_header()?;
+         // PLENORA: the same rules as `RleDecoder::reload`: a run count beyond
+-        // `u32` is an error, a bit-packed run must be inside the data (its
+-        // bits were read past the payload), and a level of bit width 1 is 0 or
+-        // 1 (any other byte was read as 1 in silence).
++        // `u32` is an error; a bit-packed run is read only as far as the data
++        // goes (its bits were read past the payload; a final run shorter than
++        // its groups is legal, and the caller compares the levels it gets with
++        // those the page declares); a level of bit width 1 is 0 or 1 (any other
++        // byte was read as 1 in silence).
+         let run = usize::try_from(
+             u32::try_from(indicator_value >> 1)
+                 .map_err(|_| general_err!("RLE run length out of range"))?,
+         )
+         .map_err(|_| general_err!("RLE run length out of range"))?;
+         if indicator_value & 1 == 1 {
+-            self.data_offset
+-                .checked_add(run)
+-                .filter(|end| *end <= self.data.len())
+-                .ok_or_else(|| {
+-                    ParquetError::EOF(
+-                        "unexpected end of file whilst decoding definition levels bit-packed run"
+-                            .into(),
+-                    )
+-                })?;
++            let disponibili = self.data.len().saturating_sub(self.data_offset);
+             self.packed_count = run
++                .min(disponibili)
+                 .checked_mul(8)
+                 .ok_or_else(|| general_err!("RLE run length out of range"))?;
+             self.packed_offset = 0;
+--- a/src/basic.rs
++++ b/src/basic.rs
+@@ -1461,6 +1461,45 @@ impl str::FromStr for LogicalType {
+     }
+ }
+ 
++/// PLENORA: the fixed text of the rejection of an encoding not qualified for
++/// reading; it names no value of the file.
++pub const ENCODING_NOT_QUALIFIED: &str = "Parquet encoding not qualified for reading";
++
++/// PLENORA: the fixed text of the rejection of a string Arrow type over a
++/// byte array column without a string annotation (`UTF8`, `JSON`, `ENUM`).
++pub const STRING_WITHOUT_ANNOTATION: &str =
++    "string Arrow type over a byte array column without a string annotation";
++
++/// PLENORA: the fixed text of the rejection of a `FIXED_LEN_BYTE_ARRAY`
++/// column read as an Arrow dictionary.
++pub const FLBA_AS_DICTIONARY: &str =
++    "FIXED_LEN_BYTE_ARRAY read as an Arrow dictionary is not supported";
++
++/// PLENORA: whether a value encoding is qualified for reading in this fork.
++///
++/// Qualified: `PLAIN`, `PLAIN_DICTIONARY` and `RLE_DICTIONARY` for values,
++/// `RLE` for booleans (levels are always `RLE` or `BIT_PACKED`). Not
++/// qualified, until each has a fuzz campaign of its own:
++/// `DELTA_BINARY_PACKED`, `DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY`,
++/// `BYTE_STREAM_SPLIT` (and the others: `BIT_PACKED` for values). Two
++/// reviews found most of the decoder defects in exactly these.
++pub fn is_qualified_value_encoding(encoding: Encoding) -> bool {
++    matches!(
++        encoding,
++        Encoding::PLAIN | Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY | Encoding::RLE
++    )
++}
++
++/// PLENORA: [`is_qualified_value_encoding`] as an error, with the fixed text
++/// [`ENCODING_NOT_QUALIFIED`] (the encoding is named after it: not data).
++pub fn check_qualified_value_encoding(encoding: Encoding) -> Result<()> {
++    if is_qualified_value_encoding(encoding) {
++        Ok(())
++    } else {
++        Err(nyi_err!("{}: {}", ENCODING_NOT_QUALIFIED, encoding))
++    }
++}
++
+ #[cfg(test)]
+ #[expect(deprecated)] // allow BIT_PACKED encoding for the whole test module
+ mod tests {
+--- a/src/column/reader/decoder.rs
++++ b/src/column/reader/decoder.rs
+@@ -206,6 +206,8 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
+         if encoding == Encoding::PLAIN_DICTIONARY {
+             encoding = Encoding::RLE_DICTIONARY;
+         }
++        // PLENORA: only the qualified encodings are read, page by page.
++        crate::basic::check_qualified_value_encoding(encoding)?;
+ 
+         let decoder = if encoding == Encoding::RLE_DICTIONARY {
+             // PLENORA: a dictionary-encoded page in a column chunk with no
+@@ -263,31 +265,43 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
+ const SKIP_BUFFER_SIZE: usize = 1024;
+ 
+ enum LevelDecoder {
+-    Packed(BitReader, u8),
+-    Rle(RleDecoder),
++    Packed(BitReader, u8, i16),
++    Rle(RleDecoder, i16),
+ }
+ 
+ impl LevelDecoder {
+-    fn new(encoding: Encoding, data: Bytes, bit_width: u8) -> Result<Self> {
++    fn new(encoding: Encoding, data: Bytes, bit_width: u8, max_level: i16) -> Result<Self> {
+         match encoding {
+             Encoding::RLE => {
+                 let mut decoder = RleDecoder::new(bit_width);
+                 decoder.set_data(data)?;
+-                Ok(Self::Rle(decoder))
++                Ok(Self::Rle(decoder, max_level))
+             }
+             #[expect(deprecated)]
+-            Encoding::BIT_PACKED => Ok(Self::Packed(BitReader::new(data), bit_width)),
+-            _ => unreachable!("invalid level encoding: {}", encoding),
++            Encoding::BIT_PACKED => Ok(Self::Packed(BitReader::new(data), bit_width, max_level)),
++            // PLENORA: an error, not `unreachable!`.
++            _ => Err(general_err!("invalid level encoding: {}", encoding)),
+         }
+     }
+ 
+     fn read(&mut self, out: &mut [i16]) -> Result<usize> {
+-        match self {
+-            Self::Packed(reader, bit_width) => {
+-                Ok(reader.get_batch::<i16>(out, *bit_width as usize))
+-            }
+-            Self::Rle(reader) => Ok(reader.get_batch(out)?),
++        let (read, max_level) = match self {
++            Self::Packed(reader, bit_width, max_level) => (
++                reader.get_batch::<i16>(out, *bit_width as usize),
++                *max_level,
++            ),
++            Self::Rle(reader, max_level) => (reader.get_batch(out)?, *max_level),
++        };
++        // PLENORA: a level above the maximum fits the bit width but is no
++        // level of the column; it was counted as a null (definition) or as a
++        // level of its own (repetition) in silence.
++        if out[..read]
++            .iter()
++            .any(|level| *level < 0 || *level > max_level)
++        {
++            return Err(general_err!("level beyond the maximum of the column"));
+         }
++        Ok(read)
+     }
+ }
+ 
+@@ -313,7 +327,12 @@ impl ColumnLevelDecoder for DefinitionLevelDecoderImpl {
+     type Buffer = Vec<i16>;
+ 
+     fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
+-        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width)?);
++        self.decoder = Some(LevelDecoder::new(
++            encoding,
++            data,
++            self.bit_width,
++            self.max_level,
++        )?);
+         Ok(())
+     }
+ }
+@@ -364,6 +383,7 @@ pub(crate) const REPETITION_LEVELS_BATCH_SIZE: usize = 1024;
+ pub struct RepetitionLevelDecoderImpl {
+     decoder: Option<LevelDecoder>,
+     bit_width: u8,
++    max_level: i16,
+     buffer: Box<[i16; REPETITION_LEVELS_BATCH_SIZE]>,
+     buffer_len: usize,
+     buffer_offset: usize,
+@@ -376,6 +396,7 @@ impl RepetitionLevelDecoderImpl {
+         Self {
+             decoder: None,
+             bit_width,
++            max_level,
+             buffer: Box::new([0; REPETITION_LEVELS_BATCH_SIZE]),
+             buffer_offset: 0,
+             buffer_len: 0,
+@@ -417,7 +438,12 @@ impl ColumnLevelDecoder for RepetitionLevelDecoderImpl {
+     type Buffer = Vec<i16>;
+ 
+     fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
+-        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width)?);
++        self.decoder = Some(LevelDecoder::new(
++            encoding,
++            data,
++            self.bit_width,
++            self.max_level,
++        )?);
+         self.buffer_len = 0;
+         self.buffer_offset = 0;
+         Ok(())
+--- a/src/encodings/decoding.rs
++++ b/src/encodings/decoding.rs
+@@ -1222,7 +1222,9 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
+                     // PLENORA: a missing suffix is an error; the previous one
+                     // stayed in `v` and was used again in silence.
+                     if suffix_decoder.get(&mut v[..])? != 1 {
+-                        return Err(eof_err!("DELTA_BYTE_ARRAY has fewer suffixes than prefixes"));
++                        return Err(eof_err!(
++                            "DELTA_BYTE_ARRAY has fewer suffixes than prefixes"
++                        ));
+                     }
+                     let suffix = v[0].data();
+ 
+--- a/src/encodings/decoding/byte_stream_split_decoder.rs
++++ b/src/encodings/decoding/byte_stream_split_decoder.rs
+@@ -199,7 +199,10 @@ impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
+     /// PLENORA: the values the page holds (`type_width` is checked non-zero
+     /// in `set_data`, before any `get` or `skip`).
+     fn stride(&self) -> usize {
+-        self.encoded_bytes.len().checked_div(self.type_width).unwrap_or(0)
++        self.encoded_bytes
++            .len()
++            .checked_div(self.type_width)
++            .unwrap_or(0)
+     }
+ }
+ 
+--- a/src/encodings/rle.rs
++++ b/src/encodings/rle.rs
+@@ -634,6 +634,12 @@ impl RleDecoder {
+             let run = u32::try_from(indicator_value >> 1)
+                 .map_err(|_| general_err!("RLE run length out of range"))?;
+             if indicator_value & 1 == 1 {
++                // PLENORA: a final bit-packed run shorter than its declared
++                // groups is read as far as its bytes go, as upstream and the
++                // C++ reader do (some writers do not pad it, see
++                // `test_truncated_rle`): the bit reader never reads past the
++                // data, and the callers compare the values and levels they get
++                // with those the page declares.
+                 self.bit_packed_left = run
+                     .checked_mul(BIT_PACK_GROUP_SIZE as u32)
+                     .ok_or_else(|| general_err!("RLE run length out of range"))?;
+@@ -641,9 +647,14 @@ impl RleDecoder {
+                 self.rle_left = run;
+                 let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);
+                 self.current_value = bit_reader.get_aligned::<u64>(value_width);
+-                self.current_value.ok_or_else(|| {
++                let valore = self.current_value.ok_or_else(|| {
+                     general_err!("parquet_data_error: not enough data for RLE decoding")
+                 })?;
++                // PLENORA: the repeated value fits the declared bit width (it
++                // is stored in whole bytes, which hold more).
++                if self.bit_width < 64 && valore >> self.bit_width != 0 {
++                    return Err(general_err!("RLE value wider than the bit width"));
++                }
+             }
+             Ok(true)
+         } else {
+--- a/src/util/bit_util.rs
++++ b/src/util/bit_util.rs
+@@ -897,7 +897,10 @@ impl BitReader {
+ 
+         for (i, &byte) in buf.iter().enumerate() {
+             if i >= MAX_VLQ_BYTE_LEN {
+-                return Err(general_err!("varint longer than {} bytes", MAX_VLQ_BYTE_LEN));
++                return Err(general_err!(
++                    "varint longer than {} bytes",
++                    MAX_VLQ_BYTE_LEN
++                ));
+             }
+             let group = u64::from(byte & 0x7F);
+             let shift = 7 * i;
+@@ -910,10 +913,15 @@ impl BitReader {
+                 return Ok(Some(v as i64));
+             }
+         }
+-        Ok(None)
++        // PLENORA: the data ends inside a varint (continuation bit set on the
++        // last byte): malformed, not the end of the data.
++        if buf.is_empty() {
++            Ok(None)
++        } else {
++            Err(general_err!("varint truncated at the end of the data"))
++        }
+     }
+ 
+-
+     /// Reads a zigzag-VLQ-encoded little-endian integer from the
+     /// stream.
+     ///

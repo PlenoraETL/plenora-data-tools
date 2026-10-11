@@ -166,9 +166,11 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     // PLENORA: every value has the declared width: `try_new`
                     // checks only the total, and ["a", "bcd"] became
                     // ["ab", "cd"] in silence.
-                    if binary.value_offsets().windows(2).any(|w| {
-                        i64::from(w[1]) - i64::from(w[0]) != i64::from(size)
-                    }) {
+                    if binary
+                        .value_offsets()
+                        .windows(2)
+                        .any(|w| i64::from(w[1]) - i64::from(w[0]) != i64::from(size))
+                    {
                         return Err(general_err!("dictionary values of the wrong width"));
                     }
                     // PLENORA: dictionary values of the wrong width are an

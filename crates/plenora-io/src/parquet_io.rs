@@ -111,10 +111,78 @@ const LIMITI_DEL_FOOTER: [&str; 3] = [
     "Parquet footer metadata exceeds the decoding memory budget",
 ];
 
+/// I rifiuti espliciti del fork `parquet` (testi fissi, senza valori del
+/// file): `Unsupported`. Il testo arriva così com'è da `ParquetError::NYI`, o
+/// dentro `ArrowError::ParquetError` quando l'errore nasce leggendo i batch.
+fn rifiuto_del_fork(testo: &str) -> Option<PlenoraError> {
+    if testo.contains(parquet::basic::ENCODING_NOT_QUALIFIED) {
+        return Some(codifica_non_qualificata());
+    }
+    if testo.contains(parquet::basic::FLBA_AS_DICTIONARY) {
+        return Some(PlenoraError::Unsupported(
+            "colonna FIXED_LEN_BYTE_ARRAY letta come dizionario Arrow: non supportata".to_owned(),
+        ));
+    }
+    if testo.contains(parquet::basic::STRING_WITHOUT_ANNOTATION) {
+        return Some(PlenoraError::Unsupported(
+            "tipo Arrow testo su una colonna di byte senza annotazione di testo: non supportato"
+                .to_owned(),
+        ));
+    }
+    None
+}
+
+/// Un errore Arrow della lettura dei batch: i rifiuti del fork restano
+/// `Unsupported`, il resto come ogni errore Arrow.
+fn da_arrow_lettura(errore: plenora_core::arrow::ArrowError) -> PlenoraError {
+    if let plenora_core::arrow::ArrowError::ParquetError(testo) = &errore {
+        if let Some(rifiuto) = rifiuto_del_fork(testo) {
+            return rifiuto;
+        }
+    }
+    PlenoraError::from(errore)
+}
+
+/// Una codifica di valori che la lettura non accetta: `Unsupported`, con un
+/// testo fisso (docs/limiti.md, «Codifiche Parquet non qualificate»).
+fn codifica_non_qualificata() -> PlenoraError {
+    PlenoraError::Unsupported(
+        "codifica Parquet non qualificata per la lettura (lette: PLAIN, PLAIN_DICTIONARY, \
+         RLE_DICTIONARY; RLE per i booleani e i livelli, BIT_PACKED per i livelli)"
+            .to_owned(),
+    )
+}
+
+/// Le codifiche che un column chunk dichiara (l'elenco e, se c'è, le
+/// statistiche delle pagine) sono fra quelle lette. Il fork `parquet`
+/// controlla anche ogni pagina letta davvero: un footer che dichiara una
+/// codifica e una pagina che ne usa un'altra si rifiutano entrambi.
+#[allow(deprecated)] // BIT_PACKED: deprecata, ma una codifica dei livelli.
+fn verifica_codifiche(chunk: &parquet::file::metadata::ColumnChunkMetaData) -> Result<()> {
+    use parquet::basic::{is_qualified_value_encoding, Encoding};
+    let ammessa = |codifica: Encoding| {
+        is_qualified_value_encoding(codifica) || codifica == Encoding::BIT_PACKED
+    };
+    let dichiarate_ok = chunk.encodings().all(ammessa);
+    let pagine_ok = chunk
+        .page_encoding_stats()
+        .is_none_or(|statistiche| statistiche.iter().all(|voce| ammessa(voce.encoding)));
+    if dichiarate_ok && pagine_ok {
+        Ok(())
+    } else {
+        Err(codifica_non_qualificata())
+    }
+}
+
 /// Errore di `parquet` con un codice nostro, mai il testo della dipendenza
 /// (che può contenere valori): la stessa regola di `arrow_error_code`.
 #[must_use]
 pub fn da_parquet(errore: &ParquetError) -> PlenoraError {
+    if let ParquetError::NYI(testo) = errore {
+        if let Some(rifiuto) = rifiuto_del_fork(testo) {
+            return rifiuto;
+        }
+    }
     if let ParquetError::General(testo) = errore {
         if LIMITI_DEL_FOOTER
             .iter()
@@ -145,7 +213,8 @@ fn da_parquet_valore(errore: ParquetError) -> PlenoraError {
     da_parquet(&errore)
 }
 
-/// I codec di tutti i column chunk devono essere fra quelli compilati, e
+/// I codec di tutti i column chunk devono essere fra quelli compilati, le
+/// codifiche dichiarate fra quelle lette ([`verifica_codifiche`]), e
 /// nessuna colonna è `INT96`: `parquet` la converte in nanosecondi con
 /// aritmetica che avvolge, e le date oltre ±292 anni dal 1970 diventano
 /// altre date senza errore.
@@ -168,6 +237,7 @@ fn verifica_colonne(metadati: &ParquetMetaData) -> Result<()> {
                     "codec Parquet {codec} non abilitato (abilitati: UNCOMPRESSED, SNAPPY, ZSTD)"
                 )));
             }
+            verifica_codifiche(chunk)?;
         }
     }
     Ok(())
@@ -460,7 +530,9 @@ pub fn leggi(percorso: &Path, residuo: u64, limiti: &LimitiLettura) -> Result<Re
             .map_err(da_parquet_valore)
     })?;
     let blocchi = barriera("parquet", || {
-        Ok(lettore.collect::<std::result::Result<Vec<_>, _>>()?)
+        lettore
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(da_arrow_lettura)
     })?;
     let tabella = match blocchi.len() {
         0 => plenora_core::batch_vuoto(Arc::clone(&schema))

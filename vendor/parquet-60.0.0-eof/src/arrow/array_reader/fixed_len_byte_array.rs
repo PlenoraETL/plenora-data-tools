@@ -452,6 +452,8 @@ impl ColumnValueDecoder for ValueDecoder {
         num_levels: usize,
         num_values: Option<usize>,
     ) -> Result<()> {
+        // PLENORA: only the qualified encodings are read, page by page.
+        crate::basic::check_qualified_value_encoding(encoding)?;
         // PLENORA: PLAIN and BYTE_STREAM_SPLIT pages hold whole values; a
         // remainder was dropped in silence (65 bytes of 8-byte values read 8
         // values and ignored the last byte).
@@ -537,7 +539,9 @@ impl ColumnValueDecoder for ValueDecoder {
                         let val = usize::try_from(*key)
                             .ok()
                             .and_then(|key| key.checked_mul(self.byte_length))
-                            .and_then(|offset| dict.get(offset..offset.checked_add(self.byte_length)?))
+                            .and_then(|offset| {
+                                dict.get(offset..offset.checked_add(self.byte_length)?)
+                            })
                             .ok_or_else(|| {
                                 general_err!(
                                     "dictionary index out of bounds: the dictionary has {} values",

@@ -199,7 +199,10 @@ impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
     /// PLENORA: the values the page holds (`type_width` is checked non-zero
     /// in `set_data`, before any `get` or `skip`).
     fn stride(&self) -> usize {
-        self.encoded_bytes.len().checked_div(self.type_width).unwrap_or(0)
+        self.encoded_bytes
+            .len()
+            .checked_div(self.type_width)
+            .unwrap_or(0)
     }
 }
 

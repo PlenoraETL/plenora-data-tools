@@ -897,7 +897,10 @@ impl BitReader {
 
         for (i, &byte) in buf.iter().enumerate() {
             if i >= MAX_VLQ_BYTE_LEN {
-                return Err(general_err!("varint longer than {} bytes", MAX_VLQ_BYTE_LEN));
+                return Err(general_err!(
+                    "varint longer than {} bytes",
+                    MAX_VLQ_BYTE_LEN
+                ));
             }
             let group = u64::from(byte & 0x7F);
             let shift = 7 * i;
@@ -910,9 +913,14 @@ impl BitReader {
                 return Ok(Some(v as i64));
             }
         }
-        Ok(None)
+        // PLENORA: the data ends inside a varint (continuation bit set on the
+        // last byte): malformed, not the end of the data.
+        if buf.is_empty() {
+            Ok(None)
+        } else {
+            Err(general_err!("varint truncated at the end of the data"))
+        }
     }
-
 
     /// Reads a zigzag-VLQ-encoded little-endian integer from the
     /// stream.

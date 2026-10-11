@@ -1222,7 +1222,9 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                     // PLENORA: a missing suffix is an error; the previous one
                     // stayed in `v` and was used again in silence.
                     if suffix_decoder.get(&mut v[..])? != 1 {
-                        return Err(eof_err!("DELTA_BYTE_ARRAY has fewer suffixes than prefixes"));
+                        return Err(eof_err!(
+                            "DELTA_BYTE_ARRAY has fewer suffixes than prefixes"
+                        ));
                     }
                     let suffix = v[0].data();
 

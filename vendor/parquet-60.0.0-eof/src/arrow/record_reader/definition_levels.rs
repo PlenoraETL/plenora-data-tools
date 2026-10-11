@@ -323,25 +323,20 @@ impl PackedDecoder {
     fn next_rle_block(&mut self) -> Result<()> {
         let indicator_value = self.decode_header()?;
         // PLENORA: the same rules as `RleDecoder::reload`: a run count beyond
-        // `u32` is an error, a bit-packed run must be inside the data (its
-        // bits were read past the payload), and a level of bit width 1 is 0 or
-        // 1 (any other byte was read as 1 in silence).
+        // `u32` is an error; a bit-packed run is read only as far as the data
+        // goes (its bits were read past the payload; a final run shorter than
+        // its groups is legal, and the caller compares the levels it gets with
+        // those the page declares); a level of bit width 1 is 0 or 1 (any other
+        // byte was read as 1 in silence).
         let run = usize::try_from(
             u32::try_from(indicator_value >> 1)
                 .map_err(|_| general_err!("RLE run length out of range"))?,
         )
         .map_err(|_| general_err!("RLE run length out of range"))?;
         if indicator_value & 1 == 1 {
-            self.data_offset
-                .checked_add(run)
-                .filter(|end| *end <= self.data.len())
-                .ok_or_else(|| {
-                    ParquetError::EOF(
-                        "unexpected end of file whilst decoding definition levels bit-packed run"
-                            .into(),
-                    )
-                })?;
+            let disponibili = self.data.len().saturating_sub(self.data_offset);
             self.packed_count = run
+                .min(disponibili)
                 .checked_mul(8)
                 .ok_or_else(|| general_err!("RLE run length out of range"))?;
             self.packed_offset = 0;

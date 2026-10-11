@@ -634,6 +634,12 @@ impl RleDecoder {
             let run = u32::try_from(indicator_value >> 1)
                 .map_err(|_| general_err!("RLE run length out of range"))?;
             if indicator_value & 1 == 1 {
+                // PLENORA: a final bit-packed run shorter than its declared
+                // groups is read as far as its bytes go, as upstream and the
+                // C++ reader do (some writers do not pad it, see
+                // `test_truncated_rle`): the bit reader never reads past the
+                // data, and the callers compare the values and levels they get
+                // with those the page declares.
                 self.bit_packed_left = run
                     .checked_mul(BIT_PACK_GROUP_SIZE as u32)
                     .ok_or_else(|| general_err!("RLE run length out of range"))?;
@@ -641,9 +647,14 @@ impl RleDecoder {
                 self.rle_left = run;
                 let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);
                 self.current_value = bit_reader.get_aligned::<u64>(value_width);
-                self.current_value.ok_or_else(|| {
+                let valore = self.current_value.ok_or_else(|| {
                     general_err!("parquet_data_error: not enough data for RLE decoding")
                 })?;
+                // PLENORA: the repeated value fits the declared bit width (it
+                // is stored in whole bytes, which hold more).
+                if self.bit_width < 64 && valore >> self.bit_width != 0 {
+                    return Err(general_err!("RLE value wider than the bit width"));
+                }
             }
             Ok(true)
         } else {

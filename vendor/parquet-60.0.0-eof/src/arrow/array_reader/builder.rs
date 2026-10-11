@@ -560,13 +560,13 @@ impl<'a> ArrayReaderBuilder<'a> {
                 )?,
             },
             PhysicalType::FIXED_LEN_BYTE_ARRAY => match arrow_type {
-                Some(DataType::Dictionary(_, _)) => make_byte_array_dictionary_reader(
-                    page_iterator,
-                    column_desc,
-                    arrow_type,
-                    self.batch_size,
-                    padding_threshold,
-                )?,
+                // PLENORA: this reader decodes the dictionary page as
+                // length-prefixed byte arrays, which a FIXED_LEN_BYTE_ARRAY
+                // dictionary is not: a valid dictionary was rejected (or
+                // misread). Unsupported until the path reads it correctly.
+                Some(DataType::Dictionary(_, _)) => {
+                    return Err(nyi_err!("{}", crate::basic::FLBA_AS_DICTIONARY));
+                }
                 _ => make_fixed_len_byte_array_reader(
                     page_iterator,
                     column_desc,

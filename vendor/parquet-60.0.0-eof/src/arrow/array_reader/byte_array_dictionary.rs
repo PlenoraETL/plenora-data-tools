@@ -92,6 +92,10 @@ pub fn make_byte_array_dictionary_reader(
             .data_type()
             .clone(),
     };
+    crate::arrow::array_reader::byte_array::check_text_annotation(
+        column_desc.as_ref(),
+        &data_type,
+    )?;
 
     match &data_type {
         ArrowType::Dictionary(key_type, value_type) => {
@@ -315,7 +319,8 @@ where
     type Buffer = DictionaryBuffer<K, V>;
 
     fn new(col: &ColumnDescPtr) -> Self {
-        let validate_utf8 = col.converted_type() == ConvertedType::UTF8;
+        // PLENORA: `JSON` and `ENUM` are text too.
+        let validate_utf8 = crate::arrow::array_reader::byte_array::annotated_as_text(col);
 
         let value_type = match (V::IS_LARGE, col.converted_type() == ConvertedType::UTF8) {
             (true, true) => ArrowType::LargeUtf8,

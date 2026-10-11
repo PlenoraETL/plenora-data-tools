@@ -26,8 +26,29 @@ la cui versione non ha qui una voce datata.
   trasporto runtime di `data.run` 3 resta all'applicazione, e nessuna
   superficie del componente annuncia la loro richiesta di base.
 
+### Incompatibile
+
+- **Codifiche Parquet lette ristrette.** Si leggono solo `PLAIN`,
+  `PLAIN_DICTIONARY` e `RLE_DICTIONARY` per i valori, `RLE` per i booleani
+  e i livelli, `BIT_PACKED` per i livelli. `DELTA_BINARY_PACKED`,
+  `DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY` e `BYTE_STREAM_SPLIT` sono
+  `Unsupported` finché ciascuna non è qualificata con un suo fuzz
+  (`docs/limiti.md`, «Codifiche Parquet non qualificate»), sia dichiarate
+  nel footer sia usate in una pagina. pyarrow, data e IO-tools con le
+  impostazioni predefinite non le scrivono; in `apache/parquet-testing`
+  le usano 9 file su 78.
+- **Tipi Arrow chiesti dal file.** Un tipo testo su una colonna di byte non
+  annotata come testo, e una colonna `FIXED_LEN_BYTE_ARRAY` letta come
+  dizionario, sono `Unsupported` (prima: byte non validati come UTF-8 in
+  una stringa, e un dizionario FLBA valido rifiutato o letto male).
+
 ### Corretto
 
+- **Livelli, interi stretti e varint nel fork `parquet`** (terzo giro di
+  revisione): un livello oltre il massimo della colonna (contato come
+  nullo), un valore RLE più largo della sua larghezza, un `INT32` annotato
+  `INT_8` fuori dalla larghezza (256 diventava 0), un varint troncato alla
+  fine dei dati: errori. `patches/parquet-codifiche-e-livelli.patch`.
 - **Schema Parquet profondo e footer costoso: errori, non aborti.** Uno
   schema valido annidato per migliaia di livelli esauriva lo stack nella
   lettura (un aborto del processo, senza inviluppo). Ora oltre 64 livelli

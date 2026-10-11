@@ -18,6 +18,7 @@ con la chiave `parquet` (`Cargo.toml`, «Copie vendorizzate»).
   patch -p1 < patches/parquet-decoder.patch       # decoder che si fidavano del file
   patch -p1 < patches/parquet-footer-budget.patch # profondità dello schema, tetto del footer
   patch -p1 < patches/parquet-decoder-2.patch     # decoder, secondo giro
+  patch -p1 < patches/parquet-codifiche-e-livelli.patch  # codifiche lette, terzo giro, formattazione
   ```
 
   Il risultato è questa cartella byte per byte, tolto questo file
@@ -270,6 +271,64 @@ punti della stessa classe. Prove rosse in
 Non coperto da una prova: un offset oltre il tipo d'indice (`i32`) in
 `ByteArrayDecoderDeltaLength::read` richiede più di 2 GiB di valori in
 una tabella.
+
+### Codifiche lette, terzo giro, formattazione (11 ottobre 2026)
+
+Da `patches/parquet-codifiche-e-livelli.patch`.
+
+**Codifiche qualificate.** `basic::is_qualified_value_encoding` e
+`check_qualified_value_encoding`: si leggono solo `PLAIN`,
+`PLAIN_DICTIONARY`, `RLE_DICTIONARY` e `RLE` (booleani). Il controllo è in
+ogni punto che sceglie un decoder di valori per una pagina
+(`column/reader/decoder.rs` e i decoder Arrow dei byte array, delle viste
+e dei FLBA): `DELTA_*` e `BYTE_STREAM_SPLIT` sono un errore `NYI` con il
+testo fisso `ENCODING_NOT_QUALIFIED`. Le correzioni dei loro decoder
+(sezioni sopra) restano, non raggiungibili; `plenora-io` controlla anche le
+codifiche dichiarate nel footer.
+
+**Terzo giro di revisione** (Codex), con prove in
+`crates/plenora-io/tests/parquet_decoder.rs`:
+
+1. Livelli (`column/reader/decoder.rs`): un livello oltre il massimo della
+   colonna sta nella larghezza in bit ma non è un livello; era contato
+   come nullo (definizione) o come livello a sé (ripetizione). Ora un
+   errore, per il decoder generico e quindi per il percorso Arrow che lo
+   usa. Nel decoder RLE condiviso il valore di una corsa RLE deve stare
+   nella larghezza dichiarata. Una corsa bit-packed finale più corta dei
+   suoi gruppi resta lecita, come a monte e in C++ (`test_truncated_rle`:
+   alcuni writer non la completano): si legge fino ai suoi byte, e il
+   lettore confronta i livelli e i valori ottenuti con quelli dichiarati.
+   Il decoder ottimizzato dei livelli (`definition_levels.rs`) ora segue la
+   stessa regola invece di rifiutarla.
+2. Colonna FLBA con tipo Arrow dizionario: passava dal lettore dei byte
+   array variabili, che legge il dizionario con il prefisso di lunghezza (il
+   formato che `ArrowWriter` di parquet-rs scrive per un
+   `Dictionary(_, FixedSizeBinary)`, non quello della specifica): un
+   dizionario FLBA valido si rifiutava. Ambiguo per costruzione:
+   `Unsupported` esplicito (`FLBA_AS_DICTIONARY`).
+3. Interi stretti (`primitive_array.rs`): `INT32` annotato `INT_8`,
+   `UINT_8`, `INT_16`, `UINT_16` si convertiva con `as` (256 → 0); ora
+   `try_unary` con un errore.
+4. UTF-8: la validazione di `PLAIN` (anche per le viste e i dizionari) è
+   corretta, perché le lunghezze separano i valori; il difetto vero era
+   altrove: i decoder validano dall'annotazione della colonna, non dal tipo
+   Arrow, e uno schema Arrow (incorporato o dato) che chiedeva testo su
+   byte non annotati produceva stringhe non validate. Ora
+   `STRING_WITHOUT_ANNOTATION` (`Unsupported`), e `JSON`/`ENUM` si validano
+   come `UTF8`.
+5. Varint: dieci byte di continuazione senza terminatore alla fine dei dati
+   erano la fine dei dati (`Ok(None)`); ora un errore.
+
+**Formattazione.** Le righe dei delta precedenti sono formattate con
+`rustfmt` (edizione 2024), come fa `cargo fmt` nel fork di plenora-IO-tools:
+solo spazi e a capo, nelle righe `PLENORA`.
+
+Prove unitarie del pacchetto con `parquet-testing`: falliscono 52 prove,
+le 5 di prima più 47 attese, che usano ciò che ora si rifiuta (42 codifiche
+non qualificate, compresa una via l'API per righe, 2 testo su byte non
+annotati, 2 FLBA come dizionario, 1 lettura di byte non UTF-8 come testo).
+Letti con `plenora-io`, i file di `parquet-testing` cambiano esito solo
+dove usano codifiche non qualificate (9 file).
 
 ### Profondità dello schema e tetto di memoria del footer (10 ottobre 2026)
 

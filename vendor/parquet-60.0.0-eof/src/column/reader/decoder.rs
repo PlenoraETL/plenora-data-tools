@@ -206,6 +206,8 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         if encoding == Encoding::PLAIN_DICTIONARY {
             encoding = Encoding::RLE_DICTIONARY;
         }
+        // PLENORA: only the qualified encodings are read, page by page.
+        crate::basic::check_qualified_value_encoding(encoding)?;
 
         let decoder = if encoding == Encoding::RLE_DICTIONARY {
             // PLENORA: a dictionary-encoded page in a column chunk with no
@@ -263,31 +265,43 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
 const SKIP_BUFFER_SIZE: usize = 1024;
 
 enum LevelDecoder {
-    Packed(BitReader, u8),
-    Rle(RleDecoder),
+    Packed(BitReader, u8, i16),
+    Rle(RleDecoder, i16),
 }
 
 impl LevelDecoder {
-    fn new(encoding: Encoding, data: Bytes, bit_width: u8) -> Result<Self> {
+    fn new(encoding: Encoding, data: Bytes, bit_width: u8, max_level: i16) -> Result<Self> {
         match encoding {
             Encoding::RLE => {
                 let mut decoder = RleDecoder::new(bit_width);
                 decoder.set_data(data)?;
-                Ok(Self::Rle(decoder))
+                Ok(Self::Rle(decoder, max_level))
             }
             #[expect(deprecated)]
-            Encoding::BIT_PACKED => Ok(Self::Packed(BitReader::new(data), bit_width)),
-            _ => unreachable!("invalid level encoding: {}", encoding),
+            Encoding::BIT_PACKED => Ok(Self::Packed(BitReader::new(data), bit_width, max_level)),
+            // PLENORA: an error, not `unreachable!`.
+            _ => Err(general_err!("invalid level encoding: {}", encoding)),
         }
     }
 
     fn read(&mut self, out: &mut [i16]) -> Result<usize> {
-        match self {
-            Self::Packed(reader, bit_width) => {
-                Ok(reader.get_batch::<i16>(out, *bit_width as usize))
-            }
-            Self::Rle(reader) => Ok(reader.get_batch(out)?),
+        let (read, max_level) = match self {
+            Self::Packed(reader, bit_width, max_level) => (
+                reader.get_batch::<i16>(out, *bit_width as usize),
+                *max_level,
+            ),
+            Self::Rle(reader, max_level) => (reader.get_batch(out)?, *max_level),
+        };
+        // PLENORA: a level above the maximum fits the bit width but is no
+        // level of the column; it was counted as a null (definition) or as a
+        // level of its own (repetition) in silence.
+        if out[..read]
+            .iter()
+            .any(|level| *level < 0 || *level > max_level)
+        {
+            return Err(general_err!("level beyond the maximum of the column"));
         }
+        Ok(read)
     }
 }
 
@@ -313,7 +327,12 @@ impl ColumnLevelDecoder for DefinitionLevelDecoderImpl {
     type Buffer = Vec<i16>;
 
     fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
-        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width)?);
+        self.decoder = Some(LevelDecoder::new(
+            encoding,
+            data,
+            self.bit_width,
+            self.max_level,
+        )?);
         Ok(())
     }
 }
@@ -364,6 +383,7 @@ pub(crate) const REPETITION_LEVELS_BATCH_SIZE: usize = 1024;
 pub struct RepetitionLevelDecoderImpl {
     decoder: Option<LevelDecoder>,
     bit_width: u8,
+    max_level: i16,
     buffer: Box<[i16; REPETITION_LEVELS_BATCH_SIZE]>,
     buffer_len: usize,
     buffer_offset: usize,
@@ -376,6 +396,7 @@ impl RepetitionLevelDecoderImpl {
         Self {
             decoder: None,
             bit_width,
+            max_level,
             buffer: Box::new([0; REPETITION_LEVELS_BATCH_SIZE]),
             buffer_offset: 0,
             buffer_len: 0,
@@ -417,7 +438,12 @@ impl ColumnLevelDecoder for RepetitionLevelDecoderImpl {
     type Buffer = Vec<i16>;
 
     fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
-        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width)?);
+        self.decoder = Some(LevelDecoder::new(
+            encoding,
+            data,
+            self.bit_width,
+            self.max_level,
+        )?);
         self.buffer_len = 0;
         self.buffer_offset = 0;
         Ok(())

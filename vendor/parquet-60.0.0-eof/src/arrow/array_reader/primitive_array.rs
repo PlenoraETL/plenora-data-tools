@@ -258,19 +258,51 @@ fn coerce_array(array: ArrayRef, target_type: &ArrowType) -> Result<ArrayRef> {
 fn coerce_i32(array: &Int32Array, target_type: &ArrowType) -> Result<ArrayRef> {
     Ok(match target_type {
         ArrowType::UInt8 => {
-            let array = array.unary(|i| i as u8) as UInt8Array;
+            // PLENORA: a value outside the annotated width is an error (`as`
+            // truncated it: INT32 256 with INT_8 became 0).
+            let array: UInt8Array = array.try_unary(|i| {
+                u8::try_from(i).map_err(|_| {
+                    arrow_schema::ArrowError::CastError(
+                        "INT32 value outside its annotated integer width".to_owned(),
+                    )
+                })
+            })?;
             Arc::new(array) as ArrayRef
         }
         ArrowType::Int8 => {
-            let array = array.unary(|i| i as i8) as Int8Array;
+            // PLENORA: a value outside the annotated width is an error (`as`
+            // truncated it: INT32 256 with INT_8 became 0).
+            let array: Int8Array = array.try_unary(|i| {
+                i8::try_from(i).map_err(|_| {
+                    arrow_schema::ArrowError::CastError(
+                        "INT32 value outside its annotated integer width".to_owned(),
+                    )
+                })
+            })?;
             Arc::new(array) as ArrayRef
         }
         ArrowType::UInt16 => {
-            let array = array.unary(|i| i as u16) as UInt16Array;
+            // PLENORA: a value outside the annotated width is an error (`as`
+            // truncated it: INT32 256 with INT_8 became 0).
+            let array: UInt16Array = array.try_unary(|i| {
+                u16::try_from(i).map_err(|_| {
+                    arrow_schema::ArrowError::CastError(
+                        "INT32 value outside its annotated integer width".to_owned(),
+                    )
+                })
+            })?;
             Arc::new(array) as ArrayRef
         }
         ArrowType::Int16 => {
-            let array = array.unary(|i| i as i16) as Int16Array;
+            // PLENORA: a value outside the annotated width is an error (`as`
+            // truncated it: INT32 256 with INT_8 became 0).
+            let array: Int16Array = array.try_unary(|i| {
+                i16::try_from(i).map_err(|_| {
+                    arrow_schema::ArrowError::CastError(
+                        "INT32 value outside its annotated integer width".to_owned(),
+                    )
+                })
+            })?;
             Arc::new(array) as ArrayRef
         }
         ArrowType::Int32 => Arc::new(array.clone()),

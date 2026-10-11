@@ -20,7 +20,7 @@ use crate::arrow::buffer::view_buffer::ViewBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
-use crate::basic::{ConvertedType, Encoding};
+use crate::basic::Encoding;
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::data_type::Int32Type;
@@ -56,6 +56,10 @@ pub fn make_byte_view_array_reader(
             _ => ArrowType::BinaryView,
         },
     };
+    crate::arrow::array_reader::byte_array::check_text_annotation(
+        column_desc.as_ref(),
+        &data_type,
+    )?;
 
     match data_type {
         ArrowType::BinaryView | ArrowType::Utf8View => {
@@ -151,7 +155,8 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
     type Buffer = ViewBuffer;
 
     fn new(desc: &ColumnDescPtr) -> Self {
-        let validate_utf8 = desc.converted_type() == ConvertedType::UTF8;
+        // PLENORA: `JSON` and `ENUM` are text too.
+        let validate_utf8 = crate::arrow::array_reader::byte_array::annotated_as_text(desc);
         Self {
             dict: None,
             decoder: None,
@@ -237,6 +242,8 @@ impl ByteViewArrayDecoder {
         num_values: Option<usize>,
         validate_utf8: bool,
     ) -> Result<Self> {
+        // PLENORA: only the qualified encodings are read, page by page.
+        crate::basic::check_qualified_value_encoding(encoding)?;
         let decoder = match encoding {
             Encoding::PLAIN => ByteViewArrayDecoder::Plain(ByteViewArrayDecoderPlain::new(
                 data,
@@ -601,7 +608,11 @@ impl ByteViewArrayDecoderDeltaLength {
         if len_decoder.get(&mut lengths)? != values {
             return Err(eof_err!("eof decoding delta length byte array lengths"));
         }
-        crate::encodings::decoding::check_delta_lengths(&lengths, len_decoder.get_offset(), data.len())?;
+        crate::encodings::decoding::check_delta_lengths(
+            &lengths,
+            len_decoder.get_offset(),
+            data.len(),
+        )?;
 
         Ok(Self {
             lengths,

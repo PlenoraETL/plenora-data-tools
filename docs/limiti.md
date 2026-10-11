@@ -1083,3 +1083,32 @@ invece di un errore. Nessuna prova lo rileva dal consumatore.
 **Condizione di rientro.** Il consumatore dichiara `overflow-checks = true`
 nel proprio `[profile.release]`, oppure una guardia a runtime che rifiuta
 di eseguire un piano in una build senza controlli di overflow.
+
+## Codifiche Parquet non qualificate
+
+**Regola.** Ogni codifica che il lettore Parquet accetta è qualificata:
+i suoi decoder hanno avuto una revisione e prove su file costruiti per
+romperli, e lo saranno con una campagna di fuzz propria. Lette:
+`PLAIN`, `PLAIN_DICTIONARY` e `RLE_DICTIONARY` per i valori, `RLE` per i
+booleani, `RLE` e `BIT_PACKED` per i livelli.
+
+**Ambito.** La lettura Parquet di `plenora-io` (CLI, SDK Python,
+`data.run` 3) e il fork `vendor/parquet-60.0.0-eof`
+(`parquet::basic::is_qualified_value_encoding`).
+
+**Hazard.** Un file valido che usa `DELTA_BINARY_PACKED`,
+`DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY` o `BYTE_STREAM_SPLIT` (o
+un'altra codifica, per esempio la nuova `ALP`) si rifiuta con
+`Unsupported`. Le scrivono pyarrow con `column_encoding` o
+`use_byte_stream_split`, i writer v2 di parquet-mr e Spark, DuckDB con le
+opzioni v2; non le scrivono pyarrow (anche con pagine v2), data e
+IO-tools con le impostazioni predefinite. Di `apache/parquet-testing`
+(`data/`) se ne rifiutano 9 file su 78: i due `byte_stream_split*`,
+`datapage_v2.snappy`, i cinque `delta_*` e `alp_extended.zstd`. Due giri
+di revisione hanno trovato in questi decoder la maggior parte dei
+difetti; le loro correzioni restano nel fork, non raggiungibili.
+
+**Condizione di rientro.** Per ogni codifica, una campagna di fuzz dei
+suoi decoder e il ritorno delle prove che la riduzione ha sostituito con
+il rifiuto (`git log` di `crates/plenora-io/tests/parquet_decoder.rs`,
+commit precedenti alla riduzione).

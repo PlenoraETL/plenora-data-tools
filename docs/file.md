@@ -219,6 +219,25 @@ difesa da file costruiti apposta (limiti dichiarati sotto).
   una voce senza valore). È una restrizione voluta: la specifica Parquet
   ammette una voce senza valore, ma qui sparirebbe in silenzio, quindi si
   rifiuta; pyarrow e arrow-rs scrivono sempre il valore, anche vuoto.
+- **Codifiche Parquet lette**: solo `PLAIN`, `PLAIN_DICTIONARY` e
+  `RLE_DICTIONARY` per i valori, `RLE` per i booleani, `RLE` e
+  `BIT_PACKED` per i livelli
+  ([«Codifiche Parquet non qualificate»](limiti.md#codifiche-parquet-non-qualificate)).
+  `DELTA_BINARY_PACKED`, `DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY` e
+  `BYTE_STREAM_SPLIT` (e ogni altra) sono `Unsupported`, con un testo
+  fisso. Il controllo è doppio: le codifiche che il column chunk dichiara
+  nel footer (l'elenco e le statistiche delle pagine), prima di leggere, e
+  quella di ogni pagina letta davvero, nel fork `parquet`: un footer che
+  dichiara `PLAIN` e una pagina in `DELTA_*` si rifiutano come il
+  contrario. pyarrow (anche con pagine v2), data e IO-tools con le
+  impostazioni predefinite non le scrivono.
+- **Tipi letti**: un tipo Arrow testo (`Utf8`, `LargeUtf8`, `Utf8View`,
+  anche come valori di un dizionario) solo su una colonna annotata come
+  testo (`UTF8`, `JSON`, `ENUM`), perché la validazione UTF-8 segue
+  l'annotazione; una colonna `FIXED_LEN_BYTE_ARRAY` letta come dizionario
+  Arrow; entrambe altrimenti `Unsupported`. Un `INT32` annotato `INT_8`,
+  `UINT_8`, `INT_16` o `UINT_16` fuori dalla sua larghezza è un errore,
+  non un altro numero.
 
 | limite (`LimitiLettura`) | predefinito | a che cosa si applica | errore |
 | --- | --- | --- | --- |

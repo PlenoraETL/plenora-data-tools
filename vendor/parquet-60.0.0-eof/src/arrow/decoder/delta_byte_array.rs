@@ -134,8 +134,13 @@ impl DeltaByteArrayDecoder {
         let data = self.data.as_ref();
 
         for (prefix_length, suffix_length) in iter {
-            let (prefix_length, end) =
-                checked_value(*prefix_length, *suffix_length, self.last_value.len(), self.data_offset, data.len())?;
+            let (prefix_length, end) = checked_value(
+                *prefix_length,
+                *suffix_length,
+                self.last_value.len(),
+                self.data_offset,
+                data.len(),
+            )?;
 
             self.last_value.truncate(prefix_length);
             self.last_value
@@ -161,8 +166,13 @@ impl DeltaByteArrayDecoder {
         let data = self.data.as_ref();
 
         for (prefix_length, suffix_length) in iter {
-            let (prefix_length, end) =
-                checked_value(*prefix_length, *suffix_length, self.last_value.len(), self.data_offset, data.len())?;
+            let (prefix_length, end) = checked_value(
+                *prefix_length,
+                *suffix_length,
+                self.last_value.len(),
+                self.data_offset,
+                data.len(),
+            )?;
 
             self.last_value.truncate(prefix_length);
             self.last_value

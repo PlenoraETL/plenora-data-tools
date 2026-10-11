@@ -37,6 +37,40 @@ use bytes::Bytes;
 use std::any::Any;
 use std::sync::Arc;
 
+/// PLENORA: the column is annotated as text (`UTF8`, `JSON`, `ENUM`): its
+/// values are validated as UTF-8 while decoding.
+pub(crate) fn annotated_as_text(desc: &crate::schema::types::ColumnDescriptor) -> bool {
+    matches!(
+        desc.converted_type(),
+        ConvertedType::UTF8 | ConvertedType::JSON | ConvertedType::ENUM
+    )
+}
+
+/// PLENORA: a string Arrow type (also as dictionary values) is read only from
+/// a column annotated as text. The decoders validate UTF-8 from the
+/// annotation, not from the Arrow type: an Arrow schema (embedded or given)
+/// that asked for strings over a plain byte array produced a string array of
+/// unvalidated bytes (a panic in debug builds, invalid UTF-8 in release).
+pub(crate) fn check_text_annotation(
+    desc: &crate::schema::types::ColumnDescriptor,
+    data_type: &ArrowType,
+) -> Result<()> {
+    let stringa = |t: &ArrowType| {
+        matches!(
+            t,
+            ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View
+        )
+    };
+    let chiede_testo = match data_type {
+        ArrowType::Dictionary(_, valori) => stringa(valori),
+        altro => stringa(altro),
+    };
+    if chiede_testo && !annotated_as_text(desc) {
+        return Err(nyi_err!("{}", crate::basic::STRING_WITHOUT_ANNOTATION));
+    }
+    Ok(())
+}
+
 /// Returns an [`ArrayReader`] that decodes the provided byte array column
 pub fn make_byte_array_reader(
     pages: Box<dyn PageIterator>,
@@ -52,6 +86,7 @@ pub fn make_byte_array_reader(
             .data_type()
             .clone(),
     };
+    check_text_annotation(column_desc.as_ref(), &data_type)?;
 
     match data_type {
         ArrowType::Binary
@@ -193,7 +228,8 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
     type Buffer = OffsetBuffer<I>;
 
     fn new(desc: &ColumnDescPtr) -> Self {
-        let validate_utf8 = desc.converted_type() == ConvertedType::UTF8;
+        // PLENORA: `JSON` and `ENUM` are text too.
+        let validate_utf8 = annotated_as_text(desc);
         Self {
             dict: None,
             decoder: None,
@@ -282,6 +318,8 @@ impl ByteArrayDecoder {
         num_values: Option<usize>,
         validate_utf8: bool,
     ) -> Result<Self> {
+        // PLENORA: only the qualified encodings are read, page by page.
+        crate::basic::check_qualified_value_encoding(encoding)?;
         let decoder = match encoding {
             Encoding::PLAIN => ByteArrayDecoder::Plain(ByteArrayDecoderPlain::new(
                 data,
@@ -494,7 +532,11 @@ impl ByteArrayDecoderDeltaLength {
         if len_decoder.get(&mut lengths)? != values {
             return Err(eof_err!("eof decoding delta length byte array lengths"));
         }
-        crate::encodings::decoding::check_delta_lengths(&lengths, len_decoder.get_offset(), data.len())?;
+        crate::encodings::decoding::check_delta_lengths(
+            &lengths,
+            len_decoder.get_offset(),
+            data.len(),
+        )?;
 
         Ok(Self {
             lengths,
