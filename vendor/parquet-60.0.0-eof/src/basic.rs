@@ -1541,6 +1541,25 @@ pub const PAGE_TYPE_NOT_QUALIFIED: &str = "Parquet page type not qualified for r
 pub const DICTIONARY_PAGE_OUT_OF_PLACE: &str =
     "dictionary page not at the start of its column chunk";
 
+/// PLENORA: the fixed text of the rejection of an `INTERVAL` component the
+/// Arrow interval holds over `i32::MAX`: the components are unsigned, and
+/// `2^31` days became `-2^31` in silence.
+pub const INTERVAL_OUT_OF_RANGE: &str = "INTERVAL component over the Arrow interval range";
+
+/// PLENORA: the fixed text of the rejection of a group annotated with a
+/// logical or converted type of a primitive (`UUID`, `JSON`, `UNKNOWN`, ...):
+/// it became an Arrow struct and lost the annotation in silence.
+pub const GROUP_WITH_PRIMITIVE_ANNOTATION: &str =
+    "Parquet group annotated with a type of a primitive column";
+
+/// PLENORA: the fixed text of the rejection of an embedded Arrow schema that
+/// contradicts the Parquet type of a column (a time zone on a timestamp not
+/// adjusted to UTC, another precision or scale for a decimal, a temporal
+/// type over an annotated integer): the hint changed the meaning of the
+/// values in silence.
+pub const ARROW_HINT_CONTRADICTS: &str =
+    "embedded Arrow schema contradicts the Parquet type of a column";
+
 /// PLENORA: the fixed text of the rejection of a value in a column with the
 /// `UNKNOWN` logical type (always null): it is read as an Arrow `Null`
 /// column, and the values were dropped in silence.

@@ -39,6 +39,15 @@ la cui versione non ha qui una voce datata.
   nel footer sia usate in una pagina. pyarrow, data e IO-tools con le
   impostazioni predefinite non le scrivono; in `apache/parquet-testing`
   le usano 9 file su 78.
+- **Intervalli negativi in Parquet.** Un intervallo `YearMonth` o
+  `DayTime` con una componente negativa non si scrive in Parquet
+  (`DataMapping`, nessun file): un `INTERVAL` ha componenti senza segno, e
+  -3 mesi erano 4294967293 per un lettore della specifica. In lettura una
+  componente oltre `i32::MAX` è un errore. Arrow IPC li conserva.
+- **Schema Arrow incorporato.** Uno schema incorporato che contraddice il
+  tipo Parquet (un fuso su un istante locale, un'altra scala di un
+  decimale, un tipo temporale su un intero annotato) è `Schema`; un gruppo
+  annotato come una colonna è un errore del footer.
 - **Tipi logici Parquet non qualificati.** Un tipo logico fuori
   dall'elenco qualificato (`VARIANT`, `FILE`, un tipo non riconosciuto) è
   `Unsupported` (prima: struct o byte); una colonna `UNKNOWN` (sempre

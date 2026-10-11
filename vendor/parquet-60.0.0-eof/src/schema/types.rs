@@ -666,6 +666,33 @@ impl<'a> GroupTypeBuilder<'a> {
 
     /// Creates a new `GroupType` instance from the gathered attributes.
     pub fn build(self) -> Result<Type> {
+        // PLENORA: a group takes only the annotations of a group (`LIST`,
+        // `MAP`, the legacy `MAP_KEY_VALUE`, `VARIANT`, `FILE`, or one the
+        // crate does not know); the annotation of a primitive (`UUID`,
+        // `JSON`, `UNKNOWN`, ...) on a group was read as a struct and lost.
+        let logico_di_gruppo = matches!(
+            &self.logical_type,
+            None | Some(
+                LogicalType::List
+                    | LogicalType::Map
+                    | LogicalType::Variant(_)
+                    | LogicalType::File
+                    | LogicalType::_Unknown { .. }
+            )
+        );
+        let convertito_di_gruppo = matches!(
+            self.converted_type,
+            ConvertedType::NONE
+                | ConvertedType::LIST
+                | ConvertedType::MAP
+                | ConvertedType::MAP_KEY_VALUE
+        );
+        if !logico_di_gruppo || !convertito_di_gruppo {
+            return Err(general_err!(
+                "{}",
+                crate::basic::GROUP_WITH_PRIMITIVE_ANNOTATION
+            ));
+        }
         if matches!(&self.logical_type, Some(LogicalType::File)) {
             validate_file_type_fields(self.name, &self.fields)?;
         }

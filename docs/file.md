@@ -275,7 +275,9 @@ limite della tabella.
   Come il budget del runner, non è un tetto duro sulla memoria del processo.
   *Rientro*: un allocatore contato per il processo.
 - **Tipi rifiutati in scrittura**: in Parquet `Interval(MonthDayNano)`
-  (errore di `parquet`, nessun file); in ogni formato `RunEndEncoded` e
+  (errore di `parquet`, nessun file) e un intervallo `YearMonth` o
+  `DayTime` con una componente negativa (`DataMapping`, nessun file: un
+  `INTERVAL` Parquet ha componenti senza segno); in ogni formato `RunEndEncoded` e
   `Union`, a qualunque profondità, prima di creare il file (limite «Run-end
   e union rifiutati al confine» del runner, anche in lettura). Un test ne
   tiene l'elenco. Una tabella senza colonne non si scrive in Parquet (il numero di

@@ -258,6 +258,21 @@ impl ArrayReader for FixedLenByteArrayReader {
                 {
                     return Err(general_err!("{}", crate::basic::INTERVAL_NOT_AS_DECLARED));
                 }
+                // PLENORA: the three components are unsigned 32-bit integers,
+                // and the Arrow interval holds them as `i32`: one over
+                // `i32::MAX` (2^31 days) became negative in silence.
+                let parti_tenute: &[std::ops::Range<usize>] = match unit {
+                    IntervalUnit::YearMonth => &[0..4],
+                    IntervalUnit::DayTime => &[4..8, 8..12],
+                    IntervalUnit::MonthDayNano => &[],
+                };
+                if binary.iter().flatten().any(|b| {
+                    parti_tenute
+                        .iter()
+                        .any(|parte| b[parte.clone()][3] & 0x80 != 0)
+                }) {
+                    return Err(general_err!("{}", crate::basic::INTERVAL_OUT_OF_RANGE));
+                }
                 match unit {
                     IntervalUnit::YearMonth => {
                         let f = |b: &[u8]| i32::from_le_bytes(b[0..4].try_into().unwrap());

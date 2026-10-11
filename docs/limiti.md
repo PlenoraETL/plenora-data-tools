@@ -1252,13 +1252,30 @@ ore, istanti, interi, `JSON`, `BSON`, `UUID`, `FLOAT16`, geometrie,
 geografie e `UNKNOWN` (il tipo «sempre nullo», letto come colonna Arrow
 `Null`: un suo valore è un errore, `UNKNOWN_WITH_VALUES`). Ogni altra
 annotazione, a ogni livello dello schema (gruppi compresi), è
-`Unsupported` prima della conversione dello schema. Un `INTERVAL` (tipo
-convertito, mesi, giorni e millisecondi) si legge solo se le parti che
-l'unità Arrow non tiene sono zero (`INTERVAL_NOT_AS_DECLARED`).
+`Unsupported` prima della conversione dello schema. Un'annotazione sta
+sulla sua forma: su un gruppo solo `LIST`, `MAP` (e il convertito
+`MAP_KEY_VALUE`), su una colonna il tipo fisico che la specifica le dà; un
+gruppo annotato come una colonna (`UUID`, `JSON`, `UNKNOWN`) è un errore
+del footer (`GROUP_WITH_PRIMITIVE_ANNOTATION`). Un `INTERVAL` (tipo
+convertito: mesi, giorni e millisecondi, interi senza segno) si legge solo
+se le parti che l'unità Arrow non tiene sono zero
+(`INTERVAL_NOT_AS_DECLARED`) e quelle che tiene stanno in `i32`
+(`INTERVAL_OUT_OF_RANGE`); in scrittura un intervallo con una componente
+negativa è un errore (`DataMapping`), perché un `INTERVAL` non la
+rappresenta. Lo schema Arrow incorporato sceglie la rappresentazione
+(grandezza degli offset, viste, dizionari, unità degli interi senza
+annotazione), non il significato: un fuso su un istante locale
+(`isAdjustedToUTC` falso), un'altra risoluzione di un istante locale in
+nanosecondi, un tipo temporale su un intero annotato, un'altra precisione
+o scala di un decimale sono un errore (`ARROW_HINT_CONTRADICTS`, `Schema`
+dal confine). Uno schema incorporato che non si applica resta ignorato dal
+fork e rifiutato dal confine (`Schema`).
 
 **Ambito.** La lettura Parquet di `plenora-io` (`parquet_io::leggi`,
-`verifica_tipi_logici`) e, per `UNKNOWN` e `INTERVAL`, il fork
-`vendor/parquet-60.0.0-eof` (`null_array.rs`, `fixed_len_byte_array.rs`).
+`verifica_tipi_logici`, `verifica_intervalli` in scrittura) e il fork
+`vendor/parquet-60.0.0-eof` (`null_array.rs`, `fixed_len_byte_array.rs`,
+il costruttore dei gruppi in `schema/types.rs`, `apply_hint` in
+`arrow/schema/primitive.rs`).
 
 **Hazard.** Si rifiutano anche file validi: `VARIANT` (non qualificato nel
 fork: `variant_experimental` è escluso, e i suoi gruppi si leggevano come
@@ -1271,14 +1288,18 @@ errore; le colonne `UNKNOWN` dei file di prova sono nulle e si leggono
 un campo Arrow `Null`. I 14 file `bad_data/variants/` non hanno l'annotazione `VARIANT`:
 sono due colonne di byte (`metadata`, `value`) che si leggono come byte,
 senza interpretarle. Un `INTERVAL` letto nell'unità `DayTime` (quella
-senza schema Arrow nel file) con mesi diversi da zero era un altro
-valore: ora un errore.
+senza schema Arrow nel file) con mesi diversi da zero, o con 2^31 giorni,
+era un altro valore: ora un errore. Gli intervalli negativi che data
+scriveva in Parquet (in complemento a due, come `parquet` a monte) non si
+scrivono più e non si rileggono; Arrow IPC li conserva. Nessuno dei 473
+file del riferimento cambia esito.
 
 **Condizione di rientro.** Per ciascun tipo, una lettura che ne tenga il
 valore con prove su file costruiti per romperla: `VARIANT` con la
 decodifica qualificata e una campagna di fuzz; i tipi nuovi della
-specifica uno per uno. Per
-`INTERVAL`, un'unità Arrow che tenga tutte e tre le parti.
+specifica uno per uno. Per `INTERVAL`, un'unità Arrow che tenga tutte e
+tre le parti senza segno. Per lo schema incorporato, nessuna: il tipo
+Parquet fissa il significato.
 
 ## Codifiche Parquet non qualificate
 

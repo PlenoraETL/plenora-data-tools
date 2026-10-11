@@ -40,7 +40,7 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::{ArrowWriter, ARROW_SCHEMA_META_KEY};
 use parquet::basic::LogicalType;
-use parquet::basic::{Compression, Type as TipoFisico, ZstdLevel};
+use parquet::basic::{Compression, ConvertedType, Type as TipoFisico, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{
     KeyValue, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
@@ -51,10 +51,11 @@ use parquet::file::properties::{
 use parquet::schema::types::Type as TipoParquet;
 use plenora_core::arrow::array::cast::AsArray;
 use plenora_core::arrow::array::types::{
-    Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
+    Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, IntervalDayTimeType,
+    IntervalYearMonthType,
 };
 use plenora_core::arrow::array::{make_array, Array, ArrayRef, RecordBatch};
-use plenora_core::arrow::schema::DataType;
+use plenora_core::arrow::schema::{DataType, IntervalUnit};
 use plenora_core::arrow::schema::{Schema, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::contract::arrow_metadata::GEO_METADATA_KEY;
@@ -148,9 +149,34 @@ const fn tipo_logico_non_qualificato(tipo: &LogicalType) -> Option<&'static str>
     }
 }
 
+/// Se l'annotazione di un nodo è della sua forma: su un gruppo solo `LIST`
+/// e `MAP` (logici) o `LIST`, `MAP`, `MAP_KEY_VALUE` (convertiti); su una
+/// colonna nessuna delle due. L'abbinamento al tipo fisico di una colonna
+/// lo verifica già il costruttore dello schema di `parquet`, e quello dei
+/// gruppi del fork (`GROUP_WITH_PRIMITIVE_ANNOTATION`).
+fn annotazione_della_forma(nodo: &TipoParquet) -> bool {
+    let info = nodo.get_basic_info();
+    let di_gruppo_logico = matches!(
+        info.logical_type_ref(),
+        Some(LogicalType::List | LogicalType::Map)
+    );
+    let di_gruppo_convertito = matches!(
+        info.converted_type(),
+        ConvertedType::LIST | ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE
+    );
+    if nodo.is_group() {
+        (info.logical_type_ref().is_none() || di_gruppo_logico)
+            && (info.converted_type() == ConvertedType::NONE || di_gruppo_convertito)
+    } else {
+        !di_gruppo_logico && !di_gruppo_convertito
+    }
+}
+
 /// Ogni nodo dello schema del footer, gruppi compresi, ha un tipo logico
-/// qualificato o nessuno ([`tipo_logico_non_qualificato`]): un'annotazione
-/// non qualificata è `Unsupported`, prima della conversione in Arrow.
+/// qualificato o nessuno ([`tipo_logico_non_qualificato`]), e un'annotazione
+/// della sua forma ([`annotazione_della_forma`]): un'annotazione non
+/// qualificata o fuori forma è `Unsupported`, prima della conversione in
+/// Arrow (un gruppo annotato `UUID` diventava una struct).
 fn verifica_tipi_logici(metadati: &ParquetMetaData) -> Result<()> {
     let mut da_vedere: Vec<&TipoParquet> = vec![metadati.file_metadata().schema()];
     while let Some(nodo) = da_vedere.pop() {
@@ -162,6 +188,12 @@ fn verifica_tipi_logici(metadati: &ParquetMetaData) -> Result<()> {
             return Err(PlenoraError::Unsupported(format!(
                 "tipo logico Parquet {nome}: non qualificato in lettura"
             )));
+        }
+        if !annotazione_della_forma(nodo) {
+            return Err(PlenoraError::Unsupported(
+                "annotazione Parquet di un tipo su un nodo di un'altra forma (gruppo o colonna)"
+                    .to_owned(),
+            ));
         }
         if nodo.is_group() {
             da_vedere.extend(nodo.get_fields().iter().map(AsRef::as_ref));
@@ -286,6 +318,14 @@ pub fn da_parquet(errore: &ParquetError) -> PlenoraError {
         }
     }
     if let ParquetError::General(testo) = errore {
+        // Lo schema Arrow incorporato contraddice il tipo Parquet (un fuso su
+        // un istante locale, un'altra scala di un decimale): come uno schema
+        // incorporato non applicabile.
+        if testo.contains(parquet::basic::ARROW_HINT_CONTRADICTS) {
+            return PlenoraError::Schema(
+                "lo schema Arrow incorporato nel file contraddice i tipi Parquet".to_owned(),
+            );
+        }
         if LIMITI_DEL_FOOTER
             .iter()
             .any(|limite| testo.starts_with(limite))
@@ -424,6 +464,46 @@ fn verifica_decimali(nome: &str, array: &ArrayRef) -> Result<()> {
         .child_data()
         .iter()
         .try_for_each(|figlio| verifica_decimali(nome, &make_array(figlio.clone())))
+}
+
+/// Ogni intervallo ha componenti non negative: in Parquet un `INTERVAL` è
+/// di tre interi senza segno (mesi, giorni, millisecondi), e `parquet`
+/// scriveva un valore negativo nei suoi byte in complemento a due, che un
+/// lettore della specifica legge come un numero enorme (-3 mesi erano
+/// 4294967293) e il fork rifiuta (`INTERVAL_OUT_OF_RANGE`). Anche annidati.
+fn verifica_intervalli(nome: &str, array: &ArrayRef) -> Result<()> {
+    let negativo = match *array.data_type() {
+        DataType::Interval(IntervalUnit::YearMonth) => array
+            .as_primitive_opt::<IntervalYearMonthType>()
+            .map(|a| a.iter().flatten().any(|mesi| mesi < 0)),
+        DataType::Interval(IntervalUnit::DayTime) => {
+            array.as_primitive_opt::<IntervalDayTimeType>().map(|a| {
+                a.iter()
+                    .flatten()
+                    .any(|valore| valore.days < 0 || valore.milliseconds < 0)
+            })
+        }
+        _ => Some(false),
+    };
+    match negativo {
+        Some(false) => {}
+        Some(true) => {
+            return Err(PlenoraError::DataMapping(format!(
+                "colonna `{nome}`: intervallo con una componente negativa, che un INTERVAL \
+                 Parquet (senza segno) non rappresenta"
+            )))
+        }
+        None => {
+            return Err(PlenoraError::Internal(
+                "array di intervalli con un tipo incoerente".to_owned(),
+            ))
+        }
+    }
+    array
+        .to_data()
+        .child_data()
+        .iter()
+        .try_for_each(|figlio| verifica_intervalli(nome, &make_array(figlio.clone())))
 }
 
 /// Lo schema Arrow incorporato nei metadati chiave-valore, se c'è.
@@ -725,6 +805,7 @@ fn da_scrivere(
     }
     for (campo, colonna) in tabella.schema().fields().iter().zip(tabella.columns()) {
         verifica_decimali(campo.name(), colonna)?;
+        verifica_intervalli(campo.name(), colonna)?;
     }
     match geoparquet::prepara(tabella)? {
         Some(preparata) => {

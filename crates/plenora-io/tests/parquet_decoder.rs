@@ -4187,10 +4187,13 @@ fn un_tipo_logico_non_qualificato_e_rifiutato() {
     }
 }
 
-/// Un `INTERVAL` (mesi, giorni, millisecondi) si leggeva nell'unità Arrow
-/// `DayTime` senza schema Arrow nel file, e i mesi sparivano in silenzio
-/// (`YearMonth` perdeva giorni e millisecondi). Ora le parti che l'unità non
-/// tiene devono essere zero, o la lettura è un errore.
+/// Un `INTERVAL` (mesi, giorni, millisecondi, interi senza segno) si
+/// leggeva nell'unità Arrow `DayTime` senza schema Arrow nel file: i mesi
+/// sparivano in silenzio (`YearMonth` perdeva giorni e millisecondi), e una
+/// componente oltre `i32::MAX` (2^31 giorni) diventava negativa. Ora le
+/// parti che l'unità non tiene devono essere zero
+/// (`INTERVAL_NOT_AS_DECLARED`) e quelle che tiene stare in `i32`
+/// (`INTERVAL_OUT_OF_RANGE`).
 #[test]
 fn un_intervallo_con_parti_perse_e_un_errore() {
     let intervallo = Colonna {
@@ -4207,9 +4210,30 @@ fn un_intervallo_con_parti_perse_e_un_errore() {
     let con_mesi = parquet(&intervallo, 1, PLAIN, &valore(1, 2, 3), None, None);
     contiene(arrow(&con_mesi), parquet::basic::INTERVAL_NOT_AS_DECLARED);
     rifiutato_dal_confine(&con_mesi);
-    // Controfattuale: senza mesi si legge, giorni e millisecondi compresi.
+    for (giorni, millisecondi) in [(1_u32 << 31, 3), (2, u32::MAX)] {
+        let oltre = parquet(
+            &intervallo,
+            1,
+            PLAIN,
+            &valore(0, giorni, millisecondi),
+            None,
+            None,
+        );
+        contiene(arrow(&oltre), parquet::basic::INTERVAL_OUT_OF_RANGE);
+        rifiutato_dal_confine(&oltre);
+    }
+    // Controfattuale: senza mesi, entro `i32::MAX`, si legge.
     let senza_mesi = parquet(&intervallo, 1, PLAIN, &valore(0, 2, 3), None, None);
     assert_eq!(arrow(&senza_mesi), Ok(1));
+    let al_limite = parquet(
+        &intervallo,
+        1,
+        PLAIN,
+        &valore(0, i32::MAX as u32, 0),
+        None,
+        None,
+    );
+    assert_eq!(arrow(&al_limite), Ok(1));
 }
 
 /// Un Parquet di una riga con un gruppo `v` di due colonne `BYTE_ARRAY`
@@ -4305,4 +4329,120 @@ fn una_colonna_unknown_con_un_valore_e_un_errore() {
     livelli.extend_from_slice(&[2, 0]); // corsa RLE di 1 livello 0
     let byte = parquet(&nulla, 1, PLAIN, &livelli, None, None);
     assert_eq!(arrow(&byte), Ok(1));
+}
+
+/// Un gruppo annotato con un tipo di una colonna (`UUID`, `JSON`,
+/// `UNKNOWN`) passava l'elenco chiuso dei tipi logici e diventava una
+/// struct, perdendo l'annotazione. Ora il costruttore dei gruppi del fork lo
+/// rifiuta (`GROUP_WITH_PRIMITIVE_ANNOTATION`), e il confine verifica la
+/// coppia annotazione e forma.
+#[test]
+fn un_gruppo_con_un_annotazione_di_colonna_e_rifiutato() {
+    for logico in [14, 12, 11] {
+        let byte = variante(Some(logico));
+        contiene(
+            arrow(&byte),
+            parquet::basic::GROUP_WITH_PRIMITIVE_ANNOTATION,
+        );
+        let dir = cartella();
+        let percorso = dir.path().join("g.parquet");
+        std::fs::write(&percorso, &byte).unwrap();
+        leggi_tabella_con_limiti(
+            &percorso,
+            Some(Formato::Parquet),
+            u64::MAX,
+            &LimitiLettura::default(),
+        )
+        .expect_err("gruppo annotato come una colonna");
+    }
+    // Controfattuale: il gruppo senza annotazione si legge.
+    assert_eq!(arrow(&variante(None)), Ok(1));
+}
+
+/// Lo schema Arrow incorporato può solo scegliere la rappresentazione, non
+/// cambiare il significato del tipo Parquet: un fuso su un istante locale
+/// (`isAdjustedToUTC` falso), un'altra scala di un decimale, un tipo
+/// temporale su un intero annotato si applicavano in silenzio. Ora sono un
+/// errore (`ARROW_HINT_CONTRADICTS`, `Schema` dal confine).
+#[test]
+fn lo_schema_incorporato_non_cambia_il_tipo_parquet() {
+    use parquet::arrow::ArrowWriter;
+    use plenora_core::arrow::array::{ArrayRef, Decimal128Array, TimestampMicrosecondArray};
+    use plenora_core::arrow::schema::TimeUnit;
+    // Un file scritto con lo schema `scritto`, e lo schema Arrow incorporato
+    // sostituito con `dichiarato`.
+    let con_schema = |colonna: ArrayRef, dichiarato: DataType| {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            colonna.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![colonna]).unwrap();
+        let mut byte = Vec::new();
+        let proprieta = parquet::file::properties::WriterProperties::builder()
+            .set_key_value_metadata(Some(vec![parquet::file::metadata::KeyValue::new(
+                parquet::arrow::ARROW_SCHEMA_META_KEY.to_owned(),
+                parquet::arrow::encode_arrow_schema(&Schema::new(vec![Field::new(
+                    "x", dichiarato, true,
+                )])),
+            )]))
+            .build();
+        // Senza lo schema dello scrittore: resta solo quello dichiarato.
+        let opzioni = parquet::arrow::arrow_writer::ArrowWriterOptions::new()
+            .with_properties(proprieta)
+            .with_skip_arrow_metadata(true);
+        let mut scrittore = ArrowWriter::try_new_with_options(&mut byte, schema, opzioni).unwrap();
+        scrittore.write(&batch).unwrap();
+        scrittore.close().unwrap();
+        byte
+    };
+    let locale: ArrayRef = Arc::new(TimestampMicrosecondArray::from(vec![Some(1)]));
+    let decimale: ArrayRef = Arc::new(
+        Decimal128Array::from(vec![Some(12_345)])
+            .with_precision_and_scale(10, 2)
+            .unwrap(),
+    );
+    for (colonna, dichiarato) in [
+        (
+            Arc::clone(&locale),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        ),
+        (Arc::clone(&decimale), DataType::Decimal64(10, 4)),
+    ] {
+        let byte = con_schema(colonna, dichiarato.clone());
+        contiene(arrow(&byte), parquet::basic::ARROW_HINT_CONTRADICTS);
+        let dir = cartella();
+        let percorso = dir.path().join("h.parquet");
+        std::fs::write(&percorso, &byte).unwrap();
+        let errore = leggi_tabella_con_limiti(
+            &percorso,
+            Some(Formato::Parquet),
+            u64::MAX,
+            &LimitiLettura::default(),
+        )
+        .expect_err("schema incorporato contraddittorio");
+        assert_eq!(
+            errore.category(),
+            ErrorCategory::Schema,
+            "{dichiarato}: {errore}"
+        );
+    }
+    // Controfattuali: lo stesso tipo, un fuso diverso su un istante UTC, un
+    // decimale più largo con la stessa scala.
+    let istante: ArrayRef =
+        Arc::new(TimestampMicrosecondArray::from(vec![Some(1)]).with_timezone("UTC"));
+    for (colonna, dichiarato) in [
+        (locale, DataType::Timestamp(TimeUnit::Microsecond, None)),
+        (
+            istante,
+            DataType::Timestamp(TimeUnit::Microsecond, Some("Europe/Rome".into())),
+        ),
+        (decimale, DataType::Decimal64(10, 2)),
+    ] {
+        assert_eq!(
+            arrow(&con_schema(colonna, dichiarato.clone())),
+            Ok(1),
+            "{dichiarato}"
+        );
+    }
 }

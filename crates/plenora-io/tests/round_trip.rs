@@ -287,14 +287,27 @@ fn tipi_rari_identici_o_rifiutati() {
         ),
         (
             "intervallo_ym",
-            Arc::new(IntervalYearMonthArray::from(vec![Some(-3), None, Some(14)])),
+            Arc::new(IntervalYearMonthArray::from(vec![Some(3), None, Some(14)])),
         ),
         (
             "intervallo_dt",
             Arc::new(IntervalDayTimeArray::from(vec![
-                Some(IntervalDayTimeType::make_value(1, -2)),
+                Some(IntervalDayTimeType::make_value(1, 2)),
                 None,
                 Some(IntervalDayTimeType::make_value(0, 0)),
+            ])),
+        ),
+        // Un INTERVAL Parquet ha componenti senza segno: negative, la
+        // scrittura Parquet le rifiuta (Arrow IPC le conserva).
+        (
+            "intervallo_ym_negativo",
+            Arc::new(IntervalYearMonthArray::from(vec![Some(-3), None])),
+        ),
+        (
+            "intervallo_dt_negativo",
+            Arc::new(IntervalDayTimeArray::from(vec![
+                Some(IntervalDayTimeType::make_value(1, -2)),
+                None,
             ])),
         ),
         (
@@ -379,6 +392,8 @@ fn tipi_rari_identici_o_rifiutati() {
     assert_eq!(
         rifiutati,
         [
+            "intervallo_ym_negativo r.parquet",
+            "intervallo_dt_negativo r.parquet",
             "intervallo_mdn r.parquet",
             "run_end r.arrow",
             "run_end r.parquet"
