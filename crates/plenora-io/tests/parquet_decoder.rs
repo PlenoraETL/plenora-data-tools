@@ -2121,7 +2121,7 @@ fn corsa_bit_packed(gruppi: u64, riempimento: u8) -> Vec<u8> {
 /// ciascuna con il suo limite. fastparquet aggiunge 8 byte a zero a ogni
 /// pagina v1, dopo i valori (`writer.py`): fino a 8 byte, tutti zero, solo
 /// dopo lo stream dei valori di una pagina v1 (non 9, non diversi da zero,
-/// non dopo i livelli, non in una pagina v2). DuckDB scrive le corse
+/// non dopo i livelli, non in una pagina v2). `DuckDB` scrive le corse
 /// bit-packed a blocchi di 32 gruppi e completa l'ultimo con byte vecchi:
 /// gruppi di riempimento solo in una corsa di 32 gruppi.
 #[test]
