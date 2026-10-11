@@ -159,6 +159,18 @@ cargo clippy --workspace --lib --all-features --locked -- -D unsafe-code \
 cargo test -p plenora-io --features sonde-di-prova --test sonda_dei_controlli --locked
 ```
 
+Gli esiti della lettura Parquet sui file reali (i file di prova di
+`apache/parquet-testing` e `apache/arrow-testing` e la matrice degli
+scrittori, non nel repository) sono versionati con i loro sha256 in
+`crates/plenora-io/tests/riferimenti/parquet_esiti.tsv`; la prova li
+ricalcola dalle cartelle date:
+
+```sh
+PLENORA_PARQUET_TESTING=<parquet-testing> PLENORA_ARROW_TESTING=<arrow-testing> \
+PLENORA_SCRITTORI=<matrice> \
+cargo test --release -p plenora-io --test esiti_di_riferimento --locked -- --ignored
+```
+
 Modelli di costo, documentazione e commenti hanno guardie Python (3.11 o
 successivo, solo libreria standard):
 

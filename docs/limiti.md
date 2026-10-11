@@ -1178,6 +1178,17 @@ DuckDB di completare i blocchi con byte vecchi, e i loro file in uso sono
 riscritti; oppure una dichiarazione dello scrittore nei metadati del file
 che permetta di tollerare le forme solo per i suoi file.
 
+Il vincolo del dizionario in prima pagina ha due parti. Il rifiuto di un
+dizionario dopo una pagina di dati, o di una prima pagina che non è un
+dizionario quando il footer lo dichiara, si toglie solo se uno scrittore
+in uso scrive un dizionario dopo i dati in un file valido per la
+specifica, con una prova su quel file. L'accettazione di un dizionario in
+prima pagina senza `dictionary_page_offset` (una tolleranza per i file
+storici di parquet-mr e Impala) si stringe a «dizionario solo se
+dichiarato» quando quei file non sono più da leggere, oppure solo per gli
+scrittori che lo dichiarano (`created_by`), misurando di nuovo i file del
+riferimento `crates/plenora-io/tests/riferimenti/parquet_esiti.tsv`.
+
 ## Indici di pagina e bloom filter Parquet
 
 **Regola.** Il lettore Parquet decodifica solo strutture qualificate: ogni

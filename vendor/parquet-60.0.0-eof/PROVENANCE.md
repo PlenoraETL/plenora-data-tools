@@ -484,6 +484,33 @@ ripetizione troncati).
    parte compressa, e un suffisso qualunque spariva. Ora si decomprime e
    deve dare zero byte (lo stream vuoto di un codec si legge).
 
+**Sedicesimo giro (evidenza).**
+
+1. `nation.dict-malformed.parquet` (`apache/parquet-testing`, `data/`,
+   sha256 `245c025f…061034d`, parquet-mr, 25 righe, 4 colonne): nelle
+   colonne `name` e `comment_col` la dimensione del column chunk non conta
+   l'header di 15 byte della pagina di dizionario (PARQUET-816), e la
+   pagina di dati che segue il dizionario dichiara 28 byte quando nel
+   chunk ne restano 13: esce dal chunk di 15 byte. Il fork lo **rifiuta**:
+   `SerializedPageReader::get_next_page`, `verify_page_size`, alla seconda
+   pagina della colonna `name` («EOF: Invalid page header»); dal confine
+   di `plenora-io` è `DataMapping`. Nessun valore si legge dai byte oltre
+   il chunk. Arrow C++ invece lo legge (25 righe; la sua prova
+   `NationDictTruncatedDataPage` lo legge oltre la fine del chunk «per
+   caso»), e `parquet` 60.0.0 a monte lo rifiuta con lo stesso errore. La
+   forma è riprodotta senza il file in
+   `una_pagina_oltre_il_column_chunk_e_rifiutata`.
+2. Gli esiti di riferimento dei 106 file di prova e dei 367 file della
+   matrice degli scrittori sono versionati in
+   `crates/plenora-io/tests/riferimenti/parquet_esiti.tsv`: per ogni file
+   insieme, percorso, sha256, `created_by`, lettura diretta con il fork,
+   esito dal confine; i commit di `parquet-testing` e `arrow-testing` sono
+   nell'intestazione. La prova `tests/esiti_di_riferimento.rs` (ignorata
+   per default: i file non sono nel repository) li ricalcola dalle
+   cartelle date e li confronta; un file diverso, mancante o in più, o un
+   esito diverso, la fa fallire, e una cartella non data è un errore. Gli
+   esiti coincidono con quelli dell'harness dei giri precedenti.
+
 **Quindicesimo giro.**
 
 1. Un dizionario dopo una pagina di dati dello stesso column chunk si
@@ -502,11 +529,14 @@ ripetizione troncati).
    `datapage_v2.snappy`, `nested_lists.snappy`, `nested_maps.snappy`,
    `nullable.impala`, `ARROW-GH-43605`, `nation.dict-malformed`), scritti
    da parquet-mr e Impala che omettono l'offset; gli scrittori della
-   matrice lo dichiarano.
+   matrice lo dichiarano. Di questi, `nation.dict-malformed` resta
+   rifiutato per un'altra ragione (sedicesimo giro, sotto).
 
 Prove unitarie del pacchetto: le stesse 148 (due esecuzioni identiche);
 la prova nuova `test_dictionary_page_after_a_data_page_is_rejected`
-passa. Scrittori, FLBA e 106 file: lo stesso esito.
+passa. Scrittori, FLBA e 106 file: lo stesso esito dei giri precedenti,
+riga per riga, come in `crates/plenora-io/tests/riferimenti/parquet_esiti.tsv`
+(sedicesimo giro).
 
 **Quattordicesimo giro.**
 

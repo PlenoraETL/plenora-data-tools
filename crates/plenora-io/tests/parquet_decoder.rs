@@ -4051,3 +4051,79 @@ fn un_dizionario_dopo_i_dati_e_rifiutato() {
     );
     assert_eq!(valori_arrow(&primo), ["7", "9"]);
 }
+
+/// La forma di `nation.dict-malformed.parquet` (`apache/parquet-testing`,
+/// scritto da parquet-mr; PARQUET-816): la dimensione del column chunk non
+/// conta l'header della pagina di dizionario, e la pagina di dati dopo
+/// dichiara più byte di quelli che restano nel chunk (28 su 13 nel file).
+/// Arrow C++ legge oltre la fine del chunk «per caso» (la sua prova
+/// `NationDictTruncatedDataPage`); il fork rifiuta la pagina che esce dal
+/// chunk («Invalid page header», `verify_page_size`), e il confine dà
+/// `DataMapping`. Non si legge oltre il column chunk dichiarato: nessun
+/// valore preso dai byte dopo. L'esito sul file vero è nel riferimento
+/// `tests/riferimenti/parquet_esiti.tsv`.
+#[test]
+fn una_pagina_oltre_il_column_chunk_e_rifiutata() {
+    let mut file = b"PAR1".to_vec();
+    let inizio = i64::try_from(file.len()).unwrap();
+    let dizionario = testo_plain(&[b"ALGERIA", b"ARGENTINA"]);
+    let lunghezza_dizionario = i64::try_from(dizionario.len()).unwrap();
+    let header_dizionario = Struttura::default()
+        .i32(1, 2)
+        .i32(2, lunghezza_dizionario)
+        .i32(3, lunghezza_dizionario)
+        .struttura(7, Struttura::default().i32(1, 2).i32(2, 2))
+        .fine();
+    let indici = [1_u8, 2, 0, 2, 1]; // larghezza 1, corse RLE di 0 e di 1
+    let lunghezza_header_dizionario = i64::try_from(header_dizionario.len()).unwrap();
+    file.extend(&header_dizionario);
+    file.extend(&dizionario);
+    file.extend(header_v1(2, 2, indici.len()));
+    file.extend_from_slice(&indici);
+    let pagine = i64::try_from(file.len()).unwrap() - inizio;
+    let costruisci = |dichiarate: i64| {
+        let mut byte = file.clone();
+        let metadati = Struttura::default()
+            .i32(1, BYTE_ARRAY)
+            .elenco(2, I32, vec![intero_di_elenco(2)])
+            .elenco(3, BINARIO, vec![testo_di_elenco("x")])
+            .i32(4, 0)
+            .i64(5, 2)
+            .i64(6, dichiarate)
+            .i64(7, dichiarate)
+            .i64(9, inizio);
+        let chunk = Struttura::default()
+            .i64(2, inizio)
+            .struttura(3, metadati)
+            .fine();
+        let gruppo = Struttura::default()
+            .elenco(1, STRUCT, vec![chunk])
+            .i64(2, dichiarate)
+            .i64(3, 2)
+            .fine();
+        let radice = Struttura::default().testo(4, "schema").i32(5, 1).fine();
+        let foglia = Struttura::default()
+            .i32(1, BYTE_ARRAY)
+            .i32(3, 0)
+            .testo(4, "x")
+            .fine();
+        let footer = Struttura::default()
+            .i32(1, 1)
+            .elenco(2, STRUCT, vec![radice, foglia])
+            .i64(3, 2)
+            .elenco(4, STRUCT, vec![gruppo])
+            .fine();
+        let lunghezza = u32::try_from(footer.len()).unwrap();
+        byte.extend(footer);
+        byte.extend_from_slice(&lunghezza.to_le_bytes());
+        byte.extend_from_slice(b"PAR1");
+        byte
+    };
+    // Il chunk dichiarato senza l'header del dizionario, come parquet-mr.
+    let troncato = costruisci(pagine - lunghezza_header_dizionario);
+    contiene(arrow(&troncato), "Invalid page header");
+    rifiutato_dal_confine(&troncato);
+    // Controfattuale: con la dimensione giusta si legge.
+    let giusto = costruisci(pagine);
+    assert_eq!(valori_arrow(&giusto), ["ALGERIA", "ARGENTINA"]);
+}
