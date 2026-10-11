@@ -173,6 +173,12 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
     ) -> Result<()> {
         // PLENORA: an excluded encoding has the text of every other rejection.
         crate::basic::check_dictionary_page_encoding(encoding)?;
+        // PLENORA: one dictionary per column chunk, as the generic decoder
+        // requires: a second dictionary page replaced the first in silence,
+        // and the indices before it read other values.
+        if self.dict.is_some() {
+            return Err(general_err!("Column cannot have more than one dictionary"));
+        }
 
         let num_values = num_values as usize;
         let mut buffer = ViewBuffer::with_capacity(num_values);
@@ -814,7 +820,7 @@ mod tests {
         let mut decoder = ByteViewArrayColumnValueDecoder::new(&column_desc);
 
         decoder
-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
             .unwrap();
 
         for (encoding, page) in pages {

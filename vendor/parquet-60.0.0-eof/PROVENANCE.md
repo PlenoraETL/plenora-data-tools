@@ -445,9 +445,9 @@ ripetizione troncati).
    byte), booleani `RLE` fino alla lunghezza prefissata. Gli stream di
    livelli che lo schema non ha devono essere vuoti (sesto giro). Prima i
    valori, i livelli o i byte in più si ignoravano **in silenzio**.
-   `PAGE_NOT_AS_DECLARED`. Ammessi il riempimento dell'ultimo gruppo
-   bit-packed e un'ultima corsa troncata dalla fine dei dati (come a
-   monte), che porta solo i valori dei suoi byte. Due deviazioni
+   `PAGE_NOT_AS_DECLARED`. Ammesso il riempimento dell'ultimo gruppo
+   bit-packed; una corsa porta tutti i gruppi che dichiara (nono giro: la
+   corsa troncata, ammessa a monte, è un errore). Due deviazioni
    dichiarate (`docs/limiti.md`, «Fine delle pagine Parquet»), solo nelle
    pagine v1 (`FinePagina::V1`; le v2 finiscono esatte) e solo nella forma
    esatta misurata su scrittori reali:
@@ -482,6 +482,36 @@ ripetizione troncati).
 5. Una pagina v2 compressa senza valori (tutti nulli) non decomprimeva la
    parte compressa, e un suffisso qualunque spariva. Ora si decomprime e
    deve dare zero byte (lo stream vuoto di un codec si legge).
+
+**Nono giro.**
+
+1. I booleani `RLE` ricevevano la coda di fastparquet (`02 00 00 00 02 01
+   00`): ora finiscono alla lunghezza prefissata, senza coda.
+2. Una corsa bit-packed che dichiarava più gruppi di quanti ne portava si
+   leggeva fino ai suoi byte (come a monte e in C++, `test_truncated_rle`),
+   anche in v2 e negli indici (`05 FF` su 8 righe, `01 41` senza byte). Ora
+   i gruppi dichiarati sono tutti nei dati, nei due decoder dei livelli e
+   in `RleDecoder`. Nessuno scrittore della matrice e nessuno dei 106 file
+   di prova ne scrive una. Le prove unitarie a monte con dati scritti a
+   mano con l'ultimo gruppo troncato hanno ora il gruppo intero;
+   `test_truncated_rle` verifica il rifiuto.
+3. Un conteggio enorme (`81 80 80 80 04`, 2^29 gruppi) era un errore di
+   overflow nel decoder generico e tagliato ai byte presenti in quello
+   ottimizzato: ora lo stesso rifiuto nei due.
+4. Due pagine di dizionario nello stesso column chunk: i lettori Arrow
+   sostituivano il dizionario in silenzio, l'API generica rifiutava. Ora
+   lo stesso errore («more than one dictionary»).
+5. Una pagina di dizionario dichiarata `RLE_DICTIONARY` si leggeva come
+   `PLAIN`: un dizionario è `PLAIN` o `PLAIN_DICTIONARY`, ora l'altra è un
+   errore. Nessuno scrittore della matrice e nessuno dei 106 file la usa;
+   il generatore delle prove unitarie e le prove a monte che la usavano
+   dichiarano `PLAIN`.
+6. L'oracolo dei due decoder dei livelli copre pagine v1 e v2, 1-40 righe,
+   blocchi di 32 gruppi, valori coerenti con i livelli, corse vuote,
+   varint non minimi, corse troncate e conteggi enormi
+   (`l_oracolo_dei_livelli_copre_v2_blocchi_e_guasti`); sul fork
+   dell'ottavo giro trova la divergenza del conteggio enorme e la corsa
+   troncata letta.
 
 **Ottavo giro.**
 

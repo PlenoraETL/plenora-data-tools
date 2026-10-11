@@ -1114,10 +1114,13 @@ parte di data o IO-tools.
 **Regola.** Una pagina Parquet letta fino al suo ultimo livello finisce
 dove finiscono i suoi livelli e i suoi valori: nessun valore, gruppo o
 byte dopo (`PAGE_NOT_AS_DECLARED`), salvo il riempimento dell'ultimo
-gruppo bit-packed e un'ultima corsa troncata dalla fine dei dati. Una
-corsa vuota (RLE di lunghezza 0, bit-packed di 0 gruppi) chiude lo stream
-ovunque sia: ciò che la segue è la coda, e deve essere vuoto salvo la
-deviazione di fastparquet; un varint non minimo è un errore.
+gruppo bit-packed. Una corsa bit-packed porta tutti i gruppi che dichiara
+(una corsa troncata, o un conteggio oltre i dati, è un errore: nessuno
+scrittore misurato ne scrive). Una corsa vuota (RLE di lunghezza 0,
+bit-packed di 0 gruppi) chiude lo stream ovunque sia: ciò che la segue è
+la coda, e deve essere vuoto salvo la deviazione di fastparquet; un varint
+non minimo è un errore. Una pagina di dizionario è `PLAIN` (o
+`PLAIN_DICTIONARY`), una per column chunk.
 
 **Ambito.** Il fork `vendor/parquet-60.0.0-eof`, fine delle pagine di dati
 v1 (`FinePagina::V1`, `column/reader/decoder.rs`); le pagine v2 finiscono
@@ -1126,11 +1129,12 @@ scrittore e solo nella sua forma esatta:
 
 - fastparquet aggiunge 8 byte a zero a ogni pagina v1, dopo i valori,
   anche `PLAIN` (`writer.py`, `8 * b'\x00'`). Si tollerano dopo lo stream
-  dei valori di una pagina v1 (valori `PLAIN` e indici di dizionario),
-  misurati da dove finisce l'ultimo valore o da dove comincia la prima
-  corsa vuota: al più 8 byte, tutti zero (`CODA_FASTPARQUET`). Mai dopo i
-  livelli, mai dentro lo stream dei booleani `RLE` (solo dopo la sua
-  lunghezza prefissata), mai in una pagina v2, mai byte diversi da zero.
+  dei valori di una pagina v1, solo valori `PLAIN` e indici di
+  dizionario, misurati da dove finisce l'ultimo valore o da dove comincia
+  la prima corsa vuota: al più 8 byte, tutti zero (`CODA_FASTPARQUET`).
+  Mai dopo i livelli, mai dopo i booleani `RLE` (finiscono alla loro
+  lunghezza prefissata, senza coda), mai in una pagina v2, mai byte
+  diversi da zero.
 - DuckDB scrive le corse bit-packed a blocchi di 32 gruppi e completa
   l'ultimo con byte vecchi, non zeri. Gruppi interi dopo l'ultimo valore si
   tollerano solo nei livelli e negli indici di dizionario di una pagina v1

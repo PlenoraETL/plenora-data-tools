@@ -1,6 +1,19 @@
 --- a/src/arrow/array_reader/byte_array.rs
 +++ b/src/arrow/array_reader/byte_array.rs
-@@ -295,6 +295,14 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
+@@ -246,6 +246,12 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
+     ) -> Result<()> {
+         // PLENORA: an excluded encoding has the text of every other rejection.
+         crate::basic::check_dictionary_page_encoding(encoding)?;
++        // PLENORA: one dictionary per column chunk, as the generic decoder
++        // requires: a second dictionary page replaced the first in silence,
++        // and the indices before it read other values.
++        if self.dict.is_some() {
++            return Err(general_err!("Column cannot have more than one dictionary"));
++        }
+ 
+         let mut buffer = OffsetBuffer::with_capacity(0);
+         let mut decoder = ByteArrayDecoderPlain::new(
+@@ -295,6 +301,14 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
  
          decoder.skip(num_values, self.dict.as_ref())
      }
@@ -15,7 +28,7 @@
  }
  
  /// A generic decoder from uncompressed parquet value data to [`OffsetBuffer`]
-@@ -306,6 +314,17 @@ pub enum ByteArrayDecoder {
+@@ -306,6 +320,17 @@ pub enum ByteArrayDecoder {
  }
  
  impl ByteArrayDecoder {
@@ -33,9 +46,49 @@
      pub fn new(
          encoding: Encoding,
          data: Bytes,
+@@ -707,7 +732,7 @@ mod tests {
+         let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
+ 
+         decoder
+-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
++            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
+             .unwrap();
+ 
+         for (encoding, page) in pages {
+@@ -764,7 +789,7 @@ mod tests {
+         let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
+ 
+         decoder
+-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
++            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
+             .unwrap();
+ 
+         for (encoding, page) in pages {
+@@ -809,7 +834,7 @@ mod tests {
+         let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
+ 
+         decoder
+-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
++            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
+             .unwrap();
+ 
+         // test nulls read
 --- a/src/arrow/array_reader/byte_array_dictionary.rs
 +++ b/src/arrow/array_reader/byte_array_dictionary.rs
-@@ -502,6 +502,15 @@ where
+@@ -365,6 +365,12 @@ where
+     ) -> Result<()> {
+         // PLENORA: an excluded encoding has the text of every other rejection.
+         crate::basic::check_dictionary_page_encoding(encoding)?;
++        // PLENORA: one dictionary per column chunk, as the generic decoder
++        // requires: a second dictionary page replaced the first in silence,
++        // and the indices before it read other values.
++        if self.dict.is_some() {
++            return Err(general_err!("Column cannot have more than one dictionary"));
++        }
+ 
+         if K::from_usize(num_values as usize).is_none() {
+             return Err(general_err!("dictionary too large for index type"));
+@@ -502,6 +508,15 @@ where
              }
          }
      }
@@ -51,9 +104,80 @@
  }
  
  #[cfg(test)]
+@@ -535,9 +550,7 @@ mod tests {
+         let column_desc = utf8_column();
+         let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+ 
+-        decoder
+-            .set_dict(dict, 3, Encoding::RLE_DICTIONARY, false)
+-            .unwrap();
++        decoder.set_dict(dict, 3, Encoding::PLAIN, false).unwrap();
+ 
+         decoder
+             .set_data(Encoding::RLE_DICTIONARY, encoded, 14, Some(data.len()))
+@@ -605,9 +618,7 @@ mod tests {
+         let column_desc = utf8_column();
+         let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+ 
+-        decoder
+-            .set_dict(dict, 3, Encoding::RLE_DICTIONARY, false)
+-            .unwrap();
++        decoder.set_dict(dict, 3, Encoding::PLAIN, false).unwrap();
+ 
+         decoder
+             .set_data(Encoding::RLE_DICTIONARY, encoded, 7, Some(data.len()))
+@@ -662,7 +673,7 @@ mod tests {
+         let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+ 
+         decoder
+-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
++            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
+             .unwrap();
+ 
+         // Read all pages into single buffer
+@@ -707,7 +718,7 @@ mod tests {
+         let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
+ 
+         decoder
+-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
++            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
+             .unwrap();
+ 
+         // Read all pages into single buffer
+@@ -752,7 +763,7 @@ mod tests {
+ 
+         let mut decoder = DictionaryDecoder::<i8, i32>::new(&column_desc);
+         let err = decoder
+-            .set_dict(dictionary.clone(), 128, Encoding::RLE_DICTIONARY, false)
++            .set_dict(dictionary.clone(), 128, Encoding::PLAIN, false)
+             .unwrap_err()
+             .to_string();
+ 
+@@ -760,7 +771,7 @@ mod tests {
+ 
+         let mut decoder = DictionaryDecoder::<i16, i32>::new(&column_desc);
+         decoder
+-            .set_dict(dictionary, 128, Encoding::RLE_DICTIONARY, false)
++            .set_dict(dictionary, 128, Encoding::PLAIN, false)
+             .unwrap();
+     }
+ 
 --- a/src/arrow/array_reader/byte_view_array.rs
 +++ b/src/arrow/array_reader/byte_view_array.rs
-@@ -221,6 +221,14 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
+@@ -173,6 +173,12 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
+     ) -> Result<()> {
+         // PLENORA: an excluded encoding has the text of every other rejection.
+         crate::basic::check_dictionary_page_encoding(encoding)?;
++        // PLENORA: one dictionary per column chunk, as the generic decoder
++        // requires: a second dictionary page replaced the first in silence,
++        // and the indices before it read other values.
++        if self.dict.is_some() {
++            return Err(general_err!("Column cannot have more than one dictionary"));
++        }
+ 
+         let num_values = num_values as usize;
+         let mut buffer = ViewBuffer::with_capacity(num_values);
+@@ -221,6 +227,14 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
  
          decoder.skip(num_values, self.dict.as_ref())
      }
@@ -68,7 +192,7 @@
  }
  
  /// A generic decoder from uncompressed parquet value data to [`ViewBuffer`]
-@@ -232,6 +240,17 @@ pub enum ByteViewArrayDecoder {
+@@ -232,6 +246,17 @@ pub enum ByteViewArrayDecoder {
  }
  
  impl ByteViewArrayDecoder {
@@ -86,9 +210,31 @@
      pub fn new(
          encoding: Encoding,
          data: Bytes,
+@@ -795,7 +820,7 @@ mod tests {
+         let mut decoder = ByteViewArrayColumnValueDecoder::new(&column_desc);
+ 
+         decoder
+-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
++            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
+             .unwrap();
+ 
+         for (encoding, page) in pages {
 --- a/src/arrow/array_reader/fixed_len_byte_array.rs
 +++ b/src/arrow/array_reader/fixed_len_byte_array.rs
-@@ -442,12 +442,12 @@ impl ColumnValueDecoder for ValueDecoder {
+@@ -419,6 +419,12 @@ impl ColumnValueDecoder for ValueDecoder {
+     ) -> Result<()> {
+         // PLENORA: an excluded encoding has the text of every other rejection.
+         crate::basic::check_dictionary_page_encoding(encoding)?;
++        // PLENORA: one dictionary per column chunk, as the generic decoder
++        // requires: a second dictionary page replaced the first in silence,
++        // and the indices before it read other values.
++        if self.dict_page.is_some() {
++            return Err(general_err!("Column cannot have more than one dictionary"));
++        }
+         // PLENORA: a wrapped product would accept a short dictionary.
+         let expected_len = (num_values as usize)
+             .checked_mul(self.byte_length)
+@@ -442,12 +448,12 @@ impl ColumnValueDecoder for ValueDecoder {
      ) -> Result<()> {
          // PLENORA: only the qualified encodings are read, page by page.
          crate::basic::check_qualified_value_encoding(encoding)?;
@@ -107,7 +253,7 @@
              return Err(general_err!(
                  "{} page of {} bytes is not a whole number of {}-byte values",
                  encoding,
-@@ -590,6 +590,17 @@ impl ColumnValueDecoder for ValueDecoder {
+@@ -590,6 +596,17 @@ impl ColumnValueDecoder for ValueDecoder {
              }
          }
      }
@@ -197,7 +343,20 @@
          // PLENORA: the same rules as `RleDecoder::reload`: a run count beyond
          // `u32` is an error; a bit-packed run is read only as far as the data
          // goes (its bits were read past the payload; a final run shorter than
-@@ -340,6 +362,7 @@ impl PackedDecoder {
+@@ -334,12 +356,19 @@ impl PackedDecoder {
+         )
+         .map_err(|_| general_err!("RLE run length out of range"))?;
+         if indicator_value & 1 == 1 {
++            // PLENORA: the groups the run declares are all in the data (one
++            // byte per group at bit width 1), as in `RleDecoder`: the count
++            // was cut to the bytes present, and a truncated or huge run
++            // passed here while the generic decoder refused it.
+             let disponibili = self.data.len().saturating_sub(self.data_offset);
++            if run > disponibili {
++                return Err(general_err!("bit-packed run beyond the data"));
++            }
+             self.packed_count = run
+-                .min(disponibili)
                  .checked_mul(8)
                  .ok_or_else(|| general_err!("RLE run length out of range"))?;
              self.packed_offset = 0;
@@ -205,7 +364,7 @@
          } else {
              self.rle_left = run;
              let byte = *self.data.as_ref().get(self.data_offset).ok_or_else(|| {
-@@ -357,6 +380,33 @@ impl PackedDecoder {
+@@ -357,6 +386,33 @@ impl PackedDecoder {
          Ok(())
      }
  
@@ -239,7 +398,7 @@
      /// Decodes a VLQ encoded little endian integer and returns it
      fn decode_header(&mut self) -> Result<i64> {
          let mut offset = 0;
-@@ -377,6 +427,10 @@ impl PackedDecoder {
+@@ -377,6 +433,10 @@ impl PackedDecoder {
              if offset == 9 && byte & 0x7F > 1 {
                  return Err(general_err!("varint beyond 64 bits"));
              }
@@ -250,7 +409,7 @@
              v |= ((byte & 0x7F) as i64) << (offset * 7);
              offset += 1;
              if byte & 0x80 == 0 {
-@@ -397,6 +451,8 @@ impl PackedDecoder {
+@@ -397,6 +457,8 @@ impl PackedDecoder {
              rle_value: false,
              packed_count: 0,
              packed_offset: 0,
@@ -259,7 +418,7 @@
          }
      }
  
-@@ -420,6 +476,7 @@ impl PackedDecoder {
+@@ -420,6 +482,7 @@ impl PackedDecoder {
          };
          self.data = data;
          self.data_offset = 0;
@@ -267,7 +426,7 @@
          Ok(())
      }
  
-@@ -434,7 +491,7 @@ impl PackedDecoder {
+@@ -434,7 +497,7 @@ impl PackedDecoder {
      fn try_consume_all_valid(&mut self, len: usize) -> Result<Option<usize>> {
          // If no active run and no packed data pending, try to parse the next RLE block
          if self.rle_left == 0 && self.packed_count == self.packed_offset {
@@ -276,7 +435,7 @@
                  self.next_rle_block()?;
              } else {
                  // No more data available
-@@ -472,7 +529,7 @@ impl PackedDecoder {
+@@ -472,7 +535,7 @@ impl PackedDecoder {
                  if self.packed_offset == self.packed_count {
                      self.data_offset += self.packed_count / 8;
                  }
@@ -285,7 +444,7 @@
                  break;
              } else {
                  self.next_rle_block()?
-@@ -506,7 +563,7 @@ impl PackedDecoder {
+@@ -506,7 +569,7 @@ impl PackedDecoder {
                  if self.packed_offset == self.packed_count {
                      self.data_offset += self.packed_count / 8;
                  }
@@ -296,7 +455,19 @@
                  self.next_rle_block()?
 --- a/src/basic.rs
 +++ b/src/basic.rs
-@@ -1519,6 +1519,19 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
+@@ -1511,7 +1511,10 @@ pub fn check_qualified_value_encoding(encoding: Encoding) -> Result<()> {
+ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
+     check_qualified_value_encoding(encoding)?;
+     match encoding {
+-        Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => Ok(()),
++        // PLENORA: a dictionary page is `PLAIN` (`PLAIN_DICTIONARY` names it
++        // in old files); `RLE_DICTIONARY` names the indices of a data page,
++        // and a dictionary page that declared it was read as `PLAIN`.
++        Encoding::PLAIN | Encoding::PLAIN_DICTIONARY => Ok(()),
+         _ => Err(nyi_err!(
+             "Invalid/Unsupported encoding type for dictionary: {}",
+             encoding
+@@ -1519,6 +1522,19 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
      }
  }
  
@@ -1072,7 +1243,7 @@
              _phantom: PhantomData,
          }
      }
-@@ -509,9 +537,17 @@ where
+@@ -509,9 +537,20 @@ where
          self.decoder
              .set_data(data.slice(I32_SIZE..I32_SIZE + data_size))?;
          self.values_left = num_values;
@@ -1081,7 +1252,10 @@
      }
  
 +    fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
-+        crate::util::bit_util::coda_di_zeri(&self.dopo, 0, fine.coda_di_zeri)
++        // PLENORA: the tail of fastparquet follows `PLAIN` values and
++        // dictionary indices, never the prefixed stream of `RLE` booleans.
++        let _ = fine;
++        self.dopo.is_empty()
 +            && self
 +                .decoder
 +                .fine_esatta(crate::column::reader::decoder::FinePagina::ESATTA)
@@ -1129,7 +1303,7 @@
  
          // Initialize decoder state. The boolean only reports whether the first run contained data,
          // and `get`/`get_batch` already interpret that result to drive iteration. We only need
-@@ -614,6 +630,55 @@ impl RleDecoder {
+@@ -614,6 +630,52 @@ impl RleDecoder {
          Ok(values_read)
      }
  
@@ -1156,12 +1330,9 @@
 +        let fine_dei_dati = dati.len().saturating_mul(8);
 +        let resto = self.bit_packed_left as usize;
 +        let nel_gruppo = resto % BIT_PACK_GROUP_SIZE;
-+        // The values left that the data holds: all of them at bit width 0,
-+        // as far as the bytes go otherwise.
-+        let presenti = match larghezza {
-+            0 => resto,
-+            _ => resto.min(fine_dei_dati.saturating_sub(posizione) / larghezza),
-+        };
++        // The values left in the run (all in the data: a run beyond the data
++        // is refused when it is read).
++        let presenti = resto;
 +        // DuckDB pads the last block it writes: a block of which a value was
 +        // read (a block read for none was 256 values in excess).
 +        let blocco = fine.blocco_duckdb
@@ -1185,7 +1356,7 @@
      #[inline]
      fn reload(&mut self) -> Result<bool> {
          let bit_reader = self
-@@ -621,12 +686,20 @@ impl RleDecoder {
+@@ -621,12 +683,20 @@ impl RleDecoder {
              .as_mut()
              .ok_or_else(|| general_err!("bit_reader should be set"))?;
  
@@ -1207,14 +1378,109 @@
                  return Ok(false);
              }
              // PLENORA: a run count beyond `u32` was truncated in silence (a
-@@ -643,6 +716,7 @@ impl RleDecoder {
+@@ -634,15 +704,25 @@ impl RleDecoder {
+             let run = u32::try_from(indicator_value >> 1)
+                 .map_err(|_| general_err!("RLE run length out of range"))?;
+             if indicator_value & 1 == 1 {
+-                // PLENORA: a final bit-packed run shorter than its declared
+-                // groups is read as far as its bytes go, as upstream and the
+-                // C++ reader do (some writers do not pad it, see
+-                // `test_truncated_rle`): the bit reader never reads past the
+-                // data, and the callers compare the values and levels they get
+-                // with those the page declares.
++                // PLENORA: the groups a bit-packed run declares are all in the
++                // data (a group of 8 values takes `bit_width` bytes). A run
++                // shorter than its groups was read as far as its bytes went
++                // (upstream and C++ do, `test_truncated_rle`), and the values
++                // it declared but did not hold disappeared in silence; no
++                // writer measured truncates one. A count beyond the data,
++                // however large, is the same error in both level decoders.
                  self.bit_packed_left = run
                      .checked_mul(BIT_PACK_GROUP_SIZE as u32)
                      .ok_or_else(|| general_err!("RLE run length out of range"))?;
++                let byte = (run as usize).checked_mul(self.bit_width as usize);
++                let restanti = bit_reader
++                    .dati()
++                    .len()
++                    .saturating_sub(bit_reader.get_byte_offset());
++                if byte.is_none_or(|byte| byte > restanti) {
++                    return Err(general_err!("bit-packed run beyond the data"));
++                }
 +                self.gruppi_della_corsa = run;
              } else {
                  self.rle_left = run;
                  let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);
+@@ -825,7 +905,9 @@ mod tests {
+         // 011 100 101 011 100 101 011 100 101 100 101 101
+         // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
+         let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
+-        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B];
++        // PLENORA: the last group whole (its 4 values of padding, 0x00): a
++        // run declares whole groups, all in the data.
++        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B, 0x00];
+         let mut decoder = RleDecoder::new(3);
+         decoder.set_data(data.into()).unwrap();
+         let mut buffer = vec![""; 12];
+@@ -860,7 +942,9 @@ mod tests {
+         // 011 100 101 011 100 101 011 100 101 100 101 101
+         // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
+         let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
+-        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B];
++        // PLENORA: the last group whole (its 4 values of padding, 0x00): a
++        // run declares whole groups, all in the data.
++        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B, 0x00];
+         let mut decoder = RleDecoder::new(3);
+         decoder.set_data(data.into()).unwrap();
+         let mut buffer = vec![""; BIT_PACK_GROUP_SIZE];
+@@ -1005,12 +1089,11 @@ mod tests {
+ 
+     #[test]
+     fn test_truncated_rle() {
+-        // The final bit packed run within a page may not be a multiple of 8 values
+-        // Unfortunately the specification stores `(bit-packed-run-len) / 8`
+-        // This means we don't necessarily know how many values are present
+-        // and some writers may not add padding to compensate for this ambiguity
+-
+-        // Bit pack encode 20 values with a bit width of 8
++        // PLENORA: a final bit-packed run shorter than its declared groups
++        // was read as far as its bytes went (some writers were said to skip
++        // the padding; none measured does). Its declared values not in the
++        // data disappeared in silence: now an error, read or read with a
++        // dictionary.
+         let mut data: Vec<u8> = vec![
+             (3 << 1) | 1, // bit-packed run of 3 * 8
+         ];
+@@ -1018,25 +1101,11 @@ mod tests {
+         let data: Bytes = data.into();
+ 
+         let mut decoder = RleDecoder::new(8);
+-        decoder.set_data(data.clone()).unwrap();
+-
+-        let mut output = vec![0_u16; 100];
+-        let read = decoder.get_batch(&mut output).unwrap();
+-
+-        assert_eq!(read, 20);
+-        assert!(output.iter().take(20).all(|x| *x == 255));
+-
+-        // Reset decoder
+-        decoder.set_data(data).unwrap();
+-
+-        let dict: Vec<u16> = (0..256).collect();
+-        let mut output = vec![0_u16; 100];
+-        let read = decoder
+-            .get_batch_with_dict(&dict, &mut output, 100)
+-            .unwrap();
+-
+-        assert_eq!(read, 20);
+-        assert!(output.iter().take(20).all(|x| *x == 255));
++        let errore = decoder.set_data(data).unwrap_err().to_string();
++        assert!(
++            errore.contains("bit-packed run beyond the data"),
++            "{errore}"
++        );
+     }
+ 
+     #[test]
 --- a/src/file/serialized_reader.rs
 +++ b/src/file/serialized_reader.rs
 @@ -514,8 +514,12 @@ pub(crate) fn decode_page(
@@ -1394,3 +1660,13 @@
          }
          random_numbers_range(num_values_cur_page, min, max, values);
  
+@@ -213,7 +218,8 @@ pub fn make_pages<T: DataType>(
+         let dict_page = Page::DictionaryPage {
+             buf: dict,
+             num_values: dict_encoder.num_entries() as u32,
+-            encoding: Encoding::RLE_DICTIONARY,
++            // PLENORA: a dictionary page is `PLAIN`.
++            encoding: Encoding::PLAIN,
+             is_sorted: false,
+         };
+         pages.push_front(dict_page);

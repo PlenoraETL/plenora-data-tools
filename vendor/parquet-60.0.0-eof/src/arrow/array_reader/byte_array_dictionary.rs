@@ -365,6 +365,12 @@ where
     ) -> Result<()> {
         // PLENORA: an excluded encoding has the text of every other rejection.
         crate::basic::check_dictionary_page_encoding(encoding)?;
+        // PLENORA: one dictionary per column chunk, as the generic decoder
+        // requires: a second dictionary page replaced the first in silence,
+        // and the indices before it read other values.
+        if self.dict.is_some() {
+            return Err(general_err!("Column cannot have more than one dictionary"));
+        }
 
         if K::from_usize(num_values as usize).is_none() {
             return Err(general_err!("dictionary too large for index type"));
@@ -544,9 +550,7 @@ mod tests {
         let column_desc = utf8_column();
         let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
 
-        decoder
-            .set_dict(dict, 3, Encoding::RLE_DICTIONARY, false)
-            .unwrap();
+        decoder.set_dict(dict, 3, Encoding::PLAIN, false).unwrap();
 
         decoder
             .set_data(Encoding::RLE_DICTIONARY, encoded, 14, Some(data.len()))
@@ -614,9 +618,7 @@ mod tests {
         let column_desc = utf8_column();
         let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
 
-        decoder
-            .set_dict(dict, 3, Encoding::RLE_DICTIONARY, false)
-            .unwrap();
+        decoder.set_dict(dict, 3, Encoding::PLAIN, false).unwrap();
 
         decoder
             .set_data(Encoding::RLE_DICTIONARY, encoded, 7, Some(data.len()))
@@ -671,7 +673,7 @@ mod tests {
         let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
 
         decoder
-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
             .unwrap();
 
         // Read all pages into single buffer
@@ -716,7 +718,7 @@ mod tests {
         let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
 
         decoder
-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
             .unwrap();
 
         // Read all pages into single buffer
@@ -761,7 +763,7 @@ mod tests {
 
         let mut decoder = DictionaryDecoder::<i8, i32>::new(&column_desc);
         let err = decoder
-            .set_dict(dictionary.clone(), 128, Encoding::RLE_DICTIONARY, false)
+            .set_dict(dictionary.clone(), 128, Encoding::PLAIN, false)
             .unwrap_err()
             .to_string();
 
@@ -769,7 +771,7 @@ mod tests {
 
         let mut decoder = DictionaryDecoder::<i16, i32>::new(&column_desc);
         decoder
-            .set_dict(dictionary, 128, Encoding::RLE_DICTIONARY, false)
+            .set_dict(dictionary, 128, Encoding::PLAIN, false)
             .unwrap();
     }
 

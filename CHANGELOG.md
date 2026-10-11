@@ -62,12 +62,16 @@ la cui versione non ha qui una voce datata.
   più dopo quelli di una pagina letta per intero si ignoravano in
   silenzio; ora sono un errore, tranne due deviazioni dichiarate, solo
   nelle pagine v1: fino a 8 byte a zero dopo i valori `PLAIN` o gli indici
-  di dizionario (fastparquet: una pagina v1 `PLAIN` con valori a zero in
-  più entro quegli 8 byte si legge senza di essi) e, nei livelli e negli
-  indici, il riempimento di un blocco bit-packed di 32 gruppi di cui si
-  legge almeno un valore (DuckDB: fino a 255 valori in più non letti);
+  di dizionario, non dopo i livelli né dopo i booleani `RLE`
+  (fastparquet: una pagina v1 `PLAIN` con valori a zero in più entro
+  quegli 8 byte si legge senza di essi) e, nei livelli e negli indici, il
+  riempimento di un blocco bit-packed di 32 gruppi di cui si legge almeno
+  un valore (DuckDB: fino a 255 valori in più non letti);
   `docs/limiti.md`, «Fine delle pagine Parquet». Una corsa vuota chiude lo
-  stream ovunque sia, e un varint non minimo è un errore. Una pagina v2
+  stream ovunque sia, un varint non minimo è un errore, e una corsa
+  bit-packed troncata (meno gruppi di quelli che dichiara) pure. Una pagina
+  di dizionario è `PLAIN` o `PLAIN_DICTIONARY`, una per column chunk anche
+  nei lettori Arrow (prima la seconda sostituiva la prima). Una pagina v2
   comincia su un confine di record (i record spezzati fra pagine v2 si
   rifiutano, `docs/limiti.md`). Una pagina vuota non
   ferma più la lettura delle pagine dopo. Le righe di una pagina v2 si

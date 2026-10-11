@@ -356,9 +356,15 @@ impl PackedDecoder {
         )
         .map_err(|_| general_err!("RLE run length out of range"))?;
         if indicator_value & 1 == 1 {
+            // PLENORA: the groups the run declares are all in the data (one
+            // byte per group at bit width 1), as in `RleDecoder`: the count
+            // was cut to the bytes present, and a truncated or huge run
+            // passed here while the generic decoder refused it.
             let disponibili = self.data.len().saturating_sub(self.data_offset);
+            if run > disponibili {
+                return Err(general_err!("bit-packed run beyond the data"));
+            }
             self.packed_count = run
-                .min(disponibili)
                 .checked_mul(8)
                 .ok_or_else(|| general_err!("RLE run length out of range"))?;
             self.packed_offset = 0;

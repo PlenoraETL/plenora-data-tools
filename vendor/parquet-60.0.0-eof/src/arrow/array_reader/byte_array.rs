@@ -246,6 +246,12 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
     ) -> Result<()> {
         // PLENORA: an excluded encoding has the text of every other rejection.
         crate::basic::check_dictionary_page_encoding(encoding)?;
+        // PLENORA: one dictionary per column chunk, as the generic decoder
+        // requires: a second dictionary page replaced the first in silence,
+        // and the indices before it read other values.
+        if self.dict.is_some() {
+            return Err(general_err!("Column cannot have more than one dictionary"));
+        }
 
         let mut buffer = OffsetBuffer::with_capacity(0);
         let mut decoder = ByteArrayDecoderPlain::new(
@@ -726,7 +732,7 @@ mod tests {
         let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
 
         decoder
-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
             .unwrap();
 
         for (encoding, page) in pages {
@@ -783,7 +789,7 @@ mod tests {
         let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
 
         decoder
-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
             .unwrap();
 
         for (encoding, page) in pages {
@@ -828,7 +834,7 @@ mod tests {
         let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
 
         decoder
-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
             .unwrap();
 
         // test nulls read

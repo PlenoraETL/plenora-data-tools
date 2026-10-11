@@ -542,7 +542,10 @@ where
     }
 
     fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
-        crate::util::bit_util::coda_di_zeri(&self.dopo, 0, fine.coda_di_zeri)
+        // PLENORA: the tail of fastparquet follows `PLAIN` values and
+        // dictionary indices, never the prefixed stream of `RLE` booleans.
+        let _ = fine;
+        self.dopo.is_empty()
             && self
                 .decoder
                 .fine_esatta(crate::column::reader::decoder::FinePagina::ESATTA)

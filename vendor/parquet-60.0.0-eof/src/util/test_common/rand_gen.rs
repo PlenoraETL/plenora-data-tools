@@ -218,7 +218,8 @@ pub fn make_pages<T: DataType>(
         let dict_page = Page::DictionaryPage {
             buf: dict,
             num_values: dict_encoder.num_entries() as u32,
-            encoding: Encoding::RLE_DICTIONARY,
+            // PLENORA: a dictionary page is `PLAIN`.
+            encoding: Encoding::PLAIN,
             is_sorted: false,
         };
         pages.push_front(dict_page);

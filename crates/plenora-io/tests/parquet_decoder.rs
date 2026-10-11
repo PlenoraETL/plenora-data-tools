@@ -1238,9 +1238,9 @@ fn opzionale_con_livelli(valori: i64, livelli: &[u8], dati: &[u8]) -> Vec<u8> {
 /// Secondo giro, punto 6: il decoder ottimizzato dei livelli Arrow (larghezza 1)
 /// non aveva le correzioni del decoder RLE: una corsa bit-packed oltre il
 /// payload leggeva bit fuori dai dati, una corsa di 2^32 era accettata, e un
-/// valore RLE diverso da 0 e 1 era letto come 1. Una corsa bit-packed finale
-/// più corta dei suoi gruppi è lecita (come nel decoder generico e in C++):
-/// si legge fino ai suoi byte, e se i livelli non bastano è un errore.
+/// valore RLE diverso da 0 e 1 era letto come 1. Una corsa bit-packed più
+/// corta dei gruppi che dichiara si leggeva fino ai suoi byte (come a monte
+/// e in C++): ora è un errore, i gruppi dichiarati sono tutti nei dati.
 #[test]
 fn i_livelli_rle_malformati_sono_un_errore() {
     let mut oltre = Vec::new();
@@ -1258,11 +1258,16 @@ fn i_livelli_rle_malformati_sono_un_errore() {
         assert!(arrow(&byte).is_err(), "{nome}");
         rifiutato_dal_confine(&byte);
     }
+    // Una corsa bit-packed dichiarata di 3 gruppi con il solo byte che
+    // serve: errore, nei due decoder dei livelli.
+    let troncata = opzionale_con_livelli(2, &[(3 << 1) | 1, 0b11], &[1, 0, 0, 0, 2, 0, 0, 0]);
+    contiene(arrow(&troncata), "bit-packed run beyond the data");
+    assert!(livelli_generici(&troncata).is_err());
     // Controfattuali: una corsa RLE di 2 valori presenti, e una corsa
-    // bit-packed finale dichiarata di 3 gruppi con il solo byte che serve.
+    // bit-packed di un gruppo.
     let byte = opzionale_con_livelli(2, &[2 << 1, 1], &[1, 0, 0, 0, 2, 0, 0, 0]);
     assert_eq!(valori_arrow(&byte), ["1", "2"]);
-    let byte = opzionale_con_livelli(2, &[(3 << 1) | 1, 0b11], &[1, 0, 0, 0, 2, 0, 0, 0]);
+    let byte = opzionale_con_livelli(2, &[(1 << 1) | 1, 0b11], &[1, 0, 0, 0, 2, 0, 0, 0]);
     assert_eq!(valori_arrow(&byte), ["1", "2"]);
 }
 
@@ -1898,13 +1903,13 @@ fn v2_opzionale(righe: i64, nulli: i64, livelli: &[u8]) -> Vec<u8> {
 }
 
 /// Una pagina v2 dichiara i suoi valori (`num_values - num_nulls`); i livelli
-/// decidono quanti se ne leggono. Livelli `05 00` (una corsa bit-packed di
-/// due gruppi con un byte solo, tutti zero) su 8 righe senza null
-/// dichiarati: 8 null in silenzio, con 8 valori nella pagina. Ora la fine
-/// della pagina confronta i valori letti con quelli dichiarati.
+/// decidono quanti se ne leggono. Livelli `03 00` (un gruppo bit-packed di
+/// otto zeri) su 8 righe senza null dichiarati: 8 null in silenzio, con 8
+/// valori nella pagina. Ora la fine della pagina confronta i valori letti
+/// con quelli dichiarati.
 #[test]
 fn una_pagina_v2_con_livelli_contro_i_valori_e_un_errore() {
-    let byte = v2_livelli_contro_valori(&[5, 0]);
+    let byte = v2_livelli_contro_valori(&[3, 0]);
     contiene(arrow(&byte), "data page V2 declares");
     rifiutato_dal_confine(&byte);
     // Controfattuale: una corsa RLE di 8 livelli 1, gli 8 valori.
@@ -2854,4 +2859,318 @@ fn una_pagina_v2_comincia_su_un_confine_di_record() {
     rifiutato_dal_confine(&byte);
     // Controfattuale: `[0, 1]`, una riga di due elementi.
     assert_eq!(arrow(&lista_v2(1)), Ok(1));
+}
+
+// --- Corse troncate, conteggi enormi, dizionari --------------------------------
+
+/// Una corsa bit-packed che dichiara più gruppi di quanti ne porta, o un
+/// conteggio enorme: il decoder generico e quello ottimizzato la leggevano
+/// fino ai suoi byte (l'ottimizzato tagliava il conteggio ai byte, il
+/// generico andava in overflow sul conteggio enorme: esiti diversi). Ora
+/// è un errore in entrambi, anche in v2 e negli indici.
+#[test]
+fn una_corsa_troncata_o_enorme_e_un_errore() {
+    let atteso = "bit-packed run beyond the data";
+    for livelli in [
+        vec![0x05_u8, 0xFF],
+        vec![0x81, 0x80, 0x80, 0x80, 0x04, 0x01],
+    ] {
+        let byte = opzionale_con_righe(8, &livelli);
+        contiene(arrow(&byte), atteso);
+        assert!(livelli_generici(&byte).is_err(), "{livelli:02x?}");
+        rifiutato_dal_confine(&byte);
+        let v2 = v2_opzionale(8, 0, &livelli);
+        assert!(arrow(&v2).is_err(), "v2 {livelli:02x?}");
+    }
+    // Indici di una pagina tutta nulla: un blocco senza i suoi byte.
+    let nulla = Colonna {
+        ripetizione: 1,
+        ..colonna(BYTE_ARRAY)
+    };
+    let mut contenuto = 2_u32.to_le_bytes().to_vec();
+    contenuto.extend_from_slice(&[1 << 1, 0, 1, 0x41]);
+    let byte = parquet(
+        &nulla,
+        1,
+        RLE_DICTIONARY,
+        &contenuto,
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+}
+
+/// I booleani `RLE` finiscono alla loro lunghezza prefissata: la coda di
+/// fastparquet (dopo i valori `PLAIN` e gli indici) non li riguarda, e uno
+/// zero dopo lo stream (`02 00 00 00 02 01 00`) passava.
+#[test]
+fn i_booleani_rle_non_hanno_coda() {
+    let booleana = colonna(0);
+    let byte = parquet(&booleana, 1, RLE, &[2, 0, 0, 0, 2, 1, 0], None, None);
+    contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+    contiene(
+        colonna_api::<parquet::data_type::BoolType>(&byte, None),
+        parquet::basic::PAGE_NOT_AS_DECLARED,
+    );
+    let byte = parquet(&booleana, 1, RLE, &[2, 0, 0, 0, 2, 1], None, None);
+    assert_eq!(arrow(&byte), Ok(1));
+}
+
+/// Una colonna con la pagina di dizionario dichiarata `encoding` e le
+/// pagine `pagine` (header e contenuto ciascuna) dopo di essa.
+fn con_pagine(
+    colonna: &Colonna,
+    valori: i64,
+    codifica_dizionario: i64,
+    dizionari: &[&[u8]],
+    dati: &[u8],
+) -> Vec<u8> {
+    let mut prima = Vec::new();
+    for (indice, dizionario) in dizionari.iter().enumerate() {
+        let lunghezza = i64::try_from(dizionario.len()).unwrap();
+        let header = Struttura::default()
+            .i32(1, 2)
+            .i32(2, lunghezza)
+            .i32(3, lunghezza)
+            .struttura(
+                7,
+                Struttura::default().i32(1, 1).i32(2, codifica_dizionario),
+            )
+            .fine();
+        prima.extend(header);
+        prima.extend_from_slice(dizionario);
+        let _ = indice;
+    }
+    prima.extend(header_v1(valori, RLE_DICTIONARY, dati.len()));
+    parquet_con_header(colonna, valori, RLE_DICTIONARY, dati, &prima, None, None)
+}
+
+/// Due pagine di dizionario nello stesso column chunk: i lettori Arrow
+/// sostituivano il primo con il secondo in silenzio, l'API generica
+/// rifiutava. Ora un errore uniforme. Una pagina di dizionario dichiarata
+/// `RLE_DICTIONARY` si leggeva come `PLAIN`: un dizionario è `PLAIN` (o
+/// `PLAIN_DICTIONARY` nei file vecchi), e ora è un errore.
+#[test]
+fn i_dizionari_di_un_column_chunk_sono_uno_e_plain() {
+    let a = testo_plain(&[b"a"]);
+    let b = testo_plain(&[b"b"]);
+    let flba = Colonna {
+        larghezza: Some(1),
+        ..colonna(FLBA)
+    };
+    for (colonna, primo, secondo) in [
+        (colonna(BYTE_ARRAY), a.as_slice(), b.as_slice()),
+        (flba, b"a".as_slice(), b"b".as_slice()),
+    ] {
+        let doppio = con_pagine(&colonna, 1, PLAIN, &[primo, secondo], &[1, 2, 0]);
+        contiene(arrow(&doppio), "more than one dictionary");
+        if colonna.tipo == BYTE_ARRAY {
+            for tipo in [
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+                DataType::BinaryView,
+            ] {
+                let schema = Schema::new(vec![Field::new("x", tipo.clone(), false)]);
+                contiene(
+                    arrow_con_schema(&doppio, schema).map(|batch| batch.len()),
+                    "more than one dictionary",
+                );
+            }
+            contiene(
+                colonna_api::<ByteArrayType>(&doppio, None),
+                "more than one dictionary",
+            );
+        }
+        let rle = con_pagine(&colonna, 1, RLE_DICTIONARY, &[primo], &[1, 2, 0]);
+        contiene(arrow(&rle), "encoding type for dictionary");
+        // Controfattuali: un dizionario PLAIN, e PLAIN_DICTIONARY (2).
+        for codifica in [PLAIN, 2] {
+            let uno = con_pagine(&colonna, 1, codifica, &[primo], &[1, 2, 0]);
+            assert_eq!(arrow(&uno), Ok(1), "{codifica}");
+        }
+    }
+}
+
+// --- Oracolo esteso dei due decoder dei livelli ----------------------------------
+
+/// Un generatore deterministico (xorshift).
+struct Casuale(u64);
+
+impl Casuale {
+    fn prossimo(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        usize::try_from(self.0 % u64::try_from(n).unwrap()).unwrap()
+    }
+}
+
+/// Livelli di definizione (larghezza 1) e il loro stream RLE/bit-packed,
+/// con le forme che i decoder devono trattare allo stesso modo: corse RLE,
+/// gruppi bit-packed, un blocco di 32 gruppi alla fine, e, se `guasto`,
+/// una corsa vuota, un varint non minimo, una corsa troncata o un conteggio
+/// enorme. Restituisce i livelli voluti, lo stream e se lo stream li
+/// codifica in una forma ammessa.
+fn stream_dei_livelli(caso: &mut Casuale, guasto: bool) -> (Vec<bool>, Vec<u8>, bool) {
+    let righe = 1 + caso.prossimo(40);
+    let livelli: Vec<bool> = (0..righe).map(|_| caso.prossimo(3) > 0).collect();
+    let mut stream = Vec::new();
+    let mut posizione = 0;
+    while posizione < righe {
+        let resto = righe - posizione;
+        if caso.prossimo(2) == 0 {
+            // Una corsa RLE dei livelli uguali che seguono.
+            let valore = livelli[posizione];
+            let mut lunghezza = 1;
+            while posizione + lunghezza < righe && livelli[posizione + lunghezza] == valore {
+                lunghezza += 1;
+            }
+            varint(u64::try_from(lunghezza).unwrap() << 1, &mut stream);
+            stream.push(u8::from(valore));
+            posizione += lunghezza;
+        } else {
+            // Gruppi bit-packed: i livelli che restano, o un blocco di 32
+            // gruppi (DuckDB) se è l'ultima corsa.
+            let gruppi = if resto <= 256 && caso.prossimo(4) == 0 {
+                32
+            } else {
+                resto.div_ceil(8).min(1 + caso.prossimo(3))
+            };
+            varint((u64::try_from(gruppi).unwrap() << 1) | 1, &mut stream);
+            for gruppo in 0..gruppi {
+                let mut byte = 0_u8;
+                for bit in 0..8 {
+                    let indice = posizione + gruppo * 8 + bit;
+                    if indice < righe && livelli[indice] {
+                        byte |= 1 << bit;
+                    }
+                }
+                stream.push(byte);
+            }
+            posizione += gruppi * 8;
+        }
+    }
+    let mut ammessa = true;
+    if guasto {
+        ammessa = false;
+        match caso.prossimo(5) {
+            0 => stream.insert(0, 0x01), // corsa bit-packed vuota
+            1 => stream.splice(0..0, [0x80, 0x00]).for_each(drop), // varint non minimo
+            tipo @ (2 | 3) => {
+                // L'ultima corsa porta i livelli che servono ma dichiara più
+                // gruppi: due in più (troncata), o 2^29 (un conteggio enorme).
+                let finali = 1 + caso.prossimo(righe.min(16));
+                stream = livelli_rle(&livelli[..righe - finali]);
+                let gruppi = finali.div_ceil(8);
+                let dichiarati = if tipo == 2 {
+                    gruppi as u64 + 2
+                } else {
+                    1 << 29
+                };
+                varint((dichiarati << 1) | 1, &mut stream);
+                for gruppo in 0..gruppi {
+                    let mut byte = 0_u8;
+                    for bit in 0..8 {
+                        let indice = righe - finali + gruppo * 8 + bit;
+                        if indice < righe && livelli[indice] {
+                            byte |= 1 << bit;
+                        }
+                    }
+                    stream.push(byte);
+                }
+            }
+            _ => stream.push(0x00), // un indicatore 0 dopo l'ultima corsa
+        }
+    }
+    (livelli, stream, ammessa)
+}
+
+/// I livelli come corse RLE.
+fn livelli_rle(livelli: &[bool]) -> Vec<u8> {
+    let mut stream = Vec::new();
+    let mut posizione = 0;
+    while posizione < livelli.len() {
+        let valore = livelli[posizione];
+        let mut lunghezza = 1;
+        while posizione + lunghezza < livelli.len() && livelli[posizione + lunghezza] == valore {
+            lunghezza += 1;
+        }
+        varint(u64::try_from(lunghezza).unwrap() << 1, &mut stream);
+        stream.push(u8::from(valore));
+        posizione += lunghezza;
+    }
+    stream
+}
+
+/// Una pagina `OPTIONAL` `INT32` v1 o v2 con i livelli dati e un valore per
+/// ogni livello 1 (i valori coerenti con i livelli: l'esito dipende solo
+/// dai livelli).
+fn pagina_dei_livelli(livelli: &[bool], stream: &[u8], v2: bool) -> Vec<u8> {
+    let presenti = livelli.iter().filter(|l| **l).count();
+    let dati: Vec<u8> = (1..=i32::try_from(presenti).unwrap())
+        .flat_map(i32::to_le_bytes)
+        .collect();
+    let righe = i64::try_from(livelli.len()).unwrap();
+    if !v2 {
+        return opzionale_con_livelli(righe, stream, &dati);
+    }
+    let opzionale = Colonna {
+        ripetizione: 1,
+        ..colonna(INT32)
+    };
+    let mut contenuto = stream.to_vec();
+    contenuto.extend_from_slice(&dati);
+    let nulli = righe - i64::try_from(presenti).unwrap();
+    let header = header_v2(
+        righe,
+        nulli,
+        righe,
+        PLAIN,
+        i64::try_from(stream.len()).unwrap(),
+        0,
+        contenuto.len(),
+        contenuto.len(),
+    );
+    parquet_con_header(&opzionale, righe, PLAIN, &contenuto, &header, None, None)
+}
+
+/// Oracolo esteso: pagine v1 e v2, 1-40 righe, corse RLE e bit-packed,
+/// blocchi di 32 gruppi, valori coerenti con i livelli, e stream guasti
+/// (corse vuote, varint non minimi, corse troncate, conteggi enormi). I due
+/// decoder dei livelli danno lo stesso esito; uno stream in forma ammessa si
+/// legge con i livelli voluti (il blocco di 32 gruppi solo in v1), uno
+/// guasto è un errore in entrambi.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn l_oracolo_dei_livelli_copre_v2_blocchi_e_guasti() {
+    let mut caso = Casuale(0x9E37_79B9_7F4A_7C15);
+    let (mut letti, mut rifiutati) = (0, 0);
+    for prova in 0..1200 {
+        let da_guastare = prova % 3 == 0;
+        let (livelli, stream, ammessa) = stream_dei_livelli(&mut caso, da_guastare);
+        for v2 in [false, true] {
+            let byte = pagina_dei_livelli(&livelli, &stream, v2);
+            let ottimizzato = livelli_ottimizzati(&byte);
+            let generico = livelli_generici(&byte);
+            match (&ottimizzato, &generico) {
+                (Ok(a), Ok(b)) => assert_eq!(a, b, "v2 {v2}, livelli {stream:02x?}"),
+                (Err(_), Err(_)) => {}
+                _ => {
+                    panic!("esiti diversi (v2 {v2}) su {stream:02x?}: {ottimizzato:?} {generico:?}")
+                }
+            }
+            // Un blocco di 32 gruppi in v2 non è ammesso (DuckDB scrive v1).
+            let blocco = stream.windows(1).any(|w| w[0] == ((32 << 1) | 1));
+            if ammessa && !(v2 && blocco) {
+                assert_eq!(ottimizzato.as_ref(), Ok(&livelli), "v2 {v2}, {stream:02x?}");
+                letti += 1;
+            } else if !ammessa {
+                assert!(ottimizzato.is_err(), "guasto letto: v2 {v2}, {stream:02x?}");
+                rifiutati += 1;
+            }
+        }
+    }
+    assert!(
+        letti > 500 && rifiutati > 300,
+        "{letti} letti, {rifiutati} rifiutati"
+    );
 }

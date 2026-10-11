@@ -1511,7 +1511,10 @@ pub fn check_qualified_value_encoding(encoding: Encoding) -> Result<()> {
 pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
     check_qualified_value_encoding(encoding)?;
     match encoding {
-        Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => Ok(()),
+        // PLENORA: a dictionary page is `PLAIN` (`PLAIN_DICTIONARY` names it
+        // in old files); `RLE_DICTIONARY` names the indices of a data page,
+        // and a dictionary page that declared it was read as `PLAIN`.
+        Encoding::PLAIN | Encoding::PLAIN_DICTIONARY => Ok(()),
         _ => Err(nyi_err!(
             "Invalid/Unsupported encoding type for dictionary: {}",
             encoding

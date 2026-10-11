@@ -653,12 +653,9 @@ impl RleDecoder {
         let fine_dei_dati = dati.len().saturating_mul(8);
         let resto = self.bit_packed_left as usize;
         let nel_gruppo = resto % BIT_PACK_GROUP_SIZE;
-        // The values left that the data holds: all of them at bit width 0,
-        // as far as the bytes go otherwise.
-        let presenti = match larghezza {
-            0 => resto,
-            _ => resto.min(fine_dei_dati.saturating_sub(posizione) / larghezza),
-        };
+        // The values left in the run (all in the data: a run beyond the data
+        // is refused when it is read).
+        let presenti = resto;
         // DuckDB pads the last block it writes: a block of which a value was
         // read (a block read for none was 256 values in excess).
         let blocco = fine.blocco_duckdb
@@ -707,15 +704,24 @@ impl RleDecoder {
             let run = u32::try_from(indicator_value >> 1)
                 .map_err(|_| general_err!("RLE run length out of range"))?;
             if indicator_value & 1 == 1 {
-                // PLENORA: a final bit-packed run shorter than its declared
-                // groups is read as far as its bytes go, as upstream and the
-                // C++ reader do (some writers do not pad it, see
-                // `test_truncated_rle`): the bit reader never reads past the
-                // data, and the callers compare the values and levels they get
-                // with those the page declares.
+                // PLENORA: the groups a bit-packed run declares are all in the
+                // data (a group of 8 values takes `bit_width` bytes). A run
+                // shorter than its groups was read as far as its bytes went
+                // (upstream and C++ do, `test_truncated_rle`), and the values
+                // it declared but did not hold disappeared in silence; no
+                // writer measured truncates one. A count beyond the data,
+                // however large, is the same error in both level decoders.
                 self.bit_packed_left = run
                     .checked_mul(BIT_PACK_GROUP_SIZE as u32)
                     .ok_or_else(|| general_err!("RLE run length out of range"))?;
+                let byte = (run as usize).checked_mul(self.bit_width as usize);
+                let restanti = bit_reader
+                    .dati()
+                    .len()
+                    .saturating_sub(bit_reader.get_byte_offset());
+                if byte.is_none_or(|byte| byte > restanti) {
+                    return Err(general_err!("bit-packed run beyond the data"));
+                }
                 self.gruppi_della_corsa = run;
             } else {
                 self.rle_left = run;
@@ -899,7 +905,9 @@ mod tests {
         // 011 100 101 011 100 101 011 100 101 100 101 101
         // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
         let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
-        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B];
+        // PLENORA: the last group whole (its 4 values of padding, 0x00): a
+        // run declares whole groups, all in the data.
+        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B, 0x00];
         let mut decoder = RleDecoder::new(3);
         decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![""; 12];
@@ -934,7 +942,9 @@ mod tests {
         // 011 100 101 011 100 101 011 100 101 100 101 101
         // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
         let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
-        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B];
+        // PLENORA: the last group whole (its 4 values of padding, 0x00): a
+        // run declares whole groups, all in the data.
+        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B, 0x00];
         let mut decoder = RleDecoder::new(3);
         decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![""; BIT_PACK_GROUP_SIZE];
@@ -1079,12 +1089,11 @@ mod tests {
 
     #[test]
     fn test_truncated_rle() {
-        // The final bit packed run within a page may not be a multiple of 8 values
-        // Unfortunately the specification stores `(bit-packed-run-len) / 8`
-        // This means we don't necessarily know how many values are present
-        // and some writers may not add padding to compensate for this ambiguity
-
-        // Bit pack encode 20 values with a bit width of 8
+        // PLENORA: a final bit-packed run shorter than its declared groups
+        // was read as far as its bytes went (some writers were said to skip
+        // the padding; none measured does). Its declared values not in the
+        // data disappeared in silence: now an error, read or read with a
+        // dictionary.
         let mut data: Vec<u8> = vec![
             (3 << 1) | 1, // bit-packed run of 3 * 8
         ];
@@ -1092,25 +1101,11 @@ mod tests {
         let data: Bytes = data.into();
 
         let mut decoder = RleDecoder::new(8);
-        decoder.set_data(data.clone()).unwrap();
-
-        let mut output = vec![0_u16; 100];
-        let read = decoder.get_batch(&mut output).unwrap();
-
-        assert_eq!(read, 20);
-        assert!(output.iter().take(20).all(|x| *x == 255));
-
-        // Reset decoder
-        decoder.set_data(data).unwrap();
-
-        let dict: Vec<u16> = (0..256).collect();
-        let mut output = vec![0_u16; 100];
-        let read = decoder
-            .get_batch_with_dict(&dict, &mut output, 100)
-            .unwrap();
-
-        assert_eq!(read, 20);
-        assert!(output.iter().take(20).all(|x| *x == 255));
+        let errore = decoder.set_data(data).unwrap_err().to_string();
+        assert!(
+            errore.contains("bit-packed run beyond the data"),
+            "{errore}"
+        );
     }
 
     #[test]
