@@ -235,7 +235,30 @@
          for (encoding, page) in pages {
 --- a/src/arrow/array_reader/fixed_len_byte_array.rs
 +++ b/src/arrow/array_reader/fixed_len_byte_array.rs
-@@ -419,6 +419,12 @@ impl ColumnValueDecoder for ValueDecoder {
+@@ -242,6 +242,22 @@ impl ArrayReader for FixedLenByteArrayReader {
+             ArrowType::Interval(unit) => {
+                 // An interval is stored as 3x 32-bit unsigned integers storing months, days,
+                 // and milliseconds
++                // PLENORA: an INTERVAL is months, days and milliseconds; a
++                // unit that holds only some of them read the others away in
++                // silence (`DayTime` is the unit without an Arrow schema in
++                // the file). The parts the unit does not hold must be zero.
++                let parti_perse = match unit {
++                    IntervalUnit::YearMonth => 4..12,
++                    IntervalUnit::DayTime => 0..4,
++                    IntervalUnit::MonthDayNano => 0..0,
++                };
++                if binary
++                    .iter()
++                    .flatten()
++                    .any(|b| b[parti_perse.clone()].iter().any(|byte| *byte != 0))
++                {
++                    return Err(general_err!("{}", crate::basic::INTERVAL_NOT_AS_DECLARED));
++                }
+                 match unit {
+                     IntervalUnit::YearMonth => {
+                         let f = |b: &[u8]| i32::from_le_bytes(b[0..4].try_into().unwrap());
+@@ -419,6 +435,12 @@ impl ColumnValueDecoder for ValueDecoder {
      ) -> Result<()> {
          // PLENORA: an excluded encoding has the text of every other rejection.
          crate::basic::check_dictionary_page_encoding(encoding)?;
@@ -248,7 +271,7 @@
          // PLENORA: a wrapped product would accept a short dictionary.
          let expected_len = (num_values as usize)
              .checked_mul(self.byte_length)
-@@ -442,12 +448,12 @@ impl ColumnValueDecoder for ValueDecoder {
+@@ -442,12 +464,12 @@ impl ColumnValueDecoder for ValueDecoder {
      ) -> Result<()> {
          // PLENORA: only the qualified encodings are read, page by page.
          crate::basic::check_qualified_value_encoding(encoding)?;
@@ -267,7 +290,7 @@
              return Err(general_err!(
                  "{} page of {} bytes is not a whole number of {}-byte values",
                  encoding,
-@@ -590,6 +596,17 @@ impl ColumnValueDecoder for ValueDecoder {
+@@ -590,6 +612,17 @@ impl ColumnValueDecoder for ValueDecoder {
              }
          }
      }
@@ -740,7 +763,7 @@
          _ => Err(nyi_err!(
              "Invalid/Unsupported encoding type for dictionary: {}",
              encoding
-@@ -1519,6 +1522,41 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
+@@ -1519,6 +1522,47 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
      }
  }
  
@@ -762,6 +785,12 @@
 +/// dictionary first), or not at the start the footer declares for it.
 +pub const DICTIONARY_PAGE_OUT_OF_PLACE: &str =
 +    "dictionary page not at the start of its column chunk";
++
++/// PLENORA: the fixed text of the rejection of an `INTERVAL` value with
++/// parts the Arrow interval unit does not hold (months for `DayTime`, days or
++/// milliseconds for `YearMonth`): they were dropped in silence.
++pub const INTERVAL_NOT_AS_DECLARED: &str =
++    "INTERVAL value with parts its Arrow interval unit does not hold";
 +
 +/// PLENORA: the fixed text of the rejection of a page index (column index
 +/// and offset index): not qualified for reading. Their counts, histograms,

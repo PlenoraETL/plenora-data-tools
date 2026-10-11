@@ -69,8 +69,14 @@ struct Struttura {
 impl Struttura {
     fn campo(&mut self, id: u8, tipo: u8) {
         let delta = id - self.ultimo;
-        assert!(delta > 0 && delta < 16);
-        self.byte.push((delta << 4) | tipo);
+        assert!(delta > 0);
+        if delta < 16 {
+            self.byte.push((delta << 4) | tipo);
+        } else {
+            // La forma lunga: il tipo, poi l'identificatore (zigzag).
+            self.byte.push(tipo);
+            varint(zigzag(i64::from(id)), &mut self.byte);
+        }
         self.ultimo = id;
     }
     fn intero(mut self, id: u8, valore: i64, tipo: u8) -> Self {
@@ -158,6 +164,9 @@ struct Colonna {
     ripetizione: i64,
     /// Tipo convertito (`converted_type`), per esempio `INT_8`.
     convertito: Option<i64>,
+    /// Tipo logico (`logicalType`, campo 10): l'identificatore del ramo
+    /// dell'unione, con una struttura vuota.
+    logico: Option<u8>,
 }
 
 const fn colonna(tipo: i64) -> Colonna {
@@ -167,6 +176,7 @@ const fn colonna(tipo: i64) -> Colonna {
         decimale: None,
         ripetizione: 0,
         convertito: None,
+        logico: None,
     }
 }
 
@@ -324,6 +334,12 @@ fn parquet_completo(
         foglia = foglia.i32(6, 5).i32(7, scala).i32(8, precisione); // DECIMAL
     } else if let Some(convertito) = colonna.convertito {
         foglia = foglia.i32(6, convertito);
+    }
+    if let Some(logico) = colonna.logico {
+        foglia = foglia.struttura(
+            10,
+            Struttura::default().struttura(logico, Struttura::default()),
+        );
     }
     let footer = Struttura::default()
         .i32(1, 1)
@@ -4126,4 +4142,150 @@ fn una_pagina_oltre_il_column_chunk_e_rifiutata() {
     // Controfattuale: con la dimensione giusta si legge.
     let giusto = costruisci(pagine);
     assert_eq!(valori_arrow(&giusto), ["ALGERIA", "ARGENTINA"]);
+}
+
+/// Un tipo logico che la lettura non qualifica si convertiva in silenzio:
+/// `UNKNOWN` (il tipo «sempre nullo») in una colonna `Null`, che scarta i
+/// valori del file; `VARIANT` in byte o struct; un tipo che il fork non
+/// riconosce (qui l'identificatore riservato 9) in byte (`FILE` senza i suoi
+/// campi è già un footer malformato, `DataMapping`). Ora il
+/// confine li rifiuta (`Unsupported`), prima della conversione dello schema,
+/// con un elenco chiuso dei tipi qualificati.
+#[test]
+fn un_tipo_logico_non_qualificato_e_rifiutato() {
+    let dir = cartella();
+    let percorso = dir.path().join("l.parquet");
+    let leggi = |byte: &[u8]| {
+        std::fs::write(&percorso, byte).unwrap();
+        leggi_tabella_con_limiti(
+            &percorso,
+            Some(Formato::Parquet),
+            u64::MAX,
+            &LimitiLettura::default(),
+        )
+    };
+    for (tipo, logico, contenuto) in [
+        (INT32, 11, 7_i32.to_le_bytes().to_vec()), // UNKNOWN
+        (BYTE_ARRAY, 9, testo_plain(&[b"x"])),     // non riconosciuto
+    ] {
+        let colonna = Colonna {
+            logico: Some(logico),
+            ..colonna(tipo)
+        };
+        let byte = parquet(&colonna, 1, PLAIN, &contenuto, None, None);
+        let errore = leggi(&byte).expect_err("tipo logico non qualificato");
+        assert_eq!(
+            errore.category(),
+            ErrorCategory::Unsupported,
+            "{logico}: {errore}"
+        );
+    }
+    // `VARIANT` (16) su un gruppo di due colonne di byte, come lo scrivono
+    // le implementazioni (`metadata`, `value`): si leggeva come struct.
+    let errore = leggi(&variante(Some(16))).expect_err("VARIANT");
+    assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+    assert_eq!(leggi(&variante(None)).map(|t| t.num_rows()).ok(), Some(1));
+    // Controfattuale: `STRING` (1) e `JSON` (12) si leggono.
+    for logico in [1, 12] {
+        let colonna = Colonna {
+            logico: Some(logico),
+            ..colonna(BYTE_ARRAY)
+        };
+        let byte = parquet(&colonna, 1, PLAIN, &testo_plain(&[b"t"]), None, None);
+        assert_eq!(leggi(&byte).map(|t| t.num_rows()).ok(), Some(1), "{logico}");
+    }
+}
+
+/// Un `INTERVAL` (mesi, giorni, millisecondi) si leggeva nell'unità Arrow
+/// `DayTime` senza schema Arrow nel file, e i mesi sparivano in silenzio
+/// (`YearMonth` perdeva giorni e millisecondi). Ora le parti che l'unità non
+/// tiene devono essere zero, o la lettura è un errore.
+#[test]
+fn un_intervallo_con_parti_perse_e_un_errore() {
+    let intervallo = Colonna {
+        larghezza: Some(12),
+        convertito: Some(21), // INTERVAL
+        ..colonna(FLBA)
+    };
+    let valore = |mesi: u32, giorni: u32, millisecondi: u32| {
+        let mut byte = mesi.to_le_bytes().to_vec();
+        byte.extend_from_slice(&giorni.to_le_bytes());
+        byte.extend_from_slice(&millisecondi.to_le_bytes());
+        byte
+    };
+    let con_mesi = parquet(&intervallo, 1, PLAIN, &valore(1, 2, 3), None, None);
+    contiene(arrow(&con_mesi), parquet::basic::INTERVAL_NOT_AS_DECLARED);
+    rifiutato_dal_confine(&con_mesi);
+    // Controfattuale: senza mesi si legge, giorni e millisecondi compresi.
+    let senza_mesi = parquet(&intervallo, 1, PLAIN, &valore(0, 2, 3), None, None);
+    assert_eq!(arrow(&senza_mesi), Ok(1));
+}
+
+/// Un Parquet di una riga con un gruppo `v` di due colonne `BYTE_ARRAY`
+/// (`metadata` e `value`), annotato con il tipo logico dato.
+fn variante(logico: Option<u8>) -> Vec<u8> {
+    let mut file = b"PAR1".to_vec();
+    let mut chunk = Vec::new();
+    for nome in ["metadata", "value"] {
+        let contenuto = testo_plain(&[b"\x01"]);
+        let inizio = i64::try_from(file.len()).unwrap();
+        file.extend(header_v1(1, PLAIN, contenuto.len()));
+        file.extend_from_slice(&contenuto);
+        let lunghezza = i64::try_from(file.len()).unwrap() - inizio;
+        let metadati = Struttura::default()
+            .i32(1, BYTE_ARRAY)
+            .elenco(2, I32, vec![intero_di_elenco(PLAIN)])
+            .elenco(
+                3,
+                BINARIO,
+                vec![testo_di_elenco("v"), testo_di_elenco(nome)],
+            )
+            .i32(4, 0)
+            .i64(5, 1)
+            .i64(6, lunghezza)
+            .i64(7, lunghezza)
+            .i64(9, inizio);
+        chunk.push(
+            Struttura::default()
+                .i64(2, inizio)
+                .struttura(3, metadati)
+                .fine(),
+        );
+    }
+    let totale = i64::try_from(file.len()).unwrap() - 4;
+    let gruppo = Struttura::default()
+        .elenco(1, STRUCT, chunk)
+        .i64(2, totale)
+        .i64(3, 1)
+        .fine();
+    let radice = Struttura::default().testo(4, "schema").i32(5, 1).fine();
+    let mut v = Struttura::default().i32(3, 0).testo(4, "v").i32(5, 2);
+    if let Some(logico) = logico {
+        v = v.struttura(
+            10,
+            Struttura::default().struttura(logico, Struttura::default()),
+        );
+    }
+    let foglia = |nome: &str| {
+        Struttura::default()
+            .i32(1, BYTE_ARRAY)
+            .i32(3, 0)
+            .testo(4, nome)
+            .fine()
+    };
+    let footer = Struttura::default()
+        .i32(1, 1)
+        .elenco(
+            2,
+            STRUCT,
+            vec![radice, v.fine(), foglia("metadata"), foglia("value")],
+        )
+        .i64(3, 1)
+        .elenco(4, STRUCT, vec![gruppo])
+        .fine();
+    let lunghezza = u32::try_from(footer.len()).unwrap();
+    file.extend(footer);
+    file.extend_from_slice(&lunghezza.to_le_bytes());
+    file.extend_from_slice(b"PAR1");
+    file
 }

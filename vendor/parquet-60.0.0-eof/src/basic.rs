@@ -1541,6 +1541,12 @@ pub const PAGE_TYPE_NOT_QUALIFIED: &str = "Parquet page type not qualified for r
 pub const DICTIONARY_PAGE_OUT_OF_PLACE: &str =
     "dictionary page not at the start of its column chunk";
 
+/// PLENORA: the fixed text of the rejection of an `INTERVAL` value with
+/// parts the Arrow interval unit does not hold (months for `DayTime`, days or
+/// milliseconds for `YearMonth`): they were dropped in silence.
+pub const INTERVAL_NOT_AS_DECLARED: &str =
+    "INTERVAL value with parts its Arrow interval unit does not hold";
+
 /// PLENORA: the fixed text of the rejection of a page index (column index
 /// and offset index): not qualified for reading. Their counts, histograms,
 /// cardinalities and boundaries reached unchecked arithmetic, and data and

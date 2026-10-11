@@ -35,14 +35,20 @@ use std::path::Path;
 use std::sync::Arc;
 
 use base64::Engine;
-use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+};
 use parquet::arrow::{ArrowWriter, ARROW_SCHEMA_META_KEY};
+use parquet::basic::LogicalType;
 use parquet::basic::{Compression, Type as TipoFisico, ZstdLevel};
 use parquet::errors::ParquetError;
-use parquet::file::metadata::{KeyValue, ParquetMetaData};
+use parquet::file::metadata::{
+    KeyValue, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
+};
 use parquet::file::properties::{
     EnabledStatistics, WriterProperties, WriterVersion, DEFAULT_CREATED_BY,
 };
+use parquet::schema::types::Type as TipoParquet;
 use plenora_core::arrow::array::cast::AsArray;
 use plenora_core::arrow::array::types::{
     Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
@@ -98,6 +104,70 @@ fn opzioni_di_lettura(budget_footer: u64) -> ArrowReaderOptions {
     ArrowReaderOptions::new()
         .with_max_schema_depth(MAX_PROFONDITA_SCHEMA)
         .with_footer_memory_budget(budget_footer)
+}
+
+/// Le stesse opzioni per il solo footer, letto prima della conversione
+/// dello schema in Arrow.
+fn opzioni_del_footer(budget_footer: u64) -> ParquetMetaDataOptions {
+    ParquetMetaDataOptions::new()
+        .with_max_schema_depth(MAX_PROFONDITA_SCHEMA)
+        .with_footer_memory_budget(budget_footer)
+}
+
+/// Il nome di un tipo logico Parquet che la lettura non qualifica, se lo è.
+///
+/// Elenco chiuso dei qualificati: testo, mappe, liste, enum, decimali,
+/// date, ore, istanti, interi, JSON, BSON, UUID, `FLOAT16`, geometrie e
+/// geografie. Tutto il resto si rifiuta: `UNKNOWN` (il tipo «sempre nullo»:
+/// `parquet` lo legge come colonna `Null` e scarterebbe in silenzio i valori
+/// che il file avesse), `VARIANT` (non qualificato nel fork: i suoi gruppi
+/// si leggevano come struct di byte), `FILE` e i tipi che il fork non
+/// riconosce (si leggevano come byte). Un tipo nuovo del fork non compila
+/// finché non è classificato qui.
+const fn tipo_logico_non_qualificato(tipo: &LogicalType) -> Option<&'static str> {
+    match tipo {
+        LogicalType::String
+        | LogicalType::Map
+        | LogicalType::List
+        | LogicalType::Enum
+        | LogicalType::Decimal(_)
+        | LogicalType::Date
+        | LogicalType::Time(_)
+        | LogicalType::Timestamp(_)
+        | LogicalType::Integer(_)
+        | LogicalType::Json
+        | LogicalType::Bson
+        | LogicalType::Uuid
+        | LogicalType::Float16
+        | LogicalType::Geometry(_)
+        | LogicalType::Geography(_) => None,
+        LogicalType::Unknown => Some("UNKNOWN"),
+        LogicalType::Variant(_) => Some("VARIANT"),
+        LogicalType::File => Some("FILE"),
+        LogicalType::_Unknown { .. } => Some("non riconosciuto"),
+    }
+}
+
+/// Ogni nodo dello schema del footer, gruppi compresi, ha un tipo logico
+/// qualificato o nessuno ([`tipo_logico_non_qualificato`]): un'annotazione
+/// non qualificata è `Unsupported`, prima della conversione in Arrow.
+fn verifica_tipi_logici(metadati: &ParquetMetaData) -> Result<()> {
+    let mut da_vedere: Vec<&TipoParquet> = vec![metadati.file_metadata().schema()];
+    while let Some(nodo) = da_vedere.pop() {
+        if let Some(nome) = nodo
+            .get_basic_info()
+            .logical_type_ref()
+            .and_then(tipo_logico_non_qualificato)
+        {
+            return Err(PlenoraError::Unsupported(format!(
+                "tipo logico Parquet {nome}: non qualificato in lettura"
+            )));
+        }
+        if nodo.is_group() {
+            da_vedere.extend(nodo.get_fields().iter().map(AsRef::as_ref));
+        }
+    }
+    Ok(())
 }
 
 /// I rifiuti dei limiti di decodifica del footer del fork `parquet`
@@ -519,10 +589,23 @@ fn verifica_righe(metadati: &ParquetMetaData) -> Result<usize> {
 pub fn leggi(percorso: &Path, residuo: u64, limiti: &LimitiLettura) -> Result<RecordBatch> {
     let mut file = File::open(percorso)?;
     verifica_footer(&mut file, limiti.metadati_entro(residuo))?;
-    let opzioni = opzioni_di_lettura(budget_del_footer(residuo, limiti));
-    let costruttore = barriera("parquet", || {
-        ParquetRecordBatchReaderBuilder::try_new_with_options(file, opzioni)
+    let budget_footer = budget_del_footer(residuo, limiti);
+    // Il footer prima, per rifiutare un tipo logico non qualificato prima
+    // che la conversione dello schema lo trasformi in un altro tipo.
+    let letti = barriera("parquet", || {
+        ParquetMetaDataReader::new()
+            .with_metadata_options(Some(opzioni_del_footer(budget_footer)))
+            .parse_and_finish(&file)
             .map_err(da_parquet_valore)
+    })?;
+    verifica_tipi_logici(&letti)?;
+    let opzioni = opzioni_di_lettura(budget_footer);
+    let costruttore = barriera("parquet", || {
+        let arrow =
+            ArrowReaderMetadata::try_new(Arc::new(letti), opzioni).map_err(da_parquet_valore)?;
+        Ok(ParquetRecordBatchReaderBuilder::new_with_metadata(
+            file, arrow,
+        ))
     })?;
     let metadati = Arc::clone(costruttore.metadata());
     let gruppi = u64::try_from(metadati.num_row_groups()).unwrap_or(u64::MAX);

@@ -171,6 +171,12 @@ PLENORA_SCRITTORI=<matrice> \
 cargo test --release -p plenora-io --test esiti_di_riferimento --locked -- --ignored
 ```
 
+La matrice degli scrittori si rigenera con
+`crates/plenora-io/tests/riferimenti/scrittori/genera.py` nei due ambienti
+dichiarati con gli hash (`requisiti-pyarrow25.txt`,
+`requisiti-principale.txt`). `PLENORA_PARQUET_ESITI_INSIEMI=parquet-testing,arrow-testing`
+limita la prova ai corpus Apache e dichiara la matrice non verificata.
+
 Modelli di costo, documentazione e commenti hanno guardie Python (3.11 o
 successivo, solo libreria standard):
 

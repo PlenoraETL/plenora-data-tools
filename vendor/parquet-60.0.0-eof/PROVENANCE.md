@@ -484,6 +484,22 @@ ripetizione troncati).
    parte compressa, e un suffisso qualunque spariva. Ora si decomprime e
    deve dare zero byte (lo stream vuoto di un codec si legge).
 
+**Diciassettesimo giro.**
+
+1. `INTERVAL` (tipo convertito, 12 byte: mesi, giorni, millisecondi): il
+   lettore Arrow lo leggeva nell'unità `IntervalUnit::DayTime` senza schema
+   Arrow nel file, e i mesi sparivano in silenzio; `YearMonth` perdeva
+   giorni e millisecondi. Ora le parti che l'unità non tiene devono essere
+   zero (`INTERVAL_NOT_AS_DECLARED`). Stessa classe dei tipi logici non
+   qualificati che `plenora-io` ora rifiuta al confine
+   (`docs/limiti.md`, «Tipi logici Parquet non qualificati»).
+
+Prove unitarie del pacchetto: le stesse 148. Riferimento
+`crates/plenora-io/tests/riferimenti/parquet_esiti.tsv` rigenerato, con il
+digest canonico dei valori letti; la matrice degli scrittori si rigenera
+con `crates/plenora-io/tests/riferimenti/scrittori/genera.py` negli
+ambienti dichiarati (366 file su 367 byte per byte).
+
 **Sedicesimo giro (evidenza).**
 
 1. `nation.dict-malformed.parquet` (`apache/parquet-testing`, `data/`,
@@ -528,8 +544,10 @@ ripetizione troncati).
    misurata, rifiutava 7 dei 106 file (`alltypes_tiny_pages`,
    `datapage_v2.snappy`, `nested_lists.snappy`, `nested_maps.snappy`,
    `nullable.impala`, `ARROW-GH-43605`, `nation.dict-malformed`), scritti
-   da parquet-mr e Impala che omettono l'offset; gli scrittori della
-   matrice lo dichiarano. Di questi, `nation.dict-malformed` resta
+   da parquet-mr (sei, `nullable.impala` compreso: il suo `created_by` è
+   parquet-mr 1.8.0) e da Polars (`ARROW-GH-43605`), che omettono l'offset;
+   gli scrittori della matrice lo dichiarano. L'offset è `optional` nella
+   specifica: leggerli è conforme. Di questi, `nation.dict-malformed` resta
    rifiutato per un'altra ragione (sedicesimo giro, sotto).
 
 Prove unitarie del pacchetto: le stesse 148 (due esecuzioni identiche);

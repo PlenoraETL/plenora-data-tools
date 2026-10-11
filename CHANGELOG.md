@@ -39,6 +39,12 @@ la cui versione non ha qui una voce datata.
   nel footer sia usate in una pagina. pyarrow, data e IO-tools con le
   impostazioni predefinite non le scrivono; in `apache/parquet-testing`
   le usano 9 file su 78.
+- **Tipi logici Parquet non qualificati.** Un tipo logico fuori
+  dall'elenco qualificato (`UNKNOWN`, `VARIANT`, `FILE`, un tipo non
+  riconosciuto) è `Unsupported` (prima: una colonna `Null` che scartava i
+  valori, struct o byte); un `INTERVAL` con parti che l'unità Arrow non
+  tiene è un errore (prima: i mesi sparivano). `docs/limiti.md`, «Tipi
+  logici Parquet non qualificati».
 - **Tipi Arrow chiesti dal file.** Un tipo testo su una colonna di byte non
   annotata come testo, e una colonna `FIXED_LEN_BYTE_ARRAY` letta come
   dizionario, sono `Unsupported` (prima: byte non validati come UTF-8 in

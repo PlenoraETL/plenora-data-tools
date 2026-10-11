@@ -242,6 +242,22 @@ impl ArrayReader for FixedLenByteArrayReader {
             ArrowType::Interval(unit) => {
                 // An interval is stored as 3x 32-bit unsigned integers storing months, days,
                 // and milliseconds
+                // PLENORA: an INTERVAL is months, days and milliseconds; a
+                // unit that holds only some of them read the others away in
+                // silence (`DayTime` is the unit without an Arrow schema in
+                // the file). The parts the unit does not hold must be zero.
+                let parti_perse = match unit {
+                    IntervalUnit::YearMonth => 4..12,
+                    IntervalUnit::DayTime => 0..4,
+                    IntervalUnit::MonthDayNano => 0..0,
+                };
+                if binary
+                    .iter()
+                    .flatten()
+                    .any(|b| b[parti_perse.clone()].iter().any(|byte| *byte != 0))
+                {
+                    return Err(general_err!("{}", crate::basic::INTERVAL_NOT_AS_DECLARED));
+                }
                 match unit {
                     IntervalUnit::YearMonth => {
                         let f = |b: &[u8]| i32::from_le_bytes(b[0..4].try_into().unwrap());

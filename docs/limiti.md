@@ -1142,8 +1142,11 @@ non minimo è un errore. Una pagina di dizionario è `PLAIN` (o
 (`DICTIONARY_PAGE_OUT_OF_PLACE`: un dizionario dopo una pagina di dati si
 leggeva, e gli indici delle pagine dopo puntavano a lui); se il footer la
 dichiara (`dictionary_page_offset`), la prima pagina è un dizionario. Un
-dizionario in prima pagina senza la dichiarazione si legge: parquet-mr e
-Impala la omettono nei file storici (7 dei 106 file di prova).
+dizionario in prima pagina senza la dichiarazione si legge, ed è conforme,
+non una tolleranza: in `parquet.thrift` `dictionary_page_offset` è
+`optional`, e la specifica chiede solo che il dizionario sia la prima
+pagina del column chunk. Lo omettono parquet-mr nei file storici e Polars
+(7 dei 106 file di prova).
 
 **Ambito.** Il fork `vendor/parquet-60.0.0-eof`, fine delle pagine di dati
 v1 (`FinePagina::V1`, `column/reader/decoder.rs`); le pagine v2 finiscono
@@ -1183,11 +1186,10 @@ dizionario dopo una pagina di dati, o di una prima pagina che non è un
 dizionario quando il footer lo dichiara, si toglie solo se uno scrittore
 in uso scrive un dizionario dopo i dati in un file valido per la
 specifica, con una prova su quel file. L'accettazione di un dizionario in
-prima pagina senza `dictionary_page_offset` (una tolleranza per i file
-storici di parquet-mr e Impala) si stringe a «dizionario solo se
-dichiarato» quando quei file non sono più da leggere, oppure solo per gli
-scrittori che lo dichiarano (`created_by`), misurando di nuovo i file del
-riferimento `crates/plenora-io/tests/riferimenti/parquet_esiti.tsv`.
+prima pagina senza `dictionary_page_offset` è conforme alla specifica (il
+campo è opzionale) e non ha una condizione di rientro: si stringerebbe
+solo se la specifica rendesse il campo obbligatorio, misurando di nuovo i
+file del riferimento `crates/plenora-io/tests/riferimenti/parquet_esiti.tsv`.
 
 ## Indici di pagina e bloom filter Parquet
 
@@ -1240,6 +1242,43 @@ liste in pagine v2 da 4 KiB, fastparquet v2, polars; i 106 file di
 **Condizione di rientro.** Un file reale da uno scrittore in uso con
 record su più pagine v2: allora la compatibilità torna, dichiarata, con una
 prova su quel file.
+
+## Tipi logici Parquet non qualificati
+
+**Regola.** La lettura Parquet legge un tipo logico solo se è in un
+elenco chiuso di tipi qualificati, che `parquet` converte in un tipo Arrow
+che tiene i valori del file: testo, mappe, liste, `ENUM`, decimali, date,
+ore, istanti, interi, `JSON`, `BSON`, `UUID`, `FLOAT16`, geometrie e
+geografie. Ogni altra annotazione, a ogni livello dello schema (gruppi
+compresi), è `Unsupported` prima della conversione dello schema. Un
+`INTERVAL` (tipo convertito, mesi, giorni e millisecondi) si legge solo se
+le parti che l'unità Arrow non tiene sono zero
+(`INTERVAL_NOT_AS_DECLARED`).
+
+**Ambito.** La lettura Parquet di `plenora-io` (`parquet_io::leggi`,
+`verifica_tipi_logici`) e, per `INTERVAL`, il fork
+`vendor/parquet-60.0.0-eof` (`fixed_len_byte_array.rs`).
+
+**Hazard.** Si rifiutano anche file validi: `UNKNOWN` (il tipo «sempre
+nullo», che `parquet` legge come colonna `Null` scartando in silenzio i
+valori che il file avesse), `VARIANT` (non qualificato nel fork:
+`variant_experimental` è escluso, e i suoi gruppi si leggevano come struct
+di byte), `FILE` e i tipi che il fork non riconosce (si leggevano come
+byte). Nei file del riferimento cambiano così quattro file di prova:
+`alltypes-java` e `null_list` (una colonna `UNKNOWN`, prima `ok`),
+`unknown-logical-type` (un tipo non riconosciuto, prima `ok`),
+`ARROW-GH-41321` e `ARROW-RS-GH-6229-LEVELS` (rifiutati già, ora per il
+tipo). I 14 file `bad_data/variants/` non hanno l'annotazione `VARIANT`:
+sono due colonne di byte (`metadata`, `value`) che si leggono come byte,
+senza interpretarle. Un `INTERVAL` letto nell'unità `DayTime` (quella
+senza schema Arrow nel file) con mesi diversi da zero era un altro
+valore: ora un errore.
+
+**Condizione di rientro.** Per ciascun tipo, una lettura che ne tenga il
+valore con prove su file costruiti per romperla: `UNKNOWN` verificando che
+ogni valore sia nullo; `VARIANT` con la decodifica qualificata e una
+campagna di fuzz; i tipi nuovi della specifica uno per uno. Per
+`INTERVAL`, un'unità Arrow che tenga tutte e tre le parti.
 
 ## Codifiche Parquet non qualificate
 
