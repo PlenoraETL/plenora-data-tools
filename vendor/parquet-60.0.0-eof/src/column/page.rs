@@ -361,8 +361,13 @@ impl TryFrom<&crate::file::metadata::thrift::PageHeader> for PageMetadata {
         value: &crate::file::metadata::thrift::PageHeader,
     ) -> std::result::Result<Self, Self::Error> {
         match value.r#type {
+            // PLENORA: a header without its page header was a panic
+            // (`unwrap`); a page type not qualified is rejected.
             PageType::DATA_PAGE => {
-                let header = value.data_page_header.as_ref().unwrap();
+                let header = value
+                    .data_page_header
+                    .as_ref()
+                    .ok_or_else(|| general_err!("Missing V1 data page header"))?;
                 Ok(PageMetadata {
                     num_rows: None,
                     num_levels: Some(header.num_values as _),
@@ -375,16 +380,17 @@ impl TryFrom<&crate::file::metadata::thrift::PageHeader> for PageMetadata {
                 is_dict: true,
             }),
             PageType::DATA_PAGE_V2 => {
-                let header = value.data_page_header_v2.as_ref().unwrap();
+                let header = value
+                    .data_page_header_v2
+                    .as_ref()
+                    .ok_or_else(|| general_err!("Missing V2 data page header"))?;
                 Ok(PageMetadata {
                     num_rows: Some(header.num_rows as _),
                     num_levels: Some(header.num_values as _),
                     is_dict: false,
                 })
             }
-            other @ PageType::INDEX_PAGE => Err(ParquetError::General(format!(
-                "page type {other:?} cannot be converted to PageMetadata"
-            ))),
+            PageType::INDEX_PAGE => Err(nyi_err!("{}", crate::basic::PAGE_TYPE_NOT_QUALIFIED)),
         }
     }
 }

@@ -1092,7 +1092,12 @@ fine della pagina.
 
 **Ambito.** Il fork `vendor/parquet-60.0.0-eof`: `skip_records` del
 lettore di colonna (una o più righe) e `skip_next_page` del lettore di
-pagine, dentro una pagina o di pagine intere. Nel lettore Arrow saltano
+pagine, dentro una pagina o di pagine intere; e le pagine di un tipo non
+qualificato fra le pagine di un column chunk (`INDEX_PAGE`), che il
+lettore di pagine saltava in silenzio e ora rifiuta dove le incontra
+(`PAGE_TYPE_NOT_QUALIFIED`, `Unsupported` dal confine; nessuno scrittore
+misurato e nessuno dei 106 file di prova ne scrive). Un tipo di pagina
+sconosciuto è già un errore della decodifica dell'header. Nel lettore Arrow saltano
 righe `RowSelection`, i filtri di riga e `offset`; la selezione dei row
 group esclude chunk interi senza saltare; `limit` può solo fermare la
 lettura, e una pagina lasciata a metà non arriva al controllo della sua
@@ -1218,8 +1223,9 @@ i suoi decoder hanno avuto una revisione e prove su file costruiti per
 romperli, e lo saranno con una campagna di fuzz propria. Lette:
 `PLAIN`, `PLAIN_DICTIONARY` e `RLE_DICTIONARY` per i valori, `RLE` per i
 booleani e per i livelli. Si controllano la codifica di ogni pagina di
-dati e di dizionario letta o saltata intera dal suo header, i livelli delle
-pagine lette, e le codifiche che il column chunk dichiara nel footer;
+dati e di dizionario letta, i livelli delle pagine lette, e le codifiche
+che il column chunk dichiara nel footer (una pagina non si salta: ogni
+salto è rifiutato, «Salti Parquet»);
 `BIT_PACKED` nell'elenco del footer passa, perché parquet-mr la dichiara
 per i livelli assenti.
 
@@ -1231,9 +1237,7 @@ per i livelli assenti.
 `DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY` o `BYTE_STREAM_SPLIT` (o
 un'altra codifica, per esempio la nuova `ALP`), o livelli `BIT_PACKED`
 (deprecata; nessun file di prova la usa in una pagina), si rifiuta con
-`Unsupported`. Una pagina saltata attraverso l'offset index non ha header
-e non si controlla: `plenora-io` non carica l'offset index, quindi non lo
-raggiunge. Le scrivono pyarrow con `column_encoding` o
+`Unsupported`. Le scrivono pyarrow con `column_encoding` o
 `use_byte_stream_split`, i writer v2 di parquet-mr e Spark, DuckDB con le
 opzioni v2; non le scrivono pyarrow (anche con pagine v2), data e
 IO-tools con le impostazioni predefinite. Di `apache/parquet-testing`

@@ -96,7 +96,9 @@ la cui versione non ha qui una voce datata.
   pagina o di pagine intere, che non decodificava ciò che saltava (con
   livelli troncati non terminava; un contenuto troncato in una pagina
   saltata passava), non è più qualificato: `Unsupported`; data legge
-  sempre per intero. Le prove unitarie del fork hanno un seme fisso.
+  sempre per intero. Una pagina d'indice (`INDEX_PAGE`) fra le pagine, che
+  si saltava in silenzio, è rifiutata (`Unsupported`); le statistiche
+  deprecate si verificano anche quando ci sono quelle nuove. Le prove unitarie del fork hanno un seme fisso.
   `patches/parquet-salti-e-fine-pagina.patch`.
 - **Livelli, interi stretti e varint nel fork `parquet`** (terzo giro di
   revisione): un livello oltre il massimo della colonna (contato come

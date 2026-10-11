@@ -3816,3 +3816,132 @@ fn la_matrice_delle_statistiche_flba() {
     }
     assert_eq!(verificati, 36);
 }
+
+/// Una `INDEX_PAGE` fra le pagine di un column chunk si saltava in silenzio
+/// (`get_next_page` avanzava oltre il suo contenuto e passava alla pagina
+/// dopo; `peek_next_page` leggeva il suo contenuto come l'header seguente):
+/// due pagine `PLAIN` con una pagina d'indice di byte qualunque in mezzo si
+/// leggevano. Ora la pagina d'indice è un tipo non qualificato, rifiutato
+/// dove si incontra (`PAGE_TYPE_NOT_QUALIFIED`, `Unsupported` dal confine).
+#[test]
+fn una_pagina_d_indice_fra_le_pagine_e_rifiutata() {
+    let pagina = |valore: i32| {
+        let mut byte = header_v1(1, PLAIN, 4);
+        byte.extend_from_slice(&valore.to_le_bytes());
+        byte
+    };
+    let indice = |contenuto: &[u8]| {
+        let lunghezza = i64::try_from(contenuto.len()).unwrap();
+        let mut byte = Struttura::default()
+            .i32(1, 1) // INDEX_PAGE
+            .i32(2, lunghezza)
+            .i32(3, lunghezza)
+            .struttura(6, Struttura::default())
+            .fine();
+        byte.extend_from_slice(contenuto);
+        byte
+    };
+    // La prima pagina (header dato a parte), la pagina d'indice, la seconda.
+    let con_indice = |contenuto: &[u8]| {
+        let mut dati = 1_i32.to_le_bytes().to_vec();
+        dati.extend(indice(contenuto));
+        dati.extend(pagina(2));
+        parquet_con_header(
+            &colonna(INT32),
+            2,
+            PLAIN,
+            &dati,
+            &header_v1(1, PLAIN, 4),
+            None,
+            None,
+        )
+    };
+    for contenuto in [&[][..], &[0xFF, 0xFF, 0xFF][..]] {
+        let byte = con_indice(contenuto);
+        contiene(arrow(&byte), parquet::basic::PAGE_TYPE_NOT_QUALIFIED);
+        contiene(
+            colonna_api::<Int32Type>(&byte, None),
+            parquet::basic::PAGE_TYPE_NOT_QUALIFIED,
+        );
+        let dir = cartella();
+        let percorso = dir.path().join("i.parquet");
+        std::fs::write(&percorso, &byte).unwrap();
+        let errore = leggi_tabella_con_limiti(
+            &percorso,
+            Some(Formato::Parquet),
+            u64::MAX,
+            &LimitiLettura::default(),
+        )
+        .expect_err("pagina d'indice");
+        assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+    }
+    // Controfattuale: le due pagine senza la pagina d'indice si leggono.
+    let mut dati = 1_i32.to_le_bytes().to_vec();
+    dati.extend(pagina(2));
+    let due = parquet_con_header(
+        &colonna(INT32),
+        2,
+        PLAIN,
+        &dati,
+        &header_v1(1, PLAIN, 4),
+        None,
+        None,
+    );
+    assert_eq!(arrow(&due), Ok(2));
+    assert_eq!(valori_arrow(&due), ["1", "2"]);
+}
+
+/// Le statistiche deprecate (`min`/`max`, campi 1 e 2) non si verificavano
+/// quando c'erano quelle nuove (`min_value`/`max_value`), che erano le sole
+/// scelte: un `min` deprecato di 5 byte per un `INT32` passava, nel column
+/// chunk e nella pagina. Ora la forma di ogni coppia presente si verifica,
+/// scelta o no.
+#[test]
+fn le_statistiche_deprecate_si_verificano_anche_se_non_scelte() {
+    let statistiche = |minimo_deprecato: &[u8]| {
+        Struttura::default()
+            .binario(1, &[9, 0, 0, 0])
+            .binario(2, minimo_deprecato)
+            .binario(5, &[7, 0, 0, 0])
+            .binario(6, &[7, 0, 0, 0])
+    };
+    let nella_pagina = |minimo_deprecato: &[u8]| {
+        let header = Struttura::default()
+            .i32(1, 0)
+            .i32(2, 4)
+            .i32(3, 4)
+            .struttura(
+                5,
+                Struttura::default()
+                    .i32(1, 1)
+                    .i32(2, PLAIN)
+                    .i32(3, RLE)
+                    .i32(4, RLE)
+                    .struttura(5, statistiche(minimo_deprecato)),
+            )
+            .fine();
+        parquet_con_header(
+            &colonna(INT32),
+            1,
+            PLAIN,
+            &7_i32.to_le_bytes(),
+            &header,
+            None,
+            None,
+        )
+    };
+    let lungo = [1_u8, 0, 0, 0, 0xFF];
+    for byte in [con_statistiche(statistiche(&lungo)), nella_pagina(&lungo)] {
+        contiene(arrow(&byte), "statistic of the wrong width");
+        rifiutato_dal_confine(&byte);
+    }
+    contiene(
+        pagine_con_statistiche(&nella_pagina(&lungo)),
+        "statistic of the wrong width",
+    );
+    // Controfattuale: un `min` deprecato di 4 byte.
+    let giusto = [1_u8, 0, 0, 0];
+    assert_eq!(arrow(&con_statistiche(statistiche(&giusto))), Ok(1));
+    assert_eq!(arrow(&nella_pagina(&giusto)), Ok(1));
+    assert_eq!(pagine_con_statistiche(&nella_pagina(&giusto)), Ok(1));
+}

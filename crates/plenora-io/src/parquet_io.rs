@@ -132,7 +132,12 @@ fn rifiuto_del_fork(testo: &str) -> Option<PlenoraError> {
     }
     if testo.contains(parquet::basic::SKIP_NOT_QUALIFIED) {
         return Some(PlenoraError::Unsupported(
-            "salto dentro una pagina Parquet o selezione di righe: non supportato".to_owned(),
+            "salto Parquet o selezione di righe: non supportato".to_owned(),
+        ));
+    }
+    if testo.contains(parquet::basic::PAGE_TYPE_NOT_QUALIFIED) {
+        return Some(PlenoraError::Unsupported(
+            "pagina Parquet di un tipo non qualificato (INDEX_PAGE): non supportata".to_owned(),
         ));
     }
     if testo.contains(parquet::basic::BINARY_DICTIONARY_OVER_TEXT) {

@@ -1529,6 +1529,11 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
 /// payload of a page, progress) did not apply to it.
 pub const SKIP_NOT_QUALIFIED: &str = "Parquet skip not qualified for reading";
 
+/// PLENORA: the fixed text of the rejection of a page of a type that is not
+/// qualified (`INDEX_PAGE`) in the pages of a column chunk: it was skipped in
+/// silence, its content passed over without a check.
+pub const PAGE_TYPE_NOT_QUALIFIED: &str = "Parquet page type not qualified for reading";
+
 /// PLENORA: the fixed text of the rejection of a page index (column index
 /// and offset index): not qualified for reading. Their counts, histograms,
 /// cardinalities and boundaries reached unchecked arithmetic, and data and

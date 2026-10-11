@@ -235,55 +235,29 @@ fn convert_stats(
                 stats.max_value
             };
 
-            // PLENORA: a statistic of a fixed-width type has exactly its
-            // width (bytes in excess were dropped in silence: `01 00 00 00 FF`
-            // was the INT32 1), and a boolean is 0 or 1.
-            fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
-                let fuori_forma = |valore: &[u8]| valore.len() != len;
-                if min.is_some_and(fuori_forma) || max.is_some_and(fuori_forma) {
-                    return Err(general_err!("statistic of the wrong width for its type"));
-                }
-                if let Some(min) = min
-                    && min.len() < len
-                {
-                    return Err(general_err!("Insufficient bytes to parse min statistic",));
-                }
-                if let Some(max) = max
-                    && max.len() < len
-                {
-                    return Err(general_err!("Insufficient bytes to parse max statistic",));
-                }
-                Ok(())
-            }
-
             let physical_type = column_descr.physical_type();
-            match physical_type {
-                Type::BOOLEAN => {
-                    // PLENORA: a boolean statistic is one byte, 0 or 1 (the
-                    // rule is the boolean's, not every width 1: a FLBA of
-                    // width 1 holds any byte).
-                    check_len(min, max, 1)?;
-                    if min.into_iter().chain(max).any(|valore| valore[0] > 1) {
-                        Err(general_err!("statistic of the wrong width for its type"))
-                    } else {
-                        Ok(())
-                    }
-                }
-                Type::INT32 | Type::FLOAT => check_len(min, max, 4),
-                Type::INT64 | Type::DOUBLE => check_len(min, max, 8),
-                Type::INT96 => check_len(min, max, 12),
-                // PLENORA: FLBA values have the width of the type.
-                Type::FIXED_LEN_BYTE_ARRAY => match usize::try_from(column_descr.type_length()) {
-                    Ok(larghezza) => {
-                        use crate::file::statistics::verifica_statistica_flba;
-                        verifica_statistica_flba(min, stats.is_min_value_exact, larghezza).and_then(
-                            |()| verifica_statistica_flba(max, stats.is_max_value_exact, larghezza),
-                        )
-                    }
-                    Err(_) => Err(general_err!("statistic of the wrong width for its type")),
-                },
-                _ => Ok(()),
-            }?;
+            // PLENORA: the shape of every pair present, the deprecated one
+            // too (`verifica_forma_statistiche`).
+            {
+                use crate::file::statistics::verifica_forma_statistiche;
+                let larghezza = Some(column_descr.type_length());
+                verifica_forma_statistiche(
+                    physical_type,
+                    larghezza,
+                    stats.min_value,
+                    stats.max_value,
+                    stats.is_min_value_exact,
+                    stats.is_max_value_exact,
+                )?;
+                verifica_forma_statistiche(
+                    physical_type,
+                    larghezza,
+                    stats.min,
+                    stats.max,
+                    None,
+                    None,
+                )?;
+            }
 
             // Values are encoded using PLAIN encoding definition, except that
             // variable-length byte arrays do not include a length prefix.

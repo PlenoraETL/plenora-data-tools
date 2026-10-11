@@ -484,6 +484,31 @@ ripetizione troncati).
    parte compressa, e un suffisso qualunque spariva. Ora si decomprime e
    deve dare zero byte (lo stream vuoto di un codec si legge).
 
+**Quattordicesimo giro.**
+
+1. Una `INDEX_PAGE` fra le pagine di un column chunk si saltava in
+   silenzio: `get_next_page` avanzava oltre il suo contenuto e passava alla
+   pagina dopo (il rifiuto in `decode_page` non si raggiungeva), e
+   `peek_next_page` leggeva il suo contenuto come l'header seguente. Ora è
+   un tipo di pagina non qualificato, rifiutato dove si incontra
+   (`PAGE_TYPE_NOT_QUALIFIED`): nella lettura, nei due `peek` e nella
+   conversione in `PageMetadata`, che per un header di pagina di dati senza
+   la sua parte andava in panico (`unwrap`) e ora è un errore. Un tipo di
+   pagina sconosciuto è già un errore della decodifica dell'header.
+   Nessuno scrittore della matrice e nessuno dei 106 file scrive una
+   pagina d'indice.
+2. Statistiche deprecate (`min`/`max`): quando c'erano anche
+   `min_value`/`max_value`, solo queste si verificavano; un `min` deprecato
+   di 5 byte per un `INT32` passava. Ora la forma di ogni coppia presente
+   si verifica, scelta o no, nel column chunk e nella pagina, con le
+   stesse regole (`verifica_forma_statistiche`; la coppia deprecata non ha
+   segni di esattezza, quindi è esatta).
+
+Prove unitarie del pacchetto: le stesse 148 (due esecuzioni identiche);
+`test_decode_unsupported_page` resta fra le dichiarazioni incoerenti (la
+sua pagina dichiara 10 byte e ne ha 0, prima del tipo). Scrittori, FLBA e
+106 file: lo stesso esito.
+
 **Tredicesimo giro.**
 
 1. Statistiche di pagina: con le proprietà di default

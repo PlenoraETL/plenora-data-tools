@@ -609,11 +609,8 @@ pub(crate) fn decode_page_con_larghezza(
             }
         }
         PageType::INDEX_PAGE => {
-            // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-            return Err(general_err!(
-                "Page type {:?} is not supported",
-                page_header.r#type
-            ));
+            // PLENORA: not qualified, rejected (see `PAGE_TYPE_NOT_QUALIFIED`).
+            return Err(nyi_err!("{}", crate::basic::PAGE_TYPE_NOT_QUALIFIED));
         }
     };
 
@@ -877,14 +874,12 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                     if *remaining_bytes == 0 {
                         return Ok(None);
                     }
+                    // PLENORA: a page of a type that is not qualified is
+                    // rejected, not skipped (the skip read its content as the
+                    // next header).
                     return if let Some(header) = next_page_header.as_ref() {
-                        if let Ok(_page_meta) = PageMetadata::try_from(&**header) {
-                            Ok(Some(*offset))
-                        } else {
-                            // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-                            *next_page_header = None;
-                            continue;
-                        }
+                        PageMetadata::try_from(&**header)?;
+                        Ok(Some(*offset))
                     } else {
                         let mut read = self.reader.get_read(*offset)?;
                         let (header_len, header) = Self::read_page_header_len(
@@ -895,12 +890,8 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                         )?;
                         *offset += header_len as u64;
                         *remaining_bytes -= header_len as u64;
-                        let page_meta = if let Ok(_page_meta) = PageMetadata::try_from(&header) {
-                            Ok(Some(*offset))
-                        } else {
-                            // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-                            continue;
-                        };
+                        PageMetadata::try_from(&header)?;
+                        let page_meta = Ok(Some(*offset));
                         *next_page_header = Some(Box::new(header));
                         page_meta
                     };
@@ -1121,8 +1112,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     *offset += data_len as u64;
                     *remaining -= data_len as u64;
 
+                    // PLENORA: an index page was skipped in silence (its
+                    // content passed over without a check): rejected where it
+                    // is met.
                     if header.r#type == PageType::INDEX_PAGE {
-                        continue;
+                        return Err(nyi_err!("{}", crate::basic::PAGE_TYPE_NOT_QUALIFIED));
                     }
 
                     let buffer = self.reader.get_bytes(data_start, data_len)?;
@@ -1214,14 +1208,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     if *remaining_bytes == 0 {
                         return Ok(None);
                     }
+                    // PLENORA: a page of a type that is not qualified is
+                    // rejected, not skipped (the skip read its content as the
+                    // next header).
                     return if let Some(header) = next_page_header.as_ref() {
-                        if let Ok(page_meta) = (&**header).try_into() {
-                            Ok(Some(page_meta))
-                        } else {
-                            // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-                            *next_page_header = None;
-                            continue;
-                        }
+                        Ok(Some(PageMetadata::try_from(&**header)?))
                     } else {
                         let mut read = self.reader.get_read(*offset)?;
                         let (header_len, header) = Self::read_page_header_len(
@@ -1233,12 +1224,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         verify_page_header_len(header_len, *remaining_bytes)?;
                         *offset += header_len as u64;
                         *remaining_bytes -= header_len as u64;
-                        let page_meta = if let Ok(page_meta) = (&header).try_into() {
-                            Ok(Some(page_meta))
-                        } else {
-                            // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-                            continue;
-                        };
+                        let page_meta = Ok(Some(PageMetadata::try_from(&header)?));
                         *next_page_header = Some(Box::new(header));
                         page_meta
                     };
