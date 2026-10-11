@@ -632,6 +632,19 @@ pub fn scrivi(
     uscita: impl Write + Send,
     compressione: CompressioneParquet,
 ) -> Result<SchemaRef> {
+    if tabella
+        .schema()
+        .fields()
+        .iter()
+        .any(|campo| dizionario_di_binari_fissi(campo.data_type()))
+    {
+        return Err(PlenoraError::Unsupported(
+            "dizionario di FixedSizeBinary non scrivibile in Parquet: parquet-rs ne scrive \
+             il dizionario con i prefissi di lunghezza, fuori dalla specifica, e la lettura \
+             lo rifiuta"
+                .to_owned(),
+        ));
+    }
     let (tabella, proprieta) = da_scrivere(tabella, compressione)?;
     let schema = tabella.schema();
     let mut scrittore = ArrowWriter::try_new(uscita, Arc::clone(&schema), Some(proprieta))
@@ -639,6 +652,30 @@ pub fn scrivi(
     scrittore.write(&tabella).map_err(da_parquet_valore)?;
     scrittore.close().map_err(da_parquet_valore)?;
     Ok(schema)
+}
+
+/// Un dizionario con valori `FixedSizeBinary`, a qualunque profondità.
+/// `ArrowWriter` lo scrive in una colonna `FIXED_LEN_BYTE_ARRAY` con il
+/// dizionario nella forma dei byte array variabili (prefisso di lunghezza),
+/// che la lettura rifiuta (docs/file.md, «Confine di lettura»): un file che
+/// questo crate non saprebbe rileggere non si scrive.
+fn dizionario_di_binari_fissi(tipo: &DataType) -> bool {
+    match tipo {
+        DataType::Dictionary(_, valori) => {
+            matches!(valori.as_ref(), DataType::FixedSizeBinary(_))
+                || dizionario_di_binari_fissi(valori)
+        }
+        DataType::List(campo)
+        | DataType::LargeList(campo)
+        | DataType::ListView(campo)
+        | DataType::LargeListView(campo)
+        | DataType::FixedSizeList(campo, _)
+        | DataType::Map(campo, _) => dizionario_di_binari_fissi(campo.data_type()),
+        DataType::Struct(campi) => campi
+            .iter()
+            .any(|campo| dizionario_di_binari_fissi(campo.data_type())),
+        _ => false,
+    }
 }
 
 /// Rilegge il footer di un file appena scritto: lo schema incorporato deve

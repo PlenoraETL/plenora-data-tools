@@ -235,7 +235,10 @@ difesa da file costruiti apposta (limiti dichiarati sotto).
   anche come valori di un dizionario) solo su una colonna annotata come
   testo (`UTF8`, `JSON`, `ENUM`), perché la validazione UTF-8 segue
   l'annotazione; una colonna `FIXED_LEN_BYTE_ARRAY` letta come dizionario
-  Arrow; entrambe altrimenti `Unsupported`. Un `INT32` annotato `INT_8`,
+  Arrow; entrambe altrimenti `Unsupported`. Per la stessa ragione un
+  dizionario di `FixedSizeBinary` non si scrive (`ArrowWriter` ne
+  scriverebbe il dizionario con i prefissi di lunghezza, fuori dalla
+  specifica). Un `INT32` annotato `INT_8`,
   `UINT_8`, `INT_16` o `UINT_16` fuori dalla sua larghezza è un errore,
   non un altro numero.
 

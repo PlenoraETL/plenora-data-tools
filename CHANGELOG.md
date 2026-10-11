@@ -40,7 +40,9 @@ la cui versione non ha qui una voce datata.
 - **Tipi Arrow chiesti dal file.** Un tipo testo su una colonna di byte non
   annotata come testo, e una colonna `FIXED_LEN_BYTE_ARRAY` letta come
   dizionario, sono `Unsupported` (prima: byte non validati come UTF-8 in
-  una stringa, e un dizionario FLBA valido rifiutato o letto male).
+  una stringa, e un dizionario FLBA valido rifiutato o letto male). Un
+  dizionario di `FixedSizeBinary` non si scrive più in Parquet: il file
+  scritto non si rileggeva.
 
 ### Corretto
 

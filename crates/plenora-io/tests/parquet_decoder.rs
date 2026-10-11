@@ -1587,3 +1587,29 @@ fn un_tipo_testo_su_byte_non_annotati_e_non_supportato() {
     }
     assert_eq!(arrow(&byte), Ok(2));
 }
+
+/// Il rovescio della lettura: un dizionario di `FixedSizeBinary` non si
+/// scrive (`ArrowWriter` lo scriverebbe in una forma che la lettura rifiuta),
+/// nemmeno dentro una lista; il file non nasce.
+#[test]
+fn un_dizionario_di_binari_fissi_non_si_scrive() {
+    use plenora_core::arrow::array::types::Int32Type as Chiave;
+    use plenora_core::arrow::array::{DictionaryArray, FixedSizeBinaryArray, Int32Array};
+    let valori =
+        FixedSizeBinaryArray::try_from_iter(vec![vec![1_u8, 2], vec![3, 4]].into_iter()).unwrap();
+    let dizionario =
+        DictionaryArray::<Chiave>::try_new(Int32Array::from(vec![0, 1, 0]), Arc::new(valori))
+            .unwrap();
+    let schema = Schema::new(vec![Field::new("x", dizionario.data_type().clone(), false)]);
+    let tabella = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dizionario)]).unwrap();
+    let dir = cartella();
+    let percorso = dir.path().join("fsb.parquet");
+    let errore = plenora_io::scrivi_tabella(
+        &tabella,
+        &percorso,
+        &plenora_io::OpzioniScrittura::default(),
+    )
+    .expect_err("dizionario di FixedSizeBinary");
+    assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+    assert!(!percorso.exists());
+}
