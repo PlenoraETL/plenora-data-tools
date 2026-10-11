@@ -3010,10 +3010,23 @@ impl Casuale {
 /// una corsa vuota, un varint non minimo, una corsa troncata o un conteggio
 /// enorme. Restituisce i livelli voluti, lo stream e se lo stream li
 /// codifica in una forma ammessa.
-fn stream_dei_livelli(caso: &mut Casuale, guasto: bool) -> (Vec<bool>, Vec<u8>, bool) {
+/// Che cosa i decoder devono fare di uno stream dell'oracolo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Atteso {
+    /// I livelli voluti.
+    Livelli,
+    /// I livelli voluti in v1; in v2, dove il blocco di `DuckDB` non è
+    /// ammesso, un errore di fine pagina (il blocco ha gruppi in eccesso).
+    BloccoInEccesso,
+    /// Un errore con questo testo, nei due decoder.
+    Errore(&'static str),
+}
+
+fn stream_dei_livelli(caso: &mut Casuale, guasto: bool) -> (Vec<bool>, Vec<u8>, Atteso) {
     let righe = 1 + caso.prossimo(40);
     let livelli: Vec<bool> = (0..righe).map(|_| caso.prossimo(3) > 0).collect();
     let mut stream = Vec::new();
+    let mut blocco_in_eccesso = false;
     let mut posizione = 0;
     while posizione < righe {
         let resto = righe - posizione;
@@ -3031,6 +3044,9 @@ fn stream_dei_livelli(caso: &mut Casuale, guasto: bool) -> (Vec<bool>, Vec<u8>, 
             // Gruppi bit-packed: i livelli che restano, o un blocco di 32
             // gruppi (DuckDB) se è l'ultima corsa.
             let gruppi = if resto <= 256 && caso.prossimo(4) == 0 {
+                if resto.div_ceil(8) < 32 {
+                    blocco_in_eccesso = true;
+                }
                 32
             } else {
                 resto.div_ceil(8).min(1 + caso.prossimo(3))
@@ -3049,13 +3065,25 @@ fn stream_dei_livelli(caso: &mut Casuale, guasto: bool) -> (Vec<bool>, Vec<u8>, 
             posizione += gruppi * 8;
         }
     }
-    let mut ammessa = true;
+    let mut atteso = if blocco_in_eccesso {
+        Atteso::BloccoInEccesso
+    } else {
+        Atteso::Livelli
+    };
     if guasto {
-        ammessa = false;
         match caso.prossimo(5) {
-            0 => stream.insert(0, 0x01), // corsa bit-packed vuota
-            1 => stream.splice(0..0, [0x80, 0x00]).for_each(drop), // varint non minimo
+            0 => {
+                // Una corsa bit-packed vuota chiude lo stream: mancano i
+                // livelli.
+                stream.insert(0, 0x01);
+                atteso = Atteso::Errore("insufficient definition levels");
+            }
+            1 => {
+                stream.splice(0..0, [0x80, 0x00]).for_each(drop);
+                atteso = Atteso::Errore("varint not minimal");
+            }
             tipo @ (2 | 3) => {
+                atteso = Atteso::Errore("bit-packed run beyond the data");
                 // L'ultima corsa porta i livelli che servono ma dichiara più
                 // gruppi: due in più (troncata), o 2^29 (un conteggio enorme).
                 let finali = 1 + caso.prossimo(righe.min(16));
@@ -3078,10 +3106,14 @@ fn stream_dei_livelli(caso: &mut Casuale, guasto: bool) -> (Vec<bool>, Vec<u8>, 
                     stream.push(byte);
                 }
             }
-            _ => stream.push(0x00), // un indicatore 0 dopo l'ultima corsa
+            _ => {
+                // Un indicatore 0 dopo l'ultima corsa: coda dopo i livelli.
+                stream.push(0x00);
+                atteso = Atteso::Errore(parquet::basic::PAGE_NOT_AS_DECLARED);
+            }
         }
     }
-    (livelli, stream, ammessa)
+    (livelli, stream, atteso)
 }
 
 /// I livelli come corse RLE.
@@ -3146,7 +3178,7 @@ fn l_oracolo_dei_livelli_copre_v2_blocchi_e_guasti() {
     let (mut letti, mut rifiutati) = (0, 0);
     for prova in 0..1200 {
         let da_guastare = prova % 3 == 0;
-        let (livelli, stream, ammessa) = stream_dei_livelli(&mut caso, da_guastare);
+        let (livelli, stream, atteso) = stream_dei_livelli(&mut caso, da_guastare);
         for v2 in [false, true] {
             let byte = pagina_dei_livelli(&livelli, &stream, v2);
             let ottimizzato = livelli_ottimizzati(&byte);
@@ -3158,14 +3190,33 @@ fn l_oracolo_dei_livelli_copre_v2_blocchi_e_guasti() {
                     panic!("esiti diversi (v2 {v2}) su {stream:02x?}: {ottimizzato:?} {generico:?}")
                 }
             }
-            // Un blocco di 32 gruppi in v2 non è ammesso (DuckDB scrive v1).
-            let blocco = stream.windows(1).any(|w| w[0] == ((32 << 1) | 1));
-            if ammessa && !(v2 && blocco) {
-                assert_eq!(ottimizzato.as_ref(), Ok(&livelli), "v2 {v2}, {stream:02x?}");
-                letti += 1;
-            } else if !ammessa {
-                assert!(ottimizzato.is_err(), "guasto letto: v2 {v2}, {stream:02x?}");
-                rifiutati += 1;
+            // La categoria dell'errore, non solo un errore: lo stesso testo
+            // dai due decoder.
+            let testo_atteso = match atteso {
+                Atteso::Livelli => None,
+                Atteso::BloccoInEccesso if !v2 => None,
+                // Un blocco di 32 gruppi in v2 non è ammesso (DuckDB scrive v1).
+                Atteso::BloccoInEccesso => Some(parquet::basic::PAGE_NOT_AS_DECLARED),
+                Atteso::Errore(testo) => Some(testo),
+            };
+            match testo_atteso {
+                None => {
+                    assert_eq!(ottimizzato.as_ref(), Ok(&livelli), "v2 {v2}, {stream:02x?}");
+                    letti += 1;
+                }
+                Some(testo) => {
+                    for (decoder, esito) in [("ottimizzato", &ottimizzato), ("generico", &generico)]
+                    {
+                        match esito {
+                            Err(errore) => assert!(
+                                errore.contains(testo),
+                                "{decoder}, v2 {v2}, {stream:02x?}: atteso «{testo}», {errore}"
+                            ),
+                            Ok(_) => panic!("{decoder} ha letto un guasto: v2 {v2}, {stream:02x?}"),
+                        }
+                    }
+                    rifiutati += 1;
+                }
             }
         }
     }
@@ -3173,4 +3224,161 @@ fn l_oracolo_dei_livelli_copre_v2_blocchi_e_guasti() {
         letti > 500 && rifiutati > 300,
         "{letti} letti, {rifiutati} rifiutati"
     );
+}
+
+/// Il blocco di `DuckDB` in una pagina v2, a larghezza diversa da 1 (indici
+/// di dizionario a 2 bit): gruppi in eccesso, un errore; in v1 si legge.
+#[test]
+fn il_blocco_in_v2_a_larghezza_due_e_un_errore() {
+    let dizionario = testo_plain(&[b"a", b"b", b"c"]);
+    let mut indici = vec![2_u8, 0x41, 0b0000_0110]; // larghezza 2, gli indici 2 e 1
+    indici.extend_from_slice(&[0xFF; 63]);
+    let v1 = parquet(
+        &colonna(BYTE_ARRAY),
+        2,
+        RLE_DICTIONARY,
+        &indici,
+        Some((3, &dizionario)),
+        None,
+    );
+    assert_eq!(valori_arrow(&v1), ["c", "b"]);
+    let v2 = parquet_con_header(
+        &colonna(BYTE_ARRAY),
+        2,
+        RLE_DICTIONARY,
+        &indici,
+        &header_v2(2, 0, 2, RLE_DICTIONARY, 0, 0, indici.len(), indici.len()),
+        Some((3, &dizionario)),
+        None,
+    );
+    contiene(arrow(&v2), parquet::basic::PAGE_NOT_AS_DECLARED);
+    contiene(
+        colonna_api::<ByteArrayType>(&v2, None),
+        parquet::basic::PAGE_NOT_AS_DECLARED,
+    );
+}
+
+// --- Statistiche e metadati: conteggi e dimensioni ---------------------------------
+
+/// Un Parquet `INT32` di un valore con le statistiche del column chunk date
+/// come campi Thrift (`ColumnMetaData.statistics`, campo 12).
+fn con_statistiche(statistiche: Struttura) -> Vec<u8> {
+    let byte = parquet(&colonna(INT32), 1, PLAIN, &7_i32.to_le_bytes(), None, None);
+    // Le statistiche si aggiungono alla fine della struct ColumnMetaData:
+    // il costruttore le scrive solo da `statistiche`; qui si ricostruisce il
+    // file con il campo 12 dato.
+    let _ = byte;
+    let mut file = b"PAR1".to_vec();
+    let inizio = i64::try_from(file.len()).unwrap();
+    let contenuto = 7_i32.to_le_bytes();
+    file.extend(header_v1(1, PLAIN, contenuto.len()));
+    file.extend_from_slice(&contenuto);
+    let pagine = i64::try_from(file.len()).unwrap() - inizio;
+    let metadati = Struttura::default()
+        .i32(1, INT32)
+        .elenco(2, I32, vec![intero_di_elenco(PLAIN)])
+        .elenco(3, BINARIO, vec![testo_di_elenco("x")])
+        .i32(4, 0)
+        .i64(5, 1)
+        .i64(6, pagine)
+        .i64(7, pagine)
+        .i64(9, inizio)
+        .struttura(12, statistiche);
+    let chunk = Struttura::default()
+        .i64(2, inizio)
+        .struttura(3, metadati)
+        .fine();
+    let gruppo = Struttura::default()
+        .elenco(1, STRUCT, vec![chunk])
+        .i64(2, pagine)
+        .i64(3, 1)
+        .fine();
+    let radice = Struttura::default().testo(4, "schema").i32(5, 1).fine();
+    let foglia = Struttura::default()
+        .i32(1, INT32)
+        .i32(3, 0)
+        .testo(4, "x")
+        .fine();
+    let footer = Struttura::default()
+        .i32(1, 1)
+        .elenco(2, STRUCT, vec![radice, foglia])
+        .i64(3, 1)
+        .elenco(4, STRUCT, vec![gruppo])
+        .fine();
+    let lunghezza = u32::try_from(footer.len()).unwrap();
+    file.extend(footer);
+    file.extend_from_slice(&lunghezza.to_le_bytes());
+    file.extend_from_slice(b"PAR1");
+    file
+}
+
+/// Le statistiche di un column chunk: un conteggio dei distinti negativo
+/// diventava un `u64` enorme (i nulli e i NaN negativi si rifiutavano già),
+/// e un minimo `INT32` di 5 byte (`01 00 00 00 FF`) si leggeva come 1, il
+/// byte in più scartato. Ora un errore: conteggi non negativi, lunghezza
+/// esatta per tipo.
+#[test]
+fn le_statistiche_hanno_conteggi_non_negativi_e_la_lunghezza_esatta() {
+    let atteso = |byte: &[u8], testo: &str| {
+        contiene(arrow(byte), testo);
+        rifiutato_dal_confine(byte);
+    };
+    // Campo 4 `distinct_count` (i64), negativo.
+    atteso(
+        &con_statistiche(Struttura::default().i64(4, -1)),
+        "distinct count is negative",
+    );
+    // Campi 5/6 `max_value`/`min_value`, 5 byte per un INT32.
+    atteso(
+        &con_statistiche(
+            Struttura::default()
+                .binario(5, &[2, 0, 0, 0])
+                .binario(6, &[1, 0, 0, 0, 0xFF]),
+        ),
+        "statistic of the wrong width",
+    );
+    // Controfattuale: 4 byte ciascuno, e un conteggio dei distinti 1.
+    let valide = con_statistiche(
+        Struttura::default()
+            .i64(4, 1)
+            .binario(5, &[7, 0, 0, 0])
+            .binario(6, &[7, 0, 0, 0]),
+    );
+    assert_eq!(arrow(&valide), Ok(1));
+}
+
+/// Offset, dimensioni e conteggi negativi nei metadati di un column chunk o
+/// di un row group: un `data_page_offset` negativo arrivava all'`assert!`
+/// di `byte_range` (un panico), gli altri diventavano `u64` enormi con `as`.
+/// Ora un errore alla lettura del footer.
+#[test]
+fn i_metadati_negativi_sono_un_errore() {
+    let byte = parquet(&colonna(INT32), 1, PLAIN, &7_i32.to_le_bytes(), None, None);
+    // `file_offset` (campo 2 di ColumnChunk) e `data_page_offset` (campo 9
+    // di ColumnMetaData) valgono 4: zigzag 8, `26 08` nel footer; ciascuno
+    // diventa -4 (zigzag 7). Lo stesso controllo copre gli altri offset,
+    // dimensioni e conteggi del column chunk e del row group.
+    let n = byte.len();
+    let lunghezza = usize::try_from(u32::from_le_bytes([
+        byte[n - 8],
+        byte[n - 7],
+        byte[n - 6],
+        byte[n - 5],
+    ]))
+    .unwrap();
+    let inizio_footer = n - 8 - lunghezza;
+    let posizioni: Vec<usize> = byte[inizio_footer..n - 8]
+        .windows(2)
+        .enumerate()
+        .filter(|(_, f)| *f == [0x26, 0x08])
+        .map(|(i, _)| i + inizio_footer + 1)
+        .collect();
+    assert_eq!(posizioni.len(), 2);
+    for posizione in posizioni {
+        let mut rotto = byte.clone();
+        rotto[posizione] = 0x07;
+        contiene(arrow(&rotto), "negative offset, size or count");
+        rifiutato_dal_confine(&rotto);
+    }
+    assert_eq!(arrow(&byte), Ok(1));
 }

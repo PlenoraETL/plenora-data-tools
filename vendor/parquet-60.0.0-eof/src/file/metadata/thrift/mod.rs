@@ -198,7 +198,15 @@ fn convert_stats(
                 })
                 .transpose()?;
             // Generic distinct count (count of distinct values occurring)
-            let distinct_count = stats.distinct_count.map(|value| value as u64);
+            // PLENORA: a negative distinct count became a huge `u64` (the
+            // null and NaN counts were already refused).
+            let distinct_count = stats
+                .distinct_count
+                .map(|valore| {
+                    u64::try_from(valore)
+                        .map_err(|_| general_err!("Statistics distinct count is negative"))
+                })
+                .transpose()?;
             // Generic nan count for floating point types
             let nan_count = stats
                 .nan_count
@@ -227,7 +235,16 @@ fn convert_stats(
                 stats.max_value
             };
 
+            // PLENORA: a statistic of a fixed-width type has exactly its
+            // width (bytes in excess were dropped in silence: `01 00 00 00 FF`
+            // was the INT32 1), and a boolean is 0 or 1.
             fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
+                let fuori_forma = |valore: &[u8]| {
+                    valore.len() != len || (len == 1 && valore.first().is_some_and(|b| *b > 1))
+                };
+                if min.is_some_and(fuori_forma) || max.is_some_and(fuori_forma) {
+                    return Err(general_err!("statistic of the wrong width for its type"));
+                }
                 if let Some(min) = min
                     && min.len() < len
                 {
@@ -634,8 +651,46 @@ fn read_column_chunk(
 
     // not encrypted, so make sure all required fields were read
     validate_column_metadata(col_meta_mask)?;
+    verifica_non_negativi(&col)?;
 
     Ok(col)
+}
+
+/// PLENORA: the offsets, sizes and counts of a column chunk are not negative.
+/// They were cast to unsigned with `as` (a negative offset became a huge one)
+/// or reached an `assert!` (`byte_range`, a panic).
+fn verifica_non_negativi(col: &ColumnChunkMetaData) -> Result<()> {
+    let negativo = [
+        col.file_offset,
+        col.num_values,
+        col.total_compressed_size,
+        col.total_uncompressed_size,
+        col.data_page_offset,
+    ]
+    .into_iter()
+    .chain(col.index_page_offset)
+    .chain(col.dictionary_page_offset)
+    .chain(col.bloom_filter_offset)
+    .chain(col.offset_index_offset)
+    .chain(col.column_index_offset)
+    .chain(col.unencoded_byte_array_data_bytes)
+    .chain(
+        [
+            col.bloom_filter_length,
+            col.offset_index_length,
+            col.column_index_length,
+        ]
+        .into_iter()
+        .flatten()
+        .map(i64::from),
+    )
+    .any(|valore| valore < 0);
+    if negativo {
+        return Err(general_err!(
+            "column chunk metadata with a negative offset, size or count"
+        ));
+    }
+    Ok(())
 }
 
 fn read_row_group(
@@ -720,6 +775,16 @@ fn read_row_group(
         last_field_id = field_ident.id;
     }
 
+    // PLENORA: the rows, the size and the offset of a row group are not
+    // negative.
+    if row_group.num_rows < 0
+        || row_group.total_byte_size < 0
+        || row_group.file_offset.is_some_and(|offset| offset < 0)
+    {
+        return Err(general_err!(
+            "row group metadata with a negative count, size or offset"
+        ));
+    }
     if mask != RG_ALL_REQUIRED {
         if mask & RG_COLUMNS == 0 {
             return Err(general_err!("Required field columns is missing"));
@@ -2036,14 +2101,14 @@ pub(crate) mod tests {
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: Incorrect Int96 min statistics"
+            "Parquet error: statistic of the wrong width for its type"
         );
 
         let err = super::convert_stats(&column_descr, Some(make_stats(None, Some(&invalid))))
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: Incorrect Int96 max statistics"
+            "Parquet error: statistic of the wrong width for its type"
         );
     }
 

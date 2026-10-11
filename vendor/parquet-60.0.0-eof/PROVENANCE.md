@@ -483,6 +483,41 @@ ripetizione troncati).
    parte compressa, e un suffisso qualunque spariva. Ora si decomprime e
    deve dare zero byte (lo stream vuoto di un codec si legge).
 
+**Decimo giro.**
+
+1. Statistiche (del column chunk e delle pagine): un `distinct_count`
+   negativo diventava un `u64` enorme (i conteggi dei nulli e dei NaN
+   negativi si rifiutavano già); un minimo o un massimo di un tipo a
+   larghezza fissa più lungo del tipo si troncava in silenzio (`01 00 00
+   00 FF` era l'`INT32` 1; solo `INT96` voleva la lunghezza esatta). Ora
+   conteggi non negativi e lunghezza esatta per tipo (`BOOLEAN` 1 byte, 0 o
+   1; `INT32`, `FLOAT` 4; `INT64`, `DOUBLE` 8; `INT96` 12), con un errore.
+   `plenora-io` non legge le statistiche, ma il fork le decodifica con il
+   footer: la strada più semplice è la stessa regola di ogni altro campo,
+   non scartarle (nessuno scrittore della matrice e nessuno dei 106 file
+   le scrive fuori forma). Le statistiche FLBA e `BYTE_ARRAY` non hanno una
+   lunghezza fissa e non cambiano.
+2. Stessa classe nei metadati Thrift: offset, dimensioni e conteggi di un
+   column chunk (`file_offset`, `num_values`, dimensioni compressa e non,
+   `data_page_offset`, gli offset e le lunghezze di dizionario, indici di
+   pagina e bloom filter, `unencoded_byte_array_data_bytes`) e di un row
+   group (`num_rows`, `total_byte_size`, `file_offset`) negativi sono un
+   errore alla lettura del footer: diventavano `u64` enormi con `as`, e un
+   `data_page_offset` negativo arrivava all'`assert!` di `byte_range` (un
+   panico).
+3. I conteggi enormi di una corsa bit-packed danno lo stesso errore nei
+   due decoder dei livelli («bit-packed run beyond the data»): il decoder
+   generico confronta i byte prima di moltiplicare il conteggio.
+4. L'oracolo verifica il testo dell'errore di ogni caso guasto nei due
+   decoder, e il rifiuto del blocco di 32 gruppi in v2; una prova a parte
+   lo verifica a larghezza 2, negli indici.
+
+Prove unitarie del pacchetto: falliscono 78 o 79 prove, le 52 di partenza
+e le 27 attese, meno `test_row_numbers_with_multiple_row_groups`, che usa
+un seme casuale e fallisce solo quando la selezione casuale salta dentro
+una pagina (`SKIP_NOT_QUALIFIED`). Due prove a monte sulle statistiche
+`INT96` aspettano ora il testo del nuovo errore.
+
 **Nono giro.**
 
 1. I booleani `RLE` ricevevano la coda di fastparquet (`02 00 00 00 02 01

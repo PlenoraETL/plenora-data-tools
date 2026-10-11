@@ -474,7 +474,7 @@ impl RleDecoder {
                     self.bit_width as usize,
                 );
                 if num_values == 0 {
-                    // Handle writers which truncate the final block
+                    // PLENORA: a defence only: a run is whole in the data (`reload`)
                     self.bit_packed_left = 0;
                     continue;
                 }
@@ -506,7 +506,7 @@ impl RleDecoder {
 
                 num_values = bit_reader.skip(num_values, self.bit_width as usize);
                 if num_values == 0 {
-                    // Handle writers which truncate the final block
+                    // PLENORA: a defence only: a run is whole in the data (`reload`)
                     self.bit_packed_left = 0;
                     continue;
                 }
@@ -573,7 +573,7 @@ impl RleDecoder {
                     let num_values = bit_reader
                         .get_batch::<i32>(&mut index_buf[..to_read], self.bit_width as usize);
                     if num_values == 0 {
-                        // Handle writers which truncate the final block
+                        // PLENORA: a defence only: a run is whole in the data (`reload`)
                         self.bit_packed_left = 0;
                         break;
                     }
@@ -635,11 +635,11 @@ impl RleDecoder {
     /// byte), up to what `fine` declares. No value left in an RLE run. In a
     /// bit-packed run: the rest of the current group of 8 (the padding of the
     /// last group); whole groups after it only in a run of exactly
-    /// `BLOCCO_DUCKDB` groups at a bit width above 0, when `fine` admits it
-    /// (DuckDB pads its last block); a run truncated by the end of the data
-    /// (some writers) holds only the values its bytes carry. After the run,
-    /// from where the runs of no value start, at most `fine.coda_di_zeri`
-    /// zero bytes.
+    /// `BLOCCO_DUCKDB` groups at a bit width above 0, of which a value was
+    /// read, when `fine` admits it (DuckDB pads its last block). A run is
+    /// whole in the data (`reload` refuses one beyond it). After the run, or
+    /// from the run of no value that ended the stream, at most
+    /// `fine.coda_di_zeri` zero bytes.
     pub(crate) fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
         if self.rle_left > 0 {
             return false;
@@ -711,17 +711,20 @@ impl RleDecoder {
                 // it declared but did not hold disappeared in silence; no
                 // writer measured truncates one. A count beyond the data,
                 // however large, is the same error in both level decoders.
-                self.bit_packed_left = run
-                    .checked_mul(BIT_PACK_GROUP_SIZE as u32)
-                    .ok_or_else(|| general_err!("RLE run length out of range"))?;
-                let byte = (run as usize).checked_mul(self.bit_width as usize);
+                // The bytes first, then the count of values: the same order,
+                // and the same error for a huge count, as the optimized level
+                // decoder (which checks the groups against the bytes).
+                let byte = u64::from(run).checked_mul(u64::from(self.bit_width));
                 let restanti = bit_reader
                     .dati()
                     .len()
                     .saturating_sub(bit_reader.get_byte_offset());
-                if byte.is_none_or(|byte| byte > restanti) {
+                if byte.is_none_or(|byte| byte > restanti as u64) {
                     return Err(general_err!("bit-packed run beyond the data"));
                 }
+                self.bit_packed_left = run
+                    .checked_mul(BIT_PACK_GROUP_SIZE as u32)
+                    .ok_or_else(|| general_err!("RLE run length out of range"))?;
                 self.gruppi_della_corsa = run;
             } else {
                 self.rle_left = run;

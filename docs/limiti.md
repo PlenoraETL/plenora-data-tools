@@ -1114,9 +1114,11 @@ parte di data o IO-tools.
 **Regola.** Una pagina Parquet letta fino al suo ultimo livello finisce
 dove finiscono i suoi livelli e i suoi valori: nessun valore, gruppo o
 byte dopo (`PAGE_NOT_AS_DECLARED`), salvo il riempimento dell'ultimo
-gruppo bit-packed. Una corsa bit-packed porta tutti i gruppi che dichiara
-(una corsa troncata, o un conteggio oltre i dati, è un errore: nessuno
-scrittore misurato ne scrive). Una corsa vuota (RLE di lunghezza 0,
+gruppo bit-packed e le due deviazioni dichiarate sotto. Una corsa
+bit-packed porta tutti i gruppi che dichiara: una corsa troncata, o un
+conteggio oltre i dati, è un errore («bit-packed run beyond the data»,
+lo stesso nei due decoder dei livelli e negli indici; nessuno scrittore
+misurato ne scrive). Una corsa vuota (RLE di lunghezza 0,
 bit-packed di 0 gruppi) chiude lo stream ovunque sia: ciò che la segue è
 la coda, e deve essere vuoto salvo la deviazione di fastparquet; un varint
 non minimo è un errore. Una pagina di dizionario è `PLAIN` (o

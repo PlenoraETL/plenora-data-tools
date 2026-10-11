@@ -345,11 +345,10 @@ impl PackedDecoder {
             return Ok(());
         }
         // PLENORA: the same rules as `RleDecoder::reload`: a run count beyond
-        // `u32` is an error; a bit-packed run is read only as far as the data
-        // goes (its bits were read past the payload; a final run shorter than
-        // its groups is legal, and the caller compares the levels it gets with
-        // those the page declares); a level of bit width 1 is 0 or 1 (any other
-        // byte was read as 1 in silence).
+        // `u32` is an error; a bit-packed run is whole in the data (its bits
+        // were read past the payload, then a run shorter than its groups was
+        // read as far as its bytes went); a level of bit width 1 is 0 or 1
+        // (any other byte was read as 1 in silence).
         let run = usize::try_from(
             u32::try_from(indicator_value >> 1)
                 .map_err(|_| general_err!("RLE run length out of range"))?,
@@ -387,11 +386,10 @@ impl PackedDecoder {
     }
 
     /// PLENORA: the level stream ends with the levels read, with the rules
-    /// of `RleDecoder::fine_esatta` (bit width 1: a group is a byte, and the
-    /// bit-packed count is already cut to the bytes present): no level left
-    /// in an RLE run; in a bit-packed run the rest of the current byte, whole
-    /// bytes after it only in a run of `BLOCCO_DUCKDB` groups; no run and no
-    /// byte after.
+    /// of `RleDecoder::fine_esatta` (bit width 1: a group is a byte): no
+    /// level left in an RLE run; in a bit-packed run the rest of the current
+    /// byte, whole bytes after it only in a run of `BLOCCO_DUCKDB` groups of
+    /// which a level was read; no run and no byte after.
     fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
         use crate::util::bit_util::{BLOCCO_DUCKDB, coda_di_zeri};
         if self.rle_left != 0 {

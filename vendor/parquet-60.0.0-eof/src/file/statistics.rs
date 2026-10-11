@@ -138,7 +138,15 @@ pub(crate) fn from_thrift_page_stats(
                 })
                 .transpose()?;
             // Generic distinct count (count of distinct values occurring)
-            let distinct_count = stats.distinct_count.map(|value| value as u64);
+            // PLENORA: a negative distinct count became a huge `u64` (the
+            // null and NaN counts were already refused).
+            let distinct_count = stats
+                .distinct_count
+                .map(|valore| {
+                    u64::try_from(valore)
+                        .map_err(|_| general_err!("Statistics distinct count is negative"))
+                })
+                .transpose()?;
             // Generic nan count for floating point types
             let nan_count = stats
                 .nan_count
@@ -166,7 +174,16 @@ pub(crate) fn from_thrift_page_stats(
                 stats.max_value
             };
 
+            // PLENORA: a statistic of a fixed-width type has exactly its
+            // width (bytes in excess were dropped in silence: `01 00 00 00 FF`
+            // was the INT32 1), and a boolean is 0 or 1.
             fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
+                let fuori_forma = |valore: &[u8]| {
+                    valore.len() != len || (len == 1 && valore.first().is_some_and(|b| *b > 1))
+                };
+                if min.is_some_and(fuori_forma) || max.is_some_and(fuori_forma) {
+                    return Err(general_err!("statistic of the wrong width for its type"));
+                }
                 if let Some(min) = min
                     && min.len() < len
                 {
@@ -1186,7 +1203,7 @@ mod tests {
         let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats.clone())).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: Incorrect Int96 min statistics"
+            "Parquet error: statistic of the wrong width for its type"
         );
 
         thrift_stats.min = None;
@@ -1194,7 +1211,7 @@ mod tests {
         let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats)).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: Incorrect Int96 max statistics"
+            "Parquet error: statistic of the wrong width for its type"
         );
     }
 

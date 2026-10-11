@@ -318,7 +318,7 @@
  }
  
  impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
-@@ -317,11 +326,24 @@ struct PackedDecoder {
+@@ -317,29 +326,48 @@ struct PackedDecoder {
      rle_value: bool,
      packed_count: usize,
      packed_offset: usize,
@@ -341,9 +341,18 @@
 +            return Ok(());
 +        }
          // PLENORA: the same rules as `RleDecoder::reload`: a run count beyond
-         // `u32` is an error; a bit-packed run is read only as far as the data
-         // goes (its bits were read past the payload; a final run shorter than
-@@ -334,12 +356,19 @@ impl PackedDecoder {
+-        // `u32` is an error; a bit-packed run is read only as far as the data
+-        // goes (its bits were read past the payload; a final run shorter than
+-        // its groups is legal, and the caller compares the levels it gets with
+-        // those the page declares); a level of bit width 1 is 0 or 1 (any other
+-        // byte was read as 1 in silence).
++        // `u32` is an error; a bit-packed run is whole in the data (its bits
++        // were read past the payload, then a run shorter than its groups was
++        // read as far as its bytes went); a level of bit width 1 is 0 or 1
++        // (any other byte was read as 1 in silence).
+         let run = usize::try_from(
+             u32::try_from(indicator_value >> 1)
+                 .map_err(|_| general_err!("RLE run length out of range"))?,
          )
          .map_err(|_| general_err!("RLE run length out of range"))?;
          if indicator_value & 1 == 1 {
@@ -364,16 +373,15 @@
          } else {
              self.rle_left = run;
              let byte = *self.data.as_ref().get(self.data_offset).ok_or_else(|| {
-@@ -357,6 +386,33 @@ impl PackedDecoder {
+@@ -357,6 +385,32 @@ impl PackedDecoder {
          Ok(())
      }
  
 +    /// PLENORA: the level stream ends with the levels read, with the rules
-+    /// of `RleDecoder::fine_esatta` (bit width 1: a group is a byte, and the
-+    /// bit-packed count is already cut to the bytes present): no level left
-+    /// in an RLE run; in a bit-packed run the rest of the current byte, whole
-+    /// bytes after it only in a run of `BLOCCO_DUCKDB` groups; no run and no
-+    /// byte after.
++    /// of `RleDecoder::fine_esatta` (bit width 1: a group is a byte): no
++    /// level left in an RLE run; in a bit-packed run the rest of the current
++    /// byte, whole bytes after it only in a run of `BLOCCO_DUCKDB` groups of
++    /// which a level was read; no run and no byte after.
 +    fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
 +        use crate::util::bit_util::{BLOCCO_DUCKDB, coda_di_zeri};
 +        if self.rle_left != 0 {
@@ -398,7 +406,7 @@
      /// Decodes a VLQ encoded little endian integer and returns it
      fn decode_header(&mut self) -> Result<i64> {
          let mut offset = 0;
-@@ -377,6 +433,10 @@ impl PackedDecoder {
+@@ -377,6 +431,10 @@ impl PackedDecoder {
              if offset == 9 && byte & 0x7F > 1 {
                  return Err(general_err!("varint beyond 64 bits"));
              }
@@ -409,7 +417,7 @@
              v |= ((byte & 0x7F) as i64) << (offset * 7);
              offset += 1;
              if byte & 0x80 == 0 {
-@@ -397,6 +457,8 @@ impl PackedDecoder {
+@@ -397,6 +455,8 @@ impl PackedDecoder {
              rle_value: false,
              packed_count: 0,
              packed_offset: 0,
@@ -418,7 +426,7 @@
          }
      }
  
-@@ -420,6 +482,7 @@ impl PackedDecoder {
+@@ -420,6 +480,7 @@ impl PackedDecoder {
          };
          self.data = data;
          self.data_offset = 0;
@@ -426,7 +434,7 @@
          Ok(())
      }
  
-@@ -434,7 +497,7 @@ impl PackedDecoder {
+@@ -434,7 +495,7 @@ impl PackedDecoder {
      fn try_consume_all_valid(&mut self, len: usize) -> Result<Option<usize>> {
          // If no active run and no packed data pending, try to parse the next RLE block
          if self.rle_left == 0 && self.packed_count == self.packed_offset {
@@ -435,7 +443,7 @@
                  self.next_rle_block()?;
              } else {
                  // No more data available
-@@ -472,7 +535,7 @@ impl PackedDecoder {
+@@ -472,7 +533,7 @@ impl PackedDecoder {
                  if self.packed_offset == self.packed_count {
                      self.data_offset += self.packed_count / 8;
                  }
@@ -444,7 +452,7 @@
                  break;
              } else {
                  self.next_rle_block()?
-@@ -506,7 +569,7 @@ impl PackedDecoder {
+@@ -506,7 +567,7 @@ impl PackedDecoder {
                  if self.packed_offset == self.packed_count {
                      self.data_offset += self.packed_count / 8;
                  }
@@ -1303,6 +1311,33 @@
  
          // Initialize decoder state. The boolean only reports whether the first run contained data,
          // and `get`/`get_batch` already interpret that result to drive iteration. We only need
+@@ -458,7 +474,7 @@ impl RleDecoder {
+                     self.bit_width as usize,
+                 );
+                 if num_values == 0 {
+-                    // Handle writers which truncate the final block
++                    // PLENORA: a defence only: a run is whole in the data (`reload`)
+                     self.bit_packed_left = 0;
+                     continue;
+                 }
+@@ -490,7 +506,7 @@ impl RleDecoder {
+ 
+                 num_values = bit_reader.skip(num_values, self.bit_width as usize);
+                 if num_values == 0 {
+-                    // Handle writers which truncate the final block
++                    // PLENORA: a defence only: a run is whole in the data (`reload`)
+                     self.bit_packed_left = 0;
+                     continue;
+                 }
+@@ -557,7 +573,7 @@ impl RleDecoder {
+                     let num_values = bit_reader
+                         .get_batch::<i32>(&mut index_buf[..to_read], self.bit_width as usize);
+                     if num_values == 0 {
+-                        // Handle writers which truncate the final block
++                        // PLENORA: a defence only: a run is whole in the data (`reload`)
+                         self.bit_packed_left = 0;
+                         break;
+                     }
 @@ -614,6 +630,52 @@ impl RleDecoder {
          Ok(values_read)
      }
@@ -1312,11 +1347,11 @@
 +    /// byte), up to what `fine` declares. No value left in an RLE run. In a
 +    /// bit-packed run: the rest of the current group of 8 (the padding of the
 +    /// last group); whole groups after it only in a run of exactly
-+    /// `BLOCCO_DUCKDB` groups at a bit width above 0, when `fine` admits it
-+    /// (DuckDB pads its last block); a run truncated by the end of the data
-+    /// (some writers) holds only the values its bytes carry. After the run,
-+    /// from where the runs of no value start, at most `fine.coda_di_zeri`
-+    /// zero bytes.
++    /// `BLOCCO_DUCKDB` groups at a bit width above 0, of which a value was
++    /// read, when `fine` admits it (DuckDB pads its last block). A run is
++    /// whole in the data (`reload` refuses one beyond it). After the run, or
++    /// from the run of no value that ended the stream, at most
++    /// `fine.coda_di_zeri` zero bytes.
 +    pub(crate) fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
 +        if self.rle_left > 0 {
 +            return false;
@@ -1378,7 +1413,7 @@
                  return Ok(false);
              }
              // PLENORA: a run count beyond `u32` was truncated in silence (a
-@@ -634,15 +704,25 @@ impl RleDecoder {
+@@ -634,15 +704,28 @@ impl RleDecoder {
              let run = u32::try_from(indicator_value >> 1)
                  .map_err(|_| general_err!("RLE run length out of range"))?;
              if indicator_value & 1 == 1 {
@@ -1395,22 +1430,25 @@
 +                // it declared but did not hold disappeared in silence; no
 +                // writer measured truncates one. A count beyond the data,
 +                // however large, is the same error in both level decoders.
-                 self.bit_packed_left = run
-                     .checked_mul(BIT_PACK_GROUP_SIZE as u32)
-                     .ok_or_else(|| general_err!("RLE run length out of range"))?;
-+                let byte = (run as usize).checked_mul(self.bit_width as usize);
++                // The bytes first, then the count of values: the same order,
++                // and the same error for a huge count, as the optimized level
++                // decoder (which checks the groups against the bytes).
++                let byte = u64::from(run).checked_mul(u64::from(self.bit_width));
 +                let restanti = bit_reader
 +                    .dati()
 +                    .len()
 +                    .saturating_sub(bit_reader.get_byte_offset());
-+                if byte.is_none_or(|byte| byte > restanti) {
++                if byte.is_none_or(|byte| byte > restanti as u64) {
 +                    return Err(general_err!("bit-packed run beyond the data"));
 +                }
+                 self.bit_packed_left = run
+                     .checked_mul(BIT_PACK_GROUP_SIZE as u32)
+                     .ok_or_else(|| general_err!("RLE run length out of range"))?;
 +                self.gruppi_della_corsa = run;
              } else {
                  self.rle_left = run;
                  let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);
-@@ -825,7 +905,9 @@ mod tests {
+@@ -825,7 +908,9 @@ mod tests {
          // 011 100 101 011 100 101 011 100 101 100 101 101
          // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
          let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
@@ -1421,7 +1459,7 @@
          let mut decoder = RleDecoder::new(3);
          decoder.set_data(data.into()).unwrap();
          let mut buffer = vec![""; 12];
-@@ -860,7 +942,9 @@ mod tests {
+@@ -860,7 +945,9 @@ mod tests {
          // 011 100 101 011 100 101 011 100 101 100 101 101
          // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
          let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
@@ -1432,7 +1470,7 @@
          let mut decoder = RleDecoder::new(3);
          decoder.set_data(data.into()).unwrap();
          let mut buffer = vec![""; BIT_PACK_GROUP_SIZE];
-@@ -1005,12 +1089,11 @@ mod tests {
+@@ -1005,12 +1092,11 @@ mod tests {
  
      #[test]
      fn test_truncated_rle() {
@@ -1450,7 +1488,7 @@
          let mut data: Vec<u8> = vec![
              (3 << 1) | 1, // bit-packed run of 3 * 8
          ];
-@@ -1018,25 +1101,11 @@ mod tests {
+@@ -1018,25 +1104,11 @@ mod tests {
          let data: Bytes = data.into();
  
          let mut decoder = RleDecoder::new(8);
@@ -1481,6 +1519,125 @@
      }
  
      #[test]
+--- a/src/file/metadata/thrift/mod.rs
++++ b/src/file/metadata/thrift/mod.rs
+@@ -198,7 +198,15 @@ fn convert_stats(
+                 })
+                 .transpose()?;
+             // Generic distinct count (count of distinct values occurring)
+-            let distinct_count = stats.distinct_count.map(|value| value as u64);
++            // PLENORA: a negative distinct count became a huge `u64` (the
++            // null and NaN counts were already refused).
++            let distinct_count = stats
++                .distinct_count
++                .map(|valore| {
++                    u64::try_from(valore)
++                        .map_err(|_| general_err!("Statistics distinct count is negative"))
++                })
++                .transpose()?;
+             // Generic nan count for floating point types
+             let nan_count = stats
+                 .nan_count
+@@ -227,7 +235,16 @@ fn convert_stats(
+                 stats.max_value
+             };
+ 
++            // PLENORA: a statistic of a fixed-width type has exactly its
++            // width (bytes in excess were dropped in silence: `01 00 00 00 FF`
++            // was the INT32 1), and a boolean is 0 or 1.
+             fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
++                let fuori_forma = |valore: &[u8]| {
++                    valore.len() != len || (len == 1 && valore.first().is_some_and(|b| *b > 1))
++                };
++                if min.is_some_and(fuori_forma) || max.is_some_and(fuori_forma) {
++                    return Err(general_err!("statistic of the wrong width for its type"));
++                }
+                 if let Some(min) = min
+                     && min.len() < len
+                 {
+@@ -634,10 +651,48 @@ fn read_column_chunk(
+ 
+     // not encrypted, so make sure all required fields were read
+     validate_column_metadata(col_meta_mask)?;
++    verifica_non_negativi(&col)?;
+ 
+     Ok(col)
+ }
+ 
++/// PLENORA: the offsets, sizes and counts of a column chunk are not negative.
++/// They were cast to unsigned with `as` (a negative offset became a huge one)
++/// or reached an `assert!` (`byte_range`, a panic).
++fn verifica_non_negativi(col: &ColumnChunkMetaData) -> Result<()> {
++    let negativo = [
++        col.file_offset,
++        col.num_values,
++        col.total_compressed_size,
++        col.total_uncompressed_size,
++        col.data_page_offset,
++    ]
++    .into_iter()
++    .chain(col.index_page_offset)
++    .chain(col.dictionary_page_offset)
++    .chain(col.bloom_filter_offset)
++    .chain(col.offset_index_offset)
++    .chain(col.column_index_offset)
++    .chain(col.unencoded_byte_array_data_bytes)
++    .chain(
++        [
++            col.bloom_filter_length,
++            col.offset_index_length,
++            col.column_index_length,
++        ]
++        .into_iter()
++        .flatten()
++        .map(i64::from),
++    )
++    .any(|valore| valore < 0);
++    if negativo {
++        return Err(general_err!(
++            "column chunk metadata with a negative offset, size or count"
++        ));
++    }
++    Ok(())
++}
++
+ fn read_row_group(
+     prot: &mut ThriftSliceInputProtocol,
+     schema_descr: &Arc<SchemaDescriptor>,
+@@ -720,6 +775,16 @@ fn read_row_group(
+         last_field_id = field_ident.id;
+     }
+ 
++    // PLENORA: the rows, the size and the offset of a row group are not
++    // negative.
++    if row_group.num_rows < 0
++        || row_group.total_byte_size < 0
++        || row_group.file_offset.is_some_and(|offset| offset < 0)
++    {
++        return Err(general_err!(
++            "row group metadata with a negative count, size or offset"
++        ));
++    }
+     if mask != RG_ALL_REQUIRED {
+         if mask & RG_COLUMNS == 0 {
+             return Err(general_err!("Required field columns is missing"));
+@@ -2036,14 +2101,14 @@ pub(crate) mod tests {
+             .unwrap_err();
+         assert_eq!(
+             err.to_string(),
+-            "Parquet error: Incorrect Int96 min statistics"
++            "Parquet error: statistic of the wrong width for its type"
+         );
+ 
+         let err = super::convert_stats(&column_descr, Some(make_stats(None, Some(&invalid))))
+             .unwrap_err();
+         assert_eq!(
+             err.to_string(),
+-            "Parquet error: Incorrect Int96 max statistics"
++            "Parquet error: statistic of the wrong width for its type"
+         );
+     }
+ 
 --- a/src/file/serialized_reader.rs
 +++ b/src/file/serialized_reader.rs
 @@ -514,8 +514,12 @@ pub(crate) fn decode_page(
@@ -1551,6 +1708,60 @@
                  }
  
                  Ok(())
+--- a/src/file/statistics.rs
++++ b/src/file/statistics.rs
+@@ -138,7 +138,15 @@ pub(crate) fn from_thrift_page_stats(
+                 })
+                 .transpose()?;
+             // Generic distinct count (count of distinct values occurring)
+-            let distinct_count = stats.distinct_count.map(|value| value as u64);
++            // PLENORA: a negative distinct count became a huge `u64` (the
++            // null and NaN counts were already refused).
++            let distinct_count = stats
++                .distinct_count
++                .map(|valore| {
++                    u64::try_from(valore)
++                        .map_err(|_| general_err!("Statistics distinct count is negative"))
++                })
++                .transpose()?;
+             // Generic nan count for floating point types
+             let nan_count = stats
+                 .nan_count
+@@ -166,7 +174,16 @@ pub(crate) fn from_thrift_page_stats(
+                 stats.max_value
+             };
+ 
++            // PLENORA: a statistic of a fixed-width type has exactly its
++            // width (bytes in excess were dropped in silence: `01 00 00 00 FF`
++            // was the INT32 1), and a boolean is 0 or 1.
+             fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
++                let fuori_forma = |valore: &[u8]| {
++                    valore.len() != len || (len == 1 && valore.first().is_some_and(|b| *b > 1))
++                };
++                if min.is_some_and(fuori_forma) || max.is_some_and(fuori_forma) {
++                    return Err(general_err!("statistic of the wrong width for its type"));
++                }
+                 if let Some(min) = min
+                     && min.len() < len
+                 {
+@@ -1186,7 +1203,7 @@ mod tests {
+         let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats.clone())).unwrap_err();
+         assert_eq!(
+             err.to_string(),
+-            "Parquet error: Incorrect Int96 min statistics"
++            "Parquet error: statistic of the wrong width for its type"
+         );
+ 
+         thrift_stats.min = None;
+@@ -1194,7 +1211,7 @@ mod tests {
+         let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats)).unwrap_err();
+         assert_eq!(
+             err.to_string(),
+-            "Parquet error: Incorrect Int96 max statistics"
++            "Parquet error: statistic of the wrong width for its type"
+         );
+     }
+ 
 --- a/src/util/bit_util.rs
 +++ b/src/util/bit_util.rs
 @@ -277,6 +277,24 @@ where
