@@ -1534,6 +1534,13 @@ pub const SKIP_NOT_QUALIFIED: &str = "Parquet skip not qualified for reading";
 /// silence, its content passed over without a check.
 pub const PAGE_TYPE_NOT_QUALIFIED: &str = "Parquet page type not qualified for reading";
 
+/// PLENORA: the fixed text of the rejection of a dictionary page that is not
+/// where a column chunk has it: after a data page (it was read, and the
+/// indices of the pages after it pointed into it; the format puts the
+/// dictionary first), or not at the start the footer declares for it.
+pub const DICTIONARY_PAGE_OUT_OF_PLACE: &str =
+    "dictionary page not at the start of its column chunk";
+
 /// PLENORA: the fixed text of the rejection of a page index (column index
 /// and offset index): not qualified for reading. Their counts, histograms,
 /// cardinalities and boundaries reached unchecked arithmetic, and data and

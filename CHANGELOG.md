@@ -71,7 +71,8 @@ la cui versione non ha qui una voce datata.
   stream ovunque sia, un varint non minimo è un errore, e una corsa
   bit-packed troncata (meno gruppi di quelli che dichiara) pure. Una pagina
   di dizionario è `PLAIN` o `PLAIN_DICTIONARY`, una per column chunk anche
-  nei lettori Arrow (prima la seconda sostituiva la prima). Le
+  nei lettori Arrow (prima la seconda sostituiva la prima), ed è la prima
+  pagina (un dizionario dopo i dati si leggeva). Le
   statistiche hanno conteggi non negativi e la lunghezza esatta del loro
   tipo, e offset, dimensioni e conteggi negativi nei metadati del footer
   sono un errore (prima diventavano interi enormi, o un panico); ogni

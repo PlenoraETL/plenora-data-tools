@@ -150,6 +150,10 @@ pub struct GenericColumnReader<R, D, V> {
 
     /// PLENORA: the rows a v2 page of a repeated column declares.
     righe_dichiarate: Option<usize>,
+
+    /// PLENORA: a data page of the column chunk has been read: a dictionary
+    /// page after it is `DICTIONARY_PAGE_OUT_OF_PLACE`.
+    dati_letti: bool,
 }
 
 impl<V> GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelDecoderImpl, V>
@@ -202,6 +206,7 @@ where
             valori_della_pagina: 0,
             fine_della_pagina: crate::column::reader::decoder::FinePagina::ESATTA,
             righe_dichiarate: None,
+            dati_letti: false,
         }
     }
 
@@ -411,6 +416,16 @@ where
                             encoding,
                             is_sorted,
                         } => {
+                            // PLENORA: the dictionary comes before the data
+                            // pages of its column chunk (`[7]`, a dictionary
+                            // `[9]`, then index 0 read `[7, 9]`), for every
+                            // value decoder, generic or Arrow.
+                            if self.dati_letti {
+                                return Err(general_err!(
+                                    "{}",
+                                    crate::basic::DICTIONARY_PAGE_OUT_OF_PLACE
+                                ));
+                            }
                             self.values_decoder
                                 .set_dict(buf, num_values, encoding, is_sorted)?;
                         }
@@ -425,6 +440,7 @@ where
                         } => {
                             self.num_buffered_values = num_values as _;
                             self.num_decoded_values = 0;
+                            self.dati_letti = true;
                             self.valori_dichiarati = None;
                             self.valori_della_pagina = 0;
                             self.fine_della_pagina = crate::column::reader::decoder::FinePagina::V1;
@@ -514,6 +530,7 @@ where
 
                             self.num_buffered_values = num_values as _;
                             self.num_decoded_values = 0;
+                            self.dati_letti = true;
                             self.valori_dichiarati = Some((num_values - num_nulls) as usize);
                             self.valori_della_pagina = 0;
                             self.fine_della_pagina =
@@ -1565,6 +1582,69 @@ mod tests {
         assert_eq!(values, vec![70, 80], "should contain 4th record's values");
         assert_eq!(rep_levels, vec![0, 1], "rep levels for a 2-element list");
         assert_eq!(def_levels, vec![1, 1], "def levels (all non-null)");
+    }
+
+    /// PLENORA: a dictionary page after a data page of the same column chunk
+    /// was read: `[7]` in `PLAIN`, a dictionary `[9]`, then the index 0 gave
+    /// `[7, 9]`. The column reader, under every value decoder, rejects it,
+    /// also with a page reader that does not check the order.
+    #[test]
+    fn test_dictionary_page_after_a_data_page_is_rejected() {
+        let desc = Arc::new(ColumnDescriptor::new(
+            Arc::new(
+                SchemaType::primitive_type_builder("x", PhysicalType::INT32)
+                    .with_repetition(Repetition::REQUIRED)
+                    .build()
+                    .unwrap(),
+            ),
+            0,
+            0,
+            ColumnPath::new(vec!["x".to_string()]),
+        ));
+        let dati = |buf: Vec<u8>, encoding: Encoding| Page::DataPage {
+            buf: Bytes::from(buf),
+            num_values: 1,
+            encoding,
+            def_level_encoding: Encoding::RLE,
+            rep_level_encoding: Encoding::RLE,
+            statistics: None,
+        };
+        let dizionario = Page::DictionaryPage {
+            buf: Bytes::from(9_i32.to_le_bytes().to_vec()),
+            num_values: 1,
+            encoding: Encoding::PLAIN,
+            is_sorted: false,
+        };
+        let leggi = |pagine: Vec<Page>| -> Result<Vec<i32>> {
+            let lettore = InMemoryPageReader::new(pagine);
+            let colonna = get_column_reader(desc.clone(), Box::new(lettore));
+            let mut tipizzata = get_typed_column_reader::<Int32Type>(colonna);
+            let mut valori = Vec::new();
+            tipizzata.read_records(10, None, None, &mut valori)?;
+            Ok(valori)
+        };
+        let errore = leggi(vec![
+            dati(7_i32.to_le_bytes().to_vec(), Encoding::PLAIN),
+            dizionario.clone(),
+            dati(vec![1, 2, 0], Encoding::RLE_DICTIONARY),
+        ])
+        .unwrap_err();
+        assert!(
+            errore
+                .to_string()
+                .contains(crate::basic::DICTIONARY_PAGE_OUT_OF_PLACE),
+            "{errore}"
+        );
+        // The dictionary first is read.
+        assert_eq!(
+            leggi(vec![
+                dizionario,
+                dati(vec![1, 2, 0], Encoding::RLE_DICTIONARY),
+                dati(7_i32.to_le_bytes().to_vec(), Encoding::PLAIN),
+            ])
+            .unwrap(),
+            [9, 7]
+        );
     }
 
     /// PLENORA: deterministic negative cases of the v2 page checks that the

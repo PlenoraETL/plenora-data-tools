@@ -740,7 +740,7 @@
          _ => Err(nyi_err!(
              "Invalid/Unsupported encoding type for dictionary: {}",
              encoding
-@@ -1519,6 +1522,34 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
+@@ -1519,6 +1522,41 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
      }
  }
  
@@ -755,6 +755,13 @@
 +/// qualified (`INDEX_PAGE`) in the pages of a column chunk: it was skipped in
 +/// silence, its content passed over without a check.
 +pub const PAGE_TYPE_NOT_QUALIFIED: &str = "Parquet page type not qualified for reading";
++
++/// PLENORA: the fixed text of the rejection of a dictionary page that is not
++/// where a column chunk has it: after a data page (it was read, and the
++/// indices of the pages after it pointed into it; the format puts the
++/// dictionary first), or not at the start the footer declares for it.
++pub const DICTIONARY_PAGE_OUT_OF_PLACE: &str =
++    "dictionary page not at the start of its column chunk";
 +
 +/// PLENORA: the fixed text of the rejection of a page index (column index
 +/// and offset index): not qualified for reading. Their counts, histograms,
@@ -927,7 +934,7 @@
  }
 --- a/src/column/reader.rs
 +++ b/src/column/reader.rs
-@@ -141,11 +141,15 @@ pub struct GenericColumnReader<R, D, V> {
+@@ -141,11 +141,19 @@ pub struct GenericColumnReader<R, D, V> {
      /// none for a V1 page.
      valori_dichiarati: Option<usize>,
  
@@ -944,20 +951,25 @@
 +
 +    /// PLENORA: the rows a v2 page of a repeated column declares.
 +    righe_dichiarate: Option<usize>,
++
++    /// PLENORA: a data page of the column chunk has been read: a dictionary
++    /// page after it is `DICTIONARY_PAGE_OUT_OF_PLACE`.
++    dati_letti: bool,
  }
  
  impl<V> GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelDecoderImpl, V>
-@@ -196,7 +200,8 @@ where
+@@ -196,7 +204,9 @@ where
              has_record_delimiter: false,
              valori_dichiarati: None,
              valori_della_pagina: 0,
 -            valori_contati: false,
 +            fine_della_pagina: crate::column::reader::decoder::FinePagina::ESATTA,
 +            righe_dichiarate: None,
++            dati_letti: false,
          }
      }
  
-@@ -259,6 +264,18 @@ where
+@@ -259,6 +269,18 @@ where
  
                      let (mut records_read, levels_read) =
                          reader.read_rep_levels(out, remaining_records, remaining_levels)?;
@@ -976,7 +988,7 @@
  
                      if records_read == 0 && levels_read == 0 {
                          // The fact that we're still looping implies there must be some levels to read.
-@@ -310,7 +327,9 @@ where
+@@ -310,7 +332,9 @@ where
  
              self.num_decoded_values += levels_to_read;
              self.valori_della_pagina += values_read;
@@ -987,7 +999,7 @@
              total_records_read += records_read;
              total_levels_read += levels_to_read;
              total_values_read += values_read;
-@@ -321,141 +340,59 @@ where
+@@ -321,141 +345,59 @@ where
  
      /// Skips over `num_records` records, where records are delimited by repetition levels of 0
      ///
@@ -1169,8 +1181,28 @@
      }
  
      /// Reads a new page and set up the decoders for levels, values or dictionary.
-@@ -490,7 +427,8 @@ where
+@@ -474,6 +416,16 @@ where
+                             encoding,
+                             is_sorted,
+                         } => {
++                            // PLENORA: the dictionary comes before the data
++                            // pages of its column chunk (`[7]`, a dictionary
++                            // `[9]`, then index 0 read `[7, 9]`), for every
++                            // value decoder, generic or Arrow.
++                            if self.dati_letti {
++                                return Err(general_err!(
++                                    "{}",
++                                    crate::basic::DICTIONARY_PAGE_OUT_OF_PLACE
++                                ));
++                            }
+                             self.values_decoder
+                                 .set_dict(buf, num_values, encoding, is_sorted)?;
+                         }
+@@ -488,9 +440,11 @@ where
+                         } => {
+                             self.num_buffered_values = num_values as _;
                              self.num_decoded_values = 0;
++                            self.dati_letti = true;
                              self.valori_dichiarati = None;
                              self.valori_della_pagina = 0;
 -                            self.valori_contati = true;
@@ -1179,7 +1211,7 @@
  
                              let max_rep_level = self.descr.max_rep_level();
                              let max_def_level = self.descr.max_def_level();
-@@ -544,7 +482,7 @@ where
+@@ -544,7 +498,7 @@ where
                              num_values,
                              encoding,
                              num_nulls,
@@ -1188,7 +1220,7 @@
                              def_levels_byte_len,
                              rep_levels_byte_len,
                              is_compressed: _,
-@@ -557,19 +495,41 @@ where
+@@ -557,19 +511,42 @@ where
                                      num_nulls
                                  ));
                              }
@@ -1211,6 +1243,7 @@
  
                              self.num_buffered_values = num_values as _;
                              self.num_decoded_values = 0;
++                            self.dati_letti = true;
                              self.valori_dichiarati = Some((num_values - num_nulls) as usize);
                              self.valori_della_pagina = 0;
 -                            self.valori_contati = true;
@@ -1234,7 +1267,7 @@
                                  self.has_record_delimiter =
                                      self.page_reader.at_record_boundary()?;
  
-@@ -613,10 +573,18 @@ where
+@@ -613,10 +590,18 @@ where
          if self.num_buffered_values == 0 || self.num_buffered_values == self.num_decoded_values {
              // TODO: should we return false if read_new_page() = true and
              // num_buffered_values = 0?
@@ -1257,7 +1290,7 @@
              }
          } else {
              Ok(true)
-@@ -624,6 +592,26 @@ where
+@@ -624,6 +609,26 @@ where
      }
  }
  
@@ -1284,10 +1317,73 @@
  /// Checks that a partial record can still be flushed into the caller's record budget.
  ///
  /// Reaching the end of a page with a record delimiter means the decoder stopped because
-@@ -1578,4 +1566,63 @@ mod tests {
+@@ -1578,4 +1583,126 @@ mod tests {
          assert_eq!(rep_levels, vec![0, 1], "rep levels for a 2-element list");
          assert_eq!(def_levels, vec![1, 1], "def levels (all non-null)");
      }
++
++    /// PLENORA: a dictionary page after a data page of the same column chunk
++    /// was read: `[7]` in `PLAIN`, a dictionary `[9]`, then the index 0 gave
++    /// `[7, 9]`. The column reader, under every value decoder, rejects it,
++    /// also with a page reader that does not check the order.
++    #[test]
++    fn test_dictionary_page_after_a_data_page_is_rejected() {
++        let desc = Arc::new(ColumnDescriptor::new(
++            Arc::new(
++                SchemaType::primitive_type_builder("x", PhysicalType::INT32)
++                    .with_repetition(Repetition::REQUIRED)
++                    .build()
++                    .unwrap(),
++            ),
++            0,
++            0,
++            ColumnPath::new(vec!["x".to_string()]),
++        ));
++        let dati = |buf: Vec<u8>, encoding: Encoding| Page::DataPage {
++            buf: Bytes::from(buf),
++            num_values: 1,
++            encoding,
++            def_level_encoding: Encoding::RLE,
++            rep_level_encoding: Encoding::RLE,
++            statistics: None,
++        };
++        let dizionario = Page::DictionaryPage {
++            buf: Bytes::from(9_i32.to_le_bytes().to_vec()),
++            num_values: 1,
++            encoding: Encoding::PLAIN,
++            is_sorted: false,
++        };
++        let leggi = |pagine: Vec<Page>| -> Result<Vec<i32>> {
++            let lettore = InMemoryPageReader::new(pagine);
++            let colonna = get_column_reader(desc.clone(), Box::new(lettore));
++            let mut tipizzata = get_typed_column_reader::<Int32Type>(colonna);
++            let mut valori = Vec::new();
++            tipizzata.read_records(10, None, None, &mut valori)?;
++            Ok(valori)
++        };
++        let errore = leggi(vec![
++            dati(7_i32.to_le_bytes().to_vec(), Encoding::PLAIN),
++            dizionario.clone(),
++            dati(vec![1, 2, 0], Encoding::RLE_DICTIONARY),
++        ])
++        .unwrap_err();
++        assert!(
++            errore
++                .to_string()
++                .contains(crate::basic::DICTIONARY_PAGE_OUT_OF_PLACE),
++            "{errore}"
++        );
++        // The dictionary first is read.
++        assert_eq!(
++            leggi(vec![
++                dizionario,
++                dati(vec![1, 2, 0], Encoding::RLE_DICTIONARY),
++                dati(7_i32.to_le_bytes().to_vec(), Encoding::PLAIN),
++            ])
++            .unwrap(),
++            [9, 7]
++        );
++    }
 +
 +    /// PLENORA: deterministic negative cases of the v2 page checks that the
 +    /// random page generator (`rand_gen`, first repetition level 0) only
@@ -2688,7 +2784,21 @@
          }
      };
  
-@@ -648,6 +668,10 @@ pub struct SerializedPageReader<R: ChunkReader> {
+@@ -615,6 +635,13 @@ enum SerializedPageReaderState {
+ 
+         /// Whether the next page is expected to be a dictionary page
+         require_dictionary: bool,
++
++        /// PLENORA: the footer declares a dictionary page
++        /// (`dictionary_page_offset`), where the chunk starts.
++        dizionario_dichiarato: bool,
++
++        /// PLENORA: pages of the chunk read so far.
++        pagine_lette: usize,
+     },
+     Pages {
+         /// Remaining page locations
+@@ -648,6 +675,10 @@ pub struct SerializedPageReader<R: ChunkReader> {
      /// Column chunk type.
      physical_type: Type,
  
@@ -2699,7 +2809,7 @@
      state: SerializedPageReaderState,
  
      context: SerializedPageReaderContext,
-@@ -776,6 +800,12 @@ impl<R: ChunkReader> SerializedPageReader<R> {
+@@ -776,6 +807,12 @@ impl<R: ChunkReader> SerializedPageReader<R> {
  
          let state = match page_locations {
              Some(locations) => {
@@ -2712,7 +2822,16 @@
                  // PLENORA: the locations come from the caller: checked
                  // against the chunk before any subtraction below.
                  crate::file::page_index::offset_index::verifica_posizioni(
-@@ -819,6 +849,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
+@@ -808,6 +845,8 @@ impl<R: ChunkReader> SerializedPageReader<R> {
+                 next_page_header: None,
+                 page_index: 0,
+                 require_dictionary: meta.dictionary_page_offset().is_some(),
++                dizionario_dichiarato: meta.dictionary_page_offset().is_some(),
++                pagine_lette: 0,
+             },
+         };
+         let mut context = SerializedPageReaderContext::default();
+@@ -819,6 +858,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
              decompressor,
              state,
              physical_type: meta.column_type(),
@@ -2720,7 +2839,13 @@
              context,
              limiti, // PLENORA
          })
-@@ -843,14 +874,12 @@ impl<R: ChunkReader> SerializedPageReader<R> {
+@@ -838,19 +878,18 @@ impl<R: ChunkReader> SerializedPageReader<R> {
+                 next_page_header,
+                 page_index,
+                 require_dictionary,
++                ..
+             } => {
+                 loop {
                      if *remaining_bytes == 0 {
                          return Ok(None);
                      }
@@ -2740,7 +2865,7 @@
                      } else {
                          let mut read = self.reader.get_read(*offset)?;
                          let (header_len, header) = Self::read_page_header_len(
-@@ -861,12 +890,8 @@ impl<R: ChunkReader> SerializedPageReader<R> {
+@@ -861,12 +900,8 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                          )?;
                          *offset += header_len as u64;
                          *remaining_bytes -= header_len as u64;
@@ -2755,7 +2880,7 @@
                          *next_page_header = Some(Box::new(header));
                          page_meta
                      };
-@@ -937,12 +962,12 @@ impl SerializedPageReaderContext {
+@@ -937,12 +972,12 @@ impl SerializedPageReaderContext {
          _page_index: usize,
          _dictionary_page: bool,
      ) -> Result<PageHeader> {
@@ -2773,7 +2898,7 @@
      }
  
      fn decrypt_page_data<T>(
-@@ -965,14 +990,9 @@ impl SerializedPageReaderContext {
+@@ -965,14 +1000,9 @@ impl SerializedPageReaderContext {
      ) -> Result<PageHeader> {
          match self.page_crypto_context(page_index, dictionary_page) {
              None => {
@@ -2790,7 +2915,7 @@
              }
              Some(page_crypto_context) => {
                  let data_decryptor = page_crypto_context.data_decryptor();
-@@ -986,11 +1006,7 @@ impl SerializedPageReaderContext {
+@@ -986,11 +1016,7 @@ impl SerializedPageReaderContext {
                  })?;
  
                  let mut prot = ThriftSliceInputProtocol::new(buf.as_slice());
@@ -2803,7 +2928,16 @@
              }
          }
      }
-@@ -1096,8 +1112,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+@@ -1065,6 +1091,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+                     next_page_header,
+                     page_index,
+                     require_dictionary,
++                    dizionario_dichiarato,
++                    pagine_lette,
+                 } => {
+                     if *remaining == 0 {
+                         return Ok(None);
+@@ -1096,8 +1124,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                      *offset += data_len as u64;
                      *remaining -= data_len as u64;
  
@@ -2816,7 +2950,7 @@
                      }
  
                      let buffer = self.reader.get_bytes(data_start, data_len)?;
-@@ -1106,10 +1125,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+@@ -1106,15 +1137,33 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                          self.context
                              .decrypt_page_data(buffer, *page_index, *require_dictionary)?;
  
@@ -2829,8 +2963,30 @@
 +                        self.context.read_stats,
                          self.decompressor.as_mut(),
                      )?;
++                    // PLENORA: the dictionary page is the first page of the
++                    // chunk (a dictionary after a data page was read), and
++                    // the first page is one if the footer declares it
++                    // (`dictionary_page_offset`, where the chunk starts). A
++                    // dictionary first without the declaration is read:
++                    // older writers (parquet-mr, Impala) omit it.
++                    let dizionario = page.is_dictionary_page();
++                    if (dizionario && *pagine_lette > 0)
++                        || (*pagine_lette == 0 && *dizionario_dichiarato && !dizionario)
++                    {
++                        return Err(general_err!(
++                            "{}",
++                            crate::basic::DICTIONARY_PAGE_OUT_OF_PLACE
++                        ));
++                    }
++                    *pagine_lette += 1;
                      if page.is_data_page() {
-@@ -1144,6 +1165,14 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+                         *page_index += 1;
+-                    } else if page.is_dictionary_page() {
++                    } else if dizionario {
+                         *require_dictionary = false;
+                     }
+                     page
+@@ -1144,6 +1193,14 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                      )?;
                      self.limiti.verifica(&header)?; // PLENORA
                      let bytes = buffer.slice(offset..);
@@ -2845,7 +3001,7 @@
                      let bytes =
                          self.context
                              .decrypt_page_data(bytes, *page_index, is_dictionary_page)?;
-@@ -1151,10 +1180,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+@@ -1151,10 +1208,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                      if !is_dictionary_page {
                          *page_index += 1;
                      }
@@ -2859,7 +3015,13 @@
                          self.decompressor.as_mut(),
                      )?
                  }
-@@ -1177,14 +1208,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+@@ -1172,19 +1231,17 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+                 next_page_header,
+                 page_index,
+                 require_dictionary,
++                ..
+             } => {
+                 loop {
                      if *remaining_bytes == 0 {
                          return Ok(None);
                      }
@@ -2878,7 +3040,7 @@
                      } else {
                          let mut read = self.reader.get_read(*offset)?;
                          let (header_len, header) = Self::read_page_header_len(
-@@ -1196,12 +1224,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+@@ -1196,12 +1253,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                          verify_page_header_len(header_len, *remaining_bytes)?;
                          *offset += header_len as u64;
                          *remaining_bytes -= header_len as u64;
@@ -2892,7 +3054,7 @@
                          *next_page_header = Some(Box::new(header));
                          page_meta
                      };
-@@ -1249,70 +1272,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+@@ -1249,70 +1301,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
          }
      }
  

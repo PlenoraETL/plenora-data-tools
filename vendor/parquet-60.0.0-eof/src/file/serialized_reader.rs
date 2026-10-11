@@ -635,6 +635,13 @@ enum SerializedPageReaderState {
 
         /// Whether the next page is expected to be a dictionary page
         require_dictionary: bool,
+
+        /// PLENORA: the footer declares a dictionary page
+        /// (`dictionary_page_offset`), where the chunk starts.
+        dizionario_dichiarato: bool,
+
+        /// PLENORA: pages of the chunk read so far.
+        pagine_lette: usize,
     },
     Pages {
         /// Remaining page locations
@@ -838,6 +845,8 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 next_page_header: None,
                 page_index: 0,
                 require_dictionary: meta.dictionary_page_offset().is_some(),
+                dizionario_dichiarato: meta.dictionary_page_offset().is_some(),
+                pagine_lette: 0,
             },
         };
         let mut context = SerializedPageReaderContext::default();
@@ -869,6 +878,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 next_page_header,
                 page_index,
                 require_dictionary,
+                ..
             } => {
                 loop {
                     if *remaining_bytes == 0 {
@@ -1081,6 +1091,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     next_page_header,
                     page_index,
                     require_dictionary,
+                    dizionario_dichiarato,
+                    pagine_lette,
                 } => {
                     if *remaining == 0 {
                         return Ok(None);
@@ -1133,9 +1145,25 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         self.context.read_stats,
                         self.decompressor.as_mut(),
                     )?;
+                    // PLENORA: the dictionary page is the first page of the
+                    // chunk (a dictionary after a data page was read), and
+                    // the first page is one if the footer declares it
+                    // (`dictionary_page_offset`, where the chunk starts). A
+                    // dictionary first without the declaration is read:
+                    // older writers (parquet-mr, Impala) omit it.
+                    let dizionario = page.is_dictionary_page();
+                    if (dizionario && *pagine_lette > 0)
+                        || (*pagine_lette == 0 && *dizionario_dichiarato && !dizionario)
+                    {
+                        return Err(general_err!(
+                            "{}",
+                            crate::basic::DICTIONARY_PAGE_OUT_OF_PLACE
+                        ));
+                    }
+                    *pagine_lette += 1;
                     if page.is_data_page() {
                         *page_index += 1;
-                    } else if page.is_dictionary_page() {
+                    } else if dizionario {
                         *require_dictionary = false;
                     }
                     page
@@ -1203,6 +1231,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 next_page_header,
                 page_index,
                 require_dictionary,
+                ..
             } => {
                 loop {
                     if *remaining_bytes == 0 {

@@ -1109,12 +1109,21 @@ dall'header, passava un contenuto troncato o malformato. Ogni salto è
 `SKIP_NOT_QUALIFIED` (`Unsupported` dal confine), anche su un file valido.
 `plenora-io` legge sempre per intero (nessuna `RowSelection`, filtro di
 riga, `offset` o `limit`) e non lo raggiunge; lo raggiunge chi usa il fork
-come libreria con una selezione di righe.
+come libreria con una selezione di righe. Una pagina d'indice
+(`INDEX_PAGE`) si saltava senza decodificarla: il suo contenuto passava
+senza controllo, e i `peek` lo leggevano come l'header seguente. Ora un
+column chunk che ne contiene una si rifiuta tutto (`Unsupported`), anche
+se il resto è valido; la specifica non le dà un contenuto, e nessuno
+scrittore misurato le scrive.
 
-**Condizione di rientro.** Un salto che decodifica e verifica come la
-lettura (leggi e butta), con una guardia di avanzamento in ogni ciclo e le
-prove dei giri di revisione, oppure il bisogno di una selezione di righe
-da parte di data o IO-tools.
+**Condizione di rientro.** Per i salti: un salto che decodifica e verifica
+come la lettura (leggi e butta), con una guardia di avanzamento in ogni
+ciclo e le prove dei giri di revisione, oppure il bisogno di una selezione
+di righe da parte di data o IO-tools. Per le pagine d'indice: qualificarne
+la decodifica (l'header `IndexPageHeader` e un contenuto definito dalla
+specifica) e verificarne il contenuto come quello di una pagina letta,
+con le prove e una campagna di fuzz; oppure un file reale di uno
+scrittore in uso che le contenga, con una prova su quel file.
 
 ## Fine delle pagine Parquet
 
@@ -1129,7 +1138,12 @@ misurato ne scrive). Una corsa vuota (RLE di lunghezza 0,
 bit-packed di 0 gruppi) chiude lo stream ovunque sia: ciò che la segue è
 la coda, e deve essere vuoto salvo la deviazione di fastparquet; un varint
 non minimo è un errore. Una pagina di dizionario è `PLAIN` (o
-`PLAIN_DICTIONARY`), una per column chunk.
+`PLAIN_DICTIONARY`), una per column chunk, ed è la sua prima pagina
+(`DICTIONARY_PAGE_OUT_OF_PLACE`: un dizionario dopo una pagina di dati si
+leggeva, e gli indici delle pagine dopo puntavano a lui); se il footer la
+dichiara (`dictionary_page_offset`), la prima pagina è un dizionario. Un
+dizionario in prima pagina senza la dichiarazione si legge: parquet-mr e
+Impala la omettono nei file storici (7 dei 106 file di prova).
 
 **Ambito.** Il fork `vendor/parquet-60.0.0-eof`, fine delle pagine di dati
 v1 (`FinePagina::V1`, `column/reader/decoder.rs`); le pagine v2 finiscono

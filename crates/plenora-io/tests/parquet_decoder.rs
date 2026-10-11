@@ -3018,7 +3018,10 @@ fn con_pagine(
 
 /// Due pagine di dizionario nello stesso column chunk: i lettori Arrow
 /// sostituivano il primo con il secondo in silenzio, l'API generica
-/// rifiutava. Ora un errore uniforme. Una pagina di dizionario dichiarata
+/// rifiutava. Ora un errore uniforme: il lettore di pagine rifiuta un
+/// dizionario che non è la prima pagina (`DICTIONARY_PAGE_OUT_OF_PLACE`; i
+/// decoder rifiutano ancora un secondo dizionario, «more than one
+/// dictionary», con un lettore di pagine che non lo fa). Una pagina di dizionario dichiarata
 /// `RLE_DICTIONARY` si leggeva come `PLAIN`: un dizionario è `PLAIN` (o
 /// `PLAIN_DICTIONARY` nei file vecchi), e ora è un errore.
 #[test]
@@ -3034,7 +3037,7 @@ fn i_dizionari_di_un_column_chunk_sono_uno_e_plain() {
         (flba, b"a".as_slice(), b"b".as_slice()),
     ] {
         let doppio = con_pagine(&colonna, 1, PLAIN, &[primo, secondo], &[1, 2, 0]);
-        contiene(arrow(&doppio), "more than one dictionary");
+        contiene(arrow(&doppio), parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE);
         if colonna.tipo == BYTE_ARRAY {
             for tipo in [
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
@@ -3043,12 +3046,12 @@ fn i_dizionari_di_un_column_chunk_sono_uno_e_plain() {
                 let schema = Schema::new(vec![Field::new("x", tipo.clone(), false)]);
                 contiene(
                     arrow_con_schema(&doppio, schema).map(|batch| batch.len()),
-                    "more than one dictionary",
+                    parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
                 );
             }
             contiene(
                 colonna_api::<ByteArrayType>(&doppio, None),
-                "more than one dictionary",
+                parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
             );
         }
         let rle = con_pagine(&colonna, 1, RLE_DICTIONARY, &[primo], &[1, 2, 0]);
@@ -3944,4 +3947,107 @@ fn le_statistiche_deprecate_si_verificano_anche_se_non_scelte() {
     assert_eq!(arrow(&con_statistiche(statistiche(&giusto))), Ok(1));
     assert_eq!(arrow(&nella_pagina(&giusto)), Ok(1));
     assert_eq!(pagine_con_statistiche(&nella_pagina(&giusto)), Ok(1));
+}
+
+/// Un dizionario dopo una pagina di dati dello stesso column chunk si
+/// leggeva: `[7]` in `PLAIN`, un dizionario `[9]`, poi l'indice 0 davano
+/// `[7, 9]` senza errore, nei lettori Arrow e nell'API per colonne. Il
+/// formato mette il dizionario prima dei dati. Ora un errore
+/// (`DICTIONARY_PAGE_OUT_OF_PLACE`), nel lettore di pagine e nel lettore di
+/// colonna, comune a tutti i decoder; anche quando il footer dichiara un
+/// dizionario (`dictionary_page_offset`) e la prima pagina non lo è. Un
+/// dizionario in prima pagina senza la dichiarazione si legge: lo scrivono
+/// parquet-mr e Impala nei file storici (7 dei 106 file di prova).
+#[test]
+fn un_dizionario_dopo_i_dati_e_rifiutato() {
+    let dizionario = |valore: &[u8]| {
+        let lunghezza = i64::try_from(valore.len()).unwrap();
+        let mut byte = Struttura::default()
+            .i32(1, 2)
+            .i32(2, lunghezza)
+            .i32(3, lunghezza)
+            .struttura(7, Struttura::default().i32(1, 1).i32(2, PLAIN))
+            .fine();
+        byte.extend_from_slice(valore);
+        byte
+    };
+    let indici = [1_u8, 2, 0]; // larghezza 1, corsa RLE di 1 dell'indice 0
+    let dopo = |colonna: &Colonna, primo: &[u8], secondo: &[u8]| {
+        let mut dati = primo.to_vec();
+        dati.extend(dizionario(secondo));
+        dati.extend(header_v1(1, RLE_DICTIONARY, indici.len()));
+        dati.extend_from_slice(&indici);
+        parquet_con_header(
+            colonna,
+            2,
+            PLAIN,
+            &dati,
+            &header_v1(1, PLAIN, primo.len()),
+            None,
+            None,
+        )
+    };
+    let intero = dopo(&colonna(INT32), &7_i32.to_le_bytes(), &9_i32.to_le_bytes());
+    contiene(arrow(&intero), parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE);
+    contiene(
+        colonna_api::<Int32Type>(&intero, None),
+        parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+    );
+    rifiutato_dal_confine(&intero);
+    let testo = dopo(
+        &colonna(BYTE_ARRAY),
+        &testo_plain(&[b"a"]),
+        &testo_plain(&[b"b"]),
+    );
+    contiene(arrow(&testo), parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE);
+    for tipo in [
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+        DataType::BinaryView,
+    ] {
+        let schema = Schema::new(vec![Field::new("x", tipo, false)]);
+        contiene(
+            arrow_con_schema(&testo, schema).map(|batch| batch.len()),
+            parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+        );
+    }
+    contiene(
+        colonna_api::<ByteArrayType>(&testo, None),
+        parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+    );
+    let flba = Colonna {
+        larghezza: Some(1),
+        ..colonna(FLBA)
+    };
+    contiene(
+        arrow(&dopo(&flba, b"a", b"b")),
+        parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+    );
+    // Il footer dichiara un dizionario all'inizio del chunk, e la prima
+    // pagina è di dati.
+    let dichiarato = con_campi(|m| m.i64(11, 4), |g| g, 1);
+    contiene(
+        arrow(&dichiarato),
+        parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+    );
+    rifiutato_dal_confine(&dichiarato);
+    // Controfattuali: senza la dichiarazione la stessa pagina si legge, e un
+    // dizionario in prima pagina senza dichiarazione (file storici) pure.
+    assert_eq!(arrow(&con_campi(|m| m, |g| g, 1)), Ok(1));
+    let mut dati = dizionario(&9_i32.to_le_bytes());
+    dati.extend(header_v1(1, PLAIN, 4));
+    dati.extend_from_slice(&7_i32.to_le_bytes());
+    let primo = parquet_con_header(
+        &colonna(INT32),
+        2,
+        PLAIN,
+        &indici,
+        &{
+            let mut h = dati;
+            h.extend(header_v1(1, RLE_DICTIONARY, indici.len()));
+            h
+        },
+        None,
+        None,
+    );
+    assert_eq!(valori_arrow(&primo), ["7", "9"]);
 }

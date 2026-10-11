@@ -484,6 +484,30 @@ ripetizione troncati).
    parte compressa, e un suffisso qualunque spariva. Ora si decomprime e
    deve dare zero byte (lo stream vuoto di un codec si legge).
 
+**Quindicesimo giro.**
+
+1. Un dizionario dopo una pagina di dati dello stesso column chunk si
+   leggeva: `[7]` in `PLAIN`, un dizionario `[9]`, poi l'indice 0 davano
+   `[7, 9]` senza errore (senza `dictionary_page_offset`). Il formato
+   mette il dizionario prima dei dati. Ora `DICTIONARY_PAGE_OUT_OF_PLACE`
+   in due punti: il lettore di colonna, comune a ogni decoder (generico,
+   byte array, viste, dizionari Arrow, FLBA), rifiuta un dizionario dopo
+   una pagina di dati, anche con un lettore di pagine fornito da chi usa il
+   fork; il lettore di pagine rifiuta un dizionario che non è la prima
+   pagina del chunk (anche un secondo dizionario: prima lo rifiutavano i
+   decoder, «more than one dictionary», che restano), e una prima pagina
+   che non è un dizionario quando il footer ne dichiara uno. Un dizionario
+   in prima pagina senza dichiarazione si legge: la regola stretta,
+   misurata, rifiutava 7 dei 106 file (`alltypes_tiny_pages`,
+   `datapage_v2.snappy`, `nested_lists.snappy`, `nested_maps.snappy`,
+   `nullable.impala`, `ARROW-GH-43605`, `nation.dict-malformed`), scritti
+   da parquet-mr e Impala che omettono l'offset; gli scrittori della
+   matrice lo dichiarano.
+
+Prove unitarie del pacchetto: le stesse 148 (due esecuzioni identiche);
+la prova nuova `test_dictionary_page_after_a_data_page_is_rejected`
+passa. Scrittori, FLBA e 106 file: lo stesso esito.
+
 **Quattordicesimo giro.**
 
 1. Una `INDEX_PAGE` fra le pagine di un column chunk si saltava in
