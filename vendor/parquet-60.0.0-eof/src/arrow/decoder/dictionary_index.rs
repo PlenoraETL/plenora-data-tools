@@ -105,8 +105,8 @@ impl DictIndexDecoder {
 
     /// PLENORA: the index stream ends with the indices read (no index
     /// buffered and not used).
-    pub fn fine_esatta(&self) -> bool {
-        self.index_offset == self.index_buf_len && self.decoder.fine_esatta()
+    pub fn fine_esatta(&self, coda: usize) -> bool {
+        self.index_offset == self.index_buf_len && self.decoder.fine_esatta(coda)
     }
 
     /// Skip up to `to_skip` values, returning the number of values skipped

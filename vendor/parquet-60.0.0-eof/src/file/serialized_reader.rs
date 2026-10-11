@@ -514,8 +514,12 @@ pub(crate) fn decode_page(
             decompressed.extend_from_slice(&buffer[..offset]);
             // decompressed size of zero corresponds to a page with no non-null values
             // see https://github.com/apache/parquet-format/blob/master/README.md#data-pages
-            if decompressed_size > 0 {
-                let compressed = &buffer[offset..];
+            // PLENORA: with no values to decompress, a compressed part that is
+            // there is still decompressed, and must give nothing: a suffix of
+            // any bytes disappeared unread (a codec writes an empty stream as
+            // a few bytes of its own, which decompress to nothing).
+            let compressed = &buffer[offset..];
+            if decompressed_size > 0 || !compressed.is_empty() {
                 decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
             }
 

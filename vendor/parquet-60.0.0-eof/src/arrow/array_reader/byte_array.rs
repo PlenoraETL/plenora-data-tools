@@ -296,11 +296,11 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
         decoder.skip(num_values, self.dict.as_ref())
     }
 
-    fn verifica_fine_pagina(&self) -> Result<()> {
+    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
         crate::column::reader::decoder::fine_esatta(
             self.decoder
                 .as_ref()
-                .is_some_and(ByteArrayDecoder::fine_esatta),
+                .is_some_and(|decoder| decoder.fine_esatta(coda)),
         )
     }
 }
@@ -315,10 +315,10 @@ pub enum ByteArrayDecoder {
 
 impl ByteArrayDecoder {
     /// PLENORA: the page ends with the values read.
-    pub fn fine_esatta(&self) -> bool {
+    pub fn fine_esatta(&self, coda: usize) -> bool {
         match self {
-            Self::Plain(d) => crate::util::bit_util::coda_di_zeri(&d.buf, d.offset),
-            Self::Dictionary(d) => d.decoder.fine_esatta(),
+            Self::Plain(d) => crate::util::bit_util::coda_di_zeri(&d.buf, d.offset, coda),
+            Self::Dictionary(d) => d.decoder.fine_esatta(coda),
             Self::DeltaLength(_) | Self::DeltaByteArray(_) => false,
         }
     }

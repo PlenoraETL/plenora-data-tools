@@ -182,7 +182,8 @@ pub trait Decoder<T: DataType>: Send {
     /// PLENORA: whether the data ends where the values read end. Only the
     /// decoders of the qualified encodings answer; the others are not
     /// verified, and answer `false` (an error at the end of the page).
-    fn fine_esatta(&self) -> bool {
+    fn fine_esatta(&self, coda: usize) -> bool {
+        let _ = coda;
         false
     }
 
@@ -347,11 +348,11 @@ impl<T: DataType> Decoder<T> for PlainDecoder<T> {
         T::T::decode(buffer, &mut self.inner)
     }
 
-    fn fine_esatta(&self) -> bool {
+    fn fine_esatta(&self, coda: usize) -> bool {
         use crate::util::bit_util::coda_di_zeri;
         match (&self.inner.data, &self.inner.bit_reader) {
-            (Some(data), _) => coda_di_zeri(data, self.inner.start),
-            (None, Some(lettore)) => coda_di_zeri(lettore.dati(), lettore.get_byte_offset()),
+            (Some(data), _) => coda_di_zeri(data, self.inner.start, coda),
+            (None, Some(lettore)) => coda_di_zeri(lettore.dati(), lettore.get_byte_offset(), coda),
             (None, None) => false,
         }
     }
@@ -455,10 +456,10 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
         rle.get_batch_with_dict(&self.dictionary[..], buffer, num_values)
     }
 
-    fn fine_esatta(&self) -> bool {
+    fn fine_esatta(&self, coda: usize) -> bool {
         self.rle_decoder
             .as_ref()
-            .is_some_and(RleDecoder::fine_esatta)
+            .is_some_and(|decoder| decoder.fine_esatta(coda))
     }
 
     /// Number of values left in this decoder stream
@@ -489,8 +490,8 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
 pub struct RleValueDecoder<T: DataType> {
     values_left: usize,
     decoder: RleDecoder,
-    /// PLENORA: bytes after the prefixed length of the stream.
-    byte_dopo: bool,
+    /// PLENORA: the bytes after the prefixed length of the stream.
+    dopo: Bytes,
     _phantom: PhantomData<T>,
 }
 
@@ -505,7 +506,7 @@ impl<T: DataType> RleValueDecoder<T> {
         Self {
             values_left: 0,
             decoder: RleDecoder::new(1),
-            byte_dopo: false,
+            dopo: Bytes::new(),
             _phantom: PhantomData,
         }
     }
@@ -534,12 +535,12 @@ where
         self.decoder
             .set_data(data.slice(I32_SIZE..I32_SIZE + data_size))?;
         self.values_left = num_values;
-        self.byte_dopo = data.len() - I32_SIZE != data_size;
+        self.dopo = data.slice(I32_SIZE + data_size..);
         Ok(())
     }
 
-    fn fine_esatta(&self) -> bool {
-        !self.byte_dopo && self.decoder.fine_esatta()
+    fn fine_esatta(&self, coda: usize) -> bool {
+        crate::util::bit_util::coda_di_zeri(&self.dopo, 0, coda) && self.decoder.fine_esatta(0)
     }
 
     #[inline]

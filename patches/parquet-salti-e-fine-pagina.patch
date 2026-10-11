@@ -5,11 +5,11 @@
          decoder.skip(num_values, self.dict.as_ref())
      }
 +
-+    fn verifica_fine_pagina(&self) -> Result<()> {
++    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
 +        crate::column::reader::decoder::fine_esatta(
 +            self.decoder
 +                .as_ref()
-+                .is_some_and(ByteArrayDecoder::fine_esatta),
++                .is_some_and(|decoder| decoder.fine_esatta(coda)),
 +        )
 +    }
  }
@@ -20,10 +20,10 @@
  
  impl ByteArrayDecoder {
 +    /// PLENORA: the page ends with the values read.
-+    pub fn fine_esatta(&self) -> bool {
++    pub fn fine_esatta(&self, coda: usize) -> bool {
 +        match self {
-+            Self::Plain(d) => crate::util::bit_util::coda_di_zeri(&d.buf, d.offset),
-+            Self::Dictionary(d) => d.decoder.fine_esatta(),
++            Self::Plain(d) => crate::util::bit_util::coda_di_zeri(&d.buf, d.offset, coda),
++            Self::Dictionary(d) => d.decoder.fine_esatta(coda),
 +            Self::DeltaLength(_) | Self::DeltaByteArray(_) => false,
 +        }
 +    }
@@ -38,10 +38,10 @@
          }
      }
 +
-+    fn verifica_fine_pagina(&self) -> Result<()> {
++    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
 +        let esatta = match self.decoder.as_ref() {
-+            Some(MaybeDictionaryDecoder::Fallback(decoder)) => decoder.fine_esatta(),
-+            Some(MaybeDictionaryDecoder::Dict { decoder, .. }) => decoder.fine_esatta(),
++            Some(MaybeDictionaryDecoder::Fallback(decoder)) => decoder.fine_esatta(coda),
++            Some(MaybeDictionaryDecoder::Dict { decoder, .. }) => decoder.fine_esatta(coda),
 +            None => false,
 +        };
 +        crate::column::reader::decoder::fine_esatta(esatta)
@@ -56,11 +56,11 @@
          decoder.skip(num_values, self.dict.as_ref())
      }
 +
-+    fn verifica_fine_pagina(&self) -> Result<()> {
++    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
 +        crate::column::reader::decoder::fine_esatta(
 +            self.decoder
 +                .as_ref()
-+                .is_some_and(ByteViewArrayDecoder::fine_esatta),
++                .is_some_and(|decoder| decoder.fine_esatta(coda)),
 +        )
 +    }
  }
@@ -71,10 +71,10 @@
  
  impl ByteViewArrayDecoder {
 +    /// PLENORA: the page ends with the values read.
-+    pub fn fine_esatta(&self) -> bool {
++    pub fn fine_esatta(&self, coda: usize) -> bool {
 +        match self {
-+            Self::Plain(d) => crate::util::bit_util::coda_di_zeri(&d.buf, d.offset),
-+            Self::Dictionary(d) => d.decoder.fine_esatta(),
++            Self::Plain(d) => crate::util::bit_util::coda_di_zeri(&d.buf, d.offset, coda),
++            Self::Dictionary(d) => d.decoder.fine_esatta(coda),
 +            Self::DeltaLength(_) | Self::DeltaByteArray(_) => false,
 +        }
 +    }
@@ -89,12 +89,12 @@
          }
      }
 +
-+    fn verifica_fine_pagina(&self) -> Result<()> {
++    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
 +        let esatta = match self.decoder.as_ref() {
 +            Some(Decoder::Plain { buf, offset }) => {
-+                crate::util::bit_util::coda_di_zeri(buf, *offset)
++                crate::util::bit_util::coda_di_zeri(buf, *offset, coda)
 +            }
-+            Some(Decoder::Dict { decoder }) => decoder.fine_esatta(),
++            Some(Decoder::Dict { decoder }) => decoder.fine_esatta(coda),
 +            Some(Decoder::Delta { .. } | Decoder::ByteStreamSplit { .. }) | None => false,
 +        };
 +        crate::column::reader::decoder::fine_esatta(esatta)
@@ -124,8 +124,8 @@
  
 +    /// PLENORA: the index stream ends with the indices read (no index
 +    /// buffered and not used).
-+    pub fn fine_esatta(&self) -> bool {
-+        self.index_offset == self.index_buf_len && self.decoder.fine_esatta()
++    pub fn fine_esatta(&self, coda: usize) -> bool {
++        self.index_offset == self.index_buf_len && self.decoder.fine_esatta(coda)
 +    }
 +
      /// Skip up to `to_skip` values, returning the number of values skipped
@@ -147,36 +147,60 @@
  }
  
  impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
-@@ -357,6 +364,29 @@ impl PackedDecoder {
+@@ -317,6 +324,8 @@ struct PackedDecoder {
+     rle_value: bool,
+     packed_count: usize,
+     packed_offset: usize,
++    /// PLENORA: the groups the current bit-packed run declares.
++    gruppi_della_corsa: usize,
+ }
+ 
+ impl PackedDecoder {
+@@ -340,6 +349,7 @@ impl PackedDecoder {
+                 .checked_mul(8)
+                 .ok_or_else(|| general_err!("RLE run length out of range"))?;
+             self.packed_offset = 0;
++            self.gruppi_della_corsa = run;
+         } else {
+             self.rle_left = run;
+             let byte = *self.data.as_ref().get(self.data_offset).ok_or_else(|| {
+@@ -357,6 +367,28 @@ impl PackedDecoder {
          Ok(())
      }
  
 +    /// PLENORA: the level stream ends with the levels read, with the rules
-+    /// of `RleDecoder::fine_esatta` (bit width 1: a group is a byte): no
-+    /// level left in an RLE run; in a bit-packed run the rest of the current
-+    /// byte, then whole bytes of levels, whatever they hold, fewer than
-+    /// `RIEMPIMENTO_BIT_PACKED` levels; no run after, at most `CODA_DI_ZERI`
-+    /// zero bytes.
++    /// of `RleDecoder::fine_esatta` (bit width 1: a group is a byte, and the
++    /// bit-packed count is already cut to the bytes present): no level left
++    /// in an RLE run; in a bit-packed run the rest of the current byte, whole
++    /// bytes after it only in a run of `BLOCCO_DUCKDB` groups; no run and no
++    /// byte after.
 +    fn fine_esatta(&self) -> bool {
-+        use crate::util::bit_util::{RIEMPIMENTO_BIT_PACKED, coda_di_zeri};
++        use crate::util::bit_util::{BLOCCO_DUCKDB, coda_di_zeri};
 +        if self.rle_left != 0 {
 +            return false;
 +        }
 +        let dati = self.data.as_ref();
 +        if self.packed_count != self.packed_offset {
 +            let resto = self.packed_count - self.packed_offset;
-+            let nel_gruppo = resto % 8;
-+            if resto - nel_gruppo >= RIEMPIMENTO_BIT_PACKED {
++            if resto > resto % 8 && self.gruppi_della_corsa != BLOCCO_DUCKDB {
 +                return false;
 +            }
-+            return coda_di_zeri(dati, self.data_offset + self.packed_count / 8);
++            return coda_di_zeri(dati, self.data_offset + self.packed_count / 8, 0);
 +        }
-+        coda_di_zeri(dati, self.data_offset)
++        coda_di_zeri(dati, self.data_offset, 0)
 +    }
 +
      /// Decodes a VLQ encoded little endian integer and returns it
      fn decode_header(&mut self) -> Result<i64> {
          let mut offset = 0;
+@@ -397,6 +429,7 @@ impl PackedDecoder {
+             rle_value: false,
+             packed_count: 0,
+             packed_offset: 0,
++            gruppi_della_corsa: 0,
+         }
+     }
+ 
 --- a/src/basic.rs
 +++ b/src/basic.rs
 @@ -1519,6 +1519,19 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
@@ -201,7 +225,7 @@
  pub const DICTIONARY_NOT_AS_DECLARED: &str =
 --- a/src/column/reader.rs
 +++ b/src/column/reader.rs
-@@ -141,11 +141,8 @@ pub struct GenericColumnReader<R, D, V> {
+@@ -141,11 +141,12 @@ pub struct GenericColumnReader<R, D, V> {
      /// none for a V1 page.
      valori_dichiarati: Option<usize>,
  
@@ -211,18 +235,23 @@
 +    /// PLENORA: the values read from the current page so far.
      valori_della_pagina: usize,
 -    valori_contati: bool,
++
++    /// PLENORA: the zero bytes the value stream of the current page may be
++    /// followed by (`CODA_FASTPARQUET` in a v1 page, 0 in a v2 page).
++    coda_dei_valori: usize,
  }
  
  impl<V> GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelDecoderImpl, V>
-@@ -196,7 +193,6 @@ where
+@@ -196,7 +197,7 @@ where
              has_record_delimiter: false,
              valori_dichiarati: None,
              valori_della_pagina: 0,
 -            valori_contati: false,
++            coda_dei_valori: 0,
          }
      }
  
-@@ -310,7 +306,9 @@ where
+@@ -310,7 +311,9 @@ where
  
              self.num_decoded_values += levels_to_read;
              self.valori_della_pagina += values_read;
@@ -233,7 +262,7 @@
              total_records_read += records_read;
              total_levels_read += levels_to_read;
              total_values_read += values_read;
-@@ -321,123 +319,79 @@ where
+@@ -321,123 +324,89 @@ where
  
      /// Skips over `num_records` records, where records are delimited by repetition levels of 0
      ///
@@ -338,8 +367,24 @@
 -                    rep_levels_read,
 -                    def_levels_read
 -                ));
--            }
--
++            // If page has less rows than the remaining records to
++            // be skipped, skip entire page
++            // PLENORA: the rows of the header against its levels and the
++            // schema (`num_rows` alone was trusted: 1 row over 2 values of a
++            // flat column skipped both).
++            if let (Some(righe), Some(livelli)) = (metadata.num_rows, metadata.num_levels) {
++                verifica_righe_v2(self.rep_level_decoder.is_some(), righe, livelli)?;
++            }
++            let rows = metadata.num_rows.or_else(|| {
++                // If no repetition levels, num_levels == num_rows
++                self.rep_level_decoder
++                    .is_none()
++                    .then_some(metadata.num_levels)?
++            });
++            if rows == Some(0) && metadata.num_levels != Some(0) {
++                return Err(general_err!("{}", crate::basic::PAGE_NOT_AS_DECLARED));
+             }
+ 
 -            let values = self.values_decoder.skip_values(values_read)?;
 -            if values != values_read {
 -                return Err(general_err!(
@@ -347,15 +392,6 @@
 -                    values,
 -                    values_read
 -                ));
-+            // If page has less rows than the remaining records to
-+            // be skipped, skip entire page
-+            let rows = metadata.num_rows.or_else(|| {
-+                // If no repetition levels, num_levels == num_rows
-+                self.rep_level_decoder
-+                    .is_none()
-+                    .then_some(metadata.num_levels)?
-+            });
-+
 +            match rows {
 +                Some(rows) if rows <= remaining_records => {
 +                    self.page_reader.skip_next_page()?;
@@ -397,48 +433,116 @@
 -            )),
 -            _ => Ok(()),
 +            ));
-+        }
+         }
 +        if let Some(decoder) = self.rep_level_decoder.as_ref() {
 +            decoder.verifica_fine_pagina()?;
-         }
++        }
 +        if let Some(decoder) = self.def_level_decoder.as_ref() {
 +            decoder.verifica_fine_pagina()?;
 +        }
-+        self.values_decoder.verifica_fine_pagina()
++        self.values_decoder
++            .verifica_fine_pagina(self.coda_dei_valori)
      }
  
      /// Read the next page as a dictionary page. If the next page is not a dictionary page,
-@@ -490,7 +444,6 @@ where
+@@ -490,7 +459,7 @@ where
                              self.num_decoded_values = 0;
                              self.valori_dichiarati = None;
                              self.valori_della_pagina = 0;
 -                            self.valori_contati = true;
++                            self.coda_dei_valori = crate::util::bit_util::CODA_FASTPARQUET;
  
                              let max_rep_level = self.descr.max_rep_level();
                              let max_def_level = self.descr.max_def_level();
-@@ -562,7 +515,6 @@ where
+@@ -544,7 +513,7 @@ where
+                             num_values,
+                             encoding,
+                             num_nulls,
+-                            num_rows: _,
++                            num_rows,
+                             def_levels_byte_len,
+                             rep_levels_byte_len,
+                             is_compressed: _,
+@@ -557,12 +526,28 @@ where
+                                     num_nulls
+                                 ));
+                             }
++                            // PLENORA: what the header declares against the
++                            // schema. Without repetition a row is a level;
++                            // with it, a page of levels has at least one row
++                            // and no more rows than levels. A level stream
++                            // the schema does not have is empty: its bytes
++                            // were cut out of the page unread.
++                            verifica_righe_v2(
++                                self.descr.max_rep_level() > 0,
++                                num_rows as usize,
++                                num_values as usize,
++                            )?;
++                            if (self.descr.max_rep_level() == 0 && rep_levels_byte_len != 0)
++                                || (self.descr.max_def_level() == 0 && def_levels_byte_len != 0)
++                            {
++                                return Err(general_err!("{}", crate::basic::PAGE_NOT_AS_DECLARED));
++                            }
+ 
+                             self.num_buffered_values = num_values as _;
                              self.num_decoded_values = 0;
                              self.valori_dichiarati = Some((num_values - num_nulls) as usize);
                              self.valori_della_pagina = 0;
 -                            self.valori_contati = true;
++                            self.coda_dei_valori = 0;
  
                              // DataPage v2 only supports RLE encoding for repetition
                              // levels
-@@ -615,8 +567,13 @@ where
+@@ -613,10 +598,18 @@ where
+         if self.num_buffered_values == 0 || self.num_buffered_values == self.num_decoded_values {
+             // TODO: should we return false if read_new_page() = true and
              // num_buffered_values = 0?
-             if !self.read_new_page()? {
-                 Ok(false)
-+            } else if self.num_buffered_values == 0 {
-+                // PLENORA: a page of no levels ends where it starts: its
-+                // streams must be empty too.
-+                self.verifica_fine_pagina()?;
-+                Ok(false)
-             } else {
+-            if !self.read_new_page()? {
+-                Ok(false)
+-            } else {
 -                Ok(self.num_buffered_values != 0)
-+                Ok(true)
++            // PLENORA: a page of no levels ends where it starts: its
++            // streams are checked, and the reading goes on with the next
++            // page. It returned `false`, the end of the column chunk for the
++            // Arrow reader, and the pages after it were dropped in silence.
++            loop {
++                if !self.read_new_page()? {
++                    return Ok(false);
++                }
++                if self.num_buffered_values != 0 {
++                    return Ok(true);
++                }
++                self.verifica_fine_pagina()?;
              }
          } else {
              Ok(true)
+@@ -624,6 +617,26 @@ where
+     }
+ }
+ 
++/// PLENORA: the rows a page declares against its levels: equal without
++/// repetition; with repetition at least one row for a page of levels, and no
++/// more rows than levels.
++fn verifica_righe_v2(ripetuta: bool, righe: usize, livelli: usize) -> Result<()> {
++    let coerenti = if ripetuta {
++        righe <= livelli && (righe > 0 || livelli == 0)
++    } else {
++        righe == livelli
++    };
++    if coerenti {
++        Ok(())
++    } else {
++        Err(general_err!(
++            "data page declares {} rows for {} levels",
++            righe,
++            livelli
++        ))
++    }
++}
++
+ /// Checks that a partial record can still be flushed into the caller's record budget.
+ ///
+ /// Reaching the end of a page with a record delimiter means the decoder stopped because
 --- a/src/column/reader/decoder.rs
 +++ b/src/column/reader/decoder.rs
 @@ -33,6 +33,11 @@ pub trait ColumnLevelDecoder {
@@ -453,7 +557,7 @@
  }
  
  pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
-@@ -132,6 +137,26 @@ pub trait ColumnValueDecoder {
+@@ -132,6 +137,28 @@ pub trait ColumnValueDecoder {
      ///
      /// Returns the number of values skipped
      fn skip_values(&mut self, num_values: usize) -> Result<usize>;
@@ -461,8 +565,10 @@
 +    /// PLENORA: at the end of a page, after its last value, the value stream
 +    /// is consumed exactly: every byte of a `PLAIN` page, the dictionary
 +    /// indices to the end of their stream, the `RLE` booleans to their
-+    /// prefixed length and nothing after it. Otherwise `PAGE_NOT_AS_DECLARED`.
-+    fn verifica_fine_pagina(&self) -> Result<()>;
++    /// prefixed length. After it at most `coda` zero bytes (the padding of
++    /// fastparquet after the values of a v1 page, 0 elsewhere). Otherwise
++    /// `PAGE_NOT_AS_DECLARED`.
++    fn verifica_fine_pagina(&self, coda: usize) -> Result<()>;
 +}
 +
 +/// PLENORA: the error of a page whose streams do not end with its values.
@@ -480,36 +586,36 @@
  }
  
  /// Bucket-based storage for decoder instances keyed by `Encoding`.
-@@ -269,6 +294,14 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
+@@ -269,6 +296,14 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
  
          current_decoder.skip(num_values)
      }
 +
-+    fn verifica_fine_pagina(&self) -> Result<()> {
++    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
 +        let esatta = self
 +            .current_encoding
 +            .and_then(|encoding| self.decoders[encoding as usize].as_ref())
-+            .is_some_and(|decoder| decoder.fine_esatta());
++            .is_some_and(|decoder| decoder.fine_esatta(coda));
 +        fine_esatta(esatta)
 +    }
  }
  
  const SKIP_BUFFER_SIZE: usize = 1024;
-@@ -297,6 +330,13 @@ impl LevelDecoder {
+@@ -297,6 +332,13 @@ impl LevelDecoder {
          }
      }
  
 +    /// PLENORA: the level stream ends with the levels read.
 +    fn fine_esatta(&self) -> bool {
 +        match self {
-+            Self::Rle(reader, _) => reader.fine_esatta(),
++            Self::Rle(reader, _) => reader.fine_esatta(0),
 +        }
 +    }
 +
      fn read(&mut self, out: &mut [i16]) -> Result<usize> {
          let (read, max_level) = match self {
              Self::Rle(reader, max_level) => (reader.get_batch(out)?, *max_level),
-@@ -344,6 +384,10 @@ impl ColumnLevelDecoder for DefinitionLevelDecoderImpl {
+@@ -344,6 +386,10 @@ impl ColumnLevelDecoder for DefinitionLevelDecoderImpl {
          )?);
          Ok(())
      }
@@ -520,7 +626,7 @@
  }
  
  impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
-@@ -413,8 +457,17 @@ impl RepetitionLevelDecoderImpl {
+@@ -413,8 +459,17 @@ impl RepetitionLevelDecoderImpl {
          }
      }
  
@@ -540,7 +646,7 @@
          self.buffer_offset = 0;
          self.buffer_len = read;
          Ok(())
-@@ -457,6 +510,13 @@ impl ColumnLevelDecoder for RepetitionLevelDecoderImpl {
+@@ -457,6 +512,13 @@ impl ColumnLevelDecoder for RepetitionLevelDecoderImpl {
          self.buffer_offset = 0;
          Ok(())
      }
@@ -554,7 +660,7 @@
  }
  
  impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
-@@ -471,7 +531,7 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
+@@ -471,7 +533,7 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
  
          while total_records_read < num_records && total_levels_read < num_levels {
              if self.buffer_len == self.buffer_offset {
@@ -563,7 +669,7 @@
                  if self.buffer_len == 0 {
                      break;
                  }
-@@ -500,7 +560,7 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
+@@ -500,7 +562,7 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
  
          while total_records_read < num_records && total_levels_read < num_levels {
              if self.buffer_len == self.buffer_offset {
@@ -574,29 +680,30 @@
                  }
 --- a/src/encodings/decoding.rs
 +++ b/src/encodings/decoding.rs
-@@ -179,6 +179,13 @@ pub trait Decoder<T: DataType>: Send {
+@@ -179,6 +179,14 @@ pub trait Decoder<T: DataType>: Send {
      /// to decode.
      fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()>;
  
 +    /// PLENORA: whether the data ends where the values read end. Only the
 +    /// decoders of the qualified encodings answer; the others are not
 +    /// verified, and answer `false` (an error at the end of the page).
-+    fn fine_esatta(&self) -> bool {
++    fn fine_esatta(&self, coda: usize) -> bool {
++        let _ = coda;
 +        false
 +    }
 +
      /// Consumes values from this decoder and write the results to `buffer`. This will try
      /// to fill up `buffer`.
      ///
-@@ -340,6 +347,15 @@ impl<T: DataType> Decoder<T> for PlainDecoder<T> {
+@@ -340,6 +348,15 @@ impl<T: DataType> Decoder<T> for PlainDecoder<T> {
          T::T::decode(buffer, &mut self.inner)
      }
  
-+    fn fine_esatta(&self) -> bool {
++    fn fine_esatta(&self, coda: usize) -> bool {
 +        use crate::util::bit_util::coda_di_zeri;
 +        match (&self.inner.data, &self.inner.bit_reader) {
-+            (Some(data), _) => coda_di_zeri(data, self.inner.start),
-+            (None, Some(lettore)) => coda_di_zeri(lettore.dati(), lettore.get_byte_offset()),
++            (Some(data), _) => coda_di_zeri(data, self.inner.start, coda),
++            (None, Some(lettore)) => coda_di_zeri(lettore.dati(), lettore.get_byte_offset(), coda),
 +            (None, None) => false,
 +        }
 +    }
@@ -604,46 +711,46 @@
      #[inline]
      fn skip(&mut self, num_values: usize) -> Result<usize> {
          T::T::skip(&mut self.inner, num_values)
-@@ -439,6 +455,12 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
+@@ -439,6 +456,12 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
          rle.get_batch_with_dict(&self.dictionary[..], buffer, num_values)
      }
  
-+    fn fine_esatta(&self) -> bool {
++    fn fine_esatta(&self, coda: usize) -> bool {
 +        self.rle_decoder
 +            .as_ref()
-+            .is_some_and(RleDecoder::fine_esatta)
++            .is_some_and(|decoder| decoder.fine_esatta(coda))
 +    }
 +
      /// Number of values left in this decoder stream
      fn values_left(&self) -> usize {
          self.num_values
-@@ -467,6 +489,8 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
+@@ -467,6 +490,8 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
  pub struct RleValueDecoder<T: DataType> {
      values_left: usize,
      decoder: RleDecoder,
-+    /// PLENORA: bytes after the prefixed length of the stream.
-+    byte_dopo: bool,
++    /// PLENORA: the bytes after the prefixed length of the stream.
++    dopo: Bytes,
      _phantom: PhantomData<T>,
  }
  
-@@ -481,6 +505,7 @@ impl<T: DataType> RleValueDecoder<T> {
+@@ -481,6 +506,7 @@ impl<T: DataType> RleValueDecoder<T> {
          Self {
              values_left: 0,
              decoder: RleDecoder::new(1),
-+            byte_dopo: false,
++            dopo: Bytes::new(),
              _phantom: PhantomData,
          }
      }
-@@ -509,9 +534,14 @@ where
+@@ -509,9 +535,14 @@ where
          self.decoder
              .set_data(data.slice(I32_SIZE..I32_SIZE + data_size))?;
          self.values_left = num_values;
-+        self.byte_dopo = data.len() - I32_SIZE != data_size;
++        self.dopo = data.slice(I32_SIZE + data_size..);
          Ok(())
      }
  
-+    fn fine_esatta(&self) -> bool {
-+        !self.byte_dopo && self.decoder.fine_esatta()
++    fn fine_esatta(&self, coda: usize) -> bool {
++        crate::util::bit_util::coda_di_zeri(&self.dopo, 0, coda) && self.decoder.fine_esatta(0)
 +    }
 +
      #[inline]
@@ -651,18 +758,38 @@
          self.values_left
 --- a/src/encodings/rle.rs
 +++ b/src/encodings/rle.rs
-@@ -614,6 +614,44 @@ impl RleDecoder {
+@@ -361,6 +361,9 @@ pub struct RleDecoder {
+     // The remaining number of values in Bit-Packing for this run
+     bit_packed_left: u32,
+ 
++    // PLENORA: the groups the current bit-packed run declares.
++    gruppi_della_corsa: u32,
++
+     // The current value for the case of RLE mode
+     current_value: Option<u64>,
+ }
+@@ -376,6 +379,7 @@ impl RleDecoder {
+             bit_width,
+             rle_left: 0,
+             bit_packed_left: 0,
++            gruppi_della_corsa: 0,
+             bit_reader: None,
+             index_buf: None,
+             current_value: None,
+@@ -614,6 +618,43 @@ impl RleDecoder {
          Ok(values_read)
      }
  
-+    /// PLENORA: whether the stream ends where the values read end. No value
-+    /// left in an RLE run. In a bit-packed run: the rest of the current group
-+    /// of 8 (the padding of the last group), and whole groups after it, fewer
-+    /// than `RIEMPIMENTO_BIT_PACKED` values, whatever they hold (the padding
-+    /// of DuckDB, which repeats stale bytes); no run after, at most `CODA_DI_ZERI` zero bytes (the padding
-+    /// of fastparquet, empty runs). A final bit-packed run shorter than its
-+    /// declared groups (truncated by some writers) ends with the data.
-+    pub(crate) fn fine_esatta(&self) -> bool {
++    /// PLENORA: whether the stream ends where the values read end, counting
++    /// the values left, not only the bytes (at bit width 0 a group takes no
++    /// byte). No value left in an RLE run. In a bit-packed run: the rest of
++    /// the current group of 8 (the padding of the last group); whole groups
++    /// after it only in a run of `BLOCCO_DUCKDB` groups (DuckDB pads its last
++    /// block), whatever they hold; a run truncated by the end of the data
++    /// (some writers) holds only the values its bytes carry. No run after;
++    /// then at most `coda` zero bytes (`CODA_FASTPARQUET` after the values of
++    /// a v1 page, 0 elsewhere).
++    pub(crate) fn fine_esatta(&self, coda: usize) -> bool {
 +        if self.rle_left > 0 {
 +            return false;
 +        }
@@ -672,33 +799,53 @@
 +        let larghezza = self.bit_width as usize;
 +        let dati = lettore.dati();
 +        let posizione = lettore.bit_letti();
++        let fine_dei_dati = dati.len().saturating_mul(8);
 +        let resto = self.bit_packed_left as usize;
 +        let nel_gruppo = resto % BIT_PACK_GROUP_SIZE;
-+        let fine_dei_dati = dati.len().saturating_mul(8);
++        // The values left that the data holds: all of them at bit width 0,
++        // as far as the bytes go otherwise.
++        let presenti = match larghezza {
++            0 => resto,
++            _ => resto.min(fine_dei_dati.saturating_sub(posizione) / larghezza),
++        };
++        if presenti > nel_gruppo && self.gruppi_della_corsa as usize != bit_util::BLOCCO_DUCKDB {
++            return false;
++        }
 +        let fine_della_corsa = posizione
 +            .saturating_add(resto.saturating_mul(larghezza))
 +            .min(fine_dei_dati);
-+        let fine_del_gruppo = posizione
-+            .saturating_add(nel_gruppo.saturating_mul(larghezza))
-+            .min(fine_della_corsa);
-+        // The padding values that are in the data (a truncated run declares
-+        // more than it holds).
-+        let riempimento = match larghezza {
-+            0 => resto - nel_gruppo,
-+            _ => (fine_della_corsa - fine_del_gruppo) / larghezza,
-+        };
-+        if riempimento >= bit_util::RIEMPIMENTO_BIT_PACKED {
-+            return false;
-+        }
-+        bit_util::coda_di_zeri(dati, bit_util::ceil(fine_della_corsa, 8))
++        bit_util::coda_di_zeri(dati, bit_util::ceil(fine_della_corsa, 8), coda)
 +    }
 +
      #[inline]
      fn reload(&mut self) -> Result<bool> {
          let bit_reader = self
+@@ -643,6 +684,7 @@ impl RleDecoder {
+                 self.bit_packed_left = run
+                     .checked_mul(BIT_PACK_GROUP_SIZE as u32)
+                     .ok_or_else(|| general_err!("RLE run length out of range"))?;
++                self.gruppi_della_corsa = run;
+             } else {
+                 self.rle_left = run;
+                 let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);
 --- a/src/file/serialized_reader.rs
 +++ b/src/file/serialized_reader.rs
-@@ -1303,11 +1303,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+@@ -514,8 +514,12 @@ pub(crate) fn decode_page(
+             decompressed.extend_from_slice(&buffer[..offset]);
+             // decompressed size of zero corresponds to a page with no non-null values
+             // see https://github.com/apache/parquet-format/blob/master/README.md#data-pages
+-            if decompressed_size > 0 {
+-                let compressed = &buffer[offset..];
++            // PLENORA: with no values to decompress, a compressed part that is
++            // there is still decompressed, and must give nothing: a suffix of
++            // any bytes disappeared unread (a codec writes an empty stream as
++            // a few bytes of its own, which decompress to nothing).
++            let compressed = &buffer[offset..];
++            if decompressed_size > 0 || !compressed.is_empty() {
+                 decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
+             }
+ 
+@@ -1303,11 +1307,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                  if dictionary_page.is_some() {
                      // If a dictionary page exists, consume it by taking it (sets to None)
                      dictionary_page.take();
@@ -718,33 +865,32 @@
                  Ok(())
 --- a/src/util/bit_util.rs
 +++ b/src/util/bit_util.rs
-@@ -277,6 +277,25 @@ where
+@@ -277,6 +277,24 @@ where
      <T>::from_le_bytes(buffer)
  }
  
-+/// PLENORA: the zero bytes a data page may carry after the end of a stream.
-+/// fastparquet appends 8 zero bytes to every v1 data page (`writer.py`,
-+/// `8 * b'\x00'`). Zero bytes after an RLE/bit-packed stream decode to no
-+/// value (an indicator 0 is an empty run); after `PLAIN` values they are a
-+/// tolerated deviation (two `INT32` zeros would be values), bounded here.
-+pub(crate) const CODA_DI_ZERI: usize = 8;
++/// PLENORA: the zero bytes a v1 data page may carry after the end of its
++/// value stream: fastparquet appends exactly 8 zero bytes to every v1 data
++/// page, after the values, also `PLAIN` (`writer.py`, `8 * b'\x00'`). Only
++/// there (not after levels, not in a v2 page), at most this many, all zero.
++pub(crate) const CODA_FASTPARQUET: usize = 8;
 +
-+/// PLENORA: the values a writer may pad the last bit-packed run with, in
-+/// whole groups after the last value: DuckDB writes bit-packed runs in blocks
-+/// of 32 groups (256 values) and pads the last one with stale bytes. Fewer
-+/// than this; what they hold is not read.
-+pub(crate) const RIEMPIMENTO_BIT_PACKED: usize = 256;
++/// PLENORA: the groups of the bit-packed runs of DuckDB: it writes them in
++/// blocks of 32 groups (256 values) and pads the last block with stale bytes,
++/// not zeros. Whole groups after the last value are padding only in a run of
++/// exactly this many groups; what they hold is not read.
++pub(crate) const BLOCCO_DUCKDB: usize = 32;
 +
-+/// PLENORA: whether `dati[da..]` is at most `CODA_DI_ZERI` zero bytes.
-+pub(crate) fn coda_di_zeri(dati: &[u8], da: usize) -> bool {
++/// PLENORA: whether `dati[da..]` is at most `massimo` bytes, all zero.
++pub(crate) fn coda_di_zeri(dati: &[u8], da: usize, massimo: usize) -> bool {
 +    dati.get(da..)
-+        .is_some_and(|coda| coda.len() <= CODA_DI_ZERI && coda.iter().all(|byte| *byte == 0))
++        .is_some_and(|coda| coda.len() <= massimo && coda.iter().all(|byte| *byte == 0))
 +}
 +
  /// Returns the ceil of value/divisor.
  ///
  /// This function should be removed after
-@@ -652,6 +671,16 @@ impl BitReader {
+@@ -652,6 +670,16 @@ impl BitReader {
          self.buffer.len()
      }
  

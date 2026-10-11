@@ -143,6 +143,10 @@ pub struct GenericColumnReader<R, D, V> {
 
     /// PLENORA: the values read from the current page so far.
     valori_della_pagina: usize,
+
+    /// PLENORA: the zero bytes the value stream of the current page may be
+    /// followed by (`CODA_FASTPARQUET` in a v1 page, 0 in a v2 page).
+    coda_dei_valori: usize,
 }
 
 impl<V> GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelDecoderImpl, V>
@@ -193,6 +197,7 @@ where
             has_record_delimiter: false,
             valori_dichiarati: None,
             valori_della_pagina: 0,
+            coda_dei_valori: 0,
         }
     }
 
@@ -349,12 +354,21 @@ where
 
             // If page has less rows than the remaining records to
             // be skipped, skip entire page
+            // PLENORA: the rows of the header against its levels and the
+            // schema (`num_rows` alone was trusted: 1 row over 2 values of a
+            // flat column skipped both).
+            if let (Some(righe), Some(livelli)) = (metadata.num_rows, metadata.num_levels) {
+                verifica_righe_v2(self.rep_level_decoder.is_some(), righe, livelli)?;
+            }
             let rows = metadata.num_rows.or_else(|| {
                 // If no repetition levels, num_levels == num_rows
                 self.rep_level_decoder
                     .is_none()
                     .then_some(metadata.num_levels)?
             });
+            if rows == Some(0) && metadata.num_levels != Some(0) {
+                return Err(general_err!("{}", crate::basic::PAGE_NOT_AS_DECLARED));
+            }
 
             match rows {
                 Some(rows) if rows <= remaining_records => {
@@ -391,7 +405,8 @@ where
         if let Some(decoder) = self.def_level_decoder.as_ref() {
             decoder.verifica_fine_pagina()?;
         }
-        self.values_decoder.verifica_fine_pagina()
+        self.values_decoder
+            .verifica_fine_pagina(self.coda_dei_valori)
     }
 
     /// Read the next page as a dictionary page. If the next page is not a dictionary page,
@@ -444,6 +459,7 @@ where
                             self.num_decoded_values = 0;
                             self.valori_dichiarati = None;
                             self.valori_della_pagina = 0;
+                            self.coda_dei_valori = crate::util::bit_util::CODA_FASTPARQUET;
 
                             let max_rep_level = self.descr.max_rep_level();
                             let max_def_level = self.descr.max_def_level();
@@ -497,7 +513,7 @@ where
                             num_values,
                             encoding,
                             num_nulls,
-                            num_rows: _,
+                            num_rows,
                             def_levels_byte_len,
                             rep_levels_byte_len,
                             is_compressed: _,
@@ -510,11 +526,28 @@ where
                                     num_nulls
                                 ));
                             }
+                            // PLENORA: what the header declares against the
+                            // schema. Without repetition a row is a level;
+                            // with it, a page of levels has at least one row
+                            // and no more rows than levels. A level stream
+                            // the schema does not have is empty: its bytes
+                            // were cut out of the page unread.
+                            verifica_righe_v2(
+                                self.descr.max_rep_level() > 0,
+                                num_rows as usize,
+                                num_values as usize,
+                            )?;
+                            if (self.descr.max_rep_level() == 0 && rep_levels_byte_len != 0)
+                                || (self.descr.max_def_level() == 0 && def_levels_byte_len != 0)
+                            {
+                                return Err(general_err!("{}", crate::basic::PAGE_NOT_AS_DECLARED));
+                            }
 
                             self.num_buffered_values = num_values as _;
                             self.num_decoded_values = 0;
                             self.valori_dichiarati = Some((num_values - num_nulls) as usize);
                             self.valori_della_pagina = 0;
+                            self.coda_dei_valori = 0;
 
                             // DataPage v2 only supports RLE encoding for repetition
                             // levels
@@ -565,19 +598,42 @@ where
         if self.num_buffered_values == 0 || self.num_buffered_values == self.num_decoded_values {
             // TODO: should we return false if read_new_page() = true and
             // num_buffered_values = 0?
-            if !self.read_new_page()? {
-                Ok(false)
-            } else if self.num_buffered_values == 0 {
-                // PLENORA: a page of no levels ends where it starts: its
-                // streams must be empty too.
+            // PLENORA: a page of no levels ends where it starts: its
+            // streams are checked, and the reading goes on with the next
+            // page. It returned `false`, the end of the column chunk for the
+            // Arrow reader, and the pages after it were dropped in silence.
+            loop {
+                if !self.read_new_page()? {
+                    return Ok(false);
+                }
+                if self.num_buffered_values != 0 {
+                    return Ok(true);
+                }
                 self.verifica_fine_pagina()?;
-                Ok(false)
-            } else {
-                Ok(true)
             }
         } else {
             Ok(true)
         }
+    }
+}
+
+/// PLENORA: the rows a page declares against its levels: equal without
+/// repetition; with repetition at least one row for a page of levels, and no
+/// more rows than levels.
+fn verifica_righe_v2(ripetuta: bool, righe: usize, livelli: usize) -> Result<()> {
+    let coerenti = if ripetuta {
+        righe <= livelli && (righe > 0 || livelli == 0)
+    } else {
+        righe == livelli
+    };
+    if coerenti {
+        Ok(())
+    } else {
+        Err(general_err!(
+            "data page declares {} rows for {} levels",
+            righe,
+            livelli
+        ))
     }
 }
 

@@ -141,8 +141,10 @@ pub trait ColumnValueDecoder {
     /// PLENORA: at the end of a page, after its last value, the value stream
     /// is consumed exactly: every byte of a `PLAIN` page, the dictionary
     /// indices to the end of their stream, the `RLE` booleans to their
-    /// prefixed length and nothing after it. Otherwise `PAGE_NOT_AS_DECLARED`.
-    fn verifica_fine_pagina(&self) -> Result<()>;
+    /// prefixed length. After it at most `coda` zero bytes (the padding of
+    /// fastparquet after the values of a v1 page, 0 elsewhere). Otherwise
+    /// `PAGE_NOT_AS_DECLARED`.
+    fn verifica_fine_pagina(&self, coda: usize) -> Result<()>;
 }
 
 /// PLENORA: the error of a page whose streams do not end with its values.
@@ -295,11 +297,11 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         current_decoder.skip(num_values)
     }
 
-    fn verifica_fine_pagina(&self) -> Result<()> {
+    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
         let esatta = self
             .current_encoding
             .and_then(|encoding| self.decoders[encoding as usize].as_ref())
-            .is_some_and(|decoder| decoder.fine_esatta());
+            .is_some_and(|decoder| decoder.fine_esatta(coda));
         fine_esatta(esatta)
     }
 }
@@ -333,7 +335,7 @@ impl LevelDecoder {
     /// PLENORA: the level stream ends with the levels read.
     fn fine_esatta(&self) -> bool {
         match self {
-            Self::Rle(reader, _) => reader.fine_esatta(),
+            Self::Rle(reader, _) => reader.fine_esatta(0),
         }
     }
 

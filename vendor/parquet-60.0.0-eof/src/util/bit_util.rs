@@ -277,23 +277,22 @@ where
     <T>::from_le_bytes(buffer)
 }
 
-/// PLENORA: the zero bytes a data page may carry after the end of a stream.
-/// fastparquet appends 8 zero bytes to every v1 data page (`writer.py`,
-/// `8 * b'\x00'`). Zero bytes after an RLE/bit-packed stream decode to no
-/// value (an indicator 0 is an empty run); after `PLAIN` values they are a
-/// tolerated deviation (two `INT32` zeros would be values), bounded here.
-pub(crate) const CODA_DI_ZERI: usize = 8;
+/// PLENORA: the zero bytes a v1 data page may carry after the end of its
+/// value stream: fastparquet appends exactly 8 zero bytes to every v1 data
+/// page, after the values, also `PLAIN` (`writer.py`, `8 * b'\x00'`). Only
+/// there (not after levels, not in a v2 page), at most this many, all zero.
+pub(crate) const CODA_FASTPARQUET: usize = 8;
 
-/// PLENORA: the values a writer may pad the last bit-packed run with, in
-/// whole groups after the last value: DuckDB writes bit-packed runs in blocks
-/// of 32 groups (256 values) and pads the last one with stale bytes. Fewer
-/// than this; what they hold is not read.
-pub(crate) const RIEMPIMENTO_BIT_PACKED: usize = 256;
+/// PLENORA: the groups of the bit-packed runs of DuckDB: it writes them in
+/// blocks of 32 groups (256 values) and pads the last block with stale bytes,
+/// not zeros. Whole groups after the last value are padding only in a run of
+/// exactly this many groups; what they hold is not read.
+pub(crate) const BLOCCO_DUCKDB: usize = 32;
 
-/// PLENORA: whether `dati[da..]` is at most `CODA_DI_ZERI` zero bytes.
-pub(crate) fn coda_di_zeri(dati: &[u8], da: usize) -> bool {
+/// PLENORA: whether `dati[da..]` is at most `massimo` bytes, all zero.
+pub(crate) fn coda_di_zeri(dati: &[u8], da: usize, massimo: usize) -> bool {
     dati.get(da..)
-        .is_some_and(|coda| coda.len() <= CODA_DI_ZERI && coda.iter().all(|byte| *byte == 0))
+        .is_some_and(|coda| coda.len() <= massimo && coda.iter().all(|byte| *byte == 0))
 }
 
 /// Returns the ceil of value/divisor.

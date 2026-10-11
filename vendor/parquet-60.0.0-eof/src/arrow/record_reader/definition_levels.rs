@@ -324,6 +324,8 @@ struct PackedDecoder {
     rle_value: bool,
     packed_count: usize,
     packed_offset: usize,
+    /// PLENORA: the groups the current bit-packed run declares.
+    gruppi_della_corsa: usize,
 }
 
 impl PackedDecoder {
@@ -347,6 +349,7 @@ impl PackedDecoder {
                 .checked_mul(8)
                 .ok_or_else(|| general_err!("RLE run length out of range"))?;
             self.packed_offset = 0;
+            self.gruppi_della_corsa = run;
         } else {
             self.rle_left = run;
             let byte = *self.data.as_ref().get(self.data_offset).ok_or_else(|| {
@@ -365,26 +368,25 @@ impl PackedDecoder {
     }
 
     /// PLENORA: the level stream ends with the levels read, with the rules
-    /// of `RleDecoder::fine_esatta` (bit width 1: a group is a byte): no
-    /// level left in an RLE run; in a bit-packed run the rest of the current
-    /// byte, then whole bytes of levels, whatever they hold, fewer than
-    /// `RIEMPIMENTO_BIT_PACKED` levels; no run after, at most `CODA_DI_ZERI`
-    /// zero bytes.
+    /// of `RleDecoder::fine_esatta` (bit width 1: a group is a byte, and the
+    /// bit-packed count is already cut to the bytes present): no level left
+    /// in an RLE run; in a bit-packed run the rest of the current byte, whole
+    /// bytes after it only in a run of `BLOCCO_DUCKDB` groups; no run and no
+    /// byte after.
     fn fine_esatta(&self) -> bool {
-        use crate::util::bit_util::{RIEMPIMENTO_BIT_PACKED, coda_di_zeri};
+        use crate::util::bit_util::{BLOCCO_DUCKDB, coda_di_zeri};
         if self.rle_left != 0 {
             return false;
         }
         let dati = self.data.as_ref();
         if self.packed_count != self.packed_offset {
             let resto = self.packed_count - self.packed_offset;
-            let nel_gruppo = resto % 8;
-            if resto - nel_gruppo >= RIEMPIMENTO_BIT_PACKED {
+            if resto > resto % 8 && self.gruppi_della_corsa != BLOCCO_DUCKDB {
                 return false;
             }
-            return coda_di_zeri(dati, self.data_offset + self.packed_count / 8);
+            return coda_di_zeri(dati, self.data_offset + self.packed_count / 8, 0);
         }
-        coda_di_zeri(dati, self.data_offset)
+        coda_di_zeri(dati, self.data_offset, 0)
     }
 
     /// Decodes a VLQ encoded little endian integer and returns it
@@ -427,6 +429,7 @@ impl PackedDecoder {
             rle_value: false,
             packed_count: 0,
             packed_offset: 0,
+            gruppi_della_corsa: 0,
         }
     }
 

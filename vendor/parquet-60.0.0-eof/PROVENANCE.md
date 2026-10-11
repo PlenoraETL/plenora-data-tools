@@ -404,8 +404,9 @@ direttamente (anche con gli indici di pagina caricati), i 106 file di
 
 ### Salti dentro una pagina, fine della pagina (11 ottobre 2026)
 
-Da `patches/parquet-salti-e-fine-pagina.patch`, sul quinto giro di revisione (Codex), che ha
-trovato le stesse classi nei salti e nella fine delle pagine. Due regole
+Da `patches/parquet-salti-e-fine-pagina.patch`, sul quinto e sul sesto
+giro di revisione (Codex), che hanno trovato le stesse classi nei salti e
+nella fine delle pagine. Due regole
 generali invece dei casi. Prove rosse in
 `crates/plenora-io/tests/parquet_decoder.rs` («Salti e fine della
 pagina») e `parquet_footer.rs` (selezione di righe), contro il fork del
@@ -424,40 +425,71 @@ ripetizione troncati).
    `SKIP_NOT_QUALIFIED` (`NYI`, `Unsupported` dal confine), finché non
    sono qualificati. Restano i salti di pagine intere dall'header, che ne
    controllano la codifica; ogni giro del loro ciclo consuma una pagina o
-   termina. Quindi `RowSelection`, filtri di riga, `offset`/`limit` del
-   lettore Arrow si rifiutano appena chiedono un salto che non cade su
-   pagine intere lette dall'header.
+   termina. Il salto di pagine intere confronta le righe dell'header con
+   i suoi livelli e lo schema (sesto giro, sotto). Non tutte le selezioni
+   del lettore Arrow saltano: la selezione dei row group esclude chunk
+   interi senza leggerli; `limit` può solo fermare la lettura (e una
+   lettura fermata a metà pagina non arriva alla fine di quella pagina,
+   quindi al suo controllo); `RowSelection`, i filtri di riga e `offset`
+   saltano righe, e si rifiutano appena il salto non cade su pagine intere
+   lette dall'header.
 2. **Fine della pagina esatta.** In un punto unico del lettore di colonna
-   (`verifica_fine_pagina`, alla fine di ogni pagina di dati, anche di
-   zero livelli), ogni stream deve finire con i suoi valori: livelli di
-   ripetizione e di definizione (decoder generici e ottimizzato), valori
-   `PLAIN` fino all'ultimo byte, indici di dizionario fino alla fine dello
-   stream, booleani `RLE` fino alla lunghezza prefissata e nessun byte
-   dopo. Prima i valori, i livelli o i byte in più si ignoravano **in
-   silenzio**. Tre forme ammesse, misurate su scrittori reali e limitate:
+   (`verifica_fine_pagina`), alla fine di ogni pagina di dati letta fino
+   all'ultimo livello (anche di zero livelli), ogni stream che il lettore
+   decodifica deve finire con i suoi valori: livelli di ripetizione e di
+   definizione (decoder generici e ottimizzato), valori `PLAIN` fino
+   all'ultimo byte, indici di dizionario fino alla fine dello stream
+   (contando i valori, non solo i byte: a larghezza 0 un gruppo non ha
+   byte), booleani `RLE` fino alla lunghezza prefissata. Gli stream di
+   livelli che lo schema non ha devono essere vuoti (sesto giro). Prima i
+   valori, i livelli o i byte in più si ignoravano **in silenzio**.
+   `PAGE_NOT_AS_DECLARED`. Tre forme ammesse, misurate su scrittori reali e
+   limitate:
    - il riempimento dell'ultimo gruppo bit-packed, e un'ultima corsa
-     troncata che finisce con i dati (come a monte);
+     troncata dalla fine dei dati (come a monte), che porta solo i valori
+     dei suoi byte;
    - DuckDB (1.5) scrive le corse bit-packed a blocchi di 32 gruppi e
-     completa l'ultimo con byte vecchi, non zeri: nell'ultima corsa sono
-     ammessi gruppi interi di riempimento, meno di 256 valori
-     (`RIEMPIMENTO_BIT_PACKED`), qualunque cosa contengano, e niente dopo;
-   - fastparquet (2026.9) aggiunge 8 byte a zero a ogni pagina v1
-     (`writer.py`, `8 * b'\x00'`): dopo uno stream di livelli o di valori
-     al più 8 byte, tutti zero (`CODA_DI_ZERI`; dopo i valori `PLAIN` è
-     una deviazione tollerata, due `INT32` a zero sarebbero valori). I
-     booleani `RLE` restano esatti alla lunghezza prefissata.
-   `PAGE_NOT_AS_DECLARED`. Perché il controllo distingua il riempimento
+     completa l'ultimo con byte vecchi, non zeri: gruppi interi di
+     riempimento dopo l'ultimo valore solo in una corsa di esattamente 32
+     gruppi (`BLOCCO_DUCKDB`), qualunque cosa contengano;
+   - fastparquet (2026.9) aggiunge 8 byte a zero a ogni pagina v1, dopo i
+     valori, anche `PLAIN` (`writer.py`, `8 * b'\x00'`): solo dopo lo
+     stream dei valori di una pagina v1, al più 8 byte, tutti zero
+     (`CODA_FASTPARQUET`; dopo i livelli e in una pagina v2 nessuna coda).
+     È una deviazione tollerata: due `INT32` a zero in coda a una pagina v1
+     si scartano come riempimento (`docs/limiti.md`). Perché il controllo distingua il riempimento
    dagli eccessi, i decoder dei livelli di ripetizione e degli indici di
    dizionario Arrow non leggono più in avanti oltre i valori chiesti.
+
+**Sesto giro.**
+
+1. Il salto di una pagina v2 si fidava di `num_rows` anche in una colonna
+   senza ripetizione: 1 riga su 2 valori saltava due valori per una riga, 0
+   righe saltava la pagina senza contarla. Ora le righe dell'header si
+   confrontano con i livelli e lo schema (uguali senza ripetizione; con
+   ripetizione almeno una riga per una pagina di livelli e non più righe
+   che livelli), nel salto e alla lettura della pagina v2.
+2. Dopo una pagina di zero livelli il lettore rispondeva «fine del column
+   chunk», e il lettore Arrow abbandonava le pagine successive. Ora la
+   pagina vuota si verifica e la lettura prosegue.
+3. Una pagina v2 toglieva dal payload gli stream di livelli che lo schema
+   non ha senza leggerli: ora la loro lunghezza deve essere 0.
+4. Indici bit-packed a larghezza 0: un gruppo intero in più non occupa
+   byte, e la fine lo accettava; ora si contano i valori rimasti.
+5. Una pagina v2 compressa senza valori (tutti nulli) non decomprimeva la
+   parte compressa, e un suffisso qualunque spariva. Ora si decomprime e
+   deve dare zero byte (lo stream vuoto di un codec si legge).
 
 Scrittori reali (11 ottobre 2026), su tipi comuni con null, stringhe,
 date, timestamp, dizionari e liste, da 3 a 20000 righe, con e senza
 compressione: pyarrow 25.0.1 e 26.0.0 (pagine v1 e v2, con e senza
 dizionario), fastparquet 2026.9.0 (pagine v1 e v2), DuckDB 1.5.6 (`COPY TO`,
 `PARQUET_VERSION` V1 e V2), polars 2.0.0 (scrittore proprio e pyarrow).
-Senza le due tolleranze ultime fastparquet e DuckDB V1 si rifiutavano
-tutti; con esse ogni file si legge, tranne DuckDB V2, che usa codifiche
-`DELTA_*` (`Unsupported`, come prima). Letti con `plenora-io` e
+Senza le tolleranze fastparquet e DuckDB V1 si rifiutavano tutti; con
+esse ogni file si legge, tranne DuckDB V2, che usa codifiche `DELTA_*`
+(`Unsupported`, come prima). Le pagine v2 tutte nulle compresse (pyarrow e
+fastparquet, SNAPPY e ZSTD) si leggono; GZIP, BROTLI e LZ4 non sono
+compilati (`Unsupported`, come prima). Letti con `plenora-io` e
 direttamente, i 106 file di prova hanno lo stesso esito del quarto giro.
 
 Prove unitarie del pacchetto con `parquet-testing`: 79 falliscono, le 52

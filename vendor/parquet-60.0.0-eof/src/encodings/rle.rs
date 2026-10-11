@@ -361,6 +361,9 @@ pub struct RleDecoder {
     // The remaining number of values in Bit-Packing for this run
     bit_packed_left: u32,
 
+    // PLENORA: the groups the current bit-packed run declares.
+    gruppi_della_corsa: u32,
+
     // The current value for the case of RLE mode
     current_value: Option<u64>,
 }
@@ -376,6 +379,7 @@ impl RleDecoder {
             bit_width,
             rle_left: 0,
             bit_packed_left: 0,
+            gruppi_della_corsa: 0,
             bit_reader: None,
             index_buf: None,
             current_value: None,
@@ -614,14 +618,16 @@ impl RleDecoder {
         Ok(values_read)
     }
 
-    /// PLENORA: whether the stream ends where the values read end. No value
-    /// left in an RLE run. In a bit-packed run: the rest of the current group
-    /// of 8 (the padding of the last group), and whole groups after it, fewer
-    /// than `RIEMPIMENTO_BIT_PACKED` values, whatever they hold (the padding
-    /// of DuckDB, which repeats stale bytes); no run after, at most `CODA_DI_ZERI` zero bytes (the padding
-    /// of fastparquet, empty runs). A final bit-packed run shorter than its
-    /// declared groups (truncated by some writers) ends with the data.
-    pub(crate) fn fine_esatta(&self) -> bool {
+    /// PLENORA: whether the stream ends where the values read end, counting
+    /// the values left, not only the bytes (at bit width 0 a group takes no
+    /// byte). No value left in an RLE run. In a bit-packed run: the rest of
+    /// the current group of 8 (the padding of the last group); whole groups
+    /// after it only in a run of `BLOCCO_DUCKDB` groups (DuckDB pads its last
+    /// block), whatever they hold; a run truncated by the end of the data
+    /// (some writers) holds only the values its bytes carry. No run after;
+    /// then at most `coda` zero bytes (`CODA_FASTPARQUET` after the values of
+    /// a v1 page, 0 elsewhere).
+    pub(crate) fn fine_esatta(&self, coda: usize) -> bool {
         if self.rle_left > 0 {
             return false;
         }
@@ -631,25 +637,22 @@ impl RleDecoder {
         let larghezza = self.bit_width as usize;
         let dati = lettore.dati();
         let posizione = lettore.bit_letti();
+        let fine_dei_dati = dati.len().saturating_mul(8);
         let resto = self.bit_packed_left as usize;
         let nel_gruppo = resto % BIT_PACK_GROUP_SIZE;
-        let fine_dei_dati = dati.len().saturating_mul(8);
+        // The values left that the data holds: all of them at bit width 0,
+        // as far as the bytes go otherwise.
+        let presenti = match larghezza {
+            0 => resto,
+            _ => resto.min(fine_dei_dati.saturating_sub(posizione) / larghezza),
+        };
+        if presenti > nel_gruppo && self.gruppi_della_corsa as usize != bit_util::BLOCCO_DUCKDB {
+            return false;
+        }
         let fine_della_corsa = posizione
             .saturating_add(resto.saturating_mul(larghezza))
             .min(fine_dei_dati);
-        let fine_del_gruppo = posizione
-            .saturating_add(nel_gruppo.saturating_mul(larghezza))
-            .min(fine_della_corsa);
-        // The padding values that are in the data (a truncated run declares
-        // more than it holds).
-        let riempimento = match larghezza {
-            0 => resto - nel_gruppo,
-            _ => (fine_della_corsa - fine_del_gruppo) / larghezza,
-        };
-        if riempimento >= bit_util::RIEMPIMENTO_BIT_PACKED {
-            return false;
-        }
-        bit_util::coda_di_zeri(dati, bit_util::ceil(fine_della_corsa, 8))
+        bit_util::coda_di_zeri(dati, bit_util::ceil(fine_della_corsa, 8), coda)
     }
 
     #[inline]
@@ -681,6 +684,7 @@ impl RleDecoder {
                 self.bit_packed_left = run
                     .checked_mul(BIT_PACK_GROUP_SIZE as u32)
                     .ok_or_else(|| general_err!("RLE run length out of range"))?;
+                self.gruppi_della_corsa = run;
             } else {
                 self.rle_left = run;
                 let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);

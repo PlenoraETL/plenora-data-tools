@@ -57,14 +57,20 @@ la cui versione non ha qui una voce datata.
   fuori ordine nell'offset index traboccava; una pagina saltata intera non
   si controllava per la codifica; un dizionario `JSON` o `ENUM` teneva
   valori binari. Ora errori. `patches/parquet-livelli-dizionari-indici.patch`.
-- **Fine della pagina esatta nel fork `parquet`** (quinto giro): valori
+- **Fine della pagina nel fork `parquet`** (quinto e sesto giro): valori
   `PLAIN`, livelli, indici di dizionario o booleani `RLE` in più dopo
-  quelli della pagina si ignoravano in silenzio; ora una pagina deve finire
-  con i suoi valori, tollerando le forme di DuckDB (riempimento
-  dell'ultima corsa bit-packed, meno di 256 valori) e di fastparquet (fino
-  a 8 byte a zero in coda). Un salto dentro una pagina, che non decodificava ciò
-  che saltava (e con livelli troncati non terminava), non è più
-  qualificato: `Unsupported`; data legge sempre per intero.
+  quelli di una pagina letta per intero si ignoravano in silenzio; ora
+  sono un errore, tranne due forme di scrittori reali: fino a 8 byte a
+  zero dopo i valori di una pagina v1 (fastparquet: una pagina v1 `PLAIN`
+  con valori a zero in più entro quegli 8 byte si legge senza di essi,
+  `docs/limiti.md`) e il riempimento di un blocco bit-packed di 32 gruppi
+  (DuckDB). Una pagina vuota non ferma più la lettura delle pagine dopo;
+  le righe di una pagina v2 si confrontano con i suoi livelli; gli stream
+  di livelli assenti dallo schema devono essere vuoti; una pagina
+  compressa senza valori non nasconde più un suffisso. Un salto dentro una
+  pagina, che non decodificava ciò che saltava (e con livelli troncati non
+  terminava), non è più qualificato: `Unsupported`; data legge sempre per
+  intero.
   `patches/parquet-salti-e-fine-pagina.patch`.
 - **Livelli, interi stretti e varint nel fork `parquet`** (terzo giro di
   revisione): un livello oltre il massimo della colonna (contato come

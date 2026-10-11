@@ -1092,8 +1092,10 @@ pagina.
 
 **Ambito.** Il fork `vendor/parquet-60.0.0-eof`: `skip_records` del
 lettore di colonna e il salto di pagine del lettore di pagine (offset
-index), quindi `RowSelection`, filtri di riga, `offset` e `limit` del
-lettore Arrow.
+index). Nel lettore Arrow saltano righe `RowSelection`, i filtri di riga e
+`offset`; la selezione dei row group esclude chunk interi senza saltare
+dentro una pagina; `limit` può solo fermare la lettura, e una pagina
+lasciata a metà non arriva al controllo della sua fine.
 
 **Hazard.** Un salto dentro una pagina, o di una pagina senza header, non
 decodificava ciò che saltava: è `SKIP_NOT_QUALIFIED` (`Unsupported` dal
@@ -1106,6 +1108,26 @@ controllano la codifica senza decodificarle.
 lettura (leggi e butta), con una guardia di avanzamento in ogni ciclo e le
 prove di questo giro, oppure il bisogno di una selezione di righe da
 parte di data o IO-tools.
+
+## Coda di zeri delle pagine Parquet di fastparquet
+
+**Regola.** Una pagina Parquet finisce dove finiscono i suoi livelli e i
+suoi valori (`PAGE_NOT_AS_DECLARED` altrimenti).
+
+**Ambito.** Il fork `vendor/parquet-60.0.0-eof`, fine dello stream dei
+valori delle pagine di dati v1 (`CODA_FASTPARQUET`).
+
+**Hazard.** fastparquet aggiunge 8 byte a zero a ogni pagina v1, dopo i
+valori, anche `PLAIN` (`writer.py`, `8 * b'\x00'`): rifiutarli
+rifiuterebbe ogni suo file. Dopo lo stream dei valori di una pagina v1 si
+tollerano al più 8 byte, tutti zero: una pagina v1 `PLAIN` con valori a
+zero in più, entro 8 byte (due `INT32`, un `INT64`), si legge senza quei
+valori invece di essere rifiutata. Mai dopo i livelli, mai in una pagina
+v2, mai byte diversi da zero. Della stessa natura, per DuckDB: gruppi di
+riempimento nell'ultima corsa bit-packed, solo se la corsa è di 32 gruppi.
+
+**Condizione di rientro.** fastparquet smette di aggiungere la coda (o la
+dichiara nell'header della pagina), e i suoi file in uso sono riscritti.
 
 ## Codifiche Parquet non qualificate
 

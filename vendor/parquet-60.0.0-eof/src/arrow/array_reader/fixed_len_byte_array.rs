@@ -591,12 +591,12 @@ impl ColumnValueDecoder for ValueDecoder {
         }
     }
 
-    fn verifica_fine_pagina(&self) -> Result<()> {
+    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
         let esatta = match self.decoder.as_ref() {
             Some(Decoder::Plain { buf, offset }) => {
-                crate::util::bit_util::coda_di_zeri(buf, *offset)
+                crate::util::bit_util::coda_di_zeri(buf, *offset, coda)
             }
-            Some(Decoder::Dict { decoder }) => decoder.fine_esatta(),
+            Some(Decoder::Dict { decoder }) => decoder.fine_esatta(coda),
             Some(Decoder::Delta { .. } | Decoder::ByteStreamSplit { .. }) | None => false,
         };
         crate::column::reader::decoder::fine_esatta(esatta)

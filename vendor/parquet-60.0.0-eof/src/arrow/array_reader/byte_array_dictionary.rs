@@ -503,10 +503,10 @@ where
         }
     }
 
-    fn verifica_fine_pagina(&self) -> Result<()> {
+    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
         let esatta = match self.decoder.as_ref() {
-            Some(MaybeDictionaryDecoder::Fallback(decoder)) => decoder.fine_esatta(),
-            Some(MaybeDictionaryDecoder::Dict { decoder, .. }) => decoder.fine_esatta(),
+            Some(MaybeDictionaryDecoder::Fallback(decoder)) => decoder.fine_esatta(coda),
+            Some(MaybeDictionaryDecoder::Dict { decoder, .. }) => decoder.fine_esatta(coda),
             None => false,
         };
         crate::column::reader::decoder::fine_esatta(esatta)
