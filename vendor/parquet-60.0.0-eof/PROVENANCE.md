@@ -433,17 +433,32 @@ ripetizione troncati).
    ripetizione e di definizione (decoder generici e ottimizzato), valori
    `PLAIN` fino all'ultimo byte, indici di dizionario fino alla fine dello
    stream, booleani `RLE` fino alla lunghezza prefissata e nessun byte
-   dopo. È ammesso solo il riempimento dell'ultimo gruppo bit-packed (e
-   l'ultimo gruppo troncato, che finisce con i dati). Prima i valori, i
-   livelli o i byte in più si ignoravano **in silenzio**.
+   dopo. Prima i valori, i livelli o i byte in più si ignoravano **in
+   silenzio**. Tre forme ammesse, misurate su scrittori reali e limitate:
+   - il riempimento dell'ultimo gruppo bit-packed, e un'ultima corsa
+     troncata che finisce con i dati (come a monte);
+   - DuckDB (1.5) scrive le corse bit-packed a blocchi di 32 gruppi e
+     completa l'ultimo con byte vecchi, non zeri: nell'ultima corsa sono
+     ammessi gruppi interi di riempimento, meno di 256 valori
+     (`RIEMPIMENTO_BIT_PACKED`), qualunque cosa contengano, e niente dopo;
+   - fastparquet (2026.9) aggiunge 8 byte a zero a ogni pagina v1
+     (`writer.py`, `8 * b'\x00'`): dopo uno stream di livelli o di valori
+     al più 8 byte, tutti zero (`CODA_DI_ZERI`; dopo i valori `PLAIN` è
+     una deviazione tollerata, due `INT32` a zero sarebbero valori). I
+     booleani `RLE` restano esatti alla lunghezza prefissata.
    `PAGE_NOT_AS_DECLARED`. Perché il controllo distingua il riempimento
    dagli eccessi, i decoder dei livelli di ripetizione e degli indici di
    dizionario Arrow non leggono più in avanti oltre i valori chiesti.
 
-I padding di fastparquet (zeri dopo l'ultima corsa) ora sono un errore:
-nessuno dei 106 file di prova ne ha. Letti con `plenora-io` e
-direttamente, i 106 file hanno lo stesso esito del quarto giro (cambia
-solo il messaggio di `ARROW-17100.parquet`, che si rifiutava già).
+Scrittori reali (11 ottobre 2026), su tipi comuni con null, stringhe,
+date, timestamp, dizionari e liste, da 3 a 20000 righe, con e senza
+compressione: pyarrow 25.0.1 e 26.0.0 (pagine v1 e v2, con e senza
+dizionario), fastparquet 2026.9.0 (pagine v1 e v2), DuckDB 1.5.6 (`COPY TO`,
+`PARQUET_VERSION` V1 e V2), polars 2.0.0 (scrittore proprio e pyarrow).
+Senza le due tolleranze ultime fastparquet e DuckDB V1 si rifiutavano
+tutti; con esse ogni file si legge, tranne DuckDB V2, che usa codifiche
+`DELTA_*` (`Unsupported`, come prima). Letti con `plenora-io` e
+direttamente, i 106 file di prova hanno lo stesso esito del quarto giro.
 
 Prove unitarie del pacchetto con `parquet-testing`: 79 falliscono, le 52
 di prima più 27 attese, tutte su salti dentro una pagina o selezioni di

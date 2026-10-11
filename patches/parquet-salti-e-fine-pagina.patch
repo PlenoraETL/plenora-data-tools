@@ -22,7 +22,7 @@
 +    /// PLENORA: the page ends with the values read.
 +    pub fn fine_esatta(&self) -> bool {
 +        match self {
-+            Self::Plain(d) => d.offset == d.buf.len(),
++            Self::Plain(d) => crate::util::bit_util::coda_di_zeri(&d.buf, d.offset),
 +            Self::Dictionary(d) => d.decoder.fine_esatta(),
 +            Self::DeltaLength(_) | Self::DeltaByteArray(_) => false,
 +        }
@@ -73,7 +73,7 @@
 +    /// PLENORA: the page ends with the values read.
 +    pub fn fine_esatta(&self) -> bool {
 +        match self {
-+            Self::Plain(d) => d.offset == d.buf.len(),
++            Self::Plain(d) => crate::util::bit_util::coda_di_zeri(&d.buf, d.offset),
 +            Self::Dictionary(d) => d.decoder.fine_esatta(),
 +            Self::DeltaLength(_) | Self::DeltaByteArray(_) => false,
 +        }
@@ -84,14 +84,16 @@
          data: Bytes,
 --- a/src/arrow/array_reader/fixed_len_byte_array.rs
 +++ b/src/arrow/array_reader/fixed_len_byte_array.rs
-@@ -590,6 +590,15 @@ impl ColumnValueDecoder for ValueDecoder {
+@@ -590,6 +590,17 @@ impl ColumnValueDecoder for ValueDecoder {
              }
          }
      }
 +
 +    fn verifica_fine_pagina(&self) -> Result<()> {
 +        let esatta = match self.decoder.as_ref() {
-+            Some(Decoder::Plain { buf, offset }) => *offset == buf.len(),
++            Some(Decoder::Plain { buf, offset }) => {
++                crate::util::bit_util::coda_di_zeri(buf, *offset)
++            }
 +            Some(Decoder::Dict { decoder }) => decoder.fine_esatta(),
 +            Some(Decoder::Delta { .. } | Decoder::ByteStreamSplit { .. }) | None => false,
 +        };
@@ -145,23 +147,31 @@
  }
  
  impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
-@@ -357,6 +364,21 @@ impl PackedDecoder {
+@@ -357,6 +364,29 @@ impl PackedDecoder {
          Ok(())
      }
  
-+    /// PLENORA: the level stream ends with the levels read: no level left
-+    /// in an RLE run; in a bit-packed run at most the rest of the current
-+    /// byte (the padding of the last group, bit width 1) and no byte after
-+    /// the run; no run after.
++    /// PLENORA: the level stream ends with the levels read, with the rules
++    /// of `RleDecoder::fine_esatta` (bit width 1: a group is a byte): no
++    /// level left in an RLE run; in a bit-packed run the rest of the current
++    /// byte, then whole bytes of levels, whatever they hold, fewer than
++    /// `RIEMPIMENTO_BIT_PACKED` levels; no run after, at most `CODA_DI_ZERI`
++    /// zero bytes.
 +    fn fine_esatta(&self) -> bool {
++        use crate::util::bit_util::{RIEMPIMENTO_BIT_PACKED, coda_di_zeri};
 +        if self.rle_left != 0 {
 +            return false;
 +        }
++        let dati = self.data.as_ref();
 +        if self.packed_count != self.packed_offset {
 +            let resto = self.packed_count - self.packed_offset;
-+            return resto < 8 && self.data_offset + self.packed_count / 8 == self.data.len();
++            let nel_gruppo = resto % 8;
++            if resto - nel_gruppo >= RIEMPIMENTO_BIT_PACKED {
++                return false;
++            }
++            return coda_di_zeri(dati, self.data_offset + self.packed_count / 8);
 +        }
-+        self.data_offset == self.data.len()
++        coda_di_zeri(dati, self.data_offset)
 +    }
 +
      /// Decodes a VLQ encoded little endian integer and returns it
@@ -578,18 +588,23 @@
      /// Consumes values from this decoder and write the results to `buffer`. This will try
      /// to fill up `buffer`.
      ///
-@@ -340,6 +347,10 @@ impl<T: DataType> Decoder<T> for PlainDecoder<T> {
+@@ -340,6 +347,15 @@ impl<T: DataType> Decoder<T> for PlainDecoder<T> {
          T::T::decode(buffer, &mut self.inner)
      }
  
 +    fn fine_esatta(&self) -> bool {
-+        self.tutto_consumato()
++        use crate::util::bit_util::coda_di_zeri;
++        match (&self.inner.data, &self.inner.bit_reader) {
++            (Some(data), _) => coda_di_zeri(data, self.inner.start),
++            (None, Some(lettore)) => coda_di_zeri(lettore.dati(), lettore.get_byte_offset()),
++            (None, None) => false,
++        }
 +    }
 +
      #[inline]
      fn skip(&mut self, num_values: usize) -> Result<usize> {
          T::T::skip(&mut self.inner, num_values)
-@@ -439,6 +450,12 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
+@@ -439,6 +455,12 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
          rle.get_batch_with_dict(&self.dictionary[..], buffer, num_values)
      }
  
@@ -602,7 +617,7 @@
      /// Number of values left in this decoder stream
      fn values_left(&self) -> usize {
          self.num_values
-@@ -467,6 +484,8 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
+@@ -467,6 +489,8 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
  pub struct RleValueDecoder<T: DataType> {
      values_left: usize,
      decoder: RleDecoder,
@@ -611,7 +626,7 @@
      _phantom: PhantomData<T>,
  }
  
-@@ -481,6 +500,7 @@ impl<T: DataType> RleValueDecoder<T> {
+@@ -481,6 +505,7 @@ impl<T: DataType> RleValueDecoder<T> {
          Self {
              values_left: 0,
              decoder: RleDecoder::new(1),
@@ -619,7 +634,7 @@
              _phantom: PhantomData,
          }
      }
-@@ -509,9 +529,14 @@ where
+@@ -509,9 +534,14 @@ where
          self.decoder
              .set_data(data.slice(I32_SIZE..I32_SIZE + data_size))?;
          self.values_left = num_values;
@@ -636,15 +651,17 @@
          self.values_left
 --- a/src/encodings/rle.rs
 +++ b/src/encodings/rle.rs
-@@ -614,6 +614,24 @@ impl RleDecoder {
+@@ -614,6 +614,44 @@ impl RleDecoder {
          Ok(values_read)
      }
  
-+    /// PLENORA: whether the stream ends where the values read end. No values
-+    /// left in an RLE run; in a bit-packed run, at most the rest of the
-+    /// current group of 8 (the padding of the last group) and no byte after
-+    /// it; no run after. A final bit-packed run shorter than its declared
-+    /// groups (truncated by some writers) ends with the data, and is exact.
++    /// PLENORA: whether the stream ends where the values read end. No value
++    /// left in an RLE run. In a bit-packed run: the rest of the current group
++    /// of 8 (the padding of the last group), and whole groups after it, fewer
++    /// than `RIEMPIMENTO_BIT_PACKED` values, whatever they hold (the padding
++    /// of DuckDB, which repeats stale bytes); no run after, at most `CODA_DI_ZERI` zero bytes (the padding
++    /// of fastparquet, empty runs). A final bit-packed run shorter than its
++    /// declared groups (truncated by some writers) ends with the data.
 +    pub(crate) fn fine_esatta(&self) -> bool {
 +        if self.rle_left > 0 {
 +            return false;
@@ -652,10 +669,28 @@
 +        let Some(lettore) = self.bit_reader.as_ref() else {
 +            return false;
 +        };
-+        let resto_del_gruppo = (self.bit_packed_left as usize % BIT_PACK_GROUP_SIZE)
-+            .saturating_mul(self.bit_width as usize);
-+        let fine_del_gruppo = lettore.bit_letti().saturating_add(resto_del_gruppo);
-+        lettore.buffer_len() <= bit_util::ceil(fine_del_gruppo, 8)
++        let larghezza = self.bit_width as usize;
++        let dati = lettore.dati();
++        let posizione = lettore.bit_letti();
++        let resto = self.bit_packed_left as usize;
++        let nel_gruppo = resto % BIT_PACK_GROUP_SIZE;
++        let fine_dei_dati = dati.len().saturating_mul(8);
++        let fine_della_corsa = posizione
++            .saturating_add(resto.saturating_mul(larghezza))
++            .min(fine_dei_dati);
++        let fine_del_gruppo = posizione
++            .saturating_add(nel_gruppo.saturating_mul(larghezza))
++            .min(fine_della_corsa);
++        // The padding values that are in the data (a truncated run declares
++        // more than it holds).
++        let riempimento = match larghezza {
++            0 => resto - nel_gruppo,
++            _ => (fine_della_corsa - fine_del_gruppo) / larghezza,
++        };
++        if riempimento >= bit_util::RIEMPIMENTO_BIT_PACKED {
++            return false;
++        }
++        bit_util::coda_di_zeri(dati, bit_util::ceil(fine_della_corsa, 8))
 +    }
 +
      #[inline]
@@ -683,13 +718,44 @@
                  Ok(())
 --- a/src/util/bit_util.rs
 +++ b/src/util/bit_util.rs
-@@ -652,6 +652,11 @@ impl BitReader {
+@@ -277,6 +277,25 @@ where
+     <T>::from_le_bytes(buffer)
+ }
+ 
++/// PLENORA: the zero bytes a data page may carry after the end of a stream.
++/// fastparquet appends 8 zero bytes to every v1 data page (`writer.py`,
++/// `8 * b'\x00'`). Zero bytes after an RLE/bit-packed stream decode to no
++/// value (an indicator 0 is an empty run); after `PLAIN` values they are a
++/// tolerated deviation (two `INT32` zeros would be values), bounded here.
++pub(crate) const CODA_DI_ZERI: usize = 8;
++
++/// PLENORA: the values a writer may pad the last bit-packed run with, in
++/// whole groups after the last value: DuckDB writes bit-packed runs in blocks
++/// of 32 groups (256 values) and pads the last one with stale bytes. Fewer
++/// than this; what they hold is not read.
++pub(crate) const RIEMPIMENTO_BIT_PACKED: usize = 256;
++
++/// PLENORA: whether `dati[da..]` is at most `CODA_DI_ZERI` zero bytes.
++pub(crate) fn coda_di_zeri(dati: &[u8], da: usize) -> bool {
++    dati.get(da..)
++        .is_some_and(|coda| coda.len() <= CODA_DI_ZERI && coda.iter().all(|byte| *byte == 0))
++}
++
+ /// Returns the ceil of value/divisor.
+ ///
+ /// This function should be removed after
+@@ -652,6 +671,16 @@ impl BitReader {
          self.buffer.len()
      }
  
 +    /// PLENORA: the bits consumed so far.
 +    pub(crate) fn bit_letti(&self) -> usize {
 +        self.byte_offset * 8 + self.bit_offset
++    }
++
++    /// PLENORA: the bytes of the buffer.
++    pub(crate) fn dati(&self) -> &[u8] {
++        &self.buffer
 +    }
 +
      /// Returns the current byte offset, rounded up to the next whole byte.

@@ -317,7 +317,7 @@ impl ByteArrayDecoder {
     /// PLENORA: the page ends with the values read.
     pub fn fine_esatta(&self) -> bool {
         match self {
-            Self::Plain(d) => d.offset == d.buf.len(),
+            Self::Plain(d) => crate::util::bit_util::coda_di_zeri(&d.buf, d.offset),
             Self::Dictionary(d) => d.decoder.fine_esatta(),
             Self::DeltaLength(_) | Self::DeltaByteArray(_) => false,
         }

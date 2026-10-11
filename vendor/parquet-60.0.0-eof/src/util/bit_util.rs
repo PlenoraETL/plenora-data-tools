@@ -277,6 +277,25 @@ where
     <T>::from_le_bytes(buffer)
 }
 
+/// PLENORA: the zero bytes a data page may carry after the end of a stream.
+/// fastparquet appends 8 zero bytes to every v1 data page (`writer.py`,
+/// `8 * b'\x00'`). Zero bytes after an RLE/bit-packed stream decode to no
+/// value (an indicator 0 is an empty run); after `PLAIN` values they are a
+/// tolerated deviation (two `INT32` zeros would be values), bounded here.
+pub(crate) const CODA_DI_ZERI: usize = 8;
+
+/// PLENORA: the values a writer may pad the last bit-packed run with, in
+/// whole groups after the last value: DuckDB writes bit-packed runs in blocks
+/// of 32 groups (256 values) and pads the last one with stale bytes. Fewer
+/// than this; what they hold is not read.
+pub(crate) const RIEMPIMENTO_BIT_PACKED: usize = 256;
+
+/// PLENORA: whether `dati[da..]` is at most `CODA_DI_ZERI` zero bytes.
+pub(crate) fn coda_di_zeri(dati: &[u8], da: usize) -> bool {
+    dati.get(da..)
+        .is_some_and(|coda| coda.len() <= CODA_DI_ZERI && coda.iter().all(|byte| *byte == 0))
+}
+
 /// Returns the ceil of value/divisor.
 ///
 /// This function should be removed after
@@ -655,6 +674,11 @@ impl BitReader {
     /// PLENORA: the bits consumed so far.
     pub(crate) fn bit_letti(&self) -> usize {
         self.byte_offset * 8 + self.bit_offset
+    }
+
+    /// PLENORA: the bytes of the buffer.
+    pub(crate) fn dati(&self) -> &[u8] {
+        &self.buffer
     }
 
     /// Returns the current byte offset, rounded up to the next whole byte.

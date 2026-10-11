@@ -60,7 +60,9 @@ la cui versione non ha qui una voce datata.
 - **Fine della pagina esatta nel fork `parquet`** (quinto giro): valori
   `PLAIN`, livelli, indici di dizionario o booleani `RLE` in più dopo
   quelli della pagina si ignoravano in silenzio; ora una pagina deve finire
-  con i suoi valori. Un salto dentro una pagina, che non decodificava ciò
+  con i suoi valori, tollerando le forme di DuckDB (riempimento
+  dell'ultima corsa bit-packed, meno di 256 valori) e di fastparquet (fino
+  a 8 byte a zero in coda). Un salto dentro una pagina, che non decodificava ciò
   che saltava (e con livelli troncati non terminava), non è più
   qualificato: `Unsupported`; data legge sempre per intero.
   `patches/parquet-salti-e-fine-pagina.patch`.

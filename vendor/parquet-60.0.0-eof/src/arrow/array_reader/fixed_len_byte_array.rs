@@ -593,7 +593,9 @@ impl ColumnValueDecoder for ValueDecoder {
 
     fn verifica_fine_pagina(&self) -> Result<()> {
         let esatta = match self.decoder.as_ref() {
-            Some(Decoder::Plain { buf, offset }) => *offset == buf.len(),
+            Some(Decoder::Plain { buf, offset }) => {
+                crate::util::bit_util::coda_di_zeri(buf, *offset)
+            }
             Some(Decoder::Dict { decoder }) => decoder.fine_esatta(),
             Some(Decoder::Delta { .. } | Decoder::ByteStreamSplit { .. }) | None => false,
         };

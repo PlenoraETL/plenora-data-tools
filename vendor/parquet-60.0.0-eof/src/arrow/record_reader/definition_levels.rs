@@ -364,19 +364,27 @@ impl PackedDecoder {
         Ok(())
     }
 
-    /// PLENORA: the level stream ends with the levels read: no level left
-    /// in an RLE run; in a bit-packed run at most the rest of the current
-    /// byte (the padding of the last group, bit width 1) and no byte after
-    /// the run; no run after.
+    /// PLENORA: the level stream ends with the levels read, with the rules
+    /// of `RleDecoder::fine_esatta` (bit width 1: a group is a byte): no
+    /// level left in an RLE run; in a bit-packed run the rest of the current
+    /// byte, then whole bytes of levels, whatever they hold, fewer than
+    /// `RIEMPIMENTO_BIT_PACKED` levels; no run after, at most `CODA_DI_ZERI`
+    /// zero bytes.
     fn fine_esatta(&self) -> bool {
+        use crate::util::bit_util::{RIEMPIMENTO_BIT_PACKED, coda_di_zeri};
         if self.rle_left != 0 {
             return false;
         }
+        let dati = self.data.as_ref();
         if self.packed_count != self.packed_offset {
             let resto = self.packed_count - self.packed_offset;
-            return resto < 8 && self.data_offset + self.packed_count / 8 == self.data.len();
+            let nel_gruppo = resto % 8;
+            if resto - nel_gruppo >= RIEMPIMENTO_BIT_PACKED {
+                return false;
+            }
+            return coda_di_zeri(dati, self.data_offset + self.packed_count / 8);
         }
-        self.data_offset == self.data.len()
+        coda_di_zeri(dati, self.data_offset)
     }
 
     /// Decodes a VLQ encoded little endian integer and returns it

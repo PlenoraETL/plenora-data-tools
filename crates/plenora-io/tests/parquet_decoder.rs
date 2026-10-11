@@ -2078,3 +2078,77 @@ fn una_pagina_con_byte_o_valori_in_piu_e_un_errore() {
     let byte = parquet(&colonna(INT32), 2, PLAIN, &dati, None, None);
     assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(2));
 }
+
+/// Livelli in una corsa bit-packed di `gruppi` gruppi da 8: i primi due
+/// bit accesi, il resto dei byte `riempimento`.
+fn corsa_bit_packed(gruppi: u64, riempimento: u8) -> Vec<u8> {
+    let mut livelli = Vec::new();
+    varint((gruppi << 1) | 1, &mut livelli);
+    livelli.push(0b11);
+    livelli.extend(std::iter::repeat_n(
+        riempimento,
+        usize::try_from(gruppi).unwrap() - 1,
+    ));
+    livelli
+}
+
+/// Le forme di scrittori reali che la fine esatta della pagina tollera,
+/// ciascuna con il suo limite. fastparquet aggiunge 8 byte a zero a ogni
+/// pagina v1 (`writer.py`): fino a 8 byte a zero dopo uno stream, non 9 e
+/// non diversi da zero. DuckDB scrive le corse bit-packed a blocchi di 32
+/// gruppi (256 valori) e completa l'ultimo con byte vecchi: valori di
+/// riempimento nell'ultima corsa, meno di 256, qualunque cosa contengano.
+#[test]
+fn la_fine_della_pagina_tollera_le_forme_di_fastparquet_e_duckdb() {
+    let atteso = parquet::basic::PAGE_NOT_AS_DECLARED;
+    // fastparquet: 8 zeri dopo i valori PLAIN.
+    let mut valori = 7_i32.to_le_bytes().to_vec();
+    valori.extend_from_slice(&[0; 8]);
+    let byte = parquet(&colonna(INT32), 1, PLAIN, &valori, None, None);
+    assert_eq!(valori_arrow(&byte), ["7"]);
+    assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(1));
+    valori.push(0);
+    let byte = parquet(&colonna(INT32), 1, PLAIN, &valori, None, None);
+    contiene(arrow(&byte), atteso);
+    rifiutato_dal_confine(&byte);
+    // E dopo gli indici di dizionario.
+    let mut indici = vec![1_u8, 2, 0];
+    indici.extend_from_slice(&[0; 8]);
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &indici,
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    assert_eq!(valori_arrow(&byte), ["a"]);
+    // DuckDB: 32 gruppi per 2 righe, il riempimento con byte qualunque.
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    let byte = opzionale_con_livelli(2, &corsa_bit_packed(32, 0xA5), &dati);
+    assert_eq!(valori_arrow(&byte), ["1", "2"]);
+    // Lo stesso nel decoder generico dei livelli (una lista [1, 2]).
+    let byte = ripetuta(
+        2,
+        &[1 << 1, 0, 1 << 1, 1],
+        &corsa_bit_packed(32, 0xA5),
+        &dati,
+    );
+    assert_eq!(arrow(&byte), Ok(1));
+    // Oltre il limite: 33 gruppi (256 valori di riempimento dopo il gruppo).
+    let byte = opzionale_con_livelli(2, &corsa_bit_packed(33, 0xA5), &dati);
+    contiene(arrow(&byte), atteso);
+    rifiutato_dal_confine(&byte);
+    let byte = ripetuta(
+        2,
+        &[1 << 1, 0, 1 << 1, 1],
+        &corsa_bit_packed(33, 0xA5),
+        &dati,
+    );
+    contiene(arrow(&byte), atteso);
+    // Un byte dopo la corsa che non è zero.
+    let mut dopo = corsa_bit_packed(32, 0);
+    dopo.push(1);
+    let byte = opzionale_con_livelli(2, &dopo, &dati);
+    contiene(arrow(&byte), atteso);
+}

@@ -614,11 +614,13 @@ impl RleDecoder {
         Ok(values_read)
     }
 
-    /// PLENORA: whether the stream ends where the values read end. No values
-    /// left in an RLE run; in a bit-packed run, at most the rest of the
-    /// current group of 8 (the padding of the last group) and no byte after
-    /// it; no run after. A final bit-packed run shorter than its declared
-    /// groups (truncated by some writers) ends with the data, and is exact.
+    /// PLENORA: whether the stream ends where the values read end. No value
+    /// left in an RLE run. In a bit-packed run: the rest of the current group
+    /// of 8 (the padding of the last group), and whole groups after it, fewer
+    /// than `RIEMPIMENTO_BIT_PACKED` values, whatever they hold (the padding
+    /// of DuckDB, which repeats stale bytes); no run after, at most `CODA_DI_ZERI` zero bytes (the padding
+    /// of fastparquet, empty runs). A final bit-packed run shorter than its
+    /// declared groups (truncated by some writers) ends with the data.
     pub(crate) fn fine_esatta(&self) -> bool {
         if self.rle_left > 0 {
             return false;
@@ -626,10 +628,28 @@ impl RleDecoder {
         let Some(lettore) = self.bit_reader.as_ref() else {
             return false;
         };
-        let resto_del_gruppo = (self.bit_packed_left as usize % BIT_PACK_GROUP_SIZE)
-            .saturating_mul(self.bit_width as usize);
-        let fine_del_gruppo = lettore.bit_letti().saturating_add(resto_del_gruppo);
-        lettore.buffer_len() <= bit_util::ceil(fine_del_gruppo, 8)
+        let larghezza = self.bit_width as usize;
+        let dati = lettore.dati();
+        let posizione = lettore.bit_letti();
+        let resto = self.bit_packed_left as usize;
+        let nel_gruppo = resto % BIT_PACK_GROUP_SIZE;
+        let fine_dei_dati = dati.len().saturating_mul(8);
+        let fine_della_corsa = posizione
+            .saturating_add(resto.saturating_mul(larghezza))
+            .min(fine_dei_dati);
+        let fine_del_gruppo = posizione
+            .saturating_add(nel_gruppo.saturating_mul(larghezza))
+            .min(fine_della_corsa);
+        // The padding values that are in the data (a truncated run declares
+        // more than it holds).
+        let riempimento = match larghezza {
+            0 => resto - nel_gruppo,
+            _ => (fine_della_corsa - fine_del_gruppo) / larghezza,
+        };
+        if riempimento >= bit_util::RIEMPIMENTO_BIT_PACKED {
+            return false;
+        }
+        bit_util::coda_di_zeri(dati, bit_util::ceil(fine_della_corsa, 8))
     }
 
     #[inline]

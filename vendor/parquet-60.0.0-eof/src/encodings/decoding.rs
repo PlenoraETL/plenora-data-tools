@@ -348,7 +348,12 @@ impl<T: DataType> Decoder<T> for PlainDecoder<T> {
     }
 
     fn fine_esatta(&self) -> bool {
-        self.tutto_consumato()
+        use crate::util::bit_util::coda_di_zeri;
+        match (&self.inner.data, &self.inner.bit_reader) {
+            (Some(data), _) => coda_di_zeri(data, self.inner.start),
+            (None, Some(lettore)) => coda_di_zeri(lettore.dati(), lettore.get_byte_offset()),
+            (None, None) => false,
+        }
     }
 
     #[inline]
