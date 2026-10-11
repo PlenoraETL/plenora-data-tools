@@ -1815,8 +1815,9 @@ pub(crate) mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use crate::util::test_common::rng;
     use rand::rngs::StdRng;
-    use rand::{Rng, RngExt, SeedableRng, rng};
+    use rand::{Rng, RngExt, SeedableRng};
     use tempfile::tempfile;
 
     use crate::arrow::arrow_reader::{
@@ -6175,9 +6176,9 @@ pub(crate) mod tests {
         (Bytes::from(buf), metadata)
     }
 
-    /// PLENORA: the two outcomes of a row selection, deterministic: a skip
-    /// on a row group boundary (whole pages) reads; a skip inside a page is
-    /// `SKIP_NOT_QUALIFIED`.
+    /// PLENORA: the outcomes of a row selection, deterministic: a selection
+    /// of every row reads them, values included; any skip, inside a page or
+    /// of whole pages on a row group boundary, is `SKIP_NOT_QUALIFIED`.
     #[test]
     fn test_row_selection_inside_a_page_or_on_a_boundary() {
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -6215,12 +6216,20 @@ pub(crate) mod tests {
             }
             Ok(valori)
         };
-        // The values selected, not only their count: the rows 100 to 199.
+        // The values selected, not only their count.
         assert_eq!(
-            leggi(vec![RowSelector::skip(100), RowSelector::select(100)]),
-            Ok((100..200).collect::<Vec<i32>>())
+            leggi(vec![RowSelector::select(200)]),
+            Ok((0..200).collect::<Vec<i32>>())
         );
-        let errore = leggi(vec![RowSelector::skip(1), RowSelector::select(199)]).unwrap_err();
-        assert!(errore.contains("skip inside a page"), "{errore}");
+        for selezione in [
+            vec![RowSelector::skip(100), RowSelector::select(100)],
+            vec![RowSelector::skip(1), RowSelector::select(199)],
+        ] {
+            let errore = leggi(selezione).unwrap_err();
+            assert!(
+                errore.contains(crate::basic::SKIP_NOT_QUALIFIED),
+                "{errore}"
+            );
+        }
     }
 }

@@ -192,6 +192,13 @@ pyo3 ={ version = "=0.29.2", default-features = false, features = ["macros", "ab
 arrow-pyarrow = "=60.0.0"
 # Dev
 proptest = "=1.11.0"
+# Lexer di Rust dell'inventario dei campi Thrift del fork `parquet`
+# (crates/plenora-io/tests/parquet_campi_thrift.rs): stringhe, raw string e
+# commenti annidati letti come il compilatore, al posto di un lexer scritto a
+# mano. Solo dev-dependency di quella prova; gia' nel lockfile come dipendenza
+# transitiva (macro derive di serde, thiserror, pyo3), alla stessa versione:
+# nessun crate nuovo.
+proc-macro2 = "=1.0.107"
 
 # Crate interni
 plenora-core = { path = "crates/plenora-core" }

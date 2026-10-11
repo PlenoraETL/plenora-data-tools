@@ -296,16 +296,18 @@
      }
  
      /// Build a [`ParquetRecordBatchReader`]
-@@ -1816,7 +1816,7 @@ pub(crate) mod tests {
+@@ -1815,8 +1815,9 @@ pub(crate) mod tests {
+     use std::path::PathBuf;
      use std::sync::Arc;
  
++    use crate::util::test_common::rng;
      use rand::rngs::StdRng;
 -    use rand::{Rng, RngExt, SeedableRng, random, rng};
-+    use rand::{Rng, RngExt, SeedableRng, rng};
++    use rand::{Rng, RngExt, SeedableRng};
      use tempfile::tempfile;
  
      use crate::arrow::arrow_reader::{
-@@ -3331,7 +3331,9 @@ pub(crate) mod tests {
+@@ -3331,7 +3332,9 @@ pub(crate) mod tests {
          fn with_row_selections(self) -> Self {
              assert!(self.row_filter.is_none(), "Must set row selection first");
  
@@ -316,7 +318,7 @@
              let step = rng.random_range(self.record_batch_size..self.num_rows);
              let row_selections = create_test_selection(
                  step,
-@@ -3350,7 +3352,8 @@ pub(crate) mod tests {
+@@ -3350,7 +3353,8 @@ pub(crate) mod tests {
                  None => self.num_row_groups * self.num_rows,
              };
  
@@ -326,7 +328,7 @@
              Self {
                  row_filter: Some((0..row_count).map(|_| rng.random_bool(0.9)).collect()),
                  ..self
-@@ -6067,7 +6070,11 @@ pub(crate) mod tests {
+@@ -6067,7 +6071,11 @@ pub(crate) mod tests {
      ) where
          F: FnOnce(PathBuf, RowSelection, Option<RowFilter>, usize) -> Vec<RecordBatch>,
      {
@@ -339,14 +341,14 @@
          println!("test_row_numbers_with_multiple_row_groups seed: {seed}");
          let mut rng = StdRng::seed_from_u64(seed);
  
-@@ -6167,4 +6174,53 @@ pub(crate) mod tests {
+@@ -6167,4 +6175,61 @@ pub(crate) mod tests {
  
          (Bytes::from(buf), metadata)
      }
 +
-+    /// PLENORA: the two outcomes of a row selection, deterministic: a skip
-+    /// on a row group boundary (whole pages) reads; a skip inside a page is
-+    /// `SKIP_NOT_QUALIFIED`.
++    /// PLENORA: the outcomes of a row selection, deterministic: a selection
++    /// of every row reads them, values included; any skip, inside a page or
++    /// of whole pages on a row group boundary, is `SKIP_NOT_QUALIFIED`.
 +    #[test]
 +    fn test_row_selection_inside_a_page_or_on_a_boundary() {
 +        let schema = Arc::new(Schema::new(vec![Field::new(
@@ -384,15 +386,61 @@
 +            }
 +            Ok(valori)
 +        };
-+        // The values selected, not only their count: the rows 100 to 199.
++        // The values selected, not only their count.
 +        assert_eq!(
-+            leggi(vec![RowSelector::skip(100), RowSelector::select(100)]),
-+            Ok((100..200).collect::<Vec<i32>>())
++            leggi(vec![RowSelector::select(200)]),
++            Ok((0..200).collect::<Vec<i32>>())
 +        );
-+        let errore = leggi(vec![RowSelector::skip(1), RowSelector::select(199)]).unwrap_err();
-+        assert!(errore.contains("skip inside a page"), "{errore}");
++        for selezione in [
++            vec![RowSelector::skip(100), RowSelector::select(100)],
++            vec![RowSelector::skip(1), RowSelector::select(199)],
++        ] {
++            let errore = leggi(selezione).unwrap_err();
++            assert!(
++                errore.contains(crate::basic::SKIP_NOT_QUALIFIED),
++                "{errore}"
++            );
++        }
 +    }
  }
+--- a/src/arrow/arrow_reader/read_plan.rs
++++ b/src/arrow/arrow_reader/read_plan.rs
+@@ -548,7 +548,8 @@ mod tests {
+     #[test]
+     #[cfg_attr(miri, ignore)] // Takes too long
+     fn preferred_selection_strategy_mask_matches_selector_backing() {
+-        use rand::{RngExt, rng};
++        use crate::util::test_common::rng;
++        use rand::RngExt;
+ 
+         let mut rand = rng();
+         for _ in 0..200 {
+--- a/src/arrow/arrow_reader/selection/algebra.rs
++++ b/src/arrow/arrow_reader/selection/algebra.rs
+@@ -433,8 +433,9 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use crate::util::test_common::rng;
+     use arrow_array::BooleanArray;
+-    use rand::{RngExt, rng};
++    use rand::RngExt;
+ 
+     #[test]
+     fn test_and() {
+--- a/src/arrow/arrow_reader/selection/boolean.rs
++++ b/src/arrow/arrow_reader/selection/boolean.rs
+@@ -355,8 +355,9 @@ pub(super) fn boolean_mask_from_selectors(selectors: &[RowSelector]) -> BooleanB
+ mod tests {
+     use super::*;
+     use crate::arrow::arrow_reader::selection::{RowSelection, RowSelectionInner};
++    use crate::util::test_common::rng;
+     use arrow_array::BooleanArray;
+-    use rand::{RngExt, rng};
++    use rand::RngExt;
+ 
+     #[test]
+     fn test_mask_iter_yields_borrowed_selectors() {
 --- a/src/arrow/async_reader/mod.rs
 +++ b/src/arrow/async_reader/mod.rs
 @@ -649,7 +649,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
@@ -404,6 +452,36 @@
      }
  
      /// Select row groups and rows using row-group-local coordinates.
+@@ -976,6 +976,7 @@ mod tests {
+     use crate::file::metadata::ParquetMetaDataReader;
+     use crate::file::metadata::page_index::PageIndex;
+     use crate::file::properties::WriterProperties;
++    use crate::util::test_common::rng;
+     use arrow::compute::kernels::cmp::eq;
+     use arrow::error::Result as ArrowResult;
+     use arrow_array::builder::{Float32Builder, ListBuilder, StringBuilder};
+@@ -987,7 +988,7 @@ mod tests {
+     };
+     use arrow_schema::{DataType, Field, Schema};
+     use futures::{StreamExt, TryStreamExt};
+-    use rand::{RngExt, rng};
++    use rand::RngExt;
+     use std::collections::HashMap;
+     use std::sync::{Arc, Mutex};
+     use tempfile::tempfile;
+--- a/src/arrow/buffer/bit_util.rs
++++ b/src/arrow/buffer/bit_util.rs
+@@ -76,8 +76,9 @@ pub fn sign_extend_be_checked<const N: usize>(b: &[u8]) -> Option<[u8; N]> {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use crate::util::test_common::rng;
+     use arrow_array::builder::BooleanBufferBuilder;
+-    use rand::{prelude::*, rng};
++    use rand::prelude::*;
+ 
+     #[test]
+     fn test_bit_fns() {
 --- a/src/arrow/decoder/dictionary_index.rs
 +++ b/src/arrow/decoder/dictionary_index.rs
 @@ -77,7 +77,12 @@ impl DictIndexDecoder {
@@ -638,6 +716,16 @@
                  break;
              } else {
                  self.next_rle_block()?
+@@ -521,7 +580,8 @@ mod tests {
+     use super::*;
+ 
+     use crate::encodings::rle::RleEncoder;
+-    use rand::{RngExt, rng};
++    use crate::util::test_common::rng;
++    use rand::RngExt;
+ 
+     #[test]
+     fn test_build_validity_bitmap_unfiltered_word_chunk() {
 --- a/src/basic.rs
 +++ b/src/basic.rs
 @@ -1511,7 +1511,10 @@ pub fn check_qualified_value_encoding(encoding: Encoding) -> Result<()> {
@@ -652,17 +740,16 @@
          _ => Err(nyi_err!(
              "Invalid/Unsupported encoding type for dictionary: {}",
              encoding
-@@ -1519,6 +1522,30 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
+@@ -1519,6 +1522,29 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
      }
  }
  
-+/// PLENORA: the fixed text of the rejection of a skip inside a page (a
-+/// partial skip, a row selection or a row filter that does not fall on whole
-+/// pages), and of a whole page skipped without its header: not qualified. A
-+/// skip did not decode what it passed over, so the checks of a read (values,
-+/// dictionary indices, declared counts, progress) did not apply to it.
-+pub const SKIP_NOT_QUALIFIED: &str =
-+    "Parquet skip inside a page or without a page header not qualified for reading";
++/// PLENORA: the fixed text of the rejection of a skip (a row selection, a
++/// row filter, an offset, a skip of records or of pages, inside a page or of
++/// whole pages): not qualified. A skip did not decode what it passed over, so
++/// the checks of a read (values, dictionary indices, declared counts, the
++/// payload of a page, progress) did not apply to it.
++pub const SKIP_NOT_QUALIFIED: &str = "Parquet skip not qualified for reading";
 +
 +/// PLENORA: the fixed text of the rejection of a page index (column index
 +/// and offset index): not qualified for reading. Their counts, histograms,
@@ -856,25 +943,22 @@
              total_records_read += records_read;
              total_levels_read += levels_to_read;
              total_values_read += values_read;
-@@ -321,123 +340,106 @@ where
+@@ -321,141 +340,59 @@ where
  
      /// Skips over `num_records` records, where records are delimited by repetition levels of 0
      ///
-+    /// PLENORA: only whole pages, from their header (their value encoding is
-+    /// checked by the page reader). A skip inside a page (a page already
-+    /// loaded, a page with more rows than the records to skip, or rows not
-+    /// known from the header) is `SKIP_NOT_QUALIFIED`: it did not decode what
-+    /// it passed over (values, dictionary indices, declared counts), and its
-+    /// loops had no guard of progress. Each turn of the loop that remains
-+    /// consumes a page (skipped, or read as a dictionary) or returns: the
-+    /// progress is in pages, which the page reader bounds.
++    /// PLENORA: not qualified. A skip inside a page did not decode what it
++    /// passed over (values, dictionary indices, declared counts), and a skip
++    /// of whole pages passed over them from their header only (a truncated
++    /// payload in a skipped page passed). Any skip of one record or more is
++    /// `SKIP_NOT_QUALIFIED`; a skip of zero records reads nothing.
 +    ///
      /// # Returns
      ///
      /// Returns the number of records skipped
      pub fn skip_records(&mut self, num_records: usize) -> Result<usize> {
-         let mut remaining_records = num_records;
-         while remaining_records != 0 {
+-        let mut remaining_records = num_records;
+-        while remaining_records != 0 {
 -            if self.num_buffered_values == self.num_decoded_values {
 -                let Some(metadata) = self.page_reader.peek_next_page()? else {
 -                    return Ok(num_records - remaining_records);
@@ -907,9 +991,7 @@
 -                if !self.read_new_page()? {
 -                    return Ok(num_records - remaining_records);
 -                }
-+            if self.num_buffered_values != self.num_decoded_values {
-+                return Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED));
-             }
+-            }
 -
 -            // start skip values in page level
 -
@@ -933,10 +1015,8 @@
 -                    let levels = remaining_levels.min(remaining_records);
 -                    (levels, levels)
 -                }
-+            let Some(metadata) = self.page_reader.peek_next_page()? else {
-+                return Ok(num_records - remaining_records);
-             };
- 
+-            };
+-
 -            self.num_decoded_values += rep_levels_read;
 -            remaining_records -= records_read;
 -
@@ -944,12 +1024,9 @@
 -                // Exhausted buffered page - no need to advance other decoders
 -                // PLENORA: its values were not decoded, so not counted.
 -                self.valori_contati = false;
-+            // If dictionary, we must read it
-+            if metadata.is_dict {
-+                self.read_dictionary_page()?;
-                 continue;
-             }
- 
+-                continue;
+-            }
+-
 -            let (values_read, def_levels_read) = match self.def_level_decoder.as_mut() {
 -                Some(decoder) => decoder.skip_def_levels(rep_levels_read)?,
 -                None => (rep_levels_read, rep_levels_read),
@@ -961,30 +1038,8 @@
 -                    rep_levels_read,
 -                    def_levels_read
 -                ));
-+            // If page has less rows than the remaining records to
-+            // be skipped, skip entire page
-+            // PLENORA: the rows of the header against its levels and the
-+            // schema (`num_rows` alone was trusted: 1 row over 2 values of a
-+            // flat column skipped both).
-+            if let (Some(righe), Some(livelli)) = (metadata.num_rows, metadata.num_levels) {
-+                verifica_righe_v2(self.rep_level_decoder.is_some(), righe, livelli)?;
-+            }
-+            // PLENORA: the rows of a page of a repeated column are its
-+            // repetition levels 0, which a skip does not read: the header
-+            // cannot be checked, and the skip is not qualified.
-+            if self.rep_level_decoder.is_some() {
-+                return Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED));
-+            }
-+            let rows = metadata.num_rows.or_else(|| {
-+                // If no repetition levels, num_levels == num_rows
-+                self.rep_level_decoder
-+                    .is_none()
-+                    .then_some(metadata.num_levels)?
-+            });
-+            if rows == Some(0) && metadata.num_levels != Some(0) {
-+                return Err(general_err!("{}", crate::basic::PAGE_NOT_AS_DECLARED));
-             }
- 
+-            }
+-
 -            let values = self.values_decoder.skip_values(values_read)?;
 -            if values != values_read {
 -                return Err(general_err!(
@@ -992,17 +1047,14 @@
 -                    values,
 -                    values_read
 -                ));
-+            match rows {
-+                Some(rows) if rows <= remaining_records => {
-+                    self.page_reader.skip_next_page()?;
-+                    remaining_records -= rows;
-+                }
-+                _ => return Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED)),
-             }
+-            }
 -            self.valori_della_pagina += values;
 -            self.verifica_fine_pagina()?;
++        if num_records == 0 {
++            return Ok(0);
          }
-         Ok(num_records - remaining_records)
+-        Ok(num_records - remaining_records)
++        Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED))
      }
  
 -    /// PLENORA: at the end of a V2 data page, the values read must be the
@@ -1033,7 +1085,24 @@
 -            )),
 -            _ => Ok(()),
 +            ));
-+        }
+         }
+-    }
+-
+-    /// Read the next page as a dictionary page. If the next page is not a dictionary page,
+-    /// this will return an error.
+-    fn read_dictionary_page(&mut self) -> Result<()> {
+-        match self.page_reader.get_next_page()? {
+-            Some(Page::DictionaryPage {
+-                buf,
+-                num_values,
+-                encoding,
+-                is_sorted,
+-            }) => self
+-                .values_decoder
+-                .set_dict(buf, num_values, encoding, is_sorted),
+-            _ => Err(ParquetError::General(
+-                "Invalid page. Expecting dictionary page".to_string(),
+-            )),
 +        let fine = self.fine_della_pagina;
 +        if let Some(decoder) = self.rep_level_decoder.as_ref() {
 +            decoder.verifica_fine_pagina(fine.livelli())?;
@@ -1048,15 +1117,15 @@
 +                    decoder.righe_iniziate()
 +                ));
 +            }
-+        }
+         }
 +        if let Some(decoder) = self.def_level_decoder.as_ref() {
 +            decoder.verifica_fine_pagina(fine.livelli())?;
-         }
++        }
 +        self.values_decoder.verifica_fine_pagina(fine)
      }
  
-     /// Read the next page as a dictionary page. If the next page is not a dictionary page,
-@@ -490,7 +492,8 @@ where
+     /// Reads a new page and set up the decoders for levels, values or dictionary.
+@@ -490,7 +427,8 @@ where
                              self.num_decoded_values = 0;
                              self.valori_dichiarati = None;
                              self.valori_della_pagina = 0;
@@ -1066,7 +1135,7 @@
  
                              let max_rep_level = self.descr.max_rep_level();
                              let max_def_level = self.descr.max_def_level();
-@@ -544,7 +547,7 @@ where
+@@ -544,7 +482,7 @@ where
                              num_values,
                              encoding,
                              num_nulls,
@@ -1075,7 +1144,7 @@
                              def_levels_byte_len,
                              rep_levels_byte_len,
                              is_compressed: _,
-@@ -557,19 +560,41 @@ where
+@@ -557,19 +495,41 @@ where
                                      num_nulls
                                  ));
                              }
@@ -1121,7 +1190,7 @@
                                  self.has_record_delimiter =
                                      self.page_reader.at_record_boundary()?;
  
-@@ -613,10 +638,18 @@ where
+@@ -613,10 +573,18 @@ where
          if self.num_buffered_values == 0 || self.num_buffered_values == self.num_decoded_values {
              // TODO: should we return false if read_new_page() = true and
              // num_buffered_values = 0?
@@ -1144,7 +1213,7 @@
              }
          } else {
              Ok(true)
-@@ -624,6 +657,26 @@ where
+@@ -624,6 +592,26 @@ where
      }
  }
  
@@ -1171,7 +1240,7 @@
  /// Checks that a partial record can still be flushed into the caller's record budget.
  ///
  /// Reaching the end of a page with a record delimiter means the decoder stopped because
-@@ -1578,4 +1631,63 @@ mod tests {
+@@ -1578,4 +1566,63 @@ mod tests {
          assert_eq!(rep_levels, vec![0, 1], "rep levels for a 2-element list");
          assert_eq!(def_levels, vec![1, 1], "def levels (all non-null)");
      }
@@ -1470,7 +1539,7 @@
                  if self.buffer_len == 0 {
                      break;
                  }
-@@ -522,6 +650,14 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
+@@ -522,13 +650,22 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
      fn flush_partial(&mut self) -> bool {
          std::mem::take(&mut self.has_partial)
      }
@@ -1485,6 +1554,15 @@
  }
  
  #[cfg(test)]
+ mod tests {
+     use super::*;
+     use crate::encodings::rle::RleEncoder;
+-    use rand::{prelude::*, rng};
++    use crate::util::test_common::rng;
++    use rand::prelude::*;
+ 
+     #[test]
+     fn test_skip_padding() {
 --- a/src/encodings/decoding.rs
 +++ b/src/encodings/decoding.rs
 @@ -179,6 +179,14 @@ pub trait Decoder<T: DataType>: Send {
@@ -1747,7 +1825,17 @@
              } else {
                  self.rle_left = run;
                  let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);
-@@ -825,7 +908,9 @@ mod tests {
+@@ -668,7 +751,8 @@ mod tests {
+     use super::*;
+ 
+     use crate::util::bit_util::ceil;
+-    use rand::{self, RngExt, SeedableRng, distr::StandardUniform, rng};
++    use crate::util::test_common::rng;
++    use rand::{self, RngExt, SeedableRng, distr::StandardUniform};
+ 
+     const MAX_WIDTH: usize = 32;
+ 
+@@ -825,7 +909,9 @@ mod tests {
          // 011 100 101 011 100 101 011 100 101 100 101 101
          // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
          let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
@@ -1758,7 +1846,7 @@
          let mut decoder = RleDecoder::new(3);
          decoder.set_data(data.into()).unwrap();
          let mut buffer = vec![""; 12];
-@@ -860,7 +945,9 @@ mod tests {
+@@ -860,7 +946,9 @@ mod tests {
          // 011 100 101 011 100 101 011 100 101 100 101 101
          // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
          let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
@@ -1769,7 +1857,7 @@
          let mut decoder = RleDecoder::new(3);
          decoder.set_data(data.into()).unwrap();
          let mut buffer = vec![""; BIT_PACK_GROUP_SIZE];
-@@ -1005,12 +1092,11 @@ mod tests {
+@@ -1005,12 +1093,11 @@ mod tests {
  
      #[test]
      fn test_truncated_rle() {
@@ -1787,7 +1875,7 @@
          let mut data: Vec<u8> = vec![
              (3 << 1) | 1, // bit-packed run of 3 * 8
          ];
-@@ -1018,25 +1104,11 @@ mod tests {
+@@ -1018,25 +1105,11 @@ mod tests {
          let data: Bytes = data.into();
  
          let mut decoder = RleDecoder::new(8);
@@ -2067,7 +2155,270 @@
              }
              4 => {
                  if schema_descr.is_none() {
-@@ -2036,14 +2166,14 @@ pub(crate) mod tests {
+@@ -1091,72 +1221,6 @@ pub(crate) struct DataPageHeader {
+ }
+ );
+ 
+-impl DataPageHeader {
+-    // reader that skips decoding page statistics
+-    fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
+-    where
+-        R: ThriftCompactInputProtocol<'a>,
+-    {
+-        let mut num_values: Option<i32> = None;
+-        let mut encoding: Option<Encoding> = None;
+-        let mut definition_level_encoding: Option<Encoding> = None;
+-        let mut repetition_level_encoding: Option<Encoding> = None;
+-        let statistics: Option<PageStatistics> = None;
+-        let mut last_field_id = 0i16;
+-        loop {
+-            let field_ident = prot.read_field_begin(last_field_id)?;
+-            if field_ident.field_type == FieldType::Stop {
+-                break;
+-            }
+-            match field_ident.id {
+-                1 => {
+-                    let val = i32::read_thrift(&mut *prot)?;
+-                    num_values = Some(val);
+-                }
+-                2 => {
+-                    let val = Encoding::read_thrift(&mut *prot)?;
+-                    encoding = Some(val);
+-                }
+-                3 => {
+-                    let val = Encoding::read_thrift(&mut *prot)?;
+-                    definition_level_encoding = Some(val);
+-                }
+-                4 => {
+-                    let val = Encoding::read_thrift(&mut *prot)?;
+-                    repetition_level_encoding = Some(val);
+-                }
+-                _ => {
+-                    prot.skip(field_ident.field_type)?;
+-                }
+-            }
+-            last_field_id = field_ident.id;
+-        }
+-        let Some(num_values) = num_values else {
+-            return Err(general_err!("Required field num_values is missing"));
+-        };
+-        let Some(encoding) = encoding else {
+-            return Err(general_err!("Required field encoding is missing"));
+-        };
+-        let Some(definition_level_encoding) = definition_level_encoding else {
+-            return Err(general_err!(
+-                "Required field definition_level_encoding is missing"
+-            ));
+-        };
+-        let Some(repetition_level_encoding) = repetition_level_encoding else {
+-            return Err(general_err!(
+-                "Required field repetition_level_encoding is missing"
+-            ));
+-        };
+-        Ok(Self {
+-            num_values,
+-            encoding,
+-            definition_level_encoding,
+-            repetition_level_encoding,
+-            statistics,
+-        })
+-    }
+-}
+-
+ thrift_struct!(
+ pub(crate) struct DataPageHeaderV2 {
+   1: required i32 num_values
+@@ -1170,95 +1234,6 @@ pub(crate) struct DataPageHeaderV2 {
+ }
+ );
+ 
+-impl DataPageHeaderV2 {
+-    // reader that skips decoding page statistics
+-    fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
+-    where
+-        R: ThriftCompactInputProtocol<'a>,
+-    {
+-        let mut num_values: Option<i32> = None;
+-        let mut num_nulls: Option<i32> = None;
+-        let mut num_rows: Option<i32> = None;
+-        let mut encoding: Option<Encoding> = None;
+-        let mut definition_levels_byte_length: Option<i32> = None;
+-        let mut repetition_levels_byte_length: Option<i32> = None;
+-        let mut is_compressed: Option<bool> = None;
+-        let statistics: Option<PageStatistics> = None;
+-        let mut last_field_id = 0i16;
+-        loop {
+-            let field_ident = prot.read_field_begin(last_field_id)?;
+-            if field_ident.field_type == FieldType::Stop {
+-                break;
+-            }
+-            match field_ident.id {
+-                1 => {
+-                    let val = i32::read_thrift(&mut *prot)?;
+-                    num_values = Some(val);
+-                }
+-                2 => {
+-                    let val = i32::read_thrift(&mut *prot)?;
+-                    num_nulls = Some(val);
+-                }
+-                3 => {
+-                    let val = i32::read_thrift(&mut *prot)?;
+-                    num_rows = Some(val);
+-                }
+-                4 => {
+-                    let val = Encoding::read_thrift(&mut *prot)?;
+-                    encoding = Some(val);
+-                }
+-                5 => {
+-                    let val = i32::read_thrift(&mut *prot)?;
+-                    definition_levels_byte_length = Some(val);
+-                }
+-                6 => {
+-                    let val = i32::read_thrift(&mut *prot)?;
+-                    repetition_levels_byte_length = Some(val);
+-                }
+-                7 => {
+-                    is_compressed = Some(field_ident.bool_val()?);
+-                }
+-                _ => {
+-                    prot.skip(field_ident.field_type)?;
+-                }
+-            }
+-            last_field_id = field_ident.id;
+-        }
+-        let Some(num_values) = num_values else {
+-            return Err(general_err!("Required field num_values is missing"));
+-        };
+-        let Some(num_nulls) = num_nulls else {
+-            return Err(general_err!("Required field num_nulls is missing"));
+-        };
+-        let Some(num_rows) = num_rows else {
+-            return Err(general_err!("Required field num_rows is missing"));
+-        };
+-        let Some(encoding) = encoding else {
+-            return Err(general_err!("Required field encoding is missing"));
+-        };
+-        let Some(definition_levels_byte_length) = definition_levels_byte_length else {
+-            return Err(general_err!(
+-                "Required field definition_levels_byte_length is missing"
+-            ));
+-        };
+-        let Some(repetition_levels_byte_length) = repetition_levels_byte_length else {
+-            return Err(general_err!(
+-                "Required field repetition_levels_byte_length is missing"
+-            ));
+-        };
+-        Ok(Self {
+-            num_values,
+-            num_nulls,
+-            num_rows,
+-            encoding,
+-            definition_levels_byte_length,
+-            repetition_levels_byte_length,
+-            is_compressed,
+-            statistics,
+-        })
+-    }
+-}
+-
+ thrift_struct!(
+ pub(crate) struct PageHeader {
+   /// the type of the page: indicates which of the *_header fields is set
+@@ -1281,93 +1256,6 @@ pub(crate) struct PageHeader {
+ }
+ );
+ 
+-impl PageHeader {
+-    // reader that skips reading page statistics. obtained by running
+-    // `cargo expand -p parquet --all-features --lib file::metadata::thrift`
+-    // and modifying the impl of `read_thrift`
+-    pub(crate) fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
+-    where
+-        R: ThriftCompactInputProtocol<'a>,
+-    {
+-        let mut type_: Option<PageType> = None;
+-        let mut uncompressed_page_size: Option<i32> = None;
+-        let mut compressed_page_size: Option<i32> = None;
+-        let mut crc: Option<i32> = None;
+-        let mut data_page_header: Option<DataPageHeader> = None;
+-        let mut index_page_header: Option<IndexPageHeader> = None;
+-        let mut dictionary_page_header: Option<DictionaryPageHeader> = None;
+-        let mut data_page_header_v2: Option<DataPageHeaderV2> = None;
+-        let mut last_field_id = 0i16;
+-        loop {
+-            let field_ident = prot.read_field_begin(last_field_id)?;
+-            if field_ident.field_type == FieldType::Stop {
+-                break;
+-            }
+-            match field_ident.id {
+-                1 => {
+-                    let val = PageType::read_thrift(&mut *prot)?;
+-                    type_ = Some(val);
+-                }
+-                2 => {
+-                    let val = i32::read_thrift(&mut *prot)?;
+-                    uncompressed_page_size = Some(val);
+-                }
+-                3 => {
+-                    let val = i32::read_thrift(&mut *prot)?;
+-                    compressed_page_size = Some(val);
+-                }
+-                4 => {
+-                    let val = i32::read_thrift(&mut *prot)?;
+-                    crc = Some(val);
+-                }
+-                5 => {
+-                    let val = DataPageHeader::read_thrift_without_stats(&mut *prot)?;
+-                    data_page_header = Some(val);
+-                }
+-                6 => {
+-                    let val = IndexPageHeader::read_thrift(&mut *prot)?;
+-                    index_page_header = Some(val);
+-                }
+-                7 => {
+-                    let val = DictionaryPageHeader::read_thrift(&mut *prot)?;
+-                    dictionary_page_header = Some(val);
+-                }
+-                8 => {
+-                    let val = DataPageHeaderV2::read_thrift_without_stats(&mut *prot)?;
+-                    data_page_header_v2 = Some(val);
+-                }
+-                _ => {
+-                    prot.skip(field_ident.field_type)?;
+-                }
+-            }
+-            last_field_id = field_ident.id;
+-        }
+-        let Some(type_) = type_ else {
+-            return Err(general_err!("Required field type_ is missing"));
+-        };
+-        let Some(uncompressed_page_size) = uncompressed_page_size else {
+-            return Err(general_err!(
+-                "Required field uncompressed_page_size is missing"
+-            ));
+-        };
+-        let Some(compressed_page_size) = compressed_page_size else {
+-            return Err(general_err!(
+-                "Required field compressed_page_size is missing"
+-            ));
+-        };
+-        Ok(Self {
+-            r#type: type_,
+-            uncompressed_page_size,
+-            compressed_page_size,
+-            crc,
+-            data_page_header,
+-            index_page_header,
+-            dictionary_page_header,
+-            data_page_header_v2,
+-        })
+-    }
+-}
+-
+ /////////////////////////////////////////////////
+ // helper functions for writing file meta data
+ 
+@@ -2036,14 +1924,14 @@ pub(crate) mod tests {
              .unwrap_err();
          assert_eq!(
              err.to_string(),
@@ -2084,6 +2435,26 @@
          );
      }
  
+@@ -2068,7 +1956,8 @@ pub(crate) mod tests {
+         change_false_bool_field_to_i32(&mut buf);
+ 
+         let mut prot = ThriftSliceInputProtocol::new(&buf);
+-        let err = PageHeader::read_thrift_without_stats(&mut prot)
++        use crate::parquet_thrift::ReadThrift;
++        let err = PageHeader::read_thrift(&mut prot)
+             .expect_err("malformed bool field should return an error");
+         assert_malformed_bool_error(err);
+     }
+@@ -2090,7 +1979,8 @@ pub(crate) mod tests {
+         change_false_bool_field_to_i32(&mut buf);
+ 
+         let mut prot = ThriftSliceInputProtocol::new(&buf);
+-        let err = DataPageHeaderV2::read_thrift_without_stats(&mut prot)
++        use crate::parquet_thrift::ReadThrift;
++        let err = DataPageHeaderV2::read_thrift(&mut prot)
+             .expect_err("malformed bool field should return an error");
+         assert_malformed_bool_error(err);
+     }
 --- a/src/file/page_index/index_reader.rs
 +++ b/src/file/page_index/index_reader.rs
 @@ -42,6 +42,9 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
@@ -2119,22 +2490,56 @@
      let mut prot = ThriftSliceInputProtocol::new(data);
      let index = ThriftColumnIndex::read_thrift(&mut prot)?;
  
+--- a/src/file/properties.rs
++++ b/src/file/properties.rs
+@@ -2068,9 +2068,14 @@ impl ReaderPropertiesBuilder {
+     ///
+     /// If set to `true`, then the reader will decode and populate the [`Statistics`] for
+     /// each page, if present.
+-    /// If set to `false`, then the reader will skip decoding the statistics.
++    /// If set to `false`, then the reader will not populate the statistics.
+     ///
+-    /// By default statistics will not be decoded.
++    /// By default statistics will not be populated.
++    ///
++    /// PLENORA: the page statistics are always decoded and checked against
++    /// their type (a malformed statistic is an error); this property decides
++    /// only whether the page exposes them. With `false` they were skipped
++    /// without a check.
+     ///
+     /// [`Statistics`]: crate::file::statistics::Statistics
+     pub fn set_read_page_statistics(mut self, value: bool) -> Self {
 --- a/src/file/serialized_reader.rs
 +++ b/src/file/serialized_reader.rs
-@@ -419,6 +419,10 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
+@@ -419,35 +419,33 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
      }
  }
  
+-/// PLENORA: a page skipped whole is rejected for its value encoding like a
+-/// page read (an excluded page was skipped in silence). Only from its header:
+-/// a page reached through the offset index has none and is skipped without
+-/// this check. The level encodings of a skipped page are not checked: the
+-/// header names one even for a column without levels.
+-fn verifica_codifica_saltata(header: &PageHeader) -> Result<()> {
+-    match header.r#type {
+-        PageType::DICTIONARY_PAGE => match header.dictionary_page_header.as_ref() {
+-            Some(dizionario) => crate::basic::check_dictionary_page_encoding(dizionario.encoding),
+-            None => Ok(()),
+-        },
+-        PageType::DATA_PAGE => match header.data_page_header.as_ref() {
+-            Some(pagina) => crate::basic::check_qualified_value_encoding(pagina.encoding),
+-            None => Ok(()),
+-        },
+-        PageType::DATA_PAGE_V2 => match header.data_page_header_v2.as_ref() {
+-            Some(pagina) => crate::basic::check_qualified_value_encoding(pagina.encoding),
+-            None => Ok(()),
+-        },
+-        _ => Ok(()),
+-    }
+-}
 +/// PLENORA: the offset index is not qualified: a page reader built on its
 +/// locations is an error.
 +const PAGINE_DALL_INDICE_NON_QUALIFICATE: bool = true;
-+
- /// PLENORA: a page skipped whole is rejected for its value encoding like a
- /// page read (an excluded page was skipped in silence). Only from its header:
- /// a page reached through the offset index has none and is skipped without
-@@ -442,12 +446,25 @@ fn verifica_codifica_saltata(header: &PageHeader) -> Result<()> {
-     }
- }
  
 +#[cfg(test)] // PLENORA: the readers pass the width of the column.
  /// Decodes a [`Page`] from the provided `buffer`
@@ -2144,21 +2549,25 @@
      physical_type: Type,
      decompressor: Option<&mut Box<dyn Codec>>,
 +) -> Result<Page> {
-+    decode_page_con_larghezza(page_header, buffer, physical_type, -1, decompressor)
++    decode_page_con_larghezza(page_header, buffer, physical_type, -1, true, decompressor)
 +}
 +
 +/// PLENORA: as [`decode_page`], with the width of a `FIXED_LEN_BYTE_ARRAY`
-+/// column (its page statistics have that width; -1 for other types).
++/// column (its page statistics have that width; -1 for other types). The
++/// page statistics are always checked; `esporre_statistiche` (the
++/// `read_page_statistics` property) decides only whether the page carries
++/// them.
 +pub(crate) fn decode_page_con_larghezza(
 +    page_header: PageHeader,
 +    buffer: Bytes,
 +    physical_type: Type,
 +    larghezza: i32,
++    esporre_statistiche: bool,
 +    decompressor: Option<&mut Box<dyn Codec>>,
  ) -> Result<Page> {
      // Verify the 32-bit CRC checksum of the page
      #[cfg(feature = "crc")]
-@@ -514,8 +531,12 @@ pub(crate) fn decode_page(
+@@ -514,8 +512,12 @@ pub(crate) fn decode_page(
              decompressed.extend_from_slice(&buffer[..offset]);
              // decompressed size of zero corresponds to a page with no non-null values
              // see https://github.com/apache/parquet-format/blob/master/README.md#data-pages
@@ -2173,7 +2582,7 @@
                  decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
              }
  
-@@ -529,7 +550,18 @@ pub(crate) fn decode_page(
+@@ -529,7 +531,18 @@ pub(crate) fn decode_page(
  
              Bytes::from(decompressed)
          }
@@ -2193,7 +2602,7 @@
      };
  
      let result = match page_header.r#type {
-@@ -565,7 +597,11 @@ pub(crate) fn decode_page(
+@@ -565,7 +578,12 @@ pub(crate) fn decode_page(
                  encoding: header.encoding,
                  def_level_encoding: header.definition_level_encoding,
                  rep_level_encoding: header.repetition_level_encoding,
@@ -2202,11 +2611,12 @@
 +                    physical_type,
 +                    Some(larghezza),
 +                    header.statistics,
-+                )?,
++                )?
++                .filter(|_| esporre_statistiche),
              }
          }
          PageType::DATA_PAGE_V2 => {
-@@ -582,7 +618,11 @@ pub(crate) fn decode_page(
+@@ -582,7 +600,12 @@ pub(crate) fn decode_page(
                  def_levels_byte_len: header.definition_levels_byte_length.try_into()?,
                  rep_levels_byte_len: header.repetition_levels_byte_length.try_into()?,
                  is_compressed,
@@ -2215,11 +2625,12 @@
 +                    physical_type,
 +                    Some(larghezza),
 +                    header.statistics,
-+                )?,
++                )?
++                .filter(|_| esporre_statistiche),
              }
          }
          PageType::INDEX_PAGE => {
-@@ -648,6 +688,10 @@ pub struct SerializedPageReader<R: ChunkReader> {
+@@ -648,6 +671,10 @@ pub struct SerializedPageReader<R: ChunkReader> {
      /// Column chunk type.
      physical_type: Type,
  
@@ -2230,7 +2641,7 @@
      state: SerializedPageReaderState,
  
      context: SerializedPageReaderContext,
-@@ -776,6 +820,12 @@ impl<R: ChunkReader> SerializedPageReader<R> {
+@@ -776,6 +803,12 @@ impl<R: ChunkReader> SerializedPageReader<R> {
  
          let state = match page_locations {
              Some(locations) => {
@@ -2243,7 +2654,7 @@
                  // PLENORA: the locations come from the caller: checked
                  // against the chunk before any subtraction below.
                  crate::file::page_index::offset_index::verifica_posizioni(
-@@ -819,6 +869,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
+@@ -819,6 +852,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
              decompressor,
              state,
              physical_type: meta.column_type(),
@@ -2251,7 +2662,55 @@
              context,
              limiti, // PLENORA
          })
-@@ -1106,10 +1157,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+@@ -937,12 +971,12 @@ impl SerializedPageReaderContext {
+         _page_index: usize,
+         _dictionary_page: bool,
+     ) -> Result<PageHeader> {
++        // PLENORA: the page statistics are always decoded, and checked
++        // against their type by `decode_page_con_larghezza`; `read_stats`
++        // decides only whether the page exposes them. A malformed statistic
++        // was skipped without a check with the default properties.
+         let mut prot = ThriftReadInputProtocol::new(input);
+-        if self.read_stats {
+-            Ok(PageHeader::read_thrift(&mut prot)?)
+-        } else {
+-            Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
+-        }
++        Ok(PageHeader::read_thrift(&mut prot)?)
+     }
+ 
+     fn decrypt_page_data<T>(
+@@ -965,14 +999,9 @@ impl SerializedPageReaderContext {
+     ) -> Result<PageHeader> {
+         match self.page_crypto_context(page_index, dictionary_page) {
+             None => {
++                // PLENORA: always decoded and checked, see above.
+                 let mut prot = ThriftReadInputProtocol::new(input);
+-                if self.read_stats {
+-                    Ok(PageHeader::read_thrift(&mut prot)?)
+-                } else {
+-                    use crate::file::metadata::thrift::PageHeader;
+-
+-                    Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
+-                }
++                Ok(PageHeader::read_thrift(&mut prot)?)
+             }
+             Some(page_crypto_context) => {
+                 let data_decryptor = page_crypto_context.data_decryptor();
+@@ -986,11 +1015,7 @@ impl SerializedPageReaderContext {
+                 })?;
+ 
+                 let mut prot = ThriftSliceInputProtocol::new(buf.as_slice());
+-                if self.read_stats {
+-                    Ok(PageHeader::read_thrift(&mut prot)?)
+-                } else {
+-                    Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
+-                }
++                Ok(PageHeader::read_thrift(&mut prot)?)
+             }
+         }
+     }
+@@ -1106,10 +1131,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                          self.context
                              .decrypt_page_data(buffer, *page_index, *require_dictionary)?;
  
@@ -2261,10 +2720,11 @@
                          buffer,
                          self.physical_type,
 +                        self.larghezza,
++                        self.context.read_stats,
                          self.decompressor.as_mut(),
                      )?;
                      if page.is_data_page() {
-@@ -1144,6 +1196,14 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+@@ -1144,6 +1171,14 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                      )?;
                      self.limiti.verifica(&header)?; // PLENORA
                      let bytes = buffer.slice(offset..);
@@ -2279,7 +2739,7 @@
                      let bytes =
                          self.context
                              .decrypt_page_data(bytes, *page_index, is_dictionary_page)?;
-@@ -1151,10 +1211,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+@@ -1151,10 +1186,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                      if !is_dictionary_page {
                          *page_index += 1;
                      }
@@ -2289,39 +2749,99 @@
                          bytes,
                          self.physical_type,
 +                        self.larghezza,
++                        self.context.read_stats,
                          self.decompressor.as_mut(),
                      )?
                  }
-@@ -1303,11 +1364,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
-                 if dictionary_page.is_some() {
-                     // If a dictionary page exists, consume it by taking it (sets to None)
-                     dictionary_page.take();
+@@ -1249,70 +1286,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+         }
+     }
+ 
++    /// PLENORA: not qualified. A page skipped whole was passed over from its
++    /// header, without decoding it: a truncated or malformed payload in a
++    /// skipped page passed, against the rule that what is not checked is
++    /// rejected. Every skip is `SKIP_NOT_QUALIFIED`; data does not skip.
+     fn skip_next_page(&mut self) -> Result<()> {
+-        match &mut self.state {
+-            SerializedPageReaderState::Values {
+-                offset,
+-                remaining_bytes,
+-                next_page_header,
+-                page_index,
+-                require_dictionary,
+-            } => {
+-                if let Some(buffered_header) = next_page_header.take() {
+-                    verifica_codifica_saltata(&buffered_header)?;
+-                    verify_page_size(
+-                        buffered_header.compressed_page_size,
+-                        buffered_header.uncompressed_page_size,
+-                        *remaining_bytes,
+-                    )?;
+-                    // The next page header has already been peeked, so just advance the offset
+-                    *offset += buffered_header.compressed_page_size as u64;
+-                    *remaining_bytes -= buffered_header.compressed_page_size as u64;
+-                } else {
+-                    let mut read = self.reader.get_read(*offset)?;
+-                    let (header_len, header) = Self::read_page_header_len(
+-                        &self.context,
+-                        &mut read,
+-                        *page_index,
+-                        *require_dictionary,
+-                    )?;
+-                    verify_page_header_len(header_len, *remaining_bytes)?;
+-                    verifica_codifica_saltata(&header)?;
+-                    verify_page_size(
+-                        header.compressed_page_size,
+-                        header.uncompressed_page_size,
+-                        *remaining_bytes,
+-                    )?;
+-                    let data_page_size = header.compressed_page_size as u64;
+-                    *offset += header_len as u64 + data_page_size;
+-                    *remaining_bytes -= header_len as u64 + data_page_size;
+-                }
+-                if *require_dictionary {
+-                    *require_dictionary = false;
+-                } else {
+-                    *page_index += 1;
+-                }
+-                Ok(())
+-            }
+-            SerializedPageReaderState::Pages {
+-                page_locations,
+-                dictionary_page,
+-                page_index,
+-                ..
+-            } => {
+-                if dictionary_page.is_some() {
+-                    // If a dictionary page exists, consume it by taking it (sets to None)
+-                    dictionary_page.take();
 -                } else {
 -                    // If no dictionary page exists, simply pop the data page from page_locations
 -                    if page_locations.pop_front().is_some() {
 -                        *page_index += 1;
 -                    }
-+                } else if !page_locations.is_empty() {
-+                    // PLENORA: a data page reached through the offset index
-+                    // has no header read: its encoding cannot be checked, and
-+                    // the skip is not qualified.
-+                    let _ = page_index;
-+                    return Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED));
-                 }
+-                }
+-
+-                Ok(())
+-            }
+-        }
++        Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED))
+     }
  
-                 Ok(())
+     fn at_record_boundary(&mut self) -> Result<bool> {
 --- a/src/file/statistics.rs
 +++ b/src/file/statistics.rs
-@@ -118,10 +118,44 @@ macro_rules! statistics_enum_func {
+@@ -118,10 +118,45 @@ macro_rules! statistics_enum_func {
      }};
  }
  
 +/// PLENORA: a `FIXED_LEN_BYTE_ARRAY` statistic against the width of the
 +/// type. An exact one (`is_*_value_exact` true, or no flag: the deprecated
 +/// fields, and the writers that do not set it) has the width exactly; one
-+/// marked not exact (`is_*_value_exact` false) is a truncated prefix, 1 to
-+/// the width bytes (the writer of this crate truncates min and max to 64
-+/// bytes and marks them).
++/// marked not exact (`is_*_value_exact` false) is a bound that is not
++/// exact, 1 to the width bytes (the writer of this crate truncates min and
++/// max to 64 bytes and marks them: the truncated min is a prefix, the
++/// truncated max is incremented).
 +pub(crate) fn verifica_statistica_flba(
 +    valore: Option<&[u8]>,
 +    esatta: Option<bool>,
@@ -2357,7 +2877,7 @@
  ) -> Result<Option<Statistics>> {
      Ok(match thrift_stats {
          Some(stats) => {
-@@ -138,7 +172,15 @@ pub(crate) fn from_thrift_page_stats(
+@@ -138,7 +173,15 @@ pub(crate) fn from_thrift_page_stats(
                  })
                  .transpose()?;
              // Generic distinct count (count of distinct values occurring)
@@ -2374,7 +2894,7 @@
              // Generic nan count for floating point types
              let nan_count = stats
                  .nan_count
-@@ -166,7 +208,14 @@ pub(crate) fn from_thrift_page_stats(
+@@ -166,7 +209,14 @@ pub(crate) fn from_thrift_page_stats(
                  stats.max_value
              };
  
@@ -2389,7 +2909,7 @@
                  if let Some(min) = min
                      && min.len() < len
                  {
-@@ -187,10 +236,37 @@ pub(crate) fn from_thrift_page_stats(
+@@ -187,10 +237,37 @@ pub(crate) fn from_thrift_page_stats(
              {
                  let (min, max) = (min.as_deref(), max.as_deref());
                  match physical_type {
@@ -2428,12 +2948,12 @@
                      _ => Ok(()),
                  }?;
              }
-@@ -753,6 +829,22 @@ impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
+@@ -753,6 +830,22 @@ impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
  
  #[cfg(test)]
  mod tests {
 +    /// PLENORA: a FLBA statistic: exact (flag true or absent) has the width
-+    /// of the type; marked not exact is a prefix of 1 to the width bytes.
++    /// of the type; marked not exact is a bound of 1 to the width bytes.
 +    #[test]
 +    fn test_flba_statistic_width_follows_exactness() {
 +        let w = 4;
@@ -2451,7 +2971,7 @@
      use core::f32;
  
      use super::*;
-@@ -1186,7 +1278,7 @@ mod tests {
+@@ -1186,7 +1279,7 @@ mod tests {
          let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats.clone())).unwrap_err();
          assert_eq!(
              err.to_string(),
@@ -2460,7 +2980,7 @@
          );
  
          thrift_stats.min = None;
-@@ -1194,7 +1286,7 @@ mod tests {
+@@ -1194,7 +1287,7 @@ mod tests {
          let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats)).unwrap_err();
          assert_eq!(
              err.to_string(),
@@ -2526,6 +3046,56 @@
                  self.byte_offset += i + 1;
                  return Ok(Some(v as i64));
              }
+--- a/src/util/test_common/mod.rs
++++ b/src/util/test_common/mod.rs
+@@ -22,3 +22,47 @@ pub mod file_util;
+ 
+ #[cfg(test)]
+ pub mod rand_gen;
++
++/// PLENORA: the random generator of the unit tests, with a fixed seed in
++/// place of `rand::rng()` (seeded from the system on every run: the data of
++/// a test changed from one run to the next). Each call gives a new
++/// generator, seeded from a counter of the calls made by the thread: every
++/// test runs on its own thread, so the sequence of a test is the same on
++/// every run, whatever the other tests do.
++#[cfg(test)]
++pub(crate) fn rng() -> rand::rngs::StdRng {
++    use rand::SeedableRng;
++    thread_local! {
++        static CHIAMATE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
++    }
++    let chiamata = CHIAMATE.with(|c| {
++        let n = c.get();
++        c.set(n.wrapping_add(1));
++        n
++    });
++    rand::rngs::StdRng::seed_from_u64(0x5EED_7E57_0000_0000 ^ chiamata)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::rng;
++    use rand::RngExt;
++
++    /// PLENORA: the generator of the unit tests gives the same sequence on
++    /// every thread, so on every run of a test (`rand::rng()` did not).
++    #[test]
++    fn test_rng_is_the_same_on_every_thread() {
++        let sequenza = || {
++            std::thread::spawn(|| {
++                let mut primo = rng();
++                let secondo: u64 = rng().random();
++                (primo.random::<u64>(), secondo)
++            })
++            .join()
++            .unwrap()
++        };
++        let (a, b) = sequenza();
++        assert_eq!((a, b), sequenza());
++        assert_ne!(a, b);
++    }
++}
 --- a/src/util/test_common/page_util.rs
 +++ b/src/util/test_common/page_util.rs
 @@ -57,6 +57,9 @@ pub struct DataPageBuilderImpl {
@@ -2566,6 +3136,19 @@
                  is_compressed: false,
 --- a/src/util/test_common/rand_gen.rs
 +++ b/src/util/test_common/rand_gen.rs
+@@ -17,11 +17,11 @@
+ 
+ use crate::basic::Encoding;
+ use crate::column::page::Page;
++use crate::util::test_common::rng;
+ use bytes::Bytes;
+ use rand::{
+     RngExt,
+     distr::{Distribution, StandardUniform, uniform::SampleUniform},
+-    rng,
+ };
+ use std::collections::VecDeque;
+ 
 @@ -173,6 +173,11 @@ pub fn make_pages<T: DataType>(
          }
          if max_rep_level > 0 {
@@ -2588,3 +3171,17 @@
              is_sorted: false,
          };
          pages.push_front(dict_page);
+--- a/tests/arrow_reader/int96_stats_roundtrip.rs
++++ b/tests/arrow_reader/int96_stats_roundtrip.rs
+@@ -78,7 +78,10 @@ fn verify_ordering(data: Vec<Int96>) {
+         {
+             let writer = col_writer.typed::<Int96Type>();
+             let mut shuffled_data = data.clone();
+-            shuffled_data.shuffle(&mut rand::rng());
++            // PLENORA: a fixed seed, the same data on every run.
++            shuffled_data.shuffle(
++                &mut <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(0x5EED_0003),
++            );
+             writer.write_batch(&shuffled_data, None, None).unwrap();
+         }
+         col_writer.close().unwrap();

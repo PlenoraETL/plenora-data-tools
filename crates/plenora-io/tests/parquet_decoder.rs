@@ -241,6 +241,33 @@ fn parquet_con_codec(
     statistiche: Option<(&[u8], &[u8])>,
     codec: i64,
 ) -> Vec<u8> {
+    let statistiche = statistiche
+        .map(|(minimo, massimo)| Struttura::default().binario(5, massimo).binario(6, minimo));
+    parquet_completo(
+        colonna,
+        valori,
+        codifica,
+        contenuto,
+        header_dati,
+        dizionario,
+        statistiche,
+        codec,
+    )
+}
+
+/// Come [`parquet_con_codec`], con le statistiche del column chunk date come
+/// struttura Thrift (`ColumnMetaData.statistics`).
+#[allow(clippy::too_many_arguments)] // Il costruttore di tutte le prove.
+fn parquet_completo(
+    colonna: &Colonna,
+    valori: i64,
+    codifica: i64,
+    contenuto: &[u8],
+    header_dati: &[u8],
+    dizionario: Option<(i64, &[u8])>,
+    statistiche: Option<Struttura>,
+    codec: i64,
+) -> Vec<u8> {
     let mut file = b"PAR1".to_vec();
     let inizio = i64::try_from(file.len()).unwrap();
     let mut offset_dizionario = None;
@@ -275,11 +302,8 @@ fn parquet_con_codec(
     if let Some(offset) = offset_dizionario {
         metadati = metadati.i64(11, offset);
     }
-    if let Some((minimo, massimo)) = statistiche {
-        metadati = metadati.struttura(
-            12,
-            Struttura::default().binario(5, massimo).binario(6, minimo),
-        );
+    if let Some(statistiche) = statistiche {
+        metadati = metadati.struttura(12, statistiche);
     }
     let chunk = Struttura::default()
         .i64(2, inizio)
@@ -1492,31 +1516,31 @@ fn le_codifiche_non_qualificate_si_rifiutano_in_ogni_forma() {
     }
 }
 
-/// L'API per colonne del fork rifiuta le stesse codifiche, anche quando
-/// salta la pagina intera (prima la saltava senza guardarla).
+/// L'API per colonne del fork rifiuta le stesse codifiche; il salto della
+/// pagina intera, che prima la passava senza guardarla, non è qualificato.
 #[test]
 fn l_api_per_colonne_rifiuta_le_codifiche_non_qualificate() {
     for (nome, codifica, colonna, valori, contenuto) in pagine_non_qualificate() {
         let byte = parquet(&colonna, valori, codifica, &contenuto, None, None);
         let tutte = Some(usize::try_from(valori).unwrap());
-        for salta in [None, tutte] {
+        for (salta, atteso) in [
+            (None, parquet::basic::ENCODING_NOT_QUALIFIED),
+            (tutte, parquet::basic::SKIP_NOT_QUALIFIED),
+        ] {
             let esito = match colonna.tipo {
                 INT32 => colonna_api::<Int32Type>(&byte, salta),
                 DOUBLE => colonna_api::<DoubleType>(&byte, salta),
                 _ => colonna_api::<ByteArrayType>(&byte, salta),
             };
             match esito {
-                Err(testo) => assert!(
-                    testo.contains(parquet::basic::ENCODING_NOT_QUALIFIED),
-                    "{nome} ({salta:?}): {testo}"
-                ),
+                Err(testo) => assert!(testo.contains(atteso), "{nome} ({salta:?}): {testo}"),
                 Ok(righe) => panic!("{nome} ({salta:?}): letto ({righe} righe)"),
             }
         }
     }
-    // Controfattuale: la stessa pagina intera in PLAIN si salta.
+    // Controfattuale: la stessa pagina in PLAIN si legge.
     let byte = parquet(&colonna(INT32), 1, PLAIN, &7_i32.to_le_bytes(), None, None);
-    assert_eq!(colonna_api::<Int32Type>(&byte, Some(1)), Ok(1));
+    assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(1));
 }
 
 // --- Livelli, interi stretti, UTF-8, varint ----------------------------------
@@ -1999,7 +2023,8 @@ fn un_dizionario_di_testo_segue_l_annotazione() {
 /// ripetizione troncati facevano girare il salto senza avanzare, un indice
 /// di dizionario fuori dal dizionario passava. Ora il salto dentro una
 /// pagina non è qualificato (`SKIP_NOT_QUALIFIED`, prima di leggere un
-/// livello); il salto di pagine intere, dall'header, resta.
+/// livello); il salto di pagine intere nemmeno
+/// (`un_salto_di_pagine_intere_non_e_qualificato`).
 #[test]
 fn un_salto_dentro_una_pagina_non_e_qualificato() {
     let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
@@ -2032,8 +2057,38 @@ fn un_salto_dentro_una_pagina_non_e_qualificato() {
         colonna_api::<Int32Type>(&due, Some(1)),
         parquet::basic::SKIP_NOT_QUALIFIED,
     );
-    // Controfattuale: la pagina intera si salta.
-    assert_eq!(colonna_api::<Int32Type>(&due, Some(2)), Ok(2));
+    // Controfattuale: la pagina si legge.
+    assert_eq!(colonna_api::<Int32Type>(&due, None), Ok(2));
+}
+
+/// Il salto di pagine intere avanzava dall'header senza decodificare la
+/// pagina: un contenuto troncato (2 valori `INT32` dichiarati, 4 byte) in
+/// una pagina saltata passava, e il salto contava 2 righe. Ora ogni salto
+/// non è qualificato (`SKIP_NOT_QUALIFIED`): data non salta, e ciò che non
+/// si verifica si rifiuta. Un salto di zero righe non legge nulla.
+#[test]
+fn un_salto_di_pagine_intere_non_e_qualificato() {
+    let troncata = parquet(&colonna(INT32), 2, PLAIN, &[1, 0, 0, 0], None, None);
+    assert!(colonna_api::<Int32Type>(&troncata, None).is_err());
+    contiene(
+        colonna_api::<Int32Type>(&troncata, Some(2)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+    rifiutato_dal_confine(&troncata);
+    let intera = parquet(
+        &colonna(INT32),
+        2,
+        PLAIN,
+        &[1, 0, 0, 0, 2, 0, 0, 0],
+        None,
+        None,
+    );
+    contiene(
+        colonna_api::<Int32Type>(&intera, Some(2)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+    assert_eq!(colonna_api::<Int32Type>(&intera, Some(0)), Ok(0));
+    assert_eq!(colonna_api::<Int32Type>(&intera, None), Ok(2));
 }
 
 /// Una pagina deve finire dove finiscono i suoi valori e i suoi livelli:
@@ -2297,7 +2352,7 @@ fn le_righe_di_una_pagina_v2_contro_i_valori_sono_controllate() {
             None,
         );
         contiene(arrow(&byte), "rows for");
-        contiene(colonna_api::<Int32Type>(&byte, Some(1)), "rows for");
+        contiene(colonna_api::<Int32Type>(&byte, None), "rows for");
         rifiutato_dal_confine(&byte);
     }
     let byte = parquet_con_header(
@@ -2309,7 +2364,7 @@ fn le_righe_di_una_pagina_v2_contro_i_valori_sono_controllate() {
         None,
         None,
     );
-    assert_eq!(colonna_api::<Int32Type>(&byte, Some(2)), Ok(2));
+    assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(2));
     assert_eq!(valori_arrow(&byte), ["1", "2"]);
 }
 
@@ -3600,7 +3655,8 @@ fn le_statistiche_di_pagina_flba_hanno_la_larghezza_del_tipo() {
 /// Lo scrittore del fork tronca il minimo e il massimo a 64 byte e li marca
 /// non esatti: una colonna FLBA di 65 byte, scritta dal fork stesso, non si
 /// rileggeva dopo la regola della larghezza esatta. Ora una statistica
-/// marcata non esatta è un prefisso fra 1 e la larghezza; una esatta (o
+/// marcata non esatta è un limite non esatto fra 1 e la larghezza (il
+/// minimo troncato è un prefisso, il massimo è incrementato); una esatta (o
 /// senza segno, come scrivono pyarrow e `DuckDB`) ha la larghezza esatta.
 #[test]
 fn una_colonna_flba_lunga_scritta_dal_fork_si_rilegge() {
@@ -3641,4 +3697,122 @@ fn una_colonna_flba_lunga_scritta_dal_fork_si_rilegge() {
     )
     .unwrap();
     assert_eq!(tabella.num_rows(), 5);
+}
+
+/// Le pagine di un Parquet di un row group e una colonna, lette con le
+/// statistiche di pagina esposte (`set_read_page_statistics`).
+fn pagine_con_statistiche(byte: &[u8]) -> Result<usize, String> {
+    use parquet::file::properties::ReaderProperties;
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::{ReadOptionsBuilder, SerializedFileReader};
+    su_file(byte, |file| {
+        let opzioni = ReadOptionsBuilder::new()
+            .with_reader_properties(
+                ReaderProperties::builder()
+                    .set_read_page_statistics(true)
+                    .build(),
+            )
+            .build();
+        let lettore =
+            SerializedFileReader::new_with_options(file, opzioni).map_err(|e| e.to_string())?;
+        let gruppo = lettore.get_row_group(0).map_err(|e| e.to_string())?;
+        let mut lettore_di_pagine = gruppo
+            .get_column_page_reader(0)
+            .map_err(|e| e.to_string())?;
+        let mut lette = 0;
+        while let Some(letta) = lettore_di_pagine
+            .get_next_page()
+            .map_err(|e| e.to_string())?
+        {
+            assert!(letta.statistics().is_some());
+            lette += 1;
+        }
+        Ok::<usize, String>(lette)
+    })
+}
+
+/// La matrice delle statistiche FLBA: nel column chunk e nella pagina;
+/// esatte (`is_*_value_exact` vero), senza segno o marcate non esatte; di
+/// lunghezza 0, 1, la larghezza e la larghezza più uno. Una statistica
+/// esatta o senza segno ha la larghezza del tipo; una marcata non esatta è
+/// un limite non esatto di 1 fino alla larghezza (il minimo troncato è un
+/// prefisso, il massimo troncato è incrementato). Le statistiche di pagina
+/// si verificano anche con le proprietà di default, che non le espongono:
+/// prima il decoder le saltava senza controllarle.
+#[test]
+fn la_matrice_delle_statistiche_flba() {
+    const LARGHEZZA: usize = 4;
+    let flba = Colonna {
+        larghezza: Some(4),
+        ..colonna(FLBA)
+    };
+    let contenuto = [7_u8; LARGHEZZA];
+    let statistiche = |lunghezza: usize, esatta: Option<bool>| {
+        let valore = vec![7_u8; lunghezza];
+        let mut s = Struttura::default().binario(5, &valore).binario(6, &valore);
+        if let Some(esatta) = esatta {
+            s = s.campo_booleano(7, esatta).campo_booleano(8, esatta);
+        }
+        s
+    };
+    let mut verificati = 0;
+    for esatta in [Some(true), None, Some(false)] {
+        for lunghezza in [0, 1, LARGHEZZA, LARGHEZZA + 1] {
+            let ammessa = if esatta == Some(false) {
+                (1..=LARGHEZZA).contains(&lunghezza)
+            } else {
+                lunghezza == LARGHEZZA
+            };
+            let nel_chunk = parquet_completo(
+                &flba,
+                1,
+                PLAIN,
+                &contenuto,
+                &header_v1(1, PLAIN, LARGHEZZA),
+                None,
+                Some(statistiche(lunghezza, esatta)),
+                0,
+            );
+            let header_pagina = Struttura::default()
+                .i32(1, 0)
+                .i32(2, 4)
+                .i32(3, 4)
+                .struttura(
+                    5,
+                    Struttura::default()
+                        .i32(1, 1)
+                        .i32(2, PLAIN)
+                        .i32(3, RLE)
+                        .i32(4, RLE)
+                        .struttura(5, statistiche(lunghezza, esatta)),
+                )
+                .fine();
+            let nella_pagina =
+                parquet_con_header(&flba, 1, PLAIN, &contenuto, &header_pagina, None, None);
+            let caso = format!("lunghezza {lunghezza}, esatta {esatta:?}");
+            // Il column chunk; la pagina con le proprietà di default (le
+            // statistiche non esposte) e con le statistiche esposte.
+            for (dove, esito) in [
+                ("chunk", arrow(&nel_chunk)),
+                ("pagina", arrow(&nella_pagina)),
+                ("pagina esposta", pagine_con_statistiche(&nella_pagina)),
+            ] {
+                if ammessa {
+                    assert_eq!(esito, Ok(1), "{dove}, {caso}");
+                } else {
+                    let errore = esito.expect_err(&format!("{dove}, {caso}: letto"));
+                    assert!(
+                        errore.contains("statistic of the wrong width"),
+                        "{dove}, {caso}: {errore}"
+                    );
+                }
+                verificati += 1;
+            }
+            if !ammessa {
+                rifiutato_dal_confine(&nel_chunk);
+                rifiutato_dal_confine(&nella_pagina);
+            }
+        }
+    }
+    assert_eq!(verificati, 36);
 }

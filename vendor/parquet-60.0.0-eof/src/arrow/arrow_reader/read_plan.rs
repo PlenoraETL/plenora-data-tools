@@ -548,7 +548,8 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
     fn preferred_selection_strategy_mask_matches_selector_backing() {
-        use rand::{RngExt, rng};
+        use crate::util::test_common::rng;
+        use rand::RngExt;
 
         let mut rand = rng();
         for _ in 0..200 {

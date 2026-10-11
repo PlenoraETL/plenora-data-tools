@@ -17,11 +17,11 @@
 
 use crate::basic::Encoding;
 use crate::column::page::Page;
+use crate::util::test_common::rng;
 use bytes::Bytes;
 use rand::{
     RngExt,
     distr::{Distribution, StandardUniform, uniform::SampleUniform},
-    rng,
 };
 use std::collections::VecDeque;
 

@@ -1221,72 +1221,6 @@ pub(crate) struct DataPageHeader {
 }
 );
 
-impl DataPageHeader {
-    // reader that skips decoding page statistics
-    fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
-    where
-        R: ThriftCompactInputProtocol<'a>,
-    {
-        let mut num_values: Option<i32> = None;
-        let mut encoding: Option<Encoding> = None;
-        let mut definition_level_encoding: Option<Encoding> = None;
-        let mut repetition_level_encoding: Option<Encoding> = None;
-        let statistics: Option<PageStatistics> = None;
-        let mut last_field_id = 0i16;
-        loop {
-            let field_ident = prot.read_field_begin(last_field_id)?;
-            if field_ident.field_type == FieldType::Stop {
-                break;
-            }
-            match field_ident.id {
-                1 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    num_values = Some(val);
-                }
-                2 => {
-                    let val = Encoding::read_thrift(&mut *prot)?;
-                    encoding = Some(val);
-                }
-                3 => {
-                    let val = Encoding::read_thrift(&mut *prot)?;
-                    definition_level_encoding = Some(val);
-                }
-                4 => {
-                    let val = Encoding::read_thrift(&mut *prot)?;
-                    repetition_level_encoding = Some(val);
-                }
-                _ => {
-                    prot.skip(field_ident.field_type)?;
-                }
-            }
-            last_field_id = field_ident.id;
-        }
-        let Some(num_values) = num_values else {
-            return Err(general_err!("Required field num_values is missing"));
-        };
-        let Some(encoding) = encoding else {
-            return Err(general_err!("Required field encoding is missing"));
-        };
-        let Some(definition_level_encoding) = definition_level_encoding else {
-            return Err(general_err!(
-                "Required field definition_level_encoding is missing"
-            ));
-        };
-        let Some(repetition_level_encoding) = repetition_level_encoding else {
-            return Err(general_err!(
-                "Required field repetition_level_encoding is missing"
-            ));
-        };
-        Ok(Self {
-            num_values,
-            encoding,
-            definition_level_encoding,
-            repetition_level_encoding,
-            statistics,
-        })
-    }
-}
-
 thrift_struct!(
 pub(crate) struct DataPageHeaderV2 {
   1: required i32 num_values
@@ -1299,95 +1233,6 @@ pub(crate) struct DataPageHeaderV2 {
   8: optional PageStatistics statistics;
 }
 );
-
-impl DataPageHeaderV2 {
-    // reader that skips decoding page statistics
-    fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
-    where
-        R: ThriftCompactInputProtocol<'a>,
-    {
-        let mut num_values: Option<i32> = None;
-        let mut num_nulls: Option<i32> = None;
-        let mut num_rows: Option<i32> = None;
-        let mut encoding: Option<Encoding> = None;
-        let mut definition_levels_byte_length: Option<i32> = None;
-        let mut repetition_levels_byte_length: Option<i32> = None;
-        let mut is_compressed: Option<bool> = None;
-        let statistics: Option<PageStatistics> = None;
-        let mut last_field_id = 0i16;
-        loop {
-            let field_ident = prot.read_field_begin(last_field_id)?;
-            if field_ident.field_type == FieldType::Stop {
-                break;
-            }
-            match field_ident.id {
-                1 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    num_values = Some(val);
-                }
-                2 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    num_nulls = Some(val);
-                }
-                3 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    num_rows = Some(val);
-                }
-                4 => {
-                    let val = Encoding::read_thrift(&mut *prot)?;
-                    encoding = Some(val);
-                }
-                5 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    definition_levels_byte_length = Some(val);
-                }
-                6 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    repetition_levels_byte_length = Some(val);
-                }
-                7 => {
-                    is_compressed = Some(field_ident.bool_val()?);
-                }
-                _ => {
-                    prot.skip(field_ident.field_type)?;
-                }
-            }
-            last_field_id = field_ident.id;
-        }
-        let Some(num_values) = num_values else {
-            return Err(general_err!("Required field num_values is missing"));
-        };
-        let Some(num_nulls) = num_nulls else {
-            return Err(general_err!("Required field num_nulls is missing"));
-        };
-        let Some(num_rows) = num_rows else {
-            return Err(general_err!("Required field num_rows is missing"));
-        };
-        let Some(encoding) = encoding else {
-            return Err(general_err!("Required field encoding is missing"));
-        };
-        let Some(definition_levels_byte_length) = definition_levels_byte_length else {
-            return Err(general_err!(
-                "Required field definition_levels_byte_length is missing"
-            ));
-        };
-        let Some(repetition_levels_byte_length) = repetition_levels_byte_length else {
-            return Err(general_err!(
-                "Required field repetition_levels_byte_length is missing"
-            ));
-        };
-        Ok(Self {
-            num_values,
-            num_nulls,
-            num_rows,
-            encoding,
-            definition_levels_byte_length,
-            repetition_levels_byte_length,
-            is_compressed,
-            statistics,
-        })
-    }
-}
 
 thrift_struct!(
 pub(crate) struct PageHeader {
@@ -1410,93 +1255,6 @@ pub(crate) struct PageHeader {
   8: optional DataPageHeaderV2 data_page_header_v2;
 }
 );
-
-impl PageHeader {
-    // reader that skips reading page statistics. obtained by running
-    // `cargo expand -p parquet --all-features --lib file::metadata::thrift`
-    // and modifying the impl of `read_thrift`
-    pub(crate) fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
-    where
-        R: ThriftCompactInputProtocol<'a>,
-    {
-        let mut type_: Option<PageType> = None;
-        let mut uncompressed_page_size: Option<i32> = None;
-        let mut compressed_page_size: Option<i32> = None;
-        let mut crc: Option<i32> = None;
-        let mut data_page_header: Option<DataPageHeader> = None;
-        let mut index_page_header: Option<IndexPageHeader> = None;
-        let mut dictionary_page_header: Option<DictionaryPageHeader> = None;
-        let mut data_page_header_v2: Option<DataPageHeaderV2> = None;
-        let mut last_field_id = 0i16;
-        loop {
-            let field_ident = prot.read_field_begin(last_field_id)?;
-            if field_ident.field_type == FieldType::Stop {
-                break;
-            }
-            match field_ident.id {
-                1 => {
-                    let val = PageType::read_thrift(&mut *prot)?;
-                    type_ = Some(val);
-                }
-                2 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    uncompressed_page_size = Some(val);
-                }
-                3 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    compressed_page_size = Some(val);
-                }
-                4 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    crc = Some(val);
-                }
-                5 => {
-                    let val = DataPageHeader::read_thrift_without_stats(&mut *prot)?;
-                    data_page_header = Some(val);
-                }
-                6 => {
-                    let val = IndexPageHeader::read_thrift(&mut *prot)?;
-                    index_page_header = Some(val);
-                }
-                7 => {
-                    let val = DictionaryPageHeader::read_thrift(&mut *prot)?;
-                    dictionary_page_header = Some(val);
-                }
-                8 => {
-                    let val = DataPageHeaderV2::read_thrift_without_stats(&mut *prot)?;
-                    data_page_header_v2 = Some(val);
-                }
-                _ => {
-                    prot.skip(field_ident.field_type)?;
-                }
-            }
-            last_field_id = field_ident.id;
-        }
-        let Some(type_) = type_ else {
-            return Err(general_err!("Required field type_ is missing"));
-        };
-        let Some(uncompressed_page_size) = uncompressed_page_size else {
-            return Err(general_err!(
-                "Required field uncompressed_page_size is missing"
-            ));
-        };
-        let Some(compressed_page_size) = compressed_page_size else {
-            return Err(general_err!(
-                "Required field compressed_page_size is missing"
-            ));
-        };
-        Ok(Self {
-            r#type: type_,
-            uncompressed_page_size,
-            compressed_page_size,
-            crc,
-            data_page_header,
-            index_page_header,
-            dictionary_page_header,
-            data_page_header_v2,
-        })
-    }
-}
 
 /////////////////////////////////////////////////
 // helper functions for writing file meta data
@@ -2198,7 +1956,8 @@ pub(crate) mod tests {
         change_false_bool_field_to_i32(&mut buf);
 
         let mut prot = ThriftSliceInputProtocol::new(&buf);
-        let err = PageHeader::read_thrift_without_stats(&mut prot)
+        use crate::parquet_thrift::ReadThrift;
+        let err = PageHeader::read_thrift(&mut prot)
             .expect_err("malformed bool field should return an error");
         assert_malformed_bool_error(err);
     }
@@ -2220,7 +1979,8 @@ pub(crate) mod tests {
         change_false_bool_field_to_i32(&mut buf);
 
         let mut prot = ThriftSliceInputProtocol::new(&buf);
-        let err = DataPageHeaderV2::read_thrift_without_stats(&mut prot)
+        use crate::parquet_thrift::ReadThrift;
+        let err = DataPageHeaderV2::read_thrift(&mut prot)
             .expect_err("malformed bool field should return an error");
         assert_malformed_bool_error(err);
     }

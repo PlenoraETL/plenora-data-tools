@@ -76,8 +76,9 @@ pub fn sign_extend_be_checked<const N: usize>(b: &[u8]) -> Option<[u8; N]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::test_common::rng;
     use arrow_array::builder::BooleanBufferBuilder;
-    use rand::{prelude::*, rng};
+    use rand::prelude::*;
 
     #[test]
     fn test_bit_fns() {

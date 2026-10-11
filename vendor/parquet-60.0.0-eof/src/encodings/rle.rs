@@ -751,7 +751,8 @@ mod tests {
     use super::*;
 
     use crate::util::bit_util::ceil;
-    use rand::{self, RngExt, SeedableRng, distr::StandardUniform, rng};
+    use crate::util::test_common::rng;
+    use rand::{self, RngExt, SeedableRng, distr::StandardUniform};
 
     const MAX_WIDTH: usize = 32;
 

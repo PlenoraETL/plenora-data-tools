@@ -4,24 +4,32 @@
 //!
 //! Un campo intero letto dal file diventa spesso un conteggio, una
 //! dimensione o un offset: negativo, una conversione `as` lo faceva enorme.
-//! La prova estrae dal codice del fork ogni campo `i8`, `i16`, `i32` o `i64`,
-//! senza dipendere dagli a capo:
+//! La prova legge il codice del fork con il lexer di Rust di `proc-macro2`
+//! (stringhe, raw string e commenti annidati come il compilatore; i commenti
+//! non sono token) ed estrae ogni campo `i8`, `i16`, `i32` o `i64`:
 //!
-//! - dalle definizioni `thrift_struct!` (il contenuto della macro, con
-//!   identificatore, presenza, tipo e nome del campo anche su più righe);
-//! - dai decoder scritti a mano, dal `match` sugli identificatori dei campi:
-//!   un ramo che legge un intero (`i64::read_thrift`, `read_i32()`, una
-//!   lista di interi) è un campo intero della struttura del decoder.
+//! - dalle invocazioni di `thrift_struct!` e `thrift_union*!`, con
+//!   qualunque delimitatore (identificatore, presenza, tipo e nome);
+//! - dai decoder scritti a mano: un `match` i cui rami sono letterali interi
+//!   (gli identificatori dei campi) o un ramo jolly, e che legge o salta
+//!   valori (`read_*`, `skip*`). La forma decide, non il nome della
+//!   variabile: un ramo che legge un intero (`i64::read_thrift`,
+//!   `read_i32()`, una lista di interi) è un campo intero della struttura
+//!   del decoder.
 //!
-//! I commenti non contano. Ogni campo deve avere una regola in [`CAMPI`], e
-//! la tabella non deve nominare campi che il codice non ha più. Un campo
-//! nuovo, rinominato o letto da un decoder nuovo fa fallire la prova finché
-//! non è classificato.
+//! Le voci `#[cfg(test)]` sono escluse. Una macro sconosciuta che contiene
+//! un campo `required`/`optional` intero fa fallire la prova, come un
+//! decoder di cui non si trova la struttura. Ogni campo deve avere una
+//! regola in [`CAMPI`], e la tabella non deve nominare campi che il codice
+//! non ha più.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+use proc_macro2::{Delimiter, Spacing, TokenStream, TokenTree};
 
 /// La regola di un campo intero.
 #[derive(Debug, Clone, Copy)]
@@ -117,170 +125,377 @@ const DECODER_A_MANO: &[(&str, &str)] = &[
     ("parquet_schema_from_bytes", "FileMetaData"),
 ];
 
+/// Le macro che definiscono tipi Thrift e di cui la prova legge i campi;
+/// `thrift_enum!` definisce valori, non campi.
+const MACRO_NOTE: &[&str] = &[
+    "thrift_struct",
+    "thrift_union",
+    "thrift_union_all_empty",
+    "thrift_union_with_unknown",
+    "thrift_enum",
+];
+
 const INTERI: [&str; 4] = ["i8", "i16", "i32", "i64"];
 
 /// Un campo intero estratto: struttura, identificatore, nome (vuoto per un
 /// decoder scritto a mano, che non lo nomina).
 type Campo = (String, u32, String);
 
-/// Il testo senza commenti (`//` fino a fine riga, `/* */`): le definizioni
-/// nei commenti non sono codice.
-fn senza_commenti(testo: &str) -> String {
-    let mut fuori = String::with_capacity(testo.len());
-    let mut caratteri = testo.chars().peekable();
-    let mut in_stringa = false;
-    while let Some(c) = caratteri.next() {
-        if in_stringa {
-            fuori.push(c);
-            if c == '\\' {
-                if let Some(d) = caratteri.next() {
-                    fuori.push(d);
+/// Ciò che si estrae da un sorgente.
+#[derive(Default, Debug)]
+struct Estratto {
+    campi: Vec<Campo>,
+    /// Decoder scritti a mano di cui non si trova la struttura.
+    non_mappati: usize,
+    /// Macro sconosciute con un campo `required`/`optional` intero.
+    macro_sconosciute: Vec<String>,
+    /// Decoder scritti a mano trovati, con la loro struttura.
+    decoder: Vec<String>,
+}
+
+/// La funzione e l'`impl` che contengono il punto visitato.
+#[derive(Default, Clone)]
+struct Contesto {
+    funzione: Option<String>,
+    tipo: Option<String>,
+}
+
+fn alberi(flusso: &TokenStream) -> Vec<TokenTree> {
+    flusso.clone().into_iter().collect()
+}
+
+/// I token come testo, con le parentesi dei gruppi: per i confronti.
+fn appiattisci(flusso: &TokenStream, fuori: &mut Vec<String>) {
+    for albero in flusso.clone() {
+        match albero {
+            TokenTree::Group(gruppo) => {
+                let (apre, chiude) = match gruppo.delimiter() {
+                    Delimiter::Parenthesis => ("(", ")"),
+                    Delimiter::Brace => ("{", "}"),
+                    Delimiter::Bracket => ("[", "]"),
+                    Delimiter::None => ("", ""),
+                };
+                if !apre.is_empty() {
+                    fuori.push(apre.to_owned());
                 }
-            } else if c == '"' {
-                in_stringa = false;
-            }
-            continue;
-        }
-        match (c, caratteri.peek()) {
-            ('"', _) => {
-                in_stringa = true;
-                fuori.push(c);
-            }
-            ('/', Some('/')) => {
-                for d in caratteri.by_ref() {
-                    if d == '\n' {
-                        fuori.push('\n');
-                        break;
-                    }
+                appiattisci(&gruppo.stream(), fuori);
+                if !chiude.is_empty() {
+                    fuori.push(chiude.to_owned());
                 }
             }
-            ('/', Some('*')) => {
-                caratteri.next();
-                let mut prima = ' ';
-                for d in caratteri.by_ref() {
-                    if prima == '*' && d == '/' {
-                        break;
-                    }
-                    prima = d;
-                }
-                fuori.push(' ');
-            }
-            _ => fuori.push(c),
+            TokenTree::Ident(nome) => fuori.push(nome.to_string()),
+            TokenTree::Punct(segno) => fuori.push(segno.as_char().to_string()),
+            TokenTree::Literal(letterale) => fuori.push(letterale.to_string()),
         }
     }
+}
+
+fn piatto(alberi: &[TokenTree]) -> Vec<String> {
+    let mut fuori = Vec::new();
+    appiattisci(&alberi.iter().cloned().collect(), &mut fuori);
     fuori
 }
 
-/// Le parole e i segni del testo, senza spazi né a capo.
-fn parole(testo: &str) -> Vec<String> {
-    let mut parole = Vec::new();
-    let mut corrente = String::new();
-    for c in testo.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' || c == '\'' {
-            corrente.push(c);
-        } else {
-            if !corrente.is_empty() {
-                parole.push(std::mem::take(&mut corrente));
-            }
-            if !c.is_whitespace() {
-                parole.push(c.to_string());
-            }
-        }
+fn identificatore(albero: Option<&TokenTree>) -> Option<String> {
+    match albero {
+        Some(TokenTree::Ident(nome)) => Some(nome.to_string()),
+        _ => None,
     }
-    if !corrente.is_empty() {
-        parole.push(corrente);
-    }
-    parole
 }
 
-/// La parentesi che chiude quella aperta in `inizio`.
-fn chiusura(parole: &[String], inizio: usize, apre: &str, chiude: &str) -> usize {
-    let mut profondita = 0;
-    for (i, parola) in parole.iter().enumerate().skip(inizio) {
-        if parola == apre {
+fn segno(albero: Option<&TokenTree>, carattere: char) -> bool {
+    matches!(albero, Some(TokenTree::Punct(p)) if p.as_char() == carattere)
+}
+
+fn gruppo(albero: Option<&TokenTree>, delimitatore: Delimiter) -> Option<TokenStream> {
+    match albero {
+        Some(TokenTree::Group(g)) if g.delimiter() == delimitatore => Some(g.stream()),
+        _ => None,
+    }
+}
+
+/// Un letterale intero senza suffisso (l'identificatore di un campo).
+fn intero(albero: Option<&TokenTree>) -> Option<u32> {
+    match albero {
+        Some(TokenTree::Literal(letterale)) => letterale.to_string().parse().ok(),
+        _ => None,
+    }
+}
+
+/// Se `alberi[i..]` comincia con un attributo `#[...]` (o `#![...]`): la
+/// sua lunghezza e il suo contenuto.
+fn attributo(alberi: &[TokenTree], i: usize) -> Option<(usize, Vec<String>)> {
+    if !segno(alberi.get(i), '#') {
+        return None;
+    }
+    let (salto, posizione) = if segno(alberi.get(i + 1), '!') {
+        (3, i + 2)
+    } else {
+        (2, i + 1)
+    };
+    let contenuto = gruppo(alberi.get(posizione), Delimiter::Bracket)?;
+    let mut testo = Vec::new();
+    appiattisci(&contenuto, &mut testo);
+    Some((salto, testo))
+}
+
+/// La fine della voce che comincia in `i` (dopo i suoi attributi): il primo
+/// gruppo `{}` o il primo `;` al livello della voce, inclusi.
+fn fine_della_voce(alberi: &[TokenTree], i: usize) -> usize {
+    let mut j = i;
+    while j < alberi.len() {
+        if gruppo(alberi.get(j), Delimiter::Brace).is_some() || segno(alberi.get(j), ';') {
+            return j + 1;
+        }
+        j += 1;
+    }
+    alberi.len()
+}
+
+/// Il primo gruppo `{}` da `i`, al livello corrente.
+fn prossimo_blocco(alberi: &[TokenTree], i: usize) -> Option<usize> {
+    (i..alberi.len()).find(|&j| gruppo(alberi.get(j), Delimiter::Brace).is_some())
+}
+
+/// Salta i parametri generici `<...>` che cominciano in `i`; `->` non chiude.
+fn dopo_i_generici(alberi: &[TokenTree], mut i: usize) -> usize {
+    if !segno(alberi.get(i), '<') {
+        return i;
+    }
+    let mut profondita = 0_i32;
+    while i < alberi.len() {
+        if segno(alberi.get(i), '<') {
             profondita += 1;
-        } else if parola == chiude {
+        } else if segno(alberi.get(i), '>') && !freccia(alberi, i) {
             profondita -= 1;
             if profondita == 0 {
-                return i;
+                return i + 1;
             }
         }
+        i += 1;
     }
-    parole.len()
+    i
 }
 
-fn numero(parola: &str) -> bool {
-    !parola.is_empty() && parola.chars().all(|c| c.is_ascii_digit())
+fn freccia(alberi: &[TokenTree], i: usize) -> bool {
+    i > 0
+        && matches!(
+            alberi.get(i - 1),
+            Some(TokenTree::Punct(p)) if p.as_char() == '-' && p.spacing() == Spacing::Joint
+        )
 }
 
-/// I campi interi delle definizioni `thrift_struct!` del testo.
-fn campi_delle_macro(parole: &[String]) -> Vec<Campo> {
-    let mut campi = Vec::new();
-    let mut i = 0;
-    while i + 2 < parole.len() {
-        if !(parole[i] == "thrift_struct" && parole[i + 1] == "!" && parole[i + 2] == "(") {
+/// L'ultimo identificatore del percorso che comincia in `i` (`a::b::Tipo`).
+fn tipo_del_percorso(alberi: &[TokenTree], mut i: usize) -> Option<String> {
+    let mut ultimo = None;
+    loop {
+        if segno(alberi.get(i), ':') {
             i += 1;
             continue;
         }
-        let fine = chiusura(parole, i + 2, "(", ")");
-        let corpo = &parole[i + 3..fine];
-        if let Some(s) = corpo.iter().position(|p| p == "struct") {
-            let nome = corpo[s + 1].clone();
-            let mut j = s + 2;
-            while j + 3 < corpo.len() {
-                // `id : presenza tipo <'lt>? <elemento>? nome`.
-                if numero(&corpo[j])
-                    && corpo[j + 1] == ":"
-                    && (corpo[j + 2] == "required" || corpo[j + 2] == "optional")
-                {
-                    let id: u32 = corpo[j].parse().unwrap();
-                    let tipo = corpo[j + 3].clone();
-                    let mut k = j + 4;
-                    let mut elementi = Vec::new();
-                    while corpo.get(k).is_some_and(|p| p == "<") {
-                        elementi.push(corpo[k + 1].clone());
-                        k += 3;
-                    }
-                    let nome_campo = corpo[k].clone();
-                    let intero = INTERI.contains(&tipo.as_str())
-                        || ((tipo == "list" || tipo == "set")
-                            && elementi.iter().any(|e| INTERI.contains(&e.as_str())));
-                    if intero {
-                        campi.push((nome.clone(), id, nome_campo));
-                    }
-                    j = k + 1;
-                } else {
-                    j += 1;
+        match identificatore(alberi.get(i)) {
+            Some(nome) if nome != "for" && nome != "where" => {
+                ultimo = Some(nome);
+                i += 1;
+            }
+            _ => return ultimo,
+        }
+    }
+}
+
+/// Il tipo di un `impl` dalla sua intestazione: dopo `for`, o il primo
+/// percorso (`impl<...> Tipo<...>`).
+fn tipo_dell_impl(intestazione: &[TokenTree]) -> Option<String> {
+    let inizio = dopo_i_generici(intestazione, 0);
+    let mut profondita = 0_i32;
+    for (j, albero) in intestazione.iter().enumerate().skip(inizio) {
+        if segno(Some(albero), '<') {
+            profondita += 1;
+        } else if segno(Some(albero), '>') && !freccia(intestazione, j) {
+            profondita -= 1;
+        } else if profondita == 0 && identificatore(Some(albero)).as_deref() == Some("for") {
+            return tipo_del_percorso(intestazione, j + 1);
+        }
+    }
+    tipo_del_percorso(intestazione, inizio)
+}
+
+/// Il tipo di un campo e i tipi dei suoi elementi (`list<i64>`), dalla
+/// posizione `i`; restituisce anche la posizione del nome. Le lifetime
+/// (`binary<'a>`) non sono tipi.
+fn tipo_del_campo(alberi: &[TokenTree], i: usize) -> Option<(String, Vec<String>, usize)> {
+    let tipo = identificatore(alberi.get(i))?;
+    let mut elementi = Vec::new();
+    let mut j = i + 1;
+    while segno(alberi.get(j), '<') {
+        let fine = dopo_i_generici(alberi, j);
+        for k in j..fine {
+            if let Some(nome) = identificatore(alberi.get(k)) {
+                if !segno(alberi.get(k.wrapping_sub(1)), '\'') {
+                    elementi.push(nome);
                 }
             }
         }
-        i = fine;
+        j = fine;
+    }
+    Some((tipo, elementi, j))
+}
+
+fn e_intero(tipo: &str, elementi: &[String]) -> bool {
+    INTERI.contains(&tipo)
+        || ((tipo == "list" || tipo == "set")
+            && elementi.iter().any(|e| INTERI.contains(&e.as_str())))
+}
+
+/// I campi interi di una definizione `thrift_struct!` o `thrift_union*!`:
+/// `id : (required|optional)? tipo nome`, nel blocco dopo `struct Nome` o
+/// `union Nome`.
+fn campi_della_definizione(contenuto: &TokenStream) -> Vec<Campo> {
+    let alberi = alberi(contenuto);
+    let Some(parola) = alberi
+        .iter()
+        .position(|a| matches!(identificatore(Some(a)).as_deref(), Some("struct" | "union")))
+    else {
+        return Vec::new();
+    };
+    let Some(nome) = identificatore(alberi.get(parola + 1)) else {
+        return Vec::new();
+    };
+    let Some(blocco) = prossimo_blocco(&alberi, parola + 2) else {
+        return Vec::new();
+    };
+    let corpo = gruppo(alberi.get(blocco), Delimiter::Brace)
+        .map(|g| self::alberi(&g))
+        .unwrap();
+    let mut campi = Vec::new();
+    let mut i = 0;
+    while i < corpo.len() {
+        if let Some((salto, _)) = attributo(&corpo, i) {
+            i += salto;
+            continue;
+        }
+        let Some(id) = intero(corpo.get(i)) else {
+            i += 1;
+            continue;
+        };
+        if !segno(corpo.get(i + 1), ':') {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 2;
+        if matches!(
+            identificatore(corpo.get(j)).as_deref(),
+            Some("required" | "optional")
+        ) {
+            j += 1;
+        }
+        let Some((tipo, elementi, dopo)) = tipo_del_campo(&corpo, j) else {
+            i += 1;
+            continue;
+        };
+        let nome_campo = identificatore(corpo.get(dopo)).unwrap_or_default();
+        if e_intero(&tipo, &elementi) {
+            campi.push((nome.clone(), id, nome_campo));
+        }
+        i = dopo + 1;
     }
     campi
 }
 
-/// Il nome della struttura di un decoder scritto a mano: la funzione che lo
-/// contiene, nella tabella, o il tipo dell'`impl` che la contiene.
-fn struttura_del_decoder(parole: &[String], posizione: usize) -> Option<String> {
-    let funzione = (0..posizione)
-        .rev()
-        .find(|&i| parole[i] == "fn")
-        .map(|i| parole[i + 1].clone())?;
-    if let Some((_, struttura)) = DECODER_A_MANO.iter().find(|(f, _)| *f == funzione) {
-        return Some((*struttura).to_owned());
+/// Se il contenuto di una macro ha un campo `id : required|optional` intero.
+fn ha_un_campo_intero(contenuto: &TokenStream) -> bool {
+    let alberi = alberi(contenuto);
+    let diretto = (0..alberi.len()).any(|i| {
+        intero(alberi.get(i)).is_some()
+            && segno(alberi.get(i + 1), ':')
+            && matches!(
+                identificatore(alberi.get(i + 2)).as_deref(),
+                Some("required" | "optional")
+            )
+            && tipo_del_campo(&alberi, i + 3).is_some_and(|(t, e, _)| e_intero(&t, &e))
+    });
+    diretto
+        || alberi.iter().any(|a| match a {
+            TokenTree::Group(g) => ha_un_campo_intero(&g.stream()),
+            _ => false,
+        })
+}
+
+/// Il pattern di un ramo: gli identificatori interi (`1 | 2`), un jolly
+/// (`_` o un nome), o altro. Una guardia `if` non conta.
+enum Pattern {
+    Interi(Vec<u32>),
+    Jolly,
+    Altro,
+}
+
+fn pattern(alberi: &[TokenTree]) -> Pattern {
+    // Gli attributi del ramo (`#[cfg(feature = "encryption")] 8 => ...`).
+    let mut inizio = 0;
+    while let Some((salto, _)) = attributo(alberi, inizio) {
+        inizio += salto;
     }
-    let impl_ = (0..posizione).rev().find(|&i| parole[i] == "impl")?;
-    let graffa = impl_ + parole[impl_..].iter().position(|p| p == "{")?;
-    // La funzione deve stare dentro l'`impl`.
-    if chiusura(parole, graffa, "{", "}") < posizione {
-        return None;
+    let alberi = &alberi[inizio..];
+    let fine = alberi
+        .iter()
+        .position(|a| identificatore(Some(a)).as_deref() == Some("if"))
+        .unwrap_or(alberi.len());
+    let alberi = &alberi[..fine];
+    if alberi.len() == 1 && identificatore(alberi.first()).is_some() {
+        return Pattern::Jolly;
     }
-    // `impl ... for Tipo {`, o `impl Tipo {` (i metodi propri del tipo).
-    let intestazione = &parole[impl_..graffa];
-    intestazione.iter().position(|p| p == "for").map_or_else(
-        || intestazione.get(1).cloned(),
-        |f| intestazione.get(f + 1).cloned(),
-    )
+    let mut interi = Vec::new();
+    for (k, albero) in alberi.iter().enumerate() {
+        if k % 2 == 0 {
+            match intero(Some(albero)) {
+                Some(id) => interi.push(id),
+                None => return Pattern::Altro,
+            }
+        } else if !segno(Some(albero), '|') {
+            return Pattern::Altro;
+        }
+    }
+    if interi.is_empty() {
+        Pattern::Altro
+    } else {
+        Pattern::Interi(interi)
+    }
+}
+
+/// I rami di un `match`: pattern e corpo.
+fn rami(corpo: &[TokenTree]) -> Vec<(Vec<TokenTree>, Vec<TokenTree>)> {
+    let mut rami = Vec::new();
+    let mut i = 0;
+    while i < corpo.len() {
+        let Some(freccia) = (i..corpo.len()).find(|&j| {
+            matches!(corpo.get(j), Some(TokenTree::Punct(p)) if p.as_char() == '=' && p.spacing() == Spacing::Joint)
+                && segno(corpo.get(j + 1), '>')
+        }) else {
+            break;
+        };
+        let pattern = corpo[i..freccia].to_vec();
+        let inizio = freccia + 2;
+        let fine = if gruppo(corpo.get(inizio), Delimiter::Brace).is_some() {
+            inizio + 1
+        } else {
+            (inizio..corpo.len())
+                .find(|&j| segno(corpo.get(j), ','))
+                .unwrap_or(corpo.len())
+        };
+        rami.push((pattern, corpo[inizio..fine].to_vec()));
+        i = fine;
+        if segno(corpo.get(i), ',') {
+            i += 1;
+        }
+    }
+    rami
+}
+
+/// Se un corpo legge o salta valori: una chiamata `read_*` o `skip*`.
+fn legge_thrift(corpo: &[String]) -> bool {
+    corpo
+        .iter()
+        .any(|p| p.starts_with("read_") || p.starts_with("skip"))
 }
 
 /// Se un ramo di un decoder scritto a mano legge un intero.
@@ -295,68 +510,130 @@ fn legge_un_intero(corpo: &[String]) -> bool {
             .any(|f| f[0] == "read_thrift_vec" && f[3] == "<" && INTERI.contains(&f[4].as_str()))
 }
 
-/// I campi interi letti dai decoder scritti a mano (`match field_ident.id`),
-/// e i `match` di cui non si trova la struttura.
-fn campi_dei_decoder(parole: &[String]) -> (Vec<Campo>, usize) {
-    let mut campi = Vec::new();
-    let mut non_mappati = 0;
-    let mut i = 0;
-    while i + 4 < parole.len() {
-        let inizio_match = parole[i] == "match"
-            && parole[i + 1] == "field_ident"
-            && parole[i + 2] == "."
-            && parole[i + 3] == "id"
-            && parole[i + 4] == "{";
-        if !inizio_match {
-            i += 1;
-            continue;
+/// Un `match` sugli identificatori dei campi: i rami sono interi o un
+/// jolly, almeno uno intero, e un ramo legge valori Thrift.
+fn decoder_dei_campi(corpo: &[TokenTree], contesto: &Contesto, estratto: &mut Estratto) -> bool {
+    let rami = rami(corpo);
+    let mut con_interi = Vec::new();
+    for (p, corpo) in &rami {
+        match pattern(p) {
+            Pattern::Interi(id) => con_interi.push((id, piatto(corpo))),
+            Pattern::Jolly => {}
+            Pattern::Altro => return false,
         }
-        let fine = chiusura(parole, i + 4, "{", "}");
-        let Some(struttura) = struttura_del_decoder(parole, i) else {
-            non_mappati += 1;
-            i = fine;
-            continue;
-        };
-        // I rami: `id (if ...)? =>` al primo livello del `match`.
-        let mut rami: Vec<(u32, usize)> = Vec::new();
-        let mut profondita = 0;
-        for j in i + 5..fine {
-            match parole[j].as_str() {
-                "{" | "(" | "[" => profondita += 1,
-                "}" | ")" | "]" => profondita -= 1,
-                _ => {}
-            }
-            if profondita == 0
-                && numero(&parole[j])
-                && (j == i + 5 || matches!(parole[j - 1].as_str(), "}" | "," | "|"))
-            {
-                rami.push((parole[j].parse().unwrap(), j));
-            }
-        }
-        for (n, (id, inizio)) in rami.iter().enumerate() {
-            let termine = rami.get(n + 1).map_or(fine, |(_, p)| *p);
-            if legge_un_intero(&parole[*inizio..termine]) {
-                campi.push((struttura.clone(), *id, String::new()));
-            }
-        }
-        i = fine;
     }
-    (campi, non_mappati)
+    if con_interi.is_empty() || !con_interi.iter().any(|(_, c)| legge_thrift(c)) {
+        return false;
+    }
+    let funzione = contesto.funzione.as_deref().unwrap_or_default();
+    let struttura = DECODER_A_MANO
+        .iter()
+        .find(|(f, _)| *f == funzione)
+        .map(|(_, s)| (*s).to_owned())
+        .or_else(|| contesto.tipo.clone());
+    let Some(struttura) = struttura else {
+        estratto.non_mappati += 1;
+        return true;
+    };
+    estratto.decoder.push(struttura.clone());
+    for (id, corpo) in con_interi {
+        if legge_un_intero(&corpo) {
+            for id in id {
+                estratto.campi.push((struttura.clone(), id, String::new()));
+            }
+        }
+    }
+    true
 }
 
-/// I campi interi di un sorgente (le prove `#[cfg(test)] mod tests` escluse),
-/// e i decoder scritti a mano di cui non si trova la struttura.
-fn campi_del_sorgente(testo: &str) -> (Vec<Campo>, usize) {
-    let testo = senza_commenti(testo);
-    let codice = testo
-        .split("#[cfg(test)]\nmod tests")
-        .next()
-        .unwrap_or(&testo);
-    let parole = parole(codice);
-    let mut campi = campi_delle_macro(&parole);
-    let (dai_decoder, non_mappati) = campi_dei_decoder(&parole);
-    campi.extend(dai_decoder);
-    (campi, non_mappati)
+fn visita(alberi: &[TokenTree], contesto: &Contesto, estratto: &mut Estratto) {
+    let mut i = 0;
+    while i < alberi.len() {
+        // Le voci `#[cfg(test)]`: escluse fino alla fine della voce.
+        if let Some((salto, testo)) = attributo(alberi, i) {
+            if testo == ["cfg", "(", "test", ")"] {
+                i = fine_della_voce(alberi, i + salto);
+            } else {
+                i += salto;
+            }
+            continue;
+        }
+        let nome = identificatore(alberi.get(i));
+        // `macro_rules! nome { ... }`: la definizione, non un'invocazione.
+        if nome.as_deref() == Some("macro_rules") && segno(alberi.get(i + 1), '!') {
+            i += 4;
+            continue;
+        }
+        if let (Some(macro_), true, Some(TokenTree::Group(g))) = (
+            nome.as_deref(),
+            segno(alberi.get(i + 1), '!'),
+            alberi.get(i + 2),
+        ) {
+            if MACRO_NOTE.contains(&macro_) {
+                if macro_ != "thrift_enum" {
+                    estratto.campi.extend(campi_della_definizione(&g.stream()));
+                }
+            } else {
+                if ha_un_campo_intero(&g.stream()) {
+                    estratto.macro_sconosciute.push(macro_.to_owned());
+                }
+                visita(&self::alberi(&g.stream()), contesto, estratto);
+            }
+            i += 3;
+            continue;
+        }
+        match nome.as_deref() {
+            Some("impl") => {
+                if let Some(blocco) = prossimo_blocco(alberi, i + 1) {
+                    let interno = Contesto {
+                        funzione: None,
+                        tipo: tipo_dell_impl(&alberi[i + 1..blocco]),
+                    };
+                    let corpo = gruppo(alberi.get(blocco), Delimiter::Brace).unwrap();
+                    visita(&self::alberi(&corpo), &interno, estratto);
+                    i = blocco + 1;
+                    continue;
+                }
+            }
+            Some("fn") => {
+                let funzione = identificatore(alberi.get(i + 1));
+                let fine = fine_della_voce(alberi, i + 1);
+                if let Some(corpo) = gruppo(alberi.get(fine - 1), Delimiter::Brace) {
+                    let interno = Contesto {
+                        funzione,
+                        tipo: contesto.tipo.clone(),
+                    };
+                    visita(&self::alberi(&corpo), &interno, estratto);
+                }
+                i = fine;
+                continue;
+            }
+            Some("match") => {
+                if let Some(blocco) = prossimo_blocco(alberi, i + 1) {
+                    let corpo =
+                        self::alberi(&gruppo(alberi.get(blocco), Delimiter::Brace).unwrap());
+                    decoder_dei_campi(&corpo, contesto, estratto);
+                    visita(&alberi[i + 1..blocco], contesto, estratto);
+                    visita(&corpo, contesto, estratto);
+                    i = blocco + 1;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        if let Some(TokenTree::Group(g)) = alberi.get(i) {
+            visita(&self::alberi(&g.stream()), contesto, estratto);
+        }
+        i += 1;
+    }
+}
+
+/// I campi interi di un sorgente, con il lexer di Rust.
+fn estrai(testo: &str) -> Estratto {
+    let flusso = TokenStream::from_str(testo).expect("un sorgente Rust valido");
+    let mut estratto = Estratto::default();
+    visita(&alberi(&flusso), &Contesto::default(), &mut estratto);
+    estratto
 }
 
 fn sorgenti(cartella: &Path, file: &mut Vec<PathBuf>) {
@@ -375,22 +652,27 @@ fn ogni_campo_intero_del_footer_ha_una_regola() {
     let radice = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/parquet-60.0.0-eof/src");
     let mut file = Vec::new();
     sorgenti(&radice, &mut file);
+    file.sort();
     // Per (struttura, id): il nome dalla macro, se c'è.
     let mut estratti: BTreeMap<(String, u32), String> = BTreeMap::new();
+    let mut decoder = Vec::new();
     for percorso in file {
-        // La definizione della macro ha un `match field_ident.id` generico.
-        if percorso.ends_with("parquet_macros.rs") {
-            continue;
-        }
         let testo = std::fs::read_to_string(&percorso).unwrap();
-        let (campi, non_mappati) = campi_del_sorgente(&testo);
+        let dal_file = estrai(&testo);
         assert_eq!(
-            non_mappati,
+            dal_file.non_mappati,
             0,
             "{}: decoder scritti a mano senza struttura in `DECODER_A_MANO`",
             percorso.display()
         );
-        for (struttura, id, nome) in campi {
+        assert!(
+            dal_file.macro_sconosciute.is_empty(),
+            "{}: macro sconosciute con campi interi: {:?}",
+            percorso.display(),
+            dal_file.macro_sconosciute
+        );
+        decoder.extend(dal_file.decoder);
+        for (struttura, id, nome) in dal_file.campi {
             let voce = estratti.entry((struttura, id)).or_default();
             if voce.is_empty() {
                 *voce = nome;
@@ -414,6 +696,21 @@ fn ogni_campo_intero_del_footer_ha_una_regola() {
         "regole di campi che il codice non ha più: {superflui:?}"
     );
     assert_eq!(estratti.len(), 60, "il numero dei campi interi del fork");
+    // I decoder scritti a mano del footer e di `ColumnOrder`, trovati per
+    // forma.
+    decoder.sort();
+    assert_eq!(
+        decoder,
+        [
+            "ColumnChunk",
+            "ColumnMetaData",
+            "ColumnOrder",
+            "FileMetaData",
+            "FileMetaData",
+            "RowGroup"
+        ],
+        "i decoder scritti a mano del fork"
+    );
     // Un campo rinominato nella macro cambia la sua regola.
     for (chiave, nome) in &estratti {
         if !nome.is_empty() {
@@ -429,6 +726,12 @@ fn ogni_campo_intero_del_footer_ha_una_regola() {
         };
         assert!(!testo.is_empty(), "{struttura}.{id} {campo}");
     }
+}
+
+fn contiene(estratto: &Estratto, struttura: &str, id: u32, nome: &str) -> bool {
+    estratto
+        .campi
+        .contains(&(struttura.to_owned(), id, nome.to_owned()))
 }
 
 /// L'estrazione non dipende dagli a capo: un campo spezzato su più righe,
@@ -461,16 +764,16 @@ fn read_column_chunk() {
         _ => {}
     }
 }
-impl Decodifica for Intestazione {
+impl<'a, R: Protocollo<'a>> Decodifica<'a, R> for Intestazione<'a> {
     fn read_thrift() { match field_ident.id { 4 => { prot.read_i32()?; } _ => {} } }
 }
 impl Propria {
-    fn read_thrift_without_stats() { match field_ident.id { 2 => { let v = i16::read_thrift(p)?; } } }
+    fn leggi() { match field_ident.id { 2 => { let v = i16::read_thrift(p)?; } _ => {} } }
 }
 ";
-    let (campi, non_mappati) = campi_del_sorgente(sintetico);
-    assert_eq!(non_mappati, 0);
-    for atteso in [
+    let estratto = estrai(sintetico);
+    assert_eq!(estratto.non_mappati, 0);
+    for (struttura, id, nome) in [
         ("Riga", 1, "conteggio"),
         ("Riga", 3, "elenco"),
         ("Spezzata", 1, "larghezza"),
@@ -479,27 +782,80 @@ impl Propria {
         ("Intestazione", 4, ""),
         ("Propria", 2, ""),
     ] {
-        let atteso: Campo = (atteso.0.into(), atteso.1, atteso.2.into());
-        assert!(campi.contains(&atteso), "{atteso:?} non visto: {campi:?}");
+        assert!(
+            contiene(&estratto, struttura, id, nome),
+            "{struttura}.{id} non visto: {:?}",
+            estratto.campi
+        );
     }
-    assert!(
-        !campi
-            .iter()
-            .any(|(s, _, _)| s == "Commentata" || s == "AncheCommentata"),
-        "{campi:?}"
+    let strutture: BTreeSet<_> = estratto.campi.iter().map(|(s, _, _)| s.as_str()).collect();
+    assert!(!strutture.contains("Commentata"), "{strutture:?}");
+    assert!(!strutture.contains("AncheCommentata"), "{strutture:?}");
+    assert!(!contiene(&estratto, "ColumnChunk", 8, ""));
+    assert!(!contiene(&estratto, "Riga", 2, "testo"));
+    let estratto = estrai(
+        "fn read_qualcosa() { match field_ident.id { 7 => { i64::read_thrift(p)?; } _ => {} } }",
     );
-    assert!(
-        !campi
-            .iter()
-            .any(|(s, id, _)| s == "ColumnChunk" && *id == 8),
-        "{campi:?}"
+    assert_eq!(estratto.non_mappati, 1);
+}
+
+/// I casi che un lexer scritto a mano sbagliava: una `}` in una stringa o in
+/// una raw string chiudeva il `match`; un commento annidato finiva al primo
+/// `*/`; `thrift_struct!{...}` e `thrift_struct![...]` si ignoravano;
+/// `#[cfg(test)]` si escludeva solo seguito da un a capo e da `mod tests`; il
+/// `match` si trovava solo sulla variabile `field_ident`.
+#[test]
+fn l_estrazione_regge_stringhe_commenti_delimitatori_e_nomi() {
+    let sintetico = r##"
+impl Decodifica for Stringhe {
+    fn read_thrift() {
+        match campo.id {
+            1 => { let s = "}"; let r = r#"} { }"#; let c = '}'; let v = i64::read_thrift(p)?; }
+            2 => { let v = i32::read_thrift(p)?; }
+            _ => { prot.skip(tipo)?; }
+        }
+    }
+}
+/* esterno /* annidato */ thrift_struct!(struct Annidata { 1: required i64 nascosto }) */
+thrift_struct!{ struct Graffe { 1: required i64 a } }
+thrift_struct![ struct Quadre { 1: optional i32 b } ];
+#[cfg(test)] mod prove { thrift_struct!(struct DiProva { 1: required i64 c }); }
+#[cfg(test)]
+
+fn prova_sola() { thrift_struct!(struct AncheDiProva { 1: required i64 d }); }
+#[cfg(any(test, feature = "x"))]
+thrift_struct!(struct Condizionata { 1: required i64 e });
+thrift_union!(union Unione { 1: i64 numero 2: Altro altro });
+"##;
+    let estratto = estrai(sintetico);
+    assert_eq!(estratto.non_mappati, 0);
+    for (struttura, id, nome) in [
+        ("Stringhe", 1, ""),
+        ("Stringhe", 2, ""),
+        ("Graffe", 1, "a"),
+        ("Quadre", 1, "b"),
+        ("Condizionata", 1, "e"),
+        ("Unione", 1, "numero"),
+    ] {
+        assert!(
+            contiene(&estratto, struttura, id, nome),
+            "{struttura}.{id} non visto: {:?}",
+            estratto.campi
+        );
+    }
+    let strutture: BTreeSet<_> = estratto.campi.iter().map(|(s, _, _)| s.as_str()).collect();
+    for esclusa in ["Annidata", "DiProva", "AncheDiProva"] {
+        assert!(!strutture.contains(esclusa), "{esclusa}: {strutture:?}");
+    }
+    assert!(!contiene(&estratto, "Unione", 2, "altro"));
+    // Una macro sconosciuta con un campo intero fa fallire la prova; una
+    // senza campi interi no.
+    let estratto = estrai(
+        "nuova_macro!(struct Nuova { 1: required i64 conteggio }); \
+         altra_macro!{ struct Testo { 1: optional binary nome } }",
     );
-    assert!(
-        !campi.iter().any(|(s, id, _)| s == "Riga" && *id == 2),
-        "{campi:?}"
-    );
-    let (_, non_mappati) = campi_del_sorgente(
-        "fn read_qualcosa() { match field_ident.id { 7 => { i64::read_thrift(p)?; } } }",
-    );
-    assert_eq!(non_mappati, 1);
+    assert_eq!(estratto.macro_sconosciute, ["nuova_macro"]);
+    // Un `match` su interi che non legge valori Thrift non è un decoder.
+    let estratto = estrai("fn larghezza(n: u8) -> u8 { match n { 1 => 8, 2 => 16, _ => 0 } }");
+    assert!(estratto.decoder.is_empty() && estratto.non_mappati == 0);
 }

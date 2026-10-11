@@ -121,9 +121,10 @@ macro_rules! statistics_enum_func {
 /// PLENORA: a `FIXED_LEN_BYTE_ARRAY` statistic against the width of the
 /// type. An exact one (`is_*_value_exact` true, or no flag: the deprecated
 /// fields, and the writers that do not set it) has the width exactly; one
-/// marked not exact (`is_*_value_exact` false) is a truncated prefix, 1 to
-/// the width bytes (the writer of this crate truncates min and max to 64
-/// bytes and marks them).
+/// marked not exact (`is_*_value_exact` false) is a bound that is not
+/// exact, 1 to the width bytes (the writer of this crate truncates min and
+/// max to 64 bytes and marks them: the truncated min is a prefix, the
+/// truncated max is incremented).
 pub(crate) fn verifica_statistica_flba(
     valore: Option<&[u8]>,
     esatta: Option<bool>,
@@ -830,7 +831,7 @@ impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
 #[cfg(test)]
 mod tests {
     /// PLENORA: a FLBA statistic: exact (flag true or absent) has the width
-    /// of the type; marked not exact is a prefix of 1 to the width bytes.
+    /// of the type; marked not exact is a bound of 1 to the width bytes.
     #[test]
     fn test_flba_statistic_width_follows_exactness() {
         let w = 4;

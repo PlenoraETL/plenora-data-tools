@@ -976,6 +976,7 @@ mod tests {
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::metadata::page_index::PageIndex;
     use crate::file::properties::WriterProperties;
+    use crate::util::test_common::rng;
     use arrow::compute::kernels::cmp::eq;
     use arrow::error::Result as ArrowResult;
     use arrow_array::builder::{Float32Builder, ListBuilder, StringBuilder};
@@ -987,7 +988,7 @@ mod tests {
     };
     use arrow_schema::{DataType, Field, Schema};
     use futures::{StreamExt, TryStreamExt};
-    use rand::{RngExt, rng};
+    use rand::RngExt;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tempfile::tempfile;

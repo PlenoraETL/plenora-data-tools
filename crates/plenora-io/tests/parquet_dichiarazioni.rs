@@ -81,14 +81,14 @@ fn leggi(byte: &[u8]) -> plenora_core::Result<RecordBatch> {
     leggi_tabella(&percorso, Some(Formato::Parquet), u64::MAX)
 }
 
-/// Rifiutato da dt2 (`DataMapping`, subito) e, letto con `parquet`
+/// Rifiutato da dt2 (`DataMapping`) e, letto con `parquet`
 /// direttamente, dalla verifica della patch: il messaggio di `parquet`
 /// contiene `motivo` (il messaggio di dt2 non porta quello di `parquet`).
+/// Il motivo, deterministico, al posto di una soglia di tempo, che dipende
+/// dalla macchina.
 fn rifiutato(byte: &[u8], motivo: &str) {
-    let inizio = std::time::Instant::now();
     let errore = leggi(byte).expect_err("il file doveva essere rifiutato");
     assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
-    assert!(inizio.elapsed() < std::time::Duration::from_secs(5));
     let messaggio = messaggio_parquet(byte, false);
     assert!(messaggio.contains(motivo), "{messaggio}");
 }

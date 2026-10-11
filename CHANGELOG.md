@@ -77,7 +77,10 @@ la cui versione non ha qui una voce datata.
   sono un errore (prima diventavano interi enormi, o un panico); ogni
   campo intero del footer ha una regola, verificata da un inventario. Le
   statistiche FLBA esatte hanno la larghezza del tipo, quelle marcate non
-  esatte (troncate, come le scrive parquet-rs) da 1 alla larghezza. La lettura degli indici di
+  esatte (troncate, come le scrive parquet-rs: il minimo è un prefisso, il
+  massimo è incrementato) da 1 alla larghezza; le statistiche di pagina si
+  verificano anche quando non si espongono (prima, con le proprietà di
+  default, si saltavano senza controllo). La lettura degli indici di
   pagina e dei bloom filter non è qualificata (`docs/limiti.md`): data non
   li legge. Una pagina v2
   comincia su un confine di record (i record spezzati fra pagine v2 si
@@ -89,10 +92,11 @@ la cui versione non ha qui una voce datata.
   Gli stream di livelli assenti dallo schema devono essere vuoti; una
   pagina compressa senza valori non nasconde più un suffisso; la
   dimensione non compressa di una pagina non decompressa e quella
-  dell'offset index si confrontano con i byte. Un salto dentro una
-  pagina, che non decodificava ciò che saltava (e con livelli troncati non
-  terminava), non è più qualificato: `Unsupported`; data legge sempre per
-  intero.
+  dell'offset index si confrontano con i byte. Un salto, dentro una
+  pagina o di pagine intere, che non decodificava ciò che saltava (con
+  livelli troncati non terminava; un contenuto troncato in una pagina
+  saltata passava), non è più qualificato: `Unsupported`; data legge
+  sempre per intero. Le prove unitarie del fork hanno un seme fisso.
   `patches/parquet-salti-e-fine-pagina.patch`.
 - **Livelli, interi stretti e varint nel fork `parquet`** (terzo giro di
   revisione): un livello oltre il massimo della colonna (contato come

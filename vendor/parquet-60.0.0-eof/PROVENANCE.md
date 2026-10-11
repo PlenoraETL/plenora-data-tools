@@ -20,7 +20,7 @@ con la chiave `parquet` (`Cargo.toml`, «Copie vendorizzate»).
   patch -p1 < patches/parquet-decoder-2.patch     # decoder, secondo giro
   patch -p1 < patches/parquet-codifiche-e-livelli.patch  # codifiche lette, terzo giro, formattazione
   patch -p1 < patches/parquet-livelli-dizionari-indici.patch  # BIT_PACKED, dizionari, pagine v2, offset index
-  patch -p1 < patches/parquet-salti-e-fine-pagina.patch  # salti solo di pagine intere, fine pagina esatta
+  patch -p1 < patches/parquet-salti-e-fine-pagina.patch  # salti non qualificati, fine pagina esatta
   ```
 
   Il risultato è questa cartella byte per byte, tolto questo file
@@ -423,7 +423,8 @@ ripetizione troncati).
    caricata, più righe di quelle da saltare, righe non note dall'header) e
    il salto di una pagina senza header (attraverso l'offset index) sono
    `SKIP_NOT_QUALIFIED` (`NYI`, `Unsupported` dal confine), finché non
-   sono qualificati. Restano i salti di pagine intere dall'header, che ne
+   sono qualificati (dal tredicesimo giro anche i salti di pagine intere,
+   sotto). Restavano i salti di pagine intere dall'header, che ne
    controllano la codifica; ogni giro del loro ciclo consuma una pagina o
    termina. Il salto di pagine intere confronta le righe dell'header con
    i suoi livelli e lo schema (sesto giro, sotto); su una colonna ripetuta
@@ -483,6 +484,55 @@ ripetizione troncati).
    parte compressa, e un suffisso qualunque spariva. Ora si decomprime e
    deve dare zero byte (lo stream vuoto di un codec si legge).
 
+**Tredicesimo giro.**
+
+1. Statistiche di pagina: con le proprietà di default
+   (`read_page_statistics` falso) il decoder dell'header le saltava e
+   non le verificava mai; un minimo FLBA di lunghezza 0 marcato esatto si
+   leggeva. Ora l'header si decodifica sempre per intero, la forma delle
+   statistiche si verifica sempre (`decode_page_con_larghezza`), e la
+   proprietà decide solo se la pagina le espone. I decoder
+   `read_thrift_without_stats` sono tolti. Le statistiche lette occupano i
+   byte che hanno nel column chunk, come la pagina.
+2. Il salto di pagine intere avanzava dall'header senza decodificare la
+   pagina: un contenuto troncato in una pagina saltata passava, e il salto
+   contava le sue righe. Ora ogni salto non è qualificato
+   (`SKIP_NOT_QUALIFIED`, testo «Parquet skip not qualified for
+   reading»): `skip_records` di una o più righe e `skip_next_page` del
+   lettore di pagine. Un salto di zero righe non legge nulla. `plenora-io`
+   non salta: non usa `RowSelection`, filtri di riga, `offset` né `limit`,
+   e gli scrittori e i 106 file hanno lo stesso esito.
+3. L'inventario dei campi Thrift usa il lexer di Rust di `proc-macro2`
+   (dev-dependency della sola prova, alla versione già nel lockfile):
+   stringhe, raw string e commenti annidati come il compilatore; le
+   invocazioni di `thrift_struct!` e `thrift_union*!` con qualunque
+   delimitatore; le voci `#[cfg(test)]` escluse come attributo, non come
+   testo; i decoder scritti a mano trovati per forma (un `match` di rami
+   interi o jolly che legge o salta valori), non dal nome della variabile.
+   Una macro sconosciuta con un campo `required`/`optional` intero fa
+   fallire la prova. L'estrattore del dodicesimo giro, sui casi sintetici
+   nuovi, perdeva i campi dopo una `}` in una stringa e quelli di
+   `thrift_struct!{}`/`[]`, contava i campi in un commento annidato e in
+   un modulo `#[cfg(test)]` senza a capo, e non vedeva un `match` su
+   un'altra variabile né una macro sconosciuta.
+4. Determinismo: le prove unitarie usavano `rand::rng()` (un seme dal
+   sistema a ogni esecuzione) in tredici moduli e nel generatore
+   `rand_gen`; ora un generatore del pacchetto con un seme fisso per
+   chiamata e per thread (`util::test_common::rng`), e la prova
+   `test_rng_is_the_same_on_every_thread` lo verifica (con `rand::rng()`
+   fallisce). Le due soglie di 5 secondi delle prove di `plenora-io`
+   (`parquet_dichiarazioni.rs`, `confine.rs`) sono tolte: le prove
+   verificano il motivo dell'errore, deterministico.
+
+Prove unitarie del pacchetto con `parquet-testing`: **148** falliscono
+(due esecuzioni identiche): le 147 di prima più
+`test_skip_page_without_offset_index`, che salta una pagina intera
+(`SKIP_NOT_QUALIFIED`). `test_row_selection_inside_a_page_or_on_a_boundary`
+verifica che una selezione di tutte le righe le legga, valori compresi, e
+che ogni salto, dentro una pagina o di pagine intere, si rifiuti. Le
+statistiche di pagina verificate sempre non cambiano nessun esito: le
+statistiche che le prove a monte scrivono hanno la forma del loro tipo.
+
 **Dodicesimo giro.**
 
 1. Statistiche `FIXED_LEN_BYTE_ARRAY`: la larghezza esatta dell'undicesimo
@@ -490,8 +540,9 @@ ripetizione troncati).
    tronca minimo e massimo a 64 byte e li marca non esatti: un FLBA di 65
    byte scritto dal fork non si rileggeva. Ora una statistica esatta
    (`is_*_value_exact` vero o assente) ha la larghezza del tipo; una marcata
-   non esatta è un prefisso da 1 alla larghezza
-   (`verifica_statistica_flba`, nel column chunk e nella pagina). pyarrow
+   non esatta è un limite non esatto da 1 alla larghezza (il minimo
+   troncato è un prefisso, il massimo troncato è incrementato;
+   `verifica_statistica_flba`, nel column chunk e nella pagina). pyarrow
    25 e 26 (FLBA di 16, 64, 65 e 200 byte, pagine v1 e v2, con e senza
    dizionario) e DuckDB (`UUID`) scrivono la larghezza piena senza segno:
    si leggono tutti.
@@ -516,7 +567,7 @@ ripetizione troncati).
    decoder ottimizzato usa i testi di `RleDecoder` per la fine dei dati,
    il valore più largo della larghezza e i varint troncati o lunghi.
 5. `test_row_selection_inside_a_page_or_on_a_boundary` verifica anche i
-   valori selezionati (le righe da 100 a 199), non solo il loro numero.
+   valori selezionati, non solo il loro numero.
 
 Prove unitarie del pacchetto: le stesse 147 (due esecuzioni identiche); le
 prove nuove di `Sbbf::new` e della regola FLBA passano. Scrittori della
@@ -589,18 +640,18 @@ generano le selezioni di righe e i filtri con un seme casuale
 con un seme casuale una selezione cadeva dentro una pagina
 (`SKIP_NOT_QUALIFIED`) o su un confine, e l'esito cambiava da
 un'esecuzione all'altra (78 o 79 fallimenti). I due casi sono espliciti in
-`test_row_selection_inside_a_page_or_on_a_boundary` (un salto su un confine
-di row group legge, uno dentro una pagina è `SKIP_NOT_QUALIFIED`). Gli
+`test_row_selection_inside_a_page_or_on_a_boundary` (dal tredicesimo
+giro ogni salto è `SKIP_NOT_QUALIFIED`). Gli
 altri semi casuali delle prove generano valori, non selezioni: cinque
 esecuzioni complete danno gli stessi fallimenti. Due prove a monte
 dichiaravano un dizionario di 4 voci per una pagina vuota
 (`test_byte_array_decoder_nulls`, `test_nulls`): ora 0.
 
-Prove unitarie del pacchetto con `parquet-testing`: **147** falliscono, sempre le stesse (verificato su tre esecuzioni), ciascuna per una delle cause seguenti.
+Prove unitarie del pacchetto con `parquet-testing`: **148** falliscono, sempre le stesse (verificato su due esecuzioni), ciascuna per una delle cause seguenti.
 
 - indice di pagina non qualificato (`PAGE_INDEX_NOT_QUALIFIED`), 85: `test_fixed_length_binary_column_reader`, `test_int96_single_column_reader_test`, `test_interval_day_time_column_reader`, `test_primitive_single_column_reader_test`, `test_read_with_page_index_enabled`, `test_scan_row_with_selection`, `test_unsigned_primitive_single_column_reader_test`, `test_utf8_single_column_reader_test`, `arrow_writer_page_size`, `test_disabled_statistics_with_chunk`, `test_disabled_statistics_with_page`, `test_page_encoding_statistics_roundtrip`, `test_writer_all_null`, `frontier_handles_global_and_local_exhaustion`, `frontier_reports_invalid_global_row_group_while_peeking`, `metadata_row_count_overflow_is_reported`, `queued_row_groups_encapsulates_plan_transitions`, `test_decoder_all_data`, `test_decoder_clear_all_ranges`, `test_decoder_empty_filters`, `test_decoder_filter_with_limit_short_circuits_within_row_group`, `test_decoder_filter_with_limit_skips_later_row_groups`, `test_decoder_filter_with_offset_and_limit`, `test_decoder_filter_with_row_selection_and_limit`, `test_decoder_incremental`, `test_decoder_multi_filters`, `test_decoder_multi_filters_with_limit`, `test_decoder_offset_limit`, `test_decoder_partial`, `test_decoder_reuses_filter_pages`, `test_decoder_row_group_local_selections`, `test_decoder_row_group_selection`, `test_decoder_row_selection`, `test_decoder_selection_does_one_request`, `test_decoder_single_filter_and_row_selection`, `test_decoder_single_filter_partial`, `test_decoder_try_next_reader_offset_limit`, `test_empty_row_group_local_selections_read_nothing`, `test_into_builder_allowed_while_iterating_handed_off_reader`, `test_into_builder_expand_projection_requests_new_bytes`, `test_into_builder_installs_filter_between_row_groups`, `test_into_builder_narrow_projection_requests_fewer_bytes`, `test_into_builder_preserves_buffered_bytes`, `test_into_builder_preserves_local_selections_with_row_filter`, `test_into_builder_preserves_remaining_row_group_local_selections`, `test_into_builder_rejected_mid_row_group`, `test_into_builder_rejected_on_finished_decoder`, `test_into_builder_resumes_remaining_budget`, `test_legacy_row_groups_and_row_selection_remain_composable`, `test_peek_next_row_group_basic`, `test_peek_next_row_group_budget_drains_all`, `test_peek_next_row_group_does_not_mutate_state`, `test_peek_next_row_group_during_decoding_row_group`, `test_peek_next_row_group_finished`, `test_peek_next_row_group_respects_with_row_groups`, `test_peek_next_row_group_skips_empty_selection`, `test_peek_next_row_group_skips_for_budget`, `test_row_group_local_selection_is_mutually_exclusive_with_legacy_configuration`, `test_row_group_local_selection_replaces_previous_configuration`, `test_row_group_local_selection_validates_row_group_and_length_at_build`, `test_row_group_local_selections_allow_duplicate_row_groups`, `test_row_group_local_selections_respect_offset_and_limit`, `test_row_group_local_selections_with_row_filter`, `test_short_row_group_local_selection_skips_trailing_rows`, `test_metadata_read_write_roundtrip_page_index`, `test_metadata_decoder_all_data`, `test_metadata_decoder_incremental`, `test_metadata_decoder_prefetch_retry`, `test_metadata_decoder_prefetch_success`, `test_try_parse`, `test_file_reader_filter_row_groups_and_range`, `test_filtered_rowgroup_metadata`, `test_fixed_length_index`, `test_page_index_reader`, `test_page_index_reader_all_type`, `test_peek_page_with_dictionary_page`, `test_skip_next_page_with_dictionary_page`, `test_skip_page_with_offset_index`, `test_byte_array_size_statistics`, `test_disabled_statistics`, `test_int96_interop`, `test_rewrite_missing_column_index`, `test_rewrite_no_page_indexes`, `test_size_statistics_with_repetition_and_nulls`, `test_spliced_write`.
-- codifica non qualificata (`ENCODING_NOT_QUALIFIED`: `DELTA_*`, `BYTE_STREAM_SPLIT`; `test_byte_stream_split_extended` per l'API a righe, che non stampa l'errore), 38: `test_byte_stream_split_extended`, `test_byte_array_decoder`, `test_byte_array_decoder_nulls`, `test_byte_array_decoder_skip`, `test_dictionary_fallback`, `test_dictionary_skip_fallback`, `test_nulls`, `test_byte_array_string_view_decoder`, `test_read_extended_byte_stream_split`, `test_read_float32_float64_byte_stream_split`, `all_null_primitive_single_column`, `arrow_writer_binary`, `arrow_writer_non_null`, `binary_column_bloom_filter`, `binary_single_column`, `empty_string_null_column_bloom_filter`, `f32_single_column`, `f64_single_column`, `fallback_flush_data_page`, `i16_single_column`, `i32_column_bloom_filter`, `i32_column_bloom_filter_at_end`, `i32_column_bloom_filter_fixed_ndv`, `i32_single_column`, `i64_single_column`, `i8_single_column`, `large_binary_single_column`, `large_string_single_column`, `statistics_null_counts_only_nulls`, `string_single_column`, `u16_single_column`, `u32_min_max`, `u32_single_column`, `u64_min_max`, `u64_single_column`, `u8_single_column`, `test_column_writer_dictionary_disabled_v2`, `test_byte_stream_split_extended_roundtrip`.
-- salto dentro una pagina o selezione di righe (`SKIP_NOT_QUALIFIED`), 9: `test_list_selection`, `test_list_selection_fuzz`, `test_list_skip`, `test_read_nested_lists`, `test_row_numbers_with_multiple_row_groups`, `test_row_numbers_with_multiple_row_groups_and_filter`, `test_skip_optional_records`, `test_skip_required_records`, `test_skip_records_v2_page_skip_accounts_for_partial`.
+- codifica non qualificata (`ENCODING_NOT_QUALIFIED`: `DELTA_*`, `BYTE_STREAM_SPLIT`; `test_byte_stream_split_extended` per l'API a righe, che non stampa l'errore), 38: `test_byte_array_decoder`, `test_byte_array_decoder_nulls`, `test_byte_array_decoder_skip`, `test_dictionary_fallback`, `test_dictionary_skip_fallback`, `test_nulls`, `test_byte_array_string_view_decoder`, `test_read_extended_byte_stream_split`, `test_read_float32_float64_byte_stream_split`, `all_null_primitive_single_column`, `arrow_writer_binary`, `arrow_writer_non_null`, `binary_column_bloom_filter`, `binary_single_column`, `empty_string_null_column_bloom_filter`, `f32_single_column`, `f64_single_column`, `fallback_flush_data_page`, `i16_single_column`, `i32_column_bloom_filter`, `i32_column_bloom_filter_at_end`, `i32_column_bloom_filter_fixed_ndv`, `i32_single_column`, `i64_single_column`, `i8_single_column`, `large_binary_single_column`, `large_string_single_column`, `statistics_null_counts_only_nulls`, `string_single_column`, `u16_single_column`, `u32_min_max`, `u32_single_column`, `u64_min_max`, `u64_single_column`, `u8_single_column`, `test_column_writer_dictionary_disabled_v2`, `test_byte_stream_split_extended`, `test_byte_stream_split_extended_roundtrip`.
+- salto o selezione di righe, anche di pagine intere (`SKIP_NOT_QUALIFIED`), 10: `test_list_selection`, `test_list_selection_fuzz`, `test_list_skip`, `test_read_nested_lists`, `test_row_numbers_with_multiple_row_groups`, `test_row_numbers_with_multiple_row_groups_and_filter`, `test_skip_optional_records`, `test_skip_required_records`, `test_skip_records_v2_page_skip_accounts_for_partial`, `test_skip_page_without_offset_index`.
 - bloom filter non qualificato (`BLOOM_FILTER_NOT_QUALIFIED`), 6: `i64_column_bloom_filter_across_dictionary_fallback`, `i64_column_bloom_filter_populated_from_dictionary`, `string_column_bloom_filter_across_dictionary_fallback`, `string_column_bloom_filter_populated_from_dictionary`, `test_bloom_filter_header_size_assumption`, `test_sbbf_write_round_trip`.
 - dichiarazioni incoerenti costruite dalla prova, rifiutate dalla patch `-eof` e dal controllo delle dimensioni, 5: `test_delta_bit_packed_padding`, `test_delta_bit_packed_skip_wide_miniblocks`, `test_decode_unsupported_page`, `test_page_writer_data_pages`, `test_page_writer_dict_pages`.
 - colonna FLBA letta come dizionario Arrow (`FLBA_AS_DICTIONARY`), 2: `test_read_dict_fixed_size_binary`, `test_fixed_size_binary_in_dict`.

@@ -340,67 +340,20 @@ where
 
     /// Skips over `num_records` records, where records are delimited by repetition levels of 0
     ///
-    /// PLENORA: only whole pages, from their header (their value encoding is
-    /// checked by the page reader). A skip inside a page (a page already
-    /// loaded, a page with more rows than the records to skip, or rows not
-    /// known from the header) is `SKIP_NOT_QUALIFIED`: it did not decode what
-    /// it passed over (values, dictionary indices, declared counts), and its
-    /// loops had no guard of progress. Each turn of the loop that remains
-    /// consumes a page (skipped, or read as a dictionary) or returns: the
-    /// progress is in pages, which the page reader bounds.
+    /// PLENORA: not qualified. A skip inside a page did not decode what it
+    /// passed over (values, dictionary indices, declared counts), and a skip
+    /// of whole pages passed over them from their header only (a truncated
+    /// payload in a skipped page passed). Any skip of one record or more is
+    /// `SKIP_NOT_QUALIFIED`; a skip of zero records reads nothing.
     ///
     /// # Returns
     ///
     /// Returns the number of records skipped
     pub fn skip_records(&mut self, num_records: usize) -> Result<usize> {
-        let mut remaining_records = num_records;
-        while remaining_records != 0 {
-            if self.num_buffered_values != self.num_decoded_values {
-                return Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED));
-            }
-            let Some(metadata) = self.page_reader.peek_next_page()? else {
-                return Ok(num_records - remaining_records);
-            };
-
-            // If dictionary, we must read it
-            if metadata.is_dict {
-                self.read_dictionary_page()?;
-                continue;
-            }
-
-            // If page has less rows than the remaining records to
-            // be skipped, skip entire page
-            // PLENORA: the rows of the header against its levels and the
-            // schema (`num_rows` alone was trusted: 1 row over 2 values of a
-            // flat column skipped both).
-            if let (Some(righe), Some(livelli)) = (metadata.num_rows, metadata.num_levels) {
-                verifica_righe_v2(self.rep_level_decoder.is_some(), righe, livelli)?;
-            }
-            // PLENORA: the rows of a page of a repeated column are its
-            // repetition levels 0, which a skip does not read: the header
-            // cannot be checked, and the skip is not qualified.
-            if self.rep_level_decoder.is_some() {
-                return Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED));
-            }
-            let rows = metadata.num_rows.or_else(|| {
-                // If no repetition levels, num_levels == num_rows
-                self.rep_level_decoder
-                    .is_none()
-                    .then_some(metadata.num_levels)?
-            });
-            if rows == Some(0) && metadata.num_levels != Some(0) {
-                return Err(general_err!("{}", crate::basic::PAGE_NOT_AS_DECLARED));
-            }
-
-            match rows {
-                Some(rows) if rows <= remaining_records => {
-                    self.page_reader.skip_next_page()?;
-                    remaining_records -= rows;
-                }
-                _ => return Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED)),
-            }
+        if num_records == 0 {
+            return Ok(0);
         }
-        Ok(num_records - remaining_records)
+        Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED))
     }
 
     /// PLENORA: the end of a data page, after its last level: the one point
@@ -440,24 +393,6 @@ where
             decoder.verifica_fine_pagina(fine.livelli())?;
         }
         self.values_decoder.verifica_fine_pagina(fine)
-    }
-
-    /// Read the next page as a dictionary page. If the next page is not a dictionary page,
-    /// this will return an error.
-    fn read_dictionary_page(&mut self) -> Result<()> {
-        match self.page_reader.get_next_page()? {
-            Some(Page::DictionaryPage {
-                buf,
-                num_values,
-                encoding,
-                is_sorted,
-            }) => self
-                .values_decoder
-                .set_dict(buf, num_values, encoding, is_sorted),
-            _ => Err(ParquetError::General(
-                "Invalid page. Expecting dictionary page".to_string(),
-            )),
-        }
     }
 
     /// Reads a new page and set up the decoders for levels, values or dictionary.

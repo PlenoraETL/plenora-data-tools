@@ -581,9 +581,9 @@ fn indici_di_pagina_e_bloom_filter_non_sono_qualificati() {
     );
 }
 
-/// Una selezione di righe senza indici: le pagine si saltano dai loro
-/// header. Un salto dentro una pagina non è qualificato
-/// (`SKIP_NOT_QUALIFIED`); un salto di pagine intere si legge.
+/// Una selezione di righe senza indici: ogni salto, dentro una pagina o di
+/// pagine intere, non è qualificato (`SKIP_NOT_QUALIFIED`); una selezione
+/// di tutte le righe si legge.
 #[test]
 fn una_selezione_di_righe_non_e_qualificata() {
     use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
@@ -604,13 +604,15 @@ fn una_selezione_di_righe_non_e_qualificata() {
         }
         Ok::<usize, String>(righe)
     };
-    let errore = leggi(vec![RowSelector::skip(150), RowSelector::select(150)]).unwrap_err();
-    assert!(
-        errore.contains(parquet::basic::SKIP_NOT_QUALIFIED),
-        "{errore}"
-    );
-    assert_eq!(
-        leggi(vec![RowSelector::skip(100), RowSelector::select(200)]),
-        Ok(200)
-    );
+    for selezione in [
+        vec![RowSelector::skip(150), RowSelector::select(150)],
+        vec![RowSelector::skip(100), RowSelector::select(200)],
+    ] {
+        let errore = leggi(selezione).unwrap_err();
+        assert!(
+            errore.contains(parquet::basic::SKIP_NOT_QUALIFIED),
+            "{errore}"
+        );
+    }
+    assert_eq!(leggi(vec![RowSelector::select(300)]), Ok(300));
 }

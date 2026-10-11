@@ -1522,13 +1522,12 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
     }
 }
 
-/// PLENORA: the fixed text of the rejection of a skip inside a page (a
-/// partial skip, a row selection or a row filter that does not fall on whole
-/// pages), and of a whole page skipped without its header: not qualified. A
-/// skip did not decode what it passed over, so the checks of a read (values,
-/// dictionary indices, declared counts, progress) did not apply to it.
-pub const SKIP_NOT_QUALIFIED: &str =
-    "Parquet skip inside a page or without a page header not qualified for reading";
+/// PLENORA: the fixed text of the rejection of a skip (a row selection, a
+/// row filter, an offset, a skip of records or of pages, inside a page or of
+/// whole pages): not qualified. A skip did not decode what it passed over, so
+/// the checks of a read (values, dictionary indices, declared counts, the
+/// payload of a page, progress) did not apply to it.
+pub const SKIP_NOT_QUALIFIED: &str = "Parquet skip not qualified for reading";
 
 /// PLENORA: the fixed text of the rejection of a page index (column index
 /// and offset index): not qualified for reading. Their counts, histograms,

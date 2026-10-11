@@ -664,7 +664,8 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
 mod tests {
     use super::*;
     use crate::encodings::rle::RleEncoder;
-    use rand::{prelude::*, rng};
+    use crate::util::test_common::rng;
+    use rand::prelude::*;
 
     #[test]
     fn test_skip_padding() {

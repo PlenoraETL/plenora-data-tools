@@ -1084,30 +1084,32 @@ invece di un errore. Nessuna prova lo rileva dal consumatore.
 nel proprio `[profile.release]`, oppure una guardia a runtime che rifiuta
 di eseguire un piano in una build senza controlli di overflow.
 
-## Salti Parquet dentro una pagina
+## Salti Parquet
 
 **Regola.** Il lettore Parquet decodifica e verifica tutto ciò che
-attraversa: valori, indici di dizionario, conteggi dichiarati, fine della
-pagina.
+attraversa: valori, indici di dizionario, conteggi dichiarati, contenuto e
+fine della pagina.
 
 **Ambito.** Il fork `vendor/parquet-60.0.0-eof`: `skip_records` del
-lettore di colonna e il salto di pagine del lettore di pagine (offset
-index). Nel lettore Arrow saltano righe `RowSelection`, i filtri di riga e
-`offset`; la selezione dei row group esclude chunk interi senza saltare
-dentro una pagina; `limit` può solo fermare la lettura, e una pagina
-lasciata a metà non arriva al controllo della sua fine.
+lettore di colonna (una o più righe) e `skip_next_page` del lettore di
+pagine, dentro una pagina o di pagine intere. Nel lettore Arrow saltano
+righe `RowSelection`, i filtri di riga e `offset`; la selezione dei row
+group esclude chunk interi senza saltare; `limit` può solo fermare la
+lettura, e una pagina lasciata a metà non arriva al controllo della sua
+fine.
 
-**Hazard.** Un salto dentro una pagina, o di una pagina senza header, non
-decodificava ciò che saltava: è `SKIP_NOT_QUALIFIED` (`Unsupported` dal
-confine), anche su un file valido. `plenora-io` legge sempre per intero e
-non lo raggiunge; lo raggiunge chi usa il fork come libreria con una
-selezione di righe. Restano i salti di pagine intere, dall'header, che ne
-controllano la codifica senza decodificarle.
+**Hazard.** Un salto non decodificava ciò che saltava: dentro una pagina
+passavano valori, indici e conteggi non verificati; di pagine intere,
+dall'header, passava un contenuto troncato o malformato. Ogni salto è
+`SKIP_NOT_QUALIFIED` (`Unsupported` dal confine), anche su un file valido.
+`plenora-io` legge sempre per intero (nessuna `RowSelection`, filtro di
+riga, `offset` o `limit`) e non lo raggiunge; lo raggiunge chi usa il fork
+come libreria con una selezione di righe.
 
 **Condizione di rientro.** Un salto che decodifica e verifica come la
 lettura (leggi e butta), con una guardia di avanzamento in ogni ciclo e le
-prove di questo giro, oppure il bisogno di una selezione di righe da
-parte di data o IO-tools.
+prove dei giri di revisione, oppure il bisogno di una selezione di righe
+da parte di data o IO-tools.
 
 ## Fine delle pagine Parquet
 

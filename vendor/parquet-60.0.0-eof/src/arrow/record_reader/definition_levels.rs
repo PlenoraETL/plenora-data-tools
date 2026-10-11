@@ -580,7 +580,8 @@ mod tests {
     use super::*;
 
     use crate::encodings::rle::RleEncoder;
-    use rand::{RngExt, rng};
+    use crate::util::test_common::rng;
+    use rand::RngExt;
 
     #[test]
     fn test_build_validity_bitmap_unfiltered_word_chunk() {

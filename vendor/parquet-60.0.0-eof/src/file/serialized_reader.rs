@@ -423,29 +423,6 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
 /// locations is an error.
 const PAGINE_DALL_INDICE_NON_QUALIFICATE: bool = true;
 
-/// PLENORA: a page skipped whole is rejected for its value encoding like a
-/// page read (an excluded page was skipped in silence). Only from its header:
-/// a page reached through the offset index has none and is skipped without
-/// this check. The level encodings of a skipped page are not checked: the
-/// header names one even for a column without levels.
-fn verifica_codifica_saltata(header: &PageHeader) -> Result<()> {
-    match header.r#type {
-        PageType::DICTIONARY_PAGE => match header.dictionary_page_header.as_ref() {
-            Some(dizionario) => crate::basic::check_dictionary_page_encoding(dizionario.encoding),
-            None => Ok(()),
-        },
-        PageType::DATA_PAGE => match header.data_page_header.as_ref() {
-            Some(pagina) => crate::basic::check_qualified_value_encoding(pagina.encoding),
-            None => Ok(()),
-        },
-        PageType::DATA_PAGE_V2 => match header.data_page_header_v2.as_ref() {
-            Some(pagina) => crate::basic::check_qualified_value_encoding(pagina.encoding),
-            None => Ok(()),
-        },
-        _ => Ok(()),
-    }
-}
-
 #[cfg(test)] // PLENORA: the readers pass the width of the column.
 /// Decodes a [`Page`] from the provided `buffer`
 pub(crate) fn decode_page(
@@ -454,16 +431,20 @@ pub(crate) fn decode_page(
     physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
 ) -> Result<Page> {
-    decode_page_con_larghezza(page_header, buffer, physical_type, -1, decompressor)
+    decode_page_con_larghezza(page_header, buffer, physical_type, -1, true, decompressor)
 }
 
 /// PLENORA: as [`decode_page`], with the width of a `FIXED_LEN_BYTE_ARRAY`
-/// column (its page statistics have that width; -1 for other types).
+/// column (its page statistics have that width; -1 for other types). The
+/// page statistics are always checked; `esporre_statistiche` (the
+/// `read_page_statistics` property) decides only whether the page carries
+/// them.
 pub(crate) fn decode_page_con_larghezza(
     page_header: PageHeader,
     buffer: Bytes,
     physical_type: Type,
     larghezza: i32,
+    esporre_statistiche: bool,
     decompressor: Option<&mut Box<dyn Codec>>,
 ) -> Result<Page> {
     // Verify the 32-bit CRC checksum of the page
@@ -601,7 +582,8 @@ pub(crate) fn decode_page_con_larghezza(
                     physical_type,
                     Some(larghezza),
                     header.statistics,
-                )?,
+                )?
+                .filter(|_| esporre_statistiche),
             }
         }
         PageType::DATA_PAGE_V2 => {
@@ -622,7 +604,8 @@ pub(crate) fn decode_page_con_larghezza(
                     physical_type,
                     Some(larghezza),
                     header.statistics,
-                )?,
+                )?
+                .filter(|_| esporre_statistiche),
             }
         }
         PageType::INDEX_PAGE => {
@@ -988,12 +971,12 @@ impl SerializedPageReaderContext {
         _page_index: usize,
         _dictionary_page: bool,
     ) -> Result<PageHeader> {
+        // PLENORA: the page statistics are always decoded, and checked
+        // against their type by `decode_page_con_larghezza`; `read_stats`
+        // decides only whether the page exposes them. A malformed statistic
+        // was skipped without a check with the default properties.
         let mut prot = ThriftReadInputProtocol::new(input);
-        if self.read_stats {
-            Ok(PageHeader::read_thrift(&mut prot)?)
-        } else {
-            Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
-        }
+        Ok(PageHeader::read_thrift(&mut prot)?)
     }
 
     fn decrypt_page_data<T>(
@@ -1016,14 +999,9 @@ impl SerializedPageReaderContext {
     ) -> Result<PageHeader> {
         match self.page_crypto_context(page_index, dictionary_page) {
             None => {
+                // PLENORA: always decoded and checked, see above.
                 let mut prot = ThriftReadInputProtocol::new(input);
-                if self.read_stats {
-                    Ok(PageHeader::read_thrift(&mut prot)?)
-                } else {
-                    use crate::file::metadata::thrift::PageHeader;
-
-                    Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
-                }
+                Ok(PageHeader::read_thrift(&mut prot)?)
             }
             Some(page_crypto_context) => {
                 let data_decryptor = page_crypto_context.data_decryptor();
@@ -1037,11 +1015,7 @@ impl SerializedPageReaderContext {
                 })?;
 
                 let mut prot = ThriftSliceInputProtocol::new(buf.as_slice());
-                if self.read_stats {
-                    Ok(PageHeader::read_thrift(&mut prot)?)
-                } else {
-                    Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
-                }
+                Ok(PageHeader::read_thrift(&mut prot)?)
             }
         }
     }
@@ -1162,6 +1136,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         buffer,
                         self.physical_type,
                         self.larghezza,
+                        self.context.read_stats,
                         self.decompressor.as_mut(),
                     )?;
                     if page.is_data_page() {
@@ -1216,6 +1191,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         bytes,
                         self.physical_type,
                         self.larghezza,
+                        self.context.read_stats,
                         self.decompressor.as_mut(),
                     )?
                 }
@@ -1310,71 +1286,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
         }
     }
 
+    /// PLENORA: not qualified. A page skipped whole was passed over from its
+    /// header, without decoding it: a truncated or malformed payload in a
+    /// skipped page passed, against the rule that what is not checked is
+    /// rejected. Every skip is `SKIP_NOT_QUALIFIED`; data does not skip.
     fn skip_next_page(&mut self) -> Result<()> {
-        match &mut self.state {
-            SerializedPageReaderState::Values {
-                offset,
-                remaining_bytes,
-                next_page_header,
-                page_index,
-                require_dictionary,
-            } => {
-                if let Some(buffered_header) = next_page_header.take() {
-                    verifica_codifica_saltata(&buffered_header)?;
-                    verify_page_size(
-                        buffered_header.compressed_page_size,
-                        buffered_header.uncompressed_page_size,
-                        *remaining_bytes,
-                    )?;
-                    // The next page header has already been peeked, so just advance the offset
-                    *offset += buffered_header.compressed_page_size as u64;
-                    *remaining_bytes -= buffered_header.compressed_page_size as u64;
-                } else {
-                    let mut read = self.reader.get_read(*offset)?;
-                    let (header_len, header) = Self::read_page_header_len(
-                        &self.context,
-                        &mut read,
-                        *page_index,
-                        *require_dictionary,
-                    )?;
-                    verify_page_header_len(header_len, *remaining_bytes)?;
-                    verifica_codifica_saltata(&header)?;
-                    verify_page_size(
-                        header.compressed_page_size,
-                        header.uncompressed_page_size,
-                        *remaining_bytes,
-                    )?;
-                    let data_page_size = header.compressed_page_size as u64;
-                    *offset += header_len as u64 + data_page_size;
-                    *remaining_bytes -= header_len as u64 + data_page_size;
-                }
-                if *require_dictionary {
-                    *require_dictionary = false;
-                } else {
-                    *page_index += 1;
-                }
-                Ok(())
-            }
-            SerializedPageReaderState::Pages {
-                page_locations,
-                dictionary_page,
-                page_index,
-                ..
-            } => {
-                if dictionary_page.is_some() {
-                    // If a dictionary page exists, consume it by taking it (sets to None)
-                    dictionary_page.take();
-                } else if !page_locations.is_empty() {
-                    // PLENORA: a data page reached through the offset index
-                    // has no header read: its encoding cannot be checked, and
-                    // the skip is not qualified.
-                    let _ = page_index;
-                    return Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED));
-                }
-
-                Ok(())
-            }
-        }
+        Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED))
     }
 
     fn at_record_boundary(&mut self) -> Result<bool> {
