@@ -77,7 +77,12 @@ impl DictIndexDecoder {
         while values_read < total_to_read {
             if self.index_offset == self.index_buf_len {
                 // We've consumed the entire index buffer so we need to reload it before proceeding
-                let read = self.decoder.get_batch(index_buf)?;
+                // PLENORA: only the indices asked for: a read ahead (up to
+                // the levels of a v1 page) decoded the padding of the last
+                // group as indices, and the end of the page could not tell
+                // padding from indices in excess.
+                let quanti = index_buf.len().min(total_to_read - values_read);
+                let read = self.decoder.get_batch(&mut index_buf[..quanti])?;
                 if read == 0 {
                     break;
                 }
@@ -96,6 +101,12 @@ impl DictIndexDecoder {
         self.max_remaining_values -= values_read;
 
         Ok(values_read)
+    }
+
+    /// PLENORA: the index stream ends with the indices read (no index
+    /// buffered and not used).
+    pub fn fine_esatta(&self, coda: usize) -> bool {
+        self.index_offset == self.index_buf_len && self.decoder.fine_esatta(coda)
     }
 
     /// Skip up to `to_skip` values, returning the number of values skipped

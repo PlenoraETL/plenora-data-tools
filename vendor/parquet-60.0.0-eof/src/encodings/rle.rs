@@ -361,6 +361,9 @@ pub struct RleDecoder {
     // The remaining number of values in Bit-Packing for this run
     bit_packed_left: u32,
 
+    // PLENORA: the groups the current bit-packed run declares.
+    gruppi_della_corsa: u32,
+
     // The current value for the case of RLE mode
     current_value: Option<u64>,
 }
@@ -376,6 +379,7 @@ impl RleDecoder {
             bit_width,
             rle_left: 0,
             bit_packed_left: 0,
+            gruppi_della_corsa: 0,
             bit_reader: None,
             index_buf: None,
             current_value: None,
@@ -614,6 +618,43 @@ impl RleDecoder {
         Ok(values_read)
     }
 
+    /// PLENORA: whether the stream ends where the values read end, counting
+    /// the values left, not only the bytes (at bit width 0 a group takes no
+    /// byte). No value left in an RLE run. In a bit-packed run: the rest of
+    /// the current group of 8 (the padding of the last group); whole groups
+    /// after it only in a run of `BLOCCO_DUCKDB` groups (DuckDB pads its last
+    /// block), whatever they hold; a run truncated by the end of the data
+    /// (some writers) holds only the values its bytes carry. No run after;
+    /// then at most `coda` zero bytes (`CODA_FASTPARQUET` after the values of
+    /// a v1 page, 0 elsewhere).
+    pub(crate) fn fine_esatta(&self, coda: usize) -> bool {
+        if self.rle_left > 0 {
+            return false;
+        }
+        let Some(lettore) = self.bit_reader.as_ref() else {
+            return false;
+        };
+        let larghezza = self.bit_width as usize;
+        let dati = lettore.dati();
+        let posizione = lettore.bit_letti();
+        let fine_dei_dati = dati.len().saturating_mul(8);
+        let resto = self.bit_packed_left as usize;
+        let nel_gruppo = resto % BIT_PACK_GROUP_SIZE;
+        // The values left that the data holds: all of them at bit width 0,
+        // as far as the bytes go otherwise.
+        let presenti = match larghezza {
+            0 => resto,
+            _ => resto.min(fine_dei_dati.saturating_sub(posizione) / larghezza),
+        };
+        if presenti > nel_gruppo && self.gruppi_della_corsa as usize != bit_util::BLOCCO_DUCKDB {
+            return false;
+        }
+        let fine_della_corsa = posizione
+            .saturating_add(resto.saturating_mul(larghezza))
+            .min(fine_dei_dati);
+        bit_util::coda_di_zeri(dati, bit_util::ceil(fine_della_corsa, 8), coda)
+    }
+
     #[inline]
     fn reload(&mut self) -> Result<bool> {
         let bit_reader = self
@@ -621,22 +662,41 @@ impl RleDecoder {
             .as_mut()
             .ok_or_else(|| general_err!("bit_reader should be set"))?;
 
-        if let Some(indicator_value) = bit_reader.get_vlq_int() {
+        // PLENORA: a malformed varint is an error, not the end of the data.
+        if let Some(indicator_value) = bit_reader.get_vlq_int_checked()? {
             // fastparquet adds padding to the end of pages. This is not spec-compliant
             // but is handled by the C++ implementation
             // <https://github.com/apache/arrow/blob/8074496cb41bc8ec8fe9fc814ca5576d89a6eb94/cpp/src/arrow/util/rle_encoding.h#L653>
             if indicator_value == 0 {
                 return Ok(false);
             }
+            // PLENORA: a run count beyond `u32` was truncated in silence (a
+            // different count of values); now an error.
+            let run = u32::try_from(indicator_value >> 1)
+                .map_err(|_| general_err!("RLE run length out of range"))?;
             if indicator_value & 1 == 1 {
-                self.bit_packed_left = ((indicator_value >> 1) * BIT_PACK_GROUP_SIZE as i64) as u32;
+                // PLENORA: a final bit-packed run shorter than its declared
+                // groups is read as far as its bytes go, as upstream and the
+                // C++ reader do (some writers do not pad it, see
+                // `test_truncated_rle`): the bit reader never reads past the
+                // data, and the callers compare the values and levels they get
+                // with those the page declares.
+                self.bit_packed_left = run
+                    .checked_mul(BIT_PACK_GROUP_SIZE as u32)
+                    .ok_or_else(|| general_err!("RLE run length out of range"))?;
+                self.gruppi_della_corsa = run;
             } else {
-                self.rle_left = (indicator_value >> 1) as u32;
+                self.rle_left = run;
                 let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);
                 self.current_value = bit_reader.get_aligned::<u64>(value_width);
-                self.current_value.ok_or_else(|| {
+                let valore = self.current_value.ok_or_else(|| {
                     general_err!("parquet_data_error: not enough data for RLE decoding")
                 })?;
+                // PLENORA: the repeated value fits the declared bit width (it
+                // is stored in whole bytes, which hold more).
+                if self.bit_width < 64 && valore >> self.bit_width != 0 {
+                    return Err(general_err!("RLE value wider than the bit width"));
+                }
             }
             Ok(true)
         } else {

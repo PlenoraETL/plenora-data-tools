@@ -37,6 +37,40 @@ use bytes::Bytes;
 use std::any::Any;
 use std::sync::Arc;
 
+/// PLENORA: the column is annotated as text (`UTF8`, `JSON`, `ENUM`): its
+/// values are validated as UTF-8 while decoding.
+pub(crate) fn annotated_as_text(desc: &crate::schema::types::ColumnDescriptor) -> bool {
+    matches!(
+        desc.converted_type(),
+        ConvertedType::UTF8 | ConvertedType::JSON | ConvertedType::ENUM
+    )
+}
+
+/// PLENORA: a string Arrow type (also as dictionary values) is read only from
+/// a column annotated as text. The decoders validate UTF-8 from the
+/// annotation, not from the Arrow type: an Arrow schema (embedded or given)
+/// that asked for strings over a plain byte array produced a string array of
+/// unvalidated bytes (a panic in debug builds, invalid UTF-8 in release).
+pub(crate) fn check_text_annotation(
+    desc: &crate::schema::types::ColumnDescriptor,
+    data_type: &ArrowType,
+) -> Result<()> {
+    let stringa = |t: &ArrowType| {
+        matches!(
+            t,
+            ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View
+        )
+    };
+    let chiede_testo = match data_type {
+        ArrowType::Dictionary(_, valori) => stringa(valori),
+        altro => stringa(altro),
+    };
+    if chiede_testo && !annotated_as_text(desc) {
+        return Err(nyi_err!("{}", crate::basic::STRING_WITHOUT_ANNOTATION));
+    }
+    Ok(())
+}
+
 /// Returns an [`ArrayReader`] that decodes the provided byte array column
 pub fn make_byte_array_reader(
     pages: Box<dyn PageIterator>,
@@ -52,6 +86,7 @@ pub fn make_byte_array_reader(
             .data_type()
             .clone(),
     };
+    check_text_annotation(column_desc.as_ref(), &data_type)?;
 
     match data_type {
         ArrowType::Binary
@@ -136,6 +171,9 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
                 let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
                 // Null slots will have 0 length, so we need to check for that in the lambda
                 // or sign_extend_be will panic.
+                // PLENORA: a non-null value of 0 bytes or more than 16 is not a
+                // decimal 128 (`sign_extend_be` panics on more than 16).
+                check_decimal_widths(binary, 16)?;
                 let decimal = Decimal128Array::from_unary(binary, |x| match x.len() {
                     0 => i128::default(),
                     _ => i128::from_be_bytes(sign_extend_be(x)),
@@ -148,6 +186,7 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
                 let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
                 // Null slots will have 0 length, so we need to check for that in the lambda
                 // or sign_extend_be will panic.
+                check_decimal_widths(binary, 32)?;
                 let decimal = Decimal256Array::from_unary(binary, |x| match x.len() {
                     0 => i256::default(),
                     _ => i256::from_be_bytes(sign_extend_be(x)),
@@ -189,7 +228,8 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
     type Buffer = OffsetBuffer<I>;
 
     fn new(desc: &ColumnDescPtr) -> Self {
-        let validate_utf8 = desc.converted_type() == ConvertedType::UTF8;
+        // PLENORA: `JSON` and `ENUM` are text too.
+        let validate_utf8 = annotated_as_text(desc);
         Self {
             dict: None,
             decoder: None,
@@ -204,15 +244,8 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
         encoding: Encoding,
         _is_sorted: bool,
     ) -> Result<()> {
-        if !matches!(
-            encoding,
-            Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
-        ) {
-            return Err(nyi_err!(
-                "Invalid/Unsupported encoding type for dictionary: {}",
-                encoding
-            ));
-        }
+        // PLENORA: an excluded encoding has the text of every other rejection.
+        crate::basic::check_dictionary_page_encoding(encoding)?;
 
         let mut buffer = OffsetBuffer::with_capacity(0);
         let mut decoder = ByteArrayDecoderPlain::new(
@@ -221,7 +254,9 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             Some(num_values as usize),
             self.validate_utf8,
         );
-        decoder.read(&mut buffer, usize::MAX)?;
+        let letti = decoder.read(&mut buffer, usize::MAX)?;
+        // PLENORA: the count was ignored; a short dictionary was kept.
+        decoder.verifica_dizionario(letti, num_values as usize)?;
         self.dict = Some(buffer);
         Ok(())
     }
@@ -260,6 +295,14 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
 
         decoder.skip(num_values, self.dict.as_ref())
     }
+
+    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
+        crate::column::reader::decoder::fine_esatta(
+            self.decoder
+                .as_ref()
+                .is_some_and(|decoder| decoder.fine_esatta(coda)),
+        )
+    }
 }
 
 /// A generic decoder from uncompressed parquet value data to [`OffsetBuffer`]
@@ -271,6 +314,15 @@ pub enum ByteArrayDecoder {
 }
 
 impl ByteArrayDecoder {
+    /// PLENORA: the page ends with the values read.
+    pub fn fine_esatta(&self, coda: usize) -> bool {
+        match self {
+            Self::Plain(d) => crate::util::bit_util::coda_di_zeri(&d.buf, d.offset, coda),
+            Self::Dictionary(d) => d.decoder.fine_esatta(coda),
+            Self::DeltaLength(_) | Self::DeltaByteArray(_) => false,
+        }
+    }
+
     pub fn new(
         encoding: Encoding,
         data: Bytes,
@@ -278,6 +330,8 @@ impl ByteArrayDecoder {
         num_values: Option<usize>,
         validate_utf8: bool,
     ) -> Result<Self> {
+        // PLENORA: only the qualified encodings are read, page by page.
+        crate::basic::check_qualified_value_encoding(encoding)?;
         let decoder = match encoding {
             Encoding::PLAIN => ByteArrayDecoder::Plain(ByteArrayDecoderPlain::new(
                 data,
@@ -289,9 +343,13 @@ impl ByteArrayDecoder {
                 ByteArrayDecoderDictionary::new(data, num_levels, num_values)?,
             ),
             // PLENORA: the page value count bounds the delta header counts.
-            Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
-                ByteArrayDecoderDeltaLength::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
-            ),
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => {
+                ByteArrayDecoder::DeltaLength(ByteArrayDecoderDeltaLength::new(
+                    data,
+                    num_values.unwrap_or(num_levels),
+                    validate_utf8,
+                )?)
+            }
             Encoding::DELTA_BYTE_ARRAY => ByteArrayDecoder::DeltaByteArray(
                 ByteArrayDecoderDelta::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
             ),
@@ -346,6 +404,21 @@ impl ByteArrayDecoder {
     }
 }
 
+/// PLENORA: every non-null decimal value has between 1 and `max` bytes.
+fn check_decimal_widths(binary: &BinaryArray, max: usize) -> Result<()> {
+    if binary
+        .iter()
+        .flatten()
+        .any(|value| value.is_empty() || value.len() > max)
+    {
+        return Err(general_err!(
+            "decimal value of 0 bytes or more than {} bytes",
+            max
+        ));
+    }
+    Ok(())
+}
+
 /// Decoder from [`Encoding::PLAIN`] data to [`OffsetBuffer`]
 pub struct ByteArrayDecoderPlain {
     buf: Bytes,
@@ -387,9 +460,11 @@ impl ByteArrayDecoderPlain {
             return Ok(0);
         }
 
+        // PLENORA: `checked_div`: no values left over a non-empty buffer
+        // divided by zero.
         let estimated_bytes = remaining_bytes
             .checked_mul(to_read)
-            .map(|x| x / self.max_remaining_values)
+            .and_then(|x| x.checked_div(self.max_remaining_values))
             .unwrap_or_default();
 
         output.values.reserve(estimated_bytes);
@@ -405,22 +480,34 @@ impl ByteArrayDecoderPlain {
             let len = u32::from_le_bytes(len_bytes);
 
             let start_offset = self.offset + 4;
-            let end_offset = start_offset + len as usize;
-            if end_offset > buf.len() {
-                return Err(ParquetError::EOF("eof decoding byte array".into()));
-            }
+            let end_offset = start_offset
+                .checked_add(len as usize)
+                .filter(|end| *end <= buf.len())
+                .ok_or_else(|| ParquetError::EOF("eof decoding byte array".into()))?;
 
             output.try_push(&buf[start_offset..end_offset], self.validate_utf8)?;
 
             self.offset = end_offset;
             read += 1;
         }
-        self.max_remaining_values -= to_read;
+        // PLENORA: the values actually read. This returned `to_read` even when
+        // the page ended first, and the caller, which compares the count with
+        // the levels, could not see the missing values.
+        self.max_remaining_values -= read;
 
         if self.validate_utf8 {
             output.check_valid_utf8(initial_values_length)?;
         }
-        Ok(to_read)
+        Ok(read)
+    }
+
+    /// PLENORA: a dictionary page holds exactly the values its header
+    /// declares: `letti` of `dichiarati`, and every byte consumed.
+    pub fn verifica_dizionario(&self, letti: usize, dichiarati: usize) -> Result<()> {
+        if letti != dichiarati || self.offset != self.buf.len() {
+            return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
+        }
+        Ok(())
     }
 
     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
@@ -434,8 +521,14 @@ impl ByteArrayDecoderPlain {
             }
             let len_bytes: [u8; 4] = buf[self.offset..self.offset + 4].try_into().unwrap();
             let len = u32::from_le_bytes(len_bytes) as usize;
+            // PLENORA: a length beyond the page is an error, not a skip that
+            // leaves the offset past the end.
+            let end = (self.offset + 4)
+                .checked_add(len)
+                .filter(|end| *end <= buf.len())
+                .ok_or_else(|| ParquetError::EOF("eof skipping byte array".into()))?;
             skip += 1;
-            self.offset = self.offset + 4 + len;
+            self.offset = end;
         }
         self.max_remaining_values -= skip;
         Ok(skip)
@@ -458,24 +551,15 @@ impl ByteArrayDecoderDeltaLength {
         let values = len_decoder.values_left();
 
         let mut lengths = vec![0; values];
-        len_decoder.get(&mut lengths)?;
-
-        let mut total_bytes = 0;
-
-        for l in &lengths {
-            if *l < 0 {
-                return Err(ParquetError::General(
-                    "negative delta length byte array length".to_string(),
-                ));
-            }
-            total_bytes += *l as usize;
+        // PLENORA: a short read is an error.
+        if len_decoder.get(&mut lengths)? != values {
+            return Err(eof_err!("eof decoding delta length byte array lengths"));
         }
-
-        if total_bytes + len_decoder.get_offset() > data.len() {
-            return Err(ParquetError::General(
-                "Insufficient delta length byte array bytes".to_string(),
-            ));
-        }
+        crate::encodings::decoding::check_delta_lengths(
+            &lengths,
+            len_decoder.get_offset(),
+            data.len(),
+        )?;
 
         Ok(Self {
             lengths,
@@ -510,10 +594,14 @@ impl ByteArrayDecoderDeltaLength {
         // Compute and extend offsets in batch using extend
         let base_offset = initial_values_length;
         let mut running = base_offset;
-        output.offsets.extend(src_lengths.iter().map(|length| {
+        // PLENORA: an offset beyond the index type is an error, not a panic.
+        for length in src_lengths {
             running += *length as usize;
-            I::from_usize(running).expect("index overflow decoding byte array")
-        }));
+            output.offsets.push(
+                I::from_usize(running)
+                    .ok_or_else(|| general_err!("index overflow decoding byte array"))?,
+            );
+        }
 
         self.data_offset = data_end;
         self.length_offset += to_read;

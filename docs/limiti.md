@@ -1083,3 +1083,84 @@ invece di un errore. Nessuna prova lo rileva dal consumatore.
 **Condizione di rientro.** Il consumatore dichiara `overflow-checks = true`
 nel proprio `[profile.release]`, oppure una guardia a runtime che rifiuta
 di eseguire un piano in una build senza controlli di overflow.
+
+## Salti Parquet dentro una pagina
+
+**Regola.** Il lettore Parquet decodifica e verifica tutto ciò che
+attraversa: valori, indici di dizionario, conteggi dichiarati, fine della
+pagina.
+
+**Ambito.** Il fork `vendor/parquet-60.0.0-eof`: `skip_records` del
+lettore di colonna e il salto di pagine del lettore di pagine (offset
+index). Nel lettore Arrow saltano righe `RowSelection`, i filtri di riga e
+`offset`; la selezione dei row group esclude chunk interi senza saltare
+dentro una pagina; `limit` può solo fermare la lettura, e una pagina
+lasciata a metà non arriva al controllo della sua fine.
+
+**Hazard.** Un salto dentro una pagina, o di una pagina senza header, non
+decodificava ciò che saltava: è `SKIP_NOT_QUALIFIED` (`Unsupported` dal
+confine), anche su un file valido. `plenora-io` legge sempre per intero e
+non lo raggiunge; lo raggiunge chi usa il fork come libreria con una
+selezione di righe. Restano i salti di pagine intere, dall'header, che ne
+controllano la codifica senza decodificarle.
+
+**Condizione di rientro.** Un salto che decodifica e verifica come la
+lettura (leggi e butta), con una guardia di avanzamento in ogni ciclo e le
+prove di questo giro, oppure il bisogno di una selezione di righe da
+parte di data o IO-tools.
+
+## Coda di zeri delle pagine Parquet di fastparquet
+
+**Regola.** Una pagina Parquet finisce dove finiscono i suoi livelli e i
+suoi valori (`PAGE_NOT_AS_DECLARED` altrimenti).
+
+**Ambito.** Il fork `vendor/parquet-60.0.0-eof`, fine dello stream dei
+valori delle pagine di dati v1 (`CODA_FASTPARQUET`).
+
+**Hazard.** fastparquet aggiunge 8 byte a zero a ogni pagina v1, dopo i
+valori, anche `PLAIN` (`writer.py`, `8 * b'\x00'`): rifiutarli
+rifiuterebbe ogni suo file. Dopo lo stream dei valori di una pagina v1 si
+tollerano al più 8 byte, tutti zero: una pagina v1 `PLAIN` con valori a
+zero in più, entro 8 byte (due `INT32`, un `INT64`), si legge senza quei
+valori invece di essere rifiutata. Mai dopo i livelli, mai in una pagina
+v2, mai byte diversi da zero. Della stessa natura, per DuckDB: gruppi di
+riempimento nell'ultima corsa bit-packed, solo se la corsa è di 32 gruppi.
+
+**Condizione di rientro.** fastparquet smette di aggiungere la coda (o la
+dichiara nell'header della pagina), e i suoi file in uso sono riscritti.
+
+## Codifiche Parquet non qualificate
+
+**Regola.** Ogni codifica che il lettore Parquet accetta è qualificata:
+i suoi decoder hanno avuto una revisione e prove su file costruiti per
+romperli, e lo saranno con una campagna di fuzz propria. Lette:
+`PLAIN`, `PLAIN_DICTIONARY` e `RLE_DICTIONARY` per i valori, `RLE` per i
+booleani e per i livelli. Si controllano la codifica di ogni pagina di
+dati e di dizionario letta o saltata intera dal suo header, i livelli delle
+pagine lette, e le codifiche che il column chunk dichiara nel footer;
+`BIT_PACKED` nell'elenco del footer passa, perché parquet-mr la dichiara
+per i livelli assenti.
+
+**Ambito.** La lettura Parquet di `plenora-io` (CLI, SDK Python,
+`data.run` 3) e il fork `vendor/parquet-60.0.0-eof`
+(`parquet::basic::is_qualified_value_encoding`).
+
+**Hazard.** Un file valido che usa `DELTA_BINARY_PACKED`,
+`DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY` o `BYTE_STREAM_SPLIT` (o
+un'altra codifica, per esempio la nuova `ALP`), o livelli `BIT_PACKED`
+(deprecata; nessun file di prova la usa in una pagina), si rifiuta con
+`Unsupported`. Una pagina saltata attraverso l'offset index non ha header
+e non si controlla: `plenora-io` non carica l'offset index, quindi non lo
+raggiunge. Le scrivono pyarrow con `column_encoding` o
+`use_byte_stream_split`, i writer v2 di parquet-mr e Spark, DuckDB con le
+opzioni v2; non le scrivono pyarrow (anche con pagine v2), data e
+IO-tools con le impostazioni predefinite. Di `apache/parquet-testing`
+(`data/`) se ne rifiutano 9 file su 78: i due `byte_stream_split*`,
+`datapage_v2.snappy`, i cinque `delta_*` e `alp_extended.zstd`. Due giri
+di revisione hanno trovato in questi decoder la maggior parte dei
+difetti; le loro correzioni restano nel fork, non raggiungibili.
+
+**Condizione di rientro.** Per ogni codifica, una campagna di fuzz dei
+suoi decoder e il ritorno delle prove che la riduzione ha sostituito con
+il rifiuto (`git log` di `crates/plenora-io/tests/parquet_decoder.rs`,
+commit precedenti alla riduzione).

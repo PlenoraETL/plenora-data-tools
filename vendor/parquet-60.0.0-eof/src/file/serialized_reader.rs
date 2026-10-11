@@ -205,6 +205,26 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// PLENORA: bound what decoding the footer may reserve; see
+    /// [`ParquetMetaDataOptions::set_footer_memory_budget`].
+    ///
+    /// [`ParquetMetaDataOptions::set_footer_memory_budget`]:
+    /// crate::file::metadata::ParquetMetaDataOptions::set_footer_memory_budget
+    pub fn with_footer_memory_budget(mut self, val: u64) -> Self {
+        self.metadata_options.set_footer_memory_budget(val);
+        self
+    }
+
+    /// PLENORA: the maximum depth of the footer schema; see
+    /// [`ParquetMetaDataOptions::set_max_schema_depth`].
+    ///
+    /// [`ParquetMetaDataOptions::set_max_schema_depth`]:
+    /// crate::file::metadata::ParquetMetaDataOptions::set_max_schema_depth
+    pub fn with_max_schema_depth(mut self, val: usize) -> Self {
+        self.metadata_options.set_max_schema_depth(val);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         let props = self
@@ -270,8 +290,11 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
 
         // If page indexes are desired, build them with the filtered set of row groups
         if options.enable_page_index {
+            // PLENORA: the same metadata options as the footer, so that a
+            // footer memory budget also governs (and refuses) the page index.
             let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
-                .with_page_index_policy(PageIndexPolicy::Required);
+                .with_page_index_policy(PageIndexPolicy::Required)
+                .with_metadata_options(Some(options.metadata_options.clone()));
             reader.read_page_indexes(&chunk_reader)?;
             metadata = reader.finish()?;
         }
@@ -396,6 +419,29 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
     }
 }
 
+/// PLENORA: a page skipped whole is rejected for its value encoding like a
+/// page read (an excluded page was skipped in silence). Only from its header:
+/// a page reached through the offset index has none and is skipped without
+/// this check. The level encodings of a skipped page are not checked: the
+/// header names one even for a column without levels.
+fn verifica_codifica_saltata(header: &PageHeader) -> Result<()> {
+    match header.r#type {
+        PageType::DICTIONARY_PAGE => match header.dictionary_page_header.as_ref() {
+            Some(dizionario) => crate::basic::check_dictionary_page_encoding(dizionario.encoding),
+            None => Ok(()),
+        },
+        PageType::DATA_PAGE => match header.data_page_header.as_ref() {
+            Some(pagina) => crate::basic::check_qualified_value_encoding(pagina.encoding),
+            None => Ok(()),
+        },
+        PageType::DATA_PAGE_V2 => match header.data_page_header_v2.as_ref() {
+            Some(pagina) => crate::basic::check_qualified_value_encoding(pagina.encoding),
+            None => Ok(()),
+        },
+        _ => Ok(()),
+    }
+}
+
 /// Decodes a [`Page`] from the provided `buffer`
 pub(crate) fn decode_page(
     page_header: PageHeader,
@@ -427,10 +473,16 @@ pub(crate) fn decode_page(
     };
     let (offset, can_decompress): (usize, bool) = match header_v2 {
         Some(header_v2) => {
+            // PLENORA: the sum in `i64` (in `i32` it overflowed, a panic), and
+            // the levels inside the bytes of the page as read too: with no
+            // decompression the buffer is the compressed size, and the column
+            // reader slices the levels out of it.
+            let livelli = i64::from(header_v2.definition_levels_byte_length)
+                + i64::from(header_v2.repetition_levels_byte_length);
             if header_v2.definition_levels_byte_length < 0
                 || header_v2.repetition_levels_byte_length < 0
-                || header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length
-                    > page_header.uncompressed_page_size
+                || livelli > i64::from(page_header.uncompressed_page_size)
+                || livelli > i64::try_from(buffer.len()).unwrap_or(i64::MAX)
             {
                 return Err(general_err!(
                     "DataPage v2 header contains implausible values \
@@ -443,10 +495,7 @@ pub(crate) fn decode_page(
                 ));
             }
             (
-                usize::try_from(
-                    header_v2.definition_levels_byte_length
-                        + header_v2.repetition_levels_byte_length,
-                )?,
+                usize::try_from(livelli)?,
                 // When is_compressed flag is missing the page is considered compressed
                 header_v2.is_compressed.unwrap_or(true),
             )
@@ -465,8 +514,12 @@ pub(crate) fn decode_page(
             decompressed.extend_from_slice(&buffer[..offset]);
             // decompressed size of zero corresponds to a page with no non-null values
             // see https://github.com/apache/parquet-format/blob/master/README.md#data-pages
-            if decompressed_size > 0 {
-                let compressed = &buffer[offset..];
+            // PLENORA: with no values to decompress, a compressed part that is
+            // there is still decompressed, and must give nothing: a suffix of
+            // any bytes disappeared unread (a codec writes an empty stream as
+            // a few bytes of its own, which decompress to nothing).
+            let compressed = &buffer[offset..];
+            if decompressed_size > 0 || !compressed.is_empty() {
                 decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
             }
 
@@ -650,8 +703,8 @@ impl LimitiPagina {
             _ => None,
         };
         if let Some(valori) = valori {
-            let valori = u64::try_from(valori)
-                .map_err(|_| general_err!("negative page value count"))?;
+            let valori =
+                u64::try_from(valori).map_err(|_| general_err!("negative page value count"))?;
             if valori > self.valori {
                 return Err(general_err!(
                     "page value count exceeds the column chunk value count"
@@ -727,6 +780,14 @@ impl<R: ChunkReader> SerializedPageReader<R> {
 
         let state = match page_locations {
             Some(locations) => {
+                // PLENORA: the locations come from the caller: checked
+                // against the chunk before any subtraction below.
+                crate::file::page_index::offset_index::verifica_posizioni(
+                    &locations,
+                    total_rows as u64,
+                    start,
+                    len,
+                )?;
                 // If the offset of the first page doesn't match the start of the column chunk
                 // then the preceding space must contain a dictionary page.
                 let dictionary_page = match locations.first() {
@@ -1163,13 +1224,25 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         is_dict: true,
                     }))
                 } else if let Some(page) = page_locations.front() {
-                    let next_rows = page_locations
-                        .get(1)
-                        .map(|x| x.first_row_index as usize)
-                        .unwrap_or(*total_rows);
+                    // PLENORA: checked conversions and subtraction (the
+                    // locations are verified at construction; no wrap here).
+                    let riga = |indice: i64| {
+                        usize::try_from(indice).map_err(|_| {
+                            general_err!("invalid offset index: negative first row index")
+                        })
+                    };
+                    let next_rows = match page_locations.get(1) {
+                        Some(next) => riga(next.first_row_index)?,
+                        None => *total_rows,
+                    };
+                    let rows = next_rows
+                        .checked_sub(riga(page.first_row_index)?)
+                        .ok_or_else(|| {
+                            general_err!("invalid offset index: first row indexes out of order")
+                        })?;
 
                     Ok(Some(PageMetadata {
-                        num_rows: Some(next_rows - page.first_row_index as usize),
+                        num_rows: Some(rows),
                         num_levels: None,
                         is_dict: false,
                     }))
@@ -1190,6 +1263,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 require_dictionary,
             } => {
                 if let Some(buffered_header) = next_page_header.take() {
+                    verifica_codifica_saltata(&buffered_header)?;
                     verify_page_size(
                         buffered_header.compressed_page_size,
                         buffered_header.uncompressed_page_size,
@@ -1207,6 +1281,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *require_dictionary,
                     )?;
                     verify_page_header_len(header_len, *remaining_bytes)?;
+                    verifica_codifica_saltata(&header)?;
                     verify_page_size(
                         header.compressed_page_size,
                         header.uncompressed_page_size,
@@ -1232,11 +1307,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 if dictionary_page.is_some() {
                     // If a dictionary page exists, consume it by taking it (sets to None)
                     dictionary_page.take();
-                } else {
-                    // If no dictionary page exists, simply pop the data page from page_locations
-                    if page_locations.pop_front().is_some() {
-                        *page_index += 1;
-                    }
+                } else if !page_locations.is_empty() {
+                    // PLENORA: a data page reached through the offset index
+                    // has no header read: its encoding cannot be checked, and
+                    // the skip is not qualified.
+                    let _ = page_index;
+                    return Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED));
                 }
 
                 Ok(())

@@ -163,11 +163,26 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                 };
                 let values = if let ArrowType::FixedSizeBinary(size) = **value_type {
                     let binary = values.as_binary::<i32>();
-                    Arc::new(FixedSizeBinaryArray::new(
-                        size,
-                        binary.values().clone(),
-                        binary.nulls().cloned(),
-                    )) as _
+                    // PLENORA: every value has the declared width: `try_new`
+                    // checks only the total, and ["a", "bcd"] became
+                    // ["ab", "cd"] in silence.
+                    if binary
+                        .value_offsets()
+                        .windows(2)
+                        .any(|w| i64::from(w[1]) - i64::from(w[0]) != i64::from(size))
+                    {
+                        return Err(general_err!("dictionary values of the wrong width"));
+                    }
+                    // PLENORA: dictionary values of the wrong width are an
+                    // error (`new` panics on them).
+                    Arc::new(
+                        FixedSizeBinaryArray::try_new(
+                            size,
+                            binary.values().clone(),
+                            binary.nulls().cloned(),
+                        )
+                        .map_err(|_| general_err!("dictionary values of the wrong width"))?,
+                    ) as _
                 } else {
                     values
                 };

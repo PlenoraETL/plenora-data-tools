@@ -826,6 +826,26 @@ impl ArrowReaderOptions {
         self
     }
 
+    /// PLENORA: bound what decoding the footer may reserve; see
+    /// [`ParquetMetaDataOptions::set_footer_memory_budget`].
+    ///
+    /// [`ParquetMetaDataOptions::set_footer_memory_budget`]:
+    /// crate::file::metadata::ParquetMetaDataOptions::set_footer_memory_budget
+    pub fn with_footer_memory_budget(mut self, val: u64) -> Self {
+        self.metadata_options.set_footer_memory_budget(val);
+        self
+    }
+
+    /// PLENORA: the maximum depth of the footer schema; see
+    /// [`ParquetMetaDataOptions::set_max_schema_depth`].
+    ///
+    /// [`ParquetMetaDataOptions::set_max_schema_depth`]:
+    /// crate::file::metadata::ParquetMetaDataOptions::set_max_schema_depth
+    pub fn with_max_schema_depth(mut self, val: usize) -> Self {
+        self.metadata_options.set_max_schema_depth(val);
+        self
+    }
+
     /// Provide the file decryption properties to use when reading encrypted parquet files.
     ///
     /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.

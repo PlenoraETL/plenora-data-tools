@@ -1461,6 +1461,82 @@ impl str::FromStr for LogicalType {
     }
 }
 
+/// PLENORA: the fixed text of the rejection of an encoding not qualified for
+/// reading; it names no value of the file.
+pub const ENCODING_NOT_QUALIFIED: &str = "Parquet encoding not qualified for reading";
+
+/// PLENORA: the fixed text of the rejection of a string Arrow type over a
+/// byte array column without a string annotation (`UTF8`, `JSON`, `ENUM`).
+pub const STRING_WITHOUT_ANNOTATION: &str =
+    "string Arrow type over a byte array column without a string annotation";
+
+/// PLENORA: the fixed text of the rejection of a `FIXED_LEN_BYTE_ARRAY`
+/// column read as an Arrow dictionary.
+pub const FLBA_AS_DICTIONARY: &str =
+    "FIXED_LEN_BYTE_ARRAY read as an Arrow dictionary is not supported";
+
+/// PLENORA: the fixed text of the rejection of a binary Arrow dictionary over
+/// a column annotated as text (the dictionary values are decoded as text).
+pub const BINARY_DICTIONARY_OVER_TEXT: &str =
+    "binary Arrow dictionary over a byte array column annotated as text";
+
+/// PLENORA: whether a value encoding is qualified for reading in this fork.
+///
+/// Qualified: `PLAIN`, `PLAIN_DICTIONARY` and `RLE_DICTIONARY` for values,
+/// `RLE` for booleans (levels are always `RLE` or `BIT_PACKED`). Not
+/// qualified, until each has a fuzz campaign of its own:
+/// `DELTA_BINARY_PACKED`, `DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY`,
+/// `BYTE_STREAM_SPLIT` (and the others: `BIT_PACKED` for values). Two
+/// reviews found most of the decoder defects in exactly these.
+pub fn is_qualified_value_encoding(encoding: Encoding) -> bool {
+    matches!(
+        encoding,
+        Encoding::PLAIN | Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY | Encoding::RLE
+    )
+}
+
+/// PLENORA: [`is_qualified_value_encoding`] as an error, with the fixed text
+/// [`ENCODING_NOT_QUALIFIED`] (the encoding is named after it: not data).
+pub fn check_qualified_value_encoding(encoding: Encoding) -> Result<()> {
+    if is_qualified_value_encoding(encoding) {
+        Ok(())
+    } else {
+        Err(nyi_err!("{}: {}", ENCODING_NOT_QUALIFIED, encoding))
+    }
+}
+
+/// PLENORA: the encodings of a dictionary page: an encoding excluded from
+/// this fork is rejected as such (the same text as on a data page), a
+/// qualified encoding that cannot hold a dictionary keeps its own rejection.
+pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
+    check_qualified_value_encoding(encoding)?;
+    match encoding {
+        Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => Ok(()),
+        _ => Err(nyi_err!(
+            "Invalid/Unsupported encoding type for dictionary: {}",
+            encoding
+        )),
+    }
+}
+
+/// PLENORA: the fixed text of the rejection of a skip inside a page (a
+/// partial skip, a row selection or a row filter that does not fall on whole
+/// pages), and of a whole page skipped without its header: not qualified. A
+/// skip did not decode what it passed over, so the checks of a read (values,
+/// dictionary indices, declared counts, progress) did not apply to it.
+pub const SKIP_NOT_QUALIFIED: &str =
+    "Parquet skip inside a page or without a page header not qualified for reading";
+
+/// PLENORA: the fixed text of a data page whose streams (levels, values,
+/// dictionary indices) do not end where its values end: bytes or values
+/// after the last one the page declares.
+pub const PAGE_NOT_AS_DECLARED: &str = "data page does not end where its levels and values end";
+
+/// PLENORA: the fixed text of a dictionary page whose entries are not the
+/// entries its header declares (fewer values, or bytes after the last one).
+pub const DICTIONARY_NOT_AS_DECLARED: &str =
+    "dictionary page does not hold the values its header declares";
+
 #[cfg(test)]
 #[expect(deprecated)] // allow BIT_PACKED encoding for the whole test module
 mod tests {

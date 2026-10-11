@@ -97,7 +97,12 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
 
         for key in keys {
             let index = key.as_usize();
-            if index + 1 >= dict_offsets.len() {
+            // PLENORA: a negative key becomes `usize::MAX`, and `index + 1`
+            // overflowed (a panic) instead of being out of bounds.
+            if index
+                .checked_add(1)
+                .is_none_or(|end| end >= dict_offsets.len())
+            {
                 return Err(general_err!(
                     "dictionary key beyond bounds of dictionary: 0..{}",
                     dict_offsets.len().saturating_sub(1)

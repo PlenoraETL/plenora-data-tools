@@ -56,7 +56,19 @@ pub fn make_fixed_len_byte_array_reader(
     };
 
     let byte_length = match column_desc.physical_type() {
-        Type::FIXED_LEN_BYTE_ARRAY => column_desc.type_length() as usize,
+        // PLENORA: la larghezza viene dallo schema del file, che ammette 0 (e
+        // il cast `as usize` trasformerebbe un negativo in un valore enorme).
+        // Con larghezza 0 i decoder PLAIN e BYTE_STREAM_SPLIT di questo lettore
+        // dividono per zero: un panico. Si rifiuta qui, prima di costruirli.
+        Type::FIXED_LEN_BYTE_ARRAY if column_desc.type_length() > 0 => {
+            column_desc.type_length() as usize
+        }
+        Type::FIXED_LEN_BYTE_ARRAY => {
+            return Err(general_err!(
+                "invalid FIXED_LEN_BYTE_ARRAY width {} for the arrow reader",
+                column_desc.type_length()
+            ));
+        }
         t => {
             return Err(general_err!(
                 "invalid physical type for fixed length byte array reader - {}",
@@ -183,14 +195,16 @@ impl ArrayReader for FixedLenByteArrayReader {
         let len = self.record_reader.values_written();
 
         let record_data = self.record_reader.consume_record_data();
-        debug_assert_eq!(
-            record_data.buffer.len(),
-            len * self.byte_length,
-            "fixed-len byte array buffer size mismatch: {} bytes for {} elements of size {}",
-            record_data.buffer.len(),
-            len,
-            self.byte_length,
-        );
+        // PLENORA: the buffer is built unchecked below: a size mismatch is an
+        // error in every build, not only a debug assertion.
+        if Some(record_data.buffer.len()) != len.checked_mul(self.byte_length) {
+            return Err(general_err!(
+                "fixed-len byte array buffer size mismatch: {} bytes for {} elements of size {}",
+                record_data.buffer.len(),
+                len,
+                self.byte_length
+            ));
+        }
         let null_bit_buffer = self.record_reader.consume_compact_bitmap();
 
         let array_data = ArrayDataBuilder::new(ArrowType::FixedSizeBinary(self.byte_length as i32))
@@ -403,27 +417,18 @@ impl ColumnValueDecoder for ValueDecoder {
         encoding: Encoding,
         _is_sorted: bool,
     ) -> Result<()> {
-        if !matches!(
-            encoding,
-            Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
-        ) {
-            return Err(nyi_err!(
-                "Invalid/Unsupported encoding type for dictionary: {}",
-                encoding
-            ));
-        }
+        // PLENORA: an excluded encoding has the text of every other rejection.
+        crate::basic::check_dictionary_page_encoding(encoding)?;
         // PLENORA: a wrapped product would accept a short dictionary.
         let expected_len = (num_values as usize)
             .checked_mul(self.byte_length)
             .ok_or_else(|| general_err!("dictionary page size overflows"))?;
-        if expected_len > buf.len() {
-            return Err(general_err!(
-                "too few bytes in dictionary page, expected {} got {}",
-                expected_len,
-                buf.len()
-            ));
+        // PLENORA: the dictionary holds exactly the values its header
+        // declares; bytes after them are not entries (an index into them was
+        // read as a value in silence), and are rejected like a short page.
+        if expected_len != buf.len() {
+            return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
         }
-
         self.dict_page = Some(buf);
         Ok(())
     }
@@ -435,6 +440,21 @@ impl ColumnValueDecoder for ValueDecoder {
         num_levels: usize,
         num_values: Option<usize>,
     ) -> Result<()> {
+        // PLENORA: only the qualified encodings are read, page by page.
+        crate::basic::check_qualified_value_encoding(encoding)?;
+        // PLENORA: PLAIN and BYTE_STREAM_SPLIT pages hold whole values; a
+        // remainder was dropped in silence (65 bytes of 8-byte values read 8
+        // values and ignored the last byte).
+        if matches!(encoding, Encoding::PLAIN | Encoding::BYTE_STREAM_SPLIT)
+            && !data.len().is_multiple_of(self.byte_length)
+        {
+            return Err(general_err!(
+                "{} page of {} bytes is not a whole number of {}-byte values",
+                encoding,
+                data.len(),
+                self.byte_length
+            ));
+        }
         self.decoder = Some(match encoding {
             Encoding::PLAIN => Decoder::Plain {
                 buf: data,
@@ -488,7 +508,12 @@ impl ColumnValueDecoder for ValueDecoder {
                 Ok(to_read)
             }
             Decoder::Dict { decoder } => {
-                let dict = self.dict_page.as_ref().unwrap();
+                // PLENORA: a dictionary-encoded page with no dictionary page is
+                // an error, not a panic.
+                let dict = self
+                    .dict_page
+                    .as_ref()
+                    .ok_or_else(|| general_err!("missing dictionary page for column"))?;
                 // All data must be NULL
                 if dict.is_empty() {
                     return Ok(0);
@@ -497,8 +522,20 @@ impl ColumnValueDecoder for ValueDecoder {
                 decoder.read(num_values, |keys| {
                     out.buffer.reserve(keys.len() * self.byte_length);
                     for key in keys {
-                        let offset = *key as usize * self.byte_length;
-                        let val = &dict.as_ref()[offset..offset + self.byte_length];
+                        // PLENORA: an index beyond the dictionary (or negative)
+                        // is an error, not a slice out of bounds.
+                        let val = usize::try_from(*key)
+                            .ok()
+                            .and_then(|key| key.checked_mul(self.byte_length))
+                            .and_then(|offset| {
+                                dict.get(offset..offset.checked_add(self.byte_length)?)
+                            })
+                            .ok_or_else(|| {
+                                general_err!(
+                                    "dictionary index out of bounds: the dictionary has {} values",
+                                    dict.len() / self.byte_length
+                                )
+                            })?;
                         out.buffer.extend_from_slice(val);
                     }
                     Ok(())
@@ -552,6 +589,17 @@ impl ColumnValueDecoder for ValueDecoder {
                 Ok(to_read)
             }
         }
+    }
+
+    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
+        let esatta = match self.decoder.as_ref() {
+            Some(Decoder::Plain { buf, offset }) => {
+                crate::util::bit_util::coda_di_zeri(buf, *offset, coda)
+            }
+            Some(Decoder::Dict { decoder }) => decoder.fine_esatta(coda),
+            Some(Decoder::Delta { .. } | Decoder::ByteStreamSplit { .. }) | None => false,
+        };
+        crate::column::reader::decoder::fine_esatta(esatta)
     }
 }
 

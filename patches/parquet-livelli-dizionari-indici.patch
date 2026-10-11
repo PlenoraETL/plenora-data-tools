@@ -1,0 +1,873 @@
+--- a/src/arrow/array_reader/byte_array.rs
++++ b/src/arrow/array_reader/byte_array.rs
+@@ -244,15 +244,8 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
+         encoding: Encoding,
+         _is_sorted: bool,
+     ) -> Result<()> {
+-        if !matches!(
+-            encoding,
+-            Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
+-        ) {
+-            return Err(nyi_err!(
+-                "Invalid/Unsupported encoding type for dictionary: {}",
+-                encoding
+-            ));
+-        }
++        // PLENORA: an excluded encoding has the text of every other rejection.
++        crate::basic::check_dictionary_page_encoding(encoding)?;
+ 
+         let mut buffer = OffsetBuffer::with_capacity(0);
+         let mut decoder = ByteArrayDecoderPlain::new(
+@@ -261,7 +254,9 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
+             Some(num_values as usize),
+             self.validate_utf8,
+         );
+-        decoder.read(&mut buffer, usize::MAX)?;
++        let letti = decoder.read(&mut buffer, usize::MAX)?;
++        // PLENORA: the count was ignored; a short dictionary was kept.
++        decoder.verifica_dizionario(letti, num_values as usize)?;
+         self.dict = Some(buffer);
+         Ok(())
+     }
+@@ -448,9 +443,11 @@ impl ByteArrayDecoderPlain {
+             return Ok(0);
+         }
+ 
++        // PLENORA: `checked_div`: no values left over a non-empty buffer
++        // divided by zero.
+         let estimated_bytes = remaining_bytes
+             .checked_mul(to_read)
+-            .map(|x| x / self.max_remaining_values)
++            .and_then(|x| x.checked_div(self.max_remaining_values))
+             .unwrap_or_default();
+ 
+         output.values.reserve(estimated_bytes);
+@@ -487,6 +484,15 @@ impl ByteArrayDecoderPlain {
+         Ok(read)
+     }
+ 
++    /// PLENORA: a dictionary page holds exactly the values its header
++    /// declares: `letti` of `dichiarati`, and every byte consumed.
++    pub fn verifica_dizionario(&self, letti: usize, dichiarati: usize) -> Result<()> {
++        if letti != dichiarati || self.offset != self.buf.len() {
++            return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
++        }
++        Ok(())
++    }
++
+     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
+         let to_skip = to_skip.min(self.max_remaining_values);
+         let mut skip = 0;
+--- a/src/arrow/array_reader/byte_array_dictionary.rs
++++ b/src/arrow/array_reader/byte_array_dictionary.rs
+@@ -32,7 +32,7 @@ use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
+ use crate::arrow::buffer::{dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer};
+ use crate::arrow::record_reader::GenericRecordReader;
+ use crate::arrow::schema::parquet_to_arrow_field;
+-use crate::basic::{ConvertedType, Encoding};
++use crate::basic::Encoding;
+ use crate::column::page::PageIterator;
+ use crate::column::reader::decoder::ColumnValueDecoder;
+ use crate::encodings::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
+@@ -96,6 +96,21 @@ pub fn make_byte_array_dictionary_reader(
+         column_desc.as_ref(),
+         &data_type,
+     )?;
++    // PLENORA: over a column annotated as text the dictionary values are
++    // decoded as text; a binary value type was read from them as binary and
++    // panicked. Not qualified: a binary dictionary over text is refused.
++    if let ArrowType::Dictionary(_, valori) = &data_type
++        && matches!(
++            valori.as_ref(),
++            ArrowType::Binary
++                | ArrowType::LargeBinary
++                | ArrowType::BinaryView
++                | ArrowType::FixedSizeBinary(_)
++        )
++        && crate::arrow::array_reader::byte_array::annotated_as_text(column_desc.as_ref())
++    {
++        return Err(nyi_err!("{}", crate::basic::BINARY_DICTIONARY_OVER_TEXT));
++    }
+ 
+     match &data_type {
+         ArrowType::Dictionary(key_type, value_type) => {
+@@ -322,7 +337,10 @@ where
+         // PLENORA: `JSON` and `ENUM` are text too.
+         let validate_utf8 = crate::arrow::array_reader::byte_array::annotated_as_text(col);
+ 
+-        let value_type = match (V::IS_LARGE, col.converted_type() == ConvertedType::UTF8) {
++        // PLENORA: the value type follows the same annotation (it followed
++        // `UTF8` alone, and a `JSON` or `ENUM` dictionary held binary values
++        // that the text conversions read as text).
++        let value_type = match (V::IS_LARGE, validate_utf8) {
+             (true, true) => ArrowType::LargeUtf8,
+             (true, false) => ArrowType::LargeBinary,
+             (false, true) => ArrowType::Utf8,
+@@ -345,15 +363,8 @@ where
+         encoding: Encoding,
+         _is_sorted: bool,
+     ) -> Result<()> {
+-        if !matches!(
+-            encoding,
+-            Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
+-        ) {
+-            return Err(nyi_err!(
+-                "Invalid/Unsupported encoding type for dictionary: {}",
+-                encoding
+-            ));
+-        }
++        // PLENORA: an excluded encoding has the text of every other rejection.
++        crate::basic::check_dictionary_page_encoding(encoding)?;
+ 
+         if K::from_usize(num_values as usize).is_none() {
+             return Err(general_err!("dictionary too large for index type"));
+@@ -362,7 +373,9 @@ where
+         let len = num_values as usize;
+         let mut buffer = OffsetBuffer::<V>::with_capacity(0);
+         let mut decoder = ByteArrayDecoderPlain::new(buf, len, Some(len), self.validate_utf8);
+-        decoder.read(&mut buffer, usize::MAX)?;
++        let letti = decoder.read(&mut buffer, usize::MAX)?;
++        // PLENORA: the count was ignored; a short dictionary was kept.
++        decoder.verifica_dizionario(letti, len)?;
+ 
+         let array = buffer.into_array(None, self.value_type.clone());
+         self.dict = Some(array);
+--- a/src/arrow/array_reader/byte_view_array.rs
++++ b/src/arrow/array_reader/byte_view_array.rs
+@@ -171,21 +171,18 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
+         encoding: Encoding,
+         _is_sorted: bool,
+     ) -> Result<()> {
+-        if !matches!(
+-            encoding,
+-            Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
+-        ) {
+-            return Err(nyi_err!(
+-                "Invalid/Unsupported encoding type for dictionary: {}",
+-                encoding
+-            ));
+-        }
++        // PLENORA: an excluded encoding has the text of every other rejection.
++        crate::basic::check_dictionary_page_encoding(encoding)?;
+ 
+         let num_values = num_values as usize;
+         let mut buffer = ViewBuffer::with_capacity(num_values);
+         let mut decoder =
+             ByteViewArrayDecoderPlain::new(buf, num_values, Some(num_values), self.validate_utf8);
+-        decoder.read(&mut buffer, usize::MAX)?;
++        let letti = decoder.read(&mut buffer, usize::MAX)?;
++        // PLENORA: the count was ignored; a short dictionary was kept.
++        if letti != num_values || decoder.offset != decoder.buf.len() {
++            return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
++        }
+         self.dict = Some(buffer);
+         Ok(())
+     }
+--- a/src/arrow/array_reader/fixed_len_byte_array.rs
++++ b/src/arrow/array_reader/fixed_len_byte_array.rs
+@@ -417,31 +417,19 @@ impl ColumnValueDecoder for ValueDecoder {
+         encoding: Encoding,
+         _is_sorted: bool,
+     ) -> Result<()> {
+-        if !matches!(
+-            encoding,
+-            Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
+-        ) {
+-            return Err(nyi_err!(
+-                "Invalid/Unsupported encoding type for dictionary: {}",
+-                encoding
+-            ));
+-        }
++        // PLENORA: an excluded encoding has the text of every other rejection.
++        crate::basic::check_dictionary_page_encoding(encoding)?;
+         // PLENORA: a wrapped product would accept a short dictionary.
+         let expected_len = (num_values as usize)
+             .checked_mul(self.byte_length)
+             .ok_or_else(|| general_err!("dictionary page size overflows"))?;
+-        if expected_len > buf.len() {
+-            return Err(general_err!(
+-                "too few bytes in dictionary page, expected {} got {}",
+-                expected_len,
+-                buf.len()
+-            ));
++        // PLENORA: the dictionary holds exactly the values its header
++        // declares; bytes after them are not entries (an index into them was
++        // read as a value in silence), and are rejected like a short page.
++        if expected_len != buf.len() {
++            return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
+         }
+-
+-        // PLENORA: the dictionary holds the values its header declares; bytes
+-        // after them are not entries, and an index into them was read as a
+-        // value in silence.
+-        self.dict_page = Some(buf.slice(..expected_len));
++        self.dict_page = Some(buf);
+         Ok(())
+     }
+ 
+--- a/src/arrow/record_reader/definition_levels.rs
++++ b/src/arrow/record_reader/definition_levels.rs
+@@ -231,7 +231,7 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
+ 
+     fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
+         match &mut self.decoder {
+-            MaybePacked::Packed(d) => d.set_data(encoding, data),
++            MaybePacked::Packed(d) => d.set_data(encoding, data)?,
+             MaybePacked::Fallback(d) => d.set_data(encoding, data)?,
+         }
+         Ok(())
+@@ -400,18 +400,27 @@ impl PackedDecoder {
+         }
+     }
+ 
+-    fn set_data(&mut self, encoding: Encoding, data: Bytes) {
++    fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
+         self.rle_left = 0;
+         self.rle_value = false;
+         self.packed_offset = 0;
++        // PLENORA: only RLE levels. `BIT_PACKED` was read in the RLE bit
++        // order (the nulls moved in silence) and any other encoding reached
++        // `unreachable!`; both are errors.
+         self.packed_count = match encoding {
+             Encoding::RLE => 0,
+             #[expect(deprecated)]
+-            Encoding::BIT_PACKED => data.len() * 8,
+-            _ => unreachable!("invalid level encoding: {}", encoding),
++            Encoding::BIT_PACKED => {
++                return Err(nyi_err!(
++                    "{}: BIT_PACKED levels",
++                    crate::basic::ENCODING_NOT_QUALIFIED
++                ));
++            }
++            _ => return Err(general_err!("invalid level encoding: {}", encoding)),
+         };
+         self.data = data;
+         self.data_offset = 0;
++        Ok(())
+     }
+ 
+     /// Try to consume `len` levels if all are valid (max definition level).
+@@ -550,7 +559,7 @@ mod tests {
+ 
+         let encoded = encoder.consume();
+         let mut decoder = PackedDecoder::new();
+-        decoder.set_data(Encoding::RLE, encoded.into());
++        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
+ 
+         // Decode data in random length intervals
+         let mut decoded = BooleanBufferBuilder::new(len);
+@@ -589,7 +598,7 @@ mod tests {
+ 
+         let encoded = encoder.consume();
+         let mut decoder = PackedDecoder::new();
+-        decoder.set_data(Encoding::RLE, encoded.into());
++        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
+ 
+         let mut skip_value = 0;
+         let mut read_value = 0;
+@@ -637,7 +646,7 @@ mod tests {
+         }
+         let encoded = encoder.consume();
+         let mut decoder = PackedDecoder::new();
+-        decoder.set_data(Encoding::RLE, encoded.into());
++        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
+ 
+         // try_consume_all_valid now parses the RLE block itself, no need to read first
+         let result = decoder.try_consume_all_valid(len).unwrap();
+@@ -650,7 +659,7 @@ mod tests {
+         }
+         let encoded = encoder.consume();
+         let mut decoder = PackedDecoder::new();
+-        decoder.set_data(Encoding::RLE, encoded.into());
++        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
+ 
+         // Should return None because rle_value is false (all nulls)
+         let result = decoder.try_consume_all_valid(len).unwrap();
+@@ -666,7 +675,7 @@ mod tests {
+         }
+         let encoded = encoder.consume();
+         let mut decoder = PackedDecoder::new();
+-        decoder.set_data(Encoding::RLE, encoded.into());
++        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
+ 
+         // Request more than the valid run - should return None
+         // (because we don't look ahead to next block)
+@@ -674,16 +683,18 @@ mod tests {
+         assert_eq!(result, None);
+ 
+         // Reset decoder and try requesting within the run
+-        decoder.set_data(Encoding::RLE, {
+-            let mut encoder = RleEncoder::new(1, 1024);
+-            for _ in 0..10 {
+-                encoder.put(1);
+-            }
+-            for _ in 0..10 {
+-                encoder.put(0);
+-            }
+-            encoder.consume().into()
+-        });
++        decoder
++            .set_data(Encoding::RLE, {
++                let mut encoder = RleEncoder::new(1, 1024);
++                for _ in 0..10 {
++                    encoder.put(1);
++                }
++                for _ in 0..10 {
++                    encoder.put(0);
++                }
++                encoder.consume().into()
++            })
++            .unwrap();
+ 
+         let result = decoder.try_consume_all_valid(5).unwrap();
+         assert_eq!(result, Some(5));
+--- a/src/basic.rs
++++ b/src/basic.rs
+@@ -1475,6 +1475,11 @@ pub const STRING_WITHOUT_ANNOTATION: &str =
+ pub const FLBA_AS_DICTIONARY: &str =
+     "FIXED_LEN_BYTE_ARRAY read as an Arrow dictionary is not supported";
+ 
++/// PLENORA: the fixed text of the rejection of a binary Arrow dictionary over
++/// a column annotated as text (the dictionary values are decoded as text).
++pub const BINARY_DICTIONARY_OVER_TEXT: &str =
++    "binary Arrow dictionary over a byte array column annotated as text";
++
+ /// PLENORA: whether a value encoding is qualified for reading in this fork.
+ ///
+ /// Qualified: `PLAIN`, `PLAIN_DICTIONARY` and `RLE_DICTIONARY` for values,
+@@ -1500,6 +1505,25 @@ pub fn check_qualified_value_encoding(encoding: Encoding) -> Result<()> {
+     }
+ }
+ 
++/// PLENORA: the encodings of a dictionary page: an encoding excluded from
++/// this fork is rejected as such (the same text as on a data page), a
++/// qualified encoding that cannot hold a dictionary keeps its own rejection.
++pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
++    check_qualified_value_encoding(encoding)?;
++    match encoding {
++        Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => Ok(()),
++        _ => Err(nyi_err!(
++            "Invalid/Unsupported encoding type for dictionary: {}",
++            encoding
++        )),
++    }
++}
++
++/// PLENORA: the fixed text of a dictionary page whose entries are not the
++/// entries its header declares (fewer values, or bytes after the last one).
++pub const DICTIONARY_NOT_AS_DECLARED: &str =
++    "dictionary page does not hold the values its header declares";
++
+ #[cfg(test)]
+ #[expect(deprecated)] // allow BIT_PACKED encoding for the whole test module
+ mod tests {
+--- a/src/column/reader.rs
++++ b/src/column/reader.rs
+@@ -28,7 +28,7 @@ use crate::column::reader::decoder::{
+ use crate::data_type::*;
+ use crate::errors::{ParquetError, Result};
+ use crate::schema::types::ColumnDescPtr;
+-use crate::util::bit_util::{ceil, num_required_bits, read_num_bytes};
++use crate::util::bit_util::read_num_bytes;
+ 
+ pub(crate) mod decoder;
+ 
+@@ -136,6 +136,16 @@ pub struct GenericColumnReader<R, D, V> {
+ 
+     /// The decoder for the values
+     values_decoder: V,
++
++    /// PLENORA: the values a V2 data page declares (`num_values - num_nulls`),
++    /// none for a V1 page.
++    valori_dichiarati: Option<usize>,
++
++    /// PLENORA: the values read or skipped from the current page so far, and
++    /// whether that count is complete (a skip that exhausts the page on the
++    /// repetition levels does not decode its values).
++    valori_della_pagina: usize,
++    valori_contati: bool,
+ }
+ 
+ impl<V> GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelDecoderImpl, V>
+@@ -184,6 +194,9 @@ where
+             num_decoded_values: 0,
+             values_decoder,
+             has_record_delimiter: false,
++            valori_dichiarati: None,
++            valori_della_pagina: 0,
++            valori_contati: false,
+         }
+     }
+ 
+@@ -296,6 +309,8 @@ where
+             }
+ 
+             self.num_decoded_values += levels_to_read;
++            self.valori_della_pagina += values_read;
++            self.verifica_fine_pagina()?;
+             total_records_read += records_read;
+             total_levels_read += levels_to_read;
+             total_values_read += values_read;
+@@ -375,6 +390,8 @@ where
+ 
+             if self.num_buffered_values == self.num_decoded_values {
+                 // Exhausted buffered page - no need to advance other decoders
++                // PLENORA: its values were not decoded, so not counted.
++                self.valori_contati = false;
+                 continue;
+             }
+ 
+@@ -399,10 +416,30 @@ where
+                     values_read
+                 ));
+             }
++            self.valori_della_pagina += values;
++            self.verifica_fine_pagina()?;
+         }
+         Ok(num_records - remaining_records)
+     }
+ 
++    /// PLENORA: at the end of a V2 data page, the values read must be the
++    /// values it declares (`num_values - num_nulls`). The levels decide how
++    /// many values are read; a page whose levels and declared nulls disagree
++    /// (for instance a short bit-packed run read as nulls) was accepted.
++    fn verifica_fine_pagina(&self) -> Result<()> {
++        if self.num_decoded_values != self.num_buffered_values || !self.valori_contati {
++            return Ok(());
++        }
++        match self.valori_dichiarati {
++            Some(dichiarati) if dichiarati != self.valori_della_pagina => Err(general_err!(
++                "data page V2 declares {} values but its levels read {}",
++                dichiarati,
++                self.valori_della_pagina
++            )),
++            _ => Ok(()),
++        }
++    }
++
+     /// Read the next page as a dictionary page. If the next page is not a dictionary page,
+     /// this will return an error.
+     fn read_dictionary_page(&mut self) -> Result<()> {
+@@ -451,6 +488,9 @@ where
+                         } => {
+                             self.num_buffered_values = num_values as _;
+                             self.num_decoded_values = 0;
++                            self.valori_dichiarati = None;
++                            self.valori_della_pagina = 0;
++                            self.valori_contati = true;
+ 
+                             let max_rep_level = self.descr.max_rep_level();
+                             let max_def_level = self.descr.max_def_level();
+@@ -520,6 +560,9 @@ where
+ 
+                             self.num_buffered_values = num_values as _;
+                             self.num_decoded_values = 0;
++                            self.valori_dichiarati = Some((num_values - num_nulls) as usize);
++                            self.valori_della_pagina = 0;
++                            self.valori_contati = true;
+ 
+                             // DataPage v2 only supports RLE encoding for repetition
+                             // levels
+@@ -603,6 +646,7 @@ fn parse_v1_level(
+     encoding: Encoding,
+     buf: Bytes,
+ ) -> Result<(usize, Bytes)> {
++    let _ = (max_level, num_buffered_values);
+     match encoding {
+         Encoding::RLE => {
+             let i32_size = std::mem::size_of::<i32>();
+@@ -617,16 +661,17 @@ fn parse_v1_level(
+             }
+             Err(general_err!("not enough data to read levels"))
+         }
++        // PLENORA: `BIT_PACKED` levels are packed from the most significant
++        // bit, the RLE hybrid from the least; both decoders of this fork read
++        // them in the RLE order, and the nulls moved in silence (a payload
++        // `0x80` over 8 rows put the value in the last row instead of the
++        // first). Deprecated and not written by current writers: not
++        // qualified.
+         #[expect(deprecated)]
+-        Encoding::BIT_PACKED => {
+-            let bit_width = num_required_bits(max_level as u64);
+-            let num_bytes = ceil(num_buffered_values as usize * bit_width as usize, 8);
+-            // PLENORA: the levels the header declares must be in the page.
+-            if num_bytes > buf.len() {
+-                return Err(general_err!("not enough data to read levels"));
+-            }
+-            Ok((num_bytes, buf.slice(..num_bytes)))
+-        }
++        Encoding::BIT_PACKED => Err(nyi_err!(
++            "{}: BIT_PACKED levels",
++            crate::basic::ENCODING_NOT_QUALIFIED
++        )),
+         _ => Err(general_err!("invalid level encoding: {}", encoding)),
+     }
+ }
+--- a/src/column/reader/decoder.rs
++++ b/src/column/reader/decoder.rs
+@@ -25,7 +25,7 @@ use crate::encodings::{
+ };
+ use crate::errors::{ParquetError, Result};
+ use crate::schema::types::ColumnDescPtr;
+-use crate::util::bit_util::{BitReader, num_required_bits};
++use crate::util::bit_util::num_required_bits;
+ 
+ /// Decodes level data
+ pub trait ColumnLevelDecoder {
+@@ -171,6 +171,8 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
+         mut encoding: Encoding,
+         _is_sorted: bool,
+     ) -> Result<()> {
++        // PLENORA: an excluded encoding has the text of every other rejection.
++        crate::basic::check_dictionary_page_encoding(encoding)?;
+         if encoding == Encoding::PLAIN || encoding == Encoding::PLAIN_DICTIONARY {
+             encoding = Encoding::RLE_DICTIONARY
+         }
+@@ -182,9 +184,16 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
+         if encoding == Encoding::RLE_DICTIONARY {
+             let mut dictionary = PlainDecoder::<T>::new(self.descr.type_length());
+             dictionary.set_data(buf, num_values as usize)?;
++            // PLENORA: the dictionary holds exactly the values its header
++            // declares (the count was ignored, a short dictionary was kept).
++            let mut valori = vec![T::T::default(); num_values as usize];
++            let letti = dictionary.get(&mut valori)?;
++            if letti != valori.len() || !dictionary.tutto_consumato() {
++                return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
++            }
+ 
+             let mut decoder = DictDecoder::new();
+-            decoder.set_dict(Box::new(dictionary))?;
++            decoder.con_valori(valori);
+             self.decoders[encoding as usize] = Some(Box::new(decoder));
+             self.decoder_mask.insert(encoding);
+             Ok(())
+@@ -264,8 +273,8 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
+ 
+ const SKIP_BUFFER_SIZE: usize = 1024;
+ 
++// PLENORA: the `Packed` variant is gone with `BIT_PACKED` levels.
+ enum LevelDecoder {
+-    Packed(BitReader, u8, i16),
+     Rle(RleDecoder, i16),
+ }
+ 
+@@ -277,8 +286,12 @@ impl LevelDecoder {
+                 decoder.set_data(data)?;
+                 Ok(Self::Rle(decoder, max_level))
+             }
++            // PLENORA: not qualified (wrong bit order, see `parse_v1_level`).
+             #[expect(deprecated)]
+-            Encoding::BIT_PACKED => Ok(Self::Packed(BitReader::new(data), bit_width, max_level)),
++            Encoding::BIT_PACKED => Err(nyi_err!(
++                "{}: BIT_PACKED levels",
++                crate::basic::ENCODING_NOT_QUALIFIED
++            )),
+             // PLENORA: an error, not `unreachable!`.
+             _ => Err(general_err!("invalid level encoding: {}", encoding)),
+         }
+@@ -286,10 +299,6 @@ impl LevelDecoder {
+ 
+     fn read(&mut self, out: &mut [i16]) -> Result<usize> {
+         let (read, max_level) = match self {
+-            Self::Packed(reader, bit_width, max_level) => (
+-                reader.get_batch::<i16>(out, *bit_width as usize),
+-                *max_level,
+-            ),
+             Self::Rle(reader, max_level) => (reader.get_batch(out)?, *max_level),
+         };
+         // PLENORA: a level above the maximum fits the bit width but is no
+--- a/src/encodings/decoding.rs
++++ b/src/encodings/decoding.rs
+@@ -306,6 +306,18 @@ impl<T: DataType> PlainDecoder<T> {
+     }
+ }
+ 
++impl<T: DataType> PlainDecoder<T> {
++    /// PLENORA: whether every byte of the data was consumed (for booleans,
++    /// up to the last partial byte).
++    pub(crate) fn tutto_consumato(&self) -> bool {
++        match (&self.inner.data, &self.inner.bit_reader) {
++            (Some(data), _) => self.inner.start == data.len(),
++            (None, Some(lettore)) => lettore.get_byte_offset() == lettore.buffer_len(),
++            (None, None) => false,
++        }
++    }
++}
++
+ impl<T: DataType> Decoder<T> for PlainDecoder<T> {
+     #[inline]
+     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
+@@ -374,13 +386,28 @@ impl<T: DataType> DictDecoder<T> {
+     }
+ 
+     /// Decodes and sets values for dictionary using `decoder` decoder.
++    ///
++    /// PLENORA: test only; the column reader decodes and checks the
++    /// dictionary itself, then calls `con_valori`.
++    #[cfg(test)]
+     pub fn set_dict(&mut self, mut decoder: Box<dyn Decoder<T>>) -> Result<()> {
+         let num_values = decoder.values_left();
+         self.dictionary.resize(num_values, T::T::default());
+-        let _ = decoder.get(&mut self.dictionary)?;
++        // PLENORA: the count was ignored; a short dictionary kept default
++        // values as entries.
++        let letti = decoder.get(&mut self.dictionary)?;
++        if letti != num_values {
++            return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
++        }
+         self.has_dictionary = true;
+         Ok(())
+     }
++
++    /// PLENORA: sets the dictionary from values already decoded and checked.
++    pub(crate) fn con_valori(&mut self, valori: Vec<T::T>) {
++        self.dictionary = valori;
++        self.has_dictionary = true;
++    }
+ }
+ 
+ impl<T: DataType> Decoder<T> for DictDecoder<T> {
+--- a/src/file/metadata/parser.rs
++++ b/src/file/metadata/parser.rs
+@@ -336,6 +336,30 @@ fn parse_column_index(
+     Ok(())
+ }
+ 
++/// PLENORA: the page locations of `idx` against the rows of the row group
++/// and the byte range of the column chunk.
++fn verifica_offset_index(
++    idx: &OffsetIndexMetaData,
++    righe: i64,
++    col: &ColumnChunkMetaData,
++) -> crate::errors::Result<()> {
++    let righe = u64::try_from(righe)
++        .map_err(|_| general_err!("invalid offset index: negative row count"))?;
++    let inizio = col
++        .dictionary_page_offset()
++        .unwrap_or_else(|| col.data_page_offset());
++    let inizio = u64::try_from(inizio)
++        .map_err(|_| general_err!("invalid offset index: column chunk out of range"))?;
++    let lunghezza = u64::try_from(col.compressed_size())
++        .map_err(|_| general_err!("invalid offset index: column chunk out of range"))?;
++    crate::file::page_index::offset_index::verifica_posizioni(
++        idx.page_locations(),
++        righe,
++        inizio,
++        lunghezza,
++    )
++}
++
+ fn parse_offset_index(
+     metadata: &ParquetMetaData,
+     offset_index_policy: PageIndexPolicy,
+@@ -360,6 +384,8 @@ fn parse_offset_index(
+                     rg_idx,
+                     col_idx,
+                 )?;
++                // PLENORA: the page locations are checked against the chunk.
++                verifica_offset_index(&idx, rg.num_rows(), col)?;
+                 page_index_builder.put_offset_index(idx, rg_idx, col_idx);
+             } else if offset_index_policy == PageIndexPolicy::Required {
+                 return Err(general_err!("missing offset index"));
+--- a/src/file/page_index/offset_index.rs
++++ b/src/file/page_index/offset_index.rs
+@@ -130,6 +130,50 @@ impl OffsetIndexMetaData {
+     }
+ }
+ 
++/// PLENORA: checks the page locations of a column chunk against the chunk:
++/// first row indexes not negative, not decreasing and within the rows of the
++/// row group, page byte ranges not negative and inside the chunk. The
++/// readers subtract and cast these values without checks (a negative or
++/// decreasing `first_row_index` wrapped to a huge row count).
++pub(crate) fn verifica_posizioni(
++    pagine: &[PageLocation],
++    righe: u64,
++    inizio: u64,
++    lunghezza: u64,
++) -> Result<()> {
++    let fine = inizio
++        .checked_add(lunghezza)
++        .ok_or_else(|| general_err!("invalid offset index: column chunk out of range"))?;
++    let mut riga_precedente = 0u64;
++    for pagina in pagine {
++        let riga = u64::try_from(pagina.first_row_index)
++            .map_err(|_| general_err!("invalid offset index: negative first row index"))?;
++        if riga < riga_precedente || riga > righe {
++            return Err(general_err!(
++                "invalid offset index: first row indexes out of order or beyond the row group"
++            ));
++        }
++        riga_precedente = riga;
++        let posizione = u64::try_from(pagina.offset).ok();
++        let dimensione = u64::try_from(pagina.compressed_page_size).ok();
++        let dentro = match (posizione, dimensione) {
++            (Some(posizione), Some(dimensione)) => {
++                posizione >= inizio
++                    && posizione
++                        .checked_add(dimensione)
++                        .is_some_and(|termine| termine <= fine)
++            }
++            _ => false,
++        };
++        if !dentro {
++            return Err(general_err!(
++                "invalid offset index: page outside its column chunk"
++            ));
++        }
++    }
++    Ok(())
++}
++
+ // hand coding this one because it is very time critical
+ 
+ // Note: this will fail if the fields are either out of order, or if a suboptimal
+--- a/src/file/serialized_reader.rs
++++ b/src/file/serialized_reader.rs
+@@ -419,6 +419,29 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
+     }
+ }
+ 
++/// PLENORA: a page skipped whole is rejected for its value encoding like a
++/// page read (an excluded page was skipped in silence). Only from its header:
++/// a page reached through the offset index has none and is skipped without
++/// this check. The level encodings of a skipped page are not checked: the
++/// header names one even for a column without levels.
++fn verifica_codifica_saltata(header: &PageHeader) -> Result<()> {
++    match header.r#type {
++        PageType::DICTIONARY_PAGE => match header.dictionary_page_header.as_ref() {
++            Some(dizionario) => crate::basic::check_dictionary_page_encoding(dizionario.encoding),
++            None => Ok(()),
++        },
++        PageType::DATA_PAGE => match header.data_page_header.as_ref() {
++            Some(pagina) => crate::basic::check_qualified_value_encoding(pagina.encoding),
++            None => Ok(()),
++        },
++        PageType::DATA_PAGE_V2 => match header.data_page_header_v2.as_ref() {
++            Some(pagina) => crate::basic::check_qualified_value_encoding(pagina.encoding),
++            None => Ok(()),
++        },
++        _ => Ok(()),
++    }
++}
++
+ /// Decodes a [`Page`] from the provided `buffer`
+ pub(crate) fn decode_page(
+     page_header: PageHeader,
+@@ -753,6 +776,14 @@ impl<R: ChunkReader> SerializedPageReader<R> {
+ 
+         let state = match page_locations {
+             Some(locations) => {
++                // PLENORA: the locations come from the caller: checked
++                // against the chunk before any subtraction below.
++                crate::file::page_index::offset_index::verifica_posizioni(
++                    &locations,
++                    total_rows as u64,
++                    start,
++                    len,
++                )?;
+                 // If the offset of the first page doesn't match the start of the column chunk
+                 // then the preceding space must contain a dictionary page.
+                 let dictionary_page = match locations.first() {
+@@ -1189,13 +1220,25 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+                         is_dict: true,
+                     }))
+                 } else if let Some(page) = page_locations.front() {
+-                    let next_rows = page_locations
+-                        .get(1)
+-                        .map(|x| x.first_row_index as usize)
+-                        .unwrap_or(*total_rows);
++                    // PLENORA: checked conversions and subtraction (the
++                    // locations are verified at construction; no wrap here).
++                    let riga = |indice: i64| {
++                        usize::try_from(indice).map_err(|_| {
++                            general_err!("invalid offset index: negative first row index")
++                        })
++                    };
++                    let next_rows = match page_locations.get(1) {
++                        Some(next) => riga(next.first_row_index)?,
++                        None => *total_rows,
++                    };
++                    let rows = next_rows
++                        .checked_sub(riga(page.first_row_index)?)
++                        .ok_or_else(|| {
++                            general_err!("invalid offset index: first row indexes out of order")
++                        })?;
+ 
+                     Ok(Some(PageMetadata {
+-                        num_rows: Some(next_rows - page.first_row_index as usize),
++                        num_rows: Some(rows),
+                         num_levels: None,
+                         is_dict: false,
+                     }))
+@@ -1216,6 +1259,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+                 require_dictionary,
+             } => {
+                 if let Some(buffered_header) = next_page_header.take() {
++                    verifica_codifica_saltata(&buffered_header)?;
+                     verify_page_size(
+                         buffered_header.compressed_page_size,
+                         buffered_header.uncompressed_page_size,
+@@ -1233,6 +1277,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+                         *require_dictionary,
+                     )?;
+                     verify_page_header_len(header_len, *remaining_bytes)?;
++                    verifica_codifica_saltata(&header)?;
+                     verify_page_size(
+                         header.compressed_page_size,
+                         header.uncompressed_page_size,
+--- a/src/util/bit_util.rs
++++ b/src/util/bit_util.rs
+@@ -647,6 +647,11 @@ impl BitReader {
+         self.bit_offset = 0;
+     }
+ 
++    /// PLENORA: the length of the buffer, to check it was consumed.
++    pub(crate) fn buffer_len(&self) -> usize {
++        self.buffer.len()
++    }
++
+     /// Returns the current byte offset, rounded up to the next whole byte.
+     ///
+     /// This is the index of the next byte that a byte-aligned
+--- a/src/util/test_common/page_util.rs
++++ b/src/util/test_common/page_util.rs
+@@ -54,6 +54,9 @@ pub struct DataPageBuilderImpl {
+     def_levels_byte_len: u32,
+     datapage_v2: bool,
+     type_width: i32,
++    // PLENORA: the levels without a value (definition below the maximum):
++    // the reader checks a V2 page against `num_values - num_nulls`.
++    num_nulls: u32,
+ }
+ 
+ impl DataPageBuilderImpl {
+@@ -69,6 +72,7 @@ impl DataPageBuilderImpl {
+             def_levels_byte_len: 0,
+             datapage_v2,
+             type_width: desc.type_length(),
++            num_nulls: 0,
+         }
+     }
+ 
+@@ -102,6 +106,10 @@ impl DataPageBuilder for DataPageBuilderImpl {
+ 
+     fn add_def_levels(&mut self, max_levels: i16, def_levels: &[i16]) {
+         self.num_values = def_levels.len() as u32;
++        self.num_nulls = def_levels
++            .iter()
++            .filter(|level| **level < max_levels)
++            .count() as u32;
+         self.def_levels_byte_len = self.add_levels(max_levels, def_levels);
+     }
+ 
+@@ -146,8 +154,7 @@ impl DataPageBuilder for DataPageBuilderImpl {
+                 buf: Bytes::from(self.buffer),
+                 num_values: self.num_values,
+                 encoding: self.encoding.unwrap(),
+-                num_nulls: 0, /* set to dummy value - don't need this when reading
+-                               * data page */
++                num_nulls: self.num_nulls,
+                 num_rows: self.num_values, /* num_rows only needs in skip_records, now we not support skip REPEATED field,
+                                             * so we can assume num_values == num_rows */
+                 def_levels_byte_len: self.def_levels_byte_len,

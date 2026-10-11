@@ -1,0 +1,509 @@
+--- a/src/arrow/array_reader/byte_array.rs
++++ b/src/arrow/array_reader/byte_array.rs
+@@ -293,9 +293,13 @@ impl ByteArrayDecoder {
+                 ByteArrayDecoderDictionary::new(data, num_levels, num_values)?,
+             ),
+             // PLENORA: the page value count bounds the delta header counts.
+-            Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
+-                ByteArrayDecoderDeltaLength::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
+-            ),
++            Encoding::DELTA_LENGTH_BYTE_ARRAY => {
++                ByteArrayDecoder::DeltaLength(ByteArrayDecoderDeltaLength::new(
++                    data,
++                    num_values.unwrap_or(num_levels),
++                    validate_utf8,
++                )?)
++            }
+             Encoding::DELTA_BYTE_ARRAY => ByteArrayDecoder::DeltaByteArray(
+                 ByteArrayDecoderDelta::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
+             ),
+--- a/src/arrow/array_reader/byte_view_array.rs
++++ b/src/arrow/array_reader/byte_view_array.rs
+@@ -250,12 +250,20 @@ impl ByteViewArrayDecoder {
+                 )?)
+             }
+             // PLENORA: the page value count bounds the delta header counts.
+-            Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteViewArrayDecoder::DeltaLength(
+-                ByteViewArrayDecoderDeltaLength::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
+-            ),
+-            Encoding::DELTA_BYTE_ARRAY => ByteViewArrayDecoder::DeltaByteArray(
+-                ByteViewArrayDecoderDelta::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
+-            ),
++            Encoding::DELTA_LENGTH_BYTE_ARRAY => {
++                ByteViewArrayDecoder::DeltaLength(ByteViewArrayDecoderDeltaLength::new(
++                    data,
++                    num_values.unwrap_or(num_levels),
++                    validate_utf8,
++                )?)
++            }
++            Encoding::DELTA_BYTE_ARRAY => {
++                ByteViewArrayDecoder::DeltaByteArray(ByteViewArrayDecoderDelta::new(
++                    data,
++                    num_values.unwrap_or(num_levels),
++                    validate_utf8,
++                )?)
++            }
+             _ => {
+                 return Err(general_err!(
+                     "unsupported encoding for byte array: {}",
+--- a/src/arrow/arrow_reader/mod.rs
++++ b/src/arrow/arrow_reader/mod.rs
+@@ -826,6 +826,26 @@ impl ArrowReaderOptions {
+         self
+     }
+ 
++    /// PLENORA: bound what decoding the footer may reserve; see
++    /// [`ParquetMetaDataOptions::set_footer_memory_budget`].
++    ///
++    /// [`ParquetMetaDataOptions::set_footer_memory_budget`]:
++    /// crate::file::metadata::ParquetMetaDataOptions::set_footer_memory_budget
++    pub fn with_footer_memory_budget(mut self, val: u64) -> Self {
++        self.metadata_options.set_footer_memory_budget(val);
++        self
++    }
++
++    /// PLENORA: the maximum depth of the footer schema; see
++    /// [`ParquetMetaDataOptions::set_max_schema_depth`].
++    ///
++    /// [`ParquetMetaDataOptions::set_max_schema_depth`]:
++    /// crate::file::metadata::ParquetMetaDataOptions::set_max_schema_depth
++    pub fn with_max_schema_depth(mut self, val: usize) -> Self {
++        self.metadata_options.set_max_schema_depth(val);
++        self
++    }
++
+     /// Provide the file decryption properties to use when reading encrypted parquet files.
+     ///
+     /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.
+--- a/src/file/metadata/mod.rs
++++ b/src/file/metadata/mod.rs
+@@ -90,7 +90,7 @@ use crate::{
+ };
+ 
+ pub use footer_tail::FooterTail;
+-pub use options::{ParquetMetaDataOptions, ParquetStatisticsPolicy};
++pub use options::{DEFAULT_MAX_SCHEMA_DEPTH, ParquetMetaDataOptions, ParquetStatisticsPolicy};
+ pub use push_decoder::ParquetMetaDataPushDecoder;
+ pub use reader::{PageIndexPolicy, ParquetMetaDataReader};
+ use std::io::Write;
+--- a/src/file/metadata/options.rs
++++ b/src/file/metadata/options.rs
+@@ -94,8 +94,19 @@ pub struct ParquetMetaDataOptions {
+     encoding_stats_policy: ParquetStatisticsPolicy,
+     column_stats_policy: ParquetStatisticsPolicy,
+     size_stats_policy: ParquetStatisticsPolicy,
++    // PLENORA: limits on what decoding the footer may cost. See
++    // `DEFAULT_MAX_SCHEMA_DEPTH` and `set_footer_memory_budget`.
++    max_schema_depth: usize,
++    footer_memory_budget: Option<u64>,
+ }
+ 
++/// PLENORA: the default maximum depth of the footer schema.
++///
++/// Converting the schema is recursive, and an unbounded depth is a way to
++/// exhaust the stack (an abort, not an error). Real schemas nest a few levels;
++/// GeoParquet native geometries reach five or six.
++pub const DEFAULT_MAX_SCHEMA_DEPTH: usize = 64;
++
+ impl Default for ParquetMetaDataOptions {
+     fn default() -> Self {
+         Self {
+@@ -104,6 +115,8 @@ impl Default for ParquetMetaDataOptions {
+             encoding_stats_policy: ParquetStatisticsPolicy::KeepAll,
+             column_stats_policy: ParquetStatisticsPolicy::KeepAll,
+             size_stats_policy: ParquetStatisticsPolicy::KeepAll,
++            max_schema_depth: DEFAULT_MAX_SCHEMA_DEPTH,
++            footer_memory_budget: None,
+         }
+     }
+ }
+@@ -131,6 +144,49 @@ impl ParquetMetaDataOptions {
+         self
+     }
+ 
++    /// PLENORA: the maximum depth of the footer schema (defaults to
++    /// [`DEFAULT_MAX_SCHEMA_DEPTH`]). A deeper schema is an error before it is
++    /// converted.
++    pub fn max_schema_depth(&self) -> usize {
++        self.max_schema_depth
++    }
++
++    /// PLENORA: set [`Self::max_schema_depth`].
++    pub fn set_max_schema_depth(&mut self, val: usize) {
++        self.max_schema_depth = val;
++    }
++
++    /// PLENORA: call [`Self::set_max_schema_depth`] and return `Self` for chaining.
++    pub fn with_max_schema_depth(mut self, val: usize) -> Self {
++        self.set_max_schema_depth(val);
++        self
++    }
++
++    /// PLENORA: the memory budget for decoding the footer, if any (defaults to
++    /// `None`, no budget).
++    pub fn footer_memory_budget(&self) -> Option<u64> {
++        self.footer_memory_budget
++    }
++
++    /// PLENORA: bound what decoding the footer may reserve.
++    ///
++    /// The decoder sizes lists from the counts the footer declares, copies its
++    /// strings, and builds one path per leaf column from the root (depth times
++    /// leaves). With a budget, every such reservation is charged **before** it
++    /// is made -- the footer bytes themselves (twice: the buffer and the owned
++    /// copies of its strings and binaries), each list (`count * size_of`),
++    /// each column chunk, and the cost of the leaf paths -- and exceeding the
++    /// budget is an error instead of an allocation.
++    pub fn set_footer_memory_budget(&mut self, val: u64) {
++        self.footer_memory_budget = Some(val);
++    }
++
++    /// PLENORA: call [`Self::set_footer_memory_budget`] and return `Self` for chaining.
++    pub fn with_footer_memory_budget(mut self, val: u64) -> Self {
++        self.set_footer_memory_budget(val);
++        self
++    }
++
+     /// Returns whether to present the [`encoding_stats`] field of the Parquet `ColumnMetaData`
+     /// as a bitmask (defaults to `true`).
+     ///
+--- a/src/file/metadata/parser.rs
++++ b/src/file/metadata/parser.rs
+@@ -83,6 +83,13 @@ mod inner {
+             }
+         }
+ 
++        /// PLENORA: the footer memory budget of the options, if any.
++        pub(crate) fn footer_memory_budget(&self) -> Option<u64> {
++            self.metadata_options
++                .as_deref()
++                .and_then(ParquetMetaDataOptions::footer_memory_budget)
++        }
++
+         pub(crate) fn decode_metadata(
+             &self,
+             buf: &[u8],
+@@ -186,6 +193,13 @@ mod inner {
+             }
+         }
+ 
++        /// PLENORA: the footer memory budget of the options, if any.
++        pub(crate) fn footer_memory_budget(&self) -> Option<u64> {
++            self.metadata_options
++                .as_deref()
++                .and_then(ParquetMetaDataOptions::footer_memory_budget)
++        }
++
+         pub(crate) fn decode_metadata(
+             &self,
+             buf: &[u8],
+--- a/src/file/metadata/push_decoder.rs
++++ b/src/file/metadata/push_decoder.rs
+@@ -419,6 +419,19 @@ impl ParquetMetaDataPushDecoder {
+                         return Ok(DecodeResult::Data(*metadata));
+                     };
+ 
++                    // PLENORA: the column index and the offset index are
++                    // decoded by `decode_column_index` / `decode_offset_index`,
++                    // which carry no budget, and their bytes are read before
++                    // decoding. With a footer memory budget the page index is
++                    // refused here, before a byte of it is requested: the
++                    // budget promises a bound that those decoders cannot keep.
++                    if self.metadata_parser.footer_memory_budget().is_some() {
++                        return Err(general_err!(
++                            "page index requested with a footer memory budget: \
++                             the page index decoders are not bounded by it"
++                        ));
++                    }
++
+                     if !self.buffers.has_range(&page_index_range) {
+                         self.state = DecodeState::ReadingPageIndex(metadata);
+                         return Ok(needs_range(page_index_range));
+--- a/src/file/metadata/thrift/mod.rs
++++ b/src/file/metadata/thrift/mod.rs
+@@ -554,6 +554,8 @@ fn read_column_chunk(
+     col_index: usize,
+     options: Option<&ParquetMetaDataOptions>,
+ ) -> Result<ColumnChunkMetaData> {
++    // PLENORA: the column chunks are charged by `read_row_group`, all at once,
++    // before `RowGroupMetaDataBuilder::new` reserves their capacity.
+     // create a default initialized ColumnMetaData
+     let mut col = ColumnChunkMetaDataBuilder::new(column_descr.clone()).build()?;
+ 
+@@ -641,6 +643,13 @@ fn read_row_group(
+     schema_descr: &Arc<SchemaDescriptor>,
+     options: Option<&ParquetMetaDataOptions>,
+ ) -> Result<RowGroupMetaData> {
++    // PLENORA: `RowGroupMetaDataBuilder::new` reserves one `ColumnChunkMetaData`
++    // per leaf column of the schema before a single chunk is read: the whole
++    // capacity is charged to the budget here, once, and not again per chunk.
++    prot.reserve(
++        schema_descr.num_columns(),
++        std::mem::size_of::<ColumnChunkMetaData>(),
++    )?;
+     // create default initialized RowGroupMetaData
+     let mut row_group = RowGroupMetaDataBuilder::new(schema_descr.clone()).build_unchecked();
+ 
+@@ -741,6 +750,9 @@ pub(crate) fn parquet_schema_from_bytes(buf: &[u8]) -> Result<SchemaDescriptor>
+             2 => {
+                 // read schema and convert to SchemaDescriptor for use when reading row groups
+                 let val = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
++                // PLENORA: the same depth bound as the footer decoder; there
++                // is no budget on this path.
++                schema_cost(&val, crate::file::metadata::DEFAULT_MAX_SCHEMA_DEPTH)?;
+                 let val = parquet_schema_from_array(val)?;
+                 return Ok(SchemaDescriptor::new(val));
+             }
+@@ -751,13 +763,85 @@ pub(crate) fn parquet_schema_from_bytes(buf: &[u8]) -> Result<SchemaDescriptor>
+     Err(general_err!("Input does not contain a schema"))
+ }
+ 
++// PLENORA: what converting the flattened schema will cost, and whether it is
++// too deep to convert.
++//
++// `parquet_schema_from_array` recurses once per level, with no bound of its
++// own, and `SchemaDescriptor::new` gives every leaf column its whole path from
++// the root (a `String` per level): depth times leaves, quadratic in the bytes
++// of the footer. The walk here is iterative and mirrors the conversion: an
++// element with `num_children` above zero opens a group that the following
++// elements fill, any other element is a leaf if it has a physical type. The
++// cost is an upper bound -- the root's name is counted in every path -- and
++// a malformed tree is left to the conversion, which rejects it.
++fn schema_cost(elements: &[SchemaElement<'_>], max_depth: usize) -> Result<usize> {
++    use crate::schema::types::{ColumnDescriptor, Type};
++    use std::mem::size_of;
++
++    let too_costly = || general_err!("Parquet schema too costly to convert");
++    // (children still to read, path cost up to and including this group)
++    let mut open: Vec<(usize, usize)> = Vec::new();
++    let mut cost: usize = 0;
++    for element in elements {
++        if open.len() >= max_depth {
++            return Err(general_err!(
++                "Parquet schema deeper than {} levels",
++                max_depth
++            ));
++        }
++        let parent_path = open.last().map_or(0, |(_, path)| *path);
++        let path = parent_path
++            .checked_add(size_of::<String>() + element.name.len())
++            .ok_or_else(too_costly)?;
++        // every element becomes a type node behind an `Arc`, and a pointer in
++        // its parent's list of fields
++        cost = cost
++            .checked_add(size_of::<Type>() + 3 * size_of::<usize>())
++            .ok_or_else(too_costly)?;
++        if let Some(parent) = open.last_mut() {
++            parent.0 = parent.0.saturating_sub(1);
++        }
++        match element.num_children {
++            Some(n) if n > 0 => {
++                let n = usize::try_from(n).map_err(|_| too_costly())?;
++                open.push((n, path));
++            }
++            _ => {
++                if element.r#type.is_some() {
++                    // the descriptor behind its `Arc`, its slot in the leaves
++                    // and in `leaf_to_base`, and the path
++                    cost = cost
++                        .checked_add(size_of::<ColumnDescriptor>() + 4 * size_of::<usize>())
++                        .and_then(|c| c.checked_add(path))
++                        .ok_or_else(too_costly)?;
++                }
++            }
++        }
++        while open.last().is_some_and(|(left, _)| *left == 0) {
++            open.pop();
++        }
++    }
++    Ok(cost)
++}
++
+ /// Create [`ParquetMetaData`] from thrift input. Note that this only decodes the file metadata in
+ /// the Parquet footer. Page indexes will need to be added later.
+ pub(crate) fn parquet_metadata_from_bytes(
+     buf: &[u8],
+     options: Option<&ParquetMetaDataOptions>,
+ ) -> Result<ParquetMetaData> {
+-    let mut prot = ThriftSliceInputProtocol::new(buf);
++    // PLENORA: with a budget, every reservation the decoder makes is charged
++    // before it is made. The footer bytes count twice: the buffer, and the
++    // owned copies of its strings and binaries, which are at most as many.
++    let mut prot = ThriftSliceInputProtocol::with_budget(
++        buf,
++        options.and_then(ParquetMetaDataOptions::footer_memory_budget),
++    );
++    prot.reserve(buf.len(), 2)?;
++    let max_schema_depth = options.map_or(
++        crate::file::metadata::DEFAULT_MAX_SCHEMA_DEPTH,
++        ParquetMetaDataOptions::max_schema_depth,
++    );
+ 
+     // begin reading the file metadata
+     let mut version: Option<i32> = None;
+@@ -805,6 +889,10 @@ pub(crate) fn parquet_metadata_from_bytes(
+                     // read schema and convert to SchemaDescriptor for use when reading row groups
+                     let val =
+                         read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
++                    // PLENORA: depth and leaf-path cost, before the recursive
++                    // conversion and before `SchemaDescriptor::new`.
++                    let cost = schema_cost(&val, max_schema_depth)?;
++                    prot.reserve(cost, 1)?;
+                     let val = parquet_schema_from_array(val)?;
+                     schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
+                 }
+@@ -821,8 +909,10 @@ pub(crate) fn parquet_metadata_from_bytes(
+                 // check for list of struct
+                 validate_list_type(ElementType::Struct, &list_ident)?;
+                 // PLENORA: capacity bounded by the remaining footer bytes.
+-                let mut rg_vec =
+-                    Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&prot, list_ident.size)?);
++                let capacity = crate::parquet_thrift::capacita_dichiarata(&prot, list_ident.size)?;
++                // PLENORA: and charged to the budget.
++                prot.reserve(capacity, std::mem::size_of::<RowGroupMetaData>())?;
++                let mut rg_vec = Vec::with_capacity(capacity);
+ 
+                 for _ in 0..list_ident.size {
+                     rg_vec.push(read_row_group(&mut prot, schema_descr, options)?);
+--- a/src/file/page_index/offset_index.rs
++++ b/src/file/page_index/offset_index.rs
+@@ -92,8 +92,10 @@ impl OffsetIndexMetaData {
+         let list_ident = prot.read_list_begin()?;
+         validate_list_type(ElementType::Struct, &list_ident)?;
+         // PLENORA: capacity bounded by the remaining input bytes.
+-        let mut page_locations =
+-            Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&*prot, list_ident.size)?);
++        let mut page_locations = Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(
++            &*prot,
++            list_ident.size,
++        )?);
+         for _ in 0..list_ident.size {
+             page_locations.push(read_page_location(prot)?);
+         }
+--- a/src/file/serialized_reader.rs
++++ b/src/file/serialized_reader.rs
+@@ -205,6 +205,26 @@ impl ReadOptionsBuilder {
+         self
+     }
+ 
++    /// PLENORA: bound what decoding the footer may reserve; see
++    /// [`ParquetMetaDataOptions::set_footer_memory_budget`].
++    ///
++    /// [`ParquetMetaDataOptions::set_footer_memory_budget`]:
++    /// crate::file::metadata::ParquetMetaDataOptions::set_footer_memory_budget
++    pub fn with_footer_memory_budget(mut self, val: u64) -> Self {
++        self.metadata_options.set_footer_memory_budget(val);
++        self
++    }
++
++    /// PLENORA: the maximum depth of the footer schema; see
++    /// [`ParquetMetaDataOptions::set_max_schema_depth`].
++    ///
++    /// [`ParquetMetaDataOptions::set_max_schema_depth`]:
++    /// crate::file::metadata::ParquetMetaDataOptions::set_max_schema_depth
++    pub fn with_max_schema_depth(mut self, val: usize) -> Self {
++        self.metadata_options.set_max_schema_depth(val);
++        self
++    }
++
+     /// Seal the builder and return the read options
+     pub fn build(self) -> ReadOptions {
+         let props = self
+@@ -270,8 +290,11 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
+ 
+         // If page indexes are desired, build them with the filtered set of row groups
+         if options.enable_page_index {
++            // PLENORA: the same metadata options as the footer, so that a
++            // footer memory budget also governs (and refuses) the page index.
+             let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
+-                .with_page_index_policy(PageIndexPolicy::Required);
++                .with_page_index_policy(PageIndexPolicy::Required)
++                .with_metadata_options(Some(options.metadata_options.clone()));
+             reader.read_page_indexes(&chunk_reader)?;
+             metadata = reader.finish()?;
+         }
+@@ -653,8 +676,8 @@ impl LimitiPagina {
+             _ => None,
+         };
+         if let Some(valori) = valori {
+-            let valori = u64::try_from(valori)
+-                .map_err(|_| general_err!("negative page value count"))?;
++            let valori =
++                u64::try_from(valori).map_err(|_| general_err!("negative page value count"))?;
+             if valori > self.valori {
+                 return Err(general_err!(
+                     "page value count exceeds the column chunk value count"
+--- a/src/parquet_thrift.rs
++++ b/src/parquet_thrift.rs
+@@ -305,6 +305,12 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
+         None
+     }
+ 
++    /// PLENORA: charge `count * size` bytes against the decoding budget, if
++    /// the protocol carries one, before the caller reserves them.
++    fn reserve(&self, _count: usize, _size: usize) -> crate::errors::Result<()> {
++        Ok(())
++    }
++
+     /// Read a ULEB128 encoded unsigned varint from the input.
+     fn read_vlq(&mut self) -> ThriftProtocolResult<u64> {
+         // try the happy path first
+@@ -585,12 +591,25 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
+ /// A high performance Thrift reader that reads from a slice of bytes.
+ pub(crate) struct ThriftSliceInputProtocol<'a> {
+     buf: &'a [u8],
++    // PLENORA: what is left of the decoding budget, if there is one.
++    budget: std::cell::Cell<Option<u64>>,
+ }
+ 
+ impl<'a> ThriftSliceInputProtocol<'a> {
+     /// Create a new `ThriftSliceInputProtocol` using the bytes in `buf`.
+     pub fn new(buf: &'a [u8]) -> Self {
+-        Self { buf }
++        Self {
++            buf,
++            budget: std::cell::Cell::new(None),
++        }
++    }
++
++    /// PLENORA: the same protocol, charging reservations against `budget`.
++    pub fn with_budget(buf: &'a [u8], budget: Option<u64>) -> Self {
++        Self {
++            buf,
++            budget: std::cell::Cell::new(budget),
++        }
+     }
+ 
+     /// Return the current buffer as a slice.
+@@ -637,6 +656,22 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a>
+     fn remaining_bytes(&self) -> Option<usize> {
+         Some(self.buf.len())
+     }
++
++    fn reserve(&self, count: usize, size: usize) -> crate::errors::Result<()> {
++        let Some(left) = self.budget.get() else {
++            return Ok(());
++        };
++        let cost = (count as u64).checked_mul(size as u64);
++        match cost {
++            Some(cost) if cost <= left => {
++                self.budget.set(Some(left - cost));
++                Ok(())
++            }
++            _ => Err(general_err!(
++                "Parquet footer metadata exceeds the decoding memory budget"
++            )),
++        }
++    }
+ }
+ 
+ /// A Thrift input protocol that wraps a [`Read`] object.
+@@ -785,6 +820,8 @@ where
+             remaining
+         ));
+     }
++    // PLENORA: the reservation is charged to the budget before it is made.
++    prot.reserve(size, std::mem::size_of::<T>())?;
+     let mut res = Vec::with_capacity(size);
+     for _ in 0..list_ident.size {
+         let val = T::read_thrift(prot)?;

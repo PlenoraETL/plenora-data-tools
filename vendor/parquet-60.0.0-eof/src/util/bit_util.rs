@@ -277,6 +277,24 @@ where
     <T>::from_le_bytes(buffer)
 }
 
+/// PLENORA: the zero bytes a v1 data page may carry after the end of its
+/// value stream: fastparquet appends exactly 8 zero bytes to every v1 data
+/// page, after the values, also `PLAIN` (`writer.py`, `8 * b'\x00'`). Only
+/// there (not after levels, not in a v2 page), at most this many, all zero.
+pub(crate) const CODA_FASTPARQUET: usize = 8;
+
+/// PLENORA: the groups of the bit-packed runs of DuckDB: it writes them in
+/// blocks of 32 groups (256 values) and pads the last block with stale bytes,
+/// not zeros. Whole groups after the last value are padding only in a run of
+/// exactly this many groups; what they hold is not read.
+pub(crate) const BLOCCO_DUCKDB: usize = 32;
+
+/// PLENORA: whether `dati[da..]` is at most `massimo` bytes, all zero.
+pub(crate) fn coda_di_zeri(dati: &[u8], da: usize, massimo: usize) -> bool {
+    dati.get(da..)
+        .is_some_and(|coda| coda.len() <= massimo && coda.iter().all(|byte| *byte == 0))
+}
+
 /// Returns the ceil of value/divisor.
 ///
 /// This function should be removed after
@@ -647,6 +665,21 @@ impl BitReader {
         self.bit_offset = 0;
     }
 
+    /// PLENORA: the length of the buffer, to check it was consumed.
+    pub(crate) fn buffer_len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    /// PLENORA: the bits consumed so far.
+    pub(crate) fn bit_letti(&self) -> usize {
+        self.byte_offset * 8 + self.bit_offset
+    }
+
+    /// PLENORA: the bytes of the buffer.
+    pub(crate) fn dati(&self) -> &[u8] {
+        &self.buffer
+    }
+
     /// Returns the current byte offset, rounded up to the next whole byte.
     ///
     /// This is the index of the next byte that a byte-aligned
@@ -878,27 +911,48 @@ impl BitReader {
     /// Panics if the encoded integer is longer than [`MAX_VLQ_BYTE_LEN`]
     /// bytes (bad input).
     pub fn get_vlq_int(&mut self) -> Option<i64> {
+        // PLENORA: a malformed varint is `None` too, like the end of the
+        // data; callers that must tell them apart use `get_vlq_int_checked`.
+        self.get_vlq_int_checked().ok().flatten()
+    }
+
+    /// PLENORA: [`Self::get_vlq_int`] that tells a malformed varint (an
+    /// error) from the end of the data (`Ok(None)`). A varint longer than
+    /// [`MAX_VLQ_BYTE_LEN`] bytes panicked, and bits beyond 64 were dropped in
+    /// silence (`<< 63` of a 7-bit group): both are errors now.
+    pub fn get_vlq_int_checked(&mut self) -> Result<Option<i64>> {
         // Align to byte boundary once, then read bytes directly
         self.byte_offset = self.get_byte_offset();
         self.bit_offset = 0;
 
         let buf = &self.buffer[self.byte_offset..];
-        let mut shift = 0;
-        let mut v: i64 = 0;
+        let mut v: u64 = 0;
 
         for (i, &byte) in buf.iter().enumerate() {
-            v |= ((byte & 0x7F) as i64) << shift;
-            shift += 7;
-            assert!(
-                shift <= MAX_VLQ_BYTE_LEN * 7,
-                "Num of bytes exceed MAX_VLQ_BYTE_LEN ({MAX_VLQ_BYTE_LEN})"
-            );
+            if i >= MAX_VLQ_BYTE_LEN {
+                return Err(general_err!(
+                    "varint longer than {} bytes",
+                    MAX_VLQ_BYTE_LEN
+                ));
+            }
+            let group = u64::from(byte & 0x7F);
+            let shift = 7 * i;
+            if shift == 63 && group > 1 {
+                return Err(general_err!("varint beyond 64 bits"));
+            }
+            v |= group << shift;
             if byte & 0x80 == 0 {
                 self.byte_offset += i + 1;
-                return Some(v);
+                return Ok(Some(v as i64));
             }
         }
-        None
+        // PLENORA: the data ends inside a varint (continuation bit set on the
+        // last byte): malformed, not the end of the data.
+        if buf.is_empty() {
+            Ok(None)
+        } else {
+            Err(general_err!("varint truncated at the end of the data"))
+        }
     }
 
     /// Reads a zigzag-VLQ-encoded little-endian integer from the

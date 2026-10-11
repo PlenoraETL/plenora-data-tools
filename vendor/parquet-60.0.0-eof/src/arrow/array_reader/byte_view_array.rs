@@ -20,7 +20,7 @@ use crate::arrow::buffer::view_buffer::ViewBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
-use crate::basic::{ConvertedType, Encoding};
+use crate::basic::Encoding;
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::data_type::Int32Type;
@@ -56,6 +56,10 @@ pub fn make_byte_view_array_reader(
             _ => ArrowType::BinaryView,
         },
     };
+    crate::arrow::array_reader::byte_array::check_text_annotation(
+        column_desc.as_ref(),
+        &data_type,
+    )?;
 
     match data_type {
         ArrowType::BinaryView | ArrowType::Utf8View => {
@@ -151,7 +155,8 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
     type Buffer = ViewBuffer;
 
     fn new(desc: &ColumnDescPtr) -> Self {
-        let validate_utf8 = desc.converted_type() == ConvertedType::UTF8;
+        // PLENORA: `JSON` and `ENUM` are text too.
+        let validate_utf8 = crate::arrow::array_reader::byte_array::annotated_as_text(desc);
         Self {
             dict: None,
             decoder: None,
@@ -166,21 +171,18 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
         encoding: Encoding,
         _is_sorted: bool,
     ) -> Result<()> {
-        if !matches!(
-            encoding,
-            Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
-        ) {
-            return Err(nyi_err!(
-                "Invalid/Unsupported encoding type for dictionary: {}",
-                encoding
-            ));
-        }
+        // PLENORA: an excluded encoding has the text of every other rejection.
+        crate::basic::check_dictionary_page_encoding(encoding)?;
 
         let num_values = num_values as usize;
         let mut buffer = ViewBuffer::with_capacity(num_values);
         let mut decoder =
             ByteViewArrayDecoderPlain::new(buf, num_values, Some(num_values), self.validate_utf8);
-        decoder.read(&mut buffer, usize::MAX)?;
+        let letti = decoder.read(&mut buffer, usize::MAX)?;
+        // PLENORA: the count was ignored; a short dictionary was kept.
+        if letti != num_values || decoder.offset != decoder.buf.len() {
+            return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
+        }
         self.dict = Some(buffer);
         Ok(())
     }
@@ -219,6 +221,14 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
 
         decoder.skip(num_values, self.dict.as_ref())
     }
+
+    fn verifica_fine_pagina(&self, coda: usize) -> Result<()> {
+        crate::column::reader::decoder::fine_esatta(
+            self.decoder
+                .as_ref()
+                .is_some_and(|decoder| decoder.fine_esatta(coda)),
+        )
+    }
 }
 
 /// A generic decoder from uncompressed parquet value data to [`ViewBuffer`]
@@ -230,6 +240,15 @@ pub enum ByteViewArrayDecoder {
 }
 
 impl ByteViewArrayDecoder {
+    /// PLENORA: the page ends with the values read.
+    pub fn fine_esatta(&self, coda: usize) -> bool {
+        match self {
+            Self::Plain(d) => crate::util::bit_util::coda_di_zeri(&d.buf, d.offset, coda),
+            Self::Dictionary(d) => d.decoder.fine_esatta(coda),
+            Self::DeltaLength(_) | Self::DeltaByteArray(_) => false,
+        }
+    }
+
     pub fn new(
         encoding: Encoding,
         data: Bytes,
@@ -237,6 +256,8 @@ impl ByteViewArrayDecoder {
         num_values: Option<usize>,
         validate_utf8: bool,
     ) -> Result<Self> {
+        // PLENORA: only the qualified encodings are read, page by page.
+        crate::basic::check_qualified_value_encoding(encoding)?;
         let decoder = match encoding {
             Encoding::PLAIN => ByteViewArrayDecoder::Plain(ByteViewArrayDecoderPlain::new(
                 data,
@@ -250,12 +271,20 @@ impl ByteViewArrayDecoder {
                 )?)
             }
             // PLENORA: the page value count bounds the delta header counts.
-            Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteViewArrayDecoder::DeltaLength(
-                ByteViewArrayDecoderDeltaLength::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
-            ),
-            Encoding::DELTA_BYTE_ARRAY => ByteViewArrayDecoder::DeltaByteArray(
-                ByteViewArrayDecoderDelta::new(data, num_values.unwrap_or(num_levels), validate_utf8)?,
-            ),
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => {
+                ByteViewArrayDecoder::DeltaLength(ByteViewArrayDecoderDeltaLength::new(
+                    data,
+                    num_values.unwrap_or(num_levels),
+                    validate_utf8,
+                )?)
+            }
+            Encoding::DELTA_BYTE_ARRAY => {
+                ByteViewArrayDecoder::DeltaByteArray(ByteViewArrayDecoderDelta::new(
+                    data,
+                    num_values.unwrap_or(num_levels),
+                    validate_utf8,
+                )?)
+            }
             _ => {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",
@@ -454,8 +483,13 @@ impl ByteViewArrayDecoderPlain {
             }
             let len_bytes: [u8; 4] = buf[self.offset..self.offset + 4].try_into().unwrap();
             let len = u32::from_le_bytes(len_bytes) as usize;
+            // PLENORA: as in the byte array decoder.
+            let end = (self.offset + 4)
+                .checked_add(len)
+                .filter(|end| *end <= buf.len())
+                .ok_or_else(|| ParquetError::EOF("eof skipping byte array".into()))?;
             skip += 1;
-            self.offset = self.offset + 4 + len;
+            self.offset = end;
         }
         self.max_remaining_values -= skip;
         Ok(skip)
@@ -584,24 +618,15 @@ impl ByteViewArrayDecoderDeltaLength {
         let values = len_decoder.values_left();
 
         let mut lengths = vec![0; values];
-        len_decoder.get(&mut lengths)?;
-
-        let mut total_bytes = 0;
-
-        for l in &lengths {
-            if *l < 0 {
-                return Err(ParquetError::General(
-                    "negative delta length byte array length".to_string(),
-                ));
-            }
-            total_bytes += *l as usize;
+        // PLENORA: a short read is an error.
+        if len_decoder.get(&mut lengths)? != values {
+            return Err(eof_err!("eof decoding delta length byte array lengths"));
         }
-
-        if total_bytes + len_decoder.get_offset() > data.len() {
-            return Err(ParquetError::General(
-                "Insufficient delta length byte array bytes".to_string(),
-            ));
-        }
+        crate::encodings::decoding::check_delta_lengths(
+            &lengths,
+            len_decoder.get_offset(),
+            data.len(),
+        )?;
 
         Ok(Self {
             lengths,

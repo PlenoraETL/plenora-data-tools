@@ -28,7 +28,7 @@ use crate::column::reader::decoder::{
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::{ceil, num_required_bits, read_num_bytes};
+use crate::util::bit_util::read_num_bytes;
 
 pub(crate) mod decoder;
 
@@ -136,6 +136,17 @@ pub struct GenericColumnReader<R, D, V> {
 
     /// The decoder for the values
     values_decoder: V,
+
+    /// PLENORA: the values a V2 data page declares (`num_values - num_nulls`),
+    /// none for a V1 page.
+    valori_dichiarati: Option<usize>,
+
+    /// PLENORA: the values read from the current page so far.
+    valori_della_pagina: usize,
+
+    /// PLENORA: the zero bytes the value stream of the current page may be
+    /// followed by (`CODA_FASTPARQUET` in a v1 page, 0 in a v2 page).
+    coda_dei_valori: usize,
 }
 
 impl<V> GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelDecoderImpl, V>
@@ -184,6 +195,9 @@ where
             num_decoded_values: 0,
             values_decoder,
             has_record_delimiter: false,
+            valori_dichiarati: None,
+            valori_della_pagina: 0,
+            coda_dei_valori: 0,
         }
     }
 
@@ -296,6 +310,10 @@ where
             }
 
             self.num_decoded_values += levels_to_read;
+            self.valori_della_pagina += values_read;
+            if self.num_decoded_values == self.num_buffered_values {
+                self.verifica_fine_pagina()?;
+            }
             total_records_read += records_read;
             total_levels_read += levels_to_read;
             total_values_read += values_read;
@@ -306,101 +324,89 @@ where
 
     /// Skips over `num_records` records, where records are delimited by repetition levels of 0
     ///
+    /// PLENORA: only whole pages, from their header (their value encoding is
+    /// checked by the page reader). A skip inside a page (a page already
+    /// loaded, a page with more rows than the records to skip, or rows not
+    /// known from the header) is `SKIP_NOT_QUALIFIED`: it did not decode what
+    /// it passed over (values, dictionary indices, declared counts), and its
+    /// loops had no guard of progress. Each turn of the loop that remains
+    /// consumes a page (skipped, or read as a dictionary) or returns: the
+    /// progress is in pages, which the page reader bounds.
+    ///
     /// # Returns
     ///
     /// Returns the number of records skipped
     pub fn skip_records(&mut self, num_records: usize) -> Result<usize> {
         let mut remaining_records = num_records;
         while remaining_records != 0 {
-            if self.num_buffered_values == self.num_decoded_values {
-                let Some(metadata) = self.page_reader.peek_next_page()? else {
-                    return Ok(num_records - remaining_records);
-                };
-
-                // If dictionary, we must read it
-                if metadata.is_dict {
-                    self.read_dictionary_page()?;
-                    continue;
-                }
-
-                // If page has less rows than the remaining records to
-                // be skipped, skip entire page
-                let rows = metadata.num_rows.or_else(|| {
-                    // If no repetition levels, num_levels == num_rows
-                    self.rep_level_decoder
-                        .is_none()
-                        .then_some(metadata.num_levels)?
-                });
-
-                if let Some(rows) = rows
-                    && rows <= remaining_records
-                {
-                    self.page_reader.skip_next_page()?;
-                    remaining_records -= rows;
-                    continue;
-                }
-                // because self.num_buffered_values == self.num_decoded_values means
-                // we need reads a new page and set up the decoders for levels
-                if !self.read_new_page()? {
-                    return Ok(num_records - remaining_records);
-                }
+            if self.num_buffered_values != self.num_decoded_values {
+                return Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED));
             }
-
-            // start skip values in page level
-
-            // The number of levels in the current data page
-            let remaining_levels = self.num_buffered_values - self.num_decoded_values;
-
-            let (records_read, rep_levels_read) = match self.rep_level_decoder.as_mut() {
-                Some(decoder) => {
-                    let (mut records_read, levels_read) =
-                        decoder.skip_rep_levels(remaining_records, remaining_levels)?;
-
-                    if levels_read == remaining_levels && self.has_record_delimiter {
-                        check_partial_record_fits(records_read, remaining_records)?;
-                        records_read += decoder.flush_partial() as usize;
-                    }
-
-                    (records_read, levels_read)
-                }
-                None => {
-                    // No repetition levels, so each level corresponds to a row
-                    let levels = remaining_levels.min(remaining_records);
-                    (levels, levels)
-                }
+            let Some(metadata) = self.page_reader.peek_next_page()? else {
+                return Ok(num_records - remaining_records);
             };
 
-            self.num_decoded_values += rep_levels_read;
-            remaining_records -= records_read;
-
-            if self.num_buffered_values == self.num_decoded_values {
-                // Exhausted buffered page - no need to advance other decoders
+            // If dictionary, we must read it
+            if metadata.is_dict {
+                self.read_dictionary_page()?;
                 continue;
             }
 
-            let (values_read, def_levels_read) = match self.def_level_decoder.as_mut() {
-                Some(decoder) => decoder.skip_def_levels(rep_levels_read)?,
-                None => (rep_levels_read, rep_levels_read),
-            };
-
-            if rep_levels_read != def_levels_read {
-                return Err(general_err!(
-                    "levels mismatch, read {} repetition levels and {} definition levels",
-                    rep_levels_read,
-                    def_levels_read
-                ));
+            // If page has less rows than the remaining records to
+            // be skipped, skip entire page
+            // PLENORA: the rows of the header against its levels and the
+            // schema (`num_rows` alone was trusted: 1 row over 2 values of a
+            // flat column skipped both).
+            if let (Some(righe), Some(livelli)) = (metadata.num_rows, metadata.num_levels) {
+                verifica_righe_v2(self.rep_level_decoder.is_some(), righe, livelli)?;
+            }
+            let rows = metadata.num_rows.or_else(|| {
+                // If no repetition levels, num_levels == num_rows
+                self.rep_level_decoder
+                    .is_none()
+                    .then_some(metadata.num_levels)?
+            });
+            if rows == Some(0) && metadata.num_levels != Some(0) {
+                return Err(general_err!("{}", crate::basic::PAGE_NOT_AS_DECLARED));
             }
 
-            let values = self.values_decoder.skip_values(values_read)?;
-            if values != values_read {
-                return Err(general_err!(
-                    "skipped {} values, expected {}",
-                    values,
-                    values_read
-                ));
+            match rows {
+                Some(rows) if rows <= remaining_records => {
+                    self.page_reader.skip_next_page()?;
+                    remaining_records -= rows;
+                }
+                _ => return Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED)),
             }
         }
         Ok(num_records - remaining_records)
+    }
+
+    /// PLENORA: the end of a data page, after its last level: the one point
+    /// where the page is checked against what it declares. A V2 page has read
+    /// the values it declares (`num_values - num_nulls`; the levels decide how
+    /// many are read, and a page whose levels and declared nulls disagree was
+    /// accepted); every stream (repetition and definition levels, values or
+    /// dictionary indices) is consumed exactly, up to the padding of a last
+    /// bit-packed group (`PAGE_NOT_AS_DECLARED`: bytes or values in excess
+    /// were accepted in silence). A V1 page does not declare its values.
+    fn verifica_fine_pagina(&self) -> Result<()> {
+        if let Some(dichiarati) = self.valori_dichiarati
+            && dichiarati != self.valori_della_pagina
+        {
+            return Err(general_err!(
+                "data page V2 declares {} values but its levels read {}",
+                dichiarati,
+                self.valori_della_pagina
+            ));
+        }
+        if let Some(decoder) = self.rep_level_decoder.as_ref() {
+            decoder.verifica_fine_pagina()?;
+        }
+        if let Some(decoder) = self.def_level_decoder.as_ref() {
+            decoder.verifica_fine_pagina()?;
+        }
+        self.values_decoder
+            .verifica_fine_pagina(self.coda_dei_valori)
     }
 
     /// Read the next page as a dictionary page. If the next page is not a dictionary page,
@@ -451,6 +457,9 @@ where
                         } => {
                             self.num_buffered_values = num_values as _;
                             self.num_decoded_values = 0;
+                            self.valori_dichiarati = None;
+                            self.valori_della_pagina = 0;
+                            self.coda_dei_valori = crate::util::bit_util::CODA_FASTPARQUET;
 
                             let max_rep_level = self.descr.max_rep_level();
                             let max_def_level = self.descr.max_def_level();
@@ -504,7 +513,7 @@ where
                             num_values,
                             encoding,
                             num_nulls,
-                            num_rows: _,
+                            num_rows,
                             def_levels_byte_len,
                             rep_levels_byte_len,
                             is_compressed: _,
@@ -517,9 +526,28 @@ where
                                     num_nulls
                                 ));
                             }
+                            // PLENORA: what the header declares against the
+                            // schema. Without repetition a row is a level;
+                            // with it, a page of levels has at least one row
+                            // and no more rows than levels. A level stream
+                            // the schema does not have is empty: its bytes
+                            // were cut out of the page unread.
+                            verifica_righe_v2(
+                                self.descr.max_rep_level() > 0,
+                                num_rows as usize,
+                                num_values as usize,
+                            )?;
+                            if (self.descr.max_rep_level() == 0 && rep_levels_byte_len != 0)
+                                || (self.descr.max_def_level() == 0 && def_levels_byte_len != 0)
+                            {
+                                return Err(general_err!("{}", crate::basic::PAGE_NOT_AS_DECLARED));
+                            }
 
                             self.num_buffered_values = num_values as _;
                             self.num_decoded_values = 0;
+                            self.valori_dichiarati = Some((num_values - num_nulls) as usize);
+                            self.valori_della_pagina = 0;
+                            self.coda_dei_valori = 0;
 
                             // DataPage v2 only supports RLE encoding for repetition
                             // levels
@@ -570,14 +598,42 @@ where
         if self.num_buffered_values == 0 || self.num_buffered_values == self.num_decoded_values {
             // TODO: should we return false if read_new_page() = true and
             // num_buffered_values = 0?
-            if !self.read_new_page()? {
-                Ok(false)
-            } else {
-                Ok(self.num_buffered_values != 0)
+            // PLENORA: a page of no levels ends where it starts: its
+            // streams are checked, and the reading goes on with the next
+            // page. It returned `false`, the end of the column chunk for the
+            // Arrow reader, and the pages after it were dropped in silence.
+            loop {
+                if !self.read_new_page()? {
+                    return Ok(false);
+                }
+                if self.num_buffered_values != 0 {
+                    return Ok(true);
+                }
+                self.verifica_fine_pagina()?;
             }
         } else {
             Ok(true)
         }
+    }
+}
+
+/// PLENORA: the rows a page declares against its levels: equal without
+/// repetition; with repetition at least one row for a page of levels, and no
+/// more rows than levels.
+fn verifica_righe_v2(ripetuta: bool, righe: usize, livelli: usize) -> Result<()> {
+    let coerenti = if ripetuta {
+        righe <= livelli && (righe > 0 || livelli == 0)
+    } else {
+        righe == livelli
+    };
+    if coerenti {
+        Ok(())
+    } else {
+        Err(general_err!(
+            "data page declares {} rows for {} levels",
+            righe,
+            livelli
+        ))
     }
 }
 
@@ -603,6 +659,7 @@ fn parse_v1_level(
     encoding: Encoding,
     buf: Bytes,
 ) -> Result<(usize, Bytes)> {
+    let _ = (max_level, num_buffered_values);
     match encoding {
         Encoding::RLE => {
             let i32_size = std::mem::size_of::<i32>();
@@ -617,12 +674,17 @@ fn parse_v1_level(
             }
             Err(general_err!("not enough data to read levels"))
         }
+        // PLENORA: `BIT_PACKED` levels are packed from the most significant
+        // bit, the RLE hybrid from the least; both decoders of this fork read
+        // them in the RLE order, and the nulls moved in silence (a payload
+        // `0x80` over 8 rows put the value in the last row instead of the
+        // first). Deprecated and not written by current writers: not
+        // qualified.
         #[expect(deprecated)]
-        Encoding::BIT_PACKED => {
-            let bit_width = num_required_bits(max_level as u64);
-            let num_bytes = ceil(num_buffered_values as usize * bit_width as usize, 8);
-            Ok((num_bytes, buf.slice(..num_bytes)))
-        }
+        Encoding::BIT_PACKED => Err(nyi_err!(
+            "{}: BIT_PACKED levels",
+            crate::basic::ENCODING_NOT_QUALIFIED
+        )),
         _ => Err(general_err!("invalid level encoding: {}", encoding)),
     }
 }

@@ -54,6 +54,9 @@ pub struct DataPageBuilderImpl {
     def_levels_byte_len: u32,
     datapage_v2: bool,
     type_width: i32,
+    // PLENORA: the levels without a value (definition below the maximum):
+    // the reader checks a V2 page against `num_values - num_nulls`.
+    num_nulls: u32,
 }
 
 impl DataPageBuilderImpl {
@@ -69,6 +72,7 @@ impl DataPageBuilderImpl {
             def_levels_byte_len: 0,
             datapage_v2,
             type_width: desc.type_length(),
+            num_nulls: 0,
         }
     }
 
@@ -102,6 +106,10 @@ impl DataPageBuilder for DataPageBuilderImpl {
 
     fn add_def_levels(&mut self, max_levels: i16, def_levels: &[i16]) {
         self.num_values = def_levels.len() as u32;
+        self.num_nulls = def_levels
+            .iter()
+            .filter(|level| **level < max_levels)
+            .count() as u32;
         self.def_levels_byte_len = self.add_levels(max_levels, def_levels);
     }
 
@@ -146,8 +154,7 @@ impl DataPageBuilder for DataPageBuilderImpl {
                 buf: Bytes::from(self.buffer),
                 num_values: self.num_values,
                 encoding: self.encoding.unwrap(),
-                num_nulls: 0, /* set to dummy value - don't need this when reading
-                               * data page */
+                num_nulls: self.num_nulls,
                 num_rows: self.num_values, /* num_rows only needs in skip_records, now we not support skip REPEATED field,
                                             * so we can assume num_values == num_rows */
                 def_levels_byte_len: self.def_levels_byte_len,

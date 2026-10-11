@@ -179,6 +179,14 @@ pub trait Decoder<T: DataType>: Send {
     /// to decode.
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()>;
 
+    /// PLENORA: whether the data ends where the values read end. Only the
+    /// decoders of the qualified encodings answer; the others are not
+    /// verified, and answer `false` (an error at the end of the page).
+    fn fine_esatta(&self, coda: usize) -> bool {
+        let _ = coda;
+        false
+    }
+
     /// Consumes values from this decoder and write the results to `buffer`. This will try
     /// to fill up `buffer`.
     ///
@@ -306,6 +314,18 @@ impl<T: DataType> PlainDecoder<T> {
     }
 }
 
+impl<T: DataType> PlainDecoder<T> {
+    /// PLENORA: whether every byte of the data was consumed (for booleans,
+    /// up to the last partial byte).
+    pub(crate) fn tutto_consumato(&self) -> bool {
+        match (&self.inner.data, &self.inner.bit_reader) {
+            (Some(data), _) => self.inner.start == data.len(),
+            (None, Some(lettore)) => lettore.get_byte_offset() == lettore.buffer_len(),
+            (None, None) => false,
+        }
+    }
+}
+
 impl<T: DataType> Decoder<T> for PlainDecoder<T> {
     #[inline]
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
@@ -326,6 +346,15 @@ impl<T: DataType> Decoder<T> for PlainDecoder<T> {
     #[inline]
     fn get(&mut self, buffer: &mut [T::T]) -> Result<usize> {
         T::T::decode(buffer, &mut self.inner)
+    }
+
+    fn fine_esatta(&self, coda: usize) -> bool {
+        use crate::util::bit_util::coda_di_zeri;
+        match (&self.inner.data, &self.inner.bit_reader) {
+            (Some(data), _) => coda_di_zeri(data, self.inner.start, coda),
+            (None, Some(lettore)) => coda_di_zeri(lettore.dati(), lettore.get_byte_offset(), coda),
+            (None, None) => false,
+        }
     }
 
     #[inline]
@@ -374,12 +403,27 @@ impl<T: DataType> DictDecoder<T> {
     }
 
     /// Decodes and sets values for dictionary using `decoder` decoder.
+    ///
+    /// PLENORA: test only; the column reader decodes and checks the
+    /// dictionary itself, then calls `con_valori`.
+    #[cfg(test)]
     pub fn set_dict(&mut self, mut decoder: Box<dyn Decoder<T>>) -> Result<()> {
         let num_values = decoder.values_left();
         self.dictionary.resize(num_values, T::T::default());
-        let _ = decoder.get(&mut self.dictionary)?;
+        // PLENORA: the count was ignored; a short dictionary kept default
+        // values as entries.
+        let letti = decoder.get(&mut self.dictionary)?;
+        if letti != num_values {
+            return Err(general_err!("{}", crate::basic::DICTIONARY_NOT_AS_DECLARED));
+        }
         self.has_dictionary = true;
         Ok(())
+    }
+
+    /// PLENORA: sets the dictionary from values already decoded and checked.
+    pub(crate) fn con_valori(&mut self, valori: Vec<T::T>) {
+        self.dictionary = valori;
+        self.has_dictionary = true;
     }
 }
 
@@ -412,6 +456,12 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
         rle.get_batch_with_dict(&self.dictionary[..], buffer, num_values)
     }
 
+    fn fine_esatta(&self, coda: usize) -> bool {
+        self.rle_decoder
+            .as_ref()
+            .is_some_and(|decoder| decoder.fine_esatta(coda))
+    }
+
     /// Number of values left in this decoder stream
     fn values_left(&self) -> usize {
         self.num_values
@@ -440,6 +490,8 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
 pub struct RleValueDecoder<T: DataType> {
     values_left: usize,
     decoder: RleDecoder,
+    /// PLENORA: the bytes after the prefixed length of the stream.
+    dopo: Bytes,
     _phantom: PhantomData<T>,
 }
 
@@ -454,6 +506,7 @@ impl<T: DataType> RleValueDecoder<T> {
         Self {
             values_left: 0,
             decoder: RleDecoder::new(1),
+            dopo: Bytes::new(),
             _phantom: PhantomData,
         }
     }
@@ -482,7 +535,12 @@ where
         self.decoder
             .set_data(data.slice(I32_SIZE..I32_SIZE + data_size))?;
         self.values_left = num_values;
+        self.dopo = data.slice(I32_SIZE + data_size..);
         Ok(())
+    }
+
+    fn fine_esatta(&self, coda: usize) -> bool {
+        crate::util::bit_util::coda_di_zeri(&self.dopo, 0, coda) && self.decoder.fine_esatta(0)
     }
 
     #[inline]
@@ -628,7 +686,13 @@ where
                 *b = 0;
             }
             remaining = remaining.saturating_sub(self.values_per_mini_block);
-            offset += *b as usize * self.values_per_mini_block / 8;
+            // PLENORA: `values_per_mini_block` comes from the header (a block
+            // size up to `usize::MAX`): the product and the sum are checked.
+            offset = (*b as usize)
+                .checked_mul(self.values_per_mini_block)
+                .map(|bits| bits / 8)
+                .and_then(|bytes| offset.checked_add(bytes))
+                .ok_or_else(|| general_err!("delta block size overflows"))?;
         }
         self.block_end_offset = offset;
 
@@ -890,7 +954,16 @@ where
                 // When min_delta == 0 there is nothing to do: last_value is
                 // unchanged and no bytes are consumed from the bit reader.
                 if min_delta != 0 {
+                    // PLENORA: the same wrapping arithmetic as `get`. The
+                    // product wraps in `i64`; for a 32-bit type its low 32 bits
+                    // are the product modulo 2^32, which `from_i64` rejected
+                    // when out of range: a valid page failed in `skip` only.
                     let total = min_delta.wrapping_mul(mini_block_to_skip as i64);
+                    let total = if std::mem::size_of::<T::T>() == 4 {
+                        i64::from(total as i32)
+                    } else {
+                        total
+                    };
                     let step = T::T::from_i64(total)
                         .ok_or_else(|| general_err!("delta*n overflow in skip"))?;
                     self.last_value = self.last_value.wrapping_add(&step);
@@ -943,6 +1016,29 @@ where
 
 // ----------------------------------------------------------------------
 // DELTA_LENGTH_BYTE_ARRAY Decoding
+
+/// PLENORA: the lengths of a DELTA_LENGTH_BYTE_ARRAY page, read from the file,
+/// are non-negative and their values fit in the page after the lengths
+/// (`offset`, the end of the lengths, up to `data_len`). A negative length
+/// converted to `usize` overflowed the offsets, and one beyond the bytes
+/// sliced past the page.
+pub(crate) fn check_delta_lengths(lengths: &[i32], offset: usize, data_len: usize) -> Result<()> {
+    // The end of the lengths counts the padding of their last block, which a
+    // truncated page lacks: it must be inside the page too.
+    if offset > data_len {
+        return Err(general_err!("Insufficient delta length byte array bytes"));
+    }
+    let mut end = offset;
+    for length in lengths {
+        let length = usize::try_from(*length)
+            .map_err(|_| general_err!("negative delta length byte array length"))?;
+        end = end
+            .checked_add(length)
+            .filter(|end| *end <= data_len)
+            .ok_or_else(|| general_err!("Insufficient delta length byte array bytes"))?;
+    }
+    Ok(())
+}
 
 /// Delta length byte array decoder.
 ///
@@ -999,7 +1095,14 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
                 len_decoder.set_data(data.clone(), num_values)?;
                 let num_lengths = len_decoder.values_left();
                 self.lengths.resize(num_lengths, 0);
-                len_decoder.get(&mut self.lengths[..])?;
+                // PLENORA: every length is non-negative and the values fit in
+                // the bytes after the lengths, checked once here; `get` and
+                // `skip` then cannot go past the page.
+                if len_decoder.get(&mut self.lengths[..])? != num_lengths {
+                    return Err(eof_err!("eof decoding delta length byte array lengths"));
+                }
+                check_delta_lengths(&self.lengths, len_decoder.get_offset(), data.len())?;
+                // (`check_delta_lengths` also bounds the offset itself.)
 
                 self.data = Some(data.slice(len_decoder.get_offset()..));
                 self.offset = 0;
@@ -1051,13 +1154,16 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
             Type::BYTE_ARRAY => {
                 let num_values = cmp::min(num_values, self.num_values);
 
-                let next_offset: i32 = self.lengths
+                // PLENORA: summed in `usize` (the lengths are non-negative,
+                // checked in `set_data`); the `i32` sum overflowed.
+                let next_offset: usize = self.lengths
                     [self.current_idx..self.current_idx + num_values]
                     .iter()
+                    .map(|length| *length as usize)
                     .sum();
 
                 self.current_idx += num_values;
-                self.offset += next_offset as usize;
+                self.offset += next_offset;
 
                 self.num_values -= num_values;
                 Ok(num_values)
@@ -1133,8 +1239,20 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                 prefix_len_decoder.get(&mut self.prefix_lengths[..])?;
 
                 let mut suffix_decoder = DeltaLengthByteArrayDecoder::new();
-                suffix_decoder
-                    .set_data(data.slice(prefix_len_decoder.get_offset()..), num_values)?;
+                // PLENORA: the offset after the prefixes counts the padding of
+                // their last block, which a truncated page lacks.
+                let fine_prefissi = prefix_len_decoder.get_offset();
+                if fine_prefissi > data.len() {
+                    return Err(eof_err!("DELTA_BYTE_ARRAY prefix lengths beyond the page"));
+                }
+                suffix_decoder.set_data(data.slice(fine_prefissi..), num_values)?;
+                if suffix_decoder.values_left() != num_prefixes {
+                    return Err(general_err!(
+                        "inconsistent DELTA_BYTE_ARRAY lengths, prefixes: {}, suffixes: {}",
+                        num_prefixes,
+                        suffix_decoder.values_left()
+                    ));
+                }
                 self.suffix_decoder = Some(suffix_decoder);
                 self.num_values = num_prefixes;
                 self.current_idx = 0;
@@ -1159,7 +1277,13 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                         .suffix_decoder
                         .as_mut()
                         .expect("decoder not initialized");
-                    suffix_decoder.get(&mut v[..])?;
+                    // PLENORA: a missing suffix is an error; the previous one
+                    // stayed in `v` and was used again in silence.
+                    if suffix_decoder.get(&mut v[..])? != 1 {
+                        return Err(eof_err!(
+                            "DELTA_BYTE_ARRAY has fewer suffixes than prefixes"
+                        ));
+                    }
                     let suffix = v[0].data();
 
                     // Extract current prefix length, can be 0

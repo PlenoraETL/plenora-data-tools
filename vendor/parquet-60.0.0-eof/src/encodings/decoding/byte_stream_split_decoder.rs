@@ -79,8 +79,40 @@ fn join_streams_variable(
     }
 }
 
+// PLENORA: i valori chiesti al decoder stanno nei byte della pagina. Lo stream
+// `j` occupa i byte `j * stride .. (j + 1) * stride`, e il valore `k` ne legge
+// il byte `k`: servono `values_decoded + num_values <= stride`. Il conteggio
+// viene dall'header di pagina e dai metadati di colonna, cioe' dal file, e
+// nessun altro punto lo confronta coi byte.
+fn valori_disponibili(stride: usize, values_decoded: usize, num_values: usize) -> Result<()> {
+    match values_decoded.checked_add(num_values) {
+        Some(fine) if fine <= stride => Ok(()),
+        _ => Err(general_err!(
+            "byte stream split: {} values requested beyond the {} encoded in the page",
+            num_values,
+            stride.saturating_sub(values_decoded)
+        )),
+    }
+}
+
+impl<T: DataType> ByteStreamSplitDecoder<T> {
+    /// PLENORA: the values the page holds.
+    fn stride(&self) -> usize {
+        self.encoded_bytes.len() / T::get_type_size()
+    }
+}
+
 impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
+        // PLENORA: the page holds whole values; a remainder was dropped in
+        // silence by `stride = len / type_size`.
+        if !data.len().is_multiple_of(T::get_type_size()) {
+            return Err(general_err!(
+                "byte stream split: {} bytes is not a whole number of {}-byte values",
+                data.len(),
+                T::get_type_size()
+            ));
+        }
         self.encoded_bytes = data;
         self.total_num_values = num_values;
         self.values_decoded = 0;
@@ -93,10 +125,14 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
         let num_values = buffer.len().min(total_remaining_values);
         let buffer = &mut buffer[..num_values];
 
-        // SAFETY: i/f32 and i/f64 has no constraints on their internal representation, so we can modify it as we want
-        let raw_out_bytes = unsafe { <T as DataType>::T::slice_as_bytes_mut(buffer) };
         let type_size = T::get_type_size();
         let stride = self.encoded_bytes.len() / type_size;
+        // PLENORA: `join_streams_*` indicizza `src[values_decoded + i + j * stride]`
+        // senza confrontare con la lunghezza: valori dichiarati oltre i byte
+        // della pagina erano un panico (index out of bounds). Ora un errore.
+        valori_disponibili(stride, self.values_decoded, num_values)?;
+        // SAFETY: i/f32 and i/f64 has no constraints on their internal representation, so we can modify it as we want
+        let raw_out_bytes = unsafe { <T as DataType>::T::slice_as_bytes_mut(buffer) };
         match type_size {
             4 => join_streams_const::<4>(
                 &self.encoded_bytes,
@@ -132,6 +168,8 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
 
     fn skip(&mut self, num_values: usize) -> Result<usize> {
         let to_skip = usize::min(self.values_left(), num_values);
+        // PLENORA: skipped values must be in the page too, as for `get`.
+        valori_disponibili(self.stride(), self.values_decoded, to_skip)?;
         self.values_decoded += to_skip;
         Ok(to_skip)
     }
@@ -157,8 +195,26 @@ impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
     }
 }
 
+impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
+    /// PLENORA: the values the page holds (`type_width` is checked non-zero
+    /// in `set_data`, before any `get` or `skip`).
+    fn stride(&self) -> usize {
+        self.encoded_bytes
+            .len()
+            .checked_div(self.type_width)
+            .unwrap_or(0)
+    }
+}
+
 impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
+        // PLENORA: una larghezza 0 (lo schema la ammette) farebbe dividere per
+        // zero `get` e `is_multiple_of` qui sotto non la rifiuterebbe.
+        if self.type_width == 0 {
+            return Err(general_err!(
+                "byte stream split: FIXED_LEN_BYTE_ARRAY of width 0"
+            ));
+        }
         // Rough check that all data elements are the same length
         if !data.len().is_multiple_of(self.type_width) {
             return Err(general_err!(
@@ -185,13 +241,15 @@ impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
         let num_values = buffer.len().min(total_remaining_values);
         let buffer = &mut buffer[..num_values];
         let type_size = self.type_width;
+        let stride = self.encoded_bytes.len() / type_size;
+        // PLENORA: stesso controllo del decoder a larghezza fissa, prima di
+        // allocare il buffer temporaneo.
+        valori_disponibili(stride, self.values_decoded, num_values)?;
 
         // Since this is FIXED_LEN_BYTE_ARRAY data, we can't use slice_as_bytes_mut. Instead we'll
         // have to do some data copies.
         let mut tmp_vec = vec![0_u8; num_values * type_size];
         let raw_out_bytes = tmp_vec.as_mut_slice();
-
-        let stride = self.encoded_bytes.len() / type_size;
         match type_size {
             2 => join_streams_const::<2>(
                 &self.encoded_bytes,
@@ -250,6 +308,8 @@ impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
 
     fn skip(&mut self, num_values: usize) -> Result<usize> {
         let to_skip = usize::min(self.values_left(), num_values);
+        // PLENORA: skipped values must be in the page too, as for `get`.
+        valori_disponibili(self.stride(), self.values_decoded, to_skip)?;
         self.values_decoded += to_skip;
         Ok(to_skip)
     }

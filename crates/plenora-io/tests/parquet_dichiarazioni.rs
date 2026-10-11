@@ -74,15 +74,6 @@ fn proprieta(compressione: Compression, dizionario: bool) -> WriterProperties {
         .build()
 }
 
-fn con_codifica(codifica: Encoding) -> WriterProperties {
-    WriterProperties::builder()
-        .set_compression(Compression::UNCOMPRESSED)
-        .set_dictionary_enabled(false)
-        .set_writer_version(WriterVersion::PARQUET_1_0)
-        .set_column_encoding(ColumnPath::from("x"), codifica)
-        .build()
-}
-
 fn leggi(byte: &[u8]) -> plenora_core::Result<RecordBatch> {
     let dir = cartella();
     let percorso = dir.path().join("f.parquet");
@@ -291,28 +282,39 @@ fn un_dizionario_con_piu_voci_dei_suoi_byte_e_rifiutato() {
 /// Il conteggio dell'header delta (`block_size` 128 o 256, 4 miniblocchi, 10
 /// valori) portato a 100 in una pagina da 10 valori: tre lettori diversi
 /// (interi, lunghezze delta, prefissi delta).
+/// Le codifiche non qualificate per la lettura (`DELTA_*`,
+/// `BYTE_STREAM_SPLIT`) si rifiutano anche in file validi scritti da
+/// `parquet-rs`, pagine v1 e v2: `Unsupported`, prima dei decoder. Le
+/// verifiche della patch `-eof` sugli header delta restano nel fork, non
+/// raggiungibili finché le codifiche non sono qualificate.
 #[test]
-fn un_header_delta_con_piu_valori_della_pagina_e_rifiutato() {
+fn le_codifiche_non_qualificate_si_rifiutano_anche_valide() {
     let casi = [
         (interi(10, 10), Encoding::DELTA_BINARY_PACKED),
         (testi(10), Encoding::DELTA_LENGTH_BYTE_ARRAY),
         (testi(10), Encoding::DELTA_BYTE_ARRAY),
+        (
+            colonna(Arc::new(Float64Array::from_iter_values(
+                (0..10).map(|i| f64::from(i) / 3.0),
+            ))),
+            Encoding::BYTE_STREAM_SPLIT,
+        ),
     ];
     for (tabella, codifica) in casi {
-        let originale = scrivi(&tabella, con_codifica(codifica));
-        identiche(&tabella, &leggi(&originale).unwrap());
-        let chunk = chunk(&originale);
-        // `block_size` 128 o 256 (due byte), poi 4 miniblocchi e 10 valori.
-        let posizione = (chunk.pagina_dati..originale.len() - 3)
-            .find(|&i| {
-                originale[i] == 0x80
-                    && matches!(originale[i + 1], 0x01 | 0x02)
-                    && originale[i + 2..i + 4] == [0x04, 0x0a]
-            })
-            .expect("header delta");
-        let mut byte = originale;
-        byte[posizione + 3] = 100;
-        rifiutato(&byte, "more values than the page holds");
+        for versione in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+            let proprieta = WriterProperties::builder()
+                .set_writer_version(versione)
+                .set_dictionary_enabled(false)
+                .set_column_encoding(ColumnPath::from("x"), codifica)
+                .build();
+            let byte = scrivi(&tabella, proprieta);
+            let errore = leggi(&byte).expect_err("codifica non qualificata");
+            assert_eq!(
+                errore.category(),
+                ErrorCategory::Unsupported,
+                "{codifica:?} {versione:?}: {errore}"
+            );
+        }
     }
 }
 
@@ -335,15 +337,14 @@ fn le_codifiche_valide_si_rileggono_uguali() {
     let binari: Vec<[u8; 4]> = (0_u32..300).map(|i| (i % 17).to_le_bytes()).collect();
     let tabelle = [
         (interi(3000, 50), None),
-        (interi(3000, 3000), Some(Encoding::DELTA_BINARY_PACKED)),
+        (interi(3000, 3000), Some(Encoding::PLAIN)),
         (
             colonna(Arc::new(Float64Array::from_iter_values(
                 (0..3000).map(|i| f64::from(i) / 3.0),
             ))),
-            Some(Encoding::BYTE_STREAM_SPLIT),
+            Some(Encoding::PLAIN),
         ),
-        (testi(3000), Some(Encoding::DELTA_LENGTH_BYTE_ARRAY)),
-        (testi(3000), Some(Encoding::DELTA_BYTE_ARRAY)),
+        (testi(3000), Some(Encoding::PLAIN)),
         (testi(3000), None),
         (
             colonna(Arc::new(
@@ -355,7 +356,7 @@ fn le_codifiche_valide_si_rileggono_uguali() {
             colonna(Arc::new(
                 FixedSizeBinaryArray::try_from_iter(binari.iter()).unwrap(),
             )),
-            Some(Encoding::DELTA_BYTE_ARRAY),
+            Some(Encoding::PLAIN),
         ),
     ];
     for (tabella, codifica) in &tabelle {
@@ -497,7 +498,7 @@ fn il_controllo_guarda_l_header_del_tipo_di_pagina() {
         .set_dictionary_enabled(false)
         .set_writer_version(WriterVersion::PARQUET_1_0)
         .set_write_page_header_statistics(true)
-        .set_column_encoding(ColumnPath::from("x"), Encoding::DELTA_LENGTH_BYTE_ARRAY)
+        .set_column_encoding(ColumnPath::from("x"), Encoding::PLAIN)
         .build();
     let originale = scrivi(&lunghi, proprieta);
     let chunk = chunk(&originale);
@@ -518,7 +519,7 @@ fn il_controllo_guarda_l_header_del_tipo_di_pagina() {
         c.i32(3, compressi);
         c.inizio(5);
         c.i32(1, 10);
-        c.i32(2, 6); // DELTA_LENGTH_BYTE_ARRAY
+        c.i32(2, 0); // PLAIN
         c.i32(3, 3);
         c.i32(4, 3);
         c.fine();
@@ -526,7 +527,7 @@ fn il_controllo_guarda_l_header_del_tipo_di_pagina() {
         c.i32(1, 1_000_000_000);
         c.i32(2, 0);
         c.i32(3, 10);
-        c.i32(4, 6);
+        c.i32(4, 0);
         c.i32(5, 0);
         c.i32(6, 0);
         c.bool(7, false);
@@ -646,30 +647,27 @@ fn nulli_e_ripetizioni_si_rileggono_uguali() {
             nullabile(Arc::new(Int64Array::from_iter(
                 (0..2000_i64).map(|i| (i % 3 != 0).then_some(i)),
             ))),
-            Some(Encoding::DELTA_BINARY_PACKED),
+            Some(Encoding::PLAIN),
         ),
         (
             nullabile(Arc::new(Int64Array::from_iter(
                 (0..2000).map(|_| None::<i64>),
             ))),
-            Some(Encoding::DELTA_BINARY_PACKED),
+            Some(Encoding::PLAIN),
         ),
         (
             nullabile(Arc::new(StringArray::from_iter(
                 (0..2000).map(|i| (i % 4 != 0).then(|| format!("v{}", i % 9))),
             ))),
-            Some(Encoding::DELTA_LENGTH_BYTE_ARRAY),
+            Some(Encoding::PLAIN),
         ),
         (
             nullabile(Arc::new(StringArray::from_iter(
                 (0..2000).map(|i| (i % 4 != 0).then(|| format!("prefisso-{}", i % 9))),
             ))),
-            Some(Encoding::DELTA_BYTE_ARRAY),
+            Some(Encoding::PLAIN),
         ),
-        (
-            nullabile(Arc::new(liste.finish())),
-            Some(Encoding::DELTA_BINARY_PACKED),
-        ),
+        (nullabile(Arc::new(liste.finish())), Some(Encoding::PLAIN)),
         (
             nullabile(Arc::new(StringArray::from_iter(
                 (0..2000).map(|i| (i % 2 == 0).then_some("d")),

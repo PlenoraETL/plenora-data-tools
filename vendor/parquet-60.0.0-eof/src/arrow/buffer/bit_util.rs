@@ -53,6 +53,8 @@ pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
 
 /// Performs big endian sign extension
 pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
+    // PLENORA: callers on values read from a file use
+    // `sign_extend_be_checked`, which does not panic.
     assert!(b.len() <= N, "Array too large, expected less than {N}");
     let is_negative = (b[0] & 128u8) == 128u8;
     let mut result = if is_negative { [255u8; N] } else { [0u8; N] };
@@ -60,6 +62,15 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
         *d = *s;
     }
     result
+}
+
+/// PLENORA: [`sign_extend_be`] for bytes read from a file: `None` for an
+/// empty slice or one longer than `N`, instead of a panic.
+pub fn sign_extend_be_checked<const N: usize>(b: &[u8]) -> Option<[u8; N]> {
+    if b.is_empty() || b.len() > N {
+        return None;
+    }
+    Some(sign_extend_be::<N>(b))
 }
 
 #[cfg(test)]

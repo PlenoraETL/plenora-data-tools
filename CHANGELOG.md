@@ -26,8 +26,88 @@ la cui versione non ha qui una voce datata.
   trasporto runtime di `data.run` 3 resta all'applicazione, e nessuna
   superficie del componente annuncia la loro richiesta di base.
 
+### Incompatibile
+
+- **Codifiche Parquet lette ristrette.** Si leggono solo `PLAIN`,
+  `PLAIN_DICTIONARY` e `RLE_DICTIONARY` per i valori, `RLE` per i booleani
+  e i livelli. Livelli `BIT_PACKED` (deprecata, letti nell'ordine di bit
+  sbagliato: i null cambiavano riga in silenzio) sono `Unsupported`, come
+  `DELTA_BINARY_PACKED`,
+  `DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY` e `BYTE_STREAM_SPLIT` sono
+  `Unsupported` finché ciascuna non è qualificata con un suo fuzz
+  (`docs/limiti.md`, «Codifiche Parquet non qualificate»), sia dichiarate
+  nel footer sia usate in una pagina. pyarrow, data e IO-tools con le
+  impostazioni predefinite non le scrivono; in `apache/parquet-testing`
+  le usano 9 file su 78.
+- **Tipi Arrow chiesti dal file.** Un tipo testo su una colonna di byte non
+  annotata come testo, e una colonna `FIXED_LEN_BYTE_ARRAY` letta come
+  dizionario, sono `Unsupported` (prima: byte non validati come UTF-8 in
+  una stringa, e un dizionario FLBA valido rifiutato o letto male). Un
+  dizionario di `FixedSizeBinary` non si scrive più in Parquet: il file
+  scritto non si rileggeva. Un dizionario Arrow di valori binari su una
+  colonna annotata come testo (`ENUM` prima si leggeva) è `Unsupported`.
+
 ### Corretto
 
+- **Dizionari, pagine v2 e offset index nel fork `parquet`** (quarto giro
+  di revisione): una pagina di dizionario con meno voci delle dichiarate,
+  o con byte dopo l'ultima, si accettava (zero voci con dei byte
+  dividevano per zero); una pagina v2 i cui livelli contraddicevano i
+  nulli dichiarati dava null in silenzio; un `first_row_index` negativo o
+  fuori ordine nell'offset index traboccava; una pagina saltata intera non
+  si controllava per la codifica; un dizionario `JSON` o `ENUM` teneva
+  valori binari. Ora errori. `patches/parquet-livelli-dizionari-indici.patch`.
+- **Fine della pagina nel fork `parquet`** (quinto e sesto giro): valori
+  `PLAIN`, livelli, indici di dizionario o booleani `RLE` in più dopo
+  quelli di una pagina letta per intero si ignoravano in silenzio; ora
+  sono un errore, tranne due forme di scrittori reali: fino a 8 byte a
+  zero dopo i valori di una pagina v1 (fastparquet: una pagina v1 `PLAIN`
+  con valori a zero in più entro quegli 8 byte si legge senza di essi,
+  `docs/limiti.md`) e il riempimento di un blocco bit-packed di 32 gruppi
+  (DuckDB). Una pagina vuota non ferma più la lettura delle pagine dopo;
+  le righe di una pagina v2 si confrontano con i suoi livelli; gli stream
+  di livelli assenti dallo schema devono essere vuoti; una pagina
+  compressa senza valori non nasconde più un suffisso. Un salto dentro una
+  pagina, che non decodificava ciò che saltava (e con livelli troncati non
+  terminava), non è più qualificato: `Unsupported`; data legge sempre per
+  intero.
+  `patches/parquet-salti-e-fine-pagina.patch`.
+- **Livelli, interi stretti e varint nel fork `parquet`** (terzo giro di
+  revisione): un livello oltre il massimo della colonna (contato come
+  nullo), un valore RLE più largo della sua larghezza, un `INT32` annotato
+  `INT_8` fuori dalla larghezza (256 diventava 0), un varint troncato alla
+  fine dei dati: errori. `patches/parquet-codifiche-e-livelli.patch`.
+- **Schema Parquet profondo e footer costoso: errori, non aborti.** Uno
+  schema valido annidato per migliaia di livelli esauriva lo stack nella
+  lettura (un aborto del processo, senza inviluppo). Ora oltre 64 livelli
+  e oltre il tetto di memoria della decodifica del footer
+  (`plenora_io::parquet_io::budget_del_footer`) la lettura è
+  `ResourceLimit`. Il delta del fork è quello di plenora-IO-tools
+  (`patches/parquet-footer-budget.patch`); prove in
+  `crates/plenora-io/tests/parquet_footer.rs`.
+- **`parquet`: i decoder non si fidano più dei valori del file.** Lunghezze,
+  indici ed estremi letti dal file passano da conversioni fallibili e
+  aritmetica controllata in tutti i decoder (`patches/parquet-decoder.patch`,
+  `vendor/parquet-60.0.0-eof/PROVENANCE.md`). Erano panici, che il confine
+  rendeva un errore della barriera, e tre accettazioni silenziose: un
+  prefisso `DELTA_BYTE_ARRAY` oltre il valore precedente (un valore
+  sbagliato), il resto di una pagina `PLAIN`/`BYTE_STREAM_SPLIT` a
+  larghezza fissa, una corsa RLE oltre `u32`. Un secondo giro
+  (`patches/parquet-decoder-2.patch`) ne chiude altre cinque: voci del
+  dizionario FLBA oltre quelle dichiarate, suffissi `DELTA_BYTE_ARRAY`
+  mancanti, varint oltre i 64 bit, livelli RLE di valore diverso da 0 e 1,
+  chiavi di dizionario strette troncate, voci `FixedSizeBinary` della
+  larghezza sbagliata. Prove in
+  `crates/plenora-io/tests/parquet_decoder.rs`, semi del fuzz in
+  `tests/dati/fuzz-decoder/`.
+- **`parquet`: larghezza 0 e `BYTE_STREAM_SPLIT` non panicano più.** Un
+  `FIXED_LEN_BYTE_ARRAY` di larghezza 0 faceva dividere per zero il
+  lettore Arrow, e `BYTE_STREAM_SPLIT` con conteggi dichiarati oltre i byte
+  della pagina indicizzava fuori limite; dal confine di lettura erano un
+  errore della barriera anti-panico. Ora sono errori del decoder
+  (`patches/parquet-flba-bss.patch`, dal fork di plenora-IO-tools, più
+  l'`assert!` del decoder `PLAIN` per colonne); prove in
+  `crates/plenora-io/tests/parquet_fork.rs`.
 - **I fork di `geo`, `wkt` e `parquet` valgono anche per i consumatori.**
   Erano `[patch.crates-io]`, che Cargo applica solo al workspace radice: un
   crate che dipendeva da data-tools per percorso o git (un worker, una

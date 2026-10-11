@@ -83,6 +83,13 @@ mod inner {
             }
         }
 
+        /// PLENORA: the footer memory budget of the options, if any.
+        pub(crate) fn footer_memory_budget(&self) -> Option<u64> {
+            self.metadata_options
+                .as_deref()
+                .and_then(ParquetMetaDataOptions::footer_memory_budget)
+        }
+
         pub(crate) fn decode_metadata(
             &self,
             buf: &[u8],
@@ -184,6 +191,13 @@ mod inner {
             Self {
                 metadata_options: options,
             }
+        }
+
+        /// PLENORA: the footer memory budget of the options, if any.
+        pub(crate) fn footer_memory_budget(&self) -> Option<u64> {
+            self.metadata_options
+                .as_deref()
+                .and_then(ParquetMetaDataOptions::footer_memory_budget)
         }
 
         pub(crate) fn decode_metadata(
@@ -322,6 +336,30 @@ fn parse_column_index(
     Ok(())
 }
 
+/// PLENORA: the page locations of `idx` against the rows of the row group
+/// and the byte range of the column chunk.
+fn verifica_offset_index(
+    idx: &OffsetIndexMetaData,
+    righe: i64,
+    col: &ColumnChunkMetaData,
+) -> crate::errors::Result<()> {
+    let righe = u64::try_from(righe)
+        .map_err(|_| general_err!("invalid offset index: negative row count"))?;
+    let inizio = col
+        .dictionary_page_offset()
+        .unwrap_or_else(|| col.data_page_offset());
+    let inizio = u64::try_from(inizio)
+        .map_err(|_| general_err!("invalid offset index: column chunk out of range"))?;
+    let lunghezza = u64::try_from(col.compressed_size())
+        .map_err(|_| general_err!("invalid offset index: column chunk out of range"))?;
+    crate::file::page_index::offset_index::verifica_posizioni(
+        idx.page_locations(),
+        righe,
+        inizio,
+        lunghezza,
+    )
+}
+
 fn parse_offset_index(
     metadata: &ParquetMetaData,
     offset_index_policy: PageIndexPolicy,
@@ -346,6 +384,8 @@ fn parse_offset_index(
                     rg_idx,
                     col_idx,
                 )?;
+                // PLENORA: the page locations are checked against the chunk.
+                verifica_offset_index(&idx, rg.num_rows(), col)?;
                 page_index_builder.put_offset_index(idx, rg_idx, col_idx);
             } else if offset_index_policy == PageIndexPolicy::Required {
                 return Err(general_err!("missing offset index"));
