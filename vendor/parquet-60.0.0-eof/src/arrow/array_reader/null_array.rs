@@ -89,16 +89,37 @@ where
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         // convert to arrays
-        let array = arrow_array::NullArray::new(self.record_reader.values_written());
+        let righe = self.record_reader.values_written();
+        let array = arrow_array::NullArray::new(righe);
 
         // save definition and repetition buffers
         self.def_levels_buffer = self.record_reader.consume_def_levels();
         self.rep_levels_buffer = self.record_reader.consume_rep_levels();
 
         // Must consume bitmap buffer
-        self.record_reader.consume_compact_bitmap();
+        let maschera = self.record_reader.consume_compact_bitmap();
+
+        // PLENORA: an `UNKNOWN` column is always null: a value (a definition
+        // level at the maximum, a valid slot of the null mask, or any slot of
+        // a required column) was read and dropped in silence by the `Null`
+        // array.
+        let massimo = self.record_reader.max_def_level();
+        let con_valore = if massimo == 0 {
+            righe > 0
+        } else if let Some(livelli) = self.def_levels_buffer.as_deref() {
+            livelli.iter().any(|livello| *livello == massimo)
+        } else if let Some(maschera) = maschera.as_ref() {
+            maschera.count_set_bits_offset(0, righe.min(maschera.len() * 8)) > 0
+        } else {
+            righe > 0
+        };
 
         self.record_reader.reset();
+        if con_valore {
+            return Err(crate::errors::ParquetError::General(
+                crate::basic::UNKNOWN_WITH_VALUES.to_string(),
+            ));
+        }
         Ok(Arc::new(array))
     }
 

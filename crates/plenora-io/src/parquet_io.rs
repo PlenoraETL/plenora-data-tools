@@ -117,10 +117,10 @@ fn opzioni_del_footer(budget_footer: u64) -> ParquetMetaDataOptions {
 /// Il nome di un tipo logico Parquet che la lettura non qualifica, se lo è.
 ///
 /// Elenco chiuso dei qualificati: testo, mappe, liste, enum, decimali,
-/// date, ore, istanti, interi, JSON, BSON, UUID, `FLOAT16`, geometrie e
-/// geografie. Tutto il resto si rifiuta: `UNKNOWN` (il tipo «sempre nullo»:
-/// `parquet` lo legge come colonna `Null` e scarterebbe in silenzio i valori
-/// che il file avesse), `VARIANT` (non qualificato nel fork: i suoi gruppi
+/// date, ore, istanti, interi, JSON, BSON, UUID, `FLOAT16`, geometrie,
+/// geografie e `UNKNOWN` (il tipo «sempre nullo», letto come colonna `Null`:
+/// il fork rifiuta un suo valore, `UNKNOWN_WITH_VALUES`, che prima scartava
+/// in silenzio). Tutto il resto si rifiuta: `VARIANT` (non qualificato nel fork: i suoi gruppi
 /// si leggevano come struct di byte), `FILE` e i tipi che il fork non
 /// riconosce (si leggevano come byte). Un tipo nuovo del fork non compila
 /// finché non è classificato qui.
@@ -140,8 +140,8 @@ const fn tipo_logico_non_qualificato(tipo: &LogicalType) -> Option<&'static str>
         | LogicalType::Uuid
         | LogicalType::Float16
         | LogicalType::Geometry(_)
-        | LogicalType::Geography(_) => None,
-        LogicalType::Unknown => Some("UNKNOWN"),
+        | LogicalType::Geography(_)
+        | LogicalType::Unknown => None,
         LogicalType::Variant(_) => Some("VARIANT"),
         LogicalType::File => Some("FILE"),
         LogicalType::_Unknown { .. } => Some("non riconosciuto"),

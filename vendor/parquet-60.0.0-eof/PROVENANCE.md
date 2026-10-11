@@ -493,6 +493,13 @@ ripetizione troncati).
    zero (`INTERVAL_NOT_AS_DECLARED`). Stessa classe dei tipi logici non
    qualificati che `plenora-io` ora rifiuta al confine
    (`docs/limiti.md`, «Tipi logici Parquet non qualificati»).
+2. `UNKNOWN` (il tipo «sempre nullo»): il lettore Arrow lo legge come
+   colonna `Null`, e un valore che il file avesse spariva in silenzio (un
+   `INT32` 7 era una riga nulla). Ora `NullArrayReader` rifiuta un livello
+   di definizione al massimo, un bit valido della maschera dei nulli o una
+   riga di una colonna obbligatoria (`UNKNOWN_WITH_VALUES`). Le colonne
+   `UNKNOWN` che l'`ArrowWriter` scrive per un campo `Null` sono nulle e
+   si leggono, come quelle dei file di prova.
 
 Prove unitarie del pacchetto: le stesse 148. Riferimento
 `crates/plenora-io/tests/riferimenti/parquet_esiti.tsv` rigenerato, con il

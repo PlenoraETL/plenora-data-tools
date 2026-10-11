@@ -1541,6 +1541,11 @@ pub const PAGE_TYPE_NOT_QUALIFIED: &str = "Parquet page type not qualified for r
 pub const DICTIONARY_PAGE_OUT_OF_PLACE: &str =
     "dictionary page not at the start of its column chunk";
 
+/// PLENORA: the fixed text of the rejection of a value in a column with the
+/// `UNKNOWN` logical type (always null): it is read as an Arrow `Null`
+/// column, and the values were dropped in silence.
+pub const UNKNOWN_WITH_VALUES: &str = "UNKNOWN (always null) column with a value";
+
 /// PLENORA: the fixed text of the rejection of an `INTERVAL` value with
 /// parts the Arrow interval unit does not hold (months for `DayTime`, days or
 /// milliseconds for `YearMonth`): they were dropped in silence.

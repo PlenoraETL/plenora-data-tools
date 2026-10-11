@@ -4145,8 +4145,7 @@ fn una_pagina_oltre_il_column_chunk_e_rifiutata() {
 }
 
 /// Un tipo logico che la lettura non qualifica si convertiva in silenzio:
-/// `UNKNOWN` (il tipo «sempre nullo») in una colonna `Null`, che scarta i
-/// valori del file; `VARIANT` in byte o struct; un tipo che il fork non
+/// `VARIANT` in byte o struct; un tipo che il fork non
 /// riconosce (qui l'identificatore riservato 9) in byte (`FILE` senza i suoi
 /// campi è già un footer malformato, `DataMapping`). Ora il
 /// confine li rifiuta (`Unsupported`), prima della conversione dello schema,
@@ -4164,22 +4163,14 @@ fn un_tipo_logico_non_qualificato_e_rifiutato() {
             &LimitiLettura::default(),
         )
     };
-    for (tipo, logico, contenuto) in [
-        (INT32, 11, 7_i32.to_le_bytes().to_vec()), // UNKNOWN
-        (BYTE_ARRAY, 9, testo_plain(&[b"x"])),     // non riconosciuto
-    ] {
-        let colonna = Colonna {
-            logico: Some(logico),
-            ..colonna(tipo)
-        };
-        let byte = parquet(&colonna, 1, PLAIN, &contenuto, None, None);
-        let errore = leggi(&byte).expect_err("tipo logico non qualificato");
-        assert_eq!(
-            errore.category(),
-            ErrorCategory::Unsupported,
-            "{logico}: {errore}"
-        );
-    }
+    // Un tipo non riconosciuto (l'identificatore riservato 9).
+    let ignoto = Colonna {
+        logico: Some(9),
+        ..colonna(BYTE_ARRAY)
+    };
+    let byte = parquet(&ignoto, 1, PLAIN, &testo_plain(&[b"x"]), None, None);
+    let errore = leggi(&byte).expect_err("tipo logico non riconosciuto");
+    assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
     // `VARIANT` (16) su un gruppo di due colonne di byte, come lo scrivono
     // le implementazioni (`metadata`, `value`): si leggeva come struct.
     let errore = leggi(&variante(Some(16))).expect_err("VARIANT");
@@ -4288,4 +4279,30 @@ fn variante(logico: Option<u8>) -> Vec<u8> {
     file.extend_from_slice(&lunghezza.to_le_bytes());
     file.extend_from_slice(b"PAR1");
     file
+}
+
+/// `UNKNOWN` è il tipo «sempre nullo»: `parquet` lo legge come colonna
+/// `Null`, e un valore che il file avesse spariva in silenzio (un `INT32`
+/// 7 diventava una riga nulla). Ora un valore è un errore
+/// (`UNKNOWN_WITH_VALUES`); una colonna davvero nulla si legge, come la
+/// scrive l'`ArrowWriter` per un campo Arrow `Null`.
+#[test]
+fn una_colonna_unknown_con_un_valore_e_un_errore() {
+    let con_valore = Colonna {
+        logico: Some(11),
+        ..colonna(INT32)
+    };
+    let byte = parquet(&con_valore, 1, PLAIN, &7_i32.to_le_bytes(), None, None);
+    contiene(arrow(&byte), parquet::basic::UNKNOWN_WITH_VALUES);
+    rifiutato_dal_confine(&byte);
+    // Controfattuale: una colonna opzionale tutta nulla (livello 0).
+    let nulla = Colonna {
+        logico: Some(11),
+        ripetizione: 1,
+        ..colonna(INT32)
+    };
+    let mut livelli = 2_u32.to_le_bytes().to_vec(); // lunghezza RLE v1
+    livelli.extend_from_slice(&[2, 0]); // corsa RLE di 1 livello 0
+    let byte = parquet(&nulla, 1, PLAIN, &livelli, None, None);
+    assert_eq!(arrow(&byte), Ok(1));
 }

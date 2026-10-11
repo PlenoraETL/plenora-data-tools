@@ -1248,36 +1248,36 @@ prova su quel file.
 **Regola.** La lettura Parquet legge un tipo logico solo se è in un
 elenco chiuso di tipi qualificati, che `parquet` converte in un tipo Arrow
 che tiene i valori del file: testo, mappe, liste, `ENUM`, decimali, date,
-ore, istanti, interi, `JSON`, `BSON`, `UUID`, `FLOAT16`, geometrie e
-geografie. Ogni altra annotazione, a ogni livello dello schema (gruppi
-compresi), è `Unsupported` prima della conversione dello schema. Un
-`INTERVAL` (tipo convertito, mesi, giorni e millisecondi) si legge solo se
-le parti che l'unità Arrow non tiene sono zero
-(`INTERVAL_NOT_AS_DECLARED`).
+ore, istanti, interi, `JSON`, `BSON`, `UUID`, `FLOAT16`, geometrie,
+geografie e `UNKNOWN` (il tipo «sempre nullo», letto come colonna Arrow
+`Null`: un suo valore è un errore, `UNKNOWN_WITH_VALUES`). Ogni altra
+annotazione, a ogni livello dello schema (gruppi compresi), è
+`Unsupported` prima della conversione dello schema. Un `INTERVAL` (tipo
+convertito, mesi, giorni e millisecondi) si legge solo se le parti che
+l'unità Arrow non tiene sono zero (`INTERVAL_NOT_AS_DECLARED`).
 
 **Ambito.** La lettura Parquet di `plenora-io` (`parquet_io::leggi`,
-`verifica_tipi_logici`) e, per `INTERVAL`, il fork
-`vendor/parquet-60.0.0-eof` (`fixed_len_byte_array.rs`).
+`verifica_tipi_logici`) e, per `UNKNOWN` e `INTERVAL`, il fork
+`vendor/parquet-60.0.0-eof` (`null_array.rs`, `fixed_len_byte_array.rs`).
 
-**Hazard.** Si rifiutano anche file validi: `UNKNOWN` (il tipo «sempre
-nullo», che `parquet` legge come colonna `Null` scartando in silenzio i
-valori che il file avesse), `VARIANT` (non qualificato nel fork:
-`variant_experimental` è escluso, e i suoi gruppi si leggevano come struct
-di byte), `FILE` e i tipi che il fork non riconosce (si leggevano come
-byte). Nei file del riferimento cambiano così quattro file di prova:
-`alltypes-java` e `null_list` (una colonna `UNKNOWN`, prima `ok`),
-`unknown-logical-type` (un tipo non riconosciuto, prima `ok`),
-`ARROW-GH-41321` e `ARROW-RS-GH-6229-LEVELS` (rifiutati già, ora per il
-tipo). I 14 file `bad_data/variants/` non hanno l'annotazione `VARIANT`:
+**Hazard.** Si rifiutano anche file validi: `VARIANT` (non qualificato nel
+fork: `variant_experimental` è escluso, e i suoi gruppi si leggevano come
+struct di byte), `FILE` e i tipi che il fork non riconosce (si leggevano
+come byte). Nei file del riferimento cambia così `unknown-logical-type`
+(un tipo non riconosciuto, prima `ok`). Una colonna `UNKNOWN` con un
+valore, che `parquet` scartava in silenzio leggendola come `Null`, è un
+errore; le colonne `UNKNOWN` dei file di prova sono nulle e si leggono
+(`alltypes-java`, `null_list`), come quelle che l'`ArrowWriter` scrive per
+un campo Arrow `Null`. I 14 file `bad_data/variants/` non hanno l'annotazione `VARIANT`:
 sono due colonne di byte (`metadata`, `value`) che si leggono come byte,
 senza interpretarle. Un `INTERVAL` letto nell'unità `DayTime` (quella
 senza schema Arrow nel file) con mesi diversi da zero era un altro
 valore: ora un errore.
 
 **Condizione di rientro.** Per ciascun tipo, una lettura che ne tenga il
-valore con prove su file costruiti per romperla: `UNKNOWN` verificando che
-ogni valore sia nullo; `VARIANT` con la decodifica qualificata e una
-campagna di fuzz; i tipi nuovi della specifica uno per uno. Per
+valore con prove su file costruiti per romperla: `VARIANT` con la
+decodifica qualificata e una campagna di fuzz; i tipi nuovi della
+specifica uno per uno. Per
 `INTERVAL`, un'unità Arrow che tenga tutte e tre le parti.
 
 ## Codifiche Parquet non qualificate
