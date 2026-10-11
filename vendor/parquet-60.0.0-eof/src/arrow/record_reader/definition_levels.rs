@@ -236,6 +236,13 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
         }
         Ok(())
     }
+
+    fn verifica_fine_pagina(&self) -> Result<()> {
+        match &self.decoder {
+            MaybePacked::Packed(d) => crate::column::reader::decoder::fine_esatta(d.fine_esatta()),
+            MaybePacked::Fallback(d) => d.verifica_fine_pagina(),
+        }
+    }
 }
 
 impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
@@ -355,6 +362,21 @@ impl PackedDecoder {
             self.rle_value = byte != 0;
         }
         Ok(())
+    }
+
+    /// PLENORA: the level stream ends with the levels read: no level left
+    /// in an RLE run; in a bit-packed run at most the rest of the current
+    /// byte (the padding of the last group, bit width 1) and no byte after
+    /// the run; no run after.
+    fn fine_esatta(&self) -> bool {
+        if self.rle_left != 0 {
+            return false;
+        }
+        if self.packed_count != self.packed_offset {
+            let resto = self.packed_count - self.packed_offset;
+            return resto < 8 && self.data_offset + self.packed_count / 8 == self.data.len();
+        }
+        self.data_offset == self.data.len()
     }
 
     /// Decodes a VLQ encoded little endian integer and returns it

@@ -20,6 +20,7 @@ con la chiave `parquet` (`Cargo.toml`, «Copie vendorizzate»).
   patch -p1 < patches/parquet-decoder-2.patch     # decoder, secondo giro
   patch -p1 < patches/parquet-codifiche-e-livelli.patch  # codifiche lette, terzo giro, formattazione
   patch -p1 < patches/parquet-livelli-dizionari-indici.patch  # BIT_PACKED, dizionari, pagine v2, offset index
+  patch -p1 < patches/parquet-salti-e-fine-pagina.patch  # salti solo di pagine intere, fine pagina esatta
   ```
 
   Il risultato è questa cartella byte per byte, tolto questo file
@@ -368,8 +369,10 @@ fork del terzo giro; i file malformati sono anche semi del fuzz.
 3. Pagine v2: i livelli decidono quanti valori si leggono, e una pagina i
    cui livelli contraddicevano `num_values - num_nulls` si leggeva (livelli
    `05 00` su 8 righe senza nulli dichiarati: 8 null con 8 valori nella
-   pagina, **in silenzio**). Ora alla fine della pagina i valori letti o
-   saltati sono quelli dichiarati. Il costruttore di pagine delle prove
+   pagina, **in silenzio**). Ora alla fine della pagina i valori letti
+   sono quelli dichiarati. Un salto dentro la pagina sfuggiva a questo
+   confronto (chiudeva la pagina senza decodificarne i valori): dal quinto
+   giro non è qualificato. Il costruttore di pagine delle prove
    unitarie (`util/test_common/page_util.rs`) dichiarava `num_nulls` 0 per
    ogni pagina: ora conta i livelli sotto il massimo.
 4. Il tipo dei valori di un dizionario di byte array seguiva solo
@@ -386,9 +389,9 @@ fork del terzo giro; i file malformati sono anche semi del fuzz.
    il column chunk. La sottrazione di `peek_next_page` è controllata.
 6. Una pagina saltata intera (`skip_records`) si rifiuta per la sua
    codifica di valori come una pagina letta, dall'header. Senza header,
-   attraverso l'offset index, il salto non la controlla; i livelli di una
-   pagina saltata non si controllano (l'header ne nomina una codifica anche
-   per una colonna senza livelli).
+   attraverso l'offset index, il salto non la controllava (dal quinto giro
+   non è qualificato); i livelli di una pagina saltata non si controllano
+   (l'header ne nomina una codifica anche per una colonna senza livelli).
 
 Una codifica sconosciuta (un identificatore fuori dall'enumerazione) è un
 errore del Thrift, non `ENCODING_NOT_QUALIFIED`: dal confine `DataMapping`,
@@ -398,6 +401,53 @@ Prove unitarie del pacchetto con `parquet-testing`: le stesse 52 di prima
 falliscono (le 5 di partenza e le 47 attese). Letti con `plenora-io` e
 direttamente (anche con gli indici di pagina caricati), i 106 file di
 `parquet-testing` e `arrow-testing` hanno lo stesso esito del terzo giro.
+
+### Salti dentro una pagina, fine della pagina (11 ottobre 2026)
+
+Da `patches/parquet-salti-e-fine-pagina.patch`, sul quinto giro di revisione (Codex), che ha
+trovato le stesse classi nei salti e nella fine delle pagine. Due regole
+generali invece dei casi. Prove rosse in
+`crates/plenora-io/tests/parquet_decoder.rs` («Salti e fine della
+pagina») e `parquet_footer.rs` (selezione di righe), contro il fork del
+quarto giro; contro quello, la prova dei salti non termina (livelli di
+ripetizione troncati).
+
+1. **Salti: solo pagine intere, dall'header.** Un salto dentro una pagina
+   non decodificava ciò che saltava: una pagina v2 chiusa da un salto
+   sfuggiva al confronto dei nulli, livelli di ripetizione troncati
+   facevano girare il salto senza avanzare (il ciclo di lettura ha la sua
+   guardia, quello del salto no), un indice di dizionario fuori dal
+   dizionario passava. data e IO-tools leggono sempre per intero, senza
+   selezione di righe: il salto dentro una pagina (una pagina già
+   caricata, più righe di quelle da saltare, righe non note dall'header) e
+   il salto di una pagina senza header (attraverso l'offset index) sono
+   `SKIP_NOT_QUALIFIED` (`NYI`, `Unsupported` dal confine), finché non
+   sono qualificati. Restano i salti di pagine intere dall'header, che ne
+   controllano la codifica; ogni giro del loro ciclo consuma una pagina o
+   termina. Quindi `RowSelection`, filtri di riga, `offset`/`limit` del
+   lettore Arrow si rifiutano appena chiedono un salto che non cade su
+   pagine intere lette dall'header.
+2. **Fine della pagina esatta.** In un punto unico del lettore di colonna
+   (`verifica_fine_pagina`, alla fine di ogni pagina di dati, anche di
+   zero livelli), ogni stream deve finire con i suoi valori: livelli di
+   ripetizione e di definizione (decoder generici e ottimizzato), valori
+   `PLAIN` fino all'ultimo byte, indici di dizionario fino alla fine dello
+   stream, booleani `RLE` fino alla lunghezza prefissata e nessun byte
+   dopo. È ammesso solo il riempimento dell'ultimo gruppo bit-packed (e
+   l'ultimo gruppo troncato, che finisce con i dati). Prima i valori, i
+   livelli o i byte in più si ignoravano **in silenzio**.
+   `PAGE_NOT_AS_DECLARED`. Perché il controllo distingua il riempimento
+   dagli eccessi, i decoder dei livelli di ripetizione e degli indici di
+   dizionario Arrow non leggono più in avanti oltre i valori chiesti.
+
+I padding di fastparquet (zeri dopo l'ultima corsa) ora sono un errore:
+nessuno dei 106 file di prova ne ha. Letti con `plenora-io` e
+direttamente, i 106 file hanno lo stesso esito del quarto giro (cambia
+solo il messaggio di `ARROW-17100.parquet`, che si rifiutava già).
+
+Prove unitarie del pacchetto con `parquet-testing`: 79 falliscono, le 52
+di prima più 27 attese, tutte su salti dentro una pagina o selezioni di
+righe (`SKIP_NOT_QUALIFIED`).
 
 ### Profondità dello schema e tetto di memoria del footer (10 ottobre 2026)
 

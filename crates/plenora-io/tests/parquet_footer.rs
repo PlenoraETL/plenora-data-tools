@@ -468,22 +468,24 @@ fn tre_pagine() -> Vec<u8> {
     byte
 }
 
-/// Gli indici di pagina e una selezione che salta 150 righe e ne legge 150:
-/// le righe lette o l'errore; un panico fa fallire la prova.
-fn con_indici(byte: &[u8]) -> Result<usize, String> {
-    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+/// Gli indici di pagina caricati e, se data, una selezione di righe: le
+/// righe lette o l'errore; un panico fa fallire la prova.
+fn con_indici(
+    byte: &[u8],
+    selezione: Option<parquet::arrow::arrow_reader::RowSelection>,
+) -> Result<usize, String> {
     let dir = cartella();
     let percorso = dir.path().join("i.parquet");
     std::fs::write(&percorso, byte).unwrap();
     let file = std::fs::File::open(&percorso).unwrap();
     std::panic::catch_unwind(move || {
         let opzioni = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
-        let selezione = RowSelection::from(vec![RowSelector::skip(150), RowSelector::select(150)]);
-        let lettore = ParquetRecordBatchReaderBuilder::try_new_with_options(file, opzioni)
-            .map_err(|e| e.to_string())?
-            .with_row_selection(selezione)
-            .build()
+        let mut costruttore = ParquetRecordBatchReaderBuilder::try_new_with_options(file, opzioni)
             .map_err(|e| e.to_string())?;
+        if let Some(selezione) = selezione {
+            costruttore = costruttore.with_row_selection(selezione);
+        }
+        let lettore = costruttore.build().map_err(|e| e.to_string())?;
         let mut righe = 0;
         for batch in lettore {
             righe += batch.map_err(|e| e.to_string())?.num_rows();
@@ -529,8 +531,8 @@ fn cambia_prima_riga(byte: &[u8], prima: [u8; 2], dopo: [u8; 2]) -> Vec<u8> {
 #[test]
 fn un_offset_index_incoerente_e_un_errore() {
     let byte = tre_pagine();
-    // Controfattuale: indici 0, 100, 200; la selezione legge 150 righe.
-    assert_eq!(con_indici(&byte), Ok(150));
+    // Controfattuale: indici 0, 100, 200; si leggono le 300 righe.
+    assert_eq!(con_indici(&byte, None), Ok(300));
     // Varint zigzag: 100 -> 0xc8 0x01, 200 -> 0x90 0x03, -100 -> 0xc7 0x01,
     // 250 -> 0xf4 0x03, 400 -> 0xa0 0x06.
     for (nome, prima, dopo) in [
@@ -539,7 +541,7 @@ fn un_offset_index_incoerente_e_un_errore() {
         ("oltre le righe", [0x90, 0x03], [0xA0, 0x06]),
     ] {
         let rotto = cambia_prima_riga(&byte, prima, dopo);
-        let Err(errore) = con_indici(&rotto) else {
+        let Err(errore) = con_indici(&rotto, None) else {
             panic!("{nome}: offset index incoerente letto");
         };
         assert!(errore.contains("invalid offset index"), "{nome}: {errore}");
@@ -595,4 +597,27 @@ fn le_posizioni_date_al_lettore_di_pagine_si_verificano() {
             "{nome}: {errore}"
         );
     }
+}
+
+/// Una selezione di righe salta pagine attraverso l'offset index, senza
+/// leggerne l'header (la codifica non si controlla), o dentro una pagina,
+/// senza decodificare ciò che salta: non qualificata, un errore con il testo
+/// fisso. La lettura completa con gli stessi indici resta.
+#[test]
+fn una_selezione_di_righe_non_e_qualificata() {
+    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+    let byte = tre_pagine();
+    for selezione in [
+        vec![RowSelector::skip(150), RowSelector::select(150)],
+        vec![RowSelector::skip(100), RowSelector::select(200)],
+    ] {
+        let Err(errore) = con_indici(&byte, Some(RowSelection::from(selezione))) else {
+            panic!("selezione di righe letta");
+        };
+        assert!(
+            errore.contains(parquet::basic::SKIP_NOT_QUALIFIED),
+            "{errore}"
+        );
+    }
+    assert_eq!(con_indici(&byte, None), Ok(300));
 }

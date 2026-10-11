@@ -614,6 +614,24 @@ impl RleDecoder {
         Ok(values_read)
     }
 
+    /// PLENORA: whether the stream ends where the values read end. No values
+    /// left in an RLE run; in a bit-packed run, at most the rest of the
+    /// current group of 8 (the padding of the last group) and no byte after
+    /// it; no run after. A final bit-packed run shorter than its declared
+    /// groups (truncated by some writers) ends with the data, and is exact.
+    pub(crate) fn fine_esatta(&self) -> bool {
+        if self.rle_left > 0 {
+            return false;
+        }
+        let Some(lettore) = self.bit_reader.as_ref() else {
+            return false;
+        };
+        let resto_del_gruppo = (self.bit_packed_left as usize % BIT_PACK_GROUP_SIZE)
+            .saturating_mul(self.bit_width as usize);
+        let fine_del_gruppo = lettore.bit_letti().saturating_add(resto_del_gruppo);
+        lettore.buffer_len() <= bit_util::ceil(fine_del_gruppo, 8)
+    }
+
     #[inline]
     fn reload(&mut self) -> Result<bool> {
         let bit_reader = self

@@ -123,6 +123,11 @@ fn rifiuto_del_fork(testo: &str) -> Option<PlenoraError> {
             "colonna FIXED_LEN_BYTE_ARRAY letta come dizionario Arrow: non supportata".to_owned(),
         ));
     }
+    if testo.contains(parquet::basic::SKIP_NOT_QUALIFIED) {
+        return Some(PlenoraError::Unsupported(
+            "salto dentro una pagina Parquet o selezione di righe: non supportato".to_owned(),
+        ));
+    }
     if testo.contains(parquet::basic::BINARY_DICTIONARY_OVER_TEXT) {
         return Some(PlenoraError::Unsupported(
             "dizionario Arrow binario su una colonna di byte annotata come testo: non supportato"

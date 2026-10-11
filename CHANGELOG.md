@@ -57,6 +57,13 @@ la cui versione non ha qui una voce datata.
   fuori ordine nell'offset index traboccava; una pagina saltata intera non
   si controllava per la codifica; un dizionario `JSON` o `ENUM` teneva
   valori binari. Ora errori. `patches/parquet-livelli-dizionari-indici.patch`.
+- **Fine della pagina esatta nel fork `parquet`** (quinto giro): valori
+  `PLAIN`, livelli, indici di dizionario o booleani `RLE` in più dopo
+  quelli della pagina si ignoravano in silenzio; ora una pagina deve finire
+  con i suoi valori. Un salto dentro una pagina, che non decodificava ciò
+  che saltava (e con livelli troncati non terminava), non è più
+  qualificato: `Unsupported`; data legge sempre per intero.
+  `patches/parquet-salti-e-fine-pagina.patch`.
 - **Livelli, interi stretti e varint nel fork `parquet`** (terzo giro di
   revisione): un livello oltre il massimo della colonna (contato come
   nullo), un valore RLE più largo della sua larghezza, un `INT32` annotato

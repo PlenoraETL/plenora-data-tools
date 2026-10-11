@@ -547,7 +547,8 @@ fn una_pagina_plain_piu_corta_dei_valori_e_un_errore() {
         colonna_api::<ByteArrayType>(&corto, None),
         "Not enough bytes",
     );
-    // Il salto non aveva nessun controllo: una lunghezza oltre la pagina.
+    // Il salto dentro una pagina non aveva nessun controllo (una lunghezza
+    // oltre la pagina): ora non è qualificato.
     let oltre = parquet(
         &colonna(BYTE_ARRAY),
         2,
@@ -558,7 +559,7 @@ fn una_pagina_plain_piu_corta_dei_valori_e_un_errore() {
     );
     contiene(
         colonna_api::<ByteArrayType>(&oltre, Some(1)),
-        "Not enough bytes",
+        parquet::basic::SKIP_NOT_QUALIFIED,
     );
 }
 
@@ -934,6 +935,21 @@ fn semi_del_secondo_giro() -> Vec<(&'static str, Vec<u8>)> {
         (
             "v2-livelli-contro-valori",
             v2_livelli_contro_valori(&[5, 0]),
+        ),
+        (
+            "valori-plain-in-piu",
+            parquet(
+                &colonna(INT32),
+                1,
+                PLAIN,
+                &[7, 0, 0, 0, 8, 0, 0, 0],
+                None,
+                None,
+            ),
+        ),
+        (
+            "livelli-con-una-corsa-in-piu",
+            opzionale_con_livelli(2, &[2 << 1, 1, 2 << 1, 1], &[1, 0, 0, 0, 2, 0, 0, 0]),
         ),
         (
             "dichiarata-plain-usata-delta",
@@ -1931,4 +1947,134 @@ fn un_dizionario_di_testo_segue_l_annotazione() {
             assert_eq!(testo, "a", "{nome} {valori}");
         }
     }
+}
+
+// --- Salti e fine della pagina -------------------------------------------------
+
+/// Un salto dentro una pagina non decodificava ciò che saltava: una pagina
+/// v2 chiusa da un salto sfuggiva al confronto dei nulli, livelli di
+/// ripetizione troncati facevano girare il salto senza avanzare, un indice
+/// di dizionario fuori dal dizionario passava. Ora il salto dentro una
+/// pagina non è qualificato (`SKIP_NOT_QUALIFIED`, prima di leggere un
+/// livello); il salto di pagine intere, dall'header, resta.
+#[test]
+fn un_salto_dentro_una_pagina_non_e_qualificato() {
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    let mut troncati = Vec::new();
+    varint((100 << 1) | 1, &mut troncati); // ripetizione bit-packed senza byte
+    let lista_troncata = ripetuta(2, &troncati, &[2 << 1, 1], &dati);
+    let fuori_dizionario = parquet(
+        &colonna(BYTE_ARRAY),
+        2,
+        RLE_DICTIONARY,
+        &[2, 4, 3], // larghezza 2, corsa RLE di 2 dell'indice 3
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    let v2 = v2_livelli_contro_valori(&[5, 0]);
+    let due = parquet(&colonna(INT32), 2, PLAIN, &dati, None, None);
+    contiene(
+        colonna_api::<Int32Type>(&lista_troncata, Some(1)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+    contiene(
+        colonna_api::<ByteArrayType>(&fuori_dizionario, Some(1)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+    contiene(
+        colonna_api::<Int32Type>(&v2, Some(4)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+    contiene(
+        colonna_api::<Int32Type>(&due, Some(1)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+    // Controfattuale: la pagina intera si salta.
+    assert_eq!(colonna_api::<Int32Type>(&due, Some(2)), Ok(2));
+}
+
+/// Una pagina deve finire dove finiscono i suoi valori e i suoi livelli:
+/// valori `PLAIN` in più (`INT32`, `BYTE_ARRAY`, anche come viste, FLBA),
+/// una corsa di livelli in più, indici di dizionario in più, un byte dopo
+/// lo stream dei booleani `RLE`. Prima si leggevano i valori dichiarati e il
+/// resto si ignorava, in silenzio.
+#[test]
+#[allow(clippy::too_many_lines)] // Un caso per decoder.
+fn una_pagina_con_byte_o_valori_in_piu_e_un_errore() {
+    let atteso = parquet::basic::PAGE_NOT_AS_DECLARED;
+    // INT32: un valore dichiarato, due nella pagina.
+    let byte = parquet(
+        &colonna(INT32),
+        1,
+        PLAIN,
+        &[7, 0, 0, 0, 8, 0, 0, 0],
+        None,
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+    contiene(colonna_api::<Int32Type>(&byte, None), atteso);
+    rifiutato_dal_confine(&byte);
+    // BYTE_ARRAY, anche come viste.
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        PLAIN,
+        &testo_plain(&[b"a", b"b"]),
+        None,
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+    contiene(colonna_api::<ByteArrayType>(&byte, None), atteso);
+    rifiutato_dal_confine(&byte);
+    let schema = Schema::new(vec![Field::new("x", DataType::BinaryView, false)]);
+    contiene(
+        arrow_con_schema(&byte, schema).map(|batch| batch.len()),
+        atteso,
+    );
+    // FLBA: due valori di larghezza 2, uno dichiarato.
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let byte = parquet(&flba, 1, PLAIN, b"zzyy", None, None);
+    contiene(arrow(&byte), atteso);
+    rifiutato_dal_confine(&byte);
+    // Livelli di definizione: due corse di 2 per 2 righe (decoder
+    // ottimizzato), e lo stesso nei livelli di ripetizione (decoder generico).
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    let byte = opzionale_con_livelli(2, &[2 << 1, 1, 2 << 1, 1], &dati);
+    contiene(arrow(&byte), atteso);
+    rifiutato_dal_confine(&byte);
+    let byte = ripetuta(2, &[1 << 1, 0, 1 << 1, 1, 2 << 1, 1], &[2 << 1, 1], &dati);
+    contiene(arrow(&byte), atteso);
+    // Indici di dizionario: una corsa in più dopo quella del valore.
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &[1, 2, 0, 2, 0],
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+    contiene(colonna_api::<ByteArrayType>(&byte, None), atteso);
+    rifiutato_dal_confine(&byte);
+    // Booleani RLE: lunghezza 2, una corsa di un `true`, poi un byte.
+    let booleana = colonna(0);
+    let byte = parquet(&booleana, 1, RLE, &[2, 0, 0, 0, 2, 1, 0], None, None);
+    contiene(arrow(&byte), atteso);
+    contiene(
+        colonna_api::<parquet::data_type::BoolType>(&byte, None),
+        atteso,
+    );
+    rifiutato_dal_confine(&byte);
+    // Controfattuali: le stesse pagine esatte si leggono.
+    let byte = parquet(&booleana, 1, RLE, &[2, 0, 0, 0, 2, 1], None, None);
+    assert_eq!(arrow(&byte), Ok(1));
+    let byte = parquet(&flba, 2, PLAIN, b"zzyy", None, None);
+    assert_eq!(valori_arrow(&byte), ["7a7a", "7979"]);
+    let byte = opzionale_con_livelli(2, &[2 << 1, 1], &dati);
+    assert_eq!(valori_arrow(&byte), ["1", "2"]);
+    let byte = parquet(&colonna(INT32), 2, PLAIN, &dati, None, None);
+    assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(2));
 }

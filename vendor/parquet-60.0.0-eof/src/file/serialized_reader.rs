@@ -1303,11 +1303,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 if dictionary_page.is_some() {
                     // If a dictionary page exists, consume it by taking it (sets to None)
                     dictionary_page.take();
-                } else {
-                    // If no dictionary page exists, simply pop the data page from page_locations
-                    if page_locations.pop_front().is_some() {
-                        *page_index += 1;
-                    }
+                } else if !page_locations.is_empty() {
+                    // PLENORA: a data page reached through the offset index
+                    // has no header read: its encoding cannot be checked, and
+                    // the skip is not qualified.
+                    let _ = page_index;
+                    return Err(nyi_err!("{}", crate::basic::SKIP_NOT_QUALIFIED));
                 }
 
                 Ok(())

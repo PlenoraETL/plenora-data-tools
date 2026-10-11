@@ -33,6 +33,11 @@ pub trait ColumnLevelDecoder {
 
     /// Set data for this [`ColumnLevelDecoder`]
     fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()>;
+
+    /// PLENORA: at the end of a page, after its last level, the level stream
+    /// is consumed exactly (see `RleDecoder::fine_esatta`), otherwise
+    /// `PAGE_NOT_AS_DECLARED`.
+    fn verifica_fine_pagina(&self) -> Result<()>;
 }
 
 pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
@@ -132,6 +137,26 @@ pub trait ColumnValueDecoder {
     ///
     /// Returns the number of values skipped
     fn skip_values(&mut self, num_values: usize) -> Result<usize>;
+
+    /// PLENORA: at the end of a page, after its last value, the value stream
+    /// is consumed exactly: every byte of a `PLAIN` page, the dictionary
+    /// indices to the end of their stream, the `RLE` booleans to their
+    /// prefixed length and nothing after it. Otherwise `PAGE_NOT_AS_DECLARED`.
+    fn verifica_fine_pagina(&self) -> Result<()>;
+}
+
+/// PLENORA: the error of a page whose streams do not end with its values.
+pub(crate) fn pagina_non_come_dichiarata() -> ParquetError {
+    general_err!("{}", crate::basic::PAGE_NOT_AS_DECLARED)
+}
+
+/// PLENORA: `Ok` when `esatta`, otherwise `PAGE_NOT_AS_DECLARED`.
+pub(crate) fn fine_esatta(esatta: bool) -> Result<()> {
+    if esatta {
+        Ok(())
+    } else {
+        Err(pagina_non_come_dichiarata())
+    }
 }
 
 /// Bucket-based storage for decoder instances keyed by `Encoding`.
@@ -269,6 +294,14 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
 
         current_decoder.skip(num_values)
     }
+
+    fn verifica_fine_pagina(&self) -> Result<()> {
+        let esatta = self
+            .current_encoding
+            .and_then(|encoding| self.decoders[encoding as usize].as_ref())
+            .is_some_and(|decoder| decoder.fine_esatta());
+        fine_esatta(esatta)
+    }
 }
 
 const SKIP_BUFFER_SIZE: usize = 1024;
@@ -294,6 +327,13 @@ impl LevelDecoder {
             )),
             // PLENORA: an error, not `unreachable!`.
             _ => Err(general_err!("invalid level encoding: {}", encoding)),
+        }
+    }
+
+    /// PLENORA: the level stream ends with the levels read.
+    fn fine_esatta(&self) -> bool {
+        match self {
+            Self::Rle(reader, _) => reader.fine_esatta(),
         }
     }
 
@@ -343,6 +383,10 @@ impl ColumnLevelDecoder for DefinitionLevelDecoderImpl {
             self.max_level,
         )?);
         Ok(())
+    }
+
+    fn verifica_fine_pagina(&self) -> Result<()> {
+        fine_esatta(self.decoder.as_ref().is_some_and(LevelDecoder::fine_esatta))
     }
 }
 
@@ -413,8 +457,17 @@ impl RepetitionLevelDecoderImpl {
         }
     }
 
-    fn fill_buf(&mut self) -> Result<()> {
-        let read = self.decoder.as_mut().unwrap().read(self.buffer.as_mut())?;
+    /// PLENORA: reads at most `livelli` levels, the levels left in the page:
+    /// a read ahead of the whole buffer decoded the padding of the last
+    /// bit-packed group as levels, and the end of the page could not tell
+    /// padding from levels in excess.
+    fn fill_buf(&mut self, livelli: usize) -> Result<()> {
+        let quanti = livelli.min(self.buffer.len());
+        let read = self
+            .decoder
+            .as_mut()
+            .unwrap()
+            .read(&mut self.buffer[..quanti])?;
         self.buffer_offset = 0;
         self.buffer_len = read;
         Ok(())
@@ -457,6 +510,13 @@ impl ColumnLevelDecoder for RepetitionLevelDecoderImpl {
         self.buffer_offset = 0;
         Ok(())
     }
+
+    fn verifica_fine_pagina(&self) -> Result<()> {
+        fine_esatta(
+            self.buffer_offset == self.buffer_len
+                && self.decoder.as_ref().is_some_and(LevelDecoder::fine_esatta),
+        )
+    }
 }
 
 impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
@@ -471,7 +531,7 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
 
         while total_records_read < num_records && total_levels_read < num_levels {
             if self.buffer_len == self.buffer_offset {
-                self.fill_buf()?;
+                self.fill_buf(num_levels - total_levels_read)?;
                 if self.buffer_len == 0 {
                     break;
                 }
@@ -500,7 +560,7 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
 
         while total_records_read < num_records && total_levels_read < num_levels {
             if self.buffer_len == self.buffer_offset {
-                self.fill_buf()?;
+                self.fill_buf(num_levels - total_levels_read)?;
                 if self.buffer_len == 0 {
                     break;
                 }

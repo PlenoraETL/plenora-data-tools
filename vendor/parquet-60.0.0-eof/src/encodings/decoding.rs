@@ -179,6 +179,13 @@ pub trait Decoder<T: DataType>: Send {
     /// to decode.
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()>;
 
+    /// PLENORA: whether the data ends where the values read end. Only the
+    /// decoders of the qualified encodings answer; the others are not
+    /// verified, and answer `false` (an error at the end of the page).
+    fn fine_esatta(&self) -> bool {
+        false
+    }
+
     /// Consumes values from this decoder and write the results to `buffer`. This will try
     /// to fill up `buffer`.
     ///
@@ -340,6 +347,10 @@ impl<T: DataType> Decoder<T> for PlainDecoder<T> {
         T::T::decode(buffer, &mut self.inner)
     }
 
+    fn fine_esatta(&self) -> bool {
+        self.tutto_consumato()
+    }
+
     #[inline]
     fn skip(&mut self, num_values: usize) -> Result<usize> {
         T::T::skip(&mut self.inner, num_values)
@@ -439,6 +450,12 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
         rle.get_batch_with_dict(&self.dictionary[..], buffer, num_values)
     }
 
+    fn fine_esatta(&self) -> bool {
+        self.rle_decoder
+            .as_ref()
+            .is_some_and(RleDecoder::fine_esatta)
+    }
+
     /// Number of values left in this decoder stream
     fn values_left(&self) -> usize {
         self.num_values
@@ -467,6 +484,8 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
 pub struct RleValueDecoder<T: DataType> {
     values_left: usize,
     decoder: RleDecoder,
+    /// PLENORA: bytes after the prefixed length of the stream.
+    byte_dopo: bool,
     _phantom: PhantomData<T>,
 }
 
@@ -481,6 +500,7 @@ impl<T: DataType> RleValueDecoder<T> {
         Self {
             values_left: 0,
             decoder: RleDecoder::new(1),
+            byte_dopo: false,
             _phantom: PhantomData,
         }
     }
@@ -509,7 +529,12 @@ where
         self.decoder
             .set_data(data.slice(I32_SIZE..I32_SIZE + data_size))?;
         self.values_left = num_values;
+        self.byte_dopo = data.len() - I32_SIZE != data_size;
         Ok(())
+    }
+
+    fn fine_esatta(&self) -> bool {
+        !self.byte_dopo && self.decoder.fine_esatta()
     }
 
     #[inline]

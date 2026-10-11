@@ -1519,6 +1519,19 @@ pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
     }
 }
 
+/// PLENORA: the fixed text of the rejection of a skip inside a page (a
+/// partial skip, a row selection or a row filter that does not fall on whole
+/// pages), and of a whole page skipped without its header: not qualified. A
+/// skip did not decode what it passed over, so the checks of a read (values,
+/// dictionary indices, declared counts, progress) did not apply to it.
+pub const SKIP_NOT_QUALIFIED: &str =
+    "Parquet skip inside a page or without a page header not qualified for reading";
+
+/// PLENORA: the fixed text of a data page whose streams (levels, values,
+/// dictionary indices) do not end where its values end: bytes or values
+/// after the last one the page declares.
+pub const PAGE_NOT_AS_DECLARED: &str = "data page does not end where its levels and values end";
+
 /// PLENORA: the fixed text of a dictionary page whose entries are not the
 /// entries its header declares (fewer values, or bytes after the last one).
 pub const DICTIONARY_NOT_AS_DECLARED: &str =

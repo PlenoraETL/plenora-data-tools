@@ -590,6 +590,15 @@ impl ColumnValueDecoder for ValueDecoder {
             }
         }
     }
+
+    fn verifica_fine_pagina(&self) -> Result<()> {
+        let esatta = match self.decoder.as_ref() {
+            Some(Decoder::Plain { buf, offset }) => *offset == buf.len(),
+            Some(Decoder::Dict { decoder }) => decoder.fine_esatta(),
+            Some(Decoder::Delta { .. } | Decoder::ByteStreamSplit { .. }) | None => false,
+        };
+        crate::column::reader::decoder::fine_esatta(esatta)
+    }
 }
 
 // `src` is an array laid out like a NxM matrix where N == `data_width` and

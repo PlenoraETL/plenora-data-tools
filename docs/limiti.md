@@ -1084,6 +1084,29 @@ invece di un errore. Nessuna prova lo rileva dal consumatore.
 nel proprio `[profile.release]`, oppure una guardia a runtime che rifiuta
 di eseguire un piano in una build senza controlli di overflow.
 
+## Salti Parquet dentro una pagina
+
+**Regola.** Il lettore Parquet decodifica e verifica tutto ciò che
+attraversa: valori, indici di dizionario, conteggi dichiarati, fine della
+pagina.
+
+**Ambito.** Il fork `vendor/parquet-60.0.0-eof`: `skip_records` del
+lettore di colonna e il salto di pagine del lettore di pagine (offset
+index), quindi `RowSelection`, filtri di riga, `offset` e `limit` del
+lettore Arrow.
+
+**Hazard.** Un salto dentro una pagina, o di una pagina senza header, non
+decodificava ciò che saltava: è `SKIP_NOT_QUALIFIED` (`Unsupported` dal
+confine), anche su un file valido. `plenora-io` legge sempre per intero e
+non lo raggiunge; lo raggiunge chi usa il fork come libreria con una
+selezione di righe. Restano i salti di pagine intere, dall'header, che ne
+controllano la codifica senza decodificarle.
+
+**Condizione di rientro.** Un salto che decodifica e verifica come la
+lettura (leggi e butta), con una guardia di avanzamento in ogni ciclo e le
+prove di questo giro, oppure il bisogno di una selezione di righe da
+parte di data o IO-tools.
+
 ## Codifiche Parquet non qualificate
 
 **Regola.** Ogni codifica che il lettore Parquet accetta è qualificata:
