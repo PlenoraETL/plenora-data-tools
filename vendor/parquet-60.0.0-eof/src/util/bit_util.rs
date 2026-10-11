@@ -942,6 +942,12 @@ impl BitReader {
             }
             v |= group << shift;
             if byte & 0x80 == 0 {
+                // PLENORA: a last byte 0 after the first is a varint not
+                // minimal (`80 00` is 0): no writer makes one, and as an RLE
+                // indicator it hid an empty run from the end of the page.
+                if i > 0 && byte == 0 {
+                    return Err(general_err!("varint not minimal"));
+                }
                 self.byte_offset += i + 1;
                 return Ok(Some(v as i64));
             }

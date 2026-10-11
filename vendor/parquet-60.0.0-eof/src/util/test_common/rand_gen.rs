@@ -173,6 +173,11 @@ pub fn make_pages<T: DataType>(
         }
         if max_rep_level > 0 {
             random_numbers_range(levels_per_page, 0, max_rep_level + 1, rep_levels);
+            // PLENORA: a page starts a record (a v2 page must): its first
+            // repetition level is 0.
+            if let Some(primo) = rep_levels.get_mut(level_range.start) {
+                *primo = 0;
+            }
         }
         random_numbers_range(num_values_cur_page, min, max, values);
 

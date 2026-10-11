@@ -2497,7 +2497,14 @@ fn le_corse_vuote_in_coda_contano_come_byte() {
         vec![0x80, 0x00, 0, 0, 0, 0, 0, 0],
         vec![0x01],
     ] {
-        contiene(arrow(&tutta_nulla(&coda)), atteso);
+        // Un varint non minimo si rifiuta appena letto.
+        match arrow(&tutta_nulla(&coda)) {
+            Err(testo) => assert!(
+                testo.contains(atteso) || testo.contains("varint not minimal"),
+                "{testo}"
+            ),
+            Ok(righe) => panic!("letto ({righe} righe)"),
+        }
     }
     assert_eq!(arrow(&tutta_nulla(&[0; 8])), Ok(1));
     let mut v2 = vec![1 << 1, 0, 1, 0];
@@ -2627,4 +2634,224 @@ fn la_dimensione_non_compressa_di_una_pagina_si_confronta() {
     let byte = parquet_con_header(&colonna(INT32), 1, PLAIN, &dati, &header, None, None);
     contiene(arrow(&byte), "declares 3 bytes");
     rifiutato_dal_confine(&byte);
+}
+
+// --- Corse vuote, blocco DuckDB, confine delle pagine v2 ---------------------------
+
+/// Una pagina `OPTIONAL` `INT32` di `righe` righe con i livelli dati e un
+/// valore per riga a partire da 1 (gli eccessi lasciano byte non zero).
+fn opzionale_con_righe(righe: i32, livelli: &[u8]) -> Vec<u8> {
+    let dati: Vec<u8> = (1..=righe).flat_map(i32::to_le_bytes).collect();
+    opzionale_con_livelli(i64::from(righe), livelli, &dati)
+}
+
+/// Il blocco di `DuckDB` solo per livelli e indici, e solo se un suo valore
+/// si legge: i booleani `RLE` lo ricevevano (255 booleani in più), e un
+/// blocco di cui non si leggeva niente (pagina tutta nulla) passava (256
+/// indici in più, oltre l'hazard dichiarato).
+#[test]
+fn il_blocco_di_duckdb_solo_per_livelli_e_indici_letti() {
+    let atteso = parquet::basic::PAGE_NOT_AS_DECLARED;
+    let blocco = |primo: u8| {
+        let mut corsa = vec![0x41, primo];
+        corsa.extend_from_slice(&[0; 31]);
+        corsa
+    };
+    // Booleani: lunghezza 33, il blocco con un `true`.
+    let mut booleani = 33_u32.to_le_bytes().to_vec();
+    booleani.extend(blocco(1));
+    let byte = parquet(&colonna(0), 1, RLE, &booleani, None, None);
+    contiene(arrow(&byte), atteso);
+    contiene(
+        colonna_api::<parquet::data_type::BoolType>(&byte, None),
+        atteso,
+    );
+    // Indici di una pagina tutta nulla: il blocco intero, nessuno letto.
+    let dizionario = testo_plain(&[b"a"]);
+    let nulla = Colonna {
+        ripetizione: 1,
+        ..colonna(BYTE_ARRAY)
+    };
+    let pagina = |livelli: &[u8], indici: &[u8]| {
+        let mut contenuto = u32::try_from(livelli.len()).unwrap().to_le_bytes().to_vec();
+        contenuto.extend_from_slice(livelli);
+        contenuto.extend_from_slice(indici);
+        parquet(
+            &nulla,
+            1,
+            RLE_DICTIONARY,
+            &contenuto,
+            Some((1, &dizionario)),
+            None,
+        )
+    };
+    let mut indici = vec![1_u8];
+    indici.extend(blocco(0));
+    contiene(arrow(&pagina(&[1 << 1, 0], &indici)), atteso);
+    // Controfattuale: un indice letto dal blocco.
+    assert_eq!(valori_arrow(&pagina(&[1 << 1, 1], &indici)), ["a"]);
+}
+
+/// Una corsa vuota (RLE di lunghezza 0 o bit-packed di 0 gruppi) prima dei
+/// valori si saltava, e la corsa dopo cancellava il segno: `01 80 00 02 00`
+/// negli indici passava (anche in v2), i livelli `01 02 01` pure, e il
+/// decoder ottimizzato dei livelli leggeva `00 00 02 01` dove quello
+/// generico si fermava. Ora una corsa vuota chiude lo stream ovunque sia, e
+/// un varint non minimo è un errore.
+#[test]
+fn una_corsa_vuota_prima_dei_valori_e_un_errore() {
+    let dizionario = testo_plain(&[b"a"]);
+    for indici in [
+        vec![1_u8, 0x80, 0x00, 2, 0],
+        vec![1, 0x01, 2, 0],
+        vec![1, 0, 2, 0],
+    ] {
+        let byte = parquet(
+            &colonna(BYTE_ARRAY),
+            1,
+            RLE_DICTIONARY,
+            &indici,
+            Some((1, &dizionario)),
+            None,
+        );
+        assert!(arrow(&byte).is_err(), "{indici:02x?}");
+        assert!(
+            colonna_api::<ByteArrayType>(&byte, None).is_err(),
+            "{indici:02x?}"
+        );
+        let v2 = parquet_con_header(
+            &colonna(BYTE_ARRAY),
+            1,
+            RLE_DICTIONARY,
+            &indici,
+            &header_v2(1, 0, 1, RLE_DICTIONARY, 0, 0, indici.len(), indici.len()),
+            Some((1, &dizionario)),
+            None,
+        );
+        assert!(arrow(&v2).is_err(), "v2 {indici:02x?}");
+    }
+    for livelli in [
+        vec![0x01_u8, 2 << 1, 1],
+        vec![0, 0, 2 << 1, 1],
+        vec![0x80, 0, 2 << 1, 1],
+    ] {
+        let byte = opzionale_con_righe(2, &livelli);
+        assert!(arrow(&byte).is_err(), "ottimizzato {livelli:02x?}");
+        assert!(livelli_generici(&byte).is_err(), "generico {livelli:02x?}");
+    }
+}
+
+/// I livelli di definizione letti dal decoder generico (API per colonne,
+/// non il decoder ottimizzato del lettore Arrow): la validità per riga o
+/// l'errore.
+fn livelli_generici(byte: &[u8]) -> Result<Vec<bool>, String> {
+    su_file(byte, |file| {
+        std::panic::catch_unwind(move || {
+            let lettore = SerializedFileReader::new(file).map_err(|e| e.to_string())?;
+            let gruppo = lettore.get_row_group(0).map_err(|e| e.to_string())?;
+            let colonna = gruppo.get_column_reader(0).map_err(|e| e.to_string())?;
+            let mut tipizzata = get_typed_column_reader::<Int32Type>(colonna);
+            let (mut definizioni, mut valori) = (Vec::new(), Vec::new());
+            loop {
+                let (righe, _, _) = tipizzata
+                    .read_records(64, Some(&mut definizioni), None, &mut valori)
+                    .map_err(|e| e.to_string())?;
+                if righe == 0 {
+                    break;
+                }
+            }
+            Ok(definizioni.iter().map(|livello| *livello == 1).collect())
+        })
+        .unwrap_or_else(|carico| panic!("il decoder generico va in panico: {}", panico(&*carico)))
+    })
+}
+
+/// La validità per riga letta dal lettore Arrow (decoder ottimizzato dei
+/// livelli a larghezza 1), o l'errore.
+fn livelli_ottimizzati(byte: &[u8]) -> Result<Vec<bool>, String> {
+    let batch = su_file(byte, |file| {
+        std::panic::catch_unwind(move || {
+            let lettore = ParquetRecordBatchReaderBuilder::try_new(file)
+                .map_err(|e| e.to_string())?
+                .build()
+                .map_err(|e| e.to_string())?;
+            lettore
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())
+        })
+        .unwrap_or_else(|carico| panic!("il lettore Arrow va in panico: {}", panico(&*carico)))
+    })?;
+    Ok(batch
+        .iter()
+        .flat_map(|b| {
+            let colonna = b.column(0).clone();
+            (0..colonna.len())
+                .map(|riga| colonna.is_valid(riga))
+                .collect::<Vec<_>>()
+        })
+        .collect())
+}
+
+/// Oracolo: il decoder ottimizzato dei livelli (lettore Arrow) e quello
+/// generico (API per colonne) danno lo stesso esito sugli stessi stream:
+/// gli stessi livelli, o entrambi un errore. Stream deterministici di 1-6
+/// byte da un alfabeto che copre corse RLE, bit-packed, vuote, varint non
+/// minimi e valori fuori dalla larghezza, su pagine di 1-9 righe.
+#[test]
+fn i_due_decoder_dei_livelli_danno_lo_stesso_esito() {
+    const ALFABETO: [u8; 12] = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x10, 0x41, 0x80, 0xFF, 0x0F,
+    ];
+    let mut stato: u64 = 0x2545_F491_4F6C_DD1D;
+    let mut prossimo = |n: usize| {
+        stato ^= stato << 13;
+        stato ^= stato >> 7;
+        stato ^= stato << 17;
+        usize::try_from(stato % u64::try_from(n).unwrap()).unwrap()
+    };
+    let mut letti = 0;
+    for _ in 0..1500 {
+        let righe = i32::try_from(1 + prossimo(9)).unwrap();
+        let lunghezza = 1 + prossimo(6);
+        let livelli: Vec<u8> = (0..lunghezza)
+            .map(|_| ALFABETO[prossimo(ALFABETO.len())])
+            .collect();
+        let byte = opzionale_con_righe(righe, &livelli);
+        let ottimizzato = livelli_ottimizzati(&byte);
+        let generico = livelli_generici(&byte);
+        match (&ottimizzato, &generico) {
+            (Ok(a), Ok(b)) => {
+                assert_eq!(a, b, "{righe} righe, livelli {livelli:02x?}");
+                letti += 1;
+            }
+            (Err(_), Err(_)) => {}
+            _ => panic!(
+                "esiti diversi su {righe} righe, livelli {livelli:02x?}: {ottimizzato:?} {generico:?}"
+            ),
+        }
+    }
+    // L'oracolo confronta anche letture riuscite, non solo errori.
+    assert!(letti > 0);
+}
+
+/// Una pagina v2 comincia su un confine di record: i livelli di
+/// ripetizione `[1, 0]` con una riga dichiarata passavano, e il primo
+/// livello si attaccava al record della pagina prima. Ora è un errore. La
+/// compatibilità per i record su più pagine v2 è tolta: nessuno scrittore
+/// misurato la usa.
+#[test]
+fn una_pagina_v2_comincia_su_un_confine_di_record() {
+    let lista = Colonna {
+        ripetizione: 2,
+        ..colonna(INT32)
+    };
+    let mut contenuto = vec![(1 << 1) | 1, 0b01]; // ripetizione [1, 0]
+    contenuto.extend_from_slice(&[2 << 1, 1]); // definizione
+    contenuto.extend_from_slice(&[1, 0, 0, 0, 2, 0, 0, 0]);
+    let header = header_v2(1, 0, 2, PLAIN, 2, 2, contenuto.len(), contenuto.len());
+    let byte = parquet_con_header(&lista, 2, PLAIN, &contenuto, &header, None, None);
+    contiene(arrow(&byte), "does not start on a record boundary");
+    rifiutato_dal_confine(&byte);
+    // Controfattuale: `[0, 1]`, una riga di due elementi.
+    assert_eq!(arrow(&lista_v2(1)), Ok(1));
 }

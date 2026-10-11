@@ -264,6 +264,18 @@ where
 
                     let (mut records_read, levels_read) =
                         reader.read_rep_levels(out, remaining_records, remaining_levels)?;
+                    // PLENORA: a v2 page starts on a record boundary (its
+                    // first repetition level is 0): a page that started
+                    // inside a record continued the record of the page before
+                    // it, and its first levels were flushed into that record.
+                    if self.righe_dichiarate.is_some()
+                        && levels_read > 0
+                        && reader.primo_livello() != Some(0)
+                    {
+                        return Err(general_err!(
+                            "data page V2 does not start on a record boundary"
+                        ));
+                    }
 
                     if records_read == 0 && levels_read == 0 {
                         // The fact that we're still looping implies there must be some levels to read.
@@ -577,9 +589,12 @@ where
                             // DataPage v2 only supports RLE encoding for repetition
                             // levels
                             if self.descr.max_rep_level() > 0 {
-                                // Technically a DataPage v2 should not write a record
-                                // across multiple pages, however, the parquet writer
-                                // used to do this so we preserve backwards compatibility
+                                // PLENORA: a v2 page starts on a record boundary,
+                                // checked on its first repetition level (a record
+                                // across v2 pages, which an old parquet-rs writer
+                                // made, is an error: no writer measured makes it).
+                                // Whether its end is a boundary depends on the next
+                                // page.
                                 self.has_record_delimiter =
                                     self.page_reader.at_record_boundary()?;
 
@@ -1615,5 +1630,64 @@ mod tests {
         assert_eq!(values, vec![70, 80], "should contain 4th record's values");
         assert_eq!(rep_levels, vec![0, 1], "rep levels for a 2-element list");
         assert_eq!(def_levels, vec![1, 1], "def levels (all non-null)");
+    }
+
+    /// PLENORA: deterministic negative cases of the v2 page checks that the
+    /// random page generator (`rand_gen`, first repetition level 0) only
+    /// meets on its positive path: a page that does not start a record, and
+    /// declared rows that are not its repetition levels 0.
+    #[test]
+    fn test_v2_page_record_boundary_and_rows_are_checked() {
+        use crate::encodings::levels::LevelEncoder;
+        let desc = Arc::new(ColumnDescriptor::new(
+            Arc::new(
+                SchemaType::primitive_type_builder("element", PhysicalType::INT32)
+                    .with_repetition(Repetition::REQUIRED)
+                    .build()
+                    .unwrap(),
+            ),
+            1,
+            1,
+            ColumnPath::new(vec!["list".to_string(), "element".to_string()]),
+        ));
+        let pagina = |rep: &[i16], righe: u32| -> Page {
+            let mut rep_enc = LevelEncoder::v2_streaming(1);
+            rep_enc.put_with_observer(rep, |_, _| {});
+            let rep_bytes = rep_enc.consume();
+            let def: Vec<i16> = vec![1; rep.len()];
+            let mut def_enc = LevelEncoder::v2_streaming(1);
+            def_enc.put_with_observer(&def, |_, _| {});
+            let def_bytes = def_enc.consume();
+            let mut buf = rep_bytes.clone();
+            buf.extend_from_slice(&def_bytes);
+            for valore in 0..rep.len() as i32 {
+                buf.extend_from_slice(&valore.to_le_bytes());
+            }
+            Page::DataPageV2 {
+                buf: Bytes::from(buf),
+                num_values: rep.len() as u32,
+                encoding: Encoding::PLAIN,
+                num_nulls: 0,
+                num_rows: righe,
+                def_levels_byte_len: def_bytes.len() as u32,
+                rep_levels_byte_len: rep_bytes.len() as u32,
+                is_compressed: false,
+                statistics: None,
+            }
+        };
+        let leggi = |pagina: Page| {
+            let lettore = InMemoryPageReader::new(VecDeque::from(vec![pagina]));
+            let colonna = get_column_reader(desc.clone(), Box::new(lettore));
+            let mut tipizzata = get_typed_column_reader::<Int32Type>(colonna);
+            let (mut valori, mut def, mut rep) = (Vec::new(), Vec::new(), Vec::new());
+            tipizzata
+                .read_records(10, Some(&mut def), Some(&mut rep), &mut valori)
+                .map(|(righe, _, _)| righe)
+        };
+        let errore = leggi(pagina(&[1, 0], 1)).unwrap_err().to_string();
+        assert!(errore.contains("record boundary"), "{errore}");
+        let errore = leggi(pagina(&[0, 1, 0], 1)).unwrap_err().to_string();
+        assert!(errore.contains("rows but its levels start"), "{errore}");
+        assert_eq!(leggi(pagina(&[0, 1, 0], 2)).unwrap(), 2);
     }
 }

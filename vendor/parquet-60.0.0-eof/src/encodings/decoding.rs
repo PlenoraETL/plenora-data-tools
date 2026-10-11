@@ -543,7 +543,9 @@ where
 
     fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
         crate::util::bit_util::coda_di_zeri(&self.dopo, 0, fine.coda_di_zeri)
-            && self.decoder.fine_esatta(fine.livelli())
+            && self
+                .decoder
+                .fine_esatta(crate::column::reader::decoder::FinePagina::ESATTA)
     }
 
     #[inline]

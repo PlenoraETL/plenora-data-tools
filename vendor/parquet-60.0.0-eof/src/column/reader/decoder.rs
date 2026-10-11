@@ -108,6 +108,9 @@ pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
     /// PLENORA: the repetition levels 0 read since the page was set, the
     /// rows that started in it (a v2 page declares them, `num_rows`).
     fn righe_iniziate(&self) -> usize;
+
+    /// PLENORA: the first repetition level read since the page was set.
+    fn primo_livello(&self) -> Option<i16>;
 }
 
 pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
@@ -489,6 +492,8 @@ pub struct RepetitionLevelDecoderImpl {
     has_partial: bool,
     /// PLENORA: the repetition levels 0 read since the page was set.
     righe_iniziate: usize,
+    /// PLENORA: the first repetition level read since the page was set.
+    primo_livello: Option<i16>,
 }
 
 impl RepetitionLevelDecoderImpl {
@@ -503,6 +508,7 @@ impl RepetitionLevelDecoderImpl {
             buffer_len: 0,
             has_partial: false,
             righe_iniziate: 0,
+            primo_livello: None,
         }
     }
 
@@ -519,6 +525,9 @@ impl RepetitionLevelDecoderImpl {
             .read(&mut self.buffer[..quanti])?;
         self.buffer_offset = 0;
         self.buffer_len = read;
+        if read > 0 {
+            self.primo_livello.get_or_insert(self.buffer[0]);
+        }
         Ok(())
     }
 
@@ -558,6 +567,7 @@ impl ColumnLevelDecoder for RepetitionLevelDecoderImpl {
         self.buffer_len = 0;
         self.buffer_offset = 0;
         self.righe_iniziate = 0;
+        self.primo_livello = None;
         Ok(())
     }
 
@@ -643,6 +653,10 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
 
     fn righe_iniziate(&self) -> usize {
         self.righe_iniziate
+    }
+
+    fn primo_livello(&self) -> Option<i16> {
+        self.primo_livello
     }
 }
 

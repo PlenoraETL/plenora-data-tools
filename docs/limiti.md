@@ -1114,7 +1114,10 @@ parte di data o IO-tools.
 **Regola.** Una pagina Parquet letta fino al suo ultimo livello finisce
 dove finiscono i suoi livelli e i suoi valori: nessun valore, gruppo o
 byte dopo (`PAGE_NOT_AS_DECLARED`), salvo il riempimento dell'ultimo
-gruppo bit-packed e un'ultima corsa troncata dalla fine dei dati.
+gruppo bit-packed e un'ultima corsa troncata dalla fine dei dati. Una
+corsa vuota (RLE di lunghezza 0, bit-packed di 0 gruppi) chiude lo stream
+ovunque sia: ciò che la segue è la coda, e deve essere vuoto salvo la
+deviazione di fastparquet; un varint non minimo è un errore.
 
 **Ambito.** Il fork `vendor/parquet-60.0.0-eof`, fine delle pagine di dati
 v1 (`FinePagina::V1`, `column/reader/decoder.rs`); le pagine v2 finiscono
@@ -1123,21 +1126,23 @@ scrittore e solo nella sua forma esatta:
 
 - fastparquet aggiunge 8 byte a zero a ogni pagina v1, dopo i valori,
   anche `PLAIN` (`writer.py`, `8 * b'\x00'`). Si tollerano dopo lo stream
-  dei valori di una pagina v1, misurati da dove finisce l'ultimo valore
-  (anche quando lo stream finisce con un indicatore RLE 0): al più 8 byte,
-  tutti zero (`CODA_FASTPARQUET`). Mai dopo i livelli, mai in una pagina
-  v2, mai byte diversi da zero, mai un varint non minimo (`80 00`).
+  dei valori di una pagina v1 (valori `PLAIN` e indici di dizionario),
+  misurati da dove finisce l'ultimo valore o da dove comincia la prima
+  corsa vuota: al più 8 byte, tutti zero (`CODA_FASTPARQUET`). Mai dopo i
+  livelli, mai dentro lo stream dei booleani `RLE` (solo dopo la sua
+  lunghezza prefissata), mai in una pagina v2, mai byte diversi da zero.
 - DuckDB scrive le corse bit-packed a blocchi di 32 gruppi e completa
   l'ultimo con byte vecchi, non zeri. Gruppi interi dopo l'ultimo valore si
-  tollerano solo in una corsa che dichiara esattamente 32 gruppi
-  (`BLOCCO_DUCKDB`), a larghezza in bit sopra 0, in una pagina v1, nei
-  livelli e negli indici; il loro contenuto non si legge.
+  tollerano solo nei livelli e negli indici di dizionario di una pagina v1
+  (non nei booleani `RLE`), in una corsa che dichiara esattamente 32 gruppi
+  (`BLOCCO_DUCKDB`), a larghezza in bit sopra 0, e solo se almeno un valore
+  del blocco si legge; il loro contenuto non si legge.
 
 **Hazard.** Una pagina v1 `PLAIN` con valori a zero in più, entro 8 byte
 (due `INT32`, un `INT64`, due `FLOAT`), si legge senza quei valori invece
 di essere rifiutata. Un'ultima corsa bit-packed di 32 gruppi in una pagina
-v1 può portare fino a 255 livelli o indici in più, qualunque, che non si
-leggono. Rifiutarle rifiuterebbe ogni file v1 di fastparquet e i file
+v1, di cui si legge almeno un valore, può portare fino a 255 livelli o
+indici in più, qualunque, che non si leggono. Rifiutarle rifiuterebbe ogni file v1 di fastparquet e i file
 DuckDB V1 da qualche centinaio di righe in su (misurato su fastparquet
 2026.9.0 e DuckDB 1.5.6, `vendor/parquet-60.0.0-eof/PROVENANCE.md`).
 
@@ -1145,6 +1150,27 @@ DuckDB V1 da qualche centinaio di righe in su (misurato su fastparquet
 DuckDB di completare i blocchi con byte vecchi, e i loro file in uso sono
 riscritti; oppure una dichiarazione dello scrittore nei metadati del file
 che permetta di tollerare le forme solo per i suoi file.
+
+## Record su più pagine Parquet v2
+
+**Regola.** Una pagina di dati v2 comincia su un confine di record: il suo
+primo livello di ripetizione è 0, e le righe che dichiara sono i suoi
+livelli di ripetizione 0.
+
+**Ambito.** Il fork `vendor/parquet-60.0.0-eof`, lettura delle pagine v2
+delle colonne ripetute. La compatibilità di `parquet` 60.0.0 per i record
+spezzati fra pagine v2 (scritti da una vecchia versione di parquet-rs) è
+tolta.
+
+**Hazard.** Un file con un record spezzato fra due pagine v2 si rifiuta
+(«does not start on a record boundary»), anche se lo scrittore lo
+intendeva. Nessuno scrittore misurato li produce (pyarrow 25 e 26 con
+liste in pagine v2 da 4 KiB, fastparquet v2, polars; i 106 file di
+`parquet-testing` e `arrow-testing`).
+
+**Condizione di rientro.** Un file reale da uno scrittore in uso con
+record su più pagine v2: allora la compatibilità torna, dichiarata, con una
+prova su quel file.
 
 ## Codifiche Parquet non qualificate
 

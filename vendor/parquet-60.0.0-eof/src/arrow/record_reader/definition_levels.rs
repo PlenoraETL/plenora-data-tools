@@ -328,8 +328,8 @@ struct PackedDecoder {
     packed_offset: usize,
     /// PLENORA: the groups the current bit-packed run declares.
     gruppi_della_corsa: usize,
-    /// PLENORA: where the runs of no value at the end of the stream start
-    /// (see `RleDecoder`); None after a run with values.
+    /// PLENORA: where the stream ended on a run of no value (see
+    /// `RleDecoder`): nothing is read after it.
     inizio_corse_vuote: Option<usize>,
 }
 
@@ -337,11 +337,12 @@ impl PackedDecoder {
     fn next_rle_block(&mut self) -> Result<()> {
         let inizio = self.data_offset;
         let indicator_value = self.decode_header()?;
-        // PLENORA: a run of no value is remembered where it starts.
+        // PLENORA: a run of no value ends the stream where it starts, as in
+        // `RleDecoder` (the two decoders gave different levels: this one read
+        // on after it, the generic one stopped).
         if indicator_value >> 1 == 0 {
-            self.inizio_corse_vuote.get_or_insert(inizio);
-        } else {
-            self.inizio_corse_vuote = None;
+            self.inizio_corse_vuote = Some(inizio);
+            return Ok(());
         }
         // PLENORA: the same rules as `RleDecoder::reload`: a run count beyond
         // `u32` is an error; a bit-packed run is read only as far as the data
@@ -393,8 +394,11 @@ impl PackedDecoder {
         let dati = self.data.as_ref();
         if self.packed_count != self.packed_offset {
             let resto = self.packed_count - self.packed_offset;
+            // DuckDB: a block of which a level was read.
             if resto > resto % 8
-                && !(fine.blocco_duckdb && self.gruppi_della_corsa == BLOCCO_DUCKDB)
+                && !(fine.blocco_duckdb
+                    && self.gruppi_della_corsa == BLOCCO_DUCKDB
+                    && self.packed_offset > 0)
             {
                 return false;
             }
@@ -422,6 +426,10 @@ impl PackedDecoder {
             // PLENORA: bits beyond 64 were dropped in silence.
             if offset == 9 && byte & 0x7F > 1 {
                 return Err(general_err!("varint beyond 64 bits"));
+            }
+            // PLENORA: a varint not minimal, as in `BitReader`.
+            if offset > 0 && byte == 0 {
+                return Err(general_err!("varint not minimal"));
             }
             v |= ((byte & 0x7F) as i64) << (offset * 7);
             offset += 1;
@@ -483,7 +491,7 @@ impl PackedDecoder {
     fn try_consume_all_valid(&mut self, len: usize) -> Result<Option<usize>> {
         // If no active run and no packed data pending, try to parse the next RLE block
         if self.rle_left == 0 && self.packed_count == self.packed_offset {
-            if self.data_offset < self.data.len() {
+            if self.data_offset < self.data.len() && self.inizio_corse_vuote.is_none() {
                 self.next_rle_block()?;
             } else {
                 // No more data available
@@ -521,7 +529,7 @@ impl PackedDecoder {
                 if self.packed_offset == self.packed_count {
                     self.data_offset += self.packed_count / 8;
                 }
-            } else if self.data_offset == self.data.len() {
+            } else if self.data_offset == self.data.len() || self.inizio_corse_vuote.is_some() {
                 break;
             } else {
                 self.next_rle_block()?
@@ -555,7 +563,7 @@ impl PackedDecoder {
                 if self.packed_offset == self.packed_count {
                     self.data_offset += self.packed_count / 8;
                 }
-            } else if self.data_offset == self.data.len() {
+            } else if self.data_offset == self.data.len() || self.inizio_corse_vuote.is_some() {
                 break;
             } else {
                 self.next_rle_block()?

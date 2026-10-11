@@ -454,13 +454,13 @@ ripetizione troncati).
    - fastparquet (2026.9) aggiunge 8 byte a zero a ogni pagina v1, dopo i
      valori, anche `PLAIN` (`writer.py`, `8 * b'\x00'`): dopo lo stream
      dei valori al più 8 byte, tutti zero (`CODA_FASTPARQUET`), misurati
-     da dove cominciano le corse vuote in coda (settimo giro: il primo
-     indicatore RLE 0 si leggeva già nel `set_data`, e 9 zeri passavano
-     come 8, `80 00` come niente); mai dopo i livelli;
+     da dove comincia la prima corsa vuota, che chiude lo stream (settimo e
+     ottavo giro); mai dopo i livelli, mai nello stream dei booleani `RLE`;
    - DuckDB (1.5) scrive le corse bit-packed a blocchi di 32 gruppi e
      completa l'ultimo con byte vecchi, non zeri: gruppi interi dopo
-     l'ultimo valore solo in una corsa che dichiara esattamente 32 gruppi
-     (`BLOCCO_DUCKDB`), a larghezza sopra 0, qualunque cosa contengano. Perché il controllo distingua il riempimento
+     l'ultimo valore solo nei livelli e negli indici, in una corsa che
+     dichiara esattamente 32 gruppi (`BLOCCO_DUCKDB`), a larghezza sopra
+     0, di cui almeno un valore si legge, qualunque cosa contengano. Perché il controllo distingua il riempimento
    dagli eccessi, i decoder dei livelli di ripetizione e degli indici di
    dizionario Arrow non leggono più in avanti oltre i valori chiesti.
 
@@ -482,6 +482,26 @@ ripetizione troncati).
 5. Una pagina v2 compressa senza valori (tutti nulli) non decomprimeva la
    parte compressa, e un suffisso qualunque spariva. Ora si decomprime e
    deve dare zero byte (lo stream vuoto di un codec si legge).
+
+**Ottavo giro.**
+
+1. Il blocco di DuckDB arrivava anche ai booleani `RLE` (255 booleani in
+   più), e un blocco di cui non si leggeva nessun valore passava (una
+   pagina tutta nulla, 256 indici in più). Ora solo livelli e indici, e
+   solo se almeno un valore del blocco si legge.
+2. Una corsa vuota prima dei valori si saltava e la corsa dopo cancellava
+   il segno (`01 80 00 02 00` negli indici, anche in v2; livelli `01 02
+   01`), e il decoder ottimizzato dei livelli leggeva oltre una corsa vuota
+   dove quello generico si fermava. Ora una corsa vuota chiude lo stream
+   ovunque sia, nei due decoder, e un varint non minimo è un errore. Un
+   oracolo confronta i due decoder dei livelli su 1500 stream
+   deterministici (`i_due_decoder_dei_livelli_danno_lo_stesso_esito`):
+   sul fork del settimo giro trova la divergenza.
+3. Una pagina v2 che cominciava dentro un record (`[1, 0]`, una riga)
+   passava, e il suo primo livello si attaccava al record precedente. Ora
+   il primo livello di ripetizione di una pagina v2 deve essere 0; la
+   compatibilità per i record su più pagine v2 è tolta (`docs/limiti.md`,
+   «Record su più pagine Parquet v2»).
 
 **Settimo giro.**
 
@@ -515,11 +535,12 @@ fastparquet, SNAPPY e ZSTD) si leggono; GZIP, BROTLI e LZ4 non sono
 compilati (`Unsupported`, come prima). Letti con `plenora-io` e
 direttamente, i 106 file di prova hanno lo stesso esito del quarto giro.
 
-Prove unitarie del pacchetto con `parquet-testing`: 80 falliscono, le 52
+Prove unitarie del pacchetto con `parquet-testing`: 79 falliscono, le 52
 di prima più 27 attese, tutte su salti dentro una pagina o selezioni di
-righe (`SKIP_NOT_QUALIFIED`), e `test_read_dict_v2_int32_small`, che
-genera pagine v2 di una colonna ripetuta senza un livello di ripetizione 0
-(0 righe su livelli presenti, una pagina v2 fuori specifica).
+righe (`SKIP_NOT_QUALIFIED`). Il generatore casuale delle pagine
+(`util/test_common/rand_gen.rs`) comincia ogni pagina con un livello di
+ripetizione 0 (una pagina v2 deve); i casi negativi sono deterministici
+(`test_v2_page_record_boundary_and_rows_are_checked`).
 
 ### Profondità dello schema e tetto di memoria del footer (10 ottobre 2026)
 
