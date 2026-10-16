@@ -1018,6 +1018,21 @@ pub(crate) mod private {
         }
     }
 
+    /// PLENORA: the value of a PLAIN byte array at `start`: its 4-byte length
+    /// and its bytes, both inside `data`. Returns the value's range.
+    fn plain_byte_array_value(data: &Bytes, start: usize) -> Result<(usize, usize)> {
+        let value_start = start
+            .checked_add(std::mem::size_of::<u32>())
+            .filter(|value_start| *value_start <= data.len())
+            .ok_or_else(|| eof_err!("Not enough bytes to decode"))?;
+        let len = read_num_bytes::<u32>(4, &data.as_ref()[start..value_start]) as usize;
+        let end = value_start
+            .checked_add(len)
+            .filter(|end| *end <= data.len())
+            .ok_or_else(|| eof_err!("Not enough bytes to decode"))?;
+        Ok((value_start, end))
+    }
+
     impl ParquetValueType for super::ByteArray {
         const PHYSICAL_TYPE: Type = Type::BYTE_ARRAY;
 
@@ -1051,16 +1066,10 @@ pub(crate) mod private {
                 .expect("set_data should have been called");
             let num_values = std::cmp::min(buffer.len(), decoder.num_values);
             for val_array in buffer.iter_mut().take(num_values) {
-                let len: usize =
-                    read_num_bytes::<u32>(4, data.slice(decoder.start..).as_ref()) as usize;
-                decoder.start += std::mem::size_of::<u32>();
-
-                if data.len() < decoder.start + len {
-                    return Err(eof_err!("Not enough bytes to decode"));
-                }
-
-                val_array.set_data(data.slice(decoder.start..decoder.start + len));
-                decoder.start += len;
+                // PLENORA: the length prefix and the value must be in the page.
+                let (start, end) = plain_byte_array_value(data, decoder.start)?;
+                val_array.set_data(data.slice(start..end));
+                decoder.start = end;
             }
             decoder.num_values -= num_values;
 
@@ -1079,9 +1088,9 @@ pub(crate) mod private {
             let num_values = num_values.min(decoder.num_values);
 
             for _ in 0..num_values {
-                let len: usize =
-                    read_num_bytes::<u32>(4, data.slice(decoder.start..).as_ref()) as usize;
-                decoder.start += std::mem::size_of::<u32>() + len;
+                // PLENORA: as in `decode`; this skip had no bound at all.
+                let (_, end) = plain_byte_array_value(data, decoder.start)?;
+                decoder.start = end;
             }
             decoder.num_values -= num_values;
 
@@ -1143,7 +1152,14 @@ pub(crate) mod private {
 
         #[inline]
         fn decode(buffer: &mut [Self], decoder: &mut PlainDecoderDetails) -> Result<usize> {
-            assert!(decoder.type_length > 0);
+            // PLENORA: la larghezza viene dallo schema del file, che ammette 0:
+            // un errore, non un panico (era `assert!`).
+            if decoder.type_length <= 0 {
+                return Err(general_err!(
+                    "invalid FIXED_LEN_BYTE_ARRAY width {} for the plain decoder",
+                    decoder.type_length
+                ));
+            }
 
             let data = decoder
                 .data
@@ -1167,7 +1183,13 @@ pub(crate) mod private {
         }
 
         fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
-            assert!(decoder.type_length > 0);
+            // PLENORA: come in `decode`.
+            if decoder.type_length <= 0 {
+                return Err(general_err!(
+                    "invalid FIXED_LEN_BYTE_ARRAY width {} for the plain decoder",
+                    decoder.type_length
+                ));
+            }
 
             let data = decoder
                 .data

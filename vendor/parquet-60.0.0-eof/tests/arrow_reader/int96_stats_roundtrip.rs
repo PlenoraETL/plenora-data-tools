@@ -78,7 +78,10 @@ fn verify_ordering(data: Vec<Int96>) {
         {
             let writer = col_writer.typed::<Int96Type>();
             let mut shuffled_data = data.clone();
-            shuffled_data.shuffle(&mut rand::rng());
+            // PLENORA: a fixed seed, the same data on every run.
+            shuffled_data.shuffle(
+                &mut <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(0x5EED_0003),
+            );
             writer.write_batch(&shuffled_data, None, None).unwrap();
         }
         col_writer.close().unwrap();

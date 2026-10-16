@@ -1,0 +1,322 @@
+--- a/src/arrow/array_reader/byte_array_dictionary.rs
++++ b/src/arrow/array_reader/byte_array_dictionary.rs
+@@ -283,6 +283,15 @@ enum MaybeDictionaryDecoder {
+     Fallback(ByteArrayDecoder),
+ }
+ 
++/// PLENORA: a dictionary index read from the file as a key of type `K`:
++/// negative or beyond `K` is an error.
++fn chiave<K: ArrowNativeType>(indice: i32) -> Result<K> {
++    usize::try_from(indice)
++        .ok()
++        .and_then(K::from_usize)
++        .ok_or_else(|| general_err!("dictionary key out of range for the key type"))
++}
++
+ /// A [`ColumnValueDecoder`] for dictionary encoded variable length byte arrays
+ struct DictionaryDecoder<K, V> {
+     /// The current dictionary
+@@ -420,10 +429,16 @@ where
+                         // Keys will be validated on conversion to arrow
+ 
+                         // TODO: Push vec into decoder (#5177)
+-                        let start = keys.len();
+-                        keys.resize(start + len, K::default());
+-                        let len = decoder.get_batch(&mut keys[start..])?;
+-                        keys.truncate(start + len);
++                        // PLENORA: decoded as `i32` (the widest a dictionary
++                        // index can be) and converted with a check: decoded
++                        // straight into a narrow key (`Int8`) an index was
++                        // truncated by `as` before any validation.
++                        let mut indici = vec![0_i32; len];
++                        let len = decoder.get_batch(&mut indici)?;
++                        keys.reserve(len);
++                        for indice in &indici[..len] {
++                            keys.push(chiave::<K>(*indice)?);
++                        }
+                         *max_remaining_values -= len;
+                         Ok(len)
+                     }
+@@ -433,8 +448,12 @@ where
+                         // This either means we crossed into a new column chunk whilst
+                         // reading this batch, or encountered non-dictionary encoded data
+                         let values = out.spill_values()?;
+-                        let mut keys = vec![K::default(); len];
+-                        let len = decoder.get_batch(&mut keys)?;
++                        let mut indici = vec![0_i32; len];
++                        let len = decoder.get_batch(&mut indici)?;
++                        let keys = indici[..len]
++                            .iter()
++                            .map(|indice| chiave::<K>(*indice))
++                            .collect::<Result<Vec<K>>>()?;
+ 
+                         assert_eq!(dict.data_type(), &self.value_type);
+ 
+--- a/src/arrow/array_reader/fixed_len_byte_array.rs
++++ b/src/arrow/array_reader/fixed_len_byte_array.rs
+@@ -438,7 +438,10 @@ impl ColumnValueDecoder for ValueDecoder {
+             ));
+         }
+ 
+-        self.dict_page = Some(buf);
++        // PLENORA: the dictionary holds the values its header declares; bytes
++        // after them are not entries, and an index into them was read as a
++        // value in silence.
++        self.dict_page = Some(buf.slice(..expected_len));
+         Ok(())
+     }
+ 
+@@ -515,7 +518,12 @@ impl ColumnValueDecoder for ValueDecoder {
+                 Ok(to_read)
+             }
+             Decoder::Dict { decoder } => {
+-                let dict = self.dict_page.as_ref().unwrap();
++                // PLENORA: a dictionary-encoded page with no dictionary page is
++                // an error, not a panic.
++                let dict = self
++                    .dict_page
++                    .as_ref()
++                    .ok_or_else(|| general_err!("missing dictionary page for column"))?;
+                 // All data must be NULL
+                 if dict.is_empty() {
+                     return Ok(0);
+--- a/src/arrow/buffer/dictionary_buffer.rs
++++ b/src/arrow/buffer/dictionary_buffer.rs
+@@ -163,6 +163,14 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
+                 };
+                 let values = if let ArrowType::FixedSizeBinary(size) = **value_type {
+                     let binary = values.as_binary::<i32>();
++                    // PLENORA: every value has the declared width: `try_new`
++                    // checks only the total, and ["a", "bcd"] became
++                    // ["ab", "cd"] in silence.
++                    if binary.value_offsets().windows(2).any(|w| {
++                        i64::from(w[1]) - i64::from(w[0]) != i64::from(size)
++                    }) {
++                        return Err(general_err!("dictionary values of the wrong width"));
++                    }
+                     // PLENORA: dictionary values of the wrong width are an
+                     // error (`new` panics on them).
+                     Arc::new(
+--- a/src/arrow/decoder/delta_byte_array.rs
++++ b/src/arrow/decoder/delta_byte_array.rs
+@@ -78,6 +78,11 @@ impl DeltaByteArrayDecoder {
+         }
+ 
+         let mut suffix = DeltaBitPackDecoder::<Int32Type>::new();
++        // PLENORA: the offsets count the padding of the last block, which a
++        // truncated page lacks: both must be inside the page.
++        if prefix.get_offset() > data.len() {
++            return Err(eof_err!("DELTA_BYTE_ARRAY prefix lengths beyond the page"));
++        }
+         suffix.set_data(data.slice(prefix.get_offset()..), massimo)?;
+ 
+         let num_suffix = suffix.values_left();
+@@ -86,6 +91,10 @@ impl DeltaByteArrayDecoder {
+             return Err(eof_err!("eof decoding DELTA_BYTE_ARRAY suffix lengths"));
+         }
+ 
++        if prefix.get_offset().saturating_add(suffix.get_offset()) > data.len() {
++            return Err(eof_err!("DELTA_BYTE_ARRAY suffix lengths beyond the page"));
++        }
++
+         if num_prefix != num_suffix {
+             return Err(general_err!(format!(
+                 "inconsistent DELTA_BYTE_ARRAY lengths, prefixes: {num_prefix}, suffixes: {num_suffix}"
+--- a/src/arrow/record_reader/definition_levels.rs
++++ b/src/arrow/record_reader/definition_levels.rs
+@@ -322,17 +322,39 @@ struct PackedDecoder {
+ impl PackedDecoder {
+     fn next_rle_block(&mut self) -> Result<()> {
+         let indicator_value = self.decode_header()?;
++        // PLENORA: the same rules as `RleDecoder::reload`: a run count beyond
++        // `u32` is an error, a bit-packed run must be inside the data (its
++        // bits were read past the payload), and a level of bit width 1 is 0 or
++        // 1 (any other byte was read as 1 in silence).
++        let run = usize::try_from(
++            u32::try_from(indicator_value >> 1)
++                .map_err(|_| general_err!("RLE run length out of range"))?,
++        )
++        .map_err(|_| general_err!("RLE run length out of range"))?;
+         if indicator_value & 1 == 1 {
+-            let len = (indicator_value >> 1) as usize;
+-            self.packed_count = len * 8;
++            self.data_offset
++                .checked_add(run)
++                .filter(|end| *end <= self.data.len())
++                .ok_or_else(|| {
++                    ParquetError::EOF(
++                        "unexpected end of file whilst decoding definition levels bit-packed run"
++                            .into(),
++                    )
++                })?;
++            self.packed_count = run
++                .checked_mul(8)
++                .ok_or_else(|| general_err!("RLE run length out of range"))?;
+             self.packed_offset = 0;
+         } else {
+-            self.rle_left = (indicator_value >> 1) as usize;
++            self.rle_left = run;
+             let byte = *self.data.as_ref().get(self.data_offset).ok_or_else(|| {
+                 ParquetError::EOF(
+                     "unexpected end of file whilst decoding definition levels rle value".into(),
+                 )
+             })?;
++            if byte > 1 {
++                return Err(general_err!("invalid definition level in an RLE run"));
++            }
+ 
+             self.data_offset += 1;
+             self.rle_value = byte != 0;
+@@ -356,6 +378,10 @@ impl PackedDecoder {
+                     )
+                 })?;
+ 
++            // PLENORA: bits beyond 64 were dropped in silence.
++            if offset == 9 && byte & 0x7F > 1 {
++                return Err(general_err!("varint beyond 64 bits"));
++            }
+             v |= ((byte & 0x7F) as i64) << (offset * 7);
+             offset += 1;
+             if byte & 0x80 == 0 {
+--- a/src/encodings/decoding.rs
++++ b/src/encodings/decoding.rs
+@@ -896,7 +896,16 @@ where
+                 // When min_delta == 0 there is nothing to do: last_value is
+                 // unchanged and no bytes are consumed from the bit reader.
+                 if min_delta != 0 {
++                    // PLENORA: the same wrapping arithmetic as `get`. The
++                    // product wraps in `i64`; for a 32-bit type its low 32 bits
++                    // are the product modulo 2^32, which `from_i64` rejected
++                    // when out of range: a valid page failed in `skip` only.
+                     let total = min_delta.wrapping_mul(mini_block_to_skip as i64);
++                    let total = if std::mem::size_of::<T::T>() == 4 {
++                        i64::from(total as i32)
++                    } else {
++                        total
++                    };
+                     let step = T::T::from_i64(total)
+                         .ok_or_else(|| general_err!("delta*n overflow in skip"))?;
+                     self.last_value = self.last_value.wrapping_add(&step);
+@@ -956,6 +965,11 @@ where
+ /// converted to `usize` overflowed the offsets, and one beyond the bytes
+ /// sliced past the page.
+ pub(crate) fn check_delta_lengths(lengths: &[i32], offset: usize, data_len: usize) -> Result<()> {
++    // The end of the lengths counts the padding of their last block, which a
++    // truncated page lacks: it must be inside the page too.
++    if offset > data_len {
++        return Err(general_err!("Insufficient delta length byte array bytes"));
++    }
+     let mut end = offset;
+     for length in lengths {
+         let length = usize::try_from(*length)
+@@ -1030,6 +1044,7 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
+                     return Err(eof_err!("eof decoding delta length byte array lengths"));
+                 }
+                 check_delta_lengths(&self.lengths, len_decoder.get_offset(), data.len())?;
++                // (`check_delta_lengths` also bounds the offset itself.)
+ 
+                 self.data = Some(data.slice(len_decoder.get_offset()..));
+                 self.offset = 0;
+@@ -1166,8 +1181,20 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
+                 prefix_len_decoder.get(&mut self.prefix_lengths[..])?;
+ 
+                 let mut suffix_decoder = DeltaLengthByteArrayDecoder::new();
+-                suffix_decoder
+-                    .set_data(data.slice(prefix_len_decoder.get_offset()..), num_values)?;
++                // PLENORA: the offset after the prefixes counts the padding of
++                // their last block, which a truncated page lacks.
++                let fine_prefissi = prefix_len_decoder.get_offset();
++                if fine_prefissi > data.len() {
++                    return Err(eof_err!("DELTA_BYTE_ARRAY prefix lengths beyond the page"));
++                }
++                suffix_decoder.set_data(data.slice(fine_prefissi..), num_values)?;
++                if suffix_decoder.values_left() != num_prefixes {
++                    return Err(general_err!(
++                        "inconsistent DELTA_BYTE_ARRAY lengths, prefixes: {}, suffixes: {}",
++                        num_prefixes,
++                        suffix_decoder.values_left()
++                    ));
++                }
+                 self.suffix_decoder = Some(suffix_decoder);
+                 self.num_values = num_prefixes;
+                 self.current_idx = 0;
+@@ -1192,7 +1219,11 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
+                         .suffix_decoder
+                         .as_mut()
+                         .expect("decoder not initialized");
+-                    suffix_decoder.get(&mut v[..])?;
++                    // PLENORA: a missing suffix is an error; the previous one
++                    // stayed in `v` and was used again in silence.
++                    if suffix_decoder.get(&mut v[..])? != 1 {
++                        return Err(eof_err!("DELTA_BYTE_ARRAY has fewer suffixes than prefixes"));
++                    }
+                     let suffix = v[0].data();
+ 
+                     // Extract current prefix length, can be 0
+--- a/src/encodings/rle.rs
++++ b/src/encodings/rle.rs
+@@ -621,7 +621,8 @@ impl RleDecoder {
+             .as_mut()
+             .ok_or_else(|| general_err!("bit_reader should be set"))?;
+ 
+-        if let Some(indicator_value) = bit_reader.get_vlq_int() {
++        // PLENORA: a malformed varint is an error, not the end of the data.
++        if let Some(indicator_value) = bit_reader.get_vlq_int_checked()? {
+             // fastparquet adds padding to the end of pages. This is not spec-compliant
+             // but is handled by the C++ implementation
+             // <https://github.com/apache/arrow/blob/8074496cb41bc8ec8fe9fc814ca5576d89a6eb94/cpp/src/arrow/util/rle_encoding.h#L653>
+--- a/src/util/bit_util.rs
++++ b/src/util/bit_util.rs
+@@ -878,29 +878,42 @@ impl BitReader {
+     /// Panics if the encoded integer is longer than [`MAX_VLQ_BYTE_LEN`]
+     /// bytes (bad input).
+     pub fn get_vlq_int(&mut self) -> Option<i64> {
++        // PLENORA: a malformed varint is `None` too, like the end of the
++        // data; callers that must tell them apart use `get_vlq_int_checked`.
++        self.get_vlq_int_checked().ok().flatten()
++    }
++
++    /// PLENORA: [`Self::get_vlq_int`] that tells a malformed varint (an
++    /// error) from the end of the data (`Ok(None)`). A varint longer than
++    /// [`MAX_VLQ_BYTE_LEN`] bytes panicked, and bits beyond 64 were dropped in
++    /// silence (`<< 63` of a 7-bit group): both are errors now.
++    pub fn get_vlq_int_checked(&mut self) -> Result<Option<i64>> {
+         // Align to byte boundary once, then read bytes directly
+         self.byte_offset = self.get_byte_offset();
+         self.bit_offset = 0;
+ 
+         let buf = &self.buffer[self.byte_offset..];
+-        let mut shift = 0;
+-        let mut v: i64 = 0;
++        let mut v: u64 = 0;
+ 
+         for (i, &byte) in buf.iter().enumerate() {
+-            v |= ((byte & 0x7F) as i64) << shift;
+-            shift += 7;
+-            assert!(
+-                shift <= MAX_VLQ_BYTE_LEN * 7,
+-                "Num of bytes exceed MAX_VLQ_BYTE_LEN ({MAX_VLQ_BYTE_LEN})"
+-            );
++            if i >= MAX_VLQ_BYTE_LEN {
++                return Err(general_err!("varint longer than {} bytes", MAX_VLQ_BYTE_LEN));
++            }
++            let group = u64::from(byte & 0x7F);
++            let shift = 7 * i;
++            if shift == 63 && group > 1 {
++                return Err(general_err!("varint beyond 64 bits"));
++            }
++            v |= group << shift;
+             if byte & 0x80 == 0 {
+                 self.byte_offset += i + 1;
+-                return Some(v);
++                return Ok(Some(v as i64));
+             }
+         }
+-        None
++        Ok(None)
+     }
+ 
++
+     /// Reads a zigzag-VLQ-encoded little-endian integer from the
+     /// stream.
+     ///

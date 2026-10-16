@@ -17,11 +17,11 @@
 
 use crate::basic::Encoding;
 use crate::column::page::Page;
+use crate::util::test_common::rng;
 use bytes::Bytes;
 use rand::{
     RngExt,
     distr::{Distribution, StandardUniform, uniform::SampleUniform},
-    rng,
 };
 use std::collections::VecDeque;
 
@@ -173,6 +173,11 @@ pub fn make_pages<T: DataType>(
         }
         if max_rep_level > 0 {
             random_numbers_range(levels_per_page, 0, max_rep_level + 1, rep_levels);
+            // PLENORA: a page starts a record (a v2 page must): its first
+            // repetition level is 0.
+            if let Some(primo) = rep_levels.get_mut(level_range.start) {
+                *primo = 0;
+            }
         }
         random_numbers_range(num_values_cur_page, min, max, values);
 
@@ -213,7 +218,8 @@ pub fn make_pages<T: DataType>(
         let dict_page = Page::DictionaryPage {
             buf: dict,
             num_values: dict_encoder.num_entries() as u32,
-            encoding: Encoding::RLE_DICTIONARY,
+            // PLENORA: a dictionary page is `PLAIN`.
+            encoding: Encoding::PLAIN,
             is_sorted: false,
         };
         pages.push_front(dict_page);

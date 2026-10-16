@@ -305,6 +305,12 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         None
     }
 
+    /// PLENORA: charge `count * size` bytes against the decoding budget, if
+    /// the protocol carries one, before the caller reserves them.
+    fn reserve(&self, _count: usize, _size: usize) -> crate::errors::Result<()> {
+        Ok(())
+    }
+
     /// Read a ULEB128 encoded unsigned varint from the input.
     fn read_vlq(&mut self) -> ThriftProtocolResult<u64> {
         // try the happy path first
@@ -585,12 +591,25 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
 /// A high performance Thrift reader that reads from a slice of bytes.
 pub(crate) struct ThriftSliceInputProtocol<'a> {
     buf: &'a [u8],
+    // PLENORA: what is left of the decoding budget, if there is one.
+    budget: std::cell::Cell<Option<u64>>,
 }
 
 impl<'a> ThriftSliceInputProtocol<'a> {
     /// Create a new `ThriftSliceInputProtocol` using the bytes in `buf`.
     pub fn new(buf: &'a [u8]) -> Self {
-        Self { buf }
+        Self {
+            buf,
+            budget: std::cell::Cell::new(None),
+        }
+    }
+
+    /// PLENORA: the same protocol, charging reservations against `budget`.
+    pub fn with_budget(buf: &'a [u8], budget: Option<u64>) -> Self {
+        Self {
+            buf,
+            budget: std::cell::Cell::new(budget),
+        }
     }
 
     /// Return the current buffer as a slice.
@@ -636,6 +655,22 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a>
 
     fn remaining_bytes(&self) -> Option<usize> {
         Some(self.buf.len())
+    }
+
+    fn reserve(&self, count: usize, size: usize) -> crate::errors::Result<()> {
+        let Some(left) = self.budget.get() else {
+            return Ok(());
+        };
+        let cost = (count as u64).checked_mul(size as u64);
+        match cost {
+            Some(cost) if cost <= left => {
+                self.budget.set(Some(left - cost));
+                Ok(())
+            }
+            _ => Err(general_err!(
+                "Parquet footer metadata exceeds the decoding memory budget"
+            )),
+        }
     }
 }
 
@@ -785,6 +820,8 @@ where
             remaining
         ));
     }
+    // PLENORA: the reservation is charged to the budget before it is made.
+    prot.reserve(size, std::mem::size_of::<T>())?;
     let mut res = Vec::with_capacity(size);
     for _ in 0..list_ident.size {
         let val = T::read_thrift(prot)?;

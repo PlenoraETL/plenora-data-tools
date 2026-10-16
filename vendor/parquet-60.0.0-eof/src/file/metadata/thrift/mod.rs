@@ -198,7 +198,15 @@ fn convert_stats(
                 })
                 .transpose()?;
             // Generic distinct count (count of distinct values occurring)
-            let distinct_count = stats.distinct_count.map(|value| value as u64);
+            // PLENORA: a negative distinct count became a huge `u64` (the
+            // null and NaN counts were already refused).
+            let distinct_count = stats
+                .distinct_count
+                .map(|valore| {
+                    u64::try_from(valore)
+                        .map_err(|_| general_err!("Statistics distinct count is negative"))
+                })
+                .transpose()?;
             // Generic nan count for floating point types
             let nan_count = stats
                 .nan_count
@@ -227,28 +235,29 @@ fn convert_stats(
                 stats.max_value
             };
 
-            fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
-                if let Some(min) = min
-                    && min.len() < len
-                {
-                    return Err(general_err!("Insufficient bytes to parse min statistic",));
-                }
-                if let Some(max) = max
-                    && max.len() < len
-                {
-                    return Err(general_err!("Insufficient bytes to parse max statistic",));
-                }
-                Ok(())
-            }
-
             let physical_type = column_descr.physical_type();
-            match physical_type {
-                Type::BOOLEAN => check_len(min, max, 1),
-                Type::INT32 | Type::FLOAT => check_len(min, max, 4),
-                Type::INT64 | Type::DOUBLE => check_len(min, max, 8),
-                Type::INT96 => check_len(min, max, 12),
-                _ => Ok(()),
-            }?;
+            // PLENORA: the shape of every pair present, the deprecated one
+            // too (`verifica_forma_statistiche`).
+            {
+                use crate::file::statistics::verifica_forma_statistiche;
+                let larghezza = Some(column_descr.type_length());
+                verifica_forma_statistiche(
+                    physical_type,
+                    larghezza,
+                    stats.min_value,
+                    stats.max_value,
+                    stats.is_min_value_exact,
+                    stats.is_max_value_exact,
+                )?;
+                verifica_forma_statistiche(
+                    physical_type,
+                    larghezza,
+                    stats.min,
+                    stats.max,
+                    None,
+                    None,
+                )?;
+            }
 
             // Values are encoded using PLAIN encoding definition, except that
             // variable-length byte arrays do not include a length prefix.
@@ -406,6 +415,10 @@ fn read_encoding_stats_as_mask(prot: &mut ThriftSliceInputProtocol<'_>) -> Resul
 
     for _ in 0..list_ident.size {
         let pes = PageEncodingStats::read_thrift(prot)?;
+        // PLENORA: a count of pages is not negative.
+        if pes.count < 0 {
+            return Err(negativo_nel_footer());
+        }
         match pes.page_type {
             PageType::DATA_PAGE | PageType::DATA_PAGE_V2 => mask |= 1 << pes.encoding as i32,
             _ => {}
@@ -515,6 +528,10 @@ fn read_column_metadata(
                 } else {
                     let val =
                         read_thrift_vec::<PageEncodingStats, ThriftSliceInputProtocol>(&mut *prot)?;
+                    // PLENORA: a count of pages is not negative.
+                    if val.iter().any(|voce| voce.count < 0) {
+                        return Err(negativo_nel_footer());
+                    }
                     column.encoding_stats = Some(ParquetPageEncodingStats::Full(val));
                 }
             }
@@ -526,6 +543,18 @@ fn read_column_metadata(
             }
             16 if !skip_size_stats => {
                 let val = SizeStatistics::read_thrift(&mut *prot)?;
+                // PLENORA: a size and the counts of a level histogram are
+                // not negative.
+                if val.unencoded_byte_array_data_bytes.is_some_and(|v| v < 0)
+                    || val
+                        .repetition_level_histogram
+                        .iter()
+                        .chain(val.definition_level_histogram.iter())
+                        .flatten()
+                        .any(|v| *v < 0)
+                {
+                    return Err(negativo_nel_footer());
+                }
                 column.unencoded_byte_array_data_bytes = val.unencoded_byte_array_data_bytes;
                 column.repetition_level_histogram =
                     val.repetition_level_histogram.map(LevelHistogram::from);
@@ -554,6 +583,8 @@ fn read_column_chunk(
     col_index: usize,
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<ColumnChunkMetaData> {
+    // PLENORA: the column chunks are charged by `read_row_group`, all at once,
+    // before `RowGroupMetaDataBuilder::new` reserves their capacity.
     // create a default initialized ColumnMetaData
     let mut col = ColumnChunkMetaDataBuilder::new(column_descr.clone()).build()?;
 
@@ -632,8 +663,53 @@ fn read_column_chunk(
 
     // not encrypted, so make sure all required fields were read
     validate_column_metadata(col_meta_mask)?;
+    verifica_non_negativi(&col)?;
 
     Ok(col)
+}
+
+/// PLENORA: a footer field that is a count, a size or an offset is
+/// negative (`tests/parquet_campi_thrift.rs` in `plenora-io` keeps the
+/// inventory of every integer field of the footer and its rule).
+fn negativo_nel_footer() -> ParquetError {
+    general_err!("footer field with a negative count, size or offset")
+}
+
+/// PLENORA: the offsets, sizes and counts of a column chunk are not negative.
+/// They were cast to unsigned with `as` (a negative offset became a huge one)
+/// or reached an `assert!` (`byte_range`, a panic).
+fn verifica_non_negativi(col: &ColumnChunkMetaData) -> Result<()> {
+    let negativo = [
+        col.file_offset,
+        col.num_values,
+        col.total_compressed_size,
+        col.total_uncompressed_size,
+        col.data_page_offset,
+    ]
+    .into_iter()
+    .chain(col.index_page_offset)
+    .chain(col.dictionary_page_offset)
+    .chain(col.bloom_filter_offset)
+    .chain(col.offset_index_offset)
+    .chain(col.column_index_offset)
+    .chain(col.unencoded_byte_array_data_bytes)
+    .chain(
+        [
+            col.bloom_filter_length,
+            col.offset_index_length,
+            col.column_index_length,
+        ]
+        .into_iter()
+        .flatten()
+        .map(i64::from),
+    )
+    .any(|valore| valore < 0);
+    if negativo {
+        return Err(general_err!(
+            "column chunk metadata with a negative offset, size or count"
+        ));
+    }
+    Ok(())
 }
 
 fn read_row_group(
@@ -641,6 +717,13 @@ fn read_row_group(
     schema_descr: &Arc<SchemaDescriptor>,
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<RowGroupMetaData> {
+    // PLENORA: `RowGroupMetaDataBuilder::new` reserves one `ColumnChunkMetaData`
+    // per leaf column of the schema before a single chunk is read: the whole
+    // capacity is charged to the budget here, once, and not again per chunk.
+    prot.reserve(
+        schema_descr.num_columns(),
+        std::mem::size_of::<ColumnChunkMetaData>(),
+    )?;
     // create default initialized RowGroupMetaData
     let mut row_group = RowGroupMetaDataBuilder::new(schema_descr.clone()).build_unchecked();
 
@@ -695,14 +778,29 @@ fn read_row_group(
             }
             4 => {
                 let val = read_thrift_vec::<SortingColumn, ThriftSliceInputProtocol>(&mut *prot)?;
+                // PLENORA: a column index is not negative.
+                if val.iter().any(|colonna| colonna.column_idx < 0) {
+                    return Err(negativo_nel_footer());
+                }
                 row_group.sorting_columns = Some(val);
             }
             5 => {
                 row_group.file_offset = Some(i64::read_thrift(&mut *prot)?);
             }
             // 6: we don't expose total_compressed_size
+            // PLENORA: read to be checked: a size is not negative.
+            6 => {
+                if i64::read_thrift(&mut *prot)? < 0 {
+                    return Err(negativo_nel_footer());
+                }
+            }
             7 => {
-                row_group.ordinal = Some(i16::read_thrift(&mut *prot)? as i32);
+                let ordinale = i16::read_thrift(&mut *prot)?;
+                // PLENORA: the ordinal of a row group is not negative.
+                if ordinale < 0 {
+                    return Err(negativo_nel_footer());
+                }
+                row_group.ordinal = Some(i32::from(ordinale));
             }
             _ => {
                 prot.skip(field_ident.field_type)?;
@@ -711,6 +809,16 @@ fn read_row_group(
         last_field_id = field_ident.id;
     }
 
+    // PLENORA: the rows, the size and the offset of a row group are not
+    // negative.
+    if row_group.num_rows < 0
+        || row_group.total_byte_size < 0
+        || row_group.file_offset.is_some_and(|offset| offset < 0)
+    {
+        return Err(general_err!(
+            "row group metadata with a negative count, size or offset"
+        ));
+    }
     if mask != RG_ALL_REQUIRED {
         if mask & RG_COLUMNS == 0 {
             return Err(general_err!("Required field columns is missing"));
@@ -741,6 +849,9 @@ pub(crate) fn parquet_schema_from_bytes(buf: &[u8]) -> Result<SchemaDescriptor> 
             2 => {
                 // read schema and convert to SchemaDescriptor for use when reading row groups
                 let val = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
+                // PLENORA: the same depth bound as the footer decoder; there
+                // is no budget on this path.
+                schema_cost(&val, crate::file::metadata::DEFAULT_MAX_SCHEMA_DEPTH)?;
                 let val = parquet_schema_from_array(val)?;
                 return Ok(SchemaDescriptor::new(val));
             }
@@ -751,13 +862,85 @@ pub(crate) fn parquet_schema_from_bytes(buf: &[u8]) -> Result<SchemaDescriptor> 
     Err(general_err!("Input does not contain a schema"))
 }
 
+// PLENORA: what converting the flattened schema will cost, and whether it is
+// too deep to convert.
+//
+// `parquet_schema_from_array` recurses once per level, with no bound of its
+// own, and `SchemaDescriptor::new` gives every leaf column its whole path from
+// the root (a `String` per level): depth times leaves, quadratic in the bytes
+// of the footer. The walk here is iterative and mirrors the conversion: an
+// element with `num_children` above zero opens a group that the following
+// elements fill, any other element is a leaf if it has a physical type. The
+// cost is an upper bound -- the root's name is counted in every path -- and
+// a malformed tree is left to the conversion, which rejects it.
+fn schema_cost(elements: &[SchemaElement<'_>], max_depth: usize) -> Result<usize> {
+    use crate::schema::types::{ColumnDescriptor, Type};
+    use std::mem::size_of;
+
+    let too_costly = || general_err!("Parquet schema too costly to convert");
+    // (children still to read, path cost up to and including this group)
+    let mut open: Vec<(usize, usize)> = Vec::new();
+    let mut cost: usize = 0;
+    for element in elements {
+        if open.len() >= max_depth {
+            return Err(general_err!(
+                "Parquet schema deeper than {} levels",
+                max_depth
+            ));
+        }
+        let parent_path = open.last().map_or(0, |(_, path)| *path);
+        let path = parent_path
+            .checked_add(size_of::<String>() + element.name.len())
+            .ok_or_else(too_costly)?;
+        // every element becomes a type node behind an `Arc`, and a pointer in
+        // its parent's list of fields
+        cost = cost
+            .checked_add(size_of::<Type>() + 3 * size_of::<usize>())
+            .ok_or_else(too_costly)?;
+        if let Some(parent) = open.last_mut() {
+            parent.0 = parent.0.saturating_sub(1);
+        }
+        match element.num_children {
+            Some(n) if n > 0 => {
+                let n = usize::try_from(n).map_err(|_| too_costly())?;
+                open.push((n, path));
+            }
+            _ => {
+                if element.r#type.is_some() {
+                    // the descriptor behind its `Arc`, its slot in the leaves
+                    // and in `leaf_to_base`, and the path
+                    cost = cost
+                        .checked_add(size_of::<ColumnDescriptor>() + 4 * size_of::<usize>())
+                        .and_then(|c| c.checked_add(path))
+                        .ok_or_else(too_costly)?;
+                }
+            }
+        }
+        while open.last().is_some_and(|(left, _)| *left == 0) {
+            open.pop();
+        }
+    }
+    Ok(cost)
+}
+
 /// Create [`ParquetMetaData`] from thrift input. Note that this only decodes the file metadata in
 /// the Parquet footer. Page indexes will need to be added later.
 pub(crate) fn parquet_metadata_from_bytes(
     buf: &[u8],
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<ParquetMetaData> {
-    let mut prot = ThriftSliceInputProtocol::new(buf);
+    // PLENORA: with a budget, every reservation the decoder makes is charged
+    // before it is made. The footer bytes count twice: the buffer, and the
+    // owned copies of its strings and binaries, which are at most as many.
+    let mut prot = ThriftSliceInputProtocol::with_budget(
+        buf,
+        options.and_then(ParquetMetaDataOptions::footer_memory_budget),
+    );
+    prot.reserve(buf.len(), 2)?;
+    let max_schema_depth = options.map_or(
+        crate::file::metadata::DEFAULT_MAX_SCHEMA_DEPTH,
+        ParquetMetaDataOptions::max_schema_depth,
+    );
 
     // begin reading the file metadata
     let mut version: Option<i32> = None;
@@ -805,12 +988,21 @@ pub(crate) fn parquet_metadata_from_bytes(
                     // read schema and convert to SchemaDescriptor for use when reading row groups
                     let val =
                         read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
+                    // PLENORA: depth and leaf-path cost, before the recursive
+                    // conversion and before `SchemaDescriptor::new`.
+                    let cost = schema_cost(&val, max_schema_depth)?;
+                    prot.reserve(cost, 1)?;
                     let val = parquet_schema_from_array(val)?;
                     schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
                 }
             }
             3 => {
-                num_rows = Some(i64::read_thrift(&mut prot)?);
+                let righe = i64::read_thrift(&mut prot)?;
+                // PLENORA: the rows of the file are not negative.
+                if righe < 0 {
+                    return Err(negativo_nel_footer());
+                }
+                num_rows = Some(righe);
             }
             4 => {
                 if schema_descr.is_none() {
@@ -821,8 +1013,10 @@ pub(crate) fn parquet_metadata_from_bytes(
                 // check for list of struct
                 validate_list_type(ElementType::Struct, &list_ident)?;
                 // PLENORA: capacity bounded by the remaining footer bytes.
-                let mut rg_vec =
-                    Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&prot, list_ident.size)?);
+                let capacity = crate::parquet_thrift::capacita_dichiarata(&prot, list_ident.size)?;
+                // PLENORA: and charged to the budget.
+                prot.reserve(capacity, std::mem::size_of::<RowGroupMetaData>())?;
+                let mut rg_vec = Vec::with_capacity(capacity);
 
                 for _ in 0..list_ident.size {
                     rg_vec.push(read_row_group(&mut prot, schema_descr, options)?);
@@ -1001,72 +1195,6 @@ pub(crate) struct DataPageHeader {
 }
 );
 
-impl DataPageHeader {
-    // reader that skips decoding page statistics
-    fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
-    where
-        R: ThriftCompactInputProtocol<'a>,
-    {
-        let mut num_values: Option<i32> = None;
-        let mut encoding: Option<Encoding> = None;
-        let mut definition_level_encoding: Option<Encoding> = None;
-        let mut repetition_level_encoding: Option<Encoding> = None;
-        let statistics: Option<PageStatistics> = None;
-        let mut last_field_id = 0i16;
-        loop {
-            let field_ident = prot.read_field_begin(last_field_id)?;
-            if field_ident.field_type == FieldType::Stop {
-                break;
-            }
-            match field_ident.id {
-                1 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    num_values = Some(val);
-                }
-                2 => {
-                    let val = Encoding::read_thrift(&mut *prot)?;
-                    encoding = Some(val);
-                }
-                3 => {
-                    let val = Encoding::read_thrift(&mut *prot)?;
-                    definition_level_encoding = Some(val);
-                }
-                4 => {
-                    let val = Encoding::read_thrift(&mut *prot)?;
-                    repetition_level_encoding = Some(val);
-                }
-                _ => {
-                    prot.skip(field_ident.field_type)?;
-                }
-            }
-            last_field_id = field_ident.id;
-        }
-        let Some(num_values) = num_values else {
-            return Err(general_err!("Required field num_values is missing"));
-        };
-        let Some(encoding) = encoding else {
-            return Err(general_err!("Required field encoding is missing"));
-        };
-        let Some(definition_level_encoding) = definition_level_encoding else {
-            return Err(general_err!(
-                "Required field definition_level_encoding is missing"
-            ));
-        };
-        let Some(repetition_level_encoding) = repetition_level_encoding else {
-            return Err(general_err!(
-                "Required field repetition_level_encoding is missing"
-            ));
-        };
-        Ok(Self {
-            num_values,
-            encoding,
-            definition_level_encoding,
-            repetition_level_encoding,
-            statistics,
-        })
-    }
-}
-
 thrift_struct!(
 pub(crate) struct DataPageHeaderV2 {
   1: required i32 num_values
@@ -1079,95 +1207,6 @@ pub(crate) struct DataPageHeaderV2 {
   8: optional PageStatistics statistics;
 }
 );
-
-impl DataPageHeaderV2 {
-    // reader that skips decoding page statistics
-    fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
-    where
-        R: ThriftCompactInputProtocol<'a>,
-    {
-        let mut num_values: Option<i32> = None;
-        let mut num_nulls: Option<i32> = None;
-        let mut num_rows: Option<i32> = None;
-        let mut encoding: Option<Encoding> = None;
-        let mut definition_levels_byte_length: Option<i32> = None;
-        let mut repetition_levels_byte_length: Option<i32> = None;
-        let mut is_compressed: Option<bool> = None;
-        let statistics: Option<PageStatistics> = None;
-        let mut last_field_id = 0i16;
-        loop {
-            let field_ident = prot.read_field_begin(last_field_id)?;
-            if field_ident.field_type == FieldType::Stop {
-                break;
-            }
-            match field_ident.id {
-                1 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    num_values = Some(val);
-                }
-                2 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    num_nulls = Some(val);
-                }
-                3 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    num_rows = Some(val);
-                }
-                4 => {
-                    let val = Encoding::read_thrift(&mut *prot)?;
-                    encoding = Some(val);
-                }
-                5 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    definition_levels_byte_length = Some(val);
-                }
-                6 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    repetition_levels_byte_length = Some(val);
-                }
-                7 => {
-                    is_compressed = Some(field_ident.bool_val()?);
-                }
-                _ => {
-                    prot.skip(field_ident.field_type)?;
-                }
-            }
-            last_field_id = field_ident.id;
-        }
-        let Some(num_values) = num_values else {
-            return Err(general_err!("Required field num_values is missing"));
-        };
-        let Some(num_nulls) = num_nulls else {
-            return Err(general_err!("Required field num_nulls is missing"));
-        };
-        let Some(num_rows) = num_rows else {
-            return Err(general_err!("Required field num_rows is missing"));
-        };
-        let Some(encoding) = encoding else {
-            return Err(general_err!("Required field encoding is missing"));
-        };
-        let Some(definition_levels_byte_length) = definition_levels_byte_length else {
-            return Err(general_err!(
-                "Required field definition_levels_byte_length is missing"
-            ));
-        };
-        let Some(repetition_levels_byte_length) = repetition_levels_byte_length else {
-            return Err(general_err!(
-                "Required field repetition_levels_byte_length is missing"
-            ));
-        };
-        Ok(Self {
-            num_values,
-            num_nulls,
-            num_rows,
-            encoding,
-            definition_levels_byte_length,
-            repetition_levels_byte_length,
-            is_compressed,
-            statistics,
-        })
-    }
-}
 
 thrift_struct!(
 pub(crate) struct PageHeader {
@@ -1190,93 +1229,6 @@ pub(crate) struct PageHeader {
   8: optional DataPageHeaderV2 data_page_header_v2;
 }
 );
-
-impl PageHeader {
-    // reader that skips reading page statistics. obtained by running
-    // `cargo expand -p parquet --all-features --lib file::metadata::thrift`
-    // and modifying the impl of `read_thrift`
-    pub(crate) fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
-    where
-        R: ThriftCompactInputProtocol<'a>,
-    {
-        let mut type_: Option<PageType> = None;
-        let mut uncompressed_page_size: Option<i32> = None;
-        let mut compressed_page_size: Option<i32> = None;
-        let mut crc: Option<i32> = None;
-        let mut data_page_header: Option<DataPageHeader> = None;
-        let mut index_page_header: Option<IndexPageHeader> = None;
-        let mut dictionary_page_header: Option<DictionaryPageHeader> = None;
-        let mut data_page_header_v2: Option<DataPageHeaderV2> = None;
-        let mut last_field_id = 0i16;
-        loop {
-            let field_ident = prot.read_field_begin(last_field_id)?;
-            if field_ident.field_type == FieldType::Stop {
-                break;
-            }
-            match field_ident.id {
-                1 => {
-                    let val = PageType::read_thrift(&mut *prot)?;
-                    type_ = Some(val);
-                }
-                2 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    uncompressed_page_size = Some(val);
-                }
-                3 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    compressed_page_size = Some(val);
-                }
-                4 => {
-                    let val = i32::read_thrift(&mut *prot)?;
-                    crc = Some(val);
-                }
-                5 => {
-                    let val = DataPageHeader::read_thrift_without_stats(&mut *prot)?;
-                    data_page_header = Some(val);
-                }
-                6 => {
-                    let val = IndexPageHeader::read_thrift(&mut *prot)?;
-                    index_page_header = Some(val);
-                }
-                7 => {
-                    let val = DictionaryPageHeader::read_thrift(&mut *prot)?;
-                    dictionary_page_header = Some(val);
-                }
-                8 => {
-                    let val = DataPageHeaderV2::read_thrift_without_stats(&mut *prot)?;
-                    data_page_header_v2 = Some(val);
-                }
-                _ => {
-                    prot.skip(field_ident.field_type)?;
-                }
-            }
-            last_field_id = field_ident.id;
-        }
-        let Some(type_) = type_ else {
-            return Err(general_err!("Required field type_ is missing"));
-        };
-        let Some(uncompressed_page_size) = uncompressed_page_size else {
-            return Err(general_err!(
-                "Required field uncompressed_page_size is missing"
-            ));
-        };
-        let Some(compressed_page_size) = compressed_page_size else {
-            return Err(general_err!(
-                "Required field compressed_page_size is missing"
-            ));
-        };
-        Ok(Self {
-            r#type: type_,
-            uncompressed_page_size,
-            compressed_page_size,
-            crc,
-            data_page_header,
-            index_page_header,
-            dictionary_page_header,
-            data_page_header_v2,
-        })
-    }
-}
 
 /////////////////////////////////////////////////
 // helper functions for writing file meta data
@@ -1946,14 +1898,14 @@ pub(crate) mod tests {
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: Incorrect Int96 min statistics"
+            "Parquet error: statistic of the wrong width for its type"
         );
 
         let err = super::convert_stats(&column_descr, Some(make_stats(None, Some(&invalid))))
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: Incorrect Int96 max statistics"
+            "Parquet error: statistic of the wrong width for its type"
         );
     }
 
@@ -1978,7 +1930,8 @@ pub(crate) mod tests {
         change_false_bool_field_to_i32(&mut buf);
 
         let mut prot = ThriftSliceInputProtocol::new(&buf);
-        let err = PageHeader::read_thrift_without_stats(&mut prot)
+        use crate::parquet_thrift::ReadThrift;
+        let err = PageHeader::read_thrift(&mut prot)
             .expect_err("malformed bool field should return an error");
         assert_malformed_bool_error(err);
     }
@@ -2000,7 +1953,8 @@ pub(crate) mod tests {
         change_false_bool_field_to_i32(&mut buf);
 
         let mut prot = ThriftSliceInputProtocol::new(&buf);
-        let err = DataPageHeaderV2::read_thrift_without_stats(&mut prot)
+        use crate::parquet_thrift::ReadThrift;
+        let err = DataPageHeaderV2::read_thrift(&mut prot)
             .expect_err("malformed bool field should return an error");
         assert_malformed_bool_error(err);
     }

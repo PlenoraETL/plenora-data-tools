@@ -246,6 +246,28 @@ impl Type {
     }
 }
 
+// PLENORA: From assumes a valid INTEGER width. Keep validation inside this
+// fallible conversion so every caller, including builders, rejects bad widths.
+fn checked_converted_type(logical: &Option<LogicalType>) -> Result<ConvertedType> {
+    check_logical_type(logical.as_ref())?;
+    Ok(ConvertedType::from(logical.clone()))
+}
+
+// PLENORA: both annotations must describe the same type, on groups and
+// primitives alike. The error must not disclose field names.
+fn check_annotation_consistency(
+    logical: &Option<LogicalType>,
+    converted: ConvertedType,
+) -> Result<()> {
+    if logical.is_some()
+        && converted != ConvertedType::NONE
+        && checked_converted_type(logical)? != converted
+    {
+        return Err(general_err!("LOGICAL_CONVERTED_TYPE_MISMATCH"));
+    }
+    Ok(())
+}
+
 /// A builder for primitive types. All attributes are optional
 /// except the name and physical type.
 /// Note that if not specified explicitly, `Repetition::OPTIONAL` is used.
@@ -353,20 +375,10 @@ impl<'a> PrimitiveTypeBuilder<'a> {
         }
 
         if let Some(logical_type) = &self.logical_type {
-            // If a converted type is populated, check that it is consistent with
-            // its logical type
-            if self.converted_type != ConvertedType::NONE {
-                if ConvertedType::from(self.logical_type.clone()) != self.converted_type {
-                    return Err(general_err!(
-                        "Logical type {:?} is incompatible with converted type {} for field '{}'",
-                        logical_type,
-                        self.converted_type,
-                        self.name
-                    ));
-                }
-            } else {
+            check_annotation_consistency(&self.logical_type, self.converted_type)?;
+            if self.converted_type == ConvertedType::NONE {
                 // Populate the converted type for backwards compatibility
-                basic_info.converted_type = self.logical_type.clone().into();
+                basic_info.converted_type = checked_converted_type(&self.logical_type)?;
             }
             // Check that logical type and physical type are compatible
             match (logical_type, self.physical_type) {
@@ -666,6 +678,34 @@ impl<'a> GroupTypeBuilder<'a> {
 
     /// Creates a new `GroupType` instance from the gathered attributes.
     pub fn build(self) -> Result<Type> {
+        // PLENORA: a group takes only the annotations of a group (`LIST`,
+        // `MAP`, the legacy `MAP_KEY_VALUE`, `VARIANT`, `FILE`, or one the
+        // crate does not know); the annotation of a primitive (`UUID`,
+        // `JSON`, `UNKNOWN`, ...) on a group was read as a struct and lost.
+        let logico_di_gruppo = matches!(
+            &self.logical_type,
+            None | Some(
+                LogicalType::List
+                    | LogicalType::Map
+                    | LogicalType::Variant(_)
+                    | LogicalType::File
+                    | LogicalType::_Unknown { .. }
+            )
+        );
+        let convertito_di_gruppo = matches!(
+            self.converted_type,
+            ConvertedType::NONE
+                | ConvertedType::LIST
+                | ConvertedType::MAP
+                | ConvertedType::MAP_KEY_VALUE
+        );
+        if !logico_di_gruppo || !convertito_di_gruppo {
+            return Err(general_err!(
+                "{}",
+                crate::basic::GROUP_WITH_PRIMITIVE_ANNOTATION
+            ));
+        }
+        check_annotation_consistency(&self.logical_type, self.converted_type)?;
         if matches!(&self.logical_type, Some(LogicalType::File)) {
             validate_file_type_fields(self.name, &self.fields)?;
         }
@@ -679,7 +719,7 @@ impl<'a> GroupTypeBuilder<'a> {
         };
         // Populate the converted type if only the logical type is populated
         if self.logical_type.is_some() && self.converted_type == ConvertedType::NONE {
-            basic_info.converted_type = self.logical_type.into();
+            basic_info.converted_type = checked_converted_type(&self.logical_type)?;
         }
         Ok(Type::GroupType {
             basic_info,
@@ -1469,18 +1509,22 @@ fn schema_from_array_helper(
     }
     let element = elements.next().expect("schema vector should not be empty");
 
+    let converted_type = element.converted_type.unwrap_or(ConvertedType::NONE);
+    let logical_type = element.logical_type;
+
+    // PLENORA: validate annotations before the empty-schema shortcut. The
+    // root is a message, so even consistent type annotations are invalid.
+    check_logical_type(logical_type.as_ref())?;
+    check_annotation_consistency(&logical_type, converted_type)?;
+    if is_root_node && (logical_type.is_some() || element.converted_type.is_some()) {
+        return Err(general_err!("ROOT_WITH_ANNOTATION"));
+    }
+
     // Check for empty schema
     if let (true, None | Some(0)) = (is_root_node, element.num_children) {
         let builder = Type::group_type_builder(element.name);
-        return Ok((index + 1, Arc::new(builder.build().unwrap())));
+        return Ok((index + 1, Arc::new(builder.build()?)));
     }
-
-    let converted_type = element.converted_type.unwrap_or(ConvertedType::NONE);
-
-    // LogicalType is preferred to ConvertedType, but both may be present.
-    let logical_type = element.logical_type;
-
-    check_logical_type(logical_type.as_ref())?;
 
     let field_id = element.field_id;
     match element.num_children {
@@ -1526,7 +1570,7 @@ fn schema_from_array_helper(
                     //   All other types must have one.
                     builder = builder.with_repetition(repetition);
                 }
-                Ok((index + 1, Arc::new(builder.build().unwrap())))
+                Ok((index + 1, Arc::new(builder.build()?)))
             }
         }
         Some(n) => {

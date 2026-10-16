@@ -1083,3 +1083,259 @@ invece di un errore. Nessuna prova lo rileva dal consumatore.
 **Condizione di rientro.** Il consumatore dichiara `overflow-checks = true`
 nel proprio `[profile.release]`, oppure una guardia a runtime che rifiuta
 di eseguire un piano in una build senza controlli di overflow.
+
+## Salti Parquet
+
+**Regola.** Il lettore Parquet decodifica e verifica tutto ciò che
+attraversa: valori, indici di dizionario, conteggi dichiarati, contenuto e
+fine della pagina.
+
+**Ambito.** Il fork `vendor/parquet-60.0.0-eof`: `skip_records` del
+lettore di colonna (una o più righe) e `skip_next_page` del lettore di
+pagine, dentro una pagina o di pagine intere; e le pagine di un tipo non
+qualificato fra le pagine di un column chunk (`INDEX_PAGE`), che il
+lettore di pagine saltava in silenzio e ora rifiuta dove le incontra
+(`PAGE_TYPE_NOT_QUALIFIED`, `Unsupported` dal confine; nessuno scrittore
+misurato e nessuno dei 106 file di prova ne scrive). Un tipo di pagina
+sconosciuto è già un errore della decodifica dell'header. Nel lettore Arrow saltano
+righe `RowSelection`, i filtri di riga e `offset`; la selezione dei row
+group esclude chunk interi senza saltare; `limit` può solo fermare la
+lettura, e una pagina lasciata a metà non arriva al controllo della sua
+fine.
+
+**Hazard.** Un salto non decodificava ciò che saltava: dentro una pagina
+passavano valori, indici e conteggi non verificati; di pagine intere,
+dall'header, passava un contenuto troncato o malformato. Ogni salto è
+`SKIP_NOT_QUALIFIED` (`Unsupported` dal confine), anche su un file valido.
+`plenora-io` legge sempre per intero (nessuna `RowSelection`, filtro di
+riga, `offset` o `limit`) e non lo raggiunge; lo raggiunge chi usa il fork
+come libreria con una selezione di righe. Una pagina d'indice
+(`INDEX_PAGE`) si saltava senza decodificarla: il suo contenuto passava
+senza controllo, e i `peek` lo leggevano come l'header seguente. Ora un
+column chunk che ne contiene una si rifiuta tutto (`Unsupported`), anche
+se il resto è valido; la specifica non le dà un contenuto, e nessuno
+scrittore misurato le scrive.
+
+**Condizione di rientro.** Per i salti: un salto che decodifica e verifica
+come la lettura (leggi e butta), con una guardia di avanzamento in ogni
+ciclo e le prove dei giri di revisione, oppure il bisogno di una selezione
+di righe da parte di data o IO-tools. Per le pagine d'indice: qualificarne
+la decodifica (l'header `IndexPageHeader` e un contenuto definito dalla
+specifica) e verificarne il contenuto come quello di una pagina letta,
+con le prove e una campagna di fuzz; oppure un file reale di uno
+scrittore in uso che le contenga, con una prova su quel file.
+
+## Fine delle pagine Parquet
+
+**Regola.** Una pagina Parquet letta fino al suo ultimo livello finisce
+dove finiscono i suoi livelli e i suoi valori: nessun valore, gruppo o
+byte dopo (`PAGE_NOT_AS_DECLARED`), salvo il riempimento dell'ultimo
+gruppo bit-packed e le due deviazioni dichiarate sotto. Una corsa
+bit-packed porta tutti i gruppi che dichiara: una corsa troncata, o un
+conteggio oltre i dati, è un errore («bit-packed run beyond the data»,
+lo stesso nei due decoder dei livelli e negli indici; nessuno scrittore
+misurato ne scrive). Una corsa vuota (RLE di lunghezza 0,
+bit-packed di 0 gruppi) chiude lo stream ovunque sia: ciò che la segue è
+la coda, e deve essere vuoto salvo la deviazione di fastparquet; un varint
+non minimo è un errore. Una pagina di dizionario è `PLAIN` (o
+`PLAIN_DICTIONARY`), una per column chunk, ed è la sua prima pagina
+(`DICTIONARY_PAGE_OUT_OF_PLACE`: un dizionario dopo una pagina di dati si
+leggeva, e gli indici delle pagine dopo puntavano a lui); se il footer la
+dichiara (`dictionary_page_offset`), la prima pagina è un dizionario. Un
+dizionario in prima pagina senza la dichiarazione si legge, ed è conforme,
+non una tolleranza: in `parquet.thrift` `dictionary_page_offset` è
+`optional`, e la specifica chiede solo che il dizionario sia la prima
+pagina del column chunk. Lo omettono parquet-mr nei file storici e Polars
+(7 dei 106 file di prova).
+
+**Ambito.** Il fork `vendor/parquet-60.0.0-eof`, fine delle pagine di dati
+v1 (`FinePagina::V1`, `column/reader/decoder.rs`); le pagine v2 finiscono
+esatte (`FinePagina::ESATTA`). Due deviazioni dichiarate, ciascuna per uno
+scrittore e solo nella sua forma esatta:
+
+- fastparquet aggiunge 8 byte a zero a ogni pagina v1, dopo i valori,
+  anche `PLAIN` (`writer.py`, `8 * b'\x00'`). Si tollerano dopo lo stream
+  dei valori di una pagina v1, solo valori `PLAIN` e indici di
+  dizionario, misurati da dove finisce l'ultimo valore o da dove comincia
+  la prima corsa vuota: al più 8 byte, tutti zero (`CODA_FASTPARQUET`).
+  Mai dopo i livelli, mai dopo i booleani `RLE` (finiscono alla loro
+  lunghezza prefissata, senza coda), mai in una pagina v2, mai byte
+  diversi da zero.
+- DuckDB scrive le corse bit-packed a blocchi di 32 gruppi e completa
+  l'ultimo con byte vecchi, non zeri. Gruppi interi dopo l'ultimo valore si
+  tollerano solo nei livelli e negli indici di dizionario di una pagina v1
+  (non nei booleani `RLE`), in una corsa che dichiara esattamente 32 gruppi
+  (`BLOCCO_DUCKDB`), a larghezza in bit sopra 0, e solo se almeno un valore
+  del blocco si legge; il loro contenuto non si legge.
+
+**Hazard.** Una pagina v1 `PLAIN` con valori a zero in più, entro 8 byte
+(due `INT32`, un `INT64`, due `FLOAT`), si legge senza quei valori invece
+di essere rifiutata. Un'ultima corsa bit-packed di 32 gruppi in una pagina
+v1, di cui si legge almeno un valore, può portare fino a 255 livelli o
+indici in più, qualunque, che non si leggono. Rifiutarle rifiuterebbe ogni file v1 di fastparquet e i file
+DuckDB V1 da qualche centinaio di righe in su (misurato su fastparquet
+2026.9.0 e DuckDB 1.5.6, `vendor/parquet-60.0.0-eof/PROVENANCE.md`).
+
+**Condizione di rientro.** fastparquet smette di aggiungere la coda e
+DuckDB di completare i blocchi con byte vecchi, e i loro file in uso sono
+riscritti; oppure una dichiarazione dello scrittore nei metadati del file
+che permetta di tollerare le forme solo per i suoi file.
+
+Il vincolo del dizionario in prima pagina ha due parti. Il rifiuto di un
+dizionario dopo una pagina di dati, o di una prima pagina che non è un
+dizionario quando il footer lo dichiara, si toglie solo se uno scrittore
+in uso scrive un dizionario dopo i dati in un file valido per la
+specifica, con una prova su quel file. L'accettazione di un dizionario in
+prima pagina senza `dictionary_page_offset` è conforme alla specifica (il
+campo è opzionale) e non ha una condizione di rientro: si stringerebbe
+solo se la specifica rendesse il campo obbligatorio, misurando di nuovo i
+file del riferimento `crates/plenora-io/tests/riferimenti/parquet_esiti.tsv`.
+
+## Indici di pagina e bloom filter Parquet
+
+**Regola.** Il lettore Parquet decodifica solo strutture qualificate: ogni
+loro campo intero ha una regola (non negativo, o un valore con il suo
+motivo) e ogni lunghezza è esatta.
+
+**Ambito.** Il fork `vendor/parquet-60.0.0-eof`: column index e offset
+index (gli indici di pagina) e bloom filter, in ogni loro ingresso — il
+lettore Arrow e quello seriale con l'indice chiesto, il lettore dei
+metadati, i decoder pubblici `decode_column_index` e
+`decode_offset_index`, il lettore di pagine costruito sulle posizioni
+dell'offset index, la lettura dei bloom filter. La scrittura non cambia.
+Gli indici e i bloom filter costruiti in memoria da chi usa il fork come
+libreria (i builder dello scrittore, `set_page_index`,
+`Sbbf::new_with_ndv_fpp`) non vengono da byte di un file e restano fuori;
+il costruttore da byte grezzi `Sbbf::new` non è più pubblico.
+
+**Hazard.** Chiedere un indice di pagina o un bloom filter è un errore
+esplicito (`PAGE_INDEX_NOT_QUALIFIED`, `BLOOM_FILTER_NOT_QUALIFIED`;
+`Unsupported` dal confine), anche su un file valido. `plenora-io` non li
+chiede mai (lettura per intero, `PageIndexPolicy::Skip`, bloom filter non
+letti) e non lo raggiunge; lo raggiunge chi usa il fork come libreria per
+filtrare righe o pagine. I loro conteggi, istogrammi, cardinalità e
+posizioni arrivavano ad aritmetica non controllata.
+
+**Condizione di rientro.** Qualificarli con le regole delle statistiche:
+lunghezze esatte per tipo, `BOOLEAN` 0 o 1, conteggi non negativi, una
+voce per pagina, `num_bytes` del bloom filter esatto, posizioni dentro il
+column chunk; le prove e la campagna di fuzz di quelle regole; e un uso
+in data o IO-tools che li chieda.
+
+## Record su più pagine Parquet v2
+
+**Regola.** Una pagina di dati v2 comincia su un confine di record: il suo
+primo livello di ripetizione è 0, e le righe che dichiara sono i suoi
+livelli di ripetizione 0.
+
+**Ambito.** Il fork `vendor/parquet-60.0.0-eof`, lettura delle pagine v2
+delle colonne ripetute. La compatibilità di `parquet` 60.0.0 per i record
+spezzati fra pagine v2 (scritti da una vecchia versione di parquet-rs) è
+tolta.
+
+**Hazard.** Un file con un record spezzato fra due pagine v2 si rifiuta
+(«does not start on a record boundary»), anche se lo scrittore lo
+intendeva. Nessuno scrittore misurato li produce (pyarrow 25 e 26 con
+liste in pagine v2 da 4 KiB, fastparquet v2, polars; i 106 file di
+`parquet-testing` e `arrow-testing`).
+
+**Condizione di rientro.** Un file reale da uno scrittore in uso con
+record su più pagine v2: allora la compatibilità torna, dichiarata, con una
+prova su quel file.
+
+## Tipi logici Parquet non qualificati
+
+**Regola.** La lettura Parquet legge un tipo logico solo se è in un
+elenco chiuso di tipi qualificati, che `parquet` converte in un tipo Arrow
+che tiene i valori del file: testo, mappe, liste, `ENUM`, decimali, date,
+ore, istanti, interi, `JSON`, `BSON`, `UUID`, `FLOAT16`, geometrie,
+geografie e `UNKNOWN` (il tipo «sempre nullo», letto come colonna Arrow
+`Null`: un suo valore è un errore, `UNKNOWN_WITH_VALUES`). Ogni altra
+annotazione, a ogni livello dello schema (gruppi compresi), è
+`Unsupported` prima della conversione dello schema. Un'annotazione sta
+sulla sua forma: su un gruppo solo `LIST`, `MAP` (e il convertito
+`MAP_KEY_VALUE`), su una colonna il tipo fisico che la specifica le dà; un
+gruppo annotato come una colonna (`UUID`, `JSON`, `UNKNOWN`) è un errore
+del footer (`GROUP_WITH_PRIMITIVE_ANNOTATION`). Se tipo logico e tipo
+convertito sono entrambi presenti devono concordare, sui gruppi come sulle
+primitive (`LOGICAL_CONVERTED_TYPE_MISMATCH`). Un `INTERVAL` (tipo
+convertito: mesi, giorni e millisecondi, interi senza segno) si legge solo
+se le parti che l'unità Arrow non tiene sono zero
+(`INTERVAL_NOT_AS_DECLARED`) e quelle che tiene stanno in `i32`
+(`INTERVAL_OUT_OF_RANGE`); in scrittura un intervallo con una componente
+negativa è un errore (`DataMapping`), perché un `INTERVAL` non la
+rappresenta. Lo schema Arrow incorporato sceglie la rappresentazione
+(grandezza degli offset, viste, dizionari, unità degli interi senza
+annotazione), non il significato: un fuso su un istante locale
+(`isAdjustedToUTC` falso), un'altra risoluzione di un istante locale in
+nanosecondi, un tipo temporale su un intero annotato, un'altra precisione
+o scala di un decimale sono un errore (`ARROW_HINT_CONTRADICTS`, `Schema`
+dal confine). Gli hint `Utf8`, `LargeUtf8` e `Utf8View`, anche dentro un
+dizionario, valgono solo per `STRING`, `ENUM` e `JSON`: `BSON`, byte senza
+annotazione e dati geografici restano binari. Uno schema incorporato che non si applica resta ignorato dal
+fork e rifiutato dal confine (`Schema`).
+
+**Ambito.** La lettura Parquet di `plenora-io` (`parquet_io::leggi`,
+`verifica_tipi_logici`, `verifica_intervalli` in scrittura) e il fork
+`vendor/parquet-60.0.0-eof` (`null_array.rs`, `fixed_len_byte_array.rs`,
+il costruttore dei gruppi in `schema/types.rs`, `apply_hint` in
+`arrow/schema/primitive.rs`).
+
+**Hazard.** Si rifiutano anche file validi: `VARIANT` (non qualificato nel
+fork: `variant_experimental` è escluso, e i suoi gruppi si leggevano come
+struct di byte), `FILE` e i tipi che il fork non riconosce (si leggevano
+come byte). Nei file del riferimento cambia così `unknown-logical-type`
+(un tipo non riconosciuto, prima `ok`). Una colonna `UNKNOWN` con un
+valore, che `parquet` scartava in silenzio leggendola come `Null`, è un
+errore; le colonne `UNKNOWN` dei file di prova sono nulle e si leggono
+(`alltypes-java`, `null_list`), come quelle che l'`ArrowWriter` scrive per
+un campo Arrow `Null`. I 14 file `bad_data/variants/` non hanno l'annotazione `VARIANT`:
+sono due colonne di byte (`metadata`, `value`) che si leggono come byte,
+senza interpretarle. Un `INTERVAL` letto nell'unità `DayTime` (quella
+senza schema Arrow nel file) con mesi diversi da zero, o con 2^31 giorni,
+era un altro valore: ora un errore. Gli intervalli negativi che data
+scriveva in Parquet (in complemento a due, come `parquet` a monte) non si
+scrivono più e non si rileggono; Arrow IPC li conserva. Nessuno dei 473
+file del riferimento cambia esito.
+
+**Condizione di rientro.** Per ciascun tipo, una lettura che ne tenga il
+valore con prove su file costruiti per romperla: `VARIANT` con la
+decodifica qualificata e una campagna di fuzz; i tipi nuovi della
+specifica uno per uno. Per `INTERVAL`, un'unità Arrow che tenga tutte e
+tre le parti senza segno. Per lo schema incorporato, nessuna: il tipo
+Parquet fissa il significato.
+
+## Codifiche Parquet non qualificate
+
+**Regola.** Ogni codifica che il lettore Parquet accetta è qualificata:
+i suoi decoder hanno avuto una revisione e prove su file costruiti per
+romperli, e lo saranno con una campagna di fuzz propria. Lette:
+`PLAIN`, `PLAIN_DICTIONARY` e `RLE_DICTIONARY` per i valori, `RLE` per i
+booleani e per i livelli. Si controllano la codifica di ogni pagina di
+dati e di dizionario letta, i livelli delle pagine lette, e le codifiche
+che il column chunk dichiara nel footer (una pagina non si salta: ogni
+salto è rifiutato, «Salti Parquet»);
+`BIT_PACKED` nell'elenco del footer passa, perché parquet-mr la dichiara
+per i livelli assenti.
+
+**Ambito.** La lettura Parquet di `plenora-io` (CLI, SDK Python,
+`data.run` 3) e il fork `vendor/parquet-60.0.0-eof`
+(`parquet::basic::is_qualified_value_encoding`).
+
+**Hazard.** Un file valido che usa `DELTA_BINARY_PACKED`,
+`DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY` o `BYTE_STREAM_SPLIT` (o
+un'altra codifica, per esempio la nuova `ALP`), o livelli `BIT_PACKED`
+(deprecata; nessun file di prova la usa in una pagina), si rifiuta con
+`Unsupported`. Le scrivono pyarrow con `column_encoding` o
+`use_byte_stream_split`, i writer v2 di parquet-mr e Spark, DuckDB con le
+opzioni v2; non le scrivono pyarrow (anche con pagine v2), data e
+IO-tools con le impostazioni predefinite. Di `apache/parquet-testing`
+(`data/`) se ne rifiutano 9 file su 78: i due `byte_stream_split*`,
+`datapage_v2.snappy`, i cinque `delta_*` e `alp_extended.zstd`. Due giri
+di revisione hanno trovato in questi decoder la maggior parte dei
+difetti; le loro correzioni restano nel fork, non raggiungibili.
+
+**Condizione di rientro.** Per ogni codifica, una campagna di fuzz dei
+suoi decoder e il ritorno delle prove che la riduzione ha sostituito con
+il rifiuto (`git log` di `crates/plenora-io/tests/parquet_decoder.rs`,
+commit precedenti alla riduzione).

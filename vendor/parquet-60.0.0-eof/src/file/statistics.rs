@@ -118,9 +118,91 @@ macro_rules! statistics_enum_func {
     }};
 }
 
+/// PLENORA: a `FIXED_LEN_BYTE_ARRAY` statistic against the width of the
+/// type. An exact one (`is_*_value_exact` true, or no flag: the deprecated
+/// fields, and the writers that do not set it) has the width exactly; one
+/// marked not exact (`is_*_value_exact` false) is a bound that is not
+/// exact, 1 to the width bytes (the writer of this crate truncates min and
+/// max to 64 bytes and marks them: the truncated min is a prefix, the
+/// truncated max is incremented).
+pub(crate) fn verifica_statistica_flba(
+    valore: Option<&[u8]>,
+    esatta: Option<bool>,
+    larghezza: usize,
+) -> Result<()> {
+    let ammessa = match (valore, esatta) {
+        (None, _) => true,
+        (Some(valore), Some(false)) => (1..=larghezza).contains(&valore.len()),
+        (Some(valore), _) => valore.len() == larghezza,
+    };
+    if ammessa {
+        Ok(())
+    } else {
+        Err(general_err!("statistic of the wrong width for its type"))
+    }
+}
+
+/// PLENORA: the shape of a min/max pair of statistics against the type,
+/// for every pair present: the `min_value`/`max_value` fields with their
+/// exactness flags, and the deprecated `min`/`max` (no flags: exact), chosen
+/// or not (a deprecated min of 5 bytes for an INT32 passed when the new
+/// fields were there). A fixed-width type has its width exactly (bytes in
+/// excess were dropped in silence: `01 00 00 00 FF` was the INT32 1); a
+/// boolean is one byte, 0 or 1 (the rule is the boolean's, not every width
+/// 1: a FLBA of width 1 holds any byte); a FLBA follows
+/// [`verifica_statistica_flba`]. `larghezza` is the width of a FLBA column
+/// (`None` where the caller has none).
+pub(crate) fn verifica_forma_statistiche(
+    physical_type: Type,
+    larghezza: Option<i32>,
+    min: Option<&[u8]>,
+    max: Option<&[u8]>,
+    esatta_min: Option<bool>,
+    esatta_max: Option<bool>,
+) -> Result<()> {
+    let larghezza_esatta = |len: usize| -> Result<()> {
+        if min.into_iter().chain(max).any(|valore| valore.len() != len) {
+            Err(general_err!("statistic of the wrong width for its type"))
+        } else {
+            Ok(())
+        }
+    };
+    match physical_type {
+        Type::BOOLEAN => {
+            larghezza_esatta(1)?;
+            if min.into_iter().chain(max).any(|valore| valore[0] > 1) {
+                Err(general_err!("statistic of the wrong width for its type"))
+            } else {
+                Ok(())
+            }
+        }
+        Type::INT32 | Type::FLOAT => larghezza_esatta(4),
+        Type::INT64 | Type::DOUBLE => larghezza_esatta(8),
+        Type::INT96 => larghezza_esatta(12),
+        Type::FIXED_LEN_BYTE_ARRAY => match larghezza.map(usize::try_from) {
+            Some(Ok(larghezza)) => verifica_statistica_flba(min, esatta_min, larghezza)
+                .and_then(|()| verifica_statistica_flba(max, esatta_max, larghezza)),
+            Some(Err(_)) => Err(general_err!("statistic of the wrong width for its type")),
+            None => Ok(()),
+        },
+        _ => Ok(()),
+    }
+}
+
 /// Converts Thrift definition into `Statistics`.
+#[cfg(test)] // PLENORA: the readers pass the width of the column.
 pub(crate) fn from_thrift_page_stats(
     physical_type: Type,
+    thrift_stats: Option<PageStatistics>,
+) -> Result<Option<Statistics>> {
+    from_thrift_page_stats_con_larghezza(physical_type, None, thrift_stats)
+}
+
+/// PLENORA: as [`from_thrift_page_stats`], with the width of a
+/// `FIXED_LEN_BYTE_ARRAY` column: its statistics have that width exactly.
+pub(crate) fn from_thrift_page_stats_con_larghezza(
+    physical_type: Type,
+    larghezza: Option<i32>,
     thrift_stats: Option<PageStatistics>,
 ) -> Result<Option<Statistics>> {
     Ok(match thrift_stats {
@@ -138,7 +220,15 @@ pub(crate) fn from_thrift_page_stats(
                 })
                 .transpose()?;
             // Generic distinct count (count of distinct values occurring)
-            let distinct_count = stats.distinct_count.map(|value| value as u64);
+            // PLENORA: a negative distinct count became a huge `u64` (the
+            // null and NaN counts were already refused).
+            let distinct_count = stats
+                .distinct_count
+                .map(|valore| {
+                    u64::try_from(valore)
+                        .map_err(|_| general_err!("Statistics distinct count is negative"))
+                })
+                .transpose()?;
             // Generic nan count for floating point types
             let nan_count = stats
                 .nan_count
@@ -151,6 +241,25 @@ pub(crate) fn from_thrift_page_stats(
                     Ok(nan_count as u64)
                 })
                 .transpose()?;
+            // PLENORA: the shape of every pair present, the deprecated one
+            // too (`verifica_forma_statistiche`).
+            verifica_forma_statistiche(
+                physical_type,
+                larghezza,
+                stats.min_value.as_deref(),
+                stats.max_value.as_deref(),
+                stats.is_min_value_exact,
+                stats.is_max_value_exact,
+            )?;
+            verifica_forma_statistiche(
+                physical_type,
+                larghezza,
+                stats.min.as_deref(),
+                stats.max.as_deref(),
+                None,
+                None,
+            )?;
+
             // Whether or not statistics use deprecated min/max fields.
             let old_format = stats.min_value.is_none() && stats.max_value.is_none();
             // Generic min value as bytes.
@@ -165,35 +274,6 @@ pub(crate) fn from_thrift_page_stats(
             } else {
                 stats.max_value
             };
-
-            fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
-                if let Some(min) = min
-                    && min.len() < len
-                {
-                    return Err(ParquetError::General(
-                        "Insufficient bytes to parse min statistic".to_string(),
-                    ));
-                }
-                if let Some(max) = max
-                    && max.len() < len
-                {
-                    return Err(ParquetError::General(
-                        "Insufficient bytes to parse max statistic".to_string(),
-                    ));
-                }
-                Ok(())
-            }
-
-            {
-                let (min, max) = (min.as_deref(), max.as_deref());
-                match physical_type {
-                    Type::BOOLEAN => check_len(min, max, 1),
-                    Type::INT32 | Type::FLOAT => check_len(min, max, 4),
-                    Type::INT64 | Type::DOUBLE => check_len(min, max, 8),
-                    Type::INT96 => check_len(min, max, 12),
-                    _ => Ok(()),
-                }?;
-            }
 
             // Values are encoded using PLAIN encoding definition, except that
             // variable-length byte arrays do not include a length prefix.
@@ -753,6 +833,22 @@ impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
 
 #[cfg(test)]
 mod tests {
+    /// PLENORA: a FLBA statistic: exact (flag true or absent) has the width
+    /// of the type; marked not exact is a bound of 1 to the width bytes.
+    #[test]
+    fn test_flba_statistic_width_follows_exactness() {
+        let w = 4;
+        assert!(verifica_statistica_flba(Some(&[1; 4]), None, w).is_ok());
+        assert!(verifica_statistica_flba(Some(&[1; 4]), Some(true), w).is_ok());
+        assert!(verifica_statistica_flba(Some(&[1; 3]), None, w).is_err());
+        assert!(verifica_statistica_flba(Some(&[1; 5]), Some(true), w).is_err());
+        assert!(verifica_statistica_flba(Some(&[1; 3]), Some(false), w).is_ok());
+        assert!(verifica_statistica_flba(Some(&[1; 4]), Some(false), w).is_ok());
+        assert!(verifica_statistica_flba(Some(&[]), Some(false), w).is_err());
+        assert!(verifica_statistica_flba(Some(&[1; 5]), Some(false), w).is_err());
+        assert!(verifica_statistica_flba(None, Some(false), w).is_ok());
+    }
+
     use core::f32;
 
     use super::*;
@@ -1186,7 +1282,7 @@ mod tests {
         let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats.clone())).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: Incorrect Int96 min statistics"
+            "Parquet error: statistic of the wrong width for its type"
         );
 
         thrift_stats.min = None;
@@ -1194,7 +1290,7 @@ mod tests {
         let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats)).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: Incorrect Int96 max statistics"
+            "Parquet error: statistic of the wrong width for its type"
         );
     }
 

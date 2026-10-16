@@ -1461,6 +1461,137 @@ impl str::FromStr for LogicalType {
     }
 }
 
+/// PLENORA: the fixed text of the rejection of an encoding not qualified for
+/// reading; it names no value of the file.
+pub const ENCODING_NOT_QUALIFIED: &str = "Parquet encoding not qualified for reading";
+
+/// PLENORA: the fixed text of the rejection of a string Arrow type over a
+/// byte array column without a string annotation (`UTF8`, `JSON`, `ENUM`).
+pub const STRING_WITHOUT_ANNOTATION: &str =
+    "string Arrow type over a byte array column without a string annotation";
+
+/// PLENORA: the fixed text of the rejection of a `FIXED_LEN_BYTE_ARRAY`
+/// column read as an Arrow dictionary.
+pub const FLBA_AS_DICTIONARY: &str =
+    "FIXED_LEN_BYTE_ARRAY read as an Arrow dictionary is not supported";
+
+/// PLENORA: the fixed text of the rejection of a binary Arrow dictionary over
+/// a column annotated as text (the dictionary values are decoded as text).
+pub const BINARY_DICTIONARY_OVER_TEXT: &str =
+    "binary Arrow dictionary over a byte array column annotated as text";
+
+/// PLENORA: whether a value encoding is qualified for reading in this fork.
+///
+/// Qualified: `PLAIN`, `PLAIN_DICTIONARY` and `RLE_DICTIONARY` for values,
+/// `RLE` for booleans (levels are always `RLE` or `BIT_PACKED`). Not
+/// qualified, until each has a fuzz campaign of its own:
+/// `DELTA_BINARY_PACKED`, `DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY`,
+/// `BYTE_STREAM_SPLIT` (and the others: `BIT_PACKED` for values). Two
+/// reviews found most of the decoder defects in exactly these.
+pub fn is_qualified_value_encoding(encoding: Encoding) -> bool {
+    matches!(
+        encoding,
+        Encoding::PLAIN | Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY | Encoding::RLE
+    )
+}
+
+/// PLENORA: [`is_qualified_value_encoding`] as an error, with the fixed text
+/// [`ENCODING_NOT_QUALIFIED`] (the encoding is named after it: not data).
+pub fn check_qualified_value_encoding(encoding: Encoding) -> Result<()> {
+    if is_qualified_value_encoding(encoding) {
+        Ok(())
+    } else {
+        Err(nyi_err!("{}: {}", ENCODING_NOT_QUALIFIED, encoding))
+    }
+}
+
+/// PLENORA: the encodings of a dictionary page: an encoding excluded from
+/// this fork is rejected as such (the same text as on a data page), a
+/// qualified encoding that cannot hold a dictionary keeps its own rejection.
+pub fn check_dictionary_page_encoding(encoding: Encoding) -> Result<()> {
+    check_qualified_value_encoding(encoding)?;
+    match encoding {
+        // PLENORA: a dictionary page is `PLAIN` (`PLAIN_DICTIONARY` names it
+        // in old files); `RLE_DICTIONARY` names the indices of a data page,
+        // and a dictionary page that declared it was read as `PLAIN`.
+        Encoding::PLAIN | Encoding::PLAIN_DICTIONARY => Ok(()),
+        _ => Err(nyi_err!(
+            "Invalid/Unsupported encoding type for dictionary: {}",
+            encoding
+        )),
+    }
+}
+
+/// PLENORA: the fixed text of the rejection of a skip (a row selection, a
+/// row filter, an offset, a skip of records or of pages, inside a page or of
+/// whole pages): not qualified. A skip did not decode what it passed over, so
+/// the checks of a read (values, dictionary indices, declared counts, the
+/// payload of a page, progress) did not apply to it.
+pub const SKIP_NOT_QUALIFIED: &str = "Parquet skip not qualified for reading";
+
+/// PLENORA: the fixed text of the rejection of a page of a type that is not
+/// qualified (`INDEX_PAGE`) in the pages of a column chunk: it was skipped in
+/// silence, its content passed over without a check.
+pub const PAGE_TYPE_NOT_QUALIFIED: &str = "Parquet page type not qualified for reading";
+
+/// PLENORA: the fixed text of the rejection of a dictionary page that is not
+/// where a column chunk has it: after a data page (it was read, and the
+/// indices of the pages after it pointed into it; the format puts the
+/// dictionary first), or not at the start the footer declares for it.
+pub const DICTIONARY_PAGE_OUT_OF_PLACE: &str =
+    "dictionary page not at the start of its column chunk";
+
+/// PLENORA: the fixed text of the rejection of an `INTERVAL` component the
+/// Arrow interval holds over `i32::MAX`: the components are unsigned, and
+/// `2^31` days became `-2^31` in silence.
+pub const INTERVAL_OUT_OF_RANGE: &str = "INTERVAL component over the Arrow interval range";
+
+/// PLENORA: the fixed text of the rejection of a group annotated with a
+/// logical or converted type of a primitive (`UUID`, `JSON`, `UNKNOWN`, ...):
+/// it became an Arrow struct and lost the annotation in silence.
+pub const GROUP_WITH_PRIMITIVE_ANNOTATION: &str =
+    "Parquet group annotated with a type of a primitive column";
+
+/// PLENORA: the fixed text of the rejection of an embedded Arrow schema that
+/// contradicts the Parquet type of a column (a time zone on a timestamp not
+/// adjusted to UTC, another precision or scale for a decimal, a temporal
+/// type over an annotated integer): the hint changed the meaning of the
+/// values in silence.
+pub const ARROW_HINT_CONTRADICTS: &str =
+    "embedded Arrow schema contradicts the Parquet type of a column";
+
+/// PLENORA: the fixed text of the rejection of a value in a column with the
+/// `UNKNOWN` logical type (always null): it is read as an Arrow `Null`
+/// column, and the values were dropped in silence.
+pub const UNKNOWN_WITH_VALUES: &str = "UNKNOWN (always null) column with a value";
+
+/// PLENORA: the fixed text of the rejection of an `INTERVAL` value with
+/// parts the Arrow interval unit does not hold (months for `DayTime`, days or
+/// milliseconds for `YearMonth`): they were dropped in silence.
+pub const INTERVAL_NOT_AS_DECLARED: &str =
+    "INTERVAL value with parts its Arrow interval unit does not hold";
+
+/// PLENORA: the fixed text of the rejection of a page index (column index
+/// and offset index): not qualified for reading. Their counts, histograms,
+/// cardinalities and boundaries reached unchecked arithmetic, and data and
+/// IO-tools do not read them.
+pub const PAGE_INDEX_NOT_QUALIFIED: &str = "Parquet page index not qualified for reading";
+
+/// PLENORA: the fixed text of the rejection of a bloom filter: not
+/// qualified for reading (its header sizes reached unchecked arithmetic, and
+/// data and IO-tools do not read them).
+pub const BLOOM_FILTER_NOT_QUALIFIED: &str = "Parquet bloom filter not qualified for reading";
+
+/// PLENORA: the fixed text of a data page whose streams (levels, values,
+/// dictionary indices) do not end where its values end: bytes or values
+/// after the last one the page declares.
+pub const PAGE_NOT_AS_DECLARED: &str = "data page does not end where its levels and values end";
+
+/// PLENORA: the fixed text of a dictionary page whose entries are not the
+/// entries its header declares (fewer values, or bytes after the last one).
+pub const DICTIONARY_NOT_AS_DECLARED: &str =
+    "dictionary page does not hold the values its header declares";
+
 #[cfg(test)]
 #[expect(deprecated)] // allow BIT_PACKED encoding for the whole test module
 mod tests {

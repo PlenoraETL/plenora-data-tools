@@ -1,0 +1,18 @@
+# Ambiente `principale` di genera.py: CPython 3.14.6. Versioni esatte degli
+# scrittori e delle loro dipendenze; requisiti-principale.txt ne è la
+# compilazione con gli hash (uv 0.12.0, `uv pip compile --generate-hashes
+# --universal --python-version 3.14`); si installa con
+# `uv pip sync --require-hashes requisiti-principale.txt`.
+pyarrow==26.0.0
+fastparquet==2026.9.0
+duckdb==1.5.6
+polars==2.0.0
+polars-runtime-32==2.0.0
+pandas==3.0.6
+numpy==2.5.4
+cramjam==2.13.0
+fsspec==2026.9.0
+packaging==26.3
+python-dateutil==2.9.0.post0
+six==1.17.0
+tzdata==2026.5

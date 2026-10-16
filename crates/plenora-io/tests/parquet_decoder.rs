@@ -1,0 +1,4752 @@
+//! La classe dei decoder di `parquet` che si fidano dei valori letti dal
+//! file (fork `vendor/parquet-60.0.0-eof`, `patches/parquet-decoder.patch`).
+//!
+//! Ogni prova costruisce a mano un Parquet minimo e **valido nella forma**:
+//! footer e header di pagina in Thrift compatto scritti campo per campo, una
+//! colonna `REQUIRED` `x`, una pagina di dati v1 senza livelli e, se serve,
+//! una pagina di dizionario. Cambia solo il contenuto codificato della
+//! pagina, cioè proprio ciò che il decoder legge. Ogni caso pretende un
+//! errore del decoder (non il panico che la barriera di lettura convertirebbe
+//! in `DataMapping`, «parquet in panico»), o, dove il difetto era
+//! un'accettazione silenziosa, il rifiuto di un file che prima si leggeva.
+//!
+//! Senza la patch: panici (`attempt to add with overflow`, `index out of
+//! bounds`, `range end index`, `attempt to multiply with overflow`) e due
+//! letture riuscite che non dovevano riuscire (il prefisso oltre il valore
+//! precedente, il resto di `BYTE_STREAM_SPLIT`).
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+mod comune;
+
+use std::fmt::Write as _;
+use std::sync::Arc;
+
+use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+use parquet::column::reader::get_typed_column_reader;
+use parquet::data_type::{ByteArrayType, DoubleType, Int32Type};
+use parquet::file::reader::{FileReader, SerializedFileReader};
+use plenora_core::arrow::array::cast::AsArray;
+use plenora_core::arrow::array::{Array, RecordBatch};
+use plenora_core::arrow::schema::{DataType, Field, Schema};
+use plenora_core::ErrorCategory;
+use plenora_io::{leggi_tabella_con_limiti, Formato, LimitiLettura};
+
+use comune::cartella;
+
+// --- Thrift compatto --------------------------------------------------------
+
+const I32: u8 = 5;
+const I64: u8 = 6;
+const BINARIO: u8 = 8;
+const ELENCO: u8 = 9;
+const STRUCT: u8 = 12;
+
+fn varint(mut n: u64, out: &mut Vec<u8>) {
+    loop {
+        let sette = u8::try_from(n & 0x7F).unwrap();
+        n >>= 7;
+        if n == 0 {
+            out.push(sette);
+            return;
+        }
+        out.push(sette | 0x80);
+    }
+}
+
+const fn zigzag(n: i64) -> u64 {
+    ((n << 1) ^ (n >> 63)).cast_unsigned()
+}
+
+/// Una struct Thrift: i campi in ordine crescente di identificatore.
+#[derive(Default)]
+struct Struttura {
+    byte: Vec<u8>,
+    ultimo: u8,
+}
+
+impl Struttura {
+    fn campo(&mut self, id: u8, tipo: u8) {
+        let delta = id - self.ultimo;
+        assert!(delta > 0);
+        if delta < 16 {
+            self.byte.push((delta << 4) | tipo);
+        } else {
+            // La forma lunga: il tipo, poi l'identificatore (zigzag).
+            self.byte.push(tipo);
+            varint(zigzag(i64::from(id)), &mut self.byte);
+        }
+        self.ultimo = id;
+    }
+    fn intero(mut self, id: u8, valore: i64, tipo: u8) -> Self {
+        self.campo(id, tipo);
+        varint(zigzag(valore), &mut self.byte);
+        self
+    }
+    /// Un booleano: nel protocollo compatto il valore è il tipo del campo.
+    fn campo_booleano(mut self, id: u8, valore: bool) -> Self {
+        self.campo(id, if valore { 1 } else { 2 });
+        self
+    }
+    fn i32(self, id: u8, valore: i64) -> Self {
+        self.intero(id, valore, I32)
+    }
+    fn i64(self, id: u8, valore: i64) -> Self {
+        self.intero(id, valore, I64)
+    }
+    fn binario(mut self, id: u8, valore: &[u8]) -> Self {
+        self.campo(id, BINARIO);
+        varint(valore.len() as u64, &mut self.byte);
+        self.byte.extend_from_slice(valore);
+        self
+    }
+    fn testo(self, id: u8, valore: &str) -> Self {
+        self.binario(id, valore.as_bytes())
+    }
+    fn struttura(mut self, id: u8, interna: Self) -> Self {
+        self.campo(id, STRUCT);
+        self.byte.extend(interna.fine());
+        self
+    }
+    fn elenco(mut self, id: u8, tipo: u8, elementi: Vec<Vec<u8>>) -> Self {
+        self.campo(id, ELENCO);
+        let quanti = elementi.len();
+        assert!(quanti < 15);
+        self.byte.push((u8::try_from(quanti).unwrap() << 4) | tipo);
+        for elemento in elementi {
+            self.byte.extend(elemento);
+        }
+        self
+    }
+    fn fine(mut self) -> Vec<u8> {
+        self.byte.push(0);
+        self.byte
+    }
+}
+
+fn intero_di_elenco(valore: i64) -> Vec<u8> {
+    let mut out = Vec::new();
+    varint(zigzag(valore), &mut out);
+    out
+}
+
+fn testo_di_elenco(valore: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    varint(valore.len() as u64, &mut out);
+    out.extend_from_slice(valore.as_bytes());
+    out
+}
+
+// --- Il file ----------------------------------------------------------------
+
+/// Tipi fisici e codifiche (numeri di `parquet.thrift`).
+const BYTE_ARRAY: i64 = 6;
+const DOUBLE: i64 = 5;
+const INT32: i64 = 1;
+const FLBA: i64 = 7;
+const PLAIN: i64 = 0;
+const RLE: i64 = 3;
+const DELTA_BINARY_PACKED: i64 = 5;
+const DELTA_LENGTH_BYTE_ARRAY: i64 = 6;
+const DELTA_BYTE_ARRAY: i64 = 7;
+const RLE_DICTIONARY: i64 = 8;
+const BYTE_STREAM_SPLIT: i64 = 9;
+
+/// Una colonna `x` `REQUIRED`: tipo fisico, larghezza (per FLBA), tipo
+/// convertito con scala e precisione (per i decimali).
+struct Colonna {
+    tipo: i64,
+    larghezza: Option<i64>,
+    decimale: Option<(i64, i64)>,
+    /// `0` `REQUIRED`, `1` `OPTIONAL` (livelli di definizione nella pagina),
+    /// `2` `REPEATED` (livelli di ripetizione e di definizione).
+    ripetizione: i64,
+    /// Tipo convertito (`converted_type`), per esempio `INT_8`.
+    convertito: Option<i64>,
+    /// Tipo logico (`logicalType`, campo 10): l'identificatore del ramo
+    /// dell'unione, con una struttura vuota.
+    logico: Option<u8>,
+}
+
+const fn colonna(tipo: i64) -> Colonna {
+    Colonna {
+        tipo,
+        larghezza: None,
+        decimale: None,
+        ripetizione: 0,
+        convertito: None,
+        logico: None,
+    }
+}
+
+/// Un Parquet di una pagina di dati (`valori` dichiarati, `codifica`,
+/// `contenuto`), con un dizionario PLAIN se dato, e statistiche min/max
+/// (`min_value`, `max_value`) se date.
+fn parquet(
+    colonna: &Colonna,
+    valori: i64,
+    codifica: i64,
+    contenuto: &[u8],
+    dizionario: Option<(i64, &[u8])>,
+    statistiche: Option<(&[u8], &[u8])>,
+) -> Vec<u8> {
+    let lunghezza = i64::try_from(contenuto.len()).unwrap();
+    let header = Struttura::default()
+        .i32(1, 0) // DATA_PAGE
+        .i32(2, lunghezza)
+        .i32(3, lunghezza)
+        .struttura(
+            5,
+            Struttura::default()
+                .i32(1, valori)
+                .i32(2, codifica)
+                .i32(3, RLE)
+                .i32(4, RLE),
+        )
+        .fine();
+    parquet_con_header(
+        colonna,
+        valori,
+        codifica,
+        contenuto,
+        &header,
+        dizionario,
+        statistiche,
+    )
+}
+
+/// Come [`parquet`], con l'header della pagina di dati dato.
+fn parquet_con_header(
+    colonna: &Colonna,
+    valori: i64,
+    codifica: i64,
+    contenuto: &[u8],
+    header_dati: &[u8],
+    dizionario: Option<(i64, &[u8])>,
+    statistiche: Option<(&[u8], &[u8])>,
+) -> Vec<u8> {
+    parquet_con_codec(
+        colonna,
+        valori,
+        codifica,
+        contenuto,
+        header_dati,
+        dizionario,
+        statistiche,
+        0,
+    )
+}
+
+/// Come [`parquet_con_header`], con il codec del column chunk dato
+/// (`0` `UNCOMPRESSED`, `1` `SNAPPY`).
+#[allow(clippy::too_many_arguments)] // Il costruttore di tutte le prove.
+fn parquet_con_codec(
+    colonna: &Colonna,
+    valori: i64,
+    codifica: i64,
+    contenuto: &[u8],
+    header_dati: &[u8],
+    dizionario: Option<(i64, &[u8])>,
+    statistiche: Option<(&[u8], &[u8])>,
+    codec: i64,
+) -> Vec<u8> {
+    let statistiche = statistiche
+        .map(|(minimo, massimo)| Struttura::default().binario(5, massimo).binario(6, minimo));
+    parquet_completo(
+        colonna,
+        valori,
+        codifica,
+        contenuto,
+        header_dati,
+        dizionario,
+        statistiche,
+        codec,
+    )
+}
+
+/// Come [`parquet_con_codec`], con le statistiche del column chunk date come
+/// struttura Thrift (`ColumnMetaData.statistics`).
+#[allow(clippy::too_many_arguments)] // Il costruttore di tutte le prove.
+fn parquet_completo(
+    colonna: &Colonna,
+    valori: i64,
+    codifica: i64,
+    contenuto: &[u8],
+    header_dati: &[u8],
+    dizionario: Option<(i64, &[u8])>,
+    statistiche: Option<Struttura>,
+    codec: i64,
+) -> Vec<u8> {
+    let mut file = b"PAR1".to_vec();
+    let inizio = i64::try_from(file.len()).unwrap();
+    let mut offset_dizionario = None;
+    let mut codifiche = vec![intero_di_elenco(codifica)];
+    if let Some((quanti, byte)) = dizionario {
+        offset_dizionario = Some(i64::try_from(file.len()).unwrap());
+        let lunghezza = i64::try_from(byte.len()).unwrap();
+        let header = Struttura::default()
+            .i32(1, 2) // DICTIONARY_PAGE
+            .i32(2, lunghezza)
+            .i32(3, lunghezza)
+            .struttura(7, Struttura::default().i32(1, quanti).i32(2, PLAIN))
+            .fine();
+        file.extend(header);
+        file.extend_from_slice(byte);
+        codifiche.push(intero_di_elenco(PLAIN));
+    }
+    let offset_dati = i64::try_from(file.len()).unwrap();
+    file.extend_from_slice(header_dati);
+    file.extend_from_slice(contenuto);
+    let pagine = i64::try_from(file.len()).unwrap() - inizio;
+
+    let mut metadati = Struttura::default()
+        .i32(1, colonna.tipo)
+        .elenco(2, I32, codifiche)
+        .elenco(3, BINARIO, vec![testo_di_elenco("x")])
+        .i32(4, codec)
+        .i64(5, valori)
+        .i64(6, pagine)
+        .i64(7, pagine)
+        .i64(9, offset_dati);
+    if let Some(offset) = offset_dizionario {
+        metadati = metadati.i64(11, offset);
+    }
+    if let Some(statistiche) = statistiche {
+        metadati = metadati.struttura(12, statistiche);
+    }
+    let chunk = Struttura::default()
+        .i64(2, inizio)
+        .struttura(3, metadati)
+        .fine();
+    let gruppo = Struttura::default()
+        .elenco(1, STRUCT, vec![chunk])
+        .i64(2, pagine)
+        .i64(3, valori)
+        .fine();
+    let radice = Struttura::default().testo(4, "schema").i32(5, 1).fine();
+    let mut foglia = Struttura::default().i32(1, colonna.tipo);
+    if let Some(larghezza) = colonna.larghezza {
+        foglia = foglia.i32(2, larghezza);
+    }
+    foglia = foglia.i32(3, colonna.ripetizione).testo(4, "x");
+    if let Some((scala, precisione)) = colonna.decimale {
+        foglia = foglia.i32(6, 5).i32(7, scala).i32(8, precisione); // DECIMAL
+    } else if let Some(convertito) = colonna.convertito {
+        foglia = foglia.i32(6, convertito);
+    }
+    if let Some(logico) = colonna.logico {
+        foglia = foglia.struttura(
+            10,
+            Struttura::default().struttura(logico, Struttura::default()),
+        );
+    }
+    let footer = Struttura::default()
+        .i32(1, 1)
+        .elenco(2, STRUCT, vec![radice, foglia.fine()])
+        .i64(3, valori)
+        .elenco(4, STRUCT, vec![gruppo])
+        .fine();
+    let lunghezza_footer = u32::try_from(footer.len()).unwrap();
+    file.extend(footer);
+    file.extend_from_slice(&lunghezza_footer.to_le_bytes());
+    file.extend_from_slice(b"PAR1");
+    file
+}
+
+/// `DELTA_BINARY_PACKED` di valori a differenza costante: un blocco da 128
+/// valori in 4 miniblocchi, larghezze 0 (ogni delta vale il minimo).
+fn delta_costante(valori: &[i64]) -> Vec<u8> {
+    let mut out = Vec::new();
+    varint(128, &mut out);
+    varint(4, &mut out);
+    varint(valori.len() as u64, &mut out);
+    varint(zigzag(valori.first().copied().unwrap_or(0)), &mut out);
+    if valori.len() > 1 {
+        let delta = valori[1] - valori[0];
+        assert!(valori.windows(2).all(|w| w[1] - w[0] == delta));
+        varint(zigzag(delta), &mut out);
+        out.extend_from_slice(&[0, 0, 0, 0]);
+    }
+    out
+}
+
+// --- Le letture -------------------------------------------------------------
+
+fn su_file<T>(byte: &[u8], f: impl FnOnce(std::fs::File) -> T) -> T {
+    let dir = cartella();
+    let percorso = dir.path().join("f.parquet");
+    std::fs::write(&percorso, byte).unwrap();
+    f(std::fs::File::open(&percorso).unwrap())
+}
+
+/// Il testo del panico, se c'è.
+fn panico(carico: &(dyn std::any::Any + Send)) -> String {
+    carico
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| carico.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_else(|| "(payload non testuale)".to_owned())
+}
+
+/// Il lettore Arrow: righe lette o l'errore; un panico fa fallire la prova.
+fn arrow(byte: &[u8]) -> Result<usize, String> {
+    su_file(byte, |file| {
+        std::panic::catch_unwind(move || {
+            let lettore = ParquetRecordBatchReaderBuilder::try_new(file)
+                .map_err(|e| e.to_string())?
+                .build()
+                .map_err(|e| e.to_string())?;
+            let mut righe = 0;
+            for batch in lettore {
+                righe += batch.map_err(|e| e.to_string())?.num_rows();
+            }
+            Ok(righe)
+        })
+        .unwrap_or_else(|carico| panic!("il lettore Arrow va in panico: {}", panico(&*carico)))
+    })
+}
+
+/// Il confine di questo crate: l'errore deve essere del decoder, non della
+/// barriera (che converte un panico in `DataMapping`, «in panico»).
+fn rifiutato_dal_confine(byte: &[u8]) {
+    let dir = cartella();
+    let percorso = dir.path().join("c.parquet");
+    std::fs::write(&percorso, byte).unwrap();
+    let errore = leggi_tabella_con_limiti(
+        &percorso,
+        Some(Formato::Parquet),
+        u64::MAX,
+        &LimitiLettura::default(),
+    )
+    .expect_err("il file doveva essere rifiutato");
+    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+    assert!(!errore.to_string().contains("panico"), "{errore}");
+}
+
+/// L'API per colonne (decoder di `encodings::decoding`): legge tutti i
+/// valori della colonna, o ne salta `salta`. Un salto di una pagina intera
+/// non passa dal decoder (il lettore salta la pagina, controllandone solo la
+/// codifica dall'header). Un panico fa fallire la prova.
+fn colonna_api<T: parquet::data_type::DataType>(
+    byte: &[u8],
+    salta: Option<usize>,
+) -> Result<usize, String>
+where
+    T::T: Default + Clone,
+{
+    su_file(byte, |file| {
+        std::panic::catch_unwind(move || {
+            let lettore = SerializedFileReader::new(file).map_err(|e| e.to_string())?;
+            let gruppo = lettore.get_row_group(0).map_err(|e| e.to_string())?;
+            let colonna = gruppo.get_column_reader(0).map_err(|e| e.to_string())?;
+            let mut tipizzata = get_typed_column_reader::<T>(colonna);
+            if let Some(quanti) = salta {
+                return tipizzata.skip_records(quanti).map_err(|e| e.to_string());
+            }
+            let mut valori = Vec::new();
+            tipizzata
+                .read_records(64, None, None, &mut valori)
+                .map(|(record, _, _)| record)
+                .map_err(|e| e.to_string())
+        })
+        .unwrap_or_else(|carico| panic!("l'API per colonne va in panico: {}", panico(&*carico)))
+    })
+}
+
+/// Il rifiuto di una codifica non qualificata: dal lettore Arrow del fork,
+/// con il testo fisso, e dal confine, `Unsupported`.
+fn non_qualificata(byte: &[u8]) {
+    contiene(arrow(byte), parquet::basic::ENCODING_NOT_QUALIFIED);
+    let dir = cartella();
+    let percorso = dir.path().join("q.parquet");
+    std::fs::write(&percorso, byte).unwrap();
+    let errore = leggi_tabella_con_limiti(
+        &percorso,
+        Some(Formato::Parquet),
+        u64::MAX,
+        &LimitiLettura::default(),
+    )
+    .expect_err("codifica non qualificata");
+    assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+}
+
+fn contiene(esito: Result<usize, String>, atteso: &str) {
+    match esito {
+        Ok(righe) => panic!("letto senza errore ({righe} righe), atteso «{atteso}»"),
+        Err(testo) => assert!(testo.contains(atteso), "atteso «{atteso}»: {testo}"),
+    }
+}
+
+// --- Le prove ---------------------------------------------------------------
+
+/// Controfattuale: il costruttore di file produce Parquet che si leggono.
+#[test]
+fn i_file_costruiti_a_mano_si_leggono() {
+    let mut testo = Vec::new();
+    for valore in [b"ab".as_slice(), b"c"] {
+        testo.extend_from_slice(&u32::try_from(valore.len()).unwrap().to_le_bytes());
+        testo.extend_from_slice(valore);
+    }
+    let byte = parquet(&colonna(BYTE_ARRAY), 2, PLAIN, &testo, None, None);
+    assert_eq!(arrow(&byte), Ok(2));
+    assert_eq!(colonna_api::<ByteArrayType>(&byte, None), Ok(2));
+
+    let doppi: Vec<u8> = (0..8_u32)
+        .flat_map(|i| f64::from(i).to_le_bytes())
+        .collect();
+    let byte = parquet(&colonna(DOUBLE), 8, PLAIN, &doppi, None, None);
+    assert_eq!(arrow(&byte), Ok(8));
+}
+
+/// Punto 3: `RLE_DICTIONARY` su FLBA: un indice oltre il dizionario tagliava una
+/// slice fuori dai limiti.
+#[test]
+fn un_indice_oltre_il_dizionario_flba_e_un_errore() {
+    let flba = Colonna {
+        tipo: FLBA,
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    // Larghezza dei bit 3, una corsa RLE di un valore: l'indice 5.
+    let indici = [3_u8, 2, 5];
+    let byte = parquet(&flba, 1, RLE_DICTIONARY, &indici, Some((1, b"zz")), None);
+    contiene(arrow(&byte), "dictionary index out of bounds");
+    rifiutato_dal_confine(&byte);
+}
+
+/// Stessa classe, `BYTE_ARRAY`: un indice a 32 bit `0xFFFFFFFF` è `-1` in
+/// `i32`, `usize::MAX` convertito, e `index + 1` traboccava.
+#[test]
+fn un_indice_negativo_del_dizionario_e_un_errore() {
+    let mut dizionario = 1_u32.to_le_bytes().to_vec();
+    dizionario.push(b'a');
+    let indici = [32_u8, 2, 0xFF, 0xFF, 0xFF, 0xFF];
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &indici,
+        Some((1, &dizionario)),
+        None,
+    );
+    contiene(arrow(&byte), "dictionary");
+    rifiutato_dal_confine(&byte);
+}
+
+/// `PLAIN` a larghezza fissa: un resto della divisione per la larghezza era
+/// scartato in silenzio (5 byte di valori da 2: l'ultimo ignorato). Ora il
+/// resto si giudica alla fine della pagina, con il resto dello stream.
+#[test]
+fn un_resto_nella_pagina_e_un_errore() {
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let byte = parquet(&flba, 2, PLAIN, b"abcde", None, None);
+    contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+    rifiutato_dal_confine(&byte);
+}
+
+/// Punto 7: Statistiche di un decimale FLBA vuote o oltre 16 byte:
+/// `sign_extend_be::<16>` andava in panico. Poi la statistica mancava; ora
+/// una statistica FLBA deve avere la larghezza del tipo (qui 4), e una
+/// diversa è un errore alla lettura del footer.
+#[test]
+fn una_statistica_decimale_malformata_e_un_errore() {
+    let decimale = Colonna {
+        tipo: FLBA,
+        larghezza: Some(4),
+        decimale: Some((0, 9)),
+        ..colonna(FLBA)
+    };
+    let valori = [0_u8, 0, 0, 1, 0, 0, 0, 2];
+    for (minimo, massimo) in [
+        (&[][..], &[0_u8, 0, 0, 2][..]),
+        (&[1_u8; 17][..], &[0, 0, 0, 2][..]),
+        (&[0_u8, 0, 1][..], &[0, 0, 0, 2][..]),
+    ] {
+        let byte = parquet(&decimale, 2, PLAIN, &valori, None, Some((minimo, massimo)));
+        contiene(arrow(&byte), "statistic of the wrong width");
+        rifiutato_dal_confine(&byte);
+    }
+    // Controfattuale: 4 byte ciascuna, la statistica c'è.
+    let byte = parquet(
+        &decimale,
+        2,
+        PLAIN,
+        &valori,
+        None,
+        Some((&[0, 0, 0, 1], &[0, 0, 0, 2])),
+    );
+    su_file(&byte, |file| {
+        let costruttore = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let convertitore =
+            StatisticsConverter::try_new("x", costruttore.schema(), costruttore.parquet_schema())
+                .unwrap();
+        let minimi = convertitore
+            .row_group_mins(costruttore.metadata().row_groups())
+            .unwrap();
+        assert_eq!(minimi.null_count(), 0);
+    });
+}
+
+/// Stessa classe nei dati: un decimale `BYTE_ARRAY` di 17 byte (o vuoto)
+/// faceva andare in panico `sign_extend_be::<16>`.
+#[test]
+fn un_decimale_byte_array_troppo_largo_e_un_errore() {
+    let decimale = Colonna {
+        tipo: BYTE_ARRAY,
+        larghezza: None,
+        decimale: Some((0, 10)),
+        ..colonna(BYTE_ARRAY)
+    };
+    for valore in [vec![1_u8; 17], Vec::new()] {
+        let mut contenuto = u32::try_from(valore.len()).unwrap().to_le_bytes().to_vec();
+        contenuto.extend_from_slice(&valore);
+        let byte = parquet(&decimale, 1, PLAIN, &contenuto, None, None);
+        contiene(arrow(&byte), "decimal value");
+        rifiutato_dal_confine(&byte);
+    }
+}
+
+/// Stessa classe: la pagina `PLAIN` di `BYTE_ARRAY` che finisce prima dei
+/// valori dichiarati. Il lettore Arrow rispondeva «letti tutti» con un
+/// valore solo; l'API per colonne leggeva la lunghezza da meno di 4 byte.
+#[test]
+fn una_pagina_plain_piu_corta_dei_valori_e_un_errore() {
+    let mut contenuto = 1_u32.to_le_bytes().to_vec();
+    contenuto.push(b'a');
+    let byte = parquet(&colonna(BYTE_ARRAY), 3, PLAIN, &contenuto, None, None);
+    assert!(arrow(&byte).is_err());
+    rifiutato_dal_confine(&byte);
+    let corto = parquet(&colonna(BYTE_ARRAY), 1, PLAIN, &[1, 0], None, None);
+    contiene(
+        colonna_api::<ByteArrayType>(&corto, None),
+        "Not enough bytes",
+    );
+    // Il salto dentro una pagina non aveva nessun controllo (una lunghezza
+    // oltre la pagina): ora non è qualificato.
+    let oltre = parquet(
+        &colonna(BYTE_ARRAY),
+        2,
+        PLAIN,
+        &[100, 0, 0, 0, b'a'],
+        None,
+        None,
+    );
+    contiene(
+        colonna_api::<ByteArrayType>(&oltre, Some(1)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+}
+
+/// Stessa classe: una corsa RLE oltre `u32` si troncava in silenzio.
+#[test]
+fn una_corsa_rle_oltre_u32_e_un_errore() {
+    let mut dizionario = 1_u32.to_le_bytes().to_vec();
+    dizionario.push(b'a');
+    let mut indici = vec![1_u8];
+    varint(1 << 33, &mut indici); // corsa RLE di 2^32 valori
+    indici.push(0);
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &indici,
+        Some((1, &dizionario)),
+        None,
+    );
+    contiene(arrow(&byte), "RLE run length out of range");
+    rifiutato_dal_confine(&byte);
+}
+
+/// La pagina di dizionario è condivisa fra i casi: lo stesso costruttore
+/// con valori validi si legge (controfattuale dei casi a dizionario).
+#[test]
+fn un_dizionario_valido_si_legge() {
+    let mut dizionario = 1_u32.to_le_bytes().to_vec();
+    dizionario.push(b'a');
+    let indici = [1_u8, 2, 0];
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &indici,
+        Some((1, &dizionario)),
+        None,
+    );
+    assert_eq!(arrow(&byte), Ok(1));
+    let flba = Colonna {
+        tipo: FLBA,
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let byte = parquet(&flba, 1, RLE_DICTIONARY, &[1, 2, 0], Some((1, b"zz")), None);
+    assert_eq!(arrow(&byte), Ok(1));
+    let _ = Arc::new(());
+}
+
+/// Stessa classe, pagina v2: la somma delle lunghezze dei livelli in `i32`
+/// traboccava (un panico), e con il codec `UNCOMPRESSED` i livelli erano
+/// confrontati con la dimensione dichiarata, non con i byte letti.
+#[test]
+fn i_livelli_di_una_pagina_v2_oltre_i_byte_sono_un_errore() {
+    let contenuto = 7_i32.to_le_bytes();
+    for (definizione, ripetizione, dichiarata) in [(i64::from(i32::MAX), 1, 4), (0, 3, 100)] {
+        let header = Struttura::default()
+            .i32(1, 3) // DATA_PAGE_V2
+            .i32(2, dichiarata)
+            .i32(3, 4)
+            .struttura(
+                8,
+                Struttura::default()
+                    .i32(1, 1)
+                    .i32(2, 0)
+                    .i32(3, 1)
+                    .i32(4, PLAIN)
+                    .i32(5, definizione)
+                    .i32(6, ripetizione),
+            )
+            .fine();
+        let byte = parquet_con_header(&colonna(INT32), 1, PLAIN, &contenuto, &header, None, None);
+        assert!(arrow(&byte).is_err(), "{definizione} + {ripetizione}");
+        rifiutato_dal_confine(&byte);
+    }
+}
+
+/// Una colonna `OPTIONAL` `INT32` con i livelli di definizione `BIT_PACKED`
+/// (pagina v1: i livelli senza lunghezza, poi i valori).
+fn livelli_bit_packed(valori: i64, contenuto: &[u8]) -> Vec<u8> {
+    let opzionale = Colonna {
+        ripetizione: 1,
+        ..colonna(INT32)
+    };
+    let lunghezza = i64::try_from(contenuto.len()).unwrap();
+    let header = Struttura::default()
+        .i32(1, 0)
+        .i32(2, lunghezza)
+        .i32(3, lunghezza)
+        .struttura(
+            5,
+            Struttura::default()
+                .i32(1, valori)
+                .i32(2, PLAIN)
+                .i32(3, 4) // BIT_PACKED
+                .i32(4, RLE),
+        )
+        .fine();
+    parquet_con_header(&opzionale, valori, PLAIN, contenuto, &header, None, None)
+}
+
+/// I livelli `BIT_PACKED` si impacchettano dal bit più significativo, l'RLE
+/// ibrido dal meno significativo; i due decoder del fork li leggevano
+/// nell'ordine RLE. Un payload `0x80` su 8 righe (il valore 42 nella prima)
+/// dava 42 nell'ultima riga e null nella prima, in silenzio. Non qualificati:
+/// `Unsupported`, anche con livelli oltre la pagina (cento valori, due byte),
+/// e nell'API per colonne.
+#[test]
+fn i_livelli_bit_packed_non_sono_qualificati() {
+    let mut contenuto = vec![0x80_u8];
+    contenuto.extend_from_slice(&42_i32.to_le_bytes());
+    let byte = livelli_bit_packed(8, &contenuto);
+    non_qualificata(&byte);
+    contiene(
+        colonna_api::<Int32Type>(&byte, None),
+        parquet::basic::ENCODING_NOT_QUALIFIED,
+    );
+    non_qualificata(&livelli_bit_packed(100, &[0xFF, 0xFF]));
+    // Controfattuale: gli stessi livelli in RLE (un gruppo bit-packed da 8,
+    // il primo bit acceso) danno 42 nella prima riga.
+    let byte = opzionale_con_livelli(8, &[(1 << 1) | 1, 0x01], &42_i32.to_le_bytes());
+    let valori = su_file(&byte, |file| {
+        let lettore = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
+        let batch = lettore.into_iter().next().unwrap().unwrap();
+        let colonna = batch.column(0).clone();
+        (0..colonna.len())
+            .map(|riga| {
+                if colonna.is_null(riga) {
+                    "null".to_owned()
+                } else {
+                    testo_della_cella(colonna.as_ref(), riga)
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        valori,
+        ["42", "null", "null", "null", "null", "null", "null", "null"]
+    );
+}
+
+/// Stessa classe: una pagina `RLE_DICTIONARY` senza pagina di dizionario
+/// nel column chunk mandava in panico il decoder generico («Decoder for dict
+/// should have been set»), quello dei tipi primitivi.
+#[test]
+fn una_pagina_a_dizionario_senza_dizionario_e_un_errore() {
+    let byte = parquet(&colonna(INT32), 1, RLE_DICTIONARY, &[1, 2, 0], None, None);
+    contiene(arrow(&byte), "missing dictionary page");
+    rifiutato_dal_confine(&byte);
+}
+
+// --- Semi del fuzz ----------------------------------------------------------
+
+/// I file malformati delle prove sopra, uno per caso: sono anche semi del
+/// target di fuzz `lettura_parquet` (`scripts/genera_corpus_fuzz.py` li
+/// prende da `tests/dati/fuzz-decoder/`). Con `PLENORA_RIGENERA_SEMI=1` la
+/// prova li riscrive; senza, pretende che i file versionati siano questi.
+#[allow(clippy::too_many_lines)] // Un elenco di casi, uno per voce.
+fn semi() -> Vec<(&'static str, Vec<u8>)> {
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let mut dizionario = 1_u32.to_le_bytes().to_vec();
+    dizionario.push(b'a');
+    let mut prefisso = delta_costante(&[0, 5]);
+    prefisso.extend(delta_costante(&[1, 1]));
+    prefisso.extend_from_slice(b"ab");
+    let mut suffisso = delta_costante(&[0]);
+    suffisso.extend(delta_costante(&[-1]));
+    suffisso.extend_from_slice(b"ab");
+    let mut lunghezze = delta_costante(&[-1, 0]);
+    lunghezze.extend_from_slice(b"abc");
+    let mut blocco = Vec::new();
+    varint(1 << 62, &mut blocco);
+    varint(1, &mut blocco);
+    varint(2, &mut blocco);
+    varint(zigzag(7), &mut blocco);
+    varint(zigzag(1), &mut blocco);
+    blocco.push(8);
+    blocco.extend_from_slice(&[0; 8]);
+    let mut resto: Vec<u8> = (0..8_u32)
+        .flat_map(|i| f64::from(i).to_le_bytes())
+        .collect();
+    resto.push(0xAB);
+    let mut corsa = vec![1_u8];
+    varint(1 << 33, &mut corsa);
+    corsa.push(0);
+    let decimale = Colonna {
+        decimale: Some((0, 10)),
+        ..colonna(BYTE_ARRAY)
+    };
+    let mut largo = 17_u32.to_le_bytes().to_vec();
+    largo.extend_from_slice(&[1; 17]);
+    let testo = colonna(BYTE_ARRAY);
+    let mut semi = vec![
+        (
+            "prefisso-oltre-il-valore",
+            parquet(&testo, 2, DELTA_BYTE_ARRAY, &prefisso, None, None),
+        ),
+        (
+            "suffisso-negativo",
+            parquet(&testo, 1, DELTA_BYTE_ARRAY, &suffisso, None, None),
+        ),
+        (
+            "indice-flba-oltre-il-dizionario",
+            parquet(&flba, 1, RLE_DICTIONARY, &[3, 2, 5], Some((1, b"zz")), None),
+        ),
+        (
+            "indice-negativo",
+            parquet(
+                &testo,
+                1,
+                RLE_DICTIONARY,
+                &[32, 2, 0xFF, 0xFF, 0xFF, 0xFF],
+                Some((1, &dizionario)),
+                None,
+            ),
+        ),
+        (
+            "lunghezza-delta-negativa",
+            parquet(&testo, 2, DELTA_LENGTH_BYTE_ARRAY, &lunghezze, None, None),
+        ),
+        (
+            "blocco-delta-enorme",
+            parquet(&colonna(INT32), 2, DELTA_BINARY_PACKED, &blocco, None, None),
+        ),
+        (
+            "resto-byte-stream-split",
+            parquet(&colonna(DOUBLE), 8, BYTE_STREAM_SPLIT, &resto, None, None),
+        ),
+        (
+            "resto-flba-plain",
+            parquet(&flba, 2, PLAIN, b"abcde", None, None),
+        ),
+        (
+            "decimale-troppo-largo",
+            parquet(&decimale, 1, PLAIN, &largo, None, None),
+        ),
+        (
+            "plain-piu-corta",
+            parquet(&testo, 3, PLAIN, &[1, 0, 0, 0, b'a'], None, None),
+        ),
+        (
+            "corsa-rle-oltre-u32",
+            parquet(
+                &testo,
+                1,
+                RLE_DICTIONARY,
+                &corsa,
+                Some((1, &dizionario)),
+                None,
+            ),
+        ),
+        (
+            "dizionario-mancante",
+            parquet(&colonna(INT32), 1, RLE_DICTIONARY, &[1, 2, 0], None, None),
+        ),
+    ];
+    semi.extend(semi_del_secondo_giro());
+    semi
+}
+
+/// I file malformati del secondo giro (letti con lo schema dedotto).
+#[allow(clippy::too_many_lines)] // Un elenco di casi, uno per voce.
+fn semi_del_secondo_giro() -> Vec<(&'static str, Vec<u8>)> {
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let mut suffissi = delta_costante(&[0, 1]);
+    suffissi.extend(delta_costante(&[1]));
+    suffissi.extend_from_slice(b"a");
+    let mut troncato = Vec::new();
+    varint(128, &mut troncato);
+    varint(4, &mut troncato);
+    varint(2, &mut troncato);
+    varint(zigzag(0), &mut troncato);
+    varint(zigzag(0), &mut troncato);
+    troncato.extend_from_slice(&[8, 0, 0, 0, 1]);
+    let mut lungo = vec![1_u8];
+    lungo.extend_from_slice(&[0xFF; 10]);
+    lungo.push(0x01);
+    let mut oltre = Vec::new();
+    varint((100 << 1) | 1, &mut oltre);
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    vec![
+        (
+            "flba-senza-dizionario",
+            parquet(&flba, 1, RLE_DICTIONARY, &[1, 2, 0], None, None),
+        ),
+        (
+            "indice-oltre-le-voci",
+            parquet(
+                &flba,
+                1,
+                RLE_DICTIONARY,
+                &[1, 2, 1],
+                Some((1, b"zzyy")),
+                None,
+            ),
+        ),
+        (
+            "suffissi-mancanti",
+            parquet(
+                &colonna(BYTE_ARRAY),
+                2,
+                DELTA_BYTE_ARRAY,
+                &suffissi,
+                None,
+                None,
+            ),
+        ),
+        (
+            "blocco-delta-troncato",
+            parquet(
+                &colonna(BYTE_ARRAY),
+                2,
+                DELTA_BYTE_ARRAY,
+                &troncato,
+                None,
+                None,
+            ),
+        ),
+        (
+            "varint-di-11-byte",
+            parquet(
+                &colonna(BYTE_ARRAY),
+                1,
+                RLE_DICTIONARY,
+                &lungo,
+                Some((1, &testo_plain(&[b"a"]))),
+                None,
+            ),
+        ),
+        (
+            "livelli-bit-packed-oltre-i-dati",
+            opzionale_con_livelli(2, &oltre, &dati),
+        ),
+        (
+            "livello-rle-di-valore-2",
+            opzionale_con_livelli(2, &[2 << 1, 2], &dati),
+        ),
+        (
+            "livelli-bit-packed",
+            livelli_bit_packed(8, &[0x80, 42, 0, 0, 0]),
+        ),
+        (
+            "dizionario-vuoto-con-byte",
+            parquet(
+                &colonna(BYTE_ARRAY),
+                1,
+                RLE_DICTIONARY,
+                &[1, 2, 0],
+                Some((0, &testo_plain(&[b"a"]))),
+                None,
+            ),
+        ),
+        (
+            "dizionario-piu-corto",
+            parquet(
+                &colonna(BYTE_ARRAY),
+                1,
+                RLE_DICTIONARY,
+                &[1, 2, 0],
+                Some((2, &testo_plain(&[b"a"]))),
+                None,
+            ),
+        ),
+        (
+            "v2-livelli-contro-valori",
+            v2_livelli_contro_valori(&[5, 0]),
+        ),
+        (
+            "valori-plain-in-piu",
+            parquet(
+                &colonna(INT32),
+                1,
+                PLAIN,
+                &[7, 0, 0, 0, 8, 0, 0, 0],
+                None,
+                None,
+            ),
+        ),
+        (
+            "livelli-con-una-corsa-in-piu",
+            opzionale_con_livelli(2, &[2 << 1, 1, 2 << 1, 1], &[1, 0, 0, 0, 2, 0, 0, 0]),
+        ),
+        (
+            "dichiarata-plain-usata-delta",
+            parquet_con_header(
+                &colonna(INT32),
+                1,
+                PLAIN,
+                &delta_costante(&[7]),
+                &header_v1(1, DELTA_BINARY_PACKED, delta_costante(&[7]).len()),
+                None,
+                None,
+            ),
+        ),
+    ]
+}
+
+/// I semi che usano una codifica non qualificata: si rifiutano come
+/// `Unsupported` prima di arrivare al decoder (le correzioni dei decoder di
+/// quelle codifiche restano nel fork, non raggiungibili).
+const NON_QUALIFICATI: [&str; 9] = [
+    "prefisso-oltre-il-valore",
+    "suffisso-negativo",
+    "lunghezza-delta-negativa",
+    "blocco-delta-enorme",
+    "resto-byte-stream-split",
+    "suffissi-mancanti",
+    "blocco-delta-troncato",
+    "dichiarata-plain-usata-delta",
+    "livelli-bit-packed",
+];
+
+#[test]
+fn i_semi_del_fuzz_sono_quelli_delle_prove_e_si_rifiutano() {
+    let cartella = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("dati")
+        .join("fuzz-decoder");
+    let rigenera = std::env::var_os("PLENORA_RIGENERA_SEMI").is_some();
+    if rigenera {
+        std::fs::create_dir_all(&cartella).unwrap();
+    }
+    let semi = semi();
+    for (nome, byte) in &semi {
+        if NON_QUALIFICATI.contains(nome) {
+            non_qualificata(byte);
+        } else {
+            rifiutato_dal_confine(byte);
+        }
+        let percorso = cartella.join(format!("{nome}.parquet"));
+        if rigenera {
+            std::fs::write(&percorso, byte).unwrap();
+        } else {
+            let versionato = std::fs::read(&percorso).unwrap_or_else(|_| {
+                panic!("{nome}: seme assente, rigenerare con PLENORA_RIGENERA_SEMI=1")
+            });
+            assert_eq!(&versionato, byte, "{nome}: seme diverso dalla prova");
+        }
+    }
+    let versionati = std::fs::read_dir(&cartella).unwrap().count();
+    assert_eq!(versionati, semi.len(), "semi in eccesso nella cartella");
+}
+
+// --- Secondo giro (`patches/parquet-decoder-2.patch`) ------------------------
+
+/// Il lettore Arrow con uno schema Arrow dato (`with_schema`): i batch letti
+/// o l'errore; un panico fa fallire la prova.
+fn arrow_con_schema(byte: &[u8], schema: Schema) -> Result<Vec<RecordBatch>, String> {
+    su_file(byte, |file| {
+        std::panic::catch_unwind(move || {
+            let opzioni = ArrowReaderOptions::new().with_schema(Arc::new(schema));
+            let lettore = ParquetRecordBatchReaderBuilder::try_new_with_options(file, opzioni)
+                .map_err(|e| e.to_string())?
+                .build()
+                .map_err(|e| e.to_string())?;
+            lettore
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())
+        })
+        .unwrap_or_else(|carico| panic!("il lettore Arrow va in panico: {}", panico(&*carico)))
+    })
+}
+
+/// I valori letti dal lettore Arrow, come testo di debug della colonna.
+fn valori_arrow(byte: &[u8]) -> Vec<String> {
+    su_file(byte, |file| {
+        let lettore = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
+        let mut valori = Vec::new();
+        for batch in lettore {
+            let colonna = batch.unwrap().column(0).clone();
+            for riga in 0..colonna.len() {
+                valori.push(testo_della_cella(colonna.as_ref(), riga));
+            }
+        }
+        valori
+    })
+}
+
+/// Una cella come testo: i tipi delle prove (`Utf8`/`Binary` come testo,
+/// `Int32` in decimale, `FixedSizeBinary` in esadecimale).
+fn testo_della_cella(colonna: &dyn Array, riga: usize) -> String {
+    match colonna.data_type() {
+        DataType::Utf8 => colonna.as_string::<i32>().value(riga).to_owned(),
+        DataType::Binary => {
+            String::from_utf8(colonna.as_binary::<i32>().value(riga).to_vec()).unwrap()
+        }
+        DataType::Int32 => colonna
+            .as_primitive::<plenora_core::arrow::array::types::Int32Type>()
+            .value(riga)
+            .to_string(),
+        DataType::Int8 => colonna
+            .as_primitive::<plenora_core::arrow::array::types::Int8Type>()
+            .value(riga)
+            .to_string(),
+        DataType::UInt8 => colonna
+            .as_primitive::<plenora_core::arrow::array::types::UInt8Type>()
+            .value(riga)
+            .to_string(),
+        DataType::Int16 => colonna
+            .as_primitive::<plenora_core::arrow::array::types::Int16Type>()
+            .value(riga)
+            .to_string(),
+        DataType::UInt16 => colonna
+            .as_primitive::<plenora_core::arrow::array::types::UInt16Type>()
+            .value(riga)
+            .to_string(),
+        DataType::Dictionary(_, _) => {
+            let dizionario = colonna.as_any_dictionary();
+            testo_della_cella(
+                dizionario.values().as_ref(),
+                dizionario.normalized_keys()[riga],
+            )
+        }
+        DataType::FixedSizeBinary(_) => colonna.as_fixed_size_binary().value(riga).iter().fold(
+            String::new(),
+            |mut testo, byte| {
+                write!(testo, "{byte:02x}").unwrap();
+                testo
+            },
+        ),
+        altro => panic!("tipo non previsto dalle prove: {altro}"),
+    }
+}
+
+fn testo_plain(valori: &[&[u8]]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for valore in valori {
+        out.extend_from_slice(&u32::try_from(valore.len()).unwrap().to_le_bytes());
+        out.extend_from_slice(valore);
+    }
+    out
+}
+
+/// I controfattuali verificano i valori, non solo il numero di righe.
+#[test]
+fn i_file_validi_danno_i_valori_scritti() {
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        2,
+        PLAIN,
+        &testo_plain(&[b"ab", b"c"]),
+        None,
+        None,
+    );
+    assert_eq!(valori_arrow(&byte), ["ab", "c"]);
+
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let byte = parquet(&flba, 1, RLE_DICTIONARY, &[1, 2, 0], Some((1, b"zz")), None);
+    assert_eq!(valori_arrow(&byte), ["7a7a"]);
+
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &[1, 2, 0],
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    assert_eq!(valori_arrow(&byte), ["a"]);
+}
+
+/// Secondo giro, punto 1: FLBA `RLE_DICTIONARY` senza pagina di dizionario: un
+/// `unwrap` (panico).
+#[test]
+fn una_pagina_flba_a_dizionario_senza_dizionario_e_un_errore() {
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let byte = parquet(&flba, 1, RLE_DICTIONARY, &[1, 2, 0], None, None);
+    contiene(arrow(&byte), "missing dictionary page");
+    rifiutato_dal_confine(&byte);
+}
+
+/// Secondo giro, punto 2: il dizionario FLBA dichiara una voce ma la pagina ne
+/// porta i byte di due. L'indice 1 era confrontato con i byte, non con le
+/// voci dichiarate, e leggeva «yy» in silenzio. Ora la pagina di dizionario
+/// stessa, con byte oltre le voci dichiarate, è un errore.
+#[test]
+fn un_indice_oltre_le_voci_dichiarate_e_un_errore() {
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let byte = parquet(
+        &flba,
+        1,
+        RLE_DICTIONARY,
+        &[1, 2, 1],
+        Some((1, b"zzyy")),
+        None,
+    );
+    contiene(arrow(&byte), parquet::basic::DICTIONARY_NOT_AS_DECLARED);
+    rifiutato_dal_confine(&byte);
+}
+
+/// Secondo giro, punto 5: un varint di 11 byte (panico) e uno di 10 con bit oltre
+/// i 64 (troncati in silenzio), nell'indicatore RLE degli indici.
+#[test]
+fn un_varint_malformato_e_un_errore() {
+    let dizionario = testo_plain(&[b"a"]);
+    let mut lungo = vec![1_u8];
+    lungo.extend_from_slice(&[0xFF; 10]);
+    lungo.push(0x01);
+    let mut largo = vec![1_u8];
+    largo.extend_from_slice(&[0x80; 9]);
+    largo.push(0x7F);
+    for (nome, indici) in [("11 byte", lungo), ("oltre 64 bit", largo)] {
+        let byte = parquet(
+            &colonna(BYTE_ARRAY),
+            1,
+            RLE_DICTIONARY,
+            &indici,
+            Some((1, &dizionario)),
+            None,
+        );
+        assert!(arrow(&byte).is_err(), "{nome}");
+        rifiutato_dal_confine(&byte);
+    }
+}
+
+/// Un Parquet di una colonna `OPTIONAL` `INT32` con livelli di definizione
+/// RLE dati (pagina v1: lunghezza in 4 byte, poi i livelli) e i valori.
+fn opzionale_con_livelli(valori: i64, livelli: &[u8], dati: &[u8]) -> Vec<u8> {
+    let mut contenuto = u32::try_from(livelli.len()).unwrap().to_le_bytes().to_vec();
+    contenuto.extend_from_slice(livelli);
+    contenuto.extend_from_slice(dati);
+    let opzionale = Colonna {
+        ripetizione: 1,
+        ..colonna(INT32)
+    };
+    parquet(&opzionale, valori, PLAIN, &contenuto, None, None)
+}
+
+/// Secondo giro, punto 6: il decoder ottimizzato dei livelli Arrow (larghezza 1)
+/// non aveva le correzioni del decoder RLE: una corsa bit-packed oltre il
+/// payload leggeva bit fuori dai dati, una corsa di 2^32 era accettata, e un
+/// valore RLE diverso da 0 e 1 era letto come 1. Una corsa bit-packed più
+/// corta dei gruppi che dichiara si leggeva fino ai suoi byte (come a monte
+/// e in C++): ora è un errore, i gruppi dichiarati sono tutti nei dati.
+#[test]
+fn i_livelli_rle_malformati_sono_un_errore() {
+    let mut oltre = Vec::new();
+    varint((100 << 1) | 1, &mut oltre); // 100 gruppi bit-packed, nessun byte
+    let mut enorme = Vec::new();
+    varint(1 << 33, &mut enorme); // corsa RLE di 2^32
+    enorme.push(1);
+    let valore_due = [2_u8 << 1, 2]; // corsa di 2, valore 2
+    for (nome, livelli) in [
+        ("bit-packed oltre i dati", oltre),
+        ("corsa di 2^32", enorme),
+        ("valore 2", valore_due.to_vec()),
+    ] {
+        let byte = opzionale_con_livelli(2, &livelli, &[1, 0, 0, 0, 2, 0, 0, 0]);
+        assert!(arrow(&byte).is_err(), "{nome}");
+        rifiutato_dal_confine(&byte);
+    }
+    // Una corsa bit-packed dichiarata di 3 gruppi con il solo byte che
+    // serve: errore, nei due decoder dei livelli.
+    let troncata = opzionale_con_livelli(2, &[(3 << 1) | 1, 0b11], &[1, 0, 0, 0, 2, 0, 0, 0]);
+    contiene(arrow(&troncata), "bit-packed run beyond the data");
+    assert!(livelli_generici(&troncata).is_err());
+    // Controfattuali: una corsa RLE di 2 valori presenti, e una corsa
+    // bit-packed di un gruppo.
+    let byte = opzionale_con_livelli(2, &[2 << 1, 1], &[1, 0, 0, 0, 2, 0, 0, 0]);
+    assert_eq!(valori_arrow(&byte), ["1", "2"]);
+    let byte = opzionale_con_livelli(2, &[(1 << 1) | 1, 0b11], &[1, 0, 0, 0, 2, 0, 0, 0]);
+    assert_eq!(valori_arrow(&byte), ["1", "2"]);
+}
+
+/// Secondo giro, punto 7: con una chiave Arrow stretta (`Int8`) l'indice 256 si
+/// troncava a 0 con `as` prima di ogni controllo, e leggeva «a» in silenzio.
+#[test]
+fn un_indice_oltre_la_chiave_stretta_e_un_errore() {
+    let mut indici = vec![9_u8]; // larghezza 9 bit
+    indici.push(2); // corsa RLE di 1
+    indici.extend_from_slice(&256_u16.to_le_bytes());
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &indici,
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    let schema = Schema::new(vec![Field::new(
+        "x",
+        DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Binary)),
+        false,
+    )]);
+    contiene(
+        arrow_con_schema(&byte, schema.clone()).map(|batch| batch.len()),
+        "out of range for the key type",
+    );
+    // Controfattuale: l'indice 0 con la stessa chiave si legge.
+    let mut zero = vec![9_u8, 2];
+    zero.extend_from_slice(&0_u16.to_le_bytes());
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &zero,
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    let batch = arrow_con_schema(&byte, schema).unwrap();
+    assert_eq!(testo_della_cella(batch[0].column(0).as_ref(), 0), "a");
+}
+
+/// Una colonna FLBA letta come dizionario Arrow
+/// (`Dictionary(Int32, FixedSizeBinary(2))`) passava dal lettore dei byte
+/// array variabili, che legge il dizionario con il prefisso di lunghezza:
+/// un dizionario FLBA valido (`zz`) si rifiutava, e uno costruito con i
+/// prefissi (`a`, `bcd`) diventava `["ab", "cd"]` in silenzio. Ora la
+/// combinazione è `Unsupported`, esplicita; lo stesso dizionario valido si
+/// legge come `FixedSizeBinary`.
+#[test]
+fn una_colonna_flba_come_dizionario_arrow_e_non_supportata() {
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let schema = Schema::new(vec![Field::new(
+        "x",
+        DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::FixedSizeBinary(2)),
+        ),
+        false,
+    )]);
+    for dizionario in [b"zz".to_vec(), testo_plain(&[b"a", b"bcd"])] {
+        let voci = if dizionario.len() == 2 { 1 } else { 2 };
+        let byte = parquet(
+            &flba,
+            1,
+            RLE_DICTIONARY,
+            &[1, 2, 0],
+            Some((voci, &dizionario)),
+            None,
+        );
+        contiene(
+            arrow_con_schema(&byte, schema.clone()).map(|batch| batch.len()),
+            "FIXED_LEN_BYTE_ARRAY read as an Arrow dictionary",
+        );
+    }
+    let valido = parquet(&flba, 1, RLE_DICTIONARY, &[1, 2, 0], Some((1, b"zz")), None);
+    assert_eq!(valori_arrow(&valido), ["7a7a"]);
+}
+
+/// Livelli v2 oltre i byte letti davvero (non solo oltre la dimensione
+/// dichiarata): dichiarati 20 byte non compressi (entro il column chunk), 4
+/// letti, 8 di livelli.
+#[test]
+fn i_livelli_v2_oltre_i_byte_letti_sono_un_errore() {
+    let contenuto = 7_i32.to_le_bytes();
+    let header = Struttura::default()
+        .i32(1, 3)
+        .i32(2, 20)
+        .i32(3, 4)
+        .struttura(
+            8,
+            Struttura::default()
+                .i32(1, 1)
+                .i32(2, 0)
+                .i32(3, 1)
+                .i32(4, PLAIN)
+                .i32(5, 8)
+                .i32(6, 0),
+        )
+        .fine();
+    let byte = parquet_con_header(&colonna(INT32), 1, PLAIN, &contenuto, &header, None, None);
+    contiene(arrow(&byte), "implausible");
+    rifiutato_dal_confine(&byte);
+}
+
+// --- Codifiche lette --------------------------------------------------------
+
+/// Una pagina valida per ciascuna codifica non qualificata: tipo della
+/// colonna, valori, contenuto.
+fn pagine_non_qualificate() -> Vec<(&'static str, i64, Colonna, i64, Vec<u8>)> {
+    let mut lunghezze = delta_costante(&[2]);
+    lunghezze.extend_from_slice(b"ab");
+    let mut delta = delta_costante(&[0]);
+    delta.extend(delta_costante(&[2]));
+    delta.extend_from_slice(b"ab");
+    vec![
+        (
+            "DELTA_BINARY_PACKED",
+            DELTA_BINARY_PACKED,
+            colonna(INT32),
+            1,
+            delta_costante(&[7]),
+        ),
+        (
+            "DELTA_LENGTH_BYTE_ARRAY",
+            DELTA_LENGTH_BYTE_ARRAY,
+            colonna(BYTE_ARRAY),
+            1,
+            lunghezze,
+        ),
+        (
+            "DELTA_BYTE_ARRAY",
+            DELTA_BYTE_ARRAY,
+            colonna(BYTE_ARRAY),
+            1,
+            delta,
+        ),
+        (
+            "BYTE_STREAM_SPLIT",
+            BYTE_STREAM_SPLIT,
+            colonna(DOUBLE),
+            1,
+            2.5_f64.to_le_bytes().to_vec(),
+        ),
+    ]
+}
+
+/// L'header di una pagina di dati v1 con la codifica data.
+fn header_v1(valori: i64, codifica: i64, lunghezza: usize) -> Vec<u8> {
+    let lunghezza = i64::try_from(lunghezza).unwrap();
+    Struttura::default()
+        .i32(1, 0)
+        .i32(2, lunghezza)
+        .i32(3, lunghezza)
+        .struttura(
+            5,
+            Struttura::default()
+                .i32(1, valori)
+                .i32(2, codifica)
+                .i32(3, RLE)
+                .i32(4, RLE),
+        )
+        .fine()
+}
+
+/// Ogni codifica non qualificata si rifiuta (`Unsupported`, testo fisso),
+/// in tre forme: dichiarata nel footer e usata nella pagina; dichiarata
+/// `PLAIN` e usata nella pagina (la controlla il fork, pagina per pagina);
+/// dichiarata nel footer e la pagina in `PLAIN` (la controlla il confine sul
+/// column chunk). Senza la riduzione le pagine, valide, si leggevano.
+#[test]
+fn le_codifiche_non_qualificate_si_rifiutano_in_ogni_forma() {
+    for (nome, codifica, colonna, valori, contenuto) in pagine_non_qualificate() {
+        let usata = parquet(&colonna, valori, codifica, &contenuto, None, None);
+        non_qualificata(&usata);
+
+        let header = header_v1(valori, codifica, contenuto.len());
+        let nascosta = parquet_con_header(&colonna, valori, PLAIN, &contenuto, &header, None, None);
+        non_qualificata(&nascosta);
+
+        // Dichiarata nel footer, pagina PLAIN: il lettore del fork la legge
+        // (non controlla il footer), il confine la rifiuta.
+        let plain: Vec<u8> = match colonna.tipo {
+            INT32 => 7_i32.to_le_bytes().to_vec(),
+            DOUBLE => 2.5_f64.to_le_bytes().to_vec(),
+            _ => testo_plain(&[b"ab"]),
+        };
+        let header = header_v1(valori, PLAIN, plain.len());
+        let dichiarata =
+            parquet_con_header(&colonna, valori, codifica, &plain, &header, None, None);
+        assert_eq!(arrow(&dichiarata), Ok(1), "{nome}");
+        let dir = cartella();
+        let percorso = dir.path().join("d.parquet");
+        std::fs::write(&percorso, &dichiarata).unwrap();
+        let errore = leggi_tabella_con_limiti(
+            &percorso,
+            Some(Formato::Parquet),
+            u64::MAX,
+            &LimitiLettura::default(),
+        )
+        .expect_err(nome);
+        assert_eq!(
+            errore.category(),
+            ErrorCategory::Unsupported,
+            "{nome}: {errore}"
+        );
+    }
+}
+
+/// L'API per colonne del fork rifiuta le stesse codifiche; il salto della
+/// pagina intera, che prima la passava senza guardarla, non è qualificato.
+#[test]
+fn l_api_per_colonne_rifiuta_le_codifiche_non_qualificate() {
+    for (nome, codifica, colonna, valori, contenuto) in pagine_non_qualificate() {
+        let byte = parquet(&colonna, valori, codifica, &contenuto, None, None);
+        let tutte = Some(usize::try_from(valori).unwrap());
+        for (salta, atteso) in [
+            (None, parquet::basic::ENCODING_NOT_QUALIFIED),
+            (tutte, parquet::basic::SKIP_NOT_QUALIFIED),
+        ] {
+            let esito = match colonna.tipo {
+                INT32 => colonna_api::<Int32Type>(&byte, salta),
+                DOUBLE => colonna_api::<DoubleType>(&byte, salta),
+                _ => colonna_api::<ByteArrayType>(&byte, salta),
+            };
+            match esito {
+                Err(testo) => assert!(testo.contains(atteso), "{nome} ({salta:?}): {testo}"),
+                Ok(righe) => panic!("{nome} ({salta:?}): letto ({righe} righe)"),
+            }
+        }
+    }
+    // Controfattuale: la stessa pagina in PLAIN si legge.
+    let byte = parquet(&colonna(INT32), 1, PLAIN, &7_i32.to_le_bytes(), None, None);
+    assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(1));
+}
+
+// --- Livelli, interi stretti, UTF-8, varint ----------------------------------
+
+/// Una colonna `REPEATED` `INT32` (lista): livelli di ripetizione e di
+/// definizione RLE, ciascuno con la sua lunghezza in 4 byte, poi i valori.
+/// Massimi: ripetizione 1, definizione 1; i livelli passano dal decoder
+/// generico, non da quello ottimizzato.
+fn ripetuta(valori: i64, ripetizione: &[u8], definizione: &[u8], dati: &[u8]) -> Vec<u8> {
+    let mut contenuto = u32::try_from(ripetizione.len())
+        .unwrap()
+        .to_le_bytes()
+        .to_vec();
+    contenuto.extend_from_slice(ripetizione);
+    contenuto.extend_from_slice(&u32::try_from(definizione.len()).unwrap().to_le_bytes());
+    contenuto.extend_from_slice(definizione);
+    contenuto.extend_from_slice(dati);
+    let lista = Colonna {
+        ripetizione: 2,
+        ..colonna(INT32)
+    };
+    parquet(&lista, valori, PLAIN, &contenuto, None, None)
+}
+
+/// Punto 1: il decoder RLE condiviso dei livelli non verificava il valore
+/// (un livello 2 con massimo 1, contato come assente) né il payload
+/// bit-packed (100 gruppi con un byte). Le stesse regole del decoder
+/// ottimizzato, nel decoder generico dei livelli e negli indici.
+#[test]
+fn i_livelli_del_decoder_generico_si_controllano() {
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    // Controfattuale: una lista [1, 2].
+    let valida = ripetuta(2, &[1 << 1, 0, 1 << 1, 1], &[2 << 1, 1], &dati);
+    assert_eq!(arrow(&valida), Ok(1));
+    let mut bit_packed = Vec::new();
+    varint((100 << 1) | 1, &mut bit_packed);
+    for (nome, ripetizione, definizione) in [
+        (
+            "definizione 2 su massimo 1",
+            vec![1 << 1, 0, 1 << 1, 1],
+            vec![2 << 1, 2],
+        ),
+        (
+            "ripetizione 2 su massimo 1",
+            vec![1 << 1, 0, 1 << 1, 2],
+            vec![2 << 1, 1],
+        ),
+        (
+            "definizione bit-packed oltre i dati",
+            vec![1 << 1, 0, 1 << 1, 1],
+            bit_packed.clone(),
+        ),
+    ] {
+        let byte = ripetuta(2, &ripetizione, &definizione, &dati);
+        assert!(arrow(&byte).is_err(), "{nome}");
+        rifiutato_dal_confine(&byte);
+    }
+    // Indici di dizionario: un valore RLE oltre la larghezza dichiarata (1 bit).
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &[1, 2, 2],
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    contiene(arrow(&byte), "RLE value wider than the bit width");
+    rifiutato_dal_confine(&byte);
+}
+
+/// Punto 3: un `INT32` annotato `INT_8` (o `UINT_8`, `INT_16`, `UINT_16`)
+/// fuori dalla larghezza diventava un altro numero con `as` (256 → 0).
+#[test]
+fn un_intero_stretto_fuori_dalla_larghezza_e_un_errore() {
+    for (convertito, fuori, dentro, atteso) in [
+        (15, 256_i32, -7_i32, "-7"),   // INT_8
+        (11, 256, 200, "200"),         // UINT_8
+        (16, 40_000, -300, "-300"),    // INT_16
+        (12, 70_000, 60_000, "60000"), // UINT_16
+    ] {
+        let stretta = Colonna {
+            convertito: Some(convertito),
+            ..colonna(INT32)
+        };
+        let byte = parquet(&stretta, 1, PLAIN, &fuori.to_le_bytes(), None, None);
+        contiene(arrow(&byte), "outside its annotated integer width");
+        rifiutato_dal_confine(&byte);
+        let byte = parquet(&stretta, 1, PLAIN, &dentro.to_le_bytes(), None, None);
+        su_file(&byte, |file| {
+            let mut lettore = ParquetRecordBatchReaderBuilder::try_new(file)
+                .unwrap()
+                .build()
+                .unwrap();
+            let batch = lettore.next().unwrap().unwrap();
+            let colonna = testo_della_cella(batch.column(0).as_ref(), 0);
+            assert_eq!(colonna, atteso, "tipo convertito {convertito}");
+        });
+    }
+}
+
+/// Punto 4: la validazione UTF-8 di `PLAIN` (anche per `Utf8View` e per il
+/// dizionario) non accetta un carattere spezzato fra due valori.
+#[test]
+fn un_carattere_utf8_spezzato_fra_due_valori_si_rifiuta() {
+    // Colonne annotate `UTF8` (tipo convertito 0).
+    let testo_annotato = Colonna {
+        convertito: Some(0),
+        ..colonna(BYTE_ARRAY)
+    };
+    let spezzato = testo_plain(&[&[0xC3], &[0xA9]]);
+    let intero = testo_plain(&["é".as_bytes()]);
+    for tipo in [DataType::Utf8, DataType::Utf8View] {
+        let schema = Schema::new(vec![Field::new("x", tipo.clone(), false)]);
+        let byte = parquet(&testo_annotato, 2, PLAIN, &spezzato, None, None);
+        assert!(arrow_con_schema(&byte, schema.clone()).is_err(), "{tipo}");
+        let byte = parquet(&testo_annotato, 1, PLAIN, &intero, None, None);
+        assert_eq!(
+            arrow_con_schema(&byte, schema).map(|batch| batch[0].num_rows()),
+            Ok(1),
+            "{tipo}"
+        );
+    }
+    let schema = Schema::new(vec![Field::new(
+        "x",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        false,
+    )]);
+    // Indici [0, 1]: un gruppo bit-packed da un bit.
+    let byte = parquet(
+        &testo_annotato,
+        2,
+        RLE_DICTIONARY,
+        &[1, 3, 0x02],
+        Some((2, &spezzato)),
+        None,
+    );
+    contiene(
+        arrow_con_schema(&byte, schema.clone()).map(|batch| batch.len()),
+        "non UTF-8",
+    );
+    let byte = parquet(
+        &testo_annotato,
+        1,
+        RLE_DICTIONARY,
+        &[1, 2, 0],
+        Some((1, &intero)),
+        None,
+    );
+    let batch = arrow_con_schema(&byte, schema).unwrap();
+    assert_eq!(testo_della_cella(batch[0].column(0).as_ref(), 0), "é");
+}
+
+/// Non bloccante: varint, ogni caso da solo. Dieci byte di continuazione
+/// senza terminatore erano la fine dei dati (`Ok(None)`), undici un
+/// `assert!`, dieci con bit oltre i 64 un troncamento.
+#[test]
+fn ogni_varint_malformato_ha_il_suo_errore() {
+    let dizionario = testo_plain(&[b"a"]);
+    let mut senza_fine = vec![1_u8];
+    senza_fine.extend_from_slice(&[0x80; 10]);
+    let mut undici = vec![1_u8];
+    undici.extend_from_slice(&[0x80; 10]);
+    undici.push(0x01);
+    let mut oltre = vec![1_u8];
+    oltre.extend_from_slice(&[0x80; 9]);
+    oltre.push(0x7F);
+    let mut troncato = vec![1_u8];
+    troncato.extend_from_slice(&[0x80; 3]);
+    for (indici, atteso) in [
+        (senza_fine, "varint truncated"),
+        (undici, "varint longer than"),
+        (oltre, "varint beyond 64 bits"),
+        (troncato, "varint truncated"),
+    ] {
+        let byte = parquet(
+            &colonna(BYTE_ARRAY),
+            1,
+            RLE_DICTIONARY,
+            &indici,
+            Some((1, &dizionario)),
+            None,
+        );
+        contiene(arrow(&byte), atteso);
+        rifiutato_dal_confine(&byte);
+    }
+}
+
+/// Un tipo Arrow testo (dato o incorporato) su una colonna di byte senza
+/// annotazione di testo: i decoder validano l'UTF-8 dall'annotazione, e i
+/// byte spezzati diventavano una stringa non valida (un panico nelle build di
+/// debug, UTF-8 non valido in release). Ora lo schema richiesto non coincide; la
+/// stessa colonna si legge come `Binary`.
+#[test]
+fn un_tipo_testo_su_byte_non_annotati_e_non_supportato() {
+    let spezzato = testo_plain(&[&[0xC3], &[0xA9]]);
+    let byte = parquet(&colonna(BYTE_ARRAY), 2, PLAIN, &spezzato, None, None);
+    for tipo in [
+        DataType::Utf8,
+        DataType::Utf8View,
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+    ] {
+        let schema = Schema::new(vec![Field::new("x", tipo.clone(), false)]);
+        contiene(
+            arrow_con_schema(&byte, schema).map(|batch| batch.len()),
+            "Incompatible supplied Arrow schema",
+        );
+    }
+    assert_eq!(arrow(&byte), Ok(2));
+}
+
+/// Il rovescio della lettura: un dizionario di `FixedSizeBinary` non si
+/// scrive (`ArrowWriter` lo scriverebbe in una forma che la lettura rifiuta),
+/// né da solo né dentro una lista; il file non nasce.
+#[test]
+fn un_dizionario_di_binari_fissi_non_si_scrive() {
+    use plenora_core::arrow::array::builder::{FixedSizeBinaryDictionaryBuilder, ListBuilder};
+    use plenora_core::arrow::array::types::Int32Type as Chiave;
+    use plenora_core::arrow::array::{ArrayRef, DictionaryArray, FixedSizeBinaryArray, Int32Array};
+    let valori =
+        FixedSizeBinaryArray::try_from_iter(vec![vec![1_u8, 2], vec![3, 4]].into_iter()).unwrap();
+    let dizionario: ArrayRef = Arc::new(
+        DictionaryArray::<Chiave>::try_new(Int32Array::from(vec![0, 1, 0]), Arc::new(valori))
+            .unwrap(),
+    );
+    let mut costruttore = ListBuilder::new(FixedSizeBinaryDictionaryBuilder::<Chiave>::new(2));
+    costruttore.values().append([1_u8, 2]).unwrap();
+    costruttore.values().append([3_u8, 4]).unwrap();
+    costruttore.append(true);
+    let lista: ArrayRef = Arc::new(costruttore.finish());
+    for (nome, colonna) in [("da solo", dizionario), ("in una lista", lista)] {
+        let schema = Schema::new(vec![Field::new("x", colonna.data_type().clone(), false)]);
+        let tabella = RecordBatch::try_new(Arc::new(schema), vec![colonna]).unwrap();
+        let dir = cartella();
+        let percorso = dir.path().join("fsb.parquet");
+        let errore = plenora_io::scrivi_tabella(
+            &tabella,
+            &percorso,
+            &plenora_io::OpzioniScrittura::default(),
+        )
+        .expect_err(nome);
+        assert_eq!(
+            errore.category(),
+            ErrorCategory::Unsupported,
+            "{nome}: {errore}"
+        );
+        assert!(!percorso.exists(), "{nome}");
+    }
+}
+
+// --- Dizionari, pagine v2, valori di testo ------------------------------------
+
+/// Una pagina di dizionario che non tiene le voci dichiarate. `BYTE_ARRAY`:
+/// zero voci dichiarate con dei byte dividevano per zero (panico); meno voci
+/// delle dichiarate, o byte dopo l'ultima, si accettavano (il conteggio letto
+/// era ignorato). Lo stesso nei tre lettori Arrow (byte, dizionario, viste),
+/// nel decoder generico (`INT32`) e per FLBA.
+#[test]
+fn un_dizionario_diverso_dal_dichiarato_e_un_errore() {
+    let un_valore = testo_plain(&[b"a"]);
+    let due_valori = testo_plain(&[b"a", b"b"]);
+    let dizionario_binario =
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary));
+    for (nome, voci, dizionario) in [
+        ("zero voci con byte", 0, un_valore.clone()),
+        ("due voci, una presente", 2, un_valore),
+        ("una voce, byte di due", 1, due_valori),
+    ] {
+        let byte = parquet(
+            &colonna(BYTE_ARRAY),
+            1,
+            RLE_DICTIONARY,
+            &[1, 2, 0],
+            Some((voci, &dizionario)),
+            None,
+        );
+        contiene(arrow(&byte), parquet::basic::DICTIONARY_NOT_AS_DECLARED);
+        rifiutato_dal_confine(&byte);
+        // Il lettore dei dizionari Arrow e quello delle viste: un errore (le
+        // viste riconoscono la fine dei dati prima, con il loro testo).
+        for tipo in [dizionario_binario.clone(), DataType::BinaryView] {
+            let schema = Schema::new(vec![Field::new("x", tipo.clone(), false)]);
+            assert!(arrow_con_schema(&byte, schema).is_err(), "{nome} {tipo}");
+        }
+        assert!(colonna_api::<ByteArrayType>(&byte, None).is_err(), "{nome}");
+    }
+    // Il decoder generico: due voci dichiarate e i byte di una, o una voce e
+    // i byte di due.
+    for (voci, byte_dizionario) in [(2, 4), (1, 8)] {
+        let dizionario: Vec<u8> = (0..byte_dizionario).collect();
+        let byte = parquet(
+            &colonna(INT32),
+            1,
+            RLE_DICTIONARY,
+            &[1, 2, 0],
+            Some((voci, &dizionario)),
+            None,
+        );
+        if voci == 1 {
+            contiene(arrow(&byte), parquet::basic::DICTIONARY_NOT_AS_DECLARED);
+            contiene(
+                colonna_api::<Int32Type>(&byte, None),
+                parquet::basic::DICTIONARY_NOT_AS_DECLARED,
+            );
+        } else {
+            // Meno byte delle voci: l'errore di fine dati del decoder.
+            assert!(arrow(&byte).is_err());
+            assert!(colonna_api::<Int32Type>(&byte, None).is_err());
+        }
+        rifiutato_dal_confine(&byte);
+    }
+    // FLBA: una voce dichiarata, un byte solo.
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let byte = parquet(&flba, 1, RLE_DICTIONARY, &[1, 2, 0], Some((1, b"z")), None);
+    contiene(arrow(&byte), parquet::basic::DICTIONARY_NOT_AS_DECLARED);
+    // Controfattuali: le voci dichiarate, esatte.
+    let byte = parquet(
+        &colonna(INT32),
+        1,
+        RLE_DICTIONARY,
+        &[1, 2, 0],
+        Some((1, &7_i32.to_le_bytes())),
+        None,
+    );
+    assert_eq!(valori_arrow(&byte), ["7"]);
+    assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(1));
+}
+
+/// Una pagina di dizionario in una codifica esclusa ha il testo di ogni altro
+/// rifiuto (`Unsupported` al confine), non quello generico del dizionario.
+#[test]
+fn un_dizionario_in_una_codifica_esclusa_non_e_qualificato() {
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    for (colonna, dizionario) in [
+        (colonna(BYTE_ARRAY), testo_plain(&[b"a"])),
+        (colonna(INT32), 7_i32.to_le_bytes().to_vec()),
+        (flba, b"zz".to_vec()),
+    ] {
+        let mut byte = parquet(
+            &colonna,
+            1,
+            RLE_DICTIONARY,
+            &[1, 2, 0],
+            Some((1, &dizionario)),
+            None,
+        );
+        // L'header del dizionario: `num_values` 1 e `encoding` PLAIN (0), il
+        // primo campo della struct annidata; diventa DELTA_BINARY_PACKED.
+        let codifica = byte
+            .windows(4)
+            .position(|finestra| finestra == [0x15, 0x02, 0x15, 0x00])
+            .unwrap()
+            + 3;
+        byte[codifica] = u8::try_from(zigzag(DELTA_BINARY_PACKED)).unwrap();
+        non_qualificata(&byte);
+    }
+}
+
+/// Una pagina v2 `OPTIONAL` `INT32`: 8 righe, `num_nulls` dato, i livelli RLE
+/// dati e 8 valori `PLAIN`.
+fn v2_livelli_contro_valori(livelli: &[u8]) -> Vec<u8> {
+    v2_opzionale(8, 0, livelli)
+}
+
+fn v2_opzionale(righe: i64, nulli: i64, livelli: &[u8]) -> Vec<u8> {
+    let opzionale = Colonna {
+        ripetizione: 1,
+        ..colonna(INT32)
+    };
+    let mut contenuto = livelli.to_vec();
+    for valore in 0..8_i32 {
+        contenuto.extend_from_slice(&valore.to_le_bytes());
+    }
+    let lunghezza = i64::try_from(contenuto.len()).unwrap();
+    let header = Struttura::default()
+        .i32(1, 3) // DATA_PAGE_V2
+        .i32(2, lunghezza)
+        .i32(3, lunghezza)
+        .struttura(
+            8,
+            Struttura::default()
+                .i32(1, righe)
+                .i32(2, nulli)
+                .i32(3, righe)
+                .i32(4, PLAIN)
+                .i32(5, i64::try_from(livelli.len()).unwrap())
+                .i32(6, 0),
+        )
+        .fine();
+    parquet_con_header(&opzionale, righe, PLAIN, &contenuto, &header, None, None)
+}
+
+/// Una pagina v2 dichiara i suoi valori (`num_values - num_nulls`); i livelli
+/// decidono quanti se ne leggono. Livelli `03 00` (un gruppo bit-packed di
+/// otto zeri) su 8 righe senza null dichiarati: 8 null in silenzio, con 8
+/// valori nella pagina. Ora la fine della pagina confronta i valori letti
+/// con quelli dichiarati.
+#[test]
+fn una_pagina_v2_con_livelli_contro_i_valori_e_un_errore() {
+    let byte = v2_livelli_contro_valori(&[3, 0]);
+    contiene(arrow(&byte), "data page V2 declares");
+    rifiutato_dal_confine(&byte);
+    // Controfattuale: una corsa RLE di 8 livelli 1, gli 8 valori.
+    let byte = v2_livelli_contro_valori(&[8 << 1, 1]);
+    assert_eq!(
+        valori_arrow(&byte),
+        ["0", "1", "2", "3", "4", "5", "6", "7"]
+    );
+}
+
+/// Il tipo dei valori di un dizionario di testo seguiva solo `UTF8`: una
+/// colonna `JSON` o `ENUM` letta come `Dictionary(Int32, Binary)` andava in
+/// panico, e come `Dictionary(Int32, Utf8)` teneva valori binari. Ora il
+/// tipo segue la stessa annotazione della validazione UTF-8 (`UTF8`, `JSON`,
+/// `ENUM`), e un dizionario binario su testo è un errore: `Unsupported` dal
+/// lettore, esplicito (prima, su `ENUM`, i valori binari passavano perché il
+/// tipo interno non seguiva l'annotazione).
+#[test]
+fn un_dizionario_di_testo_segue_l_annotazione() {
+    for (nome, convertito) in [("UTF8", 0), ("ENUM", 4), ("JSON", 19)] {
+        let annotata = Colonna {
+            convertito: Some(convertito),
+            ..colonna(BYTE_ARRAY)
+        };
+        let byte = parquet(
+            &annotata,
+            1,
+            RLE_DICTIONARY,
+            &[1, 2, 0],
+            Some((1, &testo_plain(&[b"a"]))),
+            None,
+        );
+        for valori in [
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::BinaryView,
+            DataType::FixedSizeBinary(1),
+        ] {
+            // `ENUM` si deduce `Binary`: lo schema dato passa il confronto e
+            // arriva al lettore, che lo rifiuta. `UTF8` e `JSON` si deducono
+            // `Utf8`, e lo schema si rifiuta già al confronto (anche
+            // `FixedSizeBinary` su `ENUM`).
+            let al_lettore = convertito == 4 && !matches!(valori, DataType::FixedSizeBinary(_));
+            let tipo = DataType::Dictionary(Box::new(DataType::Int32), Box::new(valori));
+            let schema = Schema::new(vec![Field::new("x", tipo.clone(), false)]);
+            let esito = arrow_con_schema(&byte, schema).map(|batch| batch.len());
+            if al_lettore {
+                contiene(esito, parquet::basic::BINARY_DICTIONARY_OVER_TEXT);
+            } else {
+                assert!(esito.is_err(), "{nome} {tipo}");
+            }
+        }
+        for valori in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            let tipo = DataType::Dictionary(Box::new(DataType::Int32), Box::new(valori.clone()));
+            let schema = Schema::new(vec![Field::new("x", tipo, false)]);
+            let batch = arrow_con_schema(&byte, schema)
+                .unwrap_or_else(|errore| panic!("{nome} {valori}: {errore}"));
+            let colonna = batch[0].column(0);
+            let dizionario = colonna.as_any_dictionary();
+            let testo = match dizionario.values().data_type() {
+                DataType::Utf8 => dizionario.values().as_string::<i32>().value(0).to_owned(),
+                DataType::LargeUtf8 => dizionario.values().as_string::<i64>().value(0).to_owned(),
+                DataType::Utf8View => dizionario.values().as_string_view().value(0).to_owned(),
+                altro => panic!("{nome}: valori {altro}"),
+            };
+            assert_eq!(testo, "a", "{nome} {valori}");
+        }
+    }
+}
+
+// --- Salti e fine della pagina -------------------------------------------------
+
+/// Un salto dentro una pagina non decodificava ciò che saltava: una pagina
+/// v2 chiusa da un salto sfuggiva al confronto dei nulli, livelli di
+/// ripetizione troncati facevano girare il salto senza avanzare, un indice
+/// di dizionario fuori dal dizionario passava. Ora il salto dentro una
+/// pagina non è qualificato (`SKIP_NOT_QUALIFIED`, prima di leggere un
+/// livello); il salto di pagine intere nemmeno
+/// (`un_salto_di_pagine_intere_non_e_qualificato`).
+#[test]
+fn un_salto_dentro_una_pagina_non_e_qualificato() {
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    let mut troncati = Vec::new();
+    varint((100 << 1) | 1, &mut troncati); // ripetizione bit-packed senza byte
+    let lista_troncata = ripetuta(2, &troncati, &[2 << 1, 1], &dati);
+    let fuori_dizionario = parquet(
+        &colonna(BYTE_ARRAY),
+        2,
+        RLE_DICTIONARY,
+        &[2, 4, 3], // larghezza 2, corsa RLE di 2 dell'indice 3
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    let v2 = v2_livelli_contro_valori(&[5, 0]);
+    let due = parquet(&colonna(INT32), 2, PLAIN, &dati, None, None);
+    contiene(
+        colonna_api::<Int32Type>(&lista_troncata, Some(1)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+    contiene(
+        colonna_api::<ByteArrayType>(&fuori_dizionario, Some(1)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+    contiene(
+        colonna_api::<Int32Type>(&v2, Some(4)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+    contiene(
+        colonna_api::<Int32Type>(&due, Some(1)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+    // Controfattuale: la pagina si legge.
+    assert_eq!(colonna_api::<Int32Type>(&due, None), Ok(2));
+}
+
+/// Il salto di pagine intere avanzava dall'header senza decodificare la
+/// pagina: un contenuto troncato (2 valori `INT32` dichiarati, 4 byte) in
+/// una pagina saltata passava, e il salto contava 2 righe. Ora ogni salto
+/// non è qualificato (`SKIP_NOT_QUALIFIED`): data non salta, e ciò che non
+/// si verifica si rifiuta. Un salto di zero righe non legge nulla.
+#[test]
+fn un_salto_di_pagine_intere_non_e_qualificato() {
+    let troncata = parquet(&colonna(INT32), 2, PLAIN, &[1, 0, 0, 0], None, None);
+    assert!(colonna_api::<Int32Type>(&troncata, None).is_err());
+    contiene(
+        colonna_api::<Int32Type>(&troncata, Some(2)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+    rifiutato_dal_confine(&troncata);
+    let intera = parquet(
+        &colonna(INT32),
+        2,
+        PLAIN,
+        &[1, 0, 0, 0, 2, 0, 0, 0],
+        None,
+        None,
+    );
+    contiene(
+        colonna_api::<Int32Type>(&intera, Some(2)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+    assert_eq!(colonna_api::<Int32Type>(&intera, Some(0)), Ok(0));
+    assert_eq!(colonna_api::<Int32Type>(&intera, None), Ok(2));
+}
+
+/// Una pagina deve finire dove finiscono i suoi valori e i suoi livelli:
+/// valori `PLAIN` in più (`INT32`, `BYTE_ARRAY`, anche come viste, FLBA),
+/// una corsa di livelli in più, indici di dizionario in più, un byte dopo
+/// lo stream dei booleani `RLE`. Prima si leggevano i valori dichiarati e il
+/// resto si ignorava, in silenzio.
+#[test]
+#[allow(clippy::too_many_lines)] // Un caso per decoder.
+fn una_pagina_con_byte_o_valori_in_piu_e_un_errore() {
+    let atteso = parquet::basic::PAGE_NOT_AS_DECLARED;
+    // INT32: un valore dichiarato, due nella pagina.
+    let byte = parquet(
+        &colonna(INT32),
+        1,
+        PLAIN,
+        &[7, 0, 0, 0, 8, 0, 0, 0],
+        None,
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+    contiene(colonna_api::<Int32Type>(&byte, None), atteso);
+    rifiutato_dal_confine(&byte);
+    // BYTE_ARRAY, anche come viste.
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        PLAIN,
+        &testo_plain(&[b"a", b"b"]),
+        None,
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+    contiene(colonna_api::<ByteArrayType>(&byte, None), atteso);
+    rifiutato_dal_confine(&byte);
+    let schema = Schema::new(vec![Field::new("x", DataType::BinaryView, false)]);
+    contiene(
+        arrow_con_schema(&byte, schema).map(|batch| batch.len()),
+        atteso,
+    );
+    // FLBA: due valori di larghezza 2, uno dichiarato.
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let byte = parquet(&flba, 1, PLAIN, b"zzyy", None, None);
+    contiene(arrow(&byte), atteso);
+    rifiutato_dal_confine(&byte);
+    // Livelli di definizione: due corse di 2 per 2 righe (decoder
+    // ottimizzato), e lo stesso nei livelli di ripetizione (decoder generico).
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    let byte = opzionale_con_livelli(2, &[2 << 1, 1, 2 << 1, 1], &dati);
+    contiene(arrow(&byte), atteso);
+    rifiutato_dal_confine(&byte);
+    let byte = ripetuta(2, &[1 << 1, 0, 1 << 1, 1, 2 << 1, 1], &[2 << 1, 1], &dati);
+    contiene(arrow(&byte), atteso);
+    // Indici di dizionario: una corsa in più dopo quella del valore.
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &[1, 2, 0, 2, 0],
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+    contiene(colonna_api::<ByteArrayType>(&byte, None), atteso);
+    rifiutato_dal_confine(&byte);
+    // Booleani RLE: lunghezza 2, una corsa di un `true`, poi un byte non zero.
+    let booleana = colonna(0);
+    let byte = parquet(&booleana, 1, RLE, &[2, 0, 0, 0, 2, 1, 5], None, None);
+    contiene(arrow(&byte), atteso);
+    contiene(
+        colonna_api::<parquet::data_type::BoolType>(&byte, None),
+        atteso,
+    );
+    rifiutato_dal_confine(&byte);
+    // Controfattuali: le stesse pagine esatte si leggono.
+    let byte = parquet(&booleana, 1, RLE, &[2, 0, 0, 0, 2, 1], None, None);
+    assert_eq!(arrow(&byte), Ok(1));
+    let byte = parquet(&flba, 2, PLAIN, b"zzyy", None, None);
+    assert_eq!(valori_arrow(&byte), ["7a7a", "7979"]);
+    let byte = opzionale_con_livelli(2, &[2 << 1, 1], &dati);
+    assert_eq!(valori_arrow(&byte), ["1", "2"]);
+    let byte = parquet(&colonna(INT32), 2, PLAIN, &dati, None, None);
+    assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(2));
+}
+
+/// Livelli in una corsa bit-packed di `gruppi` gruppi da 8: i primi due
+/// bit accesi, il resto dei byte `riempimento`.
+fn corsa_bit_packed(gruppi: u64, riempimento: u8) -> Vec<u8> {
+    let mut livelli = Vec::new();
+    varint((gruppi << 1) | 1, &mut livelli);
+    livelli.push(0b11);
+    livelli.extend(std::iter::repeat_n(
+        riempimento,
+        usize::try_from(gruppi).unwrap() - 1,
+    ));
+    livelli
+}
+
+/// Le forme di scrittori reali che la fine esatta della pagina tollera,
+/// ciascuna con il suo limite. fastparquet aggiunge 8 byte a zero a ogni
+/// pagina v1, dopo i valori (`writer.py`): fino a 8 byte, tutti zero, solo
+/// dopo lo stream dei valori di una pagina v1 (non 9, non diversi da zero,
+/// non dopo i livelli, non in una pagina v2). `DuckDB` scrive le corse
+/// bit-packed a blocchi di 32 gruppi e completa l'ultimo con byte vecchi:
+/// gruppi di riempimento solo in una corsa di 32 gruppi.
+#[test]
+fn la_fine_della_pagina_tollera_le_forme_di_fastparquet_e_duckdb() {
+    let atteso = parquet::basic::PAGE_NOT_AS_DECLARED;
+    // fastparquet: 8 zeri dopo i valori PLAIN.
+    let mut valori = 7_i32.to_le_bytes().to_vec();
+    valori.extend_from_slice(&[0; 8]);
+    let byte = parquet(&colonna(INT32), 1, PLAIN, &valori, None, None);
+    assert_eq!(valori_arrow(&byte), ["7"]);
+    assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(1));
+    valori.push(0);
+    let byte = parquet(&colonna(INT32), 1, PLAIN, &valori, None, None);
+    contiene(arrow(&byte), atteso);
+    rifiutato_dal_confine(&byte);
+    // E dopo gli indici di dizionario.
+    let mut indici = vec![1_u8, 2, 0];
+    indici.extend_from_slice(&[0; 8]);
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &indici,
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    assert_eq!(valori_arrow(&byte), ["a"]);
+    // DuckDB: 32 gruppi per 2 righe, il riempimento con byte qualunque.
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    let byte = opzionale_con_livelli(2, &corsa_bit_packed(32, 0xA5), &dati);
+    assert_eq!(valori_arrow(&byte), ["1", "2"]);
+    // Lo stesso nel decoder generico dei livelli (una lista [1, 2]).
+    let byte = ripetuta(
+        2,
+        &[1 << 1, 0, 1 << 1, 1],
+        &corsa_bit_packed(32, 0xA5),
+        &dati,
+    );
+    assert_eq!(arrow(&byte), Ok(1));
+    // Oltre il limite: 33 gruppi (256 valori di riempimento dopo il gruppo).
+    let byte = opzionale_con_livelli(2, &corsa_bit_packed(33, 0xA5), &dati);
+    contiene(arrow(&byte), atteso);
+    rifiutato_dal_confine(&byte);
+    let byte = ripetuta(
+        2,
+        &[1 << 1, 0, 1 << 1, 1],
+        &corsa_bit_packed(33, 0xA5),
+        &dati,
+    );
+    contiene(arrow(&byte), atteso);
+    // Un byte dopo la corsa, anche zero: dopo i livelli niente coda.
+    for coda in [1_u8, 0] {
+        let mut dopo = corsa_bit_packed(32, 0);
+        dopo.push(coda);
+        let byte = opzionale_con_livelli(2, &dopo, &dati);
+        contiene(arrow(&byte), atteso);
+    }
+    let byte = opzionale_con_livelli(2, &[2 << 1, 1, 0], &dati);
+    contiene(arrow(&byte), atteso);
+    // Un gruppo intero in più in una corsa che non è un blocco di 32.
+    let byte = opzionale_con_livelli(2, &corsa_bit_packed(2, 0), &dati);
+    contiene(arrow(&byte), atteso);
+    // Pagina v2: nessuna coda dopo i valori.
+    let mut valori = 7_i32.to_le_bytes().to_vec();
+    valori.extend_from_slice(&[0; 8]);
+    let byte = parquet_con_header(
+        &colonna(INT32),
+        1,
+        PLAIN,
+        &valori,
+        &header_v2(1, 0, 1, PLAIN, 0, 0, valori.len(), valori.len()),
+        None,
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+}
+
+/// L'header di una pagina v2: righe, nulli, valori, codifica, lunghezze dei
+/// livelli di definizione e di ripetizione, dimensioni non compressa e
+/// compressa.
+#[allow(clippy::too_many_arguments)] // I campi dell'header.
+fn header_v2(
+    righe: i64,
+    nulli: i64,
+    valori: i64,
+    codifica: i64,
+    definizione: i64,
+    ripetizione: i64,
+    non_compressa: usize,
+    compressa: usize,
+) -> Vec<u8> {
+    Struttura::default()
+        .i32(1, 3)
+        .i32(2, i64::try_from(non_compressa).unwrap())
+        .i32(3, i64::try_from(compressa).unwrap())
+        .struttura(
+            8,
+            Struttura::default()
+                .i32(1, valori)
+                .i32(2, nulli)
+                .i32(3, righe)
+                .i32(4, codifica)
+                .i32(5, definizione)
+                .i32(6, ripetizione),
+        )
+        .fine()
+}
+
+/// Indici a larghezza zero (dizionario di una voce): `00 05` dichiara due
+/// gruppi, 16 indici senza byte; se ne usa uno, e un gruppo intero in più
+/// passava (la fine guardava solo i byte). Ora si contano i valori.
+#[test]
+fn gli_indici_a_larghezza_zero_in_piu_sono_un_errore() {
+    let dizionario = testo_plain(&[b"a"]);
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &[0, 5],
+        Some((1, &dizionario)),
+        None,
+    );
+    contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+    contiene(
+        colonna_api::<ByteArrayType>(&byte, None),
+        parquet::basic::PAGE_NOT_AS_DECLARED,
+    );
+    // Controfattuale: un gruppo, il riempimento del gruppo.
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &[0, 3],
+        Some((1, &dizionario)),
+        None,
+    );
+    assert_eq!(valori_arrow(&byte), ["a"]);
+}
+
+/// Le righe di una pagina v2 contro i suoi valori: in una colonna senza
+/// ripetizione una riga è un valore. `num_rows` 1 su 2 valori faceva saltare
+/// due valori per una riga; 0 righe su una pagina di valori la saltava senza
+/// contarla. Errori, in lettura e nel salto.
+#[test]
+fn le_righe_di_una_pagina_v2_contro_i_valori_sono_controllate() {
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    for righe in [1, 0] {
+        let byte = parquet_con_header(
+            &colonna(INT32),
+            2,
+            PLAIN,
+            &dati,
+            &header_v2(righe, 0, 2, PLAIN, 0, 0, dati.len(), dati.len()),
+            None,
+            None,
+        );
+        contiene(arrow(&byte), "rows for");
+        contiene(colonna_api::<Int32Type>(&byte, None), "rows for");
+        rifiutato_dal_confine(&byte);
+    }
+    let byte = parquet_con_header(
+        &colonna(INT32),
+        2,
+        PLAIN,
+        &dati,
+        &header_v2(2, 0, 2, PLAIN, 0, 0, dati.len(), dati.len()),
+        None,
+        None,
+    );
+    assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(2));
+    assert_eq!(valori_arrow(&byte), ["1", "2"]);
+}
+
+/// Uno stream di livelli che lo schema non ha (ripetizione o definizione a
+/// massimo 0) si toglieva dalla pagina v2 senza leggerlo: byte qualunque al
+/// suo posto passavano. Ora la sua lunghezza deve essere 0.
+#[test]
+fn uno_stream_di_livelli_senza_livelli_e_un_errore() {
+    let mut contenuto = vec![0xAB_u8, 0xCD];
+    contenuto.extend_from_slice(&7_i32.to_le_bytes());
+    for (definizione, ripetizione) in [(0, 2), (2, 0)] {
+        let byte = parquet_con_header(
+            &colonna(INT32),
+            1,
+            PLAIN,
+            &contenuto,
+            &header_v2(
+                1,
+                0,
+                1,
+                PLAIN,
+                definizione,
+                ripetizione,
+                contenuto.len(),
+                contenuto.len(),
+            ),
+            None,
+            None,
+        );
+        contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+        rifiutato_dal_confine(&byte);
+    }
+}
+
+/// Una pagina di zero livelli rispondeva «fine del column chunk»: il
+/// lettore Arrow abbandonava le pagine dopo due pagine vuote, in silenzio.
+/// Ora la pagina vuota si verifica e la lettura prosegue.
+#[test]
+fn le_pagine_vuote_non_fermano_la_lettura() {
+    let vuota = header_v1(0, PLAIN, 0);
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    let mut prima = vuota.clone();
+    prima.extend_from_slice(&vuota);
+    prima.extend(header_v1(2, PLAIN, dati.len()));
+    let byte = parquet_con_header(&colonna(INT32), 2, PLAIN, &dati, &prima, None, None);
+    assert_eq!(valori_arrow(&byte), ["1", "2"]);
+    assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(2));
+    // Una pagina vuota con dei byte non è vuota: errore.
+    let mut piena = header_v1(0, PLAIN, 4);
+    piena.extend_from_slice(&[9, 0, 0, 0]);
+    piena.extend(header_v1(2, PLAIN, dati.len()));
+    let byte = parquet_con_header(&colonna(INT32), 2, PLAIN, &dati, &piena, None, None);
+    contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+}
+
+/// Una pagina v2 compressa senza valori (tutti nulli): la parte compressa
+/// non si decomprimeva, e un suffisso qualunque spariva. Ora si decomprime
+/// e deve dare zero byte; lo stream SNAPPY vuoto (`00`) si legge.
+#[test]
+fn una_pagina_compressa_senza_valori_verifica_il_suffisso() {
+    let opzionale = Colonna {
+        ripetizione: 1,
+        ..colonna(INT32)
+    };
+    for (suffisso, valido) in [(vec![0xFF_u8, 0xFF], false), (vec![0x00], true)] {
+        let mut contenuto = vec![1 << 1, 0]; // un livello 0: un nullo
+        contenuto.extend_from_slice(&suffisso);
+        let header = Struttura::default()
+            .i32(1, 3)
+            .i32(2, 2)
+            .i32(3, i64::try_from(contenuto.len()).unwrap())
+            .struttura(
+                8,
+                Struttura::default()
+                    .i32(1, 1)
+                    .i32(2, 1)
+                    .i32(3, 1)
+                    .i32(4, PLAIN)
+                    .i32(5, 2)
+                    .i32(6, 0),
+            )
+            .fine();
+        let byte = parquet_con_codec(&opzionale, 1, PLAIN, &contenuto, &header, None, None, 1);
+        if valido {
+            assert_eq!(arrow(&byte), Ok(1));
+        } else {
+            assert!(arrow(&byte).is_err());
+            rifiutato_dal_confine(&byte);
+        }
+    }
+}
+
+// --- Righe v2 ripetute, corse vuote, forme esatte ---------------
+
+/// Una pagina v2 di una lista (ripetizione e definizione a massimo 1): i
+/// livelli di ripetizione `[0, 1]` (una riga di due elementi), due valori.
+fn lista_v2(righe: i64) -> Vec<u8> {
+    let lista = Colonna {
+        ripetizione: 2,
+        ..colonna(INT32)
+    };
+    let mut contenuto = vec![1 << 1, 0, 1 << 1, 1]; // ripetizione
+    contenuto.extend_from_slice(&[2 << 1, 1]); // definizione
+    contenuto.extend_from_slice(&[1, 0, 0, 0, 2, 0, 0, 0]);
+    let header = header_v2(righe, 0, 2, PLAIN, 2, 4, contenuto.len(), contenuto.len());
+    parquet_con_header(&lista, 2, PLAIN, &contenuto, &header, None, None)
+}
+
+/// Le righe di una pagina v2 di una colonna ripetuta sono i suoi livelli di
+/// ripetizione 0: il conteggio dell'header non si confrontava con quelli
+/// letti (2 righe dichiarate su una passavano). Ora alla fine della pagina;
+/// un salto non legge quei livelli, e su una colonna ripetuta non è
+/// qualificato.
+#[test]
+fn le_righe_di_una_pagina_v2_ripetuta_si_contano() {
+    contiene(arrow(&lista_v2(2)), "rows but its levels start");
+    rifiutato_dal_confine(&lista_v2(2));
+    assert_eq!(arrow(&lista_v2(1)), Ok(1));
+    contiene(
+        colonna_api::<Int32Type>(&lista_v2(1), Some(1)),
+        parquet::basic::SKIP_NOT_QUALIFIED,
+    );
+}
+
+/// Un indicatore RLE 0 (la fine con cui fastparquet riempie) o una corsa
+/// vuota si leggevano prima della fine della pagina, e i loro byte non
+/// contavano più: 9 zeri dopo gli indici di una pagina v1, uno in una
+/// pagina v2, `80 00` (uno zero in un varint non minimo) passavano. Ora la
+/// coda si misura da dove cominciano le corse vuote.
+#[test]
+#[allow(clippy::too_many_lines)] // Un caso per forma di coda.
+fn le_corse_vuote_in_coda_contano_come_byte() {
+    let atteso = parquet::basic::PAGE_NOT_AS_DECLARED;
+    let dizionario = testo_plain(&[b"a"]);
+    let indici = |coda: &[u8]| {
+        let mut indici = vec![1_u8, 2, 0];
+        indici.extend_from_slice(coda);
+        indici
+    };
+    for coda in [vec![0_u8; 9], vec![0x80, 0x00], vec![0x01]] {
+        let byte = parquet(
+            &colonna(BYTE_ARRAY),
+            1,
+            RLE_DICTIONARY,
+            &indici(&coda),
+            Some((1, &dizionario)),
+            None,
+        );
+        contiene(arrow(&byte), atteso);
+        contiene(colonna_api::<ByteArrayType>(&byte, None), atteso);
+    }
+    // Pagina v2: nessuno zero dopo gli indici.
+    let contenuto = indici(&[0]);
+    let byte = parquet_con_header(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &contenuto,
+        &header_v2(
+            1,
+            0,
+            1,
+            RLE_DICTIONARY,
+            0,
+            0,
+            contenuto.len(),
+            contenuto.len(),
+        ),
+        Some((1, &dizionario)),
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+    // Livelli: uno zero dopo, nel decoder generico e in quello ottimizzato.
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    let byte = ripetuta(2, &[1 << 1, 0, 1 << 1, 1, 0], &[2 << 1, 1], &dati);
+    contiene(arrow(&byte), atteso);
+    let byte = opzionale_con_livelli(2, &[2 << 1, 1, 0x80, 0], &dati);
+    contiene(arrow(&byte), atteso);
+    // Una pagina tutta nulla: lo stream degli indici è solo la sua
+    // larghezza e la coda, e il primo indicatore si leggeva già nel
+    // `set_data` (9 zeri passavano come 8, uno in v2 come nessuno).
+    let nulla = Colonna {
+        ripetizione: 1,
+        ..colonna(BYTE_ARRAY)
+    };
+    let tutta_nulla = |coda: &[u8]| {
+        let mut contenuto = 2_u32.to_le_bytes().to_vec();
+        contenuto.extend_from_slice(&[1 << 1, 0]); // un livello 0
+        contenuto.push(1); // larghezza degli indici
+        contenuto.extend_from_slice(coda);
+        parquet(
+            &nulla,
+            1,
+            RLE_DICTIONARY,
+            &contenuto,
+            Some((1, &dizionario)),
+            None,
+        )
+    };
+    for coda in [
+        vec![0_u8; 9],
+        vec![0x80, 0x00, 0, 0, 0, 0, 0, 0],
+        vec![0x01],
+    ] {
+        // Un varint non minimo si rifiuta appena letto.
+        match arrow(&tutta_nulla(&coda)) {
+            Err(testo) => assert!(
+                testo.contains(atteso) || testo.contains("varint not minimal"),
+                "{testo}"
+            ),
+            Ok(righe) => panic!("letto ({righe} righe)"),
+        }
+    }
+    assert_eq!(arrow(&tutta_nulla(&[0; 8])), Ok(1));
+    let mut v2 = vec![1 << 1, 0, 1, 0];
+    let lunghezza = v2.len();
+    let byte = parquet_con_header(
+        &nulla,
+        1,
+        RLE_DICTIONARY,
+        &v2,
+        &header_v2(1, 1, 1, RLE_DICTIONARY, 2, 0, lunghezza, lunghezza),
+        Some((1, &dizionario)),
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+    v2.pop();
+    let byte = parquet_con_header(
+        &nulla,
+        1,
+        RLE_DICTIONARY,
+        &v2,
+        &header_v2(1, 1, 1, RLE_DICTIONARY, 2, 0, v2.len(), v2.len()),
+        Some((1, &dizionario)),
+        None,
+    );
+    assert_eq!(arrow(&byte), Ok(1));
+    // Controfattuale: 8 zeri dopo gli indici di una pagina v1.
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &indici(&[0; 8]),
+        Some((1, &dizionario)),
+        None,
+    );
+    assert_eq!(valori_arrow(&byte), ["a"]);
+}
+
+/// La coda di fastparquet vale anche per FLBA (il lettore Arrow rifiutava il
+/// resto prima della fine della pagina): 8 zeri dopo valori di larghezza 3
+/// in una pagina v1 si leggono; in una pagina v2 no.
+#[test]
+fn la_coda_di_fastparquet_vale_anche_per_flba() {
+    let flba = Colonna {
+        larghezza: Some(3),
+        ..colonna(FLBA)
+    };
+    let mut contenuto = b"abcdef".to_vec();
+    contenuto.extend_from_slice(&[0; 8]);
+    let byte = parquet(&flba, 2, PLAIN, &contenuto, None, None);
+    assert_eq!(valori_arrow(&byte), ["616263", "646566"]);
+    let byte = parquet_con_header(
+        &flba,
+        2,
+        PLAIN,
+        &contenuto,
+        &header_v2(2, 0, 2, PLAIN, 0, 0, contenuto.len(), contenuto.len()),
+        None,
+        None,
+    );
+    contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+}
+
+/// Il riempimento di `DuckDB` solo nella sua forma: pagina v1, larghezza
+/// sopra 0, corsa di 32 gruppi. In una pagina v2, o a larghezza 0 (32 gruppi
+/// senza byte), un gruppo in più è un errore.
+#[test]
+fn il_riempimento_di_duckdb_solo_nella_sua_forma() {
+    let atteso = parquet::basic::PAGE_NOT_AS_DECLARED;
+    let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
+    let opzionale = Colonna {
+        ripetizione: 1,
+        ..colonna(INT32)
+    };
+    let livelli = corsa_bit_packed(32, 0xA5);
+    let mut contenuto = livelli.clone();
+    contenuto.extend_from_slice(&dati);
+    let byte = parquet_con_header(
+        &opzionale,
+        2,
+        PLAIN,
+        &contenuto,
+        &header_v2(
+            2,
+            0,
+            2,
+            PLAIN,
+            i64::try_from(livelli.len()).unwrap(),
+            0,
+            contenuto.len(),
+            contenuto.len(),
+        ),
+        None,
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+    // Larghezza 0: un dizionario di una voce, un blocco di 32 gruppi.
+    let byte = parquet(
+        &colonna(BYTE_ARRAY),
+        1,
+        RLE_DICTIONARY,
+        &[0, (32 << 1) | 1],
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+}
+
+/// Una pagina non decompressa (codec `UNCOMPRESSED`) dichiara la sua
+/// dimensione non compressa: non si confrontava con i byte, e un header
+/// poteva dichiararne qualunque.
+#[test]
+fn la_dimensione_non_compressa_di_una_pagina_si_confronta() {
+    let dati = 7_i32.to_le_bytes();
+    let header = Struttura::default()
+        .i32(1, 0)
+        .i32(2, 3)
+        .i32(3, 4)
+        .struttura(
+            5,
+            Struttura::default()
+                .i32(1, 1)
+                .i32(2, PLAIN)
+                .i32(3, RLE)
+                .i32(4, RLE),
+        )
+        .fine();
+    let byte = parquet_con_header(&colonna(INT32), 1, PLAIN, &dati, &header, None, None);
+    contiene(arrow(&byte), "declares 3 bytes");
+    rifiutato_dal_confine(&byte);
+}
+
+// --- Corse vuote, blocco DuckDB, confine delle pagine v2 ---------------------------
+
+/// Una pagina `OPTIONAL` `INT32` di `righe` righe con i livelli dati e un
+/// valore per riga a partire da 1 (gli eccessi lasciano byte non zero).
+fn opzionale_con_righe(righe: i32, livelli: &[u8]) -> Vec<u8> {
+    let dati: Vec<u8> = (1..=righe).flat_map(i32::to_le_bytes).collect();
+    opzionale_con_livelli(i64::from(righe), livelli, &dati)
+}
+
+/// Il blocco di `DuckDB` solo per livelli e indici, e solo se un suo valore
+/// si legge: i booleani `RLE` lo ricevevano (255 booleani in più), e un
+/// blocco di cui non si leggeva niente (pagina tutta nulla) passava (256
+/// indici in più, oltre l'hazard dichiarato).
+#[test]
+fn il_blocco_di_duckdb_solo_per_livelli_e_indici_letti() {
+    let atteso = parquet::basic::PAGE_NOT_AS_DECLARED;
+    let blocco = |primo: u8| {
+        let mut corsa = vec![0x41, primo];
+        corsa.extend_from_slice(&[0; 31]);
+        corsa
+    };
+    // Booleani: lunghezza 33, il blocco con un `true`.
+    let mut booleani = 33_u32.to_le_bytes().to_vec();
+    booleani.extend(blocco(1));
+    let byte = parquet(&colonna(0), 1, RLE, &booleani, None, None);
+    contiene(arrow(&byte), atteso);
+    contiene(
+        colonna_api::<parquet::data_type::BoolType>(&byte, None),
+        atteso,
+    );
+    // Indici di una pagina tutta nulla: il blocco intero, nessuno letto.
+    let dizionario = testo_plain(&[b"a"]);
+    let nulla = Colonna {
+        ripetizione: 1,
+        ..colonna(BYTE_ARRAY)
+    };
+    let pagina = |livelli: &[u8], indici: &[u8]| {
+        let mut contenuto = u32::try_from(livelli.len()).unwrap().to_le_bytes().to_vec();
+        contenuto.extend_from_slice(livelli);
+        contenuto.extend_from_slice(indici);
+        parquet(
+            &nulla,
+            1,
+            RLE_DICTIONARY,
+            &contenuto,
+            Some((1, &dizionario)),
+            None,
+        )
+    };
+    let mut indici = vec![1_u8];
+    indici.extend(blocco(0));
+    contiene(arrow(&pagina(&[1 << 1, 0], &indici)), atteso);
+    // Controfattuale: un indice letto dal blocco.
+    assert_eq!(valori_arrow(&pagina(&[1 << 1, 1], &indici)), ["a"]);
+}
+
+/// Una corsa vuota (RLE di lunghezza 0 o bit-packed di 0 gruppi) prima dei
+/// valori si saltava, e la corsa dopo cancellava il segno: `01 80 00 02 00`
+/// negli indici passava (anche in v2), i livelli `01 02 01` pure, e il
+/// decoder ottimizzato dei livelli leggeva `00 00 02 01` dove quello
+/// generico si fermava. Ora una corsa vuota chiude lo stream ovunque sia, e
+/// un varint non minimo è un errore.
+#[test]
+fn una_corsa_vuota_prima_dei_valori_e_un_errore() {
+    let dizionario = testo_plain(&[b"a"]);
+    for indici in [
+        vec![1_u8, 0x80, 0x00, 2, 0],
+        vec![1, 0x01, 2, 0],
+        vec![1, 0, 2, 0],
+    ] {
+        let byte = parquet(
+            &colonna(BYTE_ARRAY),
+            1,
+            RLE_DICTIONARY,
+            &indici,
+            Some((1, &dizionario)),
+            None,
+        );
+        assert!(arrow(&byte).is_err(), "{indici:02x?}");
+        assert!(
+            colonna_api::<ByteArrayType>(&byte, None).is_err(),
+            "{indici:02x?}"
+        );
+        let v2 = parquet_con_header(
+            &colonna(BYTE_ARRAY),
+            1,
+            RLE_DICTIONARY,
+            &indici,
+            &header_v2(1, 0, 1, RLE_DICTIONARY, 0, 0, indici.len(), indici.len()),
+            Some((1, &dizionario)),
+            None,
+        );
+        assert!(arrow(&v2).is_err(), "v2 {indici:02x?}");
+    }
+    for livelli in [
+        vec![0x01_u8, 2 << 1, 1],
+        vec![0, 0, 2 << 1, 1],
+        vec![0x80, 0, 2 << 1, 1],
+    ] {
+        let byte = opzionale_con_righe(2, &livelli);
+        assert!(arrow(&byte).is_err(), "ottimizzato {livelli:02x?}");
+        assert!(livelli_generici(&byte).is_err(), "generico {livelli:02x?}");
+    }
+}
+
+/// I livelli di definizione letti dal decoder generico (API per colonne,
+/// non il decoder ottimizzato del lettore Arrow): la validità per riga o
+/// l'errore.
+fn livelli_generici(byte: &[u8]) -> Result<Vec<bool>, String> {
+    su_file(byte, |file| {
+        std::panic::catch_unwind(move || {
+            let lettore = SerializedFileReader::new(file).map_err(|e| e.to_string())?;
+            let gruppo = lettore.get_row_group(0).map_err(|e| e.to_string())?;
+            let colonna = gruppo.get_column_reader(0).map_err(|e| e.to_string())?;
+            let mut tipizzata = get_typed_column_reader::<Int32Type>(colonna);
+            let (mut definizioni, mut valori) = (Vec::new(), Vec::new());
+            loop {
+                let (righe, _, _) = tipizzata
+                    .read_records(64, Some(&mut definizioni), None, &mut valori)
+                    .map_err(|e| e.to_string())?;
+                if righe == 0 {
+                    break;
+                }
+            }
+            Ok(definizioni.iter().map(|livello| *livello == 1).collect())
+        })
+        .unwrap_or_else(|carico| panic!("il decoder generico va in panico: {}", panico(&*carico)))
+    })
+}
+
+/// La validità per riga letta dal lettore Arrow (decoder ottimizzato dei
+/// livelli a larghezza 1), o l'errore.
+fn livelli_ottimizzati(byte: &[u8]) -> Result<Vec<bool>, String> {
+    let batch = su_file(byte, |file| {
+        std::panic::catch_unwind(move || {
+            let lettore = ParquetRecordBatchReaderBuilder::try_new(file)
+                .map_err(|e| e.to_string())?
+                .build()
+                .map_err(|e| e.to_string())?;
+            lettore
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())
+        })
+        .unwrap_or_else(|carico| panic!("il lettore Arrow va in panico: {}", panico(&*carico)))
+    })?;
+    Ok(batch
+        .iter()
+        .flat_map(|b| {
+            let colonna = b.column(0).clone();
+            (0..colonna.len())
+                .map(|riga| colonna.is_valid(riga))
+                .collect::<Vec<_>>()
+        })
+        .collect())
+}
+
+/// Oracolo: il decoder ottimizzato dei livelli (lettore Arrow) e quello
+/// generico (API per colonne) danno lo stesso esito sugli stessi stream:
+/// gli stessi livelli, o entrambi un errore. Stream deterministici di 1-6
+/// byte da un alfabeto che copre corse RLE, bit-packed, vuote, varint non
+/// minimi e valori fuori dalla larghezza, su pagine di 1-9 righe.
+#[test]
+fn i_due_decoder_dei_livelli_danno_lo_stesso_esito() {
+    const ALFABETO: [u8; 12] = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x10, 0x41, 0x80, 0xFF, 0x0F,
+    ];
+    let mut stato: u64 = 0x2545_F491_4F6C_DD1D;
+    let mut prossimo = |n: usize| {
+        stato ^= stato << 13;
+        stato ^= stato >> 7;
+        stato ^= stato << 17;
+        usize::try_from(stato % u64::try_from(n).unwrap()).unwrap()
+    };
+    let mut letti = 0;
+    for _ in 0..1500 {
+        let righe = i32::try_from(1 + prossimo(9)).unwrap();
+        let lunghezza = 1 + prossimo(6);
+        let livelli: Vec<u8> = (0..lunghezza)
+            .map(|_| ALFABETO[prossimo(ALFABETO.len())])
+            .collect();
+        let byte = opzionale_con_righe(righe, &livelli);
+        let ottimizzato = livelli_ottimizzati(&byte);
+        let generico = livelli_generici(&byte);
+        match (&ottimizzato, &generico) {
+            (Ok(a), Ok(b)) => {
+                assert_eq!(a, b, "{righe} righe, livelli {livelli:02x?}");
+                letti += 1;
+            }
+            (Err(a), Err(b)) => assert_eq!(
+                a.strip_prefix("Parquet argument error: ").unwrap_or(a),
+                b,
+                "{righe} righe, livelli {livelli:02x?}"
+            ),
+            _ => panic!(
+                "esiti diversi su {righe} righe, livelli {livelli:02x?}: {ottimizzato:?} {generico:?}"
+            ),
+        }
+    }
+    // L'oracolo confronta anche letture riuscite, non solo errori.
+    assert!(letti > 0);
+}
+
+/// Una pagina v2 comincia su un confine di record: i livelli di
+/// ripetizione `[1, 0]` con una riga dichiarata passavano, e il primo
+/// livello si attaccava al record della pagina prima. Ora è un errore. La
+/// compatibilità per i record su più pagine v2 è tolta: nessuno scrittore
+/// misurato la usa.
+#[test]
+fn una_pagina_v2_comincia_su_un_confine_di_record() {
+    let lista = Colonna {
+        ripetizione: 2,
+        ..colonna(INT32)
+    };
+    let mut contenuto = vec![(1 << 1) | 1, 0b01]; // ripetizione [1, 0]
+    contenuto.extend_from_slice(&[2 << 1, 1]); // definizione
+    contenuto.extend_from_slice(&[1, 0, 0, 0, 2, 0, 0, 0]);
+    let header = header_v2(1, 0, 2, PLAIN, 2, 2, contenuto.len(), contenuto.len());
+    let byte = parquet_con_header(&lista, 2, PLAIN, &contenuto, &header, None, None);
+    contiene(arrow(&byte), "does not start on a record boundary");
+    rifiutato_dal_confine(&byte);
+    // Controfattuale: `[0, 1]`, una riga di due elementi.
+    assert_eq!(arrow(&lista_v2(1)), Ok(1));
+}
+
+// --- Corse troncate, conteggi enormi, dizionari --------------------------------
+
+/// Una corsa bit-packed che dichiara più gruppi di quanti ne porta, o un
+/// conteggio enorme: il decoder generico e quello ottimizzato la leggevano
+/// fino ai suoi byte (l'ottimizzato tagliava il conteggio ai byte, il
+/// generico andava in overflow sul conteggio enorme: esiti diversi). Ora
+/// è un errore in entrambi, anche in v2 e negli indici.
+#[test]
+fn una_corsa_troncata_o_enorme_e_un_errore() {
+    let atteso = "bit-packed run beyond the data";
+    for livelli in [
+        vec![0x05_u8, 0xFF],
+        vec![0x81, 0x80, 0x80, 0x80, 0x04, 0x01],
+    ] {
+        let byte = opzionale_con_righe(8, &livelli);
+        contiene(arrow(&byte), atteso);
+        assert!(livelli_generici(&byte).is_err(), "{livelli:02x?}");
+        rifiutato_dal_confine(&byte);
+        let v2 = v2_opzionale(8, 0, &livelli);
+        assert!(arrow(&v2).is_err(), "v2 {livelli:02x?}");
+    }
+    // Indici di una pagina tutta nulla: un blocco senza i suoi byte.
+    let nulla = Colonna {
+        ripetizione: 1,
+        ..colonna(BYTE_ARRAY)
+    };
+    let mut contenuto = 2_u32.to_le_bytes().to_vec();
+    contenuto.extend_from_slice(&[1 << 1, 0, 1, 0x41]);
+    let byte = parquet(
+        &nulla,
+        1,
+        RLE_DICTIONARY,
+        &contenuto,
+        Some((1, &testo_plain(&[b"a"]))),
+        None,
+    );
+    contiene(arrow(&byte), atteso);
+}
+
+/// I booleani `RLE` finiscono alla loro lunghezza prefissata: la coda di
+/// fastparquet (dopo i valori `PLAIN` e gli indici) non li riguarda, e uno
+/// zero dopo lo stream (`02 00 00 00 02 01 00`) passava.
+#[test]
+fn i_booleani_rle_non_hanno_coda() {
+    let booleana = colonna(0);
+    let byte = parquet(&booleana, 1, RLE, &[2, 0, 0, 0, 2, 1, 0], None, None);
+    contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+    contiene(
+        colonna_api::<parquet::data_type::BoolType>(&byte, None),
+        parquet::basic::PAGE_NOT_AS_DECLARED,
+    );
+    let byte = parquet(&booleana, 1, RLE, &[2, 0, 0, 0, 2, 1], None, None);
+    assert_eq!(arrow(&byte), Ok(1));
+}
+
+/// Una colonna con la pagina di dizionario dichiarata `encoding` e le
+/// pagine `pagine` (header e contenuto ciascuna) dopo di essa.
+fn con_pagine(
+    colonna: &Colonna,
+    valori: i64,
+    codifica_dizionario: i64,
+    dizionari: &[&[u8]],
+    dati: &[u8],
+) -> Vec<u8> {
+    let mut prima = Vec::new();
+    for (indice, dizionario) in dizionari.iter().enumerate() {
+        let lunghezza = i64::try_from(dizionario.len()).unwrap();
+        let header = Struttura::default()
+            .i32(1, 2)
+            .i32(2, lunghezza)
+            .i32(3, lunghezza)
+            .struttura(
+                7,
+                Struttura::default().i32(1, 1).i32(2, codifica_dizionario),
+            )
+            .fine();
+        prima.extend(header);
+        prima.extend_from_slice(dizionario);
+        let _ = indice;
+    }
+    prima.extend(header_v1(valori, RLE_DICTIONARY, dati.len()));
+    parquet_con_header(colonna, valori, RLE_DICTIONARY, dati, &prima, None, None)
+}
+
+/// Due pagine di dizionario nello stesso column chunk: i lettori Arrow
+/// sostituivano il primo con il secondo in silenzio, l'API generica
+/// rifiutava. Ora un errore uniforme: il lettore di pagine rifiuta un
+/// dizionario che non è la prima pagina (`DICTIONARY_PAGE_OUT_OF_PLACE`; i
+/// decoder rifiutano ancora un secondo dizionario, «more than one
+/// dictionary», con un lettore di pagine che non lo fa). Una pagina di dizionario dichiarata
+/// `RLE_DICTIONARY` si leggeva come `PLAIN`: un dizionario è `PLAIN` (o
+/// `PLAIN_DICTIONARY` nei file vecchi), e ora è un errore.
+#[test]
+fn i_dizionari_di_un_column_chunk_sono_uno_e_plain() {
+    let a = testo_plain(&[b"a"]);
+    let b = testo_plain(&[b"b"]);
+    let flba = Colonna {
+        larghezza: Some(1),
+        ..colonna(FLBA)
+    };
+    for (colonna, primo, secondo) in [
+        (colonna(BYTE_ARRAY), a.as_slice(), b.as_slice()),
+        (flba, b"a".as_slice(), b"b".as_slice()),
+    ] {
+        let doppio = con_pagine(&colonna, 1, PLAIN, &[primo, secondo], &[1, 2, 0]);
+        contiene(arrow(&doppio), parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE);
+        if colonna.tipo == BYTE_ARRAY {
+            for tipo in [
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+                DataType::BinaryView,
+            ] {
+                let schema = Schema::new(vec![Field::new("x", tipo.clone(), false)]);
+                contiene(
+                    arrow_con_schema(&doppio, schema).map(|batch| batch.len()),
+                    parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+                );
+            }
+            contiene(
+                colonna_api::<ByteArrayType>(&doppio, None),
+                parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+            );
+        }
+        let rle = con_pagine(&colonna, 1, RLE_DICTIONARY, &[primo], &[1, 2, 0]);
+        contiene(arrow(&rle), "encoding type for dictionary");
+        // Controfattuali: un dizionario PLAIN, e PLAIN_DICTIONARY (2).
+        for codifica in [PLAIN, 2] {
+            let uno = con_pagine(&colonna, 1, codifica, &[primo], &[1, 2, 0]);
+            assert_eq!(arrow(&uno), Ok(1), "{codifica}");
+        }
+    }
+}
+
+// --- Oracolo esteso dei due decoder dei livelli ----------------------------------
+
+/// Un generatore deterministico (xorshift).
+struct Casuale(u64);
+
+impl Casuale {
+    fn prossimo(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        usize::try_from(self.0 % u64::try_from(n).unwrap()).unwrap()
+    }
+}
+
+/// Livelli di definizione (larghezza 1) e il loro stream RLE/bit-packed,
+/// con le forme che i decoder devono trattare allo stesso modo: corse RLE,
+/// gruppi bit-packed, un blocco di 32 gruppi alla fine, e, se `guasto`,
+/// una corsa vuota, un varint non minimo, una corsa troncata o un conteggio
+/// enorme. Restituisce i livelli voluti, lo stream e se lo stream li
+/// codifica in una forma ammessa.
+/// Che cosa i decoder devono fare di uno stream dell'oracolo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Atteso {
+    /// I livelli voluti.
+    Livelli,
+    /// I livelli voluti in v1; in v2, dove il blocco di `DuckDB` non è
+    /// ammesso, un errore di fine pagina (il blocco ha gruppi in eccesso).
+    BloccoInEccesso,
+    /// Un errore con questo testo, nei due decoder.
+    Errore(&'static str),
+}
+
+fn stream_dei_livelli(caso: &mut Casuale, guasto: bool) -> (Vec<bool>, Vec<u8>, Atteso) {
+    let righe = 1 + caso.prossimo(40);
+    let livelli: Vec<bool> = (0..righe).map(|_| caso.prossimo(3) > 0).collect();
+    let mut stream = Vec::new();
+    let mut blocco_in_eccesso = false;
+    let mut posizione = 0;
+    while posizione < righe {
+        let resto = righe - posizione;
+        if caso.prossimo(2) == 0 {
+            // Una corsa RLE dei livelli uguali che seguono.
+            let valore = livelli[posizione];
+            let mut lunghezza = 1;
+            while posizione + lunghezza < righe && livelli[posizione + lunghezza] == valore {
+                lunghezza += 1;
+            }
+            varint(u64::try_from(lunghezza).unwrap() << 1, &mut stream);
+            stream.push(u8::from(valore));
+            posizione += lunghezza;
+        } else {
+            // Gruppi bit-packed: i livelli che restano, o un blocco di 32
+            // gruppi (DuckDB) se è l'ultima corsa.
+            let gruppi = if resto <= 256 && caso.prossimo(4) == 0 {
+                if resto.div_ceil(8) < 32 {
+                    blocco_in_eccesso = true;
+                }
+                32
+            } else {
+                resto.div_ceil(8).min(1 + caso.prossimo(3))
+            };
+            varint((u64::try_from(gruppi).unwrap() << 1) | 1, &mut stream);
+            for gruppo in 0..gruppi {
+                let mut byte = 0_u8;
+                for bit in 0..8 {
+                    let indice = posizione + gruppo * 8 + bit;
+                    if indice < righe && livelli[indice] {
+                        byte |= 1 << bit;
+                    }
+                }
+                stream.push(byte);
+            }
+            posizione += gruppi * 8;
+        }
+    }
+    let mut atteso = if blocco_in_eccesso {
+        Atteso::BloccoInEccesso
+    } else {
+        Atteso::Livelli
+    };
+    if guasto {
+        match caso.prossimo(5) {
+            0 => {
+                // Una corsa bit-packed vuota chiude lo stream: mancano i
+                // livelli.
+                stream.insert(0, 0x01);
+                atteso = Atteso::Errore("insufficient definition levels");
+            }
+            1 => {
+                stream.splice(0..0, [0x80, 0x00]).for_each(drop);
+                atteso = Atteso::Errore("varint not minimal");
+            }
+            tipo @ (2 | 3) => {
+                atteso = Atteso::Errore("bit-packed run beyond the data");
+                // L'ultima corsa porta i livelli che servono ma dichiara più
+                // gruppi: due in più (troncata), o 2^29 (un conteggio enorme).
+                let finali = 1 + caso.prossimo(righe.min(16));
+                stream = livelli_rle(&livelli[..righe - finali]);
+                let gruppi = finali.div_ceil(8);
+                let dichiarati = if tipo == 2 {
+                    gruppi as u64 + 2
+                } else {
+                    1 << 29
+                };
+                varint((dichiarati << 1) | 1, &mut stream);
+                for gruppo in 0..gruppi {
+                    let mut byte = 0_u8;
+                    for bit in 0..8 {
+                        let indice = righe - finali + gruppo * 8 + bit;
+                        if indice < righe && livelli[indice] {
+                            byte |= 1 << bit;
+                        }
+                    }
+                    stream.push(byte);
+                }
+            }
+            _ => {
+                // Un indicatore 0 dopo l'ultima corsa: coda dopo i livelli.
+                stream.push(0x00);
+                atteso = Atteso::Errore(parquet::basic::PAGE_NOT_AS_DECLARED);
+            }
+        }
+    }
+    (livelli, stream, atteso)
+}
+
+/// I livelli come corse RLE.
+fn livelli_rle(livelli: &[bool]) -> Vec<u8> {
+    let mut stream = Vec::new();
+    let mut posizione = 0;
+    while posizione < livelli.len() {
+        let valore = livelli[posizione];
+        let mut lunghezza = 1;
+        while posizione + lunghezza < livelli.len() && livelli[posizione + lunghezza] == valore {
+            lunghezza += 1;
+        }
+        varint(u64::try_from(lunghezza).unwrap() << 1, &mut stream);
+        stream.push(u8::from(valore));
+        posizione += lunghezza;
+    }
+    stream
+}
+
+/// Una pagina `OPTIONAL` `INT32` v1 o v2 con i livelli dati e un valore per
+/// ogni livello 1 (i valori coerenti con i livelli: l'esito dipende solo
+/// dai livelli).
+fn pagina_dei_livelli(livelli: &[bool], stream: &[u8], v2: bool) -> Vec<u8> {
+    let presenti = livelli.iter().filter(|l| **l).count();
+    let dati: Vec<u8> = (1..=i32::try_from(presenti).unwrap())
+        .flat_map(i32::to_le_bytes)
+        .collect();
+    let righe = i64::try_from(livelli.len()).unwrap();
+    if !v2 {
+        return opzionale_con_livelli(righe, stream, &dati);
+    }
+    let opzionale = Colonna {
+        ripetizione: 1,
+        ..colonna(INT32)
+    };
+    let mut contenuto = stream.to_vec();
+    contenuto.extend_from_slice(&dati);
+    let nulli = righe - i64::try_from(presenti).unwrap();
+    let header = header_v2(
+        righe,
+        nulli,
+        righe,
+        PLAIN,
+        i64::try_from(stream.len()).unwrap(),
+        0,
+        contenuto.len(),
+        contenuto.len(),
+    );
+    parquet_con_header(&opzionale, righe, PLAIN, &contenuto, &header, None, None)
+}
+
+/// Oracolo esteso: pagine v1 e v2, 1-40 righe, corse RLE e bit-packed,
+/// blocchi di 32 gruppi, valori coerenti con i livelli, e stream guasti
+/// (corse vuote, varint non minimi, corse troncate, conteggi enormi). I due
+/// decoder dei livelli danno lo stesso esito; uno stream in forma ammessa si
+/// legge con i livelli voluti (il blocco di 32 gruppi solo in v1), uno
+/// guasto è un errore in entrambi.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn l_oracolo_dei_livelli_copre_v2_blocchi_e_guasti() {
+    let mut caso = Casuale(0x9E37_79B9_7F4A_7C15);
+    let (mut letti, mut rifiutati) = (0, 0);
+    for prova in 0..1200 {
+        let da_guastare = prova % 3 == 0;
+        let (livelli, stream, atteso) = stream_dei_livelli(&mut caso, da_guastare);
+        for v2 in [false, true] {
+            let byte = pagina_dei_livelli(&livelli, &stream, v2);
+            let ottimizzato = livelli_ottimizzati(&byte);
+            let generico = livelli_generici(&byte);
+            match (&ottimizzato, &generico) {
+                (Ok(a), Ok(b)) => assert_eq!(a, b, "v2 {v2}, livelli {stream:02x?}"),
+                (Err(a), Err(b)) => assert_eq!(
+                    a.strip_prefix("Parquet argument error: ").unwrap_or(a),
+                    b,
+                    "v2 {v2}, livelli {stream:02x?}"
+                ),
+                _ => {
+                    panic!("esiti diversi (v2 {v2}) su {stream:02x?}: {ottimizzato:?} {generico:?}")
+                }
+            }
+            // La categoria dell'errore, non solo un errore: lo stesso testo
+            // dai due decoder.
+            let testo_atteso = match atteso {
+                Atteso::Livelli => None,
+                Atteso::BloccoInEccesso if !v2 => None,
+                // Un blocco di 32 gruppi in v2 non è ammesso (DuckDB scrive v1).
+                Atteso::BloccoInEccesso => Some(parquet::basic::PAGE_NOT_AS_DECLARED),
+                Atteso::Errore(testo) => Some(testo),
+            };
+            match testo_atteso {
+                None => {
+                    assert_eq!(ottimizzato.as_ref(), Ok(&livelli), "v2 {v2}, {stream:02x?}");
+                    letti += 1;
+                }
+                Some(testo) => {
+                    for (decoder, esito) in [("ottimizzato", &ottimizzato), ("generico", &generico)]
+                    {
+                        match esito {
+                            Err(errore) => assert!(
+                                errore.contains(testo),
+                                "{decoder}, v2 {v2}, {stream:02x?}: atteso «{testo}», {errore}"
+                            ),
+                            Ok(_) => panic!("{decoder} ha letto un guasto: v2 {v2}, {stream:02x?}"),
+                        }
+                    }
+                    // Lo stesso messaggio, esatto: il lettore Arrow lo
+                    // avvolge soltanto nel suo prefisso.
+                    let (Err(a), Err(b)) = (&ottimizzato, &generico) else {
+                        unreachable!()
+                    };
+                    assert_eq!(
+                        a.strip_prefix("Parquet argument error: ").unwrap_or(a),
+                        b,
+                        "v2 {v2}, {stream:02x?}"
+                    );
+                    rifiutati += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        letti > 500 && rifiutati > 300,
+        "{letti} letti, {rifiutati} rifiutati"
+    );
+}
+
+/// Il blocco di `DuckDB` in una pagina v2, a larghezza diversa da 1 (indici
+/// di dizionario a 2 bit): gruppi in eccesso, un errore; in v1 si legge.
+#[test]
+fn il_blocco_in_v2_a_larghezza_due_e_un_errore() {
+    let dizionario = testo_plain(&[b"a", b"b", b"c"]);
+    let mut indici = vec![2_u8, 0x41, 0b0000_0110]; // larghezza 2, gli indici 2 e 1
+    indici.extend_from_slice(&[0xFF; 63]);
+    let v1 = parquet(
+        &colonna(BYTE_ARRAY),
+        2,
+        RLE_DICTIONARY,
+        &indici,
+        Some((3, &dizionario)),
+        None,
+    );
+    assert_eq!(valori_arrow(&v1), ["c", "b"]);
+    let v2 = parquet_con_header(
+        &colonna(BYTE_ARRAY),
+        2,
+        RLE_DICTIONARY,
+        &indici,
+        &header_v2(2, 0, 2, RLE_DICTIONARY, 0, 0, indici.len(), indici.len()),
+        Some((3, &dizionario)),
+        None,
+    );
+    contiene(arrow(&v2), parquet::basic::PAGE_NOT_AS_DECLARED);
+    contiene(
+        colonna_api::<ByteArrayType>(&v2, None),
+        parquet::basic::PAGE_NOT_AS_DECLARED,
+    );
+}
+
+// --- Statistiche e metadati: conteggi e dimensioni ---------------------------------
+
+/// Un Parquet `INT32` di un valore con le statistiche del column chunk date
+/// come campi Thrift (`ColumnMetaData.statistics`, campo 12).
+fn con_statistiche(statistiche: Struttura) -> Vec<u8> {
+    con_campi(
+        |metadati| metadati.struttura(12, statistiche),
+        |gruppo| gruppo,
+        1,
+    )
+}
+
+/// Un Parquet `INT32` di un valore, con campi aggiunti in coda a
+/// `ColumnMetaData` (dopo il campo 9) e a `RowGroup` (dopo il campo 3), e
+/// le righe del file date.
+fn con_campi(
+    metadati_in_piu: impl FnOnce(Struttura) -> Struttura,
+    gruppo_in_piu: impl FnOnce(Struttura) -> Struttura,
+    righe_del_file: i64,
+) -> Vec<u8> {
+    let mut file = b"PAR1".to_vec();
+    let inizio = i64::try_from(file.len()).unwrap();
+    let contenuto = 7_i32.to_le_bytes();
+    file.extend(header_v1(1, PLAIN, contenuto.len()));
+    file.extend_from_slice(&contenuto);
+    let pagine = i64::try_from(file.len()).unwrap() - inizio;
+    let metadati = Struttura::default()
+        .i32(1, INT32)
+        .elenco(2, I32, vec![intero_di_elenco(PLAIN)])
+        .elenco(3, BINARIO, vec![testo_di_elenco("x")])
+        .i32(4, 0)
+        .i64(5, 1)
+        .i64(6, pagine)
+        .i64(7, pagine)
+        .i64(9, inizio);
+    let metadati = metadati_in_piu(metadati);
+    let chunk = Struttura::default()
+        .i64(2, inizio)
+        .struttura(3, metadati)
+        .fine();
+    let gruppo = Struttura::default()
+        .elenco(1, STRUCT, vec![chunk])
+        .i64(2, pagine)
+        .i64(3, 1);
+    let gruppo = gruppo_in_piu(gruppo).fine();
+    let radice = Struttura::default().testo(4, "schema").i32(5, 1).fine();
+    let foglia = Struttura::default()
+        .i32(1, INT32)
+        .i32(3, 0)
+        .testo(4, "x")
+        .fine();
+    let footer = Struttura::default()
+        .i32(1, 1)
+        .elenco(2, STRUCT, vec![radice, foglia])
+        .i64(3, righe_del_file)
+        .elenco(4, STRUCT, vec![gruppo])
+        .fine();
+    let lunghezza = u32::try_from(footer.len()).unwrap();
+    file.extend(footer);
+    file.extend_from_slice(&lunghezza.to_le_bytes());
+    file.extend_from_slice(b"PAR1");
+    file
+}
+
+/// Le statistiche di un column chunk: un conteggio dei distinti negativo
+/// diventava un `u64` enorme (i nulli e i NaN negativi si rifiutavano già),
+/// e un minimo `INT32` di 5 byte (`01 00 00 00 FF`) si leggeva come 1, il
+/// byte in più scartato. Ora un errore: conteggi non negativi, lunghezza
+/// esatta per tipo.
+#[test]
+fn le_statistiche_hanno_conteggi_non_negativi_e_la_lunghezza_esatta() {
+    let atteso = |byte: &[u8], testo: &str| {
+        contiene(arrow(byte), testo);
+        rifiutato_dal_confine(byte);
+    };
+    // Campo 4 `distinct_count` (i64), negativo.
+    atteso(
+        &con_statistiche(Struttura::default().i64(4, -1)),
+        "distinct count is negative",
+    );
+    // Campi 5/6 `max_value`/`min_value`, 5 byte per un INT32.
+    atteso(
+        &con_statistiche(
+            Struttura::default()
+                .binario(5, &[2, 0, 0, 0])
+                .binario(6, &[1, 0, 0, 0, 0xFF]),
+        ),
+        "statistic of the wrong width",
+    );
+    // Controfattuale: 4 byte ciascuno, e un conteggio dei distinti 1.
+    let valide = con_statistiche(
+        Struttura::default()
+            .i64(4, 1)
+            .binario(5, &[7, 0, 0, 0])
+            .binario(6, &[7, 0, 0, 0]),
+    );
+    assert_eq!(arrow(&valide), Ok(1));
+}
+
+/// Offset, dimensioni e conteggi negativi nei metadati di un column chunk o
+/// di un row group: un `data_page_offset` negativo arrivava all'`assert!`
+/// di `byte_range` (un panico), gli altri diventavano `u64` enormi con `as`.
+/// Ora un errore alla lettura del footer.
+#[test]
+fn i_metadati_negativi_sono_un_errore() {
+    let byte = parquet(&colonna(INT32), 1, PLAIN, &7_i32.to_le_bytes(), None, None);
+    // `file_offset` (campo 2 di ColumnChunk) e `data_page_offset` (campo 9
+    // di ColumnMetaData) valgono 4: zigzag 8, `26 08` nel footer; ciascuno
+    // diventa -4 (zigzag 7). Lo stesso controllo copre gli altri offset,
+    // dimensioni e conteggi del column chunk e del row group.
+    let n = byte.len();
+    let lunghezza = usize::try_from(u32::from_le_bytes([
+        byte[n - 8],
+        byte[n - 7],
+        byte[n - 6],
+        byte[n - 5],
+    ]))
+    .unwrap();
+    let inizio_footer = n - 8 - lunghezza;
+    let posizioni: Vec<usize> = byte[inizio_footer..n - 8]
+        .windows(2)
+        .enumerate()
+        .filter(|(_, f)| *f == [0x26, 0x08])
+        .map(|(i, _)| i + inizio_footer + 1)
+        .collect();
+    assert_eq!(posizioni.len(), 2);
+    for posizione in posizioni {
+        let mut rotto = byte.clone();
+        rotto[posizione] = 0x07;
+        contiene(arrow(&rotto), "negative offset, size or count");
+        rifiutato_dal_confine(&rotto);
+    }
+    assert_eq!(arrow(&byte), Ok(1));
+}
+
+/// Conteggi e dimensioni negativi in campi del footer che il fork leggeva
+/// senza controllo: il conteggio delle pagine di `PageEncodingStats` (nei
+/// due decoder, a maschera e completo), gli istogrammi e i byte di
+/// `SizeStatistics`, `RowGroup.total_compressed_size` (prima non letto),
+/// `RowGroup.ordinal`, `SortingColumn.column_idx` e le righe del file. Ora
+/// un errore; l'inventario di ogni campo intero e della sua regola è in
+/// `tests/parquet_campi_thrift.rs`.
+#[test]
+fn i_campi_negativi_del_footer_sono_un_errore() {
+    let atteso = "negative count, size or offset";
+    // `PageEncodingStats { page_type: DATA_PAGE, encoding: PLAIN, count }`.
+    let statistica_di_pagina = |conteggio: i64| {
+        Struttura::default()
+            .i32(1, 0)
+            .i32(2, PLAIN)
+            .i32(3, conteggio)
+            .fine()
+    };
+    let casi: Vec<(&str, Vec<u8>)> = vec![
+        (
+            "PageEncodingStats.count",
+            con_campi(
+                |m| m.elenco(13, STRUCT, vec![statistica_di_pagina(-1)]),
+                |g| g,
+                1,
+            ),
+        ),
+        (
+            "SizeStatistics.unencoded_byte_array_data_bytes",
+            con_campi(
+                |m| m.struttura(16, Struttura::default().i64(1, -1)),
+                |g| g,
+                1,
+            ),
+        ),
+        (
+            "SizeStatistics.definition_level_histogram",
+            con_campi(
+                |m| {
+                    m.struttura(
+                        16,
+                        Struttura::default().elenco(3, I64, vec![intero_di_elenco(-1)]),
+                    )
+                },
+                |g| g,
+                1,
+            ),
+        ),
+        (
+            "SortingColumn.column_idx",
+            con_campi(
+                |m| m,
+                |g| {
+                    g.elenco(
+                        4,
+                        STRUCT,
+                        vec![Struttura::default()
+                            .i32(1, -1)
+                            .campo_booleano(2, false)
+                            .campo_booleano(3, false)
+                            .fine()],
+                    )
+                },
+                1,
+            ),
+        ),
+        (
+            "RowGroup.total_compressed_size",
+            con_campi(|m| m, |g| g.i64(6, -1), 1),
+        ),
+        (
+            "RowGroup.ordinal",
+            con_campi(|m| m, |g| g.intero(7, -1, 4), 1),
+        ),
+        ("FileMetaData.num_rows", con_campi(|m| m, |g| g, -1)),
+    ];
+    for (nome, byte) in casi {
+        match arrow(&byte) {
+            Err(errore) => assert!(errore.contains(atteso), "{nome}: {errore}"),
+            Ok(righe) => panic!("{nome}: letto ({righe} righe)"),
+        }
+        rifiutato_dal_confine(&byte);
+    }
+    // Controfattuali: gli stessi campi non negativi.
+    for byte in [
+        con_campi(
+            |m| m.elenco(13, STRUCT, vec![statistica_di_pagina(1)]),
+            |g| g.i64(6, 10).intero(7, 0, 4),
+            1,
+        ),
+        con_campi(
+            |m| {
+                m.struttura(
+                    16,
+                    Struttura::default()
+                        .i64(1, 0)
+                        .elenco(3, I64, vec![intero_di_elenco(0)]),
+                )
+            },
+            |g| g,
+            1,
+        ),
+    ] {
+        assert_eq!(arrow(&byte), Ok(1));
+    }
+}
+
+/// Le statistiche di pagina di una colonna FLBA hanno la larghezza del
+/// tipo: il lettore delle statistiche di pagina non riceveva la larghezza,
+/// e un valore più lungo o più corto passava. Lette con le statistiche di
+/// pagina attive (`set_read_page_statistics`).
+#[test]
+fn le_statistiche_di_pagina_flba_hanno_la_larghezza_del_tipo() {
+    use parquet::file::properties::ReaderProperties;
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::{ReadOptionsBuilder, SerializedFileReader};
+    let flba = Colonna {
+        larghezza: Some(2),
+        ..colonna(FLBA)
+    };
+    let pagina = |minimo: &[u8], massimo: &[u8]| {
+        let contenuto = b"zz";
+        let header = Struttura::default()
+            .i32(1, 0)
+            .i32(2, 2)
+            .i32(3, 2)
+            .struttura(
+                5,
+                Struttura::default()
+                    .i32(1, 1)
+                    .i32(2, PLAIN)
+                    .i32(3, RLE)
+                    .i32(4, RLE)
+                    .struttura(
+                        5,
+                        Struttura::default().binario(5, massimo).binario(6, minimo),
+                    ),
+            )
+            .fine();
+        parquet_con_header(&flba, 1, PLAIN, contenuto, &header, None, None)
+    };
+    let leggi = |byte: &[u8]| {
+        su_file(byte, |file| {
+            let opzioni = ReadOptionsBuilder::new()
+                .with_reader_properties(
+                    ReaderProperties::builder()
+                        .set_read_page_statistics(true)
+                        .build(),
+                )
+                .build();
+            let lettore =
+                SerializedFileReader::new_with_options(file, opzioni).map_err(|e| e.to_string())?;
+            let gruppo = lettore.get_row_group(0).map_err(|e| e.to_string())?;
+            let mut lettore_di_pagine = gruppo
+                .get_column_page_reader(0)
+                .map_err(|e| e.to_string())?;
+            let mut lette = 0;
+            while let Some(letta) = lettore_di_pagine
+                .get_next_page()
+                .map_err(|e| e.to_string())?
+            {
+                assert!(letta.statistics().is_some());
+                lette += 1;
+            }
+            Ok::<usize, String>(lette)
+        })
+    };
+    for (minimo, massimo) in [(&b"z"[..], &b"zz"[..]), (&b"zzz"[..], &b"zz"[..])] {
+        let errore = leggi(&pagina(minimo, massimo)).unwrap_err();
+        assert!(errore.contains("statistic of the wrong width"), "{errore}");
+    }
+    assert_eq!(leggi(&pagina(b"zz", b"zz")), Ok(1));
+}
+
+/// Lo scrittore del fork tronca il minimo e il massimo a 64 byte e li marca
+/// non esatti: una colonna FLBA di 65 byte, scritta dal fork stesso, non si
+/// rileggeva dopo la regola della larghezza esatta. Ora una statistica
+/// marcata non esatta è un limite non esatto fra 1 e la larghezza (il
+/// minimo troncato è un prefisso, il massimo è incrementato); una esatta (o
+/// senza segno, come scrivono pyarrow e `DuckDB`) ha la larghezza esatta.
+#[test]
+fn una_colonna_flba_lunga_scritta_dal_fork_si_rilegge() {
+    use parquet::arrow::ArrowWriter;
+    use plenora_core::arrow::array::{ArrayRef, FixedSizeBinaryArray};
+    let valori = (0..5_u8).map(|i| vec![i; 65]);
+    let colonna: ArrayRef = Arc::new(FixedSizeBinaryArray::try_from_iter(valori).unwrap());
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "x",
+        colonna.data_type().clone(),
+        false,
+    )]));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![colonna]).unwrap();
+    let mut byte = Vec::new();
+    let mut scrittore = ArrowWriter::try_new(&mut byte, schema, None).unwrap();
+    scrittore.write(&batch).unwrap();
+    scrittore.close().unwrap();
+    // Le statistiche del column chunk sono troncate e marcate non esatte.
+    su_file(&byte, |file| {
+        let costruttore = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let statistiche = costruttore
+            .metadata()
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .unwrap();
+        assert!(!statistiche.max_is_exact());
+    });
+    assert_eq!(arrow(&byte), Ok(5));
+    let dir = cartella();
+    let percorso = dir.path().join("flba65.parquet");
+    std::fs::write(&percorso, &byte).unwrap();
+    let tabella = leggi_tabella_con_limiti(
+        &percorso,
+        Some(Formato::Parquet),
+        u64::MAX,
+        &LimitiLettura::default(),
+    )
+    .unwrap();
+    assert_eq!(tabella.num_rows(), 5);
+}
+
+/// Le pagine di un Parquet di un row group e una colonna, lette con le
+/// statistiche di pagina esposte (`set_read_page_statistics`).
+fn pagine_con_statistiche(byte: &[u8]) -> Result<usize, String> {
+    use parquet::file::properties::ReaderProperties;
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::{ReadOptionsBuilder, SerializedFileReader};
+    su_file(byte, |file| {
+        let opzioni = ReadOptionsBuilder::new()
+            .with_reader_properties(
+                ReaderProperties::builder()
+                    .set_read_page_statistics(true)
+                    .build(),
+            )
+            .build();
+        let lettore =
+            SerializedFileReader::new_with_options(file, opzioni).map_err(|e| e.to_string())?;
+        let gruppo = lettore.get_row_group(0).map_err(|e| e.to_string())?;
+        let mut lettore_di_pagine = gruppo
+            .get_column_page_reader(0)
+            .map_err(|e| e.to_string())?;
+        let mut lette = 0;
+        while let Some(letta) = lettore_di_pagine
+            .get_next_page()
+            .map_err(|e| e.to_string())?
+        {
+            assert!(letta.statistics().is_some());
+            lette += 1;
+        }
+        Ok::<usize, String>(lette)
+    })
+}
+
+/// La matrice delle statistiche FLBA: nel column chunk e nella pagina;
+/// esatte (`is_*_value_exact` vero), senza segno o marcate non esatte; di
+/// lunghezza 0, 1, la larghezza e la larghezza più uno. Una statistica
+/// esatta o senza segno ha la larghezza del tipo; una marcata non esatta è
+/// un limite non esatto di 1 fino alla larghezza (il minimo troncato è un
+/// prefisso, il massimo troncato è incrementato). Le statistiche di pagina
+/// si verificano anche con le proprietà di default, che non le espongono:
+/// prima il decoder le saltava senza controllarle.
+#[test]
+fn la_matrice_delle_statistiche_flba() {
+    const LARGHEZZA: usize = 4;
+    let flba = Colonna {
+        larghezza: Some(4),
+        ..colonna(FLBA)
+    };
+    let contenuto = [7_u8; LARGHEZZA];
+    let statistiche = |lunghezza: usize, esatta: Option<bool>| {
+        let valore = vec![7_u8; lunghezza];
+        let mut s = Struttura::default().binario(5, &valore).binario(6, &valore);
+        if let Some(esatta) = esatta {
+            s = s.campo_booleano(7, esatta).campo_booleano(8, esatta);
+        }
+        s
+    };
+    let mut verificati = 0;
+    for esatta in [Some(true), None, Some(false)] {
+        for lunghezza in [0, 1, LARGHEZZA, LARGHEZZA + 1] {
+            let ammessa = if esatta == Some(false) {
+                (1..=LARGHEZZA).contains(&lunghezza)
+            } else {
+                lunghezza == LARGHEZZA
+            };
+            let nel_chunk = parquet_completo(
+                &flba,
+                1,
+                PLAIN,
+                &contenuto,
+                &header_v1(1, PLAIN, LARGHEZZA),
+                None,
+                Some(statistiche(lunghezza, esatta)),
+                0,
+            );
+            let header_pagina = Struttura::default()
+                .i32(1, 0)
+                .i32(2, 4)
+                .i32(3, 4)
+                .struttura(
+                    5,
+                    Struttura::default()
+                        .i32(1, 1)
+                        .i32(2, PLAIN)
+                        .i32(3, RLE)
+                        .i32(4, RLE)
+                        .struttura(5, statistiche(lunghezza, esatta)),
+                )
+                .fine();
+            let nella_pagina =
+                parquet_con_header(&flba, 1, PLAIN, &contenuto, &header_pagina, None, None);
+            let caso = format!("lunghezza {lunghezza}, esatta {esatta:?}");
+            // Il column chunk; la pagina con le proprietà di default (le
+            // statistiche non esposte) e con le statistiche esposte.
+            for (dove, esito) in [
+                ("chunk", arrow(&nel_chunk)),
+                ("pagina", arrow(&nella_pagina)),
+                ("pagina esposta", pagine_con_statistiche(&nella_pagina)),
+            ] {
+                if ammessa {
+                    assert_eq!(esito, Ok(1), "{dove}, {caso}");
+                } else {
+                    let errore = esito.expect_err(&format!("{dove}, {caso}: letto"));
+                    assert!(
+                        errore.contains("statistic of the wrong width"),
+                        "{dove}, {caso}: {errore}"
+                    );
+                }
+                verificati += 1;
+            }
+            if !ammessa {
+                rifiutato_dal_confine(&nel_chunk);
+                rifiutato_dal_confine(&nella_pagina);
+            }
+        }
+    }
+    assert_eq!(verificati, 36);
+}
+
+/// Una `INDEX_PAGE` fra le pagine di un column chunk si saltava in silenzio
+/// (`get_next_page` avanzava oltre il suo contenuto e passava alla pagina
+/// dopo; `peek_next_page` leggeva il suo contenuto come l'header seguente):
+/// due pagine `PLAIN` con una pagina d'indice di byte qualunque in mezzo si
+/// leggevano. Ora la pagina d'indice è un tipo non qualificato, rifiutato
+/// dove si incontra (`PAGE_TYPE_NOT_QUALIFIED`, `Unsupported` dal confine).
+#[test]
+fn una_pagina_d_indice_fra_le_pagine_e_rifiutata() {
+    let pagina = |valore: i32| {
+        let mut byte = header_v1(1, PLAIN, 4);
+        byte.extend_from_slice(&valore.to_le_bytes());
+        byte
+    };
+    let indice = |contenuto: &[u8]| {
+        let lunghezza = i64::try_from(contenuto.len()).unwrap();
+        let mut byte = Struttura::default()
+            .i32(1, 1) // INDEX_PAGE
+            .i32(2, lunghezza)
+            .i32(3, lunghezza)
+            .struttura(6, Struttura::default())
+            .fine();
+        byte.extend_from_slice(contenuto);
+        byte
+    };
+    // La prima pagina (header dato a parte), la pagina d'indice, la seconda.
+    let con_indice = |contenuto: &[u8]| {
+        let mut dati = 1_i32.to_le_bytes().to_vec();
+        dati.extend(indice(contenuto));
+        dati.extend(pagina(2));
+        parquet_con_header(
+            &colonna(INT32),
+            2,
+            PLAIN,
+            &dati,
+            &header_v1(1, PLAIN, 4),
+            None,
+            None,
+        )
+    };
+    for contenuto in [&[][..], &[0xFF, 0xFF, 0xFF][..]] {
+        let byte = con_indice(contenuto);
+        contiene(arrow(&byte), parquet::basic::PAGE_TYPE_NOT_QUALIFIED);
+        contiene(
+            colonna_api::<Int32Type>(&byte, None),
+            parquet::basic::PAGE_TYPE_NOT_QUALIFIED,
+        );
+        let dir = cartella();
+        let percorso = dir.path().join("i.parquet");
+        std::fs::write(&percorso, &byte).unwrap();
+        let errore = leggi_tabella_con_limiti(
+            &percorso,
+            Some(Formato::Parquet),
+            u64::MAX,
+            &LimitiLettura::default(),
+        )
+        .expect_err("pagina d'indice");
+        assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+    }
+    // Controfattuale: le due pagine senza la pagina d'indice si leggono.
+    let mut dati = 1_i32.to_le_bytes().to_vec();
+    dati.extend(pagina(2));
+    let due = parquet_con_header(
+        &colonna(INT32),
+        2,
+        PLAIN,
+        &dati,
+        &header_v1(1, PLAIN, 4),
+        None,
+        None,
+    );
+    assert_eq!(arrow(&due), Ok(2));
+    assert_eq!(valori_arrow(&due), ["1", "2"]);
+}
+
+/// Le statistiche deprecate (`min`/`max`, campi 1 e 2) non si verificavano
+/// quando c'erano quelle nuove (`min_value`/`max_value`), che erano le sole
+/// scelte: un `min` deprecato di 5 byte per un `INT32` passava, nel column
+/// chunk e nella pagina. Ora la forma di ogni coppia presente si verifica,
+/// scelta o no.
+#[test]
+fn le_statistiche_deprecate_si_verificano_anche_se_non_scelte() {
+    let statistiche = |minimo_deprecato: &[u8]| {
+        Struttura::default()
+            .binario(1, &[9, 0, 0, 0])
+            .binario(2, minimo_deprecato)
+            .binario(5, &[7, 0, 0, 0])
+            .binario(6, &[7, 0, 0, 0])
+    };
+    let nella_pagina = |minimo_deprecato: &[u8]| {
+        let header = Struttura::default()
+            .i32(1, 0)
+            .i32(2, 4)
+            .i32(3, 4)
+            .struttura(
+                5,
+                Struttura::default()
+                    .i32(1, 1)
+                    .i32(2, PLAIN)
+                    .i32(3, RLE)
+                    .i32(4, RLE)
+                    .struttura(5, statistiche(minimo_deprecato)),
+            )
+            .fine();
+        parquet_con_header(
+            &colonna(INT32),
+            1,
+            PLAIN,
+            &7_i32.to_le_bytes(),
+            &header,
+            None,
+            None,
+        )
+    };
+    let lungo = [1_u8, 0, 0, 0, 0xFF];
+    for byte in [con_statistiche(statistiche(&lungo)), nella_pagina(&lungo)] {
+        contiene(arrow(&byte), "statistic of the wrong width");
+        rifiutato_dal_confine(&byte);
+    }
+    contiene(
+        pagine_con_statistiche(&nella_pagina(&lungo)),
+        "statistic of the wrong width",
+    );
+    // Controfattuale: un `min` deprecato di 4 byte.
+    let giusto = [1_u8, 0, 0, 0];
+    assert_eq!(arrow(&con_statistiche(statistiche(&giusto))), Ok(1));
+    assert_eq!(arrow(&nella_pagina(&giusto)), Ok(1));
+    assert_eq!(pagine_con_statistiche(&nella_pagina(&giusto)), Ok(1));
+}
+
+/// Un dizionario dopo una pagina di dati dello stesso column chunk si
+/// leggeva: `[7]` in `PLAIN`, un dizionario `[9]`, poi l'indice 0 davano
+/// `[7, 9]` senza errore, nei lettori Arrow e nell'API per colonne. Il
+/// formato mette il dizionario prima dei dati. Ora un errore
+/// (`DICTIONARY_PAGE_OUT_OF_PLACE`), nel lettore di pagine e nel lettore di
+/// colonna, comune a tutti i decoder; anche quando il footer dichiara un
+/// dizionario (`dictionary_page_offset`) e la prima pagina non lo è. Un
+/// dizionario in prima pagina senza la dichiarazione si legge: lo scrivono
+/// parquet-mr e Impala nei file storici (7 dei 106 file di prova).
+#[test]
+fn un_dizionario_dopo_i_dati_e_rifiutato() {
+    let dizionario = |valore: &[u8]| {
+        let lunghezza = i64::try_from(valore.len()).unwrap();
+        let mut byte = Struttura::default()
+            .i32(1, 2)
+            .i32(2, lunghezza)
+            .i32(3, lunghezza)
+            .struttura(7, Struttura::default().i32(1, 1).i32(2, PLAIN))
+            .fine();
+        byte.extend_from_slice(valore);
+        byte
+    };
+    let indici = [1_u8, 2, 0]; // larghezza 1, corsa RLE di 1 dell'indice 0
+    let dopo = |colonna: &Colonna, primo: &[u8], secondo: &[u8]| {
+        let mut dati = primo.to_vec();
+        dati.extend(dizionario(secondo));
+        dati.extend(header_v1(1, RLE_DICTIONARY, indici.len()));
+        dati.extend_from_slice(&indici);
+        parquet_con_header(
+            colonna,
+            2,
+            PLAIN,
+            &dati,
+            &header_v1(1, PLAIN, primo.len()),
+            None,
+            None,
+        )
+    };
+    let intero = dopo(&colonna(INT32), &7_i32.to_le_bytes(), &9_i32.to_le_bytes());
+    contiene(arrow(&intero), parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE);
+    contiene(
+        colonna_api::<Int32Type>(&intero, None),
+        parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+    );
+    rifiutato_dal_confine(&intero);
+    let testo = dopo(
+        &colonna(BYTE_ARRAY),
+        &testo_plain(&[b"a"]),
+        &testo_plain(&[b"b"]),
+    );
+    contiene(arrow(&testo), parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE);
+    for tipo in [
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+        DataType::BinaryView,
+    ] {
+        let schema = Schema::new(vec![Field::new("x", tipo, false)]);
+        contiene(
+            arrow_con_schema(&testo, schema).map(|batch| batch.len()),
+            parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+        );
+    }
+    contiene(
+        colonna_api::<ByteArrayType>(&testo, None),
+        parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+    );
+    let flba = Colonna {
+        larghezza: Some(1),
+        ..colonna(FLBA)
+    };
+    contiene(
+        arrow(&dopo(&flba, b"a", b"b")),
+        parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+    );
+    // Il footer dichiara un dizionario all'inizio del chunk, e la prima
+    // pagina è di dati.
+    let dichiarato = con_campi(|m| m.i64(11, 4), |g| g, 1);
+    contiene(
+        arrow(&dichiarato),
+        parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+    );
+    rifiutato_dal_confine(&dichiarato);
+    // Controfattuali: senza la dichiarazione la stessa pagina si legge, e un
+    // dizionario in prima pagina senza dichiarazione (file storici) pure.
+    assert_eq!(arrow(&con_campi(|m| m, |g| g, 1)), Ok(1));
+    let mut dati = dizionario(&9_i32.to_le_bytes());
+    dati.extend(header_v1(1, PLAIN, 4));
+    dati.extend_from_slice(&7_i32.to_le_bytes());
+    let primo = parquet_con_header(
+        &colonna(INT32),
+        2,
+        PLAIN,
+        &indici,
+        &{
+            let mut h = dati;
+            h.extend(header_v1(1, RLE_DICTIONARY, indici.len()));
+            h
+        },
+        None,
+        None,
+    );
+    assert_eq!(valori_arrow(&primo), ["7", "9"]);
+}
+
+/// La forma di `nation.dict-malformed.parquet` (`apache/parquet-testing`,
+/// scritto da parquet-mr; PARQUET-816): la dimensione del column chunk non
+/// conta l'header della pagina di dizionario, e la pagina di dati dopo
+/// dichiara più byte di quelli che restano nel chunk (28 su 13 nel file).
+/// Arrow C++ legge oltre la fine del chunk «per caso» (la sua prova
+/// `NationDictTruncatedDataPage`); il fork rifiuta la pagina che esce dal
+/// chunk («Invalid page header», `verify_page_size`), e il confine dà
+/// `DataMapping`. Non si legge oltre il column chunk dichiarato: nessun
+/// valore preso dai byte dopo. L'esito sul file vero è nel riferimento
+/// `tests/riferimenti/parquet_esiti.tsv`.
+#[test]
+fn una_pagina_oltre_il_column_chunk_e_rifiutata() {
+    let mut file = b"PAR1".to_vec();
+    let inizio = i64::try_from(file.len()).unwrap();
+    let dizionario = testo_plain(&[b"ALGERIA", b"ARGENTINA"]);
+    let lunghezza_dizionario = i64::try_from(dizionario.len()).unwrap();
+    let header_dizionario = Struttura::default()
+        .i32(1, 2)
+        .i32(2, lunghezza_dizionario)
+        .i32(3, lunghezza_dizionario)
+        .struttura(7, Struttura::default().i32(1, 2).i32(2, 2))
+        .fine();
+    let indici = [1_u8, 2, 0, 2, 1]; // larghezza 1, corse RLE di 0 e di 1
+    let lunghezza_header_dizionario = i64::try_from(header_dizionario.len()).unwrap();
+    file.extend(&header_dizionario);
+    file.extend(&dizionario);
+    file.extend(header_v1(2, 2, indici.len()));
+    file.extend_from_slice(&indici);
+    let pagine = i64::try_from(file.len()).unwrap() - inizio;
+    let costruisci = |dichiarate: i64| {
+        let mut byte = file.clone();
+        let metadati = Struttura::default()
+            .i32(1, BYTE_ARRAY)
+            .elenco(2, I32, vec![intero_di_elenco(2)])
+            .elenco(3, BINARIO, vec![testo_di_elenco("x")])
+            .i32(4, 0)
+            .i64(5, 2)
+            .i64(6, dichiarate)
+            .i64(7, dichiarate)
+            .i64(9, inizio);
+        let chunk = Struttura::default()
+            .i64(2, inizio)
+            .struttura(3, metadati)
+            .fine();
+        let gruppo = Struttura::default()
+            .elenco(1, STRUCT, vec![chunk])
+            .i64(2, dichiarate)
+            .i64(3, 2)
+            .fine();
+        let radice = Struttura::default().testo(4, "schema").i32(5, 1).fine();
+        let foglia = Struttura::default()
+            .i32(1, BYTE_ARRAY)
+            .i32(3, 0)
+            .testo(4, "x")
+            .fine();
+        let footer = Struttura::default()
+            .i32(1, 1)
+            .elenco(2, STRUCT, vec![radice, foglia])
+            .i64(3, 2)
+            .elenco(4, STRUCT, vec![gruppo])
+            .fine();
+        let lunghezza = u32::try_from(footer.len()).unwrap();
+        byte.extend(footer);
+        byte.extend_from_slice(&lunghezza.to_le_bytes());
+        byte.extend_from_slice(b"PAR1");
+        byte
+    };
+    // Il chunk dichiarato senza l'header del dizionario, come parquet-mr.
+    let troncato = costruisci(pagine - lunghezza_header_dizionario);
+    contiene(arrow(&troncato), "Invalid page header");
+    rifiutato_dal_confine(&troncato);
+    // Controfattuale: con la dimensione giusta si legge.
+    let giusto = costruisci(pagine);
+    assert_eq!(valori_arrow(&giusto), ["ALGERIA", "ARGENTINA"]);
+}
+
+/// Un tipo logico che la lettura non qualifica si convertiva in silenzio:
+/// `VARIANT` in byte o struct; un tipo che il fork non
+/// riconosce (qui l'identificatore riservato 9) in byte (`FILE` senza i suoi
+/// campi è già un footer malformato, `DataMapping`). Ora il
+/// confine li rifiuta (`Unsupported`), prima della conversione dello schema,
+/// con un elenco chiuso dei tipi qualificati.
+#[test]
+fn un_tipo_logico_non_qualificato_e_rifiutato() {
+    let dir = cartella();
+    let percorso = dir.path().join("l.parquet");
+    let leggi = |byte: &[u8]| {
+        std::fs::write(&percorso, byte).unwrap();
+        leggi_tabella_con_limiti(
+            &percorso,
+            Some(Formato::Parquet),
+            u64::MAX,
+            &LimitiLettura::default(),
+        )
+    };
+    // Un tipo non riconosciuto (l'identificatore riservato 9).
+    let ignoto = Colonna {
+        logico: Some(9),
+        ..colonna(BYTE_ARRAY)
+    };
+    let byte = parquet(&ignoto, 1, PLAIN, &testo_plain(&[b"x"]), None, None);
+    let errore = leggi(&byte).expect_err("tipo logico non riconosciuto");
+    assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+    // `VARIANT` (16) su un gruppo di due colonne di byte, come lo scrivono
+    // le implementazioni (`metadata`, `value`): si leggeva come struct.
+    let errore = leggi(&variante(Some(16))).expect_err("VARIANT");
+    assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+    assert_eq!(leggi(&variante(None)).map(|t| t.num_rows()).ok(), Some(1));
+    // Controfattuale: `STRING` (1) e `JSON` (12) si leggono.
+    for logico in [1, 12] {
+        let colonna = Colonna {
+            logico: Some(logico),
+            ..colonna(BYTE_ARRAY)
+        };
+        let byte = parquet(&colonna, 1, PLAIN, &testo_plain(&[b"t"]), None, None);
+        assert_eq!(leggi(&byte).map(|t| t.num_rows()).ok(), Some(1), "{logico}");
+    }
+}
+
+/// Un `INTERVAL` (mesi, giorni, millisecondi, interi senza segno) si
+/// leggeva nell'unità Arrow `DayTime` senza schema Arrow nel file: i mesi
+/// sparivano in silenzio (`YearMonth` perdeva giorni e millisecondi), e una
+/// componente oltre `i32::MAX` (2^31 giorni) diventava negativa. Ora le
+/// parti che l'unità non tiene devono essere zero
+/// (`INTERVAL_NOT_AS_DECLARED`) e quelle che tiene stare in `i32`
+/// (`INTERVAL_OUT_OF_RANGE`).
+#[test]
+fn un_intervallo_con_parti_perse_e_un_errore() {
+    let intervallo = Colonna {
+        larghezza: Some(12),
+        convertito: Some(21), // INTERVAL
+        ..colonna(FLBA)
+    };
+    let valore = |mesi: u32, giorni: u32, millisecondi: u32| {
+        let mut byte = mesi.to_le_bytes().to_vec();
+        byte.extend_from_slice(&giorni.to_le_bytes());
+        byte.extend_from_slice(&millisecondi.to_le_bytes());
+        byte
+    };
+    let con_mesi = parquet(&intervallo, 1, PLAIN, &valore(1, 2, 3), None, None);
+    contiene(arrow(&con_mesi), parquet::basic::INTERVAL_NOT_AS_DECLARED);
+    rifiutato_dal_confine(&con_mesi);
+    for (giorni, millisecondi) in [(1_u32 << 31, 3), (2, u32::MAX)] {
+        let oltre = parquet(
+            &intervallo,
+            1,
+            PLAIN,
+            &valore(0, giorni, millisecondi),
+            None,
+            None,
+        );
+        contiene(arrow(&oltre), parquet::basic::INTERVAL_OUT_OF_RANGE);
+        rifiutato_dal_confine(&oltre);
+    }
+    // Controfattuale: senza mesi, entro `i32::MAX`, si legge.
+    let senza_mesi = parquet(&intervallo, 1, PLAIN, &valore(0, 2, 3), None, None);
+    assert_eq!(arrow(&senza_mesi), Ok(1));
+    let al_limite = parquet(
+        &intervallo,
+        1,
+        PLAIN,
+        &valore(0, i32::MAX as u32, 0),
+        None,
+        None,
+    );
+    assert_eq!(arrow(&al_limite), Ok(1));
+}
+
+/// Un Parquet di una riga con un gruppo `v` di due colonne `BYTE_ARRAY`
+/// (`metadata` e `value`), annotato con il tipo logico dato.
+fn variante(logico: Option<u8>) -> Vec<u8> {
+    let mut file = b"PAR1".to_vec();
+    let mut chunk = Vec::new();
+    for nome in ["metadata", "value"] {
+        let contenuto = testo_plain(&[b"\x01"]);
+        let inizio = i64::try_from(file.len()).unwrap();
+        file.extend(header_v1(1, PLAIN, contenuto.len()));
+        file.extend_from_slice(&contenuto);
+        let lunghezza = i64::try_from(file.len()).unwrap() - inizio;
+        let metadati = Struttura::default()
+            .i32(1, BYTE_ARRAY)
+            .elenco(2, I32, vec![intero_di_elenco(PLAIN)])
+            .elenco(
+                3,
+                BINARIO,
+                vec![testo_di_elenco("v"), testo_di_elenco(nome)],
+            )
+            .i32(4, 0)
+            .i64(5, 1)
+            .i64(6, lunghezza)
+            .i64(7, lunghezza)
+            .i64(9, inizio);
+        chunk.push(
+            Struttura::default()
+                .i64(2, inizio)
+                .struttura(3, metadati)
+                .fine(),
+        );
+    }
+    let totale = i64::try_from(file.len()).unwrap() - 4;
+    let gruppo = Struttura::default()
+        .elenco(1, STRUCT, chunk)
+        .i64(2, totale)
+        .i64(3, 1)
+        .fine();
+    let radice = Struttura::default().testo(4, "schema").i32(5, 1).fine();
+    let mut v = Struttura::default().i32(3, 0).testo(4, "v").i32(5, 2);
+    if let Some(logico) = logico {
+        v = v.struttura(
+            10,
+            Struttura::default().struttura(logico, Struttura::default()),
+        );
+    }
+    let foglia = |nome: &str| {
+        Struttura::default()
+            .i32(1, BYTE_ARRAY)
+            .i32(3, 0)
+            .testo(4, nome)
+            .fine()
+    };
+    let footer = Struttura::default()
+        .i32(1, 1)
+        .elenco(
+            2,
+            STRUCT,
+            vec![radice, v.fine(), foglia("metadata"), foglia("value")],
+        )
+        .i64(3, 1)
+        .elenco(4, STRUCT, vec![gruppo])
+        .fine();
+    let lunghezza = u32::try_from(footer.len()).unwrap();
+    file.extend(footer);
+    file.extend_from_slice(&lunghezza.to_le_bytes());
+    file.extend_from_slice(b"PAR1");
+    file
+}
+
+/// `UNKNOWN` è il tipo «sempre nullo»: `parquet` lo legge come colonna
+/// `Null`, e un valore che il file avesse spariva in silenzio (un `INT32`
+/// 7 diventava una riga nulla). Ora un valore è un errore
+/// (`UNKNOWN_WITH_VALUES`); una colonna davvero nulla si legge, come la
+/// scrive l'`ArrowWriter` per un campo Arrow `Null`.
+#[test]
+fn una_colonna_unknown_con_un_valore_e_un_errore() {
+    let con_valore = Colonna {
+        logico: Some(11),
+        ..colonna(INT32)
+    };
+    let byte = parquet(&con_valore, 1, PLAIN, &7_i32.to_le_bytes(), None, None);
+    contiene(arrow(&byte), parquet::basic::UNKNOWN_WITH_VALUES);
+    rifiutato_dal_confine(&byte);
+    // Controfattuale: una colonna opzionale tutta nulla (livello 0).
+    let nulla = Colonna {
+        logico: Some(11),
+        ripetizione: 1,
+        ..colonna(INT32)
+    };
+    let mut livelli = 2_u32.to_le_bytes().to_vec(); // lunghezza RLE v1
+    livelli.extend_from_slice(&[2, 0]); // corsa RLE di 1 livello 0
+    let byte = parquet(&nulla, 1, PLAIN, &livelli, None, None);
+    assert_eq!(arrow(&byte), Ok(1));
+}
+
+/// Un gruppo annotato con un tipo di una colonna (`UUID`, `JSON`,
+/// `UNKNOWN`) passava l'elenco chiuso dei tipi logici e diventava una
+/// struct, perdendo l'annotazione. Ora il costruttore dei gruppi del fork lo
+/// rifiuta (`GROUP_WITH_PRIMITIVE_ANNOTATION`), e il confine verifica la
+/// coppia annotazione e forma.
+#[test]
+fn un_gruppo_con_un_annotazione_di_colonna_e_rifiutato() {
+    for logico in [14, 12, 11] {
+        let byte = variante(Some(logico));
+        contiene(
+            arrow(&byte),
+            parquet::basic::GROUP_WITH_PRIMITIVE_ANNOTATION,
+        );
+        let dir = cartella();
+        let percorso = dir.path().join("g.parquet");
+        std::fs::write(&percorso, &byte).unwrap();
+        leggi_tabella_con_limiti(
+            &percorso,
+            Some(Formato::Parquet),
+            u64::MAX,
+            &LimitiLettura::default(),
+        )
+        .expect_err("gruppo annotato come una colonna");
+    }
+    // Controfattuale: il gruppo senza annotazione si legge.
+    assert_eq!(arrow(&variante(None)), Ok(1));
+}
+
+/// Lo schema Arrow incorporato può solo scegliere la rappresentazione, non
+/// cambiare il significato del tipo Parquet: un fuso su un istante locale
+/// (`isAdjustedToUTC` falso), un'altra scala di un decimale, un tipo
+/// temporale su un intero annotato si applicavano in silenzio. Ora sono un
+/// errore (`ARROW_HINT_CONTRADICTS`, `Schema` dal confine).
+#[test]
+fn lo_schema_incorporato_non_cambia_il_tipo_parquet() {
+    use parquet::arrow::ArrowWriter;
+    use plenora_core::arrow::array::{ArrayRef, Decimal128Array, TimestampMicrosecondArray};
+    use plenora_core::arrow::schema::TimeUnit;
+    // Un file scritto con lo schema `scritto`, e lo schema Arrow incorporato
+    // sostituito con `dichiarato`.
+    let con_schema = |colonna: ArrayRef, dichiarato: DataType| {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            colonna.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![colonna]).unwrap();
+        let mut byte = Vec::new();
+        let proprieta = parquet::file::properties::WriterProperties::builder()
+            .set_key_value_metadata(Some(vec![parquet::file::metadata::KeyValue::new(
+                parquet::arrow::ARROW_SCHEMA_META_KEY.to_owned(),
+                parquet::arrow::encode_arrow_schema(&Schema::new(vec![Field::new(
+                    "x", dichiarato, true,
+                )])),
+            )]))
+            .build();
+        // Senza lo schema dello scrittore: resta solo quello dichiarato.
+        let opzioni = parquet::arrow::arrow_writer::ArrowWriterOptions::new()
+            .with_properties(proprieta)
+            .with_skip_arrow_metadata(true);
+        let mut scrittore = ArrowWriter::try_new_with_options(&mut byte, schema, opzioni).unwrap();
+        scrittore.write(&batch).unwrap();
+        scrittore.close().unwrap();
+        byte
+    };
+    let locale: ArrayRef = Arc::new(TimestampMicrosecondArray::from(vec![Some(1)]));
+    let decimale: ArrayRef = Arc::new(
+        Decimal128Array::from(vec![Some(12_345)])
+            .with_precision_and_scale(10, 2)
+            .unwrap(),
+    );
+    for (colonna, dichiarato) in [
+        (
+            Arc::clone(&locale),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        ),
+        (Arc::clone(&decimale), DataType::Decimal64(10, 4)),
+    ] {
+        let byte = con_schema(colonna, dichiarato.clone());
+        contiene(arrow(&byte), parquet::basic::ARROW_HINT_CONTRADICTS);
+        let dir = cartella();
+        let percorso = dir.path().join("h.parquet");
+        std::fs::write(&percorso, &byte).unwrap();
+        let errore = leggi_tabella_con_limiti(
+            &percorso,
+            Some(Formato::Parquet),
+            u64::MAX,
+            &LimitiLettura::default(),
+        )
+        .expect_err("schema incorporato contraddittorio");
+        assert_eq!(
+            errore.category(),
+            ErrorCategory::Schema,
+            "{dichiarato}: {errore}"
+        );
+    }
+    // Controfattuali: lo stesso tipo, un fuso diverso su un istante UTC, un
+    // decimale più largo con la stessa scala.
+    let istante: ArrayRef =
+        Arc::new(TimestampMicrosecondArray::from(vec![Some(1)]).with_timezone("UTC"));
+    for (colonna, dichiarato) in [
+        (locale, DataType::Timestamp(TimeUnit::Microsecond, None)),
+        (
+            istante,
+            DataType::Timestamp(TimeUnit::Microsecond, Some("Europe/Rome".into())),
+        ),
+        (decimale, DataType::Decimal64(10, 2)),
+    ] {
+        assert_eq!(
+            arrow(&con_schema(colonna, dichiarato.clone())),
+            Ok(1),
+            "{dichiarato}"
+        );
+    }
+}
+
+#[path = "comune/digest_parquet.rs"]
+mod digest_parquet;
+
+#[test]
+fn la_radice_parquet_non_ammette_annotazioni() {
+    for figli in [None, Some(0), Some(1)] {
+        for (logico, convertito) in [
+            (Some(2), Some(3)), // MAP / LIST: il caso che perdeva le annotazioni.
+            (Some(2), Some(1)), // MAP / MAP: coerenti, ma vietate sulla radice.
+            (Some(2), None),
+            (None, Some(3)),
+            (None, None),
+        ] {
+            let mut radice = Struttura::default().testo(4, "sentinella");
+            if let Some(figli) = figli {
+                radice = radice.i32(5, figli);
+            }
+            if let Some(convertito) = convertito {
+                radice = radice.i32(6, convertito);
+            }
+            if let Some(logico) = logico {
+                radice = radice.struttura(
+                    10,
+                    Struttura::default().struttura(logico, Struttura::default()),
+                );
+            }
+            let mut schema = vec![radice.fine()];
+            if figli == Some(1) {
+                schema.push(
+                    Struttura::default()
+                        .i32(1, INT32)
+                        .i32(3, 0)
+                        .testo(4, "x")
+                        .fine(),
+                );
+            }
+            let footer = Struttura::default()
+                .i32(1, 1)
+                .elenco(2, STRUCT, schema)
+                .i64(3, 0)
+                .elenco(4, STRUCT, vec![])
+                .fine();
+            let mut byte = b"PAR1".to_vec();
+            byte.extend_from_slice(&footer);
+            byte.extend_from_slice(&u32::try_from(footer.len()).unwrap().to_le_bytes());
+            byte.extend_from_slice(b"PAR1");
+            if logico.is_none() && convertito.is_none() {
+                assert_eq!(arrow(&byte), Ok(0));
+            } else {
+                let errore = arrow(&byte).expect_err("radice annotata");
+                assert!(!errore.contains("sentinella"));
+                let atteso = if logico == Some(2) && convertito == Some(3) {
+                    "LOGICAL_CONVERTED_TYPE_MISMATCH"
+                } else {
+                    "ROOT_WITH_ANNOTATION"
+                };
+                assert!(errore.contains(atteso), "{errore}");
+                rifiutato_dal_confine(&byte);
+            }
+        }
+    }
+}
+
+#[test]
+fn regressione_integer_malformato_senza_panico() {
+    use parquet::basic::{ConvertedType as C, LogicalType as L, Type as P};
+    use parquet::schema::types::Type;
+
+    for larghezza in [7_i8, -128, -1, 0, 9, 127, 8] {
+        for firmato in [true, false] {
+            for convertito in [Some(15), None] {
+                for posizione in [0, 1, 2] {
+                    // Anche INTEGER valido deve essere rifiutato su un gruppo vuoto.
+                    if larghezza == 8 && posizione != 2 {
+                        continue;
+                    }
+                    let mut intero = Struttura::default();
+                    intero.campo(1, 3); // BYTE Thrift, senza zigzag.
+                    intero.byte.push(larghezza.cast_unsigned());
+                    intero = intero.campo_booleano(2, firmato);
+                    let mut elemento = Struttura::default();
+                    if posizione == 1 {
+                        elemento = elemento.i32(1, INT32);
+                    }
+                    if posizione != 0 {
+                        elemento = elemento.i32(3, 0);
+                    }
+                    elemento = elemento.testo(4, "sentinella");
+                    if posizione != 1 {
+                        elemento = elemento.i32(5, 0);
+                    }
+                    if let Some(convertito) = convertito {
+                        elemento = elemento.i32(6, convertito);
+                    }
+                    elemento = elemento.struttura(10, Struttura::default().struttura(10, intero));
+                    let mut schema = Vec::new();
+                    if posizione != 0 {
+                        schema.push(Struttura::default().testo(4, "schema").i32(5, 1).fine());
+                    }
+                    schema.push(elemento.fine());
+                    let footer = Struttura::default()
+                        .i32(1, 1)
+                        .elenco(2, STRUCT, schema)
+                        .i64(3, 0)
+                        .elenco(4, STRUCT, vec![])
+                        .fine();
+                    let mut byte = b"PAR1".to_vec();
+                    byte.extend_from_slice(&footer);
+                    byte.extend_from_slice(&u32::try_from(footer.len()).unwrap().to_le_bytes());
+                    byte.extend_from_slice(b"PAR1");
+                    let esito = std::panic::catch_unwind(|| arrow(&byte));
+                    let errore = esito
+                        .expect("il footer non deve causare panico")
+                        .unwrap_err();
+                    let atteso = if larghezza == 8 && !firmato && convertito.is_some() {
+                        "LOGICAL_CONVERTED_TYPE_MISMATCH"
+                    } else if larghezza == 8 {
+                        parquet::basic::GROUP_WITH_PRIMITIVE_ANNOTATION
+                    } else {
+                        "Bit width must be"
+                    };
+                    assert!(errore.contains(atteso), "{errore}");
+                    assert!(!errore.contains("sentinella"));
+                    rifiutato_dal_confine(&byte);
+                }
+                if larghezza == 8 {
+                    continue;
+                }
+                let esito = std::panic::catch_unwind(|| {
+                    Type::primitive_type_builder("sentinella", P::INT32)
+                        .with_logical_type(Some(L::integer(larghezza, firmato)))
+                        .with_converted_type(if convertito.is_some() {
+                            C::INT_8
+                        } else {
+                            C::NONE
+                        })
+                        .build()
+                });
+                let errore = esito
+                    .expect("il builder non deve causare panico")
+                    .unwrap_err();
+                assert!(!errore.to_string().contains("sentinella"));
+            }
+        }
+    }
+}
+
+#[test]
+fn regressione_annotazioni_discordanti() {
+    use parquet::basic::{ConvertedType as C, LogicalType as L, Type as P};
+    use parquet::schema::types::Type;
+    for (logico, convertito) in [
+        (L::Map, C::LIST),
+        (L::List, C::MAP),
+        (L::Map, C::MAP_KEY_VALUE),
+    ] {
+        let errore = Type::group_type_builder("sentinella")
+            .with_logical_type(Some(logico))
+            .with_converted_type(convertito)
+            .build()
+            .unwrap_err();
+        assert!(!errore.to_string().contains("sentinella"));
+    }
+    let errore = Type::primitive_type_builder("sentinella", P::BYTE_ARRAY)
+        .with_logical_type(Some(L::String))
+        .with_converted_type(C::BSON)
+        .build()
+        .unwrap_err();
+    assert!(!errore.to_string().contains("sentinella"));
+    for (logico, convertito) in [(L::Map, C::MAP), (L::List, C::LIST), (L::Map, C::NONE)] {
+        assert!(Type::group_type_builder("x")
+            .with_logical_type(Some(logico))
+            .with_converted_type(convertito)
+            .build()
+            .is_ok());
+    }
+}
+
+#[test]
+fn regressione_hint_testuali_solo_su_testo() {
+    use parquet::basic::{ConvertedType as C, LogicalType as L, Type as P};
+    use parquet::schema::types::{SchemaDescriptor, Type};
+    for (logico, convertito, testuale) in [
+        (Some(L::Bson), C::NONE, false),
+        (Some(L::geometry(None)), C::NONE, false),
+        (Some(L::geography(None, None)), C::NONE, false),
+        (None, C::BSON, false),
+        (None, C::NONE, false),
+        (Some(L::String), C::NONE, true),
+        (Some(L::Enum), C::NONE, true),
+        (Some(L::Json), C::NONE, true),
+        (None, C::UTF8, true),
+        (None, C::ENUM, true),
+        (None, C::JSON, true),
+    ] {
+        let campo = Type::primitive_type_builder("x", P::BYTE_ARRAY)
+            .with_logical_type(logico)
+            .with_converted_type(convertito)
+            .build()
+            .unwrap();
+        let schema = SchemaDescriptor::new(Arc::new(
+            Type::group_type_builder("schema")
+                .with_fields(vec![Arc::new(campo)])
+                .build()
+                .unwrap(),
+        ));
+        for hint in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            for dizionario in [false, true] {
+                let hint = if dizionario {
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(hint.clone()))
+                } else {
+                    hint.clone()
+                };
+                let metadata = vec![parquet::file::metadata::KeyValue::new(
+                    parquet::arrow::ARROW_SCHEMA_META_KEY.to_owned(),
+                    parquet::arrow::encode_arrow_schema(&Schema::new(vec![Field::new(
+                        "x",
+                        hint.clone(),
+                        true,
+                    )])),
+                )];
+                let letto =
+                    parquet::arrow::parquet_to_arrow_schema(&schema, Some(&metadata)).unwrap();
+                assert_eq!(
+                    letto.field(0).data_type(),
+                    &if testuale { hint } else { DataType::Binary }
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn regressione_digest_duckdb_conserva_le_altre_colonne() {
+    assert_ne!(
+        digest_parquet::senza_byte("sha1\tDuckDB\tok 10 aaaa\tok 10 aaaa"),
+        digest_parquet::senza_byte("sha2\tDuckDB\tok 10 bbbb\tok 10 bbbb")
+    );
+    assert_eq!(
+        digest_parquet::senza_byte("sha1\tDuckDB\tok 10 aaaa\tok 10 aaaa"),
+        digest_parquet::senza_byte("sha2\tDuckDB\tok 10 aaaa\tok 10 aaaa")
+    );
+}
+
+/// Il decimale costante e il numero di righe sono quelli di `duckdb_uuid`
+/// in `riferimenti/scrittori/genera.py`; cambia soltanto l'UUID casuale.
+#[test]
+fn digest_duckdb_esclude_solo_uuid_del_file_designato() {
+    use plenora_core::arrow::array::{Decimal128Array, FixedSizeBinaryArray};
+    let tabella = |uuid: u8, decimale: i128| {
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("u", DataType::FixedSizeBinary(16), true),
+                Field::new("d", DataType::Decimal128(38, 6), true),
+            ])),
+            vec![
+                Arc::new(FixedSizeBinaryArray::try_from_iter((0..10).map(|_| [uuid; 16])).unwrap()),
+                Arc::new(
+                    Decimal128Array::from(vec![decimale; 10])
+                        .with_precision_and_scale(38, 6)
+                        .unwrap(),
+                ),
+            ],
+        )
+        .unwrap()
+    };
+    let valore = 12_345_678_901_234_567_890_123_456_i128;
+    let prima = tabella(1, valore);
+    let altro_uuid = tabella(2, valore);
+    let altro_decimale = tabella(1, valore + 1);
+    let relativo = "scritti-flba/duckdb/duckdb-uuid-dec.parquet";
+    let calcola = |b: &RecordBatch, insieme: &str, file: &str| {
+        digest_parquet::digest_file(b.schema().as_ref(), std::slice::from_ref(b), insieme, file)
+    };
+    let atteso = calcola(&prima, "scrittori", relativo);
+    assert_eq!(atteso, calcola(&altro_uuid, "scrittori", relativo));
+    assert_ne!(atteso, calcola(&altro_decimale, "scrittori", relativo));
+    for (insieme, file) in [
+        ("parquet-testing", relativo),
+        ("scrittori", "altro.parquet"),
+    ] {
+        assert_ne!(
+            calcola(&prima, insieme, file),
+            calcola(&altro_uuid, insieme, file)
+        );
+    }
+    let solo_decimale = prima.project(&[1]).unwrap();
+    assert_eq!(
+        atteso,
+        digest_parquet::digest(
+            solo_decimale.schema().as_ref(),
+            std::slice::from_ref(&solo_decimale)
+        )
+    );
+    let riferimento = include_str!("riferimenti/parquet_esiti.tsv");
+    let riga = riferimento
+        .lines()
+        .find(|r| r.starts_with(&format!("scrittori\t{relativo}\t")))
+        .unwrap();
+    for esito in riga.split('\t').skip(4) {
+        assert_eq!(esito, format!("ok 10 {atteso}"));
+    }
+}

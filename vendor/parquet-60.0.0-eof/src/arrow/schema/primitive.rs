@@ -26,59 +26,98 @@ use arrow_schema::{DECIMAL128_MAX_PRECISION, DataType, IntervalUnit, TimeUnit};
 /// provided by the arrow schema
 ///
 /// Note: the values embedded in the schema are advisory,
+///
+/// PLENORA: advisory for the representation only. A hint that contradicts
+/// the meaning the Parquet type fixes is an error
+/// (`ARROW_HINT_CONTRADICTS`): a time zone on a timestamp not adjusted to
+/// UTC, another precision or scale for a decimal, a temporal type over an
+/// annotated integer. A hint that does not apply is ignored, as upstream,
+/// and the Parquet type is read.
 pub fn convert_primitive(
     parquet_type: &Type,
     arrow_type_hint: Option<DataType>,
 ) -> Result<DataType> {
     let physical_type = from_parquet(parquet_type)?;
-    Ok(match arrow_type_hint {
-        Some(hint) => apply_hint(physical_type, hint),
-        None => physical_type,
-    })
+    match arrow_type_hint {
+        Some(hint) => apply_hint(parquet_type, physical_type, hint),
+        None => Ok(physical_type),
+    }
+}
+
+fn contraddice() -> ParquetError {
+    general_err!("{}", crate::basic::ARROW_HINT_CONTRADICTS)
 }
 
 /// Uses an type hint from the embedded arrow schema to aid in faithfully
 /// reproducing the data as it was written into parquet
-fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
-    match (&parquet, &hint) {
+fn apply_hint(tipo: &Type, parquet: DataType, hint: DataType) -> Result<DataType> {
+    let info = tipo.get_basic_info();
+    // PLENORA: a plain integer (no logical or converted type) is what the
+    // Arrow writer writes for the temporal types Parquet cannot annotate
+    // (seconds, durations, `Date64`); an annotated integer is an integer.
+    let senza_annotazione =
+        info.logical_type_ref().is_none() && info.converted_type() == ConvertedType::NONE;
+    let int96 = matches!(tipo, Type::PrimitiveType { physical_type, .. } if *physical_type == PhysicalType::INT96);
+    Ok(match (&parquet, &hint) {
         // Not all time units can be represented as LogicalType / ConvertedType
-        (DataType::Int32 | DataType::Int64, DataType::Timestamp(_, _)) => hint,
-        (DataType::Int32, DataType::Time32(_)) => hint,
-        (DataType::Int64, DataType::Time64(_)) => hint,
-        (DataType::Int64, DataType::Duration(_)) => hint,
-
+        (DataType::Int32 | DataType::Int64, DataType::Timestamp(_, _))
+        | (DataType::Int32, DataType::Time32(_))
+        | (DataType::Int64, DataType::Time64(_))
+        | (DataType::Int64, DataType::Duration(_))
         // Date64 doesn't have a corresponding LogicalType / ConvertedType
-        (DataType::Int64, DataType::Date64) => hint,
+        | (DataType::Int64, DataType::Date64) => {
+            if !senza_annotazione {
+                return Err(contraddice());
+            }
+            hint
+        }
 
         // Coerce Date32 back to Date64 (#1666)
         (DataType::Date32, DataType::Date64) => hint,
 
         // Timestamps of the same resolution can be converted to a a different timezone.
-        (DataType::Timestamp(p, _), DataType::Timestamp(h, Some(_))) if p == h => hint,
+        // PLENORA: only an instant (adjusted to UTC) takes a time zone; a
+        // local timestamp (`isAdjustedToUTC` false) with a zone changed its
+        // meaning. INT96 has no such flag.
+        (DataType::Timestamp(p, tz), DataType::Timestamp(h, Some(_))) if p == h => {
+            if tz.is_none() && !int96 {
+                return Err(contraddice());
+            }
+            hint
+        }
 
         // INT96 default to Timestamp(TimeUnit::Nanosecond, None) (see from_parquet below).
         // Allow different resolutions to support larger date ranges.
         (
             DataType::Timestamp(TimeUnit::Nanosecond, None),
             DataType::Timestamp(TimeUnit::Second, _),
-        ) => hint,
+        ) if int96 => hint,
         (
             DataType::Timestamp(TimeUnit::Nanosecond, None),
             DataType::Timestamp(TimeUnit::Millisecond, _),
-        ) => hint,
+        ) if int96 => hint,
         (
             DataType::Timestamp(TimeUnit::Nanosecond, None),
             DataType::Timestamp(TimeUnit::Microsecond, _),
-        ) => hint,
+        ) if int96 => hint,
+        // PLENORA: a local nanosecond timestamp (not INT96) with another
+        // resolution in the hint: the unit is the Parquet type's.
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Second | TimeUnit::Millisecond | TimeUnit::Microsecond, _),
+        ) => return Err(contraddice()),
 
         // Determine offset size
         (DataType::Utf8, DataType::LargeUtf8) => hint,
         (DataType::Binary, DataType::LargeBinary) => hint,
 
-        // Read as Utf8
-        (DataType::Binary, DataType::Utf8) => hint,
-        (DataType::Binary, DataType::LargeUtf8) => hint,
-        (DataType::Binary, DataType::Utf8View) => hint,
+        // PLENORA: only STRING, ENUM and JSON admit textual hints. BSON,
+        // unannotated bytes and spatial payloads keep their binary meaning.
+        // Dictionary values recurse through the same check below.
+        (DataType::Binary, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+            if matches!(info.logical_type_ref(), Some(LogicalType::String | LogicalType::Enum | LogicalType::Json))
+                || (info.logical_type_ref().is_none()
+                    && matches!(info.converted_type(), ConvertedType::UTF8 | ConvertedType::ENUM | ConvertedType::JSON)) => hint,
 
         // Determine view type
         (DataType::Utf8, DataType::Utf8View) => hint,
@@ -88,14 +127,22 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         (DataType::Interval(_), DataType::Interval(_)) => hint,
 
         // Promote to Decimal256 or narrow to Decimal32 or Decimal64
-        (DataType::Decimal128(_, _), DataType::Decimal32(_, _)) => hint,
-        (DataType::Decimal128(_, _), DataType::Decimal64(_, _)) => hint,
-        (DataType::Decimal128(_, _), DataType::Decimal256(_, _)) => hint,
+        // PLENORA: with the same precision and scale only: another scale
+        // was another value.
+        (
+            DataType::Decimal128(p, s),
+            DataType::Decimal32(hp, hs) | DataType::Decimal64(hp, hs) | DataType::Decimal256(hp, hs),
+        ) => {
+            if p != hp || s != hs {
+                return Err(contraddice());
+            }
+            hint
+        }
 
         // Potentially preserve dictionary encoding
         (_, DataType::Dictionary(_, value)) => {
             // Apply hint to inner type
-            let hinted = apply_hint(parquet, value.as_ref().clone());
+            let hinted = apply_hint(tipo, parquet, value.as_ref().clone())?;
 
             // If matches dictionary value - preserve dictionary
             // otherwise use hinted inner type
@@ -105,7 +152,7 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
             }
         }
         _ => parquet,
-    }
+    })
 }
 
 fn from_parquet(parquet_type: &Type) -> Result<DataType> {
@@ -351,6 +398,69 @@ mod tests {
     use super::*;
     use crate::basic::{DecimalType, Repetition};
     use crate::schema::types::Type;
+
+    /// PLENORA: the embedded Arrow schema chooses the representation, not
+    /// the meaning: a time zone on a local timestamp, another resolution for
+    /// a local nanosecond timestamp (not INT96), a temporal type over an
+    /// annotated integer, another scale for a decimal are errors; a plain
+    /// integer takes the temporal types Parquet cannot annotate.
+    #[test]
+    fn test_hint_does_not_change_the_parquet_type() {
+        let intero = |convertito: ConvertedType| {
+            Type::primitive_type_builder("c", PhysicalType::INT64)
+                .with_repetition(Repetition::OPTIONAL)
+                .with_converted_type(convertito)
+                .build()
+                .unwrap()
+        };
+        let istante = |utc: bool, unita: ParquetTimeUnit| {
+            Type::primitive_type_builder("c", PhysicalType::INT64)
+                .with_repetition(Repetition::OPTIONAL)
+                .with_logical_type(Some(LogicalType::timestamp(utc, unita)))
+                .build()
+                .unwrap()
+        };
+        let int96 = Type::primitive_type_builder("c", PhysicalType::INT96)
+            .with_repetition(Repetition::OPTIONAL)
+            .build()
+            .unwrap();
+        let contraddice = |tipo: &Type, hint: DataType| {
+            let errore = convert_primitive(tipo, Some(hint)).unwrap_err();
+            assert!(
+                errore
+                    .to_string()
+                    .contains(crate::basic::ARROW_HINT_CONTRADICTS),
+                "{errore}"
+            );
+        };
+        contraddice(
+            &intero(ConvertedType::INT_64),
+            DataType::Timestamp(TimeUnit::Second, None),
+        );
+        contraddice(
+            &istante(false, ParquetTimeUnit::MICROS),
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        );
+        contraddice(
+            &istante(false, ParquetTimeUnit::NANOS),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        );
+        let tz = DataType::Timestamp(TimeUnit::Second, Some("Europe/Rome".into()));
+        assert_eq!(
+            convert_primitive(&intero(ConvertedType::NONE), Some(tz.clone())).unwrap(),
+            tz
+        );
+        let roma = DataType::Timestamp(TimeUnit::Microsecond, Some("Europe/Rome".into()));
+        assert_eq!(
+            convert_primitive(&istante(true, ParquetTimeUnit::MICROS), Some(roma.clone())).unwrap(),
+            roma
+        );
+        let micro = DataType::Timestamp(TimeUnit::Microsecond, None);
+        assert_eq!(
+            convert_primitive(&int96, Some(micro.clone())).unwrap(),
+            micro
+        );
+    }
 
     // The PrimitiveTypeBuilder rejects bad lengths at construction. To exercise
     // the reader-side checks, build a valid type then overwrite its type_length,

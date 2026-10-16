@@ -92,8 +92,10 @@ impl OffsetIndexMetaData {
         let list_ident = prot.read_list_begin()?;
         validate_list_type(ElementType::Struct, &list_ident)?;
         // PLENORA: capacity bounded by the remaining input bytes.
-        let mut page_locations =
-            Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(&*prot, list_ident.size)?);
+        let mut page_locations = Vec::with_capacity(crate::parquet_thrift::capacita_dichiarata(
+            &*prot,
+            list_ident.size,
+        )?);
         for _ in 0..list_ident.size {
             page_locations.push(read_page_location(prot)?);
         }
@@ -126,6 +128,50 @@ impl OffsetIndexMetaData {
             unencoded_byte_array_data_bytes,
         })
     }
+}
+
+/// PLENORA: checks the page locations of a column chunk against the chunk:
+/// first row indexes not negative, not decreasing and within the rows of the
+/// row group, page byte ranges not negative and inside the chunk. The
+/// readers subtract and cast these values without checks (a negative or
+/// decreasing `first_row_index` wrapped to a huge row count).
+pub(crate) fn verifica_posizioni(
+    pagine: &[PageLocation],
+    righe: u64,
+    inizio: u64,
+    lunghezza: u64,
+) -> Result<()> {
+    let fine = inizio
+        .checked_add(lunghezza)
+        .ok_or_else(|| general_err!("invalid offset index: column chunk out of range"))?;
+    let mut riga_precedente = 0u64;
+    for pagina in pagine {
+        let riga = u64::try_from(pagina.first_row_index)
+            .map_err(|_| general_err!("invalid offset index: negative first row index"))?;
+        if riga < riga_precedente || riga > righe {
+            return Err(general_err!(
+                "invalid offset index: first row indexes out of order or beyond the row group"
+            ));
+        }
+        riga_precedente = riga;
+        let posizione = u64::try_from(pagina.offset).ok();
+        let dimensione = u64::try_from(pagina.compressed_page_size).ok();
+        let dentro = match (posizione, dimensione) {
+            (Some(posizione), Some(dimensione)) => {
+                posizione >= inizio
+                    && posizione
+                        .checked_add(dimensione)
+                        .is_some_and(|termine| termine <= fine)
+            }
+            _ => false,
+        };
+        if !dentro {
+            return Err(general_err!(
+                "invalid offset index: page outside its column chunk"
+            ));
+        }
+    }
+    Ok(())
 }
 
 // hand coding this one because it is very time critical

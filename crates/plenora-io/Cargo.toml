@@ -39,6 +39,10 @@ serde.workspace = true
 # plenora-contracts (tests/contratti_arrow.rs): gia' nel workspace per
 # `table.sha256_hash`, nessun crate nuovo nel lockfile.
 sha2.workspace = true
+# Lexer di Rust per l'inventario dei campi Thrift del fork
+# (tests/parquet_campi_thrift.rs; motivazione al pin nel Cargo.toml del
+# workspace): gia' nel lockfile, nessun crate nuovo.
+proc-macro2.workspace = true
 
 # I test dell'esempio (lettura della catena, percorsi d'uscita) girano con
 # `cargo test`.

@@ -219,6 +219,30 @@ difesa da file costruiti apposta (limiti dichiarati sotto).
   una voce senza valore). È una restrizione voluta: la specifica Parquet
   ammette una voce senza valore, ma qui sparirebbe in silenzio, quindi si
   rifiuta; pyarrow e arrow-rs scrivono sempre il valore, anche vuoto.
+- **Codifiche Parquet lette**: solo `PLAIN`, `PLAIN_DICTIONARY` e
+  `RLE_DICTIONARY` per i valori, `RLE` per i booleani e per i livelli
+  ([«Codifiche Parquet non qualificate»](limiti.md#codifiche-parquet-non-qualificate)).
+  Livelli `BIT_PACKED` (deprecata) sono `Unsupported`; una codifica che
+  non esiste nella specifica è un file malformato (`DataMapping`).
+  `DELTA_BINARY_PACKED`, `DELTA_LENGTH_BYTE_ARRAY`, `DELTA_BYTE_ARRAY` e
+  `BYTE_STREAM_SPLIT` (e ogni altra) sono `Unsupported`, con un testo
+  fisso. Il controllo è doppio: le codifiche che il column chunk dichiara
+  nel footer (l'elenco e le statistiche delle pagine), prima di leggere, e
+  quella di ogni pagina letta davvero, nel fork `parquet`: un footer che
+  dichiara `PLAIN` e una pagina in `DELTA_*` si rifiutano come il
+  contrario. pyarrow (anche con pagine v2), data e IO-tools con le
+  impostazioni predefinite non le scrivono.
+- **Tipi letti**: un tipo Arrow testo (`Utf8`, `LargeUtf8`, `Utf8View`,
+  anche come valori di un dizionario) solo su una colonna annotata come
+  testo (`UTF8`, `JSON`, `ENUM`), perché la validazione UTF-8 segue
+  l'annotazione; un dizionario Arrow di valori binari solo su una colonna
+  non annotata come testo; una colonna `FIXED_LEN_BYTE_ARRAY` letta come
+  dizionario Arrow; tutte altrimenti `Unsupported`. Per la stessa ragione un
+  dizionario di `FixedSizeBinary` non si scrive (`ArrowWriter` ne
+  scriverebbe il dizionario con i prefissi di lunghezza, fuori dalla
+  specifica). Un `INT32` annotato `INT_8`,
+  `UINT_8`, `INT_16` o `UINT_16` fuori dalla sua larghezza è un errore,
+  non un altro numero.
 
 | limite (`LimitiLettura`) | predefinito | a che cosa si applica | errore |
 | --- | --- | --- | --- |
@@ -251,7 +275,9 @@ limite della tabella.
   Come il budget del runner, non è un tetto duro sulla memoria del processo.
   *Rientro*: un allocatore contato per il processo.
 - **Tipi rifiutati in scrittura**: in Parquet `Interval(MonthDayNano)`
-  (errore di `parquet`, nessun file); in ogni formato `RunEndEncoded` e
+  (errore di `parquet`, nessun file) e un intervallo `YearMonth` o
+  `DayTime` con una componente negativa (`DataMapping`, nessun file: un
+  `INTERVAL` Parquet ha componenti senza segno); in ogni formato `RunEndEncoded` e
   `Union`, a qualunque profondità, prima di creare il file (limite «Run-end
   e union rifiutati al confine» del runner, anche in lettura). Un test ne
   tiene l'elenco. Una tabella senza colonne non si scrive in Parquet (il numero di
@@ -274,15 +300,23 @@ limite della tabella.
   di `parquet` (`vendor/parquet-60.0.0-eof/PROVENANCE.md`) chiude i casi
   trovati dal fuzz: header di pagina che giravano a vuoto per minuti,
   footer che riservavano gigabyte per i row group o le posizioni
-  dell'offset index, interi Thrift troncati; e le dimensioni che un
+  dell'offset index, interi Thrift troncati, `FIXED_LEN_BYTE_ARRAY` di
+  larghezza 0 e `BYTE_STREAM_SPLIT` con valori dichiarati oltre i byte
+  della pagina (panici del decoder), e i decoder che si fidavano delle
+  lunghezze, degli indici e dei conteggi letti dal file (panici, e tre
+  letture sbagliate senza errore: prefissi `DELTA_BYTE_ARRAY`, resti delle
+  pagine a larghezza fissa, corse RLE oltre `u32`); e le dimensioni che un
   header di pagina, un dizionario, una codifica delta o lo schema
   dichiarano oltre i metadati del column chunk, che il budget ha già
   confrontato prima di leggere. Restano le espansioni vere (dizionari
   ripetuti, `FixedLenByteArray` larghi), che il budget stima per un
   fattore fisso; in IPC le copie di buffer sovrapposti e non allineati. Il
-  tetto vero resta il limite di memoria del processo. Anche uno schema
-  Parquet annidato per migliaia di livelli esaurisce lo stack. I file
-  scritti da scrittori conformi non lo fanno.
+  tetto vero resta il limite di memoria del processo. Uno schema Parquet
+  annidato oltre 64 livelli (`MAX_PROFONDITA_SCHEMA`), che esauriva lo
+  stack, e un footer la cui decodifica supera il suo tetto
+  (`budget_del_footer`: 16 volte il tetto dei metadati, mai oltre il budget
+  residuo) sono `ResourceLimit`. I file scritti da scrittori conformi non
+  fanno nulla di tutto questo.
   *Rientro*: se si devono leggere file di fonti non fidate, aggiungere una
   pre-validazione (footer e intestazioni di pagina percorsi prima di
   `parquet`, contenuto dei messaggi IPC prima di Arrow).

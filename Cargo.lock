@@ -947,6 +947,7 @@ dependencies = [
  "plenora-parquet",
  "plenora-pipeline",
  "plenora-wkt",
+ "proc-macro2",
  "proptest",
  "serde",
  "serde_json",

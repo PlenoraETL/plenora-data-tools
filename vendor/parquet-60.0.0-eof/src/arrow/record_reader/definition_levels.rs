@@ -231,10 +231,19 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
 
     fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
         match &mut self.decoder {
-            MaybePacked::Packed(d) => d.set_data(encoding, data),
+            MaybePacked::Packed(d) => d.set_data(encoding, data)?,
             MaybePacked::Fallback(d) => d.set_data(encoding, data)?,
         }
         Ok(())
+    }
+
+    fn verifica_fine_pagina(&self, fine: crate::column::reader::decoder::FinePagina) -> Result<()> {
+        match &self.decoder {
+            MaybePacked::Packed(d) => {
+                crate::column::reader::decoder::fine_esatta(d.fine_esatta(fine))
+            }
+            MaybePacked::Fallback(d) => d.verifica_fine_pagina(fine),
+        }
     }
 }
 
@@ -317,22 +326,58 @@ struct PackedDecoder {
     rle_value: bool,
     packed_count: usize,
     packed_offset: usize,
+    /// PLENORA: the groups the current bit-packed run declares.
+    gruppi_della_corsa: usize,
+    /// PLENORA: where the stream ended on a run of no value (see
+    /// `RleDecoder`): nothing is read after it.
+    inizio_corse_vuote: Option<usize>,
 }
 
 impl PackedDecoder {
     fn next_rle_block(&mut self) -> Result<()> {
+        let inizio = self.data_offset;
         let indicator_value = self.decode_header()?;
+        // PLENORA: a run of no value ends the stream where it starts, as in
+        // `RleDecoder` (the two decoders gave different levels: this one read
+        // on after it, the generic one stopped).
+        if indicator_value >> 1 == 0 {
+            self.inizio_corse_vuote = Some(inizio);
+            return Ok(());
+        }
+        // PLENORA: the same rules as `RleDecoder::reload`: a run count beyond
+        // `u32` is an error; a bit-packed run is whole in the data (its bits
+        // were read past the payload, then a run shorter than its groups was
+        // read as far as its bytes went); a level of bit width 1 is 0 or 1
+        // (any other byte was read as 1 in silence).
+        let run = usize::try_from(
+            u32::try_from(indicator_value >> 1)
+                .map_err(|_| general_err!("RLE run length out of range"))?,
+        )
+        .map_err(|_| general_err!("RLE run length out of range"))?;
         if indicator_value & 1 == 1 {
-            let len = (indicator_value >> 1) as usize;
-            self.packed_count = len * 8;
+            // PLENORA: the groups the run declares are all in the data (one
+            // byte per group at bit width 1), as in `RleDecoder`: the count
+            // was cut to the bytes present, and a truncated or huge run
+            // passed here while the generic decoder refused it.
+            let disponibili = self.data.len().saturating_sub(self.data_offset);
+            if run > disponibili {
+                return Err(general_err!("bit-packed run beyond the data"));
+            }
+            self.packed_count = run
+                .checked_mul(8)
+                .ok_or_else(|| general_err!("RLE run length out of range"))?;
             self.packed_offset = 0;
+            self.gruppi_della_corsa = run;
         } else {
-            self.rle_left = (indicator_value >> 1) as usize;
+            self.rle_left = run;
+            // PLENORA: the errors of `RleDecoder`, the same text for the
+            // same stream in the two level decoders.
             let byte = *self.data.as_ref().get(self.data_offset).ok_or_else(|| {
-                ParquetError::EOF(
-                    "unexpected end of file whilst decoding definition levels rle value".into(),
-                )
+                general_err!("parquet_data_error: not enough data for RLE decoding")
             })?;
+            if byte > 1 {
+                return Err(general_err!("RLE value wider than the bit width"));
+            }
 
             self.data_offset += 1;
             self.rle_value = byte != 0;
@@ -340,22 +385,55 @@ impl PackedDecoder {
         Ok(())
     }
 
+    /// PLENORA: the level stream ends with the levels read, with the rules
+    /// of `RleDecoder::fine_esatta` (bit width 1: a group is a byte): no
+    /// level left in an RLE run; in a bit-packed run the rest of the current
+    /// byte, whole bytes after it only in a run of `BLOCCO_DUCKDB` groups of
+    /// which a level was read; no run and no byte after.
+    fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
+        use crate::util::bit_util::{BLOCCO_DUCKDB, coda_di_zeri};
+        if self.rle_left != 0 {
+            return false;
+        }
+        let dati = self.data.as_ref();
+        if self.packed_count != self.packed_offset {
+            let resto = self.packed_count - self.packed_offset;
+            // DuckDB: a block of which a level was read.
+            if resto > resto % 8
+                && !(fine.blocco_duckdb
+                    && self.gruppi_della_corsa == BLOCCO_DUCKDB
+                    && self.packed_offset > 0)
+            {
+                return false;
+            }
+            return coda_di_zeri(dati, self.data_offset + self.packed_count / 8, 0);
+        }
+        coda_di_zeri(dati, self.inizio_corse_vuote.unwrap_or(self.data_offset), 0)
+    }
+
     /// Decodes a VLQ encoded little endian integer and returns it
+    /// PLENORA: with the rules and the errors of
+    /// `BitReader::get_vlq_int_checked`, the same text for the same stream in
+    /// the two level decoders.
     fn decode_header(&mut self) -> Result<i64> {
         let mut offset = 0;
         let mut v: i64 = 0;
-        while offset < 10 {
-            let byte = *self
-                .data
-                .as_ref()
-                .get(self.data_offset + offset)
-                .ok_or_else(|| {
-                    ParquetError::EOF(
-                        "unexpected end of file whilst decoding definition levels rle header"
-                            .into(),
-                    )
-                })?;
+        loop {
+            let Some(&byte) = self.data.as_ref().get(self.data_offset + offset) else {
+                return Err(general_err!("varint truncated at the end of the data"));
+            };
+            if offset >= 10 {
+                return Err(general_err!("varint longer than 10 bytes"));
+            }
 
+            // PLENORA: bits beyond 64 were dropped in silence.
+            if offset == 9 && byte & 0x7F > 1 {
+                return Err(general_err!("varint beyond 64 bits"));
+            }
+            // PLENORA: a varint not minimal, as in `BitReader`.
+            if offset > 0 && byte == 0 {
+                return Err(general_err!("varint not minimal"));
+            }
             v |= ((byte & 0x7F) as i64) << (offset * 7);
             offset += 1;
             if byte & 0x80 == 0 {
@@ -363,7 +441,6 @@ impl PackedDecoder {
                 return Ok(v);
             }
         }
-        Err(general_err!("too many bytes for VLQ"))
     }
 }
 
@@ -376,21 +453,33 @@ impl PackedDecoder {
             rle_value: false,
             packed_count: 0,
             packed_offset: 0,
+            gruppi_della_corsa: 0,
+            inizio_corse_vuote: None,
         }
     }
 
-    fn set_data(&mut self, encoding: Encoding, data: Bytes) {
+    fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
         self.rle_left = 0;
         self.rle_value = false;
         self.packed_offset = 0;
+        // PLENORA: only RLE levels. `BIT_PACKED` was read in the RLE bit
+        // order (the nulls moved in silence) and any other encoding reached
+        // `unreachable!`; both are errors.
         self.packed_count = match encoding {
             Encoding::RLE => 0,
             #[expect(deprecated)]
-            Encoding::BIT_PACKED => data.len() * 8,
-            _ => unreachable!("invalid level encoding: {}", encoding),
+            Encoding::BIT_PACKED => {
+                return Err(nyi_err!(
+                    "{}: BIT_PACKED levels",
+                    crate::basic::ENCODING_NOT_QUALIFIED
+                ));
+            }
+            _ => return Err(general_err!("invalid level encoding: {}", encoding)),
         };
         self.data = data;
         self.data_offset = 0;
+        self.inizio_corse_vuote = None;
+        Ok(())
     }
 
     /// Try to consume `len` levels if all are valid (max definition level).
@@ -404,7 +493,7 @@ impl PackedDecoder {
     fn try_consume_all_valid(&mut self, len: usize) -> Result<Option<usize>> {
         // If no active run and no packed data pending, try to parse the next RLE block
         if self.rle_left == 0 && self.packed_count == self.packed_offset {
-            if self.data_offset < self.data.len() {
+            if self.data_offset < self.data.len() && self.inizio_corse_vuote.is_none() {
                 self.next_rle_block()?;
             } else {
                 // No more data available
@@ -442,7 +531,7 @@ impl PackedDecoder {
                 if self.packed_offset == self.packed_count {
                     self.data_offset += self.packed_count / 8;
                 }
-            } else if self.data_offset == self.data.len() {
+            } else if self.data_offset == self.data.len() || self.inizio_corse_vuote.is_some() {
                 break;
             } else {
                 self.next_rle_block()?
@@ -476,7 +565,7 @@ impl PackedDecoder {
                 if self.packed_offset == self.packed_count {
                     self.data_offset += self.packed_count / 8;
                 }
-            } else if self.data_offset == self.data.len() {
+            } else if self.data_offset == self.data.len() || self.inizio_corse_vuote.is_some() {
                 break;
             } else {
                 self.next_rle_block()?
@@ -491,7 +580,8 @@ mod tests {
     use super::*;
 
     use crate::encodings::rle::RleEncoder;
-    use rand::{RngExt, rng};
+    use crate::util::test_common::rng;
+    use rand::RngExt;
 
     #[test]
     fn test_build_validity_bitmap_unfiltered_word_chunk() {
@@ -529,7 +619,7 @@ mod tests {
 
         let encoded = encoder.consume();
         let mut decoder = PackedDecoder::new();
-        decoder.set_data(Encoding::RLE, encoded.into());
+        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
 
         // Decode data in random length intervals
         let mut decoded = BooleanBufferBuilder::new(len);
@@ -568,7 +658,7 @@ mod tests {
 
         let encoded = encoder.consume();
         let mut decoder = PackedDecoder::new();
-        decoder.set_data(Encoding::RLE, encoded.into());
+        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
 
         let mut skip_value = 0;
         let mut read_value = 0;
@@ -616,7 +706,7 @@ mod tests {
         }
         let encoded = encoder.consume();
         let mut decoder = PackedDecoder::new();
-        decoder.set_data(Encoding::RLE, encoded.into());
+        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
 
         // try_consume_all_valid now parses the RLE block itself, no need to read first
         let result = decoder.try_consume_all_valid(len).unwrap();
@@ -629,7 +719,7 @@ mod tests {
         }
         let encoded = encoder.consume();
         let mut decoder = PackedDecoder::new();
-        decoder.set_data(Encoding::RLE, encoded.into());
+        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
 
         // Should return None because rle_value is false (all nulls)
         let result = decoder.try_consume_all_valid(len).unwrap();
@@ -645,7 +735,7 @@ mod tests {
         }
         let encoded = encoder.consume();
         let mut decoder = PackedDecoder::new();
-        decoder.set_data(Encoding::RLE, encoded.into());
+        decoder.set_data(Encoding::RLE, encoded.into()).unwrap();
 
         // Request more than the valid run - should return None
         // (because we don't look ahead to next block)
@@ -653,16 +743,18 @@ mod tests {
         assert_eq!(result, None);
 
         // Reset decoder and try requesting within the run
-        decoder.set_data(Encoding::RLE, {
-            let mut encoder = RleEncoder::new(1, 1024);
-            for _ in 0..10 {
-                encoder.put(1);
-            }
-            for _ in 0..10 {
-                encoder.put(0);
-            }
-            encoder.consume().into()
-        });
+        decoder
+            .set_data(Encoding::RLE, {
+                let mut encoder = RleEncoder::new(1, 1024);
+                for _ in 0..10 {
+                    encoder.put(1);
+                }
+                for _ in 0..10 {
+                    encoder.put(0);
+                }
+                encoder.consume().into()
+            })
+            .unwrap();
 
         let result = decoder.try_consume_all_valid(5).unwrap();
         assert_eq!(result, Some(5));

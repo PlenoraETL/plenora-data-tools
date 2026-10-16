@@ -355,8 +355,9 @@ pub(super) fn boolean_mask_from_selectors(selectors: &[RowSelector]) -> BooleanB
 mod tests {
     use super::*;
     use crate::arrow::arrow_reader::selection::{RowSelection, RowSelectionInner};
+    use crate::util::test_common::rng;
     use arrow_array::BooleanArray;
-    use rand::{RngExt, rng};
+    use rand::RngExt;
 
     #[test]
     fn test_mask_iter_yields_borrowed_selectors() {

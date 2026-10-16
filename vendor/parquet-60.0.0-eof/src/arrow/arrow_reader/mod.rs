@@ -826,6 +826,26 @@ impl ArrowReaderOptions {
         self
     }
 
+    /// PLENORA: bound what decoding the footer may reserve; see
+    /// [`ParquetMetaDataOptions::set_footer_memory_budget`].
+    ///
+    /// [`ParquetMetaDataOptions::set_footer_memory_budget`]:
+    /// crate::file::metadata::ParquetMetaDataOptions::set_footer_memory_budget
+    pub fn with_footer_memory_budget(mut self, val: u64) -> Self {
+        self.metadata_options.set_footer_memory_budget(val);
+        self
+    }
+
+    /// PLENORA: the maximum depth of the footer schema; see
+    /// [`ParquetMetaDataOptions::set_max_schema_depth`].
+    ///
+    /// [`ParquetMetaDataOptions::set_max_schema_depth`]:
+    /// crate::file::metadata::ParquetMetaDataOptions::set_max_schema_depth
+    pub fn with_max_schema_depth(mut self, val: usize) -> Self {
+        self.metadata_options.set_max_schema_depth(val);
+        self
+    }
+
     /// Provide the file decryption properties to use when reading encrypted parquet files.
     ///
     /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.
@@ -1316,7 +1336,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                 self.input.0.get_bytes(bitset_offset, bitset_length)?
             }
         };
-        Ok(Some(Sbbf::new(&bitset)))
+        Ok(Some(Sbbf::new(&bitset)?))
     }
 
     /// Build a [`ParquetRecordBatchReader`]
@@ -1795,8 +1815,9 @@ pub(crate) mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use crate::util::test_common::rng;
     use rand::rngs::StdRng;
-    use rand::{Rng, RngExt, SeedableRng, random, rng};
+    use rand::{Rng, RngExt, SeedableRng};
     use tempfile::tempfile;
 
     use crate::arrow::arrow_reader::{
@@ -3311,7 +3332,9 @@ pub(crate) mod tests {
         fn with_row_selections(self) -> Self {
             assert!(self.row_filter.is_none(), "Must set row selection first");
 
-            let mut rng = rng();
+            // PLENORA: a fixed seed: where the selection falls (inside a
+            // page, not qualified, or on a boundary) decides the outcome.
+            let mut rng = StdRng::seed_from_u64(0x5EED_0001);
             let step = rng.random_range(self.record_batch_size..self.num_rows);
             let row_selections = create_test_selection(
                 step,
@@ -3330,7 +3353,8 @@ pub(crate) mod tests {
                 None => self.num_row_groups * self.num_rows,
             };
 
-            let mut rng = rng();
+            // PLENORA: a fixed seed, as for the row selections.
+            let mut rng = StdRng::seed_from_u64(0x5EED_0002);
             Self {
                 row_filter: Some((0..row_count).map(|_| rng.random_bool(0.9)).collect()),
                 ..self
@@ -6047,7 +6071,11 @@ pub(crate) mod tests {
     ) where
         F: FnOnce(PathBuf, RowSelection, Option<RowFilter>, usize) -> Vec<RecordBatch>,
     {
-        let seed: u64 = random();
+        // PLENORA: a fixed seed: with a random one the selection fell inside
+        // a page (`SKIP_NOT_QUALIFIED`) or not, and the outcome changed from
+        // run to run. The two cases are explicit in
+        // `test_row_selection_inside_a_page_or_on_a_boundary`.
+        let seed: u64 = 0x5EED_0003;
         println!("test_row_numbers_with_multiple_row_groups seed: {seed}");
         let mut rng = StdRng::seed_from_u64(seed);
 
@@ -6146,5 +6174,62 @@ pub(crate) mod tests {
         let metadata = writer.close().expect("Could not close writer");
 
         (Bytes::from(buf), metadata)
+    }
+
+    /// PLENORA: the outcomes of a row selection, deterministic: a selection
+    /// of every row reads them, values included; any skip, inside a page or
+    /// of whole pages on a row group boundary, is `SKIP_NOT_QUALIFIED`.
+    #[test]
+    fn test_row_selection_inside_a_page_or_on_a_boundary() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            ArrowDataType::Int32,
+            false,
+        )]));
+        let mut buffer = Vec::new();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(100))
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
+        let valori = Int32Array::from_iter_values(0..200);
+        writer
+            .write(&RecordBatch::try_new(schema, vec![Arc::new(valori)]).unwrap())
+            .unwrap();
+        writer.close().unwrap();
+        let byte = Bytes::from(buffer);
+        let leggi = |selezione: Vec<RowSelector>| -> std::result::Result<Vec<i32>, String> {
+            let lettore = ParquetRecordBatchReaderBuilder::try_new(byte.clone())
+                .unwrap()
+                .with_row_selection(RowSelection::from(selezione))
+                .build()
+                .map_err(|e| e.to_string())?;
+            let mut valori = Vec::new();
+            for batch in lettore {
+                let batch = batch.map_err(|e| e.to_string())?;
+                valori.extend(
+                    batch
+                        .column(0)
+                        .as_primitive::<arrow_array::types::Int32Type>()
+                        .values()
+                        .iter(),
+                );
+            }
+            Ok(valori)
+        };
+        // The values selected, not only their count.
+        assert_eq!(
+            leggi(vec![RowSelector::select(200)]),
+            Ok((0..200).collect::<Vec<i32>>())
+        );
+        for selezione in [
+            vec![RowSelector::skip(100), RowSelector::select(100)],
+            vec![RowSelector::skip(1), RowSelector::select(199)],
+        ] {
+            let errore = leggi(selezione).unwrap_err();
+            assert!(
+                errore.contains(crate::basic::SKIP_NOT_QUALIFIED),
+                "{errore}"
+            );
+        }
     }
 }

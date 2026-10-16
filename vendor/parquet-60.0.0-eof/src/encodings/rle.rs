@@ -361,6 +361,17 @@ pub struct RleDecoder {
     // The remaining number of values in Bit-Packing for this run
     bit_packed_left: u32,
 
+    // PLENORA: the groups the current bit-packed run declares.
+    gruppi_della_corsa: u32,
+
+    // PLENORA: where the stream ended on a run of no value (an RLE run of
+    // length 0, the end that fastparquet pads with, or a bit-packed run of 0
+    // groups). Such a run ends the stream wherever it is: the decoder reads
+    // nothing after it (a later run with values reset this mark, and runs of
+    // no value before the values passed), and the end of the page measures
+    // the bytes from it as the declared tail.
+    inizio_corse_vuote: Option<usize>,
+
     // The current value for the case of RLE mode
     current_value: Option<u64>,
 }
@@ -376,6 +387,8 @@ impl RleDecoder {
             bit_width,
             rle_left: 0,
             bit_packed_left: 0,
+            gruppi_della_corsa: 0,
+            inizio_corse_vuote: None,
             bit_reader: None,
             index_buf: None,
             current_value: None,
@@ -389,6 +402,9 @@ impl RleDecoder {
         } else {
             self.bit_reader = Some(BitReader::new(data));
         }
+        self.inizio_corse_vuote = None;
+        self.rle_left = 0;
+        self.bit_packed_left = 0;
 
         // Initialize decoder state. The boolean only reports whether the first run contained data,
         // and `get`/`get_batch` already interpret that result to drive iteration. We only need
@@ -458,7 +474,7 @@ impl RleDecoder {
                     self.bit_width as usize,
                 );
                 if num_values == 0 {
-                    // Handle writers which truncate the final block
+                    // PLENORA: a defence only: a run is whole in the data (`reload`)
                     self.bit_packed_left = 0;
                     continue;
                 }
@@ -490,7 +506,7 @@ impl RleDecoder {
 
                 num_values = bit_reader.skip(num_values, self.bit_width as usize);
                 if num_values == 0 {
-                    // Handle writers which truncate the final block
+                    // PLENORA: a defence only: a run is whole in the data (`reload`)
                     self.bit_packed_left = 0;
                     continue;
                 }
@@ -557,7 +573,7 @@ impl RleDecoder {
                     let num_values = bit_reader
                         .get_batch::<i32>(&mut index_buf[..to_read], self.bit_width as usize);
                     if num_values == 0 {
-                        // Handle writers which truncate the final block
+                        // PLENORA: a defence only: a run is whole in the data (`reload`)
                         self.bit_packed_left = 0;
                         break;
                     }
@@ -614,6 +630,52 @@ impl RleDecoder {
         Ok(values_read)
     }
 
+    /// PLENORA: whether the stream ends where the values read end, counting
+    /// the values left, not only the bytes (at bit width 0 a group takes no
+    /// byte), up to what `fine` declares. No value left in an RLE run. In a
+    /// bit-packed run: the rest of the current group of 8 (the padding of the
+    /// last group); whole groups after it only in a run of exactly
+    /// `BLOCCO_DUCKDB` groups at a bit width above 0, of which a value was
+    /// read, when `fine` admits it (DuckDB pads its last block). A run is
+    /// whole in the data (`reload` refuses one beyond it). After the run, or
+    /// from the run of no value that ended the stream, at most
+    /// `fine.coda_di_zeri` zero bytes.
+    pub(crate) fn fine_esatta(&self, fine: crate::column::reader::decoder::FinePagina) -> bool {
+        if self.rle_left > 0 {
+            return false;
+        }
+        let Some(lettore) = self.bit_reader.as_ref() else {
+            return false;
+        };
+        let larghezza = self.bit_width as usize;
+        let dati = lettore.dati();
+        let posizione = lettore.bit_letti();
+        let fine_dei_dati = dati.len().saturating_mul(8);
+        let resto = self.bit_packed_left as usize;
+        let nel_gruppo = resto % BIT_PACK_GROUP_SIZE;
+        // The values left in the run (all in the data: a run beyond the data
+        // is refused when it is read).
+        let presenti = resto;
+        // DuckDB pads the last block it writes: a block of which a value was
+        // read (a block read for none was 256 values in excess).
+        let blocco = fine.blocco_duckdb
+            && larghezza > 0
+            && self.gruppi_della_corsa as usize == bit_util::BLOCCO_DUCKDB
+            && resto < bit_util::BLOCCO_DUCKDB * BIT_PACK_GROUP_SIZE;
+        if presenti > nel_gruppo && !blocco {
+            return false;
+        }
+        let fine_della_corsa = posizione
+            .saturating_add(resto.saturating_mul(larghezza))
+            .min(fine_dei_dati);
+        let fine_dello_stream = self.inizio_corse_vuote.unwrap_or(fine_della_corsa);
+        bit_util::coda_di_zeri(
+            dati,
+            bit_util::ceil(fine_dello_stream, 8),
+            fine.coda_di_zeri,
+        )
+    }
+
     #[inline]
     fn reload(&mut self) -> Result<bool> {
         let bit_reader = self
@@ -621,22 +683,61 @@ impl RleDecoder {
             .as_mut()
             .ok_or_else(|| general_err!("bit_reader should be set"))?;
 
-        if let Some(indicator_value) = bit_reader.get_vlq_int() {
+        let inizio = bit_reader.bit_letti();
+        // PLENORA: after a run of no value the stream has ended.
+        if self.inizio_corse_vuote.is_some() {
+            return Ok(false);
+        }
+        // PLENORA: a malformed varint is an error, not the end of the data.
+        if let Some(indicator_value) = bit_reader.get_vlq_int_checked()? {
             // fastparquet adds padding to the end of pages. This is not spec-compliant
             // but is handled by the C++ implementation
             // <https://github.com/apache/arrow/blob/8074496cb41bc8ec8fe9fc814ca5576d89a6eb94/cpp/src/arrow/util/rle_encoding.h#L653>
-            if indicator_value == 0 {
+            // PLENORA: a run of no value (this end, or an empty bit-packed
+            // run) ends the stream where it starts.
+            if indicator_value >> 1 == 0 {
+                self.inizio_corse_vuote = Some(inizio);
                 return Ok(false);
             }
+            // PLENORA: a run count beyond `u32` was truncated in silence (a
+            // different count of values); now an error.
+            let run = u32::try_from(indicator_value >> 1)
+                .map_err(|_| general_err!("RLE run length out of range"))?;
             if indicator_value & 1 == 1 {
-                self.bit_packed_left = ((indicator_value >> 1) * BIT_PACK_GROUP_SIZE as i64) as u32;
+                // PLENORA: the groups a bit-packed run declares are all in the
+                // data (a group of 8 values takes `bit_width` bytes). A run
+                // shorter than its groups was read as far as its bytes went
+                // (upstream and C++ do, `test_truncated_rle`), and the values
+                // it declared but did not hold disappeared in silence; no
+                // writer measured truncates one. A count beyond the data,
+                // however large, is the same error in both level decoders.
+                // The bytes first, then the count of values: the same order,
+                // and the same error for a huge count, as the optimized level
+                // decoder (which checks the groups against the bytes).
+                let byte = u64::from(run).checked_mul(u64::from(self.bit_width));
+                let restanti = bit_reader
+                    .dati()
+                    .len()
+                    .saturating_sub(bit_reader.get_byte_offset());
+                if byte.is_none_or(|byte| byte > restanti as u64) {
+                    return Err(general_err!("bit-packed run beyond the data"));
+                }
+                self.bit_packed_left = run
+                    .checked_mul(BIT_PACK_GROUP_SIZE as u32)
+                    .ok_or_else(|| general_err!("RLE run length out of range"))?;
+                self.gruppi_della_corsa = run;
             } else {
-                self.rle_left = (indicator_value >> 1) as u32;
+                self.rle_left = run;
                 let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);
                 self.current_value = bit_reader.get_aligned::<u64>(value_width);
-                self.current_value.ok_or_else(|| {
+                let valore = self.current_value.ok_or_else(|| {
                     general_err!("parquet_data_error: not enough data for RLE decoding")
                 })?;
+                // PLENORA: the repeated value fits the declared bit width (it
+                // is stored in whole bytes, which hold more).
+                if self.bit_width < 64 && valore >> self.bit_width != 0 {
+                    return Err(general_err!("RLE value wider than the bit width"));
+                }
             }
             Ok(true)
         } else {
@@ -650,7 +751,8 @@ mod tests {
     use super::*;
 
     use crate::util::bit_util::ceil;
-    use rand::{self, RngExt, SeedableRng, distr::StandardUniform, rng};
+    use crate::util::test_common::rng;
+    use rand::{self, RngExt, SeedableRng, distr::StandardUniform};
 
     const MAX_WIDTH: usize = 32;
 
@@ -807,7 +909,9 @@ mod tests {
         // 011 100 101 011 100 101 011 100 101 100 101 101
         // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
         let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
-        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B];
+        // PLENORA: the last group whole (its 4 values of padding, 0x00): a
+        // run declares whole groups, all in the data.
+        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B, 0x00];
         let mut decoder = RleDecoder::new(3);
         decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![""; 12];
@@ -842,7 +946,9 @@ mod tests {
         // 011 100 101 011 100 101 011 100 101 100 101 101
         // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
         let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
-        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B];
+        // PLENORA: the last group whole (its 4 values of padding, 0x00): a
+        // run declares whole groups, all in the data.
+        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B, 0x00];
         let mut decoder = RleDecoder::new(3);
         decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![""; BIT_PACK_GROUP_SIZE];
@@ -987,12 +1093,11 @@ mod tests {
 
     #[test]
     fn test_truncated_rle() {
-        // The final bit packed run within a page may not be a multiple of 8 values
-        // Unfortunately the specification stores `(bit-packed-run-len) / 8`
-        // This means we don't necessarily know how many values are present
-        // and some writers may not add padding to compensate for this ambiguity
-
-        // Bit pack encode 20 values with a bit width of 8
+        // PLENORA: a final bit-packed run shorter than its declared groups
+        // was read as far as its bytes went (some writers were said to skip
+        // the padding; none measured does). Its declared values not in the
+        // data disappeared in silence: now an error, read or read with a
+        // dictionary.
         let mut data: Vec<u8> = vec![
             (3 << 1) | 1, // bit-packed run of 3 * 8
         ];
@@ -1000,25 +1105,11 @@ mod tests {
         let data: Bytes = data.into();
 
         let mut decoder = RleDecoder::new(8);
-        decoder.set_data(data.clone()).unwrap();
-
-        let mut output = vec![0_u16; 100];
-        let read = decoder.get_batch(&mut output).unwrap();
-
-        assert_eq!(read, 20);
-        assert!(output.iter().take(20).all(|x| *x == 255));
-
-        // Reset decoder
-        decoder.set_data(data).unwrap();
-
-        let dict: Vec<u16> = (0..256).collect();
-        let mut output = vec![0_u16; 100];
-        let read = decoder
-            .get_batch_with_dict(&dict, &mut output, 100)
-            .unwrap();
-
-        assert_eq!(read, 20);
-        assert!(output.iter().take(20).all(|x| *x == 255));
+        let errore = decoder.set_data(data).unwrap_err().to_string();
+        assert!(
+            errore.contains("bit-packed run beyond the data"),
+            "{errore}"
+        );
     }
 
     #[test]

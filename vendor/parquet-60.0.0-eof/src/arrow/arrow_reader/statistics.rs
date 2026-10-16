@@ -19,7 +19,7 @@
 
 /// Notice that all the corresponding tests are in
 /// `arrow-rs/parquet/tests/arrow_reader/statistics.rs`.
-use crate::arrow::buffer::bit_util::sign_extend_be;
+use crate::arrow::buffer::bit_util::sign_extend_be_checked;
 use crate::arrow::parquet_column;
 use crate::basic::Type as PhysicalType;
 use crate::errors::{ParquetError, Result};
@@ -52,29 +52,37 @@ use std::sync::Arc;
 
 // Convert the bytes array to i32.
 // The endian of the input bytes array must be big-endian.
-pub(crate) fn from_bytes_to_i32(b: &[u8]) -> i32 {
+// PLENORA: `None` for a statistic of 0 bytes or more than 4: an invalid
+// statistic is absent, not a panic.
+pub(crate) fn from_bytes_to_i32(b: &[u8]) -> Option<i32> {
     // The bytes array are from parquet file and must be the big-endian.
     // The endian is defined by parquet format, and the reference document
     // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
-    i32::from_be_bytes(sign_extend_be::<4>(b))
+    sign_extend_be_checked::<4>(b).map(i32::from_be_bytes)
 }
 
 // Convert the bytes array to i64.
 // The endian of the input bytes array must be big-endian.
-pub(crate) fn from_bytes_to_i64(b: &[u8]) -> i64 {
-    i64::from_be_bytes(sign_extend_be::<8>(b))
+// PLENORA: `None` for a statistic of 0 bytes or more than 8: an invalid
+// statistic is absent, not a panic.
+pub(crate) fn from_bytes_to_i64(b: &[u8]) -> Option<i64> {
+    sign_extend_be_checked::<8>(b).map(i64::from_be_bytes)
 }
 
 // Convert the bytes array to i128.
 // The endian of the input bytes array must be big-endian.
-pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
-    i128::from_be_bytes(sign_extend_be::<16>(b))
+// PLENORA: `None` for a statistic of 0 bytes or more than 16: an invalid
+// statistic is absent, not a panic.
+pub(crate) fn from_bytes_to_i128(b: &[u8]) -> Option<i128> {
+    sign_extend_be_checked::<16>(b).map(i128::from_be_bytes)
 }
 
 // Convert the bytes array to i256.
 // The endian of the input bytes array must be big-endian.
-pub(crate) fn from_bytes_to_i256(b: &[u8]) -> i256 {
-    i256::from_be_bytes(sign_extend_be::<32>(b))
+// PLENORA: `None` for a statistic of 0 bytes or more than 32: an invalid
+// statistic is absent, not a panic.
+pub(crate) fn from_bytes_to_i256(b: &[u8]) -> Option<i256> {
+    sign_extend_be_checked::<32>(b).map(i256::from_be_bytes)
 }
 
 // Convert the bytes array to f16
@@ -283,9 +291,9 @@ macro_rules! make_decimal_stats_iterator {
                             .$func()
                             .map(|x| $stat_value_type::try_from(*x).ok())
                             .flatten(),
-                        ParquetStatistics::ByteArray(s) => s.$bytes_func().map($convert_func),
+                        ParquetStatistics::ByteArray(s) => s.$bytes_func().and_then($convert_func),
                         ParquetStatistics::FixedLenByteArray(s) => {
-                            s.$bytes_func().map($convert_func)
+                            s.$bytes_func().and_then($convert_func)
                         }
                         _ => None,
                     })
@@ -1060,13 +1068,13 @@ macro_rules! get_data_page_statistics {
                             Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
                                     index.$values_iter()
-                                        .map(|val| val.map(|x| from_bytes_to_i32(x.as_ref()))),
+                                        .map(|val| val.and_then(|x| from_bytes_to_i32(x.as_ref()))),
                                 );
                             }
                             Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
                                     index.$values_iter()
-                                        .map(|val| val.map(|x| from_bytes_to_i32(x.as_ref()))),
+                                        .map(|val| val.and_then(|x| from_bytes_to_i32(x.as_ref()))),
                                 );
                             }
                             _ => b.append_nulls(len),
@@ -1093,13 +1101,13 @@ macro_rules! get_data_page_statistics {
                             Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
                                     index.$values_iter()
-                                        .map(|val| val.map(|x| from_bytes_to_i64(x.as_ref()))),
+                                        .map(|val| val.and_then(|x| from_bytes_to_i64(x.as_ref()))),
                                 );
                             }
                             Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
                                     index.$values_iter()
-                                        .map(|val| val.map(|x| from_bytes_to_i64(x.as_ref()))),
+                                        .map(|val| val.and_then(|x| from_bytes_to_i64(x.as_ref()))),
                                 );
                             }
                             _ => b.append_nulls(len),
@@ -1126,13 +1134,13 @@ macro_rules! get_data_page_statistics {
                             Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
                                     index.$values_iter()
-                                        .map(|val| val.map(|x| from_bytes_to_i128(x.as_ref()))),
+                                        .map(|val| val.and_then(|x| from_bytes_to_i128(x.as_ref()))),
                                 );
                             }
                             Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
                                     index.$values_iter()
-                                        .map(|val| val.map(|x| from_bytes_to_i128(x.as_ref()))),
+                                        .map(|val| val.and_then(|x| from_bytes_to_i128(x.as_ref()))),
                                 );
                             }
                             _ => b.append_nulls(len),
@@ -1159,13 +1167,13 @@ macro_rules! get_data_page_statistics {
                             Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
                                     index.$values_iter()
-                                        .map(|val| val.map(|x| from_bytes_to_i256(x.as_ref()))),
+                                        .map(|val| val.and_then(|x| from_bytes_to_i256(x.as_ref()))),
                                 );
                             }
                             Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
                                     index.$values_iter()
-                                        .map(|val| val.map(|x| from_bytes_to_i256(x.as_ref()))),
+                                        .map(|val| val.and_then(|x| from_bytes_to_i256(x.as_ref()))),
                                 );
                             }
                             _ => b.append_nulls(len),

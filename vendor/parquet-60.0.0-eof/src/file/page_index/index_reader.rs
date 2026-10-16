@@ -42,6 +42,9 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
     }
 }
 
+/// PLENORA: the page index is not qualified: its public decoders are errors.
+const NON_QUALIFICATO: bool = true;
+
 /// Decode a Thrift [`OffsetIndex`] from the provided bytes.
 ///
 /// The passed in bytes contain a serialized Thrift `OffsetIndex` struct as
@@ -98,6 +101,11 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
 ///
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/e94a5d090b324a0c0ee1adbb8ea6b099852dc3cc/src/main/thrift/parquet.thrift#L1253-L1273
 pub fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, ParquetError> {
+    // PLENORA: the page index is not qualified for reading.
+    let _ = data;
+    if NON_QUALIFICATO {
+        return Err(nyi_err!("{}", crate::basic::PAGE_INDEX_NOT_QUALIFIED));
+    }
     let mut prot = ThriftSliceInputProtocol::new(data);
 
     // Try to read fast-path first. If that fails, fall back to slower but more robust
@@ -192,6 +200,10 @@ pub fn decode_column_index(
     data: &[u8],
     column_type: Type,
 ) -> Result<ColumnIndexMetaData, ParquetError> {
+    // PLENORA: the page index is not qualified for reading.
+    if NON_QUALIFICATO {
+        return Err(nyi_err!("{}", crate::basic::PAGE_INDEX_NOT_QUALIFIED));
+    }
     let mut prot = ThriftSliceInputProtocol::new(data);
     let index = ThriftColumnIndex::read_thrift(&mut prot)?;
 

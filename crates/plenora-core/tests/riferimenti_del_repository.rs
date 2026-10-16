@@ -39,9 +39,10 @@ const VIETATI: &[&str] = &[
 /// Estensioni di testo: ogni file si legge per intero come UTF-8, e un
 /// errore di lettura fa fallire il test.
 /// `pyi`, `typed` (il marcatore PEP 561, vuoto), `ini` e `txt` sono
-/// dell'SDK Python: stub, configurazione di mypy, requisiti fissati.
+/// dell'SDK Python: stub, configurazione di mypy, requisiti fissati; `tsv`
+/// gli esiti di riferimento della lettura Parquet (`plenora-io`).
 const TESTO: &[&str] = &[
-    "rs", "toml", "md", "py", "pyi", "typed", "ini", "txt", "json", "csv", "lock", "yml",
+    "rs", "toml", "md", "py", "pyi", "typed", "ini", "txt", "json", "csv", "tsv", "lock", "yml",
 ];
 /// Nomi di file di testo senza estensione.
 const TESTO_PER_NOME: &[&str] = &[".gitignore", ".gitattributes", "Dockerfile"];

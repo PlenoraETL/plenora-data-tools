@@ -32,7 +32,7 @@ use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::{dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
-use crate::basic::{ConvertedType, Encoding};
+use crate::basic::Encoding;
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::encodings::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
@@ -92,6 +92,25 @@ pub fn make_byte_array_dictionary_reader(
             .data_type()
             .clone(),
     };
+    crate::arrow::array_reader::byte_array::check_text_annotation(
+        column_desc.as_ref(),
+        &data_type,
+    )?;
+    // PLENORA: over a column annotated as text the dictionary values are
+    // decoded as text; a binary value type was read from them as binary and
+    // panicked. Not qualified: a binary dictionary over text is refused.
+    if let ArrowType::Dictionary(_, valori) = &data_type
+        && matches!(
+            valori.as_ref(),
+            ArrowType::Binary
+                | ArrowType::LargeBinary
+                | ArrowType::BinaryView
+                | ArrowType::FixedSizeBinary(_)
+        )
+        && crate::arrow::array_reader::byte_array::annotated_as_text(column_desc.as_ref())
+    {
+        return Err(nyi_err!("{}", crate::basic::BINARY_DICTIONARY_OVER_TEXT));
+    }
 
     match &data_type {
         ArrowType::Dictionary(key_type, value_type) => {
@@ -283,6 +302,15 @@ enum MaybeDictionaryDecoder {
     Fallback(ByteArrayDecoder),
 }
 
+/// PLENORA: a dictionary index read from the file as a key of type `K`:
+/// negative or beyond `K` is an error.
+fn chiave<K: ArrowNativeType>(indice: i32) -> Result<K> {
+    usize::try_from(indice)
+        .ok()
+        .and_then(K::from_usize)
+        .ok_or_else(|| general_err!("dictionary key out of range for the key type"))
+}
+
 /// A [`ColumnValueDecoder`] for dictionary encoded variable length byte arrays
 struct DictionaryDecoder<K, V> {
     /// The current dictionary
@@ -306,9 +334,13 @@ where
     type Buffer = DictionaryBuffer<K, V>;
 
     fn new(col: &ColumnDescPtr) -> Self {
-        let validate_utf8 = col.converted_type() == ConvertedType::UTF8;
+        // PLENORA: `JSON` and `ENUM` are text too.
+        let validate_utf8 = crate::arrow::array_reader::byte_array::annotated_as_text(col);
 
-        let value_type = match (V::IS_LARGE, col.converted_type() == ConvertedType::UTF8) {
+        // PLENORA: the value type follows the same annotation (it followed
+        // `UTF8` alone, and a `JSON` or `ENUM` dictionary held binary values
+        // that the text conversions read as text).
+        let value_type = match (V::IS_LARGE, validate_utf8) {
             (true, true) => ArrowType::LargeUtf8,
             (true, false) => ArrowType::LargeBinary,
             (false, true) => ArrowType::Utf8,
@@ -331,14 +363,13 @@ where
         encoding: Encoding,
         _is_sorted: bool,
     ) -> Result<()> {
-        if !matches!(
-            encoding,
-            Encoding::PLAIN | Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
-        ) {
-            return Err(nyi_err!(
-                "Invalid/Unsupported encoding type for dictionary: {}",
-                encoding
-            ));
+        // PLENORA: an excluded encoding has the text of every other rejection.
+        crate::basic::check_dictionary_page_encoding(encoding)?;
+        // PLENORA: one dictionary per column chunk, as the generic decoder
+        // requires: a second dictionary page replaced the first in silence,
+        // and the indices before it read other values.
+        if self.dict.is_some() {
+            return Err(general_err!("Column cannot have more than one dictionary"));
         }
 
         if K::from_usize(num_values as usize).is_none() {
@@ -348,7 +379,9 @@ where
         let len = num_values as usize;
         let mut buffer = OffsetBuffer::<V>::with_capacity(0);
         let mut decoder = ByteArrayDecoderPlain::new(buf, len, Some(len), self.validate_utf8);
-        decoder.read(&mut buffer, usize::MAX)?;
+        let letti = decoder.read(&mut buffer, usize::MAX)?;
+        // PLENORA: the count was ignored; a short dictionary was kept.
+        decoder.verifica_dizionario(letti, len)?;
 
         let array = buffer.into_array(None, self.value_type.clone());
         self.dict = Some(array);
@@ -420,10 +453,16 @@ where
                         // Keys will be validated on conversion to arrow
 
                         // TODO: Push vec into decoder (#5177)
-                        let start = keys.len();
-                        keys.resize(start + len, K::default());
-                        let len = decoder.get_batch(&mut keys[start..])?;
-                        keys.truncate(start + len);
+                        // PLENORA: decoded as `i32` (the widest a dictionary
+                        // index can be) and converted with a check: decoded
+                        // straight into a narrow key (`Int8`) an index was
+                        // truncated by `as` before any validation.
+                        let mut indici = vec![0_i32; len];
+                        let len = decoder.get_batch(&mut indici)?;
+                        keys.reserve(len);
+                        for indice in &indici[..len] {
+                            keys.push(chiave::<K>(*indice)?);
+                        }
                         *max_remaining_values -= len;
                         Ok(len)
                     }
@@ -433,8 +472,12 @@ where
                         // This either means we crossed into a new column chunk whilst
                         // reading this batch, or encountered non-dictionary encoded data
                         let values = out.spill_values()?;
-                        let mut keys = vec![K::default(); len];
-                        let len = decoder.get_batch(&mut keys)?;
+                        let mut indici = vec![0_i32; len];
+                        let len = decoder.get_batch(&mut indici)?;
+                        let keys = indici[..len]
+                            .iter()
+                            .map(|indice| chiave::<K>(*indice))
+                            .collect::<Result<Vec<K>>>()?;
 
                         assert_eq!(dict.data_type(), &self.value_type);
 
@@ -464,6 +507,15 @@ where
                 decoder.skip(num_values)
             }
         }
+    }
+
+    fn verifica_fine_pagina(&self, fine: crate::column::reader::decoder::FinePagina) -> Result<()> {
+        let esatta = match self.decoder.as_ref() {
+            Some(MaybeDictionaryDecoder::Fallback(decoder)) => decoder.fine_esatta(fine),
+            Some(MaybeDictionaryDecoder::Dict { decoder, .. }) => decoder.fine_esatta(fine),
+            None => false,
+        };
+        crate::column::reader::decoder::fine_esatta(esatta)
     }
 }
 
@@ -498,9 +550,7 @@ mod tests {
         let column_desc = utf8_column();
         let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
 
-        decoder
-            .set_dict(dict, 3, Encoding::RLE_DICTIONARY, false)
-            .unwrap();
+        decoder.set_dict(dict, 3, Encoding::PLAIN, false).unwrap();
 
         decoder
             .set_data(Encoding::RLE_DICTIONARY, encoded, 14, Some(data.len()))
@@ -568,9 +618,7 @@ mod tests {
         let column_desc = utf8_column();
         let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
 
-        decoder
-            .set_dict(dict, 3, Encoding::RLE_DICTIONARY, false)
-            .unwrap();
+        decoder.set_dict(dict, 3, Encoding::PLAIN, false).unwrap();
 
         decoder
             .set_data(Encoding::RLE_DICTIONARY, encoded, 7, Some(data.len()))
@@ -625,7 +673,7 @@ mod tests {
         let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
 
         decoder
-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
             .unwrap();
 
         // Read all pages into single buffer
@@ -670,7 +718,7 @@ mod tests {
         let mut decoder = DictionaryDecoder::<i32, i32>::new(&column_desc);
 
         decoder
-            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .set_dict(encoded_dictionary, 4, Encoding::PLAIN, false)
             .unwrap();
 
         // Read all pages into single buffer
@@ -715,7 +763,7 @@ mod tests {
 
         let mut decoder = DictionaryDecoder::<i8, i32>::new(&column_desc);
         let err = decoder
-            .set_dict(dictionary.clone(), 128, Encoding::RLE_DICTIONARY, false)
+            .set_dict(dictionary.clone(), 128, Encoding::PLAIN, false)
             .unwrap_err()
             .to_string();
 
@@ -723,7 +771,7 @@ mod tests {
 
         let mut decoder = DictionaryDecoder::<i16, i32>::new(&column_desc);
         decoder
-            .set_dict(dictionary, 128, Encoding::RLE_DICTIONARY, false)
+            .set_dict(dictionary, 128, Encoding::PLAIN, false)
             .unwrap();
     }
 
@@ -735,8 +783,9 @@ mod tests {
         let column_desc = utf8_column();
         let mut decoder = DictionaryDecoder::new(&column_desc);
 
+        // PLENORA: the dictionary of no data has no entry.
         decoder
-            .set_dict(encoded_dictionary, 4, Encoding::PLAIN_DICTIONARY, false)
+            .set_dict(encoded_dictionary, 0, Encoding::PLAIN_DICTIONARY, false)
             .unwrap();
 
         for (encoding, page) in pages.clone() {

@@ -780,7 +780,8 @@ fn da_esadecimale(parti: &[&str]) -> Vec<u8> {
 /// dei dati, o un footer dichiara miliardi di row group. Con `parquet`
 /// 60.0.0 invariato la lettura girava a vuoto per minuti (il salto dei byte a
 /// EOF «riusciva») o riservava gigabyte; con `patches/parquet-eof.patch` e' un
-/// errore immediato.
+/// errore immediato. La prova verifica il motivo dell'errore, non il tempo
+/// (una soglia di tempo dipende dalla macchina).
 #[test]
 fn un_header_di_pagina_oltre_la_fine_dei_dati_e_un_errore_immediato() {
     let casi = [
@@ -813,14 +814,28 @@ fn un_header_di_pagina_oltre_la_fine_dei_dati_e_un_errore_immediato() {
             "352e302e31191c1c0000007a00000050415231",
         ]),
     ];
-    for byte in casi {
-        let inizio = std::time::Instant::now();
-        let errore = errore(&byte, Formato::Parquet, &LimitiLettura::default());
+    let motivi = ["Unexpected EOF", "integer overflow decoding thrift value"];
+    for (byte, motivo) in casi.iter().zip(motivi) {
+        let errore = errore(byte, Formato::Parquet, &LimitiLettura::default());
         assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
-        assert!(
-            inizio.elapsed() < std::time::Duration::from_secs(5),
-            "lettura durata {:?}",
-            inizio.elapsed()
+        // Il motivo, deterministico, al posto di una soglia di tempo: la
+        // lettura diretta con `parquet` si ferma alla fine dei dati o al
+        // conteggio dichiarato, non dopo averli percorsi o riservati.
+        let dir = cartella();
+        let percorso = dir.path().join("p.parquet");
+        std::fs::write(&percorso, byte).unwrap();
+        let messaggio = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+            File::open(&percorso).unwrap(),
+        )
+        .and_then(parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::build)
+        .map_or_else(
+            |e| e.to_string(),
+            |lettore| {
+                lettore
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_or_else(|e| e.to_string(), |_| String::from("letto"))
+            },
         );
+        assert!(messaggio.contains(motivo), "{messaggio}");
     }
 }

@@ -347,12 +347,20 @@ pub(crate) fn read_bloom_filter_header_and_length(
 fn read_bloom_filter_header_and_length_from_bytes(
     buffer: &[u8],
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
+    // PLENORA: the bloom filter is not qualified for reading; every read of
+    // one passes from here.
+    if NON_QUALIFICATO {
+        return Err(nyi_err!("{}", crate::basic::BLOOM_FILTER_NOT_QUALIFIED));
+    }
     let total_length = buffer.len();
     let mut prot = ThriftSliceInputProtocol::new(buffer);
     let header = BloomFilterHeader::read_thrift(&mut prot)
         .map_err(|e| ParquetError::General(format!("Could not read bloom filter header: {e}")))?;
     Ok((header, (total_length - prot.as_slice().len()) as u64))
 }
+
+/// PLENORA: the bloom filter is not qualified for reading.
+const NON_QUALIFICATO: bool = true;
 
 /// The minimum number of bytes for a bloom filter bitset.
 pub const BITSET_MIN_LENGTH: usize = 32;
@@ -400,7 +408,21 @@ impl Sbbf {
     }
 
     /// Creates a new [Sbbf] from a raw byte slice.
-    pub fn new(bitset: &[u8]) -> Self {
+    ///
+    /// PLENORA: not public: it was an entry around the rejection of the bloom
+    /// filters (`BLOOM_FILTER_NOT_QUALIFIED`) that read any bytes, dropped a
+    /// remainder (33 bytes were one block) and let `check` index out of an
+    /// empty filter (fewer than 32 bytes). Now a crate entry, after a header,
+    /// and the bitset is whole blocks, at least one, within the maximum.
+    pub(crate) fn new(bitset: &[u8]) -> Result<Self, ParquetError> {
+        if bitset.is_empty()
+            || !bitset.len().is_multiple_of(size_of::<Block>())
+            || bitset.len() > BITSET_MAX_LENGTH
+        {
+            return Err(ParquetError::General(
+                "bloom filter bitset is not a whole number of blocks".to_string(),
+            ));
+        }
         let data = bitset
             .as_chunks::<32>()
             .0
@@ -414,7 +436,7 @@ impl Sbbf {
                 block
             })
             .collect::<Vec<Block>>();
-        Self(data)
+        Ok(Self(data))
     }
 
     /// Write the bloom filter data (header and then bitset) to the output. This doesn't
@@ -517,7 +539,7 @@ impl Sbbf {
             }
         };
 
-        Ok(Some(Self::new(&bitset)))
+        Ok(Some(Self::new(&bitset)?))
     }
 
     /// Map a 64-bit hash to a block index in `[0, num_blocks)`.
@@ -752,7 +774,7 @@ impl Sbbf {
             .get(start..end)
             .ok_or_else(|| ParquetError::General("Bloom filter bitset is invalid".to_string()))?;
 
-        Ok(Self::new(bitset))
+        Self::new(bitset)
     }
 }
 
@@ -766,6 +788,18 @@ fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    /// PLENORA: the constructor from raw bytes is a crate entry and takes
+    /// whole blocks only: 33 bytes dropped one, fewer than 32 left `check`
+    /// indexing an empty filter.
+    #[test]
+    fn test_sbbf_new_takes_whole_blocks_only() {
+        assert!(Sbbf::new(&[0; 33]).is_err());
+        assert!(Sbbf::new(&[0; 31]).is_err());
+        assert!(Sbbf::new(&[]).is_err());
+        let filtro = Sbbf::new(&[0; 32]).unwrap();
+        assert!(!filtro.check(&1_i32));
+    }
+
     use super::*;
 
     #[test]
@@ -809,7 +843,7 @@ mod tests {
             200, 1, 80, 20, 64, 68, 8, 109, 6, 37, 4, 67, 144, 80, 96, 32, 8, 132, 43, 33, 0, 5,
             99, 65, 2, 0, 224, 44, 64, 78, 96, 4,
         ];
-        let sbbf = Sbbf::new(bitset);
+        let sbbf = Sbbf::new(bitset).unwrap();
         for a in 0..10i64 {
             let value = format!("a{a}");
             assert!(sbbf.check(&value.as_str()));
@@ -965,7 +999,7 @@ mod tests {
     fn test_sbbf_write_round_trip() {
         // Create a bloom filter with a 32-byte bitset (minimum size)
         let bitset_bytes = vec![0u8; 32];
-        let mut original = Sbbf::new(&bitset_bytes);
+        let mut original = Sbbf::new(&bitset_bytes).unwrap();
 
         // Insert some test values
         let test_values = ["hello", "world", "rust", "parquet", "bloom", "filter"];

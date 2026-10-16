@@ -1,0 +1,840 @@
+--- a/src/arrow/array_reader/byte_array.rs
++++ b/src/arrow/array_reader/byte_array.rs
+@@ -136,6 +136,9 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
+                 let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+                 // Null slots will have 0 length, so we need to check for that in the lambda
+                 // or sign_extend_be will panic.
++                // PLENORA: a non-null value of 0 bytes or more than 16 is not a
++                // decimal 128 (`sign_extend_be` panics on more than 16).
++                check_decimal_widths(binary, 16)?;
+                 let decimal = Decimal128Array::from_unary(binary, |x| match x.len() {
+                     0 => i128::default(),
+                     _ => i128::from_be_bytes(sign_extend_be(x)),
+@@ -148,6 +151,7 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
+                 let binary = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+                 // Null slots will have 0 length, so we need to check for that in the lambda
+                 // or sign_extend_be will panic.
++                check_decimal_widths(binary, 32)?;
+                 let decimal = Decimal256Array::from_unary(binary, |x| match x.len() {
+                     0 => i256::default(),
+                     _ => i256::from_be_bytes(sign_extend_be(x)),
+@@ -346,6 +350,21 @@ impl ByteArrayDecoder {
+     }
+ }
+ 
++/// PLENORA: every non-null decimal value has between 1 and `max` bytes.
++fn check_decimal_widths(binary: &BinaryArray, max: usize) -> Result<()> {
++    if binary
++        .iter()
++        .flatten()
++        .any(|value| value.is_empty() || value.len() > max)
++    {
++        return Err(general_err!(
++            "decimal value of 0 bytes or more than {} bytes",
++            max
++        ));
++    }
++    Ok(())
++}
++
+ /// Decoder from [`Encoding::PLAIN`] data to [`OffsetBuffer`]
+ pub struct ByteArrayDecoderPlain {
+     buf: Bytes,
+@@ -405,22 +424,25 @@ impl ByteArrayDecoderPlain {
+             let len = u32::from_le_bytes(len_bytes);
+ 
+             let start_offset = self.offset + 4;
+-            let end_offset = start_offset + len as usize;
+-            if end_offset > buf.len() {
+-                return Err(ParquetError::EOF("eof decoding byte array".into()));
+-            }
++            let end_offset = start_offset
++                .checked_add(len as usize)
++                .filter(|end| *end <= buf.len())
++                .ok_or_else(|| ParquetError::EOF("eof decoding byte array".into()))?;
+ 
+             output.try_push(&buf[start_offset..end_offset], self.validate_utf8)?;
+ 
+             self.offset = end_offset;
+             read += 1;
+         }
+-        self.max_remaining_values -= to_read;
++        // PLENORA: the values actually read. This returned `to_read` even when
++        // the page ended first, and the caller, which compares the count with
++        // the levels, could not see the missing values.
++        self.max_remaining_values -= read;
+ 
+         if self.validate_utf8 {
+             output.check_valid_utf8(initial_values_length)?;
+         }
+-        Ok(to_read)
++        Ok(read)
+     }
+ 
+     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
+@@ -434,8 +456,14 @@ impl ByteArrayDecoderPlain {
+             }
+             let len_bytes: [u8; 4] = buf[self.offset..self.offset + 4].try_into().unwrap();
+             let len = u32::from_le_bytes(len_bytes) as usize;
++            // PLENORA: a length beyond the page is an error, not a skip that
++            // leaves the offset past the end.
++            let end = (self.offset + 4)
++                .checked_add(len)
++                .filter(|end| *end <= buf.len())
++                .ok_or_else(|| ParquetError::EOF("eof skipping byte array".into()))?;
+             skip += 1;
+-            self.offset = self.offset + 4 + len;
++            self.offset = end;
+         }
+         self.max_remaining_values -= skip;
+         Ok(skip)
+@@ -458,24 +486,11 @@ impl ByteArrayDecoderDeltaLength {
+         let values = len_decoder.values_left();
+ 
+         let mut lengths = vec![0; values];
+-        len_decoder.get(&mut lengths)?;
+-
+-        let mut total_bytes = 0;
+-
+-        for l in &lengths {
+-            if *l < 0 {
+-                return Err(ParquetError::General(
+-                    "negative delta length byte array length".to_string(),
+-                ));
+-            }
+-            total_bytes += *l as usize;
+-        }
+-
+-        if total_bytes + len_decoder.get_offset() > data.len() {
+-            return Err(ParquetError::General(
+-                "Insufficient delta length byte array bytes".to_string(),
+-            ));
++        // PLENORA: a short read is an error.
++        if len_decoder.get(&mut lengths)? != values {
++            return Err(eof_err!("eof decoding delta length byte array lengths"));
+         }
++        crate::encodings::decoding::check_delta_lengths(&lengths, len_decoder.get_offset(), data.len())?;
+ 
+         Ok(Self {
+             lengths,
+@@ -510,10 +525,14 @@ impl ByteArrayDecoderDeltaLength {
+         // Compute and extend offsets in batch using extend
+         let base_offset = initial_values_length;
+         let mut running = base_offset;
+-        output.offsets.extend(src_lengths.iter().map(|length| {
++        // PLENORA: an offset beyond the index type is an error, not a panic.
++        for length in src_lengths {
+             running += *length as usize;
+-            I::from_usize(running).expect("index overflow decoding byte array")
+-        }));
++            output.offsets.push(
++                I::from_usize(running)
++                    .ok_or_else(|| general_err!("index overflow decoding byte array"))?,
++            );
++        }
+ 
+         self.data_offset = data_end;
+         self.length_offset += to_read;
+--- a/src/arrow/array_reader/byte_view_array.rs
++++ b/src/arrow/array_reader/byte_view_array.rs
+@@ -454,8 +454,13 @@ impl ByteViewArrayDecoderPlain {
+             }
+             let len_bytes: [u8; 4] = buf[self.offset..self.offset + 4].try_into().unwrap();
+             let len = u32::from_le_bytes(len_bytes) as usize;
++            // PLENORA: as in the byte array decoder.
++            let end = (self.offset + 4)
++                .checked_add(len)
++                .filter(|end| *end <= buf.len())
++                .ok_or_else(|| ParquetError::EOF("eof skipping byte array".into()))?;
+             skip += 1;
+-            self.offset = self.offset + 4 + len;
++            self.offset = end;
+         }
+         self.max_remaining_values -= skip;
+         Ok(skip)
+@@ -584,24 +589,11 @@ impl ByteViewArrayDecoderDeltaLength {
+         let values = len_decoder.values_left();
+ 
+         let mut lengths = vec![0; values];
+-        len_decoder.get(&mut lengths)?;
+-
+-        let mut total_bytes = 0;
+-
+-        for l in &lengths {
+-            if *l < 0 {
+-                return Err(ParquetError::General(
+-                    "negative delta length byte array length".to_string(),
+-                ));
+-            }
+-            total_bytes += *l as usize;
+-        }
+-
+-        if total_bytes + len_decoder.get_offset() > data.len() {
+-            return Err(ParquetError::General(
+-                "Insufficient delta length byte array bytes".to_string(),
+-            ));
++        // PLENORA: a short read is an error.
++        if len_decoder.get(&mut lengths)? != values {
++            return Err(eof_err!("eof decoding delta length byte array lengths"));
+         }
++        crate::encodings::decoding::check_delta_lengths(&lengths, len_decoder.get_offset(), data.len())?;
+ 
+         Ok(Self {
+             lengths,
+--- a/src/arrow/array_reader/fixed_len_byte_array.rs
++++ b/src/arrow/array_reader/fixed_len_byte_array.rs
+@@ -195,14 +195,16 @@ impl ArrayReader for FixedLenByteArrayReader {
+         let len = self.record_reader.values_written();
+ 
+         let record_data = self.record_reader.consume_record_data();
+-        debug_assert_eq!(
+-            record_data.buffer.len(),
+-            len * self.byte_length,
+-            "fixed-len byte array buffer size mismatch: {} bytes for {} elements of size {}",
+-            record_data.buffer.len(),
+-            len,
+-            self.byte_length,
+-        );
++        // PLENORA: the buffer is built unchecked below: a size mismatch is an
++        // error in every build, not only a debug assertion.
++        if Some(record_data.buffer.len()) != len.checked_mul(self.byte_length) {
++            return Err(general_err!(
++                "fixed-len byte array buffer size mismatch: {} bytes for {} elements of size {}",
++                record_data.buffer.len(),
++                len,
++                self.byte_length
++            ));
++        }
+         let null_bit_buffer = self.record_reader.consume_compact_bitmap();
+ 
+         let array_data = ArrayDataBuilder::new(ArrowType::FixedSizeBinary(self.byte_length as i32))
+@@ -447,6 +449,19 @@ impl ColumnValueDecoder for ValueDecoder {
+         num_levels: usize,
+         num_values: Option<usize>,
+     ) -> Result<()> {
++        // PLENORA: PLAIN and BYTE_STREAM_SPLIT pages hold whole values; a
++        // remainder was dropped in silence (65 bytes of 8-byte values read 8
++        // values and ignored the last byte).
++        if matches!(encoding, Encoding::PLAIN | Encoding::BYTE_STREAM_SPLIT)
++            && !data.len().is_multiple_of(self.byte_length)
++        {
++            return Err(general_err!(
++                "{} page of {} bytes is not a whole number of {}-byte values",
++                encoding,
++                data.len(),
++                self.byte_length
++            ));
++        }
+         self.decoder = Some(match encoding {
+             Encoding::PLAIN => Decoder::Plain {
+                 buf: data,
+@@ -509,8 +524,18 @@ impl ColumnValueDecoder for ValueDecoder {
+                 decoder.read(num_values, |keys| {
+                     out.buffer.reserve(keys.len() * self.byte_length);
+                     for key in keys {
+-                        let offset = *key as usize * self.byte_length;
+-                        let val = &dict.as_ref()[offset..offset + self.byte_length];
++                        // PLENORA: an index beyond the dictionary (or negative)
++                        // is an error, not a slice out of bounds.
++                        let val = usize::try_from(*key)
++                            .ok()
++                            .and_then(|key| key.checked_mul(self.byte_length))
++                            .and_then(|offset| dict.get(offset..offset.checked_add(self.byte_length)?))
++                            .ok_or_else(|| {
++                                general_err!(
++                                    "dictionary index out of bounds: the dictionary has {} values",
++                                    dict.len() / self.byte_length
++                                )
++                            })?;
+                         out.buffer.extend_from_slice(val);
+                     }
+                     Ok(())
+--- a/src/arrow/arrow_reader/statistics.rs
++++ b/src/arrow/arrow_reader/statistics.rs
+@@ -19,7 +19,7 @@
+ 
+ /// Notice that all the corresponding tests are in
+ /// `arrow-rs/parquet/tests/arrow_reader/statistics.rs`.
+-use crate::arrow::buffer::bit_util::sign_extend_be;
++use crate::arrow::buffer::bit_util::sign_extend_be_checked;
+ use crate::arrow::parquet_column;
+ use crate::basic::Type as PhysicalType;
+ use crate::errors::{ParquetError, Result};
+@@ -52,29 +52,37 @@ use std::sync::Arc;
+ 
+ // Convert the bytes array to i32.
+ // The endian of the input bytes array must be big-endian.
+-pub(crate) fn from_bytes_to_i32(b: &[u8]) -> i32 {
++// PLENORA: `None` for a statistic of 0 bytes or more than 4: an invalid
++// statistic is absent, not a panic.
++pub(crate) fn from_bytes_to_i32(b: &[u8]) -> Option<i32> {
+     // The bytes array are from parquet file and must be the big-endian.
+     // The endian is defined by parquet format, and the reference document
+     // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
+-    i32::from_be_bytes(sign_extend_be::<4>(b))
++    sign_extend_be_checked::<4>(b).map(i32::from_be_bytes)
+ }
+ 
+ // Convert the bytes array to i64.
+ // The endian of the input bytes array must be big-endian.
+-pub(crate) fn from_bytes_to_i64(b: &[u8]) -> i64 {
+-    i64::from_be_bytes(sign_extend_be::<8>(b))
++// PLENORA: `None` for a statistic of 0 bytes or more than 8: an invalid
++// statistic is absent, not a panic.
++pub(crate) fn from_bytes_to_i64(b: &[u8]) -> Option<i64> {
++    sign_extend_be_checked::<8>(b).map(i64::from_be_bytes)
+ }
+ 
+ // Convert the bytes array to i128.
+ // The endian of the input bytes array must be big-endian.
+-pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
+-    i128::from_be_bytes(sign_extend_be::<16>(b))
++// PLENORA: `None` for a statistic of 0 bytes or more than 16: an invalid
++// statistic is absent, not a panic.
++pub(crate) fn from_bytes_to_i128(b: &[u8]) -> Option<i128> {
++    sign_extend_be_checked::<16>(b).map(i128::from_be_bytes)
+ }
+ 
+ // Convert the bytes array to i256.
+ // The endian of the input bytes array must be big-endian.
+-pub(crate) fn from_bytes_to_i256(b: &[u8]) -> i256 {
+-    i256::from_be_bytes(sign_extend_be::<32>(b))
++// PLENORA: `None` for a statistic of 0 bytes or more than 32: an invalid
++// statistic is absent, not a panic.
++pub(crate) fn from_bytes_to_i256(b: &[u8]) -> Option<i256> {
++    sign_extend_be_checked::<32>(b).map(i256::from_be_bytes)
+ }
+ 
+ // Convert the bytes array to f16
+@@ -283,9 +291,9 @@ macro_rules! make_decimal_stats_iterator {
+                             .$func()
+                             .map(|x| $stat_value_type::try_from(*x).ok())
+                             .flatten(),
+-                        ParquetStatistics::ByteArray(s) => s.$bytes_func().map($convert_func),
++                        ParquetStatistics::ByteArray(s) => s.$bytes_func().and_then($convert_func),
+                         ParquetStatistics::FixedLenByteArray(s) => {
+-                            s.$bytes_func().map($convert_func)
++                            s.$bytes_func().and_then($convert_func)
+                         }
+                         _ => None,
+                     })
+@@ -1060,13 +1068,13 @@ macro_rules! get_data_page_statistics {
+                             Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
+                                 b.extend_from_iter_option(
+                                     index.$values_iter()
+-                                        .map(|val| val.map(|x| from_bytes_to_i32(x.as_ref()))),
++                                        .map(|val| val.and_then(|x| from_bytes_to_i32(x.as_ref()))),
+                                 );
+                             }
+                             Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
+                                 b.extend_from_iter_option(
+                                     index.$values_iter()
+-                                        .map(|val| val.map(|x| from_bytes_to_i32(x.as_ref()))),
++                                        .map(|val| val.and_then(|x| from_bytes_to_i32(x.as_ref()))),
+                                 );
+                             }
+                             _ => b.append_nulls(len),
+@@ -1093,13 +1101,13 @@ macro_rules! get_data_page_statistics {
+                             Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
+                                 b.extend_from_iter_option(
+                                     index.$values_iter()
+-                                        .map(|val| val.map(|x| from_bytes_to_i64(x.as_ref()))),
++                                        .map(|val| val.and_then(|x| from_bytes_to_i64(x.as_ref()))),
+                                 );
+                             }
+                             Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
+                                 b.extend_from_iter_option(
+                                     index.$values_iter()
+-                                        .map(|val| val.map(|x| from_bytes_to_i64(x.as_ref()))),
++                                        .map(|val| val.and_then(|x| from_bytes_to_i64(x.as_ref()))),
+                                 );
+                             }
+                             _ => b.append_nulls(len),
+@@ -1126,13 +1134,13 @@ macro_rules! get_data_page_statistics {
+                             Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
+                                 b.extend_from_iter_option(
+                                     index.$values_iter()
+-                                        .map(|val| val.map(|x| from_bytes_to_i128(x.as_ref()))),
++                                        .map(|val| val.and_then(|x| from_bytes_to_i128(x.as_ref()))),
+                                 );
+                             }
+                             Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
+                                 b.extend_from_iter_option(
+                                     index.$values_iter()
+-                                        .map(|val| val.map(|x| from_bytes_to_i128(x.as_ref()))),
++                                        .map(|val| val.and_then(|x| from_bytes_to_i128(x.as_ref()))),
+                                 );
+                             }
+                             _ => b.append_nulls(len),
+@@ -1159,13 +1167,13 @@ macro_rules! get_data_page_statistics {
+                             Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
+                                 b.extend_from_iter_option(
+                                     index.$values_iter()
+-                                        .map(|val| val.map(|x| from_bytes_to_i256(x.as_ref()))),
++                                        .map(|val| val.and_then(|x| from_bytes_to_i256(x.as_ref()))),
+                                 );
+                             }
+                             Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
+                                 b.extend_from_iter_option(
+                                     index.$values_iter()
+-                                        .map(|val| val.map(|x| from_bytes_to_i256(x.as_ref()))),
++                                        .map(|val| val.and_then(|x| from_bytes_to_i256(x.as_ref()))),
+                                 );
+                             }
+                             _ => b.append_nulls(len),
+--- a/src/arrow/buffer/bit_util.rs
++++ b/src/arrow/buffer/bit_util.rs
+@@ -53,6 +53,8 @@ pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
+ 
+ /// Performs big endian sign extension
+ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
++    // PLENORA: callers on values read from a file use
++    // `sign_extend_be_checked`, which does not panic.
+     assert!(b.len() <= N, "Array too large, expected less than {N}");
+     let is_negative = (b[0] & 128u8) == 128u8;
+     let mut result = if is_negative { [255u8; N] } else { [0u8; N] };
+@@ -62,6 +64,15 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
+     result
+ }
+ 
++/// PLENORA: [`sign_extend_be`] for bytes read from a file: `None` for an
++/// empty slice or one longer than `N`, instead of a panic.
++pub fn sign_extend_be_checked<const N: usize>(b: &[u8]) -> Option<[u8; N]> {
++    if b.is_empty() || b.len() > N {
++        return None;
++    }
++    Some(sign_extend_be::<N>(b))
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+--- a/src/arrow/buffer/dictionary_buffer.rs
++++ b/src/arrow/buffer/dictionary_buffer.rs
+@@ -163,11 +163,16 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
+                 };
+                 let values = if let ArrowType::FixedSizeBinary(size) = **value_type {
+                     let binary = values.as_binary::<i32>();
+-                    Arc::new(FixedSizeBinaryArray::new(
+-                        size,
+-                        binary.values().clone(),
+-                        binary.nulls().cloned(),
+-                    )) as _
++                    // PLENORA: dictionary values of the wrong width are an
++                    // error (`new` panics on them).
++                    Arc::new(
++                        FixedSizeBinaryArray::try_new(
++                            size,
++                            binary.values().clone(),
++                            binary.nulls().cloned(),
++                        )
++                        .map_err(|_| general_err!("dictionary values of the wrong width"))?,
++                    ) as _
+                 } else {
+                     values
+                 };
+--- a/src/arrow/buffer/offset_buffer.rs
++++ b/src/arrow/buffer/offset_buffer.rs
+@@ -97,7 +97,9 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
+ 
+         for key in keys {
+             let index = key.as_usize();
+-            if index + 1 >= dict_offsets.len() {
++            // PLENORA: a negative key becomes `usize::MAX`, and `index + 1`
++            // overflowed (a panic) instead of being out of bounds.
++            if index.checked_add(1).is_none_or(|end| end >= dict_offsets.len()) {
+                 return Err(general_err!(
+                     "dictionary key beyond bounds of dictionary: 0..{}",
+                     dict_offsets.len().saturating_sub(1)
+--- a/src/arrow/decoder/delta_byte_array.rs
++++ b/src/arrow/decoder/delta_byte_array.rs
+@@ -21,6 +21,36 @@ use crate::data_type::Int32Type;
+ use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
+ use crate::errors::{ParquetError, Result};
+ 
++/// PLENORA: the prefix and suffix lengths of one value, read from the file.
++///
++/// The prefix reuses that many bytes of the previous value: a negative
++/// prefix, or one longer than the previous value, is an encoding that no
++/// writer produces, and `truncate` would accept it in silence (a longer
++/// prefix keeps the whole previous value, and the value comes out wrong). A
++/// negative suffix converted to `usize` overflows the end offset. Returns
++/// the prefix length and the end of the suffix in the page.
++fn checked_value(
++    prefix_length: i32,
++    suffix_length: i32,
++    previous_length: usize,
++    data_offset: usize,
++    data_length: usize,
++) -> Result<(usize, usize)> {
++    let prefix_length = usize::try_from(prefix_length)
++        .ok()
++        .filter(|prefix| *prefix <= previous_length)
++        .ok_or_else(|| {
++            general_err!("invalid DELTA_BYTE_ARRAY prefix length: beyond the previous value")
++        })?;
++    let suffix_length = usize::try_from(suffix_length)
++        .map_err(|_| general_err!("invalid DELTA_BYTE_ARRAY suffix length: negative"))?;
++    let end = data_offset
++        .checked_add(suffix_length)
++        .filter(|end| *end <= data_length)
++        .ok_or_else(|| ParquetError::EOF("eof decoding byte array".into()))?;
++    Ok((prefix_length, end))
++}
++
+ /// Decoder for `Encoding::DELTA_BYTE_ARRAY`
+ pub struct DeltaByteArrayDecoder {
+     prefix_lengths: Vec<i32>,
+@@ -42,14 +72,19 @@ impl DeltaByteArrayDecoder {
+ 
+         let num_prefix = prefix.values_left();
+         let mut prefix_lengths = vec![0; num_prefix];
+-        assert_eq!(prefix.get(&mut prefix_lengths)?, num_prefix);
++        // PLENORA: a short read is an error, not a panic.
++        if prefix.get(&mut prefix_lengths)? != num_prefix {
++            return Err(eof_err!("eof decoding DELTA_BYTE_ARRAY prefix lengths"));
++        }
+ 
+         let mut suffix = DeltaBitPackDecoder::<Int32Type>::new();
+         suffix.set_data(data.slice(prefix.get_offset()..), massimo)?;
+ 
+         let num_suffix = suffix.values_left();
+         let mut suffix_lengths = vec![0; num_suffix];
+-        assert_eq!(suffix.get(&mut suffix_lengths)?, num_suffix);
++        if suffix.get(&mut suffix_lengths)? != num_suffix {
++            return Err(eof_err!("eof decoding DELTA_BYTE_ARRAY suffix lengths"));
++        }
+ 
+         if num_prefix != num_suffix {
+             return Err(general_err!(format!(
+@@ -57,8 +92,6 @@ impl DeltaByteArrayDecoder {
+             )));
+         }
+ 
+-        assert_eq!(prefix_lengths.len(), suffix_lengths.len());
+-
+         Ok(Self {
+             prefix_lengths,
+             suffix_lengths,
+@@ -92,19 +125,15 @@ impl DeltaByteArrayDecoder {
+         let data = self.data.as_ref();
+ 
+         for (prefix_length, suffix_length) in iter {
+-            let prefix_length = *prefix_length as usize;
+-            let suffix_length = *suffix_length as usize;
+-
+-            if self.data_offset + suffix_length > self.data.len() {
+-                return Err(ParquetError::EOF("eof decoding byte array".into()));
+-            }
++            let (prefix_length, end) =
++                checked_value(*prefix_length, *suffix_length, self.last_value.len(), self.data_offset, data.len())?;
+ 
+             self.last_value.truncate(prefix_length);
+             self.last_value
+-                .extend_from_slice(&data[self.data_offset..self.data_offset + suffix_length]);
++                .extend_from_slice(&data[self.data_offset..end]);
+             f(&self.last_value)?;
+ 
+-            self.data_offset += suffix_length;
++            self.data_offset = end;
+         }
+ 
+         self.length_offset += to_read;
+@@ -123,17 +152,13 @@ impl DeltaByteArrayDecoder {
+         let data = self.data.as_ref();
+ 
+         for (prefix_length, suffix_length) in iter {
+-            let prefix_length = *prefix_length as usize;
+-            let suffix_length = *suffix_length as usize;
+-
+-            if self.data_offset + suffix_length > self.data.len() {
+-                return Err(ParquetError::EOF("eof decoding byte array".into()));
+-            }
++            let (prefix_length, end) =
++                checked_value(*prefix_length, *suffix_length, self.last_value.len(), self.data_offset, data.len())?;
+ 
+             self.last_value.truncate(prefix_length);
+             self.last_value
+-                .extend_from_slice(&data[self.data_offset..self.data_offset + suffix_length]);
+-            self.data_offset += suffix_length;
++                .extend_from_slice(&data[self.data_offset..end]);
++            self.data_offset = end;
+         }
+         self.length_offset += to_skip;
+         Ok(to_skip)
+--- a/src/column/reader.rs
++++ b/src/column/reader.rs
+@@ -621,6 +621,10 @@ fn parse_v1_level(
+         Encoding::BIT_PACKED => {
+             let bit_width = num_required_bits(max_level as u64);
+             let num_bytes = ceil(num_buffered_values as usize * bit_width as usize, 8);
++            // PLENORA: the levels the header declares must be in the page.
++            if num_bytes > buf.len() {
++                return Err(general_err!("not enough data to read levels"));
++            }
+             Ok((num_bytes, buf.slice(..num_bytes)))
+         }
+         _ => Err(general_err!("invalid level encoding: {}", encoding)),
+--- a/src/column/reader/decoder.rs
++++ b/src/column/reader/decoder.rs
+@@ -208,9 +208,11 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
+         }
+ 
+         let decoder = if encoding == Encoding::RLE_DICTIONARY {
++            // PLENORA: a dictionary-encoded page in a column chunk with no
++            // dictionary page is an error, not a panic.
+             self.decoders[encoding as usize]
+                 .as_mut()
+-                .expect("Decoder for dict should have been set")
++                .ok_or_else(|| general_err!("missing dictionary page for column"))?
+         } else {
+             let slot = encoding as usize;
+             if self.decoders[slot].is_none() {
+--- a/src/data_type.rs
++++ b/src/data_type.rs
+@@ -1018,6 +1018,21 @@ pub(crate) mod private {
+         }
+     }
+ 
++    /// PLENORA: the value of a PLAIN byte array at `start`: its 4-byte length
++    /// and its bytes, both inside `data`. Returns the value's range.
++    fn plain_byte_array_value(data: &Bytes, start: usize) -> Result<(usize, usize)> {
++        let value_start = start
++            .checked_add(std::mem::size_of::<u32>())
++            .filter(|value_start| *value_start <= data.len())
++            .ok_or_else(|| eof_err!("Not enough bytes to decode"))?;
++        let len = read_num_bytes::<u32>(4, &data.as_ref()[start..value_start]) as usize;
++        let end = value_start
++            .checked_add(len)
++            .filter(|end| *end <= data.len())
++            .ok_or_else(|| eof_err!("Not enough bytes to decode"))?;
++        Ok((value_start, end))
++    }
++
+     impl ParquetValueType for super::ByteArray {
+         const PHYSICAL_TYPE: Type = Type::BYTE_ARRAY;
+ 
+@@ -1051,16 +1066,10 @@ pub(crate) mod private {
+                 .expect("set_data should have been called");
+             let num_values = std::cmp::min(buffer.len(), decoder.num_values);
+             for val_array in buffer.iter_mut().take(num_values) {
+-                let len: usize =
+-                    read_num_bytes::<u32>(4, data.slice(decoder.start..).as_ref()) as usize;
+-                decoder.start += std::mem::size_of::<u32>();
+-
+-                if data.len() < decoder.start + len {
+-                    return Err(eof_err!("Not enough bytes to decode"));
+-                }
+-
+-                val_array.set_data(data.slice(decoder.start..decoder.start + len));
+-                decoder.start += len;
++                // PLENORA: the length prefix and the value must be in the page.
++                let (start, end) = plain_byte_array_value(data, decoder.start)?;
++                val_array.set_data(data.slice(start..end));
++                decoder.start = end;
+             }
+             decoder.num_values -= num_values;
+ 
+@@ -1079,9 +1088,9 @@ pub(crate) mod private {
+             let num_values = num_values.min(decoder.num_values);
+ 
+             for _ in 0..num_values {
+-                let len: usize =
+-                    read_num_bytes::<u32>(4, data.slice(decoder.start..).as_ref()) as usize;
+-                decoder.start += std::mem::size_of::<u32>() + len;
++                // PLENORA: as in `decode`; this skip had no bound at all.
++                let (_, end) = plain_byte_array_value(data, decoder.start)?;
++                decoder.start = end;
+             }
+             decoder.num_values -= num_values;
+ 
+--- a/src/encodings/decoding.rs
++++ b/src/encodings/decoding.rs
+@@ -628,7 +628,13 @@ where
+                 *b = 0;
+             }
+             remaining = remaining.saturating_sub(self.values_per_mini_block);
+-            offset += *b as usize * self.values_per_mini_block / 8;
++            // PLENORA: `values_per_mini_block` comes from the header (a block
++            // size up to `usize::MAX`): the product and the sum are checked.
++            offset = (*b as usize)
++                .checked_mul(self.values_per_mini_block)
++                .map(|bits| bits / 8)
++                .and_then(|bytes| offset.checked_add(bytes))
++                .ok_or_else(|| general_err!("delta block size overflows"))?;
+         }
+         self.block_end_offset = offset;
+ 
+@@ -944,6 +950,24 @@ where
+ // ----------------------------------------------------------------------
+ // DELTA_LENGTH_BYTE_ARRAY Decoding
+ 
++/// PLENORA: the lengths of a DELTA_LENGTH_BYTE_ARRAY page, read from the file,
++/// are non-negative and their values fit in the page after the lengths
++/// (`offset`, the end of the lengths, up to `data_len`). A negative length
++/// converted to `usize` overflowed the offsets, and one beyond the bytes
++/// sliced past the page.
++pub(crate) fn check_delta_lengths(lengths: &[i32], offset: usize, data_len: usize) -> Result<()> {
++    let mut end = offset;
++    for length in lengths {
++        let length = usize::try_from(*length)
++            .map_err(|_| general_err!("negative delta length byte array length"))?;
++        end = end
++            .checked_add(length)
++            .filter(|end| *end <= data_len)
++            .ok_or_else(|| general_err!("Insufficient delta length byte array bytes"))?;
++    }
++    Ok(())
++}
++
+ /// Delta length byte array decoder.
+ ///
+ /// Only applied to byte arrays to separate the length values and the data, the lengths
+@@ -999,7 +1023,13 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
+                 len_decoder.set_data(data.clone(), num_values)?;
+                 let num_lengths = len_decoder.values_left();
+                 self.lengths.resize(num_lengths, 0);
+-                len_decoder.get(&mut self.lengths[..])?;
++                // PLENORA: every length is non-negative and the values fit in
++                // the bytes after the lengths, checked once here; `get` and
++                // `skip` then cannot go past the page.
++                if len_decoder.get(&mut self.lengths[..])? != num_lengths {
++                    return Err(eof_err!("eof decoding delta length byte array lengths"));
++                }
++                check_delta_lengths(&self.lengths, len_decoder.get_offset(), data.len())?;
+ 
+                 self.data = Some(data.slice(len_decoder.get_offset()..));
+                 self.offset = 0;
+@@ -1051,13 +1081,16 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
+             Type::BYTE_ARRAY => {
+                 let num_values = cmp::min(num_values, self.num_values);
+ 
+-                let next_offset: i32 = self.lengths
++                // PLENORA: summed in `usize` (the lengths are non-negative,
++                // checked in `set_data`); the `i32` sum overflowed.
++                let next_offset: usize = self.lengths
+                     [self.current_idx..self.current_idx + num_values]
+                     .iter()
++                    .map(|length| *length as usize)
+                     .sum();
+ 
+                 self.current_idx += num_values;
+-                self.offset += next_offset as usize;
++                self.offset += next_offset;
+ 
+                 self.num_values -= num_values;
+                 Ok(num_values)
+--- a/src/encodings/decoding/byte_stream_split_decoder.rs
++++ b/src/encodings/decoding/byte_stream_split_decoder.rs
+@@ -95,8 +95,24 @@ fn valori_disponibili(stride: usize, values_decoded: usize, num_values: usize) -
+     }
+ }
+ 
++impl<T: DataType> ByteStreamSplitDecoder<T> {
++    /// PLENORA: the values the page holds.
++    fn stride(&self) -> usize {
++        self.encoded_bytes.len() / T::get_type_size()
++    }
++}
++
+ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
+     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
++        // PLENORA: the page holds whole values; a remainder was dropped in
++        // silence by `stride = len / type_size`.
++        if !data.len().is_multiple_of(T::get_type_size()) {
++            return Err(general_err!(
++                "byte stream split: {} bytes is not a whole number of {}-byte values",
++                data.len(),
++                T::get_type_size()
++            ));
++        }
+         self.encoded_bytes = data;
+         self.total_num_values = num_values;
+         self.values_decoded = 0;
+@@ -152,6 +168,8 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
+ 
+     fn skip(&mut self, num_values: usize) -> Result<usize> {
+         let to_skip = usize::min(self.values_left(), num_values);
++        // PLENORA: skipped values must be in the page too, as for `get`.
++        valori_disponibili(self.stride(), self.values_decoded, to_skip)?;
+         self.values_decoded += to_skip;
+         Ok(to_skip)
+     }
+@@ -177,6 +195,14 @@ impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
+     }
+ }
+ 
++impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
++    /// PLENORA: the values the page holds (`type_width` is checked non-zero
++    /// in `set_data`, before any `get` or `skip`).
++    fn stride(&self) -> usize {
++        self.encoded_bytes.len().checked_div(self.type_width).unwrap_or(0)
++    }
++}
++
+ impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
+     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
+         // PLENORA: una larghezza 0 (lo schema la ammette) farebbe dividere per
+@@ -279,6 +305,8 @@ impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
+ 
+     fn skip(&mut self, num_values: usize) -> Result<usize> {
+         let to_skip = usize::min(self.values_left(), num_values);
++        // PLENORA: skipped values must be in the page too, as for `get`.
++        valori_disponibili(self.stride(), self.values_decoded, to_skip)?;
+         self.values_decoded += to_skip;
+         Ok(to_skip)
+     }
+--- a/src/encodings/rle.rs
++++ b/src/encodings/rle.rs
+@@ -628,10 +628,16 @@ impl RleDecoder {
+             if indicator_value == 0 {
+                 return Ok(false);
+             }
++            // PLENORA: a run count beyond `u32` was truncated in silence (a
++            // different count of values); now an error.
++            let run = u32::try_from(indicator_value >> 1)
++                .map_err(|_| general_err!("RLE run length out of range"))?;
+             if indicator_value & 1 == 1 {
+-                self.bit_packed_left = ((indicator_value >> 1) * BIT_PACK_GROUP_SIZE as i64) as u32;
++                self.bit_packed_left = run
++                    .checked_mul(BIT_PACK_GROUP_SIZE as u32)
++                    .ok_or_else(|| general_err!("RLE run length out of range"))?;
+             } else {
+-                self.rle_left = (indicator_value >> 1) as u32;
++                self.rle_left = run;
+                 let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);
+                 self.current_value = bit_reader.get_aligned::<u64>(value_width);
+                 self.current_value.ok_or_else(|| {
+--- a/src/file/serialized_reader.rs
++++ b/src/file/serialized_reader.rs
+@@ -427,10 +427,16 @@ pub(crate) fn decode_page(
+     };
+     let (offset, can_decompress): (usize, bool) = match header_v2 {
+         Some(header_v2) => {
++            // PLENORA: the sum in `i64` (in `i32` it overflowed, a panic), and
++            // the levels inside the bytes of the page as read too: with no
++            // decompression the buffer is the compressed size, and the column
++            // reader slices the levels out of it.
++            let livelli = i64::from(header_v2.definition_levels_byte_length)
++                + i64::from(header_v2.repetition_levels_byte_length);
+             if header_v2.definition_levels_byte_length < 0
+                 || header_v2.repetition_levels_byte_length < 0
+-                || header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length
+-                    > page_header.uncompressed_page_size
++                || livelli > i64::from(page_header.uncompressed_page_size)
++                || livelli > i64::try_from(buffer.len()).unwrap_or(i64::MAX)
+             {
+                 return Err(general_err!(
+                     "DataPage v2 header contains implausible values \
+@@ -443,10 +449,7 @@ pub(crate) fn decode_page(
+                 ));
+             }
+             (
+-                usize::try_from(
+-                    header_v2.definition_levels_byte_length
+-                        + header_v2.repetition_levels_byte_length,
+-                )?,
++                usize::try_from(livelli)?,
+                 // When is_compressed flag is missing the page is considered compressed
+                 header_v2.is_compressed.unwrap_or(true),
+             )

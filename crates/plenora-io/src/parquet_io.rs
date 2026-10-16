@@ -2,7 +2,11 @@
 //! deterministica.
 //!
 //! **Lettura.** Prima che `parquet` lo decodifichi, il footer dichiarato
-//! deve stare nel tetto dei metadati; dopo, i row group entro il massimo
+//! deve stare nel tetto dei metadati; la decodifica stessa ha un tetto di
+//! memoria ([`budget_del_footer`]) e una profondità massima dello schema
+//! ([`MAX_PROFONDITA_SCHEMA`]), entrambi del fork `parquet` (lo schema si
+//! converte per ricorsione: senza tetto uno schema profondo esauriva lo
+//! stack, un aborto); dopo, i row group entro il massimo
 //! ([`crate::confine`]). Ogni chiamata a `parquet` sui byte del file gira
 //! dentro la barriera anti-panico ([`crate::confine::barriera`]); un
 //! aborto per allocazione dentro `parquet` non si ferma (docs/file.md, «File»,
@@ -31,20 +35,27 @@ use std::path::Path;
 use std::sync::Arc;
 
 use base64::Engine;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+};
 use parquet::arrow::{ArrowWriter, ARROW_SCHEMA_META_KEY};
-use parquet::basic::{Compression, Type as TipoFisico, ZstdLevel};
+use parquet::basic::LogicalType;
+use parquet::basic::{Compression, ConvertedType, Type as TipoFisico, ZstdLevel};
 use parquet::errors::ParquetError;
-use parquet::file::metadata::{KeyValue, ParquetMetaData};
+use parquet::file::metadata::{
+    KeyValue, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
+};
 use parquet::file::properties::{
     EnabledStatistics, WriterProperties, WriterVersion, DEFAULT_CREATED_BY,
 };
+use parquet::schema::types::Type as TipoParquet;
 use plenora_core::arrow::array::cast::AsArray;
 use plenora_core::arrow::array::types::{
-    Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
+    Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, IntervalDayTimeType,
+    IntervalYearMonthType,
 };
 use plenora_core::arrow::array::{make_array, Array, ArrayRef, RecordBatch};
-use plenora_core::arrow::schema::DataType;
+use plenora_core::arrow::schema::{DataType, IntervalUnit};
 use plenora_core::arrow::schema::{Schema, SchemaRef};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::contract::arrow_metadata::GEO_METADATA_KEY;
@@ -61,10 +72,271 @@ use crate::memoria::{oltre_il_budget, stima_byte};
 /// Righe massime per row group in scrittura.
 pub const RIGHE_PER_ROW_GROUP: usize = 1024 * 1024;
 
+/// Profondità massima dello schema del footer.
+///
+/// È quella predefinita del fork `parquet` (`DEFAULT_MAX_SCHEMA_DEPTH`),
+/// dichiarata qui perché la lettura non dipenda da un default. Gli schemi reali hanno pochi livelli; le
+/// geometrie native `GeoParquet` ne raggiungono cinque o sei.
+pub const MAX_PROFONDITA_SCHEMA: usize = parquet::file::metadata::DEFAULT_MAX_SCHEMA_DEPTH;
+
+/// Quante volte il tetto dei metadati può occupare la decodifica del footer.
+///
+/// Le strutture Rust dei metadati (un `ColumnChunkMetaData` per colonna e
+/// row group, i percorsi delle foglie) pesano più dei byte Thrift che le
+/// descrivono. Con il tetto predefinito (16 MiB) sono 256 MiB.
+pub const FATTORE_FOOTER: u64 = 16;
+
+/// Il tetto di memoria della decodifica del footer.
+///
+/// [`FATTORE_FOOTER`] volte il tetto dei metadati, e mai oltre il budget
+/// residuo. È un limite anche
+/// con un budget illimitato: il costo dei percorsi delle foglie cresce col
+/// quadrato dei byte del footer.
+#[must_use]
+pub fn budget_del_footer(residuo: u64, limiti: &LimitiLettura) -> u64 {
+    limiti
+        .metadati_entro(residuo)
+        .saturating_mul(FATTORE_FOOTER)
+        .min(residuo)
+}
+
+/// Le opzioni di lettura di ogni footer: profondità e tetto di memoria.
+fn opzioni_di_lettura(budget_footer: u64) -> ArrowReaderOptions {
+    ArrowReaderOptions::new()
+        .with_max_schema_depth(MAX_PROFONDITA_SCHEMA)
+        .with_footer_memory_budget(budget_footer)
+}
+
+/// Le stesse opzioni per il solo footer, letto prima della conversione
+/// dello schema in Arrow.
+fn opzioni_del_footer(budget_footer: u64) -> ParquetMetaDataOptions {
+    ParquetMetaDataOptions::new()
+        .with_max_schema_depth(MAX_PROFONDITA_SCHEMA)
+        .with_footer_memory_budget(budget_footer)
+}
+
+/// Il nome di un tipo logico Parquet che la lettura non qualifica, se lo è.
+///
+/// Elenco chiuso dei qualificati: testo, mappe, liste, enum, decimali,
+/// date, ore, istanti, interi, JSON, BSON, UUID, `FLOAT16`, geometrie,
+/// geografie e `UNKNOWN` (il tipo «sempre nullo», letto come colonna `Null`:
+/// il fork rifiuta un suo valore, `UNKNOWN_WITH_VALUES`, che prima scartava
+/// in silenzio). Tutto il resto si rifiuta: `VARIANT` (non qualificato nel fork: i suoi gruppi
+/// si leggevano come struct di byte), `FILE` e i tipi che il fork non
+/// riconosce (si leggevano come byte). Un tipo nuovo del fork non compila
+/// finché non è classificato qui.
+const fn tipo_logico_non_qualificato(tipo: &LogicalType) -> Option<&'static str> {
+    match tipo {
+        LogicalType::String
+        | LogicalType::Map
+        | LogicalType::List
+        | LogicalType::Enum
+        | LogicalType::Decimal(_)
+        | LogicalType::Date
+        | LogicalType::Time(_)
+        | LogicalType::Timestamp(_)
+        | LogicalType::Integer(_)
+        | LogicalType::Json
+        | LogicalType::Bson
+        | LogicalType::Uuid
+        | LogicalType::Float16
+        | LogicalType::Geometry(_)
+        | LogicalType::Geography(_)
+        | LogicalType::Unknown => None,
+        LogicalType::Variant(_) => Some("VARIANT"),
+        LogicalType::File => Some("FILE"),
+        LogicalType::_Unknown { .. } => Some("non riconosciuto"),
+    }
+}
+
+/// Se l'annotazione di un nodo è della sua forma: su un gruppo solo `LIST`
+/// e `MAP` (logici) o `LIST`, `MAP`, `MAP_KEY_VALUE` (convertiti); su una
+/// colonna nessuna delle due. L'abbinamento al tipo fisico di una colonna
+/// lo verifica già il costruttore dello schema di `parquet`, e quello dei
+/// gruppi del fork (`GROUP_WITH_PRIMITIVE_ANNOTATION`).
+fn annotazione_della_forma(nodo: &TipoParquet) -> bool {
+    let info = nodo.get_basic_info();
+    let di_gruppo_logico = matches!(
+        info.logical_type_ref(),
+        Some(LogicalType::List | LogicalType::Map)
+    );
+    let di_gruppo_convertito = matches!(
+        info.converted_type(),
+        ConvertedType::LIST | ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE
+    );
+    if nodo.is_group() {
+        (info.logical_type_ref().is_none() || di_gruppo_logico)
+            && (info.converted_type() == ConvertedType::NONE || di_gruppo_convertito)
+    } else {
+        !di_gruppo_logico && !di_gruppo_convertito
+    }
+}
+
+/// Ogni nodo dello schema del footer, gruppi compresi, ha un tipo logico
+/// qualificato o nessuno ([`tipo_logico_non_qualificato`]), e un'annotazione
+/// della sua forma ([`annotazione_della_forma`]): un'annotazione non
+/// qualificata o fuori forma è `Unsupported`, prima della conversione in
+/// Arrow (un gruppo annotato `UUID` diventava una struct).
+fn verifica_tipi_logici(metadati: &ParquetMetaData) -> Result<()> {
+    let mut da_vedere: Vec<&TipoParquet> = vec![metadati.file_metadata().schema()];
+    while let Some(nodo) = da_vedere.pop() {
+        if let Some(nome) = nodo
+            .get_basic_info()
+            .logical_type_ref()
+            .and_then(tipo_logico_non_qualificato)
+        {
+            return Err(PlenoraError::Unsupported(format!(
+                "tipo logico Parquet {nome}: non qualificato in lettura"
+            )));
+        }
+        if !annotazione_della_forma(nodo) {
+            return Err(PlenoraError::Unsupported(
+                "annotazione Parquet di un tipo su un nodo di un'altra forma (gruppo o colonna)"
+                    .to_owned(),
+            ));
+        }
+        if nodo.is_group() {
+            da_vedere.extend(nodo.get_fields().iter().map(AsRef::as_ref));
+        }
+    }
+    Ok(())
+}
+
+/// I rifiuti dei limiti di decodifica del footer del fork `parquet`
+/// (`vendor/parquet-60.0.0-eof`, `patches/parquet-footer-budget.patch`):
+/// il prefisso del testo di `ParquetError::General`. Sono testi costanti
+/// del fork, senza valori del file; la prova `tests/parquet_footer.rs` li
+/// esercita.
+const LIMITI_DEL_FOOTER: [&str; 3] = [
+    "Parquet schema deeper than ",
+    "Parquet schema too costly to convert",
+    "Parquet footer metadata exceeds the decoding memory budget",
+];
+
+/// I rifiuti espliciti del fork `parquet` (testi fissi, senza valori del
+/// file): `Unsupported`. Il testo arriva così com'è da `ParquetError::NYI`, o
+/// dentro `ArrowError::ParquetError` quando l'errore nasce leggendo i batch.
+fn rifiuto_del_fork(testo: &str) -> Option<PlenoraError> {
+    if testo.contains(parquet::basic::ENCODING_NOT_QUALIFIED) {
+        return Some(codifica_non_qualificata());
+    }
+    if testo.contains(parquet::basic::FLBA_AS_DICTIONARY) {
+        return Some(PlenoraError::Unsupported(
+            "colonna FIXED_LEN_BYTE_ARRAY letta come dizionario Arrow: non supportata".to_owned(),
+        ));
+    }
+    if testo.contains(parquet::basic::PAGE_INDEX_NOT_QUALIFIED)
+        || testo.contains(parquet::basic::BLOOM_FILTER_NOT_QUALIFIED)
+    {
+        return Some(PlenoraError::Unsupported(
+            "indici di pagina o bloom filter Parquet: non supportati in lettura".to_owned(),
+        ));
+    }
+    if testo.contains(parquet::basic::SKIP_NOT_QUALIFIED) {
+        return Some(PlenoraError::Unsupported(
+            "salto Parquet o selezione di righe: non supportato".to_owned(),
+        ));
+    }
+    if testo.contains(parquet::basic::PAGE_TYPE_NOT_QUALIFIED) {
+        return Some(PlenoraError::Unsupported(
+            "pagina Parquet di un tipo non qualificato (INDEX_PAGE): non supportata".to_owned(),
+        ));
+    }
+    if testo.contains(parquet::basic::BINARY_DICTIONARY_OVER_TEXT) {
+        return Some(PlenoraError::Unsupported(
+            "dizionario Arrow binario su una colonna di byte annotata come testo: non supportato"
+                .to_owned(),
+        ));
+    }
+    if testo.contains(parquet::basic::STRING_WITHOUT_ANNOTATION) {
+        return Some(PlenoraError::Unsupported(
+            "tipo Arrow testo su una colonna di byte senza annotazione di testo: non supportato"
+                .to_owned(),
+        ));
+    }
+    None
+}
+
+/// Un errore Arrow della lettura dei batch: i rifiuti del fork restano
+/// `Unsupported`, il resto come ogni errore Arrow.
+fn da_arrow_lettura(errore: plenora_core::arrow::ArrowError) -> PlenoraError {
+    if let plenora_core::arrow::ArrowError::ParquetError(testo) = &errore {
+        if let Some(rifiuto) = rifiuto_del_fork(testo) {
+            return rifiuto;
+        }
+    }
+    PlenoraError::from(errore)
+}
+
+/// Una codifica di valori che la lettura non accetta: `Unsupported`, con un
+/// testo fisso (docs/limiti.md, «Codifiche Parquet non qualificate»).
+fn codifica_non_qualificata() -> PlenoraError {
+    PlenoraError::Unsupported(
+        "codifica Parquet non qualificata per la lettura (lette: PLAIN, PLAIN_DICTIONARY, \
+         RLE_DICTIONARY; RLE per i booleani e i livelli)"
+            .to_owned(),
+    )
+}
+
+/// Le codifiche che un column chunk dichiara (l'elenco e, se c'è, le
+/// statistiche delle pagine) sono fra quelle lette. Il fork `parquet`
+/// controlla anche ogni pagina letta davvero: un footer che dichiara una
+/// codifica e una pagina che ne usa un'altra si rifiutano entrambi.
+///
+/// `BIT_PACKED` dichiarata nell'elenco passa: l'elenco non dice se è dei
+/// livelli o dei valori, e parquet-mr la dichiara per i livelli assenti di
+/// ogni colonna (40 dei 106 file di `parquet-testing` e `arrow-testing`;
+/// nessuno ha una pagina letta che la usi). I livelli `BIT_PACKED` si rifiutano pagina per pagina nel fork;
+/// `BIT_PACKED` come codifica di valori, nelle statistiche delle pagine o in
+/// una pagina, si rifiuta come ogni codifica non qualificata.
+#[allow(deprecated)] // BIT_PACKED: deprecata, dichiarata dai livelli assenti.
+fn verifica_codifiche(chunk: &parquet::file::metadata::ColumnChunkMetaData) -> Result<()> {
+    use parquet::basic::{is_qualified_value_encoding, Encoding};
+    let ammessa = |codifica: Encoding| {
+        is_qualified_value_encoding(codifica) || codifica == Encoding::BIT_PACKED
+    };
+    let dichiarate_ok = chunk.encodings().all(ammessa);
+    let pagine_ok = chunk.page_encoding_stats().is_none_or(|statistiche| {
+        statistiche
+            .iter()
+            .all(|voce| is_qualified_value_encoding(voce.encoding))
+    });
+    if dichiarate_ok && pagine_ok {
+        Ok(())
+    } else {
+        Err(codifica_non_qualificata())
+    }
+}
+
 /// Errore di `parquet` con un codice nostro, mai il testo della dipendenza
 /// (che può contenere valori): la stessa regola di `arrow_error_code`.
 #[must_use]
 pub fn da_parquet(errore: &ParquetError) -> PlenoraError {
+    if let ParquetError::NYI(testo) = errore {
+        if let Some(rifiuto) = rifiuto_del_fork(testo) {
+            return rifiuto;
+        }
+    }
+    if let ParquetError::General(testo) = errore {
+        // Lo schema Arrow incorporato contraddice il tipo Parquet (un fuso su
+        // un istante locale, un'altra scala di un decimale): come uno schema
+        // incorporato non applicabile.
+        if testo.contains(parquet::basic::ARROW_HINT_CONTRADICTS) {
+            return PlenoraError::Schema(
+                "lo schema Arrow incorporato nel file contraddice i tipi Parquet".to_owned(),
+            );
+        }
+        if LIMITI_DEL_FOOTER
+            .iter()
+            .any(|limite| testo.starts_with(limite))
+        {
+            return PlenoraError::ResourceLimit(
+                "footer Parquet oltre i limiti di decodifica (profondita' dello schema o \
+                 memoria)"
+                    .to_owned(),
+            );
+        }
+    }
     let codice = match errore {
         ParquetError::General(_) => "general",
         ParquetError::NYI(_) => "not_yet_implemented",
@@ -83,7 +355,8 @@ fn da_parquet_valore(errore: ParquetError) -> PlenoraError {
     da_parquet(&errore)
 }
 
-/// I codec di tutti i column chunk devono essere fra quelli compilati, e
+/// I codec di tutti i column chunk devono essere fra quelli compilati, le
+/// codifiche dichiarate fra quelle lette ([`verifica_codifiche`]), e
 /// nessuna colonna è `INT96`: `parquet` la converte in nanosecondi con
 /// aritmetica che avvolge, e le date oltre ±292 anni dal 1970 diventano
 /// altre date senza errore.
@@ -106,6 +379,7 @@ fn verifica_colonne(metadati: &ParquetMetaData) -> Result<()> {
                     "codec Parquet {codec} non abilitato (abilitati: UNCOMPRESSED, SNAPPY, ZSTD)"
                 )));
             }
+            verifica_codifiche(chunk)?;
         }
     }
     Ok(())
@@ -190,6 +464,46 @@ fn verifica_decimali(nome: &str, array: &ArrayRef) -> Result<()> {
         .child_data()
         .iter()
         .try_for_each(|figlio| verifica_decimali(nome, &make_array(figlio.clone())))
+}
+
+/// Ogni intervallo ha componenti non negative: in Parquet un `INTERVAL` è
+/// di tre interi senza segno (mesi, giorni, millisecondi), e `parquet`
+/// scriveva un valore negativo nei suoi byte in complemento a due, che un
+/// lettore della specifica legge come un numero enorme (-3 mesi erano
+/// 4294967293) e il fork rifiuta (`INTERVAL_OUT_OF_RANGE`). Anche annidati.
+fn verifica_intervalli(nome: &str, array: &ArrayRef) -> Result<()> {
+    let negativo = match *array.data_type() {
+        DataType::Interval(IntervalUnit::YearMonth) => array
+            .as_primitive_opt::<IntervalYearMonthType>()
+            .map(|a| a.iter().flatten().any(|mesi| mesi < 0)),
+        DataType::Interval(IntervalUnit::DayTime) => {
+            array.as_primitive_opt::<IntervalDayTimeType>().map(|a| {
+                a.iter()
+                    .flatten()
+                    .any(|valore| valore.days < 0 || valore.milliseconds < 0)
+            })
+        }
+        _ => Some(false),
+    };
+    match negativo {
+        Some(false) => {}
+        Some(true) => {
+            return Err(PlenoraError::DataMapping(format!(
+                "colonna `{nome}`: intervallo con una componente negativa, che un INTERVAL \
+                 Parquet (senza segno) non rappresenta"
+            )))
+        }
+        None => {
+            return Err(PlenoraError::Internal(
+                "array di intervalli con un tipo incoerente".to_owned(),
+            ))
+        }
+    }
+    array
+        .to_data()
+        .child_data()
+        .iter()
+        .try_for_each(|figlio| verifica_intervalli(nome, &make_array(figlio.clone())))
 }
 
 /// Lo schema Arrow incorporato nei metadati chiave-valore, se c'è.
@@ -355,8 +669,23 @@ fn verifica_righe(metadati: &ParquetMetaData) -> Result<usize> {
 pub fn leggi(percorso: &Path, residuo: u64, limiti: &LimitiLettura) -> Result<RecordBatch> {
     let mut file = File::open(percorso)?;
     verifica_footer(&mut file, limiti.metadati_entro(residuo))?;
+    let budget_footer = budget_del_footer(residuo, limiti);
+    // Il footer prima, per rifiutare un tipo logico non qualificato prima
+    // che la conversione dello schema lo trasformi in un altro tipo.
+    let letti = barriera("parquet", || {
+        ParquetMetaDataReader::new()
+            .with_metadata_options(Some(opzioni_del_footer(budget_footer)))
+            .parse_and_finish(&file)
+            .map_err(da_parquet_valore)
+    })?;
+    verifica_tipi_logici(&letti)?;
+    let opzioni = opzioni_di_lettura(budget_footer);
     let costruttore = barriera("parquet", || {
-        ParquetRecordBatchReaderBuilder::try_new(file).map_err(da_parquet_valore)
+        let arrow =
+            ArrowReaderMetadata::try_new(Arc::new(letti), opzioni).map_err(da_parquet_valore)?;
+        Ok(ParquetRecordBatchReaderBuilder::new_with_metadata(
+            file, arrow,
+        ))
     })?;
     let metadati = Arc::clone(costruttore.metadata());
     let gruppi = u64::try_from(metadati.num_row_groups()).unwrap_or(u64::MAX);
@@ -396,7 +725,9 @@ pub fn leggi(percorso: &Path, residuo: u64, limiti: &LimitiLettura) -> Result<Re
             .map_err(da_parquet_valore)
     })?;
     let blocchi = barriera("parquet", || {
-        Ok(lettore.collect::<std::result::Result<Vec<_>, _>>()?)
+        lettore
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(da_arrow_lettura)
     })?;
     let tabella = match blocchi.len() {
         0 => plenora_core::batch_vuoto(Arc::clone(&schema))
@@ -474,6 +805,7 @@ fn da_scrivere(
     }
     for (campo, colonna) in tabella.schema().fields().iter().zip(tabella.columns()) {
         verifica_decimali(campo.name(), colonna)?;
+        verifica_intervalli(campo.name(), colonna)?;
     }
     match geoparquet::prepara(tabella)? {
         Some(preparata) => {
@@ -496,6 +828,19 @@ pub fn scrivi(
     uscita: impl Write + Send,
     compressione: CompressioneParquet,
 ) -> Result<SchemaRef> {
+    if tabella
+        .schema()
+        .fields()
+        .iter()
+        .any(|campo| dizionario_di_binari_fissi(campo.data_type()))
+    {
+        return Err(PlenoraError::Unsupported(
+            "dizionario di FixedSizeBinary non scrivibile in Parquet: parquet-rs ne scrive \
+             il dizionario con i prefissi di lunghezza, fuori dalla specifica, e la lettura \
+             lo rifiuta"
+                .to_owned(),
+        ));
+    }
     let (tabella, proprieta) = da_scrivere(tabella, compressione)?;
     let schema = tabella.schema();
     let mut scrittore = ArrowWriter::try_new(uscita, Arc::clone(&schema), Some(proprieta))
@@ -503,6 +848,30 @@ pub fn scrivi(
     scrittore.write(&tabella).map_err(da_parquet_valore)?;
     scrittore.close().map_err(da_parquet_valore)?;
     Ok(schema)
+}
+
+/// Un dizionario con valori `FixedSizeBinary`, a qualunque profondità.
+/// `ArrowWriter` lo scrive in una colonna `FIXED_LEN_BYTE_ARRAY` con il
+/// dizionario nella forma dei byte array variabili (prefisso di lunghezza),
+/// che la lettura rifiuta (docs/file.md, «Confine di lettura»): un file che
+/// questo crate non saprebbe rileggere non si scrive.
+fn dizionario_di_binari_fissi(tipo: &DataType) -> bool {
+    match tipo {
+        DataType::Dictionary(_, valori) => {
+            matches!(valori.as_ref(), DataType::FixedSizeBinary(_))
+                || dizionario_di_binari_fissi(valori)
+        }
+        DataType::List(campo)
+        | DataType::LargeList(campo)
+        | DataType::ListView(campo)
+        | DataType::LargeListView(campo)
+        | DataType::FixedSizeList(campo, _)
+        | DataType::Map(campo, _) => dizionario_di_binari_fissi(campo.data_type()),
+        DataType::Struct(campi) => campi
+            .iter()
+            .any(|campo| dizionario_di_binari_fissi(campo.data_type())),
+        _ => false,
+    }
 }
 
 /// Rilegge il footer di un file appena scritto: lo schema incorporato deve
@@ -513,8 +882,12 @@ pub fn scrivi(
 /// `Schema` se lo schema incorporato manca, è diverso da `scritto` o non si
 /// applica; `DataMapping`, `Io` dalla lettura del footer.
 pub fn verifica_schema(percorso: &Path, scritto: &Schema) -> Result<()> {
-    let costruttore = ParquetRecordBatchReaderBuilder::try_new(File::open(percorso)?)
-        .map_err(da_parquet_valore)?;
+    // Il file l'ha appena scritto questo crate: gli stessi limiti di una
+    // lettura con il budget pieno.
+    let opzioni = opzioni_di_lettura(budget_del_footer(u64::MAX, &LimitiLettura::default()));
+    let costruttore =
+        ParquetRecordBatchReaderBuilder::try_new_with_options(File::open(percorso)?, opzioni)
+            .map_err(da_parquet_valore)?;
     let incorporato = schema_incorporato(costruttore.metadata())?.ok_or_else(|| {
         PlenoraError::Schema("schema Arrow incorporato assente nel file scritto".to_owned())
     })?;

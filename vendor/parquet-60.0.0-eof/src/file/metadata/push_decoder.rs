@@ -419,6 +419,19 @@ impl ParquetMetaDataPushDecoder {
                         return Ok(DecodeResult::Data(*metadata));
                     };
 
+                    // PLENORA: the column index and the offset index are
+                    // decoded by `decode_column_index` / `decode_offset_index`,
+                    // which carry no budget, and their bytes are read before
+                    // decoding. With a footer memory budget the page index is
+                    // refused here, before a byte of it is requested: the
+                    // budget promises a bound that those decoders cannot keep.
+                    if self.metadata_parser.footer_memory_budget().is_some() {
+                        return Err(general_err!(
+                            "page index requested with a footer memory budget: \
+                             the page index decoders are not bounded by it"
+                        ));
+                    }
+
                     if !self.buffers.has_range(&page_index_range) {
                         self.state = DecodeState::ReadingPageIndex(metadata);
                         return Ok(needs_range(page_index_range));

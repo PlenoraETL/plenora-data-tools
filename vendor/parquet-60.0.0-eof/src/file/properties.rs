@@ -2068,9 +2068,14 @@ impl ReaderPropertiesBuilder {
     ///
     /// If set to `true`, then the reader will decode and populate the [`Statistics`] for
     /// each page, if present.
-    /// If set to `false`, then the reader will skip decoding the statistics.
+    /// If set to `false`, then the reader will not populate the statistics.
     ///
-    /// By default statistics will not be decoded.
+    /// By default statistics will not be populated.
+    ///
+    /// PLENORA: the page statistics are always decoded and checked against
+    /// their type (a malformed statistic is an error); this property decides
+    /// only whether the page exposes them. With `false` they were skipped
+    /// without a check.
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
     pub fn set_read_page_statistics(mut self, value: bool) -> Self {
