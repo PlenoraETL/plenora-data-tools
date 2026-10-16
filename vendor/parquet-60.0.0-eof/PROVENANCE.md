@@ -21,6 +21,7 @@ con la chiave `parquet` (`Cargo.toml`, «Copie vendorizzate»).
   patch -p1 < patches/parquet-codifiche-e-livelli.patch  # codifiche lette, terzo giro, formattazione
   patch -p1 < patches/parquet-livelli-dizionari-indici.patch  # BIT_PACKED, dizionari, pagine v2, offset index
   patch -p1 < patches/parquet-salti-e-fine-pagina.patch  # salti non qualificati, fine pagina esatta
+  patch -p1 < patches/parquet-annotazioni-coerenti.patch  # annotazioni concordi, hint testuali qualificati
   ```
 
   Il risultato è questa cartella byte per byte, tolto questo file

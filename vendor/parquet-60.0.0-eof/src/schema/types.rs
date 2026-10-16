@@ -246,6 +246,21 @@ impl Type {
     }
 }
 
+// PLENORA: both annotations must describe the same type, on groups and
+// primitives alike. The error must not disclose field names.
+fn check_annotation_consistency(
+    logical: &Option<LogicalType>,
+    converted: ConvertedType,
+) -> Result<()> {
+    if logical.is_some()
+        && converted != ConvertedType::NONE
+        && ConvertedType::from(logical.clone()) != converted
+    {
+        return Err(general_err!("LOGICAL_CONVERTED_TYPE_MISMATCH"));
+    }
+    Ok(())
+}
+
 /// A builder for primitive types. All attributes are optional
 /// except the name and physical type.
 /// Note that if not specified explicitly, `Repetition::OPTIONAL` is used.
@@ -353,18 +368,8 @@ impl<'a> PrimitiveTypeBuilder<'a> {
         }
 
         if let Some(logical_type) = &self.logical_type {
-            // If a converted type is populated, check that it is consistent with
-            // its logical type
-            if self.converted_type != ConvertedType::NONE {
-                if ConvertedType::from(self.logical_type.clone()) != self.converted_type {
-                    return Err(general_err!(
-                        "Logical type {:?} is incompatible with converted type {} for field '{}'",
-                        logical_type,
-                        self.converted_type,
-                        self.name
-                    ));
-                }
-            } else {
+            check_annotation_consistency(&self.logical_type, self.converted_type)?;
+            if self.converted_type == ConvertedType::NONE {
                 // Populate the converted type for backwards compatibility
                 basic_info.converted_type = self.logical_type.clone().into();
             }
@@ -693,6 +698,7 @@ impl<'a> GroupTypeBuilder<'a> {
                 crate::basic::GROUP_WITH_PRIMITIVE_ANNOTATION
             ));
         }
+        check_annotation_consistency(&self.logical_type, self.converted_type)?;
         if matches!(&self.logical_type, Some(LogicalType::File)) {
             validate_file_type_fields(self.name, &self.fields)?;
         }

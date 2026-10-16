@@ -1256,7 +1256,9 @@ annotazione, a ogni livello dello schema (gruppi compresi), è
 sulla sua forma: su un gruppo solo `LIST`, `MAP` (e il convertito
 `MAP_KEY_VALUE`), su una colonna il tipo fisico che la specifica le dà; un
 gruppo annotato come una colonna (`UUID`, `JSON`, `UNKNOWN`) è un errore
-del footer (`GROUP_WITH_PRIMITIVE_ANNOTATION`). Un `INTERVAL` (tipo
+del footer (`GROUP_WITH_PRIMITIVE_ANNOTATION`). Se tipo logico e tipo
+convertito sono entrambi presenti devono concordare, sui gruppi come sulle
+primitive (`LOGICAL_CONVERTED_TYPE_MISMATCH`). Un `INTERVAL` (tipo
 convertito: mesi, giorni e millisecondi, interi senza segno) si legge solo
 se le parti che l'unità Arrow non tiene sono zero
 (`INTERVAL_NOT_AS_DECLARED`) e quelle che tiene stanno in `i32`
@@ -1268,7 +1270,9 @@ annotazione), non il significato: un fuso su un istante locale
 (`isAdjustedToUTC` falso), un'altra risoluzione di un istante locale in
 nanosecondi, un tipo temporale su un intero annotato, un'altra precisione
 o scala di un decimale sono un errore (`ARROW_HINT_CONTRADICTS`, `Schema`
-dal confine). Uno schema incorporato che non si applica resta ignorato dal
+dal confine). Gli hint `Utf8`, `LargeUtf8` e `Utf8View`, anche dentro un
+dizionario, valgono solo per `STRING`, `ENUM` e `JSON`: `BSON`, byte senza
+annotazione e dati geografici restano binari. Uno schema incorporato che non si applica resta ignorato dal
 fork e rifiutato dal confine (`Schema`).
 
 **Ambito.** La lettura Parquet di `plenora-io` (`parquet_io::leggi`,

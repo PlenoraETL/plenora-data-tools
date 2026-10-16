@@ -4,7 +4,7 @@
 //! in `tests/riferimenti/parquet_esiti.tsv`: insieme, percorso, sha256,
 //! scrittore (`created_by`), esito della lettura diretta con il fork ed esito
 //! dal confine di `plenora-io`. Un esito è `ok <righe> <digest>` (il digest
-//! canonico dello schema e dei valori letti, [`digest`]) o `err <testo>` (il
+//! canonico dello schema e dei valori letti, [`digest_parquet::digest`]) o `err <testo>` (il
 //! messaggio del fork; dal confine la categoria).
 //!
 //! I file non sono nel repository (licenze diverse, circa 100 MB). I due
@@ -13,7 +13,8 @@
 //! `tests/riferimenti/scrittori/genera.py`, nei due ambienti dichiarati con
 //! le versioni e gli hash esatti (`requisiti-*.txt`): 366 dei 367 file
 //! tornano byte per byte, e [`NON_RIPRODUCIBILI`] ha l'esito confrontato
-//! senza sha256 né digest. La prova è ignorata per default e si esegue con
+//! senza sha256 e con il digest delle colonne diverse da `u`.
+//! La prova viene ignorata per default e si esegue con
 //! le cartelle:
 //!
 //! ```sh
@@ -39,10 +40,11 @@ use std::path::{Path, PathBuf};
 
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::reader::{FileReader, SerializedFileReader};
-use plenora_core::arrow::array::cast::AsArray;
-use plenora_core::arrow::array::{Array, RecordBatch};
-use plenora_core::arrow::schema::{DataType, Schema};
+use plenora_core::arrow::array::RecordBatch;
 use sha2::{Digest, Sha256};
+#[path = "comune/digest_parquet.rs"]
+mod digest_parquet;
+use digest_parquet::{digest_file, esadecimale, senza_byte};
 
 /// L'intestazione del riferimento: da dove vengono i file.
 const INTESTAZIONE: &str = "\
@@ -86,8 +88,7 @@ const INSIEMI: &[(&str, &str, &[&str], usize)] = &[
 ];
 
 /// I file della matrice senza byte riproducibili (UUID casuali di
-/// `DuckDB`): per loro la prova confronta le righe e gli esiti, non lo
-/// sha256 né i digest dei valori.
+/// `DuckDB`): si omette lo sha256 del file; il digest esclude solo `u`.
 const NON_RIPRODUCIBILI: &[(&str, &str)] =
     &[("scrittori", "scritti-flba/duckdb/duckdb-uuid-dec.parquet")];
 
@@ -111,102 +112,11 @@ fn una_riga(testo: &str) -> String {
     testo.replace(['\t', '\n', '\r'], " ")
 }
 
-fn esadecimale(byte: &[u8]) -> String {
-    byte.iter().fold(String::new(), |mut testo, b| {
-        let _ = write!(testo, "{b:02x}");
-        testo
-    })
-}
-
-// --- Il digest canonico ------------------------------------------------------
-
-/// Un pezzo del digest con la sua lunghezza: nessuna concatenazione è
-/// ambigua.
-fn pezzo(h: &mut Sha256, byte: &[u8]) {
-    h.update((byte.len() as u64).to_le_bytes());
-    h.update(byte);
-}
-
-/// Il valore `i` di `array` nel digest: un segno per il nullo, poi una forma
-/// che dipende solo dal valore, non da come i buffer lo tengono (offset,
-/// slice, viste, dizionari). Un tipo senza forma canonica ferma la prova.
-fn valore(h: &mut Sha256, array: &dyn Array, i: usize) {
-    if array.logical_nulls().is_some_and(|nulli| nulli.is_null(i)) {
-        h.update([0]);
-        return;
-    }
-    h.update([1]);
-    match array.data_type() {
-        DataType::Null => {}
-        DataType::Boolean => h.update([u8::from(array.as_boolean().value(i))]),
-        DataType::Utf8 => pezzo(h, array.as_string::<i32>().value(i).as_bytes()),
-        DataType::LargeUtf8 => pezzo(h, array.as_string::<i64>().value(i).as_bytes()),
-        DataType::Utf8View => pezzo(h, array.as_string_view().value(i).as_bytes()),
-        DataType::Binary => pezzo(h, array.as_binary::<i32>().value(i)),
-        DataType::LargeBinary => pezzo(h, array.as_binary::<i64>().value(i)),
-        DataType::BinaryView => pezzo(h, array.as_binary_view().value(i)),
-        DataType::FixedSizeBinary(_) => pezzo(h, array.as_fixed_size_binary().value(i)),
-        DataType::List(_) => elementi(h, array.as_list::<i32>().value(i).as_ref()),
-        DataType::LargeList(_) => elementi(h, array.as_list::<i64>().value(i).as_ref()),
-        DataType::FixedSizeList(_, _) => {
-            elementi(h, array.as_fixed_size_list().value(i).as_ref());
-        }
-        DataType::Map(_, _) => elementi(h, &array.as_map().value(i)),
-        DataType::Struct(_) => {
-            for figlio in array.as_struct().columns() {
-                valore(h, figlio.as_ref(), i);
-            }
-        }
-        DataType::Dictionary(_, _) => {
-            let dizionario = array.as_any_dictionary();
-            let chiave = dizionario.normalized_keys()[i];
-            valore(h, dizionario.values().as_ref(), chiave);
-        }
-        tipo => match tipo.primitive_width() {
-            // Interi, decimali, virgola mobile, date, ore, istanti, durate,
-            // intervalli: i byte little-endian del valore.
-            Some(larghezza) => {
-                let dati = array.to_data();
-                let inizio = (dati.offset() + i) * larghezza;
-                pezzo(h, &dati.buffers()[0].as_slice()[inizio..inizio + larghezza]);
-            }
-            None => panic!("tipo senza forma canonica nel digest: {tipo}"),
-        },
-    }
-}
-
-fn elementi(h: &mut Sha256, figli: &dyn Array) {
-    h.update((figli.len() as u64).to_le_bytes());
-    for j in 0..figli.len() {
-        valore(h, figli, j);
-    }
-}
-
-/// Il digest canonico di una tabella letta: lo schema (nome, tipo, nullabilità
-/// di ogni campo, senza metadati) e i valori, riga per riga, colonna per
-/// colonna, nell'ordine letto; 32 cifre esadecimali (128 bit).
-fn digest(schema: &Schema, blocchi: &[RecordBatch]) -> String {
-    let mut h = Sha256::new();
-    for campo in schema.fields() {
-        pezzo(&mut h, campo.name().as_bytes());
-        pezzo(&mut h, campo.data_type().to_string().as_bytes());
-        h.update([u8::from(campo.is_nullable())]);
-    }
-    for blocco in blocchi {
-        for riga in 0..blocco.num_rows() {
-            for colonna in blocco.columns() {
-                valore(&mut h, colonna.as_ref(), riga);
-            }
-        }
-    }
-    esadecimale(&h.finalize()[..16])
-}
-
 // --- Le letture ---------------------------------------------------------------
 
 /// La lettura diretta con il fork: tutte le righe e il loro digest, o il
 /// primo errore.
-fn diretta(percorso: &Path) -> String {
+fn diretta(percorso: &Path, insieme: &str, relativo: &str) -> String {
     let esito = std::panic::catch_unwind(|| -> Result<String, String> {
         let file = std::fs::File::open(percorso).map_err(|e| e.to_string())?;
         let costruttore =
@@ -218,7 +128,10 @@ fn diretta(percorso: &Path) -> String {
             blocchi.push(batch.map_err(|e| e.to_string())?);
         }
         let righe: usize = blocchi.iter().map(RecordBatch::num_rows).sum();
-        Ok(format!("{righe} {}", digest(&schema, &blocchi)))
+        Ok(format!(
+            "{righe} {}",
+            digest_file(&schema, &blocchi, insieme, relativo)
+        ))
     });
     match esito {
         Ok(Ok(letto)) => format!("ok {letto}"),
@@ -227,12 +140,17 @@ fn diretta(percorso: &Path) -> String {
     }
 }
 
-fn dal_confine(percorso: &Path) -> String {
+fn dal_confine(percorso: &Path, insieme: &str, relativo: &str) -> String {
     match plenora_io::leggi_tabella(percorso, Some(plenora_io::Formato::Parquet), u64::MAX) {
         Ok(tabella) => format!(
             "ok {} {}",
             tabella.num_rows(),
-            digest(tabella.schema().as_ref(), std::slice::from_ref(&tabella))
+            digest_file(
+                tabella.schema().as_ref(),
+                std::slice::from_ref(&tabella),
+                insieme,
+                relativo
+            )
         ),
         Err(errore) => format!("err {:?}", errore.category()),
     }
@@ -309,8 +227,8 @@ fn calcola(scelti: &BTreeSet<&str>) -> BTreeMap<(String, String), String> {
                     "{}\t{}\t{}\t{}",
                     esadecimale(&Sha256::digest(&byte)),
                     scrittore(&percorso),
-                    diretta(&percorso),
-                    dal_confine(&percorso)
+                    diretta(&percorso, insieme, &relativo),
+                    dal_confine(&percorso, insieme, &relativo)
                 );
                 righe.insert(((*insieme).to_owned(), relativo), riga);
             }
@@ -337,23 +255,6 @@ fn leggi_riferimento() -> BTreeMap<(String, String), String> {
             ((insieme, percorso), resto)
         })
         .collect()
-}
-
-/// Per un file non riproducibile: la riga senza sha256 e senza i digest.
-fn senza_byte(resto: &str) -> String {
-    resto
-        .split('\t')
-        .skip(1)
-        .map(|colonna| {
-            let parti: Vec<&str> = colonna.split(' ').collect();
-            if parti.len() == 3 && parti[0] == "ok" {
-                format!("ok {}", parti[1])
-            } else {
-                colonna.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\t")
 }
 
 #[test]

@@ -12,6 +12,16 @@ la cui versione non ha qui una voce datata.
 
 ## [Non rilasciata]
 
+### Correzioni
+
+- Parquet: annotazioni logiche e convertite discordanti sono rifiutate
+  sia sui gruppi sia sulle primitive, senza nomi di campo negli errori.
+  Gli hint testuali valgono solo per `STRING`, `ENUM` e `JSON`, anche
+  dentro i dizionari; per gli altri byte lo schema richiesto non coincide.
+- Riferimento DuckDB: il digest esclude soltanto la colonna UUID casuale
+  del file dedicato e confronta tutte le altre colonne; aggiornata solo
+  la sua riga TSV.
+
 ### Contratti
 
 - `plenora-contracts` passa da `1e902df` al tag `v1.1.0`

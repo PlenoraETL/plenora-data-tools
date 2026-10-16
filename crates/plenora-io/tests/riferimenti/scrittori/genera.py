@@ -15,8 +15,8 @@ parametri. Le cartelle prodotte sono quelle che la prova
 `tests/esiti_di_riferimento.rs` legge sotto `PLENORA_SCRITTORI`.
 
 Un file non ha byte riproducibili: `scritti-flba/duckdb/duckdb-uuid-dec.parquet`
-(UUID casuali, `uuid()` di DuckDB). Per lui la prova confronta l'esito, non
-lo sha256 (`NON_RIPRODUCIBILI` in `esiti_di_riferimento.rs`).
+(UUID casuali, `uuid()` di DuckDB). Il digest esclude solo la colonna `u`;
+la prova confronta le altre colonne e omette lo sha256 (`NON_RIPRODUCIBILI` in `esiti_di_riferimento.rs`).
 """
 
 import datetime as dt

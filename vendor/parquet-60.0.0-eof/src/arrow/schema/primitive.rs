@@ -111,10 +111,13 @@ fn apply_hint(tipo: &Type, parquet: DataType, hint: DataType) -> Result<DataType
         (DataType::Utf8, DataType::LargeUtf8) => hint,
         (DataType::Binary, DataType::LargeBinary) => hint,
 
-        // Read as Utf8
-        (DataType::Binary, DataType::Utf8) => hint,
-        (DataType::Binary, DataType::LargeUtf8) => hint,
-        (DataType::Binary, DataType::Utf8View) => hint,
+        // PLENORA: only STRING, ENUM and JSON admit textual hints. BSON,
+        // unannotated bytes and spatial payloads keep their binary meaning.
+        // Dictionary values recurse through the same check below.
+        (DataType::Binary, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+            if matches!(info.logical_type_ref(), Some(LogicalType::String | LogicalType::Enum | LogicalType::Json))
+                || (info.logical_type_ref().is_none()
+                    && matches!(info.converted_type(), ConvertedType::UTF8 | ConvertedType::ENUM | ConvertedType::JSON)) => hint,
 
         // Determine view type
         (DataType::Utf8, DataType::Utf8View) => hint,

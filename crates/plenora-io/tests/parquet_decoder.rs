@@ -1747,7 +1747,7 @@ fn ogni_varint_malformato_ha_il_suo_errore() {
 /// Un tipo Arrow testo (dato o incorporato) su una colonna di byte senza
 /// annotazione di testo: i decoder validano l'UTF-8 dall'annotazione, e i
 /// byte spezzati diventavano una stringa non valida (un panico nelle build di
-/// debug, UTF-8 non valido in release). Ora `Unsupported`, esplicito; la
+/// debug, UTF-8 non valido in release). Ora lo schema richiesto non coincide; la
 /// stessa colonna si legge come `Binary`.
 #[test]
 fn un_tipo_testo_su_byte_non_annotati_e_non_supportato() {
@@ -1761,7 +1761,7 @@ fn un_tipo_testo_su_byte_non_annotati_e_non_supportato() {
         let schema = Schema::new(vec![Field::new("x", tipo.clone(), false)]);
         contiene(
             arrow_con_schema(&byte, schema).map(|batch| batch.len()),
-            parquet::basic::STRING_WITHOUT_ANNOTATION,
+            "Incompatible supplied Arrow schema",
         );
     }
     assert_eq!(arrow(&byte), Ok(2));
@@ -4444,5 +4444,165 @@ fn lo_schema_incorporato_non_cambia_il_tipo_parquet() {
             Ok(1),
             "{dichiarato}"
         );
+    }
+}
+
+#[path = "comune/digest_parquet.rs"]
+mod digest_parquet;
+
+#[test]
+fn regressione_annotazioni_discordanti() {
+    use parquet::basic::{ConvertedType as C, LogicalType as L, Type as P};
+    use parquet::schema::types::Type;
+    for (logico, convertito) in [
+        (L::Map, C::LIST),
+        (L::List, C::MAP),
+        (L::Map, C::MAP_KEY_VALUE),
+    ] {
+        let errore = Type::group_type_builder("sentinella")
+            .with_logical_type(Some(logico))
+            .with_converted_type(convertito)
+            .build()
+            .unwrap_err();
+        assert!(!errore.to_string().contains("sentinella"));
+    }
+    let errore = Type::primitive_type_builder("sentinella", P::BYTE_ARRAY)
+        .with_logical_type(Some(L::String))
+        .with_converted_type(C::BSON)
+        .build()
+        .unwrap_err();
+    assert!(!errore.to_string().contains("sentinella"));
+    for (logico, convertito) in [(L::Map, C::MAP), (L::List, C::LIST), (L::Map, C::NONE)] {
+        assert!(Type::group_type_builder("x")
+            .with_logical_type(Some(logico))
+            .with_converted_type(convertito)
+            .build()
+            .is_ok());
+    }
+}
+
+#[test]
+fn regressione_hint_testuali_solo_su_testo() {
+    use parquet::basic::{ConvertedType as C, LogicalType as L, Type as P};
+    use parquet::schema::types::{SchemaDescriptor, Type};
+    for (logico, convertito, testuale) in [
+        (Some(L::Bson), C::NONE, false),
+        (Some(L::geometry(None)), C::NONE, false),
+        (Some(L::geography(None, None)), C::NONE, false),
+        (None, C::BSON, false),
+        (None, C::NONE, false),
+        (Some(L::String), C::NONE, true),
+        (Some(L::Enum), C::NONE, true),
+        (Some(L::Json), C::NONE, true),
+        (None, C::UTF8, true),
+        (None, C::ENUM, true),
+        (None, C::JSON, true),
+    ] {
+        let campo = Type::primitive_type_builder("x", P::BYTE_ARRAY)
+            .with_logical_type(logico)
+            .with_converted_type(convertito)
+            .build()
+            .unwrap();
+        let schema = SchemaDescriptor::new(Arc::new(
+            Type::group_type_builder("schema")
+                .with_fields(vec![Arc::new(campo)])
+                .build()
+                .unwrap(),
+        ));
+        for hint in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            for dizionario in [false, true] {
+                let hint = if dizionario {
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(hint.clone()))
+                } else {
+                    hint.clone()
+                };
+                let metadata = vec![parquet::file::metadata::KeyValue::new(
+                    parquet::arrow::ARROW_SCHEMA_META_KEY.to_owned(),
+                    parquet::arrow::encode_arrow_schema(&Schema::new(vec![Field::new(
+                        "x",
+                        hint.clone(),
+                        true,
+                    )])),
+                )];
+                let letto =
+                    parquet::arrow::parquet_to_arrow_schema(&schema, Some(&metadata)).unwrap();
+                assert_eq!(
+                    letto.field(0).data_type(),
+                    &if testuale { hint } else { DataType::Binary }
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn regressione_digest_duckdb_conserva_le_altre_colonne() {
+    assert_ne!(
+        digest_parquet::senza_byte("sha1\tDuckDB\tok 10 aaaa\tok 10 aaaa"),
+        digest_parquet::senza_byte("sha2\tDuckDB\tok 10 bbbb\tok 10 bbbb")
+    );
+    assert_eq!(
+        digest_parquet::senza_byte("sha1\tDuckDB\tok 10 aaaa\tok 10 aaaa"),
+        digest_parquet::senza_byte("sha2\tDuckDB\tok 10 aaaa\tok 10 aaaa")
+    );
+}
+
+/// Il decimale costante e il numero di righe sono quelli di `duckdb_uuid`
+/// in `riferimenti/scrittori/genera.py`; cambia soltanto l'UUID casuale.
+#[test]
+fn digest_duckdb_esclude_solo_uuid_del_file_designato() {
+    use plenora_core::arrow::array::{Decimal128Array, FixedSizeBinaryArray};
+    let tabella = |uuid: u8, decimale: i128| {
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("u", DataType::FixedSizeBinary(16), true),
+                Field::new("d", DataType::Decimal128(38, 6), true),
+            ])),
+            vec![
+                Arc::new(FixedSizeBinaryArray::try_from_iter((0..10).map(|_| [uuid; 16])).unwrap()),
+                Arc::new(
+                    Decimal128Array::from(vec![decimale; 10])
+                        .with_precision_and_scale(38, 6)
+                        .unwrap(),
+                ),
+            ],
+        )
+        .unwrap()
+    };
+    let valore = 12_345_678_901_234_567_890_123_456_i128;
+    let prima = tabella(1, valore);
+    let altro_uuid = tabella(2, valore);
+    let altro_decimale = tabella(1, valore + 1);
+    let relativo = "scritti-flba/duckdb/duckdb-uuid-dec.parquet";
+    let calcola = |b: &RecordBatch, insieme: &str, file: &str| {
+        digest_parquet::digest_file(b.schema().as_ref(), std::slice::from_ref(b), insieme, file)
+    };
+    let atteso = calcola(&prima, "scrittori", relativo);
+    assert_eq!(atteso, calcola(&altro_uuid, "scrittori", relativo));
+    assert_ne!(atteso, calcola(&altro_decimale, "scrittori", relativo));
+    for (insieme, file) in [
+        ("parquet-testing", relativo),
+        ("scrittori", "altro.parquet"),
+    ] {
+        assert_ne!(
+            calcola(&prima, insieme, file),
+            calcola(&altro_uuid, insieme, file)
+        );
+    }
+    let solo_decimale = prima.project(&[1]).unwrap();
+    assert_eq!(
+        atteso,
+        digest_parquet::digest(
+            solo_decimale.schema().as_ref(),
+            std::slice::from_ref(&solo_decimale)
+        )
+    );
+    let riferimento = include_str!("riferimenti/parquet_esiti.tsv");
+    let riga = riferimento
+        .lines()
+        .find(|r| r.starts_with(&format!("scrittori\t{relativo}\t")))
+        .unwrap();
+    for esito in riga.split('\t').skip(4) {
+        assert_eq!(esito, format!("ok 10 {atteso}"));
     }
 }
