@@ -4511,6 +4511,90 @@ fn la_radice_parquet_non_ammette_annotazioni() {
 }
 
 #[test]
+fn regressione_integer_malformato_senza_panico() {
+    use parquet::basic::{ConvertedType as C, LogicalType as L, Type as P};
+    use parquet::schema::types::Type;
+
+    for larghezza in [7_i8, -128, -1, 0, 9, 127, 8] {
+        for firmato in [true, false] {
+            for convertito in [Some(15), None] {
+                for posizione in [0, 1, 2] {
+                    // Anche INTEGER valido deve essere rifiutato su un gruppo vuoto.
+                    if larghezza == 8 && posizione != 2 {
+                        continue;
+                    }
+                    let mut intero = Struttura::default();
+                    intero.campo(1, 3); // BYTE Thrift, senza zigzag.
+                    intero.byte.push(larghezza.cast_unsigned());
+                    intero = intero.campo_booleano(2, firmato);
+                    let mut elemento = Struttura::default();
+                    if posizione == 1 {
+                        elemento = elemento.i32(1, INT32);
+                    }
+                    if posizione != 0 {
+                        elemento = elemento.i32(3, 0);
+                    }
+                    elemento = elemento.testo(4, "sentinella");
+                    if posizione != 1 {
+                        elemento = elemento.i32(5, 0);
+                    }
+                    if let Some(convertito) = convertito {
+                        elemento = elemento.i32(6, convertito);
+                    }
+                    elemento = elemento.struttura(10, Struttura::default().struttura(10, intero));
+                    let mut schema = Vec::new();
+                    if posizione != 0 {
+                        schema.push(Struttura::default().testo(4, "schema").i32(5, 1).fine());
+                    }
+                    schema.push(elemento.fine());
+                    let footer = Struttura::default()
+                        .i32(1, 1)
+                        .elenco(2, STRUCT, schema)
+                        .i64(3, 0)
+                        .elenco(4, STRUCT, vec![])
+                        .fine();
+                    let mut byte = b"PAR1".to_vec();
+                    byte.extend_from_slice(&footer);
+                    byte.extend_from_slice(&u32::try_from(footer.len()).unwrap().to_le_bytes());
+                    byte.extend_from_slice(b"PAR1");
+                    let esito = std::panic::catch_unwind(|| arrow(&byte));
+                    let errore = esito
+                        .expect("il footer non deve causare panico")
+                        .unwrap_err();
+                    let atteso = if larghezza == 8 && !firmato && convertito.is_some() {
+                        "LOGICAL_CONVERTED_TYPE_MISMATCH"
+                    } else if larghezza == 8 {
+                        parquet::basic::GROUP_WITH_PRIMITIVE_ANNOTATION
+                    } else {
+                        "Bit width must be"
+                    };
+                    assert!(errore.contains(atteso), "{errore}");
+                    assert!(!errore.contains("sentinella"));
+                    rifiutato_dal_confine(&byte);
+                }
+                if larghezza == 8 {
+                    continue;
+                }
+                let esito = std::panic::catch_unwind(|| {
+                    Type::primitive_type_builder("sentinella", P::INT32)
+                        .with_logical_type(Some(L::integer(larghezza, firmato)))
+                        .with_converted_type(if convertito.is_some() {
+                            C::INT_8
+                        } else {
+                            C::NONE
+                        })
+                        .build()
+                });
+                let errore = esito
+                    .expect("il builder non deve causare panico")
+                    .unwrap_err();
+                assert!(!errore.to_string().contains("sentinella"));
+            }
+        }
+    }
+}
+
+#[test]
 fn regressione_annotazioni_discordanti() {
     use parquet::basic::{ConvertedType as C, LogicalType as L, Type as P};
     use parquet::schema::types::Type;

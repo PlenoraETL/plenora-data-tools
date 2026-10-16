@@ -246,6 +246,13 @@ impl Type {
     }
 }
 
+// PLENORA: From assumes a valid INTEGER width. Keep validation inside this
+// fallible conversion so every caller, including builders, rejects bad widths.
+fn checked_converted_type(logical: &Option<LogicalType>) -> Result<ConvertedType> {
+    check_logical_type(logical.as_ref())?;
+    Ok(ConvertedType::from(logical.clone()))
+}
+
 // PLENORA: both annotations must describe the same type, on groups and
 // primitives alike. The error must not disclose field names.
 fn check_annotation_consistency(
@@ -254,7 +261,7 @@ fn check_annotation_consistency(
 ) -> Result<()> {
     if logical.is_some()
         && converted != ConvertedType::NONE
-        && ConvertedType::from(logical.clone()) != converted
+        && checked_converted_type(logical)? != converted
     {
         return Err(general_err!("LOGICAL_CONVERTED_TYPE_MISMATCH"));
     }
@@ -371,7 +378,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             check_annotation_consistency(&self.logical_type, self.converted_type)?;
             if self.converted_type == ConvertedType::NONE {
                 // Populate the converted type for backwards compatibility
-                basic_info.converted_type = self.logical_type.clone().into();
+                basic_info.converted_type = checked_converted_type(&self.logical_type)?;
             }
             // Check that logical type and physical type are compatible
             match (logical_type, self.physical_type) {
@@ -712,7 +719,7 @@ impl<'a> GroupTypeBuilder<'a> {
         };
         // Populate the converted type if only the logical type is populated
         if self.logical_type.is_some() && self.converted_type == ConvertedType::NONE {
-            basic_info.converted_type = self.logical_type.into();
+            basic_info.converted_type = checked_converted_type(&self.logical_type)?;
         }
         Ok(Type::GroupType {
             basic_info,
@@ -1507,16 +1514,16 @@ fn schema_from_array_helper(
 
     // PLENORA: validate annotations before the empty-schema shortcut. The
     // root is a message, so even consistent type annotations are invalid.
+    check_logical_type(logical_type.as_ref())?;
     check_annotation_consistency(&logical_type, converted_type)?;
     if is_root_node && (logical_type.is_some() || element.converted_type.is_some()) {
         return Err(general_err!("ROOT_WITH_ANNOTATION"));
     }
-    check_logical_type(logical_type.as_ref())?;
 
     // Check for empty schema
     if let (true, None | Some(0)) = (is_root_node, element.num_children) {
         let builder = Type::group_type_builder(element.name);
-        return Ok((index + 1, Arc::new(builder.build().unwrap())));
+        return Ok((index + 1, Arc::new(builder.build()?)));
     }
 
     let field_id = element.field_id;
@@ -1563,7 +1570,7 @@ fn schema_from_array_helper(
                     //   All other types must have one.
                     builder = builder.with_repetition(repetition);
                 }
-                Ok((index + 1, Arc::new(builder.build().unwrap())))
+                Ok((index + 1, Arc::new(builder.build()?)))
             }
         }
         Some(n) => {
