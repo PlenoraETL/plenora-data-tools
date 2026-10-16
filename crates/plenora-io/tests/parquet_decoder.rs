@@ -4451,6 +4451,66 @@ fn lo_schema_incorporato_non_cambia_il_tipo_parquet() {
 mod digest_parquet;
 
 #[test]
+fn la_radice_parquet_non_ammette_annotazioni() {
+    for figli in [None, Some(0), Some(1)] {
+        for (logico, convertito) in [
+            (Some(2), Some(3)), // MAP / LIST: il caso che perdeva le annotazioni.
+            (Some(2), Some(1)), // MAP / MAP: coerenti, ma vietate sulla radice.
+            (Some(2), None),
+            (None, Some(3)),
+            (None, None),
+        ] {
+            let mut radice = Struttura::default().testo(4, "sentinella");
+            if let Some(figli) = figli {
+                radice = radice.i32(5, figli);
+            }
+            if let Some(convertito) = convertito {
+                radice = radice.i32(6, convertito);
+            }
+            if let Some(logico) = logico {
+                radice = radice.struttura(
+                    10,
+                    Struttura::default().struttura(logico, Struttura::default()),
+                );
+            }
+            let mut schema = vec![radice.fine()];
+            if figli == Some(1) {
+                schema.push(
+                    Struttura::default()
+                        .i32(1, INT32)
+                        .i32(3, 0)
+                        .testo(4, "x")
+                        .fine(),
+                );
+            }
+            let footer = Struttura::default()
+                .i32(1, 1)
+                .elenco(2, STRUCT, schema)
+                .i64(3, 0)
+                .elenco(4, STRUCT, vec![])
+                .fine();
+            let mut byte = b"PAR1".to_vec();
+            byte.extend_from_slice(&footer);
+            byte.extend_from_slice(&u32::try_from(footer.len()).unwrap().to_le_bytes());
+            byte.extend_from_slice(b"PAR1");
+            if logico.is_none() && convertito.is_none() {
+                assert_eq!(arrow(&byte), Ok(0));
+            } else {
+                let errore = arrow(&byte).expect_err("radice annotata");
+                assert!(!errore.contains("sentinella"));
+                let atteso = if logico == Some(2) && convertito == Some(3) {
+                    "LOGICAL_CONVERTED_TYPE_MISMATCH"
+                } else {
+                    "ROOT_WITH_ANNOTATION"
+                };
+                assert!(errore.contains(atteso), "{errore}");
+                rifiutato_dal_confine(&byte);
+            }
+        }
+    }
+}
+
+#[test]
 fn regressione_annotazioni_discordanti() {
     use parquet::basic::{ConvertedType as C, LogicalType as L, Type as P};
     use parquet::schema::types::Type;

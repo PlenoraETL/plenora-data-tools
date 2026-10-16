@@ -1502,18 +1502,22 @@ fn schema_from_array_helper(
     }
     let element = elements.next().expect("schema vector should not be empty");
 
+    let converted_type = element.converted_type.unwrap_or(ConvertedType::NONE);
+    let logical_type = element.logical_type;
+
+    // PLENORA: validate annotations before the empty-schema shortcut. The
+    // root is a message, so even consistent type annotations are invalid.
+    check_annotation_consistency(&logical_type, converted_type)?;
+    if is_root_node && (logical_type.is_some() || element.converted_type.is_some()) {
+        return Err(general_err!("ROOT_WITH_ANNOTATION"));
+    }
+    check_logical_type(logical_type.as_ref())?;
+
     // Check for empty schema
     if let (true, None | Some(0)) = (is_root_node, element.num_children) {
         let builder = Type::group_type_builder(element.name);
         return Ok((index + 1, Arc::new(builder.build().unwrap())));
     }
-
-    let converted_type = element.converted_type.unwrap_or(ConvertedType::NONE);
-
-    // LogicalType is preferred to ConvertedType, but both may be present.
-    let logical_type = element.logical_type;
-
-    check_logical_type(logical_type.as_ref())?;
 
     let field_id = element.field_id;
     match element.num_children {

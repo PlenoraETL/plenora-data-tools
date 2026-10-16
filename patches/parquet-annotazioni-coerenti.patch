@@ -21,10 +21,9 @@ index 7865db4..5f81077 100644
          // Determine view type
          (DataType::Utf8, DataType::Utf8View) => hint,
 diff --git a/src/schema/types.rs b/src/schema/types.rs
-index 5b47e29..671d3c8 100644
 --- a/src/schema/types.rs
 +++ b/src/schema/types.rs
-@@ -246,6 +246,21 @@ impl Type {
+@@ -246,6 +246,21 @@
      }
  }
  
@@ -46,7 +45,7 @@ index 5b47e29..671d3c8 100644
  /// A builder for primitive types. All attributes are optional
  /// except the name and physical type.
  /// Note that if not specified explicitly, `Repetition::OPTIONAL` is used.
-@@ -353,18 +368,8 @@ impl<'a> PrimitiveTypeBuilder<'a> {
+@@ -353,18 +368,8 @@
          }
  
          if let Some(logical_type) = &self.logical_type {
@@ -67,7 +66,7 @@ index 5b47e29..671d3c8 100644
                  // Populate the converted type for backwards compatibility
                  basic_info.converted_type = self.logical_type.clone().into();
              }
-@@ -693,6 +698,7 @@ impl<'a> GroupTypeBuilder<'a> {
+@@ -693,6 +698,7 @@
                  crate::basic::GROUP_WITH_PRIMITIVE_ANNOTATION
              ));
          }
@@ -75,3 +74,33 @@ index 5b47e29..671d3c8 100644
          if matches!(&self.logical_type, Some(LogicalType::File)) {
              validate_file_type_fields(self.name, &self.fields)?;
          }
+@@ -1496,18 +1502,22 @@
+     }
+     let element = elements.next().expect("schema vector should not be empty");
+ 
++    let converted_type = element.converted_type.unwrap_or(ConvertedType::NONE);
++    let logical_type = element.logical_type;
++
++    // PLENORA: validate annotations before the empty-schema shortcut. The
++    // root is a message, so even consistent type annotations are invalid.
++    check_annotation_consistency(&logical_type, converted_type)?;
++    if is_root_node && (logical_type.is_some() || element.converted_type.is_some()) {
++        return Err(general_err!("ROOT_WITH_ANNOTATION"));
++    }
++    check_logical_type(logical_type.as_ref())?;
++
+     // Check for empty schema
+     if let (true, None | Some(0)) = (is_root_node, element.num_children) {
+         let builder = Type::group_type_builder(element.name);
+         return Ok((index + 1, Arc::new(builder.build().unwrap())));
+     }
+-
+-    let converted_type = element.converted_type.unwrap_or(ConvertedType::NONE);
+-
+-    // LogicalType is preferred to ConvertedType, but both may be present.
+-    let logical_type = element.logical_type;
+-
+-    check_logical_type(logical_type.as_ref())?;
+ 
+     let field_id = element.field_id;
+     match element.num_children {
