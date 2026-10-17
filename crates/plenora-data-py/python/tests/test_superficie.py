@@ -103,7 +103,7 @@ def test_le_capacita_sono_un_documento_capabilities_v2(
 
 
 def test_le_operazioni_sono_quelle_del_catalogo_pubblico(contratti: pathlib.Path) -> None:
-    catalogo = leggi(contratti, "data-tools-v2.json")
+    catalogo = leggi(contratti, "data-tools-v3.json")
     # Le operazioni che il catalogo mette sulla superficie Python, per
     # identita' (`data.run` 3 sta solo su Rust e runtime).
     pubbliche = [op for op in catalogo["operations"] if "python_sdk" in op["surfaces"]]

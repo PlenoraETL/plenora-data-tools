@@ -3,7 +3,7 @@
 //! degli export Rust e dei simboli Python.
 //!
 //! Le operazioni sono le cinque del catalogo pubblico di `plenora-contracts`
-//! (`catalogs/data-tools-v2.json`, profilo `plenora-data-tools-profile-v2`):
+//! (`catalogs/data-tools-v3.json`, profilo `plenora-data-tools-profile-v3`):
 //! `data.catalog` 2, `data.describe` 1, `data.validate` 2, `data.run` 2 e
 //! `data.run` 3. Quest'ultima sta solo sulla superficie Rust (e sul runtime,
 //! che l'applicazione costruisce sopra): niente comando CLI, niente simbolo

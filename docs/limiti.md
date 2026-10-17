@@ -16,6 +16,25 @@ stanno nella sua guida:
 | riproiezione | [`riproiezione.md`, «Limiti dichiarati della riproiezione»](riproiezione.md#limiti-dichiarati-della-riproiezione) |
 | operazioni topologiche | [`topologia.md`, «Differenze da GEOS»](topologia.md#differenze-da-geos) |
 
+## Ambito dell'adozione dei contratti
+
+**Regola.** Public Catalogs 2.0 distingue obiettivo e disponibilita; Runtime
+Binding 2.0, Arrow Geometry Semantics 1.0 e Interoperability Vectors 1.0
+non sono rivendicati dal componente. Non sono deviazioni da contratti adottati.
+
+**Ambito.** Profilo data-tools v3, CLI, API Rust e SDK Python; stati e
+motivazioni in `crates/plenora-cli/adozione.json` e
+[contratti adottati](cli.md#contratti-adottati).
+
+**Hazard.** Dedurre dal catalogo una superficie runtime invocabile, o dalla
+conformita Arrow Interchange le garanzie GEO/REJ e delle catene INTEROP,
+attribuirebbe al componente garanzie che non offre.
+
+**Rientro.** Pubblicare un binding runtime conforme a RT-024..027 con le
+relative prove; per gli opt-in, implementare e verificare tutte le regole
+prima di rivendicarli. Le assenze DT-ABS-001 e DT-ABS-002 sono intenzionali:
+non rientrano sulla stessa identita di operazione.
+
 ## Precisione delle operazioni geografiche: 1 cm a terra
 
 **Regola.** Ogni operazione geografica è garantita entro **1 cm a terra**,

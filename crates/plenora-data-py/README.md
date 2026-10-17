@@ -1,8 +1,8 @@
 # plenora-data
 
 SDK Python di plenora-data-tools: distribuzione `plenora-data`, pacchetto
-d'import `plenora_data` (*Python SDK 1.0* e profilo data-tools versione 2 di
-`plenora-contracts`, commit `3c395a8db96df739024e203b22794af340dc8a7f`).
+d'import `plenora_data` (*Python SDK 1.0* e profilo data-tools versione 3 di
+`plenora-contracts`, commit `3aec9f724f5a0ad21366f293895b4d0dbcd0aad1`).
 Espone le quattro operazioni
 del catalogo pubblico, le stesse della CLI `plenora-data`, sulle tabelle
 Arrow in memoria o su file.
@@ -285,12 +285,12 @@ python scripts/verifica_sdk_python.py --wheel dist-rilascio/plenora_data-<versio
 
 ## Contratti adottati
 
-Il catalogo `data-tools-v2` seleziona la superficie `python_sdk` per le quattro
+Il catalogo `data-tools-v3` seleziona la superficie `python_sdk` per le quattro
 operazioni, e la sezione di questo componente in `bindings/python-sdk-v1.json`
 è, alla lettera, `plenora_cli::capacita::mappa_python()`
 (`tests/superficie_python.rs` lo verifica sul commit fissato). `data.run`
 dichiara `side_effect: local`: con `outputs` scrive file, senza non ha effetti
-fuori dal processo. Le altre scelte del profilo v2 (piano, versioni dei
+fuori dal processo. Le altre scelte del profilo v3 (piano, versioni dei
 kernel, `table.transpose`, materializzazione, budget) valgono identiche
 sulla CLI ([«Contratti adottati»](../../docs/cli.md#contratti-adottati)).
 Nessuna deviazione.

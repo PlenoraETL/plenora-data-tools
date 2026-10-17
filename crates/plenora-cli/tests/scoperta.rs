@@ -1,6 +1,6 @@
 //! Scoperta: `--help`, `--version`, `capabilities`, `catalog`, dal binario
 //! come sottoprocesso (CLI 2.0, sezioni 3, 4 e 10; Capability Discovery
-//! 2.0; Public Catalogs 1.0, sezione 6; Surface Bindings 1.0, sezione 3).
+//! 2.0; Public Catalogs 2.0, sezione 6; Surface Bindings 1.0, sezione 3).
 
 mod comune;
 
@@ -119,9 +119,9 @@ fn capabilities_descrive_il_binario_che_risponde() {
             );
         }
     }
-    // Il catalogo pubblico v2: stesse operazioni, versioni, contratti, tipi
+    // Il catalogo pubblico v3: stesse operazioni, versioni, contratti, tipi
     // di contenuto, controlli ed effetti, senza eccezioni.
-    let catalogo = contratto("data-tools-v2.json");
+    let catalogo = contratto("data-tools-v3.json");
     // Le operazioni che il catalogo mette sulla CLI (`data.run` 3 sta solo
     // su Rust e runtime).
     let pubbliche: Vec<&Value> = catalogo["operations"]
@@ -202,7 +202,7 @@ fn catalog_pubblica_il_registro_dei_kernel_del_runner() {
     );
     assert_eq!(risultato["registry"]["component"], "plenora-data-tools");
 
-    // DT-001 (profilo v2): ogni kernel del registro comune `data-kernels-v2`
+    // DT-001 (profilo v3): ogni kernel del registro comune `data-kernels-v2`
     // ha un descrittore con id, versione e famiglia del registro; quelli
     // disponibili sono, alla lettera, il `registry` del risultato; quelli
     // non disponibili hanno un motivo e mancano dal `registry`.

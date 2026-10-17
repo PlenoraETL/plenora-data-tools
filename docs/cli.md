@@ -2,7 +2,7 @@
 
 `crates/plenora-cli` è la superficie pubblica del componente
 `plenora-data-tools` secondo il profilo data-tools di `plenora-contracts`,
-versione 2, fissato al commit `3c395a8db96df739024e203b22794af340dc8a7f`: il binario
+versione 3, fissato al commit `3aec9f724f5a0ad21366f293895b4d0dbcd0aad1`: il binario
 `plenora-data` (CLI 2.0) e le stesse quattro operazioni come funzioni Rust
 (`plenora_cli::api`), più `data.run` 3, che sta solo su Rust
 ([«`data.run` 3 sul runtime»](#datarun-3-sul-runtime)). Una sola tabella (`plenora_cli::operazioni::OPERAZIONI`)
@@ -160,7 +160,7 @@ true` anche nel suo `[profile.release]`
 ## `data.run` 3 sul runtime
 
 `plenora_cli::api::esegui_artefatti` è `data.run` versione 3 (profilo
-data-tools v2, DT-RUN-001..DT-RUN-008, decisione 0008 di
+data-tools v3, DT-RUN-001..DT-RUN-008, decisione 0008 di
 `plenora-contracts`): la rappresentazione runtime di un piano con output
 nominati. Prende il testo della richiesta
 `plenora-data-execution-input-v3` (il piano e, per ogni input e output, un
@@ -198,13 +198,22 @@ tabelle pubblicate sono quelle di `esegui_in_memoria` sullo stesso piano.
   in `crates/plenora-cli/tests/fixtures/contratti/` con il loro SHA-256
   (`provenienza.json`): inviluppo, errore, capacità (più CAP-005 e
   CAP-007), registro dei kernel contro `data-kernels-v2` (DT-001),
-  operazioni, contratti, effetti e attributi contro `data-tools-v2`, comandi
+  operazioni, contratti, effetti e attributi contro `data-tools-v3`, comandi
   contro `bindings/cli-v1.json`, diagnostica per
   riga, canarini (dati e percorsi) mai nell'uscita;
 - `python scripts/verifica_cli_contratti.py --binario <plenora-data>
   --contratti <checkout di plenora-contracts>`: le stesse verifiche di
   scoperta e d'errore con `jsonschema` e `tools/conformance_checks.py` dei
   contratti (il venv dei contratti ha i pacchetti);
+- `python scripts/verifica_adozione.py --contratti <checkout>`: pin coordinati,
+  copie contro i blob Git e SHA-256, catalogo v3, stati dei requisiti e
+  forma del manifesto; nessun artefatto di rilascio viene pubblicato.
+  Il profilo copiato ha suffisso `.md.txt` per conservarlo come fixture,
+  con i link relativi del repository originale; il gate dei contratti
+  verifica quei link nella copia originale.
+- `python <checkout>/tools/validate_specs.py`: gate del checkout dei contratti,
+  inclusi cataloghi, assenze intenzionali e vettori. La CI esegue entrambi
+  prima della verifica della CLI.
 - `python scripts/genera_manifesto_adozione.py`: il manifesto v4 dagli
   artefatti costruiti (versione e digest), con la sorgente
   `crates/plenora-cli/adozione.json` (pin, profilo, contratti). Non c'è
@@ -213,11 +222,46 @@ tabelle pubblicate sono quelle di `esegui_in_memoria` sullo stesso piano.
 
 ## Contratti adottati
 
-Il profilo è data-tools versione 2 (`plenora-data-tools-profile-v2`, decisione
-0007 di `plenora-contracts`), con il catalogo `catalogs/data-tools-v2.json`:
-le differenze che alla revisione `ade868c` erano deviazioni dichiarate sono
-diventate contratto, e la sorgente del manifesto
-(`crates/plenora-cli/adozione.json`) non ne dichiara nessuna.
+Il profilo adottato e' data-tools versione 3 (`plenora-data-tools-profile-v3`,
+decisione 0015), con `catalogs/data-tools-v3.json` e Public Catalogs 2.0.
+Il pin e' `3aec9f724f5a0ad21366f293895b4d0dbcd0aad1`; la sorgente del
+manifesto (`crates/plenora-cli/adozione.json`) registra requisiti, stati e
+motivazioni. Identita delle operazioni e registro `data-kernels-v2` invariati.
+
+CAT-001 e CAT-002 distinguono il catalogo obiettivo dalla disponibilita:
+le capabilities pubblicano solo CLI o Python dell'artefatto che risponde.
+Il runtime e' condizionale, omesso dalle capabilities e quindi pianificato,
+senza deviazione. Il contratto del catalogo e' dichiarato nel manifesto;
+non si aggiunge un'interfaccia fittizia alle capabilities.
+
+CAT-003 e DT-ABS-001 vietano `data.run` 3 su CLI e Python: manca un
+risolutore di artefatti per quelle superfici, mentre la versione 2 serve
+il caso locale. DT-ABS-002 vieta `data.run` 2 sul runtime: il risultato ha
+output multipli, il trasporto un solo payload. La versione 3 resta Rust.
+
+Runtime Binding 2.0 e' non applicabile finche' il componente non espone un
+binding runtime. Un futuro binding dovra' applicare RT-024 (risultato intero
+o `resource_limit`, con effetto provato anche dopo pubblicazione), RT-025
+(wire 1, interfaccia contratto 2), RT-026 (negoziazione e downgrade esplicito)
+e RT-027 (contesto esterno all'inviluppo e registro per identita, anche nei
+retry). Non si dichiara implementata nessuna di queste garanzie di trasporto.
+
+ERR-016 e' implementato: l'esito ignoto di una pubblicazione non cambia la
+categoria della causa (`io` o `timeout`), con `never` per I/O non transitorio e `requires_recovery` per timeout
+(DT-RUN-006, ERR-006); la fase
+rimane `write`, non il commit di una transazione di database. La prova e'
+`pubblicazione_ignota_conserva_la_categoria_della_causa`.
+
+Arrow Geometry Semantics 1.0 (GEO-000..020 e REJ-001..004) e Interoperability
+Vectors 1.0 (INTEROP-001..005, decisione 0018) sono opt-in non rivendicati:
+non si attesta l'esecuzione delle catene intercomponente. Resta il confine
+Arrow Interchange e DT-ARROW. L'adapter REST-to-Arrow (RA-001..010,
+decisione 0017) e' dell'applicazione e non e' fornito dal kernel.
+Le decisioni 0019 e 0020 aggiungono esempi e verifiche di commit database,
+non un'operazione di database al componente. La revisione non contiene una
+decisione 0016. I messaggi senza dati e la cache del fuzz (#39, #40,
+decisione 0021) sono adottati eseguendo il gate dei contratti al pin:
+non modificano le campagne Rust di questo repository.
 
 - **Piano**: `plenora-data-plan-v1` (Data Plan 1.0, [«Il piano»](runner.md#il-piano)),
   senza hash di piano; un piano dei formati 4, 5 o 6 si rifiuta con

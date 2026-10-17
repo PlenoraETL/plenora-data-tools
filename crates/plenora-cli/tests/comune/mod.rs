@@ -132,7 +132,11 @@ pub fn provenienza_completa() {
     presenti.sort();
     assert_eq!(presenti, dichiarati);
     for nome in &dichiarati {
-        let _ = contratto(nome);
+        let byte = std::fs::read(cartella.join(nome)).expect("file dei contratti");
+        assert_eq!(
+            esadecimale(&Sha256::digest(&byte)),
+            provenienza["file"][nome][1].as_str().expect("SHA-256")
+        );
     }
 }
 
