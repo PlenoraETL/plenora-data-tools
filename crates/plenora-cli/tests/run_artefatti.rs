@@ -1,6 +1,6 @@
 //! `data.run` 3 (`plenora_cli::api::esegui_artefatti`) con un risolutore in
 //! memoria strumentato: registra letture e pubblicazioni nel loro ordine e
-//! inietta i guasti di DT-RUN-001..DT-RUN-008 (profilo data-tools v2 di
+//! inietta i guasti di DT-RUN-001..DT-RUN-008 (profilo data-tools v3 di
 //! `plenora-contracts`) nelle diverse fasi. Il risultato si valida con lo
 //! schema `data-execution-result-v3` dei contratti, e le tabelle pubblicate
 //! si confrontano con quelle di `data.run` 2 sullo stesso piano (DT-RUN-004).
@@ -101,6 +101,7 @@ enum Guasto {
     NienteScritto,
     Parziale,
     Ignoto,
+    ScadenzaIgnota,
 }
 
 #[derive(Default)]
@@ -166,6 +167,10 @@ impl RisolutoreArtefatti for Strumentato {
                 Guasto::NienteScritto => PubblicazioneFallita::NienteScritto(causa),
                 Guasto::Parziale => PubblicazioneFallita::Parziale(causa),
                 Guasto::Ignoto => PubblicazioneFallita::Ignoto(causa),
+                Guasto::ScadenzaIgnota => PubblicazioneFallita::Ignoto(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    RISOLTO,
+                )),
             });
         }
         self.eventi
@@ -523,6 +528,28 @@ fn un_errore_dell_esecuzione_non_pubblica_nulla() {
         .borrow()
         .iter()
         .any(|e| e.starts_with("pubblica")));
+}
+
+/// ERR-016: la causa e l'effetto ignoto restano assi indipendenti.
+#[test]
+fn pubblicazione_ignota_conserva_la_categoria_della_causa() {
+    for (guasto, categoria, retry) in [
+        (Guasto::Ignoto, ErrorCategory::Io, RetryDisposition::Never),
+        (
+            Guasto::ScadenzaIgnota,
+            ErrorCategory::Timeout,
+            RetryDisposition::RequiresRecovery,
+        ),
+    ] {
+        let mut risolutore = risolutore();
+        risolutore.guasti.insert(0, guasto);
+        let errore = errore(&richiesta(), &risolutore);
+        assert_eq!(errore.category(), categoria);
+        assert_eq!(errore.remote_effect(), RemoteEffect::Unknown);
+        assert_eq!(errore.retry_disposition(), retry);
+        assert!(!errore.to_string().contains(RISOLTO));
+        assert!(risolutore.pubblicati.borrow().is_empty());
+    }
 }
 
 /// DT-RUN-006: l'effetto di una pubblicazione fallita.

@@ -27,7 +27,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-REVISIONE = "3c395a8db96df739024e203b22794af340dc8a7f"
+REVISIONE = "3aec9f724f5a0ad21366f293895b4d0dbcd0aad1"
 
 
 class Verifica:
@@ -57,6 +57,7 @@ class Verifica:
         self.validatori = {
             nome: Draft202012Validator(schema, registry=registro) for nome, schema in schemi.items()
         }
+        sys.path.insert(0, str(contratti / "tools"))
         specifica = importlib.util.spec_from_file_location(
             "conformance_checks", contratti / "tools" / "conformance_checks.py"
         )
@@ -108,7 +109,7 @@ def verifica(contratti: Path, binario: Path) -> list[str]:
     capacita = documento["result"]
     v.valido("capabilities-v2", capacita, "capabilities")
     v.controlla(not v.semantica.capability_errors(capacita), "capabilities: CAP-005/CAP-007")
-    catalogo = json.loads((contratti / "catalogs" / "data-tools-v2.json").read_text("utf-8"))
+    catalogo = json.loads((contratti / "catalogs" / "data-tools-v3.json").read_text("utf-8"))
     pubbliche = {
         (op["id"], op["version"], op["input"]["contract"], op["output"]["contract"], op["side_effect"])
         for op in catalogo["operations"]
@@ -118,7 +119,7 @@ def verifica(contratti: Path, binario: Path) -> list[str]:
         (op["id"], op["version"], op["input"]["contract"], op["output"]["contract"], op["side_effect"])
         for op in capacita["operations"]
     }
-    v.controlla(pubbliche == nostre, "capabilities: operazioni CLI, contratti ed effetti del catalogo v2")
+    v.controlla(pubbliche == nostre, "capabilities: operazioni CLI, contratti ed effetti del catalogo v3")
 
     codice, documento = v.invoca("catalog", "--format", "json")
     v.controlla(documento["contract"] == "plenora-data-catalog-result-v2", "catalog: contratto del risultato")

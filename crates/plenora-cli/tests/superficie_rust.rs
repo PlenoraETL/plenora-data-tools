@@ -53,7 +53,7 @@ fn la_mappa_copre_esattamente_le_operazioni_pubblicate() {
         .collect();
     // Le operazioni che il catalogo pubblico mette sulla superficie Rust:
     // quelle della CLI e `data.run` 3.
-    let catalogo = contratto("data-tools-v2.json");
+    let catalogo = contratto("data-tools-v3.json");
     let pubblicate: BTreeSet<(String, u64)> = catalogo["operations"]
         .as_array()
         .expect("operations")

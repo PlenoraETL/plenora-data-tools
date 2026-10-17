@@ -210,7 +210,7 @@ pub fn mappa_rust() -> Value {
 /// Python espone.
 ///
 /// `requirement` è `required` per tutte e quattro: lo dice il catalogo
-/// pubblico (`catalogs/data-tools-v2.json`) per ogni operazione.
+/// pubblico (`catalogs/data-tools-v3.json`) per ogni operazione.
 #[must_use]
 pub fn mappa_python() -> Value {
     json!({
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn gli_attributi_di_ogni_operazione_sono_quelli_del_catalogo() {
         let catalogo: Value = serde_json::from_str(include_str!(
-            "../tests/fixtures/contratti/data-tools-v2.json"
+            "../tests/fixtures/contratti/data-tools-v3.json"
         ))
         .expect("catalogo pubblico");
         let pubbliche = catalogo["operations"].as_array().expect("operations");

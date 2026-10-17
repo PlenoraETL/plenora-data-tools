@@ -92,7 +92,7 @@ fn la_mappa_python_e_una_sezione_valida_dei_binding_dei_contratti() {
     // Ogni operazione del catalogo pubblico, con la sua versione e il suo
     // requisito; ogni simbolo una volta sola (validate_specs.py dei
     // contratti: niente entrypoint ripetuti in un componente).
-    let catalogo = contratto("data-tools-v2.json");
+    let catalogo = contratto("data-tools-v3.json");
     let pubbliche: Vec<&Value> = catalogo["operations"]
         .as_array()
         .expect("operations")

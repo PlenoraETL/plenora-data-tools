@@ -145,6 +145,7 @@ def valida(documento: dict, contratti: Path) -> None:
     errori = list(Draft202012Validator(schema).iter_errors(documento))
     if errori:
         raise SystemExit(f"manifesto non valido per lo schema v4: {len(errori)} errori")
+    sys.path.insert(0, str(contratti / "tools"))
     specifica = importlib.util.spec_from_file_location(
         "conformance_checks", contratti / "tools" / "conformance_checks.py"
     )
@@ -152,7 +153,7 @@ def valida(documento: dict, contratti: Path) -> None:
     specifica.loader.exec_module(modulo)
     semantici = modulo.adoption_errors(documento)
     if semantici:
-        raise SystemExit(f"manifesto non valido nei controlli semantici: {semantici}")
+        raise SystemExit(f"manifesto non valido nei controlli semantici: {len(semantici)} errori")
 
 
 def main() -> int:
