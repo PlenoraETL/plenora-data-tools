@@ -137,8 +137,11 @@ def verifica_checkout(contratti: Path, revisione: str) -> None:
     # prove del pin eseguono i file del worktree. Un file modificato -- o
     # anche solo aggiunto: un modulo ombra cambia cio' che Python importa --
     # renderebbe verde un gate che non ha eseguito le prove adottate.
+    # `--untracked-files=all` e' forzato dalla riga di comando: una
+    # configurazione `status.showUntrackedFiles=no`, anche globale, renderebbe
+    # invisibile proprio il modulo aggiunto che questo controllo cerca.
     stato = subprocess.run(
-        ["git", "-C", str(contratti), "status", "--porcelain"],
+        ["git", "-C", str(contratti), "status", "--porcelain", "--untracked-files=all"],
         check=True,
         capture_output=True,
         text=True,

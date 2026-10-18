@@ -41,6 +41,19 @@ class VerificaCheckoutTests(unittest.TestCase):
         ):
             genera_manifesto_adozione.verifica_checkout(Path("contratti"), "abc")
 
+    def test_gli_untracked_si_chiedono_sempre_a_git(self):
+        """`status.showUntrackedFiles=no`, anche globale, non deve contare.
+
+        Il flag sulla riga di comando vince sulla configurazione: senza,
+        proprio il modulo aggiunto che il controllo cerca resterebbe
+        invisibile su una macchina con quella impostazione.
+        """
+        with patch.object(
+            genera_manifesto_adozione.subprocess, "run", side_effect=self.esiti(""),
+        ) as run:
+            genera_manifesto_adozione.verifica_checkout(Path("contratti"), "abc")
+        self.assertIn("--untracked-files=all", run.call_args_list[1].args[0])
+
 
 class ProveContrattiTests(unittest.TestCase):
     def test_esegue_tutte_le_prove_dichiarate(self):
