@@ -210,7 +210,10 @@ tabelle pubblicate sono quelle di `esegui_in_memoria` sullo stesso piano.
   forma del manifesto; poi esegue dal checkout fissato `tools/validate_specs.py`,
   `tools/test_messages.py`, `tools/test_gate_fuzz.py` e
   `tools/test_message_sentinels.py` (mutazioni sentinella e confronto della
-  cache con l'oracolo senza cache). Ogni fallimento ferma il gate con
+  cache con l'oracolo senza cache). Il checkout deve essere **pulito** alla
+  revisione fissata: i digest leggono i blob Git, le prove eseguono il
+  worktree, e un file modificato o aggiunto farebbe eseguire prove diverse
+  da quelle adottate. Ogni fallimento ferma il gate con
   diagnostica fissa, senza riportare l'output delle prove esterne.
   Nessun artefatto di rilascio viene pubblicato.
   Il profilo copiato ha suffisso `.md.txt` per conservarlo come fixture,

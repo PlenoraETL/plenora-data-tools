@@ -7,7 +7,39 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
+import genera_manifesto_adozione
 import verifica_adozione
+
+
+class VerificaCheckoutTests(unittest.TestCase):
+    """Le prove del pin eseguono il worktree, i digest leggono i blob.
+
+    HEAD giusto non basta: un file modificato o aggiunto nel checkout farebbe
+    eseguire al gate prove diverse da quelle adottate, con i digest ancora
+    verdi perche' letti da Git.
+    """
+
+    def esiti(self, stato: str):
+        return [
+            subprocess.CompletedProcess([], 0, "abc\n", ""),
+            subprocess.CompletedProcess([], 0, stato, ""),
+        ]
+
+    def test_un_worktree_sporco_ferma_il_gate(self):
+        for stato in (" M tools/validate_specs.py\n", "?? tools/ombra.py\n"):
+            with self.subTest(stato=stato):
+                with patch.object(
+                    genera_manifesto_adozione.subprocess, "run",
+                    side_effect=self.esiti(stato),
+                ):
+                    with self.assertRaises(SystemExit):
+                        genera_manifesto_adozione.verifica_checkout(Path("contratti"), "abc")
+
+    def test_un_worktree_pulito_passa(self):
+        with patch.object(
+            genera_manifesto_adozione.subprocess, "run", side_effect=self.esiti("\n"),
+        ):
+            genera_manifesto_adozione.verifica_checkout(Path("contratti"), "abc")
 
 
 class ProveContrattiTests(unittest.TestCase):

@@ -133,6 +133,21 @@ def verifica_checkout(contratti: Path, revisione: str) -> None:
     ).stdout.strip()
     if testa != revisione:
         raise SystemExit("il checkout dei contratti non e' al commit fissato nella sorgente")
+    # HEAD giusto non basta: i confronti SHA-256 leggono i blob Git, ma le
+    # prove del pin eseguono i file del worktree. Un file modificato -- o
+    # anche solo aggiunto: un modulo ombra cambia cio' che Python importa --
+    # renderebbe verde un gate che non ha eseguito le prove adottate.
+    stato = subprocess.run(
+        ["git", "-C", str(contratti), "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if stato:
+        raise SystemExit(
+            "il checkout dei contratti non e' pulito: le prove del pin si "
+            "eseguono solo su un worktree identico alla revisione fissata"
+        )
 
 
 def valida(documento: dict, contratti: Path) -> None:
