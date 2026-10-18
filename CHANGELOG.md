@@ -10,7 +10,16 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
-## [Non rilasciata]
+## [3.0.0] - 2026-10-18
+
+Adotta il catalogo e il profilo data-tools versione 3 di
+`plenora-contracts` al commit `3aec9f7`, senza deviazioni. La major
+raccoglie i cambiamenti incompatibili nelle letture e scritture Parquet
+descritti sotto: file prima accettati ora si rifiutano per evitare
+risultati sbagliati. L'adozione v3 aggiorna il contratto del catalogo
+pubblico (Public Catalogs 2.0), non le identità delle operazioni:
+`data.catalog` 2, `data.describe` 1, `data.validate` 2 e `data.run` 2/3
+restano le stesse; anche il registro `data-kernels-v2` resta invariato.
 
 ### Correzioni
 
@@ -24,11 +33,22 @@ la cui versione non ha qui una voce datata.
 
 ### Contratti
 
-- `plenora-contracts` passa da `1e902df` al tag `v1.1.0`
-  (`3c395a8db96df739024e203b22794af340dc8a7f`), sempre profilo data-tools
-  versione 2, senza deviazioni. Delle copie dei fixture cambia solo
-  `bindings/cli-v1.json`, nelle sezioni di io-tools e rest-tools; le altre
-  e i loro SHA-256 restano gli stessi.
+- Dopo il passaggio intermedio a `v1.1.0` (`3c395a8`, #119), il pin
+  passa a `3aec9f724f5a0ad21366f293895b4d0dbcd0aad1` (#126):
+  catalogo `data-tools-v3`, profilo `plenora-data-tools-profile-v3` e
+  Public Catalogs 2.0. Le capacità dichiarano solo la superficie che
+  risponde. `data.run` 3 resta solo Rust; `data.run` 2 non ha binding
+  runtime. Il runtime è condizionale e non pubblicato dal componente:
+  Runtime Binding 2.0 e gli altri opt-in non rivendicati non sono
+  attestazioni di conformità.
+- Il gate locale di adozione esegue anche le prove esterne del pin
+  (validatore, messaggi senza dati, cache con oracolo e mutazioni
+  sentinella). Il checkout dei contratti deve essere alla revisione
+  fissata e provato pulito: si controllano anche file non tracciati,
+  stato nascosto dell'indice e cache di Git.
+- ERR-016: la categoria della causa resta `io` o `timeout` anche con
+  effetto `unknown`; le prove distinguono le due cause e il ritentativo
+  richiede recupero per un timeout, mai automatico.
 - SB-001 e CAP-013 (decisione 0009): nessuna superficie aggiunge un effetto
   oltre il `side_effect` dell'operazione, e le capacità non usano chiavi
   `plenora.`.
@@ -190,6 +210,23 @@ la cui versione non ha qui una voce datata.
   nuovo tentativo pubblicherebbe di nuovo. Prima una causa transitoria
   (`Interrupted`, `TimedOut`, `WouldBlock`, `ResourceBusy`) dava
   `requires_recovery`.
+
+### Distribuzione
+
+- Gli artefatti includono gli avvisi di licenza dei 120 crate dei quattro
+  grafi release (CLI e wheel, Linux e Windows), con testi e registro
+  versionati (#127). Il gate offline controlla grafo, condizioni di
+  licenza e impronte; i testi supplementari hanno origine HTTPS e blob
+  Git verificato dai byte conservati. I soli rinvii alle condizioni non
+  bastano. Il confezionamento e la verifica sono parte dei workflow di
+  CI, rilascio e SDK Python.
+
+### Prove
+
+- Le prove asincrone e dei controlli dell'SDK usano eventi e sonde fra i
+  passi e fra le scritture, senza attese basate sul tempo (#118, #120).
+  Le sonde sono abilitate solo nelle build di prova; una raccolta delle
+  prove fallita non conta come verifica riuscita.
 
 ### Documentazione
 
