@@ -50,8 +50,14 @@ const TESTO_PER_NOME: &[&str] = &[".gitignore", ".gitattributes", "Dockerfile"];
 /// `scripts/avvisi_crate.py`: la LICENSE del prodotto e i testi versionati
 /// in `assurance/licenze-crate` (LICENSE-APACHE, COPYING, UNLICENSE, ...)
 /// non hanno estensione, e si leggono come ogni altro testo.
-const TESTO_PER_PREFISSO: &[&str] =
-    &["LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT", "UNLICENSE"];
+const TESTO_PER_PREFISSO: &[&str] = &[
+    "LICENSE",
+    "LICENCE",
+    "COPYING",
+    "NOTICE",
+    "COPYRIGHT",
+    "UNLICENSE",
+];
 /// Estensioni binarie: non si leggono, si contano. Un file con
 /// un'estensione fuori da [`TESTO`] e da questo elenco fa fallire il test,
 /// così un formato nuovo si classifica invece di sparire dalla scansione.
