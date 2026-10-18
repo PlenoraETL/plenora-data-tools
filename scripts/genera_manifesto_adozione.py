@@ -139,17 +139,23 @@ def verifica_checkout(contratti: Path, revisione: str) -> None:
     # renderebbe verde un gate che non ha eseguito le prove adottate.
     #
     # La classe intera e' «stato del worktree nascosto al controllo», e si
-    # chiude qui per i tre modi che git offre di nasconderlo:
+    # chiude qui per i modi che git offre di nasconderlo:
     # `--untracked-files=all` vince su `status.showUntrackedFiles=no`;
     # `--ignored=matching` mostra anche i file esclusi da `.gitignore` o da
     # `core.excludesFile` (un `__pycache__` ignorato conta: Python legge i
-    # .pyc esistenti anche con -B); `ls-files -v` scopre i bit
-    # assume-unchanged e skip-worktree, che nascondono le modifiche ai file
+    # .pyc esistenti anche con -B); le strutture di accelerazione --
+    # fsmonitor e cache degli untracked -- si disabilitano per questa
+    # invocazione, perche' una cache stantia o bugiarda farebbe credere
+    # pulito un file modificato: la scansione e' piena per costruzione.
+    # `ls-files -v` scopre i bit assume-unchanged e skip-worktree, e
+    # `ls-files -f` i fsmonitor-valid, che nascondono le modifiche ai file
     # tracciati. Chi controlla la macchina puo' alterare il gate stesso: il
     # controllo prova l'integrita' del checkout, non difende da un ostile.
     stato = subprocess.run(
         [
-            "git", "-C", str(contratti), "status", "--porcelain",
+            "git", "-C", str(contratti),
+            "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+            "status", "--porcelain",
             "--untracked-files=all", "--ignored=matching",
         ],
         check=True,
@@ -162,17 +168,19 @@ def verifica_checkout(contratti: Path, revisione: str) -> None:
             "conta): le prove del pin si eseguono solo su un worktree "
             "identico alla revisione fissata"
         )
-    voci = subprocess.run(
-        ["git", "-C", str(contratti), "ls-files", "-v"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.splitlines()
-    if any(riga and (riga[0].islower() or riga[0] == "S") for riga in voci):
-        raise SystemExit(
-            "il checkout dei contratti ha voci assume-unchanged o "
-            "skip-worktree: lo stato nascosto all'indice non si accetta"
-        )
+    for opzione, nomi in (("-v", "assume-unchanged o skip-worktree"),
+                          ("-f", "fsmonitor-valid")):
+        voci = subprocess.run(
+            ["git", "-C", str(contratti), "ls-files", opzione],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        if any(riga and (riga[0].islower() or riga[0] == "S") for riga in voci):
+            raise SystemExit(
+                f"il checkout dei contratti ha voci {nomi}: lo stato "
+                "nascosto all'indice non si accetta"
+            )
 
 
 def valida(documento: dict, contratti: Path) -> None:

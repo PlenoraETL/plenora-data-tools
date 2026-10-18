@@ -19,11 +19,13 @@ class VerificaCheckoutTests(unittest.TestCase):
     verdi perche' letti da Git.
     """
 
-    def esiti(self, stato: str, voci: str = "H tools/validate_specs.py\n"):
+    def esiti(self, stato: str, voci: str = "H tools/validate_specs.py\n",
+              monitor: str = "H tools/validate_specs.py\n"):
         return [
             subprocess.CompletedProcess([], 0, "abc\n", ""),
             subprocess.CompletedProcess([], 0, stato, ""),
             subprocess.CompletedProcess([], 0, voci, ""),
+            subprocess.CompletedProcess([], 0, monitor, ""),
         ]
 
     def test_un_worktree_sporco_ferma_il_gate(self):
@@ -50,6 +52,14 @@ class VerificaCheckoutTests(unittest.TestCase):
                     with self.assertRaises(SystemExit):
                         genera_manifesto_adozione.verifica_checkout(Path("contratti"), "abc")
 
+    def test_il_bit_fsmonitor_non_nasconde_modifiche(self):
+        with patch.object(
+            genera_manifesto_adozione.subprocess, "run",
+            side_effect=self.esiti("", monitor="h tools/validate_specs.py\n"),
+        ):
+            with self.assertRaises(SystemExit):
+                genera_manifesto_adozione.verifica_checkout(Path("contratti"), "abc")
+
     def test_un_worktree_pulito_passa(self):
         with patch.object(
             genera_manifesto_adozione.subprocess, "run", side_effect=self.esiti("\n"),
@@ -71,7 +81,13 @@ class VerificaCheckoutTests(unittest.TestCase):
         comando = run.call_args_list[1].args[0]
         self.assertIn("--untracked-files=all", comando)
         self.assertIn("--ignored=matching", comando)
+        # Le strutture di accelerazione non si consultano: una cache stantia
+        # o bugiarda farebbe credere pulito un file modificato.
+        self.assertIn("core.fsmonitor=false", comando)
+        self.assertIn("core.untrackedCache=false", comando)
         self.assertIn("ls-files", run.call_args_list[2].args[0])
+        self.assertIn("-v", run.call_args_list[2].args[0])
+        self.assertIn("-f", run.call_args_list[3].args[0])
 
 
 class ProveContrattiTests(unittest.TestCase):
