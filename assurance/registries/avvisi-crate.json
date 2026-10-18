@@ -1,0 +1,3076 @@
+{
+  "schema_version": 1,
+  "profilo": "release",
+  "grafi": {
+    "cli/x86_64-unknown-linux-gnu": [
+      "ahash-0.8.12",
+      "aho-corasick-1.1.4",
+      "allocator-api2-0.2.21",
+      "approx-0.5.1",
+      "arrow-array-60.0.0",
+      "arrow-buffer-60.0.0",
+      "arrow-cmp-60.0.0",
+      "arrow-data-60.0.0",
+      "arrow-ipc-60.0.0",
+      "arrow-schema-60.0.0",
+      "arrow-select-60.0.0",
+      "base64-0.23.1",
+      "bitflags-2.13.1",
+      "block-buffer-0.12.1",
+      "byteorder-1.5.0",
+      "bytes-1.12.1",
+      "cfg-if-1.0.4",
+      "chrono-0.4.45",
+      "chrono-tz-0.10.4",
+      "const-oid-0.10.2",
+      "cpufeatures-0.3.0",
+      "crc32fast-1.5.2",
+      "crossbeam-deque-0.8.7",
+      "crossbeam-epoch-0.9.20",
+      "crossbeam-utils-0.8.22",
+      "crypto-common-0.2.2",
+      "ctrlc-3.5.2",
+      "digest-0.11.3",
+      "earcut-0.4.5",
+      "either-1.16.0",
+      "equivalent-1.0.2",
+      "fastrand-2.5.0",
+      "flatbuffers-25.12.19",
+      "float_next_after-2.0.0",
+      "foldhash-0.2.0",
+      "geo-traits-0.3.0",
+      "geo-types-0.7.19",
+      "geographiclib-rs-0.2.7",
+      "geozero-0.15.1",
+      "getrandom-0.3.4",
+      "getrandom-0.4.3",
+      "half-2.7.1",
+      "hash32-0.3.1",
+      "hashbrown-0.16.1",
+      "hashbrown-0.17.1",
+      "heapless-0.8.0",
+      "hybrid-array-0.4.14",
+      "i_float-5.0.0",
+      "i_key_sort-0.11.0",
+      "i_overlay-9.0.0",
+      "i_shape-5.0.0",
+      "i_tree-0.19.0",
+      "iana-time-zone-0.1.65",
+      "itoa-1.0.18",
+      "libc-0.2.189",
+      "libm-0.2.16",
+      "linux-raw-sys-0.12.1",
+      "log-0.4.33",
+      "md-5-0.11.0",
+      "memchr-2.8.3",
+      "nix-0.31.3",
+      "num-bigint-0.5.1",
+      "num-complex-0.4.6",
+      "num-integer-0.1.46",
+      "num-traits-0.2.19",
+      "once_cell-1.21.4",
+      "phf-0.12.1",
+      "phf_shared-0.12.1",
+      "plenora-cli-2.0.0",
+      "plenora-core-2.0.0",
+      "plenora-geo-0.33.1",
+      "plenora-io-2.0.0",
+      "plenora-kernels-geo-2.0.0",
+      "plenora-kernels-table-2.0.0",
+      "plenora-parquet-60.0.0",
+      "plenora-pipeline-2.0.0",
+      "plenora-wkt-0.14.0",
+      "rand-0.10.2",
+      "rand_core-0.10.1",
+      "rand_pcg-0.10.2",
+      "rayon-1.12.0",
+      "rayon-core-1.13.0",
+      "regex-1.13.1",
+      "regex-automata-0.4.16",
+      "regex-syntax-0.8.11",
+      "robust-1.2.0",
+      "rstar-0.12.2",
+      "rustix-1.1.4",
+      "scroll-0.13.0",
+      "serde-1.0.229",
+      "serde_core-1.0.229",
+      "serde_json-1.0.151",
+      "sha2-0.11.0",
+      "sif-itree-0.4.1",
+      "siphasher-1.0.3",
+      "smallvec-1.15.2",
+      "snap-1.1.2",
+      "spade-2.15.1",
+      "stable_deref_trait-1.2.1",
+      "tempfile-3.27.0",
+      "thiserror-1.0.69",
+      "thiserror-2.0.21",
+      "tinyvec-1.12.0",
+      "tinyvec_macros-0.1.1",
+      "twox-hash-2.1.4",
+      "typenum-1.20.1",
+      "unicode-normalization-0.1.25",
+      "uuid-1.26.1",
+      "wkt-0.14.0",
+      "zerocopy-0.8.55",
+      "zmij-1.0.23",
+      "zstd-0.14.0",
+      "zstd-safe-8.0.0",
+      "zstd-sys-2.1.0+zstd.1.5.7"
+    ],
+    "wheel/x86_64-unknown-linux-gnu": [
+      "ahash-0.8.12",
+      "aho-corasick-1.1.4",
+      "allocator-api2-0.2.21",
+      "approx-0.5.1",
+      "arrow-array-60.0.0",
+      "arrow-buffer-60.0.0",
+      "arrow-cmp-60.0.0",
+      "arrow-data-60.0.0",
+      "arrow-ipc-60.0.0",
+      "arrow-pyarrow-60.0.0",
+      "arrow-schema-60.0.0",
+      "arrow-select-60.0.0",
+      "base64-0.23.1",
+      "bitflags-2.13.1",
+      "block-buffer-0.12.1",
+      "byteorder-1.5.0",
+      "bytes-1.12.1",
+      "cfg-if-1.0.4",
+      "chrono-0.4.45",
+      "chrono-tz-0.10.4",
+      "const-oid-0.10.2",
+      "cpufeatures-0.3.0",
+      "crc32fast-1.5.2",
+      "crossbeam-deque-0.8.7",
+      "crossbeam-epoch-0.9.20",
+      "crossbeam-utils-0.8.22",
+      "crypto-common-0.2.2",
+      "ctrlc-3.5.2",
+      "digest-0.11.3",
+      "earcut-0.4.5",
+      "either-1.16.0",
+      "equivalent-1.0.2",
+      "fastrand-2.5.0",
+      "flatbuffers-25.12.19",
+      "float_next_after-2.0.0",
+      "foldhash-0.2.0",
+      "geo-traits-0.3.0",
+      "geo-types-0.7.19",
+      "geographiclib-rs-0.2.7",
+      "geozero-0.15.1",
+      "getrandom-0.3.4",
+      "getrandom-0.4.3",
+      "half-2.7.1",
+      "hash32-0.3.1",
+      "hashbrown-0.16.1",
+      "hashbrown-0.17.1",
+      "heapless-0.8.0",
+      "hybrid-array-0.4.14",
+      "i_float-5.0.0",
+      "i_key_sort-0.11.0",
+      "i_overlay-9.0.0",
+      "i_shape-5.0.0",
+      "i_tree-0.19.0",
+      "iana-time-zone-0.1.65",
+      "itoa-1.0.18",
+      "libc-0.2.189",
+      "libm-0.2.16",
+      "linux-raw-sys-0.12.1",
+      "log-0.4.33",
+      "md-5-0.11.0",
+      "memchr-2.8.3",
+      "nix-0.31.3",
+      "num-bigint-0.5.1",
+      "num-complex-0.4.6",
+      "num-integer-0.1.46",
+      "num-traits-0.2.19",
+      "once_cell-1.21.4",
+      "phf-0.12.1",
+      "phf_shared-0.12.1",
+      "plenora-cli-2.0.0",
+      "plenora-core-2.0.0",
+      "plenora-data-py-2.0.0",
+      "plenora-geo-0.33.1",
+      "plenora-io-2.0.0",
+      "plenora-kernels-geo-2.0.0",
+      "plenora-kernels-table-2.0.0",
+      "plenora-parquet-60.0.0",
+      "plenora-pipeline-2.0.0",
+      "plenora-wkt-0.14.0",
+      "pyo3-0.29.2",
+      "pyo3-ffi-0.29.2",
+      "rand-0.10.2",
+      "rand_core-0.10.1",
+      "rand_pcg-0.10.2",
+      "rayon-1.12.0",
+      "rayon-core-1.13.0",
+      "regex-1.13.1",
+      "regex-automata-0.4.16",
+      "regex-syntax-0.8.11",
+      "robust-1.2.0",
+      "rstar-0.12.2",
+      "rustix-1.1.4",
+      "scroll-0.13.0",
+      "serde-1.0.229",
+      "serde_core-1.0.229",
+      "serde_json-1.0.151",
+      "sha2-0.11.0",
+      "sif-itree-0.4.1",
+      "siphasher-1.0.3",
+      "smallvec-1.15.2",
+      "snap-1.1.2",
+      "spade-2.15.1",
+      "stable_deref_trait-1.2.1",
+      "tempfile-3.27.0",
+      "thiserror-1.0.69",
+      "thiserror-2.0.21",
+      "tinyvec-1.12.0",
+      "tinyvec_macros-0.1.1",
+      "twox-hash-2.1.4",
+      "typenum-1.20.1",
+      "unicode-normalization-0.1.25",
+      "uuid-1.26.1",
+      "wkt-0.14.0",
+      "zerocopy-0.8.55",
+      "zmij-1.0.23",
+      "zstd-0.14.0",
+      "zstd-safe-8.0.0",
+      "zstd-sys-2.1.0+zstd.1.5.7"
+    ],
+    "cli/x86_64-pc-windows-msvc": [
+      "ahash-0.8.12",
+      "aho-corasick-1.1.4",
+      "allocator-api2-0.2.21",
+      "approx-0.5.1",
+      "arrow-array-60.0.0",
+      "arrow-buffer-60.0.0",
+      "arrow-cmp-60.0.0",
+      "arrow-data-60.0.0",
+      "arrow-ipc-60.0.0",
+      "arrow-schema-60.0.0",
+      "arrow-select-60.0.0",
+      "base64-0.23.1",
+      "bitflags-2.13.1",
+      "block-buffer-0.12.1",
+      "byteorder-1.5.0",
+      "bytes-1.12.1",
+      "cfg-if-1.0.4",
+      "chrono-0.4.45",
+      "chrono-tz-0.10.4",
+      "const-oid-0.10.2",
+      "cpufeatures-0.3.0",
+      "crc32fast-1.5.2",
+      "crossbeam-deque-0.8.7",
+      "crossbeam-epoch-0.9.20",
+      "crossbeam-utils-0.8.22",
+      "crypto-common-0.2.2",
+      "ctrlc-3.5.2",
+      "digest-0.11.3",
+      "earcut-0.4.5",
+      "either-1.16.0",
+      "equivalent-1.0.2",
+      "fastrand-2.5.0",
+      "flatbuffers-25.12.19",
+      "float_next_after-2.0.0",
+      "foldhash-0.2.0",
+      "geo-traits-0.3.0",
+      "geo-types-0.7.19",
+      "geographiclib-rs-0.2.7",
+      "geozero-0.15.1",
+      "getrandom-0.3.4",
+      "getrandom-0.4.3",
+      "half-2.7.1",
+      "hash32-0.3.1",
+      "hashbrown-0.16.1",
+      "hashbrown-0.17.1",
+      "heapless-0.8.0",
+      "hybrid-array-0.4.14",
+      "i_float-5.0.0",
+      "i_key_sort-0.11.0",
+      "i_overlay-9.0.0",
+      "i_shape-5.0.0",
+      "i_tree-0.19.0",
+      "itoa-1.0.18",
+      "libm-0.2.16",
+      "log-0.4.33",
+      "md-5-0.11.0",
+      "memchr-2.8.3",
+      "num-bigint-0.5.1",
+      "num-complex-0.4.6",
+      "num-integer-0.1.46",
+      "num-traits-0.2.19",
+      "once_cell-1.21.4",
+      "phf-0.12.1",
+      "phf_shared-0.12.1",
+      "plenora-cli-2.0.0",
+      "plenora-core-2.0.0",
+      "plenora-geo-0.33.1",
+      "plenora-io-2.0.0",
+      "plenora-kernels-geo-2.0.0",
+      "plenora-kernels-table-2.0.0",
+      "plenora-parquet-60.0.0",
+      "plenora-pipeline-2.0.0",
+      "plenora-wkt-0.14.0",
+      "rand-0.10.2",
+      "rand_core-0.10.1",
+      "rand_pcg-0.10.2",
+      "rayon-1.12.0",
+      "rayon-core-1.13.0",
+      "regex-1.13.1",
+      "regex-automata-0.4.16",
+      "regex-syntax-0.8.11",
+      "robust-1.2.0",
+      "rstar-0.12.2",
+      "scroll-0.13.0",
+      "serde-1.0.229",
+      "serde_core-1.0.229",
+      "serde_json-1.0.151",
+      "sha2-0.11.0",
+      "sif-itree-0.4.1",
+      "siphasher-1.0.3",
+      "smallvec-1.15.2",
+      "snap-1.1.2",
+      "spade-2.15.1",
+      "stable_deref_trait-1.2.1",
+      "tempfile-3.27.0",
+      "thiserror-1.0.69",
+      "thiserror-2.0.21",
+      "tinyvec-1.12.0",
+      "tinyvec_macros-0.1.1",
+      "twox-hash-2.1.4",
+      "typenum-1.20.1",
+      "unicode-normalization-0.1.25",
+      "uuid-1.26.1",
+      "windows-link-0.2.1",
+      "windows-sys-0.61.2",
+      "wkt-0.14.0",
+      "zerocopy-0.8.55",
+      "zmij-1.0.23",
+      "zstd-0.14.0",
+      "zstd-safe-8.0.0",
+      "zstd-sys-2.1.0+zstd.1.5.7"
+    ],
+    "wheel/x86_64-pc-windows-msvc": [
+      "ahash-0.8.12",
+      "aho-corasick-1.1.4",
+      "allocator-api2-0.2.21",
+      "approx-0.5.1",
+      "arrow-array-60.0.0",
+      "arrow-buffer-60.0.0",
+      "arrow-cmp-60.0.0",
+      "arrow-data-60.0.0",
+      "arrow-ipc-60.0.0",
+      "arrow-pyarrow-60.0.0",
+      "arrow-schema-60.0.0",
+      "arrow-select-60.0.0",
+      "base64-0.23.1",
+      "bitflags-2.13.1",
+      "block-buffer-0.12.1",
+      "byteorder-1.5.0",
+      "bytes-1.12.1",
+      "cfg-if-1.0.4",
+      "chrono-0.4.45",
+      "chrono-tz-0.10.4",
+      "const-oid-0.10.2",
+      "cpufeatures-0.3.0",
+      "crc32fast-1.5.2",
+      "crossbeam-deque-0.8.7",
+      "crossbeam-epoch-0.9.20",
+      "crossbeam-utils-0.8.22",
+      "crypto-common-0.2.2",
+      "ctrlc-3.5.2",
+      "digest-0.11.3",
+      "earcut-0.4.5",
+      "either-1.16.0",
+      "equivalent-1.0.2",
+      "fastrand-2.5.0",
+      "flatbuffers-25.12.19",
+      "float_next_after-2.0.0",
+      "foldhash-0.2.0",
+      "geo-traits-0.3.0",
+      "geo-types-0.7.19",
+      "geographiclib-rs-0.2.7",
+      "geozero-0.15.1",
+      "getrandom-0.3.4",
+      "getrandom-0.4.3",
+      "half-2.7.1",
+      "hash32-0.3.1",
+      "hashbrown-0.16.1",
+      "hashbrown-0.17.1",
+      "heapless-0.8.0",
+      "hybrid-array-0.4.14",
+      "i_float-5.0.0",
+      "i_key_sort-0.11.0",
+      "i_overlay-9.0.0",
+      "i_shape-5.0.0",
+      "i_tree-0.19.0",
+      "itoa-1.0.18",
+      "libc-0.2.189",
+      "libm-0.2.16",
+      "log-0.4.33",
+      "md-5-0.11.0",
+      "memchr-2.8.3",
+      "num-bigint-0.5.1",
+      "num-complex-0.4.6",
+      "num-integer-0.1.46",
+      "num-traits-0.2.19",
+      "once_cell-1.21.4",
+      "phf-0.12.1",
+      "phf_shared-0.12.1",
+      "plenora-cli-2.0.0",
+      "plenora-core-2.0.0",
+      "plenora-data-py-2.0.0",
+      "plenora-geo-0.33.1",
+      "plenora-io-2.0.0",
+      "plenora-kernels-geo-2.0.0",
+      "plenora-kernels-table-2.0.0",
+      "plenora-parquet-60.0.0",
+      "plenora-pipeline-2.0.0",
+      "plenora-wkt-0.14.0",
+      "pyo3-0.29.2",
+      "pyo3-ffi-0.29.2",
+      "rand-0.10.2",
+      "rand_core-0.10.1",
+      "rand_pcg-0.10.2",
+      "rayon-1.12.0",
+      "rayon-core-1.13.0",
+      "regex-1.13.1",
+      "regex-automata-0.4.16",
+      "regex-syntax-0.8.11",
+      "robust-1.2.0",
+      "rstar-0.12.2",
+      "scroll-0.13.0",
+      "serde-1.0.229",
+      "serde_core-1.0.229",
+      "serde_json-1.0.151",
+      "sha2-0.11.0",
+      "sif-itree-0.4.1",
+      "siphasher-1.0.3",
+      "smallvec-1.15.2",
+      "snap-1.1.2",
+      "spade-2.15.1",
+      "stable_deref_trait-1.2.1",
+      "tempfile-3.27.0",
+      "thiserror-1.0.69",
+      "thiserror-2.0.21",
+      "tinyvec-1.12.0",
+      "tinyvec_macros-0.1.1",
+      "twox-hash-2.1.4",
+      "typenum-1.20.1",
+      "unicode-normalization-0.1.25",
+      "uuid-1.26.1",
+      "windows-link-0.2.1",
+      "windows-sys-0.61.2",
+      "wkt-0.14.0",
+      "zerocopy-0.8.55",
+      "zmij-1.0.23",
+      "zstd-0.14.0",
+      "zstd-safe-8.0.0",
+      "zstd-sys-2.1.0+zstd.1.5.7"
+    ]
+  },
+  "crate": {
+    "ahash-0.8.12": {
+      "nome": "ahash",
+      "versione": "0.8.12",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/tkaitchuck/ahash",
+      "autori": [
+        "Tom Kaitchuck <Tom.Kaitchuck@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "0444c6991eead6822f7b9102e654448d51624431119546492e8b231db42c48bb",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "aho-corasick-1.1.4": {
+      "nome": "aho-corasick",
+      "versione": "1.1.4",
+      "licenza": "Unlicense OR MIT",
+      "repository": "https://github.com/BurntSushi/aho-corasick",
+      "autori": [
+        "Andrew Gallant <jamslam@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "COPYING",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "UNLICENSE",
+          "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "allocator-api2-0.2.21": {
+      "nome": "allocator-api2",
+      "versione": "0.2.21",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/zakarumych/allocator-api2",
+      "autori": [
+        "Zakarum <zaq.dev@icloud.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "approx-0.5.1": {
+      "nome": "approx",
+      "versione": "0.5.1",
+      "licenza": "Apache-2.0",
+      "repository": "https://github.com/brendanzab/approx",
+      "autori": [
+        "Brendan Zabarauskas <bjzaba@yahoo.com.au>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "arrow-array-60.0.0": {
+      "nome": "arrow-array",
+      "versione": "60.0.0",
+      "licenza": "Apache-2.0 AND MIT",
+      "repository": "https://github.com/apache/arrow-rs",
+      "autori": [
+        "Apache Arrow <dev@arrow.apache.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "a01a418b6ffb1de8f4c3814e386b35e1a93a14529b68f17d286550f355b298e1",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "NOTICE.txt",
+          "sha256": "e5b198d7f809311723889814d99a92f808c69e89a847efa7a7b65270f5fdeae6",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "arrow-buffer-60.0.0": {
+      "nome": "arrow-buffer",
+      "versione": "60.0.0",
+      "licenza": "Apache-2.0",
+      "repository": "https://github.com/apache/arrow-rs",
+      "autori": [
+        "Apache Arrow <dev@arrow.apache.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "NOTICE.txt",
+          "sha256": "e5b198d7f809311723889814d99a92f808c69e89a847efa7a7b65270f5fdeae6",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "arrow-cmp-60.0.0": {
+      "nome": "arrow-cmp",
+      "versione": "60.0.0",
+      "licenza": "Apache-2.0",
+      "repository": "https://github.com/apache/arrow-rs",
+      "autori": [
+        "Apache Arrow <dev@arrow.apache.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "NOTICE.txt",
+          "sha256": "e5b198d7f809311723889814d99a92f808c69e89a847efa7a7b65270f5fdeae6",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "arrow-data-60.0.0": {
+      "nome": "arrow-data",
+      "versione": "60.0.0",
+      "licenza": "Apache-2.0",
+      "repository": "https://github.com/apache/arrow-rs",
+      "autori": [
+        "Apache Arrow <dev@arrow.apache.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "NOTICE.txt",
+          "sha256": "e5b198d7f809311723889814d99a92f808c69e89a847efa7a7b65270f5fdeae6",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "arrow-ipc-60.0.0": {
+      "nome": "arrow-ipc",
+      "versione": "60.0.0",
+      "licenza": "Apache-2.0",
+      "repository": "https://github.com/apache/arrow-rs",
+      "autori": [
+        "Apache Arrow <dev@arrow.apache.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "NOTICE.txt",
+          "sha256": "e5b198d7f809311723889814d99a92f808c69e89a847efa7a7b65270f5fdeae6",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "arrow-pyarrow-60.0.0": {
+      "nome": "arrow-pyarrow",
+      "versione": "60.0.0",
+      "licenza": "Apache-2.0",
+      "repository": "https://github.com/apache/arrow-rs",
+      "autori": [
+        "Apache Arrow <dev@arrow.apache.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "NOTICE.txt",
+          "sha256": "e5b198d7f809311723889814d99a92f808c69e89a847efa7a7b65270f5fdeae6",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "arrow-schema-60.0.0": {
+      "nome": "arrow-schema",
+      "versione": "60.0.0",
+      "licenza": "Apache-2.0",
+      "repository": "https://github.com/apache/arrow-rs",
+      "autori": [
+        "Apache Arrow <dev@arrow.apache.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "NOTICE.txt",
+          "sha256": "e5b198d7f809311723889814d99a92f808c69e89a847efa7a7b65270f5fdeae6",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "arrow-select-60.0.0": {
+      "nome": "arrow-select",
+      "versione": "60.0.0",
+      "licenza": "Apache-2.0",
+      "repository": "https://github.com/apache/arrow-rs",
+      "autori": [
+        "Apache Arrow <dev@arrow.apache.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "NOTICE.txt",
+          "sha256": "e5b198d7f809311723889814d99a92f808c69e89a847efa7a7b65270f5fdeae6",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "base64-0.23.1": {
+      "nome": "base64",
+      "versione": "0.23.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/marshallpierce/rust-base64",
+      "autori": [
+        "Marshall Pierce <marshall@mpierce.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "ab499c75a0f0da8e0fe83bf9ba3a27e5c39705310f07107c6c66b69958d2401c",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "bitflags-2.13.1": {
+      "nome": "bitflags",
+      "versione": "2.13.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/bitflags/bitflags",
+      "autori": [
+        "The Rust Project Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "block-buffer-0.12.1": {
+      "nome": "block-buffer",
+      "versione": "0.12.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/RustCrypto/utils",
+      "autori": [
+        "RustCrypto Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "98181e7249d0c01737645ec982499ce99a0f07eb8f7d625b8840d799d10dbc01",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "byteorder-1.5.0": {
+      "nome": "byteorder",
+      "versione": "1.5.0",
+      "licenza": "Unlicense OR MIT",
+      "repository": "https://github.com/BurntSushi/byteorder",
+      "autori": [
+        "Andrew Gallant <jamslam@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "COPYING",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "UNLICENSE",
+          "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "bytes-1.12.1": {
+      "nome": "bytes",
+      "versione": "1.12.1",
+      "licenza": "MIT",
+      "repository": "https://github.com/tokio-rs/bytes",
+      "autori": [
+        "Carl Lerche <me@carllerche.com>",
+        "Sean McArthur <sean@seanmonstar.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "45f522cacecb1023856e46df79ca625dfc550c94910078bd8aec6e02880b3d42",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "cfg-if-1.0.4": {
+      "nome": "cfg-if",
+      "versione": "1.0.4",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang/cfg-if",
+      "autori": [
+        "Alex Crichton <alex@alexcrichton.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "chrono-0.4.45": {
+      "nome": "chrono",
+      "versione": "0.4.45",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/chronotope/chrono",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE.txt",
+          "sha256": "946c9835d8034d24404f8cfec5f4654cee5dad17e944afc3d06d742cf2882831",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "chrono-tz-0.10.4": {
+      "nome": "chrono-tz",
+      "versione": "0.10.4",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/chronotope/chrono-tz",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "4789210f4df8abc03fce1cddd9c2ba517f184840687f2815d741de282c1aa93a",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "tz/LICENSE",
+          "sha256": "0613408568889f5739e5ae252b722a2659c02002839ad970a63dc5e9174b27cf",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "const-oid-0.10.2": {
+      "nome": "const-oid",
+      "versione": "0.10.2",
+      "licenza": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/RustCrypto/formats",
+      "autori": [
+        "RustCrypto Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "73b9dc2e79c7308998dd30296e073aefaefb944a68fb89aa412c23c0edcabcaa",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "cpufeatures-0.3.0": {
+      "nome": "cpufeatures",
+      "versione": "0.3.0",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/RustCrypto/utils",
+      "autori": [
+        "RustCrypto Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "ae9baa7beea910273c2f384c2a6b721fb7bd02bda3436074a1072e4ee689f985",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "crc32fast-1.5.2": {
+      "nome": "crc32fast",
+      "versione": "1.5.2",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/srijs/rust-crc32fast",
+      "autori": [
+        "Sam Rijs <srijs@airpost.net>",
+        "Alex Crichton <alex@alexcrichton.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "61d383b05b87d78f94d2937e2580cce47226d17823c0430fbcad09596537efcf",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "crossbeam-deque-0.8.7": {
+      "nome": "crossbeam-deque",
+      "versione": "0.8.7",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/crossbeam-rs/crossbeam",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "crossbeam-epoch-0.9.20": {
+      "nome": "crossbeam-epoch",
+      "versione": "0.9.20",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/crossbeam-rs/crossbeam",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "crossbeam-utils-0.8.22": {
+      "nome": "crossbeam-utils",
+      "versione": "0.8.22",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/crossbeam-rs/crossbeam",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "crypto-common-0.2.2": {
+      "nome": "crypto-common",
+      "versione": "0.2.2",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/RustCrypto/traits",
+      "autori": [
+        "RustCrypto Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "d2e7ec5355c96eeade56b09187ceb48a6a30299da3ce7531a66d3d11405ab963",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "ctrlc-3.5.2": {
+      "nome": "ctrlc",
+      "versione": "3.5.2",
+      "licenza": "MIT/Apache-2.0",
+      "repository": "https://github.com/Detegr/rust-ctrlc.git",
+      "autori": [
+        "Antti Keränen <detegr@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "3481c338b8e2760b5a58e129339501c01e640f7597767f91d1a84e25e68fbdb4",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "digest-0.11.3": {
+      "nome": "digest",
+      "versione": "0.11.3",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/RustCrypto/traits",
+      "autori": [
+        "RustCrypto Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "af59cea35d7f5e2777a713b8d155d65efa2c339eb43f3c14e868c6ac8506edad",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "earcut-0.4.5": {
+      "nome": "earcut",
+      "versione": "0.4.5",
+      "licenza": "ISC",
+      "repository": "https://github.com/ciscorn/earcut-rs",
+      "autori": [
+        "Taku Fukada <naninunenor@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE.txt",
+          "sha256": "1b5fd56a3c78a302a4bfe304cfcbce912938361f627c69a321220615c2d6b08d",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "either-1.16.0": {
+      "nome": "either",
+      "versione": "1.16.0",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rayon-rs/either",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "7576269ea71f767b99297934c0b2367532690f8c4badc695edf8e04ab6a1e545",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "equivalent-1.0.2": {
+      "nome": "equivalent",
+      "versione": "1.0.2",
+      "licenza": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/indexmap-rs/equivalent",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "7365cc8878a1d7ce155a58c4ca09c3d7a6be413efa5334a80ea842912b669349",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "fastrand-2.5.0": {
+      "nome": "fastrand",
+      "versione": "2.5.0",
+      "licenza": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/smol-rs/fastrand",
+      "autori": [
+        "Stjepan Glavina <stjepang@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "flatbuffers-25.12.19": {
+      "nome": "flatbuffers",
+      "versione": "25.12.19",
+      "licenza": "Apache-2.0",
+      "repository": "https://github.com/google/flatbuffers",
+      "autori": [
+        "Robert Winslow <hello@rwinslow.com>",
+        "FlatBuffers Maintainers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "https://github.com/google/flatbuffers/blob/7e163021e59cca4f8e1e35a7c828b5c6b7915953/LICENSE",
+          "blob_git": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+          "recupero": "plenora-IO-tools@9795e7984542c2664c07b9314fd7bceab6e42a83:assurance/licenze-crate/flatbuffers-25.12.19/LICENSE",
+          "git_blob": "d645695673349e3947e8e5ae42332d0ac3164cd7"
+        }
+      ]
+    },
+    "float_next_after-2.0.0": {
+      "nome": "float_next_after",
+      "versione": "2.0.0",
+      "licenza": "MIT",
+      "repository": "https://gitlab.com/bronsonbdevost/next_afterf",
+      "autori": [
+        "Bronson Brown-deVost <bronsonbdevost@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "0604d5817110dacc5c7d9b7de6b58b962794603d4823c357157bd5dec4198bc5",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "foldhash-0.2.0": {
+      "nome": "foldhash",
+      "versione": "0.2.0",
+      "licenza": "Zlib",
+      "repository": "https://github.com/orlp/foldhash",
+      "autori": [
+        "Orson Peters <orsonpeters@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "b1181a40b2a7b25cf66fd01481713bc1005df082c53ef73e851e55071b102744",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "geo-traits-0.3.0": {
+      "nome": "geo-traits",
+      "versione": "0.3.0",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/georust/geo",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "https://github.com/georust/geo/blob/4516cec59e0cbd832ac7f0e00204758e6f8bd3e4/LICENSE-APACHE",
+          "blob_git": "16fe87b06e802f094b3fbb0894b137bca2b16ef1",
+          "recupero": "plenora-IO-tools@9795e7984542c2664c07b9314fd7bceab6e42a83:assurance/licenze-crate/geo-traits-0.3.0/LICENSE-APACHE",
+          "git_blob": "16fe87b06e802f094b3fbb0894b137bca2b16ef1"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "2f8267b247fd81e9555a2e196e119a5b341bcae21011cd93985c312f1312f727",
+          "origine": "https://github.com/georust/geo/blob/4516cec59e0cbd832ac7f0e00204758e6f8bd3e4/LICENSE-MIT",
+          "blob_git": "c26fb0916ab1404eb31ed9f88293ef730be30b55",
+          "recupero": "plenora-IO-tools@9795e7984542c2664c07b9314fd7bceab6e42a83:assurance/licenze-crate/geo-traits-0.3.0/LICENSE-MIT",
+          "git_blob": "c26fb0916ab1404eb31ed9f88293ef730be30b55"
+        }
+      ]
+    },
+    "geo-types-0.7.19": {
+      "nome": "geo-types",
+      "versione": "0.7.19",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/georust/geo",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "https://github.com/georust/geo/blob/981be9feea12cdede572fb252064536cb8b287b1/LICENSE-APACHE",
+          "git_blob": "16fe87b06e802f094b3fbb0894b137bca2b16ef1"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "2f8267b247fd81e9555a2e196e119a5b341bcae21011cd93985c312f1312f727",
+          "origine": "https://github.com/georust/geo/blob/981be9feea12cdede572fb252064536cb8b287b1/LICENSE-MIT",
+          "git_blob": "c26fb0916ab1404eb31ed9f88293ef730be30b55"
+        }
+      ]
+    },
+    "geographiclib-rs-0.2.7": {
+      "nome": "geographiclib-rs",
+      "versione": "0.2.7",
+      "licenza": "MIT",
+      "repository": "https://github.com/georust/geographiclib-rs",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "feb87a2e0c305de3464cc44077da5393c52d8ca6362d37427157d04ec6f4510d",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "geozero-0.15.1": {
+      "nome": "geozero",
+      "versione": "0.15.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/georust/geozero",
+      "autori": [
+        "Pirmin Kalberer <pka@sourcepole.ch>",
+        "Yuri Astrakhan <YuriAstrakhan@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "https://github.com/georust/geozero/blob/6889c5dcaa116fb46b2fa95dbcb9fb71512838be/LICENSE-APACHE",
+          "git_blob": "16fe87b06e802f094b3fbb0894b137bca2b16ef1"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "fd490a8762ee58fad61d407872f1844b73d7f4cf5b4123b1cfb6b5ff3114c205",
+          "origine": "https://github.com/georust/geozero/blob/6889c5dcaa116fb46b2fa95dbcb9fb71512838be/LICENSE-MIT",
+          "git_blob": "26a37ab5bd1de2d07d202b1510ebd8036fde843e"
+        }
+      ]
+    },
+    "getrandom-0.3.4": {
+      "nome": "getrandom",
+      "versione": "0.3.4",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-random/getrandom",
+      "autori": [
+        "The Rand Project Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "aaff376532ea30a0cd5330b9502ad4a4c8bf769c539c87ffe78819d188a18ebf",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "29e9fe5074bd27e0e5d5d110394fbbcd841baee2651a3c4b4560a632702cede4",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "getrandom-0.4.3": {
+      "nome": "getrandom",
+      "versione": "0.4.3",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-random/getrandom",
+      "autori": [
+        "The Rand Project Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "aaff376532ea30a0cd5330b9502ad4a4c8bf769c539c87ffe78819d188a18ebf",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "523a42c25d245dde9c015f882cec7f4555aad883382a6cf19b4b7d9b2cd5419b",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "half-2.7.1": {
+      "nome": "half",
+      "versione": "2.7.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/VoidStarKat/half-rs",
+      "autori": [
+        "Kathryn Long <squeeself@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "hash32-0.3.1": {
+      "nome": "hash32",
+      "versione": "0.3.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/japaric/hash32",
+      "autori": [
+        "Jorge Aparicio <jorge@japaric.io>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "c986bcdb83103d4ddf58aeb7b5302359782e54dc4eea14a0cc27c62dcbd50729",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "hashbrown-0.16.1": {
+      "nome": "hashbrown",
+      "versione": "0.16.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang/hashbrown",
+      "autori": [
+        "Amanieu d'Antras <amanieu@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "hashbrown-0.17.1": {
+      "nome": "hashbrown",
+      "versione": "0.17.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang/hashbrown",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "heapless-0.8.0": {
+      "nome": "heapless",
+      "versione": "0.8.0",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-embedded/heapless",
+      "autori": [
+        "Jorge Aparicio <jorge@japaric.io>",
+        "Per Lindgren <per.lindgren@ltu.se>",
+        "Emil Fresk <emil.fresk@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "035e70219855119df4273b3c5b97543ae82e0dd60c520416e759107c602f651b",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "hybrid-array-0.4.14": {
+      "nome": "hybrid-array",
+      "versione": "0.4.14",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/RustCrypto/hybrid-array",
+      "autori": [
+        "RustCrypto Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "70c9d40f1f9545c3f133b8a67206e89da850f6468eed072281bb3701514114a9",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "i_float-5.0.0": {
+      "nome": "i_float",
+      "versione": "5.0.0",
+      "licenza": "MIT",
+      "repository": "https://github.com/iShape-Rust/iFloat",
+      "autori": [
+        "Nail Sharipov <nailxsharipov@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "260cc580f53a756821a0f35475e2cd6da790f8fed0efc058252fe1bed8f2689e",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "i_key_sort-0.11.0": {
+      "nome": "i_key_sort",
+      "versione": "0.11.0",
+      "licenza": "MIT",
+      "repository": "https://github.com/iShape-Rust/iKeySort",
+      "autori": [
+        "Nail Sharipov <nailxsharipov@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "47e00f18b265d350a2860d3899f17dd1c7689b966545e929df8ffa7033f5acdc",
+          "origine": "https://github.com/iShape-Rust/iKeySort/blob/d8c914dc29afd4d4824dacd2c134dbc16168e78c/LICENSE",
+          "git_blob": "5f21cc740b01ba7c80f95e9f71c857379f355ed8"
+        }
+      ]
+    },
+    "i_overlay-9.0.0": {
+      "nome": "i_overlay",
+      "versione": "9.0.0",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/iShape-Rust/iOverlay",
+      "autori": [
+        "Nail Sharipov <nailxsharipov@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "59899c6091b540582ed617e8eeaac4919dc985ccfc35459ee9752b699be5205b",
+          "origine": "https://github.com/iShape-Rust/iOverlay/blob/26782e3b93f9b7d2516e7653f3d56eebc31af798/LICENSE-APACHE",
+          "git_blob": "2bb9ad240fa04c8cf706a4901c4807878e90c2dc"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "260cc580f53a756821a0f35475e2cd6da790f8fed0efc058252fe1bed8f2689e",
+          "origine": "https://github.com/iShape-Rust/iOverlay/blob/26782e3b93f9b7d2516e7653f3d56eebc31af798/LICENSE-MIT",
+          "git_blob": "f1bb3ddc723a156fb96bf6e9c5e9e01201e63bae"
+        }
+      ]
+    },
+    "i_shape-5.0.0": {
+      "nome": "i_shape",
+      "versione": "5.0.0",
+      "licenza": "MIT",
+      "repository": "https://github.com/iShape-Rust/i_shape",
+      "autori": [
+        "Nail Sharipov <nailxsharipov@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "260cc580f53a756821a0f35475e2cd6da790f8fed0efc058252fe1bed8f2689e",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "i_tree-0.19.0": {
+      "nome": "i_tree",
+      "versione": "0.19.0",
+      "licenza": "MIT",
+      "repository": "https://github.com/iShape-Rust/iTree",
+      "autori": [
+        "Nail Sharipov <nailxsharipov@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "47e00f18b265d350a2860d3899f17dd1c7689b966545e929df8ffa7033f5acdc",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "iana-time-zone-0.1.65": {
+      "nome": "iana-time-zone",
+      "versione": "0.1.65",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/strawlab/iana-time-zone",
+      "autori": [
+        "Andrew Straw <strawman@astraw.com>",
+        "René Kijewski <rene.kijewski@fu-berlin.de>",
+        "Ryan Lopopolo <rjl@hyperbo.la>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "696759d65dfe558ff7d9f031c76db19ec5c0767470fb67c4e8d990820d1e99c9",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "da28ccc6b158fc2d8cccc74e99794b1cff1d29bd7bbeb019442fcf0c04c6cad9",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "itoa-1.0.18": {
+      "nome": "itoa",
+      "versione": "1.0.18",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/dtolnay/itoa",
+      "autori": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "libc-0.2.189": {
+      "nome": "libc",
+      "versione": "0.2.189",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang/libc",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "123a331b5dbf04c30097fa43b8f858bc85df671fe776de498d01f3d6b7c1f69e",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "libm-0.2.16": {
+      "nome": "libm",
+      "versione": "0.2.16",
+      "licenza": "MIT",
+      "repository": "https://github.com/rust-lang/compiler-builtins",
+      "autori": [
+        "Alex Crichton <alex@alexcrichton.com>",
+        "Amanieu d'Antras <amanieu@gmail.com>",
+        "Jorge Aparicio <japaricious@gmail.com>",
+        "Trevor Gross <tg@trevorgross.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE.txt",
+          "sha256": "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "linux-raw-sys-0.12.1": {
+      "nome": "linux-raw-sys",
+      "versione": "0.12.1",
+      "licenza": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/sunfishcode/linux-raw-sys",
+      "autori": [
+        "Dan Gohman <dev@sunfishcode.online>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "COPYRIGHT",
+          "sha256": "3290ae0fbc9ddb77d2239121d710f0bb9d31b3b4744e6d97fe01e652b4c1870b",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "log-0.4.33": {
+      "nome": "log",
+      "versione": "0.4.33",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang/log",
+      "autori": [
+        "The Rust Project Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "md-5-0.11.0": {
+      "nome": "md-5",
+      "versione": "0.11.0",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/RustCrypto/hashes",
+      "autori": [
+        "RustCrypto Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "831e0f43ad0bf014c1c4fec5767aae470434c1d66d6e671be2d823e729063e25",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "memchr-2.8.3": {
+      "nome": "memchr",
+      "versione": "2.8.3",
+      "licenza": "Unlicense OR MIT",
+      "repository": "https://github.com/BurntSushi/memchr",
+      "autori": [
+        "Andrew Gallant <jamslam@gmail.com>",
+        "bluss"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "COPYING",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "UNLICENSE",
+          "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "nix-0.31.3": {
+      "nome": "nix",
+      "versione": "0.31.3",
+      "licenza": "MIT",
+      "repository": "https://github.com/nix-rust/nix",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "66e3ee1fa7f909ad3c612d556f2a0cdabcd809ad6e66f3b0605015ac64841b70",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "num-bigint-0.5.1": {
+      "nome": "num-bigint",
+      "versione": "0.5.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-num/num-bigint",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "num-complex-0.4.6": {
+      "nome": "num-complex",
+      "versione": "0.4.6",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-num/num-complex",
+      "autori": [
+        "The Rust Project Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "num-integer-0.1.46": {
+      "nome": "num-integer",
+      "versione": "0.1.46",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-num/num-integer",
+      "autori": [
+        "The Rust Project Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "num-traits-0.2.19": {
+      "nome": "num-traits",
+      "versione": "0.2.19",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-num/num-traits",
+      "autori": [
+        "The Rust Project Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "once_cell-1.21.4": {
+      "nome": "once_cell",
+      "versione": "1.21.4",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/matklad/once_cell",
+      "autori": [
+        "Aleksey Kladov <aleksey.kladov@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "phf-0.12.1": {
+      "nome": "phf",
+      "versione": "0.12.1",
+      "licenza": "MIT",
+      "repository": "https://github.com/rust-phf/rust-phf",
+      "autori": [
+        "Steven Fackler <sfackler@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "0ab4d106b6faac07fb6a051815fd1b4d862d730895e2d7d7358c2f13565e7a38",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "phf_shared-0.12.1": {
+      "nome": "phf_shared",
+      "versione": "0.12.1",
+      "licenza": "MIT",
+      "repository": "https://github.com/rust-phf/rust-phf",
+      "autori": [
+        "Steven Fackler <sfackler@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "0ab4d106b6faac07fb6a051815fd1b4d862d730895e2d7d7358c2f13565e7a38",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "plenora-cli-2.0.0": {
+      "nome": "plenora-cli",
+      "versione": "2.0.0",
+      "licenza": null,
+      "repository": null,
+      "autori": [],
+      "nostro": true,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "494475b2feac15c6b605e9e199c721e460eae92b31e522fa48fc47dc4d6ab808",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "plenora-core-2.0.0": {
+      "nome": "plenora-core",
+      "versione": "2.0.0",
+      "licenza": null,
+      "repository": null,
+      "autori": [],
+      "nostro": true,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "494475b2feac15c6b605e9e199c721e460eae92b31e522fa48fc47dc4d6ab808",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "plenora-data-py-2.0.0": {
+      "nome": "plenora-data-py",
+      "versione": "2.0.0",
+      "licenza": null,
+      "repository": null,
+      "autori": [],
+      "nostro": true,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "494475b2feac15c6b605e9e199c721e460eae92b31e522fa48fc47dc4d6ab808",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "plenora-geo-0.33.1": {
+      "nome": "plenora-geo",
+      "versione": "0.33.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/georust/geo",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "2f8267b247fd81e9555a2e196e119a5b341bcae21011cd93985c312f1312f727",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "plenora-io-2.0.0": {
+      "nome": "plenora-io",
+      "versione": "2.0.0",
+      "licenza": null,
+      "repository": null,
+      "autori": [],
+      "nostro": true,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "494475b2feac15c6b605e9e199c721e460eae92b31e522fa48fc47dc4d6ab808",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "plenora-kernels-geo-2.0.0": {
+      "nome": "plenora-kernels-geo",
+      "versione": "2.0.0",
+      "licenza": null,
+      "repository": null,
+      "autori": [],
+      "nostro": true,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "494475b2feac15c6b605e9e199c721e460eae92b31e522fa48fc47dc4d6ab808",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "plenora-kernels-table-2.0.0": {
+      "nome": "plenora-kernels-table",
+      "versione": "2.0.0",
+      "licenza": null,
+      "repository": null,
+      "autori": [],
+      "nostro": true,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "494475b2feac15c6b605e9e199c721e460eae92b31e522fa48fc47dc4d6ab808",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "plenora-parquet-60.0.0": {
+      "nome": "plenora-parquet",
+      "versione": "60.0.0",
+      "licenza": "Apache-2.0",
+      "repository": "https://github.com/apache/arrow-rs",
+      "autori": [
+        "Apache Arrow <dev@arrow.apache.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "NOTICE.txt",
+          "sha256": "e5b198d7f809311723889814d99a92f808c69e89a847efa7a7b65270f5fdeae6",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "plenora-pipeline-2.0.0": {
+      "nome": "plenora-pipeline",
+      "versione": "2.0.0",
+      "licenza": null,
+      "repository": null,
+      "autori": [],
+      "nostro": true,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "494475b2feac15c6b605e9e199c721e460eae92b31e522fa48fc47dc4d6ab808",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "plenora-wkt-0.14.0": {
+      "nome": "plenora-wkt",
+      "versione": "0.14.0",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/georust/wkt",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "2f8267b247fd81e9555a2e196e119a5b341bcae21011cd93985c312f1312f727",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "pyo3-0.29.2": {
+      "nome": "pyo3",
+      "versione": "0.29.2",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/pyo3/pyo3",
+      "autori": [
+        "PyO3 Project and Contributors <https://github.com/PyO3>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "pyo3-runtime/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "pyo3-runtime/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "pyo3-ffi-0.29.2": {
+      "nome": "pyo3-ffi",
+      "versione": "0.29.2",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/pyo3/pyo3",
+      "autori": [
+        "PyO3 Project and Contributors <https://github.com/PyO3>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "rand-0.10.2": {
+      "nome": "rand",
+      "versione": "0.10.2",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-random/rand",
+      "autori": [
+        "The Rand Project Developers",
+        "The Rust Project Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "COPYRIGHT",
+          "sha256": "90eb64f0279b0d9432accfa6023ff803bc4965212383697eee27a0f426d5f8d5",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "35242e7a83f69875e6edeff02291e688c97caafe2f8902e4e19b49d3e78b4cab",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "209fbbe0ad52d9235e37badf9cadfe4dbdc87203179c0899e738b39ade42177b",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "rand_core-0.10.1": {
+      "nome": "rand_core",
+      "versione": "0.10.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-random/rand_core",
+      "autori": [
+        "The Rand Project Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "COPYRIGHT",
+          "sha256": "92b81db30f7ab6d693e0af5661a40d273ca1947e891123ed823924192c10cbc7",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "6df43f6f4b5d4587f3d8d71e45532c688fd168afa5fe89d571cb32fa09c4ef51",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "8b6e9feec03e7c9a5facb26855cecd31662bf989b636bcfe79521bdf8ac863f0",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "rand_pcg-0.10.2": {
+      "nome": "rand_pcg",
+      "versione": "0.10.2",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-random/rngs",
+      "autori": [
+        "The Rand Project Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "COPYRIGHT",
+          "sha256": "90eb64f0279b0d9432accfa6023ff803bc4965212383697eee27a0f426d5f8d5",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "6df43f6f4b5d4587f3d8d71e45532c688fd168afa5fe89d571cb32fa09c4ef51",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "2234e3cefee876aeb686ad89e978bdb07bf118a1186ab1cf161bcdf69d4b4f57",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "rayon-1.12.0": {
+      "nome": "rayon",
+      "versione": "1.12.0",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rayon-rs/rayon",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "rayon-core-1.13.0": {
+      "nome": "rayon-core",
+      "versione": "1.13.0",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rayon-rs/rayon",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "regex-1.13.1": {
+      "nome": "regex",
+      "versione": "1.13.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang/regex",
+      "autori": [
+        "The Rust Project Developers",
+        "Andrew Gallant <jamslam@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "regex-automata-0.4.16": {
+      "nome": "regex-automata",
+      "versione": "0.4.16",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang/regex",
+      "autori": [
+        "The Rust Project Developers",
+        "Andrew Gallant <jamslam@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "regex-syntax-0.8.11": {
+      "nome": "regex-syntax",
+      "versione": "0.8.11",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang/regex",
+      "autori": [
+        "The Rust Project Developers",
+        "Andrew Gallant <jamslam@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "src/unicode_tables/LICENSE-UNICODE",
+          "sha256": "74db5baf44a41b1000312c673544b3374e4198af5605c7f9080a402cec42cfa3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "robust-1.2.0": {
+      "nome": "robust",
+      "versione": "1.2.0",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/georust/robust",
+      "autori": [
+        "The Spade Developers",
+        "The GeoRust Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "ddb606a4226673241b8dedb155a25b271178d028a2bf74c90ee47fe495f4d9bc",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "rstar-0.12.2": {
+      "nome": "rstar",
+      "versione": "0.12.2",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/georust/rstar",
+      "autori": [
+        "Stefan Altmayer <stoeoef@gmail.com>",
+        "The Georust Developers <mods@georust.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "https://github.com/georust/rstar/blob/c8c5bf9e41468281d030869d409e3f67f1aaf5b7/LICENSE-APACHE",
+          "blob_git": "16fe87b06e802f094b3fbb0894b137bca2b16ef1",
+          "recupero": "plenora-IO-tools@9795e7984542c2664c07b9314fd7bceab6e42a83:assurance/licenze-crate/rstar-0.12.2/LICENSE-APACHE",
+          "git_blob": "16fe87b06e802f094b3fbb0894b137bca2b16ef1"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "9b3a76c27bac8f3e0ff2d1f64f65941c50310ae3ff69318cea230bd4a36822c5",
+          "origine": "https://github.com/georust/rstar/blob/c8c5bf9e41468281d030869d409e3f67f1aaf5b7/LICENSE-MIT",
+          "blob_git": "c2ddafbb7dbb8d8d667ef6acb0c38cda8f03fbd4",
+          "recupero": "plenora-IO-tools@9795e7984542c2664c07b9314fd7bceab6e42a83:assurance/licenze-crate/rstar-0.12.2/LICENSE-MIT",
+          "git_blob": "c2ddafbb7dbb8d8d667ef6acb0c38cda8f03fbd4"
+        }
+      ]
+    },
+    "rustix-1.1.4": {
+      "nome": "rustix",
+      "versione": "1.1.4",
+      "licenza": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/bytecodealliance/rustix",
+      "autori": [
+        "Dan Gohman <dev@sunfishcode.online>",
+        "Jakub Konka <kubkon@jakubkonka.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "COPYRIGHT",
+          "sha256": "377c2e7c53250cc5905c0b0532d35973392af16ffb9596a41d99d202cf3617c9",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "scroll-0.13.0": {
+      "nome": "scroll",
+      "versione": "0.13.0",
+      "licenza": "MIT",
+      "repository": "https://github.com/m4b/scroll",
+      "autori": [
+        "m4b <m4b.github.io@gmail.com>",
+        "Ted Mielczarek <ted@mielczarek.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "6e24b7455f0b9afefdf4f3efd59a56ce76a3020c2dc4371937e281fc5e587fd7",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "serde-1.0.229": {
+      "nome": "serde",
+      "versione": "1.0.229",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/serde-rs/serde",
+      "autori": [
+        "Erick Tryzelaar <erick.tryzelaar@gmail.com>",
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "serde_core-1.0.229": {
+      "nome": "serde_core",
+      "versione": "1.0.229",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/serde-rs/serde",
+      "autori": [
+        "Erick Tryzelaar <erick.tryzelaar@gmail.com>",
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "serde_json-1.0.151": {
+      "nome": "serde_json",
+      "versione": "1.0.151",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/serde-rs/json",
+      "autori": [
+        "Erick Tryzelaar <erick.tryzelaar@gmail.com>",
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "sha2-0.11.0": {
+      "nome": "sha2",
+      "versione": "0.11.0",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/RustCrypto/hashes",
+      "autori": [
+        "RustCrypto Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "831e0f43ad0bf014c1c4fec5767aae470434c1d66d6e671be2d823e729063e25",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "sif-itree-0.4.1": {
+      "nome": "sif-itree",
+      "versione": "0.4.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://codeberg.org/adamreichold/sif-itree",
+      "autori": [
+        "Adam Reichold <adam.reichold@t-online.de>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "cf6287cf93399cbc46a241bdbafb2d4b6e42956046a886550883a7056f1914eb",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "siphasher-1.0.3": {
+      "nome": "siphasher",
+      "versione": "1.0.3",
+      "licenza": "MIT/Apache-2.0",
+      "repository": "https://github.com/jedisct1/rust-siphash",
+      "autori": [
+        "Frank Denis <github@pureftpd.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "COPYING",
+          "sha256": "c962ee4d1d05ddc138b202b2540219ebc57893fcf97b364852094a9a94ce1365",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "https://github.com/jedisct1/rust-siphash/blob/2fcf2a742340824ee23328e6eba4bc7ea0e52613/LICENSE-APACHE",
+          "git_blob": "d645695673349e3947e8e5ae42332d0ac3164cd7"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "f9c4c77baa3828004ee54b8a4f2db2e88ed44a6237a493965bf551fac0fcb62d",
+          "origine": "https://github.com/jedisct1/rust-siphash/blob/2fcf2a742340824ee23328e6eba4bc7ea0e52613/LICENSE-MIT",
+          "git_blob": "969d061e8ba2e38d69391910b1ef0d4869ff18d1"
+        }
+      ]
+    },
+    "smallvec-1.15.2": {
+      "nome": "smallvec",
+      "versione": "1.15.2",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/servo/rust-smallvec",
+      "autori": [
+        "The Servo Project Developers"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "0b28172679e0009b655da42797c03fd163a3379d5cfa67ba1f1655e974a2a1a9",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "snap-1.1.2": {
+      "nome": "snap",
+      "versione": "1.1.2",
+      "licenza": "BSD-3-Clause",
+      "repository": "https://github.com/BurntSushi/rust-snappy",
+      "autori": [
+        "Andrew Gallant <jamslam@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "COPYING",
+          "sha256": "7ca1297d23644e30bd489193a82a33f324e5fe33f25df4195649b91b883df967",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "spade-2.15.1": {
+      "nome": "spade",
+      "versione": "2.15.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/Stoeoef/spade",
+      "autori": [
+        "Stefan Altmayer <stoeoef@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "fc1a4c9482e823f450af4c85471ca6e58d1fd0b3bd0998be4547b1be4a5bc4af",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "stable_deref_trait-1.2.1": {
+      "nome": "stable_deref_trait",
+      "versione": "1.2.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/storyyeller/stable_deref_trait",
+      "autori": [
+        "Robert Grosse <n210241048576@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "5e05b024f653a5ce199e77cbbbd42fb5553562ec714b819421ed0c3e552a75d7",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "tempfile-3.27.0": {
+      "nome": "tempfile",
+      "versione": "3.27.0",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/Stebalien/tempfile",
+      "autori": [
+        "Steven Allen <steven@stebalien.com>",
+        "The Rust Project Developers",
+        "Ashley Mannix <ashleymannix@live.com.au>",
+        "Jason White <me@jasonwhite.io>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "8b427f5bc501764575e52ba4f9d95673cf8f6d80a86d0d06599852e1a9a20a36",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "thiserror-1.0.69": {
+      "nome": "thiserror",
+      "versione": "1.0.69",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/dtolnay/thiserror",
+      "autori": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "thiserror-2.0.21": {
+      "nome": "thiserror",
+      "versione": "2.0.21",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/dtolnay/thiserror",
+      "autori": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "tinyvec-1.12.0": {
+      "nome": "tinyvec",
+      "versione": "1.12.0",
+      "licenza": "Zlib OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/Lokathor/tinyvec",
+      "autori": [
+        "Lokathor <zefria@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE.md",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT.md",
+          "sha256": "fd80a26fbb3f644af1fa994134446702932968519797227e07a1368dea80f0bc",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-ZLIB.md",
+          "sha256": "84b34dd7608f7fb9b17bd588a6bf392bf7de504e2716f024a77d89f1b145a151",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "tinyvec_macros-0.1.1": {
+      "nome": "tinyvec_macros",
+      "versione": "0.1.1",
+      "licenza": "MIT OR Apache-2.0 OR Zlib",
+      "repository": "https://github.com/Soveu/tinyvec_macros",
+      "autori": [
+        "Soveu <marx.tomasz@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE.md",
+          "sha256": "4f44572785f35152c1fd2eadf565b7e079c0f300b4324f0af653419f9d76b735",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT.md",
+          "sha256": "1dd8eca0f83669e75fa119e34fb9e1be9d16e3e9b6368962b8019db6e8ae5f7b",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-ZLIB.md",
+          "sha256": "41ace205715d9f19a3214218cc1c01d57c533e02cd0fef7c8e51a49a7fce5ac5",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "twox-hash-2.1.4": {
+      "nome": "twox-hash",
+      "versione": "2.1.4",
+      "licenza": "MIT",
+      "repository": "https://github.com/shepmaster/twox-hash",
+      "autori": [
+        "Jake Goulding <jake.goulding@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE.txt",
+          "sha256": "f59bcb1c02654665f78a5f290bae76b6358137675f6459f51e6d474a4623d8ea",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "typenum-1.20.1": {
+      "nome": "typenum",
+      "versione": "1.20.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/paholg/typenum",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "db11fec9946737df39ca3898d9cd8c10ec6f6c3a884a6802b0ad0b81b4e8f23a",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "516b24e051bf5630880ebbd55c40a25ce9552ebaf8970a53e8976eb70e522406",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "a825bd853ab71619a4923d7b4311221427848070ff44d990da39b0b274c1683f",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "unicode-normalization-0.1.25": {
+      "nome": "unicode-normalization",
+      "versione": "0.1.25",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/unicode-rs/unicode-normalization",
+      "autori": [
+        "kwantam <kwantam@gmail.com>",
+        "Manish Goregaokar <manishsmail@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "COPYRIGHT",
+          "sha256": "23860c2a7b5d96b21569afedf033469bab9fe14a1b24a35068b8641c578ce24d",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "7b63ecd5f1902af1b63729947373683c32745c16a10e8e6292e2e2dcd7e90ae0",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "uuid-1.26.1": {
+      "nome": "uuid",
+      "versione": "1.26.1",
+      "licenza": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/uuid-rs/uuid",
+      "autori": [
+        "Ashley Mannix<ashleymannix@live.com.au>",
+        "Dylan DPC<dylan.dpc@gmail.com>",
+        "Hunar Roop Kahlon<hunar.roop@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "436bc5a105d8e57dcd8778730f3754f7bf39c14d2f530e4cde4bd2d17a83ec3d",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "windows-link-0.2.1": {
+      "nome": "windows-link",
+      "versione": "0.2.1",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/microsoft/windows-rs",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "license-apache-2.0",
+          "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "license-mit",
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "windows-sys-0.61.2": {
+      "nome": "windows-sys",
+      "versione": "0.61.2",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/microsoft/windows-rs",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "license-apache-2.0",
+          "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "license-mit",
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "wkt-0.14.0": {
+      "nome": "wkt",
+      "versione": "0.14.0",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/georust/wkt",
+      "autori": [],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "2f8267b247fd81e9555a2e196e119a5b341bcae21011cd93985c312f1312f727",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "zerocopy-0.8.55": {
+      "nome": "zerocopy",
+      "versione": "0.8.55",
+      "licenza": "BSD-2-Clause OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/google/zerocopy",
+      "autori": [
+        "Joshua Liebow-Feeser <joshlf@google.com>",
+        "Jack Wrenn <jswrenn@amazon.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "9d185ac6703c4b0453974c0d85e9eee43e6941009296bb1f5eb0b54e2329e9f3",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-BSD",
+          "sha256": "83c1763356e822adde0a2cae748d938a73fdc263849ccff6b27776dff213bd32",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "1a2f5c12ddc934d58956aa5dbdd3255fe55fd957633ab7d0d39e4f0daa73f7df",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "zmij-1.0.23": {
+      "nome": "zmij",
+      "versione": "1.0.23",
+      "licenza": "MIT",
+      "repository": "https://github.com/dtolnay/zmij",
+      "autori": [
+        "David Tolnay <dtolnay@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "zstd-0.14.0": {
+      "nome": "zstd",
+      "versione": "0.14.0",
+      "licenza": "BSD-3-Clause",
+      "repository": "https://github.com/gyscos/zstd-rs",
+      "autori": [
+        "Alexandre Bury <alexandre.bury@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "ce4868c8e4ebe47a7d4b3c93dbf6b802033e5ae2fa7638098173f80836daac60",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "zstd-safe-8.0.0": {
+      "nome": "zstd-safe",
+      "versione": "8.0.0",
+      "licenza": "BSD-3-Clause",
+      "repository": "https://github.com/gyscos/zstd-rs",
+      "autori": [
+        "Alexandre Bury <alexandre.bury@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "ce4868c8e4ebe47a7d4b3c93dbf6b802033e5ae2fa7638098173f80836daac60",
+          "origine": "pacchetto"
+        }
+      ]
+    },
+    "zstd-sys-2.1.0+zstd.1.5.7": {
+      "nome": "zstd-sys",
+      "versione": "2.1.0+zstd.1.5.7",
+      "licenza": "BSD-3-Clause",
+      "repository": "https://github.com/gyscos/zstd-rs",
+      "autori": [
+        "Alexandre Bury <alexandre.bury@gmail.com>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE",
+          "sha256": "ce4868c8e4ebe47a7d4b3c93dbf6b802033e5ae2fa7638098173f80836daac60",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE.BSD-3-Clause",
+          "sha256": "bf7017a73a95ea63bf3716b13ec2bcd79c92942356e3408c6fb66332bad6d977",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "zstd/COPYING",
+          "sha256": "f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "zstd/LICENSE",
+          "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8",
+          "origine": "pacchetto"
+        }
+      ]
+    }
+  }
+}

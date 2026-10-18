@@ -77,6 +77,22 @@ jobs:
           # build dello stesso commit. Su Windows l'input non si usa.
           container: 'quay.io/pypa/manylinux_2_34_x86_64@sha256:e4ca528d41ab66b3654110295d7a2c7bfa599ddbb6efb269ec21f7f73b88f1b6'
           rust-toolchain: '1.98.0'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Rust per il gate dei grafi offline
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
+        with:
+          toolchain: '1.98.0'
+      - name: avvisi nelle wheel caricate
+        shell: bash
+        run: |
+          cargo fetch --locked
+          python scripts/avvisi_crate.py
+          for wheel in dist/*.whl dist-rilascio/*.whl; do
+            python scripts/licenze_artefatto.py --tipo wheel --input "$wheel" --output "$wheel"
+            python scripts/check-licenze-artefatto.py --tipo wheel --input "$wheel"
+          done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheel-${{ matrix.os }}
