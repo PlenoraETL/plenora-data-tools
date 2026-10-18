@@ -43,6 +43,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Anche questo programma importa moduli dal checkout fissato dei contratti:
+# non deve scrivervi i .pyc, o il controllo di pulizia (verifica_checkout)
+# rifiuterebbe, a ragione, il checkout che questo stesso file verifica.
+sys.dont_write_bytecode = True
+
 RADICE = Path(__file__).resolve().parents[1]
 SORGENTE = RADICE / "crates" / "plenora-cli" / "adozione.json"
 SUPERFICI = {"rust", "cli", "python_sdk", "runtime"}
