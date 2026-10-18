@@ -135,10 +135,8 @@ jobs:
           python-version: '3.12'
       - name: validatore dei contratti (versioni fissate dai contratti)
         run: python -m pip install -r .plenora-contracts/requirements-validation.txt
-      - name: adozione e vettori al pin
-        run: |
-          python scripts/verifica_adozione.py --contratti .plenora-contracts
-          python .plenora-contracts/tools/validate_specs.py
+      - name: adozione, vettori, messaggi e oracolo della cache al pin
+        run: python scripts/verifica_adozione.py --contratti .plenora-contracts
       - name: Rust 1.98.0
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
         with:

@@ -103,7 +103,7 @@
       ],
       "status": "implemented",
       "reason": "Il gate esterno viene eseguito dalla revisione fissata, inclusi messaggi senza dati e cache con oracolo; non e una modifica del fuzz Rust. Il gate locale emette diagnostica fissa e conteggi.",
-      "verification": "tools/validate_specs.py; tools/test_messages.py; tools/test_gate_fuzz.py"
+      "verification": "scripts/verifica_adozione.py: tools/validate_specs.py; tools/test_messages.py; tools/test_gate_fuzz.py; tools/test_message_sentinels.py"
     }
   ]
 }

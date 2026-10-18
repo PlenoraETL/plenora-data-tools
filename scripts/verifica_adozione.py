@@ -10,11 +10,29 @@ import argparse
 import hashlib
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from genera_manifesto_adozione import valida, verifica_checkout
 
 RADICE = Path(__file__).resolve().parents[1]
+
+
+def prove_contratti(contratti: Path) -> None:
+    """Esegue anche le prove del gate esterno dichiarate nell'adozione."""
+    for nome in (
+        "validate_specs.py", "test_messages.py", "test_gate_fuzz.py",
+        "test_message_sentinels.py",
+    ):
+        esito = subprocess.run(
+            [sys.executable, "-B", str(contratti.resolve() / "tools" / nome)],
+            capture_output=True, check=False,
+        )
+        # I test esterni possono includere dati nelle assertion: non ristamparli.
+        if esito.returncode != 0:
+            print(f"contratti: {nome} fallita", flush=True)
+            raise ValueError("prova dei contratti fallita")
+        print(f"contratti: {nome} ok", flush=True)
 
 
 def verifica(contratti: Path) -> None:
@@ -74,6 +92,7 @@ def verifica(contratti: Path) -> None:
         "deviations": sorgente["deviations"],
     }
     valida(documento, contratti)
+    prove_contratti(contratti)
 
 
 def main() -> int:
@@ -84,9 +103,9 @@ def main() -> int:
         verifica(args.contratti)
     except Exception:
         # Non propagare valori letti o diagnostica delle dipendenze nel gate.
-        print("adozione: verifica fallita (pin, copie, catalogo o manifesto)")
+        print("adozione: verifica fallita (pin, copie, catalogo, manifesto o prove dei contratti)")
         return 1
-    print("adozione: pin, copie SHA-256, catalogo, requisiti e schema manifesto validi")
+    print("adozione: pin, copie SHA-256, catalogo, requisiti, schema manifesto e prove dei contratti validi")
     return 0
 
 

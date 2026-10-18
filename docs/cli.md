@@ -207,13 +207,17 @@ tabelle pubblicate sono quelle di `esegui_in_memoria` sullo stesso piano.
   contratti (il venv dei contratti ha i pacchetti);
 - `python scripts/verifica_adozione.py --contratti <checkout>`: pin coordinati,
   copie contro i blob Git e SHA-256, catalogo v3, stati dei requisiti e
-  forma del manifesto; nessun artefatto di rilascio viene pubblicato.
+  forma del manifesto; poi esegue dal checkout fissato `tools/validate_specs.py`,
+  `tools/test_messages.py`, `tools/test_gate_fuzz.py` e
+  `tools/test_message_sentinels.py` (mutazioni sentinella e confronto della
+  cache con l'oracolo senza cache). Ogni fallimento ferma il gate con
+  diagnostica fissa, senza riportare l'output delle prove esterne.
+  Nessun artefatto di rilascio viene pubblicato.
   Il profilo copiato ha suffisso `.md.txt` per conservarlo come fixture,
   con i link relativi del repository originale; il gate dei contratti
   verifica quei link nella copia originale.
-- `python <checkout>/tools/validate_specs.py`: gate del checkout dei contratti,
-  inclusi cataloghi, assenze intenzionali e vettori. La CI esegue entrambi
-  prima della verifica della CLI.
+  La CI esegue lo stesso gate locale prima della verifica della CLI,
+  inclusi cataloghi, assenze intenzionali, vettori e prove del gate esterno.
 - `python scripts/genera_manifesto_adozione.py`: il manifesto v4 dagli
   artefatti costruiti (versione e digest), con la sorgente
   `crates/plenora-cli/adozione.json` (pin, profilo, contratti). Non c'è

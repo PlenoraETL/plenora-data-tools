@@ -42,7 +42,7 @@ pull request, con la suite lunga, e verifica la CLI contro
 `.github/workflows/coverage.yml` misura la copertura contro le soglie di
 `scripts/coverage_budget.json` ([«Fuzz»](#fuzz), [«Catena delle dipendenze»](#catena-delle-dipendenze),
 [«Copertura»](#copertura)). Non c'è ancora, e si dichiara assente, il
-mutation testing. Non sono in programma l'identità del piano (`plan_hash`,
+mutation testing del codice Rust. Non sono in programma l'identità del piano (`plan_hash`,
 fingerprint del catalogo) e l'interruzione di un kernel a metà: scadenza e
 annullamento si controllano solo fra i passi
 ([«Scadenza e annullamento»](docs/runner.md#scadenza-e-annullamento)).
@@ -187,6 +187,16 @@ python scripts/genera_inventario.py --check           # docs/inventario.md aggio
 python scripts/check_docs.py                          # link, ancore, comandi, generati
 python scripts/check_comments.py                      # regole oggettive dei commenti
 python -m unittest discover -s scripts -p "test_*.py" # prove delle guardie
+```
+
+Con il checkout di `plenora-contracts` al commit adottato e i pacchetti del
+suo `requirements-validation.txt`, il gate locale usato anche dalla CI esegue
+adozione, validatore, prove dei messaggi, cache con oracolo e mutazioni
+sentinella ([dettagli](docs/cli.md)):
+
+```sh
+python scripts/verifica_adozione.py --contratti <checkout>
+python scripts/verifica_cli_contratti.py --binario <plenora-data> --contratti <checkout>
 ```
 
 ### Fuzz
