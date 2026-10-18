@@ -115,7 +115,7 @@ fn descrittore(operazione: &OperationDescriptor) -> Value {
 }
 
 /// Il documento `plenora-data-catalog-result-v2` di questo artefatto
-/// (profilo data-tools v2, DT-001).
+/// (profilo data-tools v3, DT-001).
 #[must_use]
 pub fn documento() -> Value {
     let operazioni = ordinate();

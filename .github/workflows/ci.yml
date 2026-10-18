@@ -128,13 +128,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: PlenoraETL/plenora-contracts
-          ref: 3c395a8db96df739024e203b22794af340dc8a7f
+          ref: 3aec9f724f5a0ad21366f293895b4d0dbcd0aad1
           path: .plenora-contracts
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - name: validatore dei contratti (versioni fissate dai contratti)
         run: python -m pip install -r .plenora-contracts/requirements-validation.txt
+      - name: adozione, vettori, messaggi e oracolo della cache al pin
+        run: python scripts/verifica_adozione.py --contratti .plenora-contracts
       - name: Rust 1.98.0
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
         with:

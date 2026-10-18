@@ -133,6 +133,54 @@ def verifica_checkout(contratti: Path, revisione: str) -> None:
     ).stdout.strip()
     if testa != revisione:
         raise SystemExit("il checkout dei contratti non e' al commit fissato nella sorgente")
+    # HEAD giusto non basta: i confronti SHA-256 leggono i blob Git, ma le
+    # prove del pin eseguono i file del worktree. Un file modificato -- o
+    # anche solo aggiunto: un modulo ombra cambia cio' che Python importa --
+    # renderebbe verde un gate che non ha eseguito le prove adottate.
+    #
+    # La classe intera e' «stato del worktree nascosto al controllo», e si
+    # chiude qui per i modi che git offre di nasconderlo:
+    # `--untracked-files=all` vince su `status.showUntrackedFiles=no`;
+    # `--ignored=matching` mostra anche i file esclusi da `.gitignore` o da
+    # `core.excludesFile` (un `__pycache__` ignorato conta: Python legge i
+    # .pyc esistenti anche con -B); le strutture di accelerazione --
+    # fsmonitor e cache degli untracked -- si disabilitano per questa
+    # invocazione, perche' una cache stantia o bugiarda farebbe credere
+    # pulito un file modificato: la scansione e' piena per costruzione.
+    # `ls-files -v` scopre i bit assume-unchanged e skip-worktree, e
+    # `ls-files -f` i fsmonitor-valid, che nascondono le modifiche ai file
+    # tracciati. Chi controlla la macchina puo' alterare il gate stesso: il
+    # controllo prova l'integrita' del checkout, non difende da un ostile.
+    stato = subprocess.run(
+        [
+            "git", "-C", str(contratti),
+            "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+            "status", "--porcelain",
+            "--untracked-files=all", "--ignored=matching",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if stato:
+        raise SystemExit(
+            "il checkout dei contratti non e' pulito (anche un file ignorato "
+            "conta): le prove del pin si eseguono solo su un worktree "
+            "identico alla revisione fissata"
+        )
+    for opzione, nomi in (("-v", "assume-unchanged o skip-worktree"),
+                          ("-f", "fsmonitor-valid")):
+        voci = subprocess.run(
+            ["git", "-C", str(contratti), "ls-files", opzione],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        if any(riga and (riga[0].islower() or riga[0] == "S") for riga in voci):
+            raise SystemExit(
+                f"il checkout dei contratti ha voci {nomi}: lo stato "
+                "nascosto all'indice non si accetta"
+            )
 
 
 def valida(documento: dict, contratti: Path) -> None:
@@ -145,6 +193,7 @@ def valida(documento: dict, contratti: Path) -> None:
     errori = list(Draft202012Validator(schema).iter_errors(documento))
     if errori:
         raise SystemExit(f"manifesto non valido per lo schema v4: {len(errori)} errori")
+    sys.path.insert(0, str(contratti / "tools"))
     specifica = importlib.util.spec_from_file_location(
         "conformance_checks", contratti / "tools" / "conformance_checks.py"
     )
@@ -152,7 +201,7 @@ def valida(documento: dict, contratti: Path) -> None:
     specifica.loader.exec_module(modulo)
     semantici = modulo.adoption_errors(documento)
     if semantici:
-        raise SystemExit(f"manifesto non valido nei controlli semantici: {semantici}")
+        raise SystemExit(f"manifesto non valido nei controlli semantici: {len(semantici)} errori")
 
 
 def main() -> int:

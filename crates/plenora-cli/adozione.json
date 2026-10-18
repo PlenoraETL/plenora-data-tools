@@ -1,11 +1,11 @@
 {
-  "nota": "Sorgente del manifesto di adozione v4 (schemas/adoption-manifest-v4.schema.json di plenora-contracts). Non e' il manifesto: versione e digest degli artefatti li aggiunge scripts/genera_manifesto_adozione.py dagli artefatti costruiti, al rilascio (CLI, crate Rust e wheel dell'SDK Python). Il profilo e' data-tools versione 2 (decisione 0007 dei contratti), che ha portato nei contratti le deviazioni dichiarate alla revisione ade868c: nessuna resta. data.run 3 (decisione 0008) e' esposta sulla superficie Rust (api::esegui_artefatti); il binding runtime resta all'applicazione, quindi le sonde di vectors/runtime-probes-v1 (RT-016..RT-023) non si applicano: nessuna superficie di questo componente ne annuncia la richiesta di base. Revisione 3c395a8 (tag v1.1.0, dal 1e902df): dei file copiati nei fixture cambia solo bindings/cli-v1.json, nelle sezioni di io-tools e rest-tools; la pulizia fallita dopo la pubblicazione di data.run 3 segue ERR-015 (fase cleanup, committed, ritentativo never). SB-001: nessuna superficie aggiunge un effetto oltre il side_effect dell'operazione.",
+  "nota": "Sorgente del manifesto v4: versione e digest sono aggiunti dagli artefatti di rilascio. Profilo data-tools v3, Public Catalogs 2.0. Runtime conditional non pubblicato; data.run 3 e' solo Rust e non costituisce un binding runtime. Requisiti e motivazioni in requirements e docs/cli.md. Nessuna nuova deviazione; gli opt-in non rivendicati non sono conformita'.",
   "component": "plenora-data-tools",
   "contracts_source": {
     "repository": "https://github.com/PlenoraETL/plenora-contracts.git",
-    "revision": "3c395a8db96df739024e203b22794af340dc8a7f"
+    "revision": "3aec9f724f5a0ad21366f293895b4d0dbcd0aad1"
   },
-  "profile": "plenora-data-tools-profile-v2",
+  "profile": "plenora-data-tools-profile-v3",
   "conforming": [
     "plenora-public-surfaces-v1",
     "plenora-capabilities-v2",
@@ -17,10 +17,93 @@
     "plenora-cli-v2",
     "plenora-python-sdk-v1",
     "plenora-surface-bindings-v1",
-    "plenora-composition-v1"
+    "plenora-composition-v1",
+    "plenora-public-catalog-v2"
   ],
   "not_applicable": [
-    "plenora-runtime-binding-v1"
+    "plenora-runtime-binding-v2",
+    "plenora-arrow-geometry-semantics-v1",
+    "plenora-interop-vectors-v1",
+    "plenora-rest-arrow-adapter-v1",
+    "plenora-plan-budget-v1"
   ],
-  "deviations": []
+  "deviations": [],
+  "catalog": "catalogs/data-tools-v3.json",
+  "kernel_registry": "catalogs/data-kernels-v2.json",
+  "requirements": [
+    {
+      "rules": [
+        "CAT-001",
+        "CAT-002"
+      ],
+      "status": "implemented",
+      "reason": "Capabilities CLI e Python elencano solo la superficie che risponde; runtime conditional omesso, pianificato senza deviazione. Mappa Rust pubblicata separatamente.",
+      "verification": "tests/scoperta.rs; tests/superficie_python.rs; tests/superficie_rust.rs"
+    },
+    {
+      "rules": [
+        "CAT-003",
+        "DT-ABS-001",
+        "DT-ABS-002"
+      ],
+      "status": "implemented",
+      "reason": "data.run 3 solo Rust: CLI e Python non hanno risolutore di artefatti. data.run 2 senza runtime: output multipli, contro un payload per risposta.",
+      "verification": "scripts/verifica_adozione.py; tests/superficie_python.rs; tests/superficie_rust.rs"
+    },
+    {
+      "rules": [
+        "DT-001",
+        "DT-ARROW-001..004",
+        "DT-RUN-001..008"
+      ],
+      "status": "implemented",
+      "reason": "Identita e semantica delle operazioni invariate dal profilo v2; registro data-kernels-v2 invariato.",
+      "verification": "tests/scoperta.rs; tests/run_artefatti.rs; prove metadati Arrow"
+    },
+    {
+      "rules": [
+        "RT-016..023",
+        "RT-024",
+        "RT-025",
+        "RT-026",
+        "RT-027"
+      ],
+      "status": "not_applicable",
+      "reason": "Nessuna interfaccia runtime, selezione di destinazioni runtime o trasporto. Un futuro binding deve adottare 2.0: resource_limit senza troncamento, wire 1, contratto 2, downgrade esplicito e contesto persistente per identita."
+    },
+    {
+      "rules": [
+        "ERR-016"
+      ],
+      "status": "implemented",
+      "reason": "La causa determina la categoria indipendentemente dall effetto: I/O e TimedOut restano io e timeout, unknown vieta retry automatico: never per I/O non transitorio, requires_recovery per timeout (DT-RUN-006). La fase della pubblicazione di artefatti e write, non commit di database.",
+      "verification": "tests/run_artefatti.rs; plenora-core error::tests"
+    },
+    {
+      "rules": [
+        "GEO-000..020",
+        "REJ-001..004",
+        "INTEROP-001..005"
+      ],
+      "status": "not_applicable",
+      "reason": "Arrow Geometry Semantics e Interoperability Vectors sono opt-in non rivendicati. Rimangono Arrow Interchange e DT-ARROW; nessuna attestazione delle catene intercomponente."
+    },
+    {
+      "rules": [
+        "RA-001..010"
+      ],
+      "status": "not_applicable",
+      "reason": "Adapter REST-to-Arrow dell applicazione, non implementato ne rivendicato dal kernel."
+    },
+    {
+      "rules": [
+        "decision-0021",
+        "#39",
+        "#40"
+      ],
+      "status": "implemented",
+      "reason": "Il gate esterno viene eseguito dalla revisione fissata, inclusi messaggi senza dati e cache con oracolo; non e una modifica del fuzz Rust. Il gate locale emette diagnostica fissa e conteggi.",
+      "verification": "scripts/verifica_adozione.py: tools/validate_specs.py; tools/test_messages.py; tools/test_gate_fuzz.py; tools/test_message_sentinels.py"
+    }
+  ]
 }

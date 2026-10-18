@@ -1,4 +1,4 @@
-//! `data.run` versione 3 (`plenora-contracts`, profilo data-tools v2,
+//! `data.run` versione 3 (`plenora-contracts`, profilo data-tools v3,
 //! DT-RUN-001..DT-RUN-008): un piano eseguito da sorgenti a destinazioni
 //! che sono artefatti, con il manifesto degli artefatti pubblicati come
 //! risultato. È la rappresentazione runtime di un piano con output nominati
