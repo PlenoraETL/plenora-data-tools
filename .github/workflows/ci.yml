@@ -79,6 +79,10 @@ jobs:
       # Senza `--all`: `--all` formatta anche le dipendenze per percorso,
       # cioe' i crate di `vendor/` (codice upstream, non nostro); senza, il
       # controllo copre tutti i membri del workspace.
+      - name: cache Cargo per gli avvisi dei target distribuiti
+        run: cargo fetch --locked
+      - name: avvisi dei crate (quattro grafi release, offline)
+        run: python scripts/avvisi_crate.py
       - name: cargo fmt
         run: cargo fmt --check
       - name: cargo fmt (target di fuzz)

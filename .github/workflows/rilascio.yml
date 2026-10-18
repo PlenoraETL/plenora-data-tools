@@ -126,6 +126,13 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
         with:
           toolchain: '1.98.0'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: cache Cargo dei target distribuiti
+        run: cargo fetch --locked
+      - name: avvisi dei quattro grafi release
+        run: python scripts/avvisi_crate.py
       - name: CLI
         shell: bash
         run: |
@@ -150,9 +157,7 @@ jobs:
             --prefix="plenora-data-tools-${versione}/" \
             --output="dist/plenora-data-tools-${versione}-source.tar.gz" \
             HEAD
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
+          python3 scripts/licenze_artefatto.py --tipo sorgente --input "dist/plenora-data-tools-${versione}-source.tar.gz" --output "dist/plenora-data-tools-${versione}-source.tar.gz"
       # La CLI di questo sistema contro i contratti, prima dell'upload: la
       # CLI Windows si prova sul runner Windows.
       - name: la CLI contro i contratti
@@ -164,6 +169,17 @@ jobs:
           python scripts/verifica_cli_contratti.py \
             --binario "dist/${{ matrix.cli }}" \
             --contratti .plenora-contracts
+      - name: confeziona e verifica le licenze degli artefatti
+        shell: bash
+        run: |
+          python scripts/licenze_artefatto.py --tipo cli --input "dist/${{ matrix.cli }}" --output "dist/${{ matrix.cli }}.zip"
+          python scripts/check-licenze-artefatto.py --tipo cli --input "dist/${{ matrix.cli }}.zip"
+          for wheel in dist/*.whl; do
+            python scripts/licenze_artefatto.py --tipo wheel --input "$wheel" --output "$wheel"
+            python scripts/check-licenze-artefatto.py --tipo wheel --input "$wheel"
+          done
+          # La release distribuisce la CLI solo insieme ai suoi avvisi.
+          rm "dist/${{ matrix.cli }}"
       - name: wheel installato e suite Python
         shell: bash
         env:
@@ -314,9 +330,10 @@ jobs:
           sys.exit(0 if re.search(r"^## \[" + v + r"\] - \d{4}-\d{2}-\d{2}$", open("CHANGELOG.md", encoding="utf-8").read(), re.M) else "voce del CHANGELOG non datata")'
       - name: la CLI rilasciata contro i contratti
         run: |
-          chmod +x dist/plenora-data-linux-x86_64
+          python3 -c 'import zipfile; zipfile.ZipFile("dist/plenora-data-linux-x86_64.zip").extractall("${{ runner.temp }}/cli")'
+          chmod +x "${{ runner.temp }}/cli/plenora-data-linux-x86_64"
           python3 scripts/verifica_cli_contratti.py \
-            --binario dist/plenora-data-linux-x86_64 \
+            --binario "${{ runner.temp }}/cli/plenora-data-linux-x86_64" \
             --contratti .plenora-contracts
       - name: manifesto di adozione
         shell: bash
@@ -326,8 +343,8 @@ jobs:
           for wheel in dist/*.whl; do
             artefatti+=(--artefatto "$(basename "$wheel")|python_sdk|$wheel|sync,async")
           done
-          artefatti+=(--artefatto "plenora-data-linux-x86_64|cli|dist/plenora-data-linux-x86_64")
-          artefatti+=(--artefatto "plenora-data-windows-x86_64.exe|cli|dist/plenora-data-windows-x86_64.exe")
+          artefatti+=(--artefatto "plenora-data-linux-x86_64.zip|cli|dist/plenora-data-linux-x86_64.zip")
+          artefatti+=(--artefatto "plenora-data-windows-x86_64.exe.zip|cli|dist/plenora-data-windows-x86_64.exe.zip")
           sorgente="dist/plenora-data-tools-${versione}-source.tar.gz"
           artefatti+=(--artefatto "$(basename "$sorgente")|rust|$sorgente")
           python3 scripts/genera_manifesto_adozione.py \
@@ -340,14 +357,24 @@ jobs:
             --uscita "dist/plenora-data-tools-${versione}.adoption-manifest.json"
       - name: SBOM verificato prima dell'attestazione
         run: python3 scripts/genera_sbom_rilascio.py --check "dist/plenora-data-tools-${VERSIONE}.sbom.cdx.json" --dist dist
+      - name: avvisi negli artefatti scaricati
+        shell: bash
+        run: |
+          for cli in dist/*.zip; do
+            python scripts/check-licenze-artefatto.py --tipo cli --input "$cli"
+          done
+          for wheel in dist/*.whl; do
+            python scripts/check-licenze-artefatto.py --tipo wheel --input "$wheel"
+          done
+          python scripts/check-licenze-artefatto.py --tipo sorgente --input "dist/plenora-data-tools-${VERSIONE}-source.tar.gz"
       - name: attestazione di provenienza
         if: github.event_name == 'release'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             dist/*.whl
-            dist/plenora-data-linux-x86_64
-            dist/plenora-data-windows-x86_64.exe
+            dist/plenora-data-linux-x86_64.zip
+            dist/plenora-data-windows-x86_64.exe.zip
             dist/*-source.tar.gz
       - name: attestazione dello SBOM
         if: github.event_name == 'release'
@@ -355,8 +382,8 @@ jobs:
         with:
           subject-path: |
             dist/*.whl
-            dist/plenora-data-linux-x86_64
-            dist/plenora-data-windows-x86_64.exe
+            dist/plenora-data-linux-x86_64.zip
+            dist/plenora-data-windows-x86_64.exe.zip
             dist/*-source.tar.gz
           sbom-path: dist/plenora-data-tools-${{ env.VERSIONE }}.sbom.cdx.json
       - name: allegati alla release

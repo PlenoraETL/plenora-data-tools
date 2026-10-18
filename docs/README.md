@@ -6,6 +6,7 @@ cronologia delle modifiche si consulta in Git.
 
 | documento | contenuto |
 | --- | --- |
+| [`RELEASE.md`](RELEASE.md) | avvisi di licenza, confezionamento degli artefatti e assenze che bloccano il rilascio |
 | [`inventario.md`](inventario.md) | stato generato: crate, operazioni del catalogo, operazioni pubbliche della CLI, numero dei test |
 | [`operazioni.md`](operazioni.md) | riferimento generato delle operazioni, una scheda ciascuna (sorgenti in [`schede/`](schede/)) |
 | [`limiti.md`](limiti.md) | registro dei limiti dichiarati: precisione geografica di 1 cm, misure geodetiche, validazione OGC, hash e memoria delle chiavi, tipi e formati |

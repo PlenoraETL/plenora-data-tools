@@ -288,7 +288,7 @@ alla release:
 
 | artefatto | superficie |
 | --- | --- |
-| `plenora-data-linux-x86_64`, `plenora-data-windows-x86_64.exe` | CLI |
+| `plenora-data-linux-x86_64.zip`, `plenora-data-windows-x86_64.exe.zip` | CLI con avvisi di licenza |
 | `plenora_data-<versione>-cp310-abi3-*.whl` (manylinux 2_34, Windows) | SDK Python |
 | `plenora-data-tools-<versione>-source.tar.gz` | Rust (crate dal sorgente) |
 | `plenora-data-tools-<versione>.sbom.cdx.json` | SBOM CycloneDX (`scripts/genera_sbom_rilascio.py`) |
@@ -300,3 +300,8 @@ commit adottato (`scripts/verifica_cli_contratti.py`); il manifesto generato
 dagli artefatti veri e validato da schema e controlli dei contratti; lo SBOM
 verificato contro i lock; poi le attestazioni di provenienza. Lanciato a mano
 (`workflow_dispatch`) il workflow fa gli stessi passi senza toccare release.
+
+Gli avvisi di ogni crate Rust, i gate e le assenze locali che bloccano il
+rilascio sono descritti in [docs/RELEASE.md](docs/RELEASE.md). CLI, wheel e
+sorgente vengono confezionati e verificati da `scripts/licenze_artefatto.py`;
+`python scripts/avvisi_crate.py` controlla offline i quattro grafi release.

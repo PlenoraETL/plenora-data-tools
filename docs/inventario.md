@@ -109,6 +109,7 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 
 | file | prove |
 | --- | --- |
+| `scripts/test_avvisi_crate.py` | 18 |
 | `scripts/test_check_cargo_deny.py` | 4 |
 | `scripts/test_check_comments.py` | 27 |
 | `scripts/test_check_coverage.py` | 10 |
