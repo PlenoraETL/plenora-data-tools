@@ -40,29 +40,23 @@ Non serve cargo-about né una ricerca in rete durante la costruzione.
 L'approccio deriva da plenora-IO-tools al commit
 `9795e7984542c2664c07b9314fd7bceab6e42a83`.
 
-## Assenze che bloccano il rilascio
+## Assenze: regola e stato
 
-La raccolta offline ha prodotto 217 file per 109 crate di terzi. Sette crate
-non portavano testi nella cache. Per `flatbuffers 25.12.19`, `geo-traits 0.3.0`
-e `rstar 0.12.2`, cinque testi provengono dal commit locale di riferimento:
-SHA-256 e blob Git verificati, URL upstream e provenienza conservati nel
-registro. Nessun accesso alla rete.
+Un'assenza registrata **non è una deroga**: il gate e il confezionamento dei
+profili interessati falliscono fino al recupero del testo, verificato con la
+sua provenienza (origine https e blob Git ricalcolato dai byte conservati).
+Non si afferma che un testo upstream non esista, solo che non è presente
+nelle fonti locali consultate.
 
-Restano senza testo locale:
-
-- `geo-types 0.7.19`;
-- `geozero 0.15.1`;
-- `i_key_sort 0.11.0`;
-- `i_overlay 9.0.0`;
-- i sette crate del prodotto: manca il testo autorevole della licenza di
-  famiglia nel checkout; non viene inventato né sostituito.
-
-Ogni assenza ha una ragione nel registro, con il commit di
-`.cargo_vcs_info.json` per i quattro crate esterni. **La registrazione non è
-una deroga**: il gate e il confezionamento falliscono fino al recupero dei
-testi. Non si afferma che i testi upstream non esistano, solo che non sono
-presenti nelle fonti locali consultate. Per sbloccare il rilascio occorrono
-quei testi verificati con la loro provenienza e il testo Plenora autorevole.
+Oggi il registro non ha assenze: 120 crate, tutti con testi verificati. I
+testi non presenti nei pacchetti della cache provengono dall'upstream ai
+commit dichiarati nell'origine — `geo-types`, `geozero`, `i_key_sort`,
+`i_overlay`, `siphasher` (il cui `COPYING` è di soli rinvii), oltre a
+`flatbuffers`, `geo-traits` e `rstar` — con SHA-256 e blob Git nel registro.
+I crate del prodotto portano la `LICENSE` di famiglia alla radice del
+repository, la stessa di plenora-database-tools; il testo coerente con i
+repository pubblici resta una decisione aperta del titolare e il suo
+aggiornamento sostituirà il file, non questo meccanismo.
 
 ## Comandi e integrazione
 
