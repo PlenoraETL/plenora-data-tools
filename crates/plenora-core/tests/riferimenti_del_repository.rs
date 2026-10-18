@@ -46,6 +46,12 @@ const TESTO: &[&str] = &[
 ];
 /// Nomi di file di testo senza estensione.
 const TESTO_PER_NOME: &[&str] = &[".gitignore", ".gitattributes", "Dockerfile"];
+/// Prefissi dei testi di licenza, speculari al riconoscitore `NOMI` di
+/// `scripts/avvisi_crate.py`: la LICENSE del prodotto e i testi versionati
+/// in `assurance/licenze-crate` (LICENSE-APACHE, COPYING, UNLICENSE, ...)
+/// non hanno estensione, e si leggono come ogni altro testo.
+const TESTO_PER_PREFISSO: &[&str] =
+    &["LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT", "UNLICENSE"];
 /// Estensioni binarie: non si leggono, si contano. Un file con
 /// un'estensione fuori da [`TESTO`] e da questo elenco fa fallire il test,
 /// così un formato nuovo si classifica invece di sparire dalla scansione.
@@ -95,7 +101,14 @@ fn estensione(percorso: &Path, ammesse: &[&str]) -> bool {
 }
 
 fn classifica(percorso: PathBuf, scansione: &mut Scansione) {
-    if estensione(&percorso, TESTO) || TESTO_PER_NOME.contains(&nome_di(&percorso).as_str()) {
+    let nome = nome_di(&percorso);
+    // Maiuscole ignorate come nel riconoscitore del gate: upstream pubblica
+    // anche `license-apache-2.0` e `LICENCE` minuscoli o misti.
+    let maiuscolo = nome.to_ascii_uppercase();
+    if estensione(&percorso, TESTO)
+        || TESTO_PER_NOME.contains(&nome.as_str())
+        || TESTO_PER_PREFISSO.iter().any(|p| maiuscolo.starts_with(p))
+    {
         scansione.testi.push(percorso);
     } else if estensione(&percorso, BINARI) {
         scansione.binari += 1;

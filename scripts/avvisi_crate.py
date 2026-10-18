@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -68,7 +69,13 @@ def json_bytes(value: object) -> bytes:
 
 
 def cargo(*args: str) -> str:
-    return subprocess.check_output(['cargo', *args, '--offline', '--locked'], cwd=ROOT, text=True, encoding='utf-8')
+    # Il colore si spegne per questa invocazione: la CI imposta
+    # CARGO_TERM_COLOR=always e le sequenze ANSI romperebbero il parser.
+    ambiente = {**os.environ, 'CARGO_TERM_COLOR': 'never'}
+    return subprocess.check_output(
+        ['cargo', *args, '--offline', '--locked'],
+        cwd=ROOT, text=True, encoding='utf-8', env=ambiente,
+    )
 
 
 def grafo() -> tuple[dict, dict]:
