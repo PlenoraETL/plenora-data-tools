@@ -13,6 +13,11 @@ from pathlib import Path
 import re
 import subprocess
 
+try:
+    from . import strict_json
+except ImportError:
+    import strict_json
+
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRO = ROOT / 'assurance/registries/avvisi-crate.json'
 TESTI = ROOT / 'assurance/licenze-crate'
@@ -154,7 +159,7 @@ def percorso(value: str) -> str:
 
 
 def registro() -> dict:
-    return json.loads(REGISTRO.read_text(encoding='utf-8'))
+    return strict_json.loads(REGISTRO.read_text(encoding='utf-8'))
 
 
 def contenuti(dati: dict, *, incompleti: bool = False) -> dict[str, bytes]:
@@ -249,7 +254,7 @@ def aggiorna() -> None:
                 vcs = Path(p['manifest_path']).parent / '.cargo_vcs_info.json'
                 entry['mancante'] = {
                     'ragione': ('Licenza di famiglia source-available Plenora (indicazione del titolare): testo non presente nel checkout. Nessuna licenza alternativa assegnata; occorre il testo autorevole in LICENSE.' if p['nostro'] else 'Nessun testo nel pacchetto Cargo in cache; rete non usata. Occorre recuperare e verificare i testi upstream prima del rilascio.'),
-                    'vcs': json.loads(vcs.read_text()) if vcs.exists() else None,
+                    'vcs': strict_json.loads(vcs.read_text()) if vcs.exists() else None,
                 }
         entries[key] = entry
     REGISTRO.parent.mkdir(parents=True, exist_ok=True)

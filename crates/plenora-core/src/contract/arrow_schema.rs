@@ -107,7 +107,8 @@ pub fn verifica_tipi_supportati(schema: &Schema) -> Result<(), PlenoraError> {
 /// # Errors
 ///
 /// [`PlenoraError::DataMapping`] (`json error`) se il metadato `geo` non è
-/// JSON valido; [`PlenoraError::Crs`] se la chiave `crs` non è né
+/// JSON valido o ha chiavi duplicate; [`PlenoraError::Crs`] se la definizione
+/// testuale contiene chiavi JSON duplicate o la chiave `crs` non è né
 /// una stringa né un oggetto.
 pub fn crs_definition_from_metadata(
     field_name: &str,
@@ -116,10 +117,17 @@ pub fn crs_definition_from_metadata(
     let Some(raw) = geo_metadata else {
         return Ok(None);
     };
+    crate::json::ensure_no_duplicate_keys(raw)
+        .map_err(|_| PlenoraError::DataMapping("json error: chiavi duplicate".to_owned()))?;
     let value: serde_json::Value = serde_json::from_str(raw)?;
     match value.get("crs") {
         None => Ok(None),
-        Some(serde_json::Value::String(definition)) => Ok(Some(definition.clone())),
+        Some(serde_json::Value::String(definition)) => {
+            crate::json::ensure_no_duplicate_keys(definition).map_err(|_| {
+                PlenoraError::Crs("definizione CRS: chiavi JSON duplicate".to_owned())
+            })?;
+            Ok(Some(definition.clone()))
+        }
         Some(object @ serde_json::Value::Object(_)) => Ok(Some(serde_json::to_string(object)?)),
         Some(_) => Err(PlenoraError::Crs(format!(
             "colonna geometria `{field_name}`: metadato `{GEO_METADATA_KEY}` senza \

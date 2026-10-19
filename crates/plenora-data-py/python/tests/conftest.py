@@ -12,12 +12,12 @@ saltare i controlli (un controllo saltato non è un controllo passato).
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import pathlib
 from collections.abc import Callable
 from typing import Any
 
+import json_fixture
 import jsonschema
 import pytest
 from referencing import Registry, Resource
@@ -50,7 +50,7 @@ def contratti() -> pathlib.Path:
             "crates/plenora-cli/tests/fixtures/contratti del checkout"
         )
     cartella = pathlib.Path(valore)
-    provenienza = json.loads((cartella / "provenienza.json").read_text(encoding="utf-8"))
+    provenienza = json_fixture.loads((cartella / "provenienza.json").read_text(encoding="utf-8"))
     for nome, (_, atteso) in provenienza["file"].items():
         trovato = hashlib.sha256((cartella / nome).read_bytes()).hexdigest()
         assert trovato == atteso, f"{nome}: SHA-256 diverso dal commit dei contratti"
@@ -58,7 +58,7 @@ def contratti() -> pathlib.Path:
 
 
 def leggi(cartella: pathlib.Path, nome: str) -> Any:
-    return json.loads((cartella / nome).read_text(encoding="utf-8"))
+    return json_fixture.loads((cartella / nome).read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="session")

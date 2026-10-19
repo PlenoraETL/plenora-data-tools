@@ -183,7 +183,8 @@ pub fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, Pleno
 /// # Errors
 ///
 /// `PlenoraError::Crs` se `crs` e' vuota (o solo spazi) o supera
-/// [`MAX_CRS_DEFINITION_BYTES`]; `PlenoraError::DataMapping` se la serializzazione
+/// [`MAX_CRS_DEFINITION_BYTES`], o contiene chiavi JSON duplicate;
+/// `PlenoraError::DataMapping` se la serializzazione
 /// del metadato fallisce.
 pub fn geo_metadata_json(crs: &str) -> Result<String, PlenoraError> {
     let metadata = geo_metadata_map(crs)?;
@@ -251,6 +252,8 @@ fn geo_metadata_map(crs: &str) -> Result<serde_json::Map<String, serde_json::Val
             "crs oltre il limite di {MAX_CRS_DEFINITION_BYTES} byte"
         )));
     }
+    crate::json::ensure_no_duplicate_keys(crs)
+        .map_err(|_| PlenoraError::Crs("definizione CRS: chiavi JSON duplicate".to_owned()))?;
     let crs_value = match serde_json::from_str::<serde_json::Value>(crs) {
         Ok(value @ serde_json::Value::Object(_)) => value,
         _ => serde_json::Value::String(crs.to_owned()),
@@ -815,6 +818,8 @@ pub fn strip_rewritten_crs_keys(metadata: &mut Metadata) {
 /// piano ([`ContractCrs::ResolvedByDecision`]) sostituisce le dichiarazioni
 /// della sorgente. Un `geo` non oggetto o non JSON resta invariato: il
 /// `geo` malformato è già un errore della lettura del contratto.
+/// Anche i duplicati, nel documento o nella stringa PROJJSON, restano
+/// invariati per essere rifiutati dalla lettura del contratto.
 pub fn strip_decided_crs_declarations(metadata: &mut Metadata) {
     for key in CRS_KEYS_REPLACED_BY_DECISION {
         metadata.remove(key);
@@ -822,8 +827,18 @@ pub fn strip_decided_crs_declarations(metadata: &mut Metadata) {
     let Some(raw) = metadata.get(GEO_METADATA_KEY).cloned() else {
         return;
     };
+    if crate::json::ensure_no_duplicate_keys(&raw).is_err() {
+        return;
+    }
     if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw) {
         if let Some(object) = value.as_object_mut() {
+            if object
+                .get("crs")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|text| crate::json::ensure_no_duplicate_keys(text).is_err())
+            {
+                return;
+            }
             object.remove("crs");
             if object.is_empty() {
                 metadata.remove(GEO_METADATA_KEY);
@@ -1314,6 +1329,9 @@ fn legacy_geo_keys(field: &Field) -> Result<LegacyGeoKeys, PlenoraError> {
                     "metadato legacy `geo`: chiave `crs` vuota".to_owned(),
                 ));
             }
+            crate::json::ensure_no_duplicate_keys(text).map_err(|_| {
+                PlenoraError::Crs("definizione CRS: chiavi JSON duplicate".to_owned())
+            })?;
             match definition_form(text) {
                 DefinitionForm::Wkt => Some(LegacyCrs::TextDefinition {
                     text: text.clone(),
@@ -1378,6 +1396,7 @@ fn legacy_crs_is_coherent(keys: &CanonicalGeometryKeys, legacy: &LegacyCrs) -> b
                     .crs_definition
                     .as_deref()
                     .and_then(|definition| {
+                        crate::json::ensure_no_duplicate_keys(definition).ok()?;
                         serde_json::from_str::<serde_json::Value>(definition).ok()
                     })
                     .as_ref()

@@ -28,12 +28,17 @@ const TESTO: &str = include_str!("../data/projjson_integrati.json");
 fn tabella() -> Result<&'static Map<String, Value>> {
     static TABELLA: OnceLock<Option<Map<String, Value>>> = OnceLock::new();
     TABELLA
-        .get_or_init(|| match serde_json::from_str(TESTO) {
-            Ok(Value::Object(mappa)) => Some(mappa),
-            _ => None,
-        })
+        .get_or_init(|| leggi_tabella(TESTO))
         .as_ref()
         .ok_or_else(|| PlenoraError::Internal("tabella PROJJSON integrata illeggibile".to_owned()))
+}
+
+fn leggi_tabella(testo: &str) -> Option<Map<String, Value>> {
+    plenora_core::json::ensure_no_duplicate_keys(testo).ok()?;
+    match serde_json::from_str(testo) {
+        Ok(Value::Object(mappa)) => Some(mappa),
+        _ => None,
+    }
 }
 
 fn non_integrato() -> PlenoraError {
@@ -139,6 +144,17 @@ pub fn identificativo_da_projjson(documento: &Value) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn catalogo_rifiuta_duplicati_in_superficie_e_annidati() {
+        for testo in [
+            r#"{"EPSG:4326": {}, "EPSG:4326": {}}"#,
+            r#"{"EPSG:4326": {"id": {"code": 4326, "code": 4326}}}"#,
+        ] {
+            assert!(super::leggi_tabella(testo).is_none());
+        }
+        assert!(super::leggi_tabella(super::TESTO).is_some());
+    }
+
     use super::*;
     use plenora_core::crs::builtin_crs_identifiers;
 

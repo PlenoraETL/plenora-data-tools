@@ -232,6 +232,7 @@ fn ha_tipo(istanza: &Value, tipo: &str) -> bool {
 }
 
 fn schema(testo: &str) -> Value {
+    plenora_core::json::ensure_no_duplicate_keys(testo).expect("schema senza duplicati");
     serde_json::from_str(testo).expect("schema JSON")
 }
 
@@ -549,5 +550,15 @@ fn ritardo_e_quarantena_sono_validi_contro_lo_schema() {
         let mut documento = base.clone();
         documento["retry"] = serde_json::to_value(retry).expect("serializzabile");
         assert_eq!(valida_errore(&documento), Ok(()), "{documento}");
+    }
+}
+
+#[test]
+fn schemi_rifiutano_duplicati_in_superficie_e_annidati() {
+    for testo in [
+        r#"{"type": "object", "type": "object"}"#,
+        r#"{"properties": {"x": {"type": "string", "type": "string"}}}"#,
+    ] {
+        assert!(std::panic::catch_unwind(|| schema(testo)).is_err());
     }
 }

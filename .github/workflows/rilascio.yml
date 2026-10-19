@@ -311,7 +311,23 @@ jobs:
         run: python -m pip install -r requirements-verifica-contratti.txt
       - name: la sorgente del manifesto fissa lo stesso commit
         run: |
-          python3 -c 'import json,os,sys; r=json.load(open("crates/plenora-cli/adozione.json"))["contracts_source"]["revision"]; sys.exit(0 if r==os.environ["CONTRATTI"] else "adozione.json fissa un altro commit")'
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          def unique_pairs(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError("chiave JSON duplicata")
+                  result[key] = value
+              return result
+
+          with open("crates/plenora-cli/adozione.json", encoding="utf-8") as handle:
+              r = json.load(handle, object_pairs_hook=unique_pairs)["contracts_source"]["revision"]
+          sys.exit(0 if r == os.environ["CONTRATTI"] else "adozione.json fissa un altro commit")
+          PY
       - name: il tag e' la versione del workspace
         if: github.event_name == 'release'
         run: test "${GITHUB_REF_NAME}" = "v${VERSIONE}"

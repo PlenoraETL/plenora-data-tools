@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import subprocess
 import sys
 from pathlib import Path
 
 from genera_manifesto_adozione import valida, verifica_checkout
+
+try:
+    from . import strict_json
+except ImportError:
+    import strict_json
 
 RADICE = Path(__file__).resolve().parents[1]
 
@@ -36,11 +40,11 @@ def prove_contratti(contratti: Path) -> None:
 
 
 def verifica(contratti: Path) -> None:
-    sorgente = json.loads((RADICE / "crates/plenora-cli/adozione.json").read_text("utf-8"))
+    sorgente = strict_json.loads((RADICE / "crates/plenora-cli/adozione.json").read_text("utf-8"))
     revisione = sorgente["contracts_source"]["revision"]
     verifica_checkout(contratti, revisione)
     cartella = RADICE / "crates/plenora-cli/tests/fixtures/contratti"
-    provenienza = json.loads((cartella / "provenienza.json").read_text("utf-8"))
+    provenienza = strict_json.loads((cartella / "provenienza.json").read_text("utf-8"))
     if provenienza["commit"] != revisione:
         raise ValueError("pin di provenienza incoerente")
     if {p.name for p in cartella.iterdir()} != set(provenienza["file"]) | {"provenienza.json"}:
@@ -53,10 +57,10 @@ def verifica(contratti: Path) -> None:
         copia = (cartella / nome).read_bytes()
         if copia != originale or hashlib.sha256(copia).hexdigest() != digest:
             raise ValueError("copia dei contratti o digest incoerente")
-    catalogo = json.loads((cartella / "data-tools-v3.json").read_text("utf-8"))
+    catalogo = strict_json.loads((cartella / "data-tools-v3.json").read_text("utf-8"))
     from jsonschema import Draft202012Validator
 
-    schema = json.loads((cartella / "public-catalog-v2.schema.json").read_text("utf-8"))
+    schema = strict_json.loads((cartella / "public-catalog-v2.schema.json").read_text("utf-8"))
     Draft202012Validator.check_schema(schema)
     if not Draft202012Validator(schema).is_valid(catalogo):
         raise ValueError("catalogo non valido")
