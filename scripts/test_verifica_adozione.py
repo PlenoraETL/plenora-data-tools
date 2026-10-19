@@ -4,11 +4,31 @@ import contextlib
 import io
 from pathlib import Path
 import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
 import genera_manifesto_adozione
 import verifica_adozione
+
+
+class BytecodeNelCheckoutTests(unittest.TestCase):
+    def test_i_lettori_del_checkout_non_scrivono_pyc(self):
+        """Chi importa dal checkout fissato non deve scrivervi i .pyc.
+
+        Un __pycache__ lasciato nel checkout e' stato dei file che
+        verifica_checkout rifiuta, a ragione: il rilascio della 3.0.0 e'
+        fallito proprio cosi'. L'interprete va messo in dont_write_bytecode
+        dal modulo stesso, non dal chiamante che puo' dimenticarsi il -B.
+        """
+        for modulo in ("verifica_cli_contratti", "genera_manifesto_adozione"):
+            with self.subTest(modulo=modulo):
+                esito = subprocess.run(
+                    [sys.executable, "-c",
+                     f"import {modulo}, sys; raise SystemExit(0 if sys.dont_write_bytecode else 1)"],
+                    cwd=Path(__file__).parent, check=False,
+                )
+                self.assertEqual(esito.returncode, 0)
 
 
 class VerificaCheckoutTests(unittest.TestCase):

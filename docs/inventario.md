@@ -116,5 +116,5 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 | `scripts/test_check_docs.py` | 14 |
 | `scripts/test_genera_inventario.py` | 6 |
 | `scripts/test_genera_sbom_rilascio.py` | 5 |
-| `scripts/test_verifica_adozione.py` | 7 |
+| `scripts/test_verifica_adozione.py` | 8 |
 | `scripts/test_verifica_sdk_python.py` | 2 |

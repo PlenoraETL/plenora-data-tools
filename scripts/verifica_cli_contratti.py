@@ -27,6 +27,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Questo programma importa moduli dal checkout fissato dei contratti: non deve
+# scrivervi nulla, nemmeno i .pyc. Un __pycache__ lasciato li' e' stato dei
+# file che il controllo di pulizia del checkout (verifica_checkout) rifiuta,
+# a ragione: Python legge i .pyc esistenti anche con -B.
+sys.dont_write_bytecode = True
+
 REVISIONE = "3aec9f724f5a0ad21366f293895b4d0dbcd0aad1"
 
 
