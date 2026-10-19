@@ -43,6 +43,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from . import strict_json
+except ImportError:
+    import strict_json
+
 # Anche questo programma importa moduli dal checkout fissato dei contratti:
 # non deve scrivervi i .pyc, o il controllo di pulizia (verifica_checkout)
 # rifiuterebbe, a ragione, il checkout che questo stesso file verifica.
@@ -191,7 +196,7 @@ def verifica_checkout(contratti: Path, revisione: str) -> None:
 def valida(documento: dict, contratti: Path) -> None:
     from jsonschema import Draft202012Validator
 
-    schema = json.loads(
+    schema = strict_json.loads(
         (contratti / "schemas" / "adoption-manifest-v4.schema.json").read_text(encoding="utf-8")
     )
     Draft202012Validator.check_schema(schema)
@@ -217,7 +222,7 @@ def main() -> int:
     argomenti.add_argument("--verifica", action="append", required=True)
     argomenti.add_argument("--uscita", type=Path, required=True)
     letti = argomenti.parse_args()
-    sorgente = json.loads(SORGENTE.read_text(encoding="utf-8"))
+    sorgente = strict_json.loads(SORGENTE.read_text(encoding="utf-8"))
     verifica_checkout(letti.contratti, sorgente["contracts_source"]["revision"])
     documento = manifesto(sorgente, letti.versione, letti.artefatto, letti.verifica)
     valida(documento, letti.contratti)

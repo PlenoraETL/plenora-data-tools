@@ -14,6 +14,7 @@ import pyarrow as pa
 import pyarrow.feather as feather
 import pytest
 
+import json_fixture
 import plenora_data as pd
 from aiuti import CANARINO, piano_identita, tabella_semplice
 
@@ -60,7 +61,7 @@ def verifica(errore: pd.PlenoraError, valida: Callable[[str, object], None]) -> 
 
 
 def test_la_gerarchia_ha_una_classe_per_categoria(contratti: pathlib.Path) -> None:
-    schema = json.loads((contratti / "error-v1.schema.json").read_text(encoding="utf-8"))
+    schema = json_fixture.loads((contratti / "error-v1.schema.json").read_text(encoding="utf-8"))
     assert set(CATEGORIE) == set(schema["properties"]["category"]["enum"])
     for classe in CATEGORIE.values():
         assert issubclass(classe, pd.PlenoraError)

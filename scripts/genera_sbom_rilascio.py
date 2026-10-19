@@ -27,6 +27,11 @@ import tomllib
 from urllib.parse import quote
 import zipfile
 
+try:
+    from . import strict_json
+except ImportError:
+    import strict_json
+
 ROOT = Path(__file__).resolve().parents[1]
 
 # Le dipendenze runtime dichiarate dal wheel (pyproject.toml) e il pin con cui
@@ -282,12 +287,12 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.check:
-        validate(ROOT, args.dist, json.loads(args.check.read_text(encoding="utf-8")))
+        validate(ROOT, args.dist, strict_json.loads(args.check.read_text(encoding="utf-8")))
         print("SBOM: source graphs and wheel metadata covered")
         return 0
     if args.output is None:
         parser.error("--output is required when generating")
-    bom = render(ROOT, args.dist, json.loads(args.artifact_sbom.read_text(encoding="utf-8")))
+    bom = render(ROOT, args.dist, strict_json.loads(args.artifact_sbom.read_text(encoding="utf-8")))
     args.output.write_text(json.dumps(bom, indent=2) + "\n", encoding="utf-8")
     print(f"SBOM: {len(bom['components'])} components; Cargo and Python coverage verified")
     return 0

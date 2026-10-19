@@ -23,6 +23,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+try:
+    from . import strict_json
+except ImportError:
+    import strict_json
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BUDGET = ROOT / "scripts" / "coverage_budget.json"
 LLVM_METRICS = ("functions", "lines", "regions")
@@ -57,7 +62,7 @@ def _number(value: Any, where: str) -> float:
 def load_json(path: Path, kind: str) -> dict[str, Any]:
     try:
         with path.open(encoding="utf-8") as handle:
-            return _object(json.load(handle), kind)
+            return _object(strict_json.load(handle), kind)
     except (OSError, json.JSONDecodeError) as error:
         raise CoverageError(f"{kind}: impossibile leggere {path}: {error}") from error
 

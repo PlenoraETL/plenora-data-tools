@@ -90,10 +90,10 @@ fn cartella_contratti() -> PathBuf {
 /// `provenienza.json`.
 pub fn contratto(nome: &str) -> Value {
     let cartella = cartella_contratti();
-    let provenienza: Value = serde_json::from_slice(
-        &std::fs::read(cartella.join("provenienza.json")).expect("provenienza.json"),
-    )
-    .expect("provenienza JSON");
+    let testo =
+        std::fs::read_to_string(cartella.join("provenienza.json")).expect("provenienza.json");
+    plenora_core::json::ensure_no_duplicate_keys(&testo).expect("provenienza senza duplicati");
+    let provenienza: Value = serde_json::from_str(&testo).expect("provenienza JSON");
     let atteso = provenienza["file"][nome][1]
         .as_str()
         .unwrap_or_else(|| panic!("{nome} senza provenienza"));
@@ -103,16 +103,18 @@ pub fn contratto(nome: &str) -> Value {
         atteso,
         "{nome}: SHA-256 diverso dal commit dei contratti"
     );
+    plenora_core::json::ensure_no_duplicate_keys(std::str::from_utf8(&byte).expect("UTF-8"))
+        .expect("contratto senza duplicati");
     serde_json::from_slice(&byte).expect("JSON dei contratti")
 }
 
 /// Ogni file della cartella è in `provenienza.json` e viceversa.
 pub fn provenienza_completa() {
     let cartella = cartella_contratti();
-    let provenienza: Value = serde_json::from_slice(
-        &std::fs::read(cartella.join("provenienza.json")).expect("provenienza.json"),
-    )
-    .expect("provenienza JSON");
+    let testo =
+        std::fs::read_to_string(cartella.join("provenienza.json")).expect("provenienza.json");
+    plenora_core::json::ensure_no_duplicate_keys(&testo).expect("provenienza senza duplicati");
+    let provenienza: Value = serde_json::from_str(&testo).expect("provenienza JSON");
     let dichiarati: Vec<String> = provenienza["file"]
         .as_object()
         .expect("file")

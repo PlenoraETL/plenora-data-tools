@@ -27,6 +27,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+try:
+    from . import strict_json
+except ImportError:
+    import strict_json
+
 # Questo programma importa moduli dal checkout fissato dei contratti: non deve
 # scrivervi nulla, nemmeno i .pyc. Un __pycache__ lasciato li' e' stato dei
 # file che il controllo di pulizia del checkout (verifica_checkout) rifiuta,
@@ -52,7 +57,7 @@ class Verifica:
             "row-diagnostics-v1",
             "operation-registry-v1",
         ]:
-            schema = json.loads(
+            schema = strict_json.loads(
                 (contratti / "schemas" / f"{nome}.schema.json").read_text(encoding="utf-8")
             )
             Draft202012Validator.check_schema(schema)
@@ -115,7 +120,7 @@ def verifica(contratti: Path, binario: Path) -> list[str]:
     capacita = documento["result"]
     v.valido("capabilities-v2", capacita, "capabilities")
     v.controlla(not v.semantica.capability_errors(capacita), "capabilities: CAP-005/CAP-007")
-    catalogo = json.loads((contratti / "catalogs" / "data-tools-v3.json").read_text("utf-8"))
+    catalogo = strict_json.loads((contratti / "catalogs" / "data-tools-v3.json").read_text("utf-8"))
     pubbliche = {
         (op["id"], op["version"], op["input"]["contract"], op["output"]["contract"], op["side_effect"])
         for op in catalogo["operations"]
@@ -130,7 +135,7 @@ def verifica(contratti: Path, binario: Path) -> list[str]:
     codice, documento = v.invoca("catalog", "--format", "json")
     v.controlla(documento["contract"] == "plenora-data-catalog-result-v2", "catalog: contratto del risultato")
     v.valido("operation-registry-v1", documento["result"]["registry"], "catalog: registry")
-    registro = json.loads((contratti / "catalogs" / "data-kernels-v2.json").read_text("utf-8"))
+    registro = strict_json.loads((contratti / "catalogs" / "data-kernels-v2.json").read_text("utf-8"))
     comuni = {(op["id"], op["version"], op["family"]) for op in registro["operations"]}
     kernel = documento["result"]["kernels"]
     nostri = {(k["id"], k["version"], k["family"]) for k in kernel}

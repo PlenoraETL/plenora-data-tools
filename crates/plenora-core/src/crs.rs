@@ -520,6 +520,9 @@ fn starts_with_wkt_keyword(trimmed: &str, keywords: &[&str]) -> bool {
 /// forme non riconosciute cadono in [`DefinitionForm::Other`].
 #[must_use]
 pub fn definition_form(definition: &str) -> DefinitionForm {
+    if crate::json::ensure_no_duplicate_keys(definition).is_err() {
+        return DefinitionForm::Other;
+    }
     if let Ok(value) = serde_json::from_str::<Value>(definition) {
         return if value.is_object() {
             DefinitionForm::Projjson

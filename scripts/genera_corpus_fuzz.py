@@ -29,6 +29,11 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pyarrow.parquet as pq
 
+try:
+    from . import strict_json
+except ImportError:
+    import strict_json
+
 RADICE = Path(__file__).resolve().parents[1]
 SENTINELLA = "SENTINELLA-7f3a9c"
 
@@ -50,7 +55,7 @@ def casi_del_catalogo() -> list[tuple[str, str, object]]:
     casi = re.findall(r'caso!\(\s*"([^"]+)",\s*(\w+),\s*(r#"(.*?)"#|"(.*?)")\s*\)', testo, re.S)
     if not casi:
         raise SystemExit("nessun caso! in crates/plenora-pipeline/tests/comune/mod.rs")
-    return [(op, fixture, json.loads(grezzo or semplice.replace('\\"', '"'))) for op, fixture, _, grezzo, semplice in casi]
+    return [(op, fixture, strict_json.loads(grezzo or semplice.replace('\\"', '"'))) for op, fixture, _, grezzo, semplice in casi]
 
 
 def piani(corpus: Corpus, casi: list[tuple[str, str, object]]) -> None:

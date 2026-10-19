@@ -930,3 +930,74 @@ fn discovery_rejects_unrepresentable_encoding() {
     .expect("discovery");
     assert_eq!(contract.encoding, Some(GeometryEncoding::Wkb));
 }
+
+/// Il JSON esterno e il PROJJSON codificato come stringa sono due confini.
+#[test]
+fn metadati_crs_rifiutano_duplicati_senza_payload() {
+    use plenora_core::contract::arrow_metadata::{
+        canonical_geometry_crs_definition, geo_metadata_json, strip_decided_crs_declarations,
+    };
+    use plenora_core::crs::{definition_form, DefinitionForm};
+    for definition in [
+        r#"{"SENTINELLA": 1, "SENTINELLA": 2}"#,
+        r#"{"type": "ProjectedCRS", "nested": [{"SENTINELLA": 1, "SENTINELLA": 2}]}"#,
+    ] {
+        assert_eq!(definition_form(definition), DefinitionForm::Other);
+        let error = geo_metadata_json(definition).expect_err("PROJJSON ambiguo");
+        assert!(matches!(error, PlenoraError::Crs(_)));
+        assert!(!error.to_string().contains("SENTINELLA"));
+        let field = Field::new("geometry", DataType::Binary, true).with_metadata(HashMap::from([
+            (
+                PLENORA_GEOMETRY_CRS_DEFINITION_KEY.to_owned(),
+                definition.to_owned(),
+            ),
+            (
+                PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY.to_owned(),
+                "projjson".to_owned(),
+            ),
+        ]));
+        let error = canonical_geometry_crs_definition(&field).expect_err("definizione ambigua");
+        assert!(matches!(error, PlenoraError::Crs(_)));
+        assert!(!error.to_string().contains("SENTINELLA"));
+        for (raw, stringa) in [
+            (format!(r#"{{"crs":{definition}}}"#), false),
+            (serde_json::json!({"crs": definition}).to_string(), true),
+            (
+                format!(r#"{{"crs":"EPSG:4326","extra":{definition}}}"#),
+                false,
+            ),
+        ] {
+            let error =
+                crs_definition_from_metadata("geometry", Some(&raw)).expect_err("duplicati");
+            assert!(if stringa {
+                matches!(error, PlenoraError::Crs(_))
+            } else {
+                matches!(error, PlenoraError::DataMapping(_))
+            });
+            assert!(!error.to_string().contains("SENTINELLA"));
+            let field = geometry_field(Some(&raw));
+            let error = read_geometry_contract_keys(&field).expect_err("contratto ambiguo");
+            assert!(if stringa {
+                matches!(error, PlenoraError::Crs(_))
+            } else {
+                matches!(error, PlenoraError::Schema(_))
+            });
+            assert!(!error.to_string().contains("SENTINELLA"));
+            let mut metadata = field.metadata().clone();
+            strip_decided_crs_declarations(&mut metadata);
+            assert_eq!(metadata.get(GEO_METADATA_KEY), Some(&raw));
+        }
+    }
+    let raw = r#"{"crs":"EPSG:4326","crs":"EPSG:3857"}"#.to_owned();
+    assert!(crs_definition_from_metadata("geometry", Some(&raw)).is_err());
+    let mut metadata = geometry_field(Some(&raw)).metadata().clone();
+    strip_decided_crs_declarations(&mut metadata);
+    assert_eq!(metadata.get(GEO_METADATA_KEY), Some(&raw));
+    let raw = r#"{"crs":"EPSG:4326","dimensions":"xy"}"#;
+    let mut metadata = geometry_field(Some(raw)).metadata().clone();
+    strip_decided_crs_declarations(&mut metadata);
+    assert_eq!(
+        metadata.get(GEO_METADATA_KEY).map(String::as_str),
+        Some(r#"{"dimensions":"xy"}"#)
+    );
+}

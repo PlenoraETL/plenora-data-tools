@@ -34,7 +34,9 @@ fn misure() -> Value {
         env!("CARGO_MANIFEST_DIR"),
         "/../../data/misure/catalogo-memoria-v4.json"
     );
-    serde_json::from_slice(&std::fs::read(percorso).expect("misure")).expect("json")
+    let testo = std::fs::read_to_string(percorso).expect("misure");
+    plenora_core::json::ensure_no_duplicate_keys(&testo).expect("misure senza duplicati");
+    serde_json::from_str(&testo).expect("json")
 }
 
 fn intero(punto: &Value, campo: &str) -> u64 {

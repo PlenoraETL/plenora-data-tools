@@ -55,6 +55,7 @@ fn cartella_vettori() -> PathBuf {
 
 fn vettore(nome: &str) -> Value {
     let testo = std::fs::read_to_string(cartella_vettori().join(nome)).expect("vettore");
+    plenora_core::json::ensure_no_duplicate_keys(&testo).expect("vettore senza duplicati");
     serde_json::from_str(&testo).expect("JSON del vettore")
 }
 

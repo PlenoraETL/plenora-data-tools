@@ -243,10 +243,9 @@ mod tests {
     /// pubblico, più il solo contratto degli attributi.
     #[test]
     fn gli_attributi_di_ogni_operazione_sono_quelli_del_catalogo() {
-        let catalogo: Value = serde_json::from_str(include_str!(
-            "../tests/fixtures/contratti/data-tools-v3.json"
-        ))
-        .expect("catalogo pubblico");
+        let testo = include_str!("../tests/fixtures/contratti/data-tools-v3.json");
+        plenora_core::json::ensure_no_duplicate_keys(testo).expect("catalogo senza duplicati");
+        let catalogo: Value = serde_json::from_str(testo).expect("catalogo pubblico");
         let pubbliche = catalogo["operations"].as_array().expect("operations");
         assert_eq!(pubbliche.len(), OPERAZIONI.len());
         for operazione in OPERAZIONI {

@@ -31,6 +31,11 @@ import pathlib
 import sys
 from fractions import Fraction
 
+try:
+    from . import strict_json
+except ImportError:
+    import strict_json
+
 RADICE = pathlib.Path(__file__).resolve().parent.parent
 MISURE = RADICE / "data" / "misure" / "catalogo-memoria-v4.json"
 
@@ -113,7 +118,7 @@ def ceil_frazione(valore):
 def estrai(catalogo):
     """I campi usati del catalogo v4, con provenienza e impronta."""
     testo = catalogo.read_bytes()
-    dati = json.loads(testo.decode("utf-8-sig"))
+    dati = strict_json.loads(testo.decode("utf-8-sig"))
     if dati.get("schema_version") != 4:
         fallisci("atteso il catalogo schema 4")
     provenienza = dati["provenance"]
@@ -193,7 +198,7 @@ def scrivi_misure(dati):
 def carica():
     """Le misure del repository e il loro SHA-256."""
     testo = MISURE.read_bytes()
-    dati = json.loads(testo.decode("utf-8"))
+    dati = strict_json.loads(testo.decode("utf-8"))
     if dati.get("schema") != SCHEMA_MISURE:
         fallisci(f"{MISURE.name}: schema diverso da {SCHEMA_MISURE}")
     return dati, hashlib.sha256(testo).hexdigest()

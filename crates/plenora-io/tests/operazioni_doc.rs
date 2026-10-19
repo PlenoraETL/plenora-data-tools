@@ -248,6 +248,7 @@ fn leggi_scheda(operazione: &'static OperationDescriptor) -> Result<Scheda, Stri
     if !dopo.trim().is_empty() {
         return Err("testo dopo il blocco JSON dell'esempio".into());
     }
+    plenora_core::json::ensure_no_duplicate_keys(json).map_err(|e| e.to_string())?;
     let esempio: Esempio = serde_json::from_str(json).map_err(|errore| {
         // Posizione e categoria, non il messaggio di serde, che può
         // citare il valore letto.
@@ -739,6 +740,8 @@ fn colonna_senza_contesto(spec: &ColonnaSpec) -> Result<(Field, ArrayRef), Strin
         .iter()
         .enumerate()
         .map(|(riga, valore)| {
+            plenora_core::json::ensure_no_duplicate_keys(valore.get())
+                .map_err(|e| e.to_string())?;
             in_riga(
                 riga,
                 serde_json::from_str::<Value>(valore.get())
@@ -1144,6 +1147,8 @@ fn celle_diverse(una: &Resa, altra: &Resa) -> Vec<(usize, String)> {
 /// Verifica sul contratto, per le operazioni geo che il runner non esegue:
 /// l'analisi accetta la config e l'uscita ha le colonne e i tipi scritti.
 fn verifica_contratto(scheda: &Scheda, ingressi: &[RecordBatch]) -> Result<(), String> {
+    plenora_core::json::ensure_no_duplicate_keys(scheda.esempio.config.get())
+        .map_err(|e| e.to_string())?;
     let config: Value = serde_json::from_str(scheda.esempio.config.get()).expect("config JSON");
     let contratti = ingressi
         .iter()
@@ -1184,6 +1189,7 @@ fn kernel_diretto(scheda: &Scheda, ingresso: &RecordBatch) -> Result<RecordBatch
     use plenora_kernels_table::reshape;
     let limiti = plenora_kernels_table::Limits::default();
     let config = scheda.esempio.config.get();
+    plenora_core::json::ensure_no_duplicate_keys(config).map_err(|e| e.to_string())?;
     match scheda.operazione.id {
         "table.pivot" => {
             let config: reshape::Pivot = serde_json::from_str(config).map_err(|e| e.to_string())?;
