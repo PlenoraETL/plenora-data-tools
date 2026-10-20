@@ -130,7 +130,8 @@ log = "=0.4.33"
 # Deserializzazione dei piani, delle config e dei contratti.
 serde = { version = "=1.0.229", features = ["derive"] }
 # JSON di piani, config, metadati e inviluppi; `raw_value` per il piano grezzo della CLI.
-serde_json = { version = "=1.0.151", features = ["raw_value"] }
+# float_roundtrip: la forma breve dei double deve rileggersi identica nei piani.
+serde_json = { version = "=1.0.151", features = ["raw_value", "float_roundtrip"] }
 # Derivazione di `Error` per gli errori pubblici di plenora-core e plenora-kernels-geo.
 thiserror = "=2.0.21"
 # Date e orari delle operazioni tabellari e della scadenza della CLI (RFC 3339).
