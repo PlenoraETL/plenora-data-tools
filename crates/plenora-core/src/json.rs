@@ -320,7 +320,10 @@ const MESSAGGIO_CHIAVE_RISERVATA: &str = "chiave JSON riservata \
 /// altro numero da quello scritto, senza errore. Il numero si accetta se il
 /// suo valore decimale esatto e' quello del double letto (la forma piu'
 /// corta che `serde_json` riscrive: `0.1`, `1e3`, `2.5` passano), altrimenti
-/// il documento si rifiuta. Chi vuole il valore del double lo scrive come
+/// il documento si rifiuta. Se entrambe le forme usano l'esponente,
+/// si richiede la forma breve, salvo `E` e `+` equivalenti. La lettura
+/// usa `float_roundtrip`, anche nella successiva deserializzazione.
+/// Chi vuole il valore del double lo scrive come
 /// il double lo rende; chi vuole un valore esatto oltre il double lo scrive
 /// come stringa, dove l'operazione accetta stringhe.
 ///
@@ -387,10 +390,17 @@ fn numero_esatto(token: &str) -> bool {
     let Some(riscritto) = letto.as_f64().and_then(serde_json::Number::from_f64) else {
         return true;
     };
-    match (
-        decimale_canonico(token),
-        decimale_canonico(&riscritto.to_string()),
-    ) {
+    let breve = riscritto.to_string();
+    // Quando entrambi usano l'esponente, si accetta la forma breve con
+    // `E` e `+` equivalenti. Non si allarga a mantisse come `0.11e34`.
+    if let (Some((mantissa, esponente)), Some((mantissa_breve, esponente_breve))) =
+        (token.split_once(['e', 'E']), breve.split_once(['e', 'E']))
+    {
+        let esponente = esponente.strip_prefix('+').unwrap_or(esponente);
+        let esponente_breve = esponente_breve.strip_prefix('+').unwrap_or(esponente_breve);
+        return mantissa == mantissa_breve && esponente == esponente_breve;
+    }
+    match (decimale_canonico(token), decimale_canonico(&breve)) {
         (Some(scritto), Some(letto)) => scritto == letto,
         _ => false,
     }
@@ -879,6 +889,9 @@ mod tests {
             r#"{"a": 1, "b": -7, "c": 18446744073709551615, "d": -9223372036854775808}"#,
             r#"{"a": 0.1, "b": 2.5, "c": 1e3, "d": 1.0, "e": -0.0, "f": 9007199254740992.0}"#,
             r#"{"s": "9007199254740993.0 dentro una stringa \" 1e400", "n": [1, 2.25]}"#,
+            "[1e3, 1e+3, 1E+3]",
+            "[1100000000000000000000000000000000, 1.1e33, 1.1e+33, 1.1E+33]",
+            "[1.1000000000000001e33, 1.1000000000000001E+33]",
         ] {
             assert!(ensure_numbers_exact(esatto).is_ok(), "{esatto}");
         }
@@ -887,6 +900,11 @@ mod tests {
             r#"{"x": 18446744073709551616}"#,
             r#"{"x": 0.30000000000000001}"#,
             "[1, 2, 9007199254740993e0]",
+            "1.10000000000000001e33",
+            "0.11e34",
+            "1100000000000000000000000000000001",
+            "18446744073709551617",
+            "100000000000000000001",
         ] {
             assert!(
                 matches!(

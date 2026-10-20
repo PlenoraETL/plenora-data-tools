@@ -655,6 +655,20 @@ decimale oltre la precisione del double arriva già arrotondato:
 valore decimale esatto non è quello del double letto
 (`plenora_core::json::ensure_numbers_exact`): `9007199254740993.0` e
 `0.30000000000000001` si rifiutano, `0.1`, `2.5` e `1e3` passano. Il
+criterio usa la rappresentazione decimale breve del double, non il suo
+valore binario esatto. Quando anche la forma breve usa l'esponente, il
+testo esponenziale deve coincidere con essa, salvo `e`/`E` e il `+`
+facoltativo: `1.1e33` e `1.1E+33` passano, `0.11e34` si rifiuta.
+Anche `1.1000000000000001e33` passa: è la forma breve del double
+adiacente, un altro numero letto esattamente. La forma non breve
+`1.10000000000000001e33` si rifiuta.
+`1e3`, `1e+3` e `1E+3` restano accettati. La lettura JSON abilita
+`float_roundtrip`: un piano accettato mantiene gli stessi numeri dopo
+`from_json` → `to_string` → `from_json` (resta il limite di dimensione
+del documento riscritto). Per esempio, l'intero
+`1100000000000000000000000000000000` si riscrive `1.1e+33` e si rilegge
+identico; `1100000000000000000000000000000001`, `18446744073709551617`
+e `100000000000000000001` si rifiutano. Il
 valore letto si ricostruisce esatto dalla forma che `serde_json` riscrive,
 esponente compreso (`NumericBound::parse`: `1e-7` è un decimale, non un
 double): un intero oltre `u64` come `100000000000000000000` passa il
