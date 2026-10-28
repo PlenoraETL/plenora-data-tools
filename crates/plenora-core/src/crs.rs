@@ -3,7 +3,7 @@
 //! Le sole coordinate non identificano un CRS: il chiamante fornisce una
 //! definizione, che va risolta prima che un kernel spaziale giri. In questo
 //! workspace (Rust puro) non c'è risoluzione PROJ: [`resolve_crs`] risolve
-//! solo gli identificatori d'autorità della tabella dei CRS integrati
+//! gli identificatori e i PROJJSON equivalenti della tabella dei CRS integrati
 //! (`epsg_integrati`, generata dal registro EPSG); ogni altra definizione
 //! fallisce chiusa e un [`ResolvedCrs`] diverso entra solo già risolto dal
 //! chiamante (docs/crs.md, «CRS integrati»). La riproiezione fra CRS integrati
@@ -19,8 +19,6 @@
 //!   con una regola fissa per famiglia di proiezione, descritta nel
 //!   generatore `scripts/genera_crs_integrati.py`.
 
-// Il modello resta interno finche' i formati di definizione non lo consumano.
-#[allow(dead_code)]
 mod definizioni;
 mod epsg_integrati;
 mod integrati;
@@ -606,15 +604,12 @@ pub enum CrsError {
     /// Definizione oltre [`MAX_CRS_DEFINITION_BYTES`] o con NUL.
     #[error("CRS_INVALID: {name}: {reason}")]
     InvalidDefinition { name: &'static str, reason: String },
-    /// Definizione non d'autorità (WKT, WKT2, PROJJSON, proj-string), che
+    /// Definizione non implementata (WKT, WKT2, proj-string), che
     /// qui non si risolve.
-    #[error("CRS_BACKEND_UNAVAILABLE: la validazione CRS richiede il backend PROJ")]
+    #[error("CRS_BACKEND_UNAVAILABLE: formato di definizione CRS non implementato")]
     BackendUnavailable,
     /// Identificatore d'autorità fuori dalla tabella dei CRS integrati.
-    #[error(
-        "CRS_NOT_BUILTIN: l'identificatore d'autorita' non e' nella tabella dei CRS integrati \
-         (senza backend PROJ non si risolve altro)"
-    )]
+    #[error("CRS_NOT_BUILTIN: definizione non equivalente a un CRS della tabella integrata")]
     NotBuiltin,
     /// Tipo PROJJSON diverso da geografico o proiettato. Nessun codice di
     /// questo repository lo produce: lo produceva il risolutore PROJ del
@@ -812,6 +807,8 @@ fn validate_definition_text(value: &str, name: &'static str) -> Result<(), CrsEr
 /// originale resta in [`ResolvedCrs::definition`]. Nessuna riproiezione: il
 /// valore descrive il CRS (tipo, unita', assi, area d'uso, dominio), non
 /// trasforma coordinate.
+/// Accetta anche PROJJSON completi equivalenti alla voce selezionata
+/// dall'ID radice, dopo il confronto semantico esatto.
 ///
 /// Il canonical e' un sottoinsieme del PROJJSON che PROJ produrrebbe (tipo,
 /// nome, sistema di coordinate, `id`), non il documento completo: e' stabile
@@ -825,11 +822,13 @@ fn validate_definition_text(value: &str, name: &'static str) -> Result<(), CrsEr
 /// - [`CrsError::NotBuiltin`] per un identificatore d'autorita' che non e'
 ///   nella tabella (codice sconosciuto, altra autorita', forma non
 ///   riconosciuta);
-/// - [`CrsError::BackendUnavailable`] per ogni definizione non d'autorita'
-///   (WKT, WKT2, PROJJSON, proj-string): verificarla richiederebbe PROJ,
-///   che qui non c'è.
+/// - [`CrsError::NotBuiltin`] anche per un PROJJSON non equivalente;
+/// - [`CrsError::BackendUnavailable`] per WKT, WKT2 e proj-string.
 pub fn resolve_crs(definition: &str, name: &'static str) -> Result<ResolvedCrs, CrsError> {
     validate_definition_text(definition, name)?;
+    if definition.trim_start().starts_with('{') {
+        return definizioni::risolvi(definition, name);
+    }
     if definition_form(definition) != DefinitionForm::AuthorityCode {
         return Err(CrsError::BackendUnavailable);
     }
@@ -1016,7 +1015,6 @@ mod tests {
         for definizione in [
             r#"PROJCS["WGS 84 / Pseudo-Mercator",GEOGCS["WGS 84"]]"#,
             r#"PROJCRS["WGS 84 / UTM zone 32N",BASEGEOGCRS["WGS 84"]]"#,
-            r#"{"type":"GeographicCRS","name":"WGS 84","id":{"authority":"EPSG","code":4326}}"#,
             "+proj=longlat +datum=WGS84 +no_defs",
         ] {
             assert!(

@@ -108,9 +108,12 @@ Stesso piano e stessi schemi d'ingresso, stesse identità
   2 GiB di un `Binary`, `ResourceLimit`), e l'uscita è `Binary`. Lo
   ammette il vocabolario per entrambi i lati;
 - `spatial_semantics = geography`, un `edges` non planare in
-  `ARROW:extension:metadata` e un `crs` in `ARROW:extension:metadata` si
-  rifiutano (`Unsupported`): i kernel sono planari, e un CRS che questo
-  componente non legge passerebbe per assente (ARROW-007);
+  `ARROW:extension:metadata` si rifiutano (`Unsupported`): i kernel sono
+  planari. Il `crs` PROJJSON standard passa dal confronto semantico completo;
+  se coesiste con altre dichiarazioni devono risolversi allo stesso CRS.
+  Una dichiarazione canonica esplicitamente `declared_unresolved` resta
+  irrisolta, conservata nella lineage. `crs_type`, se presente, deve essere
+  `projjson`;
 - metadati contraddittori falliscono con categoria `crs` se riguardano il
   CRS (stato, identificatore, definizione e formato, ordine degli assi,
   `srid`, divergenza dal `geo`), `schema` altrimenti (vocabolario,
@@ -204,14 +207,6 @@ un'operazione.
   `wkb`; i kernel geo rifiutano comunque lo SRID incorporato.
   *Rientro*: la dichiarazione obbligatoria in ingresso, con il rifiuto delle
   chiavi mancanti (sotto).
-- **Metadato d'estensione dei file GeoParquet.**
-  *Regola*: un CRS dichiarato non si perde (ARROW-007).
-  *Ambito*: lettura GeoParquet.
-  *Hazard*: il lettore toglie `ARROW:extension:metadata` dallo schema
-  incorporato prima di leggerne il contratto, perché l'autorità è il
-  metadato di file `geo`; un `crs` scritto lì e diverso da quello del `geo`
-  non si confronta. Limite precedente a questo ciclo.
-  *Rientro*: il confronto del `crs` d'estensione con quello del file.
 - **Chiavi mancanti tollerate in ingresso.**
   *Regola*: il vocabolario (sezione 4) vuole su ogni campo `geoarrow.wkb`
   identità, encoding, dimensionalità, semantica, precisione, dichiarazione

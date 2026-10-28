@@ -1,0 +1,6 @@
+{
+  "sorgente": "plenora-io-tools/tests/fixtures/canoniche/canonico.arrow",
+  "sha256_arrow": "c1e65b12efcedc69d4761b1820af7a12a6c3432ecfc0bce8336c5e232b5ef345",
+  "sha256_definizione": "812485b5e93cf39f57d53e74109029194d49b1c56675dad1a4b4d5e0a6eb90e9",
+  "estrazione": "metadata del campo geometry, plenora.geometry.crs_definition, byte originali"
+}

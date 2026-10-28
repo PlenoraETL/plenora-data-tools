@@ -36,8 +36,9 @@ maiuscole, codice senza zeri iniziali),
 `OGC:CRS84` e `urn:ogc:def:crs:OGC:<versione>:CRS84`. Due forme dello stesso
 codice sono semanticamente uguali (il canonical dipende dal CRS, non dal
 testo); `EPSG:4326` (lat/lon) e `OGC:CRS84` (lon/lat) no. Un identificatore
-d'autorità fuori tabella fallisce con `CRS_NOT_BUILTIN`; WKT, WKT2, PROJJSON
-e proj-string con `CRS_BACKEND_UNAVAILABLE`.
+d'autorità fuori tabella fallisce con `CRS_NOT_BUILTIN`. Sono accettati anche
+i PROJJSON completi equivalenti a una voce integrata; WKT, WKT2 e
+proj-string restano `CRS_BACKEND_UNAVAILABLE`.
 
 **Area d'uso e dominio di validità.** Sono due cose diverse:
 
@@ -123,14 +124,43 @@ punto in lon/lat e lo confronti con la regione esatta: `geo.reproject` lo fa
 già ([«La catena»](riproiezione.md#la-catena)); `validate_geometry_domain` resta sul
 rettangolo.
 
+## Definizioni PROJJSON
+
+Il profilo [PROJJSON](https://proj.org/en/stable/specifications/projjson.html)
+riconosce `GeographicCRS` ellissoidici 2D e `ProjectedCRS` 2D, con datum o
+ensemble, assi espliciti e unità metro/grado; `id` o un solo elemento in
+`ids` alla radice è obbligatorio. Ogni campo semantico deve coincidere con
+il registro fissato: datum storici WGS84/ETRS89 non equivalgono agli ensemble.
+Nomi descrittivi, `$schema`, scope, area, bbox, usages e remarks non decidono
+l'identità, ma la loro forma viene verificata. Campi sconosciuti si rifiutano.
+Greenwich e le unità implicite dell'ellissoide seguono il default PROJJSON.
+
+Il limite è 64 KiB, profondità 32 e budget strutturale conservativo 8.192
+(elementi, chiavi e separatori). Sintassi, duplicati, limiti e numeri non
+esatti danno `CRS_INVALID`; documento incompleto o non equivalente,
+ID mancante/estraneo, costrutti non supportati danno `CRS_NOT_BUILTIN`.
+I messaggi non includono valori del documento. WKT attende il parser della
+PR successiva; fuzz e qualifica della matrice interop restano alla PR 4.
+
+Risolvere non modifica le coordinate. EPSG:4326 richiede assi lat/lon nella
+definizione, CRS84 lon/lat; le ordinate dei dati possono essere `lon_lat`.
+EPSG:6707 richiede northing/easting nella definizione, mentre i dati GIS
+restano easting/northing. `axis_order=unknown` resta ignoto.
+
+Le prove in `crates/plenora-io/tests/definizioni_projjson.rs` coprono tutti i
+169 documenti, mutazioni, round-trip IPC/GeoParquet e una definizione Monte
+Mario estratta senza riserializzazione dalla fixture Arrow canonica di
+IO-tools. `scripts/estrai_projjson_io_tools.py` la rigenera dal checkout
+IO-tools; la provenienza riporta gli hash del file e dei byte estratti.
+
 ## Aggiungere un codice
 
 Il core contiene anche il modello semantico privato in
 `crates/plenora-core/src/crs/definizioni/`: datum o ensemble con membri e
 accuratezza, ellissoide, meridiano fondamentale, CRS geografico di base,
 conversione, metodo e parametri identificati, unità e assi ordinati.
-Non è collegato a `resolve_crs`: i formati pubblicamente accettati restano
-quelli elencati sopra. Il riconoscimento interno richiede l'ID radice EPSG
+Il parser PROJJSON alimenta `resolve_crs` e tutti i percorsi pubblici
+elencati sopra. Il riconoscimento richiede l'ID radice EPSG
 (oppure l'identità distinta `OGC:CRS84`) e verifica tutta la semantica.
 Non scambia ordinate e non adotta contratti opt-in.
 
@@ -143,11 +173,12 @@ I soli alias senza ID sono i nomi canonici del registro: non si equiparano
 datum storici ed ensemble, né WGS84 ed ETRS89. Gli ID annidati presenti
 devono coincidere. Il modello richiede assi espliciti, anche nella base.
 
-I numeri si confrontano come decimali esatti, prima di `f64`:
+Il modello confronta numeri come decimali esatti:
 `500000`, `500000.0` e `5e5` coincidono. Il token è limitato a 64 KiB;
 l'esponente normalizzato deve rientrare in `i64`, altrimenti il rifiuto è
-`CRS_INVALID`. Valori decimali fuori dalla gamma di `f64` restano esatti
-e discordano dalla tabella senza overflow o underflow. Per gli ellissoidi
+`CRS_INVALID`. Nel parser PROJJSON `ensure_numbers_exact` precede ogni
+conversione a `Value`: con `float_roundtrip` impedisce la perdita di cifre.
+Overflow, underflow e numeri che cambierebbero valore sono `CRS_INVALID`. Per gli ellissoidi
 si conserva la forma del registro (inverso dello schiacciamento oppure
 semiasse minore), senza conversioni approssimate tra forme. Le unità
 ammesse sono metro, grado e unità adimensionale; il fattore angolare
