@@ -1,4 +1,4 @@
-//! WKT2 ai confini pubblici: numeri esatti, assi e definizioni reali.
+//! WKT ai confini pubblici: numeri esatti, assi e definizioni reali.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -18,11 +18,15 @@ use plenora_io::{leggi_tabella, scrivi_tabella, OpzioniScrittura};
 use serde_json::json;
 
 fn wkt(id: &str) -> String {
+    wkt_versione(id, "wkt2_2019")
+}
+
+fn wkt_versione(id: &str, versione: &str) -> String {
     let corpus: serde_json::Value = serde_json::from_str(include_str!(
         "../../plenora-core/src/crs/definizioni/wkt_corpus.json"
     ))
     .unwrap();
-    corpus[id]["wkt2_2019"].as_str().unwrap().into()
+    corpus[id][versione].as_str().unwrap().into()
 }
 
 fn campo(testo: &str, forma: u8, assi: &str) -> Field {
@@ -36,7 +40,12 @@ fn campo(testo: &str, forma: u8, assi: &str) -> Field {
             m.insert(PLENORA_GEOMETRY_CRS_DEFINITION_KEY.into(), testo.into());
             m.insert(
                 PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY.into(),
-                "wkt2".into(),
+                if testo.starts_with("PROJCS") || testo.starts_with("GEOGCS") {
+                    "wkt"
+                } else {
+                    "wkt2"
+                }
+                .into(),
             );
         }
         1 => {
@@ -56,14 +65,43 @@ fn campo(testo: &str, forma: u8, assi: &str) -> Field {
 
 #[test]
 fn round_trip_ipc_e_geoparquet_non_scambiano_ordinate() {
-    for (id, x, y, assi) in [
-        ("EPSG:4326", 12.5_f64, 45.25_f64, "lon_lat"),
-        ("OGC:CRS84", 12.5, 45.25, "lon_lat"),
-        ("EPSG:6707", 500_123.0, 4_987_654.0, "easting_northing"),
-        ("EPSG:7791", 500_123.0, 4_987_654.0, "easting_northing"),
+    for (id, x, y, assi, versione) in [
+        ("EPSG:4326", 12.5_f64, 45.25_f64, "lon_lat", "wkt2_2019"),
+        ("OGC:CRS84", 12.5, 45.25, "lon_lat", "wkt2_2019"),
+        (
+            "EPSG:6707",
+            500_123.0,
+            4_987_654.0,
+            "easting_northing",
+            "wkt2_2019",
+        ),
+        (
+            "EPSG:7791",
+            500_123.0,
+            4_987_654.0,
+            "easting_northing",
+            "wkt2_2019",
+        ),
+        ("EPSG:6706", 12.5, 45.25, "lon_lat", "wkt1_assi"),
+        (
+            "EPSG:6707",
+            500_123.0,
+            4_987_654.0,
+            "easting_northing",
+            "wkt1_assi",
+        ),
+        (
+            "EPSG:7791",
+            500_123.0,
+            4_987_654.0,
+            "easting_northing",
+            "wkt1_assi",
+        ),
     ] {
-        for forma in 0..4 {
-            let testo = wkt(id);
+        // GeoArrow standard ammette solo WKT2; WKT1 usa canonico o legacy.
+        let forme = if versione == "wkt1_assi" { 2 } else { 4 };
+        for forma in 0..forme {
+            let testo = wkt_versione(id, versione);
             let schema = Arc::new(schema(campo(&testo, forma, assi)));
             let mut wkb = vec![1];
             wkb.extend(1_u32.to_le_bytes());
@@ -224,6 +262,14 @@ fn target_reproject_wkt2_uguale_al_codice_anche_da_geoarrow() {
             .unwrap()
             .semantically_equals(&resolve_crs("EPSG:32632", "crs").unwrap()));
     }
+    let a = esegui("EPSG:7791".into()).unwrap();
+    let b = esegui(wkt_versione("EPSG:7791", "wkt1_assi")).unwrap();
+    assert_eq!(a.outputs[0].1.columns(), b.outputs[0].1.columns());
+    let mutato = wkt_versione("EPSG:7791", "wkt1_assi").replace("500000", "500000.00000000001");
+    assert_eq!(
+        esegui(mutato).unwrap_err().public_projection().code(),
+        Some("CRS_NOT_BUILTIN")
+    );
     let mutato = wkt("EPSG:32632").replace("500000", "500001");
     assert_eq!(
         esegui(mutato).unwrap_err().public_projection().code(),

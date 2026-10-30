@@ -1,7 +1,7 @@
 //! Semantica interna, indipendente dal formato testuale e dalle ordinate.
 //!
 //! I numeri sono token decimali: nessuna conversione a double nel confronto.
-//! Gli alias sono esclusivamente i nomi canonici del registro generato.
+//! Gli alias WKT1 sono finiti; gli altri formati usano i nomi del registro.
 //! I parser devono rifiutare costrutti non rappresentati da questo modello.
 
 mod confronto;
@@ -10,6 +10,8 @@ mod projjson;
 #[cfg(test)]
 mod tests;
 mod wkt;
+#[cfg(test)]
+mod wkt1_tests;
 #[cfg(test)]
 mod wkt_tests;
 

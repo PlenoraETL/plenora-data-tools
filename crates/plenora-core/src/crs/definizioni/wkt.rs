@@ -1,4 +1,6 @@
-//! Profilo WKT2 chiuso; token numerici conservati senza passare da f64.
+//! Profili WKT chiusi; token numerici conservati senza passare da f64.
+
+mod wkt1;
 
 use super::{
     Asse, Base, Conversione, Datum, Definizione, Ellissoide, Id, Identita, Meridiano, Parametro,
@@ -68,7 +70,10 @@ impl Lexer<'_> {
             super::numeri::normalizza(token)?;
             return Ok(Valore::Numero(token.into()));
         }
-        if !token.bytes().all(|c| c.is_ascii_alphabetic() || c == b'_') {
+        if !token
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_')
+        {
             return Err(Rifiuto::NumeroInvalido);
         }
         let nome = token.to_ascii_uppercase();
@@ -496,6 +501,7 @@ pub(super) fn leggi(testo: &str) -> Esito<Definizione> {
         return Err(Rifiuto::NumeroInvalido);
     }
     match v {
+        Valore::Nodo(n) if matches!(n.nome.as_str(), "GEOGCS" | "PROJCS") => wkt1::modello(&n),
         Valore::Nodo(n) => modello(&n),
         _ => Err(Rifiuto::NumeroInvalido),
     }
