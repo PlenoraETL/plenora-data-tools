@@ -15,6 +15,8 @@ Uso (stesso ambiente di `genera_crs_integrati.py`, vedi docs/crs.md,
 
 Scrive `crates/plenora-io/data/projjson_integrati.json`: un oggetto con le
 chiavi `OGC:CRS84` e `EPSG:<codice>` in ordine, valori PROJJSON compatti.
+Genera anche il modello interno `crs/definizioni/semantica.json` e la mappa
+di prova `metodi_generati.rs` nel core, tramite `genera_semantica_crs.py`.
 Un test di `plenora-io` verifica che le chiavi siano esattamente gli
 identificatori di `builtin_crs_identifiers()` e che l'`id` di ogni documento
 sia la sua chiave.
@@ -57,6 +59,8 @@ def main() -> int:
             raise tabella.Rifiuto(f"{chiave}: id del PROJJSON diverso dalla chiave")
     testo = json.dumps(documenti, ensure_ascii=False, separators=(",", ":"))
     DESTINAZIONE.write_text(testo + "\n", encoding="utf-8", newline="\n")
+    import genera_semantica_crs
+    genera_semantica_crs.genera(documenti)
     return 0
 
 
