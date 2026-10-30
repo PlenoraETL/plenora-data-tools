@@ -1,0 +1,224 @@
+{
+  "cella": "data-crs-definizione",
+  "stato": "superato",
+  "casi": [
+    {
+      "crs": "EPSG:4326",
+      "formato": "projjson",
+      "ingresso_data": "arrow",
+      "uscita_data": "arrow",
+      "sha256_io": "e89e732ffaaea300a92a054bdfd1238bb0ed63db0201a4dacf8da736a017d2a7",
+      "sha256_data": "3c366881f88d5e377b18e64c769416a1bd78c2f307b4a1da2868e8674023d775",
+      "sha256_definizione_io": "99932be2d295657e4b3f6e6550589a8af2ebc8626d88ce07cac981e9cd955965",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:4326",
+      "formato": "projjson",
+      "ingresso_data": "arrow",
+      "uscita_data": "parquet",
+      "sha256_io": "e89e732ffaaea300a92a054bdfd1238bb0ed63db0201a4dacf8da736a017d2a7",
+      "sha256_data": "8549d14d8137c858df322267754be9424c9bb283584bdf4111a13d7075fe8fa2",
+      "sha256_definizione_io": "99932be2d295657e4b3f6e6550589a8af2ebc8626d88ce07cac981e9cd955965",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:4326",
+      "formato": "projjson",
+      "ingresso_data": "parquet",
+      "uscita_data": "arrow",
+      "sha256_io": "bb88f41f43ff043ea53102cf63d91e497894fc2c1963c5cadd3ddde3d517f8bf",
+      "sha256_data": "60485951a0110ba4210c6eee47ae64405333a4dec36fd4cf42519cd0027253cf",
+      "sha256_definizione_io": "99932be2d295657e4b3f6e6550589a8af2ebc8626d88ce07cac981e9cd955965",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:4326",
+      "formato": "projjson",
+      "ingresso_data": "parquet",
+      "uscita_data": "parquet",
+      "sha256_io": "bb88f41f43ff043ea53102cf63d91e497894fc2c1963c5cadd3ddde3d517f8bf",
+      "sha256_data": "8549d14d8137c858df322267754be9424c9bb283584bdf4111a13d7075fe8fa2",
+      "sha256_definizione_io": "99932be2d295657e4b3f6e6550589a8af2ebc8626d88ce07cac981e9cd955965",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:4326",
+      "formato": "wkt2",
+      "ingresso_data": "arrow",
+      "uscita_data": "arrow",
+      "sha256_io": "51e8eb40792288fb42df690db675b0af969fbee910d96052ace38bc29963410c",
+      "sha256_data": "390316e1119a930c28d52c3d344f25104ec4848ca53b3e3803c709c88754fd1a",
+      "sha256_definizione_io": "9285b9beb25e5ec582c29063c0cb0f3f77e9c2c3acf897c9edbefdeae61eb71d",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:4326",
+      "formato": "wkt2",
+      "ingresso_data": "arrow",
+      "uscita_data": "parquet",
+      "sha256_io": "51e8eb40792288fb42df690db675b0af969fbee910d96052ace38bc29963410c",
+      "sha256_data": "99ad1210b944900b578a131fcb6f863980488dc416962d15b4f6bb681a338098",
+      "sha256_definizione_io": "9285b9beb25e5ec582c29063c0cb0f3f77e9c2c3acf897c9edbefdeae61eb71d",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:6707",
+      "formato": "projjson",
+      "ingresso_data": "arrow",
+      "uscita_data": "arrow",
+      "sha256_io": "a5d37a0e807f3300890d47a827d41771c1206b29a16be9ea83e914a76f53cf15",
+      "sha256_data": "4aed63d8c628a59a28a8fb1c472d0f451f66047fec727278cdd9d8d6289326bb",
+      "sha256_definizione_io": "c5c09b33fbc636d638ac339aceb823cc5d2a7e0b0bc2f4b9641e84f77e26c78c",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:6707",
+      "formato": "projjson",
+      "ingresso_data": "arrow",
+      "uscita_data": "parquet",
+      "sha256_io": "a5d37a0e807f3300890d47a827d41771c1206b29a16be9ea83e914a76f53cf15",
+      "sha256_data": "d19c3c0f86be90197eb9eadd86df2fe749ca18fcb5e533e253ba4976d314dcfa",
+      "sha256_definizione_io": "c5c09b33fbc636d638ac339aceb823cc5d2a7e0b0bc2f4b9641e84f77e26c78c",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:6707",
+      "formato": "projjson",
+      "ingresso_data": "parquet",
+      "uscita_data": "arrow",
+      "sha256_io": "689b88c268180cd0738cbcd52ba77f147c655dd889931c1d11034003a68464e4",
+      "sha256_data": "a34ce12437d02f5bd74dad40fbba324d878a3e6d9978c57f46591d64cc0efad8",
+      "sha256_definizione_io": "c5c09b33fbc636d638ac339aceb823cc5d2a7e0b0bc2f4b9641e84f77e26c78c",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:6707",
+      "formato": "projjson",
+      "ingresso_data": "parquet",
+      "uscita_data": "parquet",
+      "sha256_io": "689b88c268180cd0738cbcd52ba77f147c655dd889931c1d11034003a68464e4",
+      "sha256_data": "d19c3c0f86be90197eb9eadd86df2fe749ca18fcb5e533e253ba4976d314dcfa",
+      "sha256_definizione_io": "c5c09b33fbc636d638ac339aceb823cc5d2a7e0b0bc2f4b9641e84f77e26c78c",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:6707",
+      "formato": "wkt2",
+      "ingresso_data": "arrow",
+      "uscita_data": "arrow",
+      "sha256_io": "6683c9af2c50ca5745f51e8ccc1d4811b960ba732f8bfb09b589dc643547662a",
+      "sha256_data": "e78ef1553e108219af32db4da5500f465c820c5b5349d6820d788324c0730bf9",
+      "sha256_definizione_io": "b6a458b3581cea00be86ff63f20f33c6e5edae27a9cb257caba0ddb891da69f8",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:6707",
+      "formato": "wkt2",
+      "ingresso_data": "arrow",
+      "uscita_data": "parquet",
+      "sha256_io": "6683c9af2c50ca5745f51e8ccc1d4811b960ba732f8bfb09b589dc643547662a",
+      "sha256_data": "8da0a5ff9277935253fea3c8ae7355c1977171cebfb8d6d20cb71e9d8b5dce45",
+      "sha256_definizione_io": "b6a458b3581cea00be86ff63f20f33c6e5edae27a9cb257caba0ddb891da69f8",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:7791",
+      "formato": "projjson",
+      "ingresso_data": "arrow",
+      "uscita_data": "arrow",
+      "sha256_io": "68279a2f7d47020dd9c0439e383e491c4452fd9ea8409c143532c2b137aa9b62",
+      "sha256_data": "20f92aa17273aea962599115d357347e111801104c1fdb097400ca623353fadd",
+      "sha256_definizione_io": "3153654e08b72d7a956520904105ca3b9ec8fe6d62a4edc5d0982589748abf8e",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:7791",
+      "formato": "projjson",
+      "ingresso_data": "arrow",
+      "uscita_data": "parquet",
+      "sha256_io": "68279a2f7d47020dd9c0439e383e491c4452fd9ea8409c143532c2b137aa9b62",
+      "sha256_data": "aa7421a91aabeedab8732e931209e4433b197c479e8f3bcb81767de06fe12d6d",
+      "sha256_definizione_io": "3153654e08b72d7a956520904105ca3b9ec8fe6d62a4edc5d0982589748abf8e",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:7791",
+      "formato": "projjson",
+      "ingresso_data": "parquet",
+      "uscita_data": "arrow",
+      "sha256_io": "4a609046da1ce16050a409193834b5b47d078974c3816942cdaaf0442b74ba22",
+      "sha256_data": "80463b5ce614e793526e2b64cdf50e24bcc959743143e6f295d1355d0d793c8d",
+      "sha256_definizione_io": "3153654e08b72d7a956520904105ca3b9ec8fe6d62a4edc5d0982589748abf8e",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:7791",
+      "formato": "projjson",
+      "ingresso_data": "parquet",
+      "uscita_data": "parquet",
+      "sha256_io": "4a609046da1ce16050a409193834b5b47d078974c3816942cdaaf0442b74ba22",
+      "sha256_data": "aa7421a91aabeedab8732e931209e4433b197c479e8f3bcb81767de06fe12d6d",
+      "sha256_definizione_io": "3153654e08b72d7a956520904105ca3b9ec8fe6d62a4edc5d0982589748abf8e",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:7791",
+      "formato": "wkt2",
+      "ingresso_data": "arrow",
+      "uscita_data": "arrow",
+      "sha256_io": "ad282521307ef3cd5dd0987fb106c1059f6bf94b6a4f2d257a368d322ce851b4",
+      "sha256_data": "42199f1a4229625ed6325d0b7f5a600a9a3b47655437fde5a6dc2f6033d25a9b",
+      "sha256_definizione_io": "7151c506cbf0b5370e1e8881de11cc1552f974b9794b8a9e4cda0cbbebbb27b9",
+      "coordinate_verificate": 2
+    },
+    {
+      "crs": "EPSG:7791",
+      "formato": "wkt2",
+      "ingresso_data": "arrow",
+      "uscita_data": "parquet",
+      "sha256_io": "ad282521307ef3cd5dd0987fb106c1059f6bf94b6a4f2d257a368d322ce851b4",
+      "sha256_data": "bc2407abb4bb22d6130102e550f0ade9a1f22307f93f98d9fcb82391a1450b81",
+      "sha256_definizione_io": "7151c506cbf0b5370e1e8881de11cc1552f974b9794b8a9e4cda0cbbebbb27b9",
+      "coordinate_verificate": 2
+    }
+  ],
+  "pyarrow": "25.0.1",
+  "sorgenti": {
+    "scripts/verifica_interop_crs.py": "3228c410cf141e0ae42fad2af66bf031098cd195b3a765b40852e3f5e287108b",
+    "crates/plenora-io/data/projjson_integrati.json": "bda3f00b73372adad13f370d79a3be8ee301e08f91c327ca7a89fd0abd49c6ec",
+    "crates/plenora-core/src/crs/definizioni/wkt_corpus.json": "fd5f6d8b825482886f8af47402b6880dbbe0d65f1d96703d9c3b567e91eee1ef"
+  },
+  "binari": {
+    "io": {
+      "sha256": "5ce1e7876781b3bbf7a8e2c73463bf389a5cd2146345a9321181537535d1dc62",
+      "versione": {
+        "command": "version",
+        "component": "plenora-io-tools",
+        "component_version": "6.0.0",
+        "contract": "plenora-io-version-v2",
+        "protocol_version": 2,
+        "result": {
+          "cli_protocol_version": 2,
+          "component_version": "6.0.0"
+        },
+        "status": "ok"
+      }
+    },
+    "data": {
+      "sha256": "0730f301374f02311207de18f959968e74fdb4a74d0bbb339a5eeec5d51d74ae",
+      "versione": {
+        "command": "version",
+        "component": "plenora-data-tools",
+        "component_version": "3.0.0",
+        "contract": "plenora-data-version-result-v1",
+        "protocol_version": 2,
+        "result": {
+          "component_version": "3.0.0",
+          "protocol_version": 2
+        },
+        "status": "ok"
+      }
+    }
+  }
+}

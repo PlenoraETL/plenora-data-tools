@@ -139,8 +139,8 @@ Il limite è 64 KiB, profondità 32 e budget strutturale conservativo 8.192
 (elementi, chiavi e separatori). Sintassi, duplicati, limiti e numeri non
 esatti danno `CRS_INVALID`; documento incompleto o non equivalente,
 ID mancante/estraneo, costrutti non supportati danno `CRS_NOT_BUILTIN`.
-I messaggi non includono valori del documento. Fuzz e qualifica della
-matrice interop restano alla PR 4.
+I messaggi non includono valori del documento. Il target fuzz e la catena
+interop sono descritti in fondo a questa guida.
 
 Risolvere non modifica le coordinate. EPSG:4326 richiede assi lat/lon nella
 definizione, CRS84 lon/lat; le ordinate dei dati possono essere `lon_lat`.
@@ -385,3 +385,56 @@ ellissoide, meridiano, unità e assi. IPC e GeoParquet conservano le coordinate
 asimmetriche; `target_crs` WKT1 coincide con il percorso per codice.
 Le chiavi Arrow canoniche usano formato `wkt`; è accettata anche la forma
 legacy `geo`. I metadati GeoArrow standard ammettono WKT2, non WKT1.
+
+## Fuzz e catena interop
+
+`definizioni_crs` esercita PROJJSON e WKT1/WKT2 attraverso `resolve_crs`:
+i parser rimangono privati. Usa i 169 PROJJSON e tutti gli export WKT del
+corpus, comprese le esclusioni documentate e i 32 WKT1 ammessi. Il generatore
+`scripts/corpus_definizioni_crs.py`, chiamato da quello comune del fuzz,
+aggiunge troncamenti, duplicati, sentinelle, mutazioni numeriche e degli assi,
+profondità e budget strutturali intorno ai limiti, NUL e lunghezze al confine.
+Le impronte dei semi seguono lo SHA-1 già usato dagli altri target; corpus
+e crash restano fuori da Git.
+
+L'oracolo pretende determinismo del risultato completo, equivalenza con
+la risoluzione per identificatore integrato e conservazione del testo.
+Gli errori devono appartenere a un elenco chiuso, senza dati né sentinelle
+nel messaggio o nella diagnostica. Nessun panico, neppure dentro una
+barriera di dipendenza. Le regressioni `fuzz_definizioni_crs` del core
+eseguono lo stesso oracolo sulla toolchain stabile e pretendono
+`CRS_INVALID` per profondità, nodi e byte oltre soglia. Non sostituiscono
+la campagna libFuzzer Linux/nightly del workflow fuzz.
+
+Il gate reale, con PyArrow di `requirements-sdk-tests.txt` e i due binari,
+si esegue così (la directory di lavoro deve essere nuova):
+
+```sh
+python scripts/verifica_interop_crs.py --io-tools <plenora-io> --data-tools <plenora-data> --lavoro target/interop-crs
+```
+
+Il gate costruisce sorgenti Arrow con definizioni complete, senza `crs_id`
+o `srid` sostitutivi. IO-tools le converte in file effettivi; data-tools
+legge quei file, esegue `table.select_columns`, scrive Arrow e GeoParquet,
+poi PyArrow rilegge ciascuna uscita. Sono 18 catene: EPSG:4326, 6707 e 7791,
+PROJJSON via Arrow e GeoParquet, WKT2 via Arrow, ciascuna verso entrambi i
+formati data-tools. WKT2 non passa dal writer GeoParquet IO-tools, che
+dichiara preservazione solo per PROJJSON. I metadati GeoParquet si leggono
+dal footer, anche quando `ARROW:schema` nasconde `geo` nello schema PyArrow.
+
+La verifica decodifica indipendentemente i POINT WKB e confronta esattamente
+le due coppie asimmetriche per caso; controlla anche il covering bbox prodotto
+da IO-tools. Pretende ordine GIS, stato risolto e formato, WKT2 originale e
+PROJJSON completo uguale al corpus con decimali esatti e senza duplicati.
+Un errore o una combinazione mancante fa fallire il gate. `rapporto.json`
+registra versioni e SHA-256 dei binari, file prodotti e definizioni: non
+certifica altre versioni o un'intera adozione dei contratti opt-in.
+Una rilevazione delle 18 catene con IO-tools 6.0.0 è conservata in
+`crates/plenora-io/tests/dati/io_tools_crs_interop.provenienza.json`;
+gli artefatti locali restano sotto `target/`.
+
+La matrice proprietaria è **fuori da questo repository**:
+`plenora-interop/suite/lacune.py` definisce `data-crs-definizione` e
+`plenora-interop/rapporto/matrice.md` la pubblica. Nel checkout locale è sotto
+`C:/Users/Marco/Desktop/pfm/plenora-interop`. Il gate fornisce l'evidenza per
+aggiornarla; non ne modifica la cella e non la dichiara verde automaticamente.

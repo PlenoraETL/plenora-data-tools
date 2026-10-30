@@ -31,8 +31,10 @@ import pyarrow.parquet as pq
 
 try:
     from . import strict_json
+    from . import corpus_definizioni_crs
 except ImportError:
     import strict_json
+    import corpus_definizioni_crs
 
 RADICE = Path(__file__).resolve().parents[1]
 SENTINELLA = "SENTINELLA-7f3a9c"
@@ -195,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
     file_tabellari(corpus)
     ordinamento(corpus)
     argomenti_cli(corpus)
+    corpus_definizioni_crs.genera(corpus)
     for target, numero in sorted(corpus.conteggi.items()):
         print(f"{target}: {numero}")
     return 0

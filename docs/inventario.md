@@ -81,13 +81,13 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 | crate | unitari | integrazione | totale |
 | --- | --- | --- | --- |
 | `plenora-cli` | 6 | 55 | 61 |
-| `plenora-core` | 201 | 67 | 268 |
+| `plenora-core` | 201 | 69 | 270 |
 | `plenora-data-py` | 0 | 0 | 0 |
 | `plenora-io` | 20 | 199 | 219 |
 | `plenora-kernels-geo` | 520 | 108 | 628 |
 | `plenora-kernels-table` | 459 | 118 | 577 |
 | `plenora-pipeline` | 12 | 163 | 175 |
-| **totale** | 1218 | 710 | 1928 |
+| **totale** | 1218 | 712 | 1930 |
 
 ### Prove Python dell'SDK
 
@@ -114,6 +114,7 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 | `scripts/test_check_comments.py` | 27 |
 | `scripts/test_check_coverage.py` | 10 |
 | `scripts/test_check_docs.py` | 14 |
+| `scripts/test_fuzz_crs.py` | 4 |
 | `scripts/test_genera_inventario.py` | 6 |
 | `scripts/test_genera_sbom_rilascio.py` | 5 |
 | `scripts/test_semantica_crs.py` | 2 |
