@@ -74,8 +74,10 @@ arrow-buffer = "=60.0.0"
 # jobserver e pkg-config (build di zstd-sys), seq-macro, twox-hash (non
 # opzionali di parquet), base64; il resto (arrow-*, cc, bytes, half,
 # hashbrown, num-*, chrono, flatbuffers) c'era gia'. Con `parquet` 60.0.0
-# `zstd` passa a 0.14.0 e `zstd-safe` a 8.0.0 (richiesti da `parquet`),
-# `zstd-sys` resta 2.1.0 (stessa libzstd 1.5.7).
+# `zstd` passa a 0.14.0 e `zstd-safe` a 8.0.0 (richiesti da `parquet`).
+# I lock fissano ora zstd 0.14.3, zstd-safe 8.2.0 e zstd-sys 2.1.2
+# (stessa libzstd 1.5.7) per RUSTSEC-2026-0391, RUSTSEC-2026-0398,
+# RUSTSEC-2026-0403 e RUSTSEC-2026-0410.
 # Il sorgente e' vendorizzato con una patch e un nome proprio
 # (`plenora-parquet`, «Copie vendorizzate» in fondo;
 # `vendor/parquet-60.0.0-eof/PROVENANCE.md`): il protocollo thrift della
