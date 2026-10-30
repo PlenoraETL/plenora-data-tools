@@ -37,7 +37,7 @@ maiuscole, codice senza zeri iniziali),
 codice sono semanticamente uguali (il canonical dipende dal CRS, non dal
 testo); `EPSG:4326` (lat/lon) e `OGC:CRS84` (lon/lat) no. Un identificatore
 d'autorità fuori tabella fallisce con `CRS_NOT_BUILTIN`. Sono accettati anche
-i PROJJSON completi equivalenti a una voce integrata; WKT, WKT2 e
+i PROJJSON e WKT2 completi equivalenti a una voce integrata; WKT1 e
 proj-string restano `CRS_BACKEND_UNAVAILABLE`.
 
 **Area d'uso e dominio di validità.** Sono due cose diverse:
@@ -139,8 +139,8 @@ Il limite è 64 KiB, profondità 32 e budget strutturale conservativo 8.192
 (elementi, chiavi e separatori). Sintassi, duplicati, limiti e numeri non
 esatti danno `CRS_INVALID`; documento incompleto o non equivalente,
 ID mancante/estraneo, costrutti non supportati danno `CRS_NOT_BUILTIN`.
-I messaggi non includono valori del documento. WKT attende il parser della
-PR successiva; fuzz e qualifica della matrice interop restano alla PR 4.
+I messaggi non includono valori del documento. WKT1 resta al seguito della
+PR 3; fuzz e qualifica della matrice interop restano alla PR 4.
 
 Risolvere non modifica le coordinate. EPSG:4326 richiede assi lat/lon nella
 definizione, CRS84 lon/lat; le ordinate dei dati possono essere `lon_lat`.
@@ -221,3 +221,95 @@ deprecati, non bidimensionali, con meridiano diverso da Greenwich, unità
 diverse da gradi o metri, assi non nord/est, metodi di proiezione senza una
 regola di dominio. Una nuova regola di dominio è una decisione da prendere in
 PR, non un default.
+
+## Definizioni WKT2
+
+Il parser Rust legge un profilo chiuso di WKT2:2015 e WKT2:2019
+([OGC 18-010r11](https://docs.ogc.org/is/18-010r11/18-010r11.pdf)).
+Le radici ammesse sono `GEOGCRS`/`GEOGRAPHICCRS`,
+`GEODCRS`/`GEODETICCRS` ellissoidici 2D e `PROJCRS`/`PROJECTEDCRS` 2D.
+La sequenza è nome, datum/ensemble e meridiano oppure base e conversione,
+sistema di coordinate, metadati d'uso opzionali, ID radice, remark opzionale.
+`BASEGEOGCRS` e `BASEGEODCRS` non contengono CS: nel modello interno
+la base è rappresentata in lat/lon e gradi. Questa convenzione non
+attribuisce un ordine alle coordinate memorizzate e non scambia ordinate.
+
+I nodi semantici sono `DATUM`/`GEODETICDATUM`, `ENSEMBLE`, `MEMBER`,
+`ELLIPSOID`, `ENSEMBLEACCURACY`, `PRIMEM`/`PRIMEMERIDIAN`, `CONVERSION`,
+`METHOD`, `PARAMETER`, `CS`, `AXIS`, `ORDER`, `LENGTHUNIT`, `ANGLEUNIT`,
+`SCALEUNIT`, `ID`. Le unità sono esplicite su ellissoide, meridiano e
+parametri; per gli assi compaiono su entrambi oppure una volta sul CS.
+`ORDER` compare su entrambi gli assi oppure su nessuno; non si riordinano
+assi scritti in ordine diverso. Sono ammessi scope, area, bbox e remark
+con forma verificata; ogni `USAGE` richiede scope ed estensione e può
+ripetersi. I metadati sciolti 2015 non si mescolano con `USAGE`.
+Un solo `ID[autorità,codice]` per entità, senza versione/URI; quello radice
+è obbligatorio. Ogni ID annidato presente deve coincidere con la tabella.
+
+Le keyword e le direzioni ignorano il caso ASCII; i nomi senza ID sono
+sensibili al caso. Gli alias di metodo ammessi senza ID sono soltanto
+questi sette nomi canonici del registro:
+
+- `Transverse Mercator`;
+- `Popular Visualisation Pseudo Mercator`;
+- `Mercator (variant A)`;
+- `Lambert Azimuthal Equal Area`;
+- `Lambert Conic Conformal (2SP)`;
+- `Hotine Oblique Mercator (variant B)`;
+- `Oblique Stereographic`.
+
+I nomi dei parametri senza ID ammessi sono `Latitude of natural origin`,
+`Longitude of natural origin`, `Scale factor at natural origin`,
+`False easting`, `False northing`, `Latitude of false origin`,
+`Longitude of false origin`, `Latitude of 1st standard parallel`,
+`Latitude of 2nd standard parallel`, `Easting at false origin`,
+`Northing at false origin`, `Latitude of projection centre`,
+`Longitude of projection centre`, `Azimuth at projection centre`,
+`Angle from Rectified to Skew Grid`, `Scale factor at projection centre`,
+`Easting at projection centre`, `Northing at projection centre`.
+Per unità, datum, membri, ellissoidi e meridiano valgono solo i nomi canonici
+in `crates/plenora-core/src/crs/definizioni/semantica.json`: nessun alias
+storico o euristico. Le unità sono `metre`, `degree`, `unity`, rispettivamente
+con fattori esatti `1`, `0.0174532925199433`, `1`; un ID corretto non
+rende accettabile un fattore diverso.
+
+**Limiti.** Massimo 64 KiB, 32 livelli di nodi e 8.192 valori/nodi,
+controllati prima di allocare o discendere. Delimitatori quadri o tondi
+accoppiati; stringhe con virgolette doppie raddoppiate; spazi ASCII.
+I decimali richiedono cifre su entrambi i lati del punto, se presente,
+e ammettono segno ed esponente. Il confronto conserva tutte le cifre:
+`500000`, `500000.0` e `5e5` coincidono; `500000.00000000001` è diverso.
+Non si passa da `f64`, non si introducono epsilon. Un esponente non
+rappresentabile dal normalizzatore è errore, non overflow/underflow silenzioso.
+Il documento deve essere consumato integralmente; nodi sconosciuti,
+duplicati semantici, dimensioni diverse da 2, CRS dinamici, composti,
+verticali, geocentrici, bound e trasformazioni incorporate sono rifiutati.
+La mancanza di un ID radice non attiva il riconoscimento per somiglianza.
+
+**Errori.** Lessico/sintassi malformati, limiti e numeri non normalizzabili
+producono `CRS_INVALID`. Struttura fuori dal profilo, cardinalità/ordine
+semantici errati, ID assente o discordante e differenze esatte producono
+`CRS_NOT_BUILTIN`. I messaggi non contengono dati della definizione.
+WKT1 resta non implementato (`CRS_BACKEND_UNAVAILABLE`): il seguito deve
+richiedere assi espliciti e rifiutare ESRI senza assi e datum storici
+sostitutivi degli ensemble.
+
+**Corpus e condizione di rientro.** `scripts/genera_wkt_integrati.py` usa
+pyproj 3.7.2 / PROJ 9.5.1 / EPSG v11.022 e verifica ogni PROJJSON contro
+la sorgente già integrata prima di esportare WKT senza ritocchi.
+`crates/plenora-core/src/crs/definizioni/wkt_corpus.json` contiene entrambi
+gli export per tutti i 169 CRS e il motivo di ogni esclusione.
+WKT2:2019 ne risolve **168**; WKT2:2015 ne risolve **32**. Il 2015 perde
+gli ensemble WGS84/ETRS89: i datum storici non sono equivalenti.
+In entrambe le versioni EPSG:4267 (NAD27) è rifiutato: Clarke 1866 è
+definito dai semiassi `6378206.4` e `6356583.8`, mentre l'export WKT usa
+l'inverso `294.978698213898`, arrotondato. Accettarlo richiederebbe una
+regola ulteriore di equivalenza delle rappresentazioni dell'ellissoide;
+non rientra nella decisione di equivalenza decimale esatta. Non si rivendica
+quindi l'accettazione di tutti i 169 export WKT2.
+
+Le prove mutano separatamente numeri, metodo, parametri, ensemble, ID,
+unità e assi. I round-trip IPC/GeoParquet e `target_crs` passano dai percorsi
+pubblici in `crates/plenora-io/tests/definizioni_wkt.rs`, con coordinate
+asimmetriche e le tre rappresentazioni Arrow. Risolvere conserva il testo
+originale e usa solo i parametri operativi della tabella integrata.

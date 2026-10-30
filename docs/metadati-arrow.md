@@ -109,11 +109,13 @@ Stesso piano e stessi schemi d'ingresso, stesse identità
   ammette il vocabolario per entrambi i lati;
 - `spatial_semantics = geography`, un `edges` non planare in
   `ARROW:extension:metadata` si rifiutano (`Unsupported`): i kernel sono
-  planari. Il `crs` PROJJSON standard passa dal confronto semantico completo;
+  planari. Il `crs` PROJJSON o WKT2 passa dal confronto semantico completo;
   se coesiste con altre dichiarazioni devono risolversi allo stesso CRS.
   Una dichiarazione canonica esplicitamente `declared_unresolved` resta
   irrisolta, conservata nella lineage. `crs_type`, se presente, deve essere
-  `projjson`;
+  `projjson` con un oggetto oppure `wkt2:2019` con una stringa WKT2.
+  Senza `crs_type` entrambe le forme sono riconosciute; tipi dichiarati
+  discordanti e stringhe di altri formati sono rifiutati;
 - metadati contraddittori falliscono con categoria `crs` se riguardano il
   CRS (stato, identificatore, definizione e formato, ordine degli assi,
   `srid`, divergenza dal `geo`), `schema` altrimenti (vocabolario,

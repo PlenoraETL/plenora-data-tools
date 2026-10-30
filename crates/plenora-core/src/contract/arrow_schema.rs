@@ -275,9 +275,9 @@ pub fn contract_from_arrow_schema(
 ///    fallimento resta un errore `Crs` (limite dichiarato: chi non
 ///    garantisce la risoluzione dichiara `declared_unresolved`). Con
 ///    `resolved` e sia `crs_id` sia `crs_definition` segue
-///    [`verify_declared_coherence`]. Con la tabella integrata una
-///    definizione WKT non si risolve, e quell'input fallisce con
-///    errore `Crs`, come uno a rappresentazione singola;
+///    [`verify_declared_coherence`]. PROJJSON e WKT2 si risolvono solo
+///    dopo il confronto esatto con la tabella integrata; una definizione
+///    non equivalente fallisce come un input a rappresentazione singola;
 /// 4. nessuna rappresentazione: [`ContractCrs::Missing`], salvo la
 ///    contraddizione `resolved`/`declared_unresolved` senza
 ///    rappresentazioni, che resta errore.
@@ -769,7 +769,7 @@ pub const GEOARROW_EXTENSION_METADATA_KEY: &str = "ARROW:extension:metadata";
 ///
 /// Assente, vuoto o `{}`: niente da dire. `edges` diverso da `planar`
 /// (archi geodetici, `spherical` e simili) si rifiuta come la semantica
-/// `geography`: i kernel sono planari. Il `crs` PROJJSON passa dalla
+/// `geography`: i kernel sono planari. Il `crs` PROJJSON o WKT2 passa dalla
 /// risoluzione semantica comune; la lettura delle chiavi lo conserva e
 /// verifica anche la coerenza con le altre rappresentazioni.
 ///
@@ -807,20 +807,30 @@ pub fn verifica_metadato_estensione(field: &Field) -> Result<(), PlenoraError> {
             )));
         }
     }
-    if let Some(tipo) = oggetto.get("crs_type") {
-        if tipo.as_str() != Some("projjson") {
+    let tipo = oggetto.get("crs_type");
+    if let Some(tipo) = tipo {
+        if !matches!(tipo.as_str(), Some("projjson" | "wkt2:2019")) {
             return Err(PlenoraError::Unsupported(
                 "formato CRS GeoArrow non supportato".into(),
             ));
         }
     }
     if let Some(v) = oggetto.get("crs").filter(|v| !v.is_null()) {
-        if !v.is_object() {
-            return Err(PlenoraError::Unsupported(
-                "CRS GeoArrow: atteso un oggetto PROJJSON".into(),
-            ));
-        }
-        crate::crs::resolve_crs(&v.to_string(), "crs")?;
+        let testo = match v {
+            serde_json::Value::Object(_) if tipo.is_none_or(|t| t == "projjson") => v.to_string(),
+            serde_json::Value::String(t)
+                if tipo.is_none_or(|t| t == "wkt2:2019")
+                    && crate::crs::definition_form(t) == crate::crs::DefinitionForm::Wkt2 =>
+            {
+                t.clone()
+            }
+            _ => {
+                return Err(PlenoraError::Unsupported(
+                    "CRS GeoArrow: formato e valore non supportati o discordanti".into(),
+                ));
+            }
+        };
+        crate::crs::resolve_crs(&testo, "crs")?;
     }
     Ok(())
 }

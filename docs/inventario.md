@@ -81,13 +81,13 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 | crate | unitari | integrazione | totale |
 | --- | --- | --- | --- |
 | `plenora-cli` | 6 | 55 | 61 |
-| `plenora-core` | 189 | 67 | 256 |
+| `plenora-core` | 196 | 67 | 263 |
 | `plenora-data-py` | 0 | 0 | 0 |
-| `plenora-io` | 20 | 195 | 215 |
+| `plenora-io` | 20 | 199 | 219 |
 | `plenora-kernels-geo` | 520 | 108 | 628 |
 | `plenora-kernels-table` | 459 | 118 | 577 |
 | `plenora-pipeline` | 12 | 163 | 175 |
-| **totale** | 1206 | 706 | 1912 |
+| **totale** | 1213 | 710 | 1923 |
 
 ### Prove Python dell'SDK
 

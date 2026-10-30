@@ -604,7 +604,7 @@ pub enum CrsError {
     /// Definizione oltre [`MAX_CRS_DEFINITION_BYTES`] o con NUL.
     #[error("CRS_INVALID: {name}: {reason}")]
     InvalidDefinition { name: &'static str, reason: String },
-    /// Definizione non implementata (WKT, WKT2, proj-string), che
+    /// Definizione non implementata (WKT1, proj-string), che
     /// qui non si risolve.
     #[error("CRS_BACKEND_UNAVAILABLE: formato di definizione CRS non implementato")]
     BackendUnavailable,
@@ -822,11 +822,13 @@ fn validate_definition_text(value: &str, name: &'static str) -> Result<(), CrsEr
 /// - [`CrsError::NotBuiltin`] per un identificatore d'autorita' che non e'
 ///   nella tabella (codice sconosciuto, altra autorita', forma non
 ///   riconosciuta);
-/// - [`CrsError::NotBuiltin`] anche per un PROJJSON non equivalente;
-/// - [`CrsError::BackendUnavailable`] per WKT, WKT2 e proj-string.
+/// - [`CrsError::NotBuiltin`] anche per PROJJSON e WKT2 non equivalenti;
+/// - [`CrsError::BackendUnavailable`] per WKT1 e proj-string.
 pub fn resolve_crs(definition: &str, name: &'static str) -> Result<ResolvedCrs, CrsError> {
     validate_definition_text(definition, name)?;
-    if definition.trim_start().starts_with('{') {
+    if definition.trim_start().starts_with('{')
+        || matches!(definition_form(definition), DefinitionForm::Wkt2)
+    {
         return definizioni::risolvi(definition, name);
     }
     if definition_form(definition) != DefinitionForm::AuthorityCode {
@@ -1010,11 +1012,9 @@ mod tests {
 
     #[test]
     fn missing_backend_never_trusts_an_unverified_declaration() {
-        // Le definizioni non d'autorita' richiedono PROJ, anche quando
-        // descrivono un CRS della tabella.
+        // I formati ancora non implementati non diventano identificatori.
         for definizione in [
             r#"PROJCS["WGS 84 / Pseudo-Mercator",GEOGCS["WGS 84"]]"#,
-            r#"PROJCRS["WGS 84 / UTM zone 32N",BASEGEOGCRS["WGS 84"]]"#,
             "+proj=longlat +datum=WGS84 +no_defs",
         ] {
             assert!(
@@ -1025,6 +1025,13 @@ mod tests {
                 "{definizione}"
             );
         }
+        assert!(matches!(
+            resolve_crs(
+                r#"PROJCRS["WGS 84 / UTM zone 32N",BASEGEOGCRS["WGS 84"]]"#,
+                "crs"
+            ),
+            Err(CrsError::NotBuiltin)
+        ));
     }
 
     #[test]

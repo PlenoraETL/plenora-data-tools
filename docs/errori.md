@@ -46,9 +46,12 @@ copiati da `plenora-contracts@3c395a8` (tag `v1.1.0`) e verificati per SHA-256):
 
 Le definizioni PROJJSON passano dal validatore CRS comune: `CRS_INVALID`
 per sintassi, duplicati, limiti e numeri non esatti; `CRS_NOT_BUILTIN` per
-semantica incompleta, non supportata o diversa dalla tabella. WKT, WKT2 e
-proj-string restano `CRS_BACKEND_UNAVAILABLE`. Non si riportano valori
-letti nel documento. Il profilo è in [CRS](crs.md#definizioni-projjson).
+semantica incompleta, non supportata o diversa dalla tabella. WKT2 passa
+dal medesimo confronto: sintassi/limiti/numeri non normalizzabili danno
+`CRS_INVALID`, struttura fuori profilo o differenze decimali esatte danno
+`CRS_NOT_BUILTIN`. WKT1 e proj-string restano `CRS_BACKEND_UNAVAILABLE`.
+Non si riportano valori letti nel documento. I profili sono in
+[PROJJSON](crs.md#definizioni-projjson) e [WKT2](crs.md#definizioni-wkt2).
 
 `provider` ed `execution_id` non ci sono: nessun errore del workspace ne
 ha uno.
