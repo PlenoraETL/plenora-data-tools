@@ -623,7 +623,7 @@ fn una_sola_colonna_geometrica() {
         || -> ArrayRef { Arc::new(BinaryArray::from(vec![Some(punto(1.0, 1.0).as_slice())])) };
     let tabella = RecordBatch::try_new(schema.clone(), vec![celle(), celle()]).unwrap();
     for (primaria, categoria) in [
-        ("a", ErrorCategory::Schema),
+        ("a", ErrorCategory::Unsupported),
         ("b", ErrorCategory::Unsupported),
     ] {
         let geo = json!({"version": "1.1.0", "primary_column": primaria, "columns": {

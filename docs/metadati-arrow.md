@@ -93,7 +93,7 @@ Stesso piano e stessi schemi d'ingresso, stesse identità
 - `plenora.field_id`: intero decimale non negativo, unico nello schema
   (`Schema`); oltre `u32::MAX` o su un campo annidato `Unsupported`;
 - `srid`: intero decimale con segno a 32 bit (`-1` ammesso; prima solo
-  senza segno). Con `crs_resolution = missing` è ammesso (il vocabolario
+  senza segno); una forma malformata e `Schema` (REJ-001). Con `crs_resolution = missing` è ammesso (il vocabolario
   vieta con `missing` identificatore, definizione, formato e assi, non lo
   `srid`; prima si rifiutava) e lo stato resta `missing`: un indizio
   numerico non diventa un CRS (ARROW-007). `declared_unresolved` con il
@@ -113,7 +113,7 @@ Stesso piano e stessi schemi d'ingresso, stesse identità
   componente non legge passerebbe per assente (ARROW-007);
 - metadati contraddittori falliscono con categoria `crs` se riguardano il
   CRS (stato, identificatore, definizione e formato, ordine degli assi,
-  `srid`, divergenza dal `geo`), `schema` altrimenti (vocabolario,
+  divergenza dal `geo`), `schema` altrimenti (vocabolario,
   sezione 4). Fino a questo ciclo erano `InvalidPlan`: il cambio di
   categoria è una rottura dichiarata, voluta dal contratto;
 - `types_declaration = unresolved` e la dichiarazione assente si leggono
@@ -228,3 +228,10 @@ un'operazione.
 - **Storage `binary` in uscita.** Un ingresso `large_binary` esce `binary`
   (sopra): lo storage non è un passaggio senza perdite, i byte delle celle
   sì.
+
+L'adozione di [Arrow Geometry Semantics 1.0](geometry-semantics.md) censisce
+le deviazioni residue. In ingresso un `axis_order` assente con CRS viene
+completato a `unknown` (DT-ARROW-003): il registro CRS non prova l'ordine
+delle coordinate memorizzate. Prima del calcolo il runner controlla buona
+forma, SRID, tipi e dimensioni contro il campo ricevuto; gli errori di valore
+sono `data_mapping/read` o `crs/read`, senza effetti.

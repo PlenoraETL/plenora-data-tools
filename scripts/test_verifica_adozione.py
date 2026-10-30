@@ -138,3 +138,40 @@ class ProveContrattiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CensimentoGeometricoTests(unittest.TestCase):
+    def sorgente(self):
+        import json
+        return json.loads((verifica_adozione.RADICE / "crates/plenora-cli/adozione.json").read_text("utf-8"))
+
+    def test_censimento_completo(self):
+        verifica_adozione.verifica_regole_geometriche(self.sorgente())
+
+    def test_regola_mancante_o_ripetuta(self):
+        for ripetuta in (False, True):
+            sorgente = self.sorgente()
+            requisito = next(r for r in sorgente["requirements"] if r["rules"] == ["GEO-001"])
+            if ripetuta:
+                sorgente["requirements"].append(requisito)
+            else:
+                sorgente["requirements"].remove(requisito)
+            with self.assertRaises(ValueError):
+                verifica_adozione.verifica_regole_geometriche(sorgente)
+
+    def test_deviazione_non_pubblicata_o_senza_rientro(self):
+        for chiave in ("scope", "hazard", "reentry", "deviations"):
+            sorgente = self.sorgente()
+            requisito = next(r for r in sorgente["requirements"] if r["rules"] == ["GEO-004"])
+            if chiave == "deviations":
+                sorgente[chiave] = []
+            else:
+                requisito.pop(chiave)
+            with self.assertRaises(ValueError):
+                verifica_adozione.verifica_regole_geometriche(sorgente)
+
+    def test_contratto_non_adottato(self):
+        sorgente = self.sorgente()
+        sorgente["conforming"].remove("plenora-arrow-geometry-semantics-v1")
+        with self.assertRaises(ValueError):
+            verifica_adozione.verifica_regole_geometriche(sorgente)

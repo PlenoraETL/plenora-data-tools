@@ -196,6 +196,7 @@ sentinella ([dettagli](docs/cli.md)):
 
 ```sh
 python scripts/verifica_adozione.py --contratti <checkout>
+cargo test -p plenora-cli --test geometry_semantics --locked
 python scripts/verifica_cli_contratti.py --binario <plenora-data> --contratti <checkout>
 ```
 

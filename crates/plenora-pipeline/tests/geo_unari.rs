@@ -939,7 +939,7 @@ fn i_tipi_dichiarati_di_un_ingresso_si_verificano() {
     )
     .unwrap();
     let errore = un_passo("geo.area", json!({}), &[dichiarata]).unwrap_err();
-    assert_eq!(errore.category(), ErrorCategory::Schema, "{errore}");
+    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
 }
 
 /// Il CRS attraversa la catena: `reproject` lo cambia, `buffer` lavora

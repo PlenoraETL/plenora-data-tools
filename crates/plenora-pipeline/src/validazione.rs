@@ -206,12 +206,28 @@ pub fn normalizza_schema(schema: &Schema) -> SchemaRef {
         .fields()
         .iter()
         .map(|campo| {
+            let mut campo = campo.as_ref().clone();
+            let mut proprieta = campo.metadata().clone();
+            if proprieta
+                .get("ARROW:extension:name")
+                .is_some_and(|v| v == "geoarrow.wkb")
+                && (proprieta.contains_key("plenora.geometry.crs_id")
+                    || proprieta.contains_key("plenora.geometry.crs_definition"))
+            {
+                if !proprieta.contains_key("plenora.geometry.axis_order") {
+                    proprieta.insert(
+                        "plenora.geometry.axis_order".to_owned(),
+                        "unknown".to_owned(),
+                    );
+                }
+                campo = campo.with_metadata(proprieta);
+            }
             if campo.data_type() == &DataType::LargeUtf8 {
-                campo.as_ref().clone().with_data_type(DataType::Utf8)
-            } else if geometria_large_binary(campo) {
-                campo.as_ref().clone().with_data_type(DataType::Binary)
+                campo.with_data_type(DataType::Utf8)
+            } else if geometria_large_binary(&campo) {
+                campo.with_data_type(DataType::Binary)
             } else {
-                campo.as_ref().clone()
+                campo
             }
         })
         .collect();

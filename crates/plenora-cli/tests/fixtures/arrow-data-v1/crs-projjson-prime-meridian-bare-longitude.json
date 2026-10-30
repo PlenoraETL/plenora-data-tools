@@ -1,0 +1,52 @@
+{
+  "$schema": "../../schemas/arrow-data-vector-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-arrow-data-vector-v1",
+  "expect": "valid",
+  "computation": {
+    "category": "crs",
+    "rules": [
+      "GEO-015",
+      "GEO-017"
+    ]
+  },
+  "schema_metadata": {
+    "plenora.contract.version": "1"
+  },
+  "fields": [
+    {
+      "name": "id",
+      "type": "int64",
+      "nullable": false,
+      "metadata": {
+        "plenora.field_id": "0"
+      }
+    },
+    {
+      "name": "geometry",
+      "type": "binary",
+      "nullable": true,
+      "metadata": {
+        "plenora.field_id": "1",
+        "ARROW:extension:name": "geoarrow.wkb",
+        "plenora.geometry.encoding": "wkb",
+        "plenora.geometry.dimensions": "xy",
+        "plenora.geometry.spatial_semantics": "geometry",
+        "plenora.geometry.precision": "float64",
+        "plenora.geometry.types_declaration": "exact",
+        "plenora.geometry.types": "point",
+        "plenora.geometry.crs_resolution": "resolved",
+        "plenora.geometry.crs_id": "EPSG:3003",
+        "plenora.geometry.crs_definition": "{\n  \"$schema\": \"https://proj.org/schemas/v0.7/projjson.schema.json\",\n  \"type\": \"ProjectedCRS\",\n  \"name\": \"Monte Mario / Italy zone 1\",\n  \"base_crs\": {\n    \"type\": \"GeographicCRS\",\n    \"name\": \"Monte Mario\",\n    \"datum\": {\n      \"type\": \"GeodeticReferenceFrame\",\n      \"name\": \"Monte Mario\",\n      \"ellipsoid\": {\n        \"name\": \"International 1924\",\n        \"semi_major_axis\": 6378388,\n        \"inverse_flattening\": 297\n      },\n      \"prime_meridian\": {\n        \"name\": \"Greenwich\",\n        \"longitude\": 0\n      }\n    },\n    \"coordinate_system\": {\n      \"subtype\": \"ellipsoidal\",\n      \"axis\": [\n        {\n          \"name\": \"Geodetic latitude\",\n          \"abbreviation\": \"Lat\",\n          \"direction\": \"north\",\n          \"unit\": \"degree\"\n        },\n        {\n          \"name\": \"Geodetic longitude\",\n          \"abbreviation\": \"Lon\",\n          \"direction\": \"east\",\n          \"unit\": \"degree\"\n        }\n      ]\n    },\n    \"id\": {\n      \"authority\": \"EPSG\",\n      \"code\": 4265\n    }\n  },\n  \"conversion\": {\n    \"name\": \"Italy zone 1\",\n    \"method\": {\n      \"name\": \"Transverse Mercator\",\n      \"id\": {\n        \"authority\": \"EPSG\",\n        \"code\": 9807\n      }\n    },\n    \"parameters\": [\n      {\n        \"name\": \"Latitude of natural origin\",\n        \"value\": 0,\n        \"unit\": \"degree\",\n        \"id\": {\n          \"authority\": \"EPSG\",\n          \"code\": 8801\n        }\n      },\n      {\n        \"name\": \"Longitude of natural origin\",\n        \"value\": 9,\n        \"unit\": \"degree\",\n        \"id\": {\n          \"authority\": \"EPSG\",\n          \"code\": 8802\n        }\n      },\n      {\n        \"name\": \"Scale factor at natural origin\",\n        \"value\": 0.9996,\n        \"unit\": \"unity\",\n        \"id\": {\n          \"authority\": \"EPSG\",\n          \"code\": 8805\n        }\n      },\n      {\n        \"name\": \"False easting\",\n        \"value\": 1500000,\n        \"unit\": \"metre\",\n        \"id\": {\n          \"authority\": \"EPSG\",\n          \"code\": 8806\n        }\n      },\n      {\n        \"name\": \"False northing\",\n        \"value\": 0,\n        \"unit\": \"metre\",\n        \"id\": {\n          \"authority\": \"EPSG\",\n          \"code\": 8807\n        }\n      }\n    ]\n  },\n  \"coordinate_system\": {\n    \"subtype\": \"Cartesian\",\n    \"axis\": [\n      {\n        \"name\": \"Easting\",\n        \"abbreviation\": \"X\",\n        \"direction\": \"east\",\n        \"unit\": \"metre\"\n      },\n      {\n        \"name\": \"Northing\",\n        \"abbreviation\": \"Y\",\n        \"direction\": \"north\",\n        \"unit\": \"metre\"\n      }\n    ]\n  },\n  \"scope\": \"Engineering survey, topographic mapping.\",\n  \"area\": \"Italy - onshore and offshore - west of 12°E.\",\n  \"bbox\": {\n    \"south_latitude\": 36.53,\n    \"west_longitude\": 5.93,\n    \"north_latitude\": 47.04,\n    \"east_longitude\": 12\n  },\n  \"id\": {\n    \"authority\": \"EPSG\",\n    \"code\": 3003\n  }\n}",
+        "plenora.geometry.crs_definition_format": "projjson",
+        "plenora.geometry.axis_order": "easting_northing"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "id": 1,
+      "geometry": "01010000000000000099133741000000c091345341"
+    }
+  ]
+}

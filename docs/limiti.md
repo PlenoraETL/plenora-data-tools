@@ -19,15 +19,17 @@ stanno nella sua guida:
 ## Ambito dell'adozione dei contratti
 
 **Regola.** Public Catalogs 2.0 distingue obiettivo e disponibilita; Runtime
-Binding 2.0, Arrow Geometry Semantics 1.0 e Interoperability Vectors 1.0
+Binding 2.0 e Interoperability Vectors 1.0
 non sono rivendicati dal componente. Non sono deviazioni da contratti adottati.
+Arrow Geometry Semantics 1.0 e adottato con le
+[deviazioni per regola](geometry-semantics.md#deviazioni-e-rientro).
 
 **Ambito.** Profilo data-tools v3, CLI, API Rust e SDK Python; stati e
 motivazioni in `crates/plenora-cli/adozione.json` e
 [contratti adottati](cli.md#contratti-adottati).
 
 **Hazard.** Dedurre dal catalogo una superficie runtime invocabile, o dalla
-conformita Arrow Interchange le garanzie GEO/REJ e delle catene INTEROP,
+conformita Arrow Interchange tutte le garanzie GEO/REJ e delle catene INTEROP,
 attribuirebbe al componente garanzie che non offre.
 
 **Rientro.** Pubblicare un binding runtime conforme a RT-024..027 con le

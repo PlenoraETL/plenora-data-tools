@@ -170,6 +170,8 @@ pub fn contract_from_arrow_schema(
     schema: SchemaRef,
     resolve_crs: CrsResolver,
 ) -> Result<DataContract, PlenoraError> {
+    // La versione precede l'interpretazione dei campi (REJ-002).
+    read_contract_version(&schema)?;
     verifica_tipi_supportati(&schema)?;
     // La versione del contratto vive nei metadati dello schema: una versione
     // successiva a quella supportata si rifiuta prima di leggere i campi.
@@ -234,6 +236,36 @@ pub fn contract_from_arrow_schema(
         None
     } else {
         Some(FieldId(0))
+    };
+    // Gli assi assenti del vocabolario canonico non si deducono dal CRS.
+    // Il percorso legacy resta una deviazione GEO-002 dichiarata.
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let mut field = field.as_ref().clone();
+            if (field.metadata().contains_key("plenora.geometry.crs_id")
+                || field
+                    .metadata()
+                    .contains_key("plenora.geometry.crs_definition"))
+                && !field
+                    .metadata()
+                    .contains_key(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+            {
+                let mut metadata = field.metadata().clone();
+                metadata.insert(
+                    PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                    "unknown".to_owned(),
+                );
+                field = field.with_metadata(metadata);
+            }
+            field
+        })
+        .collect();
+    let schema = if fields.iter().eq(schema.fields().iter().map(AsRef::as_ref)) {
+        schema
+    } else {
+        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
     };
     DataContract::new(
         schema,
@@ -560,6 +592,15 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
         let mut canonical: Vec<(String, String)> = canonical.into_iter().collect();
         canonical.sort();
         for (key, value) in &canonical {
+            // GEO-009 lega lo SRID incorporato al campo ricevuto. Su EWKB
+            // l'assenza deve attraversare anche i passi tabellari: completarla
+            // qui renderebbe valido un valore che il produttore non ha legato.
+            if key == PLENORA_GEOMETRY_SRID_KEY
+                && geometry.encoding == Some(crate::contract::GeometryEncoding::Ewkb)
+                && !metadata.contains_key(key)
+            {
+                continue;
+            }
             match metadata.get(key) {
                 Some(existing) if existing != value => {
                     // `axis_order` e `srid` si completano solo se assenti:
@@ -819,7 +860,10 @@ pub fn verifica_metadato_estensione(field: &Field) -> Result<(), PlenoraError> {
 ///
 /// Quelli delle due verifiche.
 pub fn verifica_metadati_di_confine(schema: &Schema) -> Result<(), PlenoraError> {
-    read_contract_version(schema)?;
-    verifica_identita_campi(schema)?;
-    Ok(())
+    (|| {
+        read_contract_version(schema)?;
+        verifica_identita_campi(schema)?;
+        Ok(())
+    })()
+    .map_err(|e: PlenoraError| e.with_phase(crate::ErrorPhase::Validate))
 }

@@ -259,11 +259,12 @@ categoria della causa (`io` o `timeout`), con `never` per I/O non transitorio e 
 rimane `write`, non il commit di una transazione di database. La prova e'
 `pubblicazione_ignota_conserva_la_categoria_della_causa`.
 
-Arrow Geometry Semantics 1.0 (GEO-000..020 e REJ-001..004) e Interoperability
-Vectors 1.0 (INTEROP-001..005, decisione 0018) sono opt-in non rivendicati:
-non si attesta l'esecuzione delle catene intercomponente. Resta il confine
-Arrow Interchange e DT-ARROW. L'adapter REST-to-Arrow (RA-001..010,
-decisione 0017) e' dell'applicazione e non e' fornito dal kernel.
+Arrow Geometry Semantics 1.0 (`plenora-arrow-geometry-semantics-v1`) e adottato
+con il [censimento delle 25 regole e le deviazioni](geometry-semantics.md).
+Il runner dei vettori al pin prova API e CLI; le deviazioni non valgono come
+conformita. Interoperability Vectors 1.0 (INTEROP-001..005) resta non rivendicato:
+non si attesta l'esecuzione delle catene intercomponente. L'adapter REST-to-Arrow
+(RA-001..010) e dell'applicazione e non e fornito dal kernel.
 Le decisioni 0019 e 0020 aggiungono esempi e verifiche di commit database,
 non un'operazione di database al componente. La revisione non contiene una
 decisione 0016. I messaggi senza dati e la cache del fuzz (#39, #40,

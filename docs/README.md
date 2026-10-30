@@ -27,3 +27,6 @@ comandi. I documenti generati non si modificano a mano.
 
 Le schede in `schede/` non si leggono da sole: entrano in `operazioni.md`, e
 i loro link sono relativi a questa cartella, non a `schede/`.
+
+La dichiarazione di [Arrow Geometry Semantics 1.0](geometry-semantics.md)
+censisce le 25 regole, le deviazioni e il runner dei vettori al pin.

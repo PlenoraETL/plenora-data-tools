@@ -1272,13 +1272,15 @@ mod tests {
             let field = field_with_pairs(pairs);
             assert!(read_geometry_contract_keys(&field).is_err());
         }
-        // `crs_id` senza `axis_order` -> errore (obbligatorio con un CRS); valore
-        // `unknown` esplicito -> ammesso.
+        // DT-ARROW-003 completa gli assi assenti senza dedurli dal CRS;
+        // `unknown` esplicito e assente danno la stessa dichiarazione.
         let without_axis = field_with_pairs(&[(PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326")]);
-        assert!(matches!(
-            read_geometry_contract_keys(&without_axis),
-            Err(PlenoraError::Crs(_))
-        ));
+        assert_eq!(
+            read_geometry_contract_keys(&without_axis)
+                .expect("assi assenti")
+                .axis_order,
+            Some(AxisOrder::Unknown)
+        );
         let with_unknown_axis = field_with_pairs(&[
             (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
             (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),

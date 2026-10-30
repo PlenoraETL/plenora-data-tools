@@ -856,7 +856,7 @@ pub fn strip_decided_crs_declarations(metadata: &mut Metadata) {
 /// Fino a questo ciclo questi errori erano `InvalidPlan`; il cambio di
 /// categoria è una rottura dichiarata (docs/metadati-arrow.md, «Metadati Arrow»).
 pub(crate) fn errore_di_metadato(key: &str, messaggio: String) -> PlenoraError {
-    if CRS_KEYS_REPLACED_BY_DECISION.contains(&key) {
+    if key != PLENORA_GEOMETRY_SRID_KEY && CRS_KEYS_REPLACED_BY_DECISION.contains(&key) {
         PlenoraError::Crs(messaggio)
     } else {
         PlenoraError::Schema(messaggio)
@@ -988,7 +988,7 @@ pub fn canonical_geometry_types(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Crs` se la chiave e' presente ma non e' un intero
+/// `PlenoraError::Schema` se la chiave e' presente ma non e' un intero
 /// decimale rappresentabile in `i32`.
 pub fn canonical_geometry_srid(field: &Field) -> Result<Option<i32>, PlenoraError> {
     parse_canonical_i32(
@@ -1181,7 +1181,9 @@ pub fn read_contract_version(schema: &Schema) -> Result<Option<u32>, PlenoraErro
     if raw.as_str() == PLENORA_CONTRACT_VERSION.to_string() {
         return Ok(Some(PLENORA_CONTRACT_VERSION));
     }
-    let decimale = !raw.is_empty() && raw.bytes().all(|byte| byte.is_ascii_digit());
+    let decimale = !raw.is_empty()
+        && (raw.len() == 1 || !raw.starts_with('0'))
+        && raw.bytes().all(|byte| byte.is_ascii_digit());
     let successiva = decimale && {
         let significative = raw.trim_start_matches('0');
         // Piu' cifre significative di quelle della versione supportata, o
@@ -1413,8 +1415,8 @@ fn legacy_crs_is_coherent(keys: &CanonicalGeometryKeys, legacy: &LegacyCrs) -> b
 ///
 /// 1. ogni chiave canonica e' letta dal suo reader tipizzato: assente ->
 ///    `None`, non canonica -> errore;
-/// 2. coerenze fra chiavi canoniche: `axis_order` obbligatorio con `crs_id`
-///    o `crs_definition` (`unknown` ammesso); `crs_resolution = missing`
+/// 2. coerenze fra chiavi canoniche: `axis_order` assente con `crs_id`
+///    o `crs_definition` si completa a `unknown` (DT-ARROW-003); `crs_resolution = missing`
 ///    esclude `crs_id`/`crs_definition`/`axis_order` (non `srid`);
 /// 3. una nozione presente sia canonica sia legacy deve coincidere
 ///    (il CRS a parita' di forma; forme non confrontabili contano come
@@ -1457,11 +1459,9 @@ pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKey
     // completamento: riguardano la sola rappresentazione canonica, cosi' un
     // input legacy senza `axis_order` resta leggibile.
     if (keys.crs_id.is_some() || keys.crs_definition.is_some()) && keys.axis_order.is_none() {
-        return Err(PlenoraError::Crs(format!(
-            "chiave `{PLENORA_GEOMETRY_AXIS_ORDER_KEY}` obbligatoria quando \
-             `{PLENORA_GEOMETRY_CRS_ID_KEY}` o `{PLENORA_GEOMETRY_CRS_DEFINITION_KEY}` \
-             e' presente (valore `unknown` ammesso)"
-        )));
+        // DT-ARROW-003: completa l'assenza, senza inventare l'ordine dei byte
+        // dall'autorita' del CRS (GEO-001, GEO-002).
+        keys.axis_order = Some(AxisOrder::Unknown);
     }
     // Il vocabolario Arrow 1.0 (sezione 4) vieta con `missing`
     // identificatore, definizione, formato e ordine degli assi; lo `srid`
