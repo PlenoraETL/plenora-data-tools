@@ -220,6 +220,7 @@ uguali in testo, categoria, fase e diagnostica. Poi ognuno ha un oracolo:
 | `wkb` | decoder WKB dei kernel e camminata WKB dei file | ricodifica rileggibile e stabile; ciò che il decoder accetta il confine dei file lo accetta |
 | `lettura_ipc`, `lettura_parquet` | confine di lettura dei file | due letture uguali; riscritta (IPC file e stream, Parquet) e riletta è la stessa, o per Parquet con geometrie la trasformazione GeoParquet documentata |
 | `argomenti_cli` | grammatica della CLI | rifiuti `InvalidConfiguration`, lettura deterministica |
+| `definizioni_crs` | PROJJSON, WKT1/WKT2 e risoluzione pubblica | corpus dei 169 integrati, rifiuti senza dati, limiti, determinismo e confronto con il CRS da identificatore |
 
 `.github/workflows/fuzz.yml` fa girare ogni target ogni domenica (e a mano)
 per 10 minuti, e per un minuto sulle PR che toccano `fuzz/`, con i corpus
