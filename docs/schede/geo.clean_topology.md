@@ -142,6 +142,10 @@ vicine e una differenza: di norma proporzionale ai vicini, nel caso
 peggiore (rettangoli tutti sovrapposti) O(n²) coppie di righe. Memoria:
 l'intera tabella e l'indice.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 ```json

@@ -447,6 +447,10 @@ pub(in crate::analyze) fn new_geometry_field(
         GEO_METADATA_KEY.to_owned(),
         geo_metadata_json_with_encoding(crs.definition(), dimensions, encoding)?,
     );
+    metadata.insert(
+        plenora_core::contract::arrow_metadata::PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+        crs.normalized_gis_axis_order().as_str().to_owned(),
+    );
     Ok(Field::new(name, DataType::Binary, nullable).with_metadata(metadata))
 }
 

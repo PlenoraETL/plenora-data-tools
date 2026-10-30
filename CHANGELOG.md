@@ -10,6 +10,17 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [4.0.0] - non rilasciata
+
+Ordine degli assi fail-closed: il solo identificatore CRS legacy non prova
+l'ordine memorizzato e produce `unknown`. I calcoli che interpretano le
+ordinate richiedono una dichiarazione esplicita compatibile; altrimenti
+rifiutano con `crs/validate`, senza effetti e senza scambi impliciti.
+GeoParquet dichiara la propria convenzione; i produttori geo dichiarano
+l'ordine delle coordinate che costruiscono. Le operazioni sulle sole tuple
+continuano anche con ordine sconosciuto. Versioni delle analisi geo incrementate.
+Migrazione e limiti: [errori e limiti](docs/limiti.md#ordine-delle-ordinate).
+
 ## [3.0.0] - 2026-10-18
 
 Adotta il catalogo e il profilo data-tools versione 3 di

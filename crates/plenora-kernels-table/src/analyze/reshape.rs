@@ -44,6 +44,36 @@ fn check_melt_names(op: &str, config: &reshape::Melt, limits: &Limits) -> Result
     )
 }
 
+fn melt_input_indices(
+    op: &str,
+    input: &DataContract,
+    config: &reshape::Melt,
+) -> Result<(Vec<usize>, Vec<usize>)> {
+    let index_of = |name: &String| {
+        input
+            .schema
+            .index_of(name)
+            .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {name}")))
+    };
+    let id_indices: Vec<usize> = config
+        .id_columns
+        .iter()
+        .map(index_of)
+        .collect::<Result<_>>()?;
+    let value_indices: Vec<usize> = if config.value_columns.is_empty() {
+        (0..input.schema.fields().len())
+            .filter(|index| !id_indices.contains(index))
+            .collect()
+    } else {
+        config
+            .value_columns
+            .iter()
+            .map(index_of)
+            .collect::<Result<_>>()?
+    };
+    Ok((id_indices, value_indices))
+}
+
 pub(in crate::analyze) fn analyze_melt(
     op: &str,
     inputs: &[DataContract],
@@ -55,34 +85,17 @@ pub(in crate::analyze) fn analyze_melt(
     let input = &inputs[0];
     let _ = fields;
     check_melt_names(op, &config, limits)?;
-    let id_indices: Vec<usize> = config
-        .id_columns
-        .iter()
-        .map(|name| {
-            input.schema.index_of(name).map_err(|_| {
-                PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {name}"))
-            })
-        })
-        .collect::<Result<_>>()?;
-    let value_indices: Vec<usize> = if config.value_columns.is_empty() {
-        (0..input.schema.fields().len())
-            .filter(|index| !id_indices.contains(index))
-            .collect()
-    } else {
-        config
-            .value_columns
-            .iter()
-            .map(|name| {
-                input.schema.index_of(name).map_err(|_| {
-                    PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {name}"))
-                })
-            })
-            .collect::<Result<_>>()?
-    };
+    let (id_indices, value_indices) = melt_input_indices(op, input, &config)?;
     if value_indices.is_empty() {
         return contract_error(op, "melt senza value_columns");
     }
     let source_fields = clone_fields(input);
+    let geometry_metadata = plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+        &value_indices
+            .iter()
+            .map(|index| &source_fields[*index])
+            .collect::<Vec<_>>(),
+    )?;
     let value_type = source_fields[value_indices[0]].data_type().clone();
     let homogeneous = value_indices
         .iter()
@@ -130,12 +143,14 @@ pub(in crate::analyze) fn analyze_melt(
         .map(|index| source_fields[*index].clone())
         .collect();
     fields_out.push(Field::new(&var_name, DataType::Utf8, false));
-    fields_out.push(Field::new(&value_name, value_data_type, true));
+    fields_out.push(
+        Field::new(&value_name, value_data_type, true).with_metadata(geometry_metadata.clone()),
+    );
     // I metadata dello schema di input si conservano (le colonne id
     // passano invariate, con i loro metadata di campo); `variable`/`value`
-    // sono colonne derivate e non ereditano metadata di campo.
+    // sono derivate; value eredita solo i metadati geometrici compatibili.
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
-    // La geometria sopravvive solo come colonna id (valori passthrough).
+    // Prima si propaga la geometria id; quella derivata si aggiunge sotto.
     let preserved = input
         .geometries
         .first()
@@ -146,7 +161,7 @@ pub(in crate::analyze) fn analyze_melt(
         .active_geometry
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
     let value_count = u64::try_from(value_indices.len()).unwrap_or(u64::MAX);
-    finish(
+    let output = finish(
         schema,
         geometry,
         active,
@@ -154,6 +169,14 @@ pub(in crate::analyze) fn analyze_melt(
             sorted_by: None,
             row_count: map_row_count(input, |rows| rows.saturating_mul(value_count)),
         },
+    )?;
+    super::helpers::derive_geometry(
+        output,
+        input,
+        source_fields[value_indices[0]].name(),
+        &value_name,
+        geometry_metadata,
+        fields,
     )
 }
 
@@ -227,7 +250,7 @@ pub(in crate::analyze) fn analyze_pivot(
         produce(&mut fields_out, fields, output, data_type.clone(), true)?;
     }
     // I metadati di schema si conservano (il kernel li copia); le
-    // colonne pivot sono derivate, senza metadati di campo.
+    // colonne pivot first/last geometriche si completano sotto.
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     let preserved = input
         .geometries
@@ -238,7 +261,24 @@ pub(in crate::analyze) fn analyze_pivot(
     let active = input
         .active_geometry
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
-    finish(schema, geometry, active, ContractProperties::default())
+    let mut output = finish(schema, geometry, active, ContractProperties::default())?;
+    if matches!(
+        config.aggr_func,
+        reshape::PivotAgg::First | reshape::PivotAgg::Last
+    ) {
+        let metadata = plenora_core::contract::arrow_metadata::merged_geometry_metadata(&[valore])?;
+        for name in config.mapping.values() {
+            output = super::helpers::derive_geometry(
+                output,
+                input,
+                &config.value_col,
+                name,
+                metadata.clone(),
+                fields,
+            )?;
+        }
+    }
+    Ok(output)
 }
 
 pub(in crate::analyze) fn analyze_transpose(
@@ -263,6 +303,15 @@ pub(in crate::analyze) fn analyze_transpose(
     if let Some(id_column) = &config.id_column {
         field_of(op, input, id_column)?;
     }
+    plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+        &input
+            .schema
+            .fields()
+            .iter()
+            .filter(|field| config.id_column.as_ref() != Some(field.name()))
+            .map(std::convert::AsRef::as_ref)
+            .collect::<Vec<_>>(),
+    )?;
     unsupported(
         op,
         "il numero di colonne di output dipende dal numero di righe dell'input: schema non inferibile a secco",
@@ -288,6 +337,7 @@ pub(in crate::analyze) fn analyze_explode(
         );
     }
     let field = field_of(op, input, &config.column)?;
+    crate::require_non_geometry(field)?;
     let DataType::List(child) = field.data_type() else {
         return contract_error(op, "explode richiede una colonna List");
     };
@@ -318,6 +368,7 @@ pub(in crate::analyze) fn analyze_unnest(
         PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {}", config.column))
     })?;
     let field = input.schema.field(index);
+    crate::require_non_geometry(field)?;
     let DataType::Struct(children) = field.data_type() else {
         return contract_error(op, "unnest richiede una colonna Struct");
     };
@@ -407,6 +458,12 @@ pub(in crate::analyze) fn analyze_table_diff(
         true,
     )?;
     check_key_pairs(op, left, right, &config.left_keys, &config.right_keys)?;
+    for name in &config.left_keys {
+        crate::require_non_geometry(field_of(op, left, name)?)?;
+    }
+    for name in &config.right_keys {
+        crate::require_non_geometry(field_of(op, right, name)?)?;
+    }
     // Chiavi e valori confrontati si leggono come testo (chiave composta,
     // `_diff_old_values`).
     require_scalar_strings(op, left, &config.left_keys)?;
@@ -435,6 +492,12 @@ pub(in crate::analyze) fn analyze_table_diff(
         fields_out.push(Field::new(name, field.data_type().clone(), true));
     }
     for name in &compare {
+        crate::require_non_geometry(field_of(op, left, name)?)?;
+        crate::require_non_geometry(field_of(op, right, name)?)?;
+        plenora_core::contract::arrow_metadata::require_same_geometry_reference(
+            field_of(op, left, name)?,
+            field_of(op, right, name)?,
+        )?;
         require_scalar_string(op, left, name)?;
         require_scalar_string(op, right, name)?;
         let right_field = field_of(op, right, name)?;

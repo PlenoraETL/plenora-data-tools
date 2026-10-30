@@ -870,7 +870,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "plenora-cli"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "chrono",
  "ctrlc",
@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "plenora-core"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "arrow-array",
  "arrow-data",
@@ -902,7 +902,7 @@ dependencies = [
 
 [[package]]
 name = "plenora-data-py"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "arrow-pyarrow",
  "plenora-cli",
@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "plenora-io"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "arrow-buffer",
  "base64",
@@ -957,7 +957,7 @@ dependencies = [
 
 [[package]]
 name = "plenora-kernels-geo"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "geographiclib-rs",
  "geozero",
@@ -977,7 +977,7 @@ dependencies = [
 
 [[package]]
 name = "plenora-kernels-table"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1022,7 +1022,7 @@ dependencies = [
 
 [[package]]
 name = "plenora-pipeline"
-version = "3.0.0"
+version = "4.0.0"
 dependencies = [
  "plenora-core",
  "plenora-geo",

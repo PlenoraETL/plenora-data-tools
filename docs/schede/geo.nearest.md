@@ -130,6 +130,10 @@ Di norma O((n + m) log m) più le distanze; nel caso peggiore (destre
 equidistanti da molte sinistre, rettangoli grandi sovrapposti) O(n · m).
 Memoria O(m) per l'albero più gli abbinamenti.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Il primo pozzo ha due fontane alla stessa distanza, ed esce due volte.

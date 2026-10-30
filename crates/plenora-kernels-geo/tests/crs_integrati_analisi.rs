@@ -111,24 +111,24 @@ fn operazioni_con_requisito_proiettato_girano_con_epsg_32632() {
 }
 
 #[test]
-fn stesso_crs_in_forme_diverse_soddisfa_same_projected() {
-    // Le due forme dello stesso codice sono semanticamente uguali: il join
-    // spaziale (requisito `SameProjected`) le accetta; codici diversi no.
+fn le_binarie_richiedono_dichiarazioni_identiche_anche_per_alias_crs() {
     let sinistra = input("EPSG:32632");
-    let destra = input("urn:ogc:def:crs:EPSG::32632");
-    analizza(
-        "geo.sjoin",
-        &[sinistra.clone(), destra],
-        &json!({"predicate": "intersects"}),
-    )
-    .expect("stesso CRS in forme diverse");
-    let errore = analizza(
-        "geo.sjoin",
-        &[sinistra, input("EPSG:32633")],
-        &json!({"predicate": "intersects"}),
-    )
-    .expect_err("CRS diversi");
-    assert!(errore.to_string().contains("CRS_MISMATCH"), "{errore}");
+    for op in ["geo.sjoin", "geo.nearest", "geo.overlay", "geo.union"] {
+        let config = if op == "geo.sjoin" {
+            json!({"predicate":"intersects"})
+        } else if op == "geo.overlay" {
+            json!({"mode":"union"})
+        } else {
+            json!({})
+        };
+        analizza(op, &[sinistra.clone(), sinistra.clone()], &config)
+            .expect("dichiarazioni identiche");
+        for id in ["urn:ogc:def:crs:EPSG::32632", "EPSG:32633"] {
+            let errore = analizza(op, &[sinistra.clone(), input(id)], &config)
+                .expect_err("dichiarazioni diverse");
+            assert!(matches!(errore, PlenoraError::Crs(_)), "{op}: {errore}");
+        }
+    }
 }
 
 #[test]

@@ -1,15 +1,11 @@
 //! CRS di `GeoParquet`: dal `PROJJSON` all'identificatore integrato e ritorno.
 //!
-//! In lettura il `PROJJSON` di una colonna si riconduce all'identificatore
-//! della tabella dei CRS integrati **solo tramite il suo `id`**:
-//! `{"authority": "EPSG", "code": <n>}` → `EPSG:<n>`,
-//! `{"authority": "OGC", "code": "CRS84"}` → `OGC:CRS84`. Un documento senza
-//! `id`, con un'altra autorità o con un codice fuori tabella fallisce con
-//! `CRS_NOT_BUILTIN`: il documento non si interpreta e il CRS non si
-//! indovina. Il tipo del documento (`GeographicCRS`/`ProjectedCRS`) deve
-//! essere quello del CRS integrato; il resto del documento non si confronta
-//! (limite dichiarato in docs/file.md, «`GeoParquet`, ciò che il contratto
-//! non porta»).
+//! In lettura si accetta solo il documento integrato completo, confrontato
+//! byte per byte dopo la serializzazione JSON deterministica dei due valori.
+//! Il lettore `GeoParquet` controlla inoltre i byte del frammento originale,
+//! prima che la normalizzazione JSON possa nascondere differenze.
+//! Non si deduce un CRS dal solo identificatore: qualsiasi differenza,
+//! anche non semantica, fallisce con `CRS_NOT_BUILTIN` (docs/limiti.md).
 //!
 //! In scrittura il documento è il `PROJJSON` completo che PROJ 9.5.1 produce
 //! per quel CRS (`data/projjson_integrati.json`, generato da
@@ -92,8 +88,8 @@ pub fn identificativo_di(crs: &ResolvedCrs) -> Result<String> {
 /// # Errors
 ///
 /// `Crs` (`CRS_NOT_BUILTIN`) per un documento senza `id` riconoscibile o
-/// fuori tabella; `Crs` se il tipo del documento non è quello del CRS
-/// integrato; `InvalidPlan` se il valore non è un oggetto.
+/// fuori tabella; `Crs` se il documento differisce da quello integrato;
+/// `InvalidPlan` se il valore non e' un oggetto.
 pub fn identificativo_da_projjson(documento: &Value) -> Result<String> {
     let Value::Object(oggetto) = documento else {
         return Err(PlenoraError::InvalidPlan(
@@ -138,6 +134,15 @@ pub fn identificativo_da_projjson(documento: &Value) -> Result<String> {
                  dal suo `id`"
             ),
         });
+    }
+    // Nessuna equivalenza approssimata: anche aggiunte o omissioni rifiutate.
+    let integrato = projjson_di(&identificativo)?;
+    let bytes = |value: &Value| {
+        serde_json::to_vec(value)
+            .map_err(|_| PlenoraError::Internal("serializzazione PROJJSON fallita".to_owned()))
+    };
+    if bytes(documento)? != bytes(&integrato)? {
+        return Err(non_integrato());
     }
     Ok(identificativo)
 }
@@ -187,10 +192,7 @@ mod tests {
         let documento = serde_json::json!({
             "type": "ProjectedCRS", "ids": [{"authority": "EPSG", "code": "32632"}]
         });
-        assert_eq!(
-            identificativo_da_projjson(&documento).expect("ids"),
-            "EPSG:32632"
-        );
+        assert!(identificativo_da_projjson(&documento).is_err());
     }
 
     #[test]

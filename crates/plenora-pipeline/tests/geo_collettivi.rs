@@ -874,7 +874,14 @@ fn i_tipi_delle_chiavi_di_collect_si_verificano_in_validazione() {
         campi.push(campo);
         let mut colonne = geometrie_in.columns().to_vec();
         colonne.push(colonna);
-        RecordBatch::try_new(Arc::new(Schema::new(campi)), colonne).unwrap()
+        RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                campi,
+                geometrie_in.schema().metadata().clone(),
+            )),
+            colonne,
+        )
+        .unwrap()
     };
     let millisecondi = |fuso: &str| {
         con_chiave(

@@ -1,7 +1,7 @@
 # Arrow Geometry Semantics 1.0
 
 Il componente adotta `plenora-arrow-geometry-semantics-v1` al pin del manifesto,
-con 10 regole conformi e 15 deviazioni. Il censimento riguarda le operazioni
+con 11 regole conformi e 14 deviazioni. Il censimento riguarda le operazioni
 pubbliche del profilo su Rust, CLI e SDK Python; non certifica i singoli
 kernel chiamati fuori dal runner ne catene fra componenti.
 
@@ -31,8 +31,8 @@ non si cambia quel requisito per farli passare.
 | Regola | Stato | Evidenza o comportamento |
 | --- | --- | --- |
 | GEO-000 | deviazione | Il passaggio rifiuta con crs i CRS resolved fuori tabella o con definizione, e geography con unsupported. |
-| GEO-001 | deviazione | Il vocabolario canonico conserva gli assi e completa l assenza a unknown; il percorso legacy geo.crs puo ancora emettere l ordine GIS senza conoscere quello fisico. |
-| GEO-002 | deviazione | Il percorso legacy geo.crs senza assi espliciti emette ancora l ordine GIS del CRS; il vocabolario canonico assente esce unknown. |
+| GEO-001 | conforme | Il vocabolario canonico conserva gli assi e completa l assenza a unknown; anche il legacy senza prova conserva unknown (correzione 4.0). |
+| GEO-002 | deviazione | Tutti gli ingressi senza prova escono unknown; il calcolo dipendente dagli assi lo rifiuta esplicitamente per la policy safety-critical 4.0. |
 | GEO-003 | conforme | Vettori con ordinate asimmetriche e confronto byte per byte al confine API e CLI. |
 | GEO-004 | deviazione | Un crs_id con definizione resolved viene risolto dalla definizione e rifiutato anche nel passaggio. |
 | GEO-005 | deviazione | Declared_unresolved conserva la definizione senza verificarne grammatica e identificatori di primo livello. |
@@ -64,8 +64,7 @@ v4 espande ogni deviazione sulle tre superfici; non dichiara artefatti runtime.
 | Regola | Hazard | Rientro |
 | --- | --- | --- |
 | GEO-000 | Input conformi non attraversano il componente. | Separare conformita, supporto del calcolo e trasporto dei metadati. |
-| GEO-001 | Il metadato legacy prodotto puo descrivere un ordine diverso dai byte ricevuti. | Conservare unknown anche per il legacy esterno, distinguendolo dai produttori con convenzione nota. |
-| GEO-002 | Coordinate legacy memorizzate nord-prima possono ricevere una dichiarazione est-prima. | Separare la convenzione nota dei produttori GeoParquet e geo dall ordine ignoto del legacy ricevuto, con prove sui confini. |
+| GEO-002 | Il calcolo con unknown viene rifiutato anche quando GEO-002 lo permetterebbe. | La policy locale richiede evidenza degli assi: dichiarazione esplicita o provenienza certa, senza scambi impliciti. |
 | GEO-004 | Rifiuto di input conforme; nessun calcolo sostitutivo silenzioso. | Leggere identita e definizione separatamente, preservandole nel passaggio. |
 | GEO-005 | Una dichiarazione contraddittoria puo attraversare un piano tabellare. | Verificare grammatica e identificatori anche senza risoluzione. |
 | GEO-006 | Rifiuto di input conforme. | Trasportare la definizione opaca senza chiamare il risolutore. |
@@ -82,3 +81,5 @@ v4 espande ogni deviazione sulle tre superfici; non dichiara artefatti runtime.
 Le verifiche aggiunte non risolvono il confronto delle definizioni CRS.
 Un rifiuto conservativo resta una deviazione quando il contratto impone il
 passaggio o accetta il calcolo; non viene contato come conforme.
+
+Migrazione 4.0 e censimento completo: [errori e limiti](limiti.md#ordine-delle-ordinate).

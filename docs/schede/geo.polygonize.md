@@ -142,6 +142,10 @@ rettangolo. Memoria O(n) per tutte le linee della
 tabella, raccolte prima del calcolo (classe bloccante), più le righe
 d'uscita.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Un quadrato chiuso da tre linee, con un tratto pendente.

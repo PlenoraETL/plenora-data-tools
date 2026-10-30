@@ -15,6 +15,12 @@ Ogni colonna ha un tipo fra `utf8`, `int64`, `uint64`, `float64`, `bool`,
 
 ### Schema
 
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Le colonne della sinistra, con nome, tipo e metadati di campo della
 sinistra; una colonna è nullable se lo è in almeno un ingresso. I metadati
 di schema dei due ingressi si fondono: una chiave presente in un ingresso

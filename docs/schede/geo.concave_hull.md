@@ -105,6 +105,10 @@ Tempo almeno O(n log n) sulle n coordinate (inviluppo convesso e R-tree
 dei punti di `geo`; il costo dello scavo nel caso peggiore non è
 dichiarato), più la validazione OGC di ingresso e uscita; memoria O(n).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Con `concavity` 1 il bordo scava fino al punto `(1.5, 1)`; con 3 il

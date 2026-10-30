@@ -12,13 +12,13 @@ esegue.
 
 | crate | versione | descrizione |
 | --- | --- | --- |
-| `plenora-cli` | 3.0.0 | CLI pubblica `plenora-data` di plenora-data-tools2 (CLI 2.0 di plenora-contracts) e la sua superficie Rust |
-| `plenora-core` | 3.0.0 | Fondamenta condivise di plenora-data-tools2: re-export Arrow, errori, limiti, catalogo, CRS |
-| `plenora-data-py` | 3.0.0 | SDK Python `plenora-data` di plenora-data-tools2: il modulo nativo PyO3 `plenora_data._native` |
-| `plenora-io` | 3.0.0 | Ingresso e uscita su file: Arrow IPC (file e stream), Parquet e GeoParquet 1.1, scrittura atomica, esecuzione di un piano da file a file |
-| `plenora-kernels-geo` | 3.0.0 | Kernel geografici su geo::Geometry e adapter Arrow GeoArrow-WKB |
-| `plenora-kernels-table` | 3.0.0 | Kernel tabellari puri su RecordBatch |
-| `plenora-pipeline` | 3.0.0 | Runner minimo di pipeline: piano SSA di kernel tabellari e geografici su RecordBatch interi in memoria |
+| `plenora-cli` | 4.0.0 | CLI pubblica `plenora-data` di plenora-data-tools2 (CLI 2.0 di plenora-contracts) e la sua superficie Rust |
+| `plenora-core` | 4.0.0 | Fondamenta condivise di plenora-data-tools2: re-export Arrow, errori, limiti, catalogo, CRS |
+| `plenora-data-py` | 4.0.0 | SDK Python `plenora-data` di plenora-data-tools2: il modulo nativo PyO3 `plenora_data._native` |
+| `plenora-io` | 4.0.0 | Ingresso e uscita su file: Arrow IPC (file e stream), Parquet e GeoParquet 1.1, scrittura atomica, esecuzione di un piano da file a file |
+| `plenora-kernels-geo` | 4.0.0 | Kernel geografici su geo::Geometry e adapter Arrow GeoArrow-WKB |
+| `plenora-kernels-table` | 4.0.0 | Kernel tabellari puri su RecordBatch |
+| `plenora-pipeline` | 4.0.0 | Runner minimo di pipeline: piano SSA di kernel tabellari e geografici su RecordBatch interi in memoria |
 
 ## Catalogo delle operazioni
 
@@ -80,14 +80,14 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 
 | crate | unitari | integrazione | totale |
 | --- | --- | --- | --- |
-| `plenora-cli` | 6 | 58 | 64 |
-| `plenora-core` | 184 | 67 | 251 |
+| `plenora-cli` | 6 | 62 | 68 |
+| `plenora-core` | 184 | 68 | 252 |
 | `plenora-data-py` | 0 | 0 | 0 |
-| `plenora-io` | 20 | 183 | 203 |
-| `plenora-kernels-geo` | 520 | 108 | 628 |
-| `plenora-kernels-table` | 459 | 118 | 577 |
+| `plenora-io` | 20 | 193 | 213 |
+| `plenora-kernels-geo` | 526 | 108 | 634 |
+| `plenora-kernels-table` | 462 | 121 | 583 |
 | `plenora-pipeline` | 12 | 163 | 175 |
-| **totale** | 1201 | 697 | 1898 |
+| **totale** | 1210 | 715 | 1925 |
 
 ### Prove Python dell'SDK
 

@@ -141,6 +141,111 @@ pub fn field_declares_wkb_geometry(field: &Field) -> bool {
     )
 }
 
+/// Verifica la compatibilita' dei campi che contribuiscono alla stessa
+/// colonna geometrica. Nessuna precedenza fra sorgenti, neppure senza righe.
+///
+/// # Errors
+///
+/// `Crs` se identificazione geometrica, CRS o ordine delle ordinate divergono;
+/// gli errori del lettore dei metadati per dichiarazioni malformate.
+pub fn require_same_geometry_reference(left: &Field, right: &Field) -> Result<(), PlenoraError> {
+    let a = field_declares_wkb_geometry(left);
+    let b = field_declares_wkb_geometry(right);
+    if !a && !b {
+        return Ok(());
+    }
+    super::arrow_schema::verifica_metadato_estensione(left)?;
+    super::arrow_schema::verifica_metadato_estensione(right)?;
+    let left = read_geometry_contract_keys(left)?;
+    let right = read_geometry_contract_keys(right)?;
+    if a != b
+        || left.crs_id != right.crs_id
+        || left.crs_definition != right.crs_definition
+        || left.crs_definition_format != right.crs_definition_format
+        || left.crs_resolution != right.crs_resolution
+        || left.srid != right.srid
+        || left.axis_order != right.axis_order
+        || left.spatial_semantics != right.spatial_semantics
+    {
+        return Err(PlenoraError::Crs(
+            "campi geometrici con riferimenti CRS o ordine delle ordinate diversi".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Confronta il CRS passato all'API con tutte le dichiarazioni del campo.
+/// Le definizioni esterne gia' risolte si accettano solo se identiche.
+///
+/// # Errors
+///
+/// `Crs` per dichiarazioni assenti, irrisolte o discordanti; gli errori
+/// del lettore per metadati malformati.
+pub fn require_geometry_source_crs(
+    field: &Field,
+    source: &ResolvedCrs,
+) -> Result<(), PlenoraError> {
+    super::arrow_schema::verifica_metadato_estensione(field)?;
+    let keys = read_geometry_contract_keys(field)?;
+    let matches = |definition: &str| {
+        definition == source.definition()
+            || crate::crs::resolve_crs(definition, "crs")
+                .is_ok_and(|declared| declared.semantically_equals(source))
+    };
+    if keys.crs_resolution == Some(CrsResolution::DeclaredUnresolved)
+        || keys.crs_resolution == Some(CrsResolution::Missing)
+        || (keys.crs_id.is_none() && keys.crs_definition.is_none())
+        || keys.crs_id.as_deref().is_some_and(|value| !matches(value))
+        || keys
+            .crs_definition
+            .as_deref()
+            .is_some_and(|value| !matches(value))
+        || keys.srid.is_some_and(|srid| {
+            source
+                .authority_srid()
+                .and_then(|code| i32::try_from(code).ok())
+                != Some(srid)
+        })
+    {
+        return Err(PlenoraError::Crs(
+            "CRS sorgente diverso dalla dichiarazione del campo geometrico".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Metadati geometrici di una colonna derivata da celle di piu' campi.
+/// L'identita' del campo e i tipi geometrici non si ereditano dal primo.
+///
+/// # Errors
+///
+/// `Crs` per riferimenti diversi; `Unsupported` per dimensioni o encoding
+/// diversi. I campi puramente tabellari non trasmettono metadati.
+pub fn merged_geometry_metadata(fields: &[&Field]) -> Result<Metadata, PlenoraError> {
+    let Some(first) = fields.first() else {
+        return Ok(Metadata::new());
+    };
+    for other in fields {
+        require_same_geometry_reference(first, other)?;
+    }
+    if !field_declares_wkb_geometry(first) {
+        return Ok(Metadata::new());
+    }
+    let keys = read_geometry_contract_keys(first)?;
+    for other in fields {
+        let other = read_geometry_contract_keys(other)?;
+        if keys.dimensions != other.dimensions || keys.encoding != other.encoding {
+            return Err(PlenoraError::Unsupported(
+                "fusione di geometrie con dimensioni o encoding diversi".into(),
+            ));
+        }
+    }
+    let mut metadata = first.metadata().clone();
+    metadata.remove(PLENORA_FIELD_ID_KEY);
+    strip_rewritten_types_declarations(&mut metadata);
+    Ok(metadata)
+}
+
 /// Errore di schema: la colonna geometria non e' `Binary`.
 ///
 /// Il tipo si descrive con [`crate::tipo_arrow::descrivi_tipo`]: il
@@ -444,11 +549,9 @@ fn geo_metadata_value_lenient(field: &Field) -> Option<serde_json::Value> {
 /// restano assenti, mai un default al posto dell'assente).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GeometryMetadataDetails {
-    /// Ordine degli assi del CRS; la chiave è obbligatoria quando un CRS è
-    /// presente e l'emissione completa solo L'ASSENTE: questo dettaglio
-    /// esplicito vince, poi l'ordine GIS normalizzato quando la definizione
-    /// canonica permette di stabilire gli assi. La chiave descrive l'ordine
-    /// fisico x/y dei byte, non l'ordine nativo dell'autorità.
+    /// Ordine fisico delle ordinate dichiarato dal produttore.
+    /// Senza dichiarazione l'emissione usa `unknown`: il CRS da solo non
+    /// costituisce prova dell'ordine memorizzato.
     pub axis_order: Option<AxisOrder>,
     /// SRID noto (emesso come intero decimale con segno a 32 bit); come
     /// sopra, un dettaglio assente e' completato dalla deduzione d'autorita'
@@ -642,7 +745,7 @@ fn insert_semantics_and_precision(
 /// ([`DefinitionForm::Other`]).
 ///
 /// `axis_order` è sempre emesso e si completa solo se assente: dettaglio
-/// esplicito, poi ordine GIS normalizzato dalla definizione, infine
+/// esplicito, altrimenti
 /// `unknown`. `srid` (opzionale) segue la stessa cascata senza fondo:
 /// dettaglio, poi [`ResolvedCrs::authority_srid`], altrimenti assente.
 fn insert_resolved_crs_keys(
@@ -675,15 +778,7 @@ fn insert_resolved_crs_keys(
             format.as_str().to_owned(),
         );
     }
-    let axis_order = details
-        .axis_order
-        .or_else(|| {
-            resolved.and_then(|crs| {
-                crs.authority_axis_order()
-                    .map(|_| crs.normalized_gis_axis_order())
-            })
-        })
-        .unwrap_or(AxisOrder::Unknown);
+    let axis_order = details.axis_order.unwrap_or(AxisOrder::Unknown);
     metadata.insert(
         PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
         axis_order.as_str().to_owned(),

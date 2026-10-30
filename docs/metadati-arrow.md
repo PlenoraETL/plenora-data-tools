@@ -38,7 +38,7 @@ file di `esegui_da_file`:
 | `precision` | quella ereditata, che attraversa intatta le operazioni tabellari; dopo un'operazione geo, o se nessuno la dichiara, `float64` (ogni kernel geo ricodifica le coordinate in `f64`, e ogni coordinata WKB è un double) |
 | `types_declaration`, `types` | la dichiarazione del contratto; non dichiarata: `unresolved` senza elenco |
 | `crs_resolution` | `resolved`, `declared_unresolved` o `missing`, dallo stato del CRS |
-| `crs_id`, `crs_definition`, `crs_definition_format`, `axis_order`, `srid` | come prima: con un CRS risolto `axis_order` è l'ordine GIS normalizzato (x = est/longitudine) e `srid` il codice d'autorità se sta in `i32`; con `missing` nessuna, salvo uno `srid` ereditato, che il vocabolario ammette |
+| `crs_id`, `crs_definition`, `crs_definition_format`, `axis_order`, `srid` | `axis_order` resta `unknown` senza dichiarazione esplicita o provenienza certa; `srid` deriva dall autorita' se rappresentabile in `i32`; con `missing` resta solo un eventuale `srid` ereditato |
 
 Dentro il piano gli schemi restano quelli interni (versione e blocco
 canonico solo sulle tabelle con geometrie, nessuna identità assegnata):
@@ -123,10 +123,9 @@ Stesso piano e stessi schemi d'ingresso, stesse identità
 Un `axis_order` con la prima coordinata nord (`lat_lon`,
 `northing_easting`) si accetta: il vettore `resolved-point` lo dichiara
 per `EPSG:4326`, e un piano di sole operazioni tabellari lo attraversa
-intatto (ARROW-008). Le operazioni geo lo rifiutano (`Crs`), perché ogni
-kernel geo legge x come est/longitudine: prima solo `geo.reproject` lo
-controllava, e le misure geodetiche avrebbero scambiato latitudine e
-longitudine senza errore.
+intatto (ARROW-008). Dalla 4.0 le operazioni sensibili all'ordine rifiutano
+anche assenza e `unknown` (`crs/validate`). Le operazioni sulle sole tuple
+continuano: [censimento completo](limiti.md#censimento-delle-operazioni).
 
 `scrivi_tabella` resta un codec senza perdite: non aggiunge versione né
 identità a una tabella qualsiasi, ma rifiuta uno schema con chiavi
@@ -135,7 +134,7 @@ scrivere uno schema Plenora non conforme.
 
 ## Versioni del catalogo
 
-Ogni operazione geo prende `contract_analysis_version` + 1: la sua analisi
+Ogni operazione geo prende `contract_analysis_version` + 2 nei due cicli: la sua analisi
 passa da `analyze_geo_contract`, che ha una regola di validazione nuova
 (rifiuto degli assi scambiati) e cambia lo schema d'uscita inferito (toglie
 una `precision` ereditata diversa da `float64`), e la versione dell'analisi

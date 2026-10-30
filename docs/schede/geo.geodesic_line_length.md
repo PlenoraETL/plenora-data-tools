@@ -91,6 +91,10 @@ tratto, molto sotto 1 cm su ogni linea realistica. Nessun rifiuto
 
 Tempo O(n) sui vertici della linea; memoria O(1) oltre all'ingresso.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 ```json

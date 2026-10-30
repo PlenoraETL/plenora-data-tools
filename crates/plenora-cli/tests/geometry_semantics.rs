@@ -352,7 +352,7 @@ fn verifica_cli(
 }
 
 #[test]
-fn le_deviazioni_legacy_e_identita_restano_visibili() {
+fn legacy_senza_prova_degli_assi_resta_unknown_e_identita_visibile() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/arrow-data-v1/axis-lon-lat-epsg4326.json");
     let base: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
@@ -385,8 +385,8 @@ fn le_deviazioni_legacy_e_identita_restano_visibili() {
             .metadata()
             .get("plenora.geometry.axis_order")
             .map(String::as_str),
-        Some("lon_lat"),
-        "deviazione GEO-001/002: aggiornare il censimento quando rientra"
+        Some("unknown"),
+        "GEO-001: il solo identificatore CRS non prova l ordine fisico"
     );
     let mut ids = base;
     ids["fields"][0]["metadata"]["plenora.field_id"] = Value::String("8".into());
@@ -443,5 +443,231 @@ fn verifica_calcolo(output: &RecordBatch, name: &str) {
                 .ln();
         assert!((x - expected_x).abs() < 0.01);
         assert!((y - expected_y).abs() < 0.01);
+    }
+}
+
+// GEO-001 e policy fail-closed: valori plausibili in entrambi gli ordini
+// non costituiscono una prova della convenzione fisica.
+#[test]
+fn assi_ambigui_rifiutati_prima_dei_valori_su_api_e_cli() {
+    use plenora_core::{RemoteEffect, RetryDisposition};
+    use serde_json::json;
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/arrow-data-v1/axis-lon-lat-epsg4326.json");
+    let base: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    for coords in [
+        [(60.0_f64, 10.0_f64), (60.0, 11.0)],
+        [(10.0, 60.0), (11.0, 60.0)],
+    ] {
+        let mut bytes = vec![1_u8];
+        bytes.extend(2_u32.to_le_bytes());
+        bytes.extend(2_u32.to_le_bytes());
+        for (x, y) in coords {
+            bytes.extend(x.to_le_bytes());
+            bytes.extend(y.to_le_bytes());
+        }
+        let hex = plenora_core::esadecimale::esadecimale(&bytes);
+        for axis in [
+            None,
+            Some("unknown"),
+            Some("lat_lon"),
+            Some("easting_northing"),
+            Some("northing_easting"),
+        ] {
+            let mut v = base.clone();
+            v["fields"][1]["metadata"]["plenora.geometry.types"] = json!("linestring");
+            let md = v["fields"][1]["metadata"].as_object_mut().unwrap();
+            md.remove("plenora.geometry.axis_order");
+            if let Some(axis) = axis {
+                md.insert("plenora.geometry.axis_order".into(), json!(axis));
+            }
+            v["rows"] = json!([{"id":1,"geometry":hex}]);
+            for op in [
+                "geo.geodesic_line_length",
+                "geo.geodesic_area",
+                "geo.geodesic_distance",
+                "geo.haversine_distance",
+                "geo.bearing",
+                "geo.reproject",
+            ] {
+                let plan = json!({"version":1,"inputs":["t"],"steps":[{"out":"o","in":["t"],"op":op,"config":{}}],"outputs":["o"]}).to_string();
+                let p = Pipeline::from_json(&plan).unwrap();
+                let input = tabella(&v);
+                let err = plenora_cli::api::esegui_in_memoria(
+                    &p,
+                    vec![Ingresso::Tabella {
+                        nome: "t".into(),
+                        tabella: input.clone(),
+                    }],
+                    &Interruzione::default(),
+                )
+                .unwrap_err();
+                assert_eq!(err.category().as_str(), "crs");
+                assert_eq!(err.phase().as_str(), "validate");
+                assert_eq!(err.remote_effect(), RemoteEffect::None);
+                assert_eq!(err.retry_disposition(), RetryDisposition::Never);
+                verifica_cli(&input, &plan, "crs", "validate", op, true);
+            }
+            let plan = Pipeline::from_json(r#"{"version":1,"inputs":["t"],"steps":[{"out":"o","in":["t"],"op":"geo.vertex_count","config":{}}],"outputs":["o"]}"#).unwrap();
+            plenora_cli::api::esegui_in_memoria(
+                &plan,
+                vec![Ingresso::Tabella {
+                    nome: "t".into(),
+                    tabella: tabella(&v),
+                }],
+                &Interruzione::default(),
+            )
+            .unwrap();
+        }
+        let mut v = base.clone();
+        v["fields"][1]["metadata"]["plenora.geometry.types"] = json!("linestring");
+        v["rows"] = json!([{"id":1,"geometry":hex}]);
+        let plan = Pipeline::from_json(r#"{"version":1,"inputs":["t"],"steps":[{"out":"o","in":["t"],"op":"geo.geodesic_line_length","config":{}}],"outputs":["o"]}"#).unwrap();
+        let (_, output) = plenora_cli::api::esegui_in_memoria(
+            &plan,
+            vec![Ingresso::Tabella {
+                nome: "t".into(),
+                tabella: tabella(&v),
+            }],
+            &Interruzione::default(),
+        )
+        .unwrap();
+        let batch = &output[0].1;
+        let value = batch
+            .column(batch.num_columns() - 1)
+            .as_any()
+            .downcast_ref::<plenora_core::arrow::array::Float64Array>()
+            .unwrap()
+            .value(0);
+        // Due interpretazioni esplicite diverse: circa 111 km e 56 km.
+        let expected = if coords[0].0.to_bits() == 60.0_f64.to_bits() {
+            110_611.186_562_063_13
+        } else {
+            55_799.470_393_260_4
+        };
+        assert!((value - expected).abs() < 0.01, "{value}");
+    }
+}
+
+#[test]
+fn sonde_interop_assi_precedenza_e_centroid_geografico() {
+    // Sonde dei casi nominati nel referto, non identificativi della matrice
+    // originale non disponibile. Centroid richiede un CRS proiettato.
+    for name in [
+        "axis-lat-lon-stored.json",
+        "invalid-wkb-truncated.json",
+        "invalid-ewkb-srid-differs.json",
+        "invalid-type-outside-declaration.json",
+        "invalid-unknown-crs-and-truncated.json",
+        "invalid-precedence-vocabulary-before-crs.json",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/arrow-data-v1")
+            .join(name);
+        let v: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let plan = r#"{"version":1,"inputs":["t"],"steps":[{"out":"o","in":["t"],"op":"geo.centroid","config":{}}],"outputs":["o"]}"#;
+        let p = Pipeline::from_json(plan).unwrap();
+        let input = tabella(&v);
+        let error = plenora_cli::api::esegui_in_memoria(
+            &p,
+            vec![Ingresso::Tabella {
+                nome: "t".into(),
+                tabella: input.clone(),
+            }],
+            &Interruzione::default(),
+        )
+        .unwrap_err();
+        assert_eq!(error.category().as_str(), "crs", "{name}");
+        assert_eq!(error.phase().as_str(), "validate", "{name}");
+        verifica_cli(&input, plan, "crs", "validate", name, true);
+    }
+}
+
+#[test]
+fn operazioni_strutturali_non_interpretano_il_dominio_geografico() {
+    use serde_json::json;
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/arrow-data-v1/axis-lon-lat-epsg4326.json");
+    let base: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let mut bytes = vec![1_u8];
+    bytes.extend(1_u32.to_le_bytes());
+    bytes.extend(45.0_f64.to_le_bytes());
+    bytes.extend(120.0_f64.to_le_bytes());
+    for axis in ["unknown", "lat_lon"] {
+        let mut v = base.clone();
+        v["fields"][1]["metadata"]["plenora.geometry.axis_order"] = json!(axis);
+        v["rows"] = json!([{"id":1,"geometry":plenora_core::esadecimale::esadecimale(&bytes)}]);
+        for op in [
+            "geo.to_wkt",
+            "geo.vertex_count",
+            "geo.explode",
+            "geo.collect",
+            "geo.geometry_accessors",
+            "geo.geometry_diagnostics",
+        ] {
+            let config = if op == "geo.collect" {
+                json!({"group_by":["id"]})
+            } else {
+                json!({})
+            };
+            let plan = json!({"version":1,"inputs":["t"],"steps":[{"out":"o","in":["t"],"op":op,"config":config}],"outputs":["o"]}).to_string();
+            let p = Pipeline::from_json(&plan).unwrap();
+            plenora_cli::api::esegui_in_memoria(
+                &p,
+                vec![Ingresso::Tabella {
+                    nome: "t".into(),
+                    tabella: tabella(&v),
+                }],
+                &Interruzione::default(),
+            )
+            .unwrap_or_else(|e| panic!("{op}: {e}"));
+        }
+    }
+}
+
+#[test]
+fn fusioni_geometriche_rifiutano_in_validazione_senza_effetti() {
+    use plenora_core::{RemoteEffect, RetryDisposition};
+    use serde_json::json;
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/arrow-data-v1/axis-lon-lat-epsg4326.json");
+    let base: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    for axis in ["lat_lon", "unknown"] {
+        let mut other = base.clone();
+        other["fields"][1]["metadata"]["plenora.geometry.axis_order"] = json!(axis);
+        let mut wkb = vec![1, 1, 0, 0, 0];
+        wkb.extend(45.0_f64.to_le_bytes());
+        wkb.extend(12.0_f64.to_le_bytes());
+        other["rows"] = json!([{"id":1,"geometry":plenora_core::esadecimale::esadecimale(&wkb)}]);
+        for (op, config) in [
+            ("table.concat", json!({})),
+            ("table.concat_by_name", json!({"strict":true})),
+            ("table.concat_by_name", json!({"strict":false})),
+            ("table.union_distinct", json!({})),
+            ("table.intersect", json!({})),
+            ("table.except", json!({})),
+        ] {
+            let plan = json!({"version":1,"inputs":["a","b"],"steps":[{"out":"o","in":["a","b"],"op":op,"config":config}],"outputs":["o"]});
+            let plan = Pipeline::from_json(&plan.to_string()).unwrap();
+            let err = plenora_cli::api::esegui_in_memoria(
+                &plan,
+                vec![
+                    Ingresso::Tabella {
+                        nome: "a".into(),
+                        tabella: tabella(&base),
+                    },
+                    Ingresso::Tabella {
+                        nome: "b".into(),
+                        tabella: tabella(&other),
+                    },
+                ],
+                &Interruzione::default(),
+            )
+            .unwrap_err();
+            assert_eq!(err.category().as_str(), "crs", "{op}");
+            assert_eq!(err.phase().as_str(), "validate", "{op}");
+            assert_eq!(err.remote_effect(), RemoteEffect::None);
+            assert_eq!(err.retry_disposition(), RetryDisposition::Never);
+        }
     }
 }

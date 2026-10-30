@@ -117,6 +117,10 @@ Linee e punti: O(v) per riga. Poligoni: a ogni livello due intersezioni
 per pezzo, O(v log v) sui vertici del pezzo, per al più 32 livelli;
 memoria O(v) più le parti prodotte.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Una linea di 7 vertici con `max_vertices` 4 e una linea sotto la soglia.

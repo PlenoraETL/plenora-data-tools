@@ -2,7 +2,7 @@
 //!
 //! Il repository deriva da `plenora-data-tools@190c493`, dove codici di
 //! requisito (`R2.6`, `D16`, `§3.1`) e documenti (`architettura.md`,
-//! `errori-e-limiti.md`, `piano-v5.md`, …) spiegavano le regole. Qui quei
+//! `piano-v5.md`, …) spiegavano le regole. Qui quei
 //! documenti non esistono: un codice in un messaggio d'errore o in un
 //! commento rimanda a un testo che il lettore non può aprire. Il test
 //! scandisce il repository (sorgenti, manifesti, README, schede, script,
@@ -24,7 +24,6 @@ use std::path::{Path, PathBuf};
 const VIETATI: &[&str] = &[
     "\u{a7}",
     "architettura.md",
-    "errori-e-limiti",
     "piano-v5",
     "STATO.md",
     "stato-e-roadmap",

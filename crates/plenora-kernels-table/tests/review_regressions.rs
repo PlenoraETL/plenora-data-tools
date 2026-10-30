@@ -3741,3 +3741,257 @@ fn distinct_accetta_ogni_nome_di_colonna_anche_quello_del_vecchio_spill() {
         assert_eq!(uscita, attesa, "{subset}");
     }
 }
+
+#[test]
+fn celle_geometriche_non_diventano_binary_anonimo() {
+    use plenora_core::contract::{DataContract, FieldAllocator};
+    use plenora_kernels_table::{aggregation, analyze::analyze_table_contract, cleansing};
+    let mut wkb = vec![1, 1, 0, 0, 0];
+    wkb.extend_from_slice(&45_f64.to_le_bytes());
+    wkb.extend_from_slice(&12_f64.to_le_bytes());
+    for axis in ["lat_lon", "lon_lat"] {
+        let geometry = Field::new("g", DataType::Binary, true).with_metadata(
+            [
+                ("ARROW:extension:name".into(), "geoarrow.wkb".into()),
+                ("plenora.geometry.crs_id".into(), "EPSG:4326".into()),
+                ("plenora.geometry.axis_order".into(), axis.into()),
+            ]
+            .into_iter()
+            .collect::<std::collections::HashMap<String, String>>(),
+        );
+        for cells in [vec![Some(wkb.as_slice())], vec![None], vec![]] {
+            let input = batch(
+                vec![Field::new("k", DataType::Int64, false), geometry.clone()],
+                vec![
+                    Arc::new(Int64Array::from(vec![1; cells.len()])),
+                    Arc::new(BinaryArray::from(cells)),
+                ],
+            );
+            for function in ["first", "last"] {
+                let config = json!({"group_by":["k"], "aggregations":[{"column":"g", "function":function, "alias":"out"}]});
+                let kernel = aggregation::aggregate(
+                    &input,
+                    &serde_json::from_value(config.clone()).unwrap(),
+                )
+                .unwrap_err();
+                let analysis = analyze_table_contract(
+                    "table.aggregate",
+                    &[DataContract::tabular(input.schema())],
+                    &config,
+                    &mut FieldAllocator::default(),
+                    &Limits::default(),
+                )
+                .unwrap_err();
+                assert!(matches!(kernel, PlenoraError::Crs(_)), "{kernel}");
+                assert_eq!(kernel.to_string(), analysis.to_string());
+            }
+            let config = json!({"column":"g", "target_type":"binary_utf8"});
+            let kernel =
+                cleansing::type_cast(&input, &serde_json::from_value(config.clone()).unwrap())
+                    .unwrap_err();
+            let analysis = analyze_table_contract(
+                "table.type_cast",
+                &[DataContract::tabular(input.schema())],
+                &config,
+                &mut FieldAllocator::default(),
+                &Limits::default(),
+            )
+            .unwrap_err();
+            assert!(matches!(kernel, PlenoraError::Crs(_)));
+            assert_eq!(kernel.to_string(), analysis.to_string());
+        }
+    }
+}
+
+#[test]
+fn campi_geometrici_annidati_non_perdono_il_contratto() {
+    use plenora_core::arrow::array::types::Int64Type;
+    use plenora_core::arrow::array::{ListArray, StructArray};
+    use plenora_core::contract::{DataContract, FieldAllocator};
+    use plenora_kernels_table::{analyze::analyze_table_contract, reshape};
+    let child = Arc::new(Field::new("g", DataType::Binary, true).with_metadata(
+        std::collections::HashMap::from([(
+            "plenora.geometry.axis_order".to_owned(),
+            "lat_lon".to_owned(),
+        )]),
+    ));
+    let mut wkb = vec![1, 1, 0, 0, 0];
+    wkb.extend_from_slice(&45_f64.to_le_bytes());
+    wkb.extend_from_slice(&12_f64.to_le_bytes());
+    for cells in [vec![Some(wkb.as_slice())], vec![None], vec![]] {
+        let values: ArrayRef = Arc::new(BinaryArray::from(cells));
+        let base = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(0)]);
+            values.len()
+        ]);
+        let offsets = base.offsets().clone();
+        let list = Arc::new(ListArray::new(child.clone(), offsets, values.clone(), None));
+        let structure = Arc::new(StructArray::new(
+            vec![child.clone()].into(),
+            vec![values],
+            None,
+        ));
+        for (op, array) in [
+            ("table.explode", list as ArrayRef),
+            ("table.unnest", structure as ArrayRef),
+        ] {
+            let input = batch(
+                vec![Field::new("nested", array.data_type().clone(), true)],
+                vec![array],
+            );
+            let config = json!({"column":"nested"});
+            let error = if op == "table.explode" {
+                reshape::explode(
+                    &input,
+                    &serde_json::from_value(config.clone()).unwrap(),
+                    &Limits::default(),
+                )
+            } else {
+                reshape::unnest(
+                    &input,
+                    &serde_json::from_value(config.clone()).unwrap(),
+                    &Limits::default(),
+                )
+            }
+            .unwrap_err();
+            let analysis = analyze_table_contract(
+                op,
+                &[DataContract::tabular(input.schema())],
+                &config,
+                &mut FieldAllocator::default(),
+                &Limits::default(),
+            )
+            .unwrap_err();
+            assert!(matches!(error, PlenoraError::Crs(_)));
+            assert_eq!(error.to_string(), analysis.to_string());
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Stesse fixture per il confronto kernel/analisi delle cinque operazioni.
+fn diff_e_operazioni_binarie_rifiutano_geometrie_incoerenti_prima_delle_celle() {
+    use plenora_core::contract::arrow_metadata::geometry_output_field;
+    use plenora_core::contract::{DataContract, FieldAllocator};
+    use plenora_kernels_table::{analyze::analyze_table_contract, governance, joins, reshape};
+    let mut wkb = vec![1, 1, 0, 0, 0];
+    wkb.extend_from_slice(&45_f64.to_le_bytes());
+    wkb.extend_from_slice(&12_f64.to_le_bytes());
+    for cells in [vec![Some(wkb.as_slice())], vec![None], vec![]] {
+        for (chiave, valore) in [
+            ("plenora.geometry.axis_order", "lon_lat"),
+            ("plenora.geometry.crs_id", "EPSG:32632"),
+            ("plenora.geometry.encoding", "ewkb"),
+        ] {
+            let campo = geometry_output_field("g", "EPSG:4326").unwrap();
+            let mut metadata = campo.metadata().clone();
+            metadata.remove("geo");
+            metadata.insert("plenora.geometry.crs_id", "EPSG:4326");
+            metadata.insert("plenora.geometry.axis_order", "lat_lon");
+            metadata.insert("plenora.geometry.encoding", "wkb");
+            let left = batch(
+                vec![
+                    Field::new("id", DataType::Int64, false),
+                    campo.clone().with_metadata(metadata.clone()),
+                ],
+                vec![
+                    Arc::new(Int64Array::from(vec![1; cells.len()])),
+                    Arc::new(BinaryArray::from(cells.clone())),
+                ],
+            );
+            metadata.insert(chiave, valore);
+            let right = batch(
+                vec![
+                    Field::new("id", DataType::Int64, false),
+                    campo.with_metadata(metadata),
+                ],
+                left.columns().to_vec(),
+            );
+            for op in [
+                "table.semi_join",
+                "table.anti_join",
+                "table.assert_foreign_key",
+                "table.reconcile",
+                "table.table_diff",
+            ] {
+                let config = json!({"left_keys":["id"], "right_keys":["id"]});
+                let limits = Limits::default();
+                let kernel = match op {
+                    "table.semi_join" => joins::semi_join(
+                        &left,
+                        &right,
+                        &serde_json::from_value(config.clone()).unwrap(),
+                    ),
+                    "table.anti_join" => joins::anti_join(
+                        &left,
+                        &right,
+                        &serde_json::from_value(config.clone()).unwrap(),
+                    ),
+                    "table.assert_foreign_key" => governance::assert_foreign_key(
+                        &left,
+                        &right,
+                        &serde_json::from_value(config.clone()).unwrap(),
+                        &limits,
+                    ),
+                    "table.reconcile" => governance::reconcile(
+                        &left,
+                        &right,
+                        &serde_json::from_value(config.clone()).unwrap(),
+                        &limits,
+                    ),
+                    _ => reshape::table_diff(
+                        &left,
+                        &right,
+                        &serde_json::from_value(config.clone()).unwrap(),
+                        &limits,
+                    ),
+                }
+                .unwrap_err();
+                let analisi = analyze_table_contract(
+                    op,
+                    &[
+                        DataContract::tabular(left.schema()),
+                        DataContract::tabular(right.schema()),
+                    ],
+                    &config,
+                    &mut FieldAllocator::default(),
+                    &limits,
+                )
+                .unwrap_err();
+                assert!(matches!(kernel, PlenoraError::Crs(_)), "{op}");
+                assert_eq!(kernel.to_string(), analisi.to_string(), "{op}");
+            }
+            // Anche riferimenti identici sono rifiutati dal diff, su chiavi
+            // geometriche e su compare_columns, inclusi ADDED e DELETED.
+            for config in [
+                json!({"left_keys":["id"], "right_keys":["id"], "compare_columns":["g"]}),
+                json!({"left_keys":["g"], "right_keys":["g"]}),
+            ] {
+                for (a, b) in [(&left, left.clone()), (&left, left.slice(0, 0))] {
+                    for (a, b) in [(a, &b), (&b, a)] {
+                        let kernel = reshape::table_diff(
+                            a,
+                            b,
+                            &serde_json::from_value(config.clone()).unwrap(),
+                            &Limits::default(),
+                        )
+                        .unwrap_err();
+                        let analisi = analyze_table_contract(
+                            "table.table_diff",
+                            &[
+                                DataContract::tabular(a.schema()),
+                                DataContract::tabular(b.schema()),
+                            ],
+                            &config,
+                            &mut FieldAllocator::default(),
+                            &Limits::default(),
+                        )
+                        .unwrap_err();
+                        assert!(matches!(kernel, PlenoraError::Crs(_)));
+                        assert_eq!(kernel.to_string(), analisi.to_string());
+                    }
+                }
+            }
+        }
+    }
+}

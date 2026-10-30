@@ -16,7 +16,7 @@ use plenora_core::arrow::array::{Array, ArrayRef, BinaryArray, StringArray, UInt
 use plenora_core::arrow::select::{concat::concat, take::take};
 use plenora_core::arrow::{DataType, Field, RecordBatch, Schema, SchemaRef};
 use plenora_core::contract::arrow_metadata::{
-    geometry_column_index, strip_rewritten_types_declarations, MAX_CELL_COORDINATES,
+    strip_rewritten_types_declarations, MAX_CELL_COORDINATES,
 };
 use plenora_core::PlenoraError;
 
@@ -58,7 +58,10 @@ pub struct PolygonizeParams {
 ///
 /// # Errors
 ///
-/// `PlenoraError::Schema` se la colonna geometria manca o non e' WKB;
+/// `PlenoraError::Crs` se il CRS non e' risolto o gli assi non sono
+/// dichiarati nella sua convenzione (`AXIS_ORDER_REQUIRED`), prima delle celle;
+/// `PlenoraError::Schema` se un batch ha schema diverso da quello dichiarato
+/// o la colonna geometria manca o non e' WKB;
 /// `PlenoraError::ResourceLimit` per una cella oltre il limite; l'errore
 /// della prima cella che fallisce in ordine di riga, tradotto con
 /// `From<RustBackendError>`.
@@ -68,7 +71,9 @@ pub fn make_valid_batches(
     geometry_column: &str,
     precision: Precision,
 ) -> Result<Vec<RecordBatch>, PlenoraError> {
-    let geometry_index = geometry_column_index(schema, geometry_column)?;
+    crate::arrow_adapter::verifica_schemi_batch(schema, batches)?;
+    let geometry_index =
+        crate::analyze::richiedi_ordine_assi_schema("geo.make_valid", schema, geometry_column)?;
     let mut fields: Vec<Field> = schema
         .fields()
         .iter()
@@ -119,7 +124,10 @@ pub fn make_valid_batches(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Schema` se la colonna geometria manca o non e' WKB;
+/// `PlenoraError::Crs` se il CRS non e' risolto o gli assi non sono
+/// dichiarati nella sua convenzione (`AXIS_ORDER_REQUIRED`), prima delle celle;
+/// `PlenoraError::Schema` se un batch ha schema diverso da quello dichiarato
+/// o la colonna geometria manca o non e' WKB;
 /// `PlenoraError::ResourceLimit` per una cella oltre il limite; gli errori
 /// di decode delle celle e del backend, tradotti.
 pub fn polygonize_batches(
@@ -130,7 +138,9 @@ pub fn polygonize_batches(
     max_output_rows: u64,
     precision: Precision,
 ) -> Result<(SchemaRef, Vec<RecordBatch>), PlenoraError> {
-    let geometry_index = geometry_column_index(schema, geometry_column)?;
+    crate::arrow_adapter::verifica_schemi_batch(schema, batches)?;
+    let geometry_index =
+        crate::analyze::richiedi_ordine_assi_schema("geo.polygonize", schema, geometry_column)?;
     let mut lines = Vec::new();
     for batch in batches {
         let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;
@@ -238,6 +248,9 @@ fn errore_dello_split_lineare(error: ExtendedAlgorithmError) -> PlenoraError {
 ///
 /// # Errors
 ///
+/// `PlenoraError::Crs` se il CRS non e' risolto o gli assi non sono
+/// dichiarati nella sua convenzione (`AXIS_ORDER_REQUIRED`), prima delle celle;
+/// `PlenoraError::Schema` se un batch ha schema diverso da quello dichiarato;
 /// `PlenoraError::InvalidPlan` se le righe dei due lati non coincidono, se
 /// una sorgente non e' `LineString`/`Polygon`/`MultiPolygon`, o se le parti
 /// superano `max_output_rows`; gli errori di decode e dei kernel, tradotti.
@@ -254,7 +267,9 @@ pub fn split_batches(
     max_output_rows: u64,
     precision: Precision,
 ) -> Result<(SchemaRef, Vec<RecordBatch>), PlenoraError> {
-    let geometry_index = geometry_column_index(left_schema, geometry_column)?;
+    crate::arrow_adapter::verifica_schemi_batch(left_schema, left_batches)?;
+    let geometry_index =
+        crate::analyze::richiedi_ordine_assi_schema("geo.split", left_schema, geometry_column)?;
     let left_rows = left_batches
         .iter()
         .map(RecordBatch::num_rows)
@@ -473,6 +488,151 @@ fn split_output(
 mod tests {
     use super::*;
 
+    #[test]
+    fn adapter_verificano_assi_prima_delle_celle() {
+        let linea = linestring_wkb_le(&[(12.0, 45.0), (22.0, 45.0)]);
+        let lama = point_wkb_le(17.0, 45.0);
+        let malformato = vec![1_u8, 2, 3];
+        for ordine in [
+            None,
+            Some("unknown"),
+            Some("northing_easting"),
+            Some("easting_northing"),
+        ] {
+            let mut campo = geometry_output_field("geometry", CRS).unwrap();
+            let mut md = campo.metadata().clone();
+            md.remove("plenora.geometry.axis_order");
+            if let Some(ordine) = ordine {
+                md.insert("plenora.geometry.axis_order".to_owned(), ordine.to_owned());
+            }
+            campo = campo.with_metadata(md);
+            let schema = Arc::new(Schema::new(vec![campo]));
+            for payload in [&linea, &malformato] {
+                let batch = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![Arc::new(BinaryArray::from(vec![payload.as_slice()]))],
+                )
+                .unwrap();
+                for batches in [vec![], vec![batch.slice(0, 0)], vec![batch.clone()]] {
+                    let righe = batches.iter().map(RecordBatch::num_rows).sum();
+                    let splitters = BinaryArray::from(vec![lama.as_slice(); righe]);
+                    let split = split_batches(
+                        &schema,
+                        &batches,
+                        "geometry",
+                        &splitters,
+                        None,
+                        100,
+                        precisione(),
+                    );
+                    let riparata = make_valid_batches(&schema, &batches, "geometry", precisione());
+                    let poligoni = polygonize_batches(
+                        &schema,
+                        &batches,
+                        "geometry",
+                        PolygonizeParams::default(),
+                        100,
+                        precisione(),
+                    );
+                    let risultati = [
+                        riparata.as_ref().map(|_| ()),
+                        poligoni.as_ref().map(|_| ()),
+                        split.as_ref().map(|_| ()),
+                    ];
+                    for risultato in risultati {
+                        if ordine != Some("easting_northing") {
+                            let errore = risultato.unwrap_err();
+                            assert!(
+                                matches!(errore, PlenoraError::Crs(_)),
+                                "{ordine:?}: {errore:?}"
+                            );
+                            assert!(errore.to_string().contains("AXIS_ORDER_REQUIRED"));
+                        } else if payload == &linea || righe == 0 {
+                            risultato.unwrap();
+                        } else {
+                            assert!(risultato.is_err());
+                        }
+                    }
+                    if ordine == Some("easting_northing") && payload == &linea && righe == 1 {
+                        let (_, pezzi) = split.unwrap();
+                        let celle = pezzi[0]
+                            .column(0)
+                            .as_any()
+                            .downcast_ref::<BinaryArray>()
+                            .unwrap();
+                        let attesi = [
+                            linestring_wkb_le(&[(12.0, 45.0), (17.0, 45.0)]),
+                            linestring_wkb_le(&[(17.0, 45.0), (22.0, 45.0)]),
+                        ];
+                        assert_eq!(celle.len(), 2);
+                        for (i, atteso) in attesi.iter().enumerate() {
+                            assert_eq!(
+                                geometry_from_wkb(celle.value(i)).unwrap(),
+                                geometry_from_wkb(atteso).unwrap()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn adapter_rifiutano_schemi_divergenti() {
+        let campo = crate::arrow_adapter::geometry_output_field("geometry", "EPSG:32632").unwrap();
+        let schema = Arc::new(Schema::new(vec![campo.clone()]));
+        let payload = linestring_wkb_le(&[(12.0, 45.0), (13.0, 46.0)]);
+        let buono = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(BinaryArray::from(vec![payload.as_slice()]))],
+        )
+        .unwrap();
+        for ordine in ["unknown", "lat_lon", "northing_easting"] {
+            let mut md = campo.metadata().clone();
+            md.insert("plenora.geometry.axis_order".to_owned(), ordine.to_owned());
+            let diverso = Arc::new(Schema::new(vec![campo.clone().with_metadata(md)]));
+            let errato = RecordBatch::try_new(diverso, buono.columns().to_vec()).unwrap();
+            for batches in [
+                vec![errato.clone()],
+                vec![buono.clone(), errato.clone()],
+                vec![errato.slice(0, 0)],
+            ] {
+                assert!(matches!(
+                    make_valid_batches(&schema, &batches, "geometry", precisione()),
+                    Err(PlenoraError::Schema(_))
+                ));
+                assert!(matches!(
+                    polygonize_batches(
+                        &schema,
+                        &batches,
+                        "geometry",
+                        PolygonizeParams::default(),
+                        100,
+                        precisione()
+                    ),
+                    Err(PlenoraError::Schema(_))
+                ));
+                let splitters =
+                    BinaryArray::from(vec![
+                        payload.as_slice();
+                        batches.iter().map(RecordBatch::num_rows).sum()
+                    ]);
+                assert!(matches!(
+                    split_batches(
+                        &schema,
+                        &batches,
+                        "geometry",
+                        &splitters,
+                        None,
+                        100,
+                        precisione()
+                    ),
+                    Err(PlenoraError::Schema(_))
+                ));
+            }
+        }
+    }
+
     /// A `2^48` il margine numerico di `split_line` vale circa 1 m: un punto
     /// a 25 cm dalla linea taglierebbe con tolleranza nulla. La spaziatura
     /// delle coordinate si confronta con la precisione: errore esplicito.
@@ -504,11 +664,12 @@ mod tests {
     fn precisione() -> Precision {
         Precision::new(1e-6).unwrap()
     }
+    use crate::arrow_adapter::geometry_output_field;
     use crate::geometry_from_wkb;
     use crate::test_support::{linestring_wkb_le, point_wkb_le, polygon_wkb_le};
     use geo::Area;
     use plenora_core::arrow::array::Int64Array;
-    use plenora_core::contract::arrow_metadata::{geometry_output_field, DEFAULT_GEOMETRY_COLUMN};
+    use plenora_core::contract::arrow_metadata::DEFAULT_GEOMETRY_COLUMN;
 
     const CRS: &str = "EPSG:3857";
 
@@ -523,9 +684,15 @@ mod tests {
     }
 
     fn fixture_batch(cells: &[Option<&Vec<u8>>]) -> (SchemaRef, RecordBatch) {
+        let campo = geometry_output_field(DEFAULT_GEOMETRY_COLUMN, CRS).expect("campo geometria");
+        let mut metadata = campo.metadata().clone();
+        metadata.insert(
+            "plenora.geometry.axis_order".to_owned(),
+            "easting_northing".to_owned(),
+        );
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int64, false),
-            geometry_output_field(DEFAULT_GEOMETRY_COLUMN, CRS).expect("campo geometria"),
+            campo.with_metadata(metadata),
         ]));
         let ids = (0..cells.len())
             .map(|row| i64::try_from(row).unwrap())

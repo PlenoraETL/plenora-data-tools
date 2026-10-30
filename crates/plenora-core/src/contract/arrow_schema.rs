@@ -238,7 +238,7 @@ pub fn contract_from_arrow_schema(
         Some(FieldId(0))
     };
     // Gli assi assenti del vocabolario canonico non si deducono dal CRS.
-    // Il percorso legacy resta una deviazione GEO-002 dichiarata.
+    // Anche il percorso legacy esterno resta unknown senza prova.
     let fields: Vec<Field> = schema
         .fields()
         .iter()
@@ -503,10 +503,9 @@ pub fn geometry_contract_from_field(
 ///
 /// - Le chiavi di [`canonical_geometry_metadata`] si fondono nel campo
 ///   omonimo. Con `GeometryMetadataDetails::default()` si completa l'assente:
-///   `axis_order` e `srid` sono dedotti dalla definizione d'autorità
-///   ([`ResolvedCrs::authority_axis_order`]/[`ResolvedCrs::authority_srid`]),
-///   e `axis_order` vale `unknown` solo se la definizione non determina gli
-///   assi. `geo.reproject` fa eccezione per `axis_order`: lo emette già
+///   `srid` e' dedotto dalla definizione di autorita'
+///   ([`ResolvedCrs::authority_srid`]),
+///   e `axis_order` vale `unknown` senza dichiarazione esplicita. `geo.reproject` fa eccezione per `axis_order`: lo emette già
 ///   l'analisi, con l'ordine normalizzato della riproiezione.
 /// - Una chiave canonica già presente con valore diverso è un errore, mai
 ///   una sovrascrittura; uguale è idempotente. Le chiavi che un'operazione
@@ -647,7 +646,10 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
                 }
             }
         }
-        fields.push(field.as_ref().clone().with_metadata(metadata));
+        let output = field.as_ref().clone().with_metadata(metadata);
+        verifica_metadato_estensione(&output)?;
+        read_geometry_contract_keys(&output)?;
+        fields.push(output);
     }
     if matched != contract.geometries.len() {
         return Err(errore_di_contratto(

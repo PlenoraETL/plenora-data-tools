@@ -432,6 +432,15 @@ fn campo_geometria(definizione: &str) -> Field {
         GEO_METADATA_KEY.to_owned(),
         geo_metadata_json_with_dimensions(definizione, GeometryDimensions::Xy).expect("geo"),
     );
+    // La fixture costruisce esplicitamente ordinate nella convenzione GIS.
+    metadata.insert(
+        PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+        resolve_crs(definizione, "crs")
+            .expect("CRS fixture")
+            .normalized_gis_axis_order()
+            .as_str()
+            .to_owned(),
+    );
     Field::new("geometry", plenora_core::arrow::DataType::Binary, true).with_metadata(metadata)
 }
 
@@ -668,4 +677,87 @@ fn la_riproiezione_verso_un_geografico_usa_il_passo_sul_raggio_polare() {
         crate::geometry_from_wkb(celle.value(0)).expect("wkb"),
         attesa
     );
+}
+
+#[test]
+fn schemi_effettivi_verificati_prima_di_riproiettare() {
+    let schema = Arc::new(Schema::new(vec![campo_geometria("EPSG:4326")]));
+    let payload = Geometry::Point(point!(x: 9.0, y: 45.0))
+        .to_wkb(CoordDimensions::xy())
+        .unwrap();
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(BinaryArray::from(vec![payload.as_slice()]))],
+    )
+    .unwrap();
+    let p = params("EPSG:4326", &json!({"target_crs":"EPSG:3857"}));
+    let (_, corretti) = reproject_batches(
+        &schema,
+        std::slice::from_ref(&batch),
+        "geometry",
+        &crs("EPSG:4326"),
+        &p,
+    )
+    .unwrap();
+    let celle = corretti[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .unwrap();
+    let Geometry::Point(punto) = crate::geometry_from_wkb(celle.value(0)).unwrap() else {
+        panic!("punto");
+    };
+    assert!((punto.x() - 1_001_875.417_139_462).abs() < 0.01);
+    assert!((punto.y() - 5_621_521.486_192_066).abs() < 0.01);
+    for ordine in [
+        None,
+        Some("unknown"),
+        Some("lat_lon"),
+        Some("northing_easting"),
+    ] {
+        let mut md = schema.field(0).metadata().clone();
+        md.remove("plenora.geometry.axis_order");
+        if let Some(ordine) = ordine {
+            md.insert("plenora.geometry.axis_order".to_owned(), ordine.to_owned());
+        }
+        let diverso = Arc::new(Schema::new(vec![schema.field(0).clone().with_metadata(md)]));
+        let errato = RecordBatch::try_new(diverso, batch.columns().to_vec()).unwrap();
+        for batches in [
+            vec![errato.clone()],
+            vec![batch.clone(), errato.clone()],
+            vec![errato.slice(0, 0)],
+        ] {
+            assert!(matches!(
+                reproject_batches(&schema, &batches, "geometry", &crs("EPSG:4326"), &p),
+                Err(PlenoraError::Schema(_))
+            ));
+        }
+    }
+}
+
+#[test]
+fn sorgente_argomento_deve_coincidere_con_il_campo() {
+    for (declared, source, order) in [
+        ("EPSG:4326", "EPSG:3857", "easting_northing"),
+        ("EPSG:3857", "EPSG:4326", "lon_lat"),
+        ("EPSG:4326", "EPSG:4258", "lon_lat"),
+    ] {
+        let field = campo_geometria(declared);
+        let mut md = field.metadata().clone();
+        md.insert("plenora.geometry.axis_order", order);
+        let schema = Arc::new(Schema::new(vec![field.with_metadata(md)]));
+        let bytes = Geometry::Point(point!(x: 12.0, y: 45.0))
+            .to_wkb(CoordDimensions::xy())
+            .unwrap();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(BinaryArray::from(vec![bytes.as_slice()]))],
+        )
+        .unwrap();
+        let p = params(source, &json!({"target_crs": source}));
+        for batches in [vec![], vec![batch.clone()], vec![batch.slice(0, 0)]] {
+            let result = reproject_batches(&schema, &batches, "geometry", &crs(source), &p);
+            assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
+        }
+    }
 }

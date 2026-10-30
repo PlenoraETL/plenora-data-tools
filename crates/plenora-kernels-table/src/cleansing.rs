@@ -1419,6 +1419,7 @@ pub fn type_cast_with_source_offset(
         crate::dates::validate_format_items(&config.date_format, "date_format")?;
     }
     let index = column_index(batch, &config.column)?;
+    crate::require_non_geometry(batch.schema().field(index))?;
     let source = batch.column(index);
     // Una colonna temporale (Date32, Timestamp di ogni unita') si converte
     // dal valore nativo, non dal suo testo.

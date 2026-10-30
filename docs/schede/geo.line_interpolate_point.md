@@ -91,6 +91,10 @@ geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1
 O(n) per linea, con `n` i vertici, più la validazione OGC dell'ingresso.
 Memoria O(1) oltre la linea.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 ```json

@@ -178,18 +178,7 @@
         "cli",
         "python_sdk"
       ],
-      "observed_behavior": "Il percorso legacy geo.crs senza assi espliciti emette ancora l ordine GIS del CRS; il vocabolario canonico assente esce unknown. Hazard: Coordinate legacy memorizzate nord-prima possono ricevere una dichiarazione est-prima.",
-      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
-      "detectable_before_invocation": false
-    },
-    {
-      "rule": "GEO-001",
-      "surfaces": [
-        "rust",
-        "cli",
-        "python_sdk"
-      ],
-      "observed_behavior": "Il vocabolario canonico conserva gli assi e completa l assenza a unknown; il percorso legacy geo.crs puo ancora emettere l ordine GIS senza conoscere quello fisico. Hazard: Il metadato legacy prodotto puo descrivere un ordine diverso dai byte ricevuti.",
+      "observed_behavior": "Gli assi assenti restano unknown; i calcoli dipendenti dagli assi rifiutano unknown per la policy safety-critical 4.0. Hazard: Il calcolo con unknown e rifiutato anche dove GEO-002 lo permetterebbe.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
       "detectable_before_invocation": false
     }
@@ -284,23 +273,20 @@
       "rules": [
         "GEO-001"
       ],
-      "status": "deviation",
-      "reason": "Il vocabolario canonico conserva gli assi e completa l assenza a unknown; il percorso legacy geo.crs puo ancora emettere l ordine GIS senza conoscere quello fisico.",
-      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Ingressi legacy geo.crs su Rust, CLI e SDK Python",
-      "hazard": "Il metadato legacy prodotto puo descrivere un ordine diverso dai byte ricevuti.",
-      "reentry": "Conservare unknown anche per il legacy esterno, distinguendolo dai produttori con convenzione nota."
+      "status": "implemented",
+      "reason": "Anche il legacy esterno senza prova conserva unknown; il solo identificatore CRS non determina gli assi fisici.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
     },
     {
       "rules": [
         "GEO-002"
       ],
       "status": "deviation",
-      "reason": "Il percorso legacy geo.crs senza assi espliciti emette ancora l ordine GIS del CRS; il vocabolario canonico assente esce unknown.",
+      "reason": "Gli assi assenti restano unknown; i calcoli dipendenti dagli assi rifiutano unknown per la policy safety-critical 4.0.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
       "scope": "Ingressi legacy geo.crs su Rust, CLI e SDK Python",
-      "hazard": "Coordinate legacy memorizzate nord-prima possono ricevere una dichiarazione est-prima.",
-      "reentry": "Separare la convenzione nota dei produttori GeoParquet e geo dall ordine ignoto del legacy ricevuto, con prove sui confini."
+      "hazard": "Il calcolo con unknown e rifiutato anche dove GEO-002 lo permetterebbe.",
+      "reentry": "Rientro con dichiarazione esplicita verificata dell ordine delle ordinate, senza scambi impliciti."
     },
     {
       "rules": [

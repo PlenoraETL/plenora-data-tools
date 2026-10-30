@@ -35,7 +35,7 @@ use super::{
 /// riscritti sul target risolto. La sorgente deve avere un CRS risolto (mai
 /// `Missing` o `DeclaredUnresolved`), della tabella integrata (lo verifica
 /// il piano dei percorsi: `CRS_NOT_BUILTIN`), e un ordine degli assi
-/// dichiarato normalizzato o assente; la config si verifica per intero qui,
+/// dichiarato normalizzato; la config si verifica per intero qui,
 /// con la stessa funzione del kernel
 /// ([`crate::riproiezione::ReprojectParams::da_config`]): target, percorsi
 /// fra i datum, regola dell'accuratezza, griglie. I file delle griglie si

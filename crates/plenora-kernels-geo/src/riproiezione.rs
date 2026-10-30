@@ -247,8 +247,9 @@ pub fn campo_riproiettato(
 }
 
 /// L'ordine degli assi dichiarato dalla colonna deve essere quello GIS
-/// normalizzato del CRS sorgente (o assente): con un altro ordine la
-/// riproiezione leggerebbe coordinate scambiate senza accorgersene.
+/// normalizzato del CRS sorgente.
+///
+/// Senza dichiarazione compatibile le coordinate sarebbero ambigue.
 ///
 /// # Errors
 ///
@@ -259,18 +260,14 @@ pub fn richiedi_assi_normalizzati(
     campo: &Field,
     sorgente: &ResolvedCrs,
 ) -> Result<(), PlenoraError> {
-    let Some(dichiarato) = canonical_geometry_axis_order(campo)? else {
-        return Ok(());
-    };
+    plenora_core::contract::arrow_metadata::require_geometry_source_crs(campo, sorgente)?;
+    let dichiarato = canonical_geometry_axis_order(campo)?;
     let normalizzato = sorgente.normalized_gis_axis_order();
-    if dichiarato == normalizzato {
+    if dichiarato == Some(normalizzato) {
         return Ok(());
     }
     Err(PlenoraError::Crs(format!(
-        "{op}: colonna geometria `{}`: `axis_order` diverso dall'ordine GIS normalizzato del \
-         CRS sorgente, in cui il kernel legge e riemette le coordinate: l'ordine va \
-         normalizzato a monte, mai in silenzio qui",
-        campo.name()
+        "{op}: AXIS_ORDER_REQUIRED: dichiarare l'ordine delle ordinate compatibile con il CRS; nessuno scambio implicito"
     )))
 }
 
@@ -742,7 +739,8 @@ pub fn riproietta_geometria(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Schema` se la colonna manca, non e' `Binary` o non si
+/// `PlenoraError::Schema` se un batch ha schema diverso da quello dichiarato,
+/// se la colonna manca, non e' `Binary` o non si
 /// dichiara geometria WKB; `PlenoraError::Unsupported` se dichiara
 /// dimensioni diverse da XY (o non le dichiara); `PlenoraError::InvalidPlan`
 /// per chiavi canoniche del campo non valide; `PlenoraError::Crs` per
@@ -760,6 +758,7 @@ pub fn reproject_batches(
     params: &ReprojectParams,
 ) -> Result<(SchemaRef, Vec<RecordBatch>), PlenoraError> {
     const OP: &str = "geo.reproject";
+    crate::arrow_adapter::verifica_schemi_batch(schema, batches)?;
     let geometry_index = geometry_column_index(schema, geometry_column)?;
     let campo = schema.field(geometry_index);
     richiedi_assi_normalizzati(OP, campo, sorgente)?;

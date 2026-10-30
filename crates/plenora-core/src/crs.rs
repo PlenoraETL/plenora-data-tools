@@ -363,7 +363,7 @@ impl ResolvedCrs {
     /// dall'ordine nativo dell'autorità: sempre x/y (lon/lat o
     /// easting/northing).
     ///
-    /// È l'ordine dei byte delle geometrie in tutto il workspace, compresa
+    /// È l'convenzione richiesta dai calcoli e garantita dai produttori, compresa
     /// l'uscita di `geo.reproject`; [`Self::authority_axis_order`] resta il
     /// metadato della definizione.
     #[must_use]
