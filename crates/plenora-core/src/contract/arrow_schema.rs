@@ -119,6 +119,12 @@ pub fn crs_definition_from_metadata(
     };
     crate::json::ensure_no_duplicate_keys(raw)
         .map_err(|_| PlenoraError::DataMapping("json error: chiavi duplicate".to_owned()))?;
+    crate::json::ensure_numbers_exact(raw).map_err(|_| {
+        PlenoraError::from(crate::crs::CrsError::InvalidDefinition {
+            name: "crs",
+            reason: "numero PROJJSON non esatto".into(),
+        })
+    })?;
     let value: serde_json::Value = serde_json::from_str(raw)?;
     match value.get("crs") {
         None => Ok(None),
@@ -270,7 +276,7 @@ pub fn contract_from_arrow_schema(
 ///    garantisce la risoluzione dichiara `declared_unresolved`). Con
 ///    `resolved` e sia `crs_id` sia `crs_definition` segue
 ///    [`verify_declared_coherence`]. Con la tabella integrata una
-///    definizione WKT o PROJJSON non si risolve, e quell'input fallisce con
+///    definizione WKT non si risolve, e quell'input fallisce con
 ///    errore `Crs`, come uno a rappresentazione singola;
 /// 4. nessuna rappresentazione: [`ContractCrs::Missing`], salvo la
 ///    contraddizione `resolved`/`declared_unresolved` senza
@@ -385,11 +391,12 @@ pub fn verify_declared_coherence(
     let coherent = simple_identifier.map_or_else(
         || {
             resolve_crs(crs_id, "crs").is_ok_and(|declared| {
-                matches!(
-                    (declared.authority_identifier(), resolved_identifier),
-                    (Some(left), Some(right))
-                        if left.0.eq_ignore_ascii_case(right.0) && left.1 == right.1
-                )
+                declared.semantically_equals(&resolved)
+                    || matches!(
+                        (declared.authority_identifier(), resolved_identifier),
+                        (Some(left), Some(right))
+                            if left.0.eq_ignore_ascii_case(right.0) && left.1 == right.1
+                    )
             })
         },
         |declared| {
@@ -762,15 +769,15 @@ pub const GEOARROW_EXTENSION_METADATA_KEY: &str = "ARROW:extension:metadata";
 ///
 /// Assente, vuoto o `{}`: niente da dire. `edges` diverso da `planar`
 /// (archi geodetici, `spherical` e simili) si rifiuta come la semantica
-/// `geography`: i kernel sono planari. Un `crs` (non `null`) si rifiuta:
-/// questo componente legge il CRS dalle chiavi `plenora.geometry.*` o dal
-/// metadato `geo`, e ignorarlo lo farebbe passare per assente (ARROW-007).
+/// `geography`: i kernel sono planari. Il `crs` PROJJSON passa dalla
+/// risoluzione semantica comune; la lettura delle chiavi lo conserva e
+/// verifica anche la coerenza con le altre rappresentazioni.
 ///
 /// # Errors
 ///
 /// `PlenoraError::Schema` per un metadato che non è un oggetto JSON senza
 /// chiavi ripetute; `PlenoraError::Unsupported` per `edges` non planare o
-/// un `crs` dichiarato.
+/// un formato CRS non supportato; errori CRS per una definizione rifiutata.
 pub fn verifica_metadato_estensione(field: &Field) -> Result<(), PlenoraError> {
     let Some(raw) = field.metadata().get(GEOARROW_EXTENSION_METADATA_KEY) else {
         return Ok(());
@@ -786,6 +793,7 @@ pub fn verifica_metadato_estensione(field: &Field) -> Result<(), PlenoraError> {
         ))
     };
     crate::json::ensure_no_duplicate_keys(raw).map_err(|_| illeggibile())?;
+    super::arrow_metadata::verifica_numeri_crs(raw)?;
     let value: serde_json::Value = serde_json::from_str(raw).map_err(|_| illeggibile())?;
     let oggetto = value.as_object().ok_or_else(illeggibile)?;
     match oggetto.get("edges") {
@@ -799,15 +807,22 @@ pub fn verifica_metadato_estensione(field: &Field) -> Result<(), PlenoraError> {
             )));
         }
     }
-    match oggetto.get("crs") {
-        None | Some(serde_json::Value::Null) => Ok(()),
-        Some(_) => Err(PlenoraError::Unsupported(format!(
-            "colonna geometria `{}`: CRS nel metadato d'estensione GeoArrow non \
-             interpretato da questo componente (dichiararlo con le chiavi \
-             `plenora.geometry.*`): ignorarlo lo farebbe passare per assente",
-            field.name()
-        ))),
+    if let Some(tipo) = oggetto.get("crs_type") {
+        if tipo.as_str() != Some("projjson") {
+            return Err(PlenoraError::Unsupported(
+                "formato CRS GeoArrow non supportato".into(),
+            ));
+        }
     }
+    if let Some(v) = oggetto.get("crs").filter(|v| !v.is_null()) {
+        if !v.is_object() {
+            return Err(PlenoraError::Unsupported(
+                "CRS GeoArrow: atteso un oggetto PROJJSON".into(),
+            ));
+        }
+        crate::crs::resolve_crs(&v.to_string(), "crs")?;
+    }
+    Ok(())
 }
 
 /// Versione e identità dei campi di uno schema da scrivere, verificate.

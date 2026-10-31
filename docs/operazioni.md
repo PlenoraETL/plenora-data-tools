@@ -13094,7 +13094,7 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: campi sconosciuti; `x_column`, `y_column` o
   `geometry_column` vuoti o di soli spazi;
 - `Crs`: nessun `crs` e nessun CRS di piano; `crs` vuoto, fuori dalla
-  tabella integrata o scritto come definizione (WKT, PROJJSON…) diversa da
+  tabella integrata o scritto come definizione non supportata (WKT) diversa da
   quella del piano; CRS geografico, o proiettato senza unità lineare.
 
 In esecuzione, nel runner:
@@ -18721,7 +18721,7 @@ cambiano. Il quadro completo è in
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
-| `target_crs` | stringa | obbligatorio | identificatore della tabella integrata (`EPSG:<codice>`, `OGC:CRS84`, forme URN) | CRS d'arrivo |
+| `target_crs` | stringa | obbligatorio | identificatore della tabella integrata (`EPSG:<codice>`, `OGC:CRS84`, forme URN), oppure PROJJSON completo equivalente | CRS d'arrivo |
 | `accuratezza_accettata_m` | numero | nessuna | finito, non negativo, con effetto | accuratezza in metri accettata per un cambio di datum oltre 1 cm |
 | `trasformazioni` | lista di interi | nessuna | codici EPSG che formano un percorso fra i due datum | percorso imposto, nell'ordine, per tutte le geometrie |
 | `griglie` | lista di oggetti | `[]` | `{"trasformazione": <codice EPSG NTv2>, "file": <percorso>}`, codici distinti, `file` non vuoto, al più 4096 byte, senza NUL | griglie NTv2 fornite dall'utente |

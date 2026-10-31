@@ -123,6 +123,57 @@ fn geo_colonna(colonna: Value) -> Value {
     json!({"version": "1.1.0", "primary_column": "geometry", "columns": {"geometry": colonna}})
 }
 
+#[test]
+fn projjson_non_perde_cifre_e_non_si_fida_del_codice() {
+    let geo = geo_colonna(json!({
+        "encoding":"WKB", "geometry_types":["Point"],
+        "crs":projjson_di("EPSG:32632").unwrap(),
+    }))
+    .to_string();
+    for (numero, codice) in [
+        ("500000.00000000001", "CRS_INVALID"),
+        ("500001", "CRS_NOT_BUILTIN"),
+    ] {
+        let dir = cartella();
+        let wkb = punto(500_123.0, 4_987_654.0);
+        let colonne = Arc::new(BinaryArray::from_vec(vec![wkb.as_slice()]));
+        let p = file_con_colonna(dir.path(), &geo.replace("500000", numero), colonne, 1);
+        let e = leggi(&p).unwrap_err();
+        assert_eq!(e.public_projection().code(), Some(codice));
+        assert!(!e.to_string().contains(numero));
+    }
+}
+
+#[test]
+fn crs_di_campo_non_sparisce_durante_la_normalizzazione_geoparquet() {
+    let geo = geo_colonna(json!({
+        "encoding":"WKB", "geometry_types":["Point"],
+        "crs":projjson_di("EPSG:32632").unwrap(),
+    }))
+    .to_string();
+    for chiave in [GEO_METADATA_KEY, "ARROW:extension:metadata"] {
+        for (id, coerente) in [("EPSG:32632", true), ("EPSG:4326", false)] {
+            let f = Field::new("geometry", DataType::Binary, true).with_metadata(HashMap::from([
+                (GEOARROW_EXTENSION_KEY.into(), GEOARROW_WKB_EXTENSION.into()),
+                (
+                    chiave.into(),
+                    json!({"crs":projjson_di(id).unwrap()}).to_string(),
+                ),
+            ]));
+            let batch = tabella_geo(f, vec![Some(punto(500_123.0, 4_987_654.0))]);
+            let esito = plenora_io::geoparquet::applica(&batch, &geo);
+            if coerente {
+                assert_eq!(esito.unwrap().columns(), batch.columns());
+            } else {
+                assert_eq!(
+                    esito.unwrap_err().public_projection().code(),
+                    Some("CRS_MISMATCH")
+                );
+            }
+        }
+    }
+}
+
 fn leggi(percorso: &Path) -> Result<RecordBatch, PlenoraError> {
     leggi_tabella(percorso, None, u64::MAX)
 }

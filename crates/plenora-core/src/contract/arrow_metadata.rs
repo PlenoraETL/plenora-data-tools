@@ -254,6 +254,9 @@ fn geo_metadata_map(crs: &str) -> Result<serde_json::Map<String, serde_json::Val
     }
     crate::json::ensure_no_duplicate_keys(crs)
         .map_err(|_| PlenoraError::Crs("definizione CRS: chiavi JSON duplicate".to_owned()))?;
+    if crs.trim_start().starts_with('{') {
+        verifica_numeri_crs(crs)?;
+    }
     let crs_value = match serde_json::from_str::<serde_json::Value>(crs) {
         Ok(value @ serde_json::Value::Object(_)) => value,
         _ => serde_json::Value::String(crs.to_owned()),
@@ -412,6 +415,7 @@ fn geo_metadata_value(field: &Field) -> Result<Option<serde_json::Value>, Plenor
             "metadato legacy `geo`: chiavi duplicate, documento ambiguo".to_owned(),
         )
     })?;
+    verifica_numeri_crs(raw)?;
     serde_json::from_str::<serde_json::Value>(raw)
         .map(Some)
         .map_err(|_| {
@@ -806,8 +810,28 @@ pub fn strip_rewritten_types_declarations(metadata: &mut Metadata) {
 /// della sorgente si sostituiscono e il blocco canonico ri-emette il target
 /// senza conflitto di chiave.
 pub fn strip_rewritten_crs_keys(metadata: &mut Metadata) {
+    strip_extension_crs(metadata);
     for key in CRS_KEYS_REPLACED_BY_DECISION {
         metadata.remove(key);
+    }
+}
+
+/// Il contratto ha gia' verificato il metadato; se il chiamante lo usa
+/// prima della lettura, un documento invalido resta visibile al confine.
+fn strip_extension_crs(metadata: &mut Metadata) {
+    let key = super::arrow_schema::GEOARROW_EXTENSION_METADATA_KEY;
+    let Some(raw) = metadata.get(key) else {
+        return;
+    };
+    if crate::json::ensure_no_duplicate_keys(raw).is_err()
+        || crate::json::ensure_numbers_exact(raw).is_err()
+    {
+        return;
+    }
+    if let Ok(serde_json::Value::Object(mut m)) = serde_json::from_str(raw) {
+        m.remove("crs");
+        m.remove("crs_type");
+        metadata.insert(key, serde_json::Value::Object(m).to_string());
     }
 }
 
@@ -821,6 +845,7 @@ pub fn strip_rewritten_crs_keys(metadata: &mut Metadata) {
 /// Anche i duplicati, nel documento o nella stringa PROJJSON, restano
 /// invariati per essere rifiutati dalla lettura del contratto.
 pub fn strip_decided_crs_declarations(metadata: &mut Metadata) {
+    strip_extension_crs(metadata);
     for key in CRS_KEYS_REPLACED_BY_DECISION {
         metadata.remove(key);
     }
@@ -1389,7 +1414,16 @@ fn divergent_geometry_keys(notion: &str) -> PlenoraError {
 
 fn legacy_crs_is_coherent(keys: &CanonicalGeometryKeys, legacy: &LegacyCrs) -> bool {
     match legacy {
-        LegacyCrs::Id(legacy_id) => keys.crs_id.as_ref() == Some(legacy_id),
+        LegacyCrs::Id(legacy_id) => {
+            keys.crs_id.as_ref() == Some(legacy_id)
+                || (keys.crs_id.is_none()
+                    && keys.crs_definition.as_deref().is_some_and(|definition| {
+                        crate::crs::resolve_crs(definition, "crs").is_ok_and(|d| {
+                            crate::crs::resolve_crs(legacy_id, "crs")
+                                .is_ok_and(|i| d.semantically_equals(&i))
+                        })
+                    }))
+        }
         LegacyCrs::Definition(legacy_value) => {
             keys.crs_definition_format == Some(CrsDefinitionFormat::Projjson)
                 && keys
@@ -1397,6 +1431,7 @@ fn legacy_crs_is_coherent(keys: &CanonicalGeometryKeys, legacy: &LegacyCrs) -> b
                     .as_deref()
                     .and_then(|definition| {
                         crate::json::ensure_no_duplicate_keys(definition).ok()?;
+                        crate::json::ensure_numbers_exact(definition).ok()?;
                         serde_json::from_str::<serde_json::Value>(definition).ok()
                     })
                     .as_ref()
@@ -1532,5 +1567,61 @@ pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKey
         }
     }
 
+    completa_crs_estensione(field, &mut keys)?;
+
     Ok(keys)
+}
+
+fn completa_crs_estensione(
+    field: &Field,
+    keys: &mut CanonicalGeometryKeys,
+) -> Result<(), PlenoraError> {
+    // GeoArrow standard: anche se coesiste, nessuna rappresentazione si ignora.
+    if let Some(raw) = field
+        .metadata()
+        .get(super::arrow_schema::GEOARROW_EXTENSION_METADATA_KEY)
+        .filter(|s| !s.trim().is_empty())
+    {
+        super::arrow_schema::verifica_metadato_estensione(field)?;
+        if keys.crs_resolution == Some(CrsResolution::DeclaredUnresolved)
+            && (keys.crs_id.is_some() || keys.crs_definition.is_some())
+        {
+            return Ok(());
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(raw).map_err(|_| divergent_geometry_keys("crs"))?;
+        if let Some(v) = value.get("crs").filter(|v| !v.is_null()) {
+            let definition = v.to_string();
+            let standard = crate::crs::resolve_crs(&definition, "crs")?;
+            if keys.crs_resolution == Some(CrsResolution::Missing) {
+                return Err(divergent_geometry_keys("crs"));
+            }
+            for text in [keys.crs_id.as_deref(), keys.crs_definition.as_deref()]
+                .into_iter()
+                .flatten()
+            {
+                let altro = crate::crs::resolve_crs(text, "crs")?;
+                if !standard.semantically_equals(&altro) {
+                    return Err(divergent_geometry_keys("crs"));
+                }
+            }
+            if keys.crs_id.is_none() && keys.crs_definition.is_none() {
+                keys.crs_definition = Some(definition);
+                keys.crs_definition_format = Some(CrsDefinitionFormat::Projjson);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Guardie prima del Value: lo stesso codice del parser pubblico.
+pub(super) fn verifica_numeri_crs(raw: &str) -> Result<(), PlenoraError> {
+    crate::json::ensure_numbers_exact(raw).map_err(|_| {
+        crate::crs::CrsError::InvalidDefinition {
+            name: "crs",
+            reason: "numero PROJJSON non esatto".into(),
+        }
+        .into()
+    })
 }

@@ -48,7 +48,7 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: campi sconosciuti; `x_column`, `y_column` o
   `geometry_column` vuoti o di soli spazi;
 - `Crs`: nessun `crs` e nessun CRS di piano; `crs` vuoto, fuori dalla
-  tabella integrata o scritto come definizione (WKT, PROJJSON…) diversa da
+  tabella integrata o scritto come definizione non supportata (WKT) diversa da
   quella del piano; CRS geografico, o proiettato senza unità lineare.
 
 In esecuzione, nel runner:

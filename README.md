@@ -23,9 +23,9 @@ progetto d'origine si portano qui senza rinomine.
 ## Che cosa non c'è ancora
 
 - **Risoluzione CRS fuori tabella**: senza PROJ `resolve_crs` risolve solo
-  gli identificatori d'autorità della tabella integrata
+  gli identificatori e i PROJJSON equivalenti della tabella integrata
   ([«CRS integrati»](docs/crs.md#crs-integrati)); un codice fuori tabella fallisce
-  chiuso con `CRS_NOT_BUILTIN`, una definizione WKT, WKT2, PROJJSON o
+  chiuso con `CRS_NOT_BUILTIN`, una definizione WKT, WKT2 o
   proj-string con `CRS_BACKEND_UNAVAILABLE`, e un CRS così entra solo già
   risolto dal chiamante.
 

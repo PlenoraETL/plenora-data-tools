@@ -6,6 +6,7 @@
 
 mod confronto;
 mod numeri;
+mod projjson;
 #[cfg(test)]
 mod tests;
 
@@ -125,11 +126,12 @@ pub(super) enum Rifiuto {
 }
 
 impl Rifiuto {
+    #[cfg(test)]
     pub const fn codice(self) -> &'static str {
         match self {
             Self::NonIntegrato => "CRS_NOT_BUILTIN",
             Self::NumeroInvalido => "CRS_INVALID",
-            Self::TabellaInvalida => "INTERNAL",
+            Self::TabellaInvalida => "CRS_CONTRACT_INVALID",
         }
     }
 }
@@ -161,4 +163,25 @@ pub(super) fn riconosci(definizione: &Definizione) -> Result<Identificativo, Rif
         .ok_or(Rifiuto::TabellaInvalida)?;
     confronto::confronta(definizione, attesa)?;
     Ok(identificativo)
+}
+
+/// Risolve il profilo PROJJSON conservando il documento originale.
+pub(super) fn risolvi(
+    testo: &str,
+    name: &'static str,
+) -> Result<super::ResolvedCrs, super::CrsError> {
+    let esito = projjson::leggi(testo).and_then(|d| riconosci(&d));
+    let id = esito.map_err(|e| match e {
+        Rifiuto::NonIntegrato => super::CrsError::NotBuiltin,
+        Rifiuto::NumeroInvalido => super::CrsError::InvalidDefinition {
+            name,
+            reason: "PROJJSON invalido, ambiguo, numero non esatto o limiti superati".into(),
+        },
+        Rifiuto::TabellaInvalida => {
+            super::CrsError::InvalidContract("tabella semantica integrata illeggibile")
+        }
+    })?;
+    super::integrati::risolvi_verificato(id, testo).ok_or(super::CrsError::InvalidContract(
+        "tabella integrata incoerente",
+    ))
 }
