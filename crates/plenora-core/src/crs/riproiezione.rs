@@ -29,7 +29,7 @@ mod latitudine;
 mod ntv2;
 mod percorsi;
 mod proiezioni;
-mod tabella;
+pub(super) mod tabella;
 
 use std::collections::{BTreeMap, BTreeSet};
 

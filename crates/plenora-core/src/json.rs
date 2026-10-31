@@ -409,7 +409,7 @@ fn numero_esatto(token: &str) -> bool {
 /// Il valore esatto di un numero decimale in forma canonica: segno, cifre
 /// significative senza zeri ai bordi, esponente della cifra meno
 /// significativa. Lo zero e' uno solo.
-fn decimale_canonico(testo: &str) -> Option<(bool, String, i64)> {
+pub(crate) fn decimale_canonico(testo: &str) -> Option<(bool, String, i64)> {
     let (negativo, resto) = testo
         .strip_prefix('-')
         .map_or((false, testo), |resto| (true, resto));

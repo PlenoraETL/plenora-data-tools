@@ -125,6 +125,43 @@ rettangolo.
 
 ## Aggiungere un codice
 
+Il core contiene anche il modello semantico privato in
+`crates/plenora-core/src/crs/definizioni/`: datum o ensemble con membri e
+accuratezza, ellissoide, meridiano fondamentale, CRS geografico di base,
+conversione, metodo e parametri identificati, unità e assi ordinati.
+Non è collegato a `resolve_crs`: i formati pubblicamente accettati restano
+quelli elencati sopra. Il riconoscimento interno richiede l'ID radice EPSG
+(oppure l'identità distinta `OGC:CRS84`) e verifica tutta la semantica.
+Non scambia ordinate e non adotta contratti opt-in.
+
+`semantica.json` e `metodi_generati.rs` sono generati da
+`scripts/genera_projjson_integrati.py`, tramite
+`scripts/genera_semantica_crs.py`, nello stesso ambiente vincolato. Il primo
+è la codifica del modello Rust, non un nuovo formato pubblico. Il secondo
+collega nelle prove i codici dei parametri ai campi della riproiezione.
+I soli alias senza ID sono i nomi canonici del registro: non si equiparano
+datum storici ed ensemble, né WGS84 ed ETRS89. Gli ID annidati presenti
+devono coincidere. Il modello richiede assi espliciti, anche nella base.
+
+I numeri si confrontano come decimali esatti, prima di `f64`:
+`500000`, `500000.0` e `5e5` coincidono. Il token è limitato a 64 KiB;
+l'esponente normalizzato deve rientrare in `i64`, altrimenti il rifiuto è
+`CRS_INVALID`. Valori decimali fuori dalla gamma di `f64` restano esatti
+e discordano dalla tabella senza overflow o underflow. Per gli ellissoidi
+si conserva la forma del registro (inverso dello schiacciamento oppure
+semiasse minore), senza conversioni approssimate tra forme. Le unità
+ammesse sono metro, grado e unità adimensionale; il fattore angolare
+serializzato ammesso è `0.0174532925199433`, senza epsilon.
+
+L'oracolo legge il corpus PROJJSON già usato da GeoParquet, verifica tutti
+gli ID e le proprietà contro le tabelle integrate e operative, poi muta
+singolarmente campi e cardinalità. La coerenza dei parametri operativi
+verifica la serializzazione PROJJSON a 15 cifre significative: non è una
+tolleranza del riconoscimento. Per verificare la rigenerazione senza
+scrivere: `PYTHONPATH=<dir> python scripts/genera_semantica_crs.py --verifica`.
+La guardia `scripts/test_semantica_crs.py` confronta offline il modello
+con il corpus usando decimali esatti e gira con le altre guardie Python.
+
 1. aggiungerlo a una delle liste di `scripts/genera_crs_integrati.py`
    (`ITALIA`, `MONDO` o i fusi UTM);
 2. preparare fuori dal workspace l'ambiente che ha prodotto la tabella:
@@ -145,6 +182,8 @@ rettangolo.
    `scripts/genera_oracolo_riproiezione.py`, stesso ambiente) e rieseguire i
    test: l'oracolo pretende ogni CRS proiettato e ogni trasformazione senza
    griglia della tabella.
+6. rigenerare PROJJSON e modello semantico con
+   `PYTHONPATH=<dir> python scripts/genera_projjson_integrati.py`.
 
 Il generatore rifiuta con un errore esplicito ciò che non sa descrivere: CRS
 deprecati, non bidimensionali, con meridiano diverso da Greenwich, unità

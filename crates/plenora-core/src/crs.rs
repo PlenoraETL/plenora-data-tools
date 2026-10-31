@@ -19,6 +19,9 @@
 //!   con una regola fissa per famiglia di proiezione, descritta nel
 //!   generatore `scripts/genera_crs_integrati.py`.
 
+// Il modello resta interno finche' i formati di definizione non lo consumano.
+#[allow(dead_code)]
+mod definizioni;
 mod epsg_integrati;
 mod integrati;
 pub mod riproiezione;
