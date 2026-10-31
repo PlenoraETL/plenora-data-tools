@@ -7,7 +7,7 @@ kernel chiamati fuori dal runner ne catene fra componenti.
 
 ## Verifica
 
-Esito locale: 103 scenari conformi e 69 con deviazione dichiarata, ciascuno
+Esito locale: 112 scenari conformi e 60 con deviazione dichiarata, ciascuno
 verificato su API e CLI (172 scenari, 344 invocazioni).
 
 `cargo test -p plenora-cli --test geometry_semantics --locked` legge le 86 copie
@@ -45,11 +45,11 @@ non si cambia quel requisito per farli passare.
 | GEO-012 | conforme | Piu geometrie rifiutate unsupported/validate, nessun campo scartato. |
 | GEO-013 | deviazione | Le identita nuove partono oltre il massimo osservato, per non riusare identita perse dalla lineage. |
 | GEO-014 | deviazione | Il cambio di precisione e visibile nello schema; manca un evento dedicato di normalizzazione nel risultato. |
-| GEO-015 | deviazione | Le definizioni WKT/WKT2 e quelle fuori dal profilo PROJJSON integrato vengono rifiutate, anche quando verificabili. |
+| GEO-015 | deviazione | Le definizioni fuori dai profili integrati PROJJSON, WKT1 e WKT2 vengono rifiutate, anche quando verificabili. |
 | GEO-016 | deviazione | Il lettore non applica tutta la grammatica chiusa di crs_id e delle chiavi geometry, e ammette liste types vuote in alcuni stati. |
-| GEO-017 | deviazione | Il confronto semantico completo esiste per PROJJSON integrato; resta assente per WKT/WKT2. |
+| GEO-017 | deviazione | Il confronto semantico completo copre PROJJSON, WKT1 con assi espliciti e WKT2 equivalenti alla tabella; resta limitato ai profili integrati. |
 | GEO-018 | conforme | Nessuna uscita pubblicata sui rifiuti dei vettori; pubblicazione atomica e prove run_artefatti. |
-| GEO-019 | deviazione | Il verificatore completo copre il profilo PROJJSON integrato, inclusi i datum ensemble; WKT/WKT2 restano non supportati. |
+| GEO-019 | deviazione | Il verificatore copre i profili integrati PROJJSON e WKT2, inclusi i datum ensemble, e WKT1 con assi espliciti; declared_unresolved resta opaco. |
 | GEO-020 | deviazione | Le autorita locali restano unresolved ma il piano puo sostituire il CRS per decisione esplicita. |
 | REJ-001 | conforme | Categorie dei rifiuti verificate da API e CLI; WKB e SRID non diventano errori del piano. |
 | REJ-002 | deviazione | La lettura dei metadati non ha passate globali separate per vocabolario, CRS e supporto. |
@@ -79,7 +79,9 @@ v4 espande ogni deviazione sulle tre superfici; non dichiara artefatti runtime.
 | REJ-002 | Con piu difetti la prima categoria puo divergere dall ordine normativo. | Validare ciascuna classe sull intero schema prima della successiva. |
 
 Il confronto delle definizioni PROJJSON integrate e' disponibile con #133;
-per WKT/WKT2 resta il rientro previsto da #135.
+per WKT1 con assi espliciti e WKT2 il rientro e' avvenuto con #135 nella
+4.0.0. Restano i limiti del profilo e del trasporto dichiarati in
+[CRS](crs.md): GeoArrow standard accetta WKT2, GeoParquet richiede PROJJSON.
 Un rifiuto conservativo resta una deviazione quando il contratto impone il
 passaggio o accetta il calcolo; non viene contato come conforme.
 

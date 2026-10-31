@@ -21,6 +21,13 @@ l'ordine delle coordinate che costruiscono. Le operazioni sulle sole tuple
 continuano anche con ordine sconosciuto. Versioni delle analisi geo incrementate.
 Migrazione e limiti: [limiti](docs/limiti.md#ordine-delle-ordinate).
 
+Le definizioni CRS WKT1 con assi espliciti e WKT2 entrano nella 4.0.0
+(#135): confronto semantico completo con i CRS integrati, valido nei piani,
+nei target di `geo.reproject` e nei metadati canonici/legacy. GeoArrow
+standard accetta WKT2; il `crs` GeoParquet resta PROJJSON per specifica.
+Nessuna deduzione degli assi omessi o dell'ordine fisico delle ordinate.
+Profili e rifiuti: [CRS](docs/crs.md).
+
 ### Difetti silenziosi delle versioni precedenti
 
 La PR #136 corregge i difetti sotto. Non è prevista una correttiva 3.0.1:

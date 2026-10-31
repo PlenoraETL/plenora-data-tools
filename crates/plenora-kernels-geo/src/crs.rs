@@ -62,7 +62,7 @@ mod tests {
                 r#"PROJCS["WGS 84 / Pseudo-Mercator",GEOGCS["WGS 84"]]"#,
                 "crs"
             ),
-            Err(CrsError::BackendUnavailable)
+            Err(CrsError::NotBuiltin)
         ));
         assert!(matches!(
             plenora_core::crs::resolve_crs("EPSG:99999", "crs"),

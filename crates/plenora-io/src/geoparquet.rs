@@ -494,7 +494,10 @@ fn verifica_crs_estensione(campo: &Field, crs: &CrsColonna) -> Result<()> {
     let v: Value =
         serde_json::from_str(raw).map_err(|_| invalido("metadato di estensione illeggibile"))?;
     if let Some(v) = v.get("crs").filter(|v| !v.is_null()) {
-        confronta_crs_di_campo(&v.to_string(), crs)?;
+        match v {
+            Value::String(testo) => confronta_crs_di_campo(testo, crs)?,
+            _ => confronta_crs_di_campo(&v.to_string(), crs)?,
+        }
     }
     Ok(())
 }

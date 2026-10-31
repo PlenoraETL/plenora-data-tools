@@ -1686,7 +1686,10 @@ fn completa_crs_estensione(
         let value: serde_json::Value =
             serde_json::from_str(raw).map_err(|_| divergent_geometry_keys("crs"))?;
         if let Some(v) = value.get("crs").filter(|v| !v.is_null()) {
-            let definition = v.to_string();
+            let (definition, format) = match v {
+                serde_json::Value::String(t) => (t.clone(), CrsDefinitionFormat::Wkt2),
+                _ => (v.to_string(), CrsDefinitionFormat::Projjson),
+            };
             let standard = crate::crs::resolve_crs(&definition, "crs")?;
             if keys.crs_resolution == Some(CrsResolution::Missing) {
                 return Err(divergent_geometry_keys("crs"));
@@ -1702,7 +1705,7 @@ fn completa_crs_estensione(
             }
             if keys.crs_id.is_none() && keys.crs_definition.is_none() {
                 keys.crs_definition = Some(definition);
-                keys.crs_definition_format = Some(CrsDefinitionFormat::Projjson);
+                keys.crs_definition_format = Some(format);
             }
         }
     }
