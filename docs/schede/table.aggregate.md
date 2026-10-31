@@ -5,6 +5,10 @@ per gruppo: le colonne di gruppo, poi una colonna per ogni aggregazione di
 `aggregations` (conteggi, somme, medie, estremi, varianze, quantili,
 testi). Senza aggregazioni conta le righe di ogni gruppo.
 
+`first` e `last` rifiutano i campi geometrici, anche annidati e con zero righe
+oppure tutte le celle nulle, con errore `crs/validate` sia nel kernel sia
+nell'analisi: non produce celle WKB senza metadati.
+
 ### Parametri
 
 | parametro | tipo | default | valori ammessi | significato |
@@ -127,7 +131,7 @@ In esecuzione:
 
 - `Schema`: una cella `utf8` che non è un numero sotto una funzione
   numerica; una cella che non si converte in testo (date fuori
-  intervallo, `binary` non UTF-8 sotto `first`, `last`, `concat`,
+  intervallo, `binary` non UTF-8 sotto `concat`,
   `nunique`);
 - `ResourceLimit`: più di `u32::MAX` righe; il testo `concat` di un gruppo
   oltre `max_string_bytes` byte (controllato prima di unire);

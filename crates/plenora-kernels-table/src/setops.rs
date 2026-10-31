@@ -307,6 +307,9 @@ pub fn validate_schema(left: &RecordBatch, right: &RecordBatch) -> Result<()> {
             "set operation richiede nomi e tipi Arrow identici".into(),
         ));
     }
+    for (a, b) in left.schema().fields().iter().zip(right.schema().fields()) {
+        plenora_core::contract::arrow_metadata::require_same_geometry_reference(a, b)?;
+    }
     Ok(())
 }
 

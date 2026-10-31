@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from genera_manifesto_adozione import valida, verifica_checkout
+from genera_manifesto_adozione import deviazioni, valida, verifica_checkout
 
 try:
     from . import strict_json
@@ -39,6 +39,27 @@ def prove_contratti(contratti: Path) -> None:
         print(f"contratti: {nome} ok", flush=True)
 
 
+def verifica_regole_geometriche(sorgente: dict) -> None:
+    """Ogni regola adottata ha uno stato e ogni deviazione e pubblicata."""
+    contratto = "plenora-arrow-geometry-semantics-v1"
+    if contratto not in sorgente["conforming"] or contratto in sorgente["not_applicable"]:
+        raise ValueError("contratto geometrico non adottato univocamente")
+    regole = {f"GEO-{i:03}" for i in range(21)} | {f"REJ-{i:03}" for i in range(1, 5)}
+    censite = [r for r in sorgente["requirements"] if any(x in regole for x in r["rules"])]
+    if len([x for r in censite for x in r["rules"]]) != 25 or {x for r in censite for x in r["rules"]} != regole:
+        raise ValueError("censimento geometrico incompleto o ripetuto")
+    for requisito in censite:
+        if requisito["status"] == "deviation":
+            if not all(requisito.get(k) for k in ("scope", "hazard", "reentry")):
+                raise ValueError("deviazione geometrica senza ambito, hazard o rientro")
+            if not any(d["rule"] == requisito["rules"][0] for d in sorgente["deviations"]):
+                raise ValueError("deviazione geometrica non pubblicata")
+        elif requisito["status"] != "implemented":
+            raise ValueError("regola geometrica non dichiarata")
+        elif any(d["rule"] == requisito["rules"][0] for d in sorgente["deviations"]):
+            raise ValueError("regola geometrica conforme e deviata insieme")
+
+
 def verifica(contratti: Path) -> None:
     sorgente = strict_json.loads((RADICE / "crates/plenora-cli/adozione.json").read_text("utf-8"))
     revisione = sorgente["contracts_source"]["revision"]
@@ -57,6 +78,27 @@ def verifica(contratti: Path) -> None:
         copia = (cartella / nome).read_bytes()
         if copia != originale or hashlib.sha256(copia).hexdigest() != digest:
             raise ValueError("copia dei contratti o digest incoerente")
+    geometria = RADICE / "crates/plenora-cli/tests/fixtures/arrow-data-v1"
+    prova = strict_json.loads((geometria / "provenienza.json").read_text("utf-8"))
+    if prova["commit"] != revisione:
+        raise ValueError("pin dei vettori geometrici incoerente")
+    originali = subprocess.run(
+        ["git", "-C", str(contratti), "ls-tree", "-r", "--name-only", revisione,
+         "vectors/arrow-data-v1"], capture_output=True, check=True, text=True,
+    ).stdout.splitlines()
+    nomi = {Path(nome).name for nome in originali}
+    if nomi != set(prova["file"]) or {p.name for p in geometria.iterdir()} != nomi | {"provenienza.json"}:
+        raise ValueError("inventario dei vettori geometrici incoerente")
+    for percorso in originali:
+        nome = Path(percorso).name
+        originale = subprocess.run(
+            ["git", "-C", str(contratti), "show", f"{revisione}:{percorso}"],
+            capture_output=True, check=True,
+        ).stdout
+        copia = (geometria / nome).read_bytes()
+        if copia != originale or hashlib.sha256(copia).hexdigest() != prova["file"][nome]:
+            raise ValueError("vettore geometrico o digest incoerente")
+    verifica_regole_geometriche(sorgente)
     catalogo = strict_json.loads((cartella / "data-tools-v3.json").read_text("utf-8"))
     from jsonschema import Draft202012Validator
 
@@ -93,7 +135,7 @@ def verifica(contratti: Path) -> None:
         "contracts": [{"id": c, "status": "conforming", "verification": ["verifica locale"]}
                       for c in sorgente["conforming"]]
                      + [{"id": c, "status": "not_applicable"} for c in sorgente["not_applicable"]],
-        "deviations": sorgente["deviations"],
+        "deviations": deviazioni(sorgente),
     }
     valida(documento, contratti)
     prove_contratti(contratti)

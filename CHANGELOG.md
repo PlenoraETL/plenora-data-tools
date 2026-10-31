@@ -10,6 +10,168 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [4.0.0] - non rilasciata
+
+Ordine degli assi fail-closed: il solo identificatore CRS legacy non prova
+l'ordine memorizzato e produce `unknown`. I calcoli che interpretano le
+ordinate richiedono una dichiarazione esplicita compatibile; altrimenti
+rifiutano con `crs/validate`, senza effetti e senza scambi impliciti.
+GeoParquet dichiara la propria convenzione; i produttori geo dichiarano
+l'ordine delle coordinate che costruiscono. Le operazioni sulle sole tuple
+continuano anche con ordine sconosciuto. Versioni delle analisi geo incrementate.
+Migrazione e limiti: [limiti](docs/limiti.md#ordine-delle-ordinate).
+
+### Difetti silenziosi delle versioni precedenti
+
+La PR #136 corregge i difetti sotto. Non è prevista una correttiva 3.0.1:
+chi usa la 2.x o la 3.x deve aggiornare alla 4.0.0; anche le release 1.x
+indicate sono colpite. L'aggiornamento non ripara i dati già prodotti:
+occorre verificarli contro gli ingressi originali, con CRS, ordine delle
+ordinate e codifica accertati, e rigenerare le uscite compromesse.
+
+Le versioni verificate sono i tag `v1.0.0`, `v1.1.0`, `v2.0.0` e
+`v3.0.0`, tramite lettura dei sorgenti con `git show`. Salvo il caso
+esplicitamente **misurato**, gli esiti sono **dalla lettura del codice**,
+non prove eseguite su ciascuna release. «Pipeline» comprende i percorsi
+pubblici CLI su file e SDK Python che chiamano lo stesso runner; le
+limitazioni alle sole chiamate Rust dirette sono indicate separatamente.
+
+- **Concatenazioni con riferimento geometrico falso — 1.0.0, 1.1.0,
+  2.0.0 e 3.0.0.** `table.concat`, `table.concat_by_name` (anche
+  `strict=true`) e `table.union_distinct` potevano conservare le coordinate
+  di ingressi con CRS, assi o encoding diversi, attribuendo alla colonna
+  risultante i metadati del primo ingresso che la contiene. Raggiungibile
+  dai kernel Rust e dalla pipeline: nomi e tipi Arrow coincidevano, ma
+  i riferimenti geometrici non venivano confrontati (`joins.rs`,
+  `setops.rs` e relativa analisi in `plenora-kernels-table`). **Misurato
+  sul wheel 3.0.0**, con `misura2.py`: EPSG:3857 + EPSG:32632 produce due
+  righe con coordinate invariate e tutta la colonna dichiarata EPSG:3857,
+  per tutte e tre le operazioni con configurazione predefinita. Gli altri
+  casi, incluso `strict`, sono verificati dalla lettura del codice.
+  Rimedio: aggiornare alla 4.0.0 e controllare tutte le colonne geometriche
+  concatenate, i file esportati e le misure o riproiezioni derivate;
+  un'etichetta unica non basta a recuperare righe provenienti da CRS diversi.
+- **Confronti di chiavi geometriche senza confronto del CRS — 1.0.0,
+  1.1.0, 2.0.0 e 3.0.0.** Byte uguali con significato geografico diverso
+  potevano essere deduplicati da `union_distinct`, inclusi da `intersect`,
+  esclusi da `except`, abbinati da `join`/`semi_join`, scartati da
+  `anti_join`, accettati da `assert_foreign_key` o contati come coincidenti
+  da `reconcile`. Sono confronti di rappresentazioni, non uguaglianza
+  topologica. Kernel Rust e pipeline sono raggiungibili; nei percorsi
+  che leggono Binary come testo il caso richiede byte validi UTF-8
+  (per esempio il WKB di `POINT(0 0)`), altrimenti si ottiene un errore.
+  Il join con chiave geometrica omessa dal lato destro evita il vincolo
+  della singola geometria in uscita (`joins.rs`, `setops.rs`,
+  `governance.rs` e analisi). Rimedio: aggiornare alla 4.0.0 e ricalcolare
+  insiemi, abbinamenti, righe escluse, verifiche delle chiavi esterne e
+  report di riconciliazione sui dati originali; controllare anche gli assi
+  e la codifica delle chiavi.
+- **Ordine delle ordinate inventato dal CRS legacy — 1.0.0, 1.1.0,
+  2.0.0 e 3.0.0.** L'emissione canonica in
+  `plenora-core/contract/arrow_metadata.rs` deduceva `lon_lat` da
+  EPSG:4326 anche senza prova dell'ordine memorizzato. Una tupla lat/lon
+  poteva quindi uscire etichettata lon/lat senza scambio dei byte, tramite
+  API dei contratti, normalizzazione della pipeline e IO. Rimedio:
+  aggiornare alla 4.0.0, accertare l'ordine presso il produttore e
+  controllare metadati emessi, coordinate riproiettate, misure e file
+  derivati da ingressi legacy senza dichiarazione degli assi.
+- **Calcoli geodetici con assi sconosciuti — 1.0.0, 1.1.0, 2.0.0 e
+  3.0.0.** L'analisi geo rifiutava `lat_lon` e `northing_easting`, ma
+  ammetteva `unknown` esplicito: una linea realmente lat/lon poteva essere
+  misurata come lon/lat da `geo.geodesic_line_length`; lo stesso difetto
+  riguardava gli altri calcoli che interpretano le ordinate, incluse
+  distanze e aree geodetiche (`plenora-kernels-geo/src/analyze`).
+  Raggiungibile dalla pipeline. Rimedio: aggiornare alla 4.0.0 e
+  ricalcolare misure e risultati geografici ottenuti senza un ordine
+  accertato. Il completamento a `unknown` di chiavi CRS canoniche prive
+  di assi è invece una modifica della 4.0: nelle release verificate
+  quell'ingresso era rifiutato e non costituisce un difetto pregresso.
+- **GeoParquet letto con assi contraddittori — 1.0.0, 1.1.0, 2.0.0 e
+  3.0.0.** Il lettore conservava dichiarazioni Arrow `lat_lon` senza
+  confrontarle con la convenzione x/y del file. Anche con `crs: null`
+  potevano sopravvivere un CRS canonico EPSG:4326 e `lat_lon` del campo,
+  attribuendo ai byte un significato diverso da quello del file
+  (`plenora-io/src/geoparquet.rs`). Raggiungibile dall'API IO e dalle
+  letture CLI/SDK. Rimedio: aggiornare alla 4.0.0 e verificare le tabelle
+  lette e riesportate da GeoParquet con metadati Arrow incorporati,
+  confrontando ordine delle coordinate, CRS di file e dichiarazioni di
+  campo; controllare anche i risultati successivi.
+- **PROJJSON GeoParquet ridotto al solo identificatore — 1.0.0, 1.1.0,
+  2.0.0 e 3.0.0.** Il lettore verificava identificatore e tipo del CRS,
+  senza confrontare il resto della definizione. Una definizione UTM 32N
+  con identificatore EPSG:32633 poteva essere accettata come UTM 33N:
+  una successiva riproiezione avrebbe usato la zona sbagliata
+  (`plenora-io/src/crs_projjson.rs` e `geoparquet.rs`, API IO e CLI/SDK).
+  Rimedio: aggiornare alla 4.0.0 e confrontare il PROJJSON completo dei
+  file originali con il CRS attribuito alle tabelle lette; verificare
+  esportazioni, posizioni e misure derivate. L'identificatore rimasto
+  nell'uscita non permette da solo di ricostruire la definizione perduta.
+- **Riproiezione Rust con schema o CRS sorgente non corrispondente —
+  1.0.0, 1.1.0, 2.0.0 e 3.0.0.** L'API pubblica
+  `riproiezione::reproject_batches` controllava gli assi dello schema
+  separato, senza confrontarlo con gli schemi dei batch, né confrontare
+  il CRS sorgente passato come argomento con quello del campo. Poteva
+  quindi trasformare coordinate secondo assi o CRS sbagliati ed emettere
+  una geometria apparentemente valida nel CRS destinazione. Il caso
+  schema/batch discordante riguarda la chiamata Rust diretta: il runner
+  ordinario confrontava già gli schemi. Rimedio: aggiornare alla 4.0.0 e
+  verificare le coordinate prodotte da queste chiamate contro schemi
+  effettivi, CRS sorgente passato e dati originali, poi rigenerarle.
+- **Adapter Arrow Rust senza guardia degli assi e degli schemi — 1.0.0,
+  1.1.0, 2.0.0 e 3.0.0.** Le API pubbliche
+  `rust_backend::arrow::{make_valid_batches, polygonize_batches,
+  split_batches}` elaboravano i batch senza verificare gli assi e la
+  coincidenza con lo schema separato. Per esempio `split_batches` poteva
+  non tagliare una linea con ordinate nord/est usando uno splitter in
+  ordine est/nord; uno schema separato poteva inoltre attribuire ai
+  risultati metadati diversi da quelli dei batch. Rimedio: aggiornare
+  alla 4.0.0 e verificare geometrie riparate, poligoni e pezzi prodotti
+  dalle chiamate Rust dirette, inclusi CRS e assi delle uscite.
+- **Aggregazioni e conversioni che cancellavano il riferimento — 1.0.0,
+  1.1.0, 2.0.0 e 3.0.0.** `table.aggregate` con `first`/`last` copiava il
+  WKB in un campo Binary senza metadati geometrici. `table.type_cast`
+  poteva fare altrettanto con `binary_utf8` quando i byte del WKB erano
+  UTF-8 validi, oppure convertirli in testo senza più riferimento
+  geografico; altri WKB fallivano esplicitamente. Kernel Rust e pipeline
+  ammettevano questi percorsi (`aggregation/aggregate.rs`, `cleansing.rs`,
+  `replace_or_append` e analisi). Rimedio: aggiornare alla 4.0.0, che
+  rifiuta queste operazioni sulle geometrie, e controllare colonne
+  aggregate o convertite, ripristinando CRS, assi e codifica soltanto
+  dalla provenienza verificata, oppure rigenerando i dati.
+- **Altre copie di geometrie senza metadati — 1.0.0, 1.1.0, 2.0.0 e
+  3.0.0.** `coalesce`, `melt` con valori Binary omogenei e `pivot` con
+  `first`/`last` creavano campi senza riferimento geometrico pur copiando
+  le celle; raggiungibili dai kernel e dalla pipeline (per `pivot` con
+  mapping esplicito). Anche `reshape::transpose` perdeva i metadati nel
+  percorso omogeneo, ma solo via Rust: l'analisi della pipeline lo
+  rifiutava perché lo schema dipendeva dalle righe. `coalesce`, `melt` e
+  `transpose` potevano inoltre fondere celle geometriche e altri Binary
+  senza verificarne il riferimento (`quality.rs`, `reshape.rs` e analisi).
+  Rimedio: aggiornare alla 4.0.0 e verificare colonne di coalescenza,
+  valori di melt, colonne pivot e tabelle trasposte; per uscite mescolate
+  recuperare la provenienza di ogni cella, non assegnare un CRS unico.
+- **Espansione di contenitori geometrici via Rust — 1.0.0, 1.1.0,
+  2.0.0 e 3.0.0.** `reshape::explode` copiava gli elementi di una List
+  Binary in un campo nuovo senza i metadati geometrici del figlio.
+  `reshape::unnest` conservava invece i metadati dei figli: il caso di
+  perdita riguarda dichiarazioni geometriche sul contenitore Struct
+  rimosso con `drop_source=true`, accettate dalla chiamata Rust diretta.
+  Non è una perdita generalizzata delle geometrie figlie, né un caso
+  di normale colonna WKB Binary, che queste due operazioni rifiutavano
+  per tipo. Rimedio: aggiornare alla 4.0.0, che rifiuta questi ingressi
+  geometrici, e controllare campi estratti da liste e struct nelle
+  integrazioni Rust, ricostruendone i metadati dalla sorgente.
+- **`table_diff` Rust senza metadati geometrici — 1.0.0, 1.1.0, 2.0.0 e
+  3.0.0.** `reshape::table_diff` ricreava chiavi e colonne confrontate
+  senza metadati. Anche una riga `ADDED`, con chiave ordinaria e WKB
+  copiato dalla destra, poteva perdere estensione, CRS e assi. La perdita
+  silenziosa è verificata per l'API Rust diretta; non si estende alla
+  pipeline, che poteva fermarsi per divergenza fra metadati del kernel
+  e contratto inferito. Rimedio: aggiornare alla 4.0.0, che rifiuta
+  geometrie nelle chiavi e nei valori confrontati, e verificare le
+  tabelle di differenze già prodotte e i dati ricostruiti da esse contro
+  entrambe le sorgenti originali.
+
 ## [3.0.0] - 2026-10-18
 
 Adotta il catalogo e il profilo data-tools versione 3 di

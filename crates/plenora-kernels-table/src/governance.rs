@@ -635,6 +635,7 @@ pub fn assert_foreign_key(
     config: &ForeignKey,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_compatible_geometry_inputs(&left.schema(), &right.schema())?;
     let left_indices = key_indices(left, &config.left_keys)?;
     let right_indices = key_indices(right, &config.right_keys)?;
     validate_key_types(left, right, &left_indices, &right_indices)?;
@@ -797,6 +798,7 @@ pub fn reconcile(
     config: &Reconcile,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_compatible_geometry_inputs(&left.schema(), &right.schema())?;
     let left_indices = key_indices(left, &config.left_keys)?;
     let right_indices = key_indices(right, &config.right_keys)?;
     validate_key_types(left, right, &left_indices, &right_indices)?;

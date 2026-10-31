@@ -169,13 +169,15 @@ pub fn crs_definition_from_metadata(
 /// chiavi del CRS o il risolutore non risolve un CRS dichiarato;
 /// [`PlenoraError::Unsupported`] per una versione di contratto successiva a
 /// quella supportata, la semantica `geography`, un `edges` non planare o un
-/// CRS nel metadato d'estensione `GeoArrow`; [`PlenoraError::Schema`] anche
+/// formato CRS non supportato nel metadato d'estensione `GeoArrow`; [`PlenoraError::Schema`] anche
 /// se il contratto che ne risulta non supera [`DataContract::validate`]
 /// (per esempio più di una colonna geometrica).
 pub fn contract_from_arrow_schema(
     schema: SchemaRef,
     resolve_crs: CrsResolver,
 ) -> Result<DataContract, PlenoraError> {
+    // La versione precede l'interpretazione dei campi (REJ-002).
+    read_contract_version(&schema)?;
     verifica_tipi_supportati(&schema)?;
     // La versione del contratto vive nei metadati dello schema: una versione
     // successiva a quella supportata si rifiuta prima di leggere i campi.
@@ -240,6 +242,36 @@ pub fn contract_from_arrow_schema(
         None
     } else {
         Some(FieldId(0))
+    };
+    // Gli assi assenti del vocabolario canonico non si deducono dal CRS.
+    // Anche il percorso legacy esterno resta unknown senza prova.
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let mut field = field.as_ref().clone();
+            if (field.metadata().contains_key("plenora.geometry.crs_id")
+                || field
+                    .metadata()
+                    .contains_key("plenora.geometry.crs_definition"))
+                && !field
+                    .metadata()
+                    .contains_key(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+            {
+                let mut metadata = field.metadata().clone();
+                metadata.insert(
+                    PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                    "unknown".to_owned(),
+                );
+                field = field.with_metadata(metadata);
+            }
+            field
+        })
+        .collect();
+    let schema = if fields.iter().eq(schema.fields().iter().map(AsRef::as_ref)) {
+        schema
+    } else {
+        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
     };
     DataContract::new(
         schema,
@@ -478,10 +510,9 @@ pub fn geometry_contract_from_field(
 ///
 /// - Le chiavi di [`canonical_geometry_metadata`] si fondono nel campo
 ///   omonimo. Con `GeometryMetadataDetails::default()` si completa l'assente:
-///   `axis_order` e `srid` sono dedotti dalla definizione d'autorità
-///   ([`ResolvedCrs::authority_axis_order`]/[`ResolvedCrs::authority_srid`]),
-///   e `axis_order` vale `unknown` solo se la definizione non determina gli
-///   assi. `geo.reproject` fa eccezione per `axis_order`: lo emette già
+///   `srid` e' dedotto dalla definizione di autorita'
+///   ([`ResolvedCrs::authority_srid`]),
+///   e `axis_order` vale `unknown` senza dichiarazione esplicita. `geo.reproject` fa eccezione per `axis_order`: lo emette già
 ///   l'analisi, con l'ordine normalizzato della riproiezione.
 /// - Una chiave canonica già presente con valore diverso è un errore, mai
 ///   una sovrascrittura; uguale è idempotente. Le chiavi che un'operazione
@@ -567,6 +598,15 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
         let mut canonical: Vec<(String, String)> = canonical.into_iter().collect();
         canonical.sort();
         for (key, value) in &canonical {
+            // GEO-009 lega lo SRID incorporato al campo ricevuto. Su EWKB
+            // l'assenza deve attraversare anche i passi tabellari: completarla
+            // qui renderebbe valido un valore che il produttore non ha legato.
+            if key == PLENORA_GEOMETRY_SRID_KEY
+                && geometry.encoding == Some(crate::contract::GeometryEncoding::Ewkb)
+                && !metadata.contains_key(key)
+            {
+                continue;
+            }
             match metadata.get(key) {
                 Some(existing) if existing != value => {
                     // `axis_order` e `srid` si completano solo se assenti:
@@ -613,7 +653,10 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
                 }
             }
         }
-        fields.push(field.as_ref().clone().with_metadata(metadata));
+        let output = field.as_ref().clone().with_metadata(metadata);
+        verifica_metadato_estensione(&output)?;
+        read_geometry_contract_keys(&output)?;
+        fields.push(output);
     }
     if matched != contract.geometries.len() {
         return Err(errore_di_contratto(
@@ -834,7 +877,10 @@ pub fn verifica_metadato_estensione(field: &Field) -> Result<(), PlenoraError> {
 ///
 /// Quelli delle due verifiche.
 pub fn verifica_metadati_di_confine(schema: &Schema) -> Result<(), PlenoraError> {
-    read_contract_version(schema)?;
-    verifica_identita_campi(schema)?;
-    Ok(())
+    (|| {
+        read_contract_version(schema)?;
+        verifica_identita_campi(schema)?;
+        Ok(())
+    })()
+    .map_err(|e: PlenoraError| e.with_phase(crate::ErrorPhase::Validate))
 }

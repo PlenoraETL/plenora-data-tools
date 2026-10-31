@@ -110,6 +110,10 @@ ricerca delle auto-intersezioni non è quella di `geo`, il verdetto
 sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(v + k).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Una riga per lato: la riga `i` della sinistra con la riga `i` della destra.

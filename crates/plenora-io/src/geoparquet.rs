@@ -93,6 +93,68 @@ enum CrsColonna {
     Assente,
 }
 
+/// La convenzione fisica `GeoParquet` prevale su assenza e unknown, mai su
+/// una dichiarazione concreta contraddittoria.
+fn completa_assi_geoparquet(
+    campo: &Field,
+    crs: &CrsColonna,
+    metadati: &mut plenora_core::arrow::Metadata,
+) -> Result<()> {
+    let keys = plenora_core::contract::arrow_metadata::read_geometry_contract_keys(campo)?;
+    let has_reference = keys.crs_id.is_some()
+        || keys.crs_definition.is_some()
+        || keys.srid.is_some()
+        || keys.crs_resolution.is_some();
+    match crs {
+        CrsColonna::Integrato(id) if has_reference => {
+            plenora_core::contract::arrow_metadata::require_geometry_source_crs(
+                campo,
+                &resolve_crs(id, "crs")?,
+            )?;
+        }
+        CrsColonna::Assente
+            if keys.crs_id.is_some()
+                || keys.crs_definition.is_some()
+                || keys.srid.is_some()
+                || keys.axis_order.is_some()
+                || keys.crs_resolution.is_some_and(|state| {
+                    state != plenora_core::contract::CrsResolution::Missing
+                }) =>
+        {
+            return Err(PlenoraError::Crs(
+                "GeoParquet: CRS assente nel file ma dichiarato nel campo".to_owned(),
+            ));
+        }
+        _ => {}
+    }
+    let dichiarato = canonical_geometry_axis_order(campo)?;
+    // Anche senza CRS il formato esclude gli ordini nord-prima.
+    if dichiarato.is_some_and(|ordine| {
+        !matches!(
+            ordine,
+            AxisOrder::Unknown | AxisOrder::LonLat | AxisOrder::EastingNorthing
+        )
+    }) {
+        return Err(PlenoraError::Crs(
+            "GeoParquet: dichiarazione degli assi incompatibile con il formato".to_owned(),
+        ));
+    }
+    if let CrsColonna::Integrato(id) = crs {
+        let crs = plenora_core::crs::resolve_crs(id, "crs")?;
+        let ordine = crs.normalized_gis_axis_order();
+        if dichiarato.is_some_and(|value| value != AxisOrder::Unknown && value != ordine) {
+            return Err(PlenoraError::Crs(
+                "GeoParquet: dichiarazione degli assi incompatibile con il formato".to_owned(),
+            ));
+        }
+        metadati.insert(
+            plenora_core::contract::arrow_metadata::PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+            ordine.as_str().to_owned(),
+        );
+    }
+    Ok(())
+}
+
 /// Una colonna del metadato `geo`, già validata.
 #[derive(Clone, Debug)]
 struct ColonnaGeo {
@@ -304,6 +366,7 @@ fn geo_di_campo(crs: &CrsColonna, dimensioni: GeometryDimensions) -> Result<Stri
 /// `Unsupported` per ciò che la specifica ammette e il contratto no; `Crs`
 /// per un CRS fuori tabella; `DataMapping` per celle WKB non ammesse o tipi
 /// non dichiarati.
+#[allow(clippy::too_many_lines)] // Sequenza dei controlli di lettura e ricostruzione del contratto.
 pub fn applica(tabella: &RecordBatch, testo_geo: &str) -> Result<RecordBatch> {
     let geo = analizza(testo_geo)?;
     let schema = tabella.schema();
@@ -338,6 +401,10 @@ pub fn applica(tabella: &RecordBatch, testo_geo: &str) -> Result<RecordBatch> {
                 ))));
             }
         }
+        let mut metadati = campo.metadata().clone();
+        verifica_crs_estensione(campo, &dichiarata.crs).map_err(errore)?;
+        metadati.remove(EXTENSION_METADATA_KEY);
+        completa_assi_geoparquet(campo, &dichiarata.crs, &mut metadati)?;
         let celle = come_binary(colonna).map_err(errore)?;
         let trovati = sommario(&celle).map_err(errore)?;
         if !dichiarata.tipi.is_empty() && !trovati.tipi.is_subset(&dichiarata.tipi) {
@@ -345,9 +412,6 @@ pub fn applica(tabella: &RecordBatch, testo_geo: &str) -> Result<RecordBatch> {
                 "`geometry_types` dichiarati non coerenti con le geometrie".to_owned(),
             )));
         }
-        let mut metadati = campo.metadata().clone();
-        verifica_crs_estensione(campo, &dichiarata.crs).map_err(errore)?;
-        metadati.remove(EXTENSION_METADATA_KEY);
         metadati.insert(
             GEOARROW_EXTENSION_KEY.to_owned(),
             GEOARROW_WKB_EXTENSION.to_owned(),
@@ -370,6 +434,9 @@ pub fn applica(tabella: &RecordBatch, testo_geo: &str) -> Result<RecordBatch> {
     }
     let mut metadati_schema = schema.metadata().clone();
     metadati_schema.remove(GEO_METADATA_KEY);
+    if !metadati_schema.contains_key("plenora.contract.version") {
+        metadati_schema.insert("plenora.contract.version".to_owned(), "1".to_owned());
+    }
     let schema_letto = Arc::new(Schema::new_with_metadata(campi, metadati_schema));
     let mut contratto = contract_from_arrow_schema(schema_letto, resolve_crs)?;
     for geometria in &mut contratto.geometries {
@@ -455,8 +522,8 @@ pub struct Preparata {
 /// # Errors
 ///
 /// `InvalidPlan` per un metadato di schema `geo` senza colonne geometriche
-/// o un contratto non valido; `Unsupported` per EWKB, coordinate M, ordine
-/// degli assi diverso da x = est/longitudine; `Crs` per un CRS non integrato
+/// o un contratto non valido; `Unsupported` per EWKB e coordinate M; `Crs`
+/// per ordine degli assi assente, ignoto o diverso da x = est/longitudine, CRS non integrato
 /// o dichiarato ma non risolto; `DataMapping` per celle non ammesse o tipi
 /// fuori dalla dichiarazione del contratto.
 pub fn prepara(tabella: &RecordBatch) -> Result<Option<Preparata>> {
@@ -506,6 +573,7 @@ pub fn prepara(tabella: &RecordBatch) -> Result<Option<Preparata>> {
                 let mut metadati = campo.metadata().clone();
                 metadati.remove(GEO_METADATA_KEY);
                 metadati.remove(EXTENSION_METADATA_KEY);
+
                 campo.as_ref().clone().with_metadata(metadati)
             } else {
                 campo.as_ref().clone()
@@ -536,16 +604,6 @@ fn colonna_da_scrivere(
             "encoding EWKB: GeoParquet vuole WKB ISO".to_owned(),
         ));
     }
-    match canonical_geometry_axis_order(campo)? {
-        None | Some(AxisOrder::LonLat | AxisOrder::EastingNorthing) => {}
-        Some(_) => {
-            return Err(PlenoraError::Unsupported(
-                "ordine degli assi diverso da x = est/longitudine: GeoParquet lo impone e le \
-                 coordinate non si scambiano"
-                    .to_owned(),
-            ))
-        }
-    }
     let crs = match &geometria.crs {
         ContractCrs::Resolved(crs) | ContractCrs::ResolvedByDecision(crs) => {
             projjson_di(&identificativo_di(crs)?)?
@@ -557,6 +615,16 @@ fn colonna_da_scrivere(
             ))
         }
     };
+    let ordine = canonical_geometry_axis_order(campo)?;
+    if !geometria
+        .crs
+        .as_resolved()
+        .is_some_and(|crs| ordine == Some(crs.normalized_gis_axis_order()))
+    {
+        return Err(PlenoraError::Crs(
+            "ordine degli assi non dichiarato o incompatibile: GeoParquet richiede x=est/longitudine".to_owned(),
+        ));
+    }
     let celle = colonna
         .as_any()
         .downcast_ref::<BinaryArray>()

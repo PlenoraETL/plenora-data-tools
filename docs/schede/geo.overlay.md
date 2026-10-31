@@ -145,6 +145,10 @@ un'unione di ciascun lato e una differenza per riga contro l'unione intera
 dell'altro lato. Più la validazione OGC di ingressi, unioni e pezzi.
 Memoria: i due lati, le unioni e i pezzi.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 ```json

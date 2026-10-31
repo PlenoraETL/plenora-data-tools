@@ -25,6 +25,12 @@ uguale a ogni NaN; sugli altri tipi fuori da `int64`, `uint64`, `utf8`,
 
 ### Schema
 
+Chiavi e colonne confrontate geometriche sono rifiutate preventivamente
+con `crs`, nel kernel e in validazione, anche con ingressi vuoti o celle
+nulle: il diff ricostruisce campi privi di metadati e puo' convertire i
+valori precedenti in testo
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Le colonne di `left_keys` (nomi della sinistra), poi quelle confrontate,
 tutte nullabili e con il tipo d'ingresso; poi `_diff_status` (`utf8` non
 nullabile), `_diff_columns` e `_diff_old_values` (`utf8` nullabili).

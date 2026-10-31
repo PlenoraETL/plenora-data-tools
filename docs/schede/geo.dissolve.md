@@ -95,6 +95,10 @@ Un overlay a scansione su tutti i vertici `v` della tabella, di norma
 O((v + k) log v) con `k` gli incroci fra i lati, più la validazione OGC di
 ingressi e risultato. Memoria O(v + k): l'intera tabella in memoria.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 ```json

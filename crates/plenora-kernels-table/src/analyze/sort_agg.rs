@@ -217,6 +217,7 @@ pub(in crate::analyze) fn analyze_aggregate(
             // La cella com'e' (`take`): il tipo del profilo, senza il fuso,
             // con la stessa funzione del kernel.
             aggregation::AggFunction::First | aggregation::AggFunction::Last => {
+                crate::require_non_geometry(field)?;
                 crate::validate_cella_prendibile(field.data_type(), field.name())
                     .map_err(|errore| PlenoraError::InvalidPlan(format!("{op}: {errore}")))?;
             }

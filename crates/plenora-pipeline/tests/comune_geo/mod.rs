@@ -61,11 +61,24 @@ pub fn esadecimale_di(geometria: &Geometry<f64>) -> String {
 /// Una tabella `id`, `label`, `geometry` nel CRS dato.
 pub fn tabella(crs: &str, geometrie: &[Option<Geometry<f64>>]) -> RecordBatch {
     let righe = geometrie.len();
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        Field::new("label", DataType::Utf8, true),
-        geometry_output_field("geometry", crs).expect("campo geometria"),
-    ]));
+    let schema = Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, true),
+            {
+                let field = geometry_output_field("geometry", crs).expect("campo geometria");
+                let mut metadata = field.metadata().clone();
+                let resolved = plenora_core::crs::resolve_crs(crs, "crs").expect("CRS fixture");
+                metadata.insert(
+                    "plenora.geometry.axis_order".to_owned(),
+                    resolved.normalized_gis_axis_order().as_str().to_owned(),
+                );
+                field.with_metadata(metadata)
+            },
+        ],
+        std::iter::once(("plenora.contract.version".to_owned(), "1".to_owned()))
+            .collect::<plenora_core::arrow::Metadata>(),
+    ));
     RecordBatch::try_new(
         schema,
         vec![

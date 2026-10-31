@@ -16,16 +16,23 @@ conta come null e si passa alla colonna successiva.
 
 ### Schema
 
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 `output_column` ha il tipo comune delle colonne `columns` (anche un
-dizionario, una lista o una struct) ed è sempre nullabile. Se il nome esiste
-già, anche se è una delle colonne di `columns`, la colonna si sostituisce
-nella sua posizione e perde i propri metadati di campo; altrimenti si
-aggiunge in coda. Le altre colonne restano invariate, e così i metadati di
-schema. Se la colonna sostituita è la geometria, l'uscita non ha più una
-colonna geometrica.
+dizionario, una lista o una struct) ed e' sempre nullabile. Se il nome
+esiste, la colonna si sostituisce nella sua posizione; altrimenti si
+aggiunge in coda. I metadati di campo tabellari non si ereditano. Se tutte
+le sorgenti sono geometriche compatibili, si conservano CRS, assi,
+dimensioni ed encoding, senza identita' e dichiarazione dei tipi del primo
+campo. La pipeline ammette al massimo una geometria in uscita.
+Le altre colonne e i metadati di schema restano invariati.
 
 Il contratto conserva il numero di righe; l'ordinamento dichiarato
-(`sorted_by`) resta solo se nessuna colonna è stata sostituita.
+(`sorted_by`) resta solo se nessuna colonna e' stata sostituita.
 
 ### Righe
 

@@ -180,6 +180,7 @@ pub(in crate::analyze) fn analyze_type_cast(
 ) -> Result<DataContract> {
     let config: cleansing::TypeCast = typed(op, config)?;
     let input = &inputs[0];
+    crate::require_non_geometry(field_of(op, input, &config.column)?)?;
     // Una colonna temporale (Date32, Timestamp di ogni unita') si converte
     // dal valore nativo, con i target che il kernel ammette
     // (`verifica_cast_temporale`); ogni altra colonna si legge come testo.

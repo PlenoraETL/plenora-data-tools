@@ -86,8 +86,8 @@ pub fn identificativo_di(crs: &ResolvedCrs) -> Result<String> {
 /// # Errors
 ///
 /// `Crs` (`CRS_NOT_BUILTIN`) per un documento senza `id` riconoscibile o
-/// fuori tabella; `Crs` se il tipo del documento non è quello del CRS
-/// integrato; `InvalidPlan` se il valore non è un oggetto.
+/// fuori tabella; `Crs` se il documento differisce da quello integrato;
+/// `InvalidPlan` se il valore non e' un oggetto.
 pub fn identificativo_da_projjson(documento: &Value) -> Result<String> {
     if !documento.is_object() {
         return Err(PlenoraError::InvalidPlan(

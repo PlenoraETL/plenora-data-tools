@@ -593,6 +593,10 @@ pub(in crate::analyze) fn analyze_binary(
     let right = &inputs[1];
     let left_geometry = single_geometry(op, left)?;
     let right_geometry = single_geometry(op, right)?;
+    plenora_core::contract::arrow_metadata::require_same_geometry_reference(
+        left.schema.field_with_name(&left_geometry.name)?,
+        right.schema.field_with_name(&right_geometry.name)?,
+    )?;
     // Come per le unarie: identificabilita' della colonna verificata in
     // validazione su entrambi gli operandi.
     require_identifiable_geometry(op, left, left_geometry)?;

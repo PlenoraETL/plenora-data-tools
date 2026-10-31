@@ -142,6 +142,10 @@ geometria, e ogni punto si confronta con i percorsi precedenti. Memoria
 O(k) per geometria, più le griglie NTv2 lette (al più 256 MiB per file);
 `reproject_batches` tiene in memoria l'intera uscita.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Da WGS 84 a Pseudo Mercator (stesso datum): un parallelo resta una retta e

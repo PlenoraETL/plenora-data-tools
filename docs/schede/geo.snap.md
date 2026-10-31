@@ -92,6 +92,10 @@ R-tree dei vertici del riferimento costruito una volta, O(r log r); poi
 O(log r) per vertice d'ingresso, più la validazione OGC dell'uscita di ogni
 riga. Memoria O(r) per l'albero, più le celle d'uscita.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 `reference_wkb` è `POINT(10 10)`, `tolerance` 1 cm.

@@ -348,6 +348,7 @@ pub(in crate::analyze) fn analyze_membership_join(
     fields: &mut FieldAllocator,
     limits: &Limits,
 ) -> Result<DataContract> {
+    crate::require_compatible_geometry_inputs(&inputs[0].schema, &inputs[1].schema)?;
     let config: joins::MembershipJoin = typed(op, config)?;
     let (left, right) = (&inputs[0], &inputs[1]);
     let _ = fields;
@@ -530,6 +531,10 @@ fn check_same_schema(op: &str, left: &DataContract, right: &DataContract) -> Res
         .iter()
         .zip(right.schema.fields().iter())
     {
+        plenora_core::contract::arrow_metadata::require_same_geometry_reference(
+            left_field,
+            right_field,
+        )?;
         if left_field.name() != right_field.name()
             || left_field.data_type() != right_field.data_type()
         {
@@ -580,6 +585,9 @@ pub(in crate::analyze) fn analyze_concat_by_name(
         for input in inputs {
             for field in input.schema.fields() {
                 if let Some(existing) = union.iter_mut().find(|f| f.name() == field.name()) {
+                    plenora_core::contract::arrow_metadata::require_same_geometry_reference(
+                        existing, field,
+                    )?;
                     if existing.data_type() != field.data_type() {
                         return contract_error(
                             op,
