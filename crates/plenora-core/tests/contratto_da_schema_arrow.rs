@@ -901,7 +901,7 @@ fn srid_is_a_signed_32_bit_integer() {
         let field = canonical_field(DataType::Binary, &[(PLENORA_GEOMETRY_SRID_KEY, srid)]);
         let result = read_geometry_contract_keys(&field);
         assert!(
-            matches!(result, Err(PlenoraError::Crs(_))),
+            matches!(result, Err(PlenoraError::Schema(_))),
             "{srid}: {result:?}"
         );
     }

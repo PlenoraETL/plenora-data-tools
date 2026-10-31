@@ -131,6 +131,10 @@ O(n) per geometria, con `n` i vertici, più la validazione OGC
 dell'ingresso (O(n²) nel caso peggiore). Memoria O(n) per la copia
 orientata.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Il quadrato di un grado all'equatore, e lo stesso con un buco di mezzo

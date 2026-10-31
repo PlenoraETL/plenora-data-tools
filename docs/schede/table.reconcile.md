@@ -28,6 +28,12 @@ decimali è l'uguaglianza dei valori; su `float64` tutti i `NaN` sono uguali e
 
 ### Schema
 
+Se entrambi gli ingressi dichiarano geometrie, i loro riferimenti CRS,
+assi ed encoding devono coincidere, anche con ingressi vuoti e quando la
+geometria non e' una chiave o non compare nell'uscita. Divergenze sono
+rifiutate con `crs` dal kernel e dall'analisi
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Una tabella nuova, indipendente dagli ingressi: `metric` (`utf8`) e `value`
 (`uint64`), non nullabili. Nessuna colonna e nessun metadato di schema degli
 ingressi. Il contratto dichiara 5 righe, dimostrate.

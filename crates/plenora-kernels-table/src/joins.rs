@@ -1078,6 +1078,9 @@ pub fn concat(
             "concat safe profile richiede nomi e tipi colonna identici".into(),
         ));
     }
+    for (a, b) in left.schema().fields().iter().zip(right.schema().fields()) {
+        plenora_core::contract::arrow_metadata::require_same_geometry_reference(a, b)?;
+    }
     let rows = left
         .num_rows()
         .checked_add(right.num_rows())
@@ -1143,6 +1146,10 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
     let first = inputs[0];
     if strict {
         for other in &inputs[1..] {
+            for (a, b) in first.schema().fields().iter().zip(other.schema().fields()) {
+                plenora_core::contract::arrow_metadata::require_same_geometry_reference(a, b)?;
+            }
+
             if first.num_columns() != other.num_columns()
                 || first
                     .schema()
@@ -1175,6 +1182,9 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
     for input in inputs {
         for field in input.schema().fields() {
             if let Some(existing) = fields.iter_mut().find(|f| f.name() == field.name()) {
+                plenora_core::contract::arrow_metadata::require_same_geometry_reference(
+                    existing, field,
+                )?;
                 if existing.data_type() != field.data_type() {
                     return Err(PlenoraError::Schema(format!(
                         "concat_by_name: tipi incompatibili per la colonna {} ({} vs {})",
@@ -1412,6 +1422,7 @@ fn membership_impl(
     keep_matches: bool,
     fast: bool,
 ) -> Result<RecordBatch> {
+    crate::require_compatible_geometry_inputs(&left.schema(), &right.schema())?;
     if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {
         return Err(PlenoraError::InvalidPlan(
             "chiavi membership join non valide".into(),
@@ -2820,5 +2831,248 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod geometry_reference_tests {
+    use super::*;
+    use plenora_core::arrow::array::BinaryArray;
+    use plenora_core::contract::arrow_metadata::{
+        geometry_output_field, PLENORA_GEOMETRY_AXIS_ORDER_KEY,
+    };
+    use plenora_core::contract::{ContractProperties, DataContract, FieldAllocator};
+    use serde_json::json;
+
+    fn geometry(crs: &str, order: Option<&str>, x: f64, y: f64) -> RecordBatch {
+        let field = geometry_output_field("g", crs).unwrap();
+        let mut md = field.metadata().clone();
+        if let Some(order) = order {
+            md.insert(PLENORA_GEOMETRY_AXIS_ORDER_KEY, order);
+        }
+        let mut wkb = vec![1, 1, 0, 0, 0];
+        wkb.extend(x.to_le_bytes());
+        wkb.extend(y.to_le_bytes());
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![field.with_metadata(md)])),
+            vec![Arc::new(BinaryArray::from(vec![wkb.as_slice()]))],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn riferimenti_geometrici_identici_per_tutte_le_fusioni() {
+        let left = geometry("EPSG:4326", Some("lon_lat"), 12.0, 45.0);
+        let limits = Limits::default();
+        for right in [
+            geometry("EPSG:4326", Some("lat_lon"), 45.0, 12.0),
+            geometry("EPSG:4326", Some("unknown"), 12.0, 45.0),
+            geometry("EPSG:4326", None, 12.0, 45.0),
+            geometry("EPSG:3857", Some("lon_lat"), 12.0, 45.0),
+            left.clone(),
+        ] {
+            let compatible = left.schema() == right.schema();
+            for empty in [false, true] {
+                let a = if empty {
+                    left.slice(0, 0)
+                } else {
+                    left.clone()
+                };
+                let b = if empty {
+                    right.slice(0, 0)
+                } else {
+                    right.clone()
+                };
+                let results = [
+                    concat(&a, &b, &Concat { ignore_index: None }, &limits),
+                    concat_by_name(&[&a, &b], &ConcatByName { strict: false }, &limits),
+                    concat_by_name(&[&a, &b], &ConcatByName { strict: true }, &limits),
+                    crate::setops::union_distinct(&a, &b, &crate::setops::SetOperation {}, &limits),
+                    crate::setops::intersect(&a, &b, &crate::setops::SetOperation {}),
+                    crate::setops::except(&a, &b, &crate::setops::SetOperation {}),
+                ];
+                for result in results {
+                    if compatible {
+                        assert!(result.is_ok(), "{result:?}");
+                    } else {
+                        assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
+                    }
+                }
+                let inputs = [&a, &b].map(|batch| {
+                    DataContract::new(batch.schema(), vec![], None, ContractProperties::default())
+                        .unwrap()
+                });
+                for (op, config) in [
+                    ("table.concat", json!({})),
+                    ("table.concat_by_name", json!({"strict":false})),
+                    ("table.concat_by_name", json!({"strict":true})),
+                    ("table.union_distinct", json!({})),
+                    ("table.intersect", json!({})),
+                    ("table.except", json!({})),
+                ] {
+                    let result = crate::analyze::analyze_table_contract(
+                        op,
+                        &inputs,
+                        &config,
+                        &mut FieldAllocator::new(10),
+                        &limits,
+                    );
+                    if compatible {
+                        assert!(result.is_ok(), "{op}: {result:?}");
+                    } else {
+                        assert!(
+                            matches!(result, Err(PlenoraError::Crs(_))),
+                            "{op}: {result:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn geometrie_derivate_conservano_riferimenti_o_rifiutano_la_fusione() {
+        let a = geometry("EPSG:4326", Some("lon_lat"), 12.0, 45.0);
+        for order in ["lon_lat", "lat_lon", "unknown"] {
+            let b = geometry("EPSG:4326", Some(order), 45.0, 12.0);
+            let input = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    a.schema().field(0).clone(),
+                    b.schema().field(0).clone().with_name("h"),
+                ])),
+                vec![a.column(0).clone(), b.column(0).clone()],
+            )
+            .unwrap();
+            let cases = [
+                (
+                    "table.coalesce",
+                    json!({"columns":["g","h"],"output_column":"g"}),
+                ),
+                (
+                    "table.melt",
+                    json!({"id_columns":[],"value_columns":["g","h"]}),
+                ),
+                ("table.transpose", json!({})),
+            ];
+            for empty in [false, true] {
+                let input = if empty {
+                    input.slice(0, 0)
+                } else {
+                    input.clone()
+                };
+                let contract =
+                    DataContract::new(input.schema(), vec![], None, ContractProperties::default())
+                        .unwrap();
+                for (op, config) in &cases {
+                    let result = match *op {
+                        "table.coalesce" => crate::quality::coalesce(
+                            &input,
+                            &serde_json::from_value(config.clone()).unwrap(),
+                        ),
+                        "table.melt" => crate::reshape::melt(
+                            &input,
+                            &serde_json::from_value(config.clone()).unwrap(),
+                            &Limits::default(),
+                        ),
+                        _ => crate::reshape::transpose(
+                            &input,
+                            &serde_json::from_value(config.clone()).unwrap(),
+                            &Limits::default(),
+                        ),
+                    };
+                    let analyzed = crate::analyze::analyze_table_contract(
+                        op,
+                        std::slice::from_ref(&contract),
+                        config,
+                        &mut FieldAllocator::new(20),
+                        &Limits::default(),
+                    );
+                    if order == "lon_lat" {
+                        let output = result.unwrap();
+                        let name = match *op {
+                            "table.coalesce" => "g",
+                            "table.melt" => "value",
+                            _ => continue,
+                        };
+                        assert_eq!(
+                            output
+                                .schema()
+                                .field_with_name(name)
+                                .unwrap()
+                                .metadata()
+                                .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+                                .map(String::as_str),
+                            Some("lon_lat")
+                        );
+                        let analyzed = analyzed.unwrap();
+                        assert_eq!(output.schema().fields(), analyzed.schema.fields());
+                        assert!(analyzed.geometries.iter().any(|g| g.name == name));
+                    } else {
+                        assert!(
+                            matches!(result, Err(PlenoraError::Crs(_))),
+                            "{op}: {result:?}"
+                        );
+                        assert!(
+                            matches!(analyzed, Err(PlenoraError::Crs(_))),
+                            "{op}: {analyzed:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn pivot_geometrico_e_concatenazione_null_conservano_il_riferimento() {
+        let g = geometry("EPSG:4326", Some("lon_lat"), 12.0, 45.0);
+        let input = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("k", DataType::Int64, false),
+                Field::new("p", DataType::Utf8, false),
+                g.schema().field(0).clone(),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1])),
+                Arc::new(StringArray::from(vec!["x"])),
+                g.column(0).clone(),
+            ],
+        )
+        .unwrap();
+        for function in ["first", "last"] {
+            let config = json!({"index_col":"k", "pivot_col":"p", "value_col":"g", "aggr_func":function, "mapping":{"x":"result"}});
+            let output = crate::reshape::pivot(
+                &input,
+                &serde_json::from_value(config.clone()).unwrap(),
+                &Limits::default(),
+            )
+            .unwrap();
+            let contract = plenora_core::contract::arrow_schema::contract_from_arrow_schema(
+                Arc::new(input.schema().as_ref().clone().with_metadata(
+                    std::collections::HashMap::from([(
+                        "plenora.contract.version".to_owned(),
+                        "1".to_owned(),
+                    )]),
+                )),
+                plenora_core::crs::resolve_crs,
+            )
+            .unwrap();
+            let analyzed = crate::analyze::analyze_table_contract(
+                "table.pivot",
+                &[contract],
+                &config,
+                &mut FieldAllocator::new(30),
+                &Limits::default(),
+            )
+            .unwrap();
+            assert_eq!(output.schema().fields(), analyzed.schema.fields());
+            assert_eq!(analyzed.geometries[0].name, "result");
+            assert_eq!(output.column(1).as_ref(), g.column(0).as_ref());
+        }
+        let nulls = Arc::new(BinaryArray::from(vec![None::<&[u8]>]));
+        let a = RecordBatch::try_new(g.schema(), vec![nulls.clone()]).unwrap();
+        let other = geometry("EPSG:4326", Some("lat_lon"), 45.0, 12.0);
+        let b = RecordBatch::try_new(other.schema(), vec![nulls]).unwrap();
+        assert!(matches!(
+            concat(&a, &b, &Concat { ignore_index: None }, &Limits::default()),
+            Err(PlenoraError::Crs(_))
+        ));
     }
 }

@@ -752,6 +752,14 @@ fn colonna_senza_contesto(spec: &ColonnaSpec) -> Result<(Field, ArrayRef), Strin
     if geometria {
         let crs = spec.crs.as_deref().unwrap_or("EPSG:4326");
         let campo = geometry_output_field(&spec.nome, crs).map_err(|e| e.to_string())?;
+        // Le schede dichiarano WKT nella convenzione GIS del CRS.
+        let mut metadata = campo.metadata().clone();
+        let resolved = plenora_core::crs::resolve_crs(crs, "crs").map_err(|e| e.to_string())?;
+        metadata.insert(
+            "plenora.geometry.axis_order".to_owned(),
+            resolved.normalized_gis_axis_order().as_str().to_owned(),
+        );
+        let campo = campo.with_metadata(metadata);
         let mut builder = BinaryBuilder::new();
         for (riga, valore) in valori.iter().enumerate() {
             if valore.is_null() {
@@ -807,6 +815,13 @@ fn tabella_con_metadati(
         .iter()
         .map(|(chiave, valore)| (chiave.clone(), valore.clone()))
         .collect::<plenora_core::arrow::Metadata>();
+    let mut metadati = metadati;
+    if campi
+        .iter()
+        .any(|campo| campo.metadata().contains_key("plenora.geometry.axis_order"))
+    {
+        metadati.insert("plenora.contract.version".to_owned(), "1".to_owned());
+    }
     let schema = Schema::new_with_metadata(campi, metadati);
     plenora_core::batch_with_rows(Arc::new(schema), array, righe).map_err(|e| e.to_string())
 }
@@ -2405,4 +2420,389 @@ fn le_geo_rispettano_la_nullabilita_su_ingressi_vuoti_e_geometrie_vuote() {
         }
     }
     assert!(difetti.is_empty(), "nullabilita':\n{}", difetti.join("\n"));
+}
+
+// La sorgente degli esempi resta docs/schede, indicizzata esclusivamente dal
+// CATALOG: una nuova operazione senza esempio fa fallire anche questa prova.
+// Ogni colonna viene provata come geometria, oltre alla geometria passante:
+// limitarsi ad aggiungere una colonna non eserciterebbe melt/diff/aggregate.
+fn ingresso_geometrico(batch: &RecordBatch, posizione: usize, proiettato: bool) -> RecordBatch {
+    let crs = if proiettato {
+        "EPSG:32632"
+    } else {
+        "EPSG:4326"
+    };
+    let axis = if proiettato {
+        "easting_northing"
+    } else {
+        "lat_lon"
+    };
+    let mut campi: Vec<Field> = batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect();
+    let mut colonne = batch.columns().to_vec();
+    // Una sola geometria dichiarata: le geometrie originarie non selezionate
+    // rimangono byte anonimi, ma non fanno parte dell'oracolo delle sorgenti.
+    for campo in &mut campi {
+        if plenora_core::contract::arrow_metadata::field_declares_wkb_geometry(campo) {
+            *campo = Field::new(campo.name(), campo.data_type().clone(), campo.is_nullable());
+        }
+    }
+    let nome = campi
+        .get(posizione)
+        .map_or("__geometria_oracolo", |f| f.name().as_str());
+    let campo = geometry_output_field(nome, crs).unwrap();
+    let mut metadata = campo.metadata().clone();
+    metadata.insert("plenora.geometry.axis_order", axis);
+    metadata.insert("plenora.geometry.crs_id", crs);
+    metadata.insert("plenora.geometry.encoding", "wkb");
+    let campo = campo.with_metadata(metadata);
+    let mut builder = BinaryBuilder::new();
+    for riga in 0..batch.num_rows() {
+        // WKB scritto indipendentemente dal codec di produzione, XY asimmetriche.
+        let offset = f64::from(u32::try_from(riga).unwrap());
+        let (x, y): (f64, f64) = if proiettato {
+            (500_123.0 + offset, 4_982_345.0)
+        } else {
+            (45.0 + offset / 100.0, 12.0)
+        };
+        let mut bytes = vec![1, 1, 0, 0, 0];
+        bytes.extend_from_slice(&x.to_le_bytes());
+        bytes.extend_from_slice(&y.to_le_bytes());
+        builder.append_value(bytes);
+    }
+    let array: ArrayRef = Arc::new(builder.finish());
+    if posizione < campi.len() {
+        campi[posizione] = campo;
+        colonne[posizione] = array;
+    } else {
+        campi.push(campo);
+        colonne.push(array);
+    }
+    let mut metadata = batch.schema().metadata().clone();
+    metadata.insert("plenora.contract.version", "1");
+    RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(campi, metadata)),
+        colonne,
+    )
+    .unwrap()
+}
+
+fn byte_delle_celle(array: &dyn Array) -> Vec<&[u8]> {
+    use plenora_core::arrow::array::{
+        BinaryArray, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray,
+    };
+    macro_rules! leggi {
+        ($tipo:ty) => {
+            if let Some(a) = array.as_any().downcast_ref::<$tipo>() {
+                return a.iter().flatten().collect();
+            }
+        };
+    }
+    leggi!(BinaryArray);
+    leggi!(LargeBinaryArray);
+    leggi!(BinaryViewArray);
+    leggi!(FixedSizeBinaryArray);
+    // Anche un campo testuale puo' contenere gli stessi byte WKB: alcune
+    // coordinate hanno una codifica composta soltanto da byte UTF-8 validi.
+    macro_rules! leggi_testo {
+        ($tipo:ty) => {
+            if let Some(a) = array.as_any().downcast_ref::<$tipo>() {
+                return a.iter().flatten().map(str::as_bytes).collect();
+            }
+        };
+    }
+    leggi_testo!(plenora_core::arrow::array::StringArray);
+    leggi_testo!(plenora_core::arrow::array::LargeStringArray);
+    leggi_testo!(plenora_core::arrow::array::StringViewArray);
+    Vec::new()
+}
+
+// Non usa require_same_geometry_reference: l'oracolo confronta le tre
+// dichiarazioni direttamente, anche quando l'uscita e' Binary anonimo.
+fn verifica_byte_geometrici(ingressi: &[RecordBatch], uscita: &RecordBatch) -> bool {
+    uscita
+        .schema()
+        .fields()
+        .iter()
+        .zip(uscita.columns())
+        .all(|(campo, array)| verifica_campo_geometrico(ingressi, campo, array.as_ref()))
+}
+
+fn verifica_campo_geometrico(ingressi: &[RecordBatch], campo: &Field, array: &dyn Array) -> bool {
+    let bytes = byte_delle_celle(array);
+    for ingresso in ingressi {
+        for (origine, valori) in ingresso.schema().fields().iter().zip(ingresso.columns()) {
+            if !plenora_core::contract::arrow_metadata::field_declares_wkb_geometry(origine) {
+                continue;
+            }
+            let originali = byte_delle_celle(valori.as_ref());
+            if bytes.iter().any(|b| originali.contains(b)) {
+                for chiave in [
+                    "plenora.geometry.crs_id",
+                    "plenora.geometry.axis_order",
+                    "plenora.geometry.encoding",
+                ] {
+                    if campo.metadata().get(chiave) != origine.metadata().get(chiave) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    // Cammina anche list, struct, map, union e dictionary: un contenitore
+    // non rende innocua la perdita dei metadati del suo campo binario.
+    let data = array.to_data();
+    for (indice, figlio) in data.child_data().iter().enumerate() {
+        let campo_figlio = match campo.data_type() {
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::FixedSizeList(f, _)
+            | DataType::Map(f, _) => f.as_ref().clone(),
+            DataType::Struct(fields) => fields[indice].as_ref().clone(),
+            DataType::Union(fields, _) => fields.iter().nth(indice).unwrap().1.as_ref().clone(),
+            DataType::Dictionary(_, _) => {
+                Field::new(campo.name(), figlio.data_type().clone(), true)
+                    .with_metadata(campo.metadata().clone())
+            }
+            _ => Field::new("figlio", figlio.data_type().clone(), true),
+        };
+        let array_figlio = plenora_core::arrow::array::make_array(figlio.clone());
+        if !verifica_campo_geometrico(ingressi, &campo_figlio, array_figlio.as_ref()) {
+            return false;
+        }
+    }
+    true
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // La matrice e le asserzioni restano visibili nello stesso test.
+fn catalogo_conserva_i_riferimenti_dei_byte_geometrici() {
+    prepara_ambiente();
+    let mut violazioni = Vec::new();
+    let mut casi = 0;
+    for operazione in CATALOG {
+        let scheda =
+            leggi_scheda(operazione).expect("ogni operazione deve avere un esempio valido");
+        esegui_esempio(&scheda)
+            .unwrap_or_else(|_| panic!("{}: esempio di base non valido", operazione.id));
+        let originali: Vec<_> = scheda
+            .esempio
+            .ingressi
+            .iter()
+            .map(|s| tabella_con_metadati(&s.colonne, &s.metadati).unwrap())
+            .collect();
+        assert_eq!(
+            originali.len() > 1,
+            operazione.arity != Arity::Unary,
+            "{}: copertura arieta'",
+            operazione.id
+        );
+        let larghezza = originali
+            .iter()
+            .map(RecordBatch::num_columns)
+            .max()
+            .unwrap();
+        for posizione in 0..=larghezza {
+            for proiettato in [false, true] {
+                // Ogni ingresso viene provato anche divergente dagli altri.
+                for divergente in 0..=if originali.len() > 1 {
+                    originali.len() * 3
+                } else {
+                    0
+                } {
+                    let ingressi: Vec<_> = originali
+                        .iter()
+                        .enumerate()
+                        .map(|(i, b)| {
+                            let cambia = divergente > 0 && (divergente - 1) % originali.len() == i;
+                            let variante = divergente.saturating_sub(1) / originali.len();
+                            let mut batch = ingresso_geometrico(
+                                b,
+                                posizione.min(b.num_columns()),
+                                proiettato ^ (cambia && variante == 0),
+                            );
+                            if cambia && variante > 0 {
+                                let mut campi: Vec<Field> = batch
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|f| f.as_ref().clone())
+                                    .collect();
+                                let campo = &mut campi[posizione.min(b.num_columns())];
+                                let mut metadata = campo.metadata().clone();
+                                if variante == 1 {
+                                    metadata.insert(
+                                        "plenora.geometry.axis_order",
+                                        if proiettato {
+                                            "northing_easting"
+                                        } else {
+                                            "lon_lat"
+                                        },
+                                    );
+                                } else {
+                                    metadata.insert("plenora.geometry.encoding", "ewkb");
+                                }
+                                *campo = campo.clone().with_metadata(metadata);
+                                batch = RecordBatch::try_new(
+                                    Arc::new(Schema::new_with_metadata(
+                                        campi,
+                                        batch.schema().metadata().clone(),
+                                    )),
+                                    batch.columns().to_vec(),
+                                )
+                                .unwrap();
+                            }
+                            contract_from_arrow_schema(batch.schema(), resolve_crs).expect(
+                                "fixture geometrica valida indipendentemente dall'operazione",
+                            );
+                            batch
+                        })
+                        .collect();
+                    // Gli ingressi vuoti esercitano ADDED/DELETED senza conversione
+                    // testuale dei valori cambiati; i riferimenti restano obbligatori.
+                    for vuoto in 0..=if ingressi.len() > 1 {
+                        ingressi.len()
+                    } else {
+                        0
+                    } {
+                        let ingressi: Vec<_> = ingressi
+                            .iter()
+                            .enumerate()
+                            .map(|(i, b)| {
+                                if vuoto == i + 1 {
+                                    b.slice(0, 0)
+                                } else {
+                                    b.clone()
+                                }
+                            })
+                            .collect();
+                        let piano = Pipeline::from_json(&testo_piano(&scheda)).unwrap();
+                        let schemi: Vec<_> = scheda
+                            .esempio
+                            .ingressi
+                            .iter()
+                            .zip(&ingressi)
+                            .map(|(s, b)| (s.nome.as_str(), b.schema()))
+                            .collect();
+                        let tabelle = scheda
+                            .esempio
+                            .ingressi
+                            .iter()
+                            .zip(&ingressi)
+                            .map(|(s, b)| (s.nome.clone(), b.clone()))
+                            .collect();
+                        let esito = piano.validate(&schemi).and_then(|v| v.run(tabelle));
+                        casi += 1;
+                        match esito {
+                            Ok(esito) => {
+                                if divergente != 0
+                                    || esito
+                                        .outputs
+                                        .iter()
+                                        .any(|(_, b)| !verifica_byte_geometrici(&ingressi, b))
+                                {
+                                    violazioni.push(format!("{}: posizione {posizione}, proiettato {proiettato}, divergente {divergente}, vuoto {vuoto}", operazione.id));
+                                }
+                            }
+                            Err(PlenoraError::Internal(_)) => {
+                                panic!("{}: errore interno", operazione.id)
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        violazioni.is_empty(),
+        "violazioni del catalogo: {}",
+        violazioni.join("\n")
+    );
+    eprintln!(
+        "catalogo: {} operazioni, {casi} casi geometrici",
+        CATALOG.len()
+    );
+}
+
+#[test]
+fn oracolo_geometrico_rileva_byte_anonimi_e_metadati_mutati() {
+    use plenora_core::arrow::array::{Int64Array, StructArray};
+    let base =
+        RecordBatch::try_from_iter(vec![("g", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+            .unwrap();
+    for proiettato in [false, true] {
+        let sorgente = ingresso_geometrico(&base, 0, proiettato);
+        assert!(verifica_byte_geometrici(
+            std::slice::from_ref(&sorgente),
+            &sorgente
+        ));
+        for chiave in [
+            "plenora.geometry.crs_id",
+            "plenora.geometry.axis_order",
+            "plenora.geometry.encoding",
+        ] {
+            let mut metadata = sorgente.schema().field(0).metadata().clone();
+            metadata.remove(chiave);
+            let campo = sorgente.schema().field(0).clone().with_metadata(metadata);
+            let mutata = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![campo])),
+                sorgente.columns().to_vec(),
+            )
+            .unwrap();
+            assert!(!verifica_byte_geometrici(
+                std::slice::from_ref(&sorgente),
+                &mutata
+            ));
+        }
+        let bytes = byte_delle_celle(sorgente.column(0).as_ref());
+        if let Ok(testo) = std::str::from_utf8(bytes[0]) {
+            let array: ArrayRef =
+                Arc::new(plenora_core::arrow::array::StringArray::from(vec![testo]));
+            let anonima = RecordBatch::try_from_iter(vec![("anonimo", array)]).unwrap();
+            assert!(!verifica_byte_geometrici(
+                std::slice::from_ref(&sorgente),
+                &anonima
+            ));
+        }
+        let varianti: Vec<ArrayRef> = vec![
+            Arc::new(plenora_core::arrow::array::BinaryViewArray::from(
+                bytes.clone(),
+            )),
+            Arc::new(
+                plenora_core::arrow::array::FixedSizeBinaryArray::try_from_iter(bytes.into_iter())
+                    .unwrap(),
+            ),
+        ];
+        for array in varianti {
+            let anonima = RecordBatch::try_from_iter(vec![("anonimo", array)]).unwrap();
+            assert!(!verifica_byte_geometrici(
+                std::slice::from_ref(&sorgente),
+                &anonima
+            ));
+        }
+        let campo = Field::new("anonimo", DataType::Binary, true);
+        let anonima = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![campo.clone()])),
+            sorgente.columns().to_vec(),
+        )
+        .unwrap();
+        assert!(!verifica_byte_geometrici(
+            std::slice::from_ref(&sorgente),
+            &anonima
+        ));
+        let struttura = StructArray::new(vec![campo].into(), sorgente.columns().to_vec(), None);
+        let annidata =
+            RecordBatch::try_from_iter(vec![("contenitore", Arc::new(struttura) as ArrayRef)])
+                .unwrap();
+        assert!(!verifica_byte_geometrici(
+            std::slice::from_ref(&sorgente),
+            &annidata
+        ));
+    }
 }

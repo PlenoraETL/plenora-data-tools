@@ -18,6 +18,12 @@ fra `utf8`, `int64`, `uint64`, `float64`, `bool`, `date32`, `date64` (allineato 
 
 ### Schema
 
+Se entrambi gli ingressi dichiarano geometrie, i loro riferimenti CRS,
+assi ed encoding devono coincidere, anche con ingressi vuoti e quando la
+geometria non e' una chiave o non compare nell'uscita. Divergenze sono
+rifiutate con `crs` dal kernel e dall'analisi
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Identico alla sinistra: stesse colonne, tipi, nullabilità, metadati e
 colonna geometrica. Delle proprietà del contratto resta l'ordinamento
 dichiarato (`sorted_by`) della sinistra; il conteggio delle righe non è più

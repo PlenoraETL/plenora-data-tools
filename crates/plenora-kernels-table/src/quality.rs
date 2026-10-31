@@ -704,13 +704,40 @@ pub fn coalesce(batch: &RecordBatch, config: &Coalesce) -> Result<RecordBatch> {
             "coalesce richiede colonne con tipi Arrow identici".into(),
         ));
     }
+    let schema = batch.schema();
+    let metadata = plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+        &indices
+            .iter()
+            .map(|index| schema.field(*index))
+            .collect::<Vec<_>>(),
+    )?;
     // Percorso veloce tipizzato: copre Int64,
     // Float64, UInt64, Boolean, Utf8 con semantica identica al generico.
-    if let Some(values) = crate::cleansing::coalesce_fast(batch, &indices) {
-        return replace_or_append(batch, &config.output_column, data_type, true, values);
-    }
-    let values = coalesce_generic(batch, &indices)?;
-    replace_or_append(batch, &config.output_column, data_type, true, values)
+    let values = match crate::cleansing::coalesce_fast(batch, &indices) {
+        Some(values) => values,
+        None => coalesce_generic(batch, &indices)?,
+    };
+    let output = replace_or_append(batch, &config.output_column, data_type, true, values)?;
+    let schema = output.schema();
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.name() == &config.output_column {
+                field.as_ref().clone().with_metadata(metadata.clone())
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    crate::batch_with_rows(
+        std::sync::Arc::new(plenora_core::arrow::Schema::new_with_metadata(
+            fields,
+            schema.metadata().clone(),
+        )),
+        output.columns().to_vec(),
+        output.num_rows(),
+    )
 }
 
 /// Percorso generico (concat + take): fallback per i tipi non

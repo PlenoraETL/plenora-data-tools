@@ -990,7 +990,7 @@ impl DataContract {
             }
         }
         if self.geometries.len() > 1 {
-            return Err(PlenoraError::Schema(format!(
+            return Err(PlenoraError::Unsupported(format!(
                 "contratto con {} colonne geometriche: la v1 ne ammette al massimo una",
                 self.geometries.len()
             )));
@@ -1376,7 +1376,7 @@ mod tests {
             None,
             ContractProperties::default(),
         );
-        assert!(matches!(result, Err(PlenoraError::Schema(_))));
+        assert!(matches!(result, Err(PlenoraError::Unsupported(_))));
     }
 
     #[test]

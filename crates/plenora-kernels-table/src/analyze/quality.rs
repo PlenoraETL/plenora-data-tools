@@ -235,7 +235,26 @@ pub(in crate::analyze) fn analyze_coalesce(
             return contract_error(op, "coalesce richiede colonne con tipi Arrow identici");
         }
     }
-    analyze_append(input, fields, &[(config.output_column, data_type, true)])
+    let metadata = plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+        &config
+            .columns
+            .iter()
+            .map(|name| field_of(op, input, name))
+            .collect::<Result<Vec<_>>>()?,
+    )?;
+    let output = analyze_append(
+        input,
+        fields,
+        &[(config.output_column.clone(), data_type, true)],
+    )?;
+    super::helpers::derive_geometry(
+        output,
+        input,
+        &config.columns[0],
+        &config.output_column,
+        metadata,
+        fields,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +366,7 @@ pub(in crate::analyze) fn analyze_assert_foreign_key(
     fields: &mut FieldAllocator,
     limits: &Limits,
 ) -> Result<DataContract> {
+    crate::require_compatible_geometry_inputs(&inputs[0].schema, &inputs[1].schema)?;
     let config: governance::ForeignKey = typed(op, config)?;
     let _ = fields;
     check_text_key_pairs(
@@ -368,6 +388,7 @@ pub(in crate::analyze) fn analyze_reconcile(
     fields: &mut FieldAllocator,
     limits: &Limits,
 ) -> Result<DataContract> {
+    crate::require_compatible_geometry_inputs(&inputs[0].schema, &inputs[1].schema)?;
     let config: governance::Reconcile = typed(op, config)?;
     let _ = fields;
     check_text_key_pairs(

@@ -384,4 +384,34 @@ Le prove verificano tutte le voci e mutano ogni parametro, identità,
 ellissoide, meridiano, unità e assi. IPC e GeoParquet conservano le coordinate
 asimmetriche; `target_crs` WKT1 coincide con il percorso per codice.
 Le chiavi Arrow canoniche usano formato `wkt`; è accettata anche la forma
-legacy `geo`. I metadati GeoArrow standard ammettono WKT2, non WKT1.
+legacy `geo`. Il profilo locale dei metadati GeoArrow standard accetta WKT2, non WKT1.
+
+## Ingressi WKT nella 4.0.0
+
+Il rientro #135 usa il risolutore semantico comune in tutti gli ingressi:
+
+| Ingresso | WKT ammesso |
+| --- | --- |
+| CRS di piano (`crs`) | WKT1 con assi espliciti e WKT2; risolto anche se nessun passo lo usa. |
+| `plenora.geometry.crs_definition` negli schemi di ingresso | WKT1 con assi espliciti e WKT2, con `crs_definition_format` coerente. |
+| `target_crs` di `geo.reproject` | WKT1 con assi espliciti e WKT2. |
+| Metadato legacy `geo.crs` | WKT1 con assi espliciti e WKT2. |
+| GeoArrow `crs` in `ARROW:extension:metadata` | WKT2; `crs_type`, se presente, deve essere `wkt2:2019`. WKT1 rifiutato. |
+| GeoParquet `geo.columns.<colonna>.crs` | Nessun WKT: oggetto PROJJSON o null, come prescrive la [specifica 1.1.0](https://geoparquet.org/releases/v1.1.0/#crs). |
+| `verify_declared_coherence` | Verifica l'accordo dell'identificatore con il CRS gia' risolto semanticamente; conserva le dichiarazioni come unresolved se discordanti. |
+
+L'accettazione richiede equivalenza completa alla tabella integrata, mai il
+solo ID. Gli assi obbligatori della definizione non si deducono. L'ordine
+fisico delle celle e' una dichiarazione distinta: senza prova rimane
+`unknown` e i calcoli che interpretano le ordinate lo rifiutano. La
+convenzione x/y di GeoParquet e' una prova fornita dal formato; in scrittura
+un CRS risolto da WKT viene emesso come PROJJSON, senza scambiare ordinate.
+
+Quando canonico e legacy `geo.crs` contengono entrambi una definizione
+WKT, il codec richiede ancora testo e formato identici; l'equivalenza
+semantica non sostituisce questo vincolo di coerenza del trasporto.
+
+La [specifica GeoArrow 0.2](https://geoarrow.org/extension-types.html)
+consente anche stringhe CRS di ripiego senza `crs_type`: il rifiuto di WKT1
+nell'estensione e' un limite del profilo locale, non un divieto generale
+dello standard. GeoParquet, invece, richiede esplicitamente PROJJSON.

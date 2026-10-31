@@ -32,7 +32,7 @@ canoniche CRS della sorgente si sostituiscono, `axis_order` diventa quello
 GIS normalizzato del target. Le coordinate si leggono e si scrivono
 nell'ordine GIS normalizzato (longitudine o easting prima, anche per 4326,
 6707–6709, 6875, 3035): una colonna che dichiara un altro ordine, anche
-`unknown`, si rifiuta, come a 190c493. Un CRS risolto dal chiamante (non
+`unknown`, oppure non dichiara gli assi, si rifiuta nella 4.0. Un CRS risolto dal chiamante (non
 della tabella) si rifiuta con `CRS_NOT_BUILTIN`.
 
 ## La catena

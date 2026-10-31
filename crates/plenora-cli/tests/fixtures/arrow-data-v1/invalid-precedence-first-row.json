@@ -1,0 +1,54 @@
+{
+  "$schema": "../../schemas/arrow-data-vector-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-arrow-data-vector-v1",
+  "expect": "invalid",
+  "reason": "Row 1 has a type outside the declaration, row 2 a different EWKB SRID: row 1 is reported.",
+  "category": "data_mapping",
+  "rules": [
+    "GEO-011",
+    "REJ-002"
+  ],
+  "schema_metadata": {
+    "plenora.contract.version": "1"
+  },
+  "fields": [
+    {
+      "name": "id",
+      "type": "int64",
+      "nullable": false,
+      "metadata": {
+        "plenora.field_id": "0"
+      }
+    },
+    {
+      "name": "geometry",
+      "type": "binary",
+      "nullable": true,
+      "metadata": {
+        "plenora.field_id": "1",
+        "ARROW:extension:name": "geoarrow.wkb",
+        "plenora.geometry.encoding": "ewkb",
+        "plenora.geometry.dimensions": "xy",
+        "plenora.geometry.spatial_semantics": "geometry",
+        "plenora.geometry.precision": "float64",
+        "plenora.geometry.types_declaration": "exact",
+        "plenora.geometry.types": "point",
+        "plenora.geometry.srid": "4326",
+        "plenora.geometry.crs_resolution": "resolved",
+        "plenora.geometry.crs_id": "EPSG:4326",
+        "plenora.geometry.axis_order": "lon_lat"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "id": 1,
+      "geometry": "0102000000020000000000000000205ec00000000000a046409a99999999195ec00000000000a04640"
+    },
+    {
+      "id": 2,
+      "geometry": "0101000020bb0b00000000000000205ec00000000000a04640"
+    }
+  ]
+}

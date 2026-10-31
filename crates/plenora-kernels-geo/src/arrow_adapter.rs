@@ -37,6 +37,22 @@ use crate::memory_estimate::{estimate_geometry_native_bytes, DecodedNativeBytesE
 // percorsi dei chiamanti.
 pub use plenora_core::contract::arrow_metadata::*;
 
+/// Verifica tutti gli schemi prima di leggere celle o attribuire metadati d'uscita.
+pub(crate) fn verifica_schemi_batch(
+    schema: &plenora_core::arrow::SchemaRef,
+    batches: &[RecordBatch],
+) -> Result<(), PlenoraError> {
+    if batches
+        .iter()
+        .any(|batch| batch.schema().as_ref() != schema.as_ref())
+    {
+        return Err(PlenoraError::Schema(
+            "schema del batch diverso dallo schema dichiarato".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 // Errori delle CELLE WKB: restano qui, con il codice che le legge.
 
 fn cell_too_large(bytes: u64) -> PlenoraError {
@@ -795,18 +811,14 @@ mod tests {
     }
 
     #[test]
-    fn canonical_metadata_uses_normalized_axis_order_and_authority_srid() {
-        // Completamento DELL'ASSENTE: senza dettagli espliciti,
-        // axis_order descrive i byte x/y normalizzati (EPSG:4326 -> lon_lat),
-        // mentre lo srid resta dedotto dall'autorita' (id EPSG:4326 -> 4326).
-        // Lo stub `{"type":"ProjectedCRS"}` (`unknown` + niente srid) e'
-        // coperto da `canonical_metadata_minimal_omits_everything_not_declared`.
+    fn canonical_metadata_requires_axis_evidence_but_deduces_authority_srid() {
+        // GEO-001: l identificatore CRS non prova l ordine fisico.
         let metadata = canonical_geometry_metadata(
             &epsg_4326_realistic_contract(),
             &GeometryMetadataDetails::default(),
         );
         let get = |key: &str| metadata.get(key).map(String::as_str);
-        assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("lon_lat"));
+        assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("unknown"));
         assert_eq!(get(PLENORA_GEOMETRY_SRID_KEY), Some("4326"));
         assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), Some("EPSG:4326"));
     }
@@ -916,7 +928,7 @@ mod tests {
         // Una definizione WKT e' emessa come `crs_definition`
         // (byte originali) + `crs_definition_format = wkt`, MAI in
         // `crs_id` (divergerebbe dalla lineage WKT); deduzione
-        // d'autorita' dal canonical realistico (assi + id) gratis.
+        // il canonical risolto non prova gli assi del WKT1 originale.
         let metadata = canonical_geometry_metadata(
             &monte_mario_wkt_contract(),
             &GeometryMetadataDetails::default(),
@@ -928,10 +940,7 @@ mod tests {
         );
         assert_eq!(get(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY), Some("wkt"));
         assert_eq!(get(PLENORA_GEOMETRY_CRS_ID_KEY), None);
-        assert_eq!(
-            get(PLENORA_GEOMETRY_AXIS_ORDER_KEY),
-            Some("easting_northing")
-        );
+        assert_eq!(get(PLENORA_GEOMETRY_AXIS_ORDER_KEY), Some("unknown"));
         assert_eq!(get(PLENORA_GEOMETRY_SRID_KEY), Some("3003"));
     }
 
@@ -1272,13 +1281,15 @@ mod tests {
             let field = field_with_pairs(pairs);
             assert!(read_geometry_contract_keys(&field).is_err());
         }
-        // `crs_id` senza `axis_order` -> errore (obbligatorio con un CRS); valore
-        // `unknown` esplicito -> ammesso.
+        // DT-ARROW-003 completa gli assi assenti senza dedurli dal CRS;
+        // `unknown` esplicito e assente danno la stessa dichiarazione.
         let without_axis = field_with_pairs(&[(PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326")]);
-        assert!(matches!(
-            read_geometry_contract_keys(&without_axis),
-            Err(PlenoraError::Crs(_))
-        ));
+        assert_eq!(
+            read_geometry_contract_keys(&without_axis)
+                .expect("assi assenti")
+                .axis_order,
+            Some(AxisOrder::Unknown)
+        );
         let with_unknown_axis = field_with_pairs(&[
             (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
             (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "unknown"),

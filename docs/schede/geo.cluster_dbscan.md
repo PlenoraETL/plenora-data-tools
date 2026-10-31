@@ -87,6 +87,10 @@ distinta, O(log n + m) con `m` i vicini trovati: O(n²) nel caso peggiore,
 quando quasi tutti i punti stanno entro `eps` l'uno dall'altro. Memoria O(n)
 per punti ed etichette, più i vicinati trattenuti.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 ```json

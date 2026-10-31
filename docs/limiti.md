@@ -19,15 +19,17 @@ stanno nella sua guida:
 ## Ambito dell'adozione dei contratti
 
 **Regola.** Public Catalogs 2.0 distingue obiettivo e disponibilita; Runtime
-Binding 2.0, Arrow Geometry Semantics 1.0 e Interoperability Vectors 1.0
+Binding 2.0 e Interoperability Vectors 1.0
 non sono rivendicati dal componente. Non sono deviazioni da contratti adottati.
+Arrow Geometry Semantics 1.0 e adottato con le
+[deviazioni per regola](geometry-semantics.md#deviazioni-e-rientro).
 
 **Ambito.** Profilo data-tools v3, CLI, API Rust e SDK Python; stati e
 motivazioni in `crates/plenora-cli/adozione.json` e
 [contratti adottati](cli.md#contratti-adottati).
 
 **Hazard.** Dedurre dal catalogo una superficie runtime invocabile, o dalla
-conformita Arrow Interchange le garanzie GEO/REJ e delle catene INTEROP,
+conformita Arrow Interchange tutte le garanzie GEO/REJ e delle catene INTEROP,
 attribuirebbe al componente garanzie che non offre.
 
 **Rientro.** Pubblicare un binding runtime conforme a RT-024..027 con le
@@ -1372,3 +1374,353 @@ difetti; le loro correzioni restano nel fork, non raggiungibili.
 suoi decoder e il ritorno delle prove che la riduzione ha sostituito con
 il rifiuto (`git log` di `crates/plenora-io/tests/parquet_decoder.rs`,
 commit precedenti alla riduzione).
+
+## Ordine delle ordinate
+
+**Regola.** Un identificatore CRS, anche EPSG:4326, non prova l'ordine fisico dei byte.
+Il legacy esterno senza dichiarazione conserva `unknown`; nessun passaggio
+scambia coordinate.
+
+**Rifiuto.** Per le operazioni censite sotto, assenza, `unknown` o
+ordine incompatibile causano `crs/validate`, effetto `none`, retry `never`,
+exit CLI 3, prima della lettura delle celle e senza file di uscita.
+
+**Rientro.** Dopo verifica della provenienza, dichiarare nel campo Arrow
+`plenora.geometry.axis_order=lon_lat` per CRS geografico oppure
+`easting_northing` per CRS proiettato. Non basta correggere il metadato se
+le coordinate sono realmente nord-prima: occorre una trasformazione esplicita
+esterna, poi la dichiarazione corretta. Il componente non scambia ordinate.
+
+**Hazard.** I file 3.x etichettati automaticamente richiedono verifica alla fonte:
+il solo metadato non distingue quelli corretti da quelli erronei.
+
+GeoParquet garantisce x=est/longitudine per specifica: la lettura completa
+assenza/unknown e rifiuta dichiarazioni concrete contraddittorie. La scrittura
+richiede ordine noto, per non certificare retroattivamente dati ambigui.
+Anche la riscrittura di un GeoParquet con CRS null si rifiuta: il vocabolario
+`missing` non puo' conservare `axis_order`. Rientro con CRS e ordine dichiarati
+esplicitamente dal chiamante, oppure trasporto IPC senza interpretazione.
+I produttori `from_coords`, `from_wkt`, `generate_grid` dichiarano la propria
+convenzione esplicita x/y. Le geometrie in config seguono tale convenzione.
+
+GeoArrow con CRS completo PROJJSON passa dal confronto semantico completo
+con la tabella integrata; il solo EPSG non basta e non dichiara gli assi fisici.
+WKT2 equivalente e' accettato dalla 4.0.0 (#135); WKT1 resta escluso
+dal profilo locale dell'estensione standard. Gli assi del CRS non provano l'ordine delle celle.
+Le API dei kernel su tuple senza metadati mantengono la precondizione
+x=est/longitudine, y=nord/latitudine; l'ordine non e' verificabile da soli numeri.
+
+### Censimento delle API Arrow geografiche
+
+Il censimento comprende le funzioni raggiungibili dall'esterno, i metodi e i
+re-export; i `pub` dentro moduli privati non sono API aggiuntive. I riferimenti
+file:riga sono punti d'ingresso, non una verifica automatica del flusso.
+La guardia comune di confronto e' `richiedi_assi_normalizzati`
+(`crates/plenora-kernels-geo/src/riproiezione.rs:258`): l'analisi e gli
+adapter diretti la raggiungono prima delle celle. Nessuna deduzione dell'ordine
+dai numeri, nessuno scambio implicito. La colonna esplicitamente selezionata
+dagli adapter e' controllata anche senza batch o con batch vuoti; tutti i batch
+devono avere lo schema dichiarato, metadati compresi.
+
+| API | File:riga | Esito |
+| --- | --- | --- |
+| `analyze_geo_contract` | `crates/plenora-kernels-geo/src/analyze/mod.rs:250` | Guardia tramite `richiedi_ordine_assi`, su ogni operando; esenzioni nella tabella delle operazioni sotto |
+| `make_valid_batches` | `crates/plenora-kernels-geo/src/rust_backend/arrow.rs:68` | Guardia tramite `richiedi_ordine_assi_schema` e `richiedi_ordine_assi` |
+| `polygonize_batches` | `crates/plenora-kernels-geo/src/rust_backend/arrow.rs:133` | Stesso percorso comune |
+| `split_batches` | `crates/plenora-kernels-geo/src/rust_backend/arrow.rs:261` | Stesso percorso comune; `splitters` e' un array senza metadati, nel CRS e ordine dichiarati dalla sorgente |
+| `reproject_batches` | `crates/plenora-kernels-geo/src/riproiezione.rs:752` | Guardia comune diretta con il CRS sorgente esplicito |
+| `campo_riproiettato` | `crates/plenora-kernels-geo/src/riproiezione.rs:230` | Non dipende dagli assi d'ingresso: costruisce metadati d'uscita, non trasforma celle |
+| `batch_geometry_cells` | `crates/plenora-kernels-geo/src/arrow_adapter.rs:70` | Non dipende dagli assi: accesso allo storage Binary, nessun calcolo |
+| `verifica_tabella` | `crates/plenora-kernels-geo/src/valori_arrow.rs:381` | Non dipende dagli assi: struttura WKB, tipi, dimensioni e SRID; nessun controllo geografico del dominio |
+| `Pipeline::validate` | `crates/plenora-pipeline/src/validazione.rs:431` | `analyze_geo_contract` per ogni passo geo |
+| `PipelineValidata::run`, `run_interrompibile` | `crates/plenora-pipeline/src/esecuzione.rs:514`, `:530` | Solo piani validati dalla guardia; confronto completo degli schemi dei batch prima dell'esecuzione |
+| `normalizza_schema` | `crates/plenora-pipeline/src/validazione.rs:202` | Non dipende dagli assi: normalizzazione dei tipi Arrow |
+| `esegui_ingressi`, `esegui_in_memoria`, `valida_ingressi` | `crates/plenora-io/src/esecuzione.rs:316`, `:358`, `:412` | `Pipeline::validate`, quindi guardia comune; gli ingressi possono contenere batch |
+| `esegui_da_file`, `esegui_da_file_interrompibile`, `valida_da_file` | `crates/plenora-io/src/esecuzione.rs:220`, `:266`, `:398` | Stesso percorso dopo la lettura dei file |
+| `geoparquet::applica` | `crates/plenora-io/src/geoparquet.rs:337` | Non esegue operazioni del catalogo; `completa_assi_geoparquet` verifica la convenzione del formato prima di conversione e scansione delle celle |
+| `geoparquet::prepara` | `crates/plenora-io/src/geoparquet.rs:461` | Non esegue operazioni del catalogo; `colonna_da_scrivere` verifica la convenzione del formato prima del sommario WKB e bbox |
+| `scrivi_tabella`, `leggi_tabella`, `leggi_tabella_con_limiti` | `crates/plenora-io/src/lib.rs:97`, `:64`, `:78` | Trasporto; per Parquet passa da `prepara`/`applica`, per IPC non dipende dagli assi |
+| `parquet_io::scrivi`, `leggi`, `verifica_schema`, `transitorio_scrittura` | `crates/plenora-io/src/parquet_io.rs:826`, `:669`, `:884`, `:909` | Trasporto/stima; scrittura e lettura geo passano da `prepara`/`applica`; confronto schema e stima non dipendono dagli assi |
+| `ipc::scrivi`, `scrivi_stream`, `leggi`, `verifica_schema`, `verifica_schema_stream`, `transitorio_scrittura` | `crates/plenora-io/src/ipc.rs:466`, `:481`, `:80`, `:528`, `:545`, `:515` | Non dipendono dagli assi: trasporto, confronto schema e stima |
+| `confine::verifica_metadati_custom` | `crates/plenora-io/src/confine.rs:122` | Non dipende dagli assi: limiti dei metadati |
+| SDK `validate`, `avalidate`, `run`, `arun` | `crates/plenora-data-py/python/plenora_data/_api.py:437`, `:455`, `:468`, `:492` | Binding `src/lib.rs:289`, `:317` → API CLI → IO → `Pipeline::validate` → guardia |
+| SDK `describe`, `adescribe` | `crates/plenora-data-py/python/plenora_data/_api.py:407`, `:425` | Non dipendono dagli assi: descrizione del contratto, nessuna operazione geometrica |
+| CLI `valida_ingressi`, `esegui_ingressi`, `esegui_in_memoria` (usate dall'SDK) | `crates/plenora-cli/src/api.rs:193`, `:259`, `:291` | Delegano alle corrispondenti API IO, quindi guardia comune |
+| CLI `descrivi_tabella` | `crates/plenora-cli/src/api.rs:121` | Non dipende dagli assi: descrizione del contratto |
+
+In `plenora-core` non ci sono operazioni geometriche sulle celle Arrow.
+Le seguenti API ricevono schema/campo/contratto e **non dipendono dagli assi**:
+
+| API core (anche re-export da `arrow_adapter`) | File:riga |
+| --- | --- |
+| `contract_from_arrow_schema`, `geometry_contract_from_field`, `arrow_schema_from_contract`, `pubblica_schema` | `crates/plenora-core/src/contract/arrow_schema.rs:169`, `:465`, `:533`, `:757` |
+| `verifica_tipi_supportati`, `verifica_identita_campi`, `verifica_metadato_estensione`, `verifica_metadati_di_confine` | `crates/plenora-core/src/contract/arrow_schema.rs:73`, `:705`, `:814`, `:861` |
+| `field_declares_wkb_geometry`, `geometry_column_index`, `geometry_dimensions_from_metadata`, `geometry_encoding_from_metadata`, `geometry_encoding_from_metadata_strict` | `crates/plenora-core/src/contract/arrow_metadata.rs:132`, `:164`, `:330`, `:348`, `:370` |
+| `canonical_geometry_encoding`, `canonical_geometry_dimensions`, `canonical_geometry_types`, `canonical_geometry_srid`, `canonical_geometry_crs_id`, `canonical_geometry_crs_resolution`, `canonical_geometry_crs_definition` | `crates/plenora-core/src/contract/arrow_metadata.rs:913`, `:928`, `:948`, `:983`, `:998`, `:1016`, `:1037` |
+| `canonical_geometry_axis_order`, `canonical_geometry_spatial_semantics`, `canonical_geometry_precision`, `canonical_field_id`, `read_contract_version`, `schema_has_canonical_keys`, `campo_con_chiave`, `read_geometry_contract_keys` | `crates/plenora-core/src/contract/arrow_metadata.rs:1086`, `:1098`, `:1112`, `:1128`, `:1161`, `:1207`, `:1223`, `:1428` |
+| `DataContract::tabular`, `batch_with_rows`, `batch_vuoto` | `crates/plenora-core/src/contract.rs:935`; `crates/plenora-core/src/lib.rs:65`, `:118` |
+
+Costruttori di metadati senza schema/batch d'ingresso, contatori di memoria,
+codec su array/byte e kernel su `Geometry` o tuple non interpretano metadati
+Arrow e non aggiungono vie d'esecuzione a questo censimento. Il binding Arrow
+Python (`src/arrow_py.rs:98`, `:152`) importa/esporta il trasporto e resta privato.
+
+**Prove e limite della copertura.** La prova
+`ogni_calcolo_rifiuta_assi_ambigui_su_ogni_operando` itera il catalogo: una nuova
+operazione dipendente dagli assi deve rifiutarli prima della config e dei dati.
+`adapter_verificano_assi_prima_delle_celle` esercita le tre API dirette con
+coordinate asimmetriche, assi assenti/unknown/invertiti, schema coincidente,
+nessun batch, batch vuoto e WKB malformato; per split verifica le geometrie
+attese. La riproiezione conserva le sue prove di assi e schemi divergenti.
+`assi_geoparquet_precedono_la_lettura_delle_celle` verifica la precedenza su WKB
+malformato. Non si dichiara una scoperta automatica di nuove API Rust/Python:
+verificare che una funzione arbitraria raggiunga la guardia richiederebbe
+analisi del flusso interprocedurale; una ricerca testuale di chiamate o firme
+sarebbe fragile. Il censimento va rivisto quando si aggiunge un ingresso pubblico.
+
+### Censimento delle operazioni
+
+**Ambito.** Il riferimento file:riga indica la registrazione di ogni operazione; la
+guardia comune e' `crates/plenora-kernels-geo/src/analyze/mod.rs`
+(`richiede_ordine_assi`, `richiedi_ordine_assi`). Le alias usano l'id canonico.
+Le misure planari richiedono comunque la dichiarazione per contratto 4.0.
+Operazioni binarie e secondi operandi richiedono una convenzione comune;
+trasformazioni e controlli di dominio interpretano le ordinate nel CRS.
+Le operazioni indipendenti lavorano sulle tuple memorizzate, inclusi bounds
+numerici: non applicano un controllo geografico del dominio.
+
+| Operazione | Ordine richiesto | Registrazione |
+| --- | --- | --- |
+| `geo.centroid` | si | `crates/plenora-core/src/catalog.rs:1788` |
+| `geo.convex_hull` | si | `crates/plenora-core/src/catalog.rs:1804` |
+| `geo.envelope` | si | `crates/plenora-core/src/catalog.rs:1820` |
+| `geo.sjoin` | si | `crates/plenora-core/src/catalog.rs:1838` |
+| `geo.area` | si | `crates/plenora-core/src/catalog.rs:1854` |
+| `geo.boundary` | indipendente | `crates/plenora-core/src/catalog.rs:1870` |
+| `geo.bounds_extractor` | indipendente | `crates/plenora-core/src/catalog.rs:1886` |
+| `geo.buffer` | si | `crates/plenora-core/src/catalog.rs:1901` |
+| `geo.clean_topology` | si | `crates/plenora-core/src/catalog.rs:1920` |
+| `geo.clip` | si | `crates/plenora-core/src/catalog.rs:1942` |
+| `geo.count_points_in_polygons` | si | `crates/plenora-core/src/catalog.rs:1961` |
+| `geo.difference` | si | `crates/plenora-core/src/catalog.rs:1977` |
+| `geo.dissolve` | si | `crates/plenora-core/src/catalog.rs:1997` |
+| `geo.distance` | si | `crates/plenora-core/src/catalog.rs:2013` |
+| `geo.explode` | indipendente | `crates/plenora-core/src/catalog.rs:2027` |
+| `geo.from_coords` | produttore x/y | `crates/plenora-core/src/catalog.rs:2041` |
+| `geo.intersection` | si | `crates/plenora-core/src/catalog.rs:2056` |
+| `geo.length` | si | `crates/plenora-core/src/catalog.rs:2071` |
+| `geo.line_builder` | si | `crates/plenora-core/src/catalog.rs:2087` |
+| `geo.nearest` | si | `crates/plenora-core/src/catalog.rs:2106` |
+| `geo.overlay` | si | `crates/plenora-core/src/catalog.rs:2123` |
+| `geo.perimeter` | si | `crates/plenora-core/src/catalog.rs:2140` |
+| `geo.point_on_surface` | si | `crates/plenora-core/src/catalog.rs:2156` |
+| `geo.polygon_builder` | si | `crates/plenora-core/src/catalog.rs:2172` |
+| `geo.simplify` | si | `crates/plenora-core/src/catalog.rs:2188` |
+| `geo.symmetric_difference` | si | `crates/plenora-core/src/catalog.rs:2206` |
+| `geo.to_wkt` | indipendente | `crates/plenora-core/src/catalog.rs:2221` |
+| `geo.union` | si | `crates/plenora-core/src/catalog.rs:2243` |
+| `geo.vertex_count` | indipendente | `crates/plenora-core/src/catalog.rs:2259` |
+| `geo.voronoi` | si | `crates/plenora-core/src/catalog.rs:2281` |
+| `geo.within` | si | `crates/plenora-core/src/catalog.rs:2297` |
+| `geo.make_valid` | si | `crates/plenora-core/src/catalog.rs:2321` |
+| `geo.reproject` | si | `crates/plenora-core/src/catalog.rs:2345` |
+| `geo.predicate_intersects` | si | `crates/plenora-core/src/catalog.rs:2364` |
+| `geo.predicate_disjoint` | si | `crates/plenora-core/src/catalog.rs:2378` |
+| `geo.predicate_contains` | si | `crates/plenora-core/src/catalog.rs:2392` |
+| `geo.predicate_within` | si | `crates/plenora-core/src/catalog.rs:2406` |
+| `geo.predicate_equals_topo` | si | `crates/plenora-core/src/catalog.rs:2420` |
+| `geo.predicate_covers` | si | `crates/plenora-core/src/catalog.rs:2434` |
+| `geo.predicate_covered_by` | si | `crates/plenora-core/src/catalog.rs:2448` |
+| `geo.predicate_contains_properly` | si | `crates/plenora-core/src/catalog.rs:2462` |
+| `geo.predicate_touches` | si | `crates/plenora-core/src/catalog.rs:2476` |
+| `geo.predicate_crosses` | si | `crates/plenora-core/src/catalog.rs:2490` |
+| `geo.predicate_overlaps` | si | `crates/plenora-core/src/catalog.rs:2504` |
+| `geo.affine_transform` | si | `crates/plenora-core/src/catalog.rs:2519` |
+| `geo.translate` | si | `crates/plenora-core/src/catalog.rs:2535` |
+| `geo.scale` | si | `crates/plenora-core/src/catalog.rs:2551` |
+| `geo.rotate` | si | `crates/plenora-core/src/catalog.rs:2567` |
+| `geo.concave_hull` | si | `crates/plenora-core/src/catalog.rs:2583` |
+| `geo.hausdorff_distance` | si | `crates/plenora-core/src/catalog.rs:2599` |
+| `geo.haversine_distance` | si | `crates/plenora-core/src/catalog.rs:2614` |
+| `geo.geodesic_distance` | si | `crates/plenora-core/src/catalog.rs:2630` |
+| `geo.geodesic_line_length` | si | `crates/plenora-core/src/catalog.rs:2646` |
+| `geo.densify` | si | `crates/plenora-core/src/catalog.rs:2662` |
+| `geo.snap_to_grid` | si | `crates/plenora-core/src/catalog.rs:2678` |
+| `geo.delaunay` | si | `crates/plenora-core/src/catalog.rs:2698` |
+| `geo.polygonize` | si | `crates/plenora-core/src/catalog.rs:2714` |
+| `geo.line_merge` | si | `crates/plenora-core/src/catalog.rs:2737` |
+| `geo.split` | si | `crates/plenora-core/src/catalog.rs:2753` |
+| `geo.line_substring` | si | `crates/plenora-core/src/catalog.rs:2769` |
+| `geo.line_interpolate_point` | si | `crates/plenora-core/src/catalog.rs:2784` |
+| `geo.frechet_distance` | si | `crates/plenora-core/src/catalog.rs:2799` |
+| `geo.bearing` | si | `crates/plenora-core/src/catalog.rs:2814` |
+| `geo.geodesic_area` | si | `crates/plenora-core/src/catalog.rs:2830` |
+| `geo.geometry_diagnostics` | indipendente | `crates/plenora-core/src/catalog.rs:2846` |
+| `geo.from_wkt` | produttore x/y | `crates/plenora-core/src/catalog.rs:2861` |
+| `geo.geometry_accessors` | indipendente | `crates/plenora-core/src/catalog.rs:2877` |
+| `geo.collect` | indipendente | `crates/plenora-core/src/catalog.rs:2891` |
+| `geo.line_locate_point` | si | `crates/plenora-core/src/catalog.rs:2907` |
+| `geo.generate_grid` | produttore x/y | `crates/plenora-core/src/catalog.rs:2922` |
+| `geo.subdivide` | si | `crates/plenora-core/src/catalog.rs:2938` |
+| `geo.snap` | si | `crates/plenora-core/src/catalog.rs:2956` |
+| `geo.coverage_validate` | si | `crates/plenora-core/src/catalog.rs:2976` |
+| `geo.shared_paths` | si | `crates/plenora-core/src/catalog.rs:2992` |
+| `geo.cluster_dbscan` | si | `crates/plenora-core/src/catalog.rs:3011` |
+
+## Interoperabilita' e precedenza
+
+**Hazard.** Il referto fornito non include gli identificativi della matrice delle sei
+celle rosse. Non e' quindi possibile certificarne la chiusura puntuale.
+
+**Regola.** Il rifiuto degli assi verifica categoria/fase/effetto/retry sulle API e CLI.
+REJ-002 resta una deviazione: mancano le passate globali per vocabolario,
+CRS e supporto.
+
+**Rifiuto.** `centroid` richiede CRS proiettato e continua a rifiutare
+un CRS geografico in validazione prima di eventuali difetti WKB: i vettori
+che in quel punto attendono un errore di lettura non diventano verdi.
+
+**Ambito.** Le sei sonde ricostruite dal referto sono eseguite dal test
+`sonde_interop_assi_precedenza_e_centroid_geografico` su API e CLI; tutte
+verificano anche nessun file di uscita, effetto `none`, retry `never`, exit 3.
+La matrice originale non e' allegata: questa tabella non ne inventa gli ID.
+
+| Sonda (fixture Arrow) | Esito osservato con centroid | Confronto normativo |
+| --- | --- | --- |
+| `axis-lat-lon-stored` | `crs/validate` | Verde rispetto a `rejection-lat-lon-geo-operation`; nessuna attestazione del precedente colore. |
+| `invalid-unknown-crs-and-truncated` | `crs/validate` | Verde per questa precedenza REJ-002; non dimostra le passate globali mancanti. |
+| `invalid-wkb-truncated` | `crs/validate` | Rosso: il vettore interop attende `data_mapping/read`, ma centroid rifiuta il CRS geografico. |
+| `invalid-ewkb-srid-differs` | `crs/validate` | Rosso: il vettore interop attende `crs/read`; stessa precondizione di centroid. |
+| `invalid-type-outside-declaration` | `crs/validate` | Rosso: il vettore interop attende `data_mapping/read`; stessa precondizione di centroid. |
+| `invalid-precedence-vocabulary-before-crs` | `crs/validate` | Sonda locale della precedenza: DT-ARROW-003 completa encoding; non certifica la sesta cella originale, non identificata. |
+
+**Rientro.** I tre rossi di centroid non vengono riclassificati come conformi: cambiare
+le attese per nasconderli violerebbe la distinzione tra supporto del calcolo
+e conformita' del trasporto. La sonda applicabile `reproject` nei vettori
+Geometry Semantics continua a verificare i rifiuti dei valori.
+
+## Fusione di celle geometriche e CRS espliciti
+
+**Hazard.** Copiare il riferimento della prima sorgente dopo avere mescolato
+WKB con ordini o CRS diversi dichiara un luogo diverso senza cambiare i byte.
+Anche un CRS passato come argomento puo' contraddire quello del campo.
+
+**Regola.** Ogni campo che riceve celle da piu' sorgenti richiede identita'
+delle dichiarazioni CRS/axis_order di tutte le sorgenti geometriche.
+Il confronto include assenza, `unknown`, stato di risoluzione, SRID e
+semantica; non usa l'equivalenza semantica per scegliere i metadati del
+primo. Le chiavi si leggono con il codec comune (canone e legacy coerenti).
+Il controllo precede la lettura delle celle e vale per ingressi vuoti e null.
+Un campo Binary senza dichiarazione geometrica non puo' essere fuso con uno
+geometrico. Colonne distinte di un join conservano ciascuna il proprio
+riferimento; non sono una fusione nello stesso campo.
+
+**Rifiuto.** Discordanza nelle fusioni e nell'analisi della pipeline:
+`crs/validate`, effetto `none`, retry `never`. Il confine di lettura dei file
+attribuisce la fase di lettura secondo il contratto IO. Un CRS in
+`ARROW:extension:metadata` si accetta come PROJJSON o WKT2 completo
+semanticamente equivalente a un CRS integrato, e si confronta con le altre
+dichiarazioni prima di cancellare o sostituire metadati; le altre
+rappresentazioni (WKT1 compreso) si rifiutano con
+`unsupported`.
+Il confronto fra CRS argomento e campo ammette la stessa definizione o un
+CRS integrato risolto equivalente; tutte le dichiarazioni presenti devono
+concordare. Una definizione esterna non risolvibile deve essere identica a
+quella gia' risolta. I dettagli di un errore non includono coordinate.
+
+**Ambito.** Censimento dei punti di produzione/consumo (kernel e analisi):
+
+| Operazioni/superficie | Regola o esclusione | File:riga |
+| --- | --- | --- |
+| Regola comune | Confronto senza celle: identificazione geometrica, CRS, SRID, stato, ordine e semantica. | `crates/plenora-core/src/contract/arrow_metadata.rs:151` |
+| `table.concat` | Ogni coppia di campi posizionali. | `crates/plenora-kernels-table/src/joins.rs:1060` / `crates/plenora-kernels-table/src/analyze/joins.rs:523` |
+| `table.concat_by_name` (strict e non strict) | Ogni campo presente con lo stesso nome; colonne assenti aggiungono solo null. | `crates/plenora-kernels-table/src/joins.rs:1145` / `crates/plenora-kernels-table/src/analyze/joins.rs:555` |
+| `table.union_distinct`, `table.intersect`, `table.except` | Stessa guardia prima della codifica/confronto delle righe. | `crates/plenora-kernels-table/src/setops.rs:295` / `crates/plenora-kernels-table/src/analyze/joins.rs:662` |
+| `table.coalesce` | Tutte le colonne candidate, anche quelle mai selezionate; metadati propagati sia nel percorso veloce sia nel generico. | `crates/plenora-kernels-table/src/quality.rs:686` / `crates/plenora-kernels-table/src/analyze/quality.rs:217` |
+| `table.melt` (unpivot) | Tutte le colonne valore; il campo derivato conserva il riferimento comune. | `crates/plenora-kernels-table/src/reshape.rs:247` / `crates/plenora-kernels-table/src/analyze/reshape.rs:77` |
+| `table.transpose` | Tutte le colonne dati; controllo anche senza righe. Analisi poi Unsupported: numero di colonne dipendente dai dati. | `crates/plenora-kernels-table/src/reshape.rs:1220` / `crates/plenora-kernels-table/src/analyze/reshape.rs:284` |
+| `table.pivot` first/last | Una sola colonna sorgente per ciascun campo derivato, metadati geometrici conservati. Altre riduzioni producono scalari. | `crates/plenora-kernels-table/src/reshape.rs:939` / `crates/plenora-kernels-table/src/analyze/reshape.rs:193` |
+| `table.table_diff` | Rifiuto preventivo di chiavi e colonne confrontate geometriche, anche vuote/null, nel kernel e in analisi. | `crates/plenora-kernels-table/src/reshape.rs:1936` / `crates/plenora-kernels-table/src/analyze/reshape.rs:424` |
+| `table.join` inner/left/right/outer | Campi non chiave separati e rinominati conservano la propria sorgente. Chiavi Binary ammesse dal profilo scalare; fusione delle chiavi soggetta alla guardia dei riferimenti. | `crates/plenora-kernels-table/src/joins.rs:368` / `crates/plenora-kernels-table/src/analyze/joins.rs:153` |
+| `table.cross_join` | Campi separati: metadati della rispettiva sorgente. | `crates/plenora-kernels-table/src/joins.rs:1345` / `crates/plenora-kernels-table/src/analyze/joins.rs:288` |
+| `table.semi_join`, `table.anti_join` | Solo campi sinistri con metadati conservati; chiavi Binary confrontate come byte. | `crates/plenora-kernels-table/src/joins.rs:1567` / `crates/plenora-kernels-table/src/analyze/joins.rs:344` |
+| `table.asof_join` | Campi separati; chiavi temporali/numeriche o testuali, non geometrie. | `crates/plenora-kernels-table/src/joins.rs:1951` / `crates/plenora-kernels-table/src/analyze/joins.rs:368` |
+| `table.fuzzy_join` | Campi separati con metadati della rispettiva sorgente; chiavi testuali. | `crates/plenora-kernels-table/src/fuzzy.rs:838` / `crates/plenora-kernels-table/src/analyze/joins.rs:241` |
+| `table.assert_foreign_key`, `table.reconcile` | La prima conserva solo la tabella sinistra; la seconda produce metriche scalari, senza geometrie. | `crates/plenora-kernels-table/src/governance.rs:632` / `crates/plenora-kernels-table/src/governance.rs:794` / `crates/plenora-kernels-table/src/analyze/quality.rs:362` / `crates/plenora-kernels-table/src/analyze/quality.rs:383` |
+| `table.window_function` lag/lead e altre finestre | Valori numerici: Binary non ammesso, nessuna geometria derivata. | `crates/plenora-kernels-table/src/aggregation/window.rs:552` / `crates/plenora-kernels-table/src/analyze/sort_agg.rs:323` |
+| Espressioni `case`, `coalesce`, formule | Binary escluso dal controllo statico: nessuna geometria d'uscita. | `crates/plenora-kernels-table/src/expressions/static_type.rs:202` |
+| `table.type_cast` | Rifiuto preventivo di dichiarazioni geometriche anche incoerenti o annidate; nessun WKB diventa Binary anonimo. | `crates/plenora-kernels-table/src/cleansing.rs:1410` / `crates/plenora-kernels-table/src/analyze/cleansing.rs:174` |
+| `table.fill_na` | Solo Utf8/Int64/Float64/Boolean; Binary rifiutato. | `crates/plenora-kernels-table/src/cleansing.rs:537` |
+| `table.aggregate` first/last; finestre lag/lead | First/last rifiutano esplicitamente i campi geometrici prima delle celle, anche vuoti/null; Binary ordinario resta nel profilo scalare. Finestre solo numeriche. | `crates/plenora-kernels-table/src/lib.rs:783` / `crates/plenora-kernels-table/src/analyze/sort_agg.rs:177` |
+| `table.explode`, `table.unnest`; selezione/rinomina/ordinamento/filtro | Explode e unnest rifiutano campi geometrici anche annidati; le altre operazioni conservano i campi. | `crates/plenora-kernels-table/src/reshape.rs:1535` / `crates/plenora-kernels-table/src/analyze/reshape.rs:355` |
+| `geo.clip`, `geo.intersection`, `geo.union`, `geo.difference`, `geo.symmetric_difference`, `geo.overlay`, `geo.sjoin`, `geo.nearest`, `geo.within` | Identita' dei riferimenti dei due campi prima dei requisiti e del calcolo. Overlay puo' emettere parti di entrambi i lati; sjoin/nearest mantengono la geometria sinistra. | `crates/plenora-kernels-geo/src/analyze/dispatch.rs:586` / `crates/plenora-pipeline/src/geo/binari.rs:70` |
+| `geo.collect`, dissolve, line/polygon builder, concave hull, coverage, clustering | Piu' righe della medesima colonna geometrica: un solo riferimento, non piu' campi sorgente. | `crates/plenora-pipeline/src/geo/collettivi.rs:144` |
+| `geo.split`, snap, shared_paths, predicati/distanze con `other_wkb` | Il secondo operando e' WKB senza metadati: usa il riferimento dichiarato dell'ingresso; non introduce una seconda dichiarazione. | `crates/plenora-kernels-geo/src/analyze/dispatch.rs:196` / `crates/plenora-kernels-geo/src/rust_backend/arrow.rs:261` |
+| `reproject_batches`, guardia assi | Confronto del CRS argomento con tutte le dichiarazioni del campo prima di interpretare le coordinate; poi assi normalizzati e piano sorgente. | `crates/plenora-kernels-geo/src/riproiezione.rs:753` / `crates/plenora-kernels-geo/src/riproiezione.rs:258` |
+| Analisi geo e reproject | Stessa guardia fra geometria del contratto e campo Arrow. | `crates/plenora-kernels-geo/src/analyze/mod.rs:171` / `crates/plenora-kernels-geo/src/analyze/producers.rs:48` |
+| Emissione Arrow da contratto | Verifica anche coerenza legacy/canonico del campo prodotto. ResolvedByDecision e' una riscrittura esplicita distinta. | `crates/plenora-core/src/contract/arrow_schema.rs:533` |
+| GeoParquet | PROJJSON accettato solo semanticamente equivalente alla definizione integrata, con il validatore comune del core. Confronto del CRS di campo (anche legacy) con il CRS di file prima di sovrascrivere metadati; CRS null rifiuta riferimenti residui; il CRS in ARROW:extension:metadata si valida e confronta prima della cancellazione. Ordine fisico x/y imposto dal formato. | `crates/plenora-io/src/geoparquet.rs:98` |
+| Produttori da WKT/coordinate/grid; campo riproiettato | Creano un riferimento nuovo o scrivono la destinazione di una decisione: non reinterpretano celle gia' etichettate con un CRS sorgente diverso. | `crates/plenora-kernels-geo/src/analyze/producers.rs:233` / `crates/plenora-kernels-geo/src/riproiezione.rs:230` |
+| Costruttori di metadati/contratti; kernel su Geometry nude | Non consumano celle etichettate. I costruttori accettano dichiarazioni esplicite; emissione e consumo verificano la coerenza. Le Geometry nude non hanno una seconda dichiarazione confrontabile. | `crates/plenora-core/src/contract/arrow_schema.rs:465` / `crates/plenora-core/src/contract/arrow_metadata.rs:607` |
+
+**PR CRS #132-#135.** Il rientro per PROJJSON e' avvenuto con #133:
+il validatore comune confronta datum/ensemble, ellissoide, meridiano,
+conversione, parametri, unita' e assi con la tabella integrata. Le forme
+semanticamente equivalenti sono accettate; le definizioni discordanti
+sono `CRS_NOT_BUILTIN`, numeri non esatti e JSON ambiguo sono rifiutati.
+`identificativo_di` verifica l'equivalenza semantica del CRS risolto.
+Il rientro per WKT1 con assi espliciti e WKT2 e' avvenuto con **#135**,
+nella 4.0.0: stesso confronto semantico completo, senza risolvere dal solo
+identificatore. Le definizioni fuori profilo restano `CRS_NOT_BUILTIN`;
+gli assi omessi non si deducono. Questo vale per piani, target di
+`geo.reproject`, chiavi canoniche e legacy `geo.crs`; l'estensione
+GeoArrow ammette WKT2, non WKT1. Il `crs` di file GeoParquet resta
+un oggetto PROJJSON o null per specifica, mai una stringa WKT.
+L'ordine fisico delle ordinate richiede una prova separata dagli assi
+dichiarati nella definizione CRS.
+
+`table.type_cast` rifiuta campi geometrici (anche su input vuoti/null) nel
+kernel e nell'analisi. `table.fill_na` conserva il campo ma ammette solo
+Utf8/Int64/Float64/Boolean, quindi rifiuta WKB. Le espressioni non costruiscono
+struct/list geometriche; `unnest` ed `explode`
+rifiutano dichiarazioni geometriche annidate prima di creare un campo nuovo.
+
+**Limiti.** Con concat_by_name, se la geometria manca in un input il campo Arrow
+conserva i metadati, ma l'analisi non propaga la geometria attiva: un passo
+geo successivo e' rifiutato. La pipeline ammette al massimo una colonna geometrica: derivarne
+una seconda resta un rifiuto esplicito. Le API tabellari dirette possono
+conservare piu' campi geometrici distinti. Coalesce, melt, pivot first/last e
+transpose conservano i metadati del riferimento comune ma non copiano
+l'identita' del campo ne' la dichiarazione dei tipi geometrici del primo;
+dimensioni/encoding differenti nella fusione sono rifiutati. I kernel che
+ricevono solo WKB o Geometry senza schema non possono verificare metadati
+che l'API non riceve: il chiamante deve dichiarare il riferimento al confine.
+
+La prova `catalogo_conserva_i_riferimenti_dei_byte_geometrici` enumera tutto
+`CATALOG` e legge gli esempi dichiarati in `docs/schede`: un'operazione
+nuova senza esempio valido fallisce. Per ciascun esempio aggiunge una
+geometria passante e sostituisce a turno ogni colonna con WKB asimmetrico,
+EPSG:4326 lat_lon ed EPSG:32632 easting_northing. Esegue validate e run
+dell'API pubblica; verifica i byte d'uscita anche se Binary anonimi o
+annidati, confrontando CRS, assi ed encoding con la sorgente. Gli ingressi
+multipli sono provati anche vuoti e con divergenze indipendenti di CRS,
+assi ed encoding su ciascun lato: devono essere rifiutati. Nessuna
+operazione e' esclusa; le configurazioni che il runner non supporta
+restano rifiuti espliciti. Le sentinelle cancellano metadati mantenendo i
+byte e devono essere riconosciute dall'oracolo. Questa e' una matrice
+finita sugli esempi, non una prova di tutte le configurazioni possibili.
+
+`table.table_diff` rifiuta chiavi e valori geometrici prima delle celle.
+`table.semi_join`, `table.anti_join`, `table.assert_foreign_key` e
+`table.reconcile` richiedono riferimenti ed encoding concordi fra le
+geometrie dichiarate dei due ingressi anche se non sono chiavi o non
+sopravvivono nell'uscita. Kernel e analisi applicano la stessa guardia.
+
+**Rientro.** Regressioni con POINT(12 45)/POINT(45 12), assi invertiti,
+unknown/assenti, CRS diversi, geometrie compatibili, tabelle vuote e
+verifica kernel/analisi. First/last, cast, explode e unnest hanno regressioni
+con coordinate asimmetriche, celle nulle e input vuoti; GeoParquet muta
+id, ellissoide, metodo, parametri, unita' e assi e verifica anche spazi,
+escape e numeri che il parsing arrotonderebbe. Le prove API verificano categoria, fase, effetto e
+retry; riproiezione verifica anche assenza di batch e sorgente discordante
+pur con assi compatibili con l'argomento.

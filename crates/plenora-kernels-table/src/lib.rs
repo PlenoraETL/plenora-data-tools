@@ -767,6 +767,69 @@ pub fn validate_text_convertible(data_type: &DataType, column: &str) -> Result<(
     Ok(())
 }
 
+/// Le operazioni binarie richiedono riferimenti concordi anche quando
+/// la geometria non e' una chiave o non contribuisce all'uscita.
+pub(crate) fn require_compatible_geometry_inputs(left: &Schema, right: &Schema) -> Result<()> {
+    use plenora_core::contract::arrow_metadata::{
+        field_declares_wkb_geometry, require_same_geometry_reference,
+    };
+    for a in left
+        .fields()
+        .iter()
+        .filter(|f| field_declares_wkb_geometry(f))
+    {
+        for b in right
+            .fields()
+            .iter()
+            .filter(|f| field_declares_wkb_geometry(f))
+        {
+            require_same_geometry_reference(a, b)?;
+            let left = plenora_core::contract::arrow_metadata::read_geometry_contract_keys(a)?;
+            let right = plenora_core::contract::arrow_metadata::read_geometry_contract_keys(b)?;
+            if left.encoding != right.encoding {
+                return Err(PlenoraError::Crs(
+                    "ingressi geometrici con encoding diversi".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Rifiuta celle geometriche quando l'operazione non ne conserva i metadati.
+/// Controlla anche i campi annidati, prima di leggere qualsiasi cella.
+pub(crate) fn require_non_geometry(field: &Field) -> Result<()> {
+    if plenora_core::contract::arrow_metadata::field_declares_wkb_geometry(field)
+        || field
+            .metadata()
+            .keys()
+            .any(|key| key.starts_with("plenora.geometry."))
+        || field
+            .metadata()
+            .get("ARROW:extension:name")
+            .is_some_and(|name| name.starts_with("geoarrow."))
+    {
+        return Err(PlenoraError::Crs(
+            "operazione non supportata su celle geometriche".into(),
+        ));
+    }
+    match field.data_type() {
+        DataType::List(child)
+        | DataType::LargeList(child)
+        | DataType::FixedSizeList(child, _)
+        | DataType::Map(child, _) => {
+            require_non_geometry(child)?;
+        }
+        DataType::Struct(children) => {
+            for child in children {
+                require_non_geometry(child)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Verifica sullo SCHEMA che le riduzioni che **scelgono una cella**
 /// (`first`/`last` di `table.aggregate`) possano renderla com'e', nel tipo
 /// d'ingresso (`take`).

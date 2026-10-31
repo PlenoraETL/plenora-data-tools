@@ -136,6 +136,10 @@ concentrici collegati, è quadratico nei lati per il logaritmo, entro il
 tetto di 10.000 segmenti) e la rivalidazione dell'uscita. Memoria O(v) per
 la cella in lavorazione, più le celle d'uscita.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Una farfalla, un quadrato valido e un null.

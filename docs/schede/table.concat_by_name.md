@@ -13,6 +13,12 @@ gli schemi devono essere identici, come in [`table.concat`](#tableconcat).
 
 ### Schema
 
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Senza `strict`, l'unione delle colonne nell'ordine di prima apparizione:
 le colonne di sinistra, poi quelle di destra con un nome nuovo. Una colonna
 presente in entrambi gli ingressi ha lo stesso tipo nei due (nessuna

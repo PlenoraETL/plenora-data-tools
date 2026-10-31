@@ -94,6 +94,10 @@ rifiuto `PrecisionInsufficient`
 Tempo O(n) sulle coordinate della geometria, più la validazione OGC di
 ingresso e uscita; memoria O(n) per la copia scalata.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Fattori 2 e 3 attorno al vertice `(1, 1)`, che resta fermo.

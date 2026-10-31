@@ -100,6 +100,10 @@ caso peggiore, [Limiti dichiarati, «Validazione OGC: la ricerca delle
 auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Lati di 10 con `max_segment_length` 5: ogni lato si divide in due.

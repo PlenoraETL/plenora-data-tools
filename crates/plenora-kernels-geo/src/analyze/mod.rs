@@ -146,44 +146,76 @@ pub const DIAGNOSTIC_COLUMNS: [(&str, DataType); 10] = [
 // Entry point del catalogo (`analyze_contract` delle operazioni `geo.*`).
 // ---------------------------------------------------------------------------
 
-/// Rifiuta una colonna geometria che dichiara la prima coordinata nord
-/// (`axis_order` `lat_lon` o `northing_easting`).
-///
-/// Ogni kernel geo legge x come est/longitudine (l'ordine GIS normalizzato
-/// del contratto): con gli assi scambiati misure geodetiche, azimut e
-/// costruzioni darebbero un risultato sbagliato senza errore. Il contratto
-/// Arrow ammette quegli ordini (il vettore `resolved-point` dichiara
-/// `lat_lon` per `EPSG:4326`), e le operazioni tabellari li attraversano
-/// intatti (ARROW-008); le operazioni geo li rifiutano, finché non ci sarà
-/// uno scambio esplicito degli assi.
-///
-/// # Errors
-///
-/// `PlenoraError::Crs` per un ordine scambiato; l'errore di lettura della
-/// chiave.
-fn rifiuta_assi_scambiati(op: &str, inputs: &[DataContract]) -> Result<()> {
+/// Operazioni che interpretano le ordinate nel CRS, incluse le verifiche
+/// del dominio e i secondi operandi. Le altre lavorano sulle tuple memorizzate.
+#[must_use]
+pub fn richiede_ordine_assi(op: &str) -> bool {
+    !matches!(
+        op,
+        "geo.from_coords"
+            | "geo.from_wkt"
+            | "geo.generate_grid"
+            | "geo.to_wkt"
+            | "geo.vertex_count"
+            | "geo.explode"
+            | "geo.collect"
+            | "geo.geometry_accessors"
+            | "geo.geometry_diagnostics"
+            | "geo.boundary"
+            | "geo.bounds_extractor"
+    )
+}
+
+/// Richiede una dichiarazione esplicita compatibile, prima di leggere valori.
+/// Il CRS identifica il sistema, non l'ordine delle ordinate memorizzate.
+fn richiedi_ordine_assi(op: &str, inputs: &[DataContract]) -> Result<()> {
+    let interpreta_assi = richiede_ordine_assi(op);
     for input in inputs {
         for geometry in &input.geometries {
-            let Ok(field) = input.schema.field_with_name(&geometry.name) else {
-                continue;
-            };
-            if matches!(
-                plenora_core::contract::arrow_metadata::canonical_geometry_axis_order(field)?,
-                Some(
-                    plenora_core::contract::AxisOrder::LatLon
-                        | plenora_core::contract::AxisOrder::NorthingEasting
-                )
-            ) {
-                return Err(PlenoraError::Crs(format!(
-                    "{op}: colonna geometria `{}`: `axis_order` dichiara la prima coordinata \
-                     nord, ma i kernel geo leggono x come est/longitudine: l'ordine va \
-                     normalizzato a monte, mai in silenzio qui",
-                    geometry.name
-                )));
+            helpers::require_identifiable_geometry(op, input, geometry)?;
+            let field = input.schema.field_with_name(&geometry.name).map_err(|_| {
+                PlenoraError::Schema("campo geometria assente dallo schema".to_owned())
+            })?;
+            if interpreta_assi {
+                let crs = dispatch::require_resolved_crs(op, geometry)?;
+                crate::riproiezione::richiedi_assi_normalizzati(op, field, crs)?;
+            } else if let Some(crs) = geometry.crs.as_resolved() {
+                plenora_core::contract::arrow_metadata::require_geometry_source_crs(field, crs)?;
             }
         }
     }
     Ok(())
+}
+
+/// Gli adapter Arrow diretti applicano la stessa guardia dell'analisi,
+/// anche senza righe e prima di decodificare qualsiasi cella.
+pub(crate) fn richiedi_ordine_assi_schema(
+    op: &str,
+    schema: &plenora_core::arrow::SchemaRef,
+    colonna: &str,
+) -> Result<usize> {
+    use plenora_core::contract::arrow_metadata::{
+        geometry_column_index, read_geometry_contract_keys, GEO_METADATA_KEY,
+    };
+    use plenora_core::contract::arrow_schema::{
+        contract_crs_from_keys, geometry_contract_from_field,
+    };
+
+    let indice = geometry_column_index(schema, colonna)?;
+    let campo = schema.field(indice);
+    let chiavi = read_geometry_contract_keys(campo)?;
+    let crs = contract_crs_from_keys(
+        colonna,
+        campo.metadata().get(GEO_METADATA_KEY),
+        &chiavi,
+        plenora_core::crs::resolve_crs,
+    )?;
+    let mut input = DataContract::tabular(schema.clone());
+    input
+        .geometries
+        .push(geometry_contract_from_field(campo, crs, &chiavi));
+    richiedi_ordine_assi(op, &[input])?;
+    Ok(indice)
 }
 
 /// `analyze_contract` del catalogo per le operazioni `geo.*`: inferenza a
@@ -214,7 +246,7 @@ fn rifiuta_assi_scambiati(op: &str, inputs: &[DataContract]) -> Result<()> {
 ///   `Missing` o dichiarato ma non risolto compresi), se il CRS di output non
 ///   e' risolvibile o la riproiezione non e' ammessa, se una geometria di
 ///   config esce dal dominio del CRS, o se una colonna geometria di input
-///   dichiara gli assi scambiati (`lat_lon`, `northing_easting`);
+///   ha assi ignoti o incompatibili per un calcolo che ne dipende;
 /// - `PlenoraError::Internal` per un'incoerenza interna dell'analisi, o se
 ///   la validazione OGC di un WKB di config non conclude.
 pub fn analyze_geo_contract(
@@ -247,11 +279,7 @@ pub fn analyze_geo_contract(
             inputs.len()
         )));
     }
-    // `geo.reproject` ha la verifica piu' stretta (ordine GIS normalizzato
-    // del CRS sorgente, `richiedi_assi_normalizzati`).
-    if descriptor.id != "geo.reproject" {
-        rifiuta_assi_scambiati(descriptor.id, inputs)?;
-    }
+    richiedi_ordine_assi(descriptor.id, inputs)?;
     // I produttori sono unari: l'arieta' e' gia' verificata sopra. Il
     // rifiuto dell'N-aria resta prima del controllo sul numero di input,
     // quindi qui l'arieta' e' solo 1 o 2.
@@ -445,6 +473,71 @@ mod tests {
         }
     }
 
+    #[test]
+    fn anche_le_strutturali_rifiutano_crs_di_contratto_diverso_dal_campo() {
+        let input = with_geometry_field_metadata(geo_contract(projected_crs()), true, |metadata| {
+            metadata.insert(
+                GEO_METADATA_KEY,
+                geo_metadata_json_with_dimensions("EPSG:3857", GeometryDimensions::Xy).unwrap(),
+            );
+        });
+        for op in [
+            "geo.collect",
+            "geo.explode",
+            "geo.boundary",
+            "geo.bounds_extractor",
+            "geo.to_wkt",
+            "geo.geometry_accessors",
+            "geo.geometry_diagnostics",
+            "geo.vertex_count",
+        ] {
+            let error =
+                analyze_one(op, std::slice::from_ref(&input), &json!({}), None).unwrap_err();
+            assert_eq!(error.category(), ErrorCategory::Crs, "{op}: {error}");
+        }
+    }
+
+    #[test]
+    fn ogni_calcolo_rifiuta_assi_ambigui_su_ogni_operando() {
+        for descriptor in CATALOG.iter().filter(|d| d.family == Family::Geo) {
+            if !richiede_ordine_assi(descriptor.id) {
+                continue;
+            }
+            let count = if descriptor.arity == Arity::BinaryOrdered {
+                2
+            } else {
+                1
+            };
+            for position in 0..count {
+                for axis in [
+                    None,
+                    Some("unknown"),
+                    Some("lat_lon"),
+                    Some("northing_easting"),
+                ] {
+                    let mut inputs = vec![geo_contract(input_crs_for(descriptor.id)); count];
+                    inputs[position] =
+                        with_geometry_field_metadata(inputs[position].clone(), true, |metadata| {
+                            metadata.remove("plenora.geometry.axis_order");
+                            if let Some(axis) = axis {
+                                metadata.insert(
+                                    "plenora.geometry.axis_order".to_owned(),
+                                    axis.to_owned(),
+                                );
+                            }
+                        });
+                    let error = analyze_one(descriptor.id, &inputs, &json!({}), None).unwrap_err();
+                    assert_eq!(error.category(), ErrorCategory::Crs, "{}", descriptor.id);
+                    assert!(
+                        error.to_string().contains("AXIS_ORDER_REQUIRED"),
+                        "{}: {error}",
+                        descriptor.id
+                    );
+                }
+            }
+        }
+    }
+
     fn geometry_arrow_field() -> Field {
         let mut metadata = HashMap::new();
         metadata.insert(
@@ -462,6 +555,23 @@ mod tests {
     /// Contratto con la colonna geometria `FieldId(2)`, XY, nullable e senza
     /// tipi dichiarati; i campi e il CRS sono del chiamante.
     fn contract_with_geometry(fields: Vec<Field>, crs: ContractCrs) -> DataContract {
+        // Queste fixture costruiscono coordinate nella convenzione GIS.
+        let fields: Vec<Field> = fields
+            .into_iter()
+            .map(|field| {
+                if field.name() != DEFAULT_GEOMETRY_COLUMN {
+                    return field;
+                }
+                let mut metadata = field.metadata().clone();
+                if let Some(crs) = crs.as_resolved() {
+                    metadata.insert(
+                        "plenora.geometry.axis_order".to_owned(),
+                        crs.normalized_gis_axis_order().as_str().to_owned(),
+                    );
+                }
+                field.with_metadata(metadata)
+            })
+            .collect();
         DataContract::new(
             Arc::new(Schema::new(fields)),
             vec![GeometryColumnContract {
@@ -484,7 +594,11 @@ mod tests {
             vec![
                 Field::new("id", DataType::Int64, false),
                 Field::new("label", DataType::Utf8, true),
-                geometry_arrow_field(),
+                plenora_core::contract::arrow_metadata::geometry_output_field(
+                    DEFAULT_GEOMETRY_COLUMN,
+                    crs.definition(),
+                )
+                .expect("campo con CRS della fixture"),
             ],
             ContractCrs::Resolved(crs),
         )
@@ -3559,6 +3673,14 @@ mod tests {
             Field::new("id", DataType::Int64, false),
             Field::new(DEFAULT_GEOMETRY_COLUMN, DataType::Binary, true).with_metadata(
                 HashMap::from([
+                    (
+                        "plenora.geometry.crs_id".to_owned(),
+                        "EPSG:32632".to_owned(),
+                    ),
+                    (
+                        "plenora.geometry.axis_order".to_owned(),
+                        "easting_northing".to_owned(),
+                    ),
                     (PLENORA_GEOMETRY_DIMENSIONS_KEY.to_owned(), "xy".to_owned()),
                     (PLENORA_GEOMETRY_ENCODING_KEY.to_owned(), "wkb".to_owned()),
                 ]),

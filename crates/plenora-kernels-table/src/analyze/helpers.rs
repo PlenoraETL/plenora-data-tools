@@ -483,3 +483,50 @@ pub(in crate::analyze) fn analyze_append(
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
     finish(schema, geometry, active, append_props(input, overwritten))
 }
+
+/// Completa il contratto di una colonna che conserva celle geometriche.
+/// Il riferimento e' gia' stato verificato prima delle allocazioni.
+pub(in crate::analyze) fn derive_geometry(
+    mut output: DataContract,
+    input: &DataContract,
+    source: &str,
+    name: &str,
+    metadata: plenora_core::arrow::Metadata,
+    alloc: &mut FieldAllocator,
+) -> Result<DataContract> {
+    if metadata.is_empty() {
+        return Ok(output);
+    }
+    let mut fields = clone_fields(&output);
+    let index = output.schema.index_of(name)?;
+    fields[index] = fields[index].clone().with_metadata(metadata);
+    let keys = plenora_core::contract::arrow_metadata::read_geometry_contract_keys(&fields[index])?;
+    let crs = if let Some(geometry) = input.geometries.iter().find(|g| g.name == source) {
+        geometry.crs.clone()
+    } else {
+        plenora_core::contract::arrow_schema::contract_crs_from_keys(
+            source,
+            None,
+            &keys,
+            plenora_core::crs::resolve_crs,
+        )?
+    };
+    let mut geometry = plenora_core::contract::arrow_schema::geometry_contract_from_field(
+        &fields[index],
+        crs,
+        &keys,
+    );
+    geometry.field_id = alloc.derive(name)?;
+    output.geometries.retain(|g| g.name != name);
+    output.active_geometry = Some(geometry.field_id);
+    output.geometries.push(geometry);
+    DataContract::new(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            output.schema.metadata().clone(),
+        )),
+        output.geometries,
+        output.active_geometry,
+        output.properties,
+    )
+}

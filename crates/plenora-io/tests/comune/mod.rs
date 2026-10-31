@@ -429,3 +429,29 @@ pub fn ordini() -> RecordBatch {
     )
     .expect("ordini")
 }
+
+/// Celle della fixture esterna con definizione integrata esplicita per i
+/// round-trip positivi e il confronto con la definizione equivalente esterna.
+pub fn utm32_integrata() -> RecordBatch {
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/dati/pyarrow_utm32.parquet");
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path).unwrap()).unwrap();
+    let raw = builder
+        .metadata()
+        .file_metadata()
+        .key_value_metadata()
+        .unwrap()
+        .iter()
+        .find(|entry| entry.key == "geo")
+        .unwrap()
+        .value
+        .as_ref()
+        .unwrap();
+    let mut geo: serde_json::Value = serde_json::from_str(raw).unwrap();
+    geo["columns"]["geometry"]["crs"] =
+        plenora_io::crs_projjson::projjson_di("EPSG:32632").unwrap();
+    let batch = builder.build().unwrap().next().unwrap().unwrap();
+    plenora_io::geoparquet::applica(&batch, &geo.to_string()).unwrap()
+}
