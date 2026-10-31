@@ -431,7 +431,7 @@ pub fn ordini() -> RecordBatch {
 }
 
 /// Celle della fixture esterna con definizione integrata esplicita per i
-/// round-trip positivi; la fixture originale resta una prova di rifiuto.
+/// round-trip positivi e il confronto con la definizione equivalente esterna.
 pub fn utm32_integrata() -> RecordBatch {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     let path =

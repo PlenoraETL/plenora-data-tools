@@ -125,14 +125,20 @@ fn expected<'a>(v: &'a Value, name: &str, compute: bool) -> (&'a str, &'static s
     {
         return (v["category"].as_str().unwrap(), "validate", false);
     }
-    if geometry.iter().any(|f| {
-        f["metadata"]
-            .get("plenora.geometry.crs_definition")
-            .is_some()
-    }) || matches!(
-        name,
-        "axis-other-polar.json" | "crs-unknown-identifier.json"
-    ) {
+    // Questa fixture completa coincide con la tabella integrata; gli altri
+    // PROJJSON del corpus restano discordanti o fuori dal profilo.
+    let projjson_integrato = name == "crs-proj-epsg-4326-projjson.json";
+    if (!projjson_integrato
+        && geometry.iter().any(|f| {
+            f["metadata"]
+                .get("plenora.geometry.crs_definition")
+                .is_some()
+        }))
+        || matches!(
+            name,
+            "axis-other-polar.json" | "crs-unknown-identifier.json"
+        )
+    {
         // Deviazioni GEO-000/004/006/015/017/019: risolutore solo integrato.
         return (
             "crs",

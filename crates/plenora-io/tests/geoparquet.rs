@@ -123,15 +123,65 @@ fn geo_colonna(colonna: Value) -> Value {
     json!({"version": "1.1.0", "primary_column": "geometry", "columns": {"geometry": colonna}})
 }
 
+#[test]
+fn projjson_non_perde_cifre_e_non_si_fida_del_codice() {
+    let geo = geo_colonna(json!({
+        "encoding":"WKB", "geometry_types":["Point"],
+        "crs":projjson_di("EPSG:32632").unwrap(),
+    }))
+    .to_string();
+    for (numero, codice) in [
+        ("500000.00000000001", "CRS_INVALID"),
+        ("500001", "CRS_NOT_BUILTIN"),
+    ] {
+        let dir = cartella();
+        let wkb = punto(500_123.0, 4_987_654.0);
+        let colonne = Arc::new(BinaryArray::from_vec(vec![wkb.as_slice()]));
+        let p = file_con_colonna(dir.path(), &geo.replace("500000", numero), colonne, 1);
+        let e = leggi(&p).unwrap_err();
+        assert_eq!(e.public_projection().code(), Some(codice));
+        assert!(!e.to_string().contains(numero));
+    }
+}
+
+#[test]
+fn crs_di_campo_non_sparisce_durante_la_normalizzazione_geoparquet() {
+    let geo = geo_colonna(json!({
+        "encoding":"WKB", "geometry_types":["Point"],
+        "crs":projjson_di("EPSG:32632").unwrap(),
+    }))
+    .to_string();
+    for chiave in [GEO_METADATA_KEY, "ARROW:extension:metadata"] {
+        for (id, coerente) in [("EPSG:32632", true), ("EPSG:4326", false)] {
+            let f = Field::new("geometry", DataType::Binary, true).with_metadata(HashMap::from([
+                (GEOARROW_EXTENSION_KEY.into(), GEOARROW_WKB_EXTENSION.into()),
+                (
+                    chiave.into(),
+                    json!({"crs":projjson_di(id).unwrap()}).to_string(),
+                ),
+            ]));
+            let batch = tabella_geo(f, vec![Some(punto(500_123.0, 4_987_654.0))]);
+            let esito = plenora_io::geoparquet::applica(&batch, &geo);
+            if coerente {
+                assert_eq!(esito.unwrap().columns(), batch.columns());
+            } else {
+                assert_eq!(
+                    esito.unwrap_err().public_projection().code(),
+                    Some("CRS_MISMATCH")
+                );
+            }
+        }
+    }
+}
+
 fn leggi(percorso: &Path) -> Result<RecordBatch, PlenoraError> {
     leggi_tabella(percorso, None, u64::MAX)
 }
 
 #[test]
-fn fixture_pyarrow_utm32_rifiutata_e_celle_con_definizione_integrata() {
-    let error = leggi(&fixture("pyarrow_utm32.parquet")).unwrap_err();
-    assert_eq!(error.category(), ErrorCategory::Crs);
-    let tabella = comune::utm32_integrata();
+fn fixture_pyarrow_utm32_semanticamente_equivalente() {
+    let tabella = leggi(&fixture("pyarrow_utm32.parquet")).unwrap();
+    assert_eq!(tabella.columns(), comune::utm32_integrata().columns());
     assert_eq!(tabella.num_rows(), 4);
     assert!(!tabella.schema().metadata().contains_key(GEO_METADATA_KEY));
     assert_eq!(
@@ -1155,10 +1205,13 @@ fn geoparquet_non_sovrascrive_un_crs_legacy_diverso() {
 }
 
 #[test]
-fn geoparquet_non_cancella_dichiarazioni_estensione_non_supportate() {
-    for extension in [
-        json!({"crs":projjson_di("EPSG:4326").unwrap()}),
-        json!({"edges":"spherical"}),
+fn geoparquet_non_cancella_dichiarazioni_estensione_contraddittorie() {
+    for (extension, categoria) in [
+        (
+            json!({"crs":projjson_di("EPSG:4326").unwrap()}),
+            ErrorCategory::Crs,
+        ),
+        (json!({"edges":"spherical"}), ErrorCategory::Unsupported),
     ] {
         let campo =
             Field::new("geometry", DataType::Binary, true).with_metadata(HashMap::from([(
@@ -1172,7 +1225,7 @@ fn geoparquet_non_cancella_dichiarazioni_estensione_non_supportate() {
                 plenora_io::geoparquet::applica(&input, &file)
                     .unwrap_err()
                     .category(),
-                ErrorCategory::Unsupported
+                categoria
             );
         }
     }
@@ -1181,12 +1234,12 @@ fn geoparquet_non_cancella_dichiarazioni_estensione_non_supportate() {
 #[test]
 fn definizione_projjson_integrata_non_si_deduce_dal_solo_id() {
     let originale = projjson_di("EPSG:32632").unwrap();
-    // Ogni componente della definizione deve essere identico, anche quando
+    // Ogni componente semantica deve essere equivalente, anche quando
     // il codice EPSG resta valido. Le coordinate non sono simmetriche.
     for pointer in [
         "/id/code",
         "/base_crs/datum_ensemble/ellipsoid/semi_major_axis",
-        "/conversion/method/name",
+        "/conversion/method/id/code",
         "/conversion/parameters/1/value",
         "/coordinate_system/axis/0/unit",
         "/coordinate_system/axis/0/direction",
@@ -1218,7 +1271,7 @@ fn definizione_projjson_integrata_non_si_deduce_dal_solo_id() {
 }
 
 #[test]
-fn projjson_confronta_i_byte_prima_della_normalizzazione_json() {
+fn projjson_accetta_forme_equivalenti_senza_arrotondare_numeri() {
     let dir = cartella();
     let crs = projjson_di("EPSG:32632").unwrap();
     let path = file_a_mano(
@@ -1232,12 +1285,16 @@ fn projjson_confronta_i_byte_prima_della_normalizzazione_json() {
         geo_colonna(json!({"encoding":"WKB", "geometry_types":["Point"], "crs":crs})).to_string();
     for modified in [
         serde_json::to_string_pretty(&crs).unwrap(),
-        canonical.replace("6378137", "6378137.00000000000000000001"),
+        canonical.replace("500000", "5e5"),
         canonical.replace("WGS", r"W\u0047S"),
     ] {
         assert_ne!(modified, canonical);
-        let error = plenora_io::geoparquet::applica(&table, &geo.replace(&canonical, &modified))
-            .unwrap_err();
-        assert_eq!(error.category(), ErrorCategory::Crs);
+        let letto =
+            plenora_io::geoparquet::applica(&table, &geo.replace(&canonical, &modified)).unwrap();
+        assert_eq!(letto.columns(), table.columns());
     }
+    let modified = canonical.replace("6378137", "6378137.00000000000000000001");
+    let error =
+        plenora_io::geoparquet::applica(&table, &geo.replace(&canonical, &modified)).unwrap_err();
+    assert_eq!(error.public_projection().code(), Some("CRS_INVALID"));
 }

@@ -12,7 +12,7 @@
 //!   che il contratto non porta e si lasciano cadere;
 //! - `crs` assente vale `OGC:CRS84` (la specifica), `null` è un CRS
 //!   assente ([`ContractCrs::Missing`]), un `PROJJSON` si riconduce alla
-//!   tabella integrata per confronto completo ([`crate::crs_projjson`]);
+//!   tabella integrata con confronto semantico completo ([`crate::crs_projjson`]);
 //! - `geometry_types` dà i tipi dichiarati (`exact`) e la dimensionalità
 //!   (tutti ` Z` → `xyz`, nessuno → `xy`, misti o elenco vuoto →
 //!   `unknown`); ogni cella si cammina ([`crate::wkb`]) e un tipo non
@@ -182,6 +182,12 @@ struct MetadatoGeo {
 }
 
 fn analizza(testo: &str) -> Result<MetadatoGeo> {
+    plenora_core::json::ensure_numbers_exact(testo).map_err(|_| {
+        plenora_core::crs::CrsError::InvalidDefinition {
+            name: "crs",
+            reason: "numero PROJJSON non esatto".into(),
+        }
+    })?;
     plenora_core::json::ensure_no_duplicate_keys(testo)
         .map_err(|_| invalido("chiavi duplicate, documento ambiguo"))?;
     let Value::Object(radice) =
@@ -207,33 +213,9 @@ fn analizza(testo: &str) -> Result<MetadatoGeo> {
     let Some(Value::Object(colonne_json)) = radice.get("columns") else {
         return Err(invalido("`columns` assente o non oggetto"));
     };
-    // RawValue conserva anche numeri, escape e spazi: il confronto non
-    // deve perdere differenze durante il parsing in Value.
-    let raw: BTreeMap<String, &serde_json::value::RawValue> =
-        serde_json::from_str(testo).map_err(|_| invalido("JSON non valido"))?;
-    let raw_columns: BTreeMap<String, &serde_json::value::RawValue> = serde_json::from_str(
-        raw.get("columns")
-            .ok_or_else(|| invalido("columns assente"))?
-            .get(),
-    )
-    .map_err(|_| invalido("columns non valido"))?;
     let mut colonne = BTreeMap::new();
     for (nome, valore) in colonne_json {
         let analizzata = analizza_colonna(valore).map_err(|errore| di_colonna(nome, errore))?;
-        let raw_column: BTreeMap<String, &serde_json::value::RawValue> = serde_json::from_str(
-            raw_columns
-                .get(nome)
-                .ok_or_else(|| invalido("colonna assente"))?
-                .get(),
-        )
-        .map_err(|_| invalido("colonna non valida"))?;
-        if let (Some(raw_crs), CrsColonna::Integrato(id)) = (raw_column.get("crs"), &analizzata.crs)
-        {
-            let integrato = projjson_di(id)?.to_string();
-            if raw_crs.get() != integrato {
-                return Err(plenora_core::crs::CrsError::NotBuiltin.into());
-            }
-        }
         colonne.insert(nome.clone(), analizzata);
     }
     if !colonne.contains_key(&primaria) {
@@ -420,7 +402,7 @@ pub fn applica(tabella: &RecordBatch, testo_geo: &str) -> Result<RecordBatch> {
             }
         }
         let mut metadati = campo.metadata().clone();
-        plenora_core::contract::arrow_schema::verifica_metadato_estensione(campo)?;
+        verifica_crs_estensione(campo, &dichiarata.crs).map_err(errore)?;
         metadati.remove(EXTENSION_METADATA_KEY);
         completa_assi_geoparquet(campo, &dichiarata.crs, &mut metadati)?;
         let celle = come_binary(colonna).map_err(errore)?;
@@ -491,6 +473,40 @@ pub fn applica(tabella: &RecordBatch, testo_geo: &str) -> Result<RecordBatch> {
     contratto.validate()?;
     let schema_finale = arrow_schema_from_contract(&contratto)?;
     plenora_core::batch_with_rows(schema_finale, colonne, tabella.num_rows())
+}
+
+/// Prima della normalizzazione nessun CRS concorrente puo' sparire.
+fn verifica_crs_estensione(campo: &Field, crs: &CrsColonna) -> Result<()> {
+    if let Some(testo) = plenora_core::contract::arrow_schema::crs_definition_from_metadata(
+        campo.name(),
+        campo.metadata().get(GEO_METADATA_KEY),
+    )? {
+        confronta_crs_di_campo(&testo, crs)?;
+    }
+    plenora_core::contract::arrow_schema::verifica_metadato_estensione(campo)?;
+    let Some(raw) = campo
+        .metadata()
+        .get(EXTENSION_METADATA_KEY)
+        .filter(|s| !s.trim().is_empty())
+    else {
+        return Ok(());
+    };
+    let v: Value =
+        serde_json::from_str(raw).map_err(|_| invalido("metadato di estensione illeggibile"))?;
+    if let Some(v) = v.get("crs").filter(|v| !v.is_null()) {
+        confronta_crs_di_campo(&v.to_string(), crs)?;
+    }
+    Ok(())
+}
+
+fn confronta_crs_di_campo(testo: &str, crs: &CrsColonna) -> Result<()> {
+    let CrsColonna::Integrato(id) = crs else {
+        return Err(plenora_core::crs::CrsError::Mismatch.into());
+    };
+    if !resolve_crs(testo, "crs")?.semantically_equals(&resolve_crs(id, "crs")?) {
+        return Err(plenora_core::crs::CrsError::Mismatch.into());
+    }
+    Ok(())
 }
 
 /// Tabella pronta da scrivere come `GeoParquet`: schema senza i metadati che

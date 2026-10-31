@@ -44,6 +44,12 @@ copiati da `plenora-contracts@3c395a8` (tag `v1.1.0`) e verificati per SHA-256):
   ritentativo è `requires_recovery` se la causa era ritentabile,
   altrimenti `never`).
 
+Le definizioni PROJJSON passano dal validatore CRS comune: `CRS_INVALID`
+per sintassi, duplicati, limiti e numeri non esatti; `CRS_NOT_BUILTIN` per
+semantica incompleta, non supportata o diversa dalla tabella. WKT, WKT2 e
+proj-string restano `CRS_BACKEND_UNAVAILABLE`. Non si riportano valori
+letti nel documento. Il profilo è in [CRS](crs.md#definizioni-projjson).
+
 `provider` ed `execution_id` non ci sono: nessun errore del workspace ne
 ha uno.
 

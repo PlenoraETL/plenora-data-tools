@@ -69,7 +69,7 @@ In lettura il metadato di file `geo` è l'autorità:
 | `primary_column` | deve essere fra le `columns` e la prima colonna geometrica dello schema |
 | `encoding` | solo `WKB`; le codifiche GeoArrow native (`point`, …) sono `Unsupported` |
 | `geometry_types` | tipi dichiarati (`exact`) e dimensionalità: tutti ` Z` → `xyz`, nessuno → `xy`, misti o elenco vuoto → `unknown`; ogni cella si verifica, un tipo non dichiarato è `DataMapping` |
-| `crs` | assente → `OGC:CRS84`; `null` → CRS mancante; PROJJSON → documento integrato identico (sotto) |
+| `crs` | assente → `OGC:CRS84`; `null` → CRS mancante; PROJJSON → confronto semantico completo con la tabella (sotto) |
 | `edges` | assente o `planar`; `spherical` è `Unsupported` |
 | `epoch` | `Unsupported` (il contratto non ha epoche) |
 | `orientation`, `bbox`, `covering` | validati nella forma e lasciati cadere |
@@ -89,14 +89,16 @@ metadato `geo` di schema si toglie, `ARROW:extension:metadata` si
 sostituisce. Le identità dei campi (`plenora.field_id`) le assegna il
 runner all'uscita, non la lettura.
 
-**CRS.** Un PROJJSON si riconduce alla tabella integrata solo se l'intero
-frammento JSON originale coincide byte per byte con la serializzazione compatta
-del documento integrato prodotta dallo scrittore.
-L'identificatore seleziona il candidato, ma non basta ad accettarlo: ogni
-aggiunta, omissione o differenza e' `CRS_NOT_BUILTIN`, anche non semantica.
-Anche spazi, escape, ordine delle chiavi e numeri scritti diversamente si rifiutano. Le
+**CRS.** Un PROJJSON passa dal validatore comune del core: l'ID radice
+seleziona il candidato e il confronto completo verifica datum, ensemble,
+ellissoide, meridiano, conversione, parametri, unità e assi. Un documento
+non equivalente si rifiuta con `CRS_NOT_BUILTIN`; numeri non esatti e JSON
+ambiguo non vengono arrotondati o completati. Il profilo e i limiti sono in
+[CRS, «Definizioni PROJJSON»](crs.md#definizioni-projjson). Le
 coordinate WKB di GeoParquet sono sempre x = est/longitudine, come l'ordine
 GIS normalizzato del contratto: `EPSG:4326` si legge `lon_lat`.
+Un CRS nell'estensione Arrow incorporata viene validato e confrontato con
+quello di file prima della normalizzazione; una discordanza è `CRS_MISMATCH`.
 
 In scrittura, dal contratto: `version` `1.1.0`, `primary_column` la
 geometria attiva, `encoding` `WKB`, `crs` il PROJJSON **completo** del CRS
@@ -132,8 +134,7 @@ Fixture: `crates/plenora-io/tests/dati/` contiene file scritti da pyarrow
 (Parquet C++): due GeoParquet nella forma di GeoPandas, con il PROJJSON di
 PROJ, uno con timestamp `INT96` e uno con i checksum di pagina
 (`scripts/genera_fixture_geoparquet.py`). La fixture UTM con PROJJSON esterno
-si rifiuta fino al rientro PR CRS #132-#135; i round-trip positivi usano le
-stesse celle con la definizione integrata esplicitamente assegnata nel test.
+semanticamente equivalente si legge senza modificare le coordinate.
 
 ## Scrittura atomica
 
@@ -378,10 +379,8 @@ limite della tabella.
   `covering` letti si validano e si perdono; `epoch` e `edges: spherical` si
   rifiutano; il contratto ammette una sola colonna geometrica, quindi
   un file con più colonne geometriche si rifiuta (`Schema`). Il PROJJSON
-  letto deve coincidere integralmente con il documento integrato nella forma compatta
-  dello scrittore; definizioni equivalenti scritte in
-  altre forme sono rifiutate (rientro `PR CRS #132-#135` in
-  [limiti](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+  letto deve coincidere semanticamente con una voce integrata; un ID EPSG
+  con parametri discordanti viene rifiutato.
 - **Metadati geometrici normalizzati**: dopo GeoParquet il campo porta il
   `geo` di campo e il blocco canonico nella forma del contratto, non i byte
   di metadati che aveva prima della scrittura; il contratto si conserva

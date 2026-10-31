@@ -30,11 +30,11 @@ non si cambia quel requisito per farli passare.
 
 | Regola | Stato | Evidenza o comportamento |
 | --- | --- | --- |
-| GEO-000 | deviazione | Il passaggio rifiuta con crs i CRS resolved fuori tabella o con definizione, e geography con unsupported. |
+| GEO-000 | deviazione | Il passaggio rifiuta con crs i CRS resolved fuori tabella o con definizione non risolvibile dal profilo integrato, e geography con unsupported. |
 | GEO-001 | conforme | Il vocabolario canonico conserva gli assi e completa l assenza a unknown; anche il legacy senza prova conserva unknown (correzione 4.0). |
 | GEO-002 | deviazione | Tutti gli ingressi senza prova escono unknown; il calcolo dipendente dagli assi lo rifiuta esplicitamente per la policy safety-critical 4.0. |
 | GEO-003 | conforme | Vettori con ordinate asimmetriche e confronto byte per byte al confine API e CLI. |
-| GEO-004 | deviazione | Un crs_id con definizione resolved viene risolto dalla definizione e rifiutato anche nel passaggio. |
+| GEO-004 | deviazione | Un crs_id con definizione resolved non supportata viene rifiutato anche nel passaggio; PROJJSON equivalente alla tabella viene verificato. |
 | GEO-005 | deviazione | Declared_unresolved conserva la definizione senza verificarne grammatica e identificatori di primo livello. |
 | GEO-006 | deviazione | Una definizione senza identificatore, dichiarata resolved, viene rifiutata anche nel passaggio. |
 | GEO-007 | deviazione | Le operazioni geo rifiutano ancora EWKB valido con SRID incorporato; le tabellari lo preservano. |
@@ -45,11 +45,11 @@ non si cambia quel requisito per farli passare.
 | GEO-012 | conforme | Piu geometrie rifiutate unsupported/validate, nessun campo scartato. |
 | GEO-013 | deviazione | Le identita nuove partono oltre il massimo osservato, per non riusare identita perse dalla lineage. |
 | GEO-014 | deviazione | Il cambio di precisione e visibile nello schema; manca un evento dedicato di normalizzazione nel risultato. |
-| GEO-015 | deviazione | Le definizioni resolved vengono rifiutate dal risolutore integrato, anche quando verificabili. |
+| GEO-015 | deviazione | Le definizioni WKT/WKT2 e quelle fuori dal profilo PROJJSON integrato vengono rifiutate, anche quando verificabili. |
 | GEO-016 | deviazione | Il lettore non applica tutta la grammatica chiusa di crs_id e delle chiavi geometry, e ammette liste types vuote in alcuni stati. |
-| GEO-017 | deviazione | Non esiste il confronto delle definizioni nel sottoinsieme conservativo a decimali esatti. |
+| GEO-017 | deviazione | Il confronto semantico completo esiste per PROJJSON integrato; resta assente per WKT/WKT2. |
 | GEO-018 | conforme | Nessuna uscita pubblicata sui rifiuti dei vettori; pubblicazione atomica e prove run_artefatti. |
-| GEO-019 | deviazione | Non esiste il verificatore completo della grammatica chiusa di definizioni e datum ensemble. |
+| GEO-019 | deviazione | Il verificatore completo copre il profilo PROJJSON integrato, inclusi i datum ensemble; WKT/WKT2 restano non supportati. |
 | GEO-020 | deviazione | Le autorita locali restano unresolved ma il piano puo sostituire il CRS per decisione esplicita. |
 | REJ-001 | conforme | Categorie dei rifiuti verificate da API e CLI; WKB e SRID non diventano errori del piano. |
 | REJ-002 | deviazione | La lettura dei metadati non ha passate globali separate per vocabolario, CRS e supporto. |
@@ -78,7 +78,8 @@ v4 espande ogni deviazione sulle tre superfici; non dichiara artefatti runtime.
 | GEO-020 | Una decisione del chiamante puo rendere calcolabile un CRS locale che il contratto vuole indecidibile. | Separare decisione di riparazione e identita locale non confrontabile. |
 | REJ-002 | Con piu difetti la prima categoria puo divergere dall ordine normativo. | Validare ciascuna classe sull intero schema prima della successiva. |
 
-Le verifiche aggiunte non risolvono il confronto delle definizioni CRS.
+Il confronto delle definizioni PROJJSON integrate e' disponibile con #133;
+per WKT/WKT2 resta il rientro previsto da #135.
 Un rifiuto conservativo resta una deviazione quando il contratto impone il
 passaggio o accetta il calcolo; non viene contato come conforme.
 

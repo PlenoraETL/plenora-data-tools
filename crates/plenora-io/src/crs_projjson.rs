@@ -1,11 +1,8 @@
 //! CRS di `GeoParquet`: dal `PROJJSON` all'identificatore integrato e ritorno.
 //!
-//! In lettura si accetta solo il documento integrato completo, confrontato
-//! byte per byte dopo la serializzazione JSON deterministica dei due valori.
-//! Il lettore `GeoParquet` controlla inoltre i byte del frammento originale,
-//! prima che la normalizzazione JSON possa nascondere differenze.
-//! Non si deduce un CRS dal solo identificatore: qualsiasi differenza,
-//! anche non semantica, fallisce con `CRS_NOT_BUILTIN` (docs/limiti.md).
+//! In lettura il validatore comune del core confronta tutta la semantica
+//! con il candidato individuato dall'ID radice. ID e tipo da soli non
+//! bastano: ogni discordanza o costrutto fuori profilo viene rifiutato.
 //!
 //! In scrittura il documento è il `PROJJSON` completo che PROJ 9.5.1 produce
 //! per quel CRS (`data/projjson_integrati.json`, generato da
@@ -14,7 +11,7 @@
 
 use std::sync::OnceLock;
 
-use plenora_core::crs::{resolve_crs, CrsError, CrsKind, ResolvedCrs};
+use plenora_core::crs::{resolve_crs, CrsError, ResolvedCrs};
 use plenora_core::{PlenoraError, Result};
 use serde_json::{Map, Value};
 
@@ -31,6 +28,7 @@ fn tabella() -> Result<&'static Map<String, Value>> {
 
 fn leggi_tabella(testo: &str) -> Option<Map<String, Value>> {
     plenora_core::json::ensure_no_duplicate_keys(testo).ok()?;
+    plenora_core::json::ensure_numbers_exact(testo).ok()?;
     match serde_json::from_str(testo) {
         Ok(Value::Object(mappa)) => Some(mappa),
         _ => None,
@@ -91,60 +89,13 @@ pub fn identificativo_di(crs: &ResolvedCrs) -> Result<String> {
 /// fuori tabella; `Crs` se il documento differisce da quello integrato;
 /// `InvalidPlan` se il valore non e' un oggetto.
 pub fn identificativo_da_projjson(documento: &Value) -> Result<String> {
-    let Value::Object(oggetto) = documento else {
+    if !documento.is_object() {
         return Err(PlenoraError::InvalidPlan(
-            "metadato `geo`: `crs` deve essere un oggetto PROJJSON o null".to_owned(),
+            "metadato `geo`: `crs` deve essere un oggetto PROJJSON o null".into(),
         ));
-    };
-    let id = match (oggetto.get("id"), oggetto.get("ids")) {
-        (Some(id), None) => id,
-        (None, Some(Value::Array(ids))) if ids.len() == 1 => &ids[0],
-        _ => return Err(non_integrato()),
-    };
-    let autorita = id
-        .get("authority")
-        .and_then(Value::as_str)
-        .ok_or_else(non_integrato)?;
-    let codice = match id.get("code") {
-        Some(Value::Number(numero)) => numero.as_u64().map(|n| n.to_string()),
-        Some(Value::String(testo)) => Some(testo.clone()),
-        _ => None,
     }
-    .ok_or_else(non_integrato)?;
-    let identificativo = match autorita {
-        "EPSG" if !codice.is_empty() && codice.bytes().all(|b| b.is_ascii_digit()) => {
-            format!("EPSG:{codice}")
-        }
-        "OGC" if codice == "CRS84" => "OGC:CRS84".to_owned(),
-        _ => return Err(non_integrato()),
-    };
-    let risolto = resolve_crs(&identificativo, "crs")?;
-    let tipo_atteso = match risolto.kind() {
-        CrsKind::Geographic => "GeographicCRS",
-        CrsKind::Projected => "ProjectedCRS",
-    };
-    if oggetto.get("type").and_then(Value::as_str) != Some(tipo_atteso) {
-        let code = CrsError::NotBuiltin.code();
-        return Err(PlenoraError::CrsCoded {
-            code,
-            // Il messaggio nomina la chiave (`type`), mai il valore letto né
-            // l'identificatore: errori senza dati.
-            message: format!(
-                "{code}: il `type` del PROJJSON non e' quello del CRS integrato indicato \
-                 dal suo `id`"
-            ),
-        });
-    }
-    // Nessuna equivalenza approssimata: anche aggiunte o omissioni rifiutate.
-    let integrato = projjson_di(&identificativo)?;
-    let bytes = |value: &Value| {
-        serde_json::to_vec(value)
-            .map_err(|_| PlenoraError::Internal("serializzazione PROJJSON fallita".to_owned()))
-    };
-    if bytes(documento)? != bytes(&integrato)? {
-        return Err(non_integrato());
-    }
-    Ok(identificativo)
+    let risolto = resolve_crs(&documento.to_string(), "crs")?;
+    identificativo_di(&risolto)
 }
 
 #[cfg(test)]
@@ -177,7 +128,8 @@ mod tests {
         for identificativo in identificatori().expect("tabella") {
             let documento = projjson_di(&identificativo).expect("documento");
             assert_eq!(
-                identificativo_da_projjson(&documento).expect("rilettura"),
+                identificativo_da_projjson(&documento)
+                    .unwrap_or_else(|e| panic!("{identificativo}: {e}")),
                 identificativo
             );
             let risolto = resolve_crs(&identificativo, "crs").expect("risolto");
@@ -189,10 +141,13 @@ mod tests {
     fn forme_non_canoniche_riportano_all_identificatore() {
         let urn = resolve_crs("urn:ogc:def:crs:EPSG::32632", "crs").expect("urn");
         assert_eq!(identificativo_di(&urn).expect("id"), "EPSG:32632");
-        let documento = serde_json::json!({
-            "type": "ProjectedCRS", "ids": [{"authority": "EPSG", "code": "32632"}]
-        });
-        assert!(identificativo_da_projjson(&documento).is_err());
+        let mut documento = projjson_di("EPSG:32632").unwrap();
+        documento.as_object_mut().unwrap().remove("id");
+        documento["ids"] = serde_json::json!([{"authority": "EPSG", "code": "32632"}]);
+        assert_eq!(
+            identificativo_da_projjson(&documento).expect("ids"),
+            "EPSG:32632"
+        );
     }
 
     #[test]

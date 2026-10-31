@@ -1403,9 +1403,9 @@ esplicitamente dal chiamante, oppure trasporto IPC senza interpretazione.
 I produttori `from_coords`, `from_wkt`, `generate_grid` dichiarano la propria
 convenzione esplicita x/y. Le geometrie in config seguono tale convenzione.
 
-GeoArrow con CRS completo PROJJSON/WKT2 nell'estensione resta non supportato
-nel ramo: `verifica_metadato_estensione` rifiuta, non deduce dal solo EPSG.
-Il supporto futuro deve verificare la definizione completa e gli assi.
+GeoArrow con CRS completo PROJJSON passa dal confronto semantico completo
+con la tabella integrata; il solo EPSG non basta e non dichiara gli assi fisici.
+WKT2 nell'estensione resta non supportato.
 Le API dei kernel su tuple senza metadati mantengono la precondizione
 x=est/longitudine, y=nord/latitudine; l'ordine non e' verificabile da soli numeri.
 
@@ -1616,9 +1616,12 @@ riferimento; non sono una fusione nello stesso campo.
 
 **Rifiuto.** Discordanza nelle fusioni e nell'analisi della pipeline:
 `crs/validate`, effetto `none`, retry `never`. Il confine di lettura dei file
-attribuisce la fase di lettura secondo il contratto IO. Rappresentazioni
-fuori profilo, come CRS in `ARROW:extension:metadata`, si rifiutano con
-`unsupported`, prima di cancellare o sostituire metadati.
+attribuisce la fase di lettura secondo il contratto IO. Un CRS in
+`ARROW:extension:metadata` si accetta solo come PROJJSON completo
+semanticamente equivalente a un CRS integrato, e si confronta con le altre
+dichiarazioni prima di cancellare o sostituire metadati; le altre
+rappresentazioni (WKT2 compreso, finche' #135 non e' fusa) si rifiutano con
+`unsupported`.
 Il confronto fra CRS argomento e campo ammette la stessa definizione o un
 CRS integrato risolto equivalente; tutte le dichiarazioni presenti devono
 concordare. Una definizione esterna non risolvibile deve essere identica a
@@ -1655,20 +1658,19 @@ quella gia' risolta. I dettagli di un errore non includono coordinate.
 | `reproject_batches`, guardia assi | Confronto del CRS argomento con tutte le dichiarazioni del campo prima di interpretare le coordinate; poi assi normalizzati e piano sorgente. | `crates/plenora-kernels-geo/src/riproiezione.rs:753` / `crates/plenora-kernels-geo/src/riproiezione.rs:258` |
 | Analisi geo e reproject | Stessa guardia fra geometria del contratto e campo Arrow. | `crates/plenora-kernels-geo/src/analyze/mod.rs:171` / `crates/plenora-kernels-geo/src/analyze/producers.rs:48` |
 | Emissione Arrow da contratto | Verifica anche coerenza legacy/canonico del campo prodotto. ResolvedByDecision e' una riscrittura esplicita distinta. | `crates/plenora-core/src/contract/arrow_schema.rs:533` |
-| GeoParquet | PROJJSON accettato solo identico byte per byte al documento integrato nella forma dello scrittore (frammento originale, prima della normalizzazione). Confronto del CRS di campo (anche legacy) con il CRS di file prima di sovrascrivere metadati; CRS null rifiuta riferimenti residui; il CRS in ARROW:extension:metadata non supportato si rifiuta prima della cancellazione. Ordine fisico x/y imposto dal formato. | `crates/plenora-io/src/geoparquet.rs:98` |
+| GeoParquet | PROJJSON accettato solo semanticamente equivalente alla definizione integrata, con il validatore comune del core. Confronto del CRS di campo (anche legacy) con il CRS di file prima di sovrascrivere metadati; CRS null rifiuta riferimenti residui; il CRS in ARROW:extension:metadata si valida e confronta prima della cancellazione. Ordine fisico x/y imposto dal formato. | `crates/plenora-io/src/geoparquet.rs:98` |
 | Produttori da WKT/coordinate/grid; campo riproiettato | Creano un riferimento nuovo o scrivono la destinazione di una decisione: non reinterpretano celle gia' etichettate con un CRS sorgente diverso. | `crates/plenora-kernels-geo/src/analyze/producers.rs:233` / `crates/plenora-kernels-geo/src/riproiezione.rs:230` |
 | Costruttori di metadati/contratti; kernel su Geometry nude | Non consumano celle etichettate. I costruttori accettano dichiarazioni esplicite; emissione e consumo verificano la coerenza. Le Geometry nude non hanno una seconda dichiarazione confrontabile. | `crates/plenora-core/src/contract/arrow_schema.rs:465` / `crates/plenora-core/src/contract/arrow_metadata.rs:607` |
 
-**PR CRS #132-#135.** In attesa del confronto semantico completo di quelle
-PR, GeoParquet accetta solo PROJJSON identico byte per byte alla definizione
-integrata nella forma compatta dello scrittore: si confronta il frammento
-originale, senza normalizzare spazi, ordine delle chiavi, escape o numeri. Il confronto include ogni chiave,
-datum/ellissoide, metodo, parametri, unita' e assi; differenze anche puramente
-descrittive sono `crs/validate` (`CRS_NOT_BUILTIN`). `identificativo_di`
-confronta l'intero valore canonical del CRS risolto con quello integrato
-(il canonical integrato resta ridotto, non un resolver di definizioni esterne);
-`resolve_crs` rifiuta WKT/PROJJSON esterni con `CRS_BACKEND_UNAVAILABLE`,
-non ne estrae un identificatore. Rientro: **PR CRS #132-#135**.
+**PR CRS #132-#135.** Il rientro per PROJJSON e' avvenuto con #133:
+il validatore comune confronta datum/ensemble, ellissoide, meridiano,
+conversione, parametri, unita' e assi con la tabella integrata. Le forme
+semanticamente equivalenti sono accettate; le definizioni discordanti
+sono `CRS_NOT_BUILTIN`, numeri non esatti e JSON ambiguo sono rifiutati.
+`identificativo_di` verifica l'equivalenza semantica del CRS risolto.
+Resta il limite WKT/WKT2: `resolve_crs` li rifiuta con
+`CRS_BACKEND_UNAVAILABLE`, senza estrarne un identificatore.
+Rientro per WKT: **PR CRS #135**.
 
 `table.type_cast` rifiuta campi geometrici (anche su input vuoti/null) nel
 kernel e nell'analisi. `table.fill_na` conserva il campo ma ammette solo

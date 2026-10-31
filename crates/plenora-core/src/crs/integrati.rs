@@ -177,7 +177,12 @@ pub(super) fn cerca(identificativo: Identificativo) -> Option<&'static CrsIntegr
 
 /// Risolve una definizione d'autorita' della tabella.
 pub(super) fn risolvi(definizione: &str) -> Option<ResolvedCrs> {
-    let voce = cerca(identificativo(definizione)?)?;
+    risolvi_verificato(identificativo(definizione)?, definizione)
+}
+
+/// Costruisce solo dopo il confronto completo con la tabella.
+pub(super) fn risolvi_verificato(id: Identificativo, definizione: &str) -> Option<ResolvedCrs> {
+    let voce = cerca(id)?;
     Some(ResolvedCrs {
         definition: definizione.to_owned(),
         canonical: canonico(voce),

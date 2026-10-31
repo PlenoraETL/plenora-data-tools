@@ -80,7 +80,8 @@ pub struct GrigliaConfig {
 #[serde(deny_unknown_fields)]
 pub struct ReprojectConfig {
     /// CRS d'arrivo, obbligatorio: un identificatore della tabella
-    /// integrata (`EPSG:<codice>`, `OGC:CRS84` e le forme URN).
+    /// integrata (`EPSG:<codice>`, `OGC:CRS84` e le forme URN), oppure
+    /// una definizione PROJJSON completa semanticamente equivalente.
     pub target_crs: String,
     /// Accuratezza accettata in metri per un cambio di datum oltre 1 cm
     /// (assente: nessuna, e un percorso oltre 1 cm si rifiuta). Non finita,
