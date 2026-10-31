@@ -1079,7 +1079,7 @@ pub fn concat(
         ));
     }
     for (a, b) in left.schema().fields().iter().zip(right.schema().fields()) {
-        plenora_core::contract::arrow_metadata::require_same_geometry_reference(a, b)?;
+        plenora_core::contract::arrow_metadata::require_same_geometry_declaration(a, b)?;
     }
     let rows = left
         .num_rows()
@@ -1143,11 +1143,14 @@ pub struct ConcatByName {
 /// nullable se almeno un input non ha la colonna o ce l'ha nullable. In
 /// strict mode gli schemi devono essere identici per sequenza (nome + tipo).
 fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Field>> {
+    for input in inputs {
+        crate::require_unique_names(&input.schema())?;
+    }
     let first = inputs[0];
     if strict {
         for other in &inputs[1..] {
             for (a, b) in first.schema().fields().iter().zip(other.schema().fields()) {
-                plenora_core::contract::arrow_metadata::require_same_geometry_reference(a, b)?;
+                plenora_core::contract::arrow_metadata::require_same_geometry_declaration(a, b)?;
             }
 
             if first.num_columns() != other.num_columns()
@@ -1182,7 +1185,7 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
     for input in inputs {
         for field in input.schema().fields() {
             if let Some(existing) = fields.iter_mut().find(|f| f.name() == field.name()) {
-                plenora_core::contract::arrow_metadata::require_same_geometry_reference(
+                plenora_core::contract::arrow_metadata::require_same_geometry_declaration(
                     existing, field,
                 )?;
                 if existing.data_type() != field.data_type() {
@@ -1227,7 +1230,7 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
 /// - `ResourceLimit`: overflow nel conteggio delle righe, righe totali oltre
 ///   `max_rows`, colonne dell'unione oltre `max_columns` o uscita stimata
 ///   oltre `max_governed_memory_bytes`;
-/// - `Schema`: con `strict` schemi non identici, tipi incompatibili per
+/// - `Schema`: nomi duplicati, con `strict` schemi non identici, tipi incompatibili per
 ///   una stessa colonna (nessun cast), metadati di schema in conflitto;
 /// - `DataMapping` (`arrow error: …`): errori Arrow di concatenazione.
 pub fn concat_by_name(

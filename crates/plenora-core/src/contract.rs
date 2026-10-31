@@ -768,6 +768,37 @@ impl FieldAllocator {
         }
     }
 
+    /// Rinomina simultanea: cicli e catene leggono tutte le identita' originali.
+    ///
+    /// # Errors
+    ///
+    /// `Schema` se sorgenti o destinazioni sono ripetute.
+    pub fn rename_many(&mut self, pairs: &[(&str, &str)]) -> Result<()> {
+        let mut sources = std::collections::BTreeSet::new();
+        let mut targets = std::collections::BTreeSet::new();
+        for (old, new) in pairs {
+            if !sources.insert(*old) || !targets.insert(*new) {
+                return Err(PlenoraError::Schema(
+                    "rinomina ambigua delle identita'".into(),
+                ));
+            }
+        }
+        let original: Vec<_> = pairs
+            .iter()
+            .map(|(old, new)| ((*new).to_owned(), self.by_name.get(*old).copied()))
+            .collect();
+        for (old, new) in pairs {
+            self.by_name.remove(*old);
+            self.by_name.remove(*new);
+        }
+        for (new, id) in original {
+            if let Some(id) = id {
+                self.by_name.insert(new, id);
+            }
+        }
+        Ok(())
+    }
+
     /// Colonna derivata: riceve un `FieldId` nuovo, sostituendo l'eventuale
     /// identità precedente associata al nome.
     ///

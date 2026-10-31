@@ -1279,6 +1279,48 @@ fn flatten_row(
     esito
 }
 
+/// Rifiuta prima del parsing ogni numero che cambierebbe valore decimale.
+fn verifica_numeri_json(text: &str) -> Result<()> {
+    // RawValue interpreta il contenuto di una stringa come un secondo JSON:
+    // rifiutiamo la chiave riservata anche negli array e nei percorsi ignorati.
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'"' {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        while index < bytes.len() {
+            match bytes[index] {
+                b'\\' => index = (index + 2).min(bytes.len()),
+                b'"' => {
+                    index += 1;
+                    break;
+                }
+                _ => index += 1,
+            }
+        }
+        if bytes[index..]
+            .iter()
+            .find(|byte| !byte.is_ascii_whitespace())
+            == Some(&b':')
+            && serde_json::from_str::<String>(&text[start..index])
+                .is_ok_and(|key| key == CHIAVE_RAW_VALUE)
+        {
+            return Err(PlenoraError::DataMapping(
+                "flatten_json: chiave JSON riservata non supportata".into(),
+            ));
+        }
+    }
+    plenora_core::json::ensure_numbers_exact(text).map_err(|_| {
+        PlenoraError::DataMapping(
+            "flatten_json: numero JSON non rappresentabile esattamente".into(),
+        )
+    })
+}
+
 /// Righe rifiutate di `flatten_json`: conteggi per causa ed esempi, in
 /// ordine di riga.
 struct RifiutiJson {
@@ -1365,6 +1407,7 @@ impl RifiutiJson {
 ///   del `prefix` atteso;
 /// - `ResourceLimit`: colonne dell'ingresso piu' colonne prodotte oltre
 ///   `limits.max_columns`;
+/// - `DataMapping`: numero non rappresentabile esattamente o chiave JSON riservata;
 /// - `DataMapping` con diagnostica per riga: celle non nulle che non sono
 ///   JSON valido (`json.invalid_syntax`) o con radice non oggetto
 ///   (`json.root_not_object`), tutte contate;
@@ -1394,7 +1437,7 @@ pub fn flatten_json(
     } else {
         Some(JsonTargets::from_outputs(&config.output_columns, &prefix))
     };
-    // Una sola passata: ogni documento si valida e si appiattisce insieme.
+    // Dopo il controllo lessicale esatto, il parsing valida e appiattisce.
     // Al primo rifiuto l'output non serve piu' (l'esito e' l'errore con la
     // diagnostica di tutte le righe rifiutate): le righe seguenti si
     // classificano soltanto. Un errore di `scalar_as_string` esce alla prima
@@ -1404,6 +1447,7 @@ pub fn flatten_json(
     let mut cells: Vec<(String, String)> = Vec::new();
     let mut rifiuti = RifiutiJson::new();
     let mut elabora = |row: usize, text: &str| -> Result<()> {
+        verifica_numeri_json(text)?;
         let esito = if rifiuti.observed_total == 0 {
             flatten_row(
                 text,
@@ -2307,7 +2351,11 @@ mod tests {
         };
         let rows = (0..batch.num_rows())
             .map(|row| {
-                let parsed = scalar_as_string(source.as_ref(), row)?
+                let text = scalar_as_string(source.as_ref(), row)?;
+                if let Some(text) = &text {
+                    verifica_numeri_json(text)?;
+                }
+                let parsed = text
                     .and_then(|text| serde_json::from_str::<Value>(&text).ok())
                     .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
                 let mut values = BTreeMap::new();

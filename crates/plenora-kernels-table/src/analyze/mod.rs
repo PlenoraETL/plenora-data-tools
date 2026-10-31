@@ -159,6 +159,7 @@ pub fn analyze_table_contract(
         _ => {}
     }
     for input in inputs {
+        crate::require_unique_names(&input.schema)?;
         for geometry in &input.geometries {
             fields.observe(geometry.field_id);
         }

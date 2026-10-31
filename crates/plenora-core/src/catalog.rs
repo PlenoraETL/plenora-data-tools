@@ -814,8 +814,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         InputOrder,
         PublicProtocol,
         config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 2
+        contract_analysis_version = 3,
+        kernel_version = 3,
+        semantic_version = 1
     ),
     op!(
         "table.concat_columns",
@@ -979,7 +980,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         semantic_version = 3,
-        kernel_version = 5,
+        kernel_version = 6,
         contract_analysis_version = 2
     ),
     op!(
@@ -1048,8 +1049,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol,
         semantic_version = 3,
         config_schema_version = 2,
-        kernel_version = 4,
-        contract_analysis_version = 2
+        kernel_version = 5,
+        contract_analysis_version = 3
     ),
     op!(
         "table.pivot",
@@ -1065,8 +1066,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol,
         semantic_version = 3,
         config_schema_version = 2,
-        contract_analysis_version = 4,
-        kernel_version = 5
+        contract_analysis_version = 5,
+        kernel_version = 6
     ),
     op!(
         "table.rename",
@@ -1081,7 +1082,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         DefinedOrder,
         PublicProtocol,
         config_schema_version = 2,
-        contract_analysis_version = 2,
+        contract_analysis_version = 3,
         kernel_version = 2
     ),
     op!(
@@ -1273,8 +1274,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol,
         semantic_version = 3,
         config_schema_version = 2,
-        contract_analysis_version = 2,
-        kernel_version = 4
+        contract_analysis_version = 3,
+        kernel_version = 5
     ),
     op!(
         "table.type_cast",
@@ -1320,7 +1321,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol,
         semantic_version = 3,
         config_schema_version = 2,
-        contract_analysis_version = 3,
+        contract_analysis_version = 4,
         kernel_version = 5
     ),
     op!(
@@ -1487,7 +1488,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         DefinedOrder,
         PublicProtocol,
-        kernel_version = 2
+        kernel_version = 3,
+        semantic_version = 1,
+        contract_analysis_version = 2
     ),
     op!(
         "table.date_add",
@@ -1605,7 +1608,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         PublicProtocol,
         semantic_version = 3,
         config_schema_version = 2,
-        contract_analysis_version = 3,
+        contract_analysis_version = 4,
         kernel_version = 5
     ),
     // semi_join: output <= left -> LeftRelative.
@@ -1673,10 +1676,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         &[],
         CanonicalOrder,
         PublicProtocol,
-        kernel_version = 3,
+        kernel_version = 4,
         expansion_constraint = SumRelative,
         semantic_version = 2,
-        contract_analysis_version = 2
+        contract_analysis_version = 3
     ),
     op!(
         "table.unnest",
@@ -3117,7 +3120,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
         None,
         &[],
         InputOrder,
-        KernelValidated
+        KernelValidated,
+        semantic_version = 1,
+        contract_analysis_version = 2,
+        kernel_version = 2
     ),
     op!(
         "table.hmac_sha256",
@@ -4092,8 +4098,6 @@ mod tests {
         // i loro valori prima del ciclo, che includono questi incrementi,
         // stanno in `temporali_di_ogni_unita_portano_i_loro_incrementi`.
         let motivi: &[(&str, Versioni, Versioni)] = &[
-            // ignore_index scritto rifiutato
-            ("table.concat", (1, 1, 1, 1), (0, 1, 1, 1)),
             // separator con una colonna
             ("table.concat_columns", (1, 1, 1, 1), (0, 1, 1, 1)),
             // delimiter con una uscita; max_splits che non riduce
@@ -4104,8 +4108,6 @@ mod tests {
             ("table.assert_cardinality", (1, 1, 1, 1), (0, 1, 1, 1)),
             // offset con n 0
             ("table.limit", (1, 1, 1, 1), (0, 1, 1, 1)),
-            // renames vuoto, su se stessa
-            ("table.rename", (1, 1, 1, 1), (0, 1, 1, 1)),
             // columns vuoto
             ("table.drop_columns", (1, 1, 1, 1), (0, 1, 1, 1)),
             // columns vuoto senza alphabetical; alphabetical null
@@ -4240,8 +4242,6 @@ mod tests {
             ("table.expression", (5, 3, 4, 6), (1, 0, 1, 1)),
             // operatori ordinati nel valore nativo di ogni unita'; uguaglianza sul testo esatto
             ("table.filter", (2, 2, 3, 4), (1, 0, 1, 1)),
-            // colonna nel profilo testuale di ogni unita'
-            ("table.flatten_json", (2, 1, 1, 4), (1, 0, 1, 1)),
             // operandi di ogni unita' nel profilo testuale
             ("table.formula", (3, 2, 2, 4), (1, 0, 1, 1)),
             // colonne nel profilo testuale di ogni unita'
@@ -4256,14 +4256,8 @@ mod tests {
             ("table.mask_data", (1, 2, 2, 3), (1, 0, 1, 1)),
             // colonne nel profilo testuale di ogni unita'
             ("table.md5_hash", (2, 2, 2, 3), (1, 0, 1, 1)),
-            // type_policy string su timestamp di ogni unita' e date64
-            ("table.melt", (2, 2, 1, 3), (1, 0, 1, 1)),
-            // indice e pivot_col di ogni unita'; estremi e first/last nell'unita' nativa; indice timestamp sull'istante, in ordine cronologico
-            ("table.pivot", (2, 2, 3, 4), (1, 0, 1, 1)),
             // chiavi di ogni unita' e date64
             ("table.reconcile", (2, 1, 2, 2), (1, 0, 1, 1)),
-            // group_by e order_column di ogni unita'; valori nell'unita' nativa
-            ("table.rolling_window", (2, 2, 2, 4), (1, 0, 1, 1)),
             // stratify nel profilo testuale di ogni unita'
             ("table.sample", (1, 2, 2, 2), (1, 0, 1, 1)),
             // chiavi di ogni unita' e date64
@@ -4282,16 +4276,10 @@ mod tests {
             ("table.timezone_convert", (3, 3, 3, 5), (1, 0, 1, 1)),
             // comparatore di ogni unita' (istante esatto) e date64
             ("table.top_n", (1, 2, 2, 2), (1, 0, 1, 1)),
-            // celle di ogni unita' e date64 nel testo del kernel (l'analisi resta Unsupported)
-            ("table.transpose", (2, 2, 2, 3), (1, 0, 0, 1)),
             // date64 letto come il suo testo AAAA-MM-GG
             ("table.type_cast", (3, 2, 3, 5), (1, 0, 1, 1)),
-            // colonne di ogni unita' e date64 sul valore nativo
-            ("table.union_distinct", (1, 1, 1, 2), (1, 0, 1, 1)),
             // regole numeriche nel valore nativo di ogni unita' e di date64
             ("table.validate_rules", (3, 1, 3, 2), (1, 0, 1, 1)),
-            // group_by e order_column di ogni unita'; lag/lead nel tipo d'ingresso; ranghi sull'istante
-            ("table.window_function", (2, 2, 2, 4), (1, 0, 1, 1)),
         ];
         for (id, prima, incrementi) in motivi {
             let attese = (
@@ -4452,5 +4440,44 @@ mod tests {
             elencate, geo,
             "ogni operazione geo passa da `analyze_geo_contract`"
         );
+    }
+
+    #[test]
+    fn audit_400_porta_i_suoi_incrementi() {
+        // Versioni di be96cb3 e incrementi per i cinque difetti e la stessa
+        // classe nelle fusioni geometriche e nelle rinomine simultanee.
+        // La versione semantica pubblica resta quella del registro adottato:
+        // si corregge l'implementazione delle sue garanzie, non il protocollo.
+        let cases = [
+            ("table.flatten_json", (3, 1, 2, 5), (0, 0, 0, 1)),
+            ("table.concat", (1, 2, 2, 2), (0, 0, 1, 1)),
+            ("table.concat_by_name", (1, 1, 1, 1), (0, 0, 1, 1)),
+            ("table.union_distinct", (2, 1, 2, 3), (0, 0, 1, 1)),
+            ("table.coalesce", (1, 1, 1, 2), (0, 0, 1, 1)),
+            ("table.melt", (3, 2, 2, 4), (0, 0, 1, 1)),
+            ("table.pivot", (3, 2, 4, 5), (0, 0, 1, 1)),
+            ("table.transpose", (3, 2, 2, 4), (0, 0, 1, 1)),
+            ("table.rename", (1, 2, 2, 2), (0, 0, 1, 0)),
+            ("table.rolling_window", (3, 2, 3, 5), (0, 0, 1, 0)),
+            ("table.window_function", (3, 2, 3, 5), (0, 0, 1, 0)),
+        ];
+        for (id, before, delta) in cases {
+            let d = find_operation(id).unwrap();
+            assert_eq!(
+                (
+                    d.semantic_version,
+                    d.config_schema_version,
+                    d.contract_analysis_version,
+                    d.kernel_version
+                ),
+                (
+                    before.0 + delta.0,
+                    before.1 + delta.1,
+                    before.2 + delta.2,
+                    before.3 + delta.3
+                ),
+                "{id}"
+            );
+        }
     }
 }

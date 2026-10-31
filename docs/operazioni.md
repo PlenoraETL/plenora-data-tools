@@ -1940,7 +1940,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 1, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -2058,7 +2058,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 2 |
+| versioni | semantica 1, config 2, analisi 3, kernel 3 |
 
 #### Che cosa fa
 
@@ -2185,7 +2185,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 2, kernel 2 |
 
 #### Che cosa fa
 
@@ -4340,7 +4340,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 1, analisi 2, kernel 5 |
+| versioni | semantica 3, config 1, analisi 2, kernel 6 |
 
 #### Che cosa fa
 
@@ -4406,6 +4406,9 @@ In validazione:
 
 In esecuzione:
 
+- `DataMapping` senza valori nel messaggio: numero JSON che il parser
+  riscriverebbe con valore decimale diverso, oppure chiave riservata
+  `$serde_json::private::RawValue`, anche negli array e nei percorsi ignorati;
 - `DataMapping` con diagnostica per riga: una cella non nulla che non è JSON
   valido (`json.invalid_syntax`) o la cui radice non è un oggetto
   (`json.root_not_object`). Il passo non produce uscita; la diagnostica
@@ -4425,7 +4428,7 @@ per ogni percorso trovato; il runner lo rifiuta in validazione
 
 #### Complessità
 
-Tempo O(byte dei documenti): una passata di parsing per riga, senza
+Tempo O(byte dei documenti): controllo lessicale esatto e parsing per riga, senza
 costruire l'albero JSON (salvo le righe con chiavi ambigue o ripetute, che
 passano dall'albero); memoria O(n · k) per le k colonne estratte.
 
@@ -5742,7 +5745,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 2, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -5886,7 +5889,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 4, kernel 5 |
+| versioni | semantica 3, config 2, analisi 5, kernel 6 |
 
 #### Che cosa fa
 
@@ -6221,7 +6224,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 2 |
+| versioni | semantica 1, config 2, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -6558,7 +6561,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 3, kernel 5 |
+| versioni | semantica 3, config 2, analisi 4, kernel 5 |
 
 #### Che cosa fa
 
@@ -8611,7 +8614,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 2, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -8967,7 +8970,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 2, kernel 3 |
+| versioni | semantica 2, config 1, analisi 3, kernel 4 |
 
 #### Che cosa fa
 
@@ -9449,7 +9452,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 3, kernel 5 |
+| versioni | semantica 3, config 2, analisi 4, kernel 5 |
 
 #### Che cosa fa
 

@@ -313,6 +313,8 @@ pub(in crate::analyze) fn analyze_rolling_window(
         config.function,
         field_of(op, input, &config.column)?.data_type(),
     );
+    let overwritten = input.schema.index_of(&config.output_column).is_ok();
+    let sorted_by = if overwritten { None } else { sorted_by };
     let mut output = analyze_append(input, fields, &[(config.output_column, tipo, true)])?;
     output.properties = ContractProperties {
         sorted_by,
@@ -391,6 +393,8 @@ pub(in crate::analyze) fn analyze_window_function(
         &config.function,
         field_of(op, input, &config.column)?.data_type(),
     );
+    let overwritten = input.schema.index_of(&name).is_ok();
+    let sorted_by = if overwritten { None } else { sorted_by };
     let mut output = analyze_append(input, fields, &[(name, tipo, true)])?;
     output.properties = ContractProperties {
         sorted_by,

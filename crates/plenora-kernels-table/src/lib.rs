@@ -352,12 +352,24 @@ pub(crate) fn reject_rows(rejections: &[RowRejection<'_>], message: &'static str
     Err(PlenoraError::DataMapping(message.into()).with_row_diagnostics(report))
 }
 
+/// Rifiuta schemi ambigui prima di risolvere colonne per nome.
+pub(crate) fn require_unique_names(schema: &Schema) -> Result<()> {
+    let mut names = std::collections::BTreeSet::new();
+    for field in schema.fields() {
+        if !names.insert(field.name()) {
+            return Err(PlenoraError::Schema("nomi di colonna duplicati".into()));
+        }
+    }
+    Ok(())
+}
+
 /// Indice della colonna `name` nel batch.
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna assente dallo schema.
+/// - `Schema`: colonna assente o nomi duplicati nello schema.
 pub fn column_index(batch: &RecordBatch, name: &str) -> Result<usize> {
+    require_unique_names(&batch.schema())?;
     batch
         .schema()
         .index_of(name)
@@ -496,6 +508,7 @@ pub fn replace_or_append(
     nullable: bool,
     array: ArrayRef,
 ) -> Result<RecordBatch> {
+    require_unique_names(&batch.schema())?;
     if array.len() != batch.num_rows() {
         return Err(PlenoraError::Schema(format!(
             "lunghezza output {} diversa dalle righe {}",

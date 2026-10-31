@@ -101,9 +101,12 @@ pub(in crate::analyze) fn analyze_rename(
         }
         fields_out.push(field.with_name(name));
     }
-    for pair in &config.renames {
-        fields.rename(&pair.old_name, &pair.new_name);
-    }
+    let pairs: Vec<_> = config
+        .renames
+        .iter()
+        .map(|pair| (pair.old_name.as_str(), pair.new_name.as_str()))
+        .collect();
+    fields.rename_many(&pairs)?;
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     let renamed_geometry = input.geometries.first().map(|geometry| {
         renames

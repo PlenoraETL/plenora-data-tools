@@ -147,7 +147,7 @@ restano. La tabella con le versioni prima del ciclo e l'incremento è
 `crates/plenora-core/src/catalog.rs`, e copre per costruzione ogni
 operazione geo del catalogo.
 
-Le tabellari non cambiano versione: né la loro analisi né i loro kernel
+Nel ciclo Arrow qui descritto le tabellari non cambiano versione: né la loro analisi né i loro kernel
 cambiano. Versione, identità dei campi e blocco geometrico completo li
 aggiungono la pubblicazione dello schema e l'emissione canonica, che stanno
 sotto il catalogo e valgono per tutte le operazioni allo stesso modo: è un
@@ -229,3 +229,10 @@ completato a `unknown` (DT-ARROW-003): il registro CRS non prova l'ordine
 delle coordinate memorizzate. Prima del calcolo il runner controlla buona
 forma, SRID, tipi e dimensioni contro il campo ricevuto; gli errori di valore
 sono `data_mapping/read` o `crs/read`, senza effetti.
+
+L'audit successivo della 4.0.0 incrementa invece le versioni delle
+concatenazioni, delle fusioni geometriche e di `flatten_json`, e quelle di
+analisi di finestre e rinomina. I controlli contro nomi duplicati proteggono
+anche l'API Rust diretta; tali schemi erano gia' contratti non validi.
+Le concatenazioni conservano i metadati geometrici del primo campo solo
+se encoding, dimensioni, tipi e precisione concordano fra tutti gli ingressi.

@@ -114,6 +114,7 @@ pub struct SelectColumns {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn select_columns(batch: &RecordBatch, config: &SelectColumns) -> Result<RecordBatch> {
+    crate::require_unique_names(&batch.schema())?;
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
             "select_columns richiede almeno una colonna".into(),
@@ -447,6 +448,7 @@ pub fn check_align_default(value: &Value, align_type: AlignType) -> Result<()> {
 /// - `Internal`: colonna costruita con un tipo diverso da quello dichiarato
 ///   (guardia interna).
 pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordBatch> {
+    crate::require_unique_names(&batch.schema())?;
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
             "align_schema richiede almeno una colonna".into(),
@@ -674,6 +676,7 @@ impl ReorderColumns {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn reorder_columns(batch: &RecordBatch, config: &ReorderColumns) -> Result<RecordBatch> {
+    crate::require_unique_names(&batch.schema())?;
     let schema = batch.schema();
     let mut selected = Vec::with_capacity(batch.num_columns());
     let mut seen = HashSet::new();

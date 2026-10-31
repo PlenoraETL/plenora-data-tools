@@ -160,14 +160,27 @@ pub(in crate::analyze) fn analyze_melt(
     let active = input
         .active_geometry
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
-    let value_count = u64::try_from(value_indices.len()).unwrap_or(u64::MAX);
+    let value_count = u64::try_from(value_indices.len()).map_err(|_| {
+        PlenoraError::ResourceLimit("melt: numero colonne non rappresentabile".into())
+    })?;
+    if input
+        .properties
+        .row_count
+        .as_ref()
+        .and_then(|property| property.confidence.value())
+        .is_some_and(|rows| rows.checked_mul(value_count).is_none())
+    {
+        return Err(PlenoraError::ResourceLimit(
+            "melt: conteggio righe non rappresentabile".into(),
+        ));
+    }
     let output = finish(
         schema,
         geometry,
         active,
         ContractProperties {
             sorted_by: None,
-            row_count: map_row_count(input, |rows| rows.saturating_mul(value_count)),
+            row_count: map_row_count(input, |rows| rows * value_count),
         },
     )?;
     super::helpers::derive_geometry(

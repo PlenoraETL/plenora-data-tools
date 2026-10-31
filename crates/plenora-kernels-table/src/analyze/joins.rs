@@ -531,10 +531,17 @@ fn check_same_schema(op: &str, left: &DataContract, right: &DataContract) -> Res
         .iter()
         .zip(right.schema.fields().iter())
     {
-        plenora_core::contract::arrow_metadata::require_same_geometry_reference(
-            left_field,
-            right_field,
-        )?;
+        if matches!(op, "table.intersect" | "table.except") {
+            plenora_core::contract::arrow_metadata::require_same_geometry_reference(
+                left_field,
+                right_field,
+            )?;
+        } else {
+            plenora_core::contract::arrow_metadata::require_same_geometry_declaration(
+                left_field,
+                right_field,
+            )?;
+        }
         if left_field.name() != right_field.name()
             || left_field.data_type() != right_field.data_type()
         {
@@ -585,7 +592,7 @@ pub(in crate::analyze) fn analyze_concat_by_name(
         for input in inputs {
             for field in input.schema.fields() {
                 if let Some(existing) = union.iter_mut().find(|f| f.name() == field.name()) {
-                    plenora_core::contract::arrow_metadata::require_same_geometry_reference(
+                    plenora_core::contract::arrow_metadata::require_same_geometry_declaration(
                         existing, field,
                     )?;
                     if existing.data_type() != field.data_type() {

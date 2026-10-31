@@ -174,6 +174,32 @@ pub fn require_same_geometry_reference(left: &Field, right: &Field) -> Result<()
     Ok(())
 }
 
+/// Verifica le dichiarazioni geometriche conservate quando si impilano celle.
+/// Le identita' dei campi sorgenti possono differire; le altre proprieta' no.
+///
+/// # Errors
+///
+/// `Crs` per riferimenti incompatibili; `Schema` per encoding, dimensioni,
+/// tipi o precisione discordanti; errori del lettore per metadati invalidi.
+pub fn require_same_geometry_declaration(left: &Field, right: &Field) -> Result<(), PlenoraError> {
+    require_same_geometry_reference(left, right)?;
+    if !field_declares_wkb_geometry(left) && !field_declares_wkb_geometry(right) {
+        return Ok(());
+    }
+    let a = read_geometry_contract_keys(left)?;
+    let b = read_geometry_contract_keys(right)?;
+    if a.encoding != b.encoding
+        || a.dimensions != b.dimensions
+        || a.types != b.types
+        || a.precision != b.precision
+    {
+        return Err(PlenoraError::Schema(
+            "concatenazione con dichiarazioni geometriche incompatibili".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Confronta il CRS passato all'API con tutte le dichiarazioni del campo.
 /// Le definizioni esterne gia' risolte si accettano solo se identiche.
 ///
@@ -219,7 +245,7 @@ pub fn require_geometry_source_crs(
 ///
 /// # Errors
 ///
-/// `Crs` per riferimenti diversi; `Unsupported` per dimensioni o encoding
+/// `Crs` per riferimenti diversi; `Unsupported` per dimensioni, precisione o encoding
 /// diversi. I campi puramente tabellari non trasmettono metadati.
 pub fn merged_geometry_metadata(fields: &[&Field]) -> Result<Metadata, PlenoraError> {
     let Some(first) = fields.first() else {
@@ -234,9 +260,12 @@ pub fn merged_geometry_metadata(fields: &[&Field]) -> Result<Metadata, PlenoraEr
     let keys = read_geometry_contract_keys(first)?;
     for other in fields {
         let other = read_geometry_contract_keys(other)?;
-        if keys.dimensions != other.dimensions || keys.encoding != other.encoding {
+        if keys.dimensions != other.dimensions
+            || keys.encoding != other.encoding
+            || keys.precision != other.precision
+        {
             return Err(PlenoraError::Unsupported(
-                "fusione di geometrie con dimensioni o encoding diversi".into(),
+                "fusione di geometrie con dimensioni, encoding o precisione diversi".into(),
             ));
         }
     }
@@ -265,8 +294,14 @@ pub fn geometry_column_not_binary(name: &str, actual: &DataType) -> PlenoraError
 /// # Errors
 ///
 /// `PlenoraError::Schema` se la colonna `name` e' assente, non e' di tipo
-/// `Binary` o non si identifica come geometria WKB.
+/// `Binary`, non si identifica come geometria WKB, o lo schema ha nomi duplicati.
 pub fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, PlenoraError> {
+    let mut names = std::collections::BTreeSet::new();
+    for field in schema.fields() {
+        if !names.insert(field.name()) {
+            return Err(PlenoraError::Schema("nomi di colonna duplicati".into()));
+        }
+    }
     let (index, field) = schema
         .column_with_name(name)
         .ok_or_else(|| missing_geometry_column(name))?;
