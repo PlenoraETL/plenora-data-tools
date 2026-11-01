@@ -75,6 +75,19 @@ fn tabella(v: &Value) -> RecordBatch {
     .unwrap()
 }
 
+fn definizione_integrata(name: &str) -> bool {
+    // Elenco esplicito indipendente dal risolutore: queste definizioni
+    // del corpus coincidono interamente con la tabella integrata.
+    matches!(
+        name,
+        "crs-proj-epsg-4326-projjson.json"
+            | "crs-proj-epsg-3003-wkt2.json"
+            | "crs-proj-epsg-32632-wkt2.json"
+            | "crs-proj-epsg-3857-wkt2.json"
+            | "crs-proj-epsg-4326-wkt2.json"
+    )
+}
+
 fn expected<'a>(v: &'a Value, name: &str, compute: bool) -> (&'a str, &'static str, bool) {
     let geometry = v["fields"]
         .as_array()
@@ -125,10 +138,7 @@ fn expected<'a>(v: &'a Value, name: &str, compute: bool) -> (&'a str, &'static s
     {
         return (v["category"].as_str().unwrap(), "validate", false);
     }
-    // Questa fixture completa coincide con la tabella integrata; gli altri
-    // PROJJSON del corpus restano discordanti o fuori dal profilo.
-    let projjson_integrato = name == "crs-proj-epsg-4326-projjson.json";
-    if (!projjson_integrato
+    if (!definizione_integrata(name)
         && geometry.iter().any(|f| {
             f["metadata"]
                 .get("plenora.geometry.crs_definition")
@@ -148,6 +158,10 @@ fn expected<'a>(v: &'a Value, name: &str, compute: bool) -> (&'a str, &'static s
     }
     if !compute {
         return ("ok", "", false);
+    }
+    if name == "crs-proj-epsg-3003-wkt2.json" {
+        // Monte Mario risolve, ma il cambio datum verso WGS84 non e' supportato.
+        return ("crs", "validate", v["computation"] == "accepted");
     }
     if geometry
         .iter()
