@@ -1678,9 +1678,12 @@ Utf8/Int64/Float64/Boolean, quindi rifiuta WKB. Le espressioni non costruiscono
 struct/list geometriche; `unnest` ed `explode`
 rifiutano dichiarazioni geometriche annidate prima di creare un campo nuovo.
 
-**Limiti.** Con concat_by_name, se la geometria manca in un input il campo Arrow
-conserva i metadati, ma l'analisi non propaga la geometria attiva: un passo
-geo successivo e' rifiutato. La pipeline ammette al massimo una colonna geometrica: derivarne
+**Limiti.** Con concat_by_name, una colonna assente aggiunge null: campo,
+identita' e dichiarazione geometrica vengono dalla prima sorgente effettiva,
+con nullabilita' aggiornata. La prova di catalogo
+`catalogo_colonne_presenti_in_un_solo_ingresso` verifica entrambi i lati,
+anche con dichiarazioni presenti solo nel contratto Rust. La pipeline
+ammette al massimo una colonna geometrica: derivarne
 una seconda resta un rifiuto esplicito. Le API tabellari dirette possono
 conservare piu' campi geometrici distinti. Coalesce, melt, pivot first/last e
 transpose conservano i metadati del riferimento comune ma non copiano

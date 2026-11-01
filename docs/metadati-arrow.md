@@ -67,9 +67,11 @@ tiene l'identità). All'uscita (`pubblica_schema`):
   l'unicità vale nello schema.
 
 `concat`, `concat_by_name` e `union_distinct` tengono i metadati di campo
-del primo ingresso, e con loro la sua identità: la colonna unita è quella
-del primo ingresso, l'identità del secondo per la stessa colonna non
-sopravvive.
+della prima sorgente che contiene la colonna, e con loro la sua identita':
+per `concat_by_name` non strict puo' essere anche il secondo ingresso.
+Anche la dichiarazione geometrica segue questa sorgente, con nullabilita'
+aggiornata. L'identita' degli ingressi successivi per la stessa colonna
+non sopravvive.
 
 Stesso piano e stessi schemi d'ingresso, stesse identità
 (`crates/plenora-core/tests/identita_dei_campi.rs`,

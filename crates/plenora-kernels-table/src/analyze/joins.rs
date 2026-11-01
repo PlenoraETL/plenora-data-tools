@@ -686,31 +686,22 @@ pub(in crate::analyze) fn analyze_concat_by_name(
     // Merge dei metadata di schema di tutti gli input (conflitto su valori
     // diversi -> errore, mai "vince il primo").
     let schema = Schema::new_with_metadata(fields_out, merge_schema_metadata_many(op, inputs)?);
-    // Geometria: propagata solo se TUTTI gli input hanno la colonna con lo
-    // stesso tipo (altrimenti le righe degli input senza la colonna
-    // sarebbero null aggiunti, non la colonna d'ingresso conservata).
-    let geometry = first
-        .geometries
-        .first()
-        .filter(|geometry| {
-            inputs.iter().all(|input| {
-                input
-                    .schema
-                    .field_with_name(&geometry.name)
-                    .is_ok_and(|field| {
-                        Some(field.data_type())
-                            == first
-                                .schema
-                                .field_with_name(&geometry.name)
-                                .ok()
-                                .map(plenora_core::arrow::Field::data_type)
-                    })
-            })
-        })
-        .and_then(|geometry| propagate_geometry(first, &schema, Some(&geometry.name)));
-    let active = first
-        .active_geometry
-        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+    // Come campo e identita', la dichiarazione viene dalla prima sorgente
+    // effettiva. Gli ingressi senza il campo aggiungono null, non cancellano
+    // la geometria; quelli che lo portano sono gia' confrontati sopra.
+    let mut geometry = None;
+    let mut active = None;
+    for field in schema.fields() {
+        let source = first_field_source(inputs, field.name())?;
+        if let Some(declaration) = source.geometries.iter().find(|g| &g.name == field.name()) {
+            let mut propagated = declaration.clone();
+            propagated.nullable = field.is_nullable();
+            geometry = merge_geometry(op, geometry, Some(propagated))?;
+            active = source
+                .active_geometry
+                .filter(|id| *id == declaration.field_id);
+        }
+    }
     finish(
         origins,
         schema,

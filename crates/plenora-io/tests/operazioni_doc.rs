@@ -3082,3 +3082,456 @@ fn diagnostica_omonima_non_resuscita_dopo_un_passo_tabellare() {
     assert_ne!(continued.field_ids["geometry_type"], geometry_id);
     assert!(!continued.field_ids.values().any(|id| *id == geometry_id));
 }
+
+/// Una colonna privata di un ramo deve seguire quel ramo, anche quando la
+/// dichiarazione geometrica esiste solo nel contratto Rust e non in Arrow.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn catalogo_colonne_presenti_in_un_solo_ingresso() {
+    use plenora_core::catalog::Arity;
+    use plenora_core::contract::arrow_schema::arrow_schema_from_contract;
+    const NAME: &str = "__geometria_oracolo";
+    prepara_ambiente();
+    for op in CATALOG.iter().filter(|op| op.arity != Arity::Unary) {
+        let scheda = leggi_scheda(op).unwrap();
+        assert_eq!(scheda.esempio.ingressi.len(), 2, "{}", op.id);
+        for branch in 0..2 {
+            for geometry in [false, true] {
+                for contract_only in [false, true] {
+                    let mut allocator = FieldAllocator::default();
+                    let mut inputs = Vec::new();
+                    for (i, spec) in scheda.esempio.ingressi.iter().enumerate() {
+                        let mut batch =
+                            tabella_con_metadati(&spec.colonne, &spec.metadati).unwrap();
+                        if i == branch && op.family == Family::Table {
+                            batch = ingresso_geometrico(&batch, batch.num_columns(), false);
+                        }
+                        let mut input =
+                            contract_from_arrow_schema(batch.schema(), resolve_crs).unwrap();
+                        if op.family == Family::Geo && geometry {
+                            // Ogni binaria geo richiede la geometria di entrambi i
+                            // lati: l'assenza su un lato deve essere un errore.
+                            if i != branch {
+                                let name = input.geometries[0].name.clone();
+                                let fields: Vec<_> = input
+                                    .schema
+                                    .fields()
+                                    .iter()
+                                    .filter(|f| f.name() != &name)
+                                    .cloned()
+                                    .collect();
+                                input.schema = Arc::new(Schema::new_with_metadata(
+                                    fields,
+                                    input.schema.metadata().clone(),
+                                ));
+                                input.field_ids.remove(&name);
+                                input.geometries.clear();
+                                input.active_geometry = None;
+                            }
+                        } else if i == branch {
+                            let mut fields = input.schema.fields().to_vec();
+                            if op.family == Family::Geo {
+                                fields.push(Arc::new(Field::new(NAME, DataType::Binary, false)));
+                            }
+                            let field = fields.iter_mut().find(|f| f.name() == NAME).unwrap();
+                            let mut metadata = if geometry && !contract_only {
+                                field.metadata().clone()
+                            } else {
+                                plenora_core::arrow::Metadata::default()
+                            };
+                            metadata.insert("audit.source", "private");
+                            *field = Arc::new(
+                                field
+                                    .as_ref()
+                                    .clone()
+                                    .with_nullable(false)
+                                    .with_metadata(metadata),
+                            );
+                            input.schema = Arc::new(Schema::new_with_metadata(
+                                fields,
+                                input.schema.metadata().clone(),
+                            ));
+                            if !geometry && op.family == Family::Table {
+                                input.geometries.clear();
+                                input.active_geometry = None;
+                            }
+                            for g in &mut input.geometries {
+                                if g.name == NAME {
+                                    g.nullable = false;
+                                }
+                            }
+                        }
+                        for field in input.schema.fields() {
+                            let id = allocator.alloc().unwrap();
+                            input.field_ids.insert(field.name().clone(), id);
+                            for g in &mut input.geometries {
+                                if g.name == *field.name() {
+                                    g.field_id = id;
+                                    input.active_geometry = Some(id);
+                                }
+                            }
+                        }
+                        input.validate().unwrap();
+                        inputs.push(input);
+                    }
+                    let mut config: Value =
+                        serde_json::from_str(scheda.esempio.config.get()).unwrap();
+                    if op.id == "table.concat_by_name" {
+                        config["strict"] = Value::Bool(false);
+                    }
+                    let result = if op.family == Family::Table {
+                        plenora_kernels_table::analyze::analyze_table_contract(
+                            op.id,
+                            &inputs,
+                            &config,
+                            &mut allocator,
+                            &plenora_kernels_table::Limits::default(),
+                        )
+                    } else {
+                        plenora_kernels_geo::analyze::analyze_geo_contract(
+                            op.id,
+                            &inputs,
+                            &config,
+                            None,
+                            &mut allocator,
+                        )
+                    };
+                    let context = format!(
+                        "{}: ramo {branch}, geometria {geometry}, solo contratto {contract_only}",
+                        op.id
+                    );
+                    let reject = matches!(
+                        op.id,
+                        "table.concat"
+                            | "table.union_distinct"
+                            | "table.except"
+                            | "table.intersect"
+                    ) || (op.family == Family::Geo && geometry);
+                    if reject {
+                        assert!(
+                            matches!(
+                                result,
+                                Err(PlenoraError::Schema(_)
+                                    | PlenoraError::InvalidPlan(_)
+                                    | PlenoraError::Crs(_)
+                                    | PlenoraError::Unsupported(_))
+                            ),
+                            "{context}: {result:?}"
+                        );
+                        continue;
+                    }
+                    let output = result.unwrap_or_else(|e| panic!("{context}: {e}"));
+                    // Oracolo semantico chiuso: un'operazione nuova richiede una
+                    // decisione esplicita, non eredita un successo per default.
+                    let retained = match op.id {
+                        "table.concat_by_name"
+                        | "table.join"
+                        | "table.cross_join"
+                        | "table.asof_join"
+                        | "table.fuzzy_join" => true,
+                        "table.anti_join"
+                        | "table.semi_join"
+                        | "table.assert_foreign_key"
+                        | "geo.clip"
+                        | "geo.difference"
+                        | "geo.intersection"
+                        | "geo.union"
+                        | "geo.symmetric_difference"
+                        | "geo.within"
+                        | "geo.count_points_in_polygons"
+                        | "geo.sjoin"
+                        | "geo.nearest" => branch == 0,
+                        "table.reconcile" | "table.table_diff" | "geo.overlay" => false,
+                        _ => panic!("operazione senza oracolo: {}", op.id),
+                    };
+                    let name = if matches!(op.id, "table.join" | "table.fuzzy_join") {
+                        format!("{NAME}_{}", if branch == 0 { "L" } else { "R" })
+                    } else {
+                        NAME.to_owned()
+                    };
+                    assert_eq!(
+                        output.schema.field_with_name(&name).is_ok(),
+                        retained,
+                        "{context}"
+                    );
+                    if !retained {
+                        continue;
+                    }
+                    let field = output.schema.field_with_name(&name).unwrap();
+                    let source = &inputs[branch];
+                    assert_eq!(output.field_ids[&name], source.field_ids[NAME], "{context}");
+                    assert_eq!(
+                        field.metadata(),
+                        source.schema.field_with_name(NAME).unwrap().metadata(),
+                        "{context}"
+                    );
+                    if geometry {
+                        let mut expected = source.geometries[0].clone();
+                        expected.name = name.clone();
+                        expected.nullable = field.is_nullable();
+                        assert_eq!(
+                            format!("{:?}", output.geometries),
+                            format!("{:?}", vec![expected]),
+                            "{context}"
+                        );
+                        if matches!(
+                            op.id,
+                            "table.concat_by_name"
+                                | "table.join"
+                                | "table.asof_join"
+                                | "table.semi_join"
+                                | "table.anti_join"
+                                | "table.assert_foreign_key"
+                        ) {
+                            assert_eq!(
+                                output.active_geometry,
+                                Some(source.field_ids[NAME]),
+                                "{context}"
+                            );
+                        }
+                        let emitted = arrow_schema_from_contract(&output).unwrap();
+                        let reread = contract_from_arrow_schema(emitted, resolve_crs).unwrap();
+                        assert_eq!(reread.geometries.len(), 1, "{context}");
+                        assert_eq!(
+                            format!("{:?}", reread.geometries[0].crs),
+                            format!("{:?}", source.geometries[0].crs),
+                            "{context}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn concat_sorgente_effettiva_emissione_e_conflitti() {
+    use plenora_core::contract::arrow_schema::arrow_schema_from_contract;
+    use plenora_core::contract::{
+        ContractProperty, NullPlacement, PropertyConfidence, PropertyScope, SortDirection,
+        SortOrder,
+    };
+    use plenora_kernels_table::{analyze::analyze_table_contract, joins, Limits};
+    let base = RecordBatch::try_from_iter(vec![(
+        "id",
+        Arc::new(plenora_core::arrow::array::Int64Array::from(vec![1])) as ArrayRef,
+    )])
+    .unwrap();
+    let geo = ingresso_geometrico(&base, 1, false);
+    let mut fields = geo.schema().fields().to_vec();
+    let mut metadata = fields[1].metadata().clone();
+    metadata.insert("plenora.geometry.types", "point");
+    metadata.insert("plenora.geometry.types_declaration", "exact");
+    fields[1] = Arc::new(
+        fields[1]
+            .as_ref()
+            .clone()
+            .with_nullable(false)
+            .with_metadata(metadata),
+    );
+    let geo = RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            geo.schema().metadata().clone(),
+        )),
+        geo.columns().to_vec(),
+    )
+    .unwrap();
+    let limits = Limits::default();
+    for branch in 0..3 {
+        for repeated in [false, true] {
+            let batches: Vec<_> = (0..3)
+                .map(|i| {
+                    if i == branch || (repeated && i == (branch + 1) % 3) {
+                        geo.clone()
+                    } else {
+                        base.clone()
+                    }
+                })
+                .collect();
+            let mut alloc = FieldAllocator::default();
+            let inputs: Vec<_> = batches
+                .iter()
+                .map(|b| {
+                    let mut input = contract_from_arrow_schema(b.schema(), resolve_crs).unwrap();
+                    for field in input.schema.fields() {
+                        let id = alloc.alloc().unwrap();
+                        input.field_ids.insert(field.name().clone(), id);
+                        for g in &mut input.geometries {
+                            if g.name == *field.name() {
+                                g.field_id = id;
+                                input.active_geometry = Some(id);
+                            }
+                        }
+                    }
+                    // Le chiavi rappresentate dal contratto non restano in Arrow.
+                    // L'ordine assi vive solo nel campo, quindi resta li'.
+                    input.schema = Arc::new(Schema::new(
+                        input
+                            .schema
+                            .fields()
+                            .iter()
+                            .map(|f| {
+                                Field::new(f.name(), f.data_type().clone(), f.is_nullable())
+                                    .with_metadata(
+                                        f.metadata()
+                                            .iter()
+                                            .filter(|(k, _)| {
+                                                k.as_str() == "plenora.geometry.axis_order"
+                                            })
+                                            .map(|(k, v)| (k.clone(), v.clone()))
+                                            .collect::<plenora_core::arrow::Metadata>(),
+                                    )
+                            })
+                            .collect::<Vec<_>>(),
+                    ));
+                    let mut metadata = input.schema.metadata().clone();
+                    metadata.insert(
+                        format!("audit.source.{}", input.field_ids["id"].0),
+                        "retained",
+                    );
+                    input.schema = Arc::new(Schema::new_with_metadata(
+                        input.schema.fields().clone(),
+                        metadata,
+                    ));
+                    input.properties.row_count = Some(ContractProperty::new(
+                        PropertyConfidence::Proven(1),
+                        PropertyScope::Dataset,
+                    ));
+                    input.properties.sorted_by = Some(ContractProperty::new(
+                        PropertyConfidence::Proven(SortOrder {
+                            keys: vec![input.field_ids["id"]],
+                            direction: SortDirection::Ascending,
+                            nulls: NullPlacement::Last,
+                        }),
+                        PropertyScope::Dataset,
+                    ));
+                    input
+                })
+                .collect();
+            let output = analyze_table_contract(
+                "table.concat_by_name",
+                &inputs,
+                &serde_json::json!({"strict":false}),
+                &mut alloc,
+                &limits,
+            )
+            .unwrap();
+            let source = inputs.iter().find(|i| !i.geometries.is_empty()).unwrap();
+            assert_eq!(output.geometries.len(), 1);
+            assert_eq!(output.geometries[0].field_id, source.geometries[0].field_id);
+            assert!(output.geometries[0].nullable);
+            assert_eq!(output.geometries[0].types, source.geometries[0].types);
+            assert_eq!(output.active_geometry, source.active_geometry);
+            assert_eq!(
+                output.properties.row_count,
+                Some(ContractProperty::new(
+                    PropertyConfidence::Proven(3),
+                    PropertyScope::Dataset
+                ))
+            );
+            assert!(output.properties.sorted_by.is_none());
+            for input in &inputs {
+                for (key, value) in input.schema.metadata() {
+                    assert_eq!(output.schema.metadata().get(key), Some(value));
+                }
+            }
+            let emitted = arrow_schema_from_contract(&output).unwrap();
+            let direct = joins::concat_by_name(
+                &batches.iter().collect::<Vec<_>>(),
+                &joins::ConcatByName { strict: false },
+                &limits,
+            )
+            .unwrap();
+            let rebuilt = RecordBatch::try_new(emitted, direct.columns().to_vec()).unwrap();
+            assert!(verifica_byte_geometrici(&batches, &rebuilt));
+            assert_eq!(rebuilt.column(1).null_count(), if repeated { 1 } else { 2 });
+            let continued = analyze_table_contract(
+                "table.limit",
+                &[output],
+                &serde_json::json!({"n":1}),
+                &mut alloc,
+                &limits,
+            )
+            .unwrap();
+            assert_eq!(continued.geometries.len(), 1);
+            assert_eq!(
+                continued.geometries[0].field_id,
+                source.geometries[0].field_id
+            );
+        }
+    }
+    let plain = contract_from_arrow_schema(base.schema(), resolve_crs).unwrap();
+    let geometry = contract_from_arrow_schema(geo.schema(), resolve_crs).unwrap();
+    for divergence in 0..3 {
+        let mut other = geometry.clone();
+        // Il terzo ingresso non deve essere confrontato con il primo,
+        // che non ha il campo, ma con il secondo che ne e' la sorgente.
+        other.schema = Arc::new(Schema::new(
+            other
+                .schema
+                .fields()
+                .iter()
+                .map(|f| {
+                    Field::new(f.name(), f.data_type().clone(), f.is_nullable()).with_metadata(
+                        f.metadata()
+                            .iter()
+                            .filter(|(k, _)| k.as_str() == "plenora.geometry.axis_order")
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect::<plenora_core::arrow::Metadata>(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ));
+        match divergence {
+            0 => {
+                other.geometries[0].encoding = Some(plenora_core::contract::GeometryEncoding::Ewkb);
+            }
+            1 => {
+                other.geometries.clear();
+                other.active_geometry = None;
+            }
+            _ => {
+                let mut fields = other.schema.fields().to_vec();
+                fields[1] = Arc::new(fields[1].as_ref().clone().with_name("other_geometry"));
+                other.schema = Arc::new(Schema::new(fields));
+                let id = other.field_ids.remove("__geometria_oracolo").unwrap();
+                other.field_ids.insert("other_geometry".into(), id);
+                other.geometries[0].name = "other_geometry".into();
+            }
+        }
+        let result = analyze_table_contract(
+            "table.concat_by_name",
+            &[plain.clone(), geometry.clone(), other],
+            &serde_json::json!({"strict":false}),
+            &mut FieldAllocator::default(),
+            &limits,
+        );
+        match divergence {
+            0 => assert!(matches!(result, Err(PlenoraError::Schema(_)))),
+            1 => assert!(matches!(result, Err(PlenoraError::Crs(_)))),
+            _ => assert!(matches!(result, Err(PlenoraError::InvalidPlan(_)))),
+        }
+    }
+    // Allineare aggiunge un Binary anonimo: non puo' attribuirgli la
+    // dichiarazione geometrica dell'altro ramo, neppure se e' tutto null.
+    let aligned = analyze_table_contract("table.align_schema", &[plain], &serde_json::json!({"columns":[{"name":"id","type":"Int64"},{"name":"__geometria_oracolo","type":"Binary"}]}), &mut FieldAllocator::default(), &limits).unwrap();
+    for op in ["table.union_distinct", "table.except", "table.intersect"] {
+        for inputs in [
+            [aligned.clone(), geometry.clone()],
+            [geometry.clone(), aligned.clone()],
+        ] {
+            assert!(matches!(
+                analyze_table_contract(
+                    op,
+                    &inputs,
+                    &serde_json::json!({}),
+                    &mut FieldAllocator::default(),
+                    &limits
+                ),
+                Err(PlenoraError::Crs(_))
+            ));
+        }
+    }
+}

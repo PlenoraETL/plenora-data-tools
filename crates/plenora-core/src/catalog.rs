@@ -3123,7 +3123,7 @@ pub static CATALOG: &[OperationDescriptor] = &[
         InputOrder,
         KernelValidated,
         semantic_version = 1,
-        contract_analysis_version = 2,
+        contract_analysis_version = 3,
         kernel_version = 2
     ),
     op!(
@@ -4467,7 +4467,7 @@ mod tests {
         let cases = [
             ("table.flatten_json", (3, 1, 2, 5), (0, 0, 0, 1)),
             ("table.concat", (1, 2, 2, 2), (0, 0, 1, 1)),
-            ("table.concat_by_name", (1, 1, 1, 1), (0, 0, 1, 1)),
+            ("table.concat_by_name", (1, 1, 1, 1), (0, 0, 2, 1)),
             ("table.union_distinct", (2, 1, 2, 3), (0, 0, 1, 1)),
             ("table.coalesce", (1, 1, 1, 2), (0, 0, 1, 1)),
             ("table.melt", (3, 2, 2, 4), (0, 0, 1, 1)),
