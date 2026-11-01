@@ -4372,7 +4372,14 @@ mod tests {
             kernel: impl FnOnce(&RecordBatch, &RecordBatch, &Value) -> Result<RecordBatch>,
         ) {
             let expected = kernel(left, right, &config);
-            let inputs = [geo_input(left), DataContract::tabular(right.schema())];
+            // La fixture senza metadati dichiara `geom` solo nel contratto:
+            // anche il secondo ramo che la possiede deve dichiararla.
+            let right_contract = if right.schema().field_with_name("geom").is_ok() {
+                geo_input(right)
+            } else {
+                DataContract::tabular(right.schema())
+            };
+            let inputs = [geo_input(left), right_contract];
             check_schema(op, &inputs, &config, expected);
         }
 

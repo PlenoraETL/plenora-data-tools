@@ -281,6 +281,7 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
             .iter()
             .map(|index| input_schema.field(*index))
             .collect::<Vec<_>>(),
+        &[],
     )?;
     let tipo_valore = batch.column(value_indices[0]).data_type().clone();
     let omogeneo = value_indices
@@ -1134,9 +1135,10 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
             per_chiave[posizione[*key_id]] = None;
         }
         let metadata = if matches!(config.aggr_func, PivotAgg::First | PivotAgg::Last) {
-            plenora_core::contract::arrow_metadata::merged_geometry_metadata(&[batch
-                .schema()
-                .field(value_index)])?
+            plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+                &[batch.schema().field(value_index)],
+                &[],
+            )?
         } else {
             plenora_core::arrow::Metadata::default()
         };
@@ -1148,13 +1150,14 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
     crate::verifica_nomi_distinti("pivot", fields.iter().map(|field| field.name().as_str()))?;
     // I metadati dello schema d'ingresso si conservano, come in `melt`
     // e `aggregate`.
-    Ok(RecordBatch::try_new(
+    plenora_core::batch_with_rows(
         Arc::new(Schema::new_with_metadata(
             fields,
             batch.schema().metadata().clone(),
         )),
         columns,
-    )?)
+        ordine.len(),
+    )
 }
 
 /// Config di `table.transpose`. Campi sconosciuti rifiutati.
@@ -1233,6 +1236,7 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
             .iter()
             .map(|index| input_schema.field(*index))
             .collect::<Vec<_>>(),
+        &[],
     )?;
     if batch.num_rows() == 0 {
         return Ok(batch.clone());
@@ -1990,7 +1994,13 @@ pub fn table_diff(
         let b = right_schema.field(*b);
         crate::require_non_geometry(a)?;
         crate::require_non_geometry(b)?;
-        plenora_core::contract::arrow_metadata::require_same_geometry_reference(a, b)?;
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            a,
+            &[],
+            b,
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
+        )?;
         crate::validate_text_convertible(a.data_type(), a.name())?;
         crate::validate_text_convertible(b.data_type(), b.name())?;
     }

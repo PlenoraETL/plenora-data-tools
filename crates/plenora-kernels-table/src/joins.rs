@@ -1079,7 +1079,13 @@ pub fn concat(
         ));
     }
     for (a, b) in left.schema().fields().iter().zip(right.schema().fields()) {
-        plenora_core::contract::arrow_metadata::require_same_geometry_declaration(a, b)?;
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            a,
+            &[],
+            b,
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
+        )?;
     }
     let rows = left
         .num_rows()
@@ -1150,7 +1156,13 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
     if strict {
         for other in &inputs[1..] {
             for (a, b) in first.schema().fields().iter().zip(other.schema().fields()) {
-                plenora_core::contract::arrow_metadata::require_same_geometry_declaration(a, b)?;
+                plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+                    a,
+                    &[],
+                    b,
+                    &[],
+                    plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
+                )?;
             }
 
             if first.num_columns() != other.num_columns()
@@ -1185,8 +1197,12 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
     for input in inputs {
         for field in input.schema().fields() {
             if let Some(existing) = fields.iter_mut().find(|f| f.name() == field.name()) {
-                plenora_core::contract::arrow_metadata::require_same_geometry_declaration(
-                    existing, field,
+                plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+                    existing,
+                    &[],
+                    field,
+                    &[],
+                    plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
                 )?;
                 if existing.data_type() != field.data_type() {
                     return Err(PlenoraError::Schema(format!(
@@ -1425,7 +1441,7 @@ fn membership_impl(
     keep_matches: bool,
     fast: bool,
 ) -> Result<RecordBatch> {
-    crate::require_compatible_geometry_inputs(&left.schema(), &right.schema())?;
+    crate::require_compatible_geometry_inputs(&left.schema(), &[], &right.schema(), &[])?;
     if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {
         return Err(PlenoraError::InvalidPlan(
             "chiavi membership join non valide".into(),

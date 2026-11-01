@@ -553,110 +553,7 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
             continue;
         };
         matched += 1;
-        let canonical = canonical_geometry_metadata(geometry, &GeometryMetadataDetails::default());
-        let mut metadata = field.metadata().clone();
-        // Con un CRS deciso dal piano (`ResolvedByDecision`) le
-        // dichiarazioni della sorgente sono SOSTITUITE, non fuse: il
-        // blocco canonico ri-emette il CRS deciso e la lineage non deve
-        // riproporre il conflitto a valle. Lo schema del contratto di
-        // input resta intatto (il check fail-closed input/contratto
-        // confronta i campi, metadati inclusi): la sostituzione vive solo
-        // qui, all'emissione.
-        if matches!(geometry.crs, ContractCrs::ResolvedByDecision(_)) {
-            strip_decided_crs_declarations(&mut metadata);
-        }
-        match metadata.get(GEOARROW_EXTENSION_KEY) {
-            Some(extension) if extension != GEOARROW_WKB_EXTENSION => {
-                return Err(errore_di_contratto(format!(
-                    "campo geometria `{}`: estensione diversa da `{GEOARROW_WKB_EXTENSION}`",
-                    geometry.name
-                )));
-            }
-            Some(_) => {}
-            None => {
-                metadata.insert(
-                    GEOARROW_EXTENSION_KEY.to_owned(),
-                    GEOARROW_WKB_EXTENSION.to_owned(),
-                );
-            }
-        }
-        // Una dichiarazione dei tipi `unresolved` della lineage cede a
-        // quella del contratto: se ne va con il suo elenco (assente per
-        // costruzione), e il blocco canonico ri-emette la nuova.
-        let dichiarazione = canonical.get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY);
-        if metadata
-            .get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY)
-            .is_some_and(|existing| existing == "unresolved")
-            && dichiarazione.is_some_and(|value| value != "unresolved")
-            && !metadata.contains_key(PLENORA_GEOMETRY_TYPES_KEY)
-        {
-            metadata.remove(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY);
-        }
-        // In ordine di chiave: con piu' chiavi in conflitto l'errore (e la
-        // sua categoria) e' sempre lo stesso, non quello che l'ordine della
-        // `HashMap` sceglie.
-        let mut canonical: Vec<(String, String)> = canonical.into_iter().collect();
-        canonical.sort();
-        for (key, value) in &canonical {
-            // GEO-009 lega lo SRID incorporato al campo ricevuto. Su EWKB
-            // l'assenza deve attraversare anche i passi tabellari: completarla
-            // qui renderebbe valido un valore che il produttore non ha legato.
-            if key == PLENORA_GEOMETRY_SRID_KEY
-                && geometry.encoding == Some(crate::contract::GeometryEncoding::Ewkb)
-                && !metadata.contains_key(key)
-            {
-                continue;
-            }
-            match metadata.get(key) {
-                Some(existing) if existing != value => {
-                    // `axis_order` e `srid` si completano solo se assenti:
-                    // una chiave di lineage presente vince con qualunque
-                    // valore emesso, anche dedotto dall'autorità, così la
-                    // deduzione non diventa un falso conflitto su un
-                    // passaggio che non tocca il CRS.
-                    // La precisione segue la stessa regola: una dichiarazione
-                    // ereditata attraversa intatta le operazioni che non
-                    // toccano le coordinate, e le operazioni geo la tolgono
-                    // a monte (`analyze_geo_contract`), perche' ricodificano
-                    // in `f64`.
-                    if key == PLENORA_GEOMETRY_AXIS_ORDER_KEY
-                        || key == PLENORA_GEOMETRY_SRID_KEY
-                        || key == PLENORA_GEOMETRY_PRECISION_KEY
-                    {
-                        continue;
-                    }
-                    // Un'incoerenza CRS rilevata si dichiara
-                    // (`declared_unresolved`) invece di propagare il
-                    // `resolved` del produttore; con una decisione del
-                    // piano le dichiarazioni della sorgente sono già rimosse
-                    // (`strip_decided_crs_declarations`).
-                    if key == PLENORA_GEOMETRY_CRS_RESOLUTION_KEY
-                        && existing == "resolved"
-                        && value == "declared_unresolved"
-                    {
-                        metadata.insert(key.clone(), value.clone());
-                        continue;
-                    }
-                    return Err(errore_di_metadato(
-                        key,
-                        format!(
-                            "campo geometria `{}`: chiave `{key}` gia' presente con un valore \
-                             diverso da quello del contratto (il componente fallisce, \
-                             non sovrascrive)",
-                            geometry.name
-                        ),
-                    ));
-                }
-                Some(_) => {}
-                None => {
-                    metadata.insert(key.clone(), value.clone());
-                }
-            }
-        }
-        let output = field.as_ref().clone().with_metadata(metadata);
-        verifica_metadato_estensione(&output)?;
-        read_geometry_contract_keys(&output)?;
-        fields.push(output);
+        fields.push(canonical_geometry_field(field, geometry)?);
     }
     if matched != contract.geometries.len() {
         return Err(errore_di_contratto(
@@ -883,4 +780,120 @@ pub fn verifica_metadati_di_confine(schema: &Schema) -> Result<(), PlenoraError>
         Ok(())
     })()
     .map_err(|e: PlenoraError| e.with_phase(crate::ErrorPhase::Validate))
+}
+
+/// Canonicalizza insieme il campo Arrow e la dichiarazione del contratto.
+/// Usa le stesse precedenze e gli stessi rifiuti dell'emissione dello schema.
+///
+/// # Errors
+///
+/// `Schema` o `Crs` per dichiarazioni incoerenti o metadati malformati.
+pub fn canonical_geometry_field(
+    field: &Field,
+    geometry: &GeometryColumnContract,
+) -> Result<Field, PlenoraError> {
+    let canonical = canonical_geometry_metadata(geometry, &GeometryMetadataDetails::default());
+    let mut metadata = field.metadata().clone();
+    // Con un CRS deciso dal piano (`ResolvedByDecision`) le
+    // dichiarazioni della sorgente sono SOSTITUITE, non fuse: il
+    // blocco canonico ri-emette il CRS deciso e la lineage non deve
+    // riproporre il conflitto a valle. Lo schema del contratto di
+    // input resta intatto (il check fail-closed input/contratto
+    // confronta i campi, metadati inclusi): la sostituzione vive solo
+    // qui, all'emissione.
+    if matches!(geometry.crs, ContractCrs::ResolvedByDecision(_)) {
+        strip_decided_crs_declarations(&mut metadata);
+    }
+    match metadata.get(GEOARROW_EXTENSION_KEY) {
+        Some(extension) if extension != GEOARROW_WKB_EXTENSION => {
+            return Err(errore_di_contratto(format!(
+                "campo geometria `{}`: estensione diversa da `{GEOARROW_WKB_EXTENSION}`",
+                geometry.name
+            )));
+        }
+        Some(_) => {}
+        None => {
+            metadata.insert(
+                GEOARROW_EXTENSION_KEY.to_owned(),
+                GEOARROW_WKB_EXTENSION.to_owned(),
+            );
+        }
+    }
+    // Una dichiarazione dei tipi `unresolved` della lineage cede a
+    // quella del contratto: se ne va con il suo elenco (assente per
+    // costruzione), e il blocco canonico ri-emette la nuova.
+    let dichiarazione = canonical.get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY);
+    if metadata
+        .get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY)
+        .is_some_and(|existing| existing == "unresolved")
+        && dichiarazione.is_some_and(|value| value != "unresolved")
+        && !metadata.contains_key(PLENORA_GEOMETRY_TYPES_KEY)
+    {
+        metadata.remove(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY);
+    }
+    // In ordine di chiave: con piu' chiavi in conflitto l'errore (e la
+    // sua categoria) e' sempre lo stesso, non quello che l'ordine della
+    // `HashMap` sceglie.
+    let mut canonical: Vec<(String, String)> = canonical.into_iter().collect();
+    canonical.sort();
+    for (key, value) in &canonical {
+        // GEO-009 lega lo SRID incorporato al campo ricevuto. Su EWKB
+        // l'assenza deve attraversare anche i passi tabellari: completarla
+        // qui renderebbe valido un valore che il produttore non ha legato.
+        if key == PLENORA_GEOMETRY_SRID_KEY
+            && geometry.encoding == Some(crate::contract::GeometryEncoding::Ewkb)
+            && !metadata.contains_key(key)
+        {
+            continue;
+        }
+        match metadata.get(key) {
+            Some(existing) if existing != value => {
+                // `axis_order` e `srid` si completano solo se assenti:
+                // una chiave di lineage presente vince con qualunque
+                // valore emesso, anche dedotto dall'autorità, così la
+                // deduzione non diventa un falso conflitto su un
+                // passaggio che non tocca il CRS.
+                // La precisione segue la stessa regola: una dichiarazione
+                // ereditata attraversa intatta le operazioni che non
+                // toccano le coordinate, e le operazioni geo la tolgono
+                // a monte (`analyze_geo_contract`), perche' ricodificano
+                // in `f64`.
+                if key == PLENORA_GEOMETRY_AXIS_ORDER_KEY
+                    || key == PLENORA_GEOMETRY_SRID_KEY
+                    || key == PLENORA_GEOMETRY_PRECISION_KEY
+                {
+                    continue;
+                }
+                // Un'incoerenza CRS rilevata si dichiara
+                // (`declared_unresolved`) invece di propagare il
+                // `resolved` del produttore; con una decisione del
+                // piano le dichiarazioni della sorgente sono già rimosse
+                // (`strip_decided_crs_declarations`).
+                if key == PLENORA_GEOMETRY_CRS_RESOLUTION_KEY
+                    && existing == "resolved"
+                    && value == "declared_unresolved"
+                {
+                    metadata.insert(key.clone(), value.clone());
+                    continue;
+                }
+                return Err(errore_di_metadato(
+                    key,
+                    format!(
+                        "campo geometria `{}`: chiave `{key}` gia' presente con un valore \
+                     diverso da quello del contratto (il componente fallisce, \
+                     non sovrascrive)",
+                        geometry.name
+                    ),
+                ));
+            }
+            Some(_) => {}
+            None => {
+                metadata.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    let output = field.clone().with_metadata(metadata);
+    verifica_metadato_estensione(&output)?;
+    read_geometry_contract_keys(&output)?;
+    Ok(output)
 }

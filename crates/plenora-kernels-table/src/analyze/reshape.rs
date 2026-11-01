@@ -74,6 +74,8 @@ fn melt_input_indices(
     Ok((id_indices, value_indices))
 }
 
+// Inferenza di schema, cardinalita' e geometria della stessa trasformazione.
+#[allow(clippy::too_many_lines)]
 pub(in crate::analyze) fn analyze_melt(
     op: &str,
     inputs: &[DataContract],
@@ -95,6 +97,7 @@ pub(in crate::analyze) fn analyze_melt(
             .iter()
             .map(|index| &source_fields[*index])
             .collect::<Vec<_>>(),
+        &input.geometries,
     )?;
     let value_type = source_fields[value_indices[0]].data_type().clone();
     let homogeneous = value_indices
@@ -297,7 +300,10 @@ pub(in crate::analyze) fn analyze_pivot(
         config.aggr_func,
         reshape::PivotAgg::First | reshape::PivotAgg::Last
     ) {
-        let metadata = plenora_core::contract::arrow_metadata::merged_geometry_metadata(&[valore])?;
+        let metadata = plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+            &[valore],
+            &input.geometries,
+        )?;
         for name in config.mapping.values() {
             output = super::helpers::derive_geometry(
                 output,
@@ -342,6 +348,7 @@ pub(in crate::analyze) fn analyze_transpose(
             .filter(|field| config.id_column.as_ref() != Some(field.name()))
             .map(std::convert::AsRef::as_ref)
             .collect::<Vec<_>>(),
+        &input.geometries,
     )?;
     unsupported(
         op,
@@ -535,9 +542,12 @@ pub(in crate::analyze) fn analyze_table_diff(
     for name in &compare {
         crate::require_non_geometry(field_of(op, left, name)?)?;
         crate::require_non_geometry(field_of(op, right, name)?)?;
-        plenora_core::contract::arrow_metadata::require_same_geometry_reference(
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
             field_of(op, left, name)?,
+            &left.geometries,
             field_of(op, right, name)?,
+            &right.geometries,
+            plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
         )?;
         require_scalar_string(op, left, name)?;
         require_scalar_string(op, right, name)?;

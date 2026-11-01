@@ -241,6 +241,7 @@ pub(in crate::analyze) fn analyze_coalesce(
             .iter()
             .map(|name| field_of(op, input, name))
             .collect::<Result<Vec<_>>>()?,
+        &input.geometries,
     )?;
     let output = analyze_append(
         input,
@@ -366,7 +367,12 @@ pub(in crate::analyze) fn analyze_assert_foreign_key(
     fields: &mut FieldAllocator,
     limits: &Limits,
 ) -> Result<DataContract> {
-    crate::require_compatible_geometry_inputs(&inputs[0].schema, &inputs[1].schema)?;
+    crate::require_compatible_geometry_inputs(
+        &inputs[0].schema,
+        &inputs[0].geometries,
+        &inputs[1].schema,
+        &inputs[1].geometries,
+    )?;
     let config: governance::ForeignKey = typed(op, config)?;
     let _ = fields;
     check_text_key_pairs(
@@ -388,7 +394,12 @@ pub(in crate::analyze) fn analyze_reconcile(
     fields: &mut FieldAllocator,
     limits: &Limits,
 ) -> Result<DataContract> {
-    crate::require_compatible_geometry_inputs(&inputs[0].schema, &inputs[1].schema)?;
+    crate::require_compatible_geometry_inputs(
+        &inputs[0].schema,
+        &inputs[0].geometries,
+        &inputs[1].schema,
+        &inputs[1].geometries,
+    )?;
     let config: governance::Reconcile = typed(op, config)?;
     let _ = fields;
     check_text_key_pairs(

@@ -782,28 +782,28 @@ pub fn validate_text_convertible(data_type: &DataType, column: &str) -> Result<(
 
 /// Le operazioni binarie richiedono riferimenti concordi anche quando
 /// la geometria non e' una chiave o non contribuisce all'uscita.
-pub(crate) fn require_compatible_geometry_inputs(left: &Schema, right: &Schema) -> Result<()> {
+pub(crate) fn require_compatible_geometry_inputs(
+    left: &Schema,
+    left_geometries: &[plenora_core::contract::GeometryColumnContract],
+    right: &Schema,
+    right_geometries: &[plenora_core::contract::GeometryColumnContract],
+) -> Result<()> {
     use plenora_core::contract::arrow_metadata::{
-        field_declares_wkb_geometry, require_same_geometry_reference,
+        field_declares_wkb_geometry, require_geometry_compatibility, GeometryComparison,
     };
-    for a in left
-        .fields()
-        .iter()
-        .filter(|f| field_declares_wkb_geometry(f))
-    {
-        for b in right
-            .fields()
-            .iter()
-            .filter(|f| field_declares_wkb_geometry(f))
-        {
-            require_same_geometry_reference(a, b)?;
-            let left = plenora_core::contract::arrow_metadata::read_geometry_contract_keys(a)?;
-            let right = plenora_core::contract::arrow_metadata::read_geometry_contract_keys(b)?;
-            if left.encoding != right.encoding {
-                return Err(PlenoraError::Crs(
-                    "ingressi geometrici con encoding diversi".into(),
-                ));
-            }
+    for a in left.fields().iter().filter(|f| {
+        field_declares_wkb_geometry(f) || left_geometries.iter().any(|g| g.name == *f.name())
+    }) {
+        for b in right.fields().iter().filter(|f| {
+            field_declares_wkb_geometry(f) || right_geometries.iter().any(|g| g.name == *f.name())
+        }) {
+            require_geometry_compatibility(
+                a,
+                left_geometries,
+                b,
+                right_geometries,
+                GeometryComparison::Inputs,
+            )?;
         }
     }
     Ok(())

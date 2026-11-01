@@ -308,7 +308,13 @@ pub fn validate_schema(left: &RecordBatch, right: &RecordBatch) -> Result<()> {
         ));
     }
     for (a, b) in left.schema().fields().iter().zip(right.schema().fields()) {
-        plenora_core::contract::arrow_metadata::require_same_geometry_reference(a, b)?;
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            a,
+            &[],
+            b,
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
+        )?;
     }
     Ok(())
 }
@@ -332,7 +338,13 @@ pub fn concat_compatible(
 ) -> Result<RecordBatch> {
     validate_schema(left, right)?;
     for (a, b) in left.schema().fields().iter().zip(right.schema().fields()) {
-        plenora_core::contract::arrow_metadata::require_same_geometry_declaration(a, b)?;
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            a,
+            &[],
+            b,
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
+        )?;
     }
     let rows = left
         .num_rows()
@@ -413,7 +425,13 @@ pub fn union_distinct(
     // selezione finale.
     validate_schema(left, right)?;
     for (a, b) in left.schema().fields().iter().zip(right.schema().fields()) {
-        plenora_core::contract::arrow_metadata::require_same_geometry_declaration(a, b)?;
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            a,
+            &[],
+            b,
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
+        )?;
     }
     let rows = left
         .num_rows()
