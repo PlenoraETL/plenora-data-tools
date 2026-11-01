@@ -13417,7 +13417,7 @@ In validazione (analisi del contratto):
   o di tipo diverso da `utf8` (`large_utf8` compreso); `output_column` già
   presente;
 - `Crs`: né `crs` né un CRS di piano; `crs` non risolvibile (codice fuori
-  dalla tabella integrata, definizione WKT o PROJ).
+  dalla tabella integrata, PROJJSON, WKT1 o WKT2 non equivalente, oppure proj-string).
 
 In esecuzione (conversione di colonna):
 

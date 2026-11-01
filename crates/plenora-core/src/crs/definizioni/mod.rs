@@ -1,7 +1,7 @@
 //! Semantica interna, indipendente dal formato testuale e dalle ordinate.
 //!
 //! I numeri sono token decimali: nessuna conversione a double nel confronto.
-//! Gli alias sono esclusivamente i nomi canonici del registro generato.
+//! Gli alias WKT1 sono finiti; gli altri formati usano i nomi del registro.
 //! I parser devono rifiutare costrutti non rappresentati da questo modello.
 
 mod confronto;
@@ -9,6 +9,11 @@ mod numeri;
 mod projjson;
 #[cfg(test)]
 mod tests;
+mod wkt;
+#[cfg(test)]
+mod wkt1_tests;
+#[cfg(test)]
+mod wkt_tests;
 
 use serde::{Deserialize, Serialize};
 
@@ -165,17 +170,22 @@ pub(super) fn riconosci(definizione: &Definizione) -> Result<Identificativo, Rif
     Ok(identificativo)
 }
 
-/// Risolve il profilo PROJJSON conservando il documento originale.
+/// Risolve i profili testuali conservando il documento originale.
 pub(super) fn risolvi(
     testo: &str,
     name: &'static str,
 ) -> Result<super::ResolvedCrs, super::CrsError> {
-    let esito = projjson::leggi(testo).and_then(|d| riconosci(&d));
+    let modello = if testo.trim_start().starts_with('{') {
+        projjson::leggi(testo)
+    } else {
+        wkt::leggi(testo)
+    };
+    let esito = modello.and_then(|d| riconosci(&d));
     let id = esito.map_err(|e| match e {
         Rifiuto::NonIntegrato => super::CrsError::NotBuiltin,
         Rifiuto::NumeroInvalido => super::CrsError::InvalidDefinition {
             name,
-            reason: "PROJJSON invalido, ambiguo, numero non esatto o limiti superati".into(),
+            reason: "definizione invalida, ambigua, numero non esatto o limiti superati".into(),
         },
         Rifiuto::TabellaInvalida => {
             super::CrsError::InvalidContract("tabella semantica integrata illeggibile")

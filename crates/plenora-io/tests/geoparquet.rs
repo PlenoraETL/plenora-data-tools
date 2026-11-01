@@ -1298,3 +1298,66 @@ fn projjson_accetta_forme_equivalenti_senza_arrotondare_numeri() {
         plenora_io::geoparquet::applica(&table, &geo.replace(&canonical, &modified)).unwrap_err();
     assert_eq!(error.public_projection().code(), Some("CRS_INVALID"));
 }
+
+#[test]
+fn wkt_estensione_geoparquet_si_confronta_senza_virgolette_json() {
+    let corpus: Value = serde_json::from_str(include_str!(
+        "../../plenora-core/src/crs/definizioni/wkt_corpus.json"
+    ))
+    .unwrap();
+    let wkt2 = corpus["EPSG:32632"]["wkt2_2019"].as_str().unwrap();
+    let wkt1 = corpus["EPSG:6707"]["wkt1_assi"].as_str().unwrap();
+    for cells in [
+        vec![Some(punto(500_123.0, 4_987_654.0))],
+        vec![None],
+        vec![],
+    ] {
+        let campo = Field::new("geometry", DataType::Binary, true).with_metadata(HashMap::from([
+            (GEOARROW_EXTENSION_KEY.into(), GEOARROW_WKB_EXTENSION.into()),
+            (
+                "ARROW:extension:metadata".into(),
+                json!({"crs":wkt2, "crs_type":"wkt2:2019"}).to_string(),
+            ),
+        ]));
+        let batch = tabella_geo_con_assi_dichiarati(campo, cells.clone());
+        for (crs, coerente) in [
+            (projjson_di("EPSG:32632").unwrap(), true),
+            (projjson_di("EPSG:32633").unwrap(), false),
+            (Value::Null, false),
+        ] {
+            let geo = geo_colonna(json!({"encoding":"WKB", "geometry_types":["Point"], "crs":crs}));
+            // File esterno: conserva l'estensione nello schema Arrow incorporato.
+            let dir = cartella();
+            let path = dir.path().join("estensione.parquet");
+            let props = WriterProperties::builder()
+                .set_key_value_metadata(Some(vec![KeyValue::new("geo".into(), geo.to_string())]))
+                .build();
+            let mut writer =
+                ArrowWriter::try_new(File::create(&path).unwrap(), batch.schema(), Some(props))
+                    .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+            let result = leggi(&path);
+            if coerente {
+                let letto = result.unwrap();
+                assert_eq!(letto.columns(), batch.columns());
+                assert_eq!(
+                    identificativo(&contratto(&letto).geometries[0].crs),
+                    "EPSG:32632"
+                );
+            } else {
+                assert_eq!(result.unwrap_err().category(), ErrorCategory::Crs);
+            }
+        }
+        // Nel metadato di file nessuna stringa WKT diventa PROJJSON.
+        for testo in [wkt1, wkt2] {
+            assert!(resolve_crs(testo, "crs").is_ok());
+            let geo =
+                geo_colonna(json!({"encoding":"WKB", "geometry_types":["Point"], "crs":testo}));
+            assert_eq!(
+                errore_di(&geo, cells.clone()).category(),
+                ErrorCategory::InvalidPlan
+            );
+        }
+    }
+}

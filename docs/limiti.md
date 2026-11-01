@@ -1405,7 +1405,8 @@ convenzione esplicita x/y. Le geometrie in config seguono tale convenzione.
 
 GeoArrow con CRS completo PROJJSON passa dal confronto semantico completo
 con la tabella integrata; il solo EPSG non basta e non dichiara gli assi fisici.
-WKT2 nell'estensione resta non supportato.
+WKT2 equivalente e' accettato dalla 4.0.0 (#135); WKT1 resta escluso
+dal profilo locale dell'estensione standard. Gli assi del CRS non provano l'ordine delle celle.
 Le API dei kernel su tuple senza metadati mantengono la precondizione
 x=est/longitudine, y=nord/latitudine; l'ordine non e' verificabile da soli numeri.
 
@@ -1617,10 +1618,10 @@ riferimento; non sono una fusione nello stesso campo.
 **Rifiuto.** Discordanza nelle fusioni e nell'analisi della pipeline:
 `crs/validate`, effetto `none`, retry `never`. Il confine di lettura dei file
 attribuisce la fase di lettura secondo il contratto IO. Un CRS in
-`ARROW:extension:metadata` si accetta solo come PROJJSON completo
+`ARROW:extension:metadata` si accetta come PROJJSON o WKT2 completo
 semanticamente equivalente a un CRS integrato, e si confronta con le altre
 dichiarazioni prima di cancellare o sostituire metadati; le altre
-rappresentazioni (WKT2 compreso, finche' #135 non e' fusa) si rifiutano con
+rappresentazioni (WKT1 compreso) si rifiutano con
 `unsupported`.
 Il confronto fra CRS argomento e campo ammette la stessa definizione o un
 CRS integrato risolto equivalente; tutte le dichiarazioni presenti devono
@@ -1668,9 +1669,15 @@ conversione, parametri, unita' e assi con la tabella integrata. Le forme
 semanticamente equivalenti sono accettate; le definizioni discordanti
 sono `CRS_NOT_BUILTIN`, numeri non esatti e JSON ambiguo sono rifiutati.
 `identificativo_di` verifica l'equivalenza semantica del CRS risolto.
-Resta il limite WKT/WKT2: `resolve_crs` li rifiuta con
-`CRS_BACKEND_UNAVAILABLE`, senza estrarne un identificatore.
-Rientro per WKT: **PR CRS #135**.
+Il rientro per WKT1 con assi espliciti e WKT2 e' avvenuto con **#135**,
+nella 4.0.0: stesso confronto semantico completo, senza risolvere dal solo
+identificatore. Le definizioni fuori profilo restano `CRS_NOT_BUILTIN`;
+gli assi omessi non si deducono. Questo vale per piani, target di
+`geo.reproject`, chiavi canoniche e legacy `geo.crs`; l'estensione
+GeoArrow ammette WKT2, non WKT1. Il `crs` di file GeoParquet resta
+un oggetto PROJJSON o null per specifica, mai una stringa WKT.
+L'ordine fisico delle ordinate richiede una prova separata dagli assi
+dichiarati nella definizione CRS.
 
 `table.type_cast` rifiuta campi geometrici (anche su input vuoti/null) nel
 kernel e nell'analisi. `table.fill_na` conserva il campo ma ammette solo
