@@ -562,7 +562,7 @@ fn with_nullable_geometry(
             candidate.nullable = true;
         }
     }
-    DataContract::new(
+    contract.rebuild(
         std::sync::Arc::new(plenora_core::arrow::Schema::new_with_metadata(
             fields,
             contract.schema.metadata().clone(),

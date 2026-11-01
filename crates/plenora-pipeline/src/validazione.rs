@@ -565,6 +565,7 @@ impl Pipeline {
                     letto.active_geometry = Some(rimappato);
                 }
                 geometria.field_id = rimappato;
+                letto.field_ids.insert(geometria.name.clone(), rimappato);
             }
             verifica_colonne(&letto, limiti_kernel.max_columns)
                 .map_err(|errore| nel_passo_o_input(&format!("input `{nome}`"), errore))?;

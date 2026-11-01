@@ -313,7 +313,7 @@ pub(in crate::analyze) fn with_geometry_types_property(
         )));
     };
     target.types = types;
-    DataContract::new(
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
@@ -347,7 +347,7 @@ pub(in crate::analyze) fn rebuild(
     fields: Vec<Field>,
     properties: ContractProperties,
 ) -> Result<DataContract> {
-    DataContract::new(
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
@@ -394,7 +394,7 @@ pub(in crate::analyze) fn with_schema_metadata(
     contract: &DataContract,
     metadata: Metadata,
 ) -> Result<DataContract> {
-    DataContract::new(
+    contract.rebuild(
         Arc::new(Schema::new_with_metadata(output_fields(contract), metadata)),
         contract.geometries.clone(),
         contract.active_geometry,

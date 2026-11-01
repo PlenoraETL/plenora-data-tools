@@ -408,6 +408,7 @@ pub(in crate::analyze) fn analyze_reconcile(
         Field::new("value", DataType::UInt64, false),
     ]);
     finish(
+        &inputs[0],
         schema,
         None,
         None,
@@ -598,7 +599,7 @@ pub(in crate::analyze) fn analyze_validate_rules(
                 Field::new("errors", DataType::Int64, false),
                 Field::new("warnings", DataType::Int64, false),
             ]);
-            finish(schema, None, None, ContractProperties::default())
+            finish(input, schema, None, None, ContractProperties::default())
         }
     }
 }

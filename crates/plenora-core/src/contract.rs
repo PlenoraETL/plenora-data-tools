@@ -761,6 +761,24 @@ impl FieldAllocator {
         Ok(id)
     }
 
+    /// Registra le identita' dell'ingresso corrente. I nomi assenti si eliminano;
+    /// solo per un ingresso unario i campi senza registro possono adottare un ID
+    /// gia' assegnato dal chiamante (`adopt_unregistered`), senza ambiguita' fra archi.
+    pub fn bind_contract(&mut self, contract: &DataContract, adopt_unregistered: bool) {
+        if adopt_unregistered {
+            self.by_name.retain(|name, id| {
+                contract.schema.field_with_name(name).is_ok()
+                    && !contract.field_ids.values().any(|known| known == id)
+            });
+        } else {
+            self.by_name.clear();
+        }
+        for (name, id) in &contract.field_ids {
+            self.observe(*id);
+            self.by_name.insert(name.clone(), *id);
+        }
+    }
+
     /// Rinomina: il `FieldId` segue la colonna.
     pub fn rename(&mut self, old: &str, new: &str) {
         if let Some(id) = self.by_name.remove(old) {
@@ -787,9 +805,11 @@ impl FieldAllocator {
             .iter()
             .map(|(old, new)| ((*new).to_owned(), self.by_name.get(*old).copied()))
             .collect();
-        for (old, new) in pairs {
-            self.by_name.remove(*old);
-            self.by_name.remove(*new);
+        for ((old, new), (_, id)) in pairs.iter().zip(&original) {
+            if id.is_some() {
+                self.by_name.remove(*old);
+                self.by_name.remove(*new);
+            }
         }
         for (new, id) in original {
             if let Some(id) = id {
@@ -952,6 +972,8 @@ pub struct ContractProperties {
 pub struct DataContract {
     /// Schema Arrow, metadati compresi.
     pub schema: SchemaRef,
+    /// Identita' note dei campi, indipendenti dalle proprieta' che le riferiscono.
+    pub field_ids: std::collections::BTreeMap<String, FieldId>,
     /// Colonne geometriche: al massimo una ([`DataContract::validate`]).
     pub geometries: Vec<GeometryColumnContract>,
     /// La colonna geometrica attiva, se dichiarata.
@@ -966,6 +988,7 @@ impl DataContract {
     pub fn tabular(schema: SchemaRef) -> Self {
         Self {
             schema,
+            field_ids: std::collections::BTreeMap::new(),
             geometries: Vec::new(),
             active_geometry: None,
             properties: ContractProperties::default(),
@@ -985,6 +1008,10 @@ impl DataContract {
         properties: ContractProperties,
     ) -> Result<Self> {
         let contract = Self {
+            field_ids: geometries
+                .iter()
+                .map(|g| (g.name.clone(), g.field_id))
+                .collect(),
             schema,
             geometries,
             active_geometry,
@@ -992,6 +1019,47 @@ impl DataContract {
         };
         contract.validate()?;
         Ok(contract)
+    }
+
+    /// Ricostruisce lo schema propagando solo le identita' dei campi rimasti.
+    /// Le geometrie dichiarano esplicitamente la propria identita' d'uscita.
+    ///
+    /// # Errors
+    /// Come [`DataContract::validate`], anche per proprieta' con riferimenti pendenti.
+    pub fn rebuild(
+        &self,
+        schema: SchemaRef,
+        geometries: Vec<GeometryColumnContract>,
+        active_geometry: Option<FieldId>,
+        properties: ContractProperties,
+    ) -> Result<Self> {
+        let mut field_ids: std::collections::BTreeMap<_, _> = self
+            .field_ids
+            .iter()
+            .filter(|(name, _)| schema.field_with_name(name).is_ok())
+            .map(|(name, id)| (name.clone(), *id))
+            .collect();
+        // Una geometria rimossa puo' essere sostituita da uno scalare omonimo.
+        for geometry in &self.geometries {
+            if !geometries
+                .iter()
+                .any(|g| g.name == geometry.name && g.field_id == geometry.field_id)
+            {
+                field_ids.remove(&geometry.name);
+            }
+        }
+        for geometry in &geometries {
+            field_ids.insert(geometry.name.clone(), geometry.field_id);
+        }
+        let output = Self {
+            schema,
+            field_ids,
+            geometries,
+            active_geometry,
+            properties,
+        };
+        output.validate()?;
+        Ok(output)
     }
 
     /// Validazione strutturale del contratto.
@@ -1005,7 +1073,9 @@ impl DataContract {
     /// - se contratto e metadati canonici dichiarano entrambi i tipi
     ///   geometrici, coincidono;
     /// - `active_geometry`, se presente, riferisce una colonna geometrica
-    ///   dichiarata.
+    ///   dichiarata;
+    /// - ogni chiave di `sorted_by` esiste nel registro delle identita',
+    ///   senza duplicati; ogni identita' registrata riferisce un campo presente.
     ///
     /// # Errors
     ///
@@ -1026,7 +1096,20 @@ impl DataContract {
                 self.geometries.len()
             )));
         }
+        let mut identities = HashSet::new();
+        for (name, id) in &self.field_ids {
+            if self.schema.field_with_name(name).is_err() || !identities.insert(id) {
+                return Err(PlenoraError::Schema(
+                    "registro delle identita' assente o ambiguo".into(),
+                ));
+            }
+        }
         for geometry in &self.geometries {
+            if self.field_ids.get(&geometry.name) != Some(&geometry.field_id) {
+                return Err(PlenoraError::Schema(
+                    "identita' geometrica incoerente con il registro".into(),
+                ));
+            }
             let field = self.schema.field_with_name(&geometry.name).map_err(|_| {
                 PlenoraError::Schema(format!(
                     "colonna geometrica `{}` ({}) assente dallo schema",
@@ -1050,6 +1133,27 @@ impl DataContract {
             }
             validate_declared_types(geometry, field.metadata())?;
         }
+        if let Some(order) = self
+            .properties
+            .sorted_by
+            .as_ref()
+            .and_then(ContractProperty::value)
+        {
+            if order.keys.is_empty() {
+                return Err(PlenoraError::Schema(
+                    "riferimenti di sorted_by incompleti".into(),
+                ));
+            }
+            let mut ids = HashSet::new();
+            for id in &order.keys {
+                if !ids.insert(id) || !self.field_ids.values().any(|known| known == id) {
+                    return Err(PlenoraError::Schema(
+                        "riferimento di sorted_by assente o incoerente".into(),
+                    ));
+                }
+            }
+        }
+
         if let Some(active) = self.active_geometry {
             if !self.geometries.iter().any(|g| g.field_id == active) {
                 return Err(PlenoraError::Schema(format!(
@@ -1289,6 +1393,44 @@ mod tests {
     use super::*;
     use crate::arrow::schema::{DataType, Field, Schema};
     use crate::crs::CrsKind;
+
+    #[test]
+    fn rename_assente_non_consuma_identita_della_destinazione() {
+        let mut alloc = FieldAllocator::default();
+        let a = alloc.intern("a").unwrap();
+        alloc.rename_many(&[("assente", "a")]).unwrap();
+        assert_eq!(alloc.intern("a").unwrap(), a);
+        assert_eq!(alloc.peek(), FieldId(1));
+        alloc.rename_many(&[("a", "b"), ("assente", "a")]).unwrap();
+        assert_eq!(alloc.intern("b").unwrap(), a);
+    }
+
+    #[test]
+    fn sorted_by_rifiuta_riferimenti_pendenti_a_ogni_fiducia() {
+        let order = SortOrder {
+            keys: vec![FieldId(9)],
+            direction: SortDirection::Ascending,
+            nulls: NullPlacement::Last,
+        };
+        for confidence in [
+            PropertyConfidence::Declared(order.clone()),
+            PropertyConfidence::Estimated(order.clone()),
+            PropertyConfidence::Proven(order),
+        ] {
+            let mut contract =
+                DataContract::tabular(schema(vec![Field::new("a", DataType::Int64, false)]));
+            contract.properties.sorted_by =
+                Some(ContractProperty::new(confidence, PropertyScope::Stream));
+            assert!(contract.validate().is_err());
+            contract.field_ids.insert("a".into(), FieldId(9));
+            contract.validate().unwrap();
+            contract.field_ids.insert("a".into(), FieldId(10));
+            assert!(contract.validate().is_err());
+            contract.field_ids.insert("a".into(), FieldId(9));
+            contract.schema = schema(vec![]);
+            assert!(matches!(contract.validate(), Err(PlenoraError::Schema(_))));
+        }
+    }
 
     fn schema(fields: Vec<Field>) -> SchemaRef {
         Arc::new(Schema::new(fields))

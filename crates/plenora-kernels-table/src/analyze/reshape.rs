@@ -175,6 +175,7 @@ pub(in crate::analyze) fn analyze_melt(
         ));
     }
     let output = finish(
+        input,
         schema,
         geometry,
         active,
@@ -274,7 +275,13 @@ pub(in crate::analyze) fn analyze_pivot(
     let active = input
         .active_geometry
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
-    let mut output = finish(schema, geometry, active, ContractProperties::default())?;
+    let mut output = finish(
+        input,
+        schema,
+        geometry,
+        active,
+        ContractProperties::default(),
+    )?;
     if matches!(
         config.aggr_func,
         reshape::PivotAgg::First | reshape::PivotAgg::Last
@@ -421,6 +428,7 @@ pub(in crate::analyze) fn analyze_unnest(
         .active_geometry
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
     finish(
+        input,
         schema,
         geometry,
         active,
@@ -549,5 +557,5 @@ pub(in crate::analyze) fn analyze_table_diff(
         None
     };
     let geometry = merge_geometry(op, left_geometry, right_geometry)?;
-    finish(schema, geometry, None, ContractProperties::default())
+    finish(left, schema, geometry, None, ContractProperties::default())
 }

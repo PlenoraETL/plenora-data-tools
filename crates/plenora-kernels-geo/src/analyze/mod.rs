@@ -279,6 +279,29 @@ pub fn analyze_geo_contract(
             inputs.len()
         )));
     }
+    let mut owned_inputs = inputs.to_vec();
+    for input in &mut owned_inputs {
+        input.validate()?;
+        for id in input.field_ids.values() {
+            fields.observe(*id);
+        }
+        // Conservativo: un'operazione geo puo' riscrivere la geometria anche a schema invariato.
+        if input
+            .properties
+            .sorted_by
+            .as_ref()
+            .and_then(|p| p.value())
+            .is_some_and(|order| {
+                input
+                    .geometries
+                    .iter()
+                    .any(|g| order.keys.contains(&g.field_id))
+            })
+        {
+            input.properties.sorted_by = None;
+        }
+    }
+    let inputs = owned_inputs.as_slice();
     richiedi_ordine_assi(descriptor.id, inputs)?;
     // I produttori sono unari: l'arieta' e' gia' verificata sopra. Il
     // rifiuto dell'N-aria resta prima del controllo sul numero di input,
@@ -313,6 +336,7 @@ pub fn analyze_geo_contract(
         (_, 2) => analyze_binary(descriptor, inputs, config),
         _ => analyze_unary(descriptor, &inputs[0], config, fields),
     }?;
+    output.validate()?;
     Ok(senza_precisione_ereditata(output))
 }
 
@@ -439,6 +463,94 @@ mod tests {
             CrsKind::Geographic,
             None,
         )
+    }
+
+    #[test]
+    fn geometria_riscritta_non_conserva_la_prova_di_ordinamento() {
+        for (op, config) in [
+            ("geo.buffer", json!({"distance": 1.0})),
+            ("geo.centroid", json!({})),
+            (
+                "geo.subdivide",
+                json!({"max_vertices": 10, "output_column": "parts"}),
+            ),
+        ] {
+            let mut input = contract_with_properties();
+            let id = input.geometries[0].field_id;
+            input.properties.sorted_by.as_mut().unwrap().confidence =
+                PropertyConfidence::Proven(SortOrder {
+                    keys: vec![id],
+                    direction: SortDirection::Ascending,
+                    nulls: NullPlacement::Last,
+                });
+            let output =
+                analyze_geo_contract(op, &[input], &config, None, &mut FieldAllocator::default())
+                    .unwrap();
+            assert!(output.properties.sorted_by.is_none(), "{op}");
+            output.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn diagnostica_omonima_non_eredita_identita_geometrica() {
+        let mut input = geo_contract(projected_crs());
+        let old = input.geometries[0].name.clone();
+        let id = input.geometries[0].field_id;
+        input.geometries[0].name = "geometry_type".into();
+        input.field_ids.remove(&old);
+        input.field_ids.insert("geometry_type".into(), id);
+        input.schema = Arc::new(Schema::new(
+            input
+                .schema
+                .fields()
+                .iter()
+                .map(|f| {
+                    if f.name() == &old {
+                        f.as_ref().clone().with_name("geometry_type")
+                    } else {
+                        f.as_ref().clone()
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ));
+        let output = analyze_geo_contract(
+            "geo.geometry_diagnostics",
+            &[input],
+            &json!({}),
+            None,
+            &mut FieldAllocator::default(),
+        )
+        .unwrap();
+        assert!(!output.field_ids.values().any(|value| *value == id));
+        output.validate().unwrap();
+    }
+
+    #[test]
+    fn diagnostics_elimina_solo_ordine_sulla_geometria_rimossa() {
+        for on_geometry in [false, true] {
+            let mut input = contract_with_properties();
+            if on_geometry {
+                let g = &input.geometries[0];
+                input.properties.sorted_by.as_mut().unwrap().confidence =
+                    PropertyConfidence::Proven(SortOrder {
+                        keys: vec![g.field_id],
+                        direction: SortDirection::Ascending,
+                        nulls: NullPlacement::Last,
+                    });
+            }
+            input.validate().unwrap();
+            let output = analyze_geo_contract(
+                "geo.geometry_diagnostics",
+                std::slice::from_ref(&input),
+                &json!({}),
+                None,
+                &mut FieldAllocator::default(),
+            )
+            .unwrap();
+            assert_eq!(output.properties.sorted_by.is_none(), on_geometry);
+            assert_eq!(output.properties.row_count, input.properties.row_count);
+            output.validate().unwrap();
+        }
     }
 
     /// Le misure geodetiche chiedono l'ellissoide del datum: un CRS
@@ -2769,8 +2881,8 @@ mod tests {
         assert_eq!(signatures(&output), expected);
         assert_eq!(
             output.geometries[0].field_id,
-            FieldId(0),
-            "allocatore da zero"
+            FieldId(3),
+            "anche un allocatore da zero osserva le identita' di ingresso"
         );
         assert!(!output.geometries[0].nullable);
         assert_eq!(
@@ -2874,6 +2986,7 @@ mod tests {
 
     fn contract_with_properties() -> DataContract {
         let mut contract = geo_contract(projected_crs());
+        contract.field_ids.insert("id".into(), FieldId(0));
         contract.properties = ContractProperties {
             sorted_by: Some(ContractProperty::new(
                 PropertyConfidence::Proven(SortOrder {

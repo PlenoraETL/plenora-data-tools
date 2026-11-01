@@ -62,7 +62,7 @@ pub(in crate::analyze) fn analyze_drop_columns(
         },
         dropped_geometry,
     );
-    finish(schema, geometry, active, properties)
+    finish(input, schema, geometry, active, properties)
 }
 
 pub(in crate::analyze) fn analyze_rename(
@@ -75,7 +75,7 @@ pub(in crate::analyze) fn analyze_rename(
     let config: columns::Rename = typed(op, config)?;
     let input = &inputs[0];
     // Due rinomine della stessa sorgente o verso la stessa destinazione, un
-    // `old_name` inesistente o uguale al `new_name`: rifiutati, qui e nel
+    // `old_name` uguale al `new_name`: rifiutati, qui e nel
     // kernel (`Rename::verifica_parametri`).
     let old: Vec<String> = config.renames.iter().map(|p| p.old_name.clone()).collect();
     let new: Vec<String> = config.renames.iter().map(|p| p.new_name.clone()).collect();
@@ -104,6 +104,7 @@ pub(in crate::analyze) fn analyze_rename(
     let pairs: Vec<_> = config
         .renames
         .iter()
+        .filter(|pair| input.schema.field_with_name(&pair.old_name).is_ok())
         .map(|pair| (pair.old_name.as_str(), pair.new_name.as_str()))
         .collect();
     fields.rename_many(&pairs)?;
@@ -115,13 +116,27 @@ pub(in crate::analyze) fn analyze_rename(
             .unwrap_or(geometry.name.as_str())
     });
     let geometry = propagate_geometry(input, &schema, renamed_geometry);
-    // Rinomina: i FieldId seguono le colonne (una colonna rinominata resta
-    // la stessa colonna logica), righe e ordine invariati.
+    let properties = input.properties.clone();
+    let mut source_contract = input.clone();
+    source_contract.field_ids = input
+        .field_ids
+        .iter()
+        .map(|(name, id)| {
+            (
+                renames
+                    .get(name.as_str())
+                    .map_or_else(|| name.clone(), |new| (*new).to_owned()),
+                *id,
+            )
+        })
+        .collect();
+    source_contract.geometries = geometry.iter().cloned().collect();
     finish(
+        &source_contract,
         schema,
         geometry,
         input.active_geometry,
-        input.properties.clone(),
+        properties,
     )
 }
 
@@ -162,6 +177,7 @@ pub(in crate::analyze) fn analyze_reorder_columns(
         input.geometries.first().map(|g| g.name.as_str()),
     );
     finish(
+        input,
         schema,
         geometry,
         input.active_geometry,
@@ -279,7 +295,7 @@ pub(in crate::analyze) fn analyze_select_columns(
         },
         dropped_geometry,
     );
-    finish(schema, geometry, active, properties)
+    finish(input, schema, geometry, active, properties)
 }
 
 pub(in crate::analyze) fn analyze_align_schema(
@@ -380,5 +396,5 @@ pub(in crate::analyze) fn analyze_align_schema(
         },
         dropped_geometry,
     );
-    finish(schema, geometry, active, properties)
+    finish(input, schema, geometry, active, properties)
 }

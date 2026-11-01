@@ -36,7 +36,7 @@ pub(in crate::analyze) fn analyze_bounds(
 /// `geometry_diagnostics`: la colonna geometria e' sostituita, nella sua
 /// posizione, dalle 10 colonne diagnostiche; il contratto diventa
 /// non-geografico (nessuna colonna geometria), metadati di schema e
-/// proprieta' restano.
+/// cardinalita' restano; l'ordine sulla geometria rimossa si elimina.
 pub(in crate::analyze) fn analyze_diagnostics(
     op: &str,
     input: &DataContract,
@@ -83,14 +83,23 @@ pub(in crate::analyze) fn analyze_diagnostics(
     fields
         .splice(position..=position, diagnostic_fields)
         .for_each(drop);
-    DataContract::new(
+    let mut properties = input.properties.clone();
+    if properties
+        .sorted_by
+        .as_ref()
+        .and_then(|p| p.value())
+        .is_some_and(|order| order.keys.contains(&geometry.field_id))
+    {
+        properties.sorted_by = None;
+    }
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
         )),
         Vec::new(),
         None,
-        input.properties.clone(),
+        properties,
     )
 }
 

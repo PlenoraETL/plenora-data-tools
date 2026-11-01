@@ -269,7 +269,13 @@ pub(in crate::analyze) fn analyze_aggregate(
     let active = input
         .active_geometry
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
-    finish(schema, geometry, active, ContractProperties::default())
+    finish(
+        input,
+        schema,
+        geometry,
+        active,
+        ContractProperties::default(),
+    )
 }
 
 pub(in crate::analyze) fn analyze_rolling_window(

@@ -358,7 +358,7 @@ impl JoinExpansion {
     #[must_use]
     #[allow(clippy::cast_precision_loss)] // Metriche f64 per contratto: sotto 2^53 righe sono esatte, e il limite non le usa.
     pub fn compute(output_rows: u64, left_rows: u64, right_rows: u64) -> Self {
-        fn ratio(numerator: u64, denominator: u64) -> f64 {
+        fn ratio(numerator: u64, denominator: u128) -> f64 {
             if denominator == 0 {
                 if numerator == 0 {
                     0.0
@@ -370,12 +370,13 @@ impl JoinExpansion {
             }
         }
         Self {
-            // Somma saturante: avvolgere abbasserebbe il denominatore, cioè
-            // alzerebbe il rapporto riportato (e in debug farebbe abortire
-            // con `overflow-checks`).
-            output_over_sum_inputs: ratio(output_rows, left_rows.saturating_add(right_rows)),
-            output_over_left: ratio(output_rows, left_rows),
-            output_over_right: ratio(output_rows, right_rows),
+            // La somma di due u64 entra sempre in u128, prima della conversione metrica.
+            output_over_sum_inputs: ratio(
+                output_rows,
+                u128::from(left_rows) + u128::from(right_rows),
+            ),
+            output_over_left: ratio(output_rows, u128::from(left_rows)),
+            output_over_right: ratio(output_rows, u128::from(right_rows)),
         }
     }
 
@@ -3365,6 +3366,21 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+
+    #[test]
+    #[allow(clippy::float_cmp)] // Rapporti binari esatti: il test richiede uguaglianza esatta.
+    fn espansione_somma_ingressi_oltre_u64() {
+        let half = 1_u64 << 63;
+        assert_eq!(
+            JoinExpansion::compute(half, half, half).output_over_sum_inputs,
+            0.5
+        );
+        assert_eq!(
+            JoinExpansion::compute(u64::MAX, u64::MAX, u64::MAX).output_over_sum_inputs,
+            0.5
+        );
+        assert_eq!(JoinExpansion::compute(half, half, 0).output_over_left, 1.0);
+    }
 
     #[test]
     fn catalog_has_146_unique_ids() {

@@ -351,12 +351,13 @@ pub(in crate::analyze) fn merge_schema_metadata_many(
 }
 
 pub(in crate::analyze) fn finish(
+    input: &DataContract,
     schema: Schema,
     geometry: Option<GeometryColumnContract>,
     active: Option<FieldId>,
     properties: ContractProperties,
 ) -> Result<DataContract> {
-    DataContract::new(
+    input.rebuild(
         Arc::new(schema),
         geometry.into_iter().collect(),
         active,
@@ -481,7 +482,13 @@ pub(in crate::analyze) fn analyze_append(
     let active = input
         .active_geometry
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
-    finish(schema, geometry, active, append_props(input, overwritten))
+    finish(
+        input,
+        schema,
+        geometry,
+        active,
+        append_props(input, overwritten),
+    )
 }
 
 /// Completa il contratto di una colonna che conserva celle geometriche.
@@ -520,7 +527,7 @@ pub(in crate::analyze) fn derive_geometry(
     output.geometries.retain(|g| g.name != name);
     output.active_geometry = Some(geometry.field_id);
     output.geometries.push(geometry);
-    DataContract::new(
+    output.clone().rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             output.schema.metadata().clone(),

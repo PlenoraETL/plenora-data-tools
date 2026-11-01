@@ -228,7 +228,13 @@ pub(in crate::analyze) fn analyze_join(
                 .filter(|id| right_geometry.as_ref().is_some_and(|g| &g.field_id == id))
         });
     let geometry = merge_geometry(op, left_geometry, right_geometry)?;
-    finish(schema, geometry, active, ContractProperties::default())
+    finish(
+        left,
+        schema,
+        geometry,
+        active,
+        ContractProperties::default(),
+    )
 }
 
 /// `table.fuzzy_join`: replica le validazioni statiche del
@@ -282,7 +288,7 @@ pub(in crate::analyze) fn analyze_fuzzy_join(
     let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
     let right_geometry = propagate_geometry(right, &schema, right_geometry.as_deref());
     let geometry = merge_geometry(op, left_geometry, right_geometry)?;
-    finish(schema, geometry, None, ContractProperties::default())
+    finish(left, schema, geometry, None, ContractProperties::default())
 }
 
 pub(in crate::analyze) fn analyze_cross_join(
@@ -312,6 +318,7 @@ pub(in crate::analyze) fn analyze_cross_join(
     // Righe = prodotto esatto delle cardinalita' (se note e stesso scope).
     let row_count = product_row_count(left, right);
     finish(
+        left,
         schema,
         geometry,
         None,
@@ -420,7 +427,7 @@ pub(in crate::analyze) fn analyze_asof_join(
         });
     let geometry = merge_geometry(op, left_geometry, right_geometry)?;
     // Una riga di output per riga left, nell'ordine di left.
-    finish(schema, geometry, active, left.properties.clone())
+    finish(left, schema, geometry, active, left.properties.clone())
 }
 
 pub(in crate::analyze) fn analyze_concat(
@@ -459,6 +466,7 @@ pub(in crate::analyze) fn analyze_concat(
     );
     let row_count = sum_row_count(inputs);
     finish(
+        first,
         schema,
         geometry,
         first.active_geometry,
@@ -654,6 +662,7 @@ pub(in crate::analyze) fn analyze_concat_by_name(
         .active_geometry
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
     finish(
+        first,
         schema,
         geometry,
         active,
@@ -712,6 +721,7 @@ pub(in crate::analyze) fn analyze_set_operation(
             left.geometries.first().map(|g| g.name.as_str()),
         );
         finish(
+            left,
             schema,
             geometry,
             left.active_geometry,

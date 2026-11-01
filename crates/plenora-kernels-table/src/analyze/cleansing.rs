@@ -107,7 +107,13 @@ pub(in crate::analyze) fn analyze_fill_na(
         input.geometries.first().map(|g| g.name.as_str()),
     );
     // Valori modificati, righe e ordine invariati.
-    finish(schema, geometry, input.active_geometry, rows_only(input))
+    finish(
+        input,
+        schema,
+        geometry,
+        input.active_geometry,
+        rows_only(input),
+    )
 }
 
 pub(in crate::analyze) fn analyze_replace(
@@ -157,7 +163,13 @@ pub(in crate::analyze) fn analyze_replace(
         &schema,
         input.geometries.first().map(|g| g.name.as_str()),
     );
-    finish(schema, geometry, input.active_geometry, rows_only(input))
+    finish(
+        input,
+        schema,
+        geometry,
+        input.active_geometry,
+        rows_only(input),
+    )
 }
 
 /// Parametri di `type_cast` che solo alcuni target usano: su un altro target

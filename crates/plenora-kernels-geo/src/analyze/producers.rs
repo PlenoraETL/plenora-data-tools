@@ -82,7 +82,7 @@ pub(in crate::analyze) fn analyze_reproject(
         crs: ContractCrs::Resolved(target),
         ..geometry.clone()
     };
-    DataContract::new(
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
@@ -168,7 +168,7 @@ pub(in crate::analyze) fn with_active_geometry_nullability(
             candidate.nullable = nullable;
         }
     }
-    DataContract::new(
+    contract.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             contract.schema.metadata().clone(),
@@ -205,7 +205,7 @@ pub(in crate::analyze) fn analyze_geometry_only(
         nullable,
         ..geometry.clone()
     };
-    DataContract::new(
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
@@ -309,7 +309,7 @@ pub(in crate::analyze) fn analyze_from_coords(
         nullable: false,
         types: GeometryColumnContract::undeclared_types(),
     };
-    DataContract::new(
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
@@ -404,7 +404,7 @@ pub(in crate::analyze) fn analyze_from_wkt(
             PropertyScope::Schema,
         ),
     };
-    DataContract::new(
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
@@ -546,7 +546,7 @@ pub(in crate::analyze) fn analyze_generate_grid(
         )),
         ..ContractProperties::default()
     };
-    DataContract::new(
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
@@ -601,7 +601,7 @@ pub(in crate::analyze) fn analyze_subdivide(
     fields.push(Field::new(PARENT_INDEX_COLUMN, DataType::UInt64, false));
     let mut properties = input.properties.clone();
     properties.row_count = None;
-    DataContract::new(
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
