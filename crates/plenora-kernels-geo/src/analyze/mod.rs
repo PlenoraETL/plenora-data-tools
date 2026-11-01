@@ -301,12 +301,19 @@ pub fn analyze_geo_contract(
             input.properties.sorted_by = None;
         }
     }
+    for input in &mut owned_inputs {
+        fields.bind_contract(input);
+        for field in input.schema.fields() {
+            let id = fields.intern(field.name())?;
+            input.field_ids.insert(field.name().clone(), id);
+        }
+    }
     let inputs = owned_inputs.as_slice();
     richiedi_ordine_assi(descriptor.id, inputs)?;
     // I produttori sono unari: l'arieta' e' gia' verificata sopra. Il
     // rifiuto dell'N-aria resta prima del controllo sul numero di input,
     // quindi qui l'arieta' e' solo 1 o 2.
-    let mut output = match (descriptor.id, expected_arity) {
+    let output = match (descriptor.id, expected_arity) {
         ("geo.from_coords", _) => {
             // Il messaggio nomina l'op come richiesta (anche un alias).
             let requirement = crs_requirement(op, descriptor)?;
@@ -331,17 +338,13 @@ pub fn analyze_geo_contract(
         }
         ("geo.reproject", _) => {
             let op = descriptor.id;
-            producers::analyze_reproject(op, &inputs[0], config)
+            producers::analyze_reproject(op, &inputs[0], config, fields)
         }
-        (_, 2) => analyze_binary(descriptor, inputs, config),
+        (_, 2) => analyze_binary(descriptor, inputs, config, fields),
         _ => analyze_unary(descriptor, &inputs[0], config, fields),
     }?;
     // Il contratto e' l'unica fonte delle identita' sopravvissute.
     fields.bind_contract(&output);
-    for field in output.schema.fields() {
-        let id = fields.intern(field.name())?;
-        output.field_ids.insert(field.name().clone(), id);
-    }
     output.validate()?;
     Ok(senza_precisione_ereditata(output))
 }
@@ -690,7 +693,7 @@ mod tests {
                 field.with_metadata(metadata)
             })
             .collect();
-        DataContract::new(
+        DataContract::from_source(
             Arc::new(Schema::new(fields)),
             vec![GeometryColumnContract {
                 field_id: FieldId(2),
@@ -1482,6 +1485,19 @@ mod tests {
     fn every_geo_op_produces_the_expected_contract() {
         for case in cases() {
             let (output, input, allocator) = run_case(&case);
+            // Prima si identificano tutti gli input; poi i campi nuovi nell'ordine d'uscita.
+            let missing = input.schema.fields().len() - input.field_ids.len()
+                + if case.binary { 2 } else { 0 };
+            let first_new = 100 + u32::try_from(missing).unwrap();
+            let new_geometry_id = FieldId(
+                first_new
+                    + match &case.expected {
+                        Expect::CoverageRows(expected) => {
+                            u32::try_from(expected.len() - 1).unwrap()
+                        }
+                        _ => 0,
+                    },
+            );
             output
                 .validate()
                 .unwrap_or_else(|error| panic!("{}: contratto non valido: {error}", case.op));
@@ -1508,8 +1524,12 @@ mod tests {
                 Expect::AppendedGeometryNotNull(extra) => {
                     assert_appended(
                         &output,
-                        &with_active_geometry_nullability(&input, false)
-                            .expect("geometria non nullable"),
+                        &with_active_geometry_nullability(
+                            &input,
+                            false,
+                            &mut FieldAllocator::default(),
+                        )
+                        .expect("geometria non nullable"),
                         extra,
                     );
                     assert_geometry_preserved(&output, &input);
@@ -1574,8 +1594,7 @@ mod tests {
                     assert_eq!(signatures(&output), expected, "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria creata");
                     assert_eq!(
-                        geometry.field_id,
-                        FieldId(100),
+                        geometry.field_id, new_geometry_id,
                         "{}: FieldId allocato",
                         case.op
                     );
@@ -1608,8 +1627,7 @@ mod tests {
                     assert_eq!(signatures(&output), expected, "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria creata");
                     assert_eq!(
-                        geometry.field_id,
-                        FieldId(100),
+                        geometry.field_id, new_geometry_id,
                         "{}: FieldId allocato",
                         case.op
                     );
@@ -1649,8 +1667,7 @@ mod tests {
                     assert_eq!(signatures(&output), expected, "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria creata");
                     assert_eq!(
-                        geometry.field_id,
-                        FieldId(100),
+                        geometry.field_id, new_geometry_id,
                         "{}: FieldId allocato",
                         case.op
                     );
@@ -1714,8 +1731,7 @@ mod tests {
                     assert_eq!(signatures(&output), *expected, "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria creata");
                     assert_eq!(
-                        geometry.field_id,
-                        FieldId(100),
+                        geometry.field_id, new_geometry_id,
                         "{}: FieldId allocato",
                         case.op
                     );
@@ -1735,10 +1751,14 @@ mod tests {
             }
             // Anche gli attributi e le nuove colonne scalari hanno identita'.
             assert_eq!(output.field_ids.len(), output.schema.fields().len());
-            let allocated = output.field_ids.values().filter(|id| id.0 >= 100).count();
+            let allocated = output
+                .field_ids
+                .values()
+                .filter(|id| id.0 >= first_new)
+                .count();
             assert_eq!(
                 allocator.peek(),
-                FieldId(100 + u32::try_from(allocated).unwrap()),
+                FieldId(first_new + u32::try_from(allocated).unwrap()),
                 "{}: un ID per ogni campo prima privo di identita'",
                 case.op
             );
@@ -2880,7 +2900,7 @@ mod tests {
         assert_eq!(signatures(&output), expected);
         assert_eq!(
             output.geometries[0].field_id,
-            FieldId(3),
+            FieldId(8),
             "anche un allocatore da zero osserva le identita' di ingresso"
         );
         assert!(!output.geometries[0].nullable);
@@ -2919,8 +2939,8 @@ mod tests {
             (DEFAULT_GEOMETRY_COLUMN, DataType::Binary, false),
         ];
         assert_eq!(signatures(&output), expected);
-        assert_eq!(output.geometries[0].field_id, FieldId(7));
-        assert_eq!(allocator.peek(), FieldId(11));
+        assert_eq!(output.geometries[0].field_id, FieldId(11));
+        assert_eq!(allocator.peek(), FieldId(12));
         // Anche qui l'input dichiara ordinamento e conteggio: non valgono
         // per le righe nuove.
         assert!(output.properties.sorted_by.is_none());
@@ -3083,8 +3103,8 @@ mod tests {
             &mut allocator,
         )
         .expect("seconda from_coords");
-        assert_eq!(first.geometries[0].field_id, FieldId(41));
-        assert_eq!(second.geometries[0].field_id, FieldId(45));
+        assert_eq!(first.geometries[0].field_id, FieldId(44));
+        assert_eq!(second.geometries[0].field_id, FieldId(48));
         assert_eq!(allocator.peek(), FieldId(49));
         assert!(first
             .field_ids

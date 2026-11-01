@@ -176,7 +176,7 @@ pub fn analyze_table_contract(
     }
     let inputs = owned_inputs.as_slice();
     fields.bind_contract(&inputs[0]);
-    let mut output = match id {
+    let output = match id {
         "table.add_row_number" => analyze_add_row_number(id, inputs, config, fields, limits),
         "table.aggregate" => analyze_aggregate(id, inputs, config, fields, limits),
         "table.bin" => analyze_bin(id, inputs, config, fields, limits),
@@ -261,13 +261,6 @@ pub fn analyze_table_contract(
             "{id}: analyze_contract non disponibile"
         ))),
     }?;
-    for field in output.schema.fields() {
-        if !output.geometries.iter().any(|g| g.name == *field.name()) {
-            output
-                .field_ids
-                .insert(field.name().clone(), fields.intern(field.name())?);
-        }
-    }
     output.validate()?;
     fields.bind_contract(&output);
     Ok(output)
@@ -354,7 +347,7 @@ mod tests {
 
     /// Contratto con geometria attiva `geom` (FieldId(7)) e nessuna proprieta'.
     fn geo_contract() -> DataContract {
-        DataContract::new(
+        DataContract::from_source(
             Arc::new(Schema::new(base_fields())),
             vec![geometry(7, "geom", true)],
             Some(FieldId(7)),
@@ -371,6 +364,7 @@ mod tests {
         contract
             .rebuild(
                 Arc::new(Schema::new(base_fields())),
+                contract.field_origins(),
                 vec![geometry(7, "geom", true)],
                 Some(FieldId(7)),
                 ContractProperties {
@@ -387,6 +381,7 @@ mod tests {
                         PropertyScope::Dataset,
                     )),
                 },
+                &mut FieldAllocator::default(),
             )
             .unwrap()
     }
@@ -419,7 +414,7 @@ mod tests {
     /// Coppia di contratti semplici per concat/setops (niente List/Struct).
     fn simple_pair() -> (DataContract, DataContract) {
         let make = |nullable: bool, rows: u64| {
-            DataContract::new(
+            DataContract::from_source(
                 Arc::new(Schema::new(vec![
                     Field::new("id", DataType::Int64, false),
                     Field::new("name", DataType::Utf8, nullable),
@@ -569,7 +564,7 @@ mod tests {
             DataType::Int64,
             false,
         )])));
-        let right = DataContract::new(
+        let right = DataContract::from_source(
             Arc::new(Schema::new(vec![Field::new(
                 "geom",
                 DataType::Binary,
@@ -1178,7 +1173,7 @@ mod tests {
 
         // concat_by_name: unione per nome su schemi diversi.
         let (a, b) = simple_pair();
-        let third = DataContract::new(
+        let third = DataContract::from_source(
             Arc::new(Schema::new(vec![
                 Field::new("name", DataType::Utf8, true),
                 Field::new("extra", DataType::Int64, false),
@@ -3682,7 +3677,7 @@ mod tests {
             .map(|field| field.as_ref().clone())
             .collect();
         fields.push(Field::new("rgeom", DataType::Binary, true));
-        right = DataContract::new(
+        right = DataContract::from_source(
             Arc::new(Schema::new(fields)),
             vec![geometry(70, "rgeom", true)],
             Some(FieldId(70)),
@@ -4270,7 +4265,7 @@ mod tests {
         }
 
         fn geo_input(batch: &RecordBatch) -> DataContract {
-            DataContract::new(
+            DataContract::from_source(
                 batch.schema(),
                 vec![geometry(1, "geom", true)],
                 Some(FieldId(1)),

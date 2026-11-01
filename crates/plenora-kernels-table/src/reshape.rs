@@ -4133,7 +4133,7 @@ mod tests {
                         .unwrap_or_else(|error| panic!("{caso}: {error}"));
 
                     // Lo schema del kernel e' quello dichiarato dall'analisi.
-                    let contratto = DataContract::new(
+                    let contratto = DataContract::from_source(
                         batch.schema(),
                         vec![],
                         None,

@@ -2,6 +2,7 @@
 //! `shared_paths` e `cluster_dbscan` e la forma di risultato condivisa
 //! `WholeToMany` delle op di copertura.
 
+use plenora_core::contract::FieldOrigin;
 use std::sync::Arc;
 
 use plenora_core::arrow::{DataType, Field, Schema};
@@ -58,7 +59,8 @@ pub(in crate::analyze) fn analyze_coverage_rows(
         None,
         false,
     )?);
-    let field_id = fields_allocator.alloc()?;
+    // Segnaposto per il riferimento attivo: `New` assegna l'ID nel costruttore.
+    let field_id = fields_allocator.peek();
     let output_geometry = GeometryColumnContract {
         field_id,
         name: DEFAULT_GEOMETRY_COLUMN.to_owned(),
@@ -71,11 +73,14 @@ pub(in crate::analyze) fn analyze_coverage_rows(
         nullable: false,
         types: GeometryColumnContract::undeclared_types(),
     };
+    let origins = vec![FieldOrigin::New; fields.len()];
     DataContract::new(
         Arc::new(Schema::new_with_metadata(fields, schema_metadata.clone())),
+        origins,
         vec![output_geometry],
         Some(field_id),
         ContractProperties::default(),
+        fields_allocator,
     )
 }
 
@@ -149,6 +154,7 @@ pub(in crate::analyze) fn analyze_cluster_dbscan(
     op: &str,
     input: &DataContract,
     config: &Value,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let parsed: ClusterDbscanConfig = parse_config(op, config)?;
     ensure_positive(op, "eps", parsed.eps)?;
@@ -157,5 +163,5 @@ pub(in crate::analyze) fn analyze_cluster_dbscan(
     }
     let name = output_name(op, parsed.output_column.as_deref(), CLUSTER_ID_COLUMN)?;
     // Null per il rumore, anche per una geometria presente.
-    analyze_add_column(op, input, name, DataType::UInt64, true)
+    analyze_add_column(op, input, name, DataType::UInt64, true, allocator)
 }

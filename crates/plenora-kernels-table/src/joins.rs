@@ -2902,8 +2902,13 @@ mod geometry_reference_tests {
                     }
                 }
                 let inputs = [&a, &b].map(|batch| {
-                    DataContract::new(batch.schema(), vec![], None, ContractProperties::default())
-                        .unwrap()
+                    DataContract::from_source(
+                        batch.schema(),
+                        vec![],
+                        None,
+                        ContractProperties::default(),
+                    )
+                    .unwrap()
                 });
                 for (op, config) in [
                     ("table.concat", json!({})),
@@ -2962,9 +2967,13 @@ mod geometry_reference_tests {
                 } else {
                     input.clone()
                 };
-                let contract =
-                    DataContract::new(input.schema(), vec![], None, ContractProperties::default())
-                        .unwrap();
+                let contract = DataContract::from_source(
+                    input.schema(),
+                    vec![],
+                    None,
+                    ContractProperties::default(),
+                )
+                .unwrap();
                 for (op, config) in &cases {
                     let result = match *op {
                         "table.coalesce" => crate::quality::coalesce(

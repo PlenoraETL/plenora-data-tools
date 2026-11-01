@@ -1,6 +1,7 @@
 //! Helper condivisi dell'analisi: errori, validazioni di dominio, parsing
 //! delle config e utility su contratti e schemi.
 
+use plenora_core::contract::FieldOrigin;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -272,11 +273,13 @@ pub(in crate::analyze) fn with_geometry_types(
     input: &DataContract,
     geometry: &GeometryColumnContract,
     types: GeometryTypesProperty,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     with_geometry_types_property(
         input,
         geometry,
         ContractProperty::new(PropertyConfidence::Declared(types), PropertyScope::Schema),
+        allocator,
     )
 }
 
@@ -287,6 +290,7 @@ pub(in crate::analyze) fn with_geometry_types_property(
     input: &DataContract,
     geometry: &GeometryColumnContract,
     types: ContractProperty<GeometryTypesProperty>,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let fields: Vec<Field> = input
         .schema
@@ -318,9 +322,11 @@ pub(in crate::analyze) fn with_geometry_types_property(
             fields,
             input.schema.metadata().clone(),
         )),
+        input.field_origins(),
         geometries,
         input.active_geometry,
         input.properties.clone(),
+        allocator,
     )
 }
 
@@ -346,15 +352,25 @@ pub(in crate::analyze) fn rebuild(
     input: &DataContract,
     fields: Vec<Field>,
     properties: ContractProperties,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
+    let mut origins = input.field_origins();
+    if fields.len() < origins.len() {
+        return Err(PlenoraError::Schema(
+            "append con campi sorgente mancanti".into(),
+        ));
+    }
+    origins.resize(fields.len(), FieldOrigin::New);
     input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
         )),
+        origins,
         input.geometries.clone(),
         input.active_geometry,
         properties,
+        allocator,
     )
 }
 
@@ -393,12 +409,15 @@ pub(in crate::analyze) fn merge_schema_metadata(
 pub(in crate::analyze) fn with_schema_metadata(
     contract: &DataContract,
     metadata: Metadata,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     contract.rebuild(
         Arc::new(Schema::new_with_metadata(output_fields(contract), metadata)),
+        contract.field_origins(),
         contract.geometries.clone(),
         contract.active_geometry,
         contract.properties.clone(),
+        allocator,
     )
 }
 

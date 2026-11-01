@@ -142,8 +142,7 @@ pub(in crate::analyze) fn analyze_melt(
         .iter()
         .map(|index| source_fields[*index].clone())
         .collect();
-    fields.derive(&var_name)?;
-    fields.derive(&value_name)?;
+
     fields_out.push(Field::new(&var_name, DataType::Utf8, false));
     fields_out.push(
         Field::new(&value_name, value_data_type, true).with_metadata(geometry_metadata.clone()),
@@ -176,8 +175,11 @@ pub(in crate::analyze) fn analyze_melt(
             "melt: conteggio righe non rappresentabile".into(),
         ));
     }
+    let mut origins =
+        super::helpers::preserved_origins(input, config.id_columns.iter().map(String::as_str))?;
+    origins.extend([plenora_core::contract::FieldOrigin::New; 2]);
     let output = finish(
-        input,
+        origins,
         schema,
         geometry,
         active,
@@ -185,6 +187,7 @@ pub(in crate::analyze) fn analyze_melt(
             sorted_by: None,
             row_count: map_row_count(input, |rows| rows * value_count),
         },
+        fields,
     )?;
     super::helpers::derive_geometry(
         output,
@@ -263,7 +266,7 @@ pub(in crate::analyze) fn analyze_pivot(
         }
     };
     for output in config.mapping.values() {
-        produce(&mut fields_out, fields, output, data_type.clone(), true)?;
+        produce(&mut fields_out, output, data_type.clone(), true);
     }
     // I metadati di schema si conservano (il kernel li copia); le
     // colonne pivot first/last geometriche si completano sotto.
@@ -277,12 +280,18 @@ pub(in crate::analyze) fn analyze_pivot(
     let active = input
         .active_geometry
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+    let mut origins = super::helpers::preserved_origins(input, indice.iter().copied())?;
+    origins.resize(
+        schema.fields().len(),
+        plenora_core::contract::FieldOrigin::New,
+    );
     let mut output = finish(
-        input,
+        origins,
         schema,
         geometry,
         active,
         ContractProperties::default(),
+        fields,
     )?;
     if matches!(
         config.aggr_func,
@@ -418,7 +427,7 @@ pub(in crate::analyze) fn analyze_unnest(
         if !names.insert(name.clone()) {
             return contract_error(op, format!("unnest: collisione colonna {name}"));
         }
-        fields.derive(&name)?;
+
         fields_out.push(child.as_ref().clone().with_name(name).with_nullable(true));
     }
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
@@ -430,8 +439,16 @@ pub(in crate::analyze) fn analyze_unnest(
     let active = input
         .active_geometry
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+    let mut origins = input.field_origins();
+    if config.drop_source {
+        origins.remove(index);
+    }
+    origins.resize(
+        schema.fields().len(),
+        plenora_core::contract::FieldOrigin::New,
+    );
     finish(
-        input,
+        origins,
         schema,
         geometry,
         active,
@@ -444,6 +461,7 @@ pub(in crate::analyze) fn analyze_unnest(
             },
             row_count: input.properties.row_count.clone(),
         },
+        fields,
     )
 }
 
@@ -535,9 +553,6 @@ pub(in crate::analyze) fn analyze_table_diff(
     fields_out.push(Field::new("_diff_status", DataType::Utf8, false));
     fields_out.push(Field::new("_diff_columns", DataType::Utf8, true));
     fields_out.push(Field::new("_diff_old_values", DataType::Utf8, true));
-    fields_out
-        .iter()
-        .try_for_each(|field| fields.derive(field.name()).map(|_| ()))?;
     // Chiavi e colonne di confronto sono ricostruite (nullability forzata,
     // valori da entrambe le sorgenti), quindi derivate: nessun metadata di
     // campo ereditato. I metadata di SCHEMA delle due sorgenti si fondono
@@ -545,5 +560,12 @@ pub(in crate::analyze) fn analyze_table_diff(
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
     // Chiavi e confronti hanno gia' rifiutato ogni geometria.
-    finish(left, schema, None, None, ContractProperties::default())
+    finish(
+        vec![plenora_core::contract::FieldOrigin::New; schema.fields().len()],
+        schema,
+        None,
+        None,
+        ContractProperties::default(),
+        fields,
+    )
 }

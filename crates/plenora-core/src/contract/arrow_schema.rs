@@ -273,7 +273,7 @@ pub fn contract_from_arrow_schema(
     } else {
         Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
     };
-    DataContract::new(
+    DataContract::from_source(
         schema,
         geometries,
         active_geometry,

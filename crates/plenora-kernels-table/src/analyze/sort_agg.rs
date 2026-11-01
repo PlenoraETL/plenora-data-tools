@@ -249,10 +249,10 @@ pub(in crate::analyze) fn analyze_aggregate(
             aggregation.function,
             aggregation::AggFunction::Count | aggregation::AggFunction::Nunique
         );
-        produce(&mut fields_out, fields, &name, data_type, nullable)?;
+        produce(&mut fields_out, &name, data_type, nullable);
     }
     if config.aggregations.is_empty() {
-        produce(&mut fields_out, fields, "count", DataType::Int64, false)?;
+        produce(&mut fields_out, "count", DataType::Int64, false);
     }
     // I metadata dello schema di input si conservano sempre (le chiavi
     // sconosciute non sono giudicabili qui; perderle rompe i round-trip).
@@ -269,12 +269,19 @@ pub(in crate::analyze) fn analyze_aggregate(
     let active = input
         .active_geometry
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+    let mut origins =
+        super::helpers::preserved_origins(input, config.group_by.iter().map(String::as_str))?;
+    origins.resize(
+        schema.fields().len(),
+        plenora_core::contract::FieldOrigin::New,
+    );
     finish(
-        input,
+        origins,
         schema,
         geometry,
         active,
         ContractProperties::default(),
+        fields,
     )
 }
 

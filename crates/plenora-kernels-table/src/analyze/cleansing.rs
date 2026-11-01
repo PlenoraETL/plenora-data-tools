@@ -108,11 +108,12 @@ pub(in crate::analyze) fn analyze_fill_na(
     );
     // Valori modificati, righe e ordine invariati.
     finish(
-        input,
+        input.field_origins(),
         schema,
         geometry,
         input.active_geometry,
         rows_only(input),
+        fields,
     )
 }
 
@@ -144,13 +145,7 @@ pub(in crate::analyze) fn analyze_replace(
     // quindi vanno ripristinati dal sorgente.
     let source_metadata = field_of(op, input, &config.column)?.metadata().clone();
     let mut fields_out = clone_fields(input);
-    produce(
-        &mut fields_out,
-        fields,
-        &config.column,
-        DataType::Utf8,
-        true,
-    )?;
+    produce(&mut fields_out, &config.column, DataType::Utf8, true);
     if let Some(replaced) = fields_out
         .iter_mut()
         .find(|field| field.name() == &config.column)
@@ -163,12 +158,15 @@ pub(in crate::analyze) fn analyze_replace(
         &schema,
         input.geometries.first().map(|g| g.name.as_str()),
     );
+    let mut origins = input.field_origins();
+    origins[input.schema.index_of(&config.column)?] = plenora_core::contract::FieldOrigin::New;
     finish(
-        input,
+        origins,
         schema,
         geometry,
         input.active_geometry,
         rows_only(input),
+        fields,
     )
 }
 

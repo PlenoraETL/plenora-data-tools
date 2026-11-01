@@ -2828,109 +2828,216 @@ fn catalogo_identita_seguono_la_provenienza() {
     let mut errors = Vec::new();
     for op in CATALOG {
         let scheda = leggi_scheda(op).unwrap();
-        let mut allocator = FieldAllocator::default();
-        let inputs: Vec<DataContract> = scheda
-            .esempio
-            .ingressi
-            .iter()
-            .map(|spec| {
-                let batch = tabella_con_metadati(&spec.colonne, &spec.metadati).unwrap();
-                let mut input = contract_from_arrow_schema(batch.schema(), resolve_crs).unwrap();
-                for field in input.schema.fields() {
-                    let id = allocator.alloc().unwrap();
-                    input.field_ids.insert(field.name().clone(), id);
-                    for geometry in &mut input.geometries {
-                        if geometry.name == *field.name() {
-                            geometry.field_id = id;
-                            input.active_geometry = Some(id);
+        let output_schema = tabella(&scheda.esempio.uscita.colonne).unwrap().schema();
+        let mut variants = vec![None];
+        for field in output_schema.fields() {
+            if oracle[op.id].get(field.name()) == Some(&None) {
+                for branch in 0..scheda.esempio.ingressi.len() {
+                    variants.push(Some((branch, field.name().clone())));
+                }
+            }
+        }
+        for variant in variants {
+            let mut allocator = FieldAllocator::default();
+            let mut inputs: Vec<DataContract> = scheda
+                .esempio
+                .ingressi
+                .iter()
+                .map(|spec| {
+                    let batch = tabella_con_metadati(&spec.colonne, &spec.metadati).unwrap();
+                    let mut input =
+                        contract_from_arrow_schema(batch.schema(), resolve_crs).unwrap();
+                    for field in input.schema.fields() {
+                        let id = allocator.alloc().unwrap();
+                        input.field_ids.insert(field.name().clone(), id);
+                        for geometry in &mut input.geometries {
+                            if geometry.name == *field.name() {
+                                geometry.field_id = id;
+                                input.active_geometry = Some(id);
+                            }
                         }
                     }
+                    input.validate().unwrap();
+                    input
+                })
+                .collect();
+            if let Some((branch, name)) = &variant {
+                let input = &mut inputs[*branch];
+                if input.schema.field_with_name(name).is_err() {
+                    let mut fields = input.schema.fields().to_vec();
+                    fields.push(Arc::new(Field::new(
+                        name,
+                        output_schema
+                            .field_with_name(name)
+                            .unwrap()
+                            .data_type()
+                            .clone(),
+                        true,
+                    )));
+                    input.schema = Arc::new(Schema::new_with_metadata(
+                        fields,
+                        input.schema.metadata().clone(),
+                    ));
+                    input
+                        .field_ids
+                        .insert(name.clone(), allocator.alloc().unwrap());
                 }
-                input.validate().unwrap();
-                input
-            })
-            .collect();
-        // Avvelena anche i nomi d'uscita: nessun campo nuovo puo' adottarli.
-        let mut estranei = Vec::new();
-        for name in inputs
-            .iter()
-            .flat_map(|input| input.field_ids.keys())
-            .chain(oracle[op.id].keys())
-        {
-            estranei.push(allocator.derive(name).unwrap());
-        }
-        let mut config: Value = serde_json::from_str(scheda.esempio.config.get()).unwrap();
-        if op.id == "table.pivot" {
-            config["mapping"] = serde_json::json!({"feb":"feb", "gen":"gen"});
-        }
-        let result = if op.family == Family::Table {
-            plenora_kernels_table::analyze::analyze_table_contract(
-                op.id,
-                &inputs,
-                &config,
+            }
+            // Avvelena anche i nomi d'uscita: nessun campo nuovo puo' adottarli.
+            let mut estranei = Vec::new();
+            for name in inputs
+                .iter()
+                .flat_map(|input| input.field_ids.keys())
+                .chain(oracle[op.id].keys())
+            {
+                estranei.push(allocator.derive(name).unwrap());
+            }
+            let mut config: Value = serde_json::from_str(scheda.esempio.config.get()).unwrap();
+            if op.id == "table.pivot" {
+                config["mapping"] = serde_json::json!({"feb":"feb", "gen":"gen"});
+            }
+            let result = if op.family == Family::Table {
+                plenora_kernels_table::analyze::analyze_table_contract(
+                    op.id,
+                    &inputs,
+                    &config,
+                    &mut allocator,
+                    &plenora_kernels_table::Limits::default(),
+                )
+            } else {
+                let crs = scheda
+                    .esempio
+                    .crs
+                    .as_deref()
+                    .map(|s| resolve_crs(s, "crs").unwrap());
+                plenora_kernels_geo::analyze::analyze_geo_contract(
+                    op.id,
+                    &inputs,
+                    &config,
+                    crs.as_ref(),
+                    &mut allocator,
+                )
+            };
+            if op.id == "table.transpose" {
+                assert!(matches!(result, Err(PlenoraError::Unsupported(_))));
+                continue;
+            }
+            // Le op che appendono senza sovrascrivere rifiutano l'omonimo sul
+            // ramo conservato. Un errore inatteso non conta come prova superata.
+            let rejects_collision = variant.as_ref().is_some_and(|(branch, _)| {
+                *branch == 0
+                    && (op.id == "table.unnest"
+                        || matches!(
+                            op.id,
+                            "geo.area"
+                                | "geo.bounds_extractor"
+                                | "geo.count_points_in_polygons"
+                                | "geo.distance"
+                                | "geo.explode"
+                                | "geo.from_coords"
+                                | "geo.from_wkt"
+                                | "geo.length"
+                                | "geo.nearest"
+                                | "geo.perimeter"
+                                | "geo.to_wkt"
+                                | "geo.vertex_count"
+                                | "geo.within"
+                                | "geo.sjoin"
+                                | "geo.hausdorff_distance"
+                                | "geo.haversine_distance"
+                                | "geo.geodesic_distance"
+                                | "geo.geodesic_line_length"
+                                | "geo.delaunay"
+                                | "geo.split"
+                                | "geo.frechet_distance"
+                                | "geo.bearing"
+                                | "geo.geodesic_area"
+                                | "geo.geometry_diagnostics"
+                                | "geo.geometry_accessors"
+                                | "geo.line_locate_point"
+                                | "geo.subdivide"
+                                | "geo.cluster_dbscan"
+                        )
+                        || op.id.starts_with("geo.predicate_"))
+            });
+            if rejects_collision {
+                assert!(
+                    matches!(
+                        result,
+                        Err(PlenoraError::Schema(_) | PlenoraError::InvalidPlan(_))
+                    ),
+                    "{}: {variant:?}",
+                    op.id
+                );
+                continue;
+            }
+            let output = result.unwrap_or_else(|e| panic!("{}: {variant:?}: {e}", op.id));
+            let mut expected = oracle[op.id].clone();
+            if let Some((branch, name)) = &variant {
+                match op.id {
+                    "table.align_schema" => {
+                        expected.insert(name.clone(), Some((*branch, name.clone())));
+                    }
+                    "table.melt" => {
+                        let source = expected.remove(name).unwrap();
+                        expected.insert(format!("{name}_1"), source);
+                    }
+                    "table.fuzzy_join" => {
+                        let suffix = if *branch == 0 { "L" } else { "R" };
+                        expected.insert(format!("{name}_{suffix}"), Some((*branch, name.clone())));
+                    }
+                    _ => {}
+                }
+            }
+            let old: Vec<FieldId> = inputs
+                .iter()
+                .flat_map(|i| i.field_ids.values().copied())
+                .collect();
+            assert_eq!(
+                output.field_ids.len(),
+                output.schema.fields().len(),
+                "{}",
+                op.id
+            );
+            assert_eq!(
+                expected.len(),
+                output.field_ids.len(),
+                "{}: {variant:?}",
+                op.id
+            );
+            for (name, source) in &expected {
+                let actual = output.field_ids[name];
+                assert!(
+                    !estranei.contains(&actual),
+                    "{}: ID estraneo per {name}",
+                    op.id
+                );
+                let correct = match source {
+                    Some((branch, origin)) => actual == inputs[*branch].field_ids[origin],
+                    None => !old.contains(&actual),
+                };
+                if !correct {
+                    errors.push(format!(
+                        "{}: {name}, origine {source:?}, variante {variant:?}",
+                        op.id
+                    ));
+                }
+            }
+            // La stessa mappa deve sopravvivere a una continuazione tabellare.
+            let continued = plenora_kernels_table::analyze::analyze_table_contract(
+                "table.limit",
+                std::slice::from_ref(&output),
+                &serde_json::json!({"n": 1}),
                 &mut allocator,
                 &plenora_kernels_table::Limits::default(),
             )
-        } else {
-            let crs = scheda
-                .esempio
-                .crs
-                .as_deref()
-                .map(|s| resolve_crs(s, "crs").unwrap());
-            plenora_kernels_geo::analyze::analyze_geo_contract(
-                op.id,
-                &inputs,
-                &config,
-                crs.as_ref(),
-                &mut allocator,
-            )
-        };
-        if op.id == "table.transpose" {
-            assert!(matches!(result, Err(PlenoraError::Unsupported(_))));
-            continue;
-        }
-        let output = result.unwrap_or_else(|e| panic!("{}: {e}", op.id));
-        let expected = &oracle[op.id];
-        let old: Vec<FieldId> = inputs
-            .iter()
-            .flat_map(|i| i.field_ids.values().copied())
-            .collect();
-        assert_eq!(
-            output.field_ids.len(),
-            output.schema.fields().len(),
-            "{}",
-            op.id
-        );
-        assert_eq!(expected.len(), output.field_ids.len(), "{}", op.id);
-        for (name, source) in expected {
-            let actual = output.field_ids[name];
-            assert!(
-                !estranei.contains(&actual),
-                "{}: ID estraneo per {name}",
+            .unwrap();
+            assert_eq!(
+                continued.field_ids, output.field_ids,
+                "{}: continuazione",
                 op.id
             );
-            let correct = match source {
-                Some((branch, origin)) => actual == inputs[*branch].field_ids[origin],
-                None => !old.contains(&actual),
-            };
-            if !correct {
-                errors.push(format!("{}: {name}, origine {source:?}", op.id));
-            }
         }
-        // La stessa mappa deve sopravvivere a una continuazione tabellare.
-        let continued = plenora_kernels_table::analyze::analyze_table_contract(
-            "table.limit",
-            std::slice::from_ref(&output),
-            &serde_json::json!({"n": 1}),
-            &mut allocator,
-            &plenora_kernels_table::Limits::default(),
-        )
-        .unwrap();
-        assert_eq!(
-            continued.field_ids, output.field_ids,
-            "{}: continuazione",
-            op.id
-        );
     }
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 }

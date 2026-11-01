@@ -62,7 +62,17 @@ pub(in crate::analyze) fn analyze_drop_columns(
         },
         dropped_geometry,
     );
-    finish(input, schema, geometry, active, properties)
+    finish(
+        super::helpers::preserved_origins(
+            input,
+            schema.fields().iter().map(|field| field.name().as_str()),
+        )?,
+        schema,
+        geometry,
+        active,
+        properties,
+        fields,
+    )
 }
 
 pub(in crate::analyze) fn analyze_rename(
@@ -117,26 +127,13 @@ pub(in crate::analyze) fn analyze_rename(
     });
     let geometry = propagate_geometry(input, &schema, renamed_geometry);
     let properties = input.properties.clone();
-    let mut source_contract = input.clone();
-    source_contract.field_ids = input
-        .field_ids
-        .iter()
-        .map(|(name, id)| {
-            (
-                renames
-                    .get(name.as_str())
-                    .map_or_else(|| name.clone(), |new| (*new).to_owned()),
-                *id,
-            )
-        })
-        .collect();
-    source_contract.geometries = geometry.iter().cloned().collect();
     finish(
-        &source_contract,
+        input.field_origins(),
         schema,
         geometry,
         input.active_geometry,
         properties,
+        fields,
     )
 }
 
@@ -177,11 +174,15 @@ pub(in crate::analyze) fn analyze_reorder_columns(
         input.geometries.first().map(|g| g.name.as_str()),
     );
     finish(
-        input,
+        super::helpers::preserved_origins(
+            input,
+            schema.fields().iter().map(|field| field.name().as_str()),
+        )?,
         schema,
         geometry,
         input.active_geometry,
         input.properties.clone(),
+        fields,
     )
 }
 
@@ -295,7 +296,17 @@ pub(in crate::analyze) fn analyze_select_columns(
         },
         dropped_geometry,
     );
-    finish(input, schema, geometry, active, properties)
+    finish(
+        super::helpers::preserved_origins(
+            input,
+            schema.fields().iter().map(|field| field.name().as_str()),
+        )?,
+        schema,
+        geometry,
+        active,
+        properties,
+        fields,
+    )
 }
 
 pub(in crate::analyze) fn analyze_align_schema(
@@ -315,6 +326,7 @@ pub(in crate::analyze) fn analyze_align_schema(
     }
     let mut seen: HashSet<&str> = HashSet::new();
     let mut fields_out = Vec::with_capacity(config.columns.len());
+    let mut origins = Vec::new();
     let mut added_any = false;
     for declared in &config.columns {
         check_output_name(op, &declared.name)?;
@@ -338,8 +350,12 @@ pub(in crate::analyze) fn analyze_align_schema(
                     ),
                 );
             }
+            origins.push(plenora_core::contract::FieldOrigin::Preserved(
+                input.field_ids[&declared.name],
+            ));
             fields_out.push(field.clone());
         } else {
+            origins.push(plenora_core::contract::FieldOrigin::New);
             added_any = true;
             // Il default e' validato a secco con la stessa conversione del
             // kernel: mai un errore a meta' dei dati.
@@ -348,7 +364,7 @@ pub(in crate::analyze) fn analyze_align_schema(
                 // Il default riempie ogni cella della colonna aggiunta.
                 check_json_text(op, default, limits.max_string_bytes, "default")?;
             }
-            fields.derive(&declared.name)?;
+
             fields_out.push(Field::new(
                 &declared.name,
                 data_type,
@@ -365,6 +381,9 @@ pub(in crate::analyze) fn analyze_align_schema(
     if config.tiene_extra() {
         for field in input.schema.fields() {
             if !seen.contains(field.name().as_str()) {
+                origins.push(plenora_core::contract::FieldOrigin::Preserved(
+                    input.field_ids[field.name()],
+                ));
                 fields_out.push(field.as_ref().clone());
             }
         }
@@ -396,5 +415,5 @@ pub(in crate::analyze) fn analyze_align_schema(
         },
         dropped_geometry,
     );
-    finish(input, schema, geometry, active, properties)
+    finish(origins, schema, geometry, active, properties, fields)
 }

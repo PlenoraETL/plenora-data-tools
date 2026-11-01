@@ -69,7 +69,7 @@ fn contratto(crs: ContractCrs, dimensioni: GeometryDimensions) -> DataContract {
         Field::new("id", DataType::Int64, false),
         campo_geometria("geom"),
     ]));
-    DataContract::new(
+    DataContract::from_source(
         schema,
         vec![GeometryColumnContract {
             field_id: FieldId(0),
@@ -271,7 +271,7 @@ fn un_metadato_divergente_e_un_errore_non_un_arbitrato() {
         Field::new("id", DataType::Int64, false),
         Field::new("geom", DataType::Binary, true).with_metadata(metadata),
     ]));
-    let esito = DataContract::new(
+    let esito = DataContract::from_source(
         schema,
         vec![GeometryColumnContract {
             field_id: FieldId(0),
