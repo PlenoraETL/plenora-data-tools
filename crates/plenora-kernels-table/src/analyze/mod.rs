@@ -168,14 +168,14 @@ pub fn analyze_table_contract(
     }
     let mut owned_inputs = inputs.to_vec();
     for input in &mut owned_inputs {
-        fields.bind_contract(input, inputs.len() == 1);
+        fields.bind_contract(input);
         for field in input.schema.fields() {
             let id = fields.intern(field.name())?;
             input.field_ids.insert(field.name().clone(), id);
         }
     }
     let inputs = owned_inputs.as_slice();
-    fields.bind_contract(&inputs[0], false);
+    fields.bind_contract(&inputs[0]);
     let mut output = match id {
         "table.add_row_number" => analyze_add_row_number(id, inputs, config, fields, limits),
         "table.aggregate" => analyze_aggregate(id, inputs, config, fields, limits),
@@ -269,6 +269,7 @@ pub fn analyze_table_contract(
         }
     }
     output.validate()?;
+    fields.bind_contract(&output);
     Ok(output)
 }
 
@@ -506,6 +507,58 @@ mod tests {
     }
 
     // -- Completezza del dispatch -------------------------------------------
+
+    #[test]
+    fn join_suffissi_seguono_origine_non_nome_finale() {
+        for (op, config, left_names, right_names, expected) in [
+            (
+                "table.join",
+                json!({"left_keys":["k"], "right_keys":["k"]}),
+                vec!["k", "x", "x_L"],
+                vec!["k", "z"],
+                vec![("k", 0), ("x_L", 1), ("x_L_L", 2), ("z_R", 4)],
+            ),
+            (
+                "table.fuzzy_join",
+                json!({"left_key":"k", "right_key":"k", "metric":"levenshtein", "threshold":0.7, "blocking":"prefix", "how":"left"}),
+                vec!["k", "x", "x_L"],
+                vec!["k", "z"],
+                vec![("k", 0), ("x_L", 1), ("x_L_L", 2), ("k_R", 3), ("z_R", 4)],
+            ),
+            (
+                "table.cross_join",
+                json!({}),
+                vec!["x", "x_x"],
+                vec!["x", "x_x"],
+                vec![("x_x", 0), ("x_x_x", 1), ("x_y", 2), ("x_x_y", 3)],
+            ),
+        ] {
+            let mut allocator = FieldAllocator::default();
+            let inputs: Vec<_> = [left_names, right_names]
+                .into_iter()
+                .map(|names| {
+                    let mut input = DataContract::tabular(Arc::new(Schema::new(
+                        names
+                            .iter()
+                            .map(|n| Field::new(*n, DataType::Utf8, true))
+                            .collect::<Vec<_>>(),
+                    )));
+                    for name in names {
+                        input
+                            .field_ids
+                            .insert(name.into(), allocator.alloc().unwrap());
+                    }
+                    input
+                })
+                .collect();
+            let output =
+                analyze_table_contract(op, &inputs, &config, &mut allocator, &Limits::default())
+                    .unwrap();
+            for (name, id) in expected {
+                assert_eq!(output.field_ids[name], FieldId(id), "{op}: {name}");
+            }
+        }
+    }
 
     #[test]
     fn identita_preassegnate_non_collidono_con_un_altro_ingresso() {

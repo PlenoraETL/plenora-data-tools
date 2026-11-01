@@ -3995,3 +3995,49 @@ fn diff_e_operazioni_binarie_rifiutano_geometrie_incoerenti_prima_delle_celle() 
         }
     }
 }
+
+#[test]
+fn conteggi_sintetici_rifiutano_overflow_e_perdita_di_precisione() {
+    use plenora_core::arrow::array::RecordBatchOptions;
+    use plenora_core::contract::{
+        ContractProperty, DataContract, FieldAllocator, PropertyConfidence, PropertyScope,
+    };
+    use plenora_kernels_table::{analysis, analyze::analyze_table_contract, reshape};
+    let empty = Arc::new(Schema::empty());
+    let input = RecordBatch::try_new_with_options(
+        empty.clone(),
+        vec![],
+        &RecordBatchOptions::new().with_row_count(Some(usize::MAX)),
+    )
+    .unwrap();
+    let limits = Limits {
+        max_columns: usize::MAX,
+        max_rows: usize::MAX,
+        ..Limits::default()
+    };
+    let transpose =
+        reshape::transpose(&input, &serde_json::from_value(json!({})).unwrap(), &limits);
+    assert!(matches!(transpose, Err(PlenoraError::ResourceLimit(_))));
+    let fraction = json!({"fraction": 1.0});
+    if usize::BITS > 53 {
+        assert!(matches!(
+            analysis::sample(&input, &serde_json::from_value(fraction.clone()).unwrap()),
+            Err(PlenoraError::ResourceLimit(_))
+        ));
+    }
+    let mut contract = DataContract::tabular(empty);
+    contract.properties.row_count = Some(ContractProperty::new(
+        PropertyConfidence::Proven((1_u64 << 53) + 1),
+        PropertyScope::Stream,
+    ));
+    assert!(matches!(
+        analyze_table_contract(
+            "table.sample",
+            &[contract],
+            &fraction,
+            &mut FieldAllocator::default(),
+            &limits
+        ),
+        Err(PlenoraError::ResourceLimit(_))
+    ));
+}

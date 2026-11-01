@@ -9,9 +9,9 @@ use serde_json::Value;
 
 use super::helpers::{
     analyze_append, check_name_list, check_output_name, check_text_len, clone_fields, con_op,
-    contract_error, field_of, finish, map_row_count, merge_geometry, merge_schema_metadata,
-    produce, propagate_geometry, require_numeric, require_scalar_string,
-    require_scalar_string_field, require_scalar_strings, typed, unsupported,
+    contract_error, field_of, finish, map_row_count, merge_schema_metadata, produce,
+    propagate_geometry, require_numeric, require_scalar_string, require_scalar_string_field,
+    require_scalar_strings, typed, unsupported,
 };
 use super::joins::check_key_pairs;
 use crate::{reshape, Limits};
@@ -142,6 +142,8 @@ pub(in crate::analyze) fn analyze_melt(
         .iter()
         .map(|index| source_fields[*index].clone())
         .collect();
+    fields.derive(&var_name)?;
+    fields.derive(&value_name)?;
     fields_out.push(Field::new(&var_name, DataType::Utf8, false));
     fields_out.push(
         Field::new(&value_name, value_data_type, true).with_metadata(geometry_metadata.clone()),
@@ -416,6 +418,7 @@ pub(in crate::analyze) fn analyze_unnest(
         if !names.insert(name.clone()) {
             return contract_error(op, format!("unnest: collisione colonna {name}"));
         }
+        fields.derive(&name)?;
         fields_out.push(child.as_ref().clone().with_name(name).with_nullable(true));
     }
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
@@ -453,7 +456,6 @@ pub(in crate::analyze) fn analyze_table_diff(
 ) -> Result<DataContract> {
     let config: reshape::TableDiff = typed(op, config)?;
     let (left, right) = (&inputs[0], &inputs[1]);
-    let _ = fields;
     if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {
         return contract_error(op, "chiavi table_diff non valide");
     }
@@ -533,29 +535,15 @@ pub(in crate::analyze) fn analyze_table_diff(
     fields_out.push(Field::new("_diff_status", DataType::Utf8, false));
     fields_out.push(Field::new("_diff_columns", DataType::Utf8, true));
     fields_out.push(Field::new("_diff_old_values", DataType::Utf8, true));
+    fields_out
+        .iter()
+        .try_for_each(|field| fields.derive(field.name()).map(|_| ()))?;
     // Chiavi e colonne di confronto sono ricostruite (nullability forzata,
     // valori da entrambe le sorgenti), quindi derivate: nessun metadata di
     // campo ereditato. I metadata di SCHEMA delle due sorgenti si fondono
     // invece come nei join: una chiave con valori diversi e' un errore.
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
-    let emitted = |name: &str| {
-        config.left_keys.contains(&name.to_owned()) || compare.iter().any(|c| c == name)
-    };
-    let left_geometry = left
-        .geometries
-        .first()
-        .filter(|geometry| emitted(&geometry.name))
-        .and_then(|geometry| propagate_geometry(left, &schema, Some(&geometry.name)));
-    let right_geometry = if left_geometry.is_none() {
-        right
-            .geometries
-            .first()
-            .filter(|geometry| emitted(&geometry.name))
-            .and_then(|geometry| propagate_geometry(right, &schema, Some(&geometry.name)))
-    } else {
-        None
-    };
-    let geometry = merge_geometry(op, left_geometry, right_geometry)?;
-    finish(left, schema, geometry, None, ContractProperties::default())
+    // Chiavi e confronti hanno gia' rifiutato ogni geometria.
+    finish(left, schema, None, None, ContractProperties::default())
 }

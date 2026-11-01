@@ -194,6 +194,18 @@ pub(in crate::analyze) fn analyze_sample(
     if let Some(stratify) = &config.stratify_column {
         require_scalar_string(op, input, stratify)?;
     }
+    if config.fraction.is_some()
+        && input
+            .properties
+            .row_count
+            .as_ref()
+            .and_then(|p| p.confidence.value())
+            .is_some_and(|rows| *rows > (1_u64 << 53))
+    {
+        return Err(PlenoraError::ResourceLimit(
+            "sample: conteggio oltre il dominio esatto della frazione".into(),
+        ));
+    }
     let _ = fields;
     let mut output = input.clone();
     // Il kernel mescola le righe (shuffle): nessun ordinamento preservato.

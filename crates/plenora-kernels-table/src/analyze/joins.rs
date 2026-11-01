@@ -1,7 +1,7 @@
 //! Analyzer a secco di join e set operation
 //! (kernel `joins.rs` / `setops.rs` / `fuzzy.rs`).
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::contract::{
@@ -66,6 +66,7 @@ fn combine_horizontal_fields(
     right: &DataContract,
     omitted_right: &HashSet<usize>,
     naming: HorizontalNaming<'_>,
+    allocator: &mut FieldAllocator,
     limits: &Limits,
 ) -> Result<(Vec<Field>, Option<String>, Option<String>)> {
     let right_names: HashSet<&str> = right
@@ -80,6 +81,7 @@ fn combine_horizontal_fields(
         HorizontalNaming::ManipolaJoin(indices) => indices.iter().copied().collect(),
         _ => HashSet::new(),
     };
+    let mut identities = BTreeMap::new();
     let mut fields_out: Vec<Field> = Vec::new();
     let mut left_geometry_name = None;
     for (index, field) in clone_fields(left).into_iter().enumerate() {
@@ -97,6 +99,7 @@ fn combine_horizontal_fields(
         if left.geometries.first().is_some_and(|g| g.name == original) {
             left_geometry_name = Some(name.clone());
         }
+        identities.insert(name.clone(), left.field_ids[&original]);
         fields_out.push(field.with_name(name).with_nullable(true));
     }
     let mut names: HashSet<String> = fields_out
@@ -135,11 +138,13 @@ fn combine_horizontal_fields(
         if right.geometries.first().is_some_and(|g| g.name == original) {
             right_geometry_name = Some(name.clone());
         }
+        identities.insert(name.clone(), right.field_ids[&original]);
         fields_out.push(field.with_name(name).with_nullable(true));
     }
     if fields_out.len() > limits.max_columns {
         return contract_error(op, "join supera max_columns");
     }
+    allocator.bind_fields(&identities);
     Ok((fields_out, left_geometry_name, right_geometry_name))
 }
 
@@ -211,6 +216,7 @@ pub(in crate::analyze) fn analyze_join(
         right,
         &right_indices,
         HorizontalNaming::ManipolaJoin(&left_indices),
+        fields,
         limits,
     )?;
     // I metadata di schema delle due sorgenti si fondono; stessa chiave con
@@ -267,6 +273,7 @@ pub(in crate::analyze) fn analyze_fuzzy_join(
         right,
         &HashSet::new(),
         HorizontalNaming::ManipolaJoin(&[left_index]),
+        fields,
         limits,
     )?;
     let score_name = config.score_name();
@@ -274,6 +281,7 @@ pub(in crate::analyze) fn analyze_fuzzy_join(
     if fields_out.iter().any(|field| field.name() == score_name) {
         return contract_error(op, format!("collisione fuzzy_join: {score_name}"));
     }
+    fields.derive(score_name)?;
     fields_out.push(Field::new(
         score_name,
         DataType::Float64,
@@ -307,6 +315,7 @@ pub(in crate::analyze) fn analyze_cross_join(
         right,
         &HashSet::new(),
         HorizontalNaming::PandasCross,
+        fields,
         limits,
     )?;
     // Merge dei metadata di schema delle due sorgenti (come `table.join`).
@@ -410,8 +419,15 @@ pub(in crate::analyze) fn analyze_asof_join(
             })
         })
         .collect::<Result<HashSet<_>>>()?;
-    let (fields_out, left_geometry, right_geometry) =
-        combine_horizontal_fields(op, left, right, &omitted, HorizontalNaming::AsOf, limits)?;
+    let (fields_out, left_geometry, right_geometry) = combine_horizontal_fields(
+        op,
+        left,
+        right,
+        &omitted,
+        HorizontalNaming::AsOf,
+        fields,
+        limits,
+    )?;
     // Merge dei metadata di schema delle due sorgenti (come `table.join`).
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
@@ -633,6 +649,17 @@ pub(in crate::analyze) fn analyze_concat_by_name(
         }
         union
     };
+    // I campi presenti su un solo ramo conservano la sua provenienza.
+    let identities = fields_out
+        .iter()
+        .filter_map(|field| {
+            inputs
+                .iter()
+                .find_map(|input| input.field_ids.get(field.name()))
+                .map(|id| (field.name().clone(), *id))
+        })
+        .collect();
+    fields.bind_fields(&identities);
     // Merge dei metadata di schema di tutti gli input (conflitto su valori
     // diversi -> errore, mai "vince il primo").
     let schema = Schema::new_with_metadata(fields_out, merge_schema_metadata_many(op, inputs)?);

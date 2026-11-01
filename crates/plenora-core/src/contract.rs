@@ -761,19 +761,17 @@ impl FieldAllocator {
         Ok(id)
     }
 
-    /// Registra le identita' dell'ingresso corrente. I nomi assenti si eliminano;
-    /// solo per un ingresso unario i campi senza registro possono adottare un ID
-    /// gia' assegnato dal chiamante (`adopt_unregistered`), senza ambiguita' fra archi.
-    pub fn bind_contract(&mut self, contract: &DataContract, adopt_unregistered: bool) {
-        if adopt_unregistered {
-            self.by_name.retain(|name, id| {
-                contract.schema.field_with_name(name).is_ok()
-                    && !contract.field_ids.values().any(|known| known == id)
-            });
-        } else {
-            self.by_name.clear();
-        }
-        for (name, id) in &contract.field_ids {
+    /// Sostituisce le associazioni con la provenienza esplicita del contratto.
+    /// Un nome privo di identita' non eredita associazioni di passi precedenti.
+    pub fn bind_contract(&mut self, contract: &DataContract) {
+        self.bind_fields(&contract.field_ids);
+    }
+
+    /// Associa i nomi d'uscita alle identita' delle rispettive sorgenti.
+    /// La mappa deve essere costruita prima di rinominare i campi.
+    pub fn bind_fields(&mut self, fields: &std::collections::BTreeMap<String, FieldId>) {
+        self.by_name.clear();
+        for (name, id) in fields {
             self.observe(*id);
             self.by_name.insert(name.clone(), *id);
         }

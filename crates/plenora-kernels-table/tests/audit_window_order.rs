@@ -76,13 +76,16 @@ fn finestre_che_sostituiscono_la_chiave_invalidano_sorted_by() {
 #[test]
 fn rinomina_simultanea_conserva_identita_della_chiave() {
     for second_target in ["a", "c"] {
-        let input = DataContract::tabular(Arc::new(Schema::new(vec![
+        let mut input = DataContract::tabular(Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
         ])));
         let mut fields = FieldAllocator::default();
         let a = fields.intern("a").unwrap();
         let b = fields.intern("b").unwrap();
+        // La provenienza e' nel contratto, non nella cache dei nomi dell'allocatore.
+        input.field_ids.insert("a".into(), a);
+        input.field_ids.insert("b".into(), b);
         let sorted = analyze_table_contract(
             "table.sort",
             &[input],

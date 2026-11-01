@@ -1237,7 +1237,9 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
     if batch.num_rows() == 0 {
         return Ok(batch.clone());
     }
-    let output_columns = batch.num_rows().saturating_add(1);
+    let output_columns = batch.num_rows().checked_add(1).ok_or_else(|| {
+        PlenoraError::ResourceLimit("transpose: numero colonne non rappresentabile".into())
+    })?;
     if data_indices.len() > limits.max_rows || output_columns > limits.max_columns {
         return Err(PlenoraError::ResourceLimit(
             "transpose supera i limiti".into(),

@@ -219,7 +219,8 @@ pub(in crate::analyze) fn require_scalar_strings<'a>(
 }
 
 /// `round(rows * fraction)` con l'aritmetica f64 del kernel `sample`
-/// (i cast riflettono volutamente la sua semantica).
+/// (i cast riflettono volutamente la sua semantica). Il chiamante verifica
+/// `rows <= 2^53`: conversione del conteggio e ritorno sono esatti.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,

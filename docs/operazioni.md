@@ -6769,6 +6769,10 @@ In validazione, `InvalidPlan`:
 - config con campi sconosciuti, `n` negativo o `null` esplicito in `n`,
   `fraction`, `random_state` o `stratify_column` (il parametro si omette).
 
+In validazione (se il conteggio e' noto) e in esecuzione, `ResourceLimit`
+se `fraction` e' presente e le righe superano `2^53`: la conversione del
+conteggio in `f64` non deve perdere precisione.
+
 In esecuzione:
 
 - `Schema`: una cella di `stratify_column` che non si converte in testo;
@@ -19745,7 +19749,8 @@ Poi dal kernel, per geometria (`OperationError`, che il runner porta in `Plenora
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
   calcolo di `geo` vanno in panico dentro la barriera (il messaggio porta
   solo la forma del payload);
-- `InvalidParameter`: soglia non finita o negativa (l'analisi la
+- `InvalidParameter`: con `preserve_topology`, oltre `i32::MAX` coordinate;
+  soglia non finita o negativa (l'analisi la
   rifiuta prima); sul percorso scalato (sotto), un'area positiva che nella
   scala delle coordinate diventa zero.
 

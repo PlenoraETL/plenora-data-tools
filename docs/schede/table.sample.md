@@ -56,6 +56,10 @@ In validazione, `InvalidPlan`:
 - config con campi sconosciuti, `n` negativo o `null` esplicito in `n`,
   `fraction`, `random_state` o `stratify_column` (il parametro si omette).
 
+In validazione (se il conteggio e' noto) e in esecuzione, `ResourceLimit`
+se `fraction` e' presente e le righe superano `2^53`: la conversione del
+conteggio in `f64` non deve perdere precisione.
+
 In esecuzione:
 
 - `Schema`: una cella di `stratify_column` che non si converte in testo;

@@ -2026,6 +2026,13 @@ fn shuffle(rows: &mut [usize], seed: u64) {
     }
 }
 
+/// Quota intera esatta: il prodotto di due usize entra in u128 sui target supportati.
+fn stratified_count(requested: usize, group: usize, total: usize) -> Result<usize> {
+    let count = (requested as u128) * (group as u128) / (total.max(1) as u128);
+    usize::try_from(count)
+        .map_err(|_| PlenoraError::ResourceLimit("campione non rappresentabile".into()))
+}
+
 /// Campione casuale deterministico delle righe (dimensione `n` o
 /// `fraction`, mai entrambi; opzionalmente stratificato su
 /// `stratify_column`).
@@ -2047,6 +2054,11 @@ fn shuffle(rows: &mut [usize], seed: u64) {
 /// - `DataMapping` (`arrow error: …`): errore Arrow della `take` in `select_rows`.
 pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
     config.verifica_parametri()?;
+    if config.fraction.is_some() && (batch.num_rows() as u128) > (1_u128 << 53) {
+        return Err(PlenoraError::ResourceLimit(
+            "sample: conteggio oltre il dominio esatto della frazione".into(),
+        ));
+    }
     let seed = config.random_state.unwrap_or(0x9e37_79b9_7f4a_7c15);
     let mut selected = Vec::new();
     if let Some(column) = &config.stratify_column {
@@ -2065,7 +2077,7 @@ pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
             );
             let count =
                 match config.fraction {
-                    None => config.righe().saturating_mul(rows.len()) / batch.num_rows().max(1),
+                    None => stratified_count(config.righe(), rows.len(), batch.num_rows())?,
                     Some(fraction) => (rows.len().to_f64().ok_or_else(|| {
                         PlenoraError::ResourceLimit("gruppo troppo grande".into())
                     })? * fraction)
@@ -2107,6 +2119,28 @@ mod tests {
     use plenora_core::arrow::schema::{Field, Schema};
 
     use super::*;
+
+    #[test]
+    fn quota_stratificata_esatta_contro_oracolo() {
+        for total in 1_usize..80 {
+            for group in 0..=total {
+                for requested in 0..100 {
+                    assert_eq!(
+                        stratified_count(requested, group, total).unwrap(),
+                        requested * group / total
+                    );
+                }
+            }
+        }
+        if let Ok(n) = usize::try_from(1_u64 << 32) {
+            assert_eq!(stratified_count(n, n, n).unwrap(), n);
+        }
+        assert_eq!(
+            stratified_count(usize::MAX, usize::MAX, usize::MAX).unwrap(),
+            usize::MAX
+        );
+    }
+
     use crate::test_support::single_column_batch;
 
     // ------------------------------------------------------------------

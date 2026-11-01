@@ -2806,3 +2806,172 @@ fn oracolo_geometrico_rileva_byte_anonimi_e_metadati_mutati() {
         ));
     }
 }
+
+/// Oracolo esplicito, indipendente dagli analyzer: per ogni campo dell'esempio
+/// indica [ingresso, nome sorgente], oppure null per un campo nuovo/ricostruito.
+/// Le trasformazioni geometriche in place mantengono la colonna logica;
+/// le fusioni verticali adottano il primo ramo che contiene la colonna.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn catalogo_identita_seguono_la_provenienza() {
+    use plenora_core::contract::{DataContract, FieldId};
+    use std::collections::BTreeMap;
+    type Origini = BTreeMap<String, Option<(usize, String)>>;
+    let oracle: BTreeMap<String, Origini> =
+        serde_json::from_str(include_str!("riferimenti/identita_catalogo.json")).unwrap();
+    assert_eq!(
+        oracle.len(),
+        CATALOG.len(),
+        "ogni operazione richiede un oracolo"
+    );
+    prepara_ambiente();
+    let mut errors = Vec::new();
+    for op in CATALOG {
+        let scheda = leggi_scheda(op).unwrap();
+        let mut allocator = FieldAllocator::default();
+        let inputs: Vec<DataContract> = scheda
+            .esempio
+            .ingressi
+            .iter()
+            .map(|spec| {
+                let batch = tabella_con_metadati(&spec.colonne, &spec.metadati).unwrap();
+                let mut input = contract_from_arrow_schema(batch.schema(), resolve_crs).unwrap();
+                for field in input.schema.fields() {
+                    let id = allocator.alloc().unwrap();
+                    input.field_ids.insert(field.name().clone(), id);
+                    for geometry in &mut input.geometries {
+                        if geometry.name == *field.name() {
+                            geometry.field_id = id;
+                            input.active_geometry = Some(id);
+                        }
+                    }
+                }
+                input.validate().unwrap();
+                input
+            })
+            .collect();
+        // Avvelena anche i nomi d'uscita: nessun campo nuovo puo' adottarli.
+        let mut estranei = Vec::new();
+        for name in inputs
+            .iter()
+            .flat_map(|input| input.field_ids.keys())
+            .chain(oracle[op.id].keys())
+        {
+            estranei.push(allocator.derive(name).unwrap());
+        }
+        let mut config: Value = serde_json::from_str(scheda.esempio.config.get()).unwrap();
+        if op.id == "table.pivot" {
+            config["mapping"] = serde_json::json!({"feb":"feb", "gen":"gen"});
+        }
+        let result = if op.family == Family::Table {
+            plenora_kernels_table::analyze::analyze_table_contract(
+                op.id,
+                &inputs,
+                &config,
+                &mut allocator,
+                &plenora_kernels_table::Limits::default(),
+            )
+        } else {
+            let crs = scheda
+                .esempio
+                .crs
+                .as_deref()
+                .map(|s| resolve_crs(s, "crs").unwrap());
+            plenora_kernels_geo::analyze::analyze_geo_contract(
+                op.id,
+                &inputs,
+                &config,
+                crs.as_ref(),
+                &mut allocator,
+            )
+        };
+        if op.id == "table.transpose" {
+            assert!(matches!(result, Err(PlenoraError::Unsupported(_))));
+            continue;
+        }
+        let output = result.unwrap_or_else(|e| panic!("{}: {e}", op.id));
+        let expected = &oracle[op.id];
+        let old: Vec<FieldId> = inputs
+            .iter()
+            .flat_map(|i| i.field_ids.values().copied())
+            .collect();
+        assert_eq!(
+            output.field_ids.len(),
+            output.schema.fields().len(),
+            "{}",
+            op.id
+        );
+        assert_eq!(expected.len(), output.field_ids.len(), "{}", op.id);
+        for (name, source) in expected {
+            let actual = output.field_ids[name];
+            assert!(
+                !estranei.contains(&actual),
+                "{}: ID estraneo per {name}",
+                op.id
+            );
+            let correct = match source {
+                Some((branch, origin)) => actual == inputs[*branch].field_ids[origin],
+                None => !old.contains(&actual),
+            };
+            if !correct {
+                errors.push(format!("{}: {name}, origine {source:?}", op.id));
+            }
+        }
+        // La stessa mappa deve sopravvivere a una continuazione tabellare.
+        let continued = plenora_kernels_table::analyze::analyze_table_contract(
+            "table.limit",
+            std::slice::from_ref(&output),
+            &serde_json::json!({"n": 1}),
+            &mut allocator,
+            &plenora_kernels_table::Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            continued.field_ids, output.field_ids,
+            "{}: continuazione",
+            op.id
+        );
+    }
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+}
+
+#[test]
+fn diagnostica_omonima_non_resuscita_dopo_un_passo_tabellare() {
+    let op = CATALOG
+        .iter()
+        .find(|op| op.id == "geo.geometry_diagnostics")
+        .unwrap();
+    let scheda = leggi_scheda(op).unwrap();
+    let spec = &scheda.esempio.ingressi[0];
+    let batch = tabella_con_metadati(&spec.colonne, &spec.metadati).unwrap();
+    let input = contract_from_arrow_schema(batch.schema(), resolve_crs).unwrap();
+    let mut allocator = FieldAllocator::default();
+    let limits = plenora_kernels_table::Limits::default();
+    let renamed = plenora_kernels_table::analyze::analyze_table_contract(
+        "table.rename",
+        &[input],
+        &serde_json::json!({"renames":[{"old_name":"geometry", "new_name":"geometry_type"}]}),
+        &mut allocator,
+        &limits,
+    )
+    .unwrap();
+    let geometry_id = renamed.field_ids["geometry_type"];
+    let diagnostics = plenora_kernels_geo::analyze::analyze_geo_contract(
+        op.id,
+        &[renamed],
+        &serde_json::json!({}),
+        None,
+        &mut allocator,
+    )
+    .unwrap();
+    let continued = plenora_kernels_table::analyze::analyze_table_contract(
+        "table.limit",
+        &[diagnostics],
+        &serde_json::json!({"n":1}),
+        &mut allocator,
+        &limits,
+    )
+    .unwrap();
+    assert_ne!(continued.field_ids["geometry_type"], geometry_id);
+    assert!(!continued.field_ids.values().any(|id| *id == geometry_id));
+}

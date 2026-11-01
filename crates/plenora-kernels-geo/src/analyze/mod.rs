@@ -306,7 +306,7 @@ pub fn analyze_geo_contract(
     // I produttori sono unari: l'arieta' e' gia' verificata sopra. Il
     // rifiuto dell'N-aria resta prima del controllo sul numero di input,
     // quindi qui l'arieta' e' solo 1 o 2.
-    let output = match (descriptor.id, expected_arity) {
+    let mut output = match (descriptor.id, expected_arity) {
         ("geo.from_coords", _) => {
             // Il messaggio nomina l'op come richiesta (anche un alias).
             let requirement = crs_requirement(op, descriptor)?;
@@ -336,6 +336,12 @@ pub fn analyze_geo_contract(
         (_, 2) => analyze_binary(descriptor, inputs, config),
         _ => analyze_unary(descriptor, &inputs[0], config, fields),
     }?;
+    // Il contratto e' l'unica fonte delle identita' sopravvissute.
+    fields.bind_contract(&output);
+    for field in output.schema.fields() {
+        let id = fields.intern(field.name())?;
+        output.field_ids.insert(field.name().clone(), id);
+    }
     output.validate()?;
     Ok(senza_precisione_ereditata(output))
 }
@@ -1727,22 +1733,15 @@ mod tests {
                     // su un input che le dichiara.
                 }
             }
-            // L'allocatore non viene consumato dalle op che non creano geometrie.
-            if !matches!(
-                case.op,
-                "geo.from_coords"
-                    | "geo.from_wkt"
-                    | "geo.generate_grid"
-                    | "geo.coverage_validate"
-                    | "geo.shared_paths"
-            ) {
-                assert_eq!(
-                    allocator.peek(),
-                    FieldId(100),
-                    "{}: allocatore intatto",
-                    case.op
-                );
-            }
+            // Anche gli attributi e le nuove colonne scalari hanno identita'.
+            assert_eq!(output.field_ids.len(), output.schema.fields().len());
+            let allocated = output.field_ids.values().filter(|id| id.0 >= 100).count();
+            assert_eq!(
+                allocator.peek(),
+                FieldId(100 + u32::try_from(allocated).unwrap()),
+                "{}: un ID per ogni campo prima privo di identita'",
+                case.op
+            );
         }
     }
 
@@ -2921,7 +2920,7 @@ mod tests {
         ];
         assert_eq!(signatures(&output), expected);
         assert_eq!(output.geometries[0].field_id, FieldId(7));
-        assert_eq!(allocator.peek(), FieldId(8));
+        assert_eq!(allocator.peek(), FieldId(11));
         // Anche qui l'input dichiara ordinamento e conteggio: non valgono
         // per le righe nuove.
         assert!(output.properties.sorted_by.is_none());
@@ -3085,8 +3084,12 @@ mod tests {
         )
         .expect("seconda from_coords");
         assert_eq!(first.geometries[0].field_id, FieldId(41));
-        assert_eq!(second.geometries[0].field_id, FieldId(42));
-        assert_eq!(allocator.peek(), FieldId(43));
+        assert_eq!(second.geometries[0].field_id, FieldId(45));
+        assert_eq!(allocator.peek(), FieldId(49));
+        assert!(first
+            .field_ids
+            .values()
+            .all(|id| !second.field_ids.values().any(|other| other == id)));
     }
 
     fn builtin_crs(definizione: &str) -> ResolvedCrs {
