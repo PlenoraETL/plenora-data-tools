@@ -1989,7 +1989,10 @@ aggiunge in coda. I metadati di campo tabellari non si ereditano. Se tutte
 le sorgenti sono geometriche compatibili, si conservano CRS, assi,
 dimensioni ed encoding, senza identita' e dichiarazione dei tipi del primo
 campo. Ogni geometria sopravvissuta mantiene il proprio contratto; una nuova
-geometria non diventa primaria automaticamente.
+geometria non diventa primaria automaticamente. Eccezione dichiarata
+(PRIM-005): se `output_column` e' la colonna primaria, la sostituzione resta
+primaria, con una nuova identita' e il contratto (CRS, assi, encoding) delle
+sorgenti, non quello della colonna sostituita.
 Le altre colonne e i metadati di schema restano invariati.
 
 Il contratto conserva il numero di righe; l'ordinamento dichiarato
@@ -2223,7 +2226,7 @@ gli schemi devono essere identici, come in [`table.concat`](#tableconcat).
 
 #### Schema
 
-Ogni colonna geometrica conserva il proprio contratto, anche se altri ingressi contribuiscono solo null. La primaria richiede il consenso di tutti gli ingressi sulla stessa colonna.
+Ogni colonna geometrica conserva il proprio contratto, anche se altri ingressi contribuiscono solo null. La primaria richiede il consenso di tutti gli ingressi sulla stessa colonna. Un ingresso senza geometrie non ha primaria e rompe il consenso: concatenare una tabella con una geometria e una senza geometrie da' primaria assente (`none`), e un'operazione geo successiva senza selettore esplicito (`input_geometry`) si rifiuta in validazione con `schema`.
 
 Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
 delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
