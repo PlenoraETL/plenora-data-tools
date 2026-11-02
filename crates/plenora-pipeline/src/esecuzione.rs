@@ -33,7 +33,7 @@ use std::time::Instant;
 use plenora_core::arrow::array::{
     Array, ArrayRef, BinaryArray, LargeBinaryArray, LargeStringArray, RecordBatch, StringArray,
 };
-use plenora_core::arrow::schema::{DataType, Schema};
+use plenora_core::arrow::schema::DataType;
 use plenora_core::catalog::Arity;
 use plenora_core::contract::arrow_schema::arrow_schema_from_contract;
 use plenora_core::contract::DataContract;
@@ -45,7 +45,7 @@ use plenora_kernels_table::EffettiKernel;
 use crate::budget::Ingresso;
 use crate::validazione::{
     geometria_large_binary, nel_passo, nel_passo_o_input, BaseIndici, KernelPasso, PassoValidato,
-    PipelineValidata, METADATI_PANDAS,
+    PipelineValidata,
 };
 
 /// Esito di un'esecuzione: le tabelle d'uscita e il resoconto.
@@ -199,20 +199,10 @@ fn validate_batch(batch: &RecordBatch, limits: &plenora_kernels_table::Limits) -
 /// (porting di `normalize_large_utf8`). Stessa trasformazione di
 /// [`crate::validazione::normalizza_schema`] sugli schemi.
 fn normalize_large_utf8(batch: RecordBatch) -> Result<RecordBatch> {
-    let has_large =
-        batch.schema().fields().iter().any(|field| {
-            field.data_type() == &DataType::LargeUtf8 || geometria_large_binary(field)
-        });
-    let has_pandas_metadata = batch.schema().metadata().contains_key(METADATI_PANDAS);
-    if !has_large && !has_pandas_metadata {
+    let schema = crate::validazione::normalizza_schema(&batch.schema());
+    if schema == batch.schema() {
         return Ok(batch);
     }
-    let mut metadata = batch.schema().metadata().clone();
-    // Pandas tiene in questa voce un secondo schema, indipendente: una
-    // trasformazione qualsiasi lo rende falso, e PyArrow reinterpreterebbe
-    // colonne Arrow corrette alla lettura.
-    let _ = metadata.remove(METADATI_PANDAS);
-    let mut fields = Vec::with_capacity(batch.num_columns());
     let mut columns: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns());
     for (field, column) in batch.schema().fields().iter().zip(batch.columns()) {
         if field.data_type() == &DataType::LargeUtf8 {
@@ -230,7 +220,6 @@ fn normalize_large_utf8(batch: RecordBatch) -> Result<RecordBatch> {
                     "colonna LargeUtf8 oltre il limite sicuro Utf8 di Arrow".into(),
                 ));
             }
-            fields.push(field.as_ref().clone().with_data_type(DataType::Utf8));
             columns.push(Arc::new(strings.iter().collect::<StringArray>()));
         } else if geometria_large_binary(field) {
             let celle = column
@@ -247,18 +236,12 @@ fn normalize_large_utf8(batch: RecordBatch) -> Result<RecordBatch> {
                     "colonna geometria LargeBinary oltre il limite sicuro Binary di Arrow".into(),
                 ));
             }
-            fields.push(field.as_ref().clone().with_data_type(DataType::Binary));
             columns.push(Arc::new(celle.iter().collect::<BinaryArray>()));
         } else {
-            fields.push(field.as_ref().clone());
             columns.push(column.clone());
         }
     }
-    plenora_core::batch_with_rows(
-        Arc::new(Schema::new_with_metadata(fields, metadata)),
-        columns,
-        batch.num_rows(),
-    )
+    plenora_core::batch_with_rows(schema, columns, batch.num_rows())
 }
 
 /// L'output del kernel ha nomi, tipi e metadati (di campo e di schema) del
@@ -390,9 +373,13 @@ fn esegui_kernel(
     CHIAMATE_KERNEL.with(|chiamate| chiamate.set(chiamate.get() + 1));
     let nessuno = |uscita| (uscita, EffettiKernel::default());
     let chiamata = || match (&passo.kernel, ingressi) {
-        (KernelPasso::Geo(geo), _) => geo
-            .esegui(ingressi, contratto, limiti.max_governed_memory_bytes)
-            .map(nessuno),
+        (KernelPasso::Geo(geo), _) => {
+            for tabella in ingressi {
+                plenora_kernels_geo::valori_arrow::verifica_tabella(tabella)?;
+            }
+            geo.esegui(ingressi, contratto, limiti.max_governed_memory_bytes)
+                .map(nessuno)
+        }
         (KernelPasso::Tabellare(preparato), [unico]) => {
             preparato.esegui_unario_con_effetti(unico, limiti)
         }

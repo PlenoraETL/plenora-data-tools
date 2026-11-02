@@ -886,7 +886,6 @@ fn le_coordinate_fuori_dominio_si_rifiutano() {
     for (op, config) in [
         ("geo.area", json!({})),
         ("geo.buffer", json!({"distance": 1.0})),
-        ("geo.geometry_diagnostics", json!({})),
         ("geo.reproject", json!({"target_crs": "EPSG:4326"})),
         (
             "geo.snap",
@@ -896,6 +895,13 @@ fn le_coordinate_fuori_dominio_si_rifiutano() {
         let errore = un_passo(op, config, std::slice::from_ref(&fuori)).unwrap_err();
         assert_eq!(errore.category(), ErrorCategory::Crs, "{op}: {errore}");
     }
+    // La diagnostica descrive le tuple, senza interpretarle nel CRS.
+    un_passo(
+        "geo.geometry_diagnostics",
+        json!({}),
+        std::slice::from_ref(&fuori),
+    )
+    .unwrap();
     // Un produttore rifiuta le geometrie prodotte fuori dominio.
     let coordinate = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
@@ -939,7 +945,7 @@ fn i_tipi_dichiarati_di_un_ingresso_si_verificano() {
     )
     .unwrap();
     let errore = un_passo("geo.area", json!({}), &[dichiarata]).unwrap_err();
-    assert_eq!(errore.category(), ErrorCategory::Schema, "{errore}");
+    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
 }
 
 /// Il CRS attraversa la catena: `reproject` lo cambia, `buffer` lavora
@@ -1133,8 +1139,14 @@ fn un_risultato_vuoto_in_una_colonna_non_nullable_e_un_errore() {
         .map(|campo| campo.as_ref().clone())
         .collect();
     campi[2] = campi[2].clone().with_nullable(false);
-    let non_nullable =
-        RecordBatch::try_new(Arc::new(Schema::new(campi)), ingresso.columns().to_vec()).unwrap();
+    let non_nullable = RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(
+            campi,
+            ingresso.schema().metadata().clone(),
+        )),
+        ingresso.columns().to_vec(),
+    )
+    .unwrap();
     let errore = un_passo("geo.point_on_surface", json!({}), &[non_nullable]).unwrap_err();
     assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{errore}");
     assert!(errore.to_string().contains("non ammette null"), "{errore}");
@@ -1342,8 +1354,14 @@ fn run_end_e_union_rifiutati_in_validazione_e_in_esecuzione() {
             .collect();
         let mut colonne = base.columns().to_vec();
         colonne[1] = colonna.clone();
-        let codificata =
-            RecordBatch::try_new(Arc::new(Schema::new(campi)), colonne).expect("tabella");
+        let codificata = RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                campi,
+                base.schema().metadata().clone(),
+            )),
+            colonne,
+        )
+        .expect("tabella");
         // In validazione, sullo schema che li porta.
         let errore = pipeline
             .validate(&[("t", codificata.schema())])

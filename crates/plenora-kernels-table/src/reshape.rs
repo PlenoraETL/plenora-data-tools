@@ -275,6 +275,14 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
     // budget, invece di uscire come `resource_limit` e far alzare un budget
     // per un piano comunque non eseguibile; e rifiutare dopo aver allocato
     // costa la memoria che il rifiuto deve risparmiare.
+    let input_schema = batch.schema();
+    let geometry_metadata = plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+        &value_indices
+            .iter()
+            .map(|index| input_schema.field(*index))
+            .collect::<Vec<_>>(),
+        &[],
+    )?;
     let tipo_valore = batch.column(value_indices[0]).data_type().clone();
     let omogeneo = value_indices
         .iter()
@@ -423,7 +431,7 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
             .iter()
             .map(|index| batch.column(*index).as_ref())
             .collect::<Vec<_>>();
-        fields.push(Field::new(&value_name, value_type, true));
+        fields.push(Field::new(&value_name, value_type, true).with_metadata(geometry_metadata));
         columns.push(plenora_core::arrow::select::concat::concat(&arrays)?);
     } else if matches!(
         politica_tipi(config.type_policy),
@@ -1126,7 +1134,15 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
         for (key_id, _) in celle_pivot {
             per_chiave[posizione[*key_id]] = None;
         }
-        fields.push(Field::new(&output, data_type, true));
+        let metadata = if matches!(config.aggr_func, PivotAgg::First | PivotAgg::Last) {
+            plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+                &[batch.schema().field(value_index)],
+                &[],
+            )?
+        } else {
+            plenora_core::arrow::Metadata::default()
+        };
+        fields.push(Field::new(&output, data_type, true).with_metadata(metadata));
         columns.push(values);
     }
     // Nomi tutti distinti, la regola di `aggregate` e `transpose`: il
@@ -1134,13 +1150,14 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
     crate::verifica_nomi_distinti("pivot", fields.iter().map(|field| field.name().as_str()))?;
     // I metadati dello schema d'ingresso si conservano, come in `melt`
     // e `aggregate`.
-    Ok(RecordBatch::try_new(
+    plenora_core::batch_with_rows(
         Arc::new(Schema::new_with_metadata(
             fields,
             batch.schema().metadata().clone(),
         )),
         columns,
-    )?)
+        ordine.len(),
+    )
 }
 
 /// Config di `table.transpose`. Campi sconosciuti rifiutati.
@@ -1205,9 +1222,6 @@ impl Transpose {
 #[allow(clippy::too_many_lines)]
 pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Result<RecordBatch> {
     config.verifica_nomi()?;
-    if batch.num_rows() == 0 {
-        return Ok(batch.clone());
-    }
     let id_index = config
         .id_column
         .as_deref()
@@ -1216,7 +1230,20 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
     let data_indices = (0..batch.num_columns())
         .filter(|index| Some(*index) != id_index)
         .collect::<Vec<_>>();
-    let output_columns = batch.num_rows().saturating_add(1);
+    let input_schema = batch.schema();
+    let geometry_metadata = plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+        &data_indices
+            .iter()
+            .map(|index| input_schema.field(*index))
+            .collect::<Vec<_>>(),
+        &[],
+    )?;
+    if batch.num_rows() == 0 {
+        return Ok(batch.clone());
+    }
+    let output_columns = batch.num_rows().checked_add(1).ok_or_else(|| {
+        PlenoraError::ResourceLimit("transpose: numero colonne non rappresentabile".into())
+    })?;
     if data_indices.len() > limits.max_rows || output_columns > limits.max_columns {
         return Err(PlenoraError::ResourceLimit(
             "transpose supera i limiti".into(),
@@ -1269,7 +1296,9 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
             .unwrap_or(default_name);
         validate_output_name(&name)?;
         if let Some(combined) = &combined {
-            fields.push(Field::new(&name, data_type.clone(), true));
+            fields.push(
+                Field::new(&name, data_type.clone(), true).with_metadata(geometry_metadata.clone()),
+            );
             let indices = data_indices
                 .iter()
                 .enumerate()
@@ -1426,6 +1455,7 @@ pub fn explode(batch: &RecordBatch, config: &Explode, limits: &Limits) -> Result
         ));
     }
     let index = column_index(batch, &config.column)?;
+    crate::require_non_geometry(batch.schema().field(index))?;
     let list = batch
         .column(index)
         .as_any()
@@ -1511,6 +1541,7 @@ const fn default_true() -> bool {
 /// - `InvalidPlan`: nome di colonna figlia non valido.
 pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<RecordBatch> {
     let index = column_index(batch, &config.column)?;
+    crate::require_non_geometry(batch.schema().field(index))?;
     let structure = batch
         .column(index)
         .as_any()
@@ -1952,6 +1983,27 @@ pub fn table_diff(
         .iter()
         .map(|name| column_index(right, name))
         .collect::<Result<Vec<_>>>()?;
+    for (a, b) in left_keys
+        .iter()
+        .zip(&right_keys)
+        .chain(left_compare.iter().zip(&right_compare))
+    {
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+        let a = left_schema.field(*a);
+        let b = right_schema.field(*b);
+        crate::require_non_geometry(a)?;
+        crate::require_non_geometry(b)?;
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            a,
+            &[],
+            b,
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
+        )?;
+        crate::validate_text_convertible(a.data_type(), a.name())?;
+        crate::validate_text_convertible(b.data_type(), b.name())?;
+    }
     // Chiavi binarie (`BinaryKeyEncoder`, stessa identita' dei byte di
     // `composite_key`) codificate una volta per riga in un'arena sola
     // (`diff_abbinamenti`); valori confrontati sul tipo nativo quando i due
@@ -4091,7 +4143,7 @@ mod tests {
                         .unwrap_or_else(|error| panic!("{caso}: {error}"));
 
                     // Lo schema del kernel e' quello dichiarato dall'analisi.
-                    let contratto = DataContract::new(
+                    let contratto = DataContract::from_source(
                         batch.schema(),
                         vec![],
                         None,

@@ -761,11 +761,60 @@ impl FieldAllocator {
         Ok(id)
     }
 
+    /// Sostituisce le associazioni con la provenienza esplicita del contratto.
+    /// Un nome privo di identita' non eredita associazioni di passi precedenti.
+    pub fn bind_contract(&mut self, contract: &DataContract) {
+        self.bind_fields(&contract.field_ids);
+    }
+
+    /// Associa i nomi d'uscita alle identita' delle rispettive sorgenti.
+    /// La mappa deve essere costruita prima di rinominare i campi.
+    pub fn bind_fields(&mut self, fields: &std::collections::BTreeMap<String, FieldId>) {
+        self.by_name.clear();
+        for (name, id) in fields {
+            self.observe(*id);
+            self.by_name.insert(name.clone(), *id);
+        }
+    }
+
     /// Rinomina: il `FieldId` segue la colonna.
     pub fn rename(&mut self, old: &str, new: &str) {
         if let Some(id) = self.by_name.remove(old) {
             self.by_name.insert(new.to_owned(), id);
         }
+    }
+
+    /// Rinomina simultanea: cicli e catene leggono tutte le identita' originali.
+    ///
+    /// # Errors
+    ///
+    /// `Schema` se sorgenti o destinazioni sono ripetute.
+    pub fn rename_many(&mut self, pairs: &[(&str, &str)]) -> Result<()> {
+        let mut sources = std::collections::BTreeSet::new();
+        let mut targets = std::collections::BTreeSet::new();
+        for (old, new) in pairs {
+            if !sources.insert(*old) || !targets.insert(*new) {
+                return Err(PlenoraError::Schema(
+                    "rinomina ambigua delle identita'".into(),
+                ));
+            }
+        }
+        let original: Vec<_> = pairs
+            .iter()
+            .map(|(old, new)| ((*new).to_owned(), self.by_name.get(*old).copied()))
+            .collect();
+        for ((old, new), (_, id)) in pairs.iter().zip(&original) {
+            if id.is_some() {
+                self.by_name.remove(*old);
+                self.by_name.remove(*new);
+            }
+        }
+        for (new, id) in original {
+            if let Some(id) = id {
+                self.by_name.insert(new, id);
+            }
+        }
+        Ok(())
     }
 
     /// Colonna derivata: riceve un `FieldId` nuovo, sostituendo l'eventuale
@@ -911,6 +960,15 @@ pub struct ContractProperties {
     pub row_count: Option<ContractProperty<u64>>,
 }
 
+/// Provenienza esplicita di un campo, nella posizione dello schema d'uscita.
+#[derive(Clone, Copy, Debug)]
+pub enum FieldOrigin {
+    /// Identita' della colonna sorgente (anche dopo rinomina).
+    Preserved(FieldId),
+    /// Colonna ricostruita: il costruttore assegna un'identita' fresca.
+    New,
+}
+
 /// Contratto di una tabella: ingresso o uscita di un passo.
 ///
 /// Ogni tabella è conforme al suo contratto, inferito senza i dati
@@ -921,6 +979,8 @@ pub struct ContractProperties {
 pub struct DataContract {
     /// Schema Arrow, metadati compresi.
     pub schema: SchemaRef,
+    /// Identita' note dei campi, indipendenti dalle proprieta' che le riferiscono.
+    pub field_ids: std::collections::BTreeMap<String, FieldId>,
     /// Colonne geometriche: al massimo una ([`DataContract::validate`]).
     pub geometries: Vec<GeometryColumnContract>,
     /// La colonna geometrica attiva, se dichiarata.
@@ -935,25 +995,31 @@ impl DataContract {
     pub fn tabular(schema: SchemaRef) -> Self {
         Self {
             schema,
+            field_ids: std::collections::BTreeMap::new(),
             geometries: Vec::new(),
             active_geometry: None,
             properties: ContractProperties::default(),
         }
     }
 
-    /// Costruisce e valida subito il contratto (fail-closed).
+    /// Adotta una sorgente esterna senza contratto predecessore.
+    /// Ogni campo e' nuovo; gli ID geometrici sono quelli dichiarati dal lettore.
     ///
     /// # Errors
     ///
     /// Restituisce `PlenoraError::Schema` se il contratto viola le regole di
     /// [`DataContract::validate`].
-    pub fn new(
+    pub fn from_source(
         schema: SchemaRef,
         geometries: Vec<GeometryColumnContract>,
         active_geometry: Option<FieldId>,
         properties: ContractProperties,
     ) -> Result<Self> {
         let contract = Self {
+            field_ids: geometries
+                .iter()
+                .map(|g| (g.name.clone(), g.field_id))
+                .collect(),
             schema,
             geometries,
             active_geometry,
@@ -961,6 +1027,113 @@ impl DataContract {
         };
         contract.validate()?;
         Ok(contract)
+    }
+
+    /// Ricostruisce il contratto con una provenienza per posizione, senza
+    /// cercare omonimi nell'ingresso. `New` non conserva alcuna identita'.
+    /// Anche le geometrie nuove ricevono un ID fresco; il riferimento attivo segue l'ID.
+    ///
+    /// # Errors
+    /// Rifiuta provenienze incomplete e contratti strutturalmente incoerenti.
+    pub fn rebuild(
+        &self,
+        schema: SchemaRef,
+        origins: Vec<FieldOrigin>,
+        geometries: Vec<GeometryColumnContract>,
+        active_geometry: Option<FieldId>,
+        properties: ContractProperties,
+        allocator: &mut FieldAllocator,
+    ) -> Result<Self> {
+        self.validate()?;
+        for id in self.field_ids.values() {
+            allocator.observe(*id);
+        }
+        Self::new(
+            schema,
+            origins,
+            geometries,
+            active_geometry,
+            properties,
+            allocator,
+        )
+    }
+
+    /// Costruisce un'uscita con provenienza esplicita per ogni campo.
+    ///
+    /// # Errors
+    /// Rifiuta provenienze incomplete e contratti strutturalmente incoerenti.
+    pub fn new(
+        schema: SchemaRef,
+        origins: Vec<FieldOrigin>,
+        mut geometries: Vec<GeometryColumnContract>,
+        mut active_geometry: Option<FieldId>,
+        properties: ContractProperties,
+        allocator: &mut FieldAllocator,
+    ) -> Result<Self> {
+        if origins.len() != schema.fields().len() {
+            return Err(PlenoraError::Schema(
+                "provenienza dei campi incompleta".into(),
+            ));
+        }
+        for origin in &origins {
+            if let FieldOrigin::Preserved(id) = origin {
+                allocator.observe(*id);
+            }
+        }
+        let mut field_ids = std::collections::BTreeMap::new();
+        for (field, origin) in schema.fields().iter().zip(origins) {
+            let geometry_id = geometries
+                .iter()
+                .find(|g| g.name == *field.name())
+                .map(|g| g.field_id);
+            let id = match origin {
+                FieldOrigin::Preserved(id) => {
+                    if geometry_id.is_some_and(|geometry_id| geometry_id != id) {
+                        return Err(PlenoraError::Schema(
+                            "provenienza geometrica incoerente".into(),
+                        ));
+                    }
+                    id
+                }
+                FieldOrigin::New => {
+                    let id = allocator.alloc()?;
+                    if let Some(geometry) = geometries.iter_mut().find(|g| g.name == *field.name())
+                    {
+                        if active_geometry == Some(geometry.field_id) {
+                            active_geometry = Some(id);
+                        }
+                        geometry.field_id = id;
+                    }
+                    id
+                }
+            };
+            field_ids.insert(field.name().clone(), id);
+        }
+        let output = Self {
+            schema,
+            field_ids,
+            geometries,
+            active_geometry,
+            properties,
+        };
+        output.validate()?;
+        Ok(output)
+    }
+
+    /// Provenienze per una trasformazione che conserva tutte le colonne,
+    /// nel loro ordine originario. Un campo d'ingresso senza ID resta nuovo.
+    #[must_use]
+    pub fn field_origins(&self) -> Vec<FieldOrigin> {
+        self.schema
+            .fields()
+            .iter()
+            .map(|field| {
+                self.field_ids
+                    .get(field.name())
+                    .copied()
+                    .map_or(FieldOrigin::New, FieldOrigin::Preserved)
+            })
+            .collect()
     }
 
     /// Validazione strutturale del contratto.
@@ -974,7 +1147,9 @@ impl DataContract {
     /// - se contratto e metadati canonici dichiarano entrambi i tipi
     ///   geometrici, coincidono;
     /// - `active_geometry`, se presente, riferisce una colonna geometrica
-    ///   dichiarata.
+    ///   dichiarata;
+    /// - ogni chiave di `sorted_by` esiste nel registro delle identita',
+    ///   senza duplicati; ogni identita' registrata riferisce un campo presente.
     ///
     /// # Errors
     ///
@@ -990,12 +1165,25 @@ impl DataContract {
             }
         }
         if self.geometries.len() > 1 {
-            return Err(PlenoraError::Schema(format!(
+            return Err(PlenoraError::Unsupported(format!(
                 "contratto con {} colonne geometriche: la v1 ne ammette al massimo una",
                 self.geometries.len()
             )));
         }
+        let mut identities = HashSet::new();
+        for (name, id) in &self.field_ids {
+            if self.schema.field_with_name(name).is_err() || !identities.insert(id) {
+                return Err(PlenoraError::Schema(
+                    "registro delle identita' assente o ambiguo".into(),
+                ));
+            }
+        }
         for geometry in &self.geometries {
+            if self.field_ids.get(&geometry.name) != Some(&geometry.field_id) {
+                return Err(PlenoraError::Schema(
+                    "identita' geometrica incoerente con il registro".into(),
+                ));
+            }
             let field = self.schema.field_with_name(&geometry.name).map_err(|_| {
                 PlenoraError::Schema(format!(
                     "colonna geometrica `{}` ({}) assente dallo schema",
@@ -1019,6 +1207,27 @@ impl DataContract {
             }
             validate_declared_types(geometry, field.metadata())?;
         }
+        if let Some(order) = self
+            .properties
+            .sorted_by
+            .as_ref()
+            .and_then(ContractProperty::value)
+        {
+            if order.keys.is_empty() {
+                return Err(PlenoraError::Schema(
+                    "riferimenti di sorted_by incompleti".into(),
+                ));
+            }
+            let mut ids = HashSet::new();
+            for id in &order.keys {
+                if !ids.insert(id) || !self.field_ids.values().any(|known| known == id) {
+                    return Err(PlenoraError::Schema(
+                        "riferimento di sorted_by assente o incoerente".into(),
+                    ));
+                }
+            }
+        }
+
         if let Some(active) = self.active_geometry {
             if !self.geometries.iter().any(|g| g.field_id == active) {
                 return Err(PlenoraError::Schema(format!(
@@ -1259,6 +1468,44 @@ mod tests {
     use crate::arrow::schema::{DataType, Field, Schema};
     use crate::crs::CrsKind;
 
+    #[test]
+    fn rename_assente_non_consuma_identita_della_destinazione() {
+        let mut alloc = FieldAllocator::default();
+        let a = alloc.intern("a").unwrap();
+        alloc.rename_many(&[("assente", "a")]).unwrap();
+        assert_eq!(alloc.intern("a").unwrap(), a);
+        assert_eq!(alloc.peek(), FieldId(1));
+        alloc.rename_many(&[("a", "b"), ("assente", "a")]).unwrap();
+        assert_eq!(alloc.intern("b").unwrap(), a);
+    }
+
+    #[test]
+    fn sorted_by_rifiuta_riferimenti_pendenti_a_ogni_fiducia() {
+        let order = SortOrder {
+            keys: vec![FieldId(9)],
+            direction: SortDirection::Ascending,
+            nulls: NullPlacement::Last,
+        };
+        for confidence in [
+            PropertyConfidence::Declared(order.clone()),
+            PropertyConfidence::Estimated(order.clone()),
+            PropertyConfidence::Proven(order),
+        ] {
+            let mut contract =
+                DataContract::tabular(schema(vec![Field::new("a", DataType::Int64, false)]));
+            contract.properties.sorted_by =
+                Some(ContractProperty::new(confidence, PropertyScope::Stream));
+            assert!(contract.validate().is_err());
+            contract.field_ids.insert("a".into(), FieldId(9));
+            contract.validate().unwrap();
+            contract.field_ids.insert("a".into(), FieldId(10));
+            assert!(contract.validate().is_err());
+            contract.field_ids.insert("a".into(), FieldId(9));
+            contract.schema = schema(vec![]);
+            assert!(matches!(contract.validate(), Err(PlenoraError::Schema(_))));
+        }
+    }
+
     fn schema(fields: Vec<Field>) -> SchemaRef {
         Arc::new(Schema::new(fields))
     }
@@ -1350,7 +1597,7 @@ mod tests {
 
     #[test]
     fn single_geometry_contract_is_valid() {
-        let contract = DataContract::new(
+        let contract = DataContract::from_source(
             schema(vec![
                 Field::new("a", DataType::Int64, false),
                 Field::new("geom", DataType::Binary, true),
@@ -1367,7 +1614,7 @@ mod tests {
 
     #[test]
     fn more_than_one_geometry_is_rejected_in_v1() {
-        let result = DataContract::new(
+        let result = DataContract::from_source(
             schema(vec![
                 Field::new("g1", DataType::Binary, true),
                 Field::new("g2", DataType::Binary, true),
@@ -1376,12 +1623,12 @@ mod tests {
             None,
             ContractProperties::default(),
         );
-        assert!(matches!(result, Err(PlenoraError::Schema(_))));
+        assert!(matches!(result, Err(PlenoraError::Unsupported(_))));
     }
 
     #[test]
     fn geometry_column_must_exist_with_matching_nullability() {
-        let missing = DataContract::new(
+        let missing = DataContract::from_source(
             schema(vec![Field::new("a", DataType::Int64, false)]),
             vec![geometry(1, "geom", true)],
             None,
@@ -1389,7 +1636,7 @@ mod tests {
         );
         assert!(matches!(missing, Err(PlenoraError::Schema(_))));
 
-        let nullability_mismatch = DataContract::new(
+        let nullability_mismatch = DataContract::from_source(
             schema(vec![Field::new("geom", DataType::Binary, false)]),
             vec![geometry(1, "geom", true)],
             None,
@@ -1400,7 +1647,7 @@ mod tests {
 
     #[test]
     fn active_geometry_must_reference_a_declared_geometry() {
-        let result = DataContract::new(
+        let result = DataContract::from_source(
             schema(vec![Field::new("geom", DataType::Binary, true)]),
             vec![geometry(1, "geom", true)],
             Some(FieldId(99)),
@@ -1408,7 +1655,7 @@ mod tests {
         );
         assert!(matches!(result, Err(PlenoraError::Schema(_))));
 
-        let ok = DataContract::new(
+        let ok = DataContract::from_source(
             schema(vec![Field::new("geom", DataType::Binary, true)]),
             vec![geometry(1, "geom", true)],
             Some(FieldId(1)),
@@ -1899,7 +2146,7 @@ mod tests {
         let column = geometry(1, "geom", true);
         assert!(column.types.value().is_none());
         // Un contratto col default resta valido (comportamento invariato).
-        let contract = DataContract::new(
+        let contract = DataContract::from_source(
             schema(vec![Field::new("geom", DataType::Binary, true)]),
             vec![column],
             None,
@@ -1924,5 +2171,72 @@ mod tests {
         assert_eq!(sequence.source_node, "n0");
         assert_eq!(sequence.input_partition, 2);
         assert_eq!(sequence.sequence_number, 17);
+    }
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+    use crate::arrow::{DataType, Field, Schema};
+    use std::sync::Arc;
+
+    #[test]
+    fn rebuild_richiede_origini_complete_e_non_ricicla_omonimi() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let mut input = DataContract::tabular(schema.clone());
+        input.field_ids.insert("a".into(), FieldId(42));
+        input.field_ids.insert("b".into(), FieldId(77));
+        let mut allocator = FieldAllocator::default();
+        allocator.observe(FieldId(90));
+        let estraneo = allocator.derive("b").unwrap();
+        let output = input
+            .rebuild(
+                schema.clone(),
+                vec![FieldOrigin::Preserved(FieldId(77)), FieldOrigin::New],
+                vec![],
+                None,
+                ContractProperties::default(),
+                &mut allocator,
+            )
+            .unwrap();
+        assert_eq!(output.field_ids["a"], FieldId(77));
+        assert!(![FieldId(42), FieldId(77), estraneo].contains(&output.field_ids["b"]));
+        for origins in [vec![], vec![FieldOrigin::New], vec![FieldOrigin::New; 3]] {
+            assert!(input
+                .rebuild(
+                    schema.clone(),
+                    origins,
+                    vec![],
+                    None,
+                    ContractProperties::default(),
+                    &mut allocator
+                )
+                .is_err());
+        }
+        let mut last = FieldAllocator::new(u32::MAX);
+        let output = input
+            .rebuild(
+                schema.clone(),
+                vec![FieldOrigin::Preserved(FieldId(42)), FieldOrigin::New],
+                vec![],
+                None,
+                ContractProperties::default(),
+                &mut last,
+            )
+            .unwrap();
+        assert_eq!(output.field_ids["b"], FieldId(u32::MAX));
+        assert!(input
+            .rebuild(
+                schema,
+                vec![FieldOrigin::New; 2],
+                vec![],
+                None,
+                ContractProperties::default(),
+                &mut last
+            )
+            .is_err());
     }
 }

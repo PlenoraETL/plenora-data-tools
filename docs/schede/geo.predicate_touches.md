@@ -123,6 +123,10 @@ indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
 caso peggiore (molti lati che si incrociano); in più la validazione OGC di
 entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Il punto interno non tocca soltanto: entra; B è `POLYGON((0 0,10 0,10 10,0 10,0 0))`.

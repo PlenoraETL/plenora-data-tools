@@ -82,6 +82,10 @@ Esatta: i vertici sono le coordinate dei punti, copiate
 Tempo O(n) sulle righe più la validazione OGC della linea (O(n) per una
 `LineString`); memoria O(n): tutta la colonna diventa una geometria.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 ```json

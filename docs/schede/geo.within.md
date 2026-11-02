@@ -106,6 +106,10 @@ costo dei predicati; nel caso peggiore (rettangoli tutti sovrapposti)
 O(n · m) predicati. Più la validazione OGC di ogni geometria. Memoria O(m)
 per l'albero più le coppie confermate.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Il secondo punto sta sul bordo del poligono, quindi non è dentro.

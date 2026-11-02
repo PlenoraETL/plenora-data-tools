@@ -752,6 +752,14 @@ fn colonna_senza_contesto(spec: &ColonnaSpec) -> Result<(Field, ArrayRef), Strin
     if geometria {
         let crs = spec.crs.as_deref().unwrap_or("EPSG:4326");
         let campo = geometry_output_field(&spec.nome, crs).map_err(|e| e.to_string())?;
+        // Le schede dichiarano WKT nella convenzione GIS del CRS.
+        let mut metadata = campo.metadata().clone();
+        let resolved = plenora_core::crs::resolve_crs(crs, "crs").map_err(|e| e.to_string())?;
+        metadata.insert(
+            "plenora.geometry.axis_order".to_owned(),
+            resolved.normalized_gis_axis_order().as_str().to_owned(),
+        );
+        let campo = campo.with_metadata(metadata);
         let mut builder = BinaryBuilder::new();
         for (riga, valore) in valori.iter().enumerate() {
             if valore.is_null() {
@@ -807,6 +815,13 @@ fn tabella_con_metadati(
         .iter()
         .map(|(chiave, valore)| (chiave.clone(), valore.clone()))
         .collect::<plenora_core::arrow::Metadata>();
+    let mut metadati = metadati;
+    if campi
+        .iter()
+        .any(|campo| campo.metadata().contains_key("plenora.geometry.axis_order"))
+    {
+        metadati.insert("plenora.contract.version".to_owned(), "1".to_owned());
+    }
     let schema = Schema::new_with_metadata(campi, metadati);
     plenora_core::batch_with_rows(Arc::new(schema), array, righe).map_err(|e| e.to_string())
 }
@@ -2405,4 +2420,1118 @@ fn le_geo_rispettano_la_nullabilita_su_ingressi_vuoti_e_geometrie_vuote() {
         }
     }
     assert!(difetti.is_empty(), "nullabilita':\n{}", difetti.join("\n"));
+}
+
+// La sorgente degli esempi resta docs/schede, indicizzata esclusivamente dal
+// CATALOG: una nuova operazione senza esempio fa fallire anche questa prova.
+// Ogni colonna viene provata come geometria, oltre alla geometria passante:
+// limitarsi ad aggiungere una colonna non eserciterebbe melt/diff/aggregate.
+fn ingresso_geometrico(batch: &RecordBatch, posizione: usize, proiettato: bool) -> RecordBatch {
+    let crs = if proiettato {
+        "EPSG:32632"
+    } else {
+        "EPSG:4326"
+    };
+    let axis = if proiettato {
+        "easting_northing"
+    } else {
+        "lat_lon"
+    };
+    let mut campi: Vec<Field> = batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect();
+    let mut colonne = batch.columns().to_vec();
+    // Una sola geometria dichiarata: le geometrie originarie non selezionate
+    // rimangono byte anonimi, ma non fanno parte dell'oracolo delle sorgenti.
+    for campo in &mut campi {
+        if plenora_core::contract::arrow_metadata::field_declares_wkb_geometry(campo) {
+            *campo = Field::new(campo.name(), campo.data_type().clone(), campo.is_nullable());
+        }
+    }
+    let nome = campi
+        .get(posizione)
+        .map_or("__geometria_oracolo", |f| f.name().as_str());
+    let campo = geometry_output_field(nome, crs).unwrap();
+    let mut metadata = campo.metadata().clone();
+    metadata.insert("plenora.geometry.axis_order", axis);
+    metadata.insert("plenora.geometry.crs_id", crs);
+    metadata.insert("plenora.geometry.encoding", "wkb");
+    let campo = campo.with_metadata(metadata);
+    let mut builder = BinaryBuilder::new();
+    for riga in 0..batch.num_rows() {
+        // WKB scritto indipendentemente dal codec di produzione, XY asimmetriche.
+        let offset = f64::from(u32::try_from(riga).unwrap());
+        let (x, y): (f64, f64) = if proiettato {
+            (500_123.0 + offset, 4_982_345.0)
+        } else {
+            (45.0 + offset / 100.0, 12.0)
+        };
+        let mut bytes = vec![1, 1, 0, 0, 0];
+        bytes.extend_from_slice(&x.to_le_bytes());
+        bytes.extend_from_slice(&y.to_le_bytes());
+        builder.append_value(bytes);
+    }
+    let array: ArrayRef = Arc::new(builder.finish());
+    if posizione < campi.len() {
+        campi[posizione] = campo;
+        colonne[posizione] = array;
+    } else {
+        campi.push(campo);
+        colonne.push(array);
+    }
+    let mut metadata = batch.schema().metadata().clone();
+    metadata.insert("plenora.contract.version", "1");
+    RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(campi, metadata)),
+        colonne,
+    )
+    .unwrap()
+}
+
+fn byte_delle_celle(array: &dyn Array) -> Vec<&[u8]> {
+    use plenora_core::arrow::array::{
+        BinaryArray, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray,
+    };
+    macro_rules! leggi {
+        ($tipo:ty) => {
+            if let Some(a) = array.as_any().downcast_ref::<$tipo>() {
+                return a.iter().flatten().collect();
+            }
+        };
+    }
+    leggi!(BinaryArray);
+    leggi!(LargeBinaryArray);
+    leggi!(BinaryViewArray);
+    leggi!(FixedSizeBinaryArray);
+    // Anche un campo testuale puo' contenere gli stessi byte WKB: alcune
+    // coordinate hanno una codifica composta soltanto da byte UTF-8 validi.
+    macro_rules! leggi_testo {
+        ($tipo:ty) => {
+            if let Some(a) = array.as_any().downcast_ref::<$tipo>() {
+                return a.iter().flatten().map(str::as_bytes).collect();
+            }
+        };
+    }
+    leggi_testo!(plenora_core::arrow::array::StringArray);
+    leggi_testo!(plenora_core::arrow::array::LargeStringArray);
+    leggi_testo!(plenora_core::arrow::array::StringViewArray);
+    Vec::new()
+}
+
+// Non usa require_same_geometry_reference: l'oracolo confronta le tre
+// dichiarazioni direttamente, anche quando l'uscita e' Binary anonimo.
+fn verifica_byte_geometrici(ingressi: &[RecordBatch], uscita: &RecordBatch) -> bool {
+    uscita
+        .schema()
+        .fields()
+        .iter()
+        .zip(uscita.columns())
+        .all(|(campo, array)| verifica_campo_geometrico(ingressi, campo, array.as_ref()))
+}
+
+fn verifica_campo_geometrico(ingressi: &[RecordBatch], campo: &Field, array: &dyn Array) -> bool {
+    let bytes = byte_delle_celle(array);
+    for ingresso in ingressi {
+        for (origine, valori) in ingresso.schema().fields().iter().zip(ingresso.columns()) {
+            if !plenora_core::contract::arrow_metadata::field_declares_wkb_geometry(origine) {
+                continue;
+            }
+            let originali = byte_delle_celle(valori.as_ref());
+            if bytes.iter().any(|b| originali.contains(b)) {
+                for chiave in [
+                    "plenora.geometry.crs_id",
+                    "plenora.geometry.axis_order",
+                    "plenora.geometry.encoding",
+                ] {
+                    if campo.metadata().get(chiave) != origine.metadata().get(chiave) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    // Cammina anche list, struct, map, union e dictionary: un contenitore
+    // non rende innocua la perdita dei metadati del suo campo binario.
+    let data = array.to_data();
+    for (indice, figlio) in data.child_data().iter().enumerate() {
+        let campo_figlio = match campo.data_type() {
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::FixedSizeList(f, _)
+            | DataType::Map(f, _) => f.as_ref().clone(),
+            DataType::Struct(fields) => fields[indice].as_ref().clone(),
+            DataType::Union(fields, _) => fields.iter().nth(indice).unwrap().1.as_ref().clone(),
+            DataType::Dictionary(_, _) => {
+                Field::new(campo.name(), figlio.data_type().clone(), true)
+                    .with_metadata(campo.metadata().clone())
+            }
+            _ => Field::new("figlio", figlio.data_type().clone(), true),
+        };
+        let array_figlio = plenora_core::arrow::array::make_array(figlio.clone());
+        if !verifica_campo_geometrico(ingressi, &campo_figlio, array_figlio.as_ref()) {
+            return false;
+        }
+    }
+    true
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // La matrice e le asserzioni restano visibili nello stesso test.
+fn catalogo_conserva_i_riferimenti_dei_byte_geometrici() {
+    prepara_ambiente();
+    let mut violazioni = Vec::new();
+    let mut casi = 0;
+    for operazione in CATALOG {
+        let scheda =
+            leggi_scheda(operazione).expect("ogni operazione deve avere un esempio valido");
+        esegui_esempio(&scheda)
+            .unwrap_or_else(|_| panic!("{}: esempio di base non valido", operazione.id));
+        let originali: Vec<_> = scheda
+            .esempio
+            .ingressi
+            .iter()
+            .map(|s| tabella_con_metadati(&s.colonne, &s.metadati).unwrap())
+            .collect();
+        assert_eq!(
+            originali.len() > 1,
+            operazione.arity != Arity::Unary,
+            "{}: copertura arieta'",
+            operazione.id
+        );
+        let larghezza = originali
+            .iter()
+            .map(RecordBatch::num_columns)
+            .max()
+            .unwrap();
+        for posizione in 0..=larghezza {
+            for proiettato in [false, true] {
+                // Ogni ingresso viene provato anche divergente dagli altri.
+                for divergente in 0..=if originali.len() > 1 {
+                    originali.len() * 3
+                } else {
+                    0
+                } {
+                    let ingressi: Vec<_> = originali
+                        .iter()
+                        .enumerate()
+                        .map(|(i, b)| {
+                            let cambia = divergente > 0 && (divergente - 1) % originali.len() == i;
+                            let variante = divergente.saturating_sub(1) / originali.len();
+                            let mut batch = ingresso_geometrico(
+                                b,
+                                posizione.min(b.num_columns()),
+                                proiettato ^ (cambia && variante == 0),
+                            );
+                            if cambia && variante > 0 {
+                                let mut campi: Vec<Field> = batch
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|f| f.as_ref().clone())
+                                    .collect();
+                                let campo = &mut campi[posizione.min(b.num_columns())];
+                                let mut metadata = campo.metadata().clone();
+                                if variante == 1 {
+                                    metadata.insert(
+                                        "plenora.geometry.axis_order",
+                                        if proiettato {
+                                            "northing_easting"
+                                        } else {
+                                            "lon_lat"
+                                        },
+                                    );
+                                } else {
+                                    metadata.insert("plenora.geometry.encoding", "ewkb");
+                                }
+                                *campo = campo.clone().with_metadata(metadata);
+                                batch = RecordBatch::try_new(
+                                    Arc::new(Schema::new_with_metadata(
+                                        campi,
+                                        batch.schema().metadata().clone(),
+                                    )),
+                                    batch.columns().to_vec(),
+                                )
+                                .unwrap();
+                            }
+                            contract_from_arrow_schema(batch.schema(), resolve_crs).expect(
+                                "fixture geometrica valida indipendentemente dall'operazione",
+                            );
+                            batch
+                        })
+                        .collect();
+                    // Gli ingressi vuoti esercitano ADDED/DELETED senza conversione
+                    // testuale dei valori cambiati; i riferimenti restano obbligatori.
+                    for vuoto in 0..=if ingressi.len() > 1 {
+                        ingressi.len()
+                    } else {
+                        0
+                    } {
+                        let ingressi: Vec<_> = ingressi
+                            .iter()
+                            .enumerate()
+                            .map(|(i, b)| {
+                                if vuoto == i + 1 {
+                                    b.slice(0, 0)
+                                } else {
+                                    b.clone()
+                                }
+                            })
+                            .collect();
+                        let piano = Pipeline::from_json(&testo_piano(&scheda)).unwrap();
+                        let schemi: Vec<_> = scheda
+                            .esempio
+                            .ingressi
+                            .iter()
+                            .zip(&ingressi)
+                            .map(|(s, b)| (s.nome.as_str(), b.schema()))
+                            .collect();
+                        let tabelle = scheda
+                            .esempio
+                            .ingressi
+                            .iter()
+                            .zip(&ingressi)
+                            .map(|(s, b)| (s.nome.clone(), b.clone()))
+                            .collect();
+                        let esito = piano.validate(&schemi).and_then(|v| v.run(tabelle));
+                        casi += 1;
+                        match esito {
+                            Ok(esito) => {
+                                if divergente != 0
+                                    || esito
+                                        .outputs
+                                        .iter()
+                                        .any(|(_, b)| !verifica_byte_geometrici(&ingressi, b))
+                                {
+                                    violazioni.push(format!("{}: posizione {posizione}, proiettato {proiettato}, divergente {divergente}, vuoto {vuoto}", operazione.id));
+                                }
+                            }
+                            Err(PlenoraError::Internal(_)) => {
+                                panic!("{}: errore interno", operazione.id)
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        violazioni.is_empty(),
+        "violazioni del catalogo: {}",
+        violazioni.join("\n")
+    );
+    eprintln!(
+        "catalogo: {} operazioni, {casi} casi geometrici",
+        CATALOG.len()
+    );
+}
+
+#[test]
+fn oracolo_geometrico_rileva_byte_anonimi_e_metadati_mutati() {
+    use plenora_core::arrow::array::{Int64Array, StructArray};
+    let base =
+        RecordBatch::try_from_iter(vec![("g", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+            .unwrap();
+    for proiettato in [false, true] {
+        let sorgente = ingresso_geometrico(&base, 0, proiettato);
+        assert!(verifica_byte_geometrici(
+            std::slice::from_ref(&sorgente),
+            &sorgente
+        ));
+        for chiave in [
+            "plenora.geometry.crs_id",
+            "plenora.geometry.axis_order",
+            "plenora.geometry.encoding",
+        ] {
+            let mut metadata = sorgente.schema().field(0).metadata().clone();
+            metadata.remove(chiave);
+            let campo = sorgente.schema().field(0).clone().with_metadata(metadata);
+            let mutata = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![campo])),
+                sorgente.columns().to_vec(),
+            )
+            .unwrap();
+            assert!(!verifica_byte_geometrici(
+                std::slice::from_ref(&sorgente),
+                &mutata
+            ));
+        }
+        let bytes = byte_delle_celle(sorgente.column(0).as_ref());
+        if let Ok(testo) = std::str::from_utf8(bytes[0]) {
+            let array: ArrayRef =
+                Arc::new(plenora_core::arrow::array::StringArray::from(vec![testo]));
+            let anonima = RecordBatch::try_from_iter(vec![("anonimo", array)]).unwrap();
+            assert!(!verifica_byte_geometrici(
+                std::slice::from_ref(&sorgente),
+                &anonima
+            ));
+        }
+        let varianti: Vec<ArrayRef> = vec![
+            Arc::new(plenora_core::arrow::array::BinaryViewArray::from(
+                bytes.clone(),
+            )),
+            Arc::new(
+                plenora_core::arrow::array::FixedSizeBinaryArray::try_from_iter(bytes.into_iter())
+                    .unwrap(),
+            ),
+        ];
+        for array in varianti {
+            let anonima = RecordBatch::try_from_iter(vec![("anonimo", array)]).unwrap();
+            assert!(!verifica_byte_geometrici(
+                std::slice::from_ref(&sorgente),
+                &anonima
+            ));
+        }
+        let campo = Field::new("anonimo", DataType::Binary, true);
+        let anonima = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![campo.clone()])),
+            sorgente.columns().to_vec(),
+        )
+        .unwrap();
+        assert!(!verifica_byte_geometrici(
+            std::slice::from_ref(&sorgente),
+            &anonima
+        ));
+        let struttura = StructArray::new(vec![campo].into(), sorgente.columns().to_vec(), None);
+        let annidata =
+            RecordBatch::try_from_iter(vec![("contenitore", Arc::new(struttura) as ArrayRef)])
+                .unwrap();
+        assert!(!verifica_byte_geometrici(
+            std::slice::from_ref(&sorgente),
+            &annidata
+        ));
+    }
+}
+
+/// Oracolo esplicito, indipendente dagli analyzer: per ogni campo dell'esempio
+/// indica [ingresso, nome sorgente], oppure null per un campo nuovo/ricostruito.
+/// Le trasformazioni geometriche in place mantengono la colonna logica;
+/// le fusioni verticali adottano il primo ramo che contiene la colonna.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn catalogo_identita_seguono_la_provenienza() {
+    use plenora_core::contract::{DataContract, FieldId};
+    use std::collections::BTreeMap;
+    type Origini = BTreeMap<String, Option<(usize, String)>>;
+    let oracle: BTreeMap<String, Origini> =
+        serde_json::from_str(include_str!("riferimenti/identita_catalogo.json")).unwrap();
+    assert_eq!(
+        oracle.len(),
+        CATALOG.len(),
+        "ogni operazione richiede un oracolo"
+    );
+    prepara_ambiente();
+    let mut errors = Vec::new();
+    for op in CATALOG {
+        let scheda = leggi_scheda(op).unwrap();
+        let output_schema = tabella(&scheda.esempio.uscita.colonne).unwrap().schema();
+        let mut variants = vec![None];
+        for field in output_schema.fields() {
+            if oracle[op.id].get(field.name()) == Some(&None) {
+                for branch in 0..scheda.esempio.ingressi.len() {
+                    variants.push(Some((branch, field.name().clone())));
+                }
+            }
+        }
+        for variant in variants {
+            let mut allocator = FieldAllocator::default();
+            let mut inputs: Vec<DataContract> = scheda
+                .esempio
+                .ingressi
+                .iter()
+                .map(|spec| {
+                    let batch = tabella_con_metadati(&spec.colonne, &spec.metadati).unwrap();
+                    let mut input =
+                        contract_from_arrow_schema(batch.schema(), resolve_crs).unwrap();
+                    for field in input.schema.fields() {
+                        let id = allocator.alloc().unwrap();
+                        input.field_ids.insert(field.name().clone(), id);
+                        for geometry in &mut input.geometries {
+                            if geometry.name == *field.name() {
+                                geometry.field_id = id;
+                                input.active_geometry = Some(id);
+                            }
+                        }
+                    }
+                    input.validate().unwrap();
+                    input
+                })
+                .collect();
+            if let Some((branch, name)) = &variant {
+                let input = &mut inputs[*branch];
+                if input.schema.field_with_name(name).is_err() {
+                    let mut fields = input.schema.fields().to_vec();
+                    fields.push(Arc::new(Field::new(
+                        name,
+                        output_schema
+                            .field_with_name(name)
+                            .unwrap()
+                            .data_type()
+                            .clone(),
+                        true,
+                    )));
+                    input.schema = Arc::new(Schema::new_with_metadata(
+                        fields,
+                        input.schema.metadata().clone(),
+                    ));
+                    input
+                        .field_ids
+                        .insert(name.clone(), allocator.alloc().unwrap());
+                }
+            }
+            // Avvelena anche i nomi d'uscita: nessun campo nuovo puo' adottarli.
+            let mut estranei = Vec::new();
+            for name in inputs
+                .iter()
+                .flat_map(|input| input.field_ids.keys())
+                .chain(oracle[op.id].keys())
+            {
+                estranei.push(allocator.derive(name).unwrap());
+            }
+            let mut config: Value = serde_json::from_str(scheda.esempio.config.get()).unwrap();
+            if op.id == "table.pivot" {
+                config["mapping"] = serde_json::json!({"feb":"feb", "gen":"gen"});
+            }
+            let result = if op.family == Family::Table {
+                plenora_kernels_table::analyze::analyze_table_contract(
+                    op.id,
+                    &inputs,
+                    &config,
+                    &mut allocator,
+                    &plenora_kernels_table::Limits::default(),
+                )
+            } else {
+                let crs = scheda
+                    .esempio
+                    .crs
+                    .as_deref()
+                    .map(|s| resolve_crs(s, "crs").unwrap());
+                plenora_kernels_geo::analyze::analyze_geo_contract(
+                    op.id,
+                    &inputs,
+                    &config,
+                    crs.as_ref(),
+                    &mut allocator,
+                )
+            };
+            if op.id == "table.transpose" {
+                assert!(matches!(result, Err(PlenoraError::Unsupported(_))));
+                continue;
+            }
+            // Le op che appendono senza sovrascrivere rifiutano l'omonimo sul
+            // ramo conservato. Un errore inatteso non conta come prova superata.
+            let rejects_collision = variant.as_ref().is_some_and(|(branch, _)| {
+                *branch == 0
+                    && (op.id == "table.unnest"
+                        || matches!(
+                            op.id,
+                            "geo.area"
+                                | "geo.bounds_extractor"
+                                | "geo.count_points_in_polygons"
+                                | "geo.distance"
+                                | "geo.explode"
+                                | "geo.from_coords"
+                                | "geo.from_wkt"
+                                | "geo.length"
+                                | "geo.nearest"
+                                | "geo.perimeter"
+                                | "geo.to_wkt"
+                                | "geo.vertex_count"
+                                | "geo.within"
+                                | "geo.sjoin"
+                                | "geo.hausdorff_distance"
+                                | "geo.haversine_distance"
+                                | "geo.geodesic_distance"
+                                | "geo.geodesic_line_length"
+                                | "geo.delaunay"
+                                | "geo.split"
+                                | "geo.frechet_distance"
+                                | "geo.bearing"
+                                | "geo.geodesic_area"
+                                | "geo.geometry_diagnostics"
+                                | "geo.geometry_accessors"
+                                | "geo.line_locate_point"
+                                | "geo.subdivide"
+                                | "geo.cluster_dbscan"
+                        )
+                        || op.id.starts_with("geo.predicate_"))
+            });
+            if rejects_collision {
+                assert!(
+                    matches!(
+                        result,
+                        Err(PlenoraError::Schema(_) | PlenoraError::InvalidPlan(_))
+                    ),
+                    "{}: {variant:?}",
+                    op.id
+                );
+                continue;
+            }
+            let output = result.unwrap_or_else(|e| panic!("{}: {variant:?}: {e}", op.id));
+            let mut expected = oracle[op.id].clone();
+            if let Some((branch, name)) = &variant {
+                match op.id {
+                    "table.align_schema" => {
+                        expected.insert(name.clone(), Some((*branch, name.clone())));
+                    }
+                    "table.melt" => {
+                        let source = expected.remove(name).unwrap();
+                        expected.insert(format!("{name}_1"), source);
+                    }
+                    "table.fuzzy_join" => {
+                        let suffix = if *branch == 0 { "L" } else { "R" };
+                        expected.insert(format!("{name}_{suffix}"), Some((*branch, name.clone())));
+                    }
+                    _ => {}
+                }
+            }
+            let old: Vec<FieldId> = inputs
+                .iter()
+                .flat_map(|i| i.field_ids.values().copied())
+                .collect();
+            assert_eq!(
+                output.field_ids.len(),
+                output.schema.fields().len(),
+                "{}",
+                op.id
+            );
+            assert_eq!(
+                expected.len(),
+                output.field_ids.len(),
+                "{}: {variant:?}",
+                op.id
+            );
+            for (name, source) in &expected {
+                let actual = output.field_ids[name];
+                assert!(
+                    !estranei.contains(&actual),
+                    "{}: ID estraneo per {name}",
+                    op.id
+                );
+                let correct = match source {
+                    Some((branch, origin)) => actual == inputs[*branch].field_ids[origin],
+                    None => !old.contains(&actual),
+                };
+                if !correct {
+                    errors.push(format!(
+                        "{}: {name}, origine {source:?}, variante {variant:?}",
+                        op.id
+                    ));
+                }
+            }
+            // La stessa mappa deve sopravvivere a una continuazione tabellare.
+            let continued = plenora_kernels_table::analyze::analyze_table_contract(
+                "table.limit",
+                std::slice::from_ref(&output),
+                &serde_json::json!({"n": 1}),
+                &mut allocator,
+                &plenora_kernels_table::Limits::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                continued.field_ids, output.field_ids,
+                "{}: continuazione",
+                op.id
+            );
+        }
+    }
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+}
+
+#[test]
+fn diagnostica_omonima_non_resuscita_dopo_un_passo_tabellare() {
+    let op = CATALOG
+        .iter()
+        .find(|op| op.id == "geo.geometry_diagnostics")
+        .unwrap();
+    let scheda = leggi_scheda(op).unwrap();
+    let spec = &scheda.esempio.ingressi[0];
+    let batch = tabella_con_metadati(&spec.colonne, &spec.metadati).unwrap();
+    let input = contract_from_arrow_schema(batch.schema(), resolve_crs).unwrap();
+    let mut allocator = FieldAllocator::default();
+    let limits = plenora_kernels_table::Limits::default();
+    let renamed = plenora_kernels_table::analyze::analyze_table_contract(
+        "table.rename",
+        &[input],
+        &serde_json::json!({"renames":[{"old_name":"geometry", "new_name":"geometry_type"}]}),
+        &mut allocator,
+        &limits,
+    )
+    .unwrap();
+    let geometry_id = renamed.field_ids["geometry_type"];
+    let diagnostics = plenora_kernels_geo::analyze::analyze_geo_contract(
+        op.id,
+        &[renamed],
+        &serde_json::json!({}),
+        None,
+        &mut allocator,
+    )
+    .unwrap();
+    let continued = plenora_kernels_table::analyze::analyze_table_contract(
+        "table.limit",
+        &[diagnostics],
+        &serde_json::json!({"n":1}),
+        &mut allocator,
+        &limits,
+    )
+    .unwrap();
+    assert_ne!(continued.field_ids["geometry_type"], geometry_id);
+    assert!(!continued.field_ids.values().any(|id| *id == geometry_id));
+}
+
+/// Una colonna privata di un ramo deve seguire quel ramo, anche quando la
+/// dichiarazione geometrica esiste solo nel contratto Rust e non in Arrow.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn catalogo_colonne_presenti_in_un_solo_ingresso() {
+    use plenora_core::catalog::Arity;
+    use plenora_core::contract::arrow_schema::arrow_schema_from_contract;
+    const NAME: &str = "__geometria_oracolo";
+    prepara_ambiente();
+    for op in CATALOG.iter().filter(|op| op.arity != Arity::Unary) {
+        let scheda = leggi_scheda(op).unwrap();
+        assert_eq!(scheda.esempio.ingressi.len(), 2, "{}", op.id);
+        for branch in 0..2 {
+            for geometry in [false, true] {
+                for contract_only in [false, true] {
+                    let mut allocator = FieldAllocator::default();
+                    let mut inputs = Vec::new();
+                    for (i, spec) in scheda.esempio.ingressi.iter().enumerate() {
+                        let mut batch =
+                            tabella_con_metadati(&spec.colonne, &spec.metadati).unwrap();
+                        if i == branch && op.family == Family::Table {
+                            batch = ingresso_geometrico(&batch, batch.num_columns(), false);
+                        }
+                        let mut input =
+                            contract_from_arrow_schema(batch.schema(), resolve_crs).unwrap();
+                        if op.family == Family::Geo && geometry {
+                            // Ogni binaria geo richiede la geometria di entrambi i
+                            // lati: l'assenza su un lato deve essere un errore.
+                            if i != branch {
+                                let name = input.geometries[0].name.clone();
+                                let fields: Vec<_> = input
+                                    .schema
+                                    .fields()
+                                    .iter()
+                                    .filter(|f| f.name() != &name)
+                                    .cloned()
+                                    .collect();
+                                input.schema = Arc::new(Schema::new_with_metadata(
+                                    fields,
+                                    input.schema.metadata().clone(),
+                                ));
+                                input.field_ids.remove(&name);
+                                input.geometries.clear();
+                                input.active_geometry = None;
+                            }
+                        } else if i == branch {
+                            let mut fields = input.schema.fields().to_vec();
+                            if op.family == Family::Geo {
+                                fields.push(Arc::new(Field::new(NAME, DataType::Binary, false)));
+                            }
+                            let field = fields.iter_mut().find(|f| f.name() == NAME).unwrap();
+                            let mut metadata = if geometry && !contract_only {
+                                field.metadata().clone()
+                            } else {
+                                plenora_core::arrow::Metadata::default()
+                            };
+                            metadata.insert("audit.source", "private");
+                            *field = Arc::new(
+                                field
+                                    .as_ref()
+                                    .clone()
+                                    .with_nullable(false)
+                                    .with_metadata(metadata),
+                            );
+                            input.schema = Arc::new(Schema::new_with_metadata(
+                                fields,
+                                input.schema.metadata().clone(),
+                            ));
+                            if !geometry && op.family == Family::Table {
+                                input.geometries.clear();
+                                input.active_geometry = None;
+                            }
+                            for g in &mut input.geometries {
+                                if g.name == NAME {
+                                    g.nullable = false;
+                                }
+                            }
+                        }
+                        for field in input.schema.fields() {
+                            let id = allocator.alloc().unwrap();
+                            input.field_ids.insert(field.name().clone(), id);
+                            for g in &mut input.geometries {
+                                if g.name == *field.name() {
+                                    g.field_id = id;
+                                    input.active_geometry = Some(id);
+                                }
+                            }
+                        }
+                        input.validate().unwrap();
+                        inputs.push(input);
+                    }
+                    let mut config: Value =
+                        serde_json::from_str(scheda.esempio.config.get()).unwrap();
+                    if op.id == "table.concat_by_name" {
+                        config["strict"] = Value::Bool(false);
+                    }
+                    let result = if op.family == Family::Table {
+                        plenora_kernels_table::analyze::analyze_table_contract(
+                            op.id,
+                            &inputs,
+                            &config,
+                            &mut allocator,
+                            &plenora_kernels_table::Limits::default(),
+                        )
+                    } else {
+                        plenora_kernels_geo::analyze::analyze_geo_contract(
+                            op.id,
+                            &inputs,
+                            &config,
+                            None,
+                            &mut allocator,
+                        )
+                    };
+                    let context = format!(
+                        "{}: ramo {branch}, geometria {geometry}, solo contratto {contract_only}",
+                        op.id
+                    );
+                    let reject = matches!(
+                        op.id,
+                        "table.concat"
+                            | "table.union_distinct"
+                            | "table.except"
+                            | "table.intersect"
+                    ) || (op.family == Family::Geo && geometry);
+                    if reject {
+                        assert!(
+                            matches!(
+                                result,
+                                Err(PlenoraError::Schema(_)
+                                    | PlenoraError::InvalidPlan(_)
+                                    | PlenoraError::Crs(_)
+                                    | PlenoraError::Unsupported(_))
+                            ),
+                            "{context}: {result:?}"
+                        );
+                        continue;
+                    }
+                    let output = result.unwrap_or_else(|e| panic!("{context}: {e}"));
+                    // Oracolo semantico chiuso: un'operazione nuova richiede una
+                    // decisione esplicita, non eredita un successo per default.
+                    let retained = match op.id {
+                        "table.concat_by_name"
+                        | "table.join"
+                        | "table.cross_join"
+                        | "table.asof_join"
+                        | "table.fuzzy_join" => true,
+                        "table.anti_join"
+                        | "table.semi_join"
+                        | "table.assert_foreign_key"
+                        | "geo.clip"
+                        | "geo.difference"
+                        | "geo.intersection"
+                        | "geo.union"
+                        | "geo.symmetric_difference"
+                        | "geo.within"
+                        | "geo.count_points_in_polygons"
+                        | "geo.sjoin"
+                        | "geo.nearest" => branch == 0,
+                        "table.reconcile" | "table.table_diff" | "geo.overlay" => false,
+                        _ => panic!("operazione senza oracolo: {}", op.id),
+                    };
+                    let name = if matches!(op.id, "table.join" | "table.fuzzy_join") {
+                        format!("{NAME}_{}", if branch == 0 { "L" } else { "R" })
+                    } else {
+                        NAME.to_owned()
+                    };
+                    assert_eq!(
+                        output.schema.field_with_name(&name).is_ok(),
+                        retained,
+                        "{context}"
+                    );
+                    if !retained {
+                        continue;
+                    }
+                    let field = output.schema.field_with_name(&name).unwrap();
+                    let source = &inputs[branch];
+                    assert_eq!(output.field_ids[&name], source.field_ids[NAME], "{context}");
+                    assert_eq!(
+                        field.metadata(),
+                        source.schema.field_with_name(NAME).unwrap().metadata(),
+                        "{context}"
+                    );
+                    if geometry {
+                        let mut expected = source.geometries[0].clone();
+                        expected.name = name.clone();
+                        expected.nullable = field.is_nullable();
+                        assert_eq!(
+                            format!("{:?}", output.geometries),
+                            format!("{:?}", vec![expected]),
+                            "{context}"
+                        );
+                        if matches!(
+                            op.id,
+                            "table.concat_by_name"
+                                | "table.join"
+                                | "table.asof_join"
+                                | "table.semi_join"
+                                | "table.anti_join"
+                                | "table.assert_foreign_key"
+                        ) {
+                            assert_eq!(
+                                output.active_geometry,
+                                Some(source.field_ids[NAME]),
+                                "{context}"
+                            );
+                        }
+                        let emitted = arrow_schema_from_contract(&output).unwrap();
+                        let reread = contract_from_arrow_schema(emitted, resolve_crs).unwrap();
+                        assert_eq!(reread.geometries.len(), 1, "{context}");
+                        assert_eq!(
+                            format!("{:?}", reread.geometries[0].crs),
+                            format!("{:?}", source.geometries[0].crs),
+                            "{context}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn concat_sorgente_effettiva_emissione_e_conflitti() {
+    use plenora_core::contract::arrow_schema::arrow_schema_from_contract;
+    use plenora_core::contract::{
+        ContractProperty, NullPlacement, PropertyConfidence, PropertyScope, SortDirection,
+        SortOrder,
+    };
+    use plenora_kernels_table::{analyze::analyze_table_contract, joins, Limits};
+    let base = RecordBatch::try_from_iter(vec![(
+        "id",
+        Arc::new(plenora_core::arrow::array::Int64Array::from(vec![1])) as ArrayRef,
+    )])
+    .unwrap();
+    let geo = ingresso_geometrico(&base, 1, false);
+    let mut fields = geo.schema().fields().to_vec();
+    let mut metadata = fields[1].metadata().clone();
+    metadata.insert("plenora.geometry.types", "point");
+    metadata.insert("plenora.geometry.types_declaration", "exact");
+    fields[1] = Arc::new(
+        fields[1]
+            .as_ref()
+            .clone()
+            .with_nullable(false)
+            .with_metadata(metadata),
+    );
+    let geo = RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            geo.schema().metadata().clone(),
+        )),
+        geo.columns().to_vec(),
+    )
+    .unwrap();
+    let limits = Limits::default();
+    for branch in 0..3 {
+        for repeated in [false, true] {
+            let batches: Vec<_> = (0..3)
+                .map(|i| {
+                    if i == branch || (repeated && i == (branch + 1) % 3) {
+                        geo.clone()
+                    } else {
+                        base.clone()
+                    }
+                })
+                .collect();
+            let mut alloc = FieldAllocator::default();
+            let inputs: Vec<_> = batches
+                .iter()
+                .map(|b| {
+                    let mut input = contract_from_arrow_schema(b.schema(), resolve_crs).unwrap();
+                    for field in input.schema.fields() {
+                        let id = alloc.alloc().unwrap();
+                        input.field_ids.insert(field.name().clone(), id);
+                        for g in &mut input.geometries {
+                            if g.name == *field.name() {
+                                g.field_id = id;
+                                input.active_geometry = Some(id);
+                            }
+                        }
+                    }
+                    // Le chiavi rappresentate dal contratto non restano in Arrow.
+                    // L'ordine assi vive solo nel campo, quindi resta li'.
+                    input.schema = Arc::new(Schema::new(
+                        input
+                            .schema
+                            .fields()
+                            .iter()
+                            .map(|f| {
+                                Field::new(f.name(), f.data_type().clone(), f.is_nullable())
+                                    .with_metadata(
+                                        f.metadata()
+                                            .iter()
+                                            .filter(|(k, _)| {
+                                                k.as_str() == "plenora.geometry.axis_order"
+                                            })
+                                            .map(|(k, v)| (k.clone(), v.clone()))
+                                            .collect::<plenora_core::arrow::Metadata>(),
+                                    )
+                            })
+                            .collect::<Vec<_>>(),
+                    ));
+                    let mut metadata = input.schema.metadata().clone();
+                    metadata.insert(
+                        format!("audit.source.{}", input.field_ids["id"].0),
+                        "retained",
+                    );
+                    input.schema = Arc::new(Schema::new_with_metadata(
+                        input.schema.fields().clone(),
+                        metadata,
+                    ));
+                    input.properties.row_count = Some(ContractProperty::new(
+                        PropertyConfidence::Proven(1),
+                        PropertyScope::Dataset,
+                    ));
+                    input.properties.sorted_by = Some(ContractProperty::new(
+                        PropertyConfidence::Proven(SortOrder {
+                            keys: vec![input.field_ids["id"]],
+                            direction: SortDirection::Ascending,
+                            nulls: NullPlacement::Last,
+                        }),
+                        PropertyScope::Dataset,
+                    ));
+                    input
+                })
+                .collect();
+            let output = analyze_table_contract(
+                "table.concat_by_name",
+                &inputs,
+                &serde_json::json!({"strict":false}),
+                &mut alloc,
+                &limits,
+            )
+            .unwrap();
+            let source = inputs.iter().find(|i| !i.geometries.is_empty()).unwrap();
+            assert_eq!(output.geometries.len(), 1);
+            assert_eq!(output.geometries[0].field_id, source.geometries[0].field_id);
+            assert!(output.geometries[0].nullable);
+            assert_eq!(output.geometries[0].types, source.geometries[0].types);
+            assert_eq!(output.active_geometry, source.active_geometry);
+            assert_eq!(
+                output.properties.row_count,
+                Some(ContractProperty::new(
+                    PropertyConfidence::Proven(3),
+                    PropertyScope::Dataset
+                ))
+            );
+            assert!(output.properties.sorted_by.is_none());
+            for input in &inputs {
+                for (key, value) in input.schema.metadata() {
+                    assert_eq!(output.schema.metadata().get(key), Some(value));
+                }
+            }
+            let emitted = arrow_schema_from_contract(&output).unwrap();
+            let direct = joins::concat_by_name(
+                &batches.iter().collect::<Vec<_>>(),
+                &joins::ConcatByName { strict: false },
+                &limits,
+            )
+            .unwrap();
+            let rebuilt = RecordBatch::try_new(emitted, direct.columns().to_vec()).unwrap();
+            assert!(verifica_byte_geometrici(&batches, &rebuilt));
+            assert_eq!(rebuilt.column(1).null_count(), if repeated { 1 } else { 2 });
+            let continued = analyze_table_contract(
+                "table.limit",
+                &[output],
+                &serde_json::json!({"n":1}),
+                &mut alloc,
+                &limits,
+            )
+            .unwrap();
+            assert_eq!(continued.geometries.len(), 1);
+            assert_eq!(
+                continued.geometries[0].field_id,
+                source.geometries[0].field_id
+            );
+        }
+    }
+    let plain = contract_from_arrow_schema(base.schema(), resolve_crs).unwrap();
+    let geometry = contract_from_arrow_schema(geo.schema(), resolve_crs).unwrap();
+    for divergence in 0..3 {
+        let mut other = geometry.clone();
+        // Il terzo ingresso non deve essere confrontato con il primo,
+        // che non ha il campo, ma con il secondo che ne e' la sorgente.
+        other.schema = Arc::new(Schema::new(
+            other
+                .schema
+                .fields()
+                .iter()
+                .map(|f| {
+                    Field::new(f.name(), f.data_type().clone(), f.is_nullable()).with_metadata(
+                        f.metadata()
+                            .iter()
+                            .filter(|(k, _)| k.as_str() == "plenora.geometry.axis_order")
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect::<plenora_core::arrow::Metadata>(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ));
+        match divergence {
+            0 => {
+                other.geometries[0].encoding = Some(plenora_core::contract::GeometryEncoding::Ewkb);
+            }
+            1 => {
+                other.geometries.clear();
+                other.active_geometry = None;
+            }
+            _ => {
+                let mut fields = other.schema.fields().to_vec();
+                fields[1] = Arc::new(fields[1].as_ref().clone().with_name("other_geometry"));
+                other.schema = Arc::new(Schema::new(fields));
+                let id = other.field_ids.remove("__geometria_oracolo").unwrap();
+                other.field_ids.insert("other_geometry".into(), id);
+                other.geometries[0].name = "other_geometry".into();
+            }
+        }
+        let result = analyze_table_contract(
+            "table.concat_by_name",
+            &[plain.clone(), geometry.clone(), other],
+            &serde_json::json!({"strict":false}),
+            &mut FieldAllocator::default(),
+            &limits,
+        );
+        match divergence {
+            0 => assert!(matches!(result, Err(PlenoraError::Schema(_)))),
+            1 => assert!(matches!(result, Err(PlenoraError::Crs(_)))),
+            _ => assert!(matches!(result, Err(PlenoraError::InvalidPlan(_)))),
+        }
+    }
+    // Allineare aggiunge un Binary anonimo: non puo' attribuirgli la
+    // dichiarazione geometrica dell'altro ramo, neppure se e' tutto null.
+    let aligned = analyze_table_contract("table.align_schema", &[plain], &serde_json::json!({"columns":[{"name":"id","type":"Int64"},{"name":"__geometria_oracolo","type":"Binary"}]}), &mut FieldAllocator::default(), &limits).unwrap();
+    for op in ["table.union_distinct", "table.except", "table.intersect"] {
+        for inputs in [
+            [aligned.clone(), geometry.clone()],
+            [geometry.clone(), aligned.clone()],
+        ] {
+            assert!(matches!(
+                analyze_table_contract(
+                    op,
+                    &inputs,
+                    &serde_json::json!({}),
+                    &mut FieldAllocator::default(),
+                    &limits
+                ),
+                Err(PlenoraError::Crs(_))
+            ));
+        }
+    }
 }

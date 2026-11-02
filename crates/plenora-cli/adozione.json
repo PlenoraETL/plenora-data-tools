@@ -1,5 +1,5 @@
 {
-  "nota": "Sorgente del manifesto v4: versione e digest sono aggiunti dagli artefatti di rilascio. Profilo data-tools v3, Public Catalogs 2.0. Runtime conditional non pubblicato; data.run 3 e' solo Rust e non costituisce un binding runtime. Requisiti e motivazioni in requirements e docs/cli.md. Nessuna nuova deviazione; gli opt-in non rivendicati non sono conformita'.",
+  "nota": "Sorgente del manifesto v4: versione e digest dagli artefatti di rilascio. Geometry Semantics 1.0 adottato con le deviazioni per regola sotto elencate: una deviazione non conta come conformita. Profilo data-tools v3; runtime e catene intercomponente non rivendicati.",
   "component": "plenora-data-tools",
   "contracts_source": {
     "repository": "https://github.com/PlenoraETL/plenora-contracts.git",
@@ -18,16 +18,171 @@
     "plenora-python-sdk-v1",
     "plenora-surface-bindings-v1",
     "plenora-composition-v1",
-    "plenora-public-catalog-v2"
+    "plenora-public-catalog-v2",
+    "plenora-arrow-geometry-semantics-v1"
   ],
   "not_applicable": [
     "plenora-runtime-binding-v2",
-    "plenora-arrow-geometry-semantics-v1",
     "plenora-interop-vectors-v1",
     "plenora-rest-arrow-adapter-v1",
     "plenora-plan-budget-v1"
   ],
-  "deviations": [],
+  "deviations": [
+    {
+      "rule": "GEO-000",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "Il passaggio rifiuta con crs i CRS resolved fuori tabella o con definizione, e geography con unsupported. Hazard: Input conformi non attraversano il componente.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    },
+    {
+      "rule": "GEO-004",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "Un crs_id con definizione resolved viene risolto dalla definizione e rifiutato anche nel passaggio. Hazard: Rifiuto di input conforme; nessun calcolo sostitutivo silenzioso.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    },
+    {
+      "rule": "GEO-005",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "Declared_unresolved conserva la definizione senza verificarne grammatica e identificatori di primo livello. Hazard: Una dichiarazione contraddittoria puo attraversare un piano tabellare.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    },
+    {
+      "rule": "GEO-006",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "Una definizione senza identificatore, dichiarata resolved, viene rifiutata anche nel passaggio. Hazard: Rifiuto di input conforme.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    },
+    {
+      "rule": "GEO-007",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "Le operazioni geo rifiutano ancora EWKB valido con SRID incorporato; le tabellari lo preservano. Hazard: Interoperabilita del calcolo ridotta; nessuna perdita silenziosa dello SRID.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    },
+    {
+      "rule": "GEO-013",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "Le identita nuove partono oltre il massimo osservato, per non riusare identita perse dalla lineage. Hazard: Identificatori diversi dal minimo libero richiesto dal contratto.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    },
+    {
+      "rule": "GEO-014",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "Il cambio di precisione e visibile nello schema; manca un evento dedicato di normalizzazione nel risultato. Hazard: Il consumatore che non confronta gli schemi non vede la normalizzazione.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    },
+    {
+      "rule": "GEO-015",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "Le definizioni resolved vengono rifiutate dal risolutore integrato, anche quando verificabili. Hazard: Calcoli conformi rifiutati; nessun ripiego sulla definizione.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    },
+    {
+      "rule": "GEO-016",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "Il lettore non applica tutta la grammatica chiusa di crs_id e delle chiavi geometry, e ammette liste types vuote in alcuni stati. Hazard: Metadati non conformi possono attraversare il confine.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    },
+    {
+      "rule": "GEO-017",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "Non esiste il confronto delle definizioni nel sottoinsieme conservativo a decimali esatti. Hazard: Definizioni verificabili rifiutate, senza approssimazioni numeriche.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    },
+    {
+      "rule": "GEO-019",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "Non esiste il verificatore completo della grammatica chiusa di definizioni e datum ensemble. Hazard: Definizioni verificabili rifiutate; declared_unresolved passa opaco.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    },
+    {
+      "rule": "GEO-020",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "Le autorita locali restano unresolved ma il piano puo sostituire il CRS per decisione esplicita. Hazard: Una decisione del chiamante puo rendere calcolabile un CRS locale che il contratto vuole indecidibile.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    },
+    {
+      "rule": "REJ-002",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "La lettura dei metadati non ha passate globali separate per vocabolario, CRS e supporto. Hazard: Con piu difetti la prima categoria puo divergere dall ordine normativo.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    },
+    {
+      "rule": "GEO-002",
+      "surfaces": [
+        "rust",
+        "cli",
+        "python_sdk"
+      ],
+      "observed_behavior": "Gli assi assenti restano unknown; i calcoli dipendenti dagli assi rifiutano unknown per la policy safety-critical 4.0. Hazard: Il calcolo con unknown e rifiutato anche dove GEO-002 lo permetterebbe.",
+      "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
+      "detectable_before_invocation": false
+    }
+  ],
   "catalog": "catalogs/data-tools-v3.json",
   "kernel_registry": "catalogs/data-kernels-v2.json",
   "requirements": [
@@ -81,12 +236,10 @@
     },
     {
       "rules": [
-        "GEO-000..020",
-        "REJ-001..004",
         "INTEROP-001..005"
       ],
       "status": "not_applicable",
-      "reason": "Arrow Geometry Semantics e Interoperability Vectors sono opt-in non rivendicati. Rimangono Arrow Interchange e DT-ARROW; nessuna attestazione delle catene intercomponente."
+      "reason": "Interoperability Vectors non rivendicato: il runner locale prova il componente, non le catene intercomponente."
     },
     {
       "rules": [
@@ -104,6 +257,248 @@
       "status": "implemented",
       "reason": "Il gate esterno viene eseguito dalla revisione fissata, inclusi messaggi senza dati e cache con oracolo; non e una modifica del fuzz Rust. Il gate locale emette diagnostica fissa e conteggi.",
       "verification": "scripts/verifica_adozione.py: tools/validate_specs.py; tools/test_messages.py; tools/test_gate_fuzz.py; tools/test_message_sentinels.py"
+    },
+    {
+      "rules": [
+        "GEO-000"
+      ],
+      "status": "deviation",
+      "reason": "Il passaggio rifiuta con crs i CRS resolved fuori tabella o con definizione, e geography con unsupported.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "hazard": "Input conformi non attraversano il componente.",
+      "reentry": "Separare conformita, supporto del calcolo e trasporto dei metadati."
+    },
+    {
+      "rules": [
+        "GEO-001"
+      ],
+      "status": "implemented",
+      "reason": "Anche il legacy esterno senza prova conserva unknown; il solo identificatore CRS non determina gli assi fisici.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
+    },
+    {
+      "rules": [
+        "GEO-002"
+      ],
+      "status": "deviation",
+      "reason": "Gli assi assenti restano unknown; i calcoli dipendenti dagli assi rifiutano unknown per la policy safety-critical 4.0.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Ingressi legacy geo.crs su Rust, CLI e SDK Python",
+      "hazard": "Il calcolo con unknown e rifiutato anche dove GEO-002 lo permetterebbe.",
+      "reentry": "Rientro con dichiarazione esplicita verificata dell ordine delle ordinate, senza scambi impliciti."
+    },
+    {
+      "rules": [
+        "GEO-003"
+      ],
+      "status": "implemented",
+      "reason": "Vettori con ordinate asimmetriche e confronto byte per byte al confine API e CLI.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
+    },
+    {
+      "rules": [
+        "GEO-004"
+      ],
+      "status": "deviation",
+      "reason": "Un crs_id con definizione resolved viene risolto dalla definizione e rifiutato anche nel passaggio.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "hazard": "Rifiuto di input conforme; nessun calcolo sostitutivo silenzioso.",
+      "reentry": "Leggere identita e definizione separatamente, preservandole nel passaggio."
+    },
+    {
+      "rules": [
+        "GEO-005"
+      ],
+      "status": "deviation",
+      "reason": "Declared_unresolved conserva la definizione senza verificarne grammatica e identificatori di primo livello.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "hazard": "Una dichiarazione contraddittoria puo attraversare un piano tabellare.",
+      "reentry": "Verificare grammatica e identificatori anche senza risoluzione."
+    },
+    {
+      "rules": [
+        "GEO-006"
+      ],
+      "status": "deviation",
+      "reason": "Una definizione senza identificatore, dichiarata resolved, viene rifiutata anche nel passaggio.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "hazard": "Rifiuto di input conforme.",
+      "reentry": "Trasportare la definizione opaca senza chiamare il risolutore."
+    },
+    {
+      "rules": [
+        "GEO-007"
+      ],
+      "status": "deviation",
+      "reason": "Le operazioni geo rifiutano ancora EWKB valido con SRID incorporato; le tabellari lo preservano.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "hazard": "Interoperabilita del calcolo ridotta; nessuna perdita silenziosa dello SRID.",
+      "reentry": "Conversione EWKB senza perdita dopo la verifica del campo."
+    },
+    {
+      "rules": [
+        "GEO-008"
+      ],
+      "status": "implemented",
+      "reason": "Flag SRID sotto wkb rifiutato data_mapping/read prima del kernel; il passaggio non decodifica.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
+    },
+    {
+      "rules": [
+        "GEO-009"
+      ],
+      "status": "implemented",
+      "reason": "Buona forma prima dello SRID; confronto contro il campo originale prima di completarne i metadati.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
+    },
+    {
+      "rules": [
+        "GEO-010"
+      ],
+      "status": "implemented",
+      "reason": "Insiemi di tipi preservati; verifica dei valori contro la lista prima del calcolo.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
+    },
+    {
+      "rules": [
+        "GEO-011"
+      ],
+      "status": "implemented",
+      "reason": "Lettore strutturale dei valori prima dei kernel, poi SRID, tipi e dimensioni; limite di 32 livelli.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
+    },
+    {
+      "rules": [
+        "GEO-012"
+      ],
+      "status": "implemented",
+      "reason": "Piu geometrie rifiutate unsupported/validate, nessun campo scartato.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
+    },
+    {
+      "rules": [
+        "GEO-013"
+      ],
+      "status": "deviation",
+      "reason": "Le identita nuove partono oltre il massimo osservato, per non riusare identita perse dalla lineage.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "hazard": "Identificatori diversi dal minimo libero richiesto dal contratto.",
+      "reentry": "Distinguere assegnazione iniziale e identita derivate senza reintrodurre alias."
+    },
+    {
+      "rules": [
+        "GEO-014"
+      ],
+      "status": "deviation",
+      "reason": "Il cambio di precisione e visibile nello schema; manca un evento dedicato di normalizzazione nel risultato.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "hazard": "Il consumatore che non confronta gli schemi non vede la normalizzazione.",
+      "reentry": "Esporre e verificare un avviso di normalizzazione sulle superfici pubbliche."
+    },
+    {
+      "rules": [
+        "GEO-015"
+      ],
+      "status": "deviation",
+      "reason": "Le definizioni resolved vengono rifiutate dal risolutore integrato, anche quando verificabili.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "hazard": "Calcoli conformi rifiutati; nessun ripiego sulla definizione.",
+      "reentry": "Implementare il verificatore conservativo prima del calcolo."
+    },
+    {
+      "rules": [
+        "GEO-016"
+      ],
+      "status": "deviation",
+      "reason": "Il lettore non applica tutta la grammatica chiusa di crs_id e delle chiavi geometry, e ammette liste types vuote in alcuni stati.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "hazard": "Metadati non conformi possono attraversare il confine.",
+      "reentry": "Chiudere le grammatiche con prove negative per ogni chiave."
+    },
+    {
+      "rules": [
+        "GEO-017"
+      ],
+      "status": "deviation",
+      "reason": "Non esiste il confronto delle definizioni nel sottoinsieme conservativo a decimali esatti.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "hazard": "Definizioni verificabili rifiutate, senza approssimazioni numeriche.",
+      "reentry": "Implementare il confronto esatto con oracolo differenziale."
+    },
+    {
+      "rules": [
+        "GEO-018"
+      ],
+      "status": "implemented",
+      "reason": "Nessuna uscita pubblicata sui rifiuti dei vettori; pubblicazione atomica e prove run_artefatti.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
+    },
+    {
+      "rules": [
+        "GEO-019"
+      ],
+      "status": "deviation",
+      "reason": "Non esiste il verificatore completo della grammatica chiusa di definizioni e datum ensemble.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "hazard": "Definizioni verificabili rifiutate; declared_unresolved passa opaco.",
+      "reentry": "Implementare grammatica chiusa e vettori negativi per nodi aggiuntivi."
+    },
+    {
+      "rules": [
+        "GEO-020"
+      ],
+      "status": "deviation",
+      "reason": "Le autorita locali restano unresolved ma il piano puo sostituire il CRS per decisione esplicita.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "hazard": "Una decisione del chiamante puo rendere calcolabile un CRS locale che il contratto vuole indecidibile.",
+      "reentry": "Separare decisione di riparazione e identita locale non confrontabile."
+    },
+    {
+      "rules": [
+        "REJ-001"
+      ],
+      "status": "implemented",
+      "reason": "Categorie dei rifiuti verificate da API e CLI; WKB e SRID non diventano errori del piano.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
+    },
+    {
+      "rules": [
+        "REJ-002"
+      ],
+      "status": "deviation",
+      "reason": "La lettura dei metadati non ha passate globali separate per vocabolario, CRS e supporto.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "hazard": "Con piu difetti la prima categoria puo divergere dall ordine normativo.",
+      "reentry": "Validare ciascuna classe sull intero schema prima della successiva."
+    },
+    {
+      "rules": [
+        "REJ-003"
+      ],
+      "status": "implemented",
+      "reason": "Assi categoria/fase/effetto/retry ed exit 3 verificati sui vettori da memoria e IPC.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
+    },
+    {
+      "rules": [
+        "REJ-004"
+      ],
+      "status": "implemented",
+      "reason": "86 vettori al pin, SHA-256, conformita distinta dalle deviazioni e dall applicabilita del calcolo.",
+      "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
     }
   ]
 }

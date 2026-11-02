@@ -118,7 +118,11 @@ impl Lato {
                 self.nome
             ))
         })?;
-        verifica_dominio(op, celle, &self.crs)
+        if plenora_kernels_geo::analyze::richiede_ordine_assi(op) {
+            verifica_dominio(op, celle, &self.crs)
+        } else {
+            Ok(())
+        }
     }
 }
 

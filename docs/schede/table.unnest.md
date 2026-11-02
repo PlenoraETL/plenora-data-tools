@@ -3,6 +3,10 @@
 Apre una colonna struct: ogni campo dello struct diventa una colonna, con
 il nome preceduto da `prefix`. Per default la colonna struct sparisce.
 
+L'operazione rifiuta i campi geometrici, anche annidati e con zero righe
+oppure tutte le celle nulle, con errore `crs/validate` sia nel kernel sia
+nell'analisi: non produce celle WKB senza metadati.
+
 ### Parametri
 
 | parametro | tipo | default | valori ammessi | significato |

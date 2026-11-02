@@ -141,6 +141,261 @@ pub fn field_declares_wkb_geometry(field: &Field) -> bool {
     )
 }
 
+/// Quanto deve conservarsi quando due sorgenti geometriche si incontrano.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum GeometryComparison {
+    /// Confronto di celle: i tipi possono differire.
+    Reference,
+    /// Concatenazione: la dichiarazione conservata deve valere per ogni ramo.
+    Declaration,
+    /// Colonna derivata: i tipi vengono rimossi dai metadati di uscita.
+    Derived,
+    /// Ingressi binari: anche il framing delle celle deve coincidere.
+    Inputs,
+}
+
+/// Confronto unico delle geometrie: metadati Arrow e dichiarazioni tipizzate
+/// sono canonicalizzati insieme, con le regole dell'emissione dello schema.
+///
+/// I kernel senza contratto passano un elenco vuoto; l'analisi passa sempre
+/// le geometrie del contratto proprietario del campo. Gli ID non si confrontano.
+///
+/// # Errors
+///
+/// `Crs` per riferimenti incompatibili; `Schema` per dichiarazioni divergenti;
+/// `Unsupported` per rappresentazioni diverse in una colonna derivata.
+pub fn require_geometry_compatibility(
+    left: &Field,
+    left_geometries: &[GeometryColumnContract],
+    right: &Field,
+    right_geometries: &[GeometryColumnContract],
+    comparison: GeometryComparison,
+) -> Result<(), PlenoraError> {
+    let left_effective = geometry_comparison_field(left, left_geometries)?;
+    let right_effective = geometry_comparison_field(right, right_geometries)?;
+    let mut left_raw =
+        read_geometry_contract_keys(if geometry_has_decided_crs(left, left_geometries) {
+            &left_effective
+        } else {
+            left
+        })?;
+    let mut right_raw =
+        read_geometry_contract_keys(if geometry_has_decided_crs(right, right_geometries) {
+            &right_effective
+        } else {
+            right
+        })?;
+    // Una decisione CRS non decide precisione o semantica spaziale.
+    left_raw.precision = canonical_geometry_precision(left)?;
+    left_raw.spatial_semantics = canonical_geometry_spatial_semantics(left)?;
+    right_raw.precision = canonical_geometry_precision(right)?;
+    right_raw.spatial_semantics = canonical_geometry_spatial_semantics(right)?;
+    let (left, right) = (left_effective, right_effective);
+    let a = field_declares_wkb_geometry(&left);
+    let b = field_declares_wkb_geometry(&right);
+    if !a && !b {
+        return Ok(());
+    }
+    super::arrow_schema::verifica_metadato_estensione(&left)?;
+    super::arrow_schema::verifica_metadato_estensione(&right)?;
+    let left = comparison_keys(read_geometry_contract_keys(&left)?, &left_raw);
+    let right = comparison_keys(read_geometry_contract_keys(&right)?, &right_raw);
+    if a != b
+        || left.crs_id != right.crs_id
+        || left.crs_definition != right.crs_definition
+        || left.crs_definition_format != right.crs_definition_format
+        || left.crs_resolution != right.crs_resolution
+        || left.srid != right.srid
+        || left.axis_order != right.axis_order
+        || left.spatial_semantics != right.spatial_semantics
+    {
+        return Err(PlenoraError::Crs(
+            "campi geometrici con riferimenti CRS o ordine delle ordinate diversi".into(),
+        ));
+    }
+    if comparison == GeometryComparison::Inputs && left.encoding != right.encoding {
+        return Err(PlenoraError::Crs(
+            "ingressi geometrici con encoding diversi".into(),
+        ));
+    }
+    if matches!(
+        comparison,
+        GeometryComparison::Declaration | GeometryComparison::Derived
+    ) && (left.encoding != right.encoding
+        || left.dimensions != right.dimensions
+        || left.precision != right.precision
+        || (comparison == GeometryComparison::Declaration && left.types != right.types))
+    {
+        return Err(if comparison == GeometryComparison::Derived {
+            PlenoraError::Unsupported(
+                "fusione di geometrie con dimensioni, encoding o precisione diversi".into(),
+            )
+        } else {
+            PlenoraError::Schema(
+                "concatenazione con dichiarazioni geometriche incompatibili".into(),
+            )
+        });
+    }
+    Ok(())
+}
+
+// Queste nozioni appartengono al campo, non a GeometryColumnContract:
+// i default dell'emissione non devono cancellare l'evidenza di assenza.
+fn comparison_keys(
+    mut effective: CanonicalGeometryKeys,
+    raw: &CanonicalGeometryKeys,
+) -> CanonicalGeometryKeys {
+    effective.axis_order = raw.axis_order;
+    effective.srid = raw.srid;
+    effective.precision = raw.precision;
+    effective.spatial_semantics = raw.spatial_semantics;
+    effective.crs_resolution = Some(comparison_crs_resolution(&effective));
+    effective.dimensions = Some(effective.dimensions.unwrap_or(GeometryDimensions::Unknown));
+    effective.types = effective
+        .types
+        .filter(|types| types.declaration() != crate::contract::TypesDeclaration::Unresolved);
+    effective
+}
+
+// Stesso stato implicito del lettore di contratto, senza invocare un backend
+// CRS nel kernel: le rappresentazioni si confrontano comunque esattamente.
+fn comparison_crs_resolution(keys: &CanonicalGeometryKeys) -> CrsResolution {
+    let conflicting_srid = keys
+        .crs_id
+        .as_deref()
+        .and_then(authority_code_srid)
+        .is_some_and(|code| {
+            keys.srid
+                .is_some_and(|srid| i64::from(code) != i64::from(srid))
+        });
+    if conflicting_srid {
+        return CrsResolution::DeclaredUnresolved;
+    }
+    if let Some(resolution) = keys.crs_resolution {
+        return resolution;
+    }
+    if keys.crs_id.is_some() && keys.crs_definition.is_some() {
+        CrsResolution::DeclaredUnresolved
+    } else if keys.crs_id.is_some() || keys.crs_definition.is_some() {
+        CrsResolution::Resolved
+    } else {
+        CrsResolution::Missing
+    }
+}
+
+fn geometry_has_decided_crs(field: &Field, geometries: &[GeometryColumnContract]) -> bool {
+    geometries.iter().any(|geometry| {
+        geometry.name == *field.name() && matches!(geometry.crs, ContractCrs::ResolvedByDecision(_))
+    })
+}
+
+fn geometry_comparison_field<'a>(
+    field: &'a Field,
+    geometries: &[GeometryColumnContract],
+) -> Result<std::borrow::Cow<'a, Field>, PlenoraError> {
+    geometries
+        .iter()
+        .find(|geometry| geometry.name == *field.name())
+        .map_or_else(
+            || Ok(std::borrow::Cow::Borrowed(field)),
+            |geometry| {
+                super::arrow_schema::canonical_geometry_field(field, geometry)
+                    .map(std::borrow::Cow::Owned)
+            },
+        )
+}
+
+/// Confronta il CRS passato all'API con tutte le dichiarazioni del campo.
+/// Le definizioni esterne gia' risolte si accettano solo se identiche.
+///
+/// # Errors
+///
+/// `Crs` per dichiarazioni assenti, irrisolte o discordanti; gli errori
+/// del lettore per metadati malformati.
+pub fn require_geometry_source_crs(
+    field: &Field,
+    source: &ResolvedCrs,
+) -> Result<(), PlenoraError> {
+    super::arrow_schema::verifica_metadato_estensione(field)?;
+    let keys = read_geometry_contract_keys(field)?;
+    let matches = |definition: &str| {
+        definition == source.definition()
+            || crate::crs::resolve_crs(definition, "crs")
+                .is_ok_and(|declared| declared.semantically_equals(source))
+    };
+    if keys.crs_resolution == Some(CrsResolution::DeclaredUnresolved)
+        || keys.crs_resolution == Some(CrsResolution::Missing)
+        || (keys.crs_id.is_none() && keys.crs_definition.is_none())
+        || keys.crs_id.as_deref().is_some_and(|value| !matches(value))
+        || keys
+            .crs_definition
+            .as_deref()
+            .is_some_and(|value| !matches(value))
+        || keys.srid.is_some_and(|srid| {
+            source
+                .authority_srid()
+                .and_then(|code| i32::try_from(code).ok())
+                != Some(srid)
+        })
+    {
+        return Err(PlenoraError::Crs(
+            "CRS sorgente diverso dalla dichiarazione del campo geometrico".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Metadati geometrici di una colonna derivata da celle di piu' campi.
+/// L'identita' del campo e i tipi geometrici non si ereditano dal primo.
+///
+/// # Errors
+///
+/// `Crs` per riferimenti diversi; `Unsupported` per dimensioni, precisione o encoding
+/// diversi. I campi puramente tabellari non trasmettono metadati.
+pub fn merged_geometry_metadata(
+    fields: &[&Field],
+    geometries: &[GeometryColumnContract],
+) -> Result<Metadata, PlenoraError> {
+    let Some(first) = fields.first() else {
+        return Ok(Metadata::new());
+    };
+    for other in fields {
+        require_geometry_compatibility(
+            first,
+            geometries,
+            other,
+            geometries,
+            GeometryComparison::Derived,
+        )?;
+    }
+    let effective = geometry_comparison_field(first, geometries)?;
+    let decided = geometry_has_decided_crs(first, geometries);
+    let raw = read_geometry_contract_keys(if decided { &effective } else { first })?;
+    let canonical = read_geometry_contract_keys(&effective)?;
+    // Conserva la lineage solo se rappresenta gia' le nozioni tipizzate;
+    // una doppia rappresentazione CRS senza stato resta irrisolta.
+    let preserves_declaration = !decided
+        && raw.encoding == canonical.encoding
+        && raw.dimensions.unwrap_or(GeometryDimensions::Unknown)
+            == canonical.dimensions.unwrap_or(GeometryDimensions::Unknown)
+        && raw.crs_id == canonical.crs_id
+        && raw.crs_definition == canonical.crs_definition
+        && raw.crs_definition_format == canonical.crs_definition_format
+        && comparison_crs_resolution(&raw) == comparison_crs_resolution(&canonical);
+    let first = if preserves_declaration {
+        std::borrow::Cow::Borrowed(*first)
+    } else {
+        effective
+    };
+    if !field_declares_wkb_geometry(&first) {
+        return Ok(Metadata::new());
+    }
+    let mut metadata = first.metadata().clone();
+    metadata.remove(PLENORA_FIELD_ID_KEY);
+    strip_rewritten_types_declarations(&mut metadata);
+    Ok(metadata)
+}
+
 /// Errore di schema: la colonna geometria non e' `Binary`.
 ///
 /// Il tipo si descrive con [`crate::tipo_arrow::descrivi_tipo`]: il
@@ -160,8 +415,14 @@ pub fn geometry_column_not_binary(name: &str, actual: &DataType) -> PlenoraError
 /// # Errors
 ///
 /// `PlenoraError::Schema` se la colonna `name` e' assente, non e' di tipo
-/// `Binary` o non si identifica come geometria WKB.
+/// `Binary`, non si identifica come geometria WKB, o lo schema ha nomi duplicati.
 pub fn geometry_column_index(schema: &Schema, name: &str) -> Result<usize, PlenoraError> {
+    let mut names = std::collections::BTreeSet::new();
+    for field in schema.fields() {
+        if !names.insert(field.name()) {
+            return Err(PlenoraError::Schema("nomi di colonna duplicati".into()));
+        }
+    }
     let (index, field) = schema
         .column_with_name(name)
         .ok_or_else(|| missing_geometry_column(name))?;
@@ -448,11 +709,9 @@ fn geo_metadata_value_lenient(field: &Field) -> Option<serde_json::Value> {
 /// restano assenti, mai un default al posto dell'assente).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GeometryMetadataDetails {
-    /// Ordine degli assi del CRS; la chiave è obbligatoria quando un CRS è
-    /// presente e l'emissione completa solo L'ASSENTE: questo dettaglio
-    /// esplicito vince, poi l'ordine GIS normalizzato quando la definizione
-    /// canonica permette di stabilire gli assi. La chiave descrive l'ordine
-    /// fisico x/y dei byte, non l'ordine nativo dell'autorità.
+    /// Ordine fisico delle ordinate dichiarato dal produttore.
+    /// Senza dichiarazione l'emissione usa `unknown`: il CRS da solo non
+    /// costituisce prova dell'ordine memorizzato.
     pub axis_order: Option<AxisOrder>,
     /// SRID noto (emesso come intero decimale con segno a 32 bit); come
     /// sopra, un dettaglio assente e' completato dalla deduzione d'autorita'
@@ -646,7 +905,7 @@ fn insert_semantics_and_precision(
 /// ([`DefinitionForm::Other`]).
 ///
 /// `axis_order` è sempre emesso e si completa solo se assente: dettaglio
-/// esplicito, poi ordine GIS normalizzato dalla definizione, infine
+/// esplicito, altrimenti
 /// `unknown`. `srid` (opzionale) segue la stessa cascata senza fondo:
 /// dettaglio, poi [`ResolvedCrs::authority_srid`], altrimenti assente.
 fn insert_resolved_crs_keys(
@@ -679,15 +938,7 @@ fn insert_resolved_crs_keys(
             format.as_str().to_owned(),
         );
     }
-    let axis_order = details
-        .axis_order
-        .or_else(|| {
-            resolved.and_then(|crs| {
-                crs.authority_axis_order()
-                    .map(|_| crs.normalized_gis_axis_order())
-            })
-        })
-        .unwrap_or(AxisOrder::Unknown);
+    let axis_order = details.axis_order.unwrap_or(AxisOrder::Unknown);
     metadata.insert(
         PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
         axis_order.as_str().to_owned(),
@@ -881,7 +1132,7 @@ pub fn strip_decided_crs_declarations(metadata: &mut Metadata) {
 /// Fino a questo ciclo questi errori erano `InvalidPlan`; il cambio di
 /// categoria è una rottura dichiarata (docs/metadati-arrow.md, «Metadati Arrow»).
 pub(crate) fn errore_di_metadato(key: &str, messaggio: String) -> PlenoraError {
-    if CRS_KEYS_REPLACED_BY_DECISION.contains(&key) {
+    if key != PLENORA_GEOMETRY_SRID_KEY && CRS_KEYS_REPLACED_BY_DECISION.contains(&key) {
         PlenoraError::Crs(messaggio)
     } else {
         PlenoraError::Schema(messaggio)
@@ -1013,7 +1264,7 @@ pub fn canonical_geometry_types(
 ///
 /// # Errors
 ///
-/// `PlenoraError::Crs` se la chiave e' presente ma non e' un intero
+/// `PlenoraError::Schema` se la chiave e' presente ma non e' un intero
 /// decimale rappresentabile in `i32`.
 pub fn canonical_geometry_srid(field: &Field) -> Result<Option<i32>, PlenoraError> {
     parse_canonical_i32(
@@ -1206,7 +1457,9 @@ pub fn read_contract_version(schema: &Schema) -> Result<Option<u32>, PlenoraErro
     if raw.as_str() == PLENORA_CONTRACT_VERSION.to_string() {
         return Ok(Some(PLENORA_CONTRACT_VERSION));
     }
-    let decimale = !raw.is_empty() && raw.bytes().all(|byte| byte.is_ascii_digit());
+    let decimale = !raw.is_empty()
+        && (raw.len() == 1 || !raw.starts_with('0'))
+        && raw.bytes().all(|byte| byte.is_ascii_digit());
     let successiva = decimale && {
         let significative = raw.trim_start_matches('0');
         // Piu' cifre significative di quelle della versione supportata, o
@@ -1448,8 +1701,8 @@ fn legacy_crs_is_coherent(keys: &CanonicalGeometryKeys, legacy: &LegacyCrs) -> b
 ///
 /// 1. ogni chiave canonica e' letta dal suo reader tipizzato: assente ->
 ///    `None`, non canonica -> errore;
-/// 2. coerenze fra chiavi canoniche: `axis_order` obbligatorio con `crs_id`
-///    o `crs_definition` (`unknown` ammesso); `crs_resolution = missing`
+/// 2. coerenze fra chiavi canoniche: `axis_order` assente con `crs_id`
+///    o `crs_definition` si completa a `unknown` (DT-ARROW-003); `crs_resolution = missing`
 ///    esclude `crs_id`/`crs_definition`/`axis_order` (non `srid`);
 /// 3. una nozione presente sia canonica sia legacy deve coincidere
 ///    (il CRS a parita' di forma; forme non confrontabili contano come
@@ -1492,11 +1745,9 @@ pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKey
     // completamento: riguardano la sola rappresentazione canonica, cosi' un
     // input legacy senza `axis_order` resta leggibile.
     if (keys.crs_id.is_some() || keys.crs_definition.is_some()) && keys.axis_order.is_none() {
-        return Err(PlenoraError::Crs(format!(
-            "chiave `{PLENORA_GEOMETRY_AXIS_ORDER_KEY}` obbligatoria quando \
-             `{PLENORA_GEOMETRY_CRS_ID_KEY}` o `{PLENORA_GEOMETRY_CRS_DEFINITION_KEY}` \
-             e' presente (valore `unknown` ammesso)"
-        )));
+        // DT-ARROW-003: completa l'assenza, senza inventare l'ordine dei byte
+        // dall'autorita' del CRS (GEO-001, GEO-002).
+        keys.axis_order = Some(AxisOrder::Unknown);
     }
     // Il vocabolario Arrow 1.0 (sezione 4) vieta con `missing`
     // identificatore, definizione, formato e ordine degli assi; lo `srid`

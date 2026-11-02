@@ -6,6 +6,7 @@ cronologia delle modifiche si consulta in Git.
 
 | documento | contenuto |
 | --- | --- |
+| [Errori e limiti 4.0](limiti.md) | Migrazione dell ordine degli assi e censimento |
 | [`RELEASE.md`](RELEASE.md) | avvisi di licenza, confezionamento degli artefatti e assenze che bloccano il rilascio |
 | [`inventario.md`](inventario.md) | stato generato: crate, operazioni del catalogo, operazioni pubbliche della CLI, numero dei test |
 | [`operazioni.md`](operazioni.md) | riferimento generato delle operazioni, una scheda ciascuna (sorgenti in [`schede/`](schede/)) |
@@ -27,3 +28,6 @@ comandi. I documenti generati non si modificano a mano.
 
 Le schede in `schede/` non si leggono da sole: entrano in `operazioni.md`, e
 i loro link sono relativi a questa cartella, non a `schede/`.
+
+La dichiarazione di [Arrow Geometry Semantics 1.0](geometry-semantics.md)
+censisce le 25 regole, le deviazioni e il runner dei vettori al pin.

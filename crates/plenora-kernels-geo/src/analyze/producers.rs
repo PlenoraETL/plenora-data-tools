@@ -3,6 +3,7 @@
 //! `generate_grid`, `reproject`, `collect`, `subdivide`, `snap`) e le forme
 //! di risultato condivise (colonna aggiunta, espansione, sole geometrie).
 
+use plenora_core::contract::FieldOrigin;
 use std::sync::Arc;
 
 use plenora_core::arrow::{DataType, Field, Schema};
@@ -35,7 +36,7 @@ use super::{
 /// riscritti sul target risolto. La sorgente deve avere un CRS risolto (mai
 /// `Missing` o `DeclaredUnresolved`), della tabella integrata (lo verifica
 /// il piano dei percorsi: `CRS_NOT_BUILTIN`), e un ordine degli assi
-/// dichiarato normalizzato o assente; la config si verifica per intero qui,
+/// dichiarato normalizzato; la config si verifica per intero qui,
 /// con la stessa funzione del kernel
 /// ([`crate::riproiezione::ReprojectParams::da_config`]): target, percorsi
 /// fra i datum, regola dell'accuratezza, griglie. I file delle griglie si
@@ -49,6 +50,7 @@ pub(in crate::analyze) fn analyze_reproject(
     op: &str,
     input: &DataContract,
     config: &Value,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let geometry = super::helpers::single_geometry(op, input)?;
     super::helpers::require_identifiable_geometry(op, input, geometry)?;
@@ -82,14 +84,16 @@ pub(in crate::analyze) fn analyze_reproject(
         crs: ContractCrs::Resolved(target),
         ..geometry.clone()
     };
-    DataContract::new(
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
         )),
+        input.field_origins(),
         vec![reprojected],
         input.active_geometry,
         input.properties.clone(),
+        allocator,
     )
 }
 
@@ -111,11 +115,12 @@ pub(in crate::analyze) fn analyze_add_column(
     name: &str,
     data_type: DataType,
     nullable: bool,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let mut fields = output_fields(input);
     ensure_name_free(op, &fields, name)?;
     fields.push(Field::new(name, data_type, nullable));
-    rebuild(input, fields, input.properties.clone())
+    rebuild(input, fields, input.properties.clone(), allocator)
 }
 
 /// Se la colonna geometria attiva dell'ingresso ammette null (in assenza,
@@ -130,14 +135,18 @@ pub(in crate::analyze) fn geometry_nullable(input: &DataContract) -> bool {
 /// `__parent_index`; `sorted_by` preservato (espansione stabile), `row_count`
 /// eliminato. La geometria d'uscita non e' nullable: una riga a geometria
 /// null non produce righe, e ogni parte prodotta c'e'.
-pub(in crate::analyze) fn analyze_expand(op: &str, input: &DataContract) -> Result<DataContract> {
+pub(in crate::analyze) fn analyze_expand(
+    op: &str,
+    input: &DataContract,
+    allocator: &mut plenora_core::contract::FieldAllocator,
+) -> Result<DataContract> {
     let mut fields = output_fields(input);
     ensure_name_free(op, &fields, PARENT_INDEX_COLUMN)?;
     fields.push(Field::new(PARENT_INDEX_COLUMN, DataType::UInt64, false));
     let mut properties = input.properties.clone();
     properties.row_count = None;
-    let output = rebuild(input, fields, properties)?;
-    with_active_geometry_nullability(&output, false)
+    let output = rebuild(input, fields, properties, allocator)?;
+    with_active_geometry_nullability(&output, false, allocator)
 }
 
 /// Il contratto con la colonna geometria attiva dichiarata `nullable` (campo
@@ -145,6 +154,7 @@ pub(in crate::analyze) fn analyze_expand(op: &str, input: &DataContract) -> Resu
 pub(in crate::analyze) fn with_active_geometry_nullability(
     contract: &DataContract,
     nullable: bool,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let Some(active) = contract.active_geometry_column() else {
         return Ok(contract.clone());
@@ -168,14 +178,16 @@ pub(in crate::analyze) fn with_active_geometry_nullability(
             candidate.nullable = nullable;
         }
     }
-    DataContract::new(
+    contract.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             contract.schema.metadata().clone(),
         )),
+        contract.field_origins(),
         geometries,
         contract.active_geometry,
         contract.properties.clone(),
+        allocator,
     )
 }
 
@@ -193,11 +205,14 @@ pub(in crate::analyze) fn with_active_geometry_nullability(
 pub(in crate::analyze) fn analyze_geometry_only(
     input: &DataContract,
     geometry: &GeometryColumnContract,
-    extra: &[Field],
+    extra: &[(Field, FieldOrigin)],
     nullable: bool,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let mut fields = vec![geometry_field(input, geometry, nullable)?];
-    fields.extend(extra.iter().cloned());
+    fields.extend(extra.iter().map(|(field, _)| field.clone()));
+    let mut origins = vec![FieldOrigin::Preserved(geometry.field_id)];
+    origins.extend(extra.iter().map(|(_, origin)| *origin));
     let active = input
         .active_geometry
         .filter(|active| *active == geometry.field_id);
@@ -205,14 +220,16 @@ pub(in crate::analyze) fn analyze_geometry_only(
         nullable,
         ..geometry.clone()
     };
-    DataContract::new(
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
         )),
+        origins,
         vec![aggregated],
         active,
         ContractProperties::default(),
+        allocator,
     )
 }
 
@@ -298,7 +315,8 @@ pub(in crate::analyze) fn analyze_from_coords(
         None,
         false,
     )?);
-    let field_id = fields_allocator.alloc()?;
+    // Segnaposto per il riferimento attivo: `New` assegna l'ID nel costruttore.
+    let field_id = fields_allocator.peek();
     let geometry = GeometryColumnContract {
         field_id,
         name: name.to_owned(),
@@ -309,14 +327,18 @@ pub(in crate::analyze) fn analyze_from_coords(
         nullable: false,
         types: GeometryColumnContract::undeclared_types(),
     };
-    DataContract::new(
+    let mut origins = input.field_origins();
+    origins.push(FieldOrigin::New);
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
         )),
+        origins,
         vec![geometry],
         Some(field_id),
         input.properties.clone(),
+        fields_allocator,
     )
 }
 
@@ -374,7 +396,8 @@ pub(in crate::analyze) fn analyze_from_wkt(
         None,
         nullable,
     )?);
-    let field_id = fields_allocator.alloc()?;
+    // Segnaposto per il riferimento attivo: `New` assegna l'ID nel costruttore.
+    let field_id = fields_allocator.peek();
     let output_types = GeometryTypesProperty::new(
         TypesDeclaration::Mixed,
         vec![
@@ -404,14 +427,18 @@ pub(in crate::analyze) fn analyze_from_wkt(
             PropertyScope::Schema,
         ),
     };
-    DataContract::new(
+    let mut origins = input.field_origins();
+    origins.push(FieldOrigin::New);
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
         )),
+        origins,
         vec![geometry],
         Some(field_id),
         input.properties.clone(),
+        fields_allocator,
     )
 }
 
@@ -422,12 +449,13 @@ pub(in crate::analyze) fn analyze_collect(
     input: &DataContract,
     geometry: &GeometryColumnContract,
     config: &Value,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let parsed: CollectConfig = parse_config(op, config)?;
     if parsed.group_by.is_empty() {
         return Err(invalid_param(op, "group_by", "non deve essere vuoto"));
     }
-    let mut extra: Vec<Field> = Vec::with_capacity(parsed.group_by.len());
+    let mut extra: Vec<(Field, FieldOrigin)> = Vec::with_capacity(parsed.group_by.len());
     for name in &parsed.group_by {
         if !ensure_name(name) {
             return Err(invalid_param(op, "group_by", "nomi colonna non vuoti"));
@@ -442,7 +470,7 @@ pub(in crate::analyze) fn analyze_collect(
         let field = input.schema.field_with_name(name).map_err(|_| {
             PlenoraError::Schema(format!("{op}: colonna `{name}` assente dallo schema"))
         })?;
-        if extra.iter().any(|seen| seen.name() == name) {
+        if extra.iter().any(|(seen, _)| seen.name() == name) {
             return Err(invalid_param(op, "group_by", "colonne duplicate"));
         }
         // I gruppi escono nell'ordine naturale dei valori, con il
@@ -457,10 +485,11 @@ pub(in crate::analyze) fn analyze_collect(
         }
         // La colonna chiave sopravvive invariata: si clona il `Field`
         // intero, metadati compresi.
-        extra.push(field.clone());
+        let index = input.schema.index_of(name)?;
+        extra.push((field.clone(), input.field_origins()[index]));
     }
     // Null solo per un gruppo di sole geometrie null.
-    analyze_geometry_only(input, geometry, &extra, geometry.nullable)
+    analyze_geometry_only(input, geometry, &extra, geometry.nullable, allocator)
 }
 
 /// `generate_grid` (generativa): input senza geometrie (trigger); lo
@@ -522,7 +551,8 @@ pub(in crate::analyze) fn analyze_generate_grid(
         fields.push(Field::new(CENTROID_X_COLUMN, DataType::Float64, false));
         fields.push(Field::new(CENTROID_Y_COLUMN, DataType::Float64, false));
     }
-    let field_id = fields_allocator.alloc()?;
+    // Segnaposto per il riferimento attivo: `New` assegna l'ID nel costruttore.
+    let field_id = fields_allocator.peek();
     let output_types =
         GeometryTypesProperty::new(TypesDeclaration::Exact, vec![GeometryType::Polygon])
             .map_err(|error| PlenoraError::Internal(error.to_string()))?;
@@ -546,14 +576,17 @@ pub(in crate::analyze) fn analyze_generate_grid(
         )),
         ..ContractProperties::default()
     };
-    DataContract::new(
+    let origins = vec![FieldOrigin::New; fields.len()];
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
         )),
+        origins,
         vec![geometry],
         Some(field_id),
         properties,
+        fields_allocator,
     )
 }
 
@@ -565,6 +598,7 @@ pub(in crate::analyze) fn analyze_subdivide(
     input: &DataContract,
     geometry: &GeometryColumnContract,
     config: &Value,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let parsed: SubdivideConfig = parse_config(op, config)?;
     if parsed.max_vertices < crate::extensions2::MIN_SUBDIVIDE_VERTICES {
@@ -601,14 +635,20 @@ pub(in crate::analyze) fn analyze_subdivide(
     fields.push(Field::new(PARENT_INDEX_COLUMN, DataType::UInt64, false));
     let mut properties = input.properties.clone();
     properties.row_count = None;
-    DataContract::new(
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
         )),
+        {
+            let mut origins = input.field_origins();
+            origins.push(FieldOrigin::New);
+            origins
+        },
         vec![output_geometry],
         input.active_geometry,
         properties,
+        allocator,
     )
 }
 

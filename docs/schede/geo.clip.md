@@ -114,6 +114,10 @@ O(n · (v + m) log(v + m)) con `v` i vertici della riga, perché ogni riga
 si confronta con tutta la maschera. Più la validazione OGC di ingressi,
 maschera e ritagli. Memoria O(m) per la maschera più i ritagli.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 ```json

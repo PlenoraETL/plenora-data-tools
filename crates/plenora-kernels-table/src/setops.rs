@@ -307,6 +307,15 @@ pub fn validate_schema(left: &RecordBatch, right: &RecordBatch) -> Result<()> {
             "set operation richiede nomi e tipi Arrow identici".into(),
         ));
     }
+    for (a, b) in left.schema().fields().iter().zip(right.schema().fields()) {
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            a,
+            &[],
+            b,
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
+        )?;
+    }
     Ok(())
 }
 
@@ -328,6 +337,15 @@ pub fn concat_compatible(
     limits: &Limits,
 ) -> Result<RecordBatch> {
     validate_schema(left, right)?;
+    for (a, b) in left.schema().fields().iter().zip(right.schema().fields()) {
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            a,
+            &[],
+            b,
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
+        )?;
+    }
     let rows = left
         .num_rows()
         .checked_add(right.num_rows())
@@ -406,6 +424,15 @@ pub fn union_distinct(
     // occorrenza e' quella del batch combinato; la concat avviene solo sulla
     // selezione finale.
     validate_schema(left, right)?;
+    for (a, b) in left.schema().fields().iter().zip(right.schema().fields()) {
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            a,
+            &[],
+            b,
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
+        )?;
+    }
     let rows = left
         .num_rows()
         .checked_add(right.num_rows())

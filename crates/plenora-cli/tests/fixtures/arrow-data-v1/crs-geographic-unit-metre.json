@@ -1,0 +1,52 @@
+{
+  "$schema": "../../schemas/arrow-data-vector-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-arrow-data-vector-v1",
+  "expect": "valid",
+  "computation": {
+    "category": "crs",
+    "rules": [
+      "GEO-015",
+      "GEO-019"
+    ]
+  },
+  "schema_metadata": {
+    "plenora.contract.version": "1"
+  },
+  "fields": [
+    {
+      "name": "id",
+      "type": "int64",
+      "nullable": false,
+      "metadata": {
+        "plenora.field_id": "0"
+      }
+    },
+    {
+      "name": "geometry",
+      "type": "binary",
+      "nullable": true,
+      "metadata": {
+        "plenora.field_id": "1",
+        "ARROW:extension:name": "geoarrow.wkb",
+        "plenora.geometry.encoding": "wkb",
+        "plenora.geometry.dimensions": "xy",
+        "plenora.geometry.spatial_semantics": "geometry",
+        "plenora.geometry.precision": "float64",
+        "plenora.geometry.types_declaration": "exact",
+        "plenora.geometry.types": "point",
+        "plenora.geometry.crs_resolution": "resolved",
+        "plenora.geometry.crs_id": "EPSG:4326",
+        "plenora.geometry.crs_definition": "GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]],AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0],UNIT[\"metre\",1],AXIS[\"Latitude\",NORTH],AXIS[\"Longitude\",EAST],AUTHORITY[\"EPSG\",\"4326\"]]",
+        "plenora.geometry.crs_definition_format": "wkt",
+        "plenora.geometry.axis_order": "lon_lat"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "id": 1,
+      "geometry": "01010000000000000000205ec00000000000a04640"
+    }
+  ]
+}

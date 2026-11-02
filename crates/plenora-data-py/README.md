@@ -293,7 +293,8 @@ dichiara `side_effect: local`: con `outputs` scrive file, senza non ha effetti
 fuori dal processo. Le altre scelte del profilo v3 (piano, versioni dei
 kernel, `table.transpose`, materializzazione, budget) valgono identiche
 sulla CLI ([«Contratti adottati»](../../docs/cli.md#contratti-adottati)).
-Nessuna deviazione.
+Arrow Geometry Semantics 1.0 e adottato con le deviazioni comuni alle tre
+superfici, censite in [Geometry Semantics](../../docs/geometry-semantics.md).
 
 ## Limiti dichiarati
 

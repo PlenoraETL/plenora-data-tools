@@ -100,6 +100,10 @@ dell'ingresso e dell'uscita (O(n²) nel caso peggiore, [Limiti dichiarati,
 il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(n).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 ```json

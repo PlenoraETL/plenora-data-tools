@@ -103,6 +103,10 @@ O(n) per geometria, con `n` le coordinate (una mappa degli estremi, ogni
 linea percorsa una volta), più la validazione OGC dell'ingresso e delle
 linee d'uscita. Memoria O(n).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Due linee con un estremo in comune (la seconda al contrario) e una linea

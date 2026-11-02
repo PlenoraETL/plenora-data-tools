@@ -81,7 +81,8 @@ Poi dal kernel, per geometria (`OperationError`, che il runner porta in `Plenora
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
   calcolo di `geo` vanno in panico dentro la barriera (il messaggio porta
   solo la forma del payload);
-- `InvalidParameter`: soglia non finita o negativa (l'analisi la
+- `InvalidParameter`: con `preserve_topology`, oltre `i32::MAX` coordinate;
+  soglia non finita o negativa (l'analisi la
   rifiuta prima); sul percorso scalato (sotto), un'area positiva che nella
   scala delle coordinate diventa zero.
 
@@ -123,6 +124,10 @@ verifica le distanze; `preserve_topology` O(n log n) nel caso tipico (coda di pr
 indice spaziale di `geo`). Più la validazione OGC dell'ingresso e
 dell'uscita (sub-quadratica nel caso tipico, O(n²) nel peggiore:
 [Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
 
 ### Esempio
 

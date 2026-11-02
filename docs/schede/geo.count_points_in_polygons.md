@@ -111,6 +111,10 @@ costo dei predicati; nel caso peggiore O(n · m) predicati. Più la
 validazione OGC di ogni geometria. Memoria O(n) per l'albero e i
 conteggi, più le coppie confermate.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Il terzo punto sta sul bordo del primo poligono, quindi non conta.

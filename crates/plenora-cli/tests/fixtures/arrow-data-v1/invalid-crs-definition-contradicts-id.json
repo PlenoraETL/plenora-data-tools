@@ -1,0 +1,50 @@
+{
+  "$schema": "../../schemas/arrow-data-vector-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-arrow-data-vector-v1",
+  "expect": "invalid",
+  "reason": "The WKT 2 definition identifies EPSG:3003, the field EPSG:4326.",
+  "category": "crs",
+  "rules": [
+    "GEO-005"
+  ],
+  "schema_metadata": {
+    "plenora.contract.version": "1"
+  },
+  "fields": [
+    {
+      "name": "id",
+      "type": "int64",
+      "nullable": false,
+      "metadata": {
+        "plenora.field_id": "0"
+      }
+    },
+    {
+      "name": "geometry",
+      "type": "binary",
+      "nullable": true,
+      "metadata": {
+        "plenora.field_id": "1",
+        "ARROW:extension:name": "geoarrow.wkb",
+        "plenora.geometry.encoding": "wkb",
+        "plenora.geometry.dimensions": "xy",
+        "plenora.geometry.spatial_semantics": "geometry",
+        "plenora.geometry.precision": "float64",
+        "plenora.geometry.types_declaration": "exact",
+        "plenora.geometry.types": "point",
+        "plenora.geometry.crs_resolution": "resolved",
+        "plenora.geometry.crs_id": "EPSG:4326",
+        "plenora.geometry.crs_definition": "PROJCRS[\"Monte Mario / Italy zone 1\",BASEGEOGCRS[\"Monte Mario\",DATUM[\"Monte Mario\",ELLIPSOID[\"International 1924\",6378388,297]]],CONVERSION[\"Italy zone 1\",METHOD[\"Transverse Mercator\"]],CS[Cartesian,2],AXIS[\"easting (X)\",east],AXIS[\"northing (Y)\",north],LENGTHUNIT[\"metre\",1],ID[\"EPSG\",3003]]",
+        "plenora.geometry.crs_definition_format": "wkt2",
+        "plenora.geometry.axis_order": "lon_lat"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "id": 1,
+      "geometry": "01010000000000000000205ec00000000000a04640"
+    }
+  ]
+}

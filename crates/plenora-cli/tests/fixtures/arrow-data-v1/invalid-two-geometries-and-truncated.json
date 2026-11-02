@@ -1,0 +1,67 @@
+{
+  "$schema": "../../schemas/arrow-data-vector-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-arrow-data-vector-v1",
+  "expect": "invalid",
+  "reason": "Two geometry fields, valid as input, and a truncated value in the first.",
+  "category": "data_mapping",
+  "rules": [
+    "GEO-011"
+  ],
+  "schema_metadata": {
+    "plenora.contract.version": "1"
+  },
+  "fields": [
+    {
+      "name": "id",
+      "type": "int64",
+      "nullable": false,
+      "metadata": {
+        "plenora.field_id": "0"
+      }
+    },
+    {
+      "name": "geometry",
+      "type": "binary",
+      "nullable": true,
+      "metadata": {
+        "plenora.field_id": "1",
+        "ARROW:extension:name": "geoarrow.wkb",
+        "plenora.geometry.encoding": "wkb",
+        "plenora.geometry.dimensions": "xy",
+        "plenora.geometry.spatial_semantics": "geometry",
+        "plenora.geometry.precision": "float64",
+        "plenora.geometry.types_declaration": "exact",
+        "plenora.geometry.types": "point",
+        "plenora.geometry.crs_resolution": "resolved",
+        "plenora.geometry.crs_id": "EPSG:4326",
+        "plenora.geometry.axis_order": "lon_lat"
+      }
+    },
+    {
+      "name": "site",
+      "type": "binary",
+      "nullable": true,
+      "metadata": {
+        "plenora.field_id": "2",
+        "ARROW:extension:name": "geoarrow.wkb",
+        "plenora.geometry.encoding": "wkb",
+        "plenora.geometry.dimensions": "xy",
+        "plenora.geometry.spatial_semantics": "geometry",
+        "plenora.geometry.precision": "float64",
+        "plenora.geometry.types_declaration": "exact",
+        "plenora.geometry.types": "point",
+        "plenora.geometry.crs_resolution": "resolved",
+        "plenora.geometry.crs_id": "EPSG:32632",
+        "plenora.geometry.axis_order": "easting_northing"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "id": 1,
+      "geometry": "01010000000000000000205ec0",
+      "site": "01010000000000000080841e4100000000ccbc5141"
+    }
+  ]
+}

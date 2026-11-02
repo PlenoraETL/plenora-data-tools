@@ -38,7 +38,7 @@ file di `esegui_da_file`:
 | `precision` | quella ereditata, che attraversa intatta le operazioni tabellari; dopo un'operazione geo, o se nessuno la dichiara, `float64` (ogni kernel geo ricodifica le coordinate in `f64`, e ogni coordinata WKB è un double) |
 | `types_declaration`, `types` | la dichiarazione del contratto; non dichiarata: `unresolved` senza elenco |
 | `crs_resolution` | `resolved`, `declared_unresolved` o `missing`, dallo stato del CRS |
-| `crs_id`, `crs_definition`, `crs_definition_format`, `axis_order`, `srid` | come prima: con un CRS risolto `axis_order` è l'ordine GIS normalizzato (x = est/longitudine) e `srid` il codice d'autorità se sta in `i32`; con `missing` nessuna, salvo uno `srid` ereditato, che il vocabolario ammette |
+| `crs_id`, `crs_definition`, `crs_definition_format`, `axis_order`, `srid` | `axis_order` resta `unknown` senza dichiarazione esplicita o provenienza certa; `srid` deriva dall autorita' se rappresentabile in `i32`; con `missing` resta solo un eventuale `srid` ereditato |
 
 Dentro il piano gli schemi restano quelli interni (versione e blocco
 canonico solo sulle tabelle con geometrie, nessuna identità assegnata):
@@ -67,9 +67,11 @@ tiene l'identità). All'uscita (`pubblica_schema`):
   l'unicità vale nello schema.
 
 `concat`, `concat_by_name` e `union_distinct` tengono i metadati di campo
-del primo ingresso, e con loro la sua identità: la colonna unita è quella
-del primo ingresso, l'identità del secondo per la stessa colonna non
-sopravvive.
+della prima sorgente che contiene la colonna, e con loro la sua identita':
+per `concat_by_name` non strict puo' essere anche il secondo ingresso.
+Anche la dichiarazione geometrica segue questa sorgente, con nullabilita'
+aggiornata. L'identita' degli ingressi successivi per la stessa colonna
+non sopravvive.
 
 Stesso piano e stessi schemi d'ingresso, stesse identità
 (`crates/plenora-core/tests/identita_dei_campi.rs`,
@@ -93,7 +95,7 @@ Stesso piano e stessi schemi d'ingresso, stesse identità
 - `plenora.field_id`: intero decimale non negativo, unico nello schema
   (`Schema`); oltre `u32::MAX` o su un campo annidato `Unsupported`;
 - `srid`: intero decimale con segno a 32 bit (`-1` ammesso; prima solo
-  senza segno). Con `crs_resolution = missing` è ammesso (il vocabolario
+  senza segno); una forma malformata e `Schema` (REJ-001). Con `crs_resolution = missing` è ammesso (il vocabolario
   vieta con `missing` identificatore, definizione, formato e assi, non lo
   `srid`; prima si rifiutava) e lo stato resta `missing`: un indizio
   numerico non diventa un CRS (ARROW-007). `declared_unresolved` con il
@@ -118,7 +120,7 @@ Stesso piano e stessi schemi d'ingresso, stesse identità
   discordanti e stringhe di altri formati sono rifiutati;
 - metadati contraddittori falliscono con categoria `crs` se riguardano il
   CRS (stato, identificatore, definizione e formato, ordine degli assi,
-  `srid`, divergenza dal `geo`), `schema` altrimenti (vocabolario,
+  divergenza dal `geo`), `schema` altrimenti (vocabolario,
   sezione 4). Fino a questo ciclo erano `InvalidPlan`: il cambio di
   categoria è una rottura dichiarata, voluta dal contratto;
 - `types_declaration = unresolved` e la dichiarazione assente si leggono
@@ -128,10 +130,9 @@ Stesso piano e stessi schemi d'ingresso, stesse identità
 Un `axis_order` con la prima coordinata nord (`lat_lon`,
 `northing_easting`) si accetta: il vettore `resolved-point` lo dichiara
 per `EPSG:4326`, e un piano di sole operazioni tabellari lo attraversa
-intatto (ARROW-008). Le operazioni geo lo rifiutano (`Crs`), perché ogni
-kernel geo legge x come est/longitudine: prima solo `geo.reproject` lo
-controllava, e le misure geodetiche avrebbero scambiato latitudine e
-longitudine senza errore.
+intatto (ARROW-008). Dalla 4.0 le operazioni sensibili all'ordine rifiutano
+anche assenza e `unknown` (`crs/validate`). Le operazioni sulle sole tuple
+continuano: [censimento completo](limiti.md#censimento-delle-operazioni).
 
 `scrivi_tabella` resta un codec senza perdite: non aggiunge versione né
 identità a una tabella qualsiasi, ma rifiuta uno schema con chiavi
@@ -140,7 +141,7 @@ scrivere uno schema Plenora non conforme.
 
 ## Versioni del catalogo
 
-Ogni operazione geo prende `contract_analysis_version` + 1: la sua analisi
+Ogni operazione geo prende `contract_analysis_version` + 2 nei due cicli: la sua analisi
 passa da `analyze_geo_contract`, che ha una regola di validazione nuova
 (rifiuto degli assi scambiati) e cambia lo schema d'uscita inferito (toglie
 una `precision` ereditata diversa da `float64`), e la versione dell'analisi
@@ -150,7 +151,7 @@ restano. La tabella con le versioni prima del ciclo e l'incremento è
 `crates/plenora-core/src/catalog.rs`, e copre per costruzione ogni
 operazione geo del catalogo.
 
-Le tabellari non cambiano versione: né la loro analisi né i loro kernel
+Nel ciclo Arrow qui descritto le tabellari non cambiano versione: né la loro analisi né i loro kernel
 cambiano. Versione, identità dei campi e blocco geometrico completo li
 aggiungono la pubblicazione dello schema e l'emissione canonica, che stanno
 sotto il catalogo e valgono per tutte le operazioni allo stesso modo: è un
@@ -225,3 +226,17 @@ un'operazione.
 - **Storage `binary` in uscita.** Un ingresso `large_binary` esce `binary`
   (sopra): lo storage non è un passaggio senza perdite, i byte delle celle
   sì.
+
+L'adozione di [Arrow Geometry Semantics 1.0](geometry-semantics.md) censisce
+le deviazioni residue. In ingresso un `axis_order` assente con CRS viene
+completato a `unknown` (DT-ARROW-003): il registro CRS non prova l'ordine
+delle coordinate memorizzate. Prima del calcolo il runner controlla buona
+forma, SRID, tipi e dimensioni contro il campo ricevuto; gli errori di valore
+sono `data_mapping/read` o `crs/read`, senza effetti.
+
+L'audit successivo della 4.0.0 incrementa invece le versioni delle
+concatenazioni, delle fusioni geometriche e di `flatten_json`, e quelle di
+analisi di finestre e rinomina. I controlli contro nomi duplicati proteggono
+anche l'API Rust diretta; tali schemi erano gia' contratti non validi.
+Le concatenazioni conservano i metadati geometrici del primo campo solo
+se encoding, dimensioni, tipi e precisione concordano fra tutti gli ingressi.

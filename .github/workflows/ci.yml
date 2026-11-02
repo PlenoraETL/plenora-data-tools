@@ -148,6 +148,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: costruisce la CLI
         run: cargo build --locked -p plenora-cli
+      - name: vettori Arrow Geometry Semantics al pin (API e CLI)
+        run: cargo test -p plenora-cli --test geometry_semantics --locked
       - name: verifica con jsonschema e i controlli dei contratti
         run: >-
           python scripts/verifica_cli_contratti.py

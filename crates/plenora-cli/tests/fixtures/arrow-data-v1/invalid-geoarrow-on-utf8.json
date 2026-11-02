@@ -1,0 +1,49 @@
+{
+  "$schema": "../../schemas/arrow-data-vector-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-arrow-data-vector-v1",
+  "expect": "invalid",
+  "reason": "The geoarrow.wkb extension on a utf8 storage.",
+  "category": "schema",
+  "rules": [
+    "VOCABULARY-4",
+    "REJ-001"
+  ],
+  "schema_metadata": {
+    "plenora.contract.version": "1"
+  },
+  "fields": [
+    {
+      "name": "id",
+      "type": "int64",
+      "nullable": false,
+      "metadata": {
+        "plenora.field_id": "0"
+      }
+    },
+    {
+      "name": "geometry",
+      "type": "utf8",
+      "nullable": true,
+      "metadata": {
+        "plenora.field_id": "1",
+        "ARROW:extension:name": "geoarrow.wkb",
+        "plenora.geometry.encoding": "wkb",
+        "plenora.geometry.dimensions": "xy",
+        "plenora.geometry.spatial_semantics": "geometry",
+        "plenora.geometry.precision": "float64",
+        "plenora.geometry.types_declaration": "exact",
+        "plenora.geometry.types": "point",
+        "plenora.geometry.crs_resolution": "resolved",
+        "plenora.geometry.crs_id": "EPSG:4326",
+        "plenora.geometry.axis_order": "lon_lat"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "id": 1,
+      "geometry": "POINT (-120.5 45.25)"
+    }
+  ]
+}

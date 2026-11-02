@@ -6,6 +6,10 @@ interpreta nel tipo chiesto. Se anche una sola cella non si converte il
 passo fallisce e dice quali righe (con `coerce` e `raise`, i due
 equivalenti): nessuna cella diventa null in silenzio.
 
+L'operazione rifiuta i campi geometrici, anche annidati e con zero righe
+oppure tutte le celle nulle, con errore `crs/validate` sia nel kernel sia
+nell'analisi: non produce celle WKB senza metadati.
+
 ### Parametri
 
 | parametro | tipo | default | valori ammessi | significato |

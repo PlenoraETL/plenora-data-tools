@@ -107,6 +107,10 @@ O(n log n) tipico per geometria, con `n` le coordinate, quadratico nel caso
 peggiore (punti quasi tutti allineati); più la validazione OGC
 dell'ingresso e dei triangoli. Memoria O(n).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Quattro punti non cocircolari danno due triangoli; una linea di due punti

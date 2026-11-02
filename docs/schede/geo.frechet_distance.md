@@ -113,6 +113,10 @@ O(n·m) per riga, con `n` e `m` i vertici delle due linee, limitato prima
 del calcolo; memoria O(min(n, m)). In più la validazione OGC delle due
 linee.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 La linea di confronto è `LINESTRING(0 0,10 0)`. La seconda riga ha gli

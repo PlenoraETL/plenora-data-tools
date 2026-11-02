@@ -179,8 +179,9 @@ fn leggi(percorso: &Path) -> Result<RecordBatch, PlenoraError> {
 }
 
 #[test]
-fn legge_il_file_di_pyarrow_utm32() {
-    let tabella = leggi(&fixture("pyarrow_utm32.parquet")).expect("lettura");
+fn fixture_pyarrow_utm32_semanticamente_equivalente() {
+    let tabella = leggi(&fixture("pyarrow_utm32.parquet")).unwrap();
+    assert_eq!(tabella.columns(), comune::utm32_integrata().columns());
     assert_eq!(tabella.num_rows(), 4);
     assert!(!tabella.schema().metadata().contains_key(GEO_METADATA_KEY));
     assert_eq!(
@@ -273,11 +274,27 @@ fn legge_il_file_di_pyarrow_crs84_z() {
 }
 
 fn tabella_geo(campo_geometria: Field, celle: Vec<Option<Vec<u8>>>) -> RecordBatch {
+    // Le fixture di scrittura sono costruite in easting/northing.
+    let mut metadata = campo_geometria.metadata().clone();
+    if !metadata.contains_key("plenora.geometry.axis_order") {
+        metadata.insert(
+            "plenora.geometry.axis_order".to_owned(),
+            "easting_northing".to_owned(),
+        );
+    }
+    let campo_geometria = campo_geometria.with_metadata(metadata);
+    tabella_geo_con_assi_dichiarati(campo_geometria, celle)
+}
+
+fn tabella_geo_con_assi_dichiarati(
+    campo_geometria: Field,
+    celle: Vec<Option<Vec<u8>>>,
+) -> RecordBatch {
     let n = celle.len();
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        campo_geometria,
-    ]));
+    let schema = Arc::new(Schema::new_with_metadata(
+        vec![Field::new("id", DataType::Int64, false), campo_geometria],
+        HashMap::from([("plenora.contract.version".to_owned(), "1".to_owned())]),
+    ));
     let celle: BinaryArray = celle.iter().map(|c| c.as_deref()).collect();
     RecordBatch::try_new(
         schema,
@@ -395,15 +412,11 @@ fn crs_assente_e_null() {
         Some("missing")
     );
     let uscita = dir.path().join("null.parquet");
-    scrivi_tabella(&tabella, &uscita, &OpzioniScrittura::default()).unwrap();
-    assert_eq!(
-        geo_del_file(&uscita)["columns"]["geometry"]["crs"],
-        Value::Null
-    );
-    assert!(matches!(
-        contratto(&leggi(&uscita).unwrap()).geometries[0].crs,
-        ContractCrs::Missing
-    ));
+    // Il vocabolario missing non porta axis_order: la scrittura non pu?
+    // certificare l'ordine da un CRS assente (migrazione 4.0).
+    let error = scrivi_tabella(&tabella, &uscita, &OpzioniScrittura::default()).unwrap_err();
+    assert_eq!(error.category(), ErrorCategory::Crs);
+    assert!(!uscita.exists());
 }
 
 #[test]
@@ -674,7 +687,7 @@ fn una_sola_colonna_geometrica() {
         || -> ArrayRef { Arc::new(BinaryArray::from(vec![Some(punto(1.0, 1.0).as_slice())])) };
     let tabella = RecordBatch::try_new(schema.clone(), vec![celle(), celle()]).unwrap();
     for (primaria, categoria) in [
-        ("a", ErrorCategory::Schema),
+        ("a", ErrorCategory::Unsupported),
         ("b", ErrorCategory::Unsupported),
     ] {
         let geo = json!({"version": "1.1.0", "primary_column": primaria, "columns": {
@@ -763,7 +776,7 @@ fn rifiuti_in_scrittura() {
         ),
         p(),
     );
-    assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+    assert_eq!(errore.category(), ErrorCategory::Crs, "{errore}");
     // Encoding EWKB dichiarato.
     let errore = errore_scrittura(
         con_metadati(base(), &[(PLENORA_GEOMETRY_ENCODING_KEY, "ewkb")]),
@@ -867,7 +880,7 @@ fn z_si_scrive_senza_bbox() {
 
 #[test]
 fn la_geometria_resta_in_ipc_con_il_suo_contratto() {
-    let tabella = leggi(&fixture("pyarrow_utm32.parquet")).unwrap();
+    let tabella = comune::utm32_integrata();
     let dir = cartella();
     let percorso = dir.path().join("g.arrow");
     scrivi_tabella(&tabella, &percorso, &OpzioniScrittura::default()).unwrap();
@@ -1016,4 +1029,335 @@ fn senza_geometrie_la_dimensionalita_non_si_rappresenta() {
         contratto(&letta).geometries[0].dimensions,
         GeometryDimensions::Unknown
     );
+}
+
+#[test]
+fn scrittura_non_certifica_assi_ambigui_o_incompatibili() {
+    let base = tabella_geo(
+        geometry_output_field("geometry", "EPSG:32632").unwrap(),
+        vec![Some(punto(500_000.0, 5_000_000.0))],
+    );
+    for axis in [
+        None,
+        Some("unknown"),
+        Some("lon_lat"),
+        Some("lat_lon"),
+        Some("northing_easting"),
+    ] {
+        let schema = base.schema();
+        let mut metadata = schema.field(1).metadata().clone();
+        metadata.remove("plenora.geometry.axis_order");
+        if let Some(axis) = axis {
+            metadata.insert("plenora.geometry.axis_order".to_owned(), axis.to_owned());
+        }
+        let fields = vec![
+            schema.field(0).clone(),
+            schema.field(1).clone().with_metadata(metadata),
+        ];
+        let table = RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
+            base.columns().to_vec(),
+        )
+        .unwrap();
+        let dir = cartella();
+        let output = dir.path().join("refused.parquet");
+        let error = scrivi_tabella(&table, &output, &OpzioniScrittura::default()).unwrap_err();
+        assert_eq!(error.category(), ErrorCategory::Crs);
+        assert!(!output.exists());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn provenienza_geoparquet_non_sovrascrive_versioni_non_supportate() {
+    let base = tabella_geo(
+        geometry_output_field("geometry", "EPSG:32632").unwrap(),
+        vec![Some(punto(500_000.0, 5_000_000.0))],
+    );
+    let metadata =
+        geo_colonna(json!({"encoding":"WKB","geometry_types":["Point"],"crs":projjson_di("EPSG:32632").unwrap()})).to_string();
+    plenora_io::geoparquet::applica(&base, &metadata).unwrap();
+    for (version, category) in [
+        ("2", ErrorCategory::Unsupported),
+        ("illeggibile", ErrorCategory::Schema),
+    ] {
+        let schema = base.schema();
+        let mut md = schema.metadata().clone();
+        md.insert("plenora.contract.version".to_owned(), version.to_owned());
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(schema.fields().clone(), md)),
+            base.columns().to_vec(),
+        )
+        .unwrap();
+        assert_eq!(
+            plenora_io::geoparquet::applica(&batch, &metadata)
+                .unwrap_err()
+                .category(),
+            category
+        );
+    }
+}
+
+#[test]
+fn assi_geoparquet_verificati_in_ogni_ramo_crs() {
+    for id in [
+        None,
+        Some("OGC:CRS84"),
+        Some("EPSG:4326"),
+        Some("EPSG:32632"),
+    ] {
+        for null in [false, true] {
+            let mut colonna = json!({"encoding":"WKB", "geometry_types":["Point"]});
+            if null {
+                colonna["crs"] = Value::Null;
+            } else if let Some(id) = id {
+                colonna["crs"] = projjson_di(id).unwrap();
+            }
+            let atteso = if id == Some("EPSG:32632") {
+                "easting_northing"
+            } else {
+                "lon_lat"
+            };
+            for ordine in [
+                None,
+                Some("unknown"),
+                Some("lon_lat"),
+                Some("lat_lon"),
+                Some("easting_northing"),
+                Some("northing_easting"),
+            ] {
+                let mut metadata = HashMap::new();
+                if let Some(ordine) = ordine {
+                    metadata.insert(
+                        PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                        ordine.to_owned(),
+                    );
+                }
+                // Con CRS null anche un CRS canonico residuo non deve aggirare il rifiuto.
+                if let Some(id) = id {
+                    metadata.insert(PLENORA_GEOMETRY_CRS_ID_KEY.to_owned(), id.to_owned());
+                }
+                let batch = tabella_geo_con_assi_dichiarati(
+                    Field::new("geometry", DataType::Binary, true).with_metadata(metadata),
+                    vec![Some(punto(12.0, 45.0))],
+                );
+                let risultato = plenora_io::geoparquet::applica(
+                    &batch,
+                    &geo_colonna(colonna.clone()).to_string(),
+                );
+                let incompatibile = (null && (id.is_some() || ordine.is_some()))
+                    || matches!(ordine, Some("lat_lon" | "northing_easting"))
+                    || (!null && ordine.is_some_and(|o| o != "unknown" && o != atteso));
+                if incompatibile {
+                    assert_eq!(
+                        risultato.unwrap_err().category(),
+                        ErrorCategory::Crs,
+                        "{id:?} {null} {ordine:?}"
+                    );
+                } else {
+                    let letta = risultato.unwrap();
+                    assert_eq!(letta.columns(), batch.columns());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn assi_geoparquet_precedono_la_lettura_delle_celle() {
+    let geo = geo_colonna(json!({"encoding":"WKB", "geometry_types":["Point"],
+        "crs":projjson_di("EPSG:3857").unwrap()}))
+    .to_string();
+    for ordine in ["northing_easting", "lat_lon", "easting_northing"] {
+        let campo = geometry_output_field("geometry", "EPSG:3857").unwrap();
+        let mut md = campo.metadata().clone();
+        md.insert(
+            PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+            ordine.to_owned(),
+        );
+        let batch = tabella_geo(campo.with_metadata(md), vec![Some(vec![1_u8, 2, 3])]);
+        let errore = plenora_io::geoparquet::applica(&batch, &geo).unwrap_err();
+        if ordine == "easting_northing" {
+            assert_ne!(errore.category(), ErrorCategory::Crs);
+        } else {
+            assert_eq!(errore.category(), ErrorCategory::Crs);
+        }
+    }
+}
+
+#[test]
+fn geoparquet_non_sovrascrive_un_crs_legacy_diverso() {
+    let campo = geometry_output_field("geometry", "EPSG:4326").unwrap();
+    let batch = tabella_geo(campo, vec![Some(punto(12.0, 45.0))]);
+    for crs in [Value::Null, projjson_di("EPSG:3857").unwrap()] {
+        let metadata =
+            geo_colonna(json!({"encoding":"WKB", "geometry_types":["Point"], "crs":crs}))
+                .to_string();
+        for input in [batch.clone(), batch.slice(0, 0)] {
+            assert_eq!(
+                plenora_io::geoparquet::applica(&input, &metadata)
+                    .unwrap_err()
+                    .category(),
+                ErrorCategory::Crs
+            );
+        }
+    }
+}
+
+#[test]
+fn geoparquet_non_cancella_dichiarazioni_estensione_contraddittorie() {
+    for (extension, categoria) in [
+        (
+            json!({"crs":projjson_di("EPSG:4326").unwrap()}),
+            ErrorCategory::Crs,
+        ),
+        (json!({"edges":"spherical"}), ErrorCategory::Unsupported),
+    ] {
+        let campo =
+            Field::new("geometry", DataType::Binary, true).with_metadata(HashMap::from([(
+                "ARROW:extension:metadata".to_owned(),
+                extension.to_string(),
+            )]));
+        let batch = tabella_geo_con_assi_dichiarati(campo, vec![Some(punto(12.0, 45.0))]);
+        let file = geo_colonna(json!({"encoding":"WKB", "geometry_types":["Point"], "crs":projjson_di("EPSG:3857").unwrap()})).to_string();
+        for input in [batch.clone(), batch.slice(0, 0)] {
+            assert_eq!(
+                plenora_io::geoparquet::applica(&input, &file)
+                    .unwrap_err()
+                    .category(),
+                categoria
+            );
+        }
+    }
+}
+
+#[test]
+fn definizione_projjson_integrata_non_si_deduce_dal_solo_id() {
+    let originale = projjson_di("EPSG:32632").unwrap();
+    // Ogni componente semantica deve essere equivalente, anche quando
+    // il codice EPSG resta valido. Le coordinate non sono simmetriche.
+    for pointer in [
+        "/id/code",
+        "/base_crs/datum_ensemble/ellipsoid/semi_major_axis",
+        "/conversion/method/id/code",
+        "/conversion/parameters/1/value",
+        "/coordinate_system/axis/0/unit",
+        "/coordinate_system/axis/0/direction",
+    ] {
+        let mut documento = originale.clone();
+        let target = documento
+            .pointer_mut(pointer)
+            .expect("componente integrata");
+        *target = if pointer == "/id/code" {
+            json!(32633)
+        } else {
+            json!("SENTINELLA_CRS")
+        };
+        for cells in [
+            vec![Some(punto(500_000.0, 4_982_950.0))],
+            vec![None],
+            vec![],
+        ] {
+            let error = errore_di(
+                &geo_colonna(
+                    json!({"encoding":"WKB", "geometry_types":["Point"], "crs":documento}),
+                ),
+                cells,
+            );
+            assert_eq!(error.category(), ErrorCategory::Crs);
+            assert!(!error.to_string().contains("SENTINELLA_CRS"));
+        }
+    }
+}
+
+#[test]
+fn projjson_accetta_forme_equivalenti_senza_arrotondare_numeri() {
+    let dir = cartella();
+    let crs = projjson_di("EPSG:32632").unwrap();
+    let path = file_a_mano(
+        dir.path(),
+        &geo_colonna(json!({"encoding":"WKB", "geometry_types":["Point"], "crs":crs})),
+        vec![Some(punto(500_000.0, 4_982_950.0))],
+    );
+    let table = leggi(&path).unwrap();
+    let canonical = crs.to_string();
+    let geo =
+        geo_colonna(json!({"encoding":"WKB", "geometry_types":["Point"], "crs":crs})).to_string();
+    for modified in [
+        serde_json::to_string_pretty(&crs).unwrap(),
+        canonical.replace("500000", "5e5"),
+        canonical.replace("WGS", r"W\u0047S"),
+    ] {
+        assert_ne!(modified, canonical);
+        let letto =
+            plenora_io::geoparquet::applica(&table, &geo.replace(&canonical, &modified)).unwrap();
+        assert_eq!(letto.columns(), table.columns());
+    }
+    let modified = canonical.replace("6378137", "6378137.00000000000000000001");
+    let error =
+        plenora_io::geoparquet::applica(&table, &geo.replace(&canonical, &modified)).unwrap_err();
+    assert_eq!(error.public_projection().code(), Some("CRS_INVALID"));
+}
+
+#[test]
+fn wkt_estensione_geoparquet_si_confronta_senza_virgolette_json() {
+    let corpus: Value = serde_json::from_str(include_str!(
+        "../../plenora-core/src/crs/definizioni/wkt_corpus.json"
+    ))
+    .unwrap();
+    let wkt2 = corpus["EPSG:32632"]["wkt2_2019"].as_str().unwrap();
+    let wkt1 = corpus["EPSG:6707"]["wkt1_assi"].as_str().unwrap();
+    for cells in [
+        vec![Some(punto(500_123.0, 4_987_654.0))],
+        vec![None],
+        vec![],
+    ] {
+        let campo = Field::new("geometry", DataType::Binary, true).with_metadata(HashMap::from([
+            (GEOARROW_EXTENSION_KEY.into(), GEOARROW_WKB_EXTENSION.into()),
+            (
+                "ARROW:extension:metadata".into(),
+                json!({"crs":wkt2, "crs_type":"wkt2:2019"}).to_string(),
+            ),
+        ]));
+        let batch = tabella_geo_con_assi_dichiarati(campo, cells.clone());
+        for (crs, coerente) in [
+            (projjson_di("EPSG:32632").unwrap(), true),
+            (projjson_di("EPSG:32633").unwrap(), false),
+            (Value::Null, false),
+        ] {
+            let geo = geo_colonna(json!({"encoding":"WKB", "geometry_types":["Point"], "crs":crs}));
+            // File esterno: conserva l'estensione nello schema Arrow incorporato.
+            let dir = cartella();
+            let path = dir.path().join("estensione.parquet");
+            let props = WriterProperties::builder()
+                .set_key_value_metadata(Some(vec![KeyValue::new("geo".into(), geo.to_string())]))
+                .build();
+            let mut writer =
+                ArrowWriter::try_new(File::create(&path).unwrap(), batch.schema(), Some(props))
+                    .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+            let result = leggi(&path);
+            if coerente {
+                let letto = result.unwrap();
+                assert_eq!(letto.columns(), batch.columns());
+                assert_eq!(
+                    identificativo(&contratto(&letto).geometries[0].crs),
+                    "EPSG:32632"
+                );
+            } else {
+                assert_eq!(result.unwrap_err().category(), ErrorCategory::Crs);
+            }
+        }
+        // Nel metadato di file nessuna stringa WKT diventa PROJJSON.
+        for testo in [wkt1, wkt2] {
+            assert!(resolve_crs(testo, "crs").is_ok());
+            let geo =
+                geo_colonna(json!({"encoding":"WKB", "geometry_types":["Point"], "crs":testo}));
+            assert_eq!(
+                errore_di(&geo, cells.clone()).category(),
+                ErrorCategory::InvalidPlan
+            );
+        }
+    }
 }

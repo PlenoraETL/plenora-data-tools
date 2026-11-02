@@ -100,6 +100,10 @@ Tempo O(n·m) sui vertici delle due geometrie, limitato da
 `max_coordinate_pairs`, più la validazione OGC dei due ingressi; memoria
 O(1) oltre agli ingressi.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 `other_wkb` è `LINESTRING(0 0,10 0)`. Per la seconda riga il vertice

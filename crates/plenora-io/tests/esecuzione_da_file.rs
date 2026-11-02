@@ -6,7 +6,7 @@
 mod comune;
 
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use plenora_core::arrow::array::{Array, BinaryArray, Int64Array};
@@ -47,13 +47,6 @@ fn uscita(nome: &str, percorso: &Path) -> FileUscita {
         percorso: percorso.to_path_buf(),
         formato: None,
     }
-}
-
-fn fixture(nome: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("dati")
-        .join(nome)
 }
 
 #[test]
@@ -118,9 +111,16 @@ fn geoparquet_in_filtro_geoparquet_out() {
     .unwrap();
     let dir = cartella();
     let destinazione = dir.path().join("scelti.parquet");
+    let sorgente = dir.path().join("integrata.parquet");
+    scrivi_tabella(
+        &comune::utm32_integrata(),
+        &sorgente,
+        &OpzioniScrittura::default(),
+    )
+    .unwrap();
     esegui_da_file(
         &piano,
-        &[ingresso("luoghi", &fixture("pyarrow_utm32.parquet"))],
+        &[ingresso("luoghi", &sorgente)],
         &[uscita("scelti", &destinazione)],
         &OpzioniScrittura::default(),
     )

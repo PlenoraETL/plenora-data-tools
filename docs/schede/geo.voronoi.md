@@ -118,6 +118,10 @@ O(n log n) tipico sulla colonna, con `n` le righe: caricamento in blocco
 della triangolazione, celle, ritaglio delle celle di bordo, associazione
 punto-cella con un R-tree; quadratico nel caso peggiore. Memoria O(n).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Tre punti e un duplicato del primo, che riceve la stessa cella.

@@ -276,3 +276,63 @@ fn target_reproject_wkt2_uguale_al_codice_anche_da_geoarrow() {
         Some("CRS_NOT_BUILTIN")
     );
 }
+
+#[test]
+fn wkt_assi_espliciti_e_coerenza_su_tutti_gli_ingressi_arrow() {
+    for (versione, formato, forme) in [
+        ("wkt1_assi", CrsDefinitionFormat::Wkt, 2),
+        ("wkt2_2019", CrsDefinitionFormat::Wkt2, 4),
+    ] {
+        let testo = wkt_versione("EPSG:6707", versione);
+        let risolto = resolve_crs(&testo, "crs").unwrap();
+        for (id, coerente) in [("EPSG:6707", true), ("EPSG:7791", false)] {
+            assert_eq!(
+                matches!(
+                    verify_declared_coherence(
+                        risolto.clone(),
+                        id,
+                        &testo,
+                        Some(formato),
+                        resolve_crs
+                    ),
+                    ContractCrs::Resolved(_)
+                ),
+                coerente
+            );
+        }
+        for forma in 0..forme {
+            let f = campo(&testo, forma, "unknown");
+            let mut md = f.metadata().clone();
+            md.remove(PLENORA_GEOMETRY_AXIS_ORDER_KEY);
+            let f = f.with_metadata(md);
+            let keys = read_geometry_contract_keys(&f).unwrap();
+            assert!(keys.axis_order.is_none_or(|a| a == AxisOrder::Unknown));
+            let c = contract_from_arrow_schema(Arc::new(schema(f)), resolve_crs).unwrap();
+            assert!(c.geometries[0]
+                .crs
+                .as_resolved()
+                .unwrap()
+                .semantically_equals(&risolto));
+        }
+    }
+    // WKT1 GDAL omette gli assi della base geografica: mai dedurli.
+    let senza_assi = wkt_versione("EPSG:6707", "wkt1_gdal");
+    for forma in 0..2 {
+        assert!(contract_from_arrow_schema(
+            Arc::new(schema(campo(&senza_assi, forma, "easting_northing"))),
+            resolve_crs
+        )
+        .is_err());
+    }
+    for forma in [2, 3] {
+        let f = campo(
+            &wkt_versione("EPSG:6707", "wkt1_assi"),
+            forma,
+            "easting_northing",
+        );
+        assert!(matches!(
+            read_geometry_contract_keys(&f).unwrap_err(),
+            plenora_core::PlenoraError::Unsupported(_)
+        ));
+    }
+}

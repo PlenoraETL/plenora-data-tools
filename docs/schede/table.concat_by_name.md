@@ -13,6 +13,12 @@ gli schemi devono essere identici, come in [`table.concat`](#tableconcat).
 
 ### Schema
 
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Senza `strict`, l'unione delle colonne nell'ordine di prima apparizione:
 le colonne di sinistra, poi quelle di destra con un nome nuovo. Una colonna
 presente in entrambi gli ingressi ha lo stesso tipo nei due (nessuna
@@ -22,11 +28,13 @@ lo schema è quello della sinistra, nullable dove lo è in almeno un
 ingresso.
 
 I metadati di schema dei due ingressi si fondono: una chiave presente in un
-ingresso solo, o con lo stesso valore, resta. La colonna geometrica della
-sinistra si conserva solo se la destra ha una colonna con lo stesso nome e
-lo stesso tipo; altrimenti l'uscita non dichiara geometria. Del contratto
-resta il conteggio delle righe (somma, come in `table.concat`), non
-l'ordinamento dichiarato.
+ingresso solo, o con lo stesso valore, resta. Identita', metadati di campo e
+dichiarazione geometrica vengono dalla prima sorgente che contiene la
+colonna, anche se manca negli altri ingressi; la nullabilita' geometrica
+segue quella del campo. Le dichiarazioni degli ingressi che contengono la
+stessa colonna devono essere compatibili. Due colonne geometriche distinte
+in uscita sono rifiutate. Del contratto resta il conteggio delle righe
+(somma, come in `table.concat`), non l'ordinamento dichiarato.
 
 ### Righe
 

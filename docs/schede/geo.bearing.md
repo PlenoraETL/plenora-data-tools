@@ -116,6 +116,10 @@ geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1
 
 O(1) per riga: un problema inverso geodetico. Memoria O(1).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 L'arrivo è `POINT(0 1)`: dall'equatore verso nord, da latitudine 2 verso

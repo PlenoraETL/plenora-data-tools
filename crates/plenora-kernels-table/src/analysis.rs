@@ -1279,6 +1279,48 @@ fn flatten_row(
     esito
 }
 
+/// Rifiuta prima del parsing ogni numero che cambierebbe valore decimale.
+fn verifica_numeri_json(text: &str) -> Result<()> {
+    // RawValue interpreta il contenuto di una stringa come un secondo JSON:
+    // rifiutiamo la chiave riservata anche negli array e nei percorsi ignorati.
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'"' {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        while index < bytes.len() {
+            match bytes[index] {
+                b'\\' => index = (index + 2).min(bytes.len()),
+                b'"' => {
+                    index += 1;
+                    break;
+                }
+                _ => index += 1,
+            }
+        }
+        if bytes[index..]
+            .iter()
+            .find(|byte| !byte.is_ascii_whitespace())
+            == Some(&b':')
+            && serde_json::from_str::<String>(&text[start..index])
+                .is_ok_and(|key| key == CHIAVE_RAW_VALUE)
+        {
+            return Err(PlenoraError::DataMapping(
+                "flatten_json: chiave JSON riservata non supportata".into(),
+            ));
+        }
+    }
+    plenora_core::json::ensure_numbers_exact(text).map_err(|_| {
+        PlenoraError::DataMapping(
+            "flatten_json: numero JSON non rappresentabile esattamente".into(),
+        )
+    })
+}
+
 /// Righe rifiutate di `flatten_json`: conteggi per causa ed esempi, in
 /// ordine di riga.
 struct RifiutiJson {
@@ -1365,6 +1407,7 @@ impl RifiutiJson {
 ///   del `prefix` atteso;
 /// - `ResourceLimit`: colonne dell'ingresso piu' colonne prodotte oltre
 ///   `limits.max_columns`;
+/// - `DataMapping`: numero non rappresentabile esattamente o chiave JSON riservata;
 /// - `DataMapping` con diagnostica per riga: celle non nulle che non sono
 ///   JSON valido (`json.invalid_syntax`) o con radice non oggetto
 ///   (`json.root_not_object`), tutte contate;
@@ -1394,7 +1437,7 @@ pub fn flatten_json(
     } else {
         Some(JsonTargets::from_outputs(&config.output_columns, &prefix))
     };
-    // Una sola passata: ogni documento si valida e si appiattisce insieme.
+    // Dopo il controllo lessicale esatto, il parsing valida e appiattisce.
     // Al primo rifiuto l'output non serve piu' (l'esito e' l'errore con la
     // diagnostica di tutte le righe rifiutate): le righe seguenti si
     // classificano soltanto. Un errore di `scalar_as_string` esce alla prima
@@ -1404,6 +1447,7 @@ pub fn flatten_json(
     let mut cells: Vec<(String, String)> = Vec::new();
     let mut rifiuti = RifiutiJson::new();
     let mut elabora = |row: usize, text: &str| -> Result<()> {
+        verifica_numeri_json(text)?;
         let esito = if rifiuti.observed_total == 0 {
             flatten_row(
                 text,
@@ -1982,6 +2026,13 @@ fn shuffle(rows: &mut [usize], seed: u64) {
     }
 }
 
+/// Quota intera esatta: il prodotto di due usize entra in u128 sui target supportati.
+fn stratified_count(requested: usize, group: usize, total: usize) -> Result<usize> {
+    let count = (requested as u128) * (group as u128) / (total.max(1) as u128);
+    usize::try_from(count)
+        .map_err(|_| PlenoraError::ResourceLimit("campione non rappresentabile".into()))
+}
+
 /// Campione casuale deterministico delle righe (dimensione `n` o
 /// `fraction`, mai entrambi; opzionalmente stratificato su
 /// `stratify_column`).
@@ -2003,6 +2054,11 @@ fn shuffle(rows: &mut [usize], seed: u64) {
 /// - `DataMapping` (`arrow error: …`): errore Arrow della `take` in `select_rows`.
 pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
     config.verifica_parametri()?;
+    if config.fraction.is_some() && (batch.num_rows() as u128) > (1_u128 << 53) {
+        return Err(PlenoraError::ResourceLimit(
+            "sample: conteggio oltre il dominio esatto della frazione".into(),
+        ));
+    }
     let seed = config.random_state.unwrap_or(0x9e37_79b9_7f4a_7c15);
     let mut selected = Vec::new();
     if let Some(column) = &config.stratify_column {
@@ -2021,7 +2077,7 @@ pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
             );
             let count =
                 match config.fraction {
-                    None => config.righe().saturating_mul(rows.len()) / batch.num_rows().max(1),
+                    None => stratified_count(config.righe(), rows.len(), batch.num_rows())?,
                     Some(fraction) => (rows.len().to_f64().ok_or_else(|| {
                         PlenoraError::ResourceLimit("gruppo troppo grande".into())
                     })? * fraction)
@@ -2063,6 +2119,28 @@ mod tests {
     use plenora_core::arrow::schema::{Field, Schema};
 
     use super::*;
+
+    #[test]
+    fn quota_stratificata_esatta_contro_oracolo() {
+        for total in 1_usize..80 {
+            for group in 0..=total {
+                for requested in 0..100 {
+                    assert_eq!(
+                        stratified_count(requested, group, total).unwrap(),
+                        requested * group / total
+                    );
+                }
+            }
+        }
+        if let Ok(n) = usize::try_from(1_u64 << 32) {
+            assert_eq!(stratified_count(n, n, n).unwrap(), n);
+        }
+        assert_eq!(
+            stratified_count(usize::MAX, usize::MAX, usize::MAX).unwrap(),
+            usize::MAX
+        );
+    }
+
     use crate::test_support::single_column_batch;
 
     // ------------------------------------------------------------------
@@ -2307,7 +2385,11 @@ mod tests {
         };
         let rows = (0..batch.num_rows())
             .map(|row| {
-                let parsed = scalar_as_string(source.as_ref(), row)?
+                let text = scalar_as_string(source.as_ref(), row)?;
+                if let Some(text) = &text {
+                    verifica_numeri_json(text)?;
+                }
+                let parsed = text
                     .and_then(|text| serde_json::from_str::<Value>(&text).ok())
                     .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
                 let mut values = BTreeMap::new();

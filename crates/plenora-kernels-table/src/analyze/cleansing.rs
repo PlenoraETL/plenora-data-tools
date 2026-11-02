@@ -107,7 +107,14 @@ pub(in crate::analyze) fn analyze_fill_na(
         input.geometries.first().map(|g| g.name.as_str()),
     );
     // Valori modificati, righe e ordine invariati.
-    finish(schema, geometry, input.active_geometry, rows_only(input))
+    finish(
+        input.field_origins(),
+        schema,
+        geometry,
+        input.active_geometry,
+        rows_only(input),
+        fields,
+    )
 }
 
 pub(in crate::analyze) fn analyze_replace(
@@ -138,13 +145,7 @@ pub(in crate::analyze) fn analyze_replace(
     // quindi vanno ripristinati dal sorgente.
     let source_metadata = field_of(op, input, &config.column)?.metadata().clone();
     let mut fields_out = clone_fields(input);
-    produce(
-        &mut fields_out,
-        fields,
-        &config.column,
-        DataType::Utf8,
-        true,
-    )?;
+    produce(&mut fields_out, &config.column, DataType::Utf8, true);
     if let Some(replaced) = fields_out
         .iter_mut()
         .find(|field| field.name() == &config.column)
@@ -157,7 +158,16 @@ pub(in crate::analyze) fn analyze_replace(
         &schema,
         input.geometries.first().map(|g| g.name.as_str()),
     );
-    finish(schema, geometry, input.active_geometry, rows_only(input))
+    let mut origins = input.field_origins();
+    origins[input.schema.index_of(&config.column)?] = plenora_core::contract::FieldOrigin::New;
+    finish(
+        origins,
+        schema,
+        geometry,
+        input.active_geometry,
+        rows_only(input),
+        fields,
+    )
 }
 
 /// Parametri di `type_cast` che solo alcuni target usano: su un altro target
@@ -180,6 +190,7 @@ pub(in crate::analyze) fn analyze_type_cast(
 ) -> Result<DataContract> {
     let config: cleansing::TypeCast = typed(op, config)?;
     let input = &inputs[0];
+    crate::require_non_geometry(field_of(op, input, &config.column)?)?;
     // Una colonna temporale (Date32, Timestamp di ogni unita') si converte
     // dal valore nativo, con i target che il kernel ammette
     // (`verifica_cast_temporale`); ogni altra colonna si legge come testo.

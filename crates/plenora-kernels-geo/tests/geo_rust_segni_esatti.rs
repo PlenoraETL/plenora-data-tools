@@ -174,7 +174,15 @@ fn split_e_make_valid_lontano_dall_origine() {
 fn tabella(celle: &[Vec<u8>]) -> (SchemaRef, RecordBatch) {
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
-        geometry_output_field(DEFAULT_GEOMETRY_COLUMN, CRS).expect("campo"),
+        {
+            let campo = geometry_output_field(DEFAULT_GEOMETRY_COLUMN, CRS).expect("campo");
+            let mut metadata = campo.metadata().clone();
+            metadata.insert(
+                "plenora.geometry.axis_order".to_owned(),
+                "easting_northing".to_owned(),
+            );
+            campo.with_metadata(metadata)
+        },
     ]));
     let ids = (0..celle.len())
         .map(|riga| i64::try_from(riga).expect("id"))

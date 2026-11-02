@@ -1,0 +1,52 @@
+{
+  "$schema": "../../schemas/arrow-data-vector-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-arrow-data-vector-v1",
+  "expect": "valid",
+  "computation": {
+    "category": "crs",
+    "rules": [
+      "GEO-015",
+      "GEO-019"
+    ]
+  },
+  "schema_metadata": {
+    "plenora.contract.version": "1"
+  },
+  "fields": [
+    {
+      "name": "id",
+      "type": "int64",
+      "nullable": false,
+      "metadata": {
+        "plenora.field_id": "0"
+      }
+    },
+    {
+      "name": "geometry",
+      "type": "binary",
+      "nullable": true,
+      "metadata": {
+        "plenora.field_id": "1",
+        "ARROW:extension:name": "geoarrow.wkb",
+        "plenora.geometry.encoding": "wkb",
+        "plenora.geometry.dimensions": "xy",
+        "plenora.geometry.spatial_semantics": "geometry",
+        "plenora.geometry.precision": "float64",
+        "plenora.geometry.types_declaration": "exact",
+        "plenora.geometry.types": "point",
+        "plenora.geometry.crs_resolution": "resolved",
+        "plenora.geometry.crs_id": "EPSG:32632",
+        "plenora.geometry.crs_definition": "{\"type\":\"ProjectedCRS\",\"name\":\"WGS 84 / UTM zone 32N\",\"base_crs\":{\"name\":\"WGS 84\",\"datum\":{\"type\":\"GeodeticReferenceFrame\",\"name\":\"World Geodetic System 1984\",\"ellipsoid\":{\"name\":\"WGS 84\",\"semi_major_axis\":6378137,\"inverse_flattening\":298.257223563},\"id\":{\"authority\":\"EPSG\",\"code\":6326},\"prime_meridian\":{\"name\":\"Paris\",\"longitude\":{\"value\":2.33722917,\"unit\":\"degree\"}}},\"id\":{\"authority\":\"EPSG\",\"code\":4326}},\"conversion\":{\"name\":\"UTM zone 32N\",\"method\":{\"name\":\"Transverse Mercator\"},\"parameters\":[{\"name\":\"Latitude of natural origin\",\"value\":0,\"unit\":\"degree\"},{\"name\":\"Longitude of natural origin\",\"value\":9,\"unit\":\"degree\"},{\"name\":\"Scale factor at natural origin\",\"value\":0.9996,\"unit\":\"unity\"},{\"name\":\"False easting\",\"value\":500000,\"unit\":\"metre\"},{\"name\":\"False northing\",\"value\":0,\"unit\":\"metre\"}]},\"coordinate_system\":{\"subtype\":\"Cartesian\",\"axis\":[{\"name\":\"Easting\",\"abbreviation\":\"E\",\"direction\":\"east\",\"unit\":\"metre\"},{\"name\":\"Northing\",\"abbreviation\":\"N\",\"direction\":\"north\",\"unit\":\"metre\"}]},\"id\":{\"authority\":\"EPSG\",\"code\":32632}}",
+        "plenora.geometry.crs_definition_format": "projjson",
+        "plenora.geometry.axis_order": "easting_northing"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "id": 1,
+      "geometry": "01010000000000000080841e4100000000ccbc5141"
+    }
+  ]
+}

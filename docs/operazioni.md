@@ -193,6 +193,10 @@ per gruppo: le colonne di gruppo, poi una colonna per ogni aggregazione di
 `aggregations` (conteggi, somme, medie, estremi, varianze, quantili,
 testi). Senza aggregazioni conta le righe di ogni gruppo.
 
+`first` e `last` rifiutano i campi geometrici, anche annidati e con zero righe
+oppure tutte le celle nulle, con errore `crs/validate` sia nel kernel sia
+nell'analisi: non produce celle WKB senza metadati.
+
 #### Parametri
 
 | parametro | tipo | default | valori ammessi | significato |
@@ -315,7 +319,7 @@ In esecuzione:
 
 - `Schema`: una cella `utf8` che non è un numero sotto una funzione
   numerica; una cella che non si converte in testo (date fuori
-  intervallo, `binary` non UTF-8 sotto `first`, `last`, `concat`,
+  intervallo, `binary` non UTF-8 sotto `concat`,
   `nunique`);
 - `ResourceLimit`: più di `u32::MAX` righe; il testo `concat` di un gruppo
   oltre `max_string_bytes` byte (controllato prima di unire);
@@ -562,6 +566,12 @@ fra `utf8`, `int64`, `uint64`, `float64`, `bool`, `date32`, `date64` (allineato 
 `dictionary<utf8>`.
 
 #### Schema
+
+Se entrambi gli ingressi dichiarano geometrie, i loro riferimenti CRS,
+assi ed encoding devono coincidere, anche con ingressi vuoti e quando la
+geometria non e' una chiave o non compare nell'uscita. Divergenze sono
+rifiutate con `crs` dal kernel e dall'analisi
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
 
 Identico alla sinistra: stesse colonne, tipi, nullabilità, metadati e
 colonna geometrica. Delle proprietà del contratto resta l'ordinamento
@@ -967,6 +977,12 @@ un null in una qualunque colonna è nulla: a destra non si registra mai, a
 sinistra decide `allow_null`.
 
 #### Schema
+
+Se entrambi gli ingressi dichiarano geometrie, i loro riferimenti CRS,
+assi ed encoding devono coincidere, anche con ingressi vuoti e quando la
+geometria non e' una chiave o non compare nell'uscita. Divergenze sono
+rifiutate con `crs` dal kernel e dall'analisi
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
 
 Quello della tabella sinistra, invariato: colonne, tipi, nullabilità,
 metadati di campo e di schema; il contratto conserva ordinamento dichiarato
@@ -1924,7 +1940,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 1, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -1944,16 +1960,23 @@ conta come null e si passa alla colonna successiva.
 
 #### Schema
 
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 `output_column` ha il tipo comune delle colonne `columns` (anche un
-dizionario, una lista o una struct) ed è sempre nullabile. Se il nome esiste
-già, anche se è una delle colonne di `columns`, la colonna si sostituisce
-nella sua posizione e perde i propri metadati di campo; altrimenti si
-aggiunge in coda. Le altre colonne restano invariate, e così i metadati di
-schema. Se la colonna sostituita è la geometria, l'uscita non ha più una
-colonna geometrica.
+dizionario, una lista o una struct) ed e' sempre nullabile. Se il nome
+esiste, la colonna si sostituisce nella sua posizione; altrimenti si
+aggiunge in coda. I metadati di campo tabellari non si ereditano. Se tutte
+le sorgenti sono geometriche compatibili, si conservano CRS, assi,
+dimensioni ed encoding, senza identita' e dichiarazione dei tipi del primo
+campo. La pipeline ammette al massimo una geometria in uscita.
+Le altre colonne e i metadati di schema restano invariati.
 
 Il contratto conserva il numero di righe; l'ordinamento dichiarato
-(`sorted_by`) resta solo se nessuna colonna è stata sostituita.
+(`sorted_by`) resta solo se nessuna colonna e' stata sostituita.
 
 #### Righe
 
@@ -2035,7 +2058,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 2 |
+| versioni | semantica 1, config 2, analisi 3, kernel 3 |
 
 #### Che cosa fa
 
@@ -2052,6 +2075,12 @@ usa [`table.concat_by_name`](#tableconcat_by_name).
 | `ignore_index` | booleano | assente | nessuno: scritto si rifiuta, anche `null` | una tabella Arrow non ha indice di riga, nessun valore avrebbe effetto |
 
 #### Schema
+
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
 
 Le colonne della sinistra, con nome, tipo e metadati di campo della
 sinistra; una colonna è nullable se lo è in almeno un ingresso. I metadati
@@ -2156,7 +2185,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -2173,6 +2202,12 @@ gli schemi devono essere identici, come in [`table.concat`](#tableconcat).
 
 #### Schema
 
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Senza `strict`, l'unione delle colonne nell'ordine di prima apparizione:
 le colonne di sinistra, poi quelle di destra con un nome nuovo. Una colonna
 presente in entrambi gli ingressi ha lo stesso tipo nei due (nessuna
@@ -2182,11 +2217,13 @@ lo schema è quello della sinistra, nullable dove lo è in almeno un
 ingresso.
 
 I metadati di schema dei due ingressi si fondono: una chiave presente in un
-ingresso solo, o con lo stesso valore, resta. La colonna geometrica della
-sinistra si conserva solo se la destra ha una colonna con lo stesso nome e
-lo stesso tipo; altrimenti l'uscita non dichiara geometria. Del contratto
-resta il conteggio delle righe (somma, come in `table.concat`), non
-l'ordinamento dichiarato.
+ingresso solo, o con lo stesso valore, resta. Identita', metadati di campo e
+dichiarazione geometrica vengono dalla prima sorgente che contiene la
+colonna, anche se manca negli altri ingressi; la nullabilita' geometrica
+segue quella del campo. Le dichiarazioni degli ingressi che contengono la
+stessa colonna devono essere compatibili. Due colonne geometriche distinte
+in uscita sono rifiutate. Del contratto resta il conteggio delle righe
+(somma, come in `table.concat`), non l'ordinamento dichiarato.
 
 #### Righe
 
@@ -3585,6 +3622,12 @@ Ogni colonna ha un tipo fra `utf8`, `int64`, `uint64`, `float64`, `bool`,
 
 #### Schema
 
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Identico alla sinistra: stesse colonne, tipi, nullabilità, metadati e
 colonna geometrica. Nessuna proprietà del contratto sopravvive, nemmeno
 l'ordinamento dichiarato, benché l'ordine sia quello della sinistra.
@@ -3688,6 +3731,10 @@ Espande una colonna lista in una riga per elemento: ogni riga d'ingresso
 si ripete una volta per ogni elemento della sua lista, e la colonna
 d'uscita contiene l'elemento. Una lista vuota o nulla dà una riga con
 elemento nullo, quindi nessuna riga sparisce.
+
+L'operazione rifiuta i campi geometrici, anche annidati e con zero righe
+oppure tutte le celle nulle, con errore `crs/validate` sia nel kernel sia
+nell'analisi: non produce celle WKB senza metadati.
 
 #### Parametri
 
@@ -4295,7 +4342,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 1, analisi 2, kernel 5 |
+| versioni | semantica 3, config 1, analisi 2, kernel 6 |
 
 #### Che cosa fa
 
@@ -4361,6 +4408,9 @@ In validazione:
 
 In esecuzione:
 
+- `DataMapping` senza valori nel messaggio: numero JSON che il parser
+  riscriverebbe con valore decimale diverso, oppure chiave riservata
+  `$serde_json::private::RawValue`, anche negli array e nei percorsi ignorati;
 - `DataMapping` con diagnostica per riga: una cella non nulla che non è JSON
   valido (`json.invalid_syntax`) o la cui radice non è un oggetto
   (`json.root_not_object`). Il passo non produce uscita; la diagnostica
@@ -4380,7 +4430,7 @@ per ogni percorso trovato; il runner lo rifiuta in validazione
 
 #### Complessità
 
-Tempo O(byte dei documenti): una passata di parsing per riga, senza
+Tempo O(byte dei documenti): controllo lessicale esatto e parsing per riga, senza
 costruire l'albero JSON (salvo le righe con chiavi ambigue o ripetute, che
 passano dall'albero); memoria O(n · k) per le k colonne estratte.
 
@@ -4917,6 +4967,12 @@ Ogni colonna ha un tipo fra `utf8`, `int64`, `uint64`, `float64`, `bool`,
 (chiave int32).
 
 #### Schema
+
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
 
 Identico alla sinistra: stesse colonne, tipi, nullabilità, metadati e
 colonna geometrica. Nessuna proprietà del contratto sopravvive, nemmeno
@@ -5691,7 +5747,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 2, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -5720,12 +5776,21 @@ diverse.
 
 #### Schema
 
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Le colonne di `id_columns` nel loro ordine, con tipo, nullabilità e
 metadati di campo; poi `var_name`, `utf8` non nullabile; poi `value_name`,
-nullabile e senza metadati di campo, del tipo comune se le colonne valore
+nullabile, del tipo comune se le colonne valore
 hanno tutte lo stesso tipo Arrow, altrimenti `utf8` con
 `type_policy: "string"`. I metadati di schema si conservano. Una colonna
-geometrica resta geometrica solo se è una colonna id. Il contratto dichiara
+geometrica nelle colonne valore trasmette i metadati geometrici al campo
+derivato se tutte le sorgenti sono compatibili; identita' e dichiarazione
+dei tipi non si copiano. Le colonne id conservano i loro metadati. La
+pipeline ammette al massimo una geometria in uscita. Il contratto dichiara
 righe × colonne valore quando il conteggio d'ingresso è noto, e nessun
 ordinamento.
 
@@ -5826,7 +5891,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 4, kernel 5 |
+| versioni | semantica 3, config 2, analisi 5, kernel 6 |
 
 #### Che cosa fa
 
@@ -5880,8 +5945,10 @@ Una combinazione chiave-valore che non compare nei dati è null, anche con
 #### Schema
 
 Le colonne di `index_col` nel loro ordine, con tipo, nullabilità e
-metadati di campo; poi le colonne pivot, nullabili e senza metadati di
-campo, con il tipo sopra:
+metadati di campo; poi le colonne pivot, nullabili, con il tipo sopra.
+`first` e `last` su geometrie conservano i metadati geometrici della
+sorgente, senza identita' e dichiarazione dei tipi; le altre aggregazioni
+non li ereditano. La pipeline rifiuta piu' di una geometria in uscita:
 
 - senza `mapping`, una per valore pivot distinto dei dati, nell'ordine dei
   byte del testo del valore;
@@ -6036,6 +6103,12 @@ decimali è l'uguaglianza dei valori; su `float64` tutti i `NaN` sono uguali e
 
 #### Schema
 
+Se entrambi gli ingressi dichiarano geometrie, i loro riferimenti CRS,
+assi ed encoding devono coincidere, anche con ingressi vuoti e quando la
+geometria non e' una chiave o non compare nell'uscita. Divergenze sono
+rifiutate con `crs` dal kernel e dall'analisi
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Una tabella nuova, indipendente dagli ingressi: `metric` (`utf8`) e `value`
 (`uint64`), non nullabili. Nessuna colonna e nessun metadato di schema degli
 ingressi. Il contratto dichiara 5 righe, dimostrate.
@@ -6153,7 +6226,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 2 |
+| versioni | semantica 1, config 2, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -6490,7 +6563,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 3, kernel 5 |
+| versioni | semantica 3, config 2, analisi 4, kernel 5 |
 
 #### Che cosa fa
 
@@ -6698,6 +6771,10 @@ In validazione, `InvalidPlan`:
 - config con campi sconosciuti, `n` negativo o `null` esplicito in `n`,
   `fraction`, `random_state` o `stratify_column` (il parametro si omette).
 
+In validazione (se il conteggio e' noto) e in esecuzione, `ResourceLimit`
+se `fraction` e' presente e le righe superano `2^53`: la conversione del
+conteggio in `f64` non deve perdere precisione.
+
 In esecuzione:
 
 - `Schema`: una cella di `stratify_column` che non si converte in testo;
@@ -6884,6 +6961,12 @@ precisione e scala comprese), scelto fra `utf8`, `int64`, `uint64`,
 `decimal128` con scala da 0 a 38, `binary` e `dictionary<utf8>`.
 
 #### Schema
+
+Se entrambi gli ingressi dichiarano geometrie, i loro riferimenti CRS,
+assi ed encoding devono coincidere, anche con ingressi vuoti e quando la
+geometria non e' una chiave o non compare nell'uscita. Divergenze sono
+rifiutate con `crs` dal kernel e dall'analisi
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
 
 Identico alla sinistra: stesse colonne, tipi, nullabilità, metadati e
 colonna geometrica. Delle proprietà del contratto resta l'ordinamento
@@ -8005,6 +8088,12 @@ uguale a ogni NaN; sugli altri tipi fuori da `int64`, `uint64`, `utf8`,
 
 #### Schema
 
+Chiavi e colonne confrontate geometriche sono rifiutate preventivamente
+con `crs`, nel kernel e in validazione, anche con ingressi vuoti o celle
+nulle: il diff ricostruisce campi privi di metadati e puo' convertire i
+valori precedenti in testo
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Le colonne di `left_keys` (nomi della sinistra), poi quelle confrontate,
 tutte nullabili e con il tipo d'ingresso; poi `_diff_status` (`utf8` non
 nullabile), `_diff_columns` e `_diff_old_values` (`utf8` nullabili).
@@ -8531,7 +8620,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 2, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -8561,12 +8650,20 @@ cambia niente: dipende dall'ingresso.
 
 #### Schema
 
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Prima colonna: `id_column` (o `col_0` senza), `utf8` non nullabile, con i
 nomi delle colonne dati (tutte tranne `id_column`, nel loro ordine). Poi
 una colonna per riga d'ingresso, nullabile: del tipo comune se le colonne
 dati hanno tutte lo stesso tipo Arrow, altrimenti `utf8` con
 `type_policy: "string"`, con il testo delle celle (`1.0` è `"1"`, le date
-`AAAA-MM-GG`). Metadati di campo e di schema non si conservano. Un
+`AAAA-MM-GG`). I metadati geometrici si conservano se tutte le colonne dati sono
+geometrie compatibili; identita' e dichiarazione dei tipi non si copiano.
+Gli altri metadati di campo e di schema non si conservano. Un
 ingresso senza righe esce invariato, schema compreso.
 
 #### Righe
@@ -8662,6 +8759,10 @@ posizione. Ogni cella non nulla si legge come testo e il testo si
 interpreta nel tipo chiesto. Se anche una sola cella non si converte il
 passo fallisce e dice quali righe (con `coerce` e `raise`, i due
 equivalenti): nessuna cella diventa null in silenzio.
+
+L'operazione rifiuta i campi geometrici, anche annidati e con zero righe
+oppure tutte le celle nulle, con errore `crs/validate` sia nel kernel sia
+nell'analisi: non produce celle WKB senza metadati.
 
 #### Parametri
 
@@ -8875,7 +8976,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 2, kernel 3 |
+| versioni | semantica 2, config 1, analisi 3, kernel 4 |
 
 #### Che cosa fa
 
@@ -8893,6 +8994,12 @@ Ogni colonna ha un tipo fra `utf8`, `int64`, `uint64`, `float64`, `bool`,
 (chiave int32).
 
 #### Schema
+
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
 
 Le colonne della sinistra, con nome, tipo e metadati di campo della
 sinistra; una colonna è nullable se lo è in almeno un ingresso. I metadati
@@ -9003,6 +9110,10 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Apre una colonna struct: ogni campo dello struct diventa una colonna, con
 il nome preceduto da `prefix`. Per default la colonna struct sparisce.
+
+L'operazione rifiuta i campi geometrici, anche annidati e con zero righe
+oppure tutte le celle nulle, con errore `crs/validate` sia nel kernel sia
+nell'analisi: non produce celle WKB senza metadati.
 
 #### Parametri
 
@@ -9347,7 +9458,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 3, kernel 5 |
+| versioni | semantica 3, config 2, analisi 4, kernel 5 |
 
 #### Che cosa fa
 
@@ -9525,7 +9636,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -9620,6 +9731,10 @@ risultato è esatto. Nessun rifiuto `PrecisionInsufficient`
 Tempo O(n) sulle coordinate della geometria, più la validazione OGC di
 ingresso e uscita; memoria O(n) per la copia trasformata.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -9668,7 +9783,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -9753,6 +9868,10 @@ dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
 [Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -9798,7 +9917,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 2 |
+| versioni | semantica 2, config 1, analisi 4, kernel 2 |
 
 #### Che cosa fa
 
@@ -9918,6 +10037,10 @@ geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1
 
 O(1) per riga: un problema inverso geodetico. Memoria O(1).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -9968,7 +10091,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -10113,7 +10236,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -10237,7 +10360,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -10369,6 +10492,10 @@ linea da 1.000 vertici, da 1 m a 1 km) in Limiti dichiarati, voce «Costo» di
 Più la validazione OGC dell'ingresso e dell'uscita
 ([Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -10414,7 +10541,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -10499,6 +10626,10 @@ OGC dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
 [Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -10544,7 +10675,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 2, analisi 4, kernel 1 |
+| versioni | semantica 2, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -10690,6 +10821,10 @@ vicine e una differenza: di norma proporzionale ai vicini, nel caso
 peggiore (rettangoli tutti sovrapposti) O(n²) coppie di righe. Memoria:
 l'intera tabella e l'indice.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -10737,7 +10872,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -10855,6 +10990,10 @@ O(n · (v + m) log(v + m)) con `v` i vertici della riga, perché ogni riga
 si confronta con tutta la maschera. Più la validazione OGC di ingressi,
 maschera e ritagli. Memoria O(m) per la maschera più i ritagli.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -10907,7 +11046,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -10998,6 +11137,10 @@ distinta, O(log n + m) con `m` i vicini trovati: O(n²) nel caso peggiore,
 quando quasi tutti i punti stanno entro `eps` l'uno dall'altro. Memoria O(n)
 per punti ed etichette, più i vicinati trattenuti.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -11047,7 +11190,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 4, kernel 3 |
+| versioni | semantica 3, config 1, analisi 5, kernel 3 |
 
 #### Che cosa fa
 
@@ -11204,7 +11347,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 2, kernel 1 |
+| versioni | semantica 3, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -11313,6 +11456,10 @@ Tempo almeno O(n log n) sulle n coordinate (inviluppo convesso e R-tree
 dei punti di `geo`; il costo dello scavo nel caso peggiore non è
 dichiarato), più la validazione OGC di ingresso e uscita; memoria O(n).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -11359,7 +11506,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -11453,6 +11600,10 @@ nel caso peggiore, più la validazione OGC dell'ingresso e dell'uscita
 [Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la copia scalata delle coordinate.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -11498,7 +11649,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 1, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -11613,6 +11764,10 @@ costo dei predicati; nel caso peggiore O(n · m) predicati. Più la
 validazione OGC di ogni geometria. Memoria O(n) per l'albero e i
 conteggi, più le coppie confermate.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -11669,7 +11824,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -11785,6 +11940,10 @@ coppia di rettangoli che si toccano, O(v log v) sui vertici `v` della
 coppia (O(n²) coppie nel caso peggiore, tutte sovrapposte). Memoria O(n)
 per tutte le geometrie, decodificate prima del calcolo (classe bloccante).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -11833,7 +11992,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 3, kernel 2 |
+| versioni | semantica 3, config 1, analisi 4, kernel 2 |
 
 #### Che cosa fa
 
@@ -11944,6 +12103,10 @@ O(n log n) tipico per geometria, con `n` le coordinate, quadratico nel caso
 peggiore (punti quasi tutti allineati); più la validazione OGC
 dell'ingresso e dei triangoli. Memoria O(n).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -11993,7 +12156,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 2, kernel 1 |
+| versioni | semantica 3, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -12097,6 +12260,10 @@ caso peggiore, [Limiti dichiarati, «Validazione OGC: la ricerca delle
 auto-intersezioni non è quella di `geo`, il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -12144,7 +12311,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -12258,6 +12425,10 @@ ricerca delle auto-intersezioni non è quella di `geo`, il verdetto
 sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(v + k).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -12309,7 +12480,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -12408,6 +12579,10 @@ Un overlay a scansione su tutti i vertici `v` della tabella, di norma
 O((v + k) log v) con `k` gli incroci fra i lati, più la validazione OGC di
 ingressi e risultato. Memoria O(v + k): l'intera tabella in memoria.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -12453,7 +12628,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -12559,6 +12734,10 @@ nel peggiore:
 [Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)),
 ripetuta per `other_wkb` a ogni riga.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -12608,7 +12787,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -12691,6 +12870,10 @@ OGC dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
 [Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -12738,7 +12921,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -12874,7 +13057,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -12991,6 +13174,10 @@ O(n·m) per riga, con `n` e `m` i vertici delle due linee, limitato prima
 del calcolo; memoria O(min(n, m)). In più la validazione OGC delle due
 linee.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -13042,7 +13229,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -13181,7 +13368,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 4, kernel 2 |
+| versioni | semantica 3, config 1, analisi 5, kernel 2 |
 
 #### Che cosa fa
 
@@ -13324,7 +13511,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -13476,7 +13663,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 3, kernel 2 |
+| versioni | semantica 3, config 1, analisi 4, kernel 2 |
 
 #### Che cosa fa
 
@@ -13611,6 +13798,10 @@ O(n) per geometria, con `n` i vertici, più la validazione OGC
 dell'ingresso (O(n²) nel caso peggiore). Memoria O(n) per la copia
 orientata.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -13659,7 +13850,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 2 |
+| versioni | semantica 2, config 1, analisi 4, kernel 2 |
 
 #### Che cosa fa
 
@@ -13761,6 +13952,10 @@ rifiuto `PrecisionInsufficient`
 
 Tempo e memoria O(1) per riga (poche iterazioni del problema inverso).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -13809,7 +14004,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 3, kernel 2 |
+| versioni | semantica 3, config 1, analisi 4, kernel 2 |
 
 #### Che cosa fa
 
@@ -13904,6 +14099,10 @@ tratto, molto sotto 1 cm su ogni linea realistica. Nessun rifiuto
 
 Tempo O(n) sui vertici della linea; memoria O(1) oltre all'ingresso.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -13949,7 +14148,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -14095,7 +14294,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -14252,7 +14451,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -14356,6 +14555,10 @@ Tempo O(n·m) sui vertici delle due geometrie, limitato da
 `max_coordinate_pairs`, più la validazione OGC dei due ingressi; memoria
 O(1) oltre agli ingressi.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -14404,7 +14607,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 2 |
+| versioni | semantica 2, config 1, analisi 4, kernel 2 |
 
 #### Che cosa fa
 
@@ -14516,6 +14719,10 @@ finito. Nessun rifiuto `PrecisionInsufficient`
 
 Tempo e memoria O(1) per riga.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -14564,7 +14771,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -14680,6 +14887,10 @@ ricerca delle auto-intersezioni non è quella di `geo`, il verdetto
 sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(v + k).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -14731,7 +14942,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -14815,6 +15026,10 @@ dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
 [Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -14862,7 +15077,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -14948,6 +15163,10 @@ Esatta: i vertici sono le coordinate dei punti, copiate
 Tempo O(n) sulle righe più la validazione OGC della linea (O(n) per una
 `LineString`); memoria O(n): tutta la colonna diventa una geometria.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -14993,7 +15212,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -15088,6 +15307,10 @@ geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1
 O(n) per linea, con `n` i vertici, più la validazione OGC dell'ingresso.
 Memoria O(1) oltre la linea.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -15133,7 +15356,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -15228,6 +15451,10 @@ con essa la frazione, può cambiare con l'ultimo bit delle coordinate
 O(v) per riga sui suoi `v` vertici, più la validazione OGC della geometria
 (O(v²) nel caso peggiore); memoria O(n) per la colonna aggiunta.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -15277,7 +15504,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 4, kernel 1 |
+| versioni | semantica 3, config 1, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -15384,6 +15611,10 @@ O(n) per geometria, con `n` le coordinate (una mappa degli estremi, ogni
 linea percorsa una volta), più la validazione OGC dell'ingresso e delle
 linee d'uscita. Memoria O(n).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -15431,7 +15662,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -15538,6 +15769,10 @@ restare fuori secondo l'arrotondamento delle due somme.
 O(n) per linea, con `n` i vertici, più la validazione OGC dell'ingresso e
 dell'uscita. Memoria O(n).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -15583,7 +15818,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 2, kernel 2 |
+| versioni | semantica 3, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -15723,6 +15958,10 @@ concentrici collegati, è quadratico nei lati per il logaritmo, entro il
 tetto di 10.000 segmenti) e la rivalidazione dell'uscita. Memoria O(v) per
 la cella in lavorazione, più le celle d'uscita.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -15772,7 +16011,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -15906,6 +16145,10 @@ Di norma O((n + m) log m) più le distanze; nel caso peggiore (destre
 equidistanti da molte sinistre, rettangoli grandi sovrapposti) O(n · m).
 Memoria O(m) per l'albero più gli abbinamenti.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -15962,7 +16205,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 3, kernel 2 |
+| versioni | semantica 3, config 1, analisi 4, kernel 2 |
 
 #### Che cosa fa
 
@@ -16111,6 +16354,10 @@ un'unione di ciascun lato e una differenza per riga contro l'unione intera
 dell'altro lato. Più la validazione OGC di ingressi, unioni e pezzi.
 Memoria: i due lati, le unioni e i pezzi.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -16162,7 +16409,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -16247,6 +16494,10 @@ dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
 [Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n) per la validazione.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -16292,7 +16543,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -16394,6 +16645,10 @@ O(n). Più la validazione OGC
 dell'ingresso (sub-quadratica nel caso tipico, O(n²) nel peggiore:
 [Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -16439,7 +16694,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -16529,6 +16784,10 @@ nel caso tipico, O(n²) nel peggiore:
 [Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì));
 memoria O(n): tutta la colonna diventa una geometria.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -16574,7 +16833,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 4, kernel 3 |
+| versioni | semantica 3, config 1, analisi 5, kernel 3 |
 
 #### Che cosa fa
 
@@ -16720,6 +16979,10 @@ rettangolo. Memoria O(n) per tutte le linee della
 tabella, raccolte prima del calcolo (classe bloccante), più le righe
 d'uscita.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -16769,7 +17032,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -16896,6 +17159,10 @@ indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
 caso peggiore (molti lati che si incrociano); in più la validazione OGC di
 entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -16945,7 +17212,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -17072,6 +17339,10 @@ indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
 caso peggiore (molti lati che si incrociano); in più la validazione OGC di
 entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -17121,7 +17392,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -17248,6 +17519,10 @@ indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
 caso peggiore (molti lati che si incrociano); in più la validazione OGC di
 entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -17297,7 +17572,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -17424,6 +17699,10 @@ indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
 caso peggiore (molti lati che si incrociano); in più la validazione OGC di
 entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -17473,7 +17752,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -17600,6 +17879,10 @@ indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
 caso peggiore (molti lati che si incrociano); in più la validazione OGC di
 entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -17649,7 +17932,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -17776,6 +18059,10 @@ indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
 caso peggiore (molti lati che si incrociano); in più la validazione OGC di
 entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -17825,7 +18112,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -17952,6 +18239,10 @@ indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
 caso peggiore (molti lati che si incrociano); in più la validazione OGC di
 entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -18001,7 +18292,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -18128,6 +18419,10 @@ indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
 caso peggiore (molti lati che si incrociano); in più la validazione OGC di
 entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -18177,7 +18472,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -18304,6 +18599,10 @@ indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
 caso peggiore (molti lati che si incrociano); in più la validazione OGC di
 entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -18353,7 +18652,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -18480,6 +18779,10 @@ indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
 caso peggiore (molti lati che si incrociano); in più la validazione OGC di
 entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -18529,7 +18832,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -18656,6 +18959,10 @@ indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
 caso peggiore (molti lati che si incrociano); in più la validazione OGC di
 entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -18705,7 +19012,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 2, analisi 3, kernel 2 |
+| versioni | semantica 2, config 2, analisi 4, kernel 2 |
 
 #### Che cosa fa
 
@@ -18851,6 +19158,10 @@ geometria, e ogni punto si confronta con i percorsi precedenti. Memoria
 O(k) per geometria, più le griglie NTv2 lette (al più 256 MiB per file);
 `reproject_batches` tiene in memoria l'intera uscita.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -18901,7 +19212,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -18999,6 +19310,10 @@ dei CRS integrati. Nessun rifiuto `PrecisionInsufficient`
 Tempo O(n) sulle coordinate della geometria, più la validazione OGC di
 ingresso e uscita; memoria O(n) per la copia ruotata.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -19047,7 +19362,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -19145,6 +19460,10 @@ rifiuto `PrecisionInsufficient`
 Tempo O(n) sulle coordinate della geometria, più la validazione OGC di
 ingresso e uscita; memoria O(n) per la copia scalata.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -19190,7 +19509,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -19296,6 +19615,10 @@ confronto di tutti i lati dell'uno con tutti i lati dell'altro, O(a · b),
 con un filtro sui rettangoli dei segmenti. Memoria O(n) per tutte le
 geometrie, decodificate prima del calcolo (classe bloccante).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -19343,7 +19666,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 2, analisi 3, kernel 2 |
+| versioni | semantica 3, config 2, analisi 4, kernel 2 |
 
 #### Che cosa fa
 
@@ -19428,7 +19751,8 @@ Poi dal kernel, per geometria (`OperationError`, che il runner porta in `Plenora
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
   calcolo di `geo` vanno in panico dentro la barriera (il messaggio porta
   solo la forma del payload);
-- `InvalidParameter`: soglia non finita o negativa (l'analisi la
+- `InvalidParameter`: con `preserve_topology`, oltre `i32::MAX` coordinate;
+  soglia non finita o negativa (l'analisi la
   rifiuta prima); sul percorso scalato (sotto), un'area positiva che nella
   scala delle coordinate diventa zero.
 
@@ -19470,6 +19794,10 @@ verifica le distanze; `preserve_topology` O(n log n) nel caso tipico (coda di pr
 indice spaziale di `geo`). Più la validazione OGC dell'ingresso e
 dell'uscita (sub-quadratica nel caso tipico, O(n²) nel peggiore:
 [Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
 
 #### Memoria
 
@@ -19516,7 +19844,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 1, analisi 3, kernel 1 |
+| versioni | semantica 3, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -19647,6 +19975,10 @@ O((n + m) log m) più il costo dei predicati e delle coppie `p`; nel caso
 peggiore (rettangoli tutti sovrapposti) O(n · m) predicati. Più la
 validazione OGC di ogni geometria. Memoria O(m + p).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -19706,7 +20038,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -19802,6 +20134,10 @@ R-tree dei vertici del riferimento costruito una volta, O(r log r); poi
 O(log r) per vertice d'ingresso, più la validazione OGC dell'uscita di ogni
 riga. Memoria O(r) per l'albero, più le celle d'uscita.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -19851,7 +20187,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -19955,6 +20291,10 @@ dell'ingresso e dell'uscita (O(n²) nel caso peggiore, [Limiti dichiarati,
 il verdetto sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(n).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -20000,7 +20340,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 3 |
+| versioni | semantica 2, config 1, analisi 4, kernel 3 |
 
 #### Che cosa fa
 
@@ -20148,6 +20488,10 @@ più le parti prodotte; l'uscita si costruisce in un batch solo. Tempi
 misurati e oracoli nel
 [Limiti dichiarati, «`geo.make_valid`, `geo.polygonize`, `geo.split`»](limiti.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -20195,7 +20539,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 2, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -20316,6 +20660,10 @@ Linee e punti: O(v) per riga. Poligoni: a ogni livello due intersezioni
 per pezzo, O(v log v) sui vertici del pezzo, per al più 32 livelli;
 memoria O(v) più le parti prodotte.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -20364,7 +20712,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -20477,6 +20825,10 @@ ricerca delle auto-intersezioni non è quella di `geo`, il verdetto
 sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(v + k).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -20528,7 +20880,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -20660,7 +21012,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 2, kernel 1 |
+| versioni | semantica 2, config 1, analisi 3, kernel 1 |
 
 #### Che cosa fa
 
@@ -20748,6 +21100,10 @@ con coordinate e offset interi. Nessun rifiuto `PrecisionInsufficient`
 Tempo O(n) sulle coordinate della geometria, più la validazione OGC di
 ingresso e uscita; memoria O(n) per la copia spostata.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -20793,7 +21149,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -20908,6 +21264,10 @@ ricerca delle auto-intersezioni non è quella di `geo`, il verdetto
 sì»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
 Memoria O(v + k).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -20959,7 +21319,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -21088,7 +21448,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 3, kernel 2 |
+| versioni | semantica 3, config 1, analisi 4, kernel 2 |
 
 #### Che cosa fa
 
@@ -21210,6 +21570,10 @@ O(n log n) tipico sulla colonna, con `n` le righe: caricamento in blocco
 della triangolazione, celle, ritaglio delle celle di bordo, associazione
 punto-cella con un R-tree; quadratico nel caso peggiore. Memoria O(n).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 #### Memoria
 
 Memoria: da misura v4.
@@ -21261,7 +21625,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 1, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -21370,6 +21734,10 @@ predicato esatto sui soli candidati. Di norma O((n + m) log m) più il
 costo dei predicati; nel caso peggiore (rettangoli tutti sovrapposti)
 O(n · m) predicati. Più la validazione OGC di ogni geometria. Memoria O(m)
 per l'albero più le coppie confermate.
+
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
 
 #### Memoria
 

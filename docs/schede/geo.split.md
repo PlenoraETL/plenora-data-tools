@@ -144,6 +144,10 @@ più le parti prodotte; l'uscita si costruisce in un batch solo. Tempi
 misurati e oracoli nel
 [Limiti dichiarati, «`geo.make_valid`, `geo.polygonize`, `geo.split`»](limiti.md#geomake_valid-geopolygonize-geosplit-equivalenza-a-geos-verificata-non-dimostrata).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Un quadrato tagliato da una retta verticale (`other_wkb` è

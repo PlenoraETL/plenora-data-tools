@@ -102,6 +102,10 @@ confronto di tutti i lati dell'uno con tutti i lati dell'altro, O(a · b),
 con un filtro sui rettangoli dei segmenti. Memoria O(n) per tutte le
 geometrie, decodificate prima del calcolo (classe bloccante).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Due stanze con un muro in comune e una terza che le tocca in un punto.

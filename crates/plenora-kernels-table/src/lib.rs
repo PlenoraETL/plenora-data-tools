@@ -352,12 +352,24 @@ pub(crate) fn reject_rows(rejections: &[RowRejection<'_>], message: &'static str
     Err(PlenoraError::DataMapping(message.into()).with_row_diagnostics(report))
 }
 
+/// Rifiuta schemi ambigui prima di risolvere colonne per nome.
+pub(crate) fn require_unique_names(schema: &Schema) -> Result<()> {
+    let mut names = std::collections::BTreeSet::new();
+    for field in schema.fields() {
+        if !names.insert(field.name()) {
+            return Err(PlenoraError::Schema("nomi di colonna duplicati".into()));
+        }
+    }
+    Ok(())
+}
+
 /// Indice della colonna `name` nel batch.
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna assente dallo schema.
+/// - `Schema`: colonna assente o nomi duplicati nello schema.
 pub fn column_index(batch: &RecordBatch, name: &str) -> Result<usize> {
+    require_unique_names(&batch.schema())?;
     batch
         .schema()
         .index_of(name)
@@ -496,6 +508,7 @@ pub fn replace_or_append(
     nullable: bool,
     array: ArrayRef,
 ) -> Result<RecordBatch> {
+    require_unique_names(&batch.schema())?;
     if array.len() != batch.num_rows() {
         return Err(PlenoraError::Schema(format!(
             "lunghezza output {} diversa dalle righe {}",
@@ -763,6 +776,69 @@ pub fn validate_text_convertible(data_type: &DataType, column: &str) -> Result<(
                 "colonna `{column}`: timezone Arrow del tipo non valida"
             )));
         }
+    }
+    Ok(())
+}
+
+/// Le operazioni binarie richiedono riferimenti concordi anche quando
+/// la geometria non e' una chiave o non contribuisce all'uscita.
+pub(crate) fn require_compatible_geometry_inputs(
+    left: &Schema,
+    left_geometries: &[plenora_core::contract::GeometryColumnContract],
+    right: &Schema,
+    right_geometries: &[plenora_core::contract::GeometryColumnContract],
+) -> Result<()> {
+    use plenora_core::contract::arrow_metadata::{
+        field_declares_wkb_geometry, require_geometry_compatibility, GeometryComparison,
+    };
+    for a in left.fields().iter().filter(|f| {
+        field_declares_wkb_geometry(f) || left_geometries.iter().any(|g| g.name == *f.name())
+    }) {
+        for b in right.fields().iter().filter(|f| {
+            field_declares_wkb_geometry(f) || right_geometries.iter().any(|g| g.name == *f.name())
+        }) {
+            require_geometry_compatibility(
+                a,
+                left_geometries,
+                b,
+                right_geometries,
+                GeometryComparison::Inputs,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Rifiuta celle geometriche quando l'operazione non ne conserva i metadati.
+/// Controlla anche i campi annidati, prima di leggere qualsiasi cella.
+pub(crate) fn require_non_geometry(field: &Field) -> Result<()> {
+    if plenora_core::contract::arrow_metadata::field_declares_wkb_geometry(field)
+        || field
+            .metadata()
+            .keys()
+            .any(|key| key.starts_with("plenora.geometry."))
+        || field
+            .metadata()
+            .get("ARROW:extension:name")
+            .is_some_and(|name| name.starts_with("geoarrow."))
+    {
+        return Err(PlenoraError::Crs(
+            "operazione non supportata su celle geometriche".into(),
+        ));
+    }
+    match field.data_type() {
+        DataType::List(child)
+        | DataType::LargeList(child)
+        | DataType::FixedSizeList(child, _)
+        | DataType::Map(child, _) => {
+            require_non_geometry(child)?;
+        }
+        DataType::Struct(children) => {
+            for child in children {
+                require_non_geometry(child)?;
+            }
+        }
+        _ => {}
     }
     Ok(())
 }

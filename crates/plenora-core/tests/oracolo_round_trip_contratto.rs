@@ -69,7 +69,7 @@ fn contratto(crs: ContractCrs, dimensioni: GeometryDimensions) -> DataContract {
         Field::new("id", DataType::Int64, false),
         campo_geometria("geom"),
     ]));
-    DataContract::new(
+    DataContract::from_source(
         schema,
         vec![GeometryColumnContract {
             field_id: FieldId(0),
@@ -271,7 +271,7 @@ fn un_metadato_divergente_e_un_errore_non_un_arbitrato() {
         Field::new("id", DataType::Int64, false),
         Field::new("geom", DataType::Binary, true).with_metadata(metadata),
     ]));
-    let esito = DataContract::new(
+    let esito = DataContract::from_source(
         schema,
         vec![GeometryColumnContract {
             field_id: FieldId(0),
@@ -291,4 +291,29 @@ fn un_metadato_divergente_e_un_errore_non_un_arbitrato() {
         esito.is_err(),
         "una chiave canonica divergente deve fallire, non essere sovrascritta"
     );
+}
+
+#[test]
+fn emissione_rifiuta_crs_legacy_diverso_dal_contratto() {
+    for declared in ["EPSG:4326", "EPSG:3857"] {
+        let mut input = contratto(
+            ContractCrs::Resolved(resolve_crs("EPSG:3857", "crs").unwrap()),
+            GeometryDimensions::Xy,
+        );
+        let field = plenora_core::contract::arrow_metadata::geometry_output_field("geom", declared)
+            .unwrap();
+        input.schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            field,
+        ]));
+        let result = arrow_schema_from_contract(&input);
+        if declared == "EPSG:3857" {
+            assert!(result.is_ok(), "{result:?}");
+        } else {
+            assert!(
+                matches!(result, Err(plenora_core::PlenoraError::Crs(_))),
+                "{result:?}"
+            );
+        }
+    }
 }

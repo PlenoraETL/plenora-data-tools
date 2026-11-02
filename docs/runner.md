@@ -960,3 +960,19 @@ esplicito.
   categoria; gli errori con diagnostica per riga o già strutturati restano
   quelli del kernel, salvo la diagnostica sulla base dell'ingresso del
   passo, che nomina passo e ingresso.
+
+### Riferimenti delle proprieta' del contratto
+
+`DataContract.field_ids` registra le identita' note dei campi separatamente
+dalle proprieta' che le usano. `validate` rifiuta identita' duplicate,
+campi registrati assenti e chiavi di `sorted_by` non presenti nel registro,
+a ogni livello di fiducia. `active_geometry` deve riferire una geometria
+dichiarata con la stessa identita' registrata. Il registro e' interno al
+piano: non sostituisce le identita' pubblicate nei metadati Arrow.
+
+L'analisi tabellare assegna gli ID mancanti prima della trasformazione;
+una rinomina simultanea li sposta, una sorgente assente non ha effetto.
+Le operazioni che rimuovono o sostituiscono colonne eliminano le prove
+d'ordinamento coinvolte. L'analisi geo elimina conservativamente gli
+ordinamenti sulla geometria, anche nelle operazioni che la lasciano
+invariata; conserva quelli sulle colonne tabellari propagate.

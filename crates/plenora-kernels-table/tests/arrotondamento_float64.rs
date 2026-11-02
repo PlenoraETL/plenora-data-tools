@@ -686,7 +686,7 @@ fn analisi_ed_esecuzione_concordano_sul_dominio() {
             Field::new("g", DataType::Utf8, false),
             Field::new("v", tipo.clone(), true),
         ]));
-        let contratto = DataContract::new(
+        let contratto = DataContract::from_source(
             Arc::clone(&schema),
             Vec::new(),
             None,

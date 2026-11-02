@@ -25,12 +25,21 @@ diverse.
 
 ### Schema
 
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Le colonne di `id_columns` nel loro ordine, con tipo, nullabilità e
 metadati di campo; poi `var_name`, `utf8` non nullabile; poi `value_name`,
-nullabile e senza metadati di campo, del tipo comune se le colonne valore
+nullabile, del tipo comune se le colonne valore
 hanno tutte lo stesso tipo Arrow, altrimenti `utf8` con
 `type_policy: "string"`. I metadati di schema si conservano. Una colonna
-geometrica resta geometrica solo se è una colonna id. Il contratto dichiara
+geometrica nelle colonne valore trasmette i metadati geometrici al campo
+derivato se tutte le sorgenti sono compatibili; identita' e dichiarazione
+dei tipi non si copiano. Le colonne id conservano i loro metadati. La
+pipeline ammette al massimo una geometria in uscita. Il contratto dichiara
 righe × colonne valore quando il conteggio d'ingresso è noto, e nessun
 ordinamento.
 

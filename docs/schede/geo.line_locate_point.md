@@ -91,6 +91,10 @@ con essa la frazione, può cambiare con l'ultimo bit delle coordinate
 O(v) per riga sui suoi `v` vertici, più la validazione OGC della geometria
 (O(v²) nel caso peggiore); memoria O(n) per la colonna aggiunta.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 `point_wkb` è `POINT(5 3)`.

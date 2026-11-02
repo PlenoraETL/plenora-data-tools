@@ -445,6 +445,16 @@ pub fn buffer_with_cap_con_margine(
     validate_output(Geometry::MultiPolygon(result))
 }
 
+/// Il kernel upstream usa i32 per il vicinato: nessun cast deve troncare un indice.
+fn verifica_indici_simplify(coordinates: usize) -> Result<(), OperationError> {
+    i32::try_from(coordinates)
+        .map(|_| ())
+        .map_err(|_| OperationError::InvalidParameter {
+            name: "geometry",
+            reason: "numero di coordinate oltre il dominio degli indici della semplificazione",
+        })
+}
+
 /// Semplificazione della geometria con Douglas-Peucker
 /// (`SimplifyPolicy::DouglasPeucker`), il default di `geo.simplify`.
 ///
@@ -478,7 +488,7 @@ pub fn simplify(geometry: &Geometry<f64>, tolerance: f64) -> Result<Geometry<f64
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
 /// - `InvalidParameter`: `tolerance` non e' finita oppure e' negativa, o
 ///   (area, coordinate scalate) positiva ma non rappresentabile nello spazio
-///   scalato;
+///   scalato, oppure il conteggio di coordinate supera `i32::MAX` con `PreserveTopology`;
 /// - `InvalidOutput`: la geometria semplificata non supera la validazione
 ///   OGC;
 /// - `Internal`: una distanza del percorso Douglas-Peucker non e'
@@ -490,6 +500,9 @@ pub fn simplify_with_policy(
     tolerance: f64,
     policy: SimplifyPolicy,
 ) -> Result<Geometry<f64>, OperationError> {
+    if policy == SimplifyPolicy::PreserveTopology {
+        verifica_indici_simplify(geometry.coords_count())?;
+    }
     ensure_valid(geometry)?;
     if !tolerance.is_finite() || tolerance < 0.0 {
         return Err(OperationError::InvalidParameter {
@@ -770,6 +783,14 @@ mod prove_della_soglia_scalata {
 // confronto per bit e' il contratto verificato, non un'approssimazione.
 #[allow(clippy::float_cmp)]
 mod tests {
+    #[test]
+    fn indici_simplify_rifiutati_prima_del_cast_upstream() {
+        let max = usize::try_from(i32::MAX).unwrap();
+        assert!(super::verifica_indici_simplify(max).is_ok());
+        assert!(super::verifica_indici_simplify(max + 1).is_err());
+        assert!(super::verifica_indici_simplify(usize::MAX).is_err());
+    }
+
     use super::*;
     use crate::test_support::{rect, rect_polygon};
     use geo::{

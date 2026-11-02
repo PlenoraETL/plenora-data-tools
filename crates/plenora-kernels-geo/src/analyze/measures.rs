@@ -2,6 +2,7 @@
 //! (`bounds_extractor`, `geometry_accessors`, `line_locate_point`, misure) o
 //! sostituiscono la geometria con le colonne diagnostiche.
 
+use plenora_core::contract::FieldOrigin;
 use std::sync::Arc;
 
 use plenora_core::arrow::{DataType, Field, Schema};
@@ -23,6 +24,7 @@ pub(in crate::analyze) fn analyze_bounds(
     op: &str,
     input: &DataContract,
     geometry: &GeometryColumnContract,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let mut fields = output_fields(input);
     for suffix in ["minx", "miny", "maxx", "maxy"] {
@@ -30,17 +32,18 @@ pub(in crate::analyze) fn analyze_bounds(
         ensure_name_free(op, &fields, &name)?;
         fields.push(Field::new(name, DataType::Float64, true));
     }
-    rebuild(input, fields, input.properties.clone())
+    rebuild(input, fields, input.properties.clone(), allocator)
 }
 
 /// `geometry_diagnostics`: la colonna geometria e' sostituita, nella sua
 /// posizione, dalle 10 colonne diagnostiche; il contratto diventa
 /// non-geografico (nessuna colonna geometria), metadati di schema e
-/// proprieta' restano.
+/// cardinalita' restano; l'ordine sulla geometria rimossa si elimina.
 pub(in crate::analyze) fn analyze_diagnostics(
     op: &str,
     input: &DataContract,
     geometry: &GeometryColumnContract,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let mut fields = output_fields(input);
     let position = fields
@@ -83,14 +86,30 @@ pub(in crate::analyze) fn analyze_diagnostics(
     fields
         .splice(position..=position, diagnostic_fields)
         .for_each(drop);
-    DataContract::new(
+    let mut properties = input.properties.clone();
+    if properties
+        .sorted_by
+        .as_ref()
+        .and_then(|p| p.value())
+        .is_some_and(|order| order.keys.contains(&geometry.field_id))
+    {
+        properties.sorted_by = None;
+    }
+    let mut origins = input.field_origins();
+    origins.splice(
+        position..=position,
+        std::iter::repeat_n(FieldOrigin::New, DIAGNOSTIC_COLUMNS.len()),
+    );
+    input.rebuild(
         Arc::new(Schema::new_with_metadata(
             fields,
             input.schema.metadata().clone(),
         )),
+        origins,
         Vec::new(),
         None,
-        input.properties.clone(),
+        properties,
+        allocator,
     )
 }
 
@@ -100,6 +119,7 @@ pub(in crate::analyze) fn analyze_geometry_accessors(
     op: &str,
     input: &DataContract,
     config: &Value,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let parsed: GeometryAccessorsConfig = parse_config(op, config)?;
     let mut selected: Vec<usize> = match &parsed.fields {
@@ -134,7 +154,7 @@ pub(in crate::analyze) fn analyze_geometry_accessors(
         ensure_name_free(op, &fields, &name)?;
         fields.push(Field::new(name, data_type.clone(), nullable));
     }
-    rebuild(input, fields, input.properties.clone())
+    rebuild(input, fields, input.properties.clone(), allocator)
 }
 
 /// `line_locate_point`: punto da config (`point_wkb`, WKB esadecimale nel CRS
@@ -145,6 +165,7 @@ pub(in crate::analyze) fn analyze_line_locate_point(
     op: &str,
     input: &DataContract,
     config: &Value,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let parsed: LineLocatePointConfig = parse_config(op, config)?;
     let bytes = validate_wkb_hex(op, "point_wkb", &parsed.point_wkb)?;
@@ -158,7 +179,7 @@ pub(in crate::analyze) fn analyze_line_locate_point(
     let name = output_name(op, parsed.output_column.as_deref(), FRACTION_COLUMN)?;
     // Null anche per una geometria presente: `None` per una non
     // `LineString` o una linea vuota.
-    analyze_add_column(op, input, name, DataType::Float64, true)
+    analyze_add_column(op, input, name, DataType::Float64, true, allocator)
 }
 
 /// Misure con colonna `Float64` aggiunta in coda (`area`, `length`,
@@ -168,10 +189,18 @@ pub(in crate::analyze) fn analyze_measure(
     op: &str,
     input: &DataContract,
     config: &Value,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let parsed: OutputColumnConfig = parse_config(op, config)?;
     let name = output_name(op, parsed.output_column.as_deref(), short_id(op))?;
     // Un valore per ogni geometria presente: null solo dove lo e' la
     // geometria.
-    analyze_add_column(op, input, name, DataType::Float64, geometry_nullable(input))
+    analyze_add_column(
+        op,
+        input,
+        name,
+        DataType::Float64,
+        geometry_nullable(input),
+        allocator,
+    )
 }

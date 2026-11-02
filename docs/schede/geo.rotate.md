@@ -94,6 +94,10 @@ dei CRS integrati. Nessun rifiuto `PrecisionInsufficient`
 Tempo O(n) sulle coordinate della geometria, più la validazione OGC di
 ingresso e uscita; memoria O(n) per la copia ruotata.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Un quarto di giro attorno all'origine: la x attesa è 0, quella calcolata

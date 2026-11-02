@@ -62,6 +62,9 @@ In validazione:
 
 In esecuzione:
 
+- `DataMapping` senza valori nel messaggio: numero JSON che il parser
+  riscriverebbe con valore decimale diverso, oppure chiave riservata
+  `$serde_json::private::RawValue`, anche negli array e nei percorsi ignorati;
 - `DataMapping` con diagnostica per riga: una cella non nulla che non è JSON
   valido (`json.invalid_syntax`) o la cui radice non è un oggetto
   (`json.root_not_object`). Il passo non produce uscita; la diagnostica
@@ -81,7 +84,7 @@ per ogni percorso trovato; il runner lo rifiuta in validazione
 
 ### Complessità
 
-Tempo O(byte dei documenti): una passata di parsing per riga, senza
+Tempo O(byte dei documenti): controllo lessicale esatto e parsing per riga, senza
 costruire l'albero JSON (salvo le righe con chiavi ambigue o ripetute, che
 passano dall'albero); memoria O(n · k) per le k colonne estratte.
 

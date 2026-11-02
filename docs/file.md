@@ -133,7 +133,8 @@ codifica dei kernel e con le coordinate di `geo`.
 Fixture: `crates/plenora-io/tests/dati/` contiene file scritti da pyarrow
 (Parquet C++): due GeoParquet nella forma di GeoPandas, con il PROJJSON di
 PROJ, uno con timestamp `INT96` e uno con i checksum di pagina
-(`scripts/genera_fixture_geoparquet.py`).
+(`scripts/genera_fixture_geoparquet.py`). La fixture UTM con PROJJSON esterno
+semanticamente equivalente si legge senza modificare le coordinate.
 
 ## Scrittura atomica
 

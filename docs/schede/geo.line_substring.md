@@ -103,6 +103,10 @@ restare fuori secondo l'arrotondamento delle due somme.
 O(n) per linea, con `n` i vertici, più la validazione OGC dell'ingresso e
 dell'uscita. Memoria O(n).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 ```json

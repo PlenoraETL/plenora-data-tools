@@ -112,6 +112,10 @@ coppia di rettangoli che si toccano, O(v log v) sui vertici `v` della
 coppia (O(n²) coppie nel caso peggiore, tutte sovrapposte). Memoria O(n)
 per tutte le geometrie, decodificate prima del calcolo (classe bloccante).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Due rettangoli sovrapposti per un'area di 8 e un terzo che tocca il secondo

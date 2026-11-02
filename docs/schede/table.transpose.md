@@ -26,12 +26,20 @@ cambia niente: dipende dall'ingresso.
 
 ### Schema
 
+Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
+delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
+tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano
+anche le dichiarazioni mancanti o `unknown`, senza normalizzazioni implicite
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Prima colonna: `id_column` (o `col_0` senza), `utf8` non nullabile, con i
 nomi delle colonne dati (tutte tranne `id_column`, nel loro ordine). Poi
 una colonna per riga d'ingresso, nullabile: del tipo comune se le colonne
 dati hanno tutte lo stesso tipo Arrow, altrimenti `utf8` con
 `type_policy: "string"`, con il testo delle celle (`1.0` è `"1"`, le date
-`AAAA-MM-GG`). Metadati di campo e di schema non si conservano. Un
+`AAAA-MM-GG`). I metadati geometrici si conservano se tutte le colonne dati sono
+geometrie compatibili; identita' e dichiarazione dei tipi non si copiano.
+Gli altri metadati di campo e di schema non si conservano. Un
 ingresso senza righe esce invariato, schema compreso.
 
 ### Righe

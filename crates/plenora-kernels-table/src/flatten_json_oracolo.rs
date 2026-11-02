@@ -52,6 +52,7 @@ fn flatten_json_prima(
         let Some(text) = scalar_as_string(source.as_ref(), row)? else {
             continue;
         };
+        super::verifica_numeri_json(&text)?;
         let cause = match serde_json::from_str::<Value>(&text) {
             Ok(Value::Object(_)) => continue,
             Ok(_) => "json.root_not_object",
@@ -338,48 +339,24 @@ fn la_chiave_ripetuta_sostituisce_il_sotto_albero() {
 }
 
 #[test]
-fn la_prima_chiave_raw_value_segue_value() {
-    // Casi che una passata unica accetterebbe.
-    let esito = |documento: &str, output: &[&str]| {
+fn la_chiave_raw_value_e_rifiutata_anche_dopo_un_documento_invalido() {
+    for document in [
+        r#"{"$serde_json::private::RawValue":"null"}"#,
+        r#"{"$serde_json::private::RawValue":0}"#,
+        r#"{"z":{"$serde_json::private::RawValue":0},"k":1}"#,
+    ] {
+        let batch = docs(&[Some("[1]".into()), Some(document.into())]);
+        confronta(&batch);
         let config = FlattenJson {
             column: "doc".into(),
             prefix: String::new(),
             max_level: 1,
-            output_columns: output.iter().map(|c| (*c).to_owned()).collect(),
+            output_columns: vec![],
         };
-        let batch = docs(&[Some(documento.to_owned())]);
-        assert_same_outcome_bits(
-            flatten_json(&batch, &config, &Limits::default()),
-            flatten_json_prima(&batch, &config, &Limits::default()),
+        assert!(
+            matches!(flatten_json(&batch,&config,&Limits::default()),Err(PlenoraError::DataMapping(message)) if message.contains("chiave JSON riservata"))
         );
-        flatten_json(&batch, &config, &Limits::default())
-            .err()
-            .and_then(|e| e.row_diagnostics().map(|r| r.counts.clone()))
-            .map(|counts| counts.into_keys().collect::<Vec<_>>())
-    };
-    assert_eq!(
-        esito(r#"{"$serde_json::private::RawValue":"null"}"#, &[]),
-        Some(vec!["json.root_not_object".to_owned()])
-    );
-    assert_eq!(
-        esito(r#"{"$serde_json::private::RawValue":0}"#, &[]),
-        Some(vec!["json.invalid_syntax".to_owned()])
-    );
-    assert_eq!(
-        esito(
-            r#"{"z":{"$serde_json::private::RawValue":0},"k":1}"#,
-            &["doc_k"]
-        ),
-        Some(vec!["json.invalid_syntax".to_owned()])
-    );
-    // Dopo il primo rifiuto (sola classificazione).
-    let batch = docs(&[
-        Some("[1]".into()),
-        Some(r#"{"$serde_json::private::RawValue":"null"}"#.into()),
-        Some(r#"{"$serde_json::private::RawValue":"{}"}"#.into()),
-        Some(r#"{"o":{"$serde_json::private::RawValue":0}}"#.into()),
-    ]);
-    confronta(&batch);
+    }
 }
 
 #[test]

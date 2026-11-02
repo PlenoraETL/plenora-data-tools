@@ -108,6 +108,10 @@ finito. Nessun rifiuto `PrecisionInsufficient`
 
 Tempo e memoria O(1) per riga.
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 `other_wkb` è `POINT(0 0)`: un grado di latitudine e uno di longitudine

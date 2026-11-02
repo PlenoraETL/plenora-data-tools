@@ -50,8 +50,10 @@ Una combinazione chiave-valore che non compare nei dati è null, anche con
 ### Schema
 
 Le colonne di `index_col` nel loro ordine, con tipo, nullabilità e
-metadati di campo; poi le colonne pivot, nullabili e senza metadati di
-campo, con il tipo sopra:
+metadati di campo; poi le colonne pivot, nullabili, con il tipo sopra.
+`first` e `last` su geometrie conservano i metadati geometrici della
+sorgente, senza identita' e dichiarazione dei tipi; le altre aggregazioni
+non li ereditano. La pipeline rifiuta piu' di una geometria in uscita:
 
 - senza `mapping`, una per valore pivot distinto dei dati, nell'ordine dei
   byte del testo del valore;

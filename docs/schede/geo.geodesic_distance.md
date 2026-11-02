@@ -98,6 +98,10 @@ rifiuto `PrecisionInsufficient`
 
 Tempo e memoria O(1) per riga (poche iterazioni del problema inverso).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 `other_wkb` è `POINT(0 0)`: sull'ellissoide un grado di latitudine è più

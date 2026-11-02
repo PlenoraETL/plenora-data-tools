@@ -698,6 +698,12 @@ pub fn aggregate_con_limiti(
     }
     // I nomi dopo i parametri, come nell'analisi.
     let nomi = config.nomi_uscita()?;
+    for aggregation in &config.aggregations {
+        if matches!(aggregation.function, AggFunction::First | AggFunction::Last) {
+            let index = column_index(batch, &aggregation.column)?;
+            crate::require_non_geometry(batch.schema().field(index))?;
+        }
+    }
     // Raggruppamento: fast path nativo per colonna singola
     // Int64/UInt64/Utf8 (nessuna stringa di chiave), chiavi binarie con la
     // stessa identita' di `row_key` altrimenti. Stesso ordine canonico dei

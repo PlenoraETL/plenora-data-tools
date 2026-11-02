@@ -71,14 +71,14 @@
       "once_cell-1.21.4",
       "phf-0.12.1",
       "phf_shared-0.12.1",
-      "plenora-cli-3.0.0",
-      "plenora-core-3.0.0",
+      "plenora-cli-4.0.0",
+      "plenora-core-4.0.0",
       "plenora-geo-0.33.1",
-      "plenora-io-3.0.0",
-      "plenora-kernels-geo-3.0.0",
-      "plenora-kernels-table-3.0.0",
+      "plenora-io-4.0.0",
+      "plenora-kernels-geo-4.0.0",
+      "plenora-kernels-table-4.0.0",
       "plenora-parquet-60.0.0",
-      "plenora-pipeline-3.0.0",
+      "plenora-pipeline-4.0.0",
       "plenora-wkt-0.14.0",
       "rand-0.10.2",
       "rand_core-0.10.1",
@@ -114,9 +114,9 @@
       "wkt-0.14.0",
       "zerocopy-0.8.55",
       "zmij-1.0.23",
-      "zstd-0.14.0",
-      "zstd-safe-8.0.0",
-      "zstd-sys-2.1.0+zstd.1.5.7"
+      "zstd-0.14.3",
+      "zstd-safe-8.2.0",
+      "zstd-sys-2.1.2+zstd.1.5.7"
     ],
     "wheel/x86_64-unknown-linux-gnu": [
       "ahash-0.8.12",
@@ -188,15 +188,15 @@
       "once_cell-1.21.4",
       "phf-0.12.1",
       "phf_shared-0.12.1",
-      "plenora-cli-3.0.0",
-      "plenora-core-3.0.0",
-      "plenora-data-py-3.0.0",
+      "plenora-cli-4.0.0",
+      "plenora-core-4.0.0",
+      "plenora-data-py-4.0.0",
       "plenora-geo-0.33.1",
-      "plenora-io-3.0.0",
-      "plenora-kernels-geo-3.0.0",
-      "plenora-kernels-table-3.0.0",
+      "plenora-io-4.0.0",
+      "plenora-kernels-geo-4.0.0",
+      "plenora-kernels-table-4.0.0",
       "plenora-parquet-60.0.0",
-      "plenora-pipeline-3.0.0",
+      "plenora-pipeline-4.0.0",
       "plenora-wkt-0.14.0",
       "pyo3-0.29.2",
       "pyo3-ffi-0.29.2",
@@ -234,9 +234,9 @@
       "wkt-0.14.0",
       "zerocopy-0.8.55",
       "zmij-1.0.23",
-      "zstd-0.14.0",
-      "zstd-safe-8.0.0",
-      "zstd-sys-2.1.0+zstd.1.5.7"
+      "zstd-0.14.3",
+      "zstd-safe-8.2.0",
+      "zstd-sys-2.1.2+zstd.1.5.7"
     ],
     "cli/x86_64-pc-windows-msvc": [
       "ahash-0.8.12",
@@ -303,14 +303,14 @@
       "once_cell-1.21.4",
       "phf-0.12.1",
       "phf_shared-0.12.1",
-      "plenora-cli-3.0.0",
-      "plenora-core-3.0.0",
+      "plenora-cli-4.0.0",
+      "plenora-core-4.0.0",
       "plenora-geo-0.33.1",
-      "plenora-io-3.0.0",
-      "plenora-kernels-geo-3.0.0",
-      "plenora-kernels-table-3.0.0",
+      "plenora-io-4.0.0",
+      "plenora-kernels-geo-4.0.0",
+      "plenora-kernels-table-4.0.0",
       "plenora-parquet-60.0.0",
-      "plenora-pipeline-3.0.0",
+      "plenora-pipeline-4.0.0",
       "plenora-wkt-0.14.0",
       "rand-0.10.2",
       "rand_core-0.10.1",
@@ -347,9 +347,9 @@
       "wkt-0.14.0",
       "zerocopy-0.8.55",
       "zmij-1.0.23",
-      "zstd-0.14.0",
-      "zstd-safe-8.0.0",
-      "zstd-sys-2.1.0+zstd.1.5.7"
+      "zstd-0.14.3",
+      "zstd-safe-8.2.0",
+      "zstd-sys-2.1.2+zstd.1.5.7"
     ],
     "wheel/x86_64-pc-windows-msvc": [
       "ahash-0.8.12",
@@ -418,15 +418,15 @@
       "once_cell-1.21.4",
       "phf-0.12.1",
       "phf_shared-0.12.1",
-      "plenora-cli-3.0.0",
-      "plenora-core-3.0.0",
-      "plenora-data-py-3.0.0",
+      "plenora-cli-4.0.0",
+      "plenora-core-4.0.0",
+      "plenora-data-py-4.0.0",
       "plenora-geo-0.33.1",
-      "plenora-io-3.0.0",
-      "plenora-kernels-geo-3.0.0",
-      "plenora-kernels-table-3.0.0",
+      "plenora-io-4.0.0",
+      "plenora-kernels-geo-4.0.0",
+      "plenora-kernels-table-4.0.0",
       "plenora-parquet-60.0.0",
-      "plenora-pipeline-3.0.0",
+      "plenora-pipeline-4.0.0",
       "plenora-wkt-0.14.0",
       "pyo3-0.29.2",
       "pyo3-ffi-0.29.2",
@@ -465,9 +465,9 @@
       "wkt-0.14.0",
       "zerocopy-0.8.55",
       "zmij-1.0.23",
-      "zstd-0.14.0",
-      "zstd-safe-8.0.0",
-      "zstd-sys-2.1.0+zstd.1.5.7"
+      "zstd-0.14.3",
+      "zstd-safe-8.2.0",
+      "zstd-sys-2.1.2+zstd.1.5.7"
     ]
   },
   "crate": {
@@ -1939,9 +1939,9 @@
         }
       ]
     },
-    "plenora-cli-3.0.0": {
+    "plenora-cli-4.0.0": {
       "nome": "plenora-cli",
-      "versione": "3.0.0",
+      "versione": "4.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -1954,9 +1954,9 @@
         }
       ]
     },
-    "plenora-core-3.0.0": {
+    "plenora-core-4.0.0": {
       "nome": "plenora-core",
-      "versione": "3.0.0",
+      "versione": "4.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -1969,9 +1969,9 @@
         }
       ]
     },
-    "plenora-data-py-3.0.0": {
+    "plenora-data-py-4.0.0": {
       "nome": "plenora-data-py",
-      "versione": "3.0.0",
+      "versione": "4.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -2004,9 +2004,9 @@
         }
       ]
     },
-    "plenora-io-3.0.0": {
+    "plenora-io-4.0.0": {
       "nome": "plenora-io",
-      "versione": "3.0.0",
+      "versione": "4.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -2019,9 +2019,9 @@
         }
       ]
     },
-    "plenora-kernels-geo-3.0.0": {
+    "plenora-kernels-geo-4.0.0": {
       "nome": "plenora-kernels-geo",
-      "versione": "3.0.0",
+      "versione": "4.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -2034,9 +2034,9 @@
         }
       ]
     },
-    "plenora-kernels-table-3.0.0": {
+    "plenora-kernels-table-4.0.0": {
       "nome": "plenora-kernels-table",
-      "versione": "3.0.0",
+      "versione": "4.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -2071,9 +2071,9 @@
         }
       ]
     },
-    "plenora-pipeline-3.0.0": {
+    "plenora-pipeline-4.0.0": {
       "nome": "plenora-pipeline",
-      "versione": "3.0.0",
+      "versione": "4.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -3006,9 +3006,9 @@
         }
       ]
     },
-    "zstd-0.14.0": {
+    "zstd-0.14.3": {
       "nome": "zstd",
-      "versione": "0.14.0",
+      "versione": "0.14.3",
       "licenza": "BSD-3-Clause",
       "repository": "https://github.com/gyscos/zstd-rs",
       "autori": [
@@ -3023,9 +3023,9 @@
         }
       ]
     },
-    "zstd-safe-8.0.0": {
+    "zstd-safe-8.2.0": {
       "nome": "zstd-safe",
-      "versione": "8.0.0",
+      "versione": "8.2.0",
       "licenza": "BSD-3-Clause",
       "repository": "https://github.com/gyscos/zstd-rs",
       "autori": [
@@ -3040,9 +3040,9 @@
         }
       ]
     },
-    "zstd-sys-2.1.0+zstd.1.5.7": {
+    "zstd-sys-2.1.2+zstd.1.5.7": {
       "nome": "zstd-sys",
-      "versione": "2.1.0+zstd.1.5.7",
+      "versione": "2.1.2+zstd.1.5.7",
       "licenza": "BSD-3-Clause",
       "repository": "https://github.com/gyscos/zstd-rs",
       "autori": [

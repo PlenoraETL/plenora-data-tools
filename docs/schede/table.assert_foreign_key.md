@@ -30,6 +30,12 @@ sinistra decide `allow_null`.
 
 ### Schema
 
+Se entrambi gli ingressi dichiarano geometrie, i loro riferimenti CRS,
+assi ed encoding devono coincidere, anche con ingressi vuoti e quando la
+geometria non e' una chiave o non compare nell'uscita. Divergenze sono
+rifiutate con `crs` dal kernel e dall'analisi
+([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
+
 Quello della tabella sinistra, invariato: colonne, tipi, nullabilità,
 metadati di campo e di schema; il contratto conserva ordinamento dichiarato
 (`sorted_by`) e numero di righe della sinistra. Nulla della destra entra

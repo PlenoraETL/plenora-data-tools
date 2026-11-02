@@ -127,6 +127,10 @@ O((n + m) log m) più il costo dei predicati e delle coppie `p`; nel caso
 peggiore (rettangoli tutti sovrapposti) O(n · m) predicati. Più la
 validazione OGC di ogni geometria. Memoria O(m + p).
 
+Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
+assenza o `unknown` causano `crs/validate` senza effetti. Vedi
+[migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
 ### Esempio
 
 Il primo punto sta sull'angolo comune dei due quadrati e il terzo sul lato

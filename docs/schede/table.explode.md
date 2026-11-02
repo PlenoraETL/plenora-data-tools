@@ -5,6 +5,10 @@ si ripete una volta per ogni elemento della sua lista, e la colonna
 d'uscita contiene l'elemento. Una lista vuota o nulla dà una riga con
 elemento nullo, quindi nessuna riga sparisce.
 
+L'operazione rifiuta i campi geometrici, anche annidati e con zero righe
+oppure tutte le celle nulle, con errore `crs/validate` sia nel kernel sia
+nell'analisi: non produce celle WKB senza metadati.
+
 ### Parametri
 
 | parametro | tipo | default | valori ammessi | significato |
