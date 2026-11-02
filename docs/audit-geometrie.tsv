@@ -1,0 +1,48 @@
+posizione	funzione	controllo	fonti
+crates/plenora-core/src/contract/arrow_metadata.rs:167	require_geometry_compatibility	definizione require_geometry_compatibility	autorita condivisa; dichiarazioni esplicite
+crates/plenora-core/src/contract/arrow_metadata.rs:302	geometry_comparison_field	canonical_geometry_field	autorita condivisa; dichiarazioni esplicite
+crates/plenora-core/src/contract/arrow_metadata.rs:315	require_geometry_source_crs	definizione require_geometry_source_crs	campo Arrow + CRS risolto; controllo della sorgente, non fusione
+crates/plenora-core/src/contract/arrow_metadata.rs:355	merged_geometry_metadata	definizione merged_geometry_metadata	autorita condivisa; dichiarazioni esplicite
+crates/plenora-core/src/contract/arrow_metadata.rs:363	merged_geometry_metadata	require_geometry_compatibility	autorita condivisa; dichiarazioni esplicite
+crates/plenora-core/src/contract/arrow_schema.rs:556	arrow_schema_from_contract	canonical_geometry_field	autorita condivisa; dichiarazioni esplicite
+crates/plenora-core/src/contract/arrow_schema.rs:791	canonical_geometry_field	definizione canonical_geometry_field	autorita condivisa; dichiarazioni esplicite
+crates/plenora-io/src/geoparquet.rs:110	completa_assi_geoparquet	require_geometry_source_crs	campo Arrow + CRS risolto; controllo della sorgente, non fusione
+crates/plenora-kernels-geo/src/analyze/dispatch.rs:622	analyze_binary	require_geometry_compatibility	Arrow + DataContract
+crates/plenora-kernels-geo/src/analyze/mod.rs:183	richiedi_ordine_assi	require_geometry_source_crs	campo Arrow + CRS risolto; controllo della sorgente, non fusione
+crates/plenora-kernels-geo/src/riproiezione.rs:264	richiedi_assi_normalizzati	require_geometry_source_crs	campo Arrow + CRS risolto; controllo della sorgente, non fusione
+crates/plenora-kernels-table/src/analyze/helpers.rs:291	merge_geometry	definizione merge_geometry	solo instradamento; rifiuta due colonne geometriche sopravvissute
+crates/plenora-kernels-table/src/analyze/joins.rs:244	analyze_join	merge_geometry	solo instradamento; rifiuta due colonne geometriche sopravvissute
+crates/plenora-kernels-table/src/analyze/joins.rs:307	analyze_fuzzy_join	merge_geometry	solo instradamento; rifiuta due colonne geometriche sopravvissute
+crates/plenora-kernels-table/src/analyze/joins.rs:341	analyze_cross_join	merge_geometry	solo instradamento; rifiuta due colonne geometriche sopravvissute
+crates/plenora-kernels-table/src/analyze/joins.rs:383	analyze_membership_join	require_compatible_geometry_inputs	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/joins.rs:458	analyze_asof_join	merge_geometry	solo instradamento; rifiuta due colonne geometriche sopravvissute
+crates/plenora-kernels-table/src/analyze/joins.rs:481	analyze_concat	check_same_schema	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/joins.rs:570	check_same_schema	definizione check_same_schema	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/joins.rs:581	check_same_schema	require_geometry_compatibility	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/joins.rs:589	check_same_schema	require_geometry_compatibility	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/joins.rs:628	analyze_concat_by_name	check_same_schema	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/joins.rs:647	analyze_concat_by_name	require_geometry_compatibility	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/joins.rs:740	analyze_set_operation	check_same_schema	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/quality.rs:238	analyze_coalesce	merged_geometry_metadata	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/quality.rs:370	analyze_assert_foreign_key	require_compatible_geometry_inputs	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/quality.rs:397	analyze_reconcile	require_compatible_geometry_inputs	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/reshape.rs:95	analyze_melt	merged_geometry_metadata	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/reshape.rs:303	analyze_pivot	merged_geometry_metadata	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/reshape.rs:343	analyze_transpose	merged_geometry_metadata	Arrow + DataContract
+crates/plenora-kernels-table/src/analyze/reshape.rs:545	analyze_table_diff	require_geometry_compatibility	Arrow + DataContract
+crates/plenora-kernels-table/src/governance.rs:638	assert_foreign_key	require_compatible_geometry_inputs	Arrow; API kernel senza DataContract
+crates/plenora-kernels-table/src/governance.rs:801	reconcile	require_compatible_geometry_inputs	Arrow; API kernel senza DataContract
+crates/plenora-kernels-table/src/joins.rs:1082	concat	require_geometry_compatibility	Arrow; API kernel senza DataContract
+crates/plenora-kernels-table/src/joins.rs:1159	union_schema_by_name	require_geometry_compatibility	Arrow; API kernel senza DataContract
+crates/plenora-kernels-table/src/joins.rs:1200	union_schema_by_name	require_geometry_compatibility	Arrow; API kernel senza DataContract
+crates/plenora-kernels-table/src/joins.rs:1444	membership_impl	require_compatible_geometry_inputs	Arrow; API kernel senza DataContract
+crates/plenora-kernels-table/src/lib.rs:785	require_compatible_geometry_inputs	definizione require_compatible_geometry_inputs	autorita condivisa; dichiarazioni esplicite
+crates/plenora-kernels-table/src/lib.rs:800	require_compatible_geometry_inputs	require_geometry_compatibility	autorita condivisa; dichiarazioni esplicite
+crates/plenora-kernels-table/src/quality.rs:708	coalesce	merged_geometry_metadata	Arrow; API kernel senza DataContract
+crates/plenora-kernels-table/src/reshape.rs:279	melt	merged_geometry_metadata	Arrow; API kernel senza DataContract
+crates/plenora-kernels-table/src/reshape.rs:1138	pivot	merged_geometry_metadata	Arrow; API kernel senza DataContract
+crates/plenora-kernels-table/src/reshape.rs:1234	transpose	merged_geometry_metadata	Arrow; API kernel senza DataContract
+crates/plenora-kernels-table/src/reshape.rs:1997	table_diff	require_geometry_compatibility	Arrow; API kernel senza DataContract
+crates/plenora-kernels-table/src/setops.rs:311	validate_schema	require_geometry_compatibility	Arrow; API kernel senza DataContract
+crates/plenora-kernels-table/src/setops.rs:341	concat_compatible	require_geometry_compatibility	Arrow; API kernel senza DataContract
+crates/plenora-kernels-table/src/setops.rs:428	union_distinct	require_geometry_compatibility	Arrow; API kernel senza DataContract

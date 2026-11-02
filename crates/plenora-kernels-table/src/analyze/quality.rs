@@ -241,6 +241,7 @@ pub(in crate::analyze) fn analyze_coalesce(
             .iter()
             .map(|name| field_of(op, input, name))
             .collect::<Result<Vec<_>>>()?,
+        &input.geometries,
     )?;
     let output = analyze_append(
         input,
@@ -366,7 +367,12 @@ pub(in crate::analyze) fn analyze_assert_foreign_key(
     fields: &mut FieldAllocator,
     limits: &Limits,
 ) -> Result<DataContract> {
-    crate::require_compatible_geometry_inputs(&inputs[0].schema, &inputs[1].schema)?;
+    crate::require_compatible_geometry_inputs(
+        &inputs[0].schema,
+        &inputs[0].geometries,
+        &inputs[1].schema,
+        &inputs[1].geometries,
+    )?;
     let config: governance::ForeignKey = typed(op, config)?;
     let _ = fields;
     check_text_key_pairs(
@@ -388,7 +394,12 @@ pub(in crate::analyze) fn analyze_reconcile(
     fields: &mut FieldAllocator,
     limits: &Limits,
 ) -> Result<DataContract> {
-    crate::require_compatible_geometry_inputs(&inputs[0].schema, &inputs[1].schema)?;
+    crate::require_compatible_geometry_inputs(
+        &inputs[0].schema,
+        &inputs[0].geometries,
+        &inputs[1].schema,
+        &inputs[1].geometries,
+    )?;
     let config: governance::Reconcile = typed(op, config)?;
     let _ = fields;
     check_text_key_pairs(
@@ -403,11 +414,13 @@ pub(in crate::analyze) fn analyze_reconcile(
     // derivato: nessuna colonna degli input sopravvive e i metadati di
     // schema degli input NON si ereditano (descriverebbero il risultato con
     // le proprieta' dell'ingresso).
+
     let schema = Schema::new(vec![
         Field::new("metric", DataType::Utf8, false),
         Field::new("value", DataType::UInt64, false),
     ]);
     finish(
+        vec![plenora_core::contract::FieldOrigin::New; schema.fields().len()],
         schema,
         None,
         None,
@@ -418,6 +431,7 @@ pub(in crate::analyze) fn analyze_reconcile(
                 PropertyScope::Dataset,
             )),
         },
+        fields,
     )
 }
 
@@ -590,15 +604,19 @@ pub(in crate::analyze) fn analyze_validate_rules(
             // Dataset nuovo: una riga per regola, nessuna colonna d'input.
             // Come per `reconcile`, i metadati di schema dell'input NON si
             // ereditano.
-            for name in ["name", "errors", "warnings"] {
-                fields.derive(name)?;
-            }
             let schema = Schema::new(vec![
                 Field::new("name", DataType::Utf8, false),
                 Field::new("errors", DataType::Int64, false),
                 Field::new("warnings", DataType::Int64, false),
             ]);
-            finish(schema, None, None, ContractProperties::default())
+            finish(
+                vec![plenora_core::contract::FieldOrigin::New; schema.fields().len()],
+                schema,
+                None,
+                None,
+                ContractProperties::default(),
+                fields,
+            )
         }
     }
 }

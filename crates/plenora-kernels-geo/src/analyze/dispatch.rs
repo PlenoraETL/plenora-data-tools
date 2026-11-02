@@ -4,6 +4,7 @@
 
 use plenora_core::arrow::{DataType, Field};
 use plenora_core::catalog::OperationDescriptor;
+use plenora_core::contract::FieldOrigin;
 use plenora_core::contract::{
     ContractCrs, ContractProperties, DataContract, FieldAllocator, GeometryColumnContract,
     GeometryType, GeometryTypesProperty, TypesDeclaration,
@@ -198,6 +199,7 @@ pub(in crate::analyze) fn analyze_unary_pair(
     input: &DataContract,
     config: &Value,
     data_type: DataType,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let parsed: OtherWkbConfig = parse_config(op, config)?;
     validate_other_wkb(op, &parsed.other_wkb)?;
@@ -230,7 +232,7 @@ pub(in crate::analyze) fn analyze_unary_pair(
             op,
             "geo.distance" | "geo.hausdorff_distance" | "geo.frechet_distance"
         );
-    analyze_add_column(op, input, name, data_type, nullable)
+    analyze_add_column(op, input, name, data_type, nullable, allocator)
 }
 
 /// Proprieta' `exact` della mappa tipi di output: le liste della mappa sono
@@ -308,7 +310,7 @@ pub(in crate::analyze) fn analyze_unary(
 ) -> Result<DataContract> {
     let output = analyze_unary_shape(descriptor, input, config, fields)?;
     let geometry = single_geometry(descriptor.id, input)?;
-    redeclare_output_types(descriptor.id, geometry, output)
+    redeclare_output_types(descriptor.id, geometry, output, fields)
 }
 
 /// I tipi dell'uscita delle operazioni che spezzano, raccolgono o
@@ -318,6 +320,7 @@ fn redeclare_output_types(
     op: &str,
     geometry: &GeometryColumnContract,
     output: DataContract,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let Some(types) = super::tipi::tipi_di_uscita(op, &geometry.types)? else {
         return Ok(output);
@@ -330,7 +333,7 @@ fn redeclare_output_types(
         .ok_or_else(|| {
             PlenoraError::Internal(format!("{op}: colonna geometria assente dall'uscita"))
         })?;
-    with_geometry_types_property(&output, &target, types)
+    with_geometry_types_property(&output, &target, types, allocator)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -376,7 +379,7 @@ fn analyze_unary_shape(
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             transform_output_types(op)?.map_or_else(
                 || Ok(input.clone()),
-                |types| with_geometry_types(input, geometry, types),
+                |types| with_geometry_types(input, geometry, types, fields),
             )
         }
         "geo.area"
@@ -389,34 +392,34 @@ fn analyze_unary_shape(
             if is_geodetic_measure(op) {
                 require_geodetic_ellipsoid(op, crs)?;
             }
-            analyze_measure(op, input, config)
+            analyze_measure(op, input, config, fields)
         }
         "geo.vertex_count" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             let name = output_name(op, parsed.output_column.as_deref(), short_id(op))?;
-            analyze_add_column(op, input, name, DataType::UInt64, geometry.nullable)
+            analyze_add_column(op, input, name, DataType::UInt64, geometry.nullable, fields)
         }
         "geo.to_wkt" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             let name = output_name(op, parsed.output_column.as_deref(), WKT_COLUMN)?;
-            analyze_add_column(op, input, name, DataType::Utf8, geometry.nullable)
+            analyze_add_column(op, input, name, DataType::Utf8, geometry.nullable, fields)
         }
         "geo.bounds_extractor" => {
             let _: EmptyConfig = parse_config(op, config)?;
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_bounds(op, input, geometry)
+            analyze_bounds(op, input, geometry, fields)
         }
         "geo.geometry_diagnostics" => {
             let _: EmptyConfig = parse_config(op, config)?;
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_diagnostics(op, input, geometry)
+            analyze_diagnostics(op, input, geometry, fields)
         }
         "geo.explode" | "geo.delaunay" => {
             let _: EmptyConfig = parse_config(op, config)?;
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_expand(op, input)
+            analyze_expand(op, input, fields)
         }
         "geo.split" => {
             let parsed: SplitConfig = parse_config(op, config)?;
@@ -429,7 +432,7 @@ fn analyze_unary_shape(
             // sola colonna geometria): stesso dominio del secondo operando di
             // distanze e predicati.
             let _ = super::helpers::validate_other_wkb_domain(op, &parsed.other_wkb, input)?;
-            analyze_expand(op, input)
+            analyze_expand(op, input, fields)
         }
         "geo.voronoi" => {
             let parsed: VoronoiConfig = parse_config(op, config)?;
@@ -441,7 +444,12 @@ fn analyze_unary_shape(
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
             // Le celle di Voronoi sono sempre poligoni (l'input puntuale non
             // e' il tipo dell'output).
-            with_geometry_types(input, geometry, exact_types(vec![GeometryType::Polygon])?)
+            with_geometry_types(
+                input,
+                geometry,
+                exact_types(vec![GeometryType::Polygon])?,
+                fields,
+            )
         }
         "geo.clean_topology" => {
             let parsed: CleanTopologyConfig = parse_config(op, config)?;
@@ -460,8 +468,9 @@ fn analyze_unary_shape(
                 input,
                 geometry,
                 exact_types(vec![GeometryType::Polygon, GeometryType::MultiPolygon])?,
+                fields,
             )?;
-            with_nullable_geometry(&typed, geometry)
+            with_nullable_geometry(&typed, geometry, fields)
         }
         "geo.dissolve" | "geo.line_builder" | "geo.polygon_builder" | "geo.line_merge" => {
             let _: EmptyConfig = parse_config(op, config)?;
@@ -469,23 +478,23 @@ fn analyze_unary_shape(
             // `line_merge` emette una riga per linea fusa, mai null; le altre
             // una riga, null per una tabella vuota o tutta null (e i builder
             // anche per meno punti di quanti ne servono).
-            analyze_geometry_only(input, geometry, &[], op != "geo.line_merge")
+            analyze_geometry_only(input, geometry, &[], op != "geo.line_merge", fields)
         }
         "geo.collect" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_collect(op, input, geometry, config)
+            analyze_collect(op, input, geometry, config, fields)
         }
         "geo.geometry_accessors" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_geometry_accessors(op, input, config)
+            analyze_geometry_accessors(op, input, config, fields)
         }
         "geo.line_locate_point" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_line_locate_point(op, input, config)
+            analyze_line_locate_point(op, input, config, fields)
         }
         "geo.subdivide" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_subdivide(op, input, geometry, config)
+            analyze_subdivide(op, input, geometry, config, fields)
         }
         "geo.snap" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
@@ -501,7 +510,7 @@ fn analyze_unary_shape(
         }
         "geo.cluster_dbscan" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_cluster_dbscan(op, input, config)
+            analyze_cluster_dbscan(op, input, config, fields)
         }
         "geo.polygonize" => {
             let parsed: PolygonizeConfig = parse_config(op, config)?;
@@ -511,8 +520,12 @@ fn analyze_unary_shape(
             analyze_geometry_only(
                 input,
                 geometry,
-                &[Field::new(CLASS_COLUMN, DataType::Utf8, false)],
+                &[(
+                    Field::new(CLASS_COLUMN, DataType::Utf8, false),
+                    FieldOrigin::New,
+                )],
                 false,
+                fields,
             )
         }
         "geo.distance"
@@ -526,11 +539,11 @@ fn analyze_unary_shape(
             if is_geodetic_measure(op) {
                 require_geodetic_ellipsoid(op, crs)?;
             }
-            analyze_unary_pair(op, input, config, DataType::Float64)
+            analyze_unary_pair(op, input, config, DataType::Float64, fields)
         }
         _ if op.starts_with("geo.predicate_") => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_unary_pair(op, input, config, DataType::Boolean)
+            analyze_unary_pair(op, input, config, DataType::Boolean, fields)
         }
         _ => Err(PlenoraError::Unsupported(format!(
             "{op}: analyze_contract non implementata"
@@ -543,6 +556,7 @@ fn analyze_unary_shape(
 fn with_nullable_geometry(
     contract: &DataContract,
     geometry: &GeometryColumnContract,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let fields: Vec<Field> = contract
         .schema
@@ -562,14 +576,16 @@ fn with_nullable_geometry(
             candidate.nullable = true;
         }
     }
-    DataContract::new(
+    contract.rebuild(
         std::sync::Arc::new(plenora_core::arrow::Schema::new_with_metadata(
             fields,
             contract.schema.metadata().clone(),
         )),
+        contract.field_origins(),
         geometries,
         contract.active_geometry,
         contract.properties.clone(),
+        allocator,
     )
 }
 
@@ -583,20 +599,19 @@ fn with_nullable_geometry(
 /// I metadati di SCHEMA dell'output sono la fusione di quelli delle due
 /// sorgenti ([`super::helpers::merge_schema_metadata`]): chiave presente in una sola copiata, uguale
 /// in entrambe copiata, diversa in entrambe -> errore che nomina la chiave.
+// Un braccio per operazione, con provenienza esplicita di ogni campo prodotto.
+#[allow(clippy::too_many_lines)]
 pub(in crate::analyze) fn analyze_binary(
     descriptor: &OperationDescriptor,
     inputs: &[DataContract],
     config: &Value,
+    allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let op = descriptor.id;
     let left = &inputs[0];
     let right = &inputs[1];
     let left_geometry = single_geometry(op, left)?;
     let right_geometry = single_geometry(op, right)?;
-    plenora_core::contract::arrow_metadata::require_same_geometry_reference(
-        left.schema.field_with_name(&left_geometry.name)?,
-        right.schema.field_with_name(&right_geometry.name)?,
-    )?;
     // Come per le unarie: identificabilita' della colonna verificata in
     // validazione su entrambi gli operandi.
     require_identifiable_geometry(op, left, left_geometry)?;
@@ -604,6 +619,13 @@ pub(in crate::analyze) fn analyze_binary(
     // Come per le unarie: entrambi gli operandi devono essere XY.
     require_xy_dimensions(op, left_geometry)?;
     require_xy_dimensions(op, right_geometry)?;
+    plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+        left.schema.field_with_name(&left_geometry.name)?,
+        &left.geometries,
+        right.schema.field_with_name(&right_geometry.name)?,
+        &right.geometries,
+        plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
+    )?;
     let requirement = crs_requirement(op, descriptor)?;
     validate_requirement(
         requirement,
@@ -629,18 +651,33 @@ pub(in crate::analyze) fn analyze_binary(
                 left,
                 left_geometry,
                 exact_types(vec![GeometryType::MultiPolygon])?,
+                allocator,
             )?;
-            with_nullable_geometry(&typed, left_geometry)
+            with_nullable_geometry(&typed, left_geometry, allocator)
         }
         "geo.within" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;
             let name = output_name(op, parsed.output_column.as_deref(), WITHIN_COLUMN)?;
-            analyze_add_column(op, left, name, DataType::Boolean, left_geometry.nullable)
+            analyze_add_column(
+                op,
+                left,
+                name,
+                DataType::Boolean,
+                left_geometry.nullable,
+                allocator,
+            )
         }
         "geo.count_points_in_polygons" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;
             let name = output_name(op, parsed.output_column.as_deref(), COUNT_COLUMN)?;
-            analyze_add_column(op, left, name, DataType::UInt64, left_geometry.nullable)
+            analyze_add_column(
+                op,
+                left,
+                name,
+                DataType::UInt64,
+                left_geometry.nullable,
+                allocator,
+            )
         }
         // Join con lineage: righe moltiplicate, proprieta' eliminate. Non
         // c'e' `__left_index`: il contratto dichiara le colonne left piu'
@@ -652,8 +689,8 @@ pub(in crate::analyze) fn analyze_binary(
             ensure_name_free(op, &fields, RIGHT_INDEX_COLUMN)?;
             fields.push(Field::new(RIGHT_INDEX_COLUMN, DataType::UInt64, false));
             // Una riga per coppia: una geometria sinistra null non ha coppie.
-            let output = rebuild(left, fields, ContractProperties::default())?;
-            with_active_geometry_nullability(&output, false)
+            let output = rebuild(left, fields, ContractProperties::default(), allocator)?;
+            with_active_geometry_nullability(&output, false, allocator)
         }
         "geo.nearest" => {
             let parsed: NearestConfig = parse_config(op, config)?;
@@ -670,8 +707,8 @@ pub(in crate::analyze) fn analyze_binary(
                 ensure_name_free(op, &fields, name)?;
                 fields.push(Field::new(name, data_type, false));
             }
-            let output = rebuild(left, fields, ContractProperties::default())?;
-            with_active_geometry_nullability(&output, false)
+            let output = rebuild(left, fields, ContractProperties::default(), allocator)?;
+            with_active_geometry_nullability(&output, false, allocator)
         }
         "geo.overlay" => {
             let parsed: OverlayConfig = parse_config(op, config)?;
@@ -682,19 +719,26 @@ pub(in crate::analyze) fn analyze_binary(
                 left,
                 left_geometry,
                 &[
-                    Field::new(LEFT_INDEX_COLUMN, DataType::UInt64, true),
-                    Field::new(RIGHT_INDEX_COLUMN, DataType::UInt64, true),
+                    (
+                        Field::new(LEFT_INDEX_COLUMN, DataType::UInt64, true),
+                        FieldOrigin::New,
+                    ),
+                    (
+                        Field::new(RIGHT_INDEX_COLUMN, DataType::UInt64, true),
+                        FieldOrigin::New,
+                    ),
                 ],
                 false,
+                allocator,
             )
         }
         _ => Err(PlenoraError::Unsupported(format!(
             "{op}: analyze_contract non implementata"
         ))),
     }?;
-    let output = redeclare_output_types(op, left_geometry, output)?;
+    let output = redeclare_output_types(op, left_geometry, output, allocator)?;
     // I metadati di SCHEMA delle due sorgenti sono fusi; un conflitto su
     // valori diversi fallisce qui, in validazione, mai in esecuzione.
     let schema_metadata = merge_schema_metadata(op, left, right)?;
-    with_schema_metadata(&output, schema_metadata)
+    with_schema_metadata(&output, schema_metadata, allocator)
 }

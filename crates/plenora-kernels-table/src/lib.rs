@@ -352,12 +352,24 @@ pub(crate) fn reject_rows(rejections: &[RowRejection<'_>], message: &'static str
     Err(PlenoraError::DataMapping(message.into()).with_row_diagnostics(report))
 }
 
+/// Rifiuta schemi ambigui prima di risolvere colonne per nome.
+pub(crate) fn require_unique_names(schema: &Schema) -> Result<()> {
+    let mut names = std::collections::BTreeSet::new();
+    for field in schema.fields() {
+        if !names.insert(field.name()) {
+            return Err(PlenoraError::Schema("nomi di colonna duplicati".into()));
+        }
+    }
+    Ok(())
+}
+
 /// Indice della colonna `name` nel batch.
 ///
 /// # Errors
 ///
-/// - `Schema`: colonna assente dallo schema.
+/// - `Schema`: colonna assente o nomi duplicati nello schema.
 pub fn column_index(batch: &RecordBatch, name: &str) -> Result<usize> {
+    require_unique_names(&batch.schema())?;
     batch
         .schema()
         .index_of(name)
@@ -496,6 +508,7 @@ pub fn replace_or_append(
     nullable: bool,
     array: ArrayRef,
 ) -> Result<RecordBatch> {
+    require_unique_names(&batch.schema())?;
     if array.len() != batch.num_rows() {
         return Err(PlenoraError::Schema(format!(
             "lunghezza output {} diversa dalle righe {}",
@@ -769,28 +782,28 @@ pub fn validate_text_convertible(data_type: &DataType, column: &str) -> Result<(
 
 /// Le operazioni binarie richiedono riferimenti concordi anche quando
 /// la geometria non e' una chiave o non contribuisce all'uscita.
-pub(crate) fn require_compatible_geometry_inputs(left: &Schema, right: &Schema) -> Result<()> {
+pub(crate) fn require_compatible_geometry_inputs(
+    left: &Schema,
+    left_geometries: &[plenora_core::contract::GeometryColumnContract],
+    right: &Schema,
+    right_geometries: &[plenora_core::contract::GeometryColumnContract],
+) -> Result<()> {
     use plenora_core::contract::arrow_metadata::{
-        field_declares_wkb_geometry, require_same_geometry_reference,
+        field_declares_wkb_geometry, require_geometry_compatibility, GeometryComparison,
     };
-    for a in left
-        .fields()
-        .iter()
-        .filter(|f| field_declares_wkb_geometry(f))
-    {
-        for b in right
-            .fields()
-            .iter()
-            .filter(|f| field_declares_wkb_geometry(f))
-        {
-            require_same_geometry_reference(a, b)?;
-            let left = plenora_core::contract::arrow_metadata::read_geometry_contract_keys(a)?;
-            let right = plenora_core::contract::arrow_metadata::read_geometry_contract_keys(b)?;
-            if left.encoding != right.encoding {
-                return Err(PlenoraError::Crs(
-                    "ingressi geometrici con encoding diversi".into(),
-                ));
-            }
+    for a in left.fields().iter().filter(|f| {
+        field_declares_wkb_geometry(f) || left_geometries.iter().any(|g| g.name == *f.name())
+    }) {
+        for b in right.fields().iter().filter(|f| {
+            field_declares_wkb_geometry(f) || right_geometries.iter().any(|g| g.name == *f.name())
+        }) {
+            require_geometry_compatibility(
+                a,
+                left_geometries,
+                b,
+                right_geometries,
+                GeometryComparison::Inputs,
+            )?;
         }
     }
     Ok(())

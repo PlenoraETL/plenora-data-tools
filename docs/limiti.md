@@ -1685,9 +1685,12 @@ Utf8/Int64/Float64/Boolean, quindi rifiuta WKB. Le espressioni non costruiscono
 struct/list geometriche; `unnest` ed `explode`
 rifiutano dichiarazioni geometriche annidate prima di creare un campo nuovo.
 
-**Limiti.** Con concat_by_name, se la geometria manca in un input il campo Arrow
-conserva i metadati, ma l'analisi non propaga la geometria attiva: un passo
-geo successivo e' rifiutato. La pipeline ammette al massimo una colonna geometrica: derivarne
+**Limiti.** Con concat_by_name, una colonna assente aggiunge null: campo,
+identita' e dichiarazione geometrica vengono dalla prima sorgente effettiva,
+con nullabilita' aggiornata. La prova di catalogo
+`catalogo_colonne_presenti_in_un_solo_ingresso` verifica entrambi i lati,
+anche con dichiarazioni presenti solo nel contratto Rust. La pipeline
+ammette al massimo una colonna geometrica: derivarne
 una seconda resta un rifiuto esplicito. Le API tabellari dirette possono
 conservare piu' campi geometrici distinti. Coalesce, melt, pivot first/last e
 transpose conservano i metadati del riferimento comune ma non copiano
@@ -1724,3 +1727,58 @@ id, ellissoide, metodo, parametri, unita' e assi e verifica anche spazi,
 escape e numeri che il parsing arrotonderebbe. Le prove API verificano categoria, fase, effetto e
 retry; riproiezione verifica anche assenza di batch e sorgente discordante
 pur con assi compatibili con l'argomento.
+
+## Confini delle correzioni dell'audit 4.0.0
+
+**Regola.** `flatten_json` accetta un numero solo se il valore decimale
+scritto coincide con quello riserializzato dal parser; altrimenti rende
+`DataMapping`, senza riportare il valore. La verifica comprende array,
+percorsi non estratti e fallback. La chiave riservata
+`$serde_json::private::RawValue` e' rifiutata anche con escape nel nome,
+per evitare una seconda interpretazione JSON dentro una stringa.
+
+**Ambito.** Celle JSON in kernel Rust, pipeline, CLI e SDK. Non e' una
+promessa di conservazione lessicale (`1e3` puo' diventare `1000.0`) o dei
+tipi JSON nella proiezione testuale: rimane la semantica della
+[scheda flatten_json](schede/table.flatten_json.md).
+
+**Hazard.** Numeri decimali non rappresentabili non vengono approssimati:
+l'intera operazione fallisce. Le uscite delle versioni precedenti possono
+gia' aver perso cifre e non sono riparabili dal testo arrotondato.
+
+**Rientro.** Per ampliare il dominio occorre un parser e una serializzazione
+a precisione arbitraria con oracolo indipendente; per i dati gia' prodotti
+occorre rielaborare gli originali.
+
+**Regola.** Le concatenazioni conservano le dichiarazioni geometriche solo
+se encoding, dimensioni, tipi dichiarati e precisione coincidono, oltre al
+riferimento CRS/assi; altrimenti `Schema` (o `Crs` per il riferimento).
+La fusione di colonne derivate rimuove i tipi e rifiuta precisioni diverse
+con `Unsupported`.
+
+**Ambito.** `concat`, `concat_by_name`, `union_distinct`, kernel e analisi;
+fusioni geometriche di `coalesce`, `melt`, `pivot` e `transpose`.
+
+**Hazard.** Una concatenazione potenzialmente riconciliabile viene rifiutata:
+non si amplia implicitamente una dichiarazione Point a Point/LineString.
+Nessuna verifica dei metadati puo' correggere dichiarazioni sorgenti false.
+
+**Rientro.** Normalizzare esplicitamente le dichiarazioni e verificare le
+celle prima della concatenazione; un futuro ampliamento deve definire una
+riconciliazione esatta anche per proprieta' assenti e precisioni diverse.
+
+**Regola.** I percorsi che risolvono colonne per nome rifiutano nomi duplicati
+con `Schema`. Le finestre che sostituiscono colonne eliminano `sorted_by`;
+le rinomine simultanee preservano atomicamente le identita'. `melt` rifiuta
+con `ResourceLimit` cardinalita' note non rappresentabili in `u64`.
+
+**Ambito.** API Rust diretta e analisi dei contratti; la pipeline gia'
+richiede nomi univoci. La cardinalita' e' verificabile anche senza dati.
+
+**Hazard.** La prova d'ordine viene eliminata conservativamente anche quando
+la colonna sostituita non era una chiave; un conteggio oltre `u64` non e'
+attestabile. Nessun conteggio saturato viene pubblicato come esatto.
+
+**Rientro.** Rendere univoci i nomi prima dell'ingresso, riordinare dopo la
+trasformazione per ristabilire la prova; cardinalita' oltre `u64` richiedono
+un contratto numerico piu' ampio e controlli coerenti in tutti i consumatori.

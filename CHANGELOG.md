@@ -28,6 +28,35 @@ standard accetta WKT2; il `crs` GeoParquet resta PROJJSON per specifica.
 Nessuna deduzione degli assi omessi o dell'ordine fisico delle ordinate.
 Profili e rifiuti: [CRS](docs/crs.md).
 
+### Chiusura dell'audit prima della pubblicazione
+
+Corretti cinque difetti presenti nei tag `v1.0.0`, `v1.1.0`, `v2.0.0` e
+`v3.0.0`, ancora presenti nella 4.0.0 non pubblicata dopo #136:
+
+- `flatten_json` rifiuta con `DataMapping` i numeri delle celle JSON che
+  il parser riscriverebbe con un valore decimale diverso, anche negli array,
+  nei percorsi ignorati e nei fallback. Rifiuta inoltre la chiave riservata
+  `RawValue`, che poteva reinterpretare come JSON una stringa non verificata.
+- `concat`, `concat_by_name` (anche strict) e `union_distinct` confrontano
+  encoding, dimensioni, dichiarazione dei tipi e precisione geometrici:
+  divergenze producono `Schema`, senza ereditare dichiarazioni false dal
+  primo ingresso. Anche le fusioni geometriche rifiutano precisioni diverse.
+- `concat_by_name` rifiuta con `Schema` nomi duplicati anche con un solo
+  batch nell'API Rust diretta. La guardia copre anche la risoluzione comune
+  per nome, selezione, allineamento, riordino, sostituzione e ricerca geo.
+- `rolling_window` e `window_function` eliminano `sorted_by` quando
+  sostituiscono una colonna. Le rinomine simultanee spostano atomicamente
+  le identita', senza scambiare la colonna cui si riferisce una prova.
+- L'analisi di `melt` rifiuta con `ResourceLimit` un conteggio di righe
+  non rappresentabile in `u64`, per ogni livello di confidenza, invece di
+  dichiarare esatta una cardinalita' saturata.
+
+L'attribuzione storica delle cinque cause principali deriva dal referto
+statico sui tag, non dall'esecuzione dei nuovi test sulle vecchie release.
+Le regressioni coprono kernel e analisi; i dati gia' prodotti vanno
+ricontrollati contro gli ingressi originali. Confini e rientro sono nei
+[limiti dell'audit](docs/limiti.md#confini-delle-correzioni-dellaudit-400).
+
 ### Difetti silenziosi delle versioni precedenti
 
 La PR #136 corregge i difetti sotto. Non è prevista una correttiva 3.0.1:

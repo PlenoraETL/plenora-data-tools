@@ -1079,7 +1079,13 @@ pub fn concat(
         ));
     }
     for (a, b) in left.schema().fields().iter().zip(right.schema().fields()) {
-        plenora_core::contract::arrow_metadata::require_same_geometry_reference(a, b)?;
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            a,
+            &[],
+            b,
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
+        )?;
     }
     let rows = left
         .num_rows()
@@ -1143,11 +1149,20 @@ pub struct ConcatByName {
 /// nullable se almeno un input non ha la colonna o ce l'ha nullable. In
 /// strict mode gli schemi devono essere identici per sequenza (nome + tipo).
 fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Field>> {
+    for input in inputs {
+        crate::require_unique_names(&input.schema())?;
+    }
     let first = inputs[0];
     if strict {
         for other in &inputs[1..] {
             for (a, b) in first.schema().fields().iter().zip(other.schema().fields()) {
-                plenora_core::contract::arrow_metadata::require_same_geometry_reference(a, b)?;
+                plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+                    a,
+                    &[],
+                    b,
+                    &[],
+                    plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
+                )?;
             }
 
             if first.num_columns() != other.num_columns()
@@ -1182,8 +1197,12 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
     for input in inputs {
         for field in input.schema().fields() {
             if let Some(existing) = fields.iter_mut().find(|f| f.name() == field.name()) {
-                plenora_core::contract::arrow_metadata::require_same_geometry_reference(
-                    existing, field,
+                plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+                    existing,
+                    &[],
+                    field,
+                    &[],
+                    plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
                 )?;
                 if existing.data_type() != field.data_type() {
                     return Err(PlenoraError::Schema(format!(
@@ -1227,7 +1246,7 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
 /// - `ResourceLimit`: overflow nel conteggio delle righe, righe totali oltre
 ///   `max_rows`, colonne dell'unione oltre `max_columns` o uscita stimata
 ///   oltre `max_governed_memory_bytes`;
-/// - `Schema`: con `strict` schemi non identici, tipi incompatibili per
+/// - `Schema`: nomi duplicati, con `strict` schemi non identici, tipi incompatibili per
 ///   una stessa colonna (nessun cast), metadati di schema in conflitto;
 /// - `DataMapping` (`arrow error: …`): errori Arrow di concatenazione.
 pub fn concat_by_name(
@@ -1422,7 +1441,7 @@ fn membership_impl(
     keep_matches: bool,
     fast: bool,
 ) -> Result<RecordBatch> {
-    crate::require_compatible_geometry_inputs(&left.schema(), &right.schema())?;
+    crate::require_compatible_geometry_inputs(&left.schema(), &[], &right.schema(), &[])?;
     if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {
         return Err(PlenoraError::InvalidPlan(
             "chiavi membership join non valide".into(),
@@ -2899,8 +2918,13 @@ mod geometry_reference_tests {
                     }
                 }
                 let inputs = [&a, &b].map(|batch| {
-                    DataContract::new(batch.schema(), vec![], None, ContractProperties::default())
-                        .unwrap()
+                    DataContract::from_source(
+                        batch.schema(),
+                        vec![],
+                        None,
+                        ContractProperties::default(),
+                    )
+                    .unwrap()
                 });
                 for (op, config) in [
                     ("table.concat", json!({})),
@@ -2959,9 +2983,13 @@ mod geometry_reference_tests {
                 } else {
                     input.clone()
                 };
-                let contract =
-                    DataContract::new(input.schema(), vec![], None, ContractProperties::default())
-                        .unwrap();
+                let contract = DataContract::from_source(
+                    input.schema(),
+                    vec![],
+                    None,
+                    ContractProperties::default(),
+                )
+                .unwrap();
                 for (op, config) in &cases {
                     let result = match *op {
                         "table.coalesce" => crate::quality::coalesce(

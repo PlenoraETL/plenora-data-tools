@@ -158,22 +158,25 @@ pub fn analyze_table_contract(
         }
         _ => {}
     }
+    // Osserva tutti gli archi prima di assegnare ID ai campi ancora senza identita'.
     for input in inputs {
-        for geometry in &input.geometries {
-            fields.observe(geometry.field_id);
-        }
-        if let Some(active) = input.active_geometry {
-            fields.observe(active);
-        }
-        if let Some(sorted) = &input.properties.sorted_by {
-            if let Some(order) = sorted.confidence.value() {
-                for key in &order.keys {
-                    fields.observe(*key);
-                }
-            }
+        crate::require_unique_names(&input.schema)?;
+        input.validate()?;
+        for id in input.field_ids.values() {
+            fields.observe(*id);
         }
     }
-    match id {
+    let mut owned_inputs = inputs.to_vec();
+    for input in &mut owned_inputs {
+        fields.bind_contract(input);
+        for field in input.schema.fields() {
+            let id = fields.intern(field.name())?;
+            input.field_ids.insert(field.name().clone(), id);
+        }
+    }
+    let inputs = owned_inputs.as_slice();
+    fields.bind_contract(&inputs[0]);
+    let output = match id {
         "table.add_row_number" => analyze_add_row_number(id, inputs, config, fields, limits),
         "table.aggregate" => analyze_aggregate(id, inputs, config, fields, limits),
         "table.bin" => analyze_bin(id, inputs, config, fields, limits),
@@ -257,7 +260,10 @@ pub fn analyze_table_contract(
         _ => Err(PlenoraError::Unsupported(format!(
             "{id}: analyze_contract non disponibile"
         ))),
-    }
+    }?;
+    output.validate()?;
+    fields.bind_contract(&output);
+    Ok(output)
 }
 
 // ---------------------------------------------------------------------------
@@ -341,7 +347,7 @@ mod tests {
 
     /// Contratto con geometria attiva `geom` (FieldId(7)) e nessuna proprieta'.
     fn geo_contract() -> DataContract {
-        DataContract::new(
+        DataContract::from_source(
             Arc::new(Schema::new(base_fields())),
             vec![geometry(7, "geom", true)],
             Some(FieldId(7)),
@@ -353,26 +359,31 @@ mod tests {
     /// Come `geo_contract`, con `sorted_by = Proven([FieldId(0)], Stream)` e
     /// `row_count = Proven(100, Dataset)`.
     fn proven_contract() -> DataContract {
-        DataContract::new(
-            Arc::new(Schema::new(base_fields())),
-            vec![geometry(7, "geom", true)],
-            Some(FieldId(7)),
-            ContractProperties {
-                sorted_by: Some(ContractProperty::new(
-                    PropertyConfidence::Proven(SortOrder {
-                        keys: vec![FieldId(0)],
-                        direction: SortDirection::Ascending,
-                        nulls: NullPlacement::Last,
-                    }),
-                    PropertyScope::Stream,
-                )),
-                row_count: Some(ContractProperty::new(
-                    PropertyConfidence::Proven(100),
-                    PropertyScope::Dataset,
-                )),
-            },
-        )
-        .unwrap()
+        let mut contract = geo_contract();
+        contract.field_ids.insert("id".into(), FieldId(0));
+        contract
+            .rebuild(
+                Arc::new(Schema::new(base_fields())),
+                contract.field_origins(),
+                vec![geometry(7, "geom", true)],
+                Some(FieldId(7)),
+                ContractProperties {
+                    sorted_by: Some(ContractProperty::new(
+                        PropertyConfidence::Proven(SortOrder {
+                            keys: vec![FieldId(0)],
+                            direction: SortDirection::Ascending,
+                            nulls: NullPlacement::Last,
+                        }),
+                        PropertyScope::Stream,
+                    )),
+                    row_count: Some(ContractProperty::new(
+                        PropertyConfidence::Proven(100),
+                        PropertyScope::Dataset,
+                    )),
+                },
+                &mut FieldAllocator::default(),
+            )
+            .unwrap()
     }
 
     fn tabular_contract() -> DataContract {
@@ -403,7 +414,7 @@ mod tests {
     /// Coppia di contratti semplici per concat/setops (niente List/Struct).
     fn simple_pair() -> (DataContract, DataContract) {
         let make = |nullable: bool, rows: u64| {
-            DataContract::new(
+            DataContract::from_source(
                 Arc::new(Schema::new(vec![
                     Field::new("id", DataType::Int64, false),
                     Field::new("name", DataType::Utf8, nullable),
@@ -491,6 +502,199 @@ mod tests {
     }
 
     // -- Completezza del dispatch -------------------------------------------
+
+    #[test]
+    fn join_suffissi_seguono_origine_non_nome_finale() {
+        for (op, config, left_names, right_names, expected) in [
+            (
+                "table.join",
+                json!({"left_keys":["k"], "right_keys":["k"]}),
+                vec!["k", "x", "x_L"],
+                vec!["k", "z"],
+                vec![("k", 0), ("x_L", 1), ("x_L_L", 2), ("z_R", 4)],
+            ),
+            (
+                "table.fuzzy_join",
+                json!({"left_key":"k", "right_key":"k", "metric":"levenshtein", "threshold":0.7, "blocking":"prefix", "how":"left"}),
+                vec!["k", "x", "x_L"],
+                vec!["k", "z"],
+                vec![("k", 0), ("x_L", 1), ("x_L_L", 2), ("k_R", 3), ("z_R", 4)],
+            ),
+            (
+                "table.cross_join",
+                json!({}),
+                vec!["x", "x_x"],
+                vec!["x", "x_x"],
+                vec![("x_x", 0), ("x_x_x", 1), ("x_y", 2), ("x_x_y", 3)],
+            ),
+        ] {
+            let mut allocator = FieldAllocator::default();
+            let inputs: Vec<_> = [left_names, right_names]
+                .into_iter()
+                .map(|names| {
+                    let mut input = DataContract::tabular(Arc::new(Schema::new(
+                        names
+                            .iter()
+                            .map(|n| Field::new(*n, DataType::Utf8, true))
+                            .collect::<Vec<_>>(),
+                    )));
+                    for name in names {
+                        input
+                            .field_ids
+                            .insert(name.into(), allocator.alloc().unwrap());
+                    }
+                    input
+                })
+                .collect();
+            let output =
+                analyze_table_contract(op, &inputs, &config, &mut allocator, &Limits::default())
+                    .unwrap();
+            for (name, id) in expected {
+                assert_eq!(output.field_ids[name], FieldId(id), "{op}: {name}");
+            }
+        }
+    }
+
+    #[test]
+    fn identita_preassegnate_non_collidono_con_un_altro_ingresso() {
+        let mut allocator = FieldAllocator::default();
+        assert_eq!(allocator.intern("id").unwrap(), FieldId(0));
+        let left = DataContract::tabular(Arc::new(Schema::new(vec![Field::new(
+            "id",
+            DataType::Int64,
+            false,
+        )])));
+        let right = DataContract::from_source(
+            Arc::new(Schema::new(vec![Field::new(
+                "geom",
+                DataType::Binary,
+                true,
+            )])),
+            vec![geometry(0, "geom", true)],
+            Some(FieldId(0)),
+            ContractProperties::default(),
+        )
+        .unwrap();
+        let output = analyze_table_contract(
+            "table.cross_join",
+            &[left, right],
+            &json!({}),
+            &mut allocator,
+            &Limits::default(),
+        )
+        .unwrap();
+        assert_ne!(output.field_ids["id"], output.field_ids["geom"]);
+        output.validate().unwrap();
+    }
+
+    #[test]
+    fn rename_ciclico_con_geometria_preserva_ogni_riferimento() {
+        let mut allocator = FieldAllocator::default();
+        let sorted = analyze_table_contract(
+            "table.sort",
+            &[geo_contract()],
+            &json!({"columns": ["id"]}),
+            &mut allocator,
+            &Limits::default(),
+        )
+        .unwrap();
+        let original = sorted.field_ids.clone();
+        let properties = sorted.properties.clone();
+        let output = analyze_table_contract(
+            "table.rename",
+            &[sorted],
+            &json!({"renames": [
+            {"old_name": "id", "new_name": "geom"}, {"old_name": "geom", "new_name": "id"}]}),
+            &mut allocator,
+            &Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(output.field_ids["id"], original["geom"]);
+        assert_eq!(output.field_ids["geom"], original["id"]);
+        assert_eq!(output.properties, properties);
+        output.validate().unwrap();
+    }
+
+    #[test]
+    fn rename_verso_un_nome_rimosso_non_riusa_la_vecchia_identita() {
+        let mut allocator = FieldAllocator::default();
+        let input = DataContract::tabular(Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ])));
+        let sorted = analyze_table_contract(
+            "table.sort",
+            &[input],
+            &json!({"columns": ["a"]}),
+            &mut allocator,
+            &Limits::default(),
+        )
+        .unwrap();
+        let old = sorted.field_ids["a"];
+        let b = sorted.field_ids["b"];
+        let dropped = analyze_table_contract(
+            "table.drop_columns",
+            &[sorted],
+            &json!({"columns": ["a"]}),
+            &mut allocator,
+            &Limits::default(),
+        )
+        .unwrap();
+        let renamed = analyze_table_contract(
+            "table.rename",
+            &[dropped],
+            &json!({"renames": [{"old_name": "b", "new_name": "a"}]}),
+            &mut allocator,
+            &Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(renamed.field_ids["a"], b);
+        assert_ne!(renamed.field_ids["a"], old);
+        assert_eq!(allocator.intern("a").unwrap(), b);
+    }
+
+    #[test]
+    fn rename_assente_concorda_con_kernel_e_preserva_sorted_by() {
+        use plenora_core::arrow::array::Int64Array;
+        use plenora_core::arrow::RecordBatch;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)])),
+            vec![Arc::new(Int64Array::from(vec![1, 2]))],
+        )
+        .unwrap();
+        for stale in [false, true] {
+            let mut allocator = FieldAllocator::default();
+            if stale {
+                allocator.intern("assente").unwrap();
+            }
+            let input = DataContract::tabular(batch.schema());
+            let sorted = analyze_table_contract(
+                "table.sort",
+                &[input],
+                &json!({"columns": ["id"]}),
+                &mut allocator,
+                &Limits::default(),
+            )
+            .unwrap();
+            let id = allocator.intern("id").unwrap();
+            let config = json!({"renames": [{"old_name": "assente", "new_name": "id"}]});
+            let output = analyze_table_contract(
+                "table.rename",
+                std::slice::from_ref(&sorted),
+                &config,
+                &mut allocator,
+                &Limits::default(),
+            )
+            .unwrap();
+            let actual =
+                crate::columns::rename(&batch, &serde_json::from_value(config).unwrap()).unwrap();
+            assert_eq!(actual, batch);
+            assert_eq!(output.schema, actual.schema());
+            assert_eq!(output.properties, sorted.properties);
+            assert_eq!(allocator.intern("id").unwrap(), id);
+            output.validate().unwrap();
+        }
+    }
 
     #[test]
     fn passthrough_preserves_geometry_dimensions_and_encoding() {
@@ -969,7 +1173,7 @@ mod tests {
 
         // concat_by_name: unione per nome su schemi diversi.
         let (a, b) = simple_pair();
-        let third = DataContract::new(
+        let third = DataContract::from_source(
             Arc::new(Schema::new(vec![
                 Field::new("name", DataType::Utf8, true),
                 Field::new("extra", DataType::Int64, false),
@@ -3473,7 +3677,7 @@ mod tests {
             .map(|field| field.as_ref().clone())
             .collect();
         fields.push(Field::new("rgeom", DataType::Binary, true));
-        right = DataContract::new(
+        right = DataContract::from_source(
             Arc::new(Schema::new(fields)),
             vec![geometry(70, "rgeom", true)],
             Some(FieldId(70)),
@@ -4061,7 +4265,7 @@ mod tests {
         }
 
         fn geo_input(batch: &RecordBatch) -> DataContract {
-            DataContract::new(
+            DataContract::from_source(
                 batch.schema(),
                 vec![geometry(1, "geom", true)],
                 Some(FieldId(1)),
@@ -4168,7 +4372,14 @@ mod tests {
             kernel: impl FnOnce(&RecordBatch, &RecordBatch, &Value) -> Result<RecordBatch>,
         ) {
             let expected = kernel(left, right, &config);
-            let inputs = [geo_input(left), DataContract::tabular(right.schema())];
+            // La fixture senza metadati dichiara `geom` solo nel contratto:
+            // anche il secondo ramo che la possiede deve dichiararla.
+            let right_contract = if right.schema().field_with_name("geom").is_ok() {
+                geo_input(right)
+            } else {
+                DataContract::tabular(right.schema())
+            };
+            let inputs = [geo_input(left), right_contract];
             check_schema(op, &inputs, &config, expected);
         }
 

@@ -219,7 +219,8 @@ pub(in crate::analyze) fn require_scalar_strings<'a>(
 }
 
 /// `round(rows * fraction)` con l'aritmetica f64 del kernel `sample`
-/// (i cast riflettono volutamente la sua semantica).
+/// (i cast riflettono volutamente la sua semantica). Il chiamante verifica
+/// `rows <= 2^53`: conversione del conteggio e ritorno sono esatti.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -231,7 +232,12 @@ pub(in crate::analyze) fn round_scaled(rows: u64, fraction: f64) -> u64 {
 
 /// Semantica `replace_or_append`: sostituisce in posizione se il nome esiste,
 /// altrimenti appende. Restituisce `true` se ha sovrascritto.
-fn upsert(fields: &mut Vec<Field>, name: &str, data_type: DataType, nullable: bool) -> bool {
+pub(in crate::analyze) fn produce(
+    fields: &mut Vec<Field>,
+    name: &str,
+    data_type: DataType,
+    nullable: bool,
+) -> bool {
     if let Some(existing) = fields.iter_mut().find(|field| field.name() == name) {
         *existing = Field::new(name, data_type, nullable);
         true
@@ -239,23 +245,6 @@ fn upsert(fields: &mut Vec<Field>, name: &str, data_type: DataType, nullable: bo
         fields.push(Field::new(name, data_type, nullable));
         false
     }
-}
-
-/// Come `upsert`, ma assegna anche un `FieldId` nuovo alla colonna derivata.
-///
-/// # Errors
-///
-/// `PlenoraError::InvalidPlan` a spazio dei `FieldId` esaurito
-/// ([`FieldAllocator::derive`]).
-pub(in crate::analyze) fn produce(
-    fields: &mut Vec<Field>,
-    alloc: &mut FieldAllocator,
-    name: &str,
-    data_type: DataType,
-    nullable: bool,
-) -> Result<bool> {
-    alloc.derive(name)?;
-    Ok(upsert(fields, name, data_type, nullable))
 }
 
 pub(in crate::analyze) fn clone_fields(input: &DataContract) -> Vec<Field> {
@@ -350,17 +339,39 @@ pub(in crate::analyze) fn merge_schema_metadata_many(
     merge_metadata_maps(op, inputs.iter().map(|input| input.schema.metadata()))
 }
 
+/// Origini di colonne che l'operazione dichiara conservate, in ordine d'uscita.
+pub(in crate::analyze) fn preserved_origins<'a>(
+    input: &DataContract,
+    sources: impl IntoIterator<Item = &'a str>,
+) -> Result<Vec<plenora_core::contract::FieldOrigin>> {
+    sources
+        .into_iter()
+        .map(|source| {
+            input
+                .field_ids
+                .get(source)
+                .copied()
+                .map(plenora_core::contract::FieldOrigin::Preserved)
+                .ok_or_else(|| PlenoraError::Schema("identita' sorgente assente".into()))
+        })
+        .collect()
+}
+
 pub(in crate::analyze) fn finish(
+    origins: Vec<plenora_core::contract::FieldOrigin>,
     schema: Schema,
     geometry: Option<GeometryColumnContract>,
     active: Option<FieldId>,
     properties: ContractProperties,
+    allocator: &mut FieldAllocator,
 ) -> Result<DataContract> {
     DataContract::new(
         Arc::new(schema),
+        origins,
         geometry.into_iter().collect(),
         active,
         properties,
+        allocator,
     )
 }
 
@@ -465,7 +476,7 @@ pub(in crate::analyze) fn analyze_append(
     let mut overwritten = false;
     let mut geometry_overwritten = false;
     for (name, data_type, nullable) in produced {
-        let replaced = produce(&mut fields, alloc, name, data_type.clone(), *nullable)?;
+        let replaced = produce(&mut fields, name, data_type.clone(), *nullable);
         overwritten |= replaced;
         if replaced && input.geometries.first().is_some_and(|g| &g.name == name) {
             geometry_overwritten = true;
@@ -481,7 +492,24 @@ pub(in crate::analyze) fn analyze_append(
     let active = input
         .active_geometry
         .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
-    finish(schema, geometry, active, append_props(input, overwritten))
+    finish(
+        schema
+            .fields()
+            .iter()
+            .map(|field| {
+                if produced.iter().any(|(name, _, _)| name == field.name()) {
+                    plenora_core::contract::FieldOrigin::New
+                } else {
+                    plenora_core::contract::FieldOrigin::Preserved(input.field_ids[field.name()])
+                }
+            })
+            .collect(),
+        schema,
+        geometry,
+        active,
+        append_props(input, overwritten),
+        alloc,
+    )
 }
 
 /// Completa il contratto di una colonna che conserva celle geometriche.
@@ -516,17 +544,20 @@ pub(in crate::analyze) fn derive_geometry(
         crs,
         &keys,
     );
-    geometry.field_id = alloc.derive(name)?;
+    geometry.field_id = output.field_ids[name];
     output.geometries.retain(|g| g.name != name);
     output.active_geometry = Some(geometry.field_id);
     output.geometries.push(geometry);
+    let origins = output.field_origins();
     DataContract::new(
         Arc::new(Schema::new_with_metadata(
             fields,
             output.schema.metadata().clone(),
         )),
+        origins,
         output.geometries,
         output.active_geometry,
         output.properties,
+        alloc,
     )
 }

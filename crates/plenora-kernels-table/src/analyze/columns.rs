@@ -62,7 +62,17 @@ pub(in crate::analyze) fn analyze_drop_columns(
         },
         dropped_geometry,
     );
-    finish(schema, geometry, active, properties)
+    finish(
+        super::helpers::preserved_origins(
+            input,
+            schema.fields().iter().map(|field| field.name().as_str()),
+        )?,
+        schema,
+        geometry,
+        active,
+        properties,
+        fields,
+    )
 }
 
 pub(in crate::analyze) fn analyze_rename(
@@ -75,7 +85,7 @@ pub(in crate::analyze) fn analyze_rename(
     let config: columns::Rename = typed(op, config)?;
     let input = &inputs[0];
     // Due rinomine della stessa sorgente o verso la stessa destinazione, un
-    // `old_name` inesistente o uguale al `new_name`: rifiutati, qui e nel
+    // `old_name` uguale al `new_name`: rifiutati, qui e nel
     // kernel (`Rename::verifica_parametri`).
     let old: Vec<String> = config.renames.iter().map(|p| p.old_name.clone()).collect();
     let new: Vec<String> = config.renames.iter().map(|p| p.new_name.clone()).collect();
@@ -101,9 +111,13 @@ pub(in crate::analyze) fn analyze_rename(
         }
         fields_out.push(field.with_name(name));
     }
-    for pair in &config.renames {
-        fields.rename(&pair.old_name, &pair.new_name);
-    }
+    let pairs: Vec<_> = config
+        .renames
+        .iter()
+        .filter(|pair| input.schema.field_with_name(&pair.old_name).is_ok())
+        .map(|pair| (pair.old_name.as_str(), pair.new_name.as_str()))
+        .collect();
+    fields.rename_many(&pairs)?;
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     let renamed_geometry = input.geometries.first().map(|geometry| {
         renames
@@ -112,13 +126,14 @@ pub(in crate::analyze) fn analyze_rename(
             .unwrap_or(geometry.name.as_str())
     });
     let geometry = propagate_geometry(input, &schema, renamed_geometry);
-    // Rinomina: i FieldId seguono le colonne (una colonna rinominata resta
-    // la stessa colonna logica), righe e ordine invariati.
+    let properties = input.properties.clone();
     finish(
+        input.field_origins(),
         schema,
         geometry,
         input.active_geometry,
-        input.properties.clone(),
+        properties,
+        fields,
     )
 }
 
@@ -159,10 +174,15 @@ pub(in crate::analyze) fn analyze_reorder_columns(
         input.geometries.first().map(|g| g.name.as_str()),
     );
     finish(
+        super::helpers::preserved_origins(
+            input,
+            schema.fields().iter().map(|field| field.name().as_str()),
+        )?,
         schema,
         geometry,
         input.active_geometry,
         input.properties.clone(),
+        fields,
     )
 }
 
@@ -276,7 +296,17 @@ pub(in crate::analyze) fn analyze_select_columns(
         },
         dropped_geometry,
     );
-    finish(schema, geometry, active, properties)
+    finish(
+        super::helpers::preserved_origins(
+            input,
+            schema.fields().iter().map(|field| field.name().as_str()),
+        )?,
+        schema,
+        geometry,
+        active,
+        properties,
+        fields,
+    )
 }
 
 pub(in crate::analyze) fn analyze_align_schema(
@@ -296,6 +326,7 @@ pub(in crate::analyze) fn analyze_align_schema(
     }
     let mut seen: HashSet<&str> = HashSet::new();
     let mut fields_out = Vec::with_capacity(config.columns.len());
+    let mut origins = Vec::new();
     let mut added_any = false;
     for declared in &config.columns {
         check_output_name(op, &declared.name)?;
@@ -319,8 +350,12 @@ pub(in crate::analyze) fn analyze_align_schema(
                     ),
                 );
             }
+            origins.push(plenora_core::contract::FieldOrigin::Preserved(
+                input.field_ids[&declared.name],
+            ));
             fields_out.push(field.clone());
         } else {
+            origins.push(plenora_core::contract::FieldOrigin::New);
             added_any = true;
             // Il default e' validato a secco con la stessa conversione del
             // kernel: mai un errore a meta' dei dati.
@@ -329,7 +364,7 @@ pub(in crate::analyze) fn analyze_align_schema(
                 // Il default riempie ogni cella della colonna aggiunta.
                 check_json_text(op, default, limits.max_string_bytes, "default")?;
             }
-            fields.derive(&declared.name)?;
+
             fields_out.push(Field::new(
                 &declared.name,
                 data_type,
@@ -346,6 +381,9 @@ pub(in crate::analyze) fn analyze_align_schema(
     if config.tiene_extra() {
         for field in input.schema.fields() {
             if !seen.contains(field.name().as_str()) {
+                origins.push(plenora_core::contract::FieldOrigin::Preserved(
+                    input.field_ids[field.name()],
+                ));
                 fields_out.push(field.as_ref().clone());
             }
         }
@@ -377,5 +415,5 @@ pub(in crate::analyze) fn analyze_align_schema(
         },
         dropped_geometry,
     );
-    finish(schema, geometry, active, properties)
+    finish(origins, schema, geometry, active, properties, fields)
 }

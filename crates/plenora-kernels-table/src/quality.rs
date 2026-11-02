@@ -710,6 +710,7 @@ pub fn coalesce(batch: &RecordBatch, config: &Coalesce) -> Result<RecordBatch> {
             .iter()
             .map(|index| schema.field(*index))
             .collect::<Vec<_>>(),
+        &[],
     )?;
     // Percorso veloce tipizzato: copre Int64,
     // Float64, UInt64, Boolean, Utf8 con semantica identica al generico.

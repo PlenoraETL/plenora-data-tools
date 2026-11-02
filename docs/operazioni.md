@@ -1940,7 +1940,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 1, analisi 1, kernel 2 |
+| versioni | semantica 1, config 1, analisi 2, kernel 3 |
 
 #### Che cosa fa
 
@@ -2058,7 +2058,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 2 |
+| versioni | semantica 1, config 2, analisi 3, kernel 3 |
 
 #### Che cosa fa
 
@@ -2185,7 +2185,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 1, kernel 1 |
+| versioni | semantica 1, config 1, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -2217,11 +2217,13 @@ lo schema è quello della sinistra, nullable dove lo è in almeno un
 ingresso.
 
 I metadati di schema dei due ingressi si fondono: una chiave presente in un
-ingresso solo, o con lo stesso valore, resta. La colonna geometrica della
-sinistra si conserva solo se la destra ha una colonna con lo stesso nome e
-lo stesso tipo; altrimenti l'uscita non dichiara geometria. Del contratto
-resta il conteggio delle righe (somma, come in `table.concat`), non
-l'ordinamento dichiarato.
+ingresso solo, o con lo stesso valore, resta. Identita', metadati di campo e
+dichiarazione geometrica vengono dalla prima sorgente che contiene la
+colonna, anche se manca negli altri ingressi; la nullabilita' geometrica
+segue quella del campo. Le dichiarazioni degli ingressi che contengono la
+stessa colonna devono essere compatibili. Due colonne geometriche distinte
+in uscita sono rifiutate. Del contratto resta il conteggio delle righe
+(somma, come in `table.concat`), non l'ordinamento dichiarato.
 
 #### Righe
 
@@ -4340,7 +4342,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 1, analisi 2, kernel 5 |
+| versioni | semantica 3, config 1, analisi 2, kernel 6 |
 
 #### Che cosa fa
 
@@ -4406,6 +4408,9 @@ In validazione:
 
 In esecuzione:
 
+- `DataMapping` senza valori nel messaggio: numero JSON che il parser
+  riscriverebbe con valore decimale diverso, oppure chiave riservata
+  `$serde_json::private::RawValue`, anche negli array e nei percorsi ignorati;
 - `DataMapping` con diagnostica per riga: una cella non nulla che non è JSON
   valido (`json.invalid_syntax`) o la cui radice non è un oggetto
   (`json.root_not_object`). Il passo non produce uscita; la diagnostica
@@ -4425,7 +4430,7 @@ per ogni percorso trovato; il runner lo rifiuta in validazione
 
 #### Complessità
 
-Tempo O(byte dei documenti): una passata di parsing per riga, senza
+Tempo O(byte dei documenti): controllo lessicale esatto e parsing per riga, senza
 costruire l'albero JSON (salvo le righe con chiavi ambigue o ripetute, che
 passano dall'albero); memoria O(n · k) per le k colonne estratte.
 
@@ -5742,7 +5747,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 2, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -5886,7 +5891,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 4, kernel 5 |
+| versioni | semantica 3, config 2, analisi 5, kernel 6 |
 
 #### Che cosa fa
 
@@ -6221,7 +6226,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 1, config 2, analisi 2, kernel 2 |
+| versioni | semantica 1, config 2, analisi 3, kernel 2 |
 
 #### Che cosa fa
 
@@ -6558,7 +6563,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 3, kernel 5 |
+| versioni | semantica 3, config 2, analisi 4, kernel 5 |
 
 #### Che cosa fa
 
@@ -6765,6 +6770,10 @@ In validazione, `InvalidPlan`:
   sempre vuoto (`n = 0` o `fraction = 0`): nessun seme avrebbe effetto;
 - config con campi sconosciuti, `n` negativo o `null` esplicito in `n`,
   `fraction`, `random_state` o `stratify_column` (il parametro si omette).
+
+In validazione (se il conteggio e' noto) e in esecuzione, `ResourceLimit`
+se `fraction` e' presente e le righe superano `2^53`: la conversione del
+conteggio in `f64` non deve perdere precisione.
 
 In esecuzione:
 
@@ -8611,7 +8620,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 2, kernel 4 |
+| versioni | semantica 3, config 2, analisi 3, kernel 5 |
 
 #### Che cosa fa
 
@@ -8967,7 +8976,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 2, kernel 3 |
+| versioni | semantica 2, config 1, analisi 3, kernel 4 |
 
 #### Che cosa fa
 
@@ -9449,7 +9458,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 2, analisi 3, kernel 5 |
+| versioni | semantica 3, config 2, analisi 4, kernel 5 |
 
 #### Che cosa fa
 
@@ -19742,7 +19751,8 @@ Poi dal kernel, per geometria (`OperationError`, che il runner porta in `Plenora
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
   calcolo di `geo` vanno in panico dentro la barriera (il messaggio porta
   solo la forma del payload);
-- `InvalidParameter`: soglia non finita o negativa (l'analisi la
+- `InvalidParameter`: con `preserve_topology`, oltre `i32::MAX` coordinate;
+  soglia non finita o negativa (l'analisi la
   rifiuta prima); sul percorso scalato (sotto), un'area positiva che nella
   scala delle coordinate diventa zero.
 

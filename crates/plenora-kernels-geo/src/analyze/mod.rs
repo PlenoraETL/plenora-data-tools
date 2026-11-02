@@ -279,6 +279,36 @@ pub fn analyze_geo_contract(
             inputs.len()
         )));
     }
+    let mut owned_inputs = inputs.to_vec();
+    for input in &mut owned_inputs {
+        input.validate()?;
+        for id in input.field_ids.values() {
+            fields.observe(*id);
+        }
+        // Conservativo: un'operazione geo puo' riscrivere la geometria anche a schema invariato.
+        if input
+            .properties
+            .sorted_by
+            .as_ref()
+            .and_then(|p| p.value())
+            .is_some_and(|order| {
+                input
+                    .geometries
+                    .iter()
+                    .any(|g| order.keys.contains(&g.field_id))
+            })
+        {
+            input.properties.sorted_by = None;
+        }
+    }
+    for input in &mut owned_inputs {
+        fields.bind_contract(input);
+        for field in input.schema.fields() {
+            let id = fields.intern(field.name())?;
+            input.field_ids.insert(field.name().clone(), id);
+        }
+    }
+    let inputs = owned_inputs.as_slice();
     richiedi_ordine_assi(descriptor.id, inputs)?;
     // I produttori sono unari: l'arieta' e' gia' verificata sopra. Il
     // rifiuto dell'N-aria resta prima del controllo sul numero di input,
@@ -308,11 +338,14 @@ pub fn analyze_geo_contract(
         }
         ("geo.reproject", _) => {
             let op = descriptor.id;
-            producers::analyze_reproject(op, &inputs[0], config)
+            producers::analyze_reproject(op, &inputs[0], config, fields)
         }
-        (_, 2) => analyze_binary(descriptor, inputs, config),
+        (_, 2) => analyze_binary(descriptor, inputs, config, fields),
         _ => analyze_unary(descriptor, &inputs[0], config, fields),
     }?;
+    // Il contratto e' l'unica fonte delle identita' sopravvissute.
+    fields.bind_contract(&output);
+    output.validate()?;
     Ok(senza_precisione_ereditata(output))
 }
 
@@ -439,6 +472,94 @@ mod tests {
             CrsKind::Geographic,
             None,
         )
+    }
+
+    #[test]
+    fn geometria_riscritta_non_conserva_la_prova_di_ordinamento() {
+        for (op, config) in [
+            ("geo.buffer", json!({"distance": 1.0})),
+            ("geo.centroid", json!({})),
+            (
+                "geo.subdivide",
+                json!({"max_vertices": 10, "output_column": "parts"}),
+            ),
+        ] {
+            let mut input = contract_with_properties();
+            let id = input.geometries[0].field_id;
+            input.properties.sorted_by.as_mut().unwrap().confidence =
+                PropertyConfidence::Proven(SortOrder {
+                    keys: vec![id],
+                    direction: SortDirection::Ascending,
+                    nulls: NullPlacement::Last,
+                });
+            let output =
+                analyze_geo_contract(op, &[input], &config, None, &mut FieldAllocator::default())
+                    .unwrap();
+            assert!(output.properties.sorted_by.is_none(), "{op}");
+            output.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn diagnostica_omonima_non_eredita_identita_geometrica() {
+        let mut input = geo_contract(projected_crs());
+        let old = input.geometries[0].name.clone();
+        let id = input.geometries[0].field_id;
+        input.geometries[0].name = "geometry_type".into();
+        input.field_ids.remove(&old);
+        input.field_ids.insert("geometry_type".into(), id);
+        input.schema = Arc::new(Schema::new(
+            input
+                .schema
+                .fields()
+                .iter()
+                .map(|f| {
+                    if f.name() == &old {
+                        f.as_ref().clone().with_name("geometry_type")
+                    } else {
+                        f.as_ref().clone()
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ));
+        let output = analyze_geo_contract(
+            "geo.geometry_diagnostics",
+            &[input],
+            &json!({}),
+            None,
+            &mut FieldAllocator::default(),
+        )
+        .unwrap();
+        assert!(!output.field_ids.values().any(|value| *value == id));
+        output.validate().unwrap();
+    }
+
+    #[test]
+    fn diagnostics_elimina_solo_ordine_sulla_geometria_rimossa() {
+        for on_geometry in [false, true] {
+            let mut input = contract_with_properties();
+            if on_geometry {
+                let g = &input.geometries[0];
+                input.properties.sorted_by.as_mut().unwrap().confidence =
+                    PropertyConfidence::Proven(SortOrder {
+                        keys: vec![g.field_id],
+                        direction: SortDirection::Ascending,
+                        nulls: NullPlacement::Last,
+                    });
+            }
+            input.validate().unwrap();
+            let output = analyze_geo_contract(
+                "geo.geometry_diagnostics",
+                std::slice::from_ref(&input),
+                &json!({}),
+                None,
+                &mut FieldAllocator::default(),
+            )
+            .unwrap();
+            assert_eq!(output.properties.sorted_by.is_none(), on_geometry);
+            assert_eq!(output.properties.row_count, input.properties.row_count);
+            output.validate().unwrap();
+        }
     }
 
     /// Le misure geodetiche chiedono l'ellissoide del datum: un CRS
@@ -572,7 +693,7 @@ mod tests {
                 field.with_metadata(metadata)
             })
             .collect();
-        DataContract::new(
+        DataContract::from_source(
             Arc::new(Schema::new(fields)),
             vec![GeometryColumnContract {
                 field_id: FieldId(2),
@@ -1364,6 +1485,19 @@ mod tests {
     fn every_geo_op_produces_the_expected_contract() {
         for case in cases() {
             let (output, input, allocator) = run_case(&case);
+            // Prima si identificano tutti gli input; poi i campi nuovi nell'ordine d'uscita.
+            let missing = input.schema.fields().len() - input.field_ids.len()
+                + if case.binary { 2 } else { 0 };
+            let first_new = 100 + u32::try_from(missing).unwrap();
+            let new_geometry_id = FieldId(
+                first_new
+                    + match &case.expected {
+                        Expect::CoverageRows(expected) => {
+                            u32::try_from(expected.len() - 1).unwrap()
+                        }
+                        _ => 0,
+                    },
+            );
             output
                 .validate()
                 .unwrap_or_else(|error| panic!("{}: contratto non valido: {error}", case.op));
@@ -1390,8 +1524,12 @@ mod tests {
                 Expect::AppendedGeometryNotNull(extra) => {
                     assert_appended(
                         &output,
-                        &with_active_geometry_nullability(&input, false)
-                            .expect("geometria non nullable"),
+                        &with_active_geometry_nullability(
+                            &input,
+                            false,
+                            &mut FieldAllocator::default(),
+                        )
+                        .expect("geometria non nullable"),
                         extra,
                     );
                     assert_geometry_preserved(&output, &input);
@@ -1456,8 +1594,7 @@ mod tests {
                     assert_eq!(signatures(&output), expected, "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria creata");
                     assert_eq!(
-                        geometry.field_id,
-                        FieldId(100),
+                        geometry.field_id, new_geometry_id,
                         "{}: FieldId allocato",
                         case.op
                     );
@@ -1490,8 +1627,7 @@ mod tests {
                     assert_eq!(signatures(&output), expected, "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria creata");
                     assert_eq!(
-                        geometry.field_id,
-                        FieldId(100),
+                        geometry.field_id, new_geometry_id,
                         "{}: FieldId allocato",
                         case.op
                     );
@@ -1531,8 +1667,7 @@ mod tests {
                     assert_eq!(signatures(&output), expected, "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria creata");
                     assert_eq!(
-                        geometry.field_id,
-                        FieldId(100),
+                        geometry.field_id, new_geometry_id,
                         "{}: FieldId allocato",
                         case.op
                     );
@@ -1596,8 +1731,7 @@ mod tests {
                     assert_eq!(signatures(&output), *expected, "{}: schema", case.op);
                     let geometry = output.active_geometry_column().expect("geometria creata");
                     assert_eq!(
-                        geometry.field_id,
-                        FieldId(100),
+                        geometry.field_id, new_geometry_id,
                         "{}: FieldId allocato",
                         case.op
                     );
@@ -1615,22 +1749,19 @@ mod tests {
                     // su un input che le dichiara.
                 }
             }
-            // L'allocatore non viene consumato dalle op che non creano geometrie.
-            if !matches!(
-                case.op,
-                "geo.from_coords"
-                    | "geo.from_wkt"
-                    | "geo.generate_grid"
-                    | "geo.coverage_validate"
-                    | "geo.shared_paths"
-            ) {
-                assert_eq!(
-                    allocator.peek(),
-                    FieldId(100),
-                    "{}: allocatore intatto",
-                    case.op
-                );
-            }
+            // Anche gli attributi e le nuove colonne scalari hanno identita'.
+            assert_eq!(output.field_ids.len(), output.schema.fields().len());
+            let allocated = output
+                .field_ids
+                .values()
+                .filter(|id| id.0 >= first_new)
+                .count();
+            assert_eq!(
+                allocator.peek(),
+                FieldId(first_new + u32::try_from(allocated).unwrap()),
+                "{}: un ID per ogni campo prima privo di identita'",
+                case.op
+            );
         }
     }
 
@@ -2769,8 +2900,8 @@ mod tests {
         assert_eq!(signatures(&output), expected);
         assert_eq!(
             output.geometries[0].field_id,
-            FieldId(0),
-            "allocatore da zero"
+            FieldId(8),
+            "anche un allocatore da zero osserva le identita' di ingresso"
         );
         assert!(!output.geometries[0].nullable);
         assert_eq!(
@@ -2808,8 +2939,8 @@ mod tests {
             (DEFAULT_GEOMETRY_COLUMN, DataType::Binary, false),
         ];
         assert_eq!(signatures(&output), expected);
-        assert_eq!(output.geometries[0].field_id, FieldId(7));
-        assert_eq!(allocator.peek(), FieldId(8));
+        assert_eq!(output.geometries[0].field_id, FieldId(11));
+        assert_eq!(allocator.peek(), FieldId(12));
         // Anche qui l'input dichiara ordinamento e conteggio: non valgono
         // per le righe nuove.
         assert!(output.properties.sorted_by.is_none());
@@ -2874,6 +3005,7 @@ mod tests {
 
     fn contract_with_properties() -> DataContract {
         let mut contract = geo_contract(projected_crs());
+        contract.field_ids.insert("id".into(), FieldId(0));
         contract.properties = ContractProperties {
             sorted_by: Some(ContractProperty::new(
                 PropertyConfidence::Proven(SortOrder {
@@ -2971,9 +3103,13 @@ mod tests {
             &mut allocator,
         )
         .expect("seconda from_coords");
-        assert_eq!(first.geometries[0].field_id, FieldId(41));
-        assert_eq!(second.geometries[0].field_id, FieldId(42));
-        assert_eq!(allocator.peek(), FieldId(43));
+        assert_eq!(first.geometries[0].field_id, FieldId(44));
+        assert_eq!(second.geometries[0].field_id, FieldId(48));
+        assert_eq!(allocator.peek(), FieldId(49));
+        assert!(first
+            .field_ids
+            .values()
+            .all(|id| !second.field_ids.values().any(|other| other == id)));
     }
 
     fn builtin_crs(definizione: &str) -> ResolvedCrs {
