@@ -25,7 +25,6 @@ const VIETATI: &[&str] = &[
     "\u{a7}",
     "architettura.md",
     "piano-v5",
-    "STATO.md",
     "stato-e-roadmap",
     "isolamento.md",
     "verifica_vendor_provenienza",
@@ -129,6 +128,13 @@ fn da_scandire(cartella: &Path, scansione: &mut Scansione) {
     for percorso in voci(cartella) {
         let nome = nome_di(&percorso);
         if ESCLUSE.contains(&nome.as_str()) {
+            continue;
+        }
+        // Corpus, crash e copertura locali del fuzz sono prodotti ignorati
+        // da Git, anche quando i loro nomi non hanno un'estensione.
+        if cartella == radice().join("fuzz")
+            && matches!(nome.as_str(), "corpus" | "artifacts" | "coverage")
+        {
             continue;
         }
         if !percorso.is_dir() {

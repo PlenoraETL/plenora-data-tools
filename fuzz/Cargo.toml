@@ -109,3 +109,10 @@ bench = false
 [profile.release]
 debug = 1
 overflow-checks = true
+
+[[bin]]
+name = "definizioni_crs"
+path = "fuzz_targets/definizioni_crs.rs"
+test = false
+doc = false
+bench = false

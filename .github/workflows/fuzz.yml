@@ -18,6 +18,10 @@ on:
     paths:
       - 'fuzz/**'
       - 'scripts/genera_corpus_fuzz.py'
+      - 'scripts/corpus_definizioni_crs.py'
+      - 'crates/plenora-core/src/crs/**'
+      - 'crates/plenora-core/src/crs.rs'
+      - 'crates/plenora-io/data/projjson_integrati.json'
       - '.github/workflows/fuzz.yml'
   schedule:
     # Domenica 03:41 UTC. Minuto non tondo, come supply-chain.yml.
@@ -58,6 +62,7 @@ jobs:
           - lettura_ipc
           - lettura_parquet
           - argomenti_cli
+          - definizioni_crs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
