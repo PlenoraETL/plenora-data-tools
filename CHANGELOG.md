@@ -10,7 +10,7 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
-## [4.0.0] - non rilasciata
+## [4.0.0] - 2026-11-02
 
 Ordine degli assi fail-closed: il solo identificatore CRS legacy non prova
 l'ordine memorizzato e produce `unknown`. I calcoli che interpretano le
@@ -31,7 +31,7 @@ Profili e rifiuti: [CRS](docs/crs.md).
 ### Chiusura dell'audit prima della pubblicazione
 
 Corretti cinque difetti presenti nei tag `v1.0.0`, `v1.1.0`, `v2.0.0` e
-`v3.0.0`, ancora presenti nella 4.0.0 non pubblicata dopo #136:
+`v3.0.0`, ancora presenti nella 4.0.0 in preparazione dopo #136:
 
 - `flatten_json` rifiuta con `DataMapping` i numeri delle celle JSON che
   il parser riscriverebbe con un valore decimale diverso, anche negli array,
