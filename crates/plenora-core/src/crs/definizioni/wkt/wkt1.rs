@@ -264,6 +264,8 @@ fn modello_grezzo(n: &Nodo) -> Esito<Definizione> {
 /// Solo WKT1: integra le informazioni non rappresentabili dopo aver
 /// verificato il codice EPSG del datum contro la voce esatta della radice.
 /// Ellissoide, meridiano e ogni altro dato restano quelli letti dal testo.
+/// Deviazione dichiarata: docs/limiti.md, «Equivalenza del datum WKT1 per
+/// codice EPSG».
 pub(super) fn modello(n: &Nodo) -> Esito<Definizione> {
     let mut d = modello_grezzo(n)?;
     let tabella = super::super::tabella()?;

@@ -96,7 +96,9 @@ pub fn write_polygon<T: WktNum + fmt::Display>(
     polygon: &impl PolygonTrait<T = T>,
 ) -> Result<(), Error> {
     if polygon.num_interiors() != 0
-        && polygon.exterior().map_or(true, |ring| ring.num_coords() == 0)
+        && polygon
+            .exterior()
+            .map_or(true, |ring| ring.num_coords() == 0)
     {
         return Err(Error::InteriorWithoutExterior);
     }
@@ -224,7 +226,9 @@ fn write_polygon_body<T: WktNum + fmt::Display>(
     size: PhysicalCoordinateDimension,
 ) -> Result<(), Error> {
     if polygon.num_interiors() != 0
-        && polygon.exterior().map_or(true, |ring| ring.num_coords() == 0)
+        && polygon
+            .exterior()
+            .map_or(true, |ring| ring.num_coords() == 0)
     {
         return Err(Error::InteriorWithoutExterior);
     }

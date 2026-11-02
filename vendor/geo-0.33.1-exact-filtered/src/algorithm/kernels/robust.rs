@@ -24,8 +24,8 @@ where
     fn orient2d(p: Coord<T>, q: Coord<T>, r: Coord<T>) -> Orientation {
         use robust::{Coord, orient2d};
 
-        let bits = [p.x, p.y, q.x, q.y, r.x, r.y]
-            .map(|x| <f64 as NumCast>::from(x).unwrap().to_bits());
+        let bits =
+            [p.x, p.y, q.x, q.y, r.x, r.y].map(|x| <f64 as NumCast>::from(x).unwrap().to_bits());
         if let Some(sign) = orient2d_filtered::orient2d_sign_bits_filtered(bits) {
             return match sign {
                 -1 => Orientation::Clockwise,

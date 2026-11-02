@@ -1,6 +1,7 @@
 //! Create a new geometry whose boundary is offset the specified distance from the input.
 
 use crate::algorithm::orient::{Direction, Orient};
+use crate::bool_ops::OverlayI;
 use crate::bool_ops::i_overlay_integration::{
     BoolOpsCoord,
     convert::{line_string_to_shape_path, multi_polygon_from_shapes, ring_to_shape_path},
@@ -11,7 +12,6 @@ use crate::geometry::{
     Coord, Geometry, GeometryCollection, Line, LineString, MultiLineString, MultiPoint,
     MultiPolygon, Point, Polygon, Rect, Triangle,
 };
-use crate::bool_ops::OverlayI;
 use i_overlay::mesh::float::{
     outline::offset::OutlineOffset,
     stroke::offset::StrokeOffset,

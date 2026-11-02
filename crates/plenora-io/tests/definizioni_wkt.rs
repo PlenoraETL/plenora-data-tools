@@ -317,12 +317,18 @@ fn wkt_assi_espliciti_e_coerenza_su_tutti_gli_ingressi_arrow() {
     }
     // WKT1 GDAL puo' omettere gli assi della sola base geografica.
     let senza_assi = wkt_versione("EPSG:6707", "wkt1_gdal");
+    let atteso = resolve_crs("EPSG:6707", "crs").unwrap();
     for forma in 0..2 {
-        assert!(contract_from_arrow_schema(
+        let c = contract_from_arrow_schema(
             Arc::new(schema(campo(&senza_assi, forma, "easting_northing"))),
-            resolve_crs
+            resolve_crs,
         )
-        .is_ok());
+        .unwrap();
+        assert!(c.geometries[0]
+            .crs
+            .as_resolved()
+            .unwrap()
+            .semantically_equals(&atteso));
     }
     for forma in [2, 3] {
         let f = campo(
