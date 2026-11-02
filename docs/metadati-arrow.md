@@ -40,9 +40,10 @@ file di `esegui_da_file`:
 | `crs_resolution` | `resolved`, `declared_unresolved` o `missing`, dallo stato del CRS |
 | `crs_id`, `crs_definition`, `crs_definition_format`, `axis_order`, `srid` | `axis_order` resta `unknown` senza dichiarazione esplicita o provenienza certa; `srid` deriva dall autorita' se rappresentabile in `i32`; con `missing` resta solo un eventuale `srid` ereditato |
 
-Dentro il piano gli schemi restano quelli interni (versione e blocco
-canonico solo sulle tabelle con geometrie, nessuna identità assegnata):
-versione e identità sono del confine.
+Dentro il piano gli schemi portano versione e blocco canonico sulle tabelle
+con geometrie. I contratti plurali completano anche le identita' pubbliche
+per trasportare il riferimento alla primaria; le identita' interne del
+planner restano un namespace distinto.
 
 ## Identità dei campi
 
@@ -240,3 +241,32 @@ analisi di finestre e rinomina. I controlli contro nomi duplicati proteggono
 anche l'API Rust diretta; tali schemi erano gia' contratti non validi.
 Le concatenazioni conservano i metadati geometrici del primo campo solo
 se encoding, dimensioni, tipi e precisione concordano fra tutti gli ingressi.
+
+
+## Primaria e contratto multigeometria (4.1.0, PR 1)
+
+Il core conserva tutte le colonne geometriche con identita' interne distinte.
+`active_geometry = None` significa nessuna primaria, anche con una sola
+geometria; l'accessor non ripiega sulla prima. Lo schema Arrow usa
+`plenora.primary_geometry` secondo Arrow Primary Geometry 1.0 (contracts PR
+57): identita' pubblica `plenora.field_id` oppure `none`. Senza chiave,
+l'unica geometria e' primaria; con zero o almeno due geometrie non c'e' primaria.
+In emissione la chiave compare solo per una geometria senza primaria (`none`)
+o per piu' geometrie con primaria (identita' del campo). La risoluzione
+avviene prima del completamento delle identita'; riferimenti pendenti,
+non geometrici e dichiarazioni malformate sono errori `schema`.
+
+Il selettore comune riceve lo schema originale per risolvere un'identita'
+esplicita; gli ID interni del planner non sono selettori pubblici. Il planner
+costruisce l'intera mappa delle identita' prima di riscrivere la primaria.
+La pubblicazione segue il campo anche quando il suo ID pubblico cambia.
+I piani senza passi trasportano tutte le geometrie e i loro byte indipendenti.
+
+Limite transitorio: le analisi tabellari e geo e gli adapter diretti rifiutano
+piu' geometrie con `unsupported`. Le analisi tabellari rifiutano anche una
+geometria senza primaria e gli adapter tabellari rifiutano una chiave di
+primaria esplicita: la propagazione operativa sara' adattata nella PR 2.
+Le operazioni geo senza selettore rifiutano la primaria assente con `schema`.
+GeoParquet resta monogeometria fino alla PR 4; la scrittura senza primaria
+rifiuta con `unsupported`. Questa PR non dichiara ancora l'adozione completa
+del nuovo contratto su tutte le operazioni.

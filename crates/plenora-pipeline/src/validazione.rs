@@ -559,13 +559,26 @@ impl Pipeline {
                     )));
                 }
             }
+            let mut rimappatura = BTreeMap::new();
+            for geometria in &letto.geometries {
+                rimappatura.insert(geometria.field_id, campi.alloc()?);
+            }
+            letto.active_geometry = letto
+                .active_geometry
+                .map(|id| {
+                    rimappatura
+                        .get(&id)
+                        .copied()
+                        .ok_or_else(|| PlenoraError::Schema("primaria senza corrispondenza".into()))
+                })
+                .transpose()?;
             for geometria in &mut letto.geometries {
-                let rimappato = campi.alloc()?;
-                if letto.active_geometry == Some(geometria.field_id) {
-                    letto.active_geometry = Some(rimappato);
-                }
-                geometria.field_id = rimappato;
-                letto.field_ids.insert(geometria.name.clone(), rimappato);
+                geometria.field_id = *rimappatura
+                    .get(&geometria.field_id)
+                    .ok_or_else(|| PlenoraError::Schema("geometria senza corrispondenza".into()))?;
+                letto
+                    .field_ids
+                    .insert(geometria.name.clone(), geometria.field_id);
             }
             verifica_colonne(&letto, limiti_kernel.max_columns)
                 .map_err(|errore| nel_passo_o_input(&format!("input `{nome}`"), errore))?;

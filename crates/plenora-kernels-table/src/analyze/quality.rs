@@ -243,10 +243,21 @@ pub(in crate::analyze) fn analyze_coalesce(
             .collect::<Result<Vec<_>>>()?,
         &input.geometries,
     )?;
-    let output = analyze_append(
+    if !metadata.is_empty()
+        && input
+            .geometries
+            .iter()
+            .any(|geometry| geometry.name != config.output_column)
+    {
+        return Err(PlenoraError::Unsupported(
+            "coalesce con piu' geometrie non ancora adattato".into(),
+        ));
+    }
+    let output = super::helpers::analyze_append_inner(
         input,
         fields,
         &[(config.output_column.clone(), data_type, true)],
+        Some(&metadata),
     )?;
     super::helpers::derive_geometry(
         output,

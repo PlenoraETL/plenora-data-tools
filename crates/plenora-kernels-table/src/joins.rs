@@ -371,6 +371,9 @@ pub fn join(
     config: &Join,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
+    crate::require_join_geometry_support(&left.schema(), &right.schema())?;
     join_impl(left, right, config, limits, true)
 }
 
@@ -1063,6 +1066,8 @@ pub fn concat(
     config: &Concat,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
     config.verifica_parametri()?;
     if left.num_columns() != right.num_columns()
         || left
@@ -1254,6 +1259,20 @@ pub fn concat_by_name(
     config: &ConcatByName,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    let mut geometry_names = std::collections::BTreeSet::new();
+    for input in inputs {
+        crate::require_geometry_support(&input.schema())?;
+        for field in input.schema().fields() {
+            if plenora_core::contract::arrow_metadata::field_declares_wkb_geometry(field) {
+                geometry_names.insert(field.name().clone());
+            }
+        }
+    }
+    if geometry_names.len() > 1 {
+        return Err(PlenoraError::Unsupported(
+            "concatenazione multigeometria non ancora adattata".into(),
+        ));
+    }
     if inputs.is_empty() {
         return Err(PlenoraError::InvalidPlan(
             "concat_by_name richiede almeno un input".into(),
@@ -1367,6 +1386,9 @@ pub fn cross_join(
     _config: &CrossJoin,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
+    crate::require_join_geometry_support(&left.schema(), &right.schema())?;
     let rows = left
         .num_rows()
         .checked_mul(right.num_rows())
@@ -1589,6 +1611,8 @@ pub fn semi_join(
     right: &RecordBatch,
     config: &MembershipJoin,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
     membership_join(left, right, config, true)
 }
 
@@ -1604,6 +1628,8 @@ pub fn anti_join(
     right: &RecordBatch,
     config: &MembershipJoin,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
     membership_join(left, right, config, false)
 }
 
@@ -1974,6 +2000,9 @@ pub fn asof_join(
     config: &AsOfJoin,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
+    crate::require_join_geometry_support(&left.schema(), &right.schema())?;
     config.verifica_parametri()?;
     let left_on = column_index(left, &config.left_on)?;
     let right_on = column_index(right, &config.right_on)?;
@@ -2860,8 +2889,22 @@ mod geometry_reference_tests {
     use plenora_core::contract::arrow_metadata::{
         geometry_output_field, PLENORA_GEOMETRY_AXIS_ORDER_KEY,
     };
-    use plenora_core::contract::{ContractProperties, DataContract, FieldAllocator};
+    use plenora_core::contract::FieldAllocator;
     use serde_json::json;
+
+    fn complete_contract(
+        schema: plenora_core::arrow::SchemaRef,
+    ) -> plenora_core::contract::DataContract {
+        let mut metadata = schema.metadata().clone();
+        metadata.insert("plenora.contract.version", "1");
+        let schema =
+            std::sync::Arc::new(std::sync::Arc::unwrap_or_clone(schema).with_metadata(metadata));
+        plenora_core::contract::arrow_schema::contract_from_arrow_schema(
+            schema,
+            plenora_core::crs::resolve_crs,
+        )
+        .expect("contratto completo")
+    }
 
     fn geometry(crs: &str, order: Option<&str>, x: f64, y: f64) -> RecordBatch {
         let field = geometry_output_field("g", crs).unwrap();
@@ -2917,15 +2960,7 @@ mod geometry_reference_tests {
                         assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
                     }
                 }
-                let inputs = [&a, &b].map(|batch| {
-                    DataContract::from_source(
-                        batch.schema(),
-                        vec![],
-                        None,
-                        ContractProperties::default(),
-                    )
-                    .unwrap()
-                });
+                let inputs = [&a, &b].map(|batch| complete_contract(batch.schema()));
                 for (op, config) in [
                     ("table.concat", json!({})),
                     ("table.concat_by_name", json!({"strict":false})),
@@ -2954,7 +2989,7 @@ mod geometry_reference_tests {
         }
     }
     #[test]
-    fn geometrie_derivate_conservano_riferimenti_o_rifiutano_la_fusione() {
+    fn derivazioni_multigeometria_rifiutate_finche_non_adattate() {
         let a = geometry("EPSG:4326", Some("lon_lat"), 12.0, 45.0);
         for order in ["lon_lat", "lat_lon", "unknown"] {
             let b = geometry("EPSG:4326", Some(order), 45.0, 12.0);
@@ -2983,13 +3018,7 @@ mod geometry_reference_tests {
                 } else {
                     input.clone()
                 };
-                let contract = DataContract::from_source(
-                    input.schema(),
-                    vec![],
-                    None,
-                    ContractProperties::default(),
-                )
-                .unwrap();
+                let contract = complete_contract(input.schema());
                 for (op, config) in &cases {
                     let result = match *op {
                         "table.coalesce" => crate::quality::coalesce(
@@ -3014,36 +3043,14 @@ mod geometry_reference_tests {
                         &mut FieldAllocator::new(20),
                         &Limits::default(),
                     );
-                    if order == "lon_lat" {
-                        let output = result.unwrap();
-                        let name = match *op {
-                            "table.coalesce" => "g",
-                            "table.melt" => "value",
-                            _ => continue,
-                        };
-                        assert_eq!(
-                            output
-                                .schema()
-                                .field_with_name(name)
-                                .unwrap()
-                                .metadata()
-                                .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-                                .map(String::as_str),
-                            Some("lon_lat")
-                        );
-                        let analyzed = analyzed.unwrap();
-                        assert_eq!(output.schema().fields(), analyzed.schema.fields());
-                        assert!(analyzed.geometries.iter().any(|g| g.name == name));
-                    } else {
-                        assert!(
-                            matches!(result, Err(PlenoraError::Crs(_))),
-                            "{op}: {result:?}"
-                        );
-                        assert!(
-                            matches!(analyzed, Err(PlenoraError::Crs(_))),
-                            "{op}: {analyzed:?}"
-                        );
-                    }
+                    assert!(
+                        matches!(result, Err(PlenoraError::Unsupported(_))),
+                        "{op}: {result:?}"
+                    );
+                    assert!(
+                        matches!(analyzed, Err(PlenoraError::Unsupported(_))),
+                        "{op}: {analyzed:?}"
+                    );
                 }
             }
         }

@@ -181,7 +181,32 @@ pub(in crate::analyze) fn analyze_melt(
     let mut origins =
         super::helpers::preserved_origins(input, config.id_columns.iter().map(String::as_str))?;
     origins.extend([plenora_core::contract::FieldOrigin::New; 2]);
-    let output = finish(
+    let (geometry, active) = if geometry_metadata.is_empty() {
+        (geometry, active)
+    } else {
+        if geometry.is_some() {
+            return Err(PlenoraError::Unsupported(
+                "melt con piu' geometrie non ancora adattato".into(),
+            ));
+        }
+        let source = input
+            .geometries
+            .iter()
+            .find(|g| g.name == *source_fields[value_indices[0]].name())
+            .ok_or_else(|| PlenoraError::Schema("sorgente geometrica senza contratto".into()))?;
+        let output_field = schema.field_with_name(&value_name)?;
+        let keys =
+            plenora_core::contract::arrow_metadata::read_geometry_contract_keys(output_field)?;
+        let mut derived = plenora_core::contract::arrow_schema::geometry_contract_from_field(
+            output_field,
+            source.crs.clone(),
+            &keys,
+        );
+        derived.field_id = fields.alloc()?;
+        let active = Some(derived.field_id);
+        (Some(derived), active)
+    };
+    finish(
         origins,
         schema,
         geometry,
@@ -190,14 +215,6 @@ pub(in crate::analyze) fn analyze_melt(
             sorted_by: None,
             row_count: map_row_count(input, |rows| rows * value_count),
         },
-        fields,
-    )?;
-    super::helpers::derive_geometry(
-        output,
-        input,
-        source_fields[value_indices[0]].name(),
-        &value_name,
-        geometry_metadata,
         fields,
     )
 }

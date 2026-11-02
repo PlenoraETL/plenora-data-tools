@@ -10,8 +10,8 @@
 //! [`arrow_metadata`] lo leggono da uno schema Arrow e lo riscrivono nei
 //! metadati.
 //!
-//! Struttura aperta, comportamento chiuso: il modello ammette più colonne
-//! geometriche, ma [`DataContract::validate`] ne rifiuta più di una. Le
+//! Il modello ammette piu' geometrie con identita' distinte e una primaria
+//! facoltativa. Le operazioni non adattate applicano un rifiuto esplicito. Le
 //! combinazioni confidence/scope prive di senso non sono escluse dai tipi:
 //! la rappresentazione è la coppia `ContractProperty<T> { confidence, scope
 //! }`.
@@ -981,7 +981,7 @@ pub struct DataContract {
     pub schema: SchemaRef,
     /// Identita' note dei campi, indipendenti dalle proprieta' che le riferiscono.
     pub field_ids: std::collections::BTreeMap<String, FieldId>,
-    /// Colonne geometriche: al massimo una ([`DataContract::validate`]).
+    /// Colonne geometriche, in corrispondenza univoca con lo schema.
     pub geometries: Vec<GeometryColumnContract>,
     /// La colonna geometrica attiva, se dichiarata.
     pub active_geometry: Option<FieldId>,
@@ -1066,7 +1066,7 @@ impl DataContract {
         schema: SchemaRef,
         origins: Vec<FieldOrigin>,
         mut geometries: Vec<GeometryColumnContract>,
-        mut active_geometry: Option<FieldId>,
+        active_geometry: Option<FieldId>,
         properties: ContractProperties,
         allocator: &mut FieldAllocator,
     ) -> Result<Self> {
@@ -1078,6 +1078,17 @@ impl DataContract {
         for origin in &origins {
             if let FieldOrigin::Preserved(id) = origin {
                 allocator.observe(*id);
+            }
+        }
+        let mut geometry_mapping = std::collections::BTreeMap::new();
+        for geometry in &geometries {
+            if geometry_mapping
+                .insert(geometry.field_id, geometry.field_id)
+                .is_some()
+            {
+                return Err(PlenoraError::Schema(
+                    "identita' geometriche ripetute".into(),
+                ));
             }
         }
         let mut field_ids = std::collections::BTreeMap::new();
@@ -1099,15 +1110,25 @@ impl DataContract {
                     let id = allocator.alloc()?;
                     if let Some(geometry) = geometries.iter_mut().find(|g| g.name == *field.name())
                     {
-                        if active_geometry == Some(geometry.field_id) {
-                            active_geometry = Some(id);
-                        }
-                        geometry.field_id = id;
+                        geometry_mapping.insert(geometry.field_id, id);
                     }
                     id
                 }
             };
             field_ids.insert(field.name().clone(), id);
+        }
+        let active_geometry = active_geometry
+            .map(|id| {
+                geometry_mapping
+                    .get(&id)
+                    .copied()
+                    .ok_or_else(|| PlenoraError::Schema("primaria assente dalle geometrie".into()))
+            })
+            .transpose()?;
+        for geometry in &mut geometries {
+            geometry.field_id = *field_ids
+                .get(&geometry.name)
+                .ok_or_else(|| PlenoraError::Schema("geometria assente dallo schema".into()))?;
         }
         let output = Self {
             schema,
@@ -1140,7 +1161,7 @@ impl DataContract {
     ///
     /// - nomi dei campi univoci (altrimenti `field_with_name` risolve al primo
     ///   omonimo);
-    /// - al massimo una colonna geometrica;
+    /// - identita' e nomi geometrici univoci, nessun campo geometrico omesso;
     /// - ogni colonna geometrica esiste nello schema con lo stesso nome, la
     ///   stessa nullability e tipo fisico `Binary`, che ogni lettore della
     ///   geometria presuppone;
@@ -1164,12 +1185,7 @@ impl DataContract {
                 )));
             }
         }
-        if self.geometries.len() > 1 {
-            return Err(PlenoraError::Unsupported(format!(
-                "contratto con {} colonne geometriche: la v1 ne ammette al massimo una",
-                self.geometries.len()
-            )));
-        }
+        self.validate_geometry_identities()?;
         let mut identities = HashSet::new();
         for (name, id) in &self.field_ids {
             if self.schema.field_with_name(name).is_err() || !identities.insert(id) {
@@ -1190,6 +1206,15 @@ impl DataContract {
                     geometry.name, geometry.field_id
                 ))
             })?;
+            if field
+                .metadata()
+                .get(arrow_metadata::GEOARROW_EXTENSION_KEY)
+                .is_some_and(|value| value != arrow_metadata::GEOARROW_WKB_EXTENSION)
+            {
+                return Err(PlenoraError::Schema(
+                    "estensione incompatibile con il contratto geometrico".into(),
+                ));
+            }
             if field.is_nullable() != geometry.nullable {
                 return Err(PlenoraError::Schema(format!(
                     "colonna geometrica `{}`: nullability del contratto ({}) diversa dallo schema ({})",
@@ -1238,15 +1263,109 @@ impl DataContract {
         Ok(())
     }
 
-    /// La colonna geometrica attiva, se presente: `active_geometry` se
-    /// dichiarata, altrimenti l'unica geometria del contratto.
-    ///
+    fn validate_geometry_identities(&self) -> Result<()> {
+        let mut geometry_ids = HashSet::new();
+        let mut geometry_names = HashSet::new();
+        let mut previous_position = None;
+        for geometry in &self.geometries {
+            let position = self
+                .schema
+                .index_of(&geometry.name)
+                .map_err(|_| PlenoraError::Schema("geometria assente dallo schema".into()))?;
+            if previous_position.is_some_and(|previous| previous >= position) {
+                return Err(PlenoraError::Schema(
+                    "ordine geometrico incoerente con lo schema".into(),
+                ));
+            }
+            previous_position = Some(position);
+
+            if !geometry_ids.insert(geometry.field_id)
+                || !geometry_names.insert(geometry.name.as_str())
+            {
+                return Err(PlenoraError::Schema(
+                    "geometrie con identita' o nomi ripetuti".into(),
+                ));
+            }
+        }
+        for field in self.schema.fields() {
+            if field
+                .metadata()
+                .get(arrow_metadata::GEOARROW_EXTENSION_KEY)
+                .is_some_and(|value| value == arrow_metadata::GEOARROW_WKB_EXTENSION)
+                && !geometry_names.contains(field.name().as_str())
+            {
+                return Err(PlenoraError::Schema(
+                    "campo geometrico senza contratto".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// La primaria dichiarata, senza elezione implicita.
     #[must_use]
     pub fn active_geometry_column(&self) -> Option<&GeometryColumnContract> {
-        self.active_geometry.map_or_else(
-            || self.geometries.first(),
-            |active| self.geometries.iter().find(|g| g.field_id == active),
-        )
+        self.active_geometry
+            .and_then(|active| self.geometries.iter().find(|g| g.field_id == active))
+    }
+
+    /// Risolve un'identita' pubblica ricevuta; senza selettore usa la primaria.
+    /// Non usa le identita' interne ne' quelle assegnate dal completamento.
+    ///
+    /// # Errors
+    /// `Schema` se manca l'operando o il selettore non identifica una geometria.
+    pub fn select_geometry(
+        &self,
+        selector: Option<(&crate::arrow::schema::Schema, FieldId)>,
+    ) -> Result<&GeometryColumnContract> {
+        self.validate()?;
+        let selected = if let Some((received, id)) = selector {
+            arrow_schema::verifica_identita_campi(received)?;
+            let mut names = HashSet::new();
+            let mut found = None;
+            for field in received.fields() {
+                if !names.insert(field.name()) {
+                    return Err(PlenoraError::Schema("nomi ricevuti ripetuti".into()));
+                }
+                if arrow_metadata::canonical_field_id(field)? == Some(id) {
+                    if field
+                        .metadata()
+                        .get(arrow_metadata::GEOARROW_EXTENSION_KEY)
+                        .is_none_or(|value| value != arrow_metadata::GEOARROW_WKB_EXTENSION)
+                    {
+                        return Err(PlenoraError::Schema(
+                            "selettore riferito a un campo non geometrico".into(),
+                        ));
+                    }
+                    found = self
+                        .geometries
+                        .iter()
+                        .find(|geometry| geometry.name == *field.name());
+                }
+            }
+            found
+        } else {
+            self.active_geometry_column()
+        };
+        selected.ok_or_else(|| {
+            PlenoraError::Schema(
+                "operando geometrico assente: selezionare una geometria o dichiarare la primaria"
+                    .into(),
+            )
+        })
+    }
+
+    /// Guardia transitoria delle operazioni non ancora multigeometria.
+    ///
+    /// # Errors
+    /// `Unsupported` per piu' geometrie.
+    pub fn require_single_geometry_support(&self) -> Result<()> {
+        if self.geometries.len() > 1 {
+            return Err(PlenoraError::Unsupported(
+                "operazione non ancora adattata a piu' geometrie".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -1603,7 +1722,7 @@ mod tests {
                 Field::new("geom", DataType::Binary, true),
             ]),
             vec![geometry(7, "geom", true)],
-            None,
+            Some(FieldId(7)),
             ContractProperties::default(),
         )
         .unwrap();
@@ -1613,7 +1732,7 @@ mod tests {
     }
 
     #[test]
-    fn more_than_one_geometry_is_rejected_in_v1() {
+    fn more_than_one_geometry_is_valid_without_primary() {
         let result = DataContract::from_source(
             schema(vec![
                 Field::new("g1", DataType::Binary, true),
@@ -1623,7 +1742,9 @@ mod tests {
             None,
             ContractProperties::default(),
         );
-        assert!(matches!(result, Err(PlenoraError::Unsupported(_))));
+        let contract = result.expect("contratto plurale");
+        assert_eq!(contract.geometries.len(), 2);
+        assert!(contract.active_geometry_column().is_none());
     }
 
     #[test]
@@ -2149,7 +2270,7 @@ mod tests {
         let contract = DataContract::from_source(
             schema(vec![Field::new("geom", DataType::Binary, true)]),
             vec![column],
-            None,
+            Some(FieldId(1)),
             ContractProperties::default(),
         )
         .unwrap();

@@ -245,6 +245,7 @@ impl Melt {
 // leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     let id_indices = config
         .id_columns
         .iter()
@@ -938,6 +939,7 @@ fn colonna_pivot(
 // leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     let index_names = config.nomi_indice();
     let index_indices = index_names
         .iter()
@@ -1150,7 +1152,7 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
     crate::verifica_nomi_distinti("pivot", fields.iter().map(|field| field.name().as_str()))?;
     // I metadati dello schema d'ingresso si conservano, come in `melt`
     // e `aggregate`.
-    plenora_core::batch_with_rows(
+    crate::batch_with_rows(
         Arc::new(Schema::new_with_metadata(
             fields,
             batch.schema().metadata().clone(),
@@ -1221,6 +1223,7 @@ impl Transpose {
 // leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     config.verifica_nomi()?;
     let id_index = config
         .id_column
@@ -1340,10 +1343,7 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
         "transpose",
         fields.iter().map(|field| field.name().as_str()),
     )?;
-    Ok(RecordBatch::try_new(
-        Arc::new(Schema::new(fields)),
-        columns,
-    )?)
+    crate::batch_with_rows(Arc::new(Schema::new(fields)), columns, data_indices.len())
 }
 
 /// Che cosa fa `table.explode` con una lista vuota o nulla (in JSON
@@ -1449,6 +1449,7 @@ fn select_rows_except(
 ///   riga oltre `u32`;
 /// - `InvalidPlan`: nome di output non valido, `empty_policy=drop`.
 pub fn explode(batch: &RecordBatch, config: &Explode, limits: &Limits) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     if matches!(config.empty_policy, EmptyListPolicy::Drop) {
         return Err(PlenoraError::InvalidPlan(
             "explode.empty_policy=drop e' remediation implicita; usare un nodo esplicito di selezione o partizione accepted/rejected".into(),
@@ -1540,6 +1541,7 @@ const fn default_true() -> bool {
 ///   `u32::MAX`;
 /// - `InvalidPlan`: nome di colonna figlia non valido.
 pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     let index = column_index(batch, &config.column)?;
     crate::require_non_geometry(batch.schema().field(index))?;
     let structure = batch
@@ -1602,13 +1604,14 @@ pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<R
             None,
         )?);
     }
-    Ok(RecordBatch::try_new(
+    crate::batch_with_rows(
         Arc::new(Schema::new_with_metadata(
             fields,
             batch.schema().metadata().clone(),
         )),
         columns,
-    )?)
+        batch.num_rows(),
+    )
 }
 
 /// Config di `table.table_diff`. Campi sconosciuti rifiutati.
@@ -1947,6 +1950,8 @@ pub fn table_diff(
     config: &TableDiff,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
     if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {
         return Err(PlenoraError::InvalidPlan(
             "chiavi table_diff non valide".into(),

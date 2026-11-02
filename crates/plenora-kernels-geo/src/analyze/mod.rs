@@ -282,6 +282,7 @@ pub fn analyze_geo_contract(
     let mut owned_inputs = inputs.to_vec();
     for input in &mut owned_inputs {
         input.validate()?;
+        input.require_single_geometry_support()?;
         for id in input.field_ids.values() {
             fields.observe(*id);
         }
@@ -309,6 +310,11 @@ pub fn analyze_geo_contract(
         }
     }
     let inputs = owned_inputs.as_slice();
+    for input in inputs {
+        if !input.geometries.is_empty() && input.active_geometry.is_none() {
+            input.select_geometry(None)?;
+        }
+    }
     richiedi_ordine_assi(descriptor.id, inputs)?;
     // I produttori sono unari: l'arieta' e' gia' verificata sopra. Il
     // rifiuto dell'N-aria resta prima del controllo sul numero di input,
@@ -3924,7 +3930,6 @@ mod tests {
             let mut contract = geo_contract(crs);
             contract.geometries[0].encoding = Some(GeometryEncoding::Wkb);
             contract.geometries[0].types = esatti(tipi);
-            contract.geometries[0].nullable = geometria_nullable;
             let emesso = arrow_schema_from_contract(&contract).expect("schema emesso");
             let fields: Vec<Field> = emesso
                 .fields()

@@ -1101,6 +1101,7 @@ impl<'a> FastProgram<'a> {
         batch: &RecordBatch,
         config: &ExpressionTransform,
     ) -> Result<RecordBatch> {
+        crate::require_geometry_support(&batch.schema())?;
         self.run_auto_con_effetti(batch, config)
             .map(|(uscita, _)| uscita)
     }
@@ -1112,6 +1113,7 @@ impl<'a> FastProgram<'a> {
         batch: &RecordBatch,
         config: &ExpressionTransform,
     ) -> Result<(RecordBatch, crate::EffettiKernel)> {
+        crate::require_geometry_support(&batch.schema())?;
         let limits = crate::Limits::default();
         config.verifica_parametri(&limits)?;
         let kind = super::interpreter::static_output_kind(batch, config)?;
@@ -1129,6 +1131,7 @@ impl<'a> FastProgram<'a> {
         ctx: &Contesto<'_>,
         effetti: &mut crate::EffettiKernel,
     ) -> Result<RecordBatch> {
+        crate::require_geometry_support(&batch.schema())?;
         let mut values = Vec::with_capacity(batch.num_rows());
         let mut rejections = Vec::new();
         for row in 0..batch.num_rows() {

@@ -170,6 +170,7 @@ fn type_matches(actual: &DataType, expected: &DataType) -> bool {
 ///   nullabilita' diversi dall'atteso;
 /// - `InvalidPlan`: tipo atteso non supportato da `assert_schema`.
 pub fn assert_schema(batch: &RecordBatch, config: &AssertSchema) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     if !config.allow_extra && batch.num_columns() != config.fields.len() {
         return Err(PlenoraError::Schema(format!(
             "assert_schema: attese {} colonne, trovate {}",
@@ -238,6 +239,7 @@ pub struct AssertNotNull {
 ///   colonne, causa `validation.required_value_missing`; ogni riga conta una
 ///   volta, con la prima colonna di `columns` in cui e' nulla.
 pub fn assert_not_null(batch: &RecordBatch, config: &AssertNotNull) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     let mut rejections = Vec::new();
     for name in &config.columns {
         let index = column_index(batch, name)?;
@@ -331,6 +333,7 @@ pub struct AssertUnique {
 // lineare sopra il limite di linee: nessuna complessita' logica aggiunta.
 #[allow(clippy::too_many_lines)]
 pub fn assert_unique(batch: &RecordBatch, config: &AssertUnique) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     let indices = config
         .columns
         .iter()
@@ -530,6 +533,7 @@ fn non_finite_cell(array: &dyn Array, row: usize) -> bool {
 ///   finito (causa `validation.value_out_of_range`), null con
 ///   `allow_null=false` (causa `validation.required_value_missing`).
 pub fn assert_range(batch: &RecordBatch, config: &AssertRange) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     let index = column_index(batch, &config.column)?;
     let array = batch.column(index).as_ref();
@@ -616,6 +620,7 @@ pub struct AssertRegex {
 ///   (causa `validation.regex_mismatch`), null con `allow_null=false` (causa
 ///   `validation.required_value_missing`).
 pub fn assert_regex(batch: &RecordBatch, config: &AssertRegex) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     let index = column_index(batch, &config.column)?;
     if batch.column(index).data_type() != &DataType::Utf8 {
         return Err(PlenoraError::Schema(
@@ -684,6 +689,7 @@ pub struct Coalesce {
 ///   percorso generico o nella costruzione del batch risultante (come
 ///   `replace_or_append`).
 pub fn coalesce(batch: &RecordBatch, config: &Coalesce) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     validate_output_name(&config.output_column)?;
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(

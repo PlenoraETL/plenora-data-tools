@@ -162,6 +162,12 @@ pub fn analyze_table_contract(
     for input in inputs {
         crate::require_unique_names(&input.schema)?;
         input.validate()?;
+        input.require_single_geometry_support()?;
+        if !input.geometries.is_empty() && input.active_geometry.is_none() {
+            return Err(PlenoraError::Unsupported(
+                "operazione tabellare senza primaria non ancora adattata".into(),
+            ));
+        }
         for id in input.field_ids.values() {
             fields.observe(*id);
         }
@@ -261,6 +267,7 @@ pub fn analyze_table_contract(
             "{id}: analyze_contract non disponibile"
         ))),
     }?;
+    output.require_single_geometry_support()?;
     output.validate()?;
     fields.bind_contract(&output);
     Ok(output)
@@ -3684,14 +3691,14 @@ mod tests {
             ContractProperties::default(),
         )
         .unwrap();
-        assert_invalid_plan(
-            &err(
+        assert!(matches!(
+            err(
                 "table.join",
                 &[geo_contract(), right],
-                json!({"left_keys": ["id"], "right_keys": ["rid"]}),
+                json!({"left_keys": ["id"], "right_keys": ["rid"]})
             ),
-            "due colonne geometriche in output",
-        );
+            PlenoraError::Unsupported(_)
+        ));
     }
 
     #[test]

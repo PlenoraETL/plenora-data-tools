@@ -80,8 +80,8 @@ fn ogni_concatenazione_rifiuta_dichiarazioni_incompatibili() {
                 let analyzed = analyze_table_contract(
                     op,
                     &[
-                        DataContract::tabular(left.schema()),
-                        DataContract::tabular(right.schema()),
+                        complete_contract(left.schema()),
+                        complete_contract(right.schema()),
                     ],
                     &config,
                     &mut FieldAllocator::default(),
@@ -109,8 +109,8 @@ fn confrontare_tipi_diversi_non_impila_le_dichiarazioni() {
         assert!(analyze_table_contract(
             op,
             &[
-                DataContract::tabular(left.schema()),
-                DataContract::tabular(right.schema())
+                complete_contract(left.schema()),
+                complete_contract(right.schema())
             ],
             &json!({}),
             &mut FieldAllocator::default(),
@@ -268,7 +268,7 @@ fn geometria_solo_nel_contratto_non_si_fonde_con_byte_anonimi() {
         true,
     )]));
     left.validate().unwrap();
-    let right = DataContract::tabular(left.schema.clone());
+    let right = complete_contract(left.schema.clone());
     for (op, config) in [
         ("table.concat", json!({})),
         ("table.concat_by_name", json!({"strict": false})),
@@ -364,7 +364,7 @@ fn dichiarazione_tipizzata_e_stessi_metadati_legacy_sono_compatibili() {
     ]));
     let declared =
         contract_from_arrow_schema(schema.clone(), plenora_core::crs::resolve_crs).unwrap();
-    let arrow_only = DataContract::tabular(schema);
+    let arrow_only = complete_contract(schema);
     for (op, config) in [
         ("table.concat", json!({})),
         ("table.concat_by_name", json!({"strict": false})),
@@ -416,7 +416,7 @@ fn decisione_crs_sostituisce_la_lineage_anche_nelle_fusioni() {
     let mut metadata = published.field(0).metadata().clone();
     metadata.remove("plenora.geometry.precision");
     metadata.remove("plenora.geometry.spatial_semantics");
-    let published_contract = DataContract::tabular(Arc::new(Schema::new_with_metadata(
+    let published_contract = complete_contract(Arc::new(Schema::new_with_metadata(
         vec![published.field(0).as_ref().clone().with_metadata(metadata)],
         published.metadata().clone(),
     )));
@@ -468,10 +468,24 @@ fn crs_con_srid_in_conflitto_resta_irrisolto_su_entrambi_i_percorsi() {
     ));
     analyze_table_contract(
         "table.concat",
-        &[contract, DataContract::tabular(schema)],
+        &[contract, complete_contract(schema)],
         &json!({}),
         &mut FieldAllocator::default(),
         &Limits::default(),
     )
     .unwrap();
+}
+
+fn complete_contract(
+    schema: plenora_core::arrow::SchemaRef,
+) -> plenora_core::contract::DataContract {
+    let mut metadata = schema.metadata().clone();
+    metadata.insert("plenora.contract.version", "1");
+    let schema =
+        std::sync::Arc::new(std::sync::Arc::unwrap_or_clone(schema).with_metadata(metadata));
+    plenora_core::contract::arrow_schema::contract_from_arrow_schema(
+        schema,
+        plenora_core::crs::resolve_crs,
+    )
+    .expect("contratto completo")
 }

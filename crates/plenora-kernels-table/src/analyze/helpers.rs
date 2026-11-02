@@ -285,19 +285,16 @@ pub(in crate::analyze) fn propagate_geometry(
     })
 }
 
-/// Unisce le geometrie dei due rami di un'op binaria: un contratto ammette al
-/// massimo una colonna geometrica, quindi due sopravvissute sono un errore
-/// `InvalidPlan`.
+/// Guardia delle operazioni binarie non ancora adattate all'uscita plurale.
 pub(in crate::analyze) fn merge_geometry(
     op: &str,
     left: Option<GeometryColumnContract>,
     right: Option<GeometryColumnContract>,
 ) -> Result<Option<GeometryColumnContract>> {
     match (left, right) {
-        (Some(_), Some(_)) => contract_error(
-            op,
-            "due colonne geometriche in output: la v1 ne ammette al massimo una",
-        ),
+        (Some(_), Some(_)) => Err(PlenoraError::Unsupported(format!(
+            "{op}: due colonne geometriche in output non ancora supportate"
+        ))),
         (left, right) => Ok(left.or(right)),
     }
 }
@@ -472,14 +469,32 @@ pub(in crate::analyze) fn analyze_append(
     alloc: &mut FieldAllocator,
     produced: &[(String, DataType, bool)],
 ) -> Result<DataContract> {
+    analyze_append_inner(input, alloc, produced, None)
+}
+
+/// Coalesce conserva la natura geometrica del campo sostituito durante la costruzione.
+pub(in crate::analyze) fn analyze_append_inner(
+    input: &DataContract,
+    alloc: &mut FieldAllocator,
+    produced: &[(String, DataType, bool)],
+    replacement_metadata: Option<&plenora_core::arrow::Metadata>,
+) -> Result<DataContract> {
     let mut fields = clone_fields(input);
     let mut overwritten = false;
     let mut geometry_overwritten = false;
     for (name, data_type, nullable) in produced {
         let replaced = produce(&mut fields, name, data_type.clone(), *nullable);
+        if let Some(metadata) = replacement_metadata {
+            let field = fields
+                .iter_mut()
+                .find(|field| field.name() == name)
+                .ok_or_else(|| PlenoraError::Schema("campo prodotto assente".into()))?;
+            *field = field.clone().with_metadata(metadata.clone());
+        }
         overwritten |= replaced;
         if replaced && input.geometries.first().is_some_and(|g| &g.name == name) {
-            geometry_overwritten = true;
+            geometry_overwritten =
+                replacement_metadata.is_none_or(plenora_core::arrow::Metadata::is_empty);
         }
     }
     let schema = Schema::new_with_metadata(fields, input.schema.metadata().clone());
@@ -524,6 +539,15 @@ pub(in crate::analyze) fn derive_geometry(
 ) -> Result<DataContract> {
     if metadata.is_empty() {
         return Ok(output);
+    }
+    if output
+        .geometries
+        .iter()
+        .any(|geometry| geometry.name != name)
+    {
+        return Err(PlenoraError::Unsupported(
+            "derivazione multigeometria non ancora adattata".into(),
+        ));
     }
     let mut fields = clone_fields(&output);
     let index = output.schema.index_of(name)?;

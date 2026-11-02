@@ -370,11 +370,27 @@ fn geo_di_campo(crs: &CrsColonna, dimensioni: GeometryDimensions) -> Result<Stri
 pub fn applica(tabella: &RecordBatch, testo_geo: &str) -> Result<RecordBatch> {
     let geo = analizza(testo_geo)?;
     let schema = tabella.schema();
+    if let Some(primary) = schema.metadata().get("plenora.primary_geometry") {
+        let native_id = schema
+            .column_with_name(&geo.primaria)
+            .and_then(|(_, field)| field.metadata().get("plenora.field_id"));
+        if primary == "none" || native_id != Some(primary) {
+            return Err(PlenoraError::Schema(
+                "primaria Arrow discordante dal metadato GeoParquet".into(),
+            ));
+        }
+    }
     for nome in geo.colonne.keys() {
         if schema.column_with_name(nome).is_none() {
             return Err(invalido("colonna dichiarata assente dallo schema"));
         }
     }
+    if geo.colonne.len() > 1 {
+        return Err(PlenoraError::Unsupported(
+            "lettura GeoParquet multigeometria non ancora adattata".into(),
+        ));
+    }
+
     let mut campi = Vec::with_capacity(schema.fields().len());
     let mut colonne = Vec::with_capacity(schema.fields().len());
     let mut prima_geometrica: Option<&str> = None;
@@ -544,6 +560,12 @@ pub fn prepara(tabella: &RecordBatch) -> Result<Option<Preparata>> {
         return Ok(None);
     }
     let contratto = contract_from_arrow_schema(schema.clone(), resolve_crs)?;
+    contratto.require_single_geometry_support()?;
+    if contratto.active_geometry.is_none() {
+        return Err(PlenoraError::Unsupported(
+            "GeoParquet richiede una geometria primaria".into(),
+        ));
+    }
     let mut colonne_geo = Map::new();
     let mut nomi_geometrici = BTreeSet::new();
     for geometria in &contratto.geometries {

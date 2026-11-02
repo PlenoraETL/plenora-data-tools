@@ -582,6 +582,7 @@ fn scalar_timestamp_ms(value: &Scalar, context: &str) -> Result<Option<i64>> {
 /// - `ResourceLimit`: `length` oltre `u32::MAX` caratteri;
 /// - `Internal`: invarianti interne violate.
 pub fn expression(batch: &RecordBatch, config: &ExpressionTransform) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     expression_con_effetti(batch, config, &crate::Limits::default()).map(|(uscita, _)| uscita)
 }
 
@@ -609,6 +610,7 @@ pub fn expression_con_effetti(
     config: &ExpressionTransform,
     limits: &crate::Limits,
 ) -> Result<(RecordBatch, crate::EffettiKernel)> {
+    crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri(limits)?;
     // Tipo dallo SCHEMA, mai dai valori (vedi il doc sopra).
     let kind = static_output_kind(batch, config)?;
@@ -657,6 +659,7 @@ pub fn expression_generic(
     batch: &RecordBatch,
     config: &ExpressionTransform,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     expression_generic_con_effetti(batch, config).map(|(uscita, _)| uscita)
 }
 
@@ -667,6 +670,7 @@ pub fn expression_generic_con_effetti(
     batch: &RecordBatch,
     config: &ExpressionTransform,
 ) -> Result<(RecordBatch, crate::EffettiKernel)> {
+    crate::require_geometry_support(&batch.schema())?;
     let limits = crate::Limits::default();
     config.verifica_parametri(&limits)?;
     let ctx = Contesto::new(config, &limits);

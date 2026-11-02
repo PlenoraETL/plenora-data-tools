@@ -377,8 +377,9 @@ limite della tabella.
   `plenora_core::panic_policy::install` (limite già dichiarato lì).
 - **GeoParquet, ciò che il contratto non porta**: `orientation`, `bbox` e
   `covering` letti si validano e si perdono; `epoch` e `edges: spherical` si
-  rifiutano; il contratto ammette una sola colonna geometrica, quindi
-  un file con più colonne geometriche si rifiuta (`Schema`). Il PROJJSON
+  rifiutano; il core ammette piu' geometrie ma il lettore e lo scrittore
+  GeoParquet restano monogeometria: piu' colonne si rifiutano (`Unsupported`).
+  La scrittura senza primaria si rifiuta (`Unsupported`). Il PROJJSON
   letto deve coincidere semanticamente con una voce integrata; un ID EPSG
   con parametri discordanti viene rifiutato.
 - **Metadati geometrici normalizzati**: dopo GeoParquet il campo porta il

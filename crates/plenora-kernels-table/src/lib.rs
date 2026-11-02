@@ -746,9 +746,19 @@ pub fn preflight_output_bytes(
 
 /// Costruttore di `RecordBatch` che DICHIARA la cardinalita'.
 ///
-/// Ri-esportato da [`plenora_core::batch_with_rows`]: l'invariante «un batch
+/// Delega a [`plenora_core::batch_with_rows`]: l'invariante «un batch
 /// a zero colonne puo' avere righe» vale per tutto il workspace.
-pub use plenora_core::batch_with_rows;
+///
+/// # Errors
+/// `Unsupported` per un'uscita plurale; errori Arrow per uno schema incoerente.
+pub fn batch_with_rows(
+    schema: Arc<Schema>,
+    columns: Vec<ArrayRef>,
+    rows_if_empty: usize,
+) -> Result<RecordBatch> {
+    plenora_core::contract::arrow_schema::require_single_geometry_schema(&schema)?;
+    plenora_core::batch_with_rows(schema, columns, rows_if_empty)
+}
 
 /// Verifica sullo SCHEMA tutto cio' che la conversione in testo puo'
 /// rifiutare senza guardare i valori.
@@ -2190,6 +2200,36 @@ pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
     // un batch a zero colonne il numero di righe selezionate non e' deducibile
     // da alcuna colonna.
     batch_with_rows(batch.schema(), columns, rows.len())
+}
+
+/// Confine transitorio degli adapter tabellari, prima di accedere ai dati.
+pub(crate) fn require_geometry_support(schema: &Schema) -> Result<()> {
+    plenora_core::contract::arrow_schema::require_single_geometry_schema(schema)?;
+    if schema
+        .metadata()
+        .contains_key(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY)
+    {
+        return Err(PlenoraError::Unsupported(
+            "adapter tabellare con primaria esplicita non ancora adattato".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Le geometrie affiancate richiedono l'adattamento plurale dei join.
+pub(crate) fn require_join_geometry_support(left: &Schema, right: &Schema) -> Result<()> {
+    let count = left
+        .fields()
+        .iter()
+        .chain(right.fields())
+        .filter(|field| plenora_core::contract::arrow_metadata::field_declares_wkb_geometry(field))
+        .count();
+    if count > 1 {
+        return Err(PlenoraError::Unsupported(
+            "join con piu' geometrie non ancora adattato".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

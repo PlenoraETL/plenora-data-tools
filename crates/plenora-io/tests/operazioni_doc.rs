@@ -3511,7 +3511,7 @@ fn concat_sorgente_effettiva_emissione_e_conflitti() {
         match divergence {
             0 => assert!(matches!(result, Err(PlenoraError::Schema(_)))),
             1 => assert!(matches!(result, Err(PlenoraError::Crs(_)))),
-            _ => assert!(matches!(result, Err(PlenoraError::InvalidPlan(_)))),
+            _ => assert!(matches!(result, Err(PlenoraError::Unsupported(_)))),
         }
     }
     // Allineare aggiunge un Binary anonimo: non puo' attribuirgli la

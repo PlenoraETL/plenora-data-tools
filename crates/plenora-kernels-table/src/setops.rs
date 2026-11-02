@@ -336,6 +336,8 @@ pub fn concat_compatible(
     right: &RecordBatch,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
     validate_schema(left, right)?;
     for (a, b) in left.schema().fields().iter().zip(right.schema().fields()) {
         plenora_core::contract::arrow_metadata::require_geometry_compatibility(
@@ -419,6 +421,8 @@ pub fn union_distinct(
     _config: &SetOperation,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
     // Equivale a concat + dedup senza copiare gli input: le chiavi si
     // accumulano in un solo set scandendo `left` poi `right`, quindi la prima
     // occorrenza e' quella del batch combinato; la concat avviene solo sulla
@@ -490,6 +494,8 @@ pub fn intersect(
     right: &RecordBatch,
     _config: &SetOperation,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
     validate_schema(left, right)?;
     let right = right_keys(right)?;
     let encoder = CompactRowEncoder::try_new(left)?;
@@ -528,6 +534,8 @@ pub fn except(
     right: &RecordBatch,
     _config: &SetOperation,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
     validate_schema(left, right)?;
     let right = right_keys(right)?;
     let rows = unique_rows(left, |key| right.cerca(key).is_none())?;

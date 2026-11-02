@@ -3744,7 +3744,7 @@ fn distinct_accetta_ogni_nome_di_colonna_anche_quello_del_vecchio_spill() {
 
 #[test]
 fn celle_geometriche_non_diventano_binary_anonimo() {
-    use plenora_core::contract::{DataContract, FieldAllocator};
+    use plenora_core::contract::FieldAllocator;
     use plenora_kernels_table::{aggregation, analyze::analyze_table_contract, cleansing};
     let mut wkb = vec![1, 1, 0, 0, 0];
     wkb.extend_from_slice(&45_f64.to_le_bytes());
@@ -3776,7 +3776,7 @@ fn celle_geometriche_non_diventano_binary_anonimo() {
                 .unwrap_err();
                 let analysis = analyze_table_contract(
                     "table.aggregate",
-                    &[DataContract::tabular(input.schema())],
+                    &[complete_contract(input.schema())],
                     &config,
                     &mut FieldAllocator::default(),
                     &Limits::default(),
@@ -3791,7 +3791,7 @@ fn celle_geometriche_non_diventano_binary_anonimo() {
                     .unwrap_err();
             let analysis = analyze_table_contract(
                 "table.type_cast",
-                &[DataContract::tabular(input.schema())],
+                &[complete_contract(input.schema())],
                 &config,
                 &mut FieldAllocator::default(),
                 &Limits::default(),
@@ -3807,7 +3807,7 @@ fn celle_geometriche_non_diventano_binary_anonimo() {
 fn campi_geometrici_annidati_non_perdono_il_contratto() {
     use plenora_core::arrow::array::types::Int64Type;
     use plenora_core::arrow::array::{ListArray, StructArray};
-    use plenora_core::contract::{DataContract, FieldAllocator};
+    use plenora_core::contract::FieldAllocator;
     use plenora_kernels_table::{analyze::analyze_table_contract, reshape};
     let child = Arc::new(Field::new("g", DataType::Binary, true).with_metadata(
         std::collections::HashMap::from([(
@@ -3856,7 +3856,7 @@ fn campi_geometrici_annidati_non_perdono_il_contratto() {
             .unwrap_err();
             let analysis = analyze_table_contract(
                 op,
-                &[DataContract::tabular(input.schema())],
+                &[complete_contract(input.schema())],
                 &config,
                 &mut FieldAllocator::default(),
                 &Limits::default(),
@@ -3872,7 +3872,7 @@ fn campi_geometrici_annidati_non_perdono_il_contratto() {
 #[allow(clippy::too_many_lines)] // Stesse fixture per il confronto kernel/analisi delle cinque operazioni.
 fn diff_e_operazioni_binarie_rifiutano_geometrie_incoerenti_prima_delle_celle() {
     use plenora_core::contract::arrow_metadata::geometry_output_field;
-    use plenora_core::contract::{DataContract, FieldAllocator};
+    use plenora_core::contract::FieldAllocator;
     use plenora_kernels_table::{analyze::analyze_table_contract, governance, joins, reshape};
     let mut wkb = vec![1, 1, 0, 0, 0];
     wkb.extend_from_slice(&45_f64.to_le_bytes());
@@ -3950,8 +3950,8 @@ fn diff_e_operazioni_binarie_rifiutano_geometrie_incoerenti_prima_delle_celle() 
                 let analisi = analyze_table_contract(
                     op,
                     &[
-                        DataContract::tabular(left.schema()),
-                        DataContract::tabular(right.schema()),
+                        complete_contract(left.schema()),
+                        complete_contract(right.schema()),
                     ],
                     &config,
                     &mut FieldAllocator::default(),
@@ -3978,10 +3978,7 @@ fn diff_e_operazioni_binarie_rifiutano_geometrie_incoerenti_prima_delle_celle() 
                         .unwrap_err();
                         let analisi = analyze_table_contract(
                             "table.table_diff",
-                            &[
-                                DataContract::tabular(a.schema()),
-                                DataContract::tabular(b.schema()),
-                            ],
+                            &[complete_contract(a.schema()), complete_contract(b.schema())],
                             &config,
                             &mut FieldAllocator::default(),
                             &Limits::default(),
@@ -4040,4 +4037,18 @@ fn conteggi_sintetici_rifiutano_overflow_e_perdita_di_precisione() {
         ),
         Err(PlenoraError::ResourceLimit(_))
     ));
+}
+
+fn complete_contract(
+    schema: plenora_core::arrow::SchemaRef,
+) -> plenora_core::contract::DataContract {
+    let mut metadata = schema.metadata().clone();
+    metadata.insert("plenora.contract.version", "1");
+    let schema =
+        std::sync::Arc::new(std::sync::Arc::unwrap_or_clone(schema).with_metadata(metadata));
+    plenora_core::contract::arrow_schema::contract_from_arrow_schema(
+        schema,
+        plenora_core::crs::resolve_crs,
+    )
+    .expect("contratto completo")
 }

@@ -149,9 +149,9 @@ pub fn crs_definition_from_metadata(
 /// `plenora.geometry.*` su un campo senza quell'estensione si rifiutano
 /// (vocabolario Arrow 1.0, sezione 4: «Geometry keys on a field without the
 /// `geoarrow.wkb` extension are invalid»; prima bastavano da sole). Il CRS si
-/// deduce con [`contract_crs_from_keys`]; la colonna geometrica, se c'è, è
-/// la geometria attiva, con `FieldId` provvisorio 0 (il chiamante lo
-/// rimappa con il proprio [`crate::contract::FieldAllocator`]).
+/// deduce con [`contract_crs_from_keys`]. Le identita' interne sono distinte,
+/// nell'ordine delle geometrie nello schema; il planner le rimappa nel suo
+/// namespace. La primaria si risolve prima del completamento (PRIM-002/003).
 ///
 /// Si leggono e si verificano anche le identità dei campi
 /// ([`verifica_identita_campi`]) e il metadato d'estensione `GeoArrow`
@@ -171,7 +171,7 @@ pub fn crs_definition_from_metadata(
 /// quella supportata, la semantica `geography`, un `edges` non planare o un
 /// formato CRS non supportato nel metadato d'estensione `GeoArrow`; [`PlenoraError::Schema`] anche
 /// se il contratto che ne risulta non supera [`DataContract::validate`]
-/// (per esempio più di una colonna geometrica).
+/// (per esempio nomi duplicati).
 pub fn contract_from_arrow_schema(
     schema: SchemaRef,
     resolve_crs: CrsResolver,
@@ -183,8 +183,8 @@ pub fn contract_from_arrow_schema(
     // successiva a quella supportata si rifiuta prima di leggere i campi.
     read_contract_version(&schema)?;
     verifica_identita_campi(&schema)?;
-    let mut geometries = Vec::new();
-    for field in schema.fields() {
+    let mut geometry_fields = Vec::new();
+    for (position, field) in schema.fields().iter().enumerate() {
         let extension = field.metadata().get(GEOARROW_EXTENSION_KEY);
         let geo_metadata = field.metadata().get(GEO_METADATA_KEY);
         if let Some(extension) = extension {
@@ -226,53 +226,43 @@ pub fn contract_from_arrow_schema(
                 crate::tipo_arrow::descrivi_tipo(field.data_type())
             )));
         }
+        // Gli errori di vocabolario di ogni campo precedono la primaria e i CRS.
+        verifica_vocabolario_geometrico(field)?;
+        let keys = read_geometry_contract_keys(field);
+        let keys = match keys {
+            Err(error @ PlenoraError::Schema(_)) => return Err(error),
+            other => other,
+        };
+        geometry_fields.push((position, field, keys));
+    }
+    let primary_position = primary_geometry_position(&schema)?;
+    let mut geometries = Vec::new();
+    let mut active_geometry = None;
+    for (position, field, keys) in geometry_fields {
+        let keys = keys?;
         verifica_metadato_estensione(field)?;
         if canonical_geometry_spatial_semantics(field)? == Some(SpatialSemantics::Geography) {
-            return Err(PlenoraError::Unsupported(format!(
-                "colonna geometria `{}`: semantica `geography` non supportata: i kernel \
-                 sono planari e la leggerebbero come `geometry`",
-                field.name()
-            )));
+            return Err(PlenoraError::Unsupported(
+                "semantica geography non supportata".into(),
+            ));
         }
-        let keys = read_geometry_contract_keys(field)?;
-        let crs = contract_crs_from_keys(field.name(), geo_metadata, &keys, resolve_crs)?;
-        geometries.push(geometry_contract_from_field(field, crs, &keys));
+        let crs = contract_crs_from_keys(
+            field.name(),
+            field.metadata().get(GEO_METADATA_KEY),
+            &keys,
+            resolve_crs,
+        )?;
+        let mut geometry = geometry_contract_from_field(field, crs, &keys);
+        geometry.field_id = FieldId(
+            u32::try_from(geometries.len())
+                .map_err(|_| PlenoraError::Unsupported("numero di campi oltre u32".into()))?,
+        );
+        if primary_position == Some(position) {
+            active_geometry = Some(geometry.field_id);
+        }
+        geometries.push(geometry);
     }
-    let active_geometry = if geometries.is_empty() {
-        None
-    } else {
-        Some(FieldId(0))
-    };
-    // Gli assi assenti del vocabolario canonico non si deducono dal CRS.
-    // Anche il percorso legacy esterno resta unknown senza prova.
-    let fields: Vec<Field> = schema
-        .fields()
-        .iter()
-        .map(|field| {
-            let mut field = field.as_ref().clone();
-            if (field.metadata().contains_key("plenora.geometry.crs_id")
-                || field
-                    .metadata()
-                    .contains_key("plenora.geometry.crs_definition"))
-                && !field
-                    .metadata()
-                    .contains_key(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-            {
-                let mut metadata = field.metadata().clone();
-                metadata.insert(
-                    PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
-                    "unknown".to_owned(),
-                );
-                field = field.with_metadata(metadata);
-            }
-            field
-        })
-        .collect();
-    let schema = if fields.iter().eq(schema.fields().iter().map(AsRef::as_ref)) {
-        schema
-    } else {
-        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
-    };
+    let schema = schema_con_assi_espliciti(schema);
     DataContract::from_source(
         schema,
         geometries,
@@ -538,8 +528,14 @@ pub fn geometry_contract_from_field(
 /// canonica preesistente divergente; `PlenoraError::Schema` per colonna
 /// geometrica del contratto assente nello schema o con un'altra estensione.
 pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, PlenoraError> {
+    contract.validate()?;
     if contract.geometries.is_empty() {
-        return Ok(contract.schema.clone());
+        let mut metadata = contract.schema.metadata().clone();
+        metadata.remove(PRIMARY_GEOMETRY_KEY);
+        return Ok(Arc::new(Schema::new_with_metadata(
+            contract.schema.fields().clone(),
+            metadata,
+        )));
     }
     let mut matched = 0_usize;
     let mut fields = Vec::with_capacity(contract.schema.fields().len());
@@ -564,7 +560,22 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
     // porta (guardia in testa e conteggio sopra).
     let mut metadata = contract.schema.metadata().clone();
     aggiungi_versione(&mut metadata)?;
-    Ok(Arc::new(Schema::new_with_metadata(fields, metadata)))
+    metadata.remove(PRIMARY_GEOMETRY_KEY);
+    let schema = Schema::new_with_metadata(fields, metadata);
+    let schema = if contract.geometries.len() > 1 {
+        pubblica_schema(&schema, &BTreeSet::new(), &BTreeSet::new())?
+    } else {
+        Arc::new(schema)
+    };
+    let position = contract
+        .active_geometry_column()
+        .map(|geometry| {
+            schema
+                .index_of(&geometry.name)
+                .map_err(|_| errore_di_contratto("primaria assente dallo schema"))
+        })
+        .transpose()?;
+    emit_primary_geometry(&schema, position)
 }
 
 /// `plenora.contract.version` nei metadati di schema: aggiunta se manca,
@@ -666,6 +677,7 @@ pub fn pubblica_schema(
     osservate: &BTreeSet<u32>,
     ambigue: &BTreeSet<u32>,
 ) -> Result<SchemaRef, PlenoraError> {
+    let primary = primary_geometry_position(schema)?;
     let mut metadata = schema.metadata().clone();
     aggiungi_versione(&mut metadata)?;
     let mut portate = Vec::with_capacity(schema.fields().len());
@@ -698,7 +710,7 @@ pub fn pubblica_schema(
         campo_metadata.insert(PLENORA_FIELD_ID_KEY.to_owned(), nuova.to_string());
         fields.push(field.as_ref().clone().with_metadata(campo_metadata));
     }
-    Ok(Arc::new(Schema::new_with_metadata(fields, metadata)))
+    emit_primary_geometry(&Schema::new_with_metadata(fields, metadata), primary)
 }
 
 /// Chiave del metadato d'estensione `GeoArrow` (JSON con `crs` ed `edges`).
@@ -787,6 +799,7 @@ pub fn verifica_metadati_di_confine(schema: &Schema) -> Result<(), PlenoraError>
     (|| {
         read_contract_version(schema)?;
         verifica_identita_campi(schema)?;
+        primary_geometry_position(schema)?;
         Ok(())
     })()
     .map_err(|e: PlenoraError| e.with_phase(crate::ErrorPhase::Validate))
@@ -906,4 +919,179 @@ pub fn canonical_geometry_field(
     verifica_metadato_estensione(&output)?;
     read_geometry_contract_keys(&output)?;
     Ok(output)
+}
+
+/// Chiave di schema della primaria (Arrow Primary Geometry 1.0).
+pub const PRIMARY_GEOMETRY_KEY: &str = "plenora.primary_geometry";
+
+/// Risolve la primaria sullo schema ricevuto, prima di assegnare identita'.
+/// Il risultato e' una posizione verificata, mai un'elezione per ordine.
+///
+/// # Errors
+/// `Schema` per dichiarazioni o riferimenti non conformi (PRIM-003).
+pub fn primary_geometry_position(schema: &Schema) -> Result<Option<usize>, PlenoraError> {
+    let invalid = || errore_di_contratto("plenora.primary_geometry: dichiarazione non conforme");
+    let mut geometries = Vec::new();
+    for (position, field) in schema.fields().iter().enumerate() {
+        if field.metadata().contains_key(PRIMARY_GEOMETRY_KEY)
+            || figlio_con_chiave(field.data_type(), &|key| key == PRIMARY_GEOMETRY_KEY)
+        {
+            return Err(invalid());
+        }
+        if field
+            .metadata()
+            .get(GEOARROW_EXTENSION_KEY)
+            .is_some_and(|v| v == GEOARROW_WKB_EXTENSION)
+        {
+            geometries.push(position);
+        }
+    }
+    let Some(raw) = schema.metadata().get(PRIMARY_GEOMETRY_KEY) else {
+        return Ok(match geometries.as_slice() {
+            [position] => Some(*position),
+            _ => None,
+        });
+    };
+    verifica_identita_campi(schema)?;
+    if geometries.is_empty() {
+        return Err(invalid());
+    }
+    if raw == "none" {
+        return Ok(None);
+    }
+    if raw.is_empty()
+        || !raw.bytes().all(|b| b.is_ascii_digit())
+        || (raw.len() > 1 && raw.starts_with('0'))
+    {
+        return Err(invalid());
+    }
+    let mut selected = None;
+    for position in geometries {
+        if schema.field(position).metadata().get(PLENORA_FIELD_ID_KEY) == Some(raw)
+            && selected.replace(position).is_some()
+        {
+            return Err(invalid());
+        }
+    }
+    selected.map(Some).ok_or_else(invalid)
+}
+
+/// Emette PRIM-004 dal riferimento gia' risolto, dopo la pubblicazione degli ID.
+fn emit_primary_geometry(
+    schema: &Schema,
+    primary: Option<usize>,
+) -> Result<SchemaRef, PlenoraError> {
+    let count = schema
+        .fields()
+        .iter()
+        .filter(|field| {
+            field
+                .metadata()
+                .get(GEOARROW_EXTENSION_KEY)
+                .is_some_and(|v| v == GEOARROW_WKB_EXTENSION)
+        })
+        .count();
+    let mut metadata = schema.metadata().clone();
+    metadata.remove(PRIMARY_GEOMETRY_KEY);
+    match (count, primary) {
+        (1, None) => {
+            metadata.insert(PRIMARY_GEOMETRY_KEY, "none");
+        }
+        (2.., Some(position)) => {
+            let id = schema
+                .fields()
+                .get(position)
+                .and_then(|field| field.metadata().get(PLENORA_FIELD_ID_KEY))
+                .ok_or_else(|| errore_di_contratto("primaria senza identita' pubblica"))?;
+            metadata.insert(PRIMARY_GEOMETRY_KEY, id.clone());
+        }
+        _ => {}
+    }
+    Ok(Arc::new(Schema::new_with_metadata(
+        schema.fields().clone(),
+        metadata,
+    )))
+}
+
+/// Rifiuto transitorio degli schemi non gestiti dalle operazioni monogeometria.
+/// I trasporti Arrow usano invece il contratto plurale.
+///
+/// # Errors
+/// `Unsupported` per piu' geometrie, `Schema` per primaria malformata.
+pub fn require_single_geometry_schema(schema: &Schema) -> Result<(), PlenoraError> {
+    primary_geometry_position(schema)?;
+    if schema
+        .fields()
+        .iter()
+        .filter(|field| super::arrow_metadata::field_declares_wkb_geometry(field))
+        .count()
+        > 1
+    {
+        return Err(PlenoraError::Unsupported(
+            "operazione non ancora adattata a piu' geometrie".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Controlli senza risoluzione CRS, per l'ordine delle classi REJ-002.
+fn verifica_vocabolario_geometrico(field: &Field) -> Result<(), PlenoraError> {
+    use super::arrow_metadata::{
+        canonical_geometry_dimensions, canonical_geometry_encoding, canonical_geometry_precision,
+        canonical_geometry_srid, canonical_geometry_types,
+    };
+    canonical_geometry_encoding(field)?;
+    canonical_geometry_dimensions(field)?;
+    canonical_geometry_types(field)?;
+    canonical_geometry_srid(field)?;
+    canonical_geometry_spatial_semantics(field)?;
+    canonical_geometry_precision(field)?;
+    if let Some(raw) = field
+        .metadata()
+        .get(GEOARROW_EXTENSION_METADATA_KEY)
+        .filter(|raw| !raw.trim().is_empty())
+    {
+        let invalid = || {
+            errore_di_contratto("metadato di estensione GeoArrow non e' un oggetto JSON leggibile")
+        };
+        crate::json::ensure_no_duplicate_keys(raw).map_err(|_| invalid())?;
+        let value: serde_json::Value = serde_json::from_str(raw).map_err(|_| invalid())?;
+        if !value.is_object() {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
+fn schema_con_assi_espliciti(schema: SchemaRef) -> SchemaRef {
+    // Gli assi assenti del vocabolario canonico non si deducono dal CRS.
+    // Anche il percorso legacy esterno resta unknown senza prova.
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let mut field = field.as_ref().clone();
+            if (field.metadata().contains_key("plenora.geometry.crs_id")
+                || field
+                    .metadata()
+                    .contains_key("plenora.geometry.crs_definition"))
+                && !field
+                    .metadata()
+                    .contains_key(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
+            {
+                let mut metadata = field.metadata().clone();
+                metadata.insert(
+                    PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
+                    "unknown".to_owned(),
+                );
+                field = field.with_metadata(metadata);
+            }
+            field
+        })
+        .collect();
+    if fields.iter().eq(schema.fields().iter().map(AsRef::as_ref)) {
+        schema
+    } else {
+        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+    }
 }

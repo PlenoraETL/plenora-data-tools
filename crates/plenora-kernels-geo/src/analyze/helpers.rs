@@ -225,13 +225,10 @@ pub(in crate::analyze) fn single_geometry<'a>(
     op: &str,
     input: &'a DataContract,
 ) -> Result<&'a GeometryColumnContract> {
-    if input.geometries.len() != 1 {
-        return Err(PlenoraError::Schema(format!(
-            "{op}: l'input deve avere esattamente una colonna geometria attiva (v1), trovate {}",
-            input.geometries.len()
-        )));
-    }
-    Ok(&input.geometries[0])
+    input.require_single_geometry_support()?;
+    input
+        .select_geometry(None)
+        .map_err(|error| error.con_contesto(op))
 }
 
 /// Identificazione della colonna geometria sul campo dello schema.

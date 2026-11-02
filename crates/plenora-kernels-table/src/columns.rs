@@ -73,6 +73,7 @@ impl DropColumns {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn drop_columns(batch: &RecordBatch, config: &DropColumns) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     let removed: HashSet<&str> = config.columns.iter().map(String::as_str).collect();
     let mut fields = Vec::new();
@@ -114,6 +115,7 @@ pub struct SelectColumns {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn select_columns(batch: &RecordBatch, config: &SelectColumns) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     crate::require_unique_names(&batch.schema())?;
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
@@ -448,6 +450,7 @@ pub fn check_align_default(value: &Value, align_type: AlignType) -> Result<()> {
 /// - `Internal`: colonna costruita con un tipo diverso da quello dichiarato
 ///   (guardia interna).
 pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     crate::require_unique_names(&batch.schema())?;
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
@@ -589,6 +592,7 @@ impl Rename {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn rename(batch: &RecordBatch, config: &Rename) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     let mapping: HashMap<&str, &str> = config
         .renames
@@ -676,6 +680,7 @@ impl ReorderColumns {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn reorder_columns(batch: &RecordBatch, config: &ReorderColumns) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     crate::require_unique_names(&batch.schema())?;
     let schema = batch.schema();
     let mut selected = Vec::with_capacity(batch.num_columns());
@@ -790,6 +795,7 @@ pub fn concat_columns(
     config: &ConcatColumns,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
             "concat_columns richiede almeno una colonna".into(),
@@ -926,6 +932,7 @@ pub fn split_column(
     config: &SplitColumn,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     if config.delimitatore().is_empty() {
         return Err(PlenoraError::InvalidPlan("delimiter vuoto".into()));
     }

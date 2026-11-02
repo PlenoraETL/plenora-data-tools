@@ -113,7 +113,11 @@ fn expected<'a>(v: &'a Value, name: &str, compute: bool) -> (&'a str, &'static s
         return (v["category"].as_str().unwrap(), "validate", false);
     }
     if geometry.len() > 1 {
-        return ("unsupported", "validate", false);
+        return if compute {
+            ("unsupported", "validate", false)
+        } else {
+            ("ok", "", false)
+        };
     }
     if geometry
         .iter()

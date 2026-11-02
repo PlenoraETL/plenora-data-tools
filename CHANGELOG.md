@@ -10,6 +10,18 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [Non rilasciata] - 4.1.0
+
+PR 1 - contratto e identita': il core trasporta piu' geometrie con identita'
+distinte e corrispondenza completa con lo schema. Primaria facoltativa secondo
+Arrow Primary Geometry 1.0: `plenora.primary_geometry`, assenza esplicita e
+nessuna elezione per ordine. Selettore comune sulle identita' ricevute,
+rimappatura completa nel planner e pubblicazione Arrow che segue la primaria.
+Le operazioni tabellari e geo e GeoParquet mantengono rifiuti espliciti per
+la multigeometria in attesa delle PR successive; gli adapter tabellari non
+ancora adattati rifiutano anche lo stato esplicito della primaria. Prove di
+round-trip, collisioni e rifiuti delle analisi guidate dal catalogo.
+
 ## [4.0.0] - 2026-11-02
 
 Ordine degli assi fail-closed: il solo identificatore CRS legacy non prova
