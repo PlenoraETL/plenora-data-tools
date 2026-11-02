@@ -68,25 +68,15 @@ fn subtract(a: &mut Magnitude, b: &Magnitude) {
 /// Each finite f64 is an exact signed integer times 2^-1074. The expanded
 /// determinant is evaluated as six signed integer products times 2^-2148.
 pub fn orient2d_sign_bits(bits: [u64; 6]) -> Option<i8> {
-    let mut values = [Dyadic {
-        negative: false,
-        mantissa: 0,
-        shift: 0,
-    }; 6];
+    let mut values = [Dyadic { negative: false, mantissa: 0, shift: 0 }; 6];
     for (value, bits) in values.iter_mut().zip(bits) {
         *value = decode(bits)?;
     }
     let mut sum = [0; LIMBS];
     let mut negative = false;
     // ax*by + bx*cy + cx*ay - ay*bx - by*cx - cy*ax
-    for (i, j, minus) in [
-        (0, 3, false),
-        (2, 5, false),
-        (4, 1, false),
-        (1, 2, true),
-        (3, 4, true),
-        (5, 0, true),
-    ] {
+    for (i, j, minus) in [(0, 3, false), (2, 5, false), (4, 1, false),
+                           (1, 2, true), (3, 4, true), (5, 0, true)] {
         let term = product(values[i], values[j]);
         let term_negative = values[i].negative ^ values[j].negative ^ minus;
         if negative == term_negative {
@@ -103,11 +93,5 @@ pub fn orient2d_sign_bits(bits: [u64; 6]) -> Option<i8> {
             }
         }
     }
-    Some(if sum.iter().all(|&x| x == 0) {
-        0
-    } else if negative {
-        -1
-    } else {
-        1
-    })
+    Some(if sum.iter().all(|&x| x == 0) { 0 } else if negative { -1 } else { 1 })
 }

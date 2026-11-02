@@ -104,14 +104,13 @@ pub trait BooleanOps {
     ) -> MultiPolygon<Self::Scalar> {
         let subject = self.rings().map(ring_to_shape_path).collect::<Vec<_>>();
         let clip = other.rings().map(ring_to_shape_path).collect::<Vec<_>>();
-        let shapes =
-            FloatOverlay::<BoolOpsCoord<Self::Scalar>, OverlayI>::from_subj_and_clip_custom(
-                &subject,
-                &clip,
-                OverlayOptions::<Self::Scalar, OverlayI>::ogc(),
-                Default::default(),
-            )
-            .overlay(op.into(), fill_rule);
+        let shapes = FloatOverlay::<BoolOpsCoord<Self::Scalar>, OverlayI>::from_subj_and_clip_custom(
+            &subject,
+            &clip,
+            OverlayOptions::<Self::Scalar, OverlayI>::ogc(),
+            Default::default(),
+        )
+        .overlay(op.into(), fill_rule);
         multi_polygon_from_shapes(shapes)
     }
 
