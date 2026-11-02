@@ -24,6 +24,13 @@ colonna, anche senza righe; coalesce, melt, pivot, first/last e table_diff
 conservano i contratti geometrici. Projection e rinomina non promuovono
 secondarie. Adapter diretti e pipeline condividono l'emissione della primaria.
 Vettori primary-composition-v1 e matrice tabellare con due e tre geometrie.
+Cambio rispetto alla 4.0.0: `concat_by_name` (e le altre fusioni verticali)
+fra un ingresso con una geometria e uno senza geometrie non conserva piu' la
+primaria implicita; l'uscita dichiara primaria assente e `geo.*` a valle si
+rifiuta con `schema` finche' le geo non ricevono un selettore
+esplicito (PR 3).
+`coalesce` su `output_column` primaria la sostituisce restando primaria
+(PRIM-005), ora dichiarato nella scheda.
 Le operazioni geo e GeoParquet restano esplicitamente limitate a una geometria.
 
 ## [4.0.0] - 2026-11-02
