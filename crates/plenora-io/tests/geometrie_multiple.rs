@@ -59,3 +59,46 @@ fn lettura_multi_e_primaria_contraddittoria_rifiutate_prima_dei_byte() {
         ErrorCategory::Schema
     );
 }
+
+#[test]
+fn cross_join_sort_preserva_primaria_esportabile_geoparquet() {
+    use plenora_core::arrow::array::Int64Array;
+    let geometry = batch(1, None);
+    let mut metadata = geometry.schema().field(0).metadata().clone();
+    metadata.insert("plenora.geometry.axis_order", "easting_northing");
+    metadata.insert("geo", r#"{"crs":"EPSG:3857"}"#);
+    let schema = Arc::new(Schema::new_with_metadata(
+        vec![geometry.schema().field(0).clone().with_metadata(metadata)],
+        geometry.schema().metadata().clone(),
+    ));
+    let left = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(BinaryArray::from(vec![None::<&[u8]>]))],
+    )
+    .expect("geometria nulla");
+    let right = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, false)])),
+        vec![Arc::new(Int64Array::from(vec![1]))],
+    )
+    .expect("tabella");
+    for side in 0..2 {
+        let (a, b) = if side == 0 {
+            (left.clone(), right.clone())
+        } else {
+            (right.clone(), left.clone())
+        };
+        let pipeline = plenora_pipeline::Pipeline::from_json(r#"{"version":1,"inputs":["a","b"],"steps":[{"op":"table.cross_join","in":["a","b"],"out":"joined","config":{}},{"op":"table.sort","in":["joined"],"out":"sorted","config":{"columns":["key"]}}],"outputs":["sorted"]}"#).expect("piano");
+        let valid = pipeline
+            .validate(&[("a", a.schema()), ("b", b.schema())])
+            .expect("validazione");
+        let output = valid
+            .run([("a".into(), a), ("b".into(), b)].into())
+            .expect("esecuzione");
+        let result = &output.outputs[0].1;
+        assert!(!result
+            .schema()
+            .metadata()
+            .contains_key("plenora.primary_geometry"));
+        let _ = prepara(result).unwrap_or_else(|error| panic!("GeoParquet: {error}"));
+    }
+}

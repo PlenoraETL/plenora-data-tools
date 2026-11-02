@@ -304,12 +304,20 @@ pub(in crate::analyze) fn analyze_fuzzy_join(
     let schema = Schema::new_with_metadata(fields_out, metadata);
     let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
     let right_geometry = propagate_geometry(right, &schema, right_geometry.as_deref());
+    let active = left
+        .active_geometry
+        .filter(|id| left_geometry.as_ref().is_some_and(|g| &g.field_id == id))
+        .or_else(|| {
+            right
+                .active_geometry
+                .filter(|id| right_geometry.as_ref().is_some_and(|g| &g.field_id == id))
+        });
     let geometry = merge_geometry(op, left_geometry, right_geometry)?;
     finish(
         origins,
         schema,
         geometry,
-        None,
+        active,
         ContractProperties::default(),
         fields,
     )
@@ -338,6 +346,14 @@ pub(in crate::analyze) fn analyze_cross_join(
     let schema = Schema::new_with_metadata(fields_out, metadata);
     let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
     let right_geometry = propagate_geometry(right, &schema, right_geometry.as_deref());
+    let active = left
+        .active_geometry
+        .filter(|id| left_geometry.as_ref().is_some_and(|g| &g.field_id == id))
+        .or_else(|| {
+            right
+                .active_geometry
+                .filter(|id| right_geometry.as_ref().is_some_and(|g| &g.field_id == id))
+        });
     let geometry = merge_geometry(op, left_geometry, right_geometry)?;
     // Righe = prodotto esatto delle cardinalita' (se note e stesso scope).
     let row_count = product_row_count(left, right);
@@ -345,7 +361,7 @@ pub(in crate::analyze) fn analyze_cross_join(
         origins,
         schema,
         geometry,
-        None,
+        active,
         ContractProperties {
             sorted_by: None,
             row_count,

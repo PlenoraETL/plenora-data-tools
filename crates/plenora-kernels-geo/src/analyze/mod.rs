@@ -1491,6 +1491,21 @@ mod tests {
     fn every_geo_op_produces_the_expected_contract() {
         for case in cases() {
             let (output, input, allocator) = run_case(&case);
+            // PRIM-006: una primaria sopravvissuta resta implicita nel canone.
+            let schema =
+                plenora_core::contract::arrow_schema::arrow_schema_from_contract(&output).unwrap();
+            assert!(
+                !schema.metadata().contains_key("plenora.primary_geometry"),
+                "{}",
+                case.op
+            );
+            assert_eq!(
+                output.active_geometry.is_some(),
+                !output.geometries.is_empty(),
+                "{}",
+                case.op
+            );
+
             // Prima si identificano tutti gli input; poi i campi nuovi nell'ordine d'uscita.
             let missing = input.schema.fields().len() - input.field_ids.len()
                 + if case.binary { 2 } else { 0 };

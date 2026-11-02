@@ -37,6 +37,16 @@ relative prove; per gli opt-in, implementare e verificare tutte le regole
 prima di rivendicarli. Le assenze DT-ABS-001 e DT-ABS-002 sono intenzionali:
 non rientrano sulla stessa identita di operazione.
 
+## Geometrie multiple: limiti transitori della PR 1
+
+| Regola | Ambito | Hazard | Condizione di rientro |
+| --- | --- | --- | --- |
+| Le analisi rifiutano con `Unsupported` ingressi o risultati con più geometrie. | Analisi tabellari e geo; il trasporto Arrow senza passi ammette invece più geometrie. | Scambiare il supporto del trasporto per quello delle operazioni; il rifiuto evita la perdita silenziosa di colonne. | PR 2 per le operazioni tabellari, PR 3 per quelle geo: propagazione plurale e prove di composizione della primaria. |
+| Una tabella geometrica senza primaria viene rifiutata anche dalle analisi tabellari. | Analisi tabellari, inclusi i passi che non leggono coordinate. | Una catena altrimenti valida non è ancora eseguibile; nessuna geometria viene eletta implicitamente. | PR 2: trasporto dello stato senza primaria nelle operazioni tabellari. |
+| Gli adapter monogeometria rifiutano la chiave esplicita `plenora.primary_geometry`. | Chiamate dirette agli adapter tabellari non migrati. | Confondere un riferimento esplicito valido con una selezione già supportata dall'adapter; il rifiuto protegge da riferimenti obsoleti dopo trasformazioni. | PR 2: adapter tabellari con risoluzione e riemissione della primaria. |
+| GeoParquet gestisce una sola geometria, che deve essere primaria. | Lettura e scrittura GeoParquet. | Un trasporto IPC/Parquet plurale valido non implica esportabilità GeoParquet; la scrittura rifiuta senza eliminare geometrie. | PR 4: metadati GeoParquet plurali e corrispondenza verificata della primaria. |
+| Il canone interno non assegna ID pubblici mancanti; una primaria plurale sintetica senza ID pubblico viene rifiutata. | `arrow_schema_from_contract` su contratti costruiti direttamente in Rust; gli ingressi Arrow con primaria esplicita hanno già il suo ID. | Assegnare ID prima di conoscere tutti gli ingressi potrebbe confondere campi distinti. | PR 2/3: se necessario per nuovi output plurali, pubblicazione della primaria per posizione al confine con le identità osservate e ambigue del piano. |
+
 ## Precisione delle operazioni geografiche: 1 cm a terra
 
 **Regola.** Ogni operazione geografica è garantita entro **1 cm a terra**,

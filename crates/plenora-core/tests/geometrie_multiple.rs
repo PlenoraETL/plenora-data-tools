@@ -338,3 +338,32 @@ fn eliminazione_della_primaria_non_promuove_la_secondaria() {
     );
     assert!(read(output).active_geometry_column().is_none());
 }
+
+#[test]
+fn canone_interno_non_assegna_identita_pubbliche() {
+    for primary in [None, Some("10")] {
+        let raw = schema(
+            vec![
+                geometry("a", Some(10)),
+                geometry("b", None),
+                Field::new("x", DataType::Int64, true),
+            ],
+            primary,
+        );
+        let contract = read(raw.clone());
+        let internal = arrow_schema_from_contract(&contract).expect("canone interno");
+        for (before, after) in raw.fields().iter().zip(internal.fields()) {
+            assert_eq!(before.metadata().get(ID), after.metadata().get(ID));
+        }
+        let published = pubblica_schema(&internal, &BTreeSet::from([10, 12]), &BTreeSet::new())
+            .expect("confine");
+        assert_eq!(published.field(1).metadata()[ID], "13");
+        assert_eq!(published.field(2).metadata()[ID], "14");
+    }
+    let mut synthetic = read(schema(vec![geometry("a", None), geometry("b", None)], None));
+    synthetic.active_geometry = Some(synthetic.geometries[0].field_id);
+    assert!(matches!(
+        arrow_schema_from_contract(&synthetic),
+        Err(PlenoraError::Schema(_))
+    ));
+}

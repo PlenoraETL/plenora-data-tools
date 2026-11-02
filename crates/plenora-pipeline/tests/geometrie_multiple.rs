@@ -261,3 +261,81 @@ fn output_plurali_da_input_singolo_rifiutati_e_sostituzione_tabellare_coerente()
     assert!(analyzed.active_geometry.is_none());
     assert_eq!(analyzed.schema.fields(), output.schema().fields());
 }
+
+#[test]
+fn identita_nuove_solo_al_confine_con_tutti_gli_input() {
+    for primary in [None, Some("10"), Some("11")] {
+        for ambiguous in [false, true] {
+            let base = batch(primary);
+            let mut fields: Vec<Field> = base
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.as_ref().clone())
+                .collect();
+            fields.push(Field::new("x", DataType::Binary, true));
+            let a = RecordBatch::try_new(
+                Arc::new(Schema::new_with_metadata(
+                    fields,
+                    base.schema().metadata().clone(),
+                )),
+                vec![
+                    base.column(0).clone(),
+                    base.column(1).clone(),
+                    base.column(0).clone(),
+                ],
+            )
+            .expect("a");
+            let mut fields = vec![Field::new("y", DataType::Binary, true)
+                .with_metadata(HashMap::from([("plenora.field_id".into(), "12".into())]))];
+            let mut arrays = vec![base.column(0).clone()];
+            if ambiguous {
+                fields.push(base.schema().field(0).clone());
+                arrays.push(base.column(0).clone());
+            }
+            let b = RecordBatch::try_new(
+                Arc::new(Schema::new_with_metadata(
+                    fields,
+                    HashMap::from([("plenora.contract.version".into(), "1".into())]),
+                )),
+                arrays,
+            )
+            .expect("b");
+            let pipeline = Pipeline::from_json(
+                r#"{"version":1,"inputs":["a","b"],"steps":[],"outputs":["a","b"]}"#,
+            )
+            .expect("piano");
+            let valid = pipeline
+                .validate(&[("a", a.schema()), ("b", b.schema())])
+                .expect("valida");
+            assert!(!valid
+                .contratto("a")
+                .expect("interno")
+                .schema
+                .field(2)
+                .metadata()
+                .contains_key("plenora.field_id"));
+            let expected = if ambiguous { "14" } else { "13" };
+            let published = valid.schema_uscita("a").expect("pubblico").clone();
+            assert_eq!(published.field(2).metadata()["plenora.field_id"], expected);
+            assert_eq!(
+                valid.schema_uscita("b").expect("b").field(0).metadata()["plenora.field_id"],
+                "12"
+            );
+            let reread =
+                contract_from_arrow_schema(published.clone(), resolve_crs).expect("rilettura");
+            assert_eq!(
+                reread.active_geometry_column().map(|g| g.name.as_str()),
+                match primary {
+                    Some("10") => Some("a"),
+                    Some("11") => Some("b"),
+                    _ => None,
+                }
+            );
+            let output = valid
+                .run([("a".into(), a), ("b".into(), b)].into())
+                .expect("esecuzione");
+            assert_eq!(output.outputs[0].1.schema(), published);
+        }
+    }
+}

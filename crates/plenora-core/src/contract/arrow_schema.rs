@@ -562,11 +562,8 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
     aggiungi_versione(&mut metadata)?;
     metadata.remove(PRIMARY_GEOMETRY_KEY);
     let schema = Schema::new_with_metadata(fields, metadata);
-    let schema = if contract.geometries.len() > 1 {
-        pubblica_schema(&schema, &BTreeSet::new(), &BTreeSet::new())?
-    } else {
-        Arc::new(schema)
-    };
+    // Gli ID mancanti spettano al confine, con tutte le identita' del piano.
+    let schema = Arc::new(schema);
     let position = contract
         .active_geometry_column()
         .map(|geometry| {
