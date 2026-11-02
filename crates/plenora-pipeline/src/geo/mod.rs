@@ -66,10 +66,11 @@ pub struct Lato {
 }
 
 impl Lato {
-    /// La colonna geometria attiva del contratto, con il suo CRS risolto.
+    /// L'operando geometrico scelto dal selettore (o la primaria), con il
+    /// suo CRS risolto.
     ///
-    /// L'analisi ha gia' chiesto una sola geometria identificabile, XY e con
-    /// CRS risolto: un'assenza qui e' `Internal`.
+    /// L'analisi ha gia' risolto l'operando, XY e con CRS risolto: un'assenza
+    /// qui e' `Internal`.
     fn di(op: &str, contratto: &DataContract, geometria: &GeometryColumnContract) -> Result<Self> {
         let crs = geometria.crs.as_resolved().cloned().ok_or_else(|| {
             PlenoraError::Internal(format!("{op}: geometria senza CRS risolto dopo l'analisi"))
