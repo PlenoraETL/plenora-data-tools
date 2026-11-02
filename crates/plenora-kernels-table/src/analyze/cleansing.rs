@@ -101,11 +101,7 @@ pub(in crate::analyze) fn analyze_fill_na(
     }
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     // La colonna geometrica (Binary) non e' mai un target valido: preservata.
-    let geometry = propagate_geometry(
-        input,
-        &schema,
-        input.geometries.first().map(|g| g.name.as_str()),
-    );
+    let geometry = propagate_geometry(input, &schema, |g| Some(g.name.clone()));
     // Valori modificati, righe e ordine invariati.
     finish(
         input.field_origins(),
@@ -153,21 +149,22 @@ pub(in crate::analyze) fn analyze_replace(
         *replaced = replaced.clone().with_metadata(source_metadata);
     }
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
-    let geometry = propagate_geometry(
-        input,
-        &schema,
-        input.geometries.first().map(|g| g.name.as_str()),
-    );
+    let geometry = propagate_geometry(input, &schema, |g| Some(g.name.clone()));
     let mut origins = input.field_origins();
     origins[input.schema.index_of(&config.column)?] = plenora_core::contract::FieldOrigin::New;
-    finish(
+    let output = finish(
         origins,
         schema,
         geometry,
         input.active_geometry,
         rows_only(input),
         fields,
-    )
+    )?;
+    fields.inherit_public_identity(
+        input.field_ids[&config.column],
+        output.field_ids[&config.column],
+    );
+    Ok(output)
 }
 
 /// Parametri di `type_cast` che solo alcuni target usano: su un altro target

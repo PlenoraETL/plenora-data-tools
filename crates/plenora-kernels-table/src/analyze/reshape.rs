@@ -155,15 +155,13 @@ pub(in crate::analyze) fn analyze_melt(
     // sono derivate; value eredita solo i metadati geometrici compatibili.
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
     // Prima si propaga la geometria id; quella derivata si aggiunge sotto.
-    let preserved = input
-        .geometries
-        .first()
-        .filter(|geometry| config.id_columns.contains(&geometry.name))
-        .map(|geometry| geometry.name.as_str());
+    let preserved = |geometry: &plenora_core::contract::GeometryColumnContract| {
+        (config.id_columns.contains(&geometry.name)).then(|| geometry.name.clone())
+    };
     let geometry = propagate_geometry(input, &schema, preserved);
     let active = input
         .active_geometry
-        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+        .filter(|id| geometry.iter().any(|g| &g.field_id == id));
     let value_count = u64::try_from(value_indices.len()).map_err(|_| {
         PlenoraError::ResourceLimit("melt: numero colonne non rappresentabile".into())
     })?;
@@ -184,11 +182,6 @@ pub(in crate::analyze) fn analyze_melt(
     let (geometry, active) = if geometry_metadata.is_empty() {
         (geometry, active)
     } else {
-        if geometry.is_some() {
-            return Err(PlenoraError::Unsupported(
-                "melt con piu' geometrie non ancora adattato".into(),
-            ));
-        }
         let source = input
             .geometries
             .iter()
@@ -203,8 +196,9 @@ pub(in crate::analyze) fn analyze_melt(
             &keys,
         );
         derived.field_id = fields.alloc()?;
-        let active = Some(derived.field_id);
-        (Some(derived), active)
+        let mut geometry = geometry;
+        geometry.push(derived);
+        (geometry, active)
     };
     finish(
         origins,
@@ -291,15 +285,13 @@ pub(in crate::analyze) fn analyze_pivot(
     // I metadati di schema si conservano (il kernel li copia); le
     // colonne pivot first/last geometriche si completano sotto.
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
-    let preserved = input
-        .geometries
-        .first()
-        .filter(|geometry| indice.contains(&geometry.name.as_str()))
-        .map(|geometry| geometry.name.as_str());
+    let preserved = |geometry: &plenora_core::contract::GeometryColumnContract| {
+        (indice.contains(&geometry.name.as_str())).then(|| geometry.name.clone())
+    };
     let geometry = propagate_geometry(input, &schema, preserved);
     let active = input
         .active_geometry
-        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+        .filter(|id| geometry.iter().any(|g| &g.field_id == id));
     let mut origins = super::helpers::preserved_origins(input, indice.iter().copied())?;
     origins.resize(
         schema.fields().len(),
@@ -327,6 +319,7 @@ pub(in crate::analyze) fn analyze_pivot(
                 input,
                 &config.value_col,
                 name,
+                false,
                 metadata.clone(),
                 fields,
             )?;
@@ -455,14 +448,10 @@ pub(in crate::analyze) fn analyze_unnest(
         fields_out.push(child.as_ref().clone().with_name(name).with_nullable(true));
     }
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
-    let geometry = propagate_geometry(
-        input,
-        &schema,
-        input.geometries.first().map(|g| g.name.as_str()),
-    );
+    let geometry = propagate_geometry(input, &schema, |g| Some(g.name.clone()));
     let active = input
         .active_geometry
-        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+        .filter(|id| geometry.iter().any(|g| &g.field_id == id));
     let mut origins = input.field_origins();
     if config.drop_source {
         origins.remove(index);
@@ -489,6 +478,8 @@ pub(in crate::analyze) fn analyze_unnest(
     )
 }
 
+// La costruzione segue in ordine campi, provenienza e primaria.
+#[allow(clippy::too_many_lines)]
 pub(in crate::analyze) fn analyze_table_diff(
     op: &str,
     inputs: &[DataContract],
@@ -523,12 +514,6 @@ pub(in crate::analyze) fn analyze_table_diff(
         true,
     )?;
     check_key_pairs(op, left, right, &config.left_keys, &config.right_keys)?;
-    for name in &config.left_keys {
-        crate::require_non_geometry(field_of(op, left, name)?)?;
-    }
-    for name in &config.right_keys {
-        crate::require_non_geometry(field_of(op, right, name)?)?;
-    }
     // Chiavi e valori confrontati si leggono come testo (chiave composta,
     // `_diff_old_values`).
     require_scalar_strings(op, left, &config.left_keys)?;
@@ -557,14 +542,12 @@ pub(in crate::analyze) fn analyze_table_diff(
         fields_out.push(Field::new(name, field.data_type().clone(), true));
     }
     for name in &compare {
-        crate::require_non_geometry(field_of(op, left, name)?)?;
-        crate::require_non_geometry(field_of(op, right, name)?)?;
         plenora_core::contract::arrow_metadata::require_geometry_compatibility(
             field_of(op, left, name)?,
             &left.geometries,
             field_of(op, right, name)?,
             &right.geometries,
-            plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
+            plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
         )?;
         require_scalar_string(op, left, name)?;
         require_scalar_string(op, right, name)?;
@@ -586,13 +569,57 @@ pub(in crate::analyze) fn analyze_table_diff(
     // invece come nei join: una chiave con valori diversi e' un errore.
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
-    // Chiavi e confronti hanno gia' rifiutato ogni geometria.
-    finish(
+    let mut output = finish(
         vec![plenora_core::contract::FieldOrigin::New; schema.fields().len()],
         schema,
         None,
         None,
         ContractProperties::default(),
+        fields,
+    )?;
+    for (source, right_name) in config
+        .left_keys
+        .iter()
+        .zip(&config.right_keys)
+        .chain(compare.iter().map(|name| (name, name)))
+    {
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            field_of(op, left, source)?,
+            &left.geometries,
+            field_of(op, right, right_name)?,
+            &right.geometries,
+            plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
+        )?;
+        let metadata = plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+            &[field_of(op, left, source)?],
+            &left.geometries,
+        )?;
+        output =
+            super::helpers::derive_geometry(output, left, source, source, false, metadata, fields)?;
+    }
+    let right_primary = right.active_geometry_column().map(|g| {
+        config
+            .right_keys
+            .iter()
+            .position(|name| name == &g.name)
+            .map_or(g.name.as_str(), |i| config.left_keys[i].as_str())
+    });
+    output.active_geometry = left
+        .active_geometry_column()
+        .filter(|g| Some(g.name.as_str()) == right_primary)
+        .and_then(|g| {
+            output
+                .geometries
+                .iter()
+                .find(|out| out.name == g.name)
+                .map(|out| out.field_id)
+        });
+    finish(
+        output.field_origins(),
+        output.schema.as_ref().clone(),
+        output.geometries,
+        output.active_geometry,
+        output.properties,
         fields,
     )
 }

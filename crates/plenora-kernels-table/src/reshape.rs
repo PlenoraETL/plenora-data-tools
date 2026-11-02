@@ -475,10 +475,7 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
         ));
     }
     Ok(RecordBatch::try_new(
-        Arc::new(Schema::new_with_metadata(
-            fields,
-            batch.schema().metadata().clone(),
-        )),
+        Arc::new(crate::geometry_provenance::unary(&batch.schema(), fields)?),
         columns,
     )?)
 }
@@ -1153,10 +1150,18 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
     // I metadati dello schema d'ingresso si conservano, come in `melt`
     // e `aggregate`.
     crate::batch_with_rows(
-        Arc::new(Schema::new_with_metadata(
+        Arc::new(crate::geometry_provenance::compose(
+            &[&batch.schema()],
             fields,
-            batch.schema().metadata().clone(),
-        )),
+            &config
+                .nomi_indice()
+                .iter()
+                .enumerate()
+                .map(|(out, name)| batch.schema().index_of(name).map(|source| (0, source, out)))
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            false,
+            batch.schema().metadata().clone().into_iter().collect(),
+        )?),
         columns,
         ordine.len(),
     )
@@ -1343,7 +1348,17 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
         "transpose",
         fields.iter().map(|field| field.name().as_str()),
     )?;
-    crate::batch_with_rows(Arc::new(Schema::new(fields)), columns, data_indices.len())
+    crate::batch_with_rows(
+        Arc::new(crate::geometry_provenance::compose(
+            &[&batch.schema()],
+            fields,
+            &[],
+            false,
+            HashMap::new(),
+        )?),
+        columns,
+        data_indices.len(),
+    )
 }
 
 /// Che cosa fa `table.explode` con una lista vuota o nulla (in JSON
@@ -1427,7 +1442,7 @@ fn select_rows_except(
             }
         })
         .collect::<Vec<_>>();
-    let schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+    let schema = Arc::new(crate::geometry_provenance::unary(&schema, fields)?);
     batch_with_rows(schema, columns, rows.len())
 }
 
@@ -1605,10 +1620,7 @@ pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<R
         )?);
     }
     crate::batch_with_rows(
-        Arc::new(Schema::new_with_metadata(
-            fields,
-            batch.schema().metadata().clone(),
-        )),
+        Arc::new(crate::geometry_provenance::unary(&batch.schema(), fields)?),
         columns,
         batch.num_rows(),
     )
@@ -1767,6 +1779,39 @@ fn diff_abbinamenti(
         }
     }
     Ok((abbinate, solo_destra))
+}
+
+/// I valori geometrici del resoconto sono WKB esadecimale, senza interpretare le ordinate.
+fn diff_text_values(batch: &RecordBatch, index: usize, limits: &Limits) -> Result<ArrayRef> {
+    use plenora_core::arrow::array::{BinaryArray, FixedSizeBinaryArray, LargeBinaryArray};
+    if !plenora_core::contract::arrow_metadata::field_declares_wkb_geometry(
+        batch.schema().field(index),
+    ) {
+        return Ok(batch.column(index).clone());
+    }
+    let array = batch.column(index);
+    let mut values = Vec::with_capacity(array.len());
+    for row in 0..array.len() {
+        if array.is_null(row) {
+            values.push(None);
+            continue;
+        }
+        let bytes = if let Some(a) = array.as_any().downcast_ref::<BinaryArray>() {
+            a.value(row)
+        } else if let Some(a) = array.as_any().downcast_ref::<LargeBinaryArray>() {
+            a.value(row)
+        } else if let Some(a) = array.as_any().downcast_ref::<FixedSizeBinaryArray>() {
+            a.value(row)
+        } else {
+            return Err(PlenoraError::Schema("tipo geometrico non binario".into()));
+        };
+        let size = bytes.len().checked_mul(2).ok_or_else(|| {
+            PlenoraError::ResourceLimit("testo geometrico non rappresentabile".into())
+        })?;
+        crate::verifica_testo_prodotto("table_diff", size, limits)?;
+        values.push(Some(plenora_core::esadecimale::esadecimale(bytes)));
+    }
+    Ok(Arc::new(StringArray::from(values)))
 }
 
 /// Due colonne confrontate dello stesso tipo nativo: uguaglianza sui
@@ -1997,14 +2042,12 @@ pub fn table_diff(
         let right_schema = right.schema();
         let a = left_schema.field(*a);
         let b = right_schema.field(*b);
-        crate::require_non_geometry(a)?;
-        crate::require_non_geometry(b)?;
         plenora_core::contract::arrow_metadata::require_geometry_compatibility(
             a,
             &[],
             b,
             &[],
-            plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
+            plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
         )?;
         crate::validate_text_convertible(a.data_type(), a.name())?;
         crate::validate_text_convertible(b.data_type(), b.name())?;
@@ -2032,13 +2075,21 @@ pub fn table_diff(
             left.column(*left_index).data_type().to_string()
                 == right.column(*right_index).data_type().to_string()
         });
-    let left_text_columns = left_compare
+    let left_text_values = left_compare
         .iter()
-        .map(|index| TextColumn::new(left.column(*index)))
+        .map(|index| diff_text_values(left, *index, limits))
+        .collect::<Result<Vec<_>>>()?;
+    let right_text_values = right_compare
+        .iter()
+        .map(|index| diff_text_values(right, *index, limits))
+        .collect::<Result<Vec<_>>>()?;
+    let left_text_columns = left_text_values
+        .iter()
+        .map(TextColumn::new)
         .collect::<Vec<_>>();
-    let right_text_columns = right_compare
+    let right_text_columns = right_text_values
         .iter()
-        .map(|index| TextColumn::new(right.column(*index)))
+        .map(TextColumn::new)
         .collect::<Vec<_>>();
     let confronti = left_compare
         .iter()
@@ -2185,11 +2236,29 @@ pub fn table_diff(
         fields.push(Field::new(name, DataType::Utf8, nullable));
         columns.push(Arc::new(builder.finish()));
     }
+    let mut mapping = Vec::new();
+    for (out, (l, r)) in left_keys
+        .iter()
+        .zip(&right_keys)
+        .chain(left_compare.iter().zip(&right_compare))
+        .enumerate()
+    {
+        let md = plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+            &[left.schema().field(*l)],
+            &[],
+        )?;
+        fields[out] = fields[out].clone().with_metadata(md);
+        mapping.extend([(0, *l, out), (1, *r, out)]);
+    }
     let metadata = crate::metadata_schema_input("table_diff", &[&left.schema(), &right.schema()])?;
-    Ok(RecordBatch::try_new(
-        Arc::new(Schema::new_with_metadata(fields, metadata)),
-        columns,
-    )?)
+    let schema = crate::geometry_provenance::compose(
+        &[&left.schema(), &right.schema()],
+        fields,
+        &mapping,
+        true,
+        metadata,
+    )?;
+    Ok(RecordBatch::try_new(Arc::new(schema), columns)?)
 }
 
 #[cfg(test)]
@@ -2599,10 +2668,7 @@ mod tests {
             columns.push(values);
         }
         Ok(RecordBatch::try_new(
-            Arc::new(Schema::new_with_metadata(
-                fields,
-                batch.schema().metadata().clone(),
-            )),
+            Arc::new(crate::geometry_provenance::unary(&batch.schema(), fields)?),
             columns,
         )?)
     }

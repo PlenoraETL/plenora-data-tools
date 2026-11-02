@@ -17,10 +17,14 @@ distinte e corrispondenza completa con lo schema. Primaria facoltativa secondo
 Arrow Primary Geometry 1.0: `plenora.primary_geometry`, assenza esplicita e
 nessuna elezione per ordine. Selettore comune sulle identita' ricevute,
 rimappatura completa nel planner e pubblicazione Arrow che segue la primaria.
-Le operazioni tabellari e geo e GeoParquet mantengono rifiuti espliciti per
-la multigeometria in attesa delle PR successive; gli adapter tabellari non
-ancora adattati rifiutano anche lo stato esplicito della primaria. Prove di
-round-trip, collisioni e rifiuti delle analisi guidate dal catalogo.
+PR 2 - operazioni tabellari: propagazione di tutte le geometrie sopravvissute,
+primaria per provenienza secondo contracts #57, join senza elezione fra
+sorgenti, consenso verticale per append/union/concat. Guardie CRS e assi per
+colonna, anche senza righe; coalesce, melt, pivot, first/last e table_diff
+conservano i contratti geometrici. Projection e rinomina non promuovono
+secondarie. Adapter diretti e pipeline condividono l'emissione della primaria.
+Vettori primary-composition-v1 e matrice tabellare con due e tre geometrie.
+Le operazioni geo e GeoParquet restano esplicitamente limitate a una geometria.
 
 ## [4.0.0] - 2026-11-02
 

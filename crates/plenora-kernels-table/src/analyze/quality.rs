@@ -243,27 +243,18 @@ pub(in crate::analyze) fn analyze_coalesce(
             .collect::<Result<Vec<_>>>()?,
         &input.geometries,
     )?;
-    if !metadata.is_empty()
-        && input
-            .geometries
-            .iter()
-            .any(|geometry| geometry.name != config.output_column)
-    {
-        return Err(PlenoraError::Unsupported(
-            "coalesce con piu' geometrie non ancora adattato".into(),
-        ));
-    }
     let output = super::helpers::analyze_append_inner(
         input,
         fields,
         &[(config.output_column.clone(), data_type, true)],
-        Some(&metadata),
+        None,
     )?;
     super::helpers::derive_geometry(
         output,
         input,
         &config.columns[0],
         &config.output_column,
+        true,
         metadata,
         fields,
     )
@@ -361,6 +352,13 @@ pub(in crate::analyze) fn check_foreign_keys(
     for (left_key, right_key) in left_keys.iter().zip(right_keys) {
         let left_field = field_of(op, left, left_key)?;
         let right_field = field_of(op, right, right_key)?;
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            left_field,
+            &left.geometries,
+            right_field,
+            &right.geometries,
+            plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
+        )?;
         if left_field.data_type() != right_field.data_type() {
             return contract_error(
                 op,
@@ -378,12 +376,6 @@ pub(in crate::analyze) fn analyze_assert_foreign_key(
     fields: &mut FieldAllocator,
     limits: &Limits,
 ) -> Result<DataContract> {
-    crate::require_compatible_geometry_inputs(
-        &inputs[0].schema,
-        &inputs[0].geometries,
-        &inputs[1].schema,
-        &inputs[1].geometries,
-    )?;
     let config: governance::ForeignKey = typed(op, config)?;
     let _ = fields;
     check_text_key_pairs(
@@ -405,12 +397,6 @@ pub(in crate::analyze) fn analyze_reconcile(
     fields: &mut FieldAllocator,
     limits: &Limits,
 ) -> Result<DataContract> {
-    crate::require_compatible_geometry_inputs(
-        &inputs[0].schema,
-        &inputs[0].geometries,
-        &inputs[1].schema,
-        &inputs[1].geometries,
-    )?;
     let config: governance::Reconcile = typed(op, config)?;
     let _ = fields;
     check_text_key_pairs(

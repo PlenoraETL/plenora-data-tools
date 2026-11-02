@@ -1,0 +1,29 @@
+{
+  "$schema": "../../schemas/primary-composition-vector-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-primary-composition-vector-v1",
+  "description": "join dropped primary no promotion.",
+  "operation": "join",
+  "inputs": [
+    {
+      "geometry_ids": [
+        "1",
+        "2"
+      ],
+      "primary": "2"
+    },
+    {
+      "geometry_ids": [],
+      "primary": null
+    }
+  ],
+  "mapping": [
+    {
+      "input": 0,
+      "field": "1",
+      "output": "10"
+    }
+  ],
+  "expected_primary": null,
+  "expected_key": "none"
+}

@@ -243,7 +243,7 @@ Le concatenazioni conservano i metadati geometrici del primo campo solo
 se encoding, dimensioni, tipi e precisione concordano fra tutti gli ingressi.
 
 
-## Primaria e contratto multigeometria (4.1.0, PR 1)
+## Primaria e contratto multigeometria (4.1.0, PR 1 e PR 2)
 
 Il core conserva tutte le colonne geometriche con identita' interne distinte.
 `active_geometry = None` significa nessuna primaria, anche con una sola
@@ -262,21 +262,27 @@ costruisce l'intera mappa delle identita' prima di riscrivere la primaria.
 La pubblicazione segue il campo anche quando il suo ID pubblico cambia.
 I piani senza passi trasportano tutte le geometrie e i loro byte indipendenti.
 
-Limite transitorio: le analisi tabellari e geo e gli adapter diretti rifiutano
-piu' geometrie con `unsupported`. Le analisi tabellari rifiutano anche una
-geometria senza primaria e gli adapter tabellari rifiutano una chiave di
-primaria esplicita: la propagazione operativa sara' adattata nella PR 2.
-Le operazioni geo senza selettore rifiutano la primaria assente con `schema`.
+Le operazioni tabellari e gli adapter diretti propagano ogni geometria
+sopravvissuta con identità, CRS, assi, encoding e nullabilità per colonna.
+Non esiste un CRS globale di tabella. Una proiezione che elimina la primaria
+non promuove le secondarie. Un join con geometrie sopravvissute da almeno
+due ingressi non ha primaria; con geometrie da un solo ingresso ne conserva
+lo stato attraverso la corrispondenza dei campi. Append/union/concat
+conservano la primaria solo se tutti gli ingressi la fanno confluire nello
+stesso campo d'uscita. Le guardie di compatibilità operano sulle coppie di
+chiavi e sulle sorgenti che alimentano lo stesso campo, anche a zero righe.
+Le geo restano rifiutate con `unsupported` in presenza di più geometrie;
+senza selettore rifiutano la primaria assente con `schema`.
 GeoParquet resta monogeometria fino alla PR 4; la scrittura senza primaria
 rifiuta con `unsupported`. Questa PR non dichiara ancora l'adozione completa
 del nuovo contratto su tutte le operazioni.
 
 ### Ricerca della classe: costruzioni dei contratti d'uscita
 
-La verifica della PR 1 comprende tutte le chiamate a `finish`, `new` e
+La verifica delle PR 1 e 2 comprende tutte le chiamate a `finish`, `new` e
 `rebuild` nelle analisi. La tabella enumera i percorsi; i nomi senza prefisso
 sono le funzioni dei moduli `analyze` indicati. Le prove tabellari passano
-per `ok`, che verifica presenza della primaria se sopravvive una geometria;
+per `ok`, che verifica che ogni primaria riferisca una geometria presente;
 la matrice `every_geo_op_produces_the_expected_contract` verifica anche
 l'emissione canonica per tutte le operazioni geo.
 
@@ -286,12 +292,12 @@ l'emissione canonica per tutte le operazioni geo.
 | table/columns | `analyze_drop_columns`, `analyze_select_columns`, `analyze_align_schema` | Filtrata sul campo sopravvissuto; prove di selezione e rimozione tramite `ok`. |
 | table/columns | `analyze_rename`, `analyze_reorder_columns` | Conservata; prove di rinomina e riordino tramite `ok`. |
 | table/helpers | `finish`, `analyze_append_inner`, `derive_geometry` | Costruttore comune, filtro del campo sostituito o primaria derivata; prove append/coalesce tramite `ok`. |
-| table/joins | `analyze_join`, `analyze_asof_join`, `analyze_fuzzy_join`, `analyze_cross_join` | Primaria del lato sopravvissuto; `join_primaria_sopravvissuta_oracolo_composizione`, entrambi i lati, canone e sort. Corrette le due omissioni fuzzy/cross. |
-| table/joins | `analyze_concat`, `analyze_concat_by_name`, `analyze_set_operation` | Prima sorgente effettiva del campo; prove concat e set operation tramite `ok`. Gli output plurali restano rifiutati. |
+| table/joins | `analyze_join`, `analyze_asof_join`, `analyze_fuzzy_join`, `analyze_cross_join` | Primaria del solo lato che contribuisce geometrie; nessuna se entrambi contribuiscono; `join_primaria_sopravvissuta_oracolo_composizione`, entrambi i lati, canone e sort. |
+| table/joins | `analyze_concat`, `analyze_concat_by_name`, `analyze_set_operation` | Consenso di tutti gli ingressi sul campo primario per le fusioni verticali; intersect/except conservano lo stato sinistro. |
 | table/quality | `analyze_reconcile`, `analyze_validate_rules` in modalità summary | `None` intenzionale: schema di metriche senza geometrie; prove tramite `ok`. Annotate passa per append. |
-| table/reshape | `analyze_melt`, `analyze_pivot`, `analyze_unnest` | Filtrata sulla geometria conservata, oppure assegnata alla geometria derivata; prove reshape tramite `ok`. |
-| table/reshape | `analyze_table_diff` | `None` intenzionale: chiavi e confronti geometrici rifiutati; prove table_diff tramite `ok`. |
-| table/sort_agg | `analyze_aggregate` | Filtrata sulle chiavi di raggruppamento; prove aggregate tramite `ok`. |
+| table/reshape | `analyze_melt`, `analyze_pivot`, `analyze_unnest` | Conservata sulle colonne id/indice; nessuna elezione delle derivate. Prove di catalogo e derivazioni plurali. |
+| table/reshape | `analyze_table_diff` | Consenso verticale sulle colonne fuse; resoconto dei vecchi WKB in esadecimale. |
+| table/sort_agg | `analyze_aggregate` | Filtrata sulle chiavi di raggruppamento; first/last derivano ogni geometria separatamente senza promuoverla. |
 | geo/helpers | `with_geometry_types_property`, `rebuild`, `with_schema_metadata` | Conservata; matrice geo. |
 | geo/producers e geo/dispatch | `analyze_reproject`, `with_active_geometry_nullability`, `analyze_subdivide`, `with_nullable_geometry` | Conservata; matrice geo. |
 | geo/producers | `analyze_geometry_only` | Filtrata sul campo sopravvissuto; matrice geo, inclusi overlay. |
@@ -303,16 +309,21 @@ membership join, intersect/except e operazioni sulle righe). Sjoin e nearest
 passano per `rebuild` del lato sinistro. Nessun altro `None` cancella una
 geometria sopravvissuta nelle analisi attualmente ammesse.
 
-L'oracolo dei join è una copia del vettore contracts #57
+L'oracolo di composizione comprende tutti i 13 vettori contracts #57
+`primary-composition-v1`, anche invertendo gli ingressi. Include
 `primary-composition-v1/join-one-surviving-primary-canonical.json`: il test
 applica lo stato successivo alla proiezione, con l'identità d'uscita attesa;
-l'ingresso plurale originale resta fuori dal supporto transitorio. La
+il test dei vettori copre anche gli ingressi plurali. La
 regressione `cross_join_sort_preserva_primaria_esportabile_geoparquet` prova
 anche esecuzione e preparazione GeoParquet.
 
-Il canone interno conserva soltanto gli ID pubblici ricevuti. Il test
+Gli adapter tabellari possono usare ID provvisori per rappresentare una
+primaria plurale. Il registro di provenienza pubblica li distingue dagli ID
+ricevuti: il confine li elimina prima di assegnare identità con tutti gli
+ingressi osservati. Copie self-join e riscritture sul posto conservano la
+provenienza pubblica separata dall’identità logica. Il test
 `identita_nuove_solo_al_confine_con_tutti_gli_input` verifica che un ID
 osservato nell'altro ingresso non venga assegnato a un campo nuovo, anche
 con identità ambigue e primaria plurale presente o assente. I
 [limiti transitori](limiti.md#geometrie-multiple-limiti-transitori-della-pr-1)
-restano espliciti fino alle PR 2/3/4.
+restano espliciti per le operazioni geo e GeoParquet.

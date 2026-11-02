@@ -738,10 +738,7 @@ pub fn coalesce(batch: &RecordBatch, config: &Coalesce) -> Result<RecordBatch> {
         })
         .collect::<Vec<_>>();
     crate::batch_with_rows(
-        std::sync::Arc::new(plenora_core::arrow::Schema::new_with_metadata(
-            fields,
-            schema.metadata().clone(),
-        )),
+        std::sync::Arc::new(crate::geometry_provenance::unary(&batch.schema(), fields)?),
         output.columns().to_vec(),
         output.num_rows(),
     )

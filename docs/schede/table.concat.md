@@ -14,6 +14,8 @@ usa [`table.concat_by_name`](#tableconcat_by_name).
 
 ### Schema
 
+Ogni colonna geometrica è verificata separatamente. La primaria resta solo quando ogni ingresso la fa confluire nello stesso campo.
+
 Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
 delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
 tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano

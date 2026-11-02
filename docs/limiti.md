@@ -41,11 +41,9 @@ non rientrano sulla stessa identita di operazione.
 
 | Regola | Ambito | Hazard | Condizione di rientro |
 | --- | --- | --- | --- |
-| Le analisi rifiutano con `Unsupported` ingressi o risultati con più geometrie. | Analisi tabellari e geo; il trasporto Arrow senza passi ammette invece più geometrie. | Scambiare il supporto del trasporto per quello delle operazioni; il rifiuto evita la perdita silenziosa di colonne. | PR 2 per le operazioni tabellari, PR 3 per quelle geo: propagazione plurale e prove di composizione della primaria. |
-| Una tabella geometrica senza primaria viene rifiutata anche dalle analisi tabellari. | Analisi tabellari, inclusi i passi che non leggono coordinate. | Una catena altrimenti valida non è ancora eseguibile; nessuna geometria viene eletta implicitamente. | PR 2: trasporto dello stato senza primaria nelle operazioni tabellari. |
-| Gli adapter monogeometria rifiutano la chiave esplicita `plenora.primary_geometry`. | Chiamate dirette agli adapter tabellari non migrati. | Confondere un riferimento esplicito valido con una selezione già supportata dall'adapter; il rifiuto protegge da riferimenti obsoleti dopo trasformazioni. | PR 2: adapter tabellari con risoluzione e riemissione della primaria. |
+| Le operazioni geo rifiutano con `Unsupported` ingressi o risultati con più geometrie. | Analisi e adapter geo; trasporto Arrow e operazioni tabellari supportano geometrie plurali. | Scambiare il supporto tabellare per quello geografico. | PR 3: selettori e propagazione plurale geo. |
 | GeoParquet gestisce una sola geometria, che deve essere primaria. | Lettura e scrittura GeoParquet. | Un trasporto IPC/Parquet plurale valido non implica esportabilità GeoParquet; la scrittura rifiuta senza eliminare geometrie. | PR 4: metadati GeoParquet plurali e corrispondenza verificata della primaria. |
-| Il canone interno non assegna ID pubblici mancanti; una primaria plurale sintetica senza ID pubblico viene rifiutata. | `arrow_schema_from_contract` su contratti costruiti direttamente in Rust; gli ingressi Arrow con primaria esplicita hanno già il suo ID. | Assegnare ID prima di conoscere tutti gli ingressi potrebbe confondere campi distinti. | PR 2/3: se necessario per nuovi output plurali, pubblicazione della primaria per posizione al confine con le identità osservate e ambigue del piano. |
+| Il canone interno non assegna ID pubblici mancanti; una primaria plurale sintetica senza ID pubblico viene rifiutata. | `arrow_schema_from_contract` su contratti costruiti direttamente in Rust; gli ingressi Arrow con primaria esplicita hanno già il suo ID. | Assegnare ID prima di conoscere tutti gli ingressi potrebbe confondere campi distinti. | Gli output tabellari distinguono gli ID provvisori dagli ID ricevuti; la pubblicazione segue la provenienza e la posizione primaria con tutte le identità del piano. Restano da adattare i produttori geo. |
 
 ## Precisione delle operazioni geografiche: 1 cm a terra
 
@@ -1650,7 +1648,7 @@ quella gia' risolta. I dettagli di un errore non includono coordinate.
 | `table.melt` (unpivot) | Tutte le colonne valore; il campo derivato conserva il riferimento comune. | `crates/plenora-kernels-table/src/reshape.rs:247` / `crates/plenora-kernels-table/src/analyze/reshape.rs:77` |
 | `table.transpose` | Tutte le colonne dati; controllo anche senza righe. Analisi poi Unsupported: numero di colonne dipendente dai dati. | `crates/plenora-kernels-table/src/reshape.rs:1220` / `crates/plenora-kernels-table/src/analyze/reshape.rs:284` |
 | `table.pivot` first/last | Una sola colonna sorgente per ciascun campo derivato, metadati geometrici conservati. Altre riduzioni producono scalari. | `crates/plenora-kernels-table/src/reshape.rs:939` / `crates/plenora-kernels-table/src/analyze/reshape.rs:193` |
-| `table.table_diff` | Rifiuto preventivo di chiavi e colonne confrontate geometriche, anche vuote/null, nel kernel e in analisi. | `crates/plenora-kernels-table/src/reshape.rs:1936` / `crates/plenora-kernels-table/src/analyze/reshape.rs:424` |
+| `table.table_diff` | Compatibilità per coppia delle colonne fuse; riferimenti preservati e vecchi valori WKB esadecimali nel resoconto. | `crates/plenora-kernels-table/src/reshape.rs:1936` / `crates/plenora-kernels-table/src/analyze/reshape.rs:424` |
 | `table.join` inner/left/right/outer | Campi non chiave separati e rinominati conservano la propria sorgente. Chiavi Binary ammesse dal profilo scalare; fusione delle chiavi soggetta alla guardia dei riferimenti. | `crates/plenora-kernels-table/src/joins.rs:368` / `crates/plenora-kernels-table/src/analyze/joins.rs:153` |
 | `table.cross_join` | Campi separati: metadati della rispettiva sorgente. | `crates/plenora-kernels-table/src/joins.rs:1345` / `crates/plenora-kernels-table/src/analyze/joins.rs:288` |
 | `table.semi_join`, `table.anti_join` | Solo campi sinistri con metadati conservati; chiavi Binary confrontate come byte. | `crates/plenora-kernels-table/src/joins.rs:1567` / `crates/plenora-kernels-table/src/analyze/joins.rs:344` |
@@ -1699,10 +1697,8 @@ rifiutano dichiarazioni geometriche annidate prima di creare un campo nuovo.
 identita' e dichiarazione geometrica vengono dalla prima sorgente effettiva,
 con nullabilita' aggiornata. La prova di catalogo
 `catalogo_colonne_presenti_in_un_solo_ingresso` verifica entrambi i lati,
-anche con dichiarazioni presenti solo nel contratto Rust. La pipeline
-ammette al massimo una colonna geometrica: derivarne
-una seconda resta un rifiuto esplicito. Le API tabellari dirette possono
-conservare piu' campi geometrici distinti. Coalesce, melt, pivot first/last e
+anche con dichiarazioni presenti solo nel contratto Rust. La pipeline e le API tabellari dirette conservano più campi geometrici
+distinti, anche senza primaria. Coalesce, melt, pivot first/last e
 transpose conservano i metadati del riferimento comune ma non copiano
 l'identita' del campo ne' la dichiarazione dei tipi geometrici del primo;
 dimensioni/encoding differenti nella fusione sono rifiutati. I kernel che
@@ -1723,11 +1719,11 @@ restano rifiuti espliciti. Le sentinelle cancellano metadati mantenendo i
 byte e devono essere riconosciute dall'oracolo. Questa e' una matrice
 finita sugli esempi, non una prova di tutte le configurazioni possibili.
 
-`table.table_diff` rifiuta chiavi e valori geometrici prima delle celle.
-`table.semi_join`, `table.anti_join`, `table.assert_foreign_key` e
-`table.reconcile` richiedono riferimenti ed encoding concordi fra le
-geometrie dichiarate dei due ingressi anche se non sono chiavi o non
-sopravvivono nell'uscita. Kernel e analisi applicano la stessa guardia.
+`table.table_diff` conserva i riferimenti compatibili delle colonne fuse e
+rappresenta i vecchi WKB in esadecimale nel resoconto. Semi/anti join,
+assert_foreign_key e reconcile verificano le coppie di chiavi configurate,
+anche con nomi diversi; non confrontano i CRS delle geometrie passanti.
+Kernel e analisi applicano la stessa guardia per coppia.
 
 **Rientro.** Regressioni con POINT(12 45)/POINT(45 12), assi invertiti,
 unknown/assenti, CRS diversi, geometrie compatibili, tabelle vuote e

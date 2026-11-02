@@ -162,12 +162,6 @@ pub fn analyze_table_contract(
     for input in inputs {
         crate::require_unique_names(&input.schema)?;
         input.validate()?;
-        input.require_single_geometry_support()?;
-        if !input.geometries.is_empty() && input.active_geometry.is_none() {
-            return Err(PlenoraError::Unsupported(
-                "operazione tabellare senza primaria non ancora adattata".into(),
-            ));
-        }
         for id in input.field_ids.values() {
             fields.observe(*id);
         }
@@ -267,7 +261,6 @@ pub fn analyze_table_contract(
             "{id}: analyze_contract non disponibile"
         ))),
     }?;
-    output.require_single_geometry_support()?;
     output.validate()?;
     fields.bind_contract(&output);
     Ok(output)
@@ -452,11 +445,9 @@ mod tests {
             &crate::Limits::default(),
         )
         .unwrap_or_else(|error| panic!("{op} con config valida fallisce: {error}"));
-        assert_eq!(
-            output.active_geometry.is_some(),
-            !output.geometries.is_empty(),
-            "{op}: primaria sopravvissuta"
-        );
+        assert!(output
+            .active_geometry
+            .is_none_or(|id| output.geometries.iter().any(|g| g.field_id == id)));
         output
     }
 
@@ -3748,7 +3739,7 @@ mod tests {
     }
 
     #[test]
-    fn join_with_two_geometries_fails_closed() {
+    fn join_with_two_geometries_preserves_both_without_primary() {
         let mut right = right_contract();
         let mut fields: Vec<Field> = right
             .schema
@@ -3764,14 +3755,13 @@ mod tests {
             ContractProperties::default(),
         )
         .unwrap();
-        assert!(matches!(
-            err(
-                "table.join",
-                &[geo_contract(), right],
-                json!({"left_keys": ["id"], "right_keys": ["rid"]})
-            ),
-            PlenoraError::Unsupported(_)
-        ));
+        let output = ok(
+            "table.join",
+            &[geo_contract(), right],
+            json!({"left_keys": ["id"], "right_keys": ["rid"]}),
+        );
+        assert_eq!(output.geometries.len(), 2);
+        assert!(output.active_geometry.is_none());
     }
 
     #[test]

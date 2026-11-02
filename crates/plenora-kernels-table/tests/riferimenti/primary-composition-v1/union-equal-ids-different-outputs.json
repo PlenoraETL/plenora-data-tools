@@ -1,0 +1,47 @@
+{
+  "$schema": "../../schemas/primary-composition-vector-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-primary-composition-vector-v1",
+  "description": "union equal ids different outputs.",
+  "operation": "union",
+  "inputs": [
+    {
+      "geometry_ids": [
+        "1",
+        "2"
+      ],
+      "primary": "2"
+    },
+    {
+      "geometry_ids": [
+        "1",
+        "2"
+      ],
+      "primary": "2"
+    }
+  ],
+  "mapping": [
+    {
+      "input": 0,
+      "field": "1",
+      "output": "20"
+    },
+    {
+      "input": 0,
+      "field": "2",
+      "output": "10"
+    },
+    {
+      "input": 1,
+      "field": "1",
+      "output": "10"
+    },
+    {
+      "input": 1,
+      "field": "2",
+      "output": "20"
+    }
+  ],
+  "expected_primary": null,
+  "expected_key": null
+}

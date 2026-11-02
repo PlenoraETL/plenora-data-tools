@@ -697,6 +697,7 @@ pub struct FieldAllocator {
     /// saturato a `u32::MAX` riassegnerebbe un ID gia' osservato.
     next: u64,
     by_name: HashMap<String, FieldId>,
+    public_rewrites: std::collections::BTreeMap<FieldId, Option<String>>,
 }
 
 impl FieldAllocator {
@@ -707,6 +708,25 @@ impl FieldAllocator {
         Self {
             next: u64::from(next),
             by_name: HashMap::new(),
+            public_rewrites: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// Registra l'identita' ricevuta prima di una riscrittura pubblica provvisoria.
+    pub fn record_public_identity(&mut self, field: FieldId, original: Option<String>) {
+        self.public_rewrites.insert(field, original);
+    }
+
+    /// Origine pubblica distinta dall'identita' logica, se riscritta internamente.
+    #[must_use]
+    pub fn public_identity(&self, field: FieldId) -> Option<&Option<String>> {
+        self.public_rewrites.get(&field)
+    }
+
+    /// Una copia o riscrittura sul posto conserva la provenienza pubblica del campo.
+    pub fn inherit_public_identity(&mut self, source: FieldId, output: FieldId) {
+        if let Some(original) = self.public_rewrites.get(&source).cloned() {
+            self.public_rewrites.insert(output, original);
         }
     }
 

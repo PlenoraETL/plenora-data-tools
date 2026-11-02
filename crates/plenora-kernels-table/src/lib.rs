@@ -412,6 +412,9 @@ pub(crate) fn unisci_metadata_schema<'a>(
         // `Metadata` itera in ordine di chiave (`BTreeMap`): il primo
         // conflitto e' deterministico.
         for (chiave, valore) in sorgente {
+            if chiave == plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY {
+                continue;
+            }
             match uniti.get(chiave) {
                 None => {
                     uniti.insert(chiave.clone(), valore.clone());
@@ -480,7 +483,7 @@ pub fn replace_keeping_field_metadata(
             }
         })
         .collect::<Vec<_>>();
-    let schema = Schema::new_with_metadata(fields, schema.metadata().clone());
+    let schema = crate::geometry_provenance::unary(&batch.schema(), fields)?;
     batch_with_rows(
         Arc::new(schema),
         output.columns().to_vec(),
@@ -530,7 +533,7 @@ pub fn replace_or_append(
         fields.push(Field::new(name, data_type, nullable));
         columns.push(array);
     }
-    let schema = Schema::new_with_metadata(fields, batch.schema().metadata().clone());
+    let schema = crate::geometry_provenance::unary(&batch.schema(), fields)?;
     batch_with_rows(Arc::new(schema), columns, batch.num_rows())
 }
 
@@ -756,7 +759,6 @@ pub fn batch_with_rows(
     columns: Vec<ArrayRef>,
     rows_if_empty: usize,
 ) -> Result<RecordBatch> {
-    plenora_core::contract::arrow_schema::require_single_geometry_schema(&schema)?;
     plenora_core::batch_with_rows(schema, columns, rows_if_empty)
 }
 
@@ -785,35 +787,6 @@ pub fn validate_text_convertible(data_type: &DataType, column: &str) -> Result<(
             return Err(PlenoraError::Schema(format!(
                 "colonna `{column}`: timezone Arrow del tipo non valida"
             )));
-        }
-    }
-    Ok(())
-}
-
-/// Le operazioni binarie richiedono riferimenti concordi anche quando
-/// la geometria non e' una chiave o non contribuisce all'uscita.
-pub(crate) fn require_compatible_geometry_inputs(
-    left: &Schema,
-    left_geometries: &[plenora_core::contract::GeometryColumnContract],
-    right: &Schema,
-    right_geometries: &[plenora_core::contract::GeometryColumnContract],
-) -> Result<()> {
-    use plenora_core::contract::arrow_metadata::{
-        field_declares_wkb_geometry, require_geometry_compatibility, GeometryComparison,
-    };
-    for a in left.fields().iter().filter(|f| {
-        field_declares_wkb_geometry(f) || left_geometries.iter().any(|g| g.name == *f.name())
-    }) {
-        for b in right.fields().iter().filter(|f| {
-            field_declares_wkb_geometry(f) || right_geometries.iter().any(|g| g.name == *f.name())
-        }) {
-            require_geometry_compatibility(
-                a,
-                left_geometries,
-                b,
-                right_geometries,
-                GeometryComparison::Inputs,
-            )?;
         }
     }
     Ok(())
@@ -2202,35 +2175,20 @@ pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
     batch_with_rows(batch.schema(), columns, rows.len())
 }
 
-/// Confine transitorio degli adapter tabellari, prima di accedere ai dati.
+/// Valida la dichiarazione della primaria prima di accedere ai dati.
 pub(crate) fn require_geometry_support(schema: &Schema) -> Result<()> {
-    plenora_core::contract::arrow_schema::require_single_geometry_schema(schema)?;
-    if schema
-        .metadata()
-        .contains_key(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY)
-    {
-        return Err(PlenoraError::Unsupported(
-            "adapter tabellare con primaria esplicita non ancora adattato".into(),
-        ));
-    }
+    plenora_core::contract::arrow_schema::verifica_identita_campi(schema)?;
+    plenora_core::contract::arrow_schema::primary_geometry_position(schema)?;
     Ok(())
 }
 
-/// Le geometrie affiancate richiedono l'adattamento plurale dei join.
+/// Valida separatamente gli schemi affiancati: non esiste un CRS di tabella.
 pub(crate) fn require_join_geometry_support(left: &Schema, right: &Schema) -> Result<()> {
-    let count = left
-        .fields()
-        .iter()
-        .chain(right.fields())
-        .filter(|field| plenora_core::contract::arrow_metadata::field_declares_wkb_geometry(field))
-        .count();
-    if count > 1 {
-        return Err(PlenoraError::Unsupported(
-            "join con piu' geometrie non ancora adattato".into(),
-        ));
-    }
-    Ok(())
+    require_geometry_support(left)?;
+    require_geometry_support(right)
 }
+
+pub(crate) mod geometry_provenance;
 
 #[cfg(test)]
 mod tests {

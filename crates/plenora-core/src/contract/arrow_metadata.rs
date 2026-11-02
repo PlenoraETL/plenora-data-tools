@@ -393,6 +393,12 @@ pub fn merged_geometry_metadata(
     let mut metadata = first.metadata().clone();
     metadata.remove(PLENORA_FIELD_ID_KEY);
     strip_rewritten_types_declarations(&mut metadata);
+    if first
+        .metadata()
+        .contains_key("plenora.geometry.types_declaration")
+    {
+        metadata.insert("plenora.geometry.types_declaration", "unresolved");
+    }
     Ok(metadata)
 }
 

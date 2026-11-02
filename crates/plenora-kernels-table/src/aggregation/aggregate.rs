@@ -700,12 +700,6 @@ pub fn aggregate_con_limiti(
     }
     // I nomi dopo i parametri, come nell'analisi.
     let nomi = config.nomi_uscita()?;
-    for aggregation in &config.aggregations {
-        if matches!(aggregation.function, AggFunction::First | AggFunction::Last) {
-            let index = column_index(batch, &aggregation.column)?;
-            crate::require_non_geometry(batch.schema().field(index))?;
-        }
-    }
     // Raggruppamento: fast path nativo per colonna singola
     // Int64/UInt64/Utf8 (nessuna stringa di chiave), chiavi binarie con la
     // stessa identita' di `row_key` altrimenti. Stesso ordine canonico dei
@@ -774,10 +768,10 @@ pub fn aggregate_con_limiti(
         .first()
         .map_or(0, plenora_core::arrow::array::Array::len);
     let mut result = crate::batch_with_rows(
-        Arc::new(plenora_core::arrow::schema::Schema::new_with_metadata(
+        Arc::new(crate::geometry_provenance::unary(
+            &batch.schema(),
             group_fields,
-            batch.schema().metadata().clone(),
-        )),
+        )?),
         group_columns,
         righe_gruppi,
     )?;
@@ -873,6 +867,39 @@ pub fn aggregate_con_limiti(
                     column.data_type().clone(),
                     true,
                     prendi_righe(column, &righe)?,
+                )?;
+                let metadata = plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+                    &[batch.schema().field(index)],
+                    &[],
+                )?;
+                let output_fields = result
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        if field.name() == name {
+                            field.as_ref().clone().with_metadata(metadata.clone())
+                        } else {
+                            field.as_ref().clone()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let mapping = group_indices
+                    .iter()
+                    .enumerate()
+                    .map(|(out, source)| (0, *source, out))
+                    .collect::<Vec<_>>();
+                let schema = crate::geometry_provenance::compose(
+                    &[&batch.schema()],
+                    output_fields,
+                    &mapping,
+                    false,
+                    batch.schema().metadata().clone().into_iter().collect(),
+                )?;
+                result = crate::batch_with_rows(
+                    Arc::new(schema),
+                    result.columns().to_vec(),
+                    result.num_rows(),
                 )?;
             }
             AggFunction::Concat => {

@@ -493,6 +493,13 @@ pub struct OperationDescriptor {
 }
 
 impl OperationDescriptor {
+    /// Le operazioni tabellari trasportano geometrie plurali; le geo le rifiutano.
+    /// I limiti di tipo e di schema dinamico restano quelli della singola operazione.
+    #[must_use]
+    pub const fn supports_multiple_geometries(&self) -> bool {
+        matches!(self.family, Family::Table)
+    }
+
     /// Dichiara se la posizione sorgente resta osservabile per tutte le
     /// configurazioni valide dell'operazione.
     ///

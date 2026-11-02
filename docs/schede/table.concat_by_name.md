@@ -13,6 +13,8 @@ gli schemi devono essere identici, come in [`table.concat`](#tableconcat).
 
 ### Schema
 
+Ogni colonna geometrica conserva il proprio contratto, anche se altri ingressi contribuiscono solo null. La primaria richiede il consenso di tutti gli ingressi sulla stessa colonna.
+
 Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
 delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
 tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano

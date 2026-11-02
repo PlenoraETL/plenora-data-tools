@@ -181,6 +181,15 @@ fn validate_key_types(
     left_indices: &[usize],
     right_indices: &[usize],
 ) -> Result<()> {
+    for (l, r) in left_indices.iter().zip(right_indices) {
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            left.schema().field(*l),
+            &[],
+            right.schema().field(*r),
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
+        )?;
+    }
     if left_indices
         .iter()
         .zip(right_indices)
@@ -639,7 +648,6 @@ pub fn assert_foreign_key(
 ) -> Result<RecordBatch> {
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
-    crate::require_compatible_geometry_inputs(&left.schema(), &[], &right.schema(), &[])?;
     let left_indices = key_indices(left, &config.left_keys)?;
     let right_indices = key_indices(right, &config.right_keys)?;
     validate_key_types(left, right, &left_indices, &right_indices)?;
@@ -804,7 +812,6 @@ pub fn reconcile(
 ) -> Result<RecordBatch> {
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
-    crate::require_compatible_geometry_inputs(&left.schema(), &[], &right.schema(), &[])?;
     let left_indices = key_indices(left, &config.left_keys)?;
     let right_indices = key_indices(right, &config.right_keys)?;
     validate_key_types(left, right, &left_indices, &right_indices)?;

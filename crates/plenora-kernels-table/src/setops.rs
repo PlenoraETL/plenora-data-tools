@@ -11,7 +11,9 @@ use plenora_core::arrow::array::{
     types::Int32Type, Array, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
     DictionaryArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt64Array,
 };
-use plenora_core::arrow::schema::{DataType, Schema};
+use plenora_core::arrow::schema::DataType;
+#[cfg(test)]
+use plenora_core::arrow::schema::Schema;
 use serde::Deserialize;
 
 use crate::interi_temporali::InteriTemporali;
@@ -381,7 +383,11 @@ pub fn concat_compatible(
     let metadata =
         crate::metadata_schema_input("union_distinct", &[&left.schema(), &right.schema()])?;
     crate::batch_with_rows(
-        Arc::new(Schema::new_with_metadata(fields, metadata)),
+        Arc::new(crate::geometry_provenance::vertical(
+            &[&left.schema(), &right.schema()],
+            fields,
+            metadata,
+        )?),
         columns,
         rows,
     )

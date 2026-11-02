@@ -27,8 +27,7 @@ use plenora_core::catalog::{
 };
 use plenora_core::contract::arrow_metadata::{GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION};
 use plenora_core::contract::arrow_schema::{
-    arrow_schema_from_contract, contract_from_arrow_schema, pubblica_schema,
-    verifica_identita_campi,
+    arrow_schema_from_contract, contract_from_arrow_schema, verifica_identita_campi,
 };
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::crs::{resolve_crs, ResolvedCrs};
@@ -113,7 +112,7 @@ pub struct PipelineValidata {
     pub(crate) outputs: Vec<String>,
     pub(crate) contratti: BTreeMap<String, DataContract>,
     /// Schema pubblicato di ogni output del piano
-    /// ([`pubblica_schema`]): versione del contratto e identità dei campi.
+    /// ([`plenora_core::contract::arrow_schema::pubblica_schema`]): versione del contratto e identità dei campi.
     /// `run` lo applica alle tabelle d'uscita.
     pub(crate) schemi_uscita: BTreeMap<String, SchemaRef>,
     pub(crate) limiti: Limits,
@@ -727,9 +726,37 @@ impl Pipeline {
             let interno = contratti.get(nome).ok_or_else(|| {
                 PlenoraError::Internal(format!("contratto dell'output `{nome}` assente"))
             })?;
-            let pubblicato =
-                pubblica_schema(&interno.schema, &identita_osservate, &identita_ambigue)
-                    .map_err(|errore| nel_passo_o_input(&format!("output `{nome}`"), errore))?;
+            let fields = interno
+                .schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    let mut metadata = field.metadata().clone();
+                    if let Some(original) = interno
+                        .field_ids
+                        .get(field.name())
+                        .and_then(|id| campi.public_identity(*id))
+                    {
+                        metadata.remove("plenora.field_id");
+                        if let Some(id) = original {
+                            metadata.insert("plenora.field_id", id.clone());
+                        }
+                    }
+                    field.as_ref().clone().with_metadata(metadata)
+                })
+                .collect::<Vec<_>>();
+            let primary = interno
+                .active_geometry_column()
+                .map(|g| interno.schema.index_of(&g.name))
+                .transpose()?;
+            let schema = Schema::new_with_metadata(fields, interno.schema.metadata().clone());
+            let pubblicato = plenora_core::contract::arrow_schema::pubblica_schema_con_primaria(
+                &schema,
+                primary,
+                &identita_osservate,
+                &identita_ambigue,
+            )
+            .map_err(|errore| nel_passo_o_input(&format!("output `{nome}`"), errore))?;
             schemi_uscita.insert(nome.clone(), pubblicato);
         }
 

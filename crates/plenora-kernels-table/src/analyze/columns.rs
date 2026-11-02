@@ -37,19 +37,15 @@ pub(in crate::analyze) fn analyze_drop_columns(
         .collect();
     let removed_any = kept.len() != input.schema.fields().len();
     let schema = Schema::new_with_metadata(kept, input.schema.metadata().clone());
-    let geometry = propagate_geometry(
-        input,
-        &schema,
-        input.geometries.first().map(|g| g.name.as_str()),
-    );
-    let dropped_geometry = if geometry.is_none() {
+    let geometry = propagate_geometry(input, &schema, |g| Some(g.name.clone()));
+    let dropped_geometry = if geometry.is_empty() {
         input.geometries.first().map(|g| g.field_id)
     } else {
         None
     };
     let active = input
         .active_geometry
-        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+        .filter(|id| geometry.iter().any(|g| &g.field_id == id));
     // Conservativo: una colonna rimossa puo' essere una chiave di ordinamento.
     let properties = scrub_dropped_geometry(
         ContractProperties {
@@ -119,12 +115,15 @@ pub(in crate::analyze) fn analyze_rename(
         .collect();
     fields.rename_many(&pairs)?;
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
-    let renamed_geometry = input.geometries.first().map(|geometry| {
-        renames
-            .get(geometry.name.as_str())
-            .copied()
-            .unwrap_or(geometry.name.as_str())
-    });
+    let renamed_geometry = |geometry: &plenora_core::contract::GeometryColumnContract| {
+        Some(
+            renames
+                .get(geometry.name.as_str())
+                .copied()
+                .unwrap_or(geometry.name.as_str())
+                .to_owned(),
+        )
+    };
     let geometry = propagate_geometry(input, &schema, renamed_geometry);
     let properties = input.properties.clone();
     finish(
@@ -168,11 +167,7 @@ pub(in crate::analyze) fn analyze_reorder_columns(
     }
     ordered.extend(rest);
     let schema = Schema::new_with_metadata(ordered, input.schema.metadata().clone());
-    let geometry = propagate_geometry(
-        input,
-        &schema,
-        input.geometries.first().map(|g| g.name.as_str()),
-    );
+    let geometry = propagate_geometry(input, &schema, |g| Some(g.name.clone()));
     finish(
         super::helpers::preserved_origins(
             input,
@@ -271,19 +266,15 @@ pub(in crate::analyze) fn analyze_select_columns(
     }
     let removed_any = fields_out.len() != input.schema.fields().len();
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
-    let geometry = propagate_geometry(
-        input,
-        &schema,
-        input.geometries.first().map(|g| g.name.as_str()),
-    );
-    let dropped_geometry = if geometry.is_none() {
+    let geometry = propagate_geometry(input, &schema, |g| Some(g.name.clone()));
+    let dropped_geometry = if geometry.is_empty() {
         input.geometries.first().map(|g| g.field_id)
     } else {
         None
     };
     let active = input
         .active_geometry
-        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+        .filter(|id| geometry.iter().any(|g| &g.field_id == id));
     // Come drop_columns: una colonna rimossa puo' essere chiave di ordinamento.
     let properties = scrub_dropped_geometry(
         ContractProperties {
@@ -389,19 +380,15 @@ pub(in crate::analyze) fn analyze_align_schema(
         }
     }
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
-    let geometry = propagate_geometry(
-        input,
-        &schema,
-        input.geometries.first().map(|g| g.name.as_str()),
-    );
-    let dropped_geometry = if geometry.is_none() {
+    let geometry = propagate_geometry(input, &schema, |g| Some(g.name.clone()));
+    let dropped_geometry = if geometry.is_empty() {
         input.geometries.first().map(|g| g.field_id)
     } else {
         None
     };
     let active = input
         .active_geometry
-        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+        .filter(|id| geometry.iter().any(|g| &g.field_id == id));
     // 1:1 sulle righe: row_count invariato. sorted_by solo se l'insieme delle
     // colonne e' invariato (permutazione pura, nessuna chiave rimossa).
     let properties = scrub_dropped_geometry(

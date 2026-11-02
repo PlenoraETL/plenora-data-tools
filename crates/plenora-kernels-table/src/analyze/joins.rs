@@ -12,8 +12,8 @@ use serde_json::Value;
 
 use super::helpers::{
     check_name_list, check_output_name, clone_fields, con_op, contract_error, field_of, finish,
-    merge_geometry, merge_schema_metadata, merge_schema_metadata_many, propagate_geometry,
-    require_scalar_strings, require_utf8, sorted_only, typed,
+    merge_schema_metadata, merge_schema_metadata_many, propagate_geometry, require_scalar_strings,
+    require_utf8, sorted_only, typed, vertical_primary,
 };
 use super::quality::check_foreign_keys;
 use crate::{fuzzy, joins, setops, Limits};
@@ -57,8 +57,8 @@ pub(in crate::analyze) fn check_text_key_pairs(
 
 type HorizontalFields = (
     Vec<Field>,
-    Option<String>,
-    Option<String>,
+    Vec<plenora_core::contract::GeometryColumnContract>,
+    Option<plenora_core::contract::FieldId>,
     Vec<plenora_core::contract::FieldOrigin>,
 );
 
@@ -67,6 +67,8 @@ type HorizontalFields = (
 /// collisioni -> errore. Restituisce (campi, nome left, nome right) della
 /// colonna geometrica propagata per ciascun ramo.
 #[allow(clippy::too_many_arguments)]
+// La costruzione segue in ordine campi, provenienza e primaria.
+#[allow(clippy::too_many_lines)]
 fn combine_horizontal_fields(
     op: &str,
     left: &DataContract,
@@ -74,6 +76,7 @@ fn combine_horizontal_fields(
     omitted_right: &HashSet<usize>,
     naming: HorizontalNaming<'_>,
     limits: &Limits,
+    allocator: &mut FieldAllocator,
 ) -> Result<HorizontalFields> {
     let right_names: HashSet<&str> = right
         .schema
@@ -89,7 +92,10 @@ fn combine_horizontal_fields(
     };
     let mut origins = Vec::new();
     let mut fields_out: Vec<Field> = Vec::new();
-    let mut left_geometry_name = None;
+    let mut geometries = Vec::new();
+    let mut active = None;
+    let mut left_has_geometry = false;
+    let mut right_has_geometry = false;
     for (index, field) in clone_fields(left).into_iter().enumerate() {
         let original = field.name().clone();
         let name = match naming {
@@ -102,8 +108,15 @@ fn combine_horizontal_fields(
             _ => original.clone(),
         };
         check_output_name(op, &name)?;
-        if left.geometries.first().is_some_and(|g| g.name == original) {
-            left_geometry_name = Some(name.clone());
+        if let Some(g) = left.geometries.iter().find(|g| g.name == original) {
+            let mut g = g.clone();
+            g.name.clone_from(&name);
+            g.nullable = true;
+            if left.active_geometry == Some(g.field_id) {
+                active = Some(g.field_id);
+            }
+            geometries.push(g);
+            left_has_geometry = true;
         }
         origins.push(plenora_core::contract::FieldOrigin::Preserved(
             left.field_ids[&original],
@@ -123,7 +136,7 @@ fn combine_horizontal_fields(
         .iter()
         .map(|field| field.name().as_str())
         .collect();
-    let mut right_geometry_name = None;
+
     for (index, field) in clone_fields(right).into_iter().enumerate() {
         if omitted_right.contains(&index) {
             continue;
@@ -143,18 +156,32 @@ fn combine_horizontal_fields(
         if !names.insert(name.clone()) {
             return contract_error(op, format!("collisione join: {name}"));
         }
-        if right.geometries.first().is_some_and(|g| g.name == original) {
-            right_geometry_name = Some(name.clone());
+        let source_id = right.field_ids[&original];
+        let output_id = if origins.iter().any(|origin| matches!(origin, plenora_core::contract::FieldOrigin::Preserved(id) if *id == source_id)) {
+            allocator.alloc()?
+        } else { source_id };
+        allocator.inherit_public_identity(source_id, output_id);
+        if let Some(g) = right.geometries.iter().find(|g| g.name == original) {
+            let mut g = g.clone();
+            g.name.clone_from(&name);
+            g.nullable = true;
+            g.field_id = output_id;
+            if right.active_geometry == Some(source_id) {
+                active = Some(output_id);
+            }
+            geometries.push(g);
+            right_has_geometry = true;
         }
-        origins.push(plenora_core::contract::FieldOrigin::Preserved(
-            right.field_ids[&original],
-        ));
+        origins.push(plenora_core::contract::FieldOrigin::Preserved(output_id));
         fields_out.push(field.with_name(name).with_nullable(true));
     }
     if fields_out.len() > limits.max_columns {
         return contract_error(op, "join supera max_columns");
     }
-    Ok((fields_out, left_geometry_name, right_geometry_name, origins))
+    if left_has_geometry && right_has_geometry {
+        active = None;
+    }
+    Ok((fields_out, geometries, active, origins))
 }
 
 #[derive(Clone, Copy)]
@@ -186,6 +213,15 @@ pub(in crate::analyze) fn analyze_join(
     // `coalesce` non copre tutti i tipi: il controllo va fatto QUI, non a
     // meta' esecuzione dopo aver aperto gli input.
     if matches!(config.how, joins::JoinHow::Right | joins::JoinHow::Outer) {
+        for (l, r) in config.left_keys.iter().zip(&config.right_keys) {
+            plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+                field_of(op, left, l)?,
+                &left.geometries,
+                field_of(op, right, r)?,
+                &right.geometries,
+                plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
+            )?;
+        }
         for name in &config.left_keys {
             let field = field_of(op, left, name)?;
             if !joins::coalesce_supported(field.data_type()) {
@@ -219,29 +255,19 @@ pub(in crate::analyze) fn analyze_join(
             })
         })
         .collect::<Result<HashSet<_>>>()?;
-    let (fields_out, left_geometry, right_geometry, origins) = combine_horizontal_fields(
+    let (fields_out, geometry, active, origins) = combine_horizontal_fields(
         op,
         left,
         right,
         &right_indices,
         HorizontalNaming::ManipolaJoin(&left_indices),
         limits,
+        fields,
     )?;
     // I metadata di schema delle due sorgenti si fondono; stessa chiave con
     // valori diversi -> errore, mai precedenza implicita.
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
-    let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
-    let right_geometry = propagate_geometry(right, &schema, right_geometry.as_deref());
-    let active = left
-        .active_geometry
-        .filter(|id| left_geometry.as_ref().is_some_and(|g| &g.field_id == id))
-        .or_else(|| {
-            right
-                .active_geometry
-                .filter(|id| right_geometry.as_ref().is_some_and(|g| &g.field_id == id))
-        });
-    let geometry = merge_geometry(op, left_geometry, right_geometry)?;
     finish(
         origins,
         schema,
@@ -276,13 +302,14 @@ pub(in crate::analyze) fn analyze_fuzzy_join(
     let left_index = left.schema.index_of(&config.left_key).map_err(|_| {
         PlenoraError::Internal(format!("{op}: chiave verificata assente nello schema"))
     })?;
-    let (mut fields_out, left_geometry, right_geometry, mut origins) = combine_horizontal_fields(
+    let (mut fields_out, geometry, active, mut origins) = combine_horizontal_fields(
         op,
         left,
         right,
         &HashSet::new(),
         HorizontalNaming::ManipolaJoin(&[left_index]),
         limits,
+        fields,
     )?;
     let score_name = config.score_name();
     check_output_name(op, score_name)?;
@@ -302,17 +329,6 @@ pub(in crate::analyze) fn analyze_fuzzy_join(
     // Merge dei metadata di schema delle due sorgenti (come `table.join`).
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
-    let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
-    let right_geometry = propagate_geometry(right, &schema, right_geometry.as_deref());
-    let active = left
-        .active_geometry
-        .filter(|id| left_geometry.as_ref().is_some_and(|g| &g.field_id == id))
-        .or_else(|| {
-            right
-                .active_geometry
-                .filter(|id| right_geometry.as_ref().is_some_and(|g| &g.field_id == id))
-        });
-    let geometry = merge_geometry(op, left_geometry, right_geometry)?;
     finish(
         origins,
         schema,
@@ -333,28 +349,18 @@ pub(in crate::analyze) fn analyze_cross_join(
     let _config: joins::CrossJoin = typed(op, config)?;
     let (left, right) = (&inputs[0], &inputs[1]);
     let _ = fields;
-    let (fields_out, left_geometry, right_geometry, origins) = combine_horizontal_fields(
+    let (fields_out, geometry, active, origins) = combine_horizontal_fields(
         op,
         left,
         right,
         &HashSet::new(),
         HorizontalNaming::PandasCross,
         limits,
+        fields,
     )?;
     // Merge dei metadata di schema delle due sorgenti (come `table.join`).
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
-    let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
-    let right_geometry = propagate_geometry(right, &schema, right_geometry.as_deref());
-    let active = left
-        .active_geometry
-        .filter(|id| left_geometry.as_ref().is_some_and(|g| &g.field_id == id))
-        .or_else(|| {
-            right
-                .active_geometry
-                .filter(|id| right_geometry.as_ref().is_some_and(|g| &g.field_id == id))
-        });
-    let geometry = merge_geometry(op, left_geometry, right_geometry)?;
     // Righe = prodotto esatto delle cardinalita' (se note e stesso scope).
     let row_count = product_row_count(left, right);
     finish(
@@ -396,12 +402,6 @@ pub(in crate::analyze) fn analyze_membership_join(
     fields: &mut FieldAllocator,
     limits: &Limits,
 ) -> Result<DataContract> {
-    crate::require_compatible_geometry_inputs(
-        &inputs[0].schema,
-        &inputs[0].geometries,
-        &inputs[1].schema,
-        &inputs[1].geometries,
-    )?;
     let config: joins::MembershipJoin = typed(op, config)?;
     let (left, right) = (&inputs[0], &inputs[1]);
     let _ = fields;
@@ -456,22 +456,18 @@ pub(in crate::analyze) fn analyze_asof_join(
             })
         })
         .collect::<Result<HashSet<_>>>()?;
-    let (fields_out, left_geometry, right_geometry, origins) =
-        combine_horizontal_fields(op, left, right, &omitted, HorizontalNaming::AsOf, limits)?;
+    let (fields_out, geometry, active, origins) = combine_horizontal_fields(
+        op,
+        left,
+        right,
+        &omitted,
+        HorizontalNaming::AsOf,
+        limits,
+        fields,
+    )?;
     // Merge dei metadata di schema delle due sorgenti (come `table.join`).
     let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
     let schema = Schema::new_with_metadata(fields_out, metadata);
-    let left_geometry = propagate_geometry(left, &schema, left_geometry.as_deref());
-    let right_geometry = propagate_geometry(right, &schema, right_geometry.as_deref());
-    let active = left
-        .active_geometry
-        .filter(|id| left_geometry.as_ref().is_some_and(|g| &g.field_id == id))
-        .or_else(|| {
-            right
-                .active_geometry
-                .filter(|id| right_geometry.as_ref().is_some_and(|g| &g.field_id == id))
-        });
-    let geometry = merge_geometry(op, left_geometry, right_geometry)?;
     // Una riga di output per riga left, nell'ordine di left.
     finish(
         origins,
@@ -512,17 +508,14 @@ pub(in crate::analyze) fn analyze_concat(
     // diversi -> errore, mai "vince il primo").
     let schema = Schema::new_with_metadata(fields_out, merge_schema_metadata_many(op, inputs)?);
     // Geometria del primo input (gli schemi sono identici per nome/tipo).
-    let geometry = propagate_geometry(
-        first,
-        &schema,
-        first.geometries.first().map(|g| g.name.as_str()),
-    );
+    let geometry = propagate_geometry(first, &schema, |g| Some(g.name.clone()));
     let row_count = sum_row_count(inputs);
+    let active = vertical_primary(inputs, &geometry);
     finish(
         first.field_origins(),
         schema,
         geometry,
-        first.active_geometry,
+        active,
         ContractProperties {
             sorted_by: None,
             row_count,
@@ -698,26 +691,26 @@ pub(in crate::analyze) fn analyze_concat_by_name(
         union
     };
     // I campi presenti su un solo ramo conservano la sua provenienza.
-    let origins = vertical_origins(inputs, &fields_out)?;
+    let origins = vertical_origins(inputs, &fields_out, fields)?;
     // Merge dei metadata di schema di tutti gli input (conflitto su valori
     // diversi -> errore, mai "vince il primo").
     let schema = Schema::new_with_metadata(fields_out, merge_schema_metadata_many(op, inputs)?);
     // Come campo e identita', la dichiarazione viene dalla prima sorgente
     // effettiva. Gli ingressi senza il campo aggiungono null, non cancellano
     // la geometria; quelli che lo portano sono gia' confrontati sopra.
-    let mut geometry = None;
-    let mut active = None;
-    for field in schema.fields() {
+    let mut geometry = Vec::new();
+    for (index, field) in schema.fields().iter().enumerate() {
         let source = first_field_source(inputs, field.name())?;
         if let Some(declaration) = source.geometries.iter().find(|g| &g.name == field.name()) {
             let mut propagated = declaration.clone();
+            if let plenora_core::contract::FieldOrigin::Preserved(id) = origins[index] {
+                propagated.field_id = id;
+            }
             propagated.nullable = field.is_nullable();
-            geometry = merge_geometry(op, geometry, Some(propagated))?;
-            active = source
-                .active_geometry
-                .filter(|id| *id == declaration.field_id);
+            geometry.push(propagated);
         }
     }
+    let active = vertical_primary(inputs, &geometry);
     finish(
         origins,
         schema,
@@ -773,16 +766,13 @@ pub(in crate::analyze) fn analyze_set_operation(
         // valori diversi -> errore (come i join, mai precedenza implicita).
         let metadata = merge_schema_metadata(op, &left.schema, &right.schema)?;
         let schema = Schema::new_with_metadata(fields_out, metadata);
-        let geometry = propagate_geometry(
-            left,
-            &schema,
-            left.geometries.first().map(|g| g.name.as_str()),
-        );
+        let geometry = propagate_geometry(left, &schema, |g| Some(g.name.clone()));
+        let active = vertical_primary(inputs, &geometry);
         finish(
             left.field_origins(),
             schema,
             geometry,
-            left.active_geometry,
+            active,
             ContractProperties::default(),
             fields,
         )
@@ -799,7 +789,9 @@ pub(in crate::analyze) fn analyze_set_operation(
 fn vertical_origins(
     inputs: &[DataContract],
     fields_out: &[Field],
+    allocator: &mut FieldAllocator,
 ) -> Result<Vec<plenora_core::contract::FieldOrigin>> {
+    let mut seen = HashSet::new();
     fields_out
         .iter()
         .map(|field| {
@@ -807,8 +799,18 @@ fn vertical_origins(
                 .iter()
                 .find_map(|input| input.field_ids.get(field.name()))
                 .copied()
-                .map(plenora_core::contract::FieldOrigin::Preserved)
                 .ok_or_else(|| PlenoraError::Schema("identita' sorgente assente".into()))
+                .and_then(|id| {
+                    let id = if seen.insert(id) {
+                        id
+                    } else {
+                        let fresh = allocator.alloc()?;
+                        allocator.inherit_public_identity(id, fresh);
+                        seen.insert(fresh);
+                        fresh
+                    };
+                    Ok(plenora_core::contract::FieldOrigin::Preserved(id))
+                })
         })
         .collect()
 }

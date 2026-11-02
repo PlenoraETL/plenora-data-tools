@@ -15,6 +15,8 @@ Ogni colonna ha un tipo fra `utf8`, `int64`, `uint64`, `float64`, `bool`,
 
 ### Schema
 
+Il consenso della primaria è per colonna d’uscita, indipendentemente dagli ID numerici degli ingressi. CRS e assi si verificano per ogni coppia di colonne.
+
 Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
 delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
 tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano

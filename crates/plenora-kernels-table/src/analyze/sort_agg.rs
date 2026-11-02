@@ -174,6 +174,8 @@ fn check_aggregation_parameters(
     con_op(op, aggregation.verifica_parametri())
 }
 
+// La costruzione segue in ordine campi, provenienza e primaria.
+#[allow(clippy::too_many_lines)]
 pub(in crate::analyze) fn analyze_aggregate(
     op: &str,
     inputs: &[DataContract],
@@ -217,7 +219,6 @@ pub(in crate::analyze) fn analyze_aggregate(
             // La cella com'e' (`take`): il tipo del profilo, senza il fuso,
             // con la stessa funzione del kernel.
             aggregation::AggFunction::First | aggregation::AggFunction::Last => {
-                crate::require_non_geometry(field)?;
                 crate::validate_cella_prendibile(field.data_type(), field.name())
                     .map_err(|errore| PlenoraError::InvalidPlan(format!("{op}: {errore}")))?;
             }
@@ -260,29 +261,49 @@ pub(in crate::analyze) fn analyze_aggregate(
     // sono derivate e non ne ereditano. Un nome d'uscita ripetuto o uguale a
     // una chiave si rifiuta (`Aggregate::nomi_uscita`), come nel kernel.
     let schema = Schema::new_with_metadata(fields_out, input.schema.metadata().clone());
-    let preserved = input
-        .geometries
-        .first()
-        .filter(|geometry| config.group_by.contains(&geometry.name))
-        .map(|geometry| geometry.name.as_str());
+    let preserved = |geometry: &plenora_core::contract::GeometryColumnContract| {
+        (config.group_by.contains(&geometry.name)).then(|| geometry.name.clone())
+    };
     let geometry = propagate_geometry(input, &schema, preserved);
     let active = input
         .active_geometry
-        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+        .filter(|id| geometry.iter().any(|g| &g.field_id == id));
     let mut origins =
         super::helpers::preserved_origins(input, config.group_by.iter().map(String::as_str))?;
     origins.resize(
         schema.fields().len(),
         plenora_core::contract::FieldOrigin::New,
     );
-    finish(
+    let mut output = finish(
         origins,
         schema,
         geometry,
         active,
         ContractProperties::default(),
         fields,
-    )
+    )?;
+    for (aggregation, name) in config.aggregations.iter().zip(config.nomi_uscita()?) {
+        if matches!(
+            aggregation.function,
+            aggregation::AggFunction::First | aggregation::AggFunction::Last
+        ) {
+            let metadata = plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+                &[field_of(op, input, &aggregation.column)?],
+                &input.geometries,
+            )?;
+            output = super::helpers::derive_geometry(
+                output,
+                input,
+                &aggregation.column,
+                &name,
+                false,
+                metadata,
+                fields,
+            )?;
+        }
+    }
+    output.active_geometry = active;
+    Ok(output)
 }
 
 pub(in crate::analyze) fn analyze_rolling_window(

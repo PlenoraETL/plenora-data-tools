@@ -10,6 +10,8 @@ Nessuno: la config è `{}`.
 
 ### Schema
 
+Le geometrie dei due ingressi conservano separatamente CRS e metadati. Quando entrambi contribuiscono geometrie, l’uscita non ha primaria.
+
 Prima tutte le colonne di sinistra, poi tutte quelle di destra. Una colonna
 di sinistra il cui nome compare anche a destra diventa `<nome>_x`, una di
 destra il cui nome compare anche a sinistra `<nome>_y`; le altre tengono il

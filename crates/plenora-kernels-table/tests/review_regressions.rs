@@ -3773,7 +3773,7 @@ fn celle_geometriche_non_diventano_binary_anonimo() {
                     &input,
                     &serde_json::from_value(config.clone()).unwrap(),
                 )
-                .unwrap_err();
+                .expect("geometria conservata");
                 let analysis = analyze_table_contract(
                     "table.aggregate",
                     &[complete_contract(input.schema())],
@@ -3781,9 +3781,10 @@ fn celle_geometriche_non_diventano_binary_anonimo() {
                     &mut FieldAllocator::default(),
                     &Limits::default(),
                 )
-                .unwrap_err();
-                assert!(matches!(kernel, PlenoraError::Crs(_)), "{kernel}");
-                assert_eq!(kernel.to_string(), analysis.to_string());
+                .expect("geometria conservata");
+                assert_eq!(kernel.schema().field(1).metadata(), geometry.metadata());
+                assert_eq!(analysis.geometries.len(), 1);
+                assert_eq!(analysis.schema.field(1).metadata(), geometry.metadata());
             }
             let config = json!({"column":"g", "target_type":"binary_utf8"});
             let kernel =
@@ -3881,7 +3882,6 @@ fn diff_e_operazioni_binarie_rifiutano_geometrie_incoerenti_prima_delle_celle() 
         for (chiave, valore) in [
             ("plenora.geometry.axis_order", "lon_lat"),
             ("plenora.geometry.crs_id", "EPSG:32632"),
-            ("plenora.geometry.encoding", "ewkb"),
         ] {
             let campo = geometry_output_field("g", "EPSG:4326").unwrap();
             let mut metadata = campo.metadata().clone();
@@ -3914,7 +3914,7 @@ fn diff_e_operazioni_binarie_rifiutano_geometrie_incoerenti_prima_delle_celle() 
                 "table.reconcile",
                 "table.table_diff",
             ] {
-                let config = json!({"left_keys":["id"], "right_keys":["id"]});
+                let config = json!({"left_keys":["g"], "right_keys":["g"]});
                 let limits = Limits::default();
                 let kernel = match op {
                     "table.semi_join" => joins::semi_join(
@@ -3961,7 +3961,7 @@ fn diff_e_operazioni_binarie_rifiutano_geometrie_incoerenti_prima_delle_celle() 
                 assert!(matches!(kernel, PlenoraError::Crs(_)), "{op}");
                 assert_eq!(kernel.to_string(), analisi.to_string(), "{op}");
             }
-            // Anche riferimenti identici sono rifiutati dal diff, su chiavi
+            // Riferimenti identici sono accettati dal diff, su chiavi
             // geometriche e su compare_columns, inclusi ADDED e DELETED.
             for config in [
                 json!({"left_keys":["id"], "right_keys":["id"], "compare_columns":["g"]}),
@@ -3975,7 +3975,7 @@ fn diff_e_operazioni_binarie_rifiutano_geometrie_incoerenti_prima_delle_celle() 
                             &serde_json::from_value(config.clone()).unwrap(),
                             &Limits::default(),
                         )
-                        .unwrap_err();
+                        .expect("riferimenti compatibili");
                         let analisi = analyze_table_contract(
                             "table.table_diff",
                             &[complete_contract(a.schema()), complete_contract(b.schema())],
@@ -3983,9 +3983,17 @@ fn diff_e_operazioni_binarie_rifiutano_geometrie_incoerenti_prima_delle_celle() 
                             &mut FieldAllocator::default(),
                             &Limits::default(),
                         )
-                        .unwrap_err();
-                        assert!(matches!(kernel, PlenoraError::Crs(_)));
-                        assert_eq!(kernel.to_string(), analisi.to_string());
+                        .expect("riferimenti compatibili");
+                        assert_eq!(
+                            kernel.schema().fields().len(),
+                            analisi.schema.fields().len()
+                        );
+                        for (actual, expected) in
+                            kernel.schema().fields().iter().zip(analisi.schema.fields())
+                        {
+                            assert_eq!(actual.name(), expected.name());
+                            assert_eq!(actual.metadata(), expected.metadata());
+                        }
                     }
                 }
             }

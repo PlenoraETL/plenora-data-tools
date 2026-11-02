@@ -675,7 +675,29 @@ pub fn pubblica_schema(
     ambigue: &BTreeSet<u32>,
 ) -> Result<SchemaRef, PlenoraError> {
     let primary = primary_geometry_position(schema)?;
+    pubblica_schema_con_primaria(schema, primary, osservate, ambigue)
+}
+
+/// Pubblica uno schema con la primaria già risolta per provenienza, prima di assegnare ID.
+///
+/// # Errors
+/// Rifiuta una posizione primaria non geometrica e identità non rappresentabili.
+pub fn pubblica_schema_con_primaria(
+    schema: &Schema,
+    primary: Option<usize>,
+    osservate: &BTreeSet<u32>,
+    ambigue: &BTreeSet<u32>,
+) -> Result<SchemaRef, PlenoraError> {
+    if primary.is_some_and(|p| {
+        schema
+            .fields()
+            .get(p)
+            .is_none_or(|f| !super::arrow_metadata::field_declares_wkb_geometry(f))
+    }) {
+        return Err(errore_di_contratto("primaria assente dalle geometrie"));
+    }
     let mut metadata = schema.metadata().clone();
+    metadata.remove(PRIMARY_GEOMETRY_KEY);
     aggiungi_versione(&mut metadata)?;
     let mut portate = Vec::with_capacity(schema.fields().len());
     let mut conteggi: BTreeMap<u32, usize> = BTreeMap::new();

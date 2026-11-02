@@ -256,46 +256,47 @@ pub(in crate::analyze) fn clone_fields(input: &DataContract) -> Vec<Field> {
         .collect()
 }
 
-/// Propaga la colonna geometrica se sopravvive come colonna logica inalterata
-/// (stesso tipo dell'input) sotto il nome `preserved_as`; `None` se la colonna
-/// e' stata eliminata o sovrascritta (una colonna derivata riceve un
-/// `FieldId` nuovo e non e' piu' la stessa geometria).
+/// Propaga ogni geometria attraverso la corrispondenza esplicita dei nomi.
 pub(in crate::analyze) fn propagate_geometry(
     input: &DataContract,
     output: &Schema,
-    preserved_as: Option<&str>,
-) -> Option<GeometryColumnContract> {
-    let geometry = input.geometries.first()?;
-    let name = preserved_as?;
-    let source = input.schema.field_with_name(&geometry.name).ok()?;
-    let field = output.field_with_name(name).ok()?;
-    if field.data_type() != source.data_type() {
-        return None;
-    }
-    Some(GeometryColumnContract {
-        field_id: geometry.field_id,
-        name: name.to_owned(),
-        crs: geometry.crs.clone(),
-        dimensions: geometry.dimensions,
-        encoding: geometry.encoding,
-        nullable: field.is_nullable(),
-        // Colonna preservata identica: la dichiarazione dei tipi si propaga
-        // invariata come le altre proprieta'.
-        types: geometry.types.clone(),
-    })
+    mapping: impl Fn(&GeometryColumnContract) -> Option<String>,
+) -> Vec<GeometryColumnContract> {
+    input
+        .geometries
+        .iter()
+        .filter_map(|geometry| {
+            let name = mapping(geometry)?;
+            let source = input.schema.field_with_name(&geometry.name).ok()?;
+            let field = output.field_with_name(&name).ok()?;
+            if field.data_type() != source.data_type() {
+                return None;
+            }
+            let mut result = geometry.clone();
+            result.name = name;
+            result.nullable = field.is_nullable();
+            Some(result)
+        })
+        .collect()
 }
 
-/// Guardia delle operazioni binarie non ancora adattate all'uscita plurale.
-pub(in crate::analyze) fn merge_geometry(
-    op: &str,
-    left: Option<GeometryColumnContract>,
-    right: Option<GeometryColumnContract>,
-) -> Result<Option<GeometryColumnContract>> {
-    match (left, right) {
-        (Some(_), Some(_)) => Err(PlenoraError::Unsupported(format!(
-            "{op}: due colonne geometriche in output non ancora supportate"
-        ))),
-        (left, right) => Ok(left.or(right)),
+/// Le primarie verticali devono alimentare la stessa colonna da tutti gli ingressi.
+pub(in crate::analyze) fn vertical_primary(
+    inputs: &[DataContract],
+    geometries: &[GeometryColumnContract],
+) -> Option<FieldId> {
+    let name = &inputs.first()?.active_geometry_column()?.name;
+    if inputs.iter().all(|input| {
+        input
+            .active_geometry_column()
+            .is_some_and(|g| &g.name == name)
+    }) {
+        geometries
+            .iter()
+            .find(|g| &g.name == name)
+            .map(|g| g.field_id)
+    } else {
+        None
     }
 }
 
@@ -354,22 +355,58 @@ pub(in crate::analyze) fn preserved_origins<'a>(
         .collect()
 }
 
+// Il costruttore consuma lo schema logico e ne ricostruisce i metadati pubblici.
+#[allow(clippy::needless_pass_by_value)]
 pub(in crate::analyze) fn finish(
     origins: Vec<plenora_core::contract::FieldOrigin>,
     schema: Schema,
-    geometry: Option<GeometryColumnContract>,
+    geometry: impl IntoIterator<Item = GeometryColumnContract>,
     active: Option<FieldId>,
     properties: ContractProperties,
     allocator: &mut FieldAllocator,
 ) -> Result<DataContract> {
-    DataContract::new(
+    let mut geometry: Vec<_> = geometry.into_iter().collect();
+    geometry.sort_by_key(|g| schema.index_of(&g.name).unwrap_or(usize::MAX));
+    let primary = active
+        .and_then(|id| geometry.iter().find(|g| g.field_id == id))
+        .map(|g| schema.index_of(&g.name))
+        .transpose()?;
+    let originals = schema
+        .fields()
+        .iter()
+        .zip(&origins)
+        .map(|(field, origin)| {
+            let inherited = match origin {
+                plenora_core::contract::FieldOrigin::Preserved(id) => {
+                    allocator.public_identity(*id)
+                }
+                plenora_core::contract::FieldOrigin::New => None,
+            };
+            inherited
+                .cloned()
+                .unwrap_or_else(|| field.metadata().get("plenora.field_id").cloned())
+        })
+        .collect::<Vec<_>>();
+    let schema = crate::geometry_provenance::emit(
+        schema.fields().iter().map(|f| f.as_ref().clone()).collect(),
+        primary,
+        geometry.len(),
+        schema.metadata().clone().into_iter().collect(),
+    )?;
+    let output = DataContract::new(
         Arc::new(schema),
         origins,
-        geometry.into_iter().collect(),
+        geometry,
         active,
         properties,
         allocator,
-    )
+    )?;
+    for (field, original) in output.schema.fields().iter().zip(originals) {
+        if field.metadata().get("plenora.field_id") != original.as_ref() {
+            allocator.record_public_identity(output.field_ids[field.name()], original);
+        }
+    }
+    Ok(output)
 }
 
 /// Proprieta' delle op 1:1 che si limitano ad appendere colonne: `row_count`
@@ -481,7 +518,7 @@ pub(in crate::analyze) fn analyze_append_inner(
 ) -> Result<DataContract> {
     let mut fields = clone_fields(input);
     let mut overwritten = false;
-    let mut geometry_overwritten = false;
+
     for (name, data_type, nullable) in produced {
         let replaced = produce(&mut fields, name, data_type.clone(), *nullable);
         if let Some(metadata) = replacement_metadata {
@@ -492,21 +529,16 @@ pub(in crate::analyze) fn analyze_append_inner(
             *field = field.clone().with_metadata(metadata.clone());
         }
         overwritten |= replaced;
-        if replaced && input.geometries.first().is_some_and(|g| &g.name == name) {
-            geometry_overwritten =
-                replacement_metadata.is_none_or(plenora_core::arrow::Metadata::is_empty);
-        }
     }
     let schema = Schema::new_with_metadata(fields, input.schema.metadata().clone());
-    let preserved = if geometry_overwritten {
-        None
-    } else {
-        input.geometries.first().map(|g| g.name.as_str())
-    };
-    let geometry = propagate_geometry(input, &schema, preserved);
+    let geometry = propagate_geometry(input, &schema, |g| {
+        (!produced.iter().any(|(name, _, _)| name == &g.name)
+            || replacement_metadata.is_some_and(|m| !m.is_empty()))
+        .then(|| g.name.clone())
+    });
     let active = input
         .active_geometry
-        .filter(|id| geometry.as_ref().is_some_and(|g| &g.field_id == id));
+        .filter(|id| geometry.iter().any(|g| &g.field_id == id));
     finish(
         schema
             .fields()
@@ -534,20 +566,12 @@ pub(in crate::analyze) fn derive_geometry(
     input: &DataContract,
     source: &str,
     name: &str,
+    replaces_primary: bool,
     metadata: plenora_core::arrow::Metadata,
     alloc: &mut FieldAllocator,
 ) -> Result<DataContract> {
     if metadata.is_empty() {
         return Ok(output);
-    }
-    if output
-        .geometries
-        .iter()
-        .any(|geometry| geometry.name != name)
-    {
-        return Err(PlenoraError::Unsupported(
-            "derivazione multigeometria non ancora adattata".into(),
-        ));
     }
     let mut fields = clone_fields(&output);
     let index = output.schema.index_of(name)?;
@@ -570,15 +594,22 @@ pub(in crate::analyze) fn derive_geometry(
     );
     geometry.field_id = output.field_ids[name];
     output.geometries.retain(|g| g.name != name);
-    output.active_geometry = Some(geometry.field_id);
+    if input.geometries.is_empty()
+        || (replaces_primary
+            && input
+                .active_geometry_column()
+                .is_some_and(|g| g.name == name))
+    {
+        output.active_geometry = Some(geometry.field_id);
+    }
     output.geometries.push(geometry);
+    output
+        .geometries
+        .sort_by_key(|g| output.schema.index_of(&g.name).unwrap_or(usize::MAX));
     let origins = output.field_origins();
-    DataContract::new(
-        Arc::new(Schema::new_with_metadata(
-            fields,
-            output.schema.metadata().clone(),
-        )),
+    finish(
         origins,
+        Schema::new_with_metadata(fields, output.schema.metadata().clone()),
         output.geometries,
         output.active_geometry,
         output.properties,
