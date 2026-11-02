@@ -13,6 +13,13 @@ suoi poligoni.
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `output_column` | stringa | `geodesic_area` | nome non vuoto e non già nello schema | colonna aggiunta |
@@ -43,7 +50,7 @@ CRS, config):
 
 - `InvalidPlan`: più o meno di un ingresso; config con campi sconosciuti o
   `output_column` non stringa; `output_column` vuoto;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;

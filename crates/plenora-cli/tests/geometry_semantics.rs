@@ -113,8 +113,9 @@ fn expected<'a>(v: &'a Value, name: &str, compute: bool) -> (&'a str, &'static s
         return (v["category"].as_str().unwrap(), "validate", false);
     }
     if geometry.len() > 1 {
+        // I vettori plurali non dichiarano una primaria: il calcolo e' ambiguo.
         return if compute {
-            ("unsupported", "validate", false)
+            ("schema", "validate", false)
         } else {
             ("ok", "", false)
         };

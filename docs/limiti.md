@@ -41,7 +41,7 @@ non rientrano sulla stessa identita di operazione.
 
 | Regola | Ambito | Hazard | Condizione di rientro |
 | --- | --- | --- | --- |
-| Le operazioni geo rifiutano con `Unsupported` ingressi o risultati con più geometrie. | Analisi e adapter geo; trasporto Arrow e operazioni tabellari supportano geometrie plurali. | Scambiare il supporto tabellare per quello geografico. | PR 3: selettori e propagazione plurale geo. |
+| Le operazioni geo richiedono un operando esplicito o la primaria. | `input_geometry` nelle unarie, `left_geometry` e `right_geometry` nelle binarie; nomi di colonne geometriche. | Senza primaria il selettore omesso fallisce con `Schema`; nessuna elezione della prima colonna. | Supporto plurale dalla PR 3; CRS, assi e precisione riguardano solo gli operandi. |
 | GeoParquet gestisce una sola geometria, che deve essere primaria. | Lettura e scrittura GeoParquet. | Un trasporto IPC/Parquet plurale valido non implica esportabilità GeoParquet; la scrittura rifiuta senza eliminare geometrie. | PR 4: metadati GeoParquet plurali e corrispondenza verificata della primaria. |
 | Il canone interno non assegna ID pubblici mancanti; una primaria plurale sintetica senza ID pubblico viene rifiutata. | `arrow_schema_from_contract` su contratti costruiti direttamente in Rust; gli ingressi Arrow con primaria esplicita hanno già il suo ID. | Assegnare ID prima di conoscere tutti gli ingressi potrebbe confondere campi distinti. | Gli output tabellari distinguono gli ID provvisori dagli ID ricevuti; la pubblicazione segue la provenienza e la posizione primaria con tutte le identità del piano. Restano da adattare i produttori geo. |
 

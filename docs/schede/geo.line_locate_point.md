@@ -11,6 +11,13 @@ runner chiama su ogni riga non nulla.
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `point_wkb` | stringa | obbligatorio | WKB esadecimale di un `Point` valido, nel dominio del CRS della colonna | il punto da proiettare, nello stesso CRS della colonna |
@@ -47,7 +54,7 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: config con campi sconosciuti; `point_wkb` mancante, non
   esadecimale, malformato, OGC-invalido o non `Point`; `output_column`
   vuota;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB; `output_column` già presente;
 - `Unsupported`: dimensioni della geometria diverse da `xy`; `point_wkb`
   con dimensioni Z/M o SRID;

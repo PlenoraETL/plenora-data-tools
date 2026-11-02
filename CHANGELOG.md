@@ -24,7 +24,14 @@ colonna, anche senza righe; coalesce, melt, pivot, first/last e table_diff
 conservano i contratti geometrici. Projection e rinomina non promuovono
 secondarie. Adapter diretti e pipeline condividono l'emissione della primaria.
 Vettori primary-composition-v1 e matrice tabellare con due e tre geometrie.
-Le operazioni geo e GeoParquet restano esplicitamente limitate a una geometria.
+PR 3 - operazioni geo: `input_geometry`, `left_geometry` e `right_geometry`
+selezionano per nome gli operandi senza cambiare la primaria. Selettore omesso
+usa la primaria; assenza della primaria rifiutata. Riproiezione per colonna,
+assi e precisione circoscritti agli operandi, geometrie passanti invariate.
+I produttori aggiungono senza promuovere; le operazioni a schema ridotto
+conservano solo i campi previsti. `sjoin` conserva il suo schema sinistro.
+Matrice differenziale del catalogo con due e tre geometrie indipendenti.
+GeoParquet resta esplicitamente limitato a una geometria fino alla PR 4.
 
 ## [4.0.0] - 2026-11-02
 

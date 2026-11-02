@@ -188,7 +188,8 @@ un'operazione.
   contratto la chiederà.
 - **Precisione normalizzata dalle operazioni geo.**
   *Regola*: ARROW-010 vuole dichiarata ogni normalizzazione di metadati.
-  *Ambito*: `analyze_geo_contract`, ogni operazione `geo.*`.
+  *Ambito*: `analyze_geo_contract`, solo la geometria selezionata; le
+  colonne passanti conservano la precisione dichiarata.
   *Hazard*: dopo un'operazione geo `precision` esce `float64` anche se
   l'ingresso dichiarava `float32` o `native`, e anche per le operazioni che
   restituiscono la geometria com'era (misure, predicati: dove la scheda
@@ -243,7 +244,7 @@ Le concatenazioni conservano i metadati geometrici del primo campo solo
 se encoding, dimensioni, tipi e precisione concordano fra tutti gli ingressi.
 
 
-## Primaria e contratto multigeometria (4.1.0, PR 1 e PR 2)
+## Primaria e contratto multigeometria (4.1.0, PR 1, PR 2 e PR 3)
 
 Il core conserva tutte le colonne geometriche con identita' interne distinte.
 `active_geometry = None` significa nessuna primaria, anche con una sola
@@ -271,8 +272,21 @@ lo stato attraverso la corrispondenza dei campi. Append/union/concat
 conservano la primaria solo se tutti gli ingressi la fanno confluire nello
 stesso campo d'uscita. Le guardie di compatibilità operano sulle coppie di
 chiavi e sulle sorgenti che alimentano lo stesso campo, anche a zero righe.
-Le geo restano rifiutate con `unsupported` in presenza di più geometrie;
-senza selettore rifiutano la primaria assente con `schema`.
+Le geo selezionano per nome con `input_geometry` (unaria), oppure
+`left_geometry` e `right_geometry` (binaria). Omissione significa primaria;
+assenza della primaria significa errore `Schema`, anche con una sola geometria
+esplicitamente senza primaria. La selezione non modifica la primaria.
+`geo.reproject` modifica soltanto la colonna scelta: le altre mantengono CRS,
+assi, precisione e byte. Le verifiche operative riguardano solo gli operandi;
+la validazione strutturale del contratto riguarda comunque tutti i campi.
+`from_coords` e `from_wkt` aggiungono una geometria senza promuoverla quando
+ne esistono altre; `buffer` e `centroid` trasformano sul posto la selezionata.
+Espansioni e join duplicano le passanti secondo la lineage delle righe;
+aggregazioni e overlay mantengono lo schema ridotto documentato.
+`generate_grid` produce uno schema nuovo; `geometry_diagnostics` elimina solo
+la geometria selezionata, senza promuovere quelle superstiti.
+`geo.sjoin` conserva le colonne sinistre e aggiunge `__right_index`.
+
 GeoParquet resta monogeometria fino alla PR 4; la scrittura senza primaria
 rifiuta con `unsupported`. Questa PR non dichiara ancora l'adozione completa
 del nuovo contratto su tutte le operazioni.
@@ -299,10 +313,11 @@ l'emissione canonica per tutte le operazioni geo.
 | table/reshape | `analyze_table_diff` | Consenso verticale sulle colonne fuse; resoconto dei vecchi WKB in esadecimale. |
 | table/sort_agg | `analyze_aggregate` | Filtrata sulle chiavi di raggruppamento; first/last derivano ogni geometria separatamente senza promuoverla. |
 | geo/helpers | `with_geometry_types_property`, `rebuild`, `with_schema_metadata` | Conservata; matrice geo. |
-| geo/producers e geo/dispatch | `analyze_reproject`, `with_active_geometry_nullability`, `analyze_subdivide`, `with_nullable_geometry` | Conservata; matrice geo. |
+| geo/producers e geo/dispatch | `analyze_reproject`, `with_geometry_nullability`, `analyze_subdivide`, `with_nullable_geometry` | Conservata; matrice geo. |
 | geo/producers | `analyze_geometry_only` | Filtrata sul campo sopravvissuto; matrice geo, inclusi overlay. |
-| geo/producers e geo/quality | `analyze_from_coords`, `analyze_from_wkt`, `analyze_generate_grid`, `analyze_coverage_rows` | Primaria nuova esplicita; matrice geo. |
-| geo/measures | `analyze_diagnostics` | `None` intenzionale: nessuna geometria; matrice geo. |
+| geo/producers | `analyze_from_coords`, `analyze_from_wkt` | Primaria nuova solo senza geometrie precedenti; altrimenti conserva lo stato sorgente; matrice geo plurale. |
+| geo/producers e geo/quality | `analyze_generate_grid`, `analyze_coverage_rows` | Schema nuovo con primaria nuova esplicita; matrice geo plurale. |
+| geo/measures | `analyze_diagnostics` | Primaria filtrata sulla geometria rimossa; le altre sopravvivono; matrice geo. |
 
 I percorsi che clonano il contratto preservano la primaria (fra questi
 membership join, intersect/except e operazioni sulle righe). Sjoin e nearest

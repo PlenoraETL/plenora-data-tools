@@ -181,24 +181,15 @@ pub(in crate::analyze) fn validate_other_wkb(op: &str, hex: &str) -> Result<()> 
 pub(in crate::analyze) fn validate_other_wkb_domain(
     op: &str,
     hex: &str,
-    input: &DataContract,
+    geometry: &GeometryColumnContract,
 ) -> Result<geo::Geometry<f64>> {
-    let crs = input_crs(op, input)?;
+    let crs = super::dispatch::require_resolved_crs(op, geometry)?;
     let bytes = validate_wkb_hex(op, "other_wkb", hex)?;
     let geometry = crate::geometry_from_wkb(&bytes).map_err(|error| {
         parametro_non_decodificabile(op, "other_wkb", "WKB non decodificabile", &error)
     })?;
     validate_config_geometry_domain(op, "other_wkb", &geometry, crs)?;
     Ok(geometry)
-}
-
-/// Il CRS risolto della colonna geometria dell'input, per le geometrie che
-/// arrivano dalla config con lo stesso CRS.
-pub(in crate::analyze) fn input_crs<'a>(
-    op: &str,
-    input: &'a DataContract,
-) -> Result<&'a ResolvedCrs> {
-    super::dispatch::require_resolved_crs(op, single_geometry(op, input)?)
 }
 
 /// Dominio di validita' del CRS sulle coordinate di una geometria da config.
@@ -218,18 +209,6 @@ pub(in crate::analyze) fn validate_config_geometry_domain(
 // ---------------------------------------------------------------------------
 // Helper su contratti e schemi.
 // ---------------------------------------------------------------------------
-
-/// Esattamente una colonna geometria attiva per input: il secondo operando
-/// di un'operazione binaria arriva da un secondo input o dalla config.
-pub(in crate::analyze) fn single_geometry<'a>(
-    op: &str,
-    input: &'a DataContract,
-) -> Result<&'a GeometryColumnContract> {
-    input.require_single_geometry_support()?;
-    input
-        .select_geometry(None)
-        .map_err(|error| error.con_contesto(op))
-}
 
 /// Identificazione della colonna geometria sul campo dello schema.
 ///
@@ -385,6 +364,10 @@ pub(in crate::analyze) fn merge_schema_metadata(
     let mut merged = left.schema.metadata().clone();
     // `Metadata` itera in ordine di chiave (`BTreeMap`).
     for (key, value) in right.schema.metadata() {
+        // La primaria dell'uscita segue le colonne sinistre sopravvissute.
+        if key == plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY {
+            continue;
+        }
         match merged.get(key) {
             None => {
                 merged.insert(key.clone(), value.clone());

@@ -11,6 +11,13 @@ chiama su tutta la colonna e aggiunge in coda l'etichetta ([Runner, «Operazioni
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `eps` | numero | obbligatorio | finito, `> 0` | raggio del vicinato, nelle unità del CRS (distanza `<= eps`) |
@@ -42,7 +49,7 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: config con campi sconosciuti; `eps` mancante, non finito o
   non positivo; `min_points` mancante, zero o non intero; `output_column`
   vuota;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB; `output_column` già presente;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.

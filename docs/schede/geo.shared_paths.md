@@ -12,6 +12,13 @@ runner chiama su tutta la colonna con i default della tabella sotto
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `tolerance` | numero | `0` | finito, `>= 0` | lunghezza sotto cui (compresa) un singolo tratto condiviso si scarta, nelle unità del CRS |
@@ -57,7 +64,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti; `tolerance` o `min_length`
   negativi o non finiti;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.

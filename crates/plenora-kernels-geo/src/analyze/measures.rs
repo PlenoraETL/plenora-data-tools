@@ -12,11 +12,11 @@ use serde_json::Value;
 
 use super::config::{GeometryAccessorsConfig, LineLocatePointConfig, OutputColumnConfig};
 use super::helpers::{
-    ensure_name, ensure_name_free, input_crs, invalid_param, output_fields, output_name,
+    ensure_name, ensure_name_free, invalid_param, output_fields, output_name,
     parametro_non_decodificabile, parse_config, rebuild, short_id, validate_config_geometry_domain,
     validate_wkb_hex,
 };
-use super::producers::{analyze_add_column, geometry_nullable};
+use super::producers::analyze_add_column;
 use super::{ACCESSOR_COLUMNS, DIAGNOSTIC_COLUMNS, FRACTION_COLUMN};
 
 /// `bounds_extractor`: quattro colonne `{geometria}_minx/miny/maxx/maxy`.
@@ -37,7 +37,7 @@ pub(in crate::analyze) fn analyze_bounds(
 
 /// `geometry_diagnostics`: la colonna geometria e' sostituita, nella sua
 /// posizione, dalle 10 colonne diagnostiche; il contratto diventa
-/// non-geografico (nessuna colonna geometria), metadati di schema e
+/// privo della sola geometria selezionata, metadati di schema e
 /// cardinalita' restano; l'ordine sulla geometria rimossa si elimina.
 pub(in crate::analyze) fn analyze_diagnostics(
     op: &str,
@@ -106,8 +106,13 @@ pub(in crate::analyze) fn analyze_diagnostics(
             input.schema.metadata().clone(),
         )),
         origins,
-        Vec::new(),
-        None,
+        input
+            .geometries
+            .iter()
+            .filter(|g| g.field_id != geometry.field_id)
+            .cloned()
+            .collect(),
+        input.active_geometry.filter(|id| *id != geometry.field_id),
         properties,
         allocator,
     )
@@ -118,6 +123,7 @@ pub(in crate::analyze) fn analyze_diagnostics(
 pub(in crate::analyze) fn analyze_geometry_accessors(
     op: &str,
     input: &DataContract,
+    geometry: &GeometryColumnContract,
     config: &Value,
     allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
@@ -139,7 +145,7 @@ pub(in crate::analyze) fn analyze_geometry_accessors(
     };
     selected.sort_unstable();
     let prefix = parsed.output_prefix.as_deref().unwrap_or("");
-    let geometria_nullable = geometry_nullable(input);
+    let geometria_nullable = geometry.nullable;
     let mut fields = output_fields(input);
     for index in selected {
         let (name, data_type) = &ACCESSOR_COLUMNS[index];
@@ -158,12 +164,13 @@ pub(in crate::analyze) fn analyze_geometry_accessors(
 }
 
 /// `line_locate_point`: punto da config (`point_wkb`, WKB esadecimale nel CRS
-/// dell'input, perche' un input ha una sola colonna geometria) validato
+/// dell'operando selezionato) validato
 /// strutturalmente, per tipo (deve essere un Point) e per dominio del CRS;
 /// aggiunge `fraction`.
 pub(in crate::analyze) fn analyze_line_locate_point(
     op: &str,
     input: &DataContract,
+    geometry: &GeometryColumnContract,
     config: &Value,
     allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
@@ -175,7 +182,12 @@ pub(in crate::analyze) fn analyze_line_locate_point(
     if !matches!(point, geo::Geometry::Point(_)) {
         return Err(invalid_param(op, "point_wkb", "deve essere un Point"));
     }
-    validate_config_geometry_domain(op, "point_wkb", &point, input_crs(op, input)?)?;
+    validate_config_geometry_domain(
+        op,
+        "point_wkb",
+        &point,
+        super::dispatch::require_resolved_crs(op, geometry)?,
+    )?;
     let name = output_name(op, parsed.output_column.as_deref(), FRACTION_COLUMN)?;
     // Null anche per una geometria presente: `None` per una non
     // `LineString` o una linea vuota.
@@ -188,6 +200,7 @@ pub(in crate::analyze) fn analyze_line_locate_point(
 pub(in crate::analyze) fn analyze_measure(
     op: &str,
     input: &DataContract,
+    geometry: &GeometryColumnContract,
     config: &Value,
     allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
@@ -200,7 +213,7 @@ pub(in crate::analyze) fn analyze_measure(
         input,
         name,
         DataType::Float64,
-        geometry_nullable(input),
+        geometry.nullable,
         allocator,
     )
 }

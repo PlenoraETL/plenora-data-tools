@@ -23,7 +23,7 @@
 //! inferenza.
 //!
 //! Il catalogo marca `Unary` predicati, distanze a due colonne e `split`, ma
-//! un input ha una sola colonna geometria: il secondo operando arriva
+//! il selettore identifica la colonna geometria: il secondo operando arriva
 //! dalla config come WKB hex (`other_wkb`), validato in analisi, con CRS
 //! assunto uguale a quello dell'input e coordinate nel suo dominio di
 //! validita' (come `point_wkb`, `reference_wkb` e l'`extent` di
@@ -146,6 +146,106 @@ pub const DIAGNOSTIC_COLUMNS: [(&str, DataType); 10] = [
 // Entry point del catalogo (`analyze_contract` delle operazioni `geo.*`).
 // ---------------------------------------------------------------------------
 
+/// Risolve gli operandi senza cambiare la primaria e separa i selettori
+/// dalla configurazione stretta del kernel. Usato anche dal piano runtime.
+///
+/// # Errors
+/// Rifiuta selettori non testuali, vuoti, estranei all'arieta', colonne
+/// non geometriche e selezioni implicite senza primaria.
+pub fn resolve_operands<'a>(
+    descriptor: &plenora_core::catalog::OperationDescriptor,
+    inputs: &'a [DataContract],
+    config: &Value,
+) -> Result<(
+    Vec<Option<&'a plenora_core::contract::GeometryColumnContract>>,
+    Value,
+)> {
+    let producer = matches!(
+        descriptor.id,
+        "geo.from_coords" | "geo.from_wkt" | "geo.generate_grid"
+    );
+    let keys: &[&str] = if producer {
+        &[]
+    } else if descriptor.arity == Arity::BinaryOrdered {
+        &["left_geometry", "right_geometry"]
+    } else {
+        &["input_geometry"]
+    };
+    if descriptor.family != Family::Geo
+        || descriptor.arity == Arity::NAry
+        || inputs.len() != if producer { 1 } else { keys.len() }
+    {
+        return Err(PlenoraError::InvalidPlan(
+            "arieta' o famiglia geo non valida".into(),
+        ));
+    }
+    let mut kernel_config = config.clone();
+    let object = kernel_config.as_object_mut().ok_or_else(|| {
+        PlenoraError::InvalidPlan(format!(
+            "{}: config non valida: tipo, valore o forma di un campo non validi",
+            descriptor.id
+        ))
+    })?;
+    for key in ["input_geometry", "left_geometry", "right_geometry"] {
+        if object.contains_key(key) && !keys.contains(&key) {
+            return Err(PlenoraError::InvalidPlan(
+                "selettore geometrico non ammesso per l'operazione".into(),
+            ));
+        }
+    }
+    let mut operands = Vec::with_capacity(inputs.len());
+    for (index, input) in inputs.iter().enumerate() {
+        input.validate()?;
+        if producer {
+            operands.push(None);
+            continue;
+        }
+        let key = keys
+            .get(index)
+            .ok_or_else(|| PlenoraError::InvalidPlan("arieta' geo non valida".into()))?;
+        let value = object.remove(*key);
+        let name = value
+            .as_ref()
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|name| !name.trim().is_empty())
+                    .ok_or_else(|| {
+                        PlenoraError::InvalidPlan(
+                            "selettore geometrico non valido: atteso nome non vuoto".into(),
+                        )
+                    })
+            })
+            .transpose()?;
+        let geometry = if let Some(name) = name {
+            input
+                .geometries
+                .iter()
+                .find(|geometry| geometry.name == name)
+                .ok_or_else(|| {
+                    PlenoraError::Schema(
+                        "selettore riferito a una colonna assente o non geometrica".into(),
+                    )
+                })?
+        } else {
+            input.select_geometry(None)?
+        };
+        operands.push(Some(geometry));
+    }
+    Ok((operands, kernel_config))
+}
+
+fn operand<'a>(
+    operands: &[Option<&'a plenora_core::contract::GeometryColumnContract>],
+    index: usize,
+) -> Result<&'a plenora_core::contract::GeometryColumnContract> {
+    operands
+        .get(index)
+        .copied()
+        .flatten()
+        .ok_or_else(|| PlenoraError::Internal("operando geo assente dopo la risoluzione".into()))
+}
+
 /// Operazioni che interpretano le ordinate nel CRS, incluse le verifiche
 /// del dominio e i secondi operandi. Le altre lavorano sulle tuple memorizzate.
 #[must_use]
@@ -168,21 +268,21 @@ pub fn richiede_ordine_assi(op: &str) -> bool {
 
 /// Richiede una dichiarazione esplicita compatibile, prima di leggere valori.
 /// Il CRS identifica il sistema, non l'ordine delle ordinate memorizzate.
-fn richiedi_ordine_assi(op: &str, inputs: &[DataContract]) -> Result<()> {
-    let interpreta_assi = richiede_ordine_assi(op);
-    for input in inputs {
-        for geometry in &input.geometries {
-            helpers::require_identifiable_geometry(op, input, geometry)?;
-            let field = input.schema.field_with_name(&geometry.name).map_err(|_| {
-                PlenoraError::Schema("campo geometria assente dallo schema".to_owned())
-            })?;
-            if interpreta_assi {
-                let crs = dispatch::require_resolved_crs(op, geometry)?;
-                crate::riproiezione::richiedi_assi_normalizzati(op, field, crs)?;
-            } else if let Some(crs) = geometry.crs.as_resolved() {
-                plenora_core::contract::arrow_metadata::require_geometry_source_crs(field, crs)?;
-            }
-        }
+fn richiedi_assi_operando(
+    op: &str,
+    input: &DataContract,
+    geometry: &plenora_core::contract::GeometryColumnContract,
+) -> Result<()> {
+    helpers::require_identifiable_geometry(op, input, geometry)?;
+    let field = input
+        .schema
+        .field_with_name(&geometry.name)
+        .map_err(|_| PlenoraError::Schema("campo geometria assente dallo schema".to_owned()))?;
+    if richiede_ordine_assi(op) {
+        let crs = dispatch::require_resolved_crs(op, geometry)?;
+        crate::riproiezione::richiedi_assi_normalizzati(op, field, crs)?;
+    } else if let Some(crs) = geometry.crs.as_resolved() {
+        plenora_core::contract::arrow_metadata::require_geometry_source_crs(field, crs)?;
     }
     Ok(())
 }
@@ -214,7 +314,7 @@ pub(crate) fn richiedi_ordine_assi_schema(
     input
         .geometries
         .push(geometry_contract_from_field(campo, crs, &chiavi));
-    richiedi_ordine_assi(op, &[input])?;
+    richiedi_assi_operando(op, &input, &input.geometries[0])?;
     Ok(indice)
 }
 
@@ -237,8 +337,7 @@ pub(crate) fn richiedi_ordine_assi_schema(
 ///   dell'op, se la config non supera la deserializzazione stretta o i
 ///   domini dei parametri (anche un WKB di config non valido), o se lo
 ///   spazio dei `FieldId` di `fields` e' esaurito;
-/// - `PlenoraError::Schema` se un input non ha esattamente una colonna
-///   geometria attiva, se la colonna geometria non e' identificabile dal
+/// - `PlenoraError::Schema` se manca una selezione geometrica univoca, se la colonna geometria non e' identificabile dal
 ///   trasporto (ne' estensione `geoarrow.wkb` ne' chiavi canoniche), se una
 ///   colonna richiesta manca o ha un tipo sbagliato, o se una colonna
 ///   prodotta collide con una esistente;
@@ -282,24 +381,8 @@ pub fn analyze_geo_contract(
     let mut owned_inputs = inputs.to_vec();
     for input in &mut owned_inputs {
         input.validate()?;
-        input.require_single_geometry_support()?;
         for id in input.field_ids.values() {
             fields.observe(*id);
-        }
-        // Conservativo: un'operazione geo puo' riscrivere la geometria anche a schema invariato.
-        if input
-            .properties
-            .sorted_by
-            .as_ref()
-            .and_then(|p| p.value())
-            .is_some_and(|order| {
-                input
-                    .geometries
-                    .iter()
-                    .any(|g| order.keys.contains(&g.field_id))
-            })
-        {
-            input.properties.sorted_by = None;
         }
     }
     for input in &mut owned_inputs {
@@ -309,13 +392,32 @@ pub fn analyze_geo_contract(
             input.field_ids.insert(field.name().clone(), id);
         }
     }
-    let inputs = owned_inputs.as_slice();
-    for input in inputs {
-        if !input.geometries.is_empty() && input.active_geometry.is_none() {
-            input.select_geometry(None)?;
+    let selected_ids: Vec<_> = resolve_operands(descriptor, &owned_inputs, config)?
+        .0
+        .iter()
+        .map(|geometry| geometry.map(|g| g.field_id))
+        .collect();
+    for (input, selected) in owned_inputs.iter_mut().zip(selected_ids) {
+        // Solo l'operando puo' essere riscritto; le secondarie passano invariate.
+        if selected.is_some_and(|id| {
+            input
+                .properties
+                .sorted_by
+                .as_ref()
+                .and_then(|property| property.value())
+                .is_some_and(|order| order.keys.contains(&id))
+        }) {
+            input.properties.sorted_by = None;
         }
     }
-    richiedi_ordine_assi(descriptor.id, inputs)?;
+    let inputs = owned_inputs.as_slice();
+    let (operands, kernel_config) = resolve_operands(descriptor, inputs, config)?;
+    let config = &kernel_config;
+    for (input, geometry) in inputs.iter().zip(&operands) {
+        if let Some(geometry) = geometry {
+            richiedi_assi_operando(descriptor.id, input, geometry)?;
+        }
+    }
     // I produttori sono unari: l'arieta' e' gia' verificata sopra. Il
     // rifiuto dell'N-aria resta prima del controllo sul numero di input,
     // quindi qui l'arieta' e' solo 1 o 2.
@@ -344,19 +446,25 @@ pub fn analyze_geo_contract(
         }
         ("geo.reproject", _) => {
             let op = descriptor.id;
-            producers::analyze_reproject(op, &inputs[0], config, fields)
+            producers::analyze_reproject(op, &inputs[0], operand(&operands, 0)?, config, fields)
         }
-        (_, 2) => analyze_binary(descriptor, inputs, config, fields),
-        _ => analyze_unary(descriptor, &inputs[0], config, fields),
+        (_, 2) => analyze_binary(descriptor, inputs, &operands, config, fields),
+        _ => analyze_unary(
+            descriptor,
+            &inputs[0],
+            operand(&operands, 0)?,
+            config,
+            fields,
+        ),
     }?;
     // Il contratto e' l'unica fonte delle identita' sopravvissute.
     fields.bind_contract(&output);
     output.validate()?;
-    Ok(senza_precisione_ereditata(output))
+    Ok(senza_precisione_ereditata(output, &operands))
 }
 
 /// Toglie `plenora.geometry.precision` ereditata dalle colonne geometriche
-/// dell'uscita di un'operazione geo.
+/// selezionate nell'uscita di un'operazione geo; le passanti restano intatte.
 ///
 /// Un kernel geo decodifica e ricodifica le coordinate in `f64`: una
 /// precisione `float32` o `native` dichiarata dall'ingresso direbbe il
@@ -367,10 +475,20 @@ pub fn analyze_geo_contract(
 /// operazioni geo che restituiscono la geometria com'era (misure,
 /// predicati): l'informazione d'origine si perde, ma la dichiarazione
 /// resta vera.
-fn senza_precisione_ereditata(mut output: DataContract) -> DataContract {
+fn senza_precisione_ereditata(
+    mut output: DataContract,
+    operands: &[Option<&plenora_core::contract::GeometryColumnContract>],
+) -> DataContract {
     let geometrie: Vec<&str> = output
         .geometries
         .iter()
+        .filter(|geometry| {
+            operands
+                .first()
+                .copied()
+                .flatten()
+                .is_some_and(|operand| operand.field_id == geometry.field_id)
+        })
         .map(|geometria| geometria.name.as_str())
         .collect();
     // `float64` ereditata resta: e' gia' vera dopo la ricodifica.
@@ -2130,8 +2248,7 @@ mod tests {
     /// Ogni config invalida si ferma al SUO controllo: categoria attesa e
     /// frammento che identifica la guardia (`{op}: ...`), non un errore
     /// qualunque. I produttori (`generate_grid`) ricevono un input tabellare:
-    /// con una geometria in ingresso si fermerebbero prima, al rifiuto
-    /// dell'input, e i controlli sulla config non sarebbero raggiunti.
+    /// il loro controllo della config non richiede un operando geometrico.
     #[test]
     // Tabella di fixture: la lunghezza e' data dall'elenco delle config
     // invalide con il loro esito atteso, non da logica da spezzare.

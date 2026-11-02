@@ -1,4 +1,4 @@
-//! Trasporto plurale, rimappatura degli ID e rifiuti transitori delle operazioni.
+//! Trasporto plurale, rimappatura degli ID e selezione degli operandi geo.
 use plenora_core::{
     arrow::{
         array::{BinaryArray, RecordBatch},
@@ -92,47 +92,51 @@ fn trasporto_senza_passi_preserva_colonne_byte_primaria_e_identita() {
 }
 
 #[test]
-fn tutte_le_analisi_geo_rifiutano_multigeometria_prima_della_config() {
+fn tutte_le_geo_del_catalogo_risolvono_operandi_senza_eleggere_primarie() {
     for primary in [None, Some("11")] {
         let input =
             contract_from_arrow_schema(batch(primary).schema(), resolve_crs).expect("contratto");
         for operation in CATALOG.iter().filter(|op| op.family == Family::Geo) {
-            let arity = match operation.arity {
-                Arity::Unary => 1,
-                _ => 2,
+            assert!(operation.supports_multiple_geometries(), "{}", operation.id);
+            let arity = if operation.arity == Arity::Unary {
+                1
+            } else {
+                2
             };
-            for side in 0..arity {
-                let mut inputs =
-                    vec![
-                        plenora_core::contract::DataContract::tabular(Arc::new(Schema::empty()));
-                        arity
-                    ];
-                inputs[side] = input.clone();
-                let mut allocator = FieldAllocator::default();
-                let result = match operation.family {
-                    Family::Table => plenora_kernels_table::analyze::analyze_table_contract(
-                        operation.id,
-                        &inputs,
-                        &json!({}),
-                        &mut allocator,
-                        &plenora_kernels_table::Limits::default(),
-                    ),
-                    Family::Geo => plenora_kernels_geo::analyze::analyze_geo_contract(
-                        operation.id,
-                        &inputs,
-                        &json!({}),
-                        None,
-                        &mut allocator,
-                    ),
-                };
-                assert_eq!(
-                    result.expect_err(operation.id).category(),
-                    ErrorCategory::Unsupported,
-                    "{} lato {}",
-                    operation.id,
-                    side
-                );
+            let inputs = vec![input.clone(); arity];
+            let producer = matches!(
+                operation.id,
+                "geo.from_coords" | "geo.from_wkt" | "geo.generate_grid"
+            );
+            let implicit =
+                plenora_kernels_geo::analyze::resolve_operands(operation, &inputs, &json!({}));
+            if producer {
+                assert!(implicit.unwrap().0.iter().all(Option::is_none));
+                continue;
             }
+            if primary.is_none() {
+                assert_eq!(
+                    implicit.unwrap_err().category(),
+                    ErrorCategory::Schema,
+                    "{}",
+                    operation.id
+                );
+            } else {
+                assert!(implicit.unwrap().0.iter().all(|g| g.unwrap().name == "b"));
+            }
+            let config = if arity == 1 {
+                json!({"input_geometry": "a"})
+            } else {
+                json!({"left_geometry": "a", "right_geometry": "a"})
+            };
+            let (operands, kernel) =
+                plenora_kernels_geo::analyze::resolve_operands(operation, &inputs, &config)
+                    .unwrap();
+            assert_eq!(kernel, json!({}));
+            assert!(operands.iter().all(|g| g.unwrap().name == "a"));
+            assert!(inputs
+                .iter()
+                .all(|contract| contract.active_geometry == input.active_geometry));
         }
     }
 }

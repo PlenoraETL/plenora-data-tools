@@ -42,7 +42,7 @@ pub(crate) fn verifica_schemi_batch(
     schema: &plenora_core::arrow::SchemaRef,
     batches: &[RecordBatch],
 ) -> Result<(), PlenoraError> {
-    plenora_core::contract::arrow_schema::require_single_geometry_schema(schema)?;
+    plenora_core::contract::arrow_schema::primary_geometry_position(schema)?;
     if batches
         .iter()
         .any(|batch| batch.schema().as_ref() != schema.as_ref())

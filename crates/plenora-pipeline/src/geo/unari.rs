@@ -625,7 +625,14 @@ impl KernelUnario {
         };
         let crs_prodotto = || {
             uscita
-                .active_geometry_column()
+                .geometries
+                .iter()
+                .find(|geometry| {
+                    !contratto
+                        .geometries
+                        .iter()
+                        .any(|source| source.field_id == geometry.field_id)
+                })
                 .and_then(|geometria| geometria.crs.as_resolved().cloned())
                 .ok_or_else(|| {
                     PlenoraError::Internal(format!("{op}: produttore senza CRS dopo l'analisi"))

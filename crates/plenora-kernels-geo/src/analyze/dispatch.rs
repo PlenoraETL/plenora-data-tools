@@ -22,8 +22,8 @@ use super::config::{
 use super::helpers::{
     crs_requirement, ensure_finite, ensure_name_free, ensure_non_negative, ensure_positive,
     ensure_ratio, invalid_param, merge_schema_metadata, output_fields, output_name, parse_config,
-    rebuild, require_identifiable_geometry, require_xy_dimensions, short_id, single_geometry,
-    validate_other_wkb, with_geometry_types, with_geometry_types_property, with_schema_metadata,
+    rebuild, require_identifiable_geometry, require_xy_dimensions, short_id, validate_other_wkb,
+    with_geometry_types, with_geometry_types_property, with_schema_metadata,
 };
 use super::measures::{
     analyze_bounds, analyze_diagnostics, analyze_geometry_accessors, analyze_line_locate_point,
@@ -31,7 +31,7 @@ use super::measures::{
 };
 use super::producers::{
     analyze_add_column, analyze_collect, analyze_expand, analyze_geometry_only, analyze_snap,
-    analyze_subdivide, geometry_nullable, with_active_geometry_nullability,
+    analyze_subdivide, with_geometry_nullability,
 };
 use super::quality::{analyze_cluster_dbscan, analyze_coverage_validate, analyze_shared_paths};
 use super::{
@@ -197,13 +197,14 @@ pub(in crate::analyze) fn validate_transform_params(op: &str, config: &Value) ->
 pub(in crate::analyze) fn analyze_unary_pair(
     op: &str,
     input: &DataContract,
+    geometry: &GeometryColumnContract,
     config: &Value,
     data_type: DataType,
     allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let parsed: OtherWkbConfig = parse_config(op, config)?;
     validate_other_wkb(op, &parsed.other_wkb)?;
-    let other = super::helpers::validate_other_wkb_domain(op, &parsed.other_wkb, input)?;
+    let other = super::helpers::validate_other_wkb_domain(op, &parsed.other_wkb, geometry)?;
     // Il tipo che il kernel chiede al secondo operando: si decide dalla
     // config, quindi qui, e non alla prima riga non null (che una tabella
     // vuota o tutta null non avrebbe mai).
@@ -227,7 +228,7 @@ pub(in crate::analyze) fn analyze_unary_pair(
     // (`None` del kernel): null anche per una geometria presente. Le altre
     // (predicati, distanze geografiche, azimut) hanno un valore per ogni
     // geometria presente.
-    let nullable = geometry_nullable(input)
+    let nullable = geometry.nullable
         || matches!(
             op,
             "geo.distance" | "geo.hausdorff_distance" | "geo.frechet_distance"
@@ -305,11 +306,11 @@ fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
 pub(in crate::analyze) fn analyze_unary(
     descriptor: &OperationDescriptor,
     input: &DataContract,
+    geometry: &GeometryColumnContract,
     config: &Value,
     fields: &mut FieldAllocator,
 ) -> Result<DataContract> {
-    let output = analyze_unary_shape(descriptor, input, config, fields)?;
-    let geometry = single_geometry(descriptor.id, input)?;
+    let output = analyze_unary_shape(descriptor, input, geometry, config, fields)?;
     redeclare_output_types(descriptor.id, geometry, output, fields)
 }
 
@@ -340,11 +341,11 @@ fn redeclare_output_types(
 fn analyze_unary_shape(
     descriptor: &OperationDescriptor,
     input: &DataContract,
+    geometry: &GeometryColumnContract,
     config: &Value,
     fields: &mut FieldAllocator,
 ) -> Result<DataContract> {
     let op = descriptor.id;
-    let geometry = single_geometry(op, input)?;
     // La colonna deve essere identificabile come geometria (estensione
     // `geoarrow.wkb` o sole chiavi canoniche): rifiuto in validazione, mai a
     // meta' esecuzione.
@@ -392,7 +393,7 @@ fn analyze_unary_shape(
             if is_geodetic_measure(op) {
                 require_geodetic_ellipsoid(op, crs)?;
             }
-            analyze_measure(op, input, config, fields)
+            analyze_measure(op, input, geometry, config, fields)
         }
         "geo.vertex_count" => {
             let parsed: OutputColumnConfig = parse_config(op, config)?;
@@ -419,7 +420,7 @@ fn analyze_unary_shape(
         "geo.explode" | "geo.delaunay" => {
             let _: EmptyConfig = parse_config(op, config)?;
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_expand(op, input, fields)
+            analyze_expand(op, input, geometry, fields)
         }
         "geo.split" => {
             let parsed: SplitConfig = parse_config(op, config)?;
@@ -428,11 +429,11 @@ fn analyze_unary_shape(
                 ensure_non_negative(op, "tolerance", tolerance)?;
             }
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            // La lama arriva dalla config nel CRS dell'input (un input ha una
-            // sola colonna geometria): stesso dominio del secondo operando di
+            // La lama arriva dalla config nel CRS dell'operando selezionato:
+            // stesso dominio del secondo operando di
             // distanze e predicati.
-            let _ = super::helpers::validate_other_wkb_domain(op, &parsed.other_wkb, input)?;
-            analyze_expand(op, input, fields)
+            let _ = super::helpers::validate_other_wkb_domain(op, &parsed.other_wkb, geometry)?;
+            analyze_expand(op, input, geometry, fields)
         }
         "geo.voronoi" => {
             let parsed: VoronoiConfig = parse_config(op, config)?;
@@ -486,11 +487,11 @@ fn analyze_unary_shape(
         }
         "geo.geometry_accessors" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_geometry_accessors(op, input, config, fields)
+            analyze_geometry_accessors(op, input, geometry, config, fields)
         }
         "geo.line_locate_point" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_line_locate_point(op, input, config, fields)
+            analyze_line_locate_point(op, input, geometry, config, fields)
         }
         "geo.subdivide" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
@@ -498,7 +499,7 @@ fn analyze_unary_shape(
         }
         "geo.snap" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_snap(op, input, config)
+            analyze_snap(op, input, geometry, config)
         }
         "geo.coverage_validate" => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
@@ -539,11 +540,11 @@ fn analyze_unary_shape(
             if is_geodetic_measure(op) {
                 require_geodetic_ellipsoid(op, crs)?;
             }
-            analyze_unary_pair(op, input, config, DataType::Float64, fields)
+            analyze_unary_pair(op, input, geometry, config, DataType::Float64, fields)
         }
         _ if op.starts_with("geo.predicate_") => {
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            analyze_unary_pair(op, input, config, DataType::Boolean, fields)
+            analyze_unary_pair(op, input, geometry, config, DataType::Boolean, fields)
         }
         _ => Err(PlenoraError::Unsupported(format!(
             "{op}: analyze_contract non implementata"
@@ -591,7 +592,7 @@ fn with_nullable_geometry(
 
 /// Inferenza per le operazioni binarie ordinate (left, right).
 ///
-/// Entrambi i lati: una sola colonna geometria, identificabile, XY, con CRS
+/// Entrambi i lati: una colonna geometria selezionata, identificabile, XY, con CRS
 /// risolto e che soddisfa il requisito del catalogo (per le binarie geo lo
 /// stesso CRS proiettato sui due lati). Il contratto d'uscita parte sempre
 /// dalla sinistra: le colonne della destra non passano.
@@ -604,14 +605,15 @@ fn with_nullable_geometry(
 pub(in crate::analyze) fn analyze_binary(
     descriptor: &OperationDescriptor,
     inputs: &[DataContract],
+    geometries: &[Option<&GeometryColumnContract>],
     config: &Value,
     allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let op = descriptor.id;
     let left = &inputs[0];
     let right = &inputs[1];
-    let left_geometry = single_geometry(op, left)?;
-    let right_geometry = single_geometry(op, right)?;
+    let left_geometry = super::operand(geometries, 0)?;
+    let right_geometry = super::operand(geometries, 1)?;
     // Come per le unarie: identificabilita' della colonna verificata in
     // validazione su entrambi gli operandi.
     require_identifiable_geometry(op, left, left_geometry)?;
@@ -690,7 +692,7 @@ pub(in crate::analyze) fn analyze_binary(
             fields.push(Field::new(RIGHT_INDEX_COLUMN, DataType::UInt64, false));
             // Una riga per coppia: una geometria sinistra null non ha coppie.
             let output = rebuild(left, fields, ContractProperties::default(), allocator)?;
-            with_active_geometry_nullability(&output, false, allocator)
+            with_geometry_nullability(&output, left_geometry, false, allocator)
         }
         "geo.nearest" => {
             let parsed: NearestConfig = parse_config(op, config)?;
@@ -708,7 +710,7 @@ pub(in crate::analyze) fn analyze_binary(
                 fields.push(Field::new(name, data_type, false));
             }
             let output = rebuild(left, fields, ContractProperties::default(), allocator)?;
-            with_active_geometry_nullability(&output, false, allocator)
+            with_geometry_nullability(&output, left_geometry, false, allocator)
         }
         "geo.overlay" => {
             let parsed: OverlayConfig = parse_config(op, config)?;

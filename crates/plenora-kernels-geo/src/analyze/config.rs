@@ -321,7 +321,7 @@ pub struct FromCoordsConfig {
 /// Config dei predicati e delle distanze fra la geometria di ogni riga e un
 /// secondo operando fisso.
 ///
-/// Un ingresso ha una sola colonna geometria attiva, quindi il secondo
+/// L'operazione consuma la colonna geometria selezionata; il secondo
 /// operando arriva dalla config, come WKB esadecimale, e si valida in
 /// analisi: contratto WKB strutturale, validità OGC e dominio del CRS
 /// dell'ingresso, che si assume sia anche il suo.

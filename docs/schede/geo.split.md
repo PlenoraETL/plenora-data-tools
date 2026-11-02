@@ -16,6 +16,13 @@ geo»](runner.md#operazioni-geo)).
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `other_wkb` | stringa | obbligatorio | WKB esadecimale di una geometria valida (OGC), coordinate nel dominio del CRS della colonna | la lama: linee (`LineString`, `MultiLineString`, collezioni di linee) per le sorgenti poligonali; per le sorgenti lineari anche punti e contorni di poligoni |
@@ -58,7 +65,7 @@ In validazione (analisi del contratto):
   esadecimale, strutturalmente malformato o non valido per l'OGC;
   `tolerance` negativa o non finita;
 - `Internal`: la validazione OGC di `other_wkb` non conclude;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB; una colonna `__parent_index` esiste
   già;
 - `Unsupported`: dimensioni della geometria diverse da `xy`; `other_wkb`

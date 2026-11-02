@@ -6,6 +6,13 @@ di chiusura (un quadrato ne ha 5); una geometria vuota ne ha 0.
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `output_column` | stringa | `vertex_count` | nome non vuoto (non di soli spazi) e non già presente nell'ingresso | colonna aggiunta |
@@ -29,7 +36,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`); `output_column` esiste già;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;

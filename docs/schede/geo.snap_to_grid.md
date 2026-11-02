@@ -10,6 +10,13 @@ errore, non una correzione.
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `grid_size` | numero | obbligatorio | finito, maggiore di zero | passo della griglia, nelle unità del CRS |
@@ -41,7 +48,7 @@ config, CRS):
 - `InvalidPlan`: più o meno di un ingresso; config con campi sconosciuti,
   senza `grid_size` o con un tipo sbagliato; `grid_size` non finito o non
   maggiore di zero;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o

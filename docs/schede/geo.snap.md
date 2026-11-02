@@ -11,6 +11,13 @@ chiama sulla colonna intera.
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `reference_wkb` | stringa | obbligatorio | WKB esadecimale di una geometria valida, nel dominio del CRS della colonna | riferimento, nello stesso CRS della colonna: contano solo i suoi vertici |
@@ -40,7 +47,7 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: config con campi sconosciuti; `reference_wkb` mancante,
   non esadecimale, malformato o OGC-invalido; `tolerance` mancante,
   negativa o non finita;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
   `reference_wkb` con dimensioni Z/M o SRID;

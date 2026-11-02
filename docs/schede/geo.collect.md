@@ -13,6 +13,13 @@ delle righe ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `group_by` | lista di stringhe | obbligatorio | colonne dell'ingresso, non vuota, senza ripetizioni, diversa dalla colonna geometria, di un tipo con un ordine naturale (quelli di `table.sort`) | chiavi di gruppo |
@@ -64,7 +71,7 @@ In validazione (analisi del contratto):
   senza un ordine naturale (`is_sortable` dei kernel tabellari, lo stesso
   controllo di `table.sort`);
 - `Schema`: una colonna di `group_by` non esiste; l'ingresso non ha
-  esattamente una colonna geometria, o la colonna non è riconoscibile come
+  una colonna geometria selezionabile senza ambiguita', o la colonna non è riconoscibile come
   WKB;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
