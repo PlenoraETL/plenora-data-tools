@@ -10,6 +10,17 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [4.1.0] - non rilasciata
+
+WKT1 GDAL: equivalenza del DATUM al datum/ensemble integrato solo con
+codice EPSG identico; nome irrilevante, autorità obbligatoria anche per i
+datum non ensemble. Il GEOGCS base di PROJCS può omettere gli assi; gli
+assi radice restano obbligatori e quelli presenti restano esatti.
+165 dei 169 export GDAL del corpus sono ora accettati. Nessuna modifica
+ai profili WKT2 e PROJJSON. Prove IPC `data.run` di identità per EPSG:4326
+e UTM 32632, mutazioni e corpus fuzz. Deviazione, hazard e condizione di
+rientro: [limiti](docs/limiti.md#equivalenza-del-datum-wkt1-per-codice-epsg).
+
 ## [4.0.0] - 2026-11-02
 
 Ordine degli assi fail-closed: il solo identificatore CRS legacy non prova

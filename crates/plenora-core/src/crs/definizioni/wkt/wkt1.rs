@@ -1,4 +1,4 @@
-//! WKT1 con assi espliciti anche nella base, senza equivalenze di datum.
+//! WKT1: equivalenza del datum per codice EPSG, assi radice espliciti.
 
 use super::{
     Asse, Base, Campi, Conversione, Datum, Definizione, Ellissoide, Esito, Id, Identita, Meridiano,
@@ -61,7 +61,7 @@ fn sistema(c: &mut Campi<'_>, u: &Unita, tipo: &str) -> Esito<Sistema> {
     })
 }
 
-fn base(nodo: &Nodo) -> Esito<Base> {
+fn base(nodo: &Nodo, interna: bool) -> Esito<Base> {
     let mut campi = Campi::nuovo(nodo);
     campi.testo()?;
     let mut campi_datum = Campi::nuovo(campi.nodo(&["DATUM"])?);
@@ -80,7 +80,18 @@ fn base(nodo: &Nodo) -> Esito<Base> {
     let pid = authority(&mut campi_meridiano)?;
     campi_meridiano.fine()?;
     let unita_angolare = unita(&mut campi, "angular")?;
-    let sistema = sistema(&mut campi, &unita_angolare, "ellipsoidal")?;
+    let senza_assi = !nodo
+        .valori
+        .iter()
+        .any(|v| matches!(v, super::Valore::Nodo(n) if n.nome == "AXIS"));
+    let sistema = if interna && senza_assi {
+        Sistema {
+            tipo: "ellipsoidal".into(),
+            assi: Vec::new(),
+        }
+    } else {
+        sistema(&mut campi, &unita_angolare, "ellipsoidal")?
+    };
     let bid = authority(&mut campi)?;
     campi.fine()?;
     Ok(Base {
@@ -173,9 +184,9 @@ fn parametro(metodo: &str, nome: &str) -> Esito<(&'static str, &'static str)> {
     })
 }
 
-pub(super) fn modello(n: &Nodo) -> Esito<Definizione> {
+fn modello_grezzo(n: &Nodo) -> Esito<Definizione> {
     if n.nome == "GEOGCS" {
-        let base = base(n)?;
+        let base = base(n, false)?;
         return Ok(Definizione {
             id: base.id.clone(),
             tipo: "GeographicCRS".into(),
@@ -186,7 +197,7 @@ pub(super) fn modello(n: &Nodo) -> Esito<Definizione> {
     }
     let mut c = Campi::nuovo(n);
     c.testo()?;
-    let base = base(c.nodo(&["GEOGCS"])?)?;
+    let base = base(c.nodo(&["GEOGCS"])?, true)?;
     let mut m = Campi::nuovo(c.nodo(&["PROJECTION"])?);
     let (nome, codice) = match m.testo()?.as_str() {
         "Transverse_Mercator" => ("Transverse Mercator", "9807"),
@@ -248,4 +259,36 @@ pub(super) fn modello(n: &Nodo) -> Esito<Definizione> {
             parametri,
         }),
     })
+}
+
+/// Solo WKT1: integra le informazioni non rappresentabili dopo aver
+/// verificato il codice EPSG del datum contro la voce esatta della radice.
+/// Ellissoide, meridiano e ogni altro dato restano quelli letti dal testo.
+pub(super) fn modello(n: &Nodo) -> Esito<Definizione> {
+    let mut d = modello_grezzo(n)?;
+    let tabella = super::super::tabella()?;
+    let attesa = tabella
+        .iter()
+        .find(|a| a.id == d.id)
+        .ok_or(Rifiuto::NonIntegrato)?;
+    let id = d
+        .base
+        .datum
+        .identita
+        .id
+        .as_ref()
+        .ok_or(Rifiuto::NonIntegrato)?;
+    if id.authority != "EPSG" || Some(id) != attesa.base.datum.identita.id.as_ref() {
+        return Err(Rifiuto::NonIntegrato);
+    }
+    d.base.datum.tipo.clone_from(&attesa.base.datum.tipo);
+    d.base.datum.membri.clone_from(&attesa.base.datum.membri);
+    d.base
+        .datum
+        .accuratezza
+        .clone_from(&attesa.base.datum.accuratezza);
+    if n.nome == "PROJCS" && d.base.sistema.assi.is_empty() {
+        d.base.sistema.clone_from(&attesa.base.sistema);
+    }
+    Ok(d)
 }
