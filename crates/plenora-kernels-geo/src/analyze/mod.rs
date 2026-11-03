@@ -63,7 +63,6 @@ use std::sync::Arc;
 
 use plenora_core::arrow::{DataType, Field, Schema};
 use plenora_core::catalog::{find_operation, Arity, Family};
-use plenora_core::contract::arrow_metadata::PLENORA_GEOMETRY_PRECISION_KEY;
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::crs::ResolvedCrs;
 use plenora_core::{PlenoraError, Result};
@@ -367,13 +366,6 @@ fn senza_precisione_ereditata(
         .map(|campo| {
             let mut metadati = campo.metadata().clone();
             if geometria.as_ref() == Some(campo.name()) {
-                if matches!(effect, Effect::Values | Effect::Crs)
-                    && metadati
-                        .get(PLENORA_GEOMETRY_PRECISION_KEY)
-                        .is_some_and(|value| value != "float64")
-                {
-                    metadati.remove(PLENORA_GEOMETRY_PRECISION_KEY);
-                }
                 // La riproiezione ha gia' riscritto il CRS target.
                 apply(
                     &mut metadati,

@@ -277,38 +277,7 @@ pub fn analyze_table_contract(
     if plenora_core::contract::geometry_metadata_policy::operation_effect(descriptor)
         == plenora_core::contract::geometry_metadata_policy::Effect::Merge
     {
-        let mut schema_fields = output
-            .schema
-            .fields()
-            .iter()
-            .map(|field| field.as_ref().clone())
-            .collect::<Vec<_>>();
-        for geometry in &mut output.geometries {
-            let declarations = inputs
-                .iter()
-                .flat_map(|input| &input.geometries)
-                .filter(|other| other.name == geometry.name)
-                .collect::<Vec<_>>();
-            if declarations
-                .windows(2)
-                .any(|pair| pair[0].types != pair[1].types)
-            {
-                geometry.types = plenora_core::contract::GeometryColumnContract::undeclared_types();
-                if let Some(field) = schema_fields
-                    .iter_mut()
-                    .find(|field| field.name() == &geometry.name)
-                {
-                    let mut metadata = field.metadata().clone();
-                    metadata.remove("plenora.geometry.types");
-                    metadata.insert("plenora.geometry.types_declaration", "unresolved");
-                    *field = field.clone().with_metadata(metadata);
-                }
-            }
-        }
-        output.schema = std::sync::Arc::new(plenora_core::arrow::Schema::new_with_metadata(
-            schema_fields,
-            output.schema.metadata().clone(),
-        ));
+        plenora_core::contract::geometry_metadata_policy::merge_types(&mut output, inputs);
     }
 
     output.validate()?;

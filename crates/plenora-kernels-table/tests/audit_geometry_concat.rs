@@ -137,8 +137,8 @@ fn fusione_non_eredita_precisione_discordante() {
     let mut metadata = field.metadata().clone();
     metadata.insert("plenora.geometry.precision", "float32");
     let b = field.with_metadata(metadata);
-    let output =
-        merged_geometry_metadata(&[a.schema().field(0), &b], &[]).expect("C3 diversa si toglie");
+    let output = merged_geometry_metadata(&[a.schema().field(0), &b], &[])
+        .expect("C3 diversa si toglie prima della pubblicazione canonica");
     assert!(!output.contains_key("plenora.geometry.precision"));
 }
 

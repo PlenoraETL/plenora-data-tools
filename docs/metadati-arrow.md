@@ -315,7 +315,89 @@ riscrittura JSON; i contenitori invariati restano byte per byte.
 Le regressioni `metadati_derivati` comprendono una fixture prodotta dal
 binario IO 7.0.0, con epoca e covering senza colonna Arrow referenziata.
 Provenienza: `crates/plenora-io/tests/riferimenti/io700/PROVENANCE.md`.
-L'enumerazione `geometry_metadata_policy` visita il vocabolario unico e
-ogni voce del catalogo; e' una prova della politica, non una prova completa
-di ogni configurazione dei kernel. Le prove di trasporto end-to-end
-coprono IPC file, IPC stream e GeoParquet sulle regressioni documentate.
+L'enumerazione `geometry_metadata_policy` verifica le decisioni pure.
+La matrice `operazioni_doc::matrice_metadati::catalogo_chiavi_trasporti`
+itera invece il catalogo e le 48 chiavi, usando le fixture delle schede:
+scrive e rilegge gli ingressi IPC file, IPC stream e GeoParquet, esegue
+`Pipeline::validate` e `run`, scrive l'uscita e la rilegge con Arrow pubblico.
+Controlla anche il footer GeoParquet, con bbox calcolato indipendentemente
+dai dati. Le chiavi brevi sono provate nel campo, nei due contenitori di
+campo e nelle colonne del documento `geo` di schema.
+
+Concat, concat_by_name e union_distinct ricevono dichiarazioni uguali,
+assenti da un lato e discordanti; un conflitto fuori dal vocabolario
+supportato deve produrre un rifiuto esplicito. Join riceve geometria a
+sinistra, a destra e su entrambi i lati, per inner e left. Il registro
+`tests/riferimenti/operazioni_metadati.txt` di `plenora-io` deve contenere
+esattamente il catalogo e concordare con la classificazione della politica:
+un'operazione nuova senza classificazione fa fallire il test.
+
+Il report `target/matrice-metadati.md` elenca tutti i rifiuti per fase,
+le uscite effettivamente rilette per trasporto e le divergenze. Un errore
+interno o IO non e' un rifiuto accettabile. La prova raccoglie tutti gli
+esiti prima di fallire; non pretende di coprire ogni configurazione dei
+kernel. La mappa `geometry_metadata_policy::types` calcola anche le
+dichiarazioni canoniche dipendenti dai tipi d'ingresso (collect, explode,
+subdivide); l'oracolo preesistente `kernel_crosscheck` la confronta con i
+kernel. La matrice usa tipi d'ingresso ricavati dal WKB, non soltanto una
+dichiarazione che ammette tutti i tipi. Le dichiarazioni native dei tipi
+sono invalidate da `Effect::Types`.
+
+### Precisione dichiarata e precisione della rappresentazione
+
+`precision` (C2) e `plenora.geometry.precision` (C3) non sono alias.
+Il codec legacy legge da `geo` solo `crs`, `dimensions` ed `encoding`:
+non interpreta `precision`, che resta una dichiarazione opaca del
+produttore, senza unita' o semantica canonica. La politica la tratta
+prudenzialmente come riepilogo derivato. La chiave canonica, invece,
+passa da `canonical_geometry_precision` e dall'enumerazione
+`GeometryPrecision`: descrive la rappresentazione delle coordinate
+(`float64`, per esempio), viene preservata dalle operazioni tabellari e
+riemessa dal codec dopo le trasformazioni geometriche. Non si deduce
+mai una tolleranza geometrica dal valore di nessuna delle due chiavi.
+
+### Struttura dei contenitori geometrici
+
+Questi nomi sono registrati separatamente dalle 48 proprieta': individuano
+contenitori o elementi della sintassi GeoParquet, non una classe C1-C4.
+
+| Nome | Ruolo |
+| --- | --- |
+| `geo` | Contenitore legacy di campo o documento GeoParquet di schema |
+| `ARROW:extension:metadata` | Contenitore GeoArrow di campo |
+| `version` | Versione del documento GeoParquet, riemessa dal writer |
+| `primary_column` | Nome della geometria primaria pubblicata |
+| `columns` | Mappa da nomi dei campi alle proprieta' geometriche |
+
+### Guardia del vocabolario nel sorgente
+
+La guardia `scripts/test_geometry_metadata_guard.py`, eseguita dalla suite
+Python delle guardie, usa una scansione lessicale del Rust. Riconosce
+commenti annidati, stringhe raw, item `cfg(test)`, accessi con chiave
+letterale anche fuori dai codec geometrici, costanti e costruzioni con
+`format!`/`concat!`. Una costruzione geometrica non risolta non e' una
+chiave implicitamente ammessa. Il vocabolario delle proprieta' e i nomi
+strutturali provengono dalla politica e devono comparire nelle tabelle.
+
+`scripts/metadati_literal_contexts.json` registra i contesti dei letterali
+non geometrici (configurazioni, valori degli enum, diagnostica e altre
+mappe). Non e' una lista globale di nomi permessi: spostare un letterale
+in un nuovo accesso richiede una nuova verifica. Il file non ha un comando
+di aggiornamento automatico nella guardia. Le prove negative aggiungono
+membri JSON sconosciuti, stringhe con escape e chiavi costruite per
+verificare che non passino come proprieta' registrate.
+
+La classificazione degli effetti distingue `Values` (tipi invariati) da
+`Types` (dichiarazioni dei tipi riscritte). Il secondo effetto elimina
+anche le dichiarazioni native C4; il codec ricostruisce quelle canoniche.
+`geo.bounds_extractor` legge la geometria e ha effetto `Unchanged`.
+Le geometrie nuove di `coverage_validate` e `shared_paths` ereditano le
+proprieta' C1, incluse epoca e convenzione dei lati, dalla sorgente.
+
+L'esecuzione tabellare applica la stessa politica dell'analisi allo schema
+materializzato prima del confronto esatto con il contratto. Il confronto
+resta obbligatorio; non si copia lo schema atteso per nascondere differenze.
+Una fusione con precisioni canoniche diverse riemette `float64`; un
+contenitore JSON rimasto vuoto viene eliminato in entrambi i percorsi.
+La riproiezione sostituisce il CRS nel JSON legacy conservando i membri
+C4 sopravvissuti alla politica.

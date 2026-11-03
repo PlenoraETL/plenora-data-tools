@@ -18,6 +18,7 @@ use plenora_core::crs::riproiezione::PercorsoDatum;
 use serde_json::json;
 
 use super::*;
+use plenora_core::contract::arrow_metadata::GEO_METADATA_KEY;
 
 fn crs(definizione: &str) -> ResolvedCrs {
     resolve_crs(definizione, "crs").expect("CRS integrato")

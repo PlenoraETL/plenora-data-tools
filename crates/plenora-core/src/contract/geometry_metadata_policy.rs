@@ -1,4 +1,6 @@
 //! Politica unica delle dichiarazioni geometriche, indipendente dal trasporto.
+pub mod types;
+
 use crate::arrow::Metadata;
 use crate::PlenoraError;
 
@@ -23,6 +25,8 @@ pub enum Effect {
     Rows,
     /// Coordinate o geometrie modificate.
     Values,
+    /// Valori e dichiarazioni dei tipi ricostruiti.
+    Types,
     /// Riferimento delle coordinate cambiato.
     Crs,
     /// Colonna risultante da piu' sorgenti.
@@ -121,6 +125,16 @@ pub const KEYS: &[(&str, Class)] = &[
         Class::Types,
     ),
 ];
+/// Nomi strutturali dei contenitori: non sono proprieta' di una geometria.
+/// `columns` contiene nomi di campi, non ulteriori chiavi di proprieta'.
+pub const STRUCTURAL_MEMBERS: &[&str] = &[
+    "geo",
+    "ARROW:extension:metadata",
+    "version",
+    "primary_column",
+    "columns",
+];
+
 /// Classe di una chiave nel namespace geometrico o in un contenitore geometrico.
 #[must_use]
 pub fn class(key: &str) -> Class {
@@ -139,7 +153,7 @@ pub fn keep(key: &str, effect: Effect, equal: bool) -> bool {
     match (class(key), effect) {
         (_, Effect::Unchanged)
         | (Class::Crs | Class::Representation | Class::Types, Effect::Rows)
-        | (Class::Crs, Effect::Values | Effect::Merge)
+        | (Class::Crs, Effect::Values | Effect::Types | Effect::Merge)
         | (Class::Types, Effect::Values | Effect::Crs) => true,
         (Class::Derived, Effect::Rows) => {
             matches!(key, "bbox" | "plenora.geometry.native.geoparquet.bbox")
@@ -148,11 +162,25 @@ pub fn keep(key: &str, effect: Effect, equal: bool) -> bool {
         _ => false,
     }
 }
+/// I membri tipizzati legacy rimangono al codec, salvo il confronto di fusione.
+#[must_use]
+pub fn keep_member(key: &str, effect: Effect, equal: bool) -> bool {
+    (effect != Effect::Merge && matches!(key, "dimensions" | "encoding"))
+        || keep(key, effect, equal)
+}
+
 /// Applica la politica ai membri opachi, lasciando i campi tipizzati al codec.
 /// Il codec riscrive encoding, precisione, tipi e dimensioni dall'uscita effettiva.
 pub fn apply(metadata: &mut Metadata, effect: Effect) {
     if effect == Effect::Unchanged {
         return;
+    }
+    if matches!(effect, Effect::Values | Effect::Types | Effect::Crs)
+        && metadata
+            .get("plenora.geometry.precision")
+            .is_some_and(|v| v != "float64")
+    {
+        metadata.remove("plenora.geometry.precision");
     }
     metadata.retain(|key, value| {
         (!governed(key)
@@ -184,7 +212,7 @@ pub fn apply(metadata: &mut Metadata, effect: Effect) {
                 continue;
             }
             object.retain(|key, value| {
-                (matches!(key.as_str(), "dimensions" | "encoding") || keep(key, effect, true))
+                keep_member(key, effect, true)
                     && (effect != Effect::Rows || key != "bbox" || valid_bbox(&value.to_string()))
             });
             if object.is_empty() {
@@ -260,7 +288,9 @@ pub fn merge(left: &Metadata, right: &Metadata) -> Result<Metadata, PlenoraError
                 merged.remove(key);
             }
         }
-        if left.contains_key(container) {
+        if merged.is_empty() {
+            result.remove(container);
+        } else if left.contains_key(container) {
             result.insert(container, serde_json::Value::Object(merged).to_string());
         }
     }
@@ -282,12 +312,47 @@ pub fn operation_effect(op: &crate::catalog::OperationDescriptor) -> Effect {
     ) {
         return Effect::Merge;
     }
+    if matches!(
+        op.id,
+        "geo.boundary"
+            | "geo.buffer"
+            | "geo.centroid"
+            | "geo.clean_topology"
+            | "geo.clip"
+            | "geo.collect"
+            | "geo.concave_hull"
+            | "geo.convex_hull"
+            | "geo.delaunay"
+            | "geo.difference"
+            | "geo.dissolve"
+            | "geo.envelope"
+            | "geo.explode"
+            | "geo.intersection"
+            | "geo.line_builder"
+            | "geo.line_interpolate_point"
+            | "geo.line_merge"
+            | "geo.line_substring"
+            | "geo.make_valid"
+            | "geo.overlay"
+            | "geo.point_on_surface"
+            | "geo.polygon_builder"
+            | "geo.polygonize"
+            | "geo.split"
+            | "geo.subdivide"
+            | "geo.symmetric_difference"
+            | "geo.union"
+            | "geo.voronoi"
+            | "geo.coverage_validate"
+            | "geo.shared_paths"
+    ) {
+        return Effect::Types;
+    }
     if op.family == Family::Geo {
         if op.geo_fusion == GeoFusion::TerminalMeasure
             || op.id.starts_with("geo.predicate_")
             || matches!(
                 op.id,
-                "geo.bounds"
+                "geo.bounds_extractor"
                     | "geo.geometry_diagnostics"
                     | "geo.geometry_accessors"
                     | "geo.line_locate_point"
@@ -337,6 +402,18 @@ pub fn schema_effect(
                         if let Ok(other) = input.field_with_name(field.name()) {
                             md = merge(&md, other.metadata())?;
                         }
+                    }
+                    // La fusione grezza elimina C3 discordante. Lo schema di
+                    // esecuzione riemette il default del codec WKB, come la
+                    // pubblicazione canonica del contratto in validazione.
+                    if !md.contains_key("plenora.geometry.precision")
+                        && inputs.iter().any(|input| {
+                            input.field_with_name(field.name()).is_ok_and(|source| {
+                                source.metadata().contains_key("plenora.geometry.precision")
+                            })
+                        })
+                    {
+                        md.insert("plenora.geometry.precision", "float64");
                     }
                 } else {
                     apply(&mut md, effect);
@@ -581,4 +658,131 @@ pub fn crs_properties(
         }
     }
     Ok(output)
+}
+
+/// Prepara il campo per una dichiarazione dei tipi prodotta dal codec.
+pub fn rewrite_types(metadata: &mut Metadata) {
+    apply(metadata, Effect::Types);
+    metadata.remove("plenora.geometry.types");
+    metadata.remove("plenora.geometry.types_declaration");
+}
+
+fn object(raw: &str) -> Result<serde_json::Map<String, serde_json::Value>, PlenoraError> {
+    crate::json::ensure_no_duplicate_keys(raw)
+        .map_err(|_| PlenoraError::Schema("metadato geometrico duplicato".into()))?;
+    crate::json::ensure_numbers_exact(raw)
+        .map_err(|_| PlenoraError::Schema("metadato geometrico non esatto".into()))?;
+    match serde_json::from_str(raw) {
+        Ok(serde_json::Value::Object(value)) => Ok(value),
+        _ => Err(PlenoraError::Schema(
+            "metadato geometrico non oggetto".into(),
+        )),
+    }
+}
+
+/// Riscrive il blocco tipizzato legacy conservando i membri gia' filtrati.
+///
+/// # Errors
+/// Contenitori geometrici malformati.
+pub fn rewrite_geo(metadata: &mut Metadata, replacement: &str) -> Result<(), PlenoraError> {
+    let mut retained = metadata
+        .get("geo")
+        .map_or_else(|| Ok(serde_json::Map::new()), |raw| object(raw))?;
+    retained.extend(object(replacement)?);
+    metadata.insert("geo", serde_json::Value::Object(retained).to_string());
+    Ok(())
+}
+
+/// Una geometria nuova nello stesso riferimento eredita le sole proprieta' C1.
+///
+/// # Errors
+/// Contenitori geometrici malformati.
+pub fn inherit_crs(
+    output: &crate::arrow::Field,
+    source: &crate::arrow::Field,
+) -> Result<crate::arrow::Field, PlenoraError> {
+    let mut md = output.metadata().clone();
+    for (key, value) in source.metadata() {
+        if governed(key) && class(key) == Class::Crs {
+            md.insert(key.clone(), value.clone());
+        }
+    }
+    for container in ["geo", "ARROW:extension:metadata"] {
+        if let Some(raw) = source.metadata().get(container) {
+            if container == "ARROW:extension:metadata" && raw.trim().is_empty() {
+                continue;
+            }
+            let inherited = object(raw)?;
+            let mut target = md
+                .get(container)
+                .map_or_else(|| Ok(serde_json::Map::new()), |raw| object(raw))?;
+            target.extend(
+                inherited
+                    .into_iter()
+                    .filter(|(key, _)| class(key) == Class::Crs),
+            );
+            if !target.is_empty() {
+                md.insert(container, serde_json::Value::Object(target).to_string());
+            }
+        }
+    }
+    Ok(output.clone().with_metadata(md))
+}
+
+/// Aggiorna il contratto C4 di una fusione insieme alle sue dichiarazioni Arrow.
+pub fn merge_types(
+    output: &mut crate::contract::DataContract,
+    inputs: &[crate::contract::DataContract],
+) {
+    let mut schema_fields = output
+        .schema
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect::<Vec<_>>();
+    for geometry in &mut output.geometries {
+        let declarations = inputs
+            .iter()
+            .flat_map(|input| &input.geometries)
+            .filter(|other| other.name == geometry.name)
+            .collect::<Vec<_>>();
+        if declarations
+            .windows(2)
+            .any(|pair| pair[0].types != pair[1].types)
+        {
+            geometry.types = crate::contract::GeometryColumnContract::undeclared_types();
+            if let Some(field) = schema_fields
+                .iter_mut()
+                .find(|field| field.name() == &geometry.name)
+            {
+                let mut metadata = field.metadata().clone();
+                metadata.remove("plenora.geometry.types");
+                metadata.insert("plenora.geometry.types_declaration", "unresolved");
+                *field = field.clone().with_metadata(metadata);
+            }
+        }
+    }
+    output.schema = std::sync::Arc::new(crate::arrow::Schema::new_with_metadata(
+        schema_fields,
+        output.schema.metadata().clone(),
+    ));
+}
+
+/// Confronta le proprieta' opache; il codec confronta separatamente il CRS tipizzato.
+///
+/// # Errors
+/// Proprieta' CRS native discordanti.
+pub fn require_same_reference_metadata(
+    left: &Metadata,
+    right: &Metadata,
+) -> Result<(), PlenoraError> {
+    let native = |source: &Metadata| {
+        let mut metadata = source.clone();
+        metadata.retain(|key, _| {
+            !super::arrow_metadata::CRS_KEYS_REPLACED_BY_DECISION.contains(&key.as_str())
+                && key != "crs"
+        });
+        metadata
+    };
+    merge(&native(left), &native(right)).map(|_| ())
 }

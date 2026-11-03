@@ -245,14 +245,10 @@ pub fn require_geometry_compatibility(
 }
 
 fn require_same_native_declarations(left: &Field, right: &Field) -> Result<(), PlenoraError> {
-    let native = |field: &Field| {
-        let mut metadata = field.metadata().clone();
-        metadata.retain(|key, _| {
-            !CRS_KEYS_REPLACED_BY_DECISION.contains(&key.as_str()) && key != GEO_CRS_KEY
-        });
-        metadata
-    };
-    super::geometry_metadata_policy::merge(&native(left), &native(right)).map(|_| ())
+    super::geometry_metadata_policy::require_same_reference_metadata(
+        left.metadata(),
+        right.metadata(),
+    )
 }
 
 // Queste nozioni appartengono al campo, non a GeometryColumnContract:
@@ -1071,15 +1067,7 @@ pub fn transformed_geometry_schema_metadata(metadata: &Metadata) -> Metadata {
 /// accanto (un consumatore a valle leggerebbe il tipo di prima della
 /// trasformazione) né provocare un conflitto di chiave.
 pub fn strip_rewritten_types_declarations(metadata: &mut Metadata) {
-    strip_derived_geometry_metadata(metadata);
-    metadata.retain(|key, _| {
-        !key.starts_with("plenora.geometry.native.")
-            || super::geometry_metadata_policy::class(key)
-                != super::geometry_metadata_policy::Class::Types
-    });
-    for key in TYPES_KEYS_REWRITTEN_BY_TRANSFORM {
-        metadata.remove(key);
-    }
+    super::geometry_metadata_policy::rewrite_types(metadata);
 }
 
 /// Rimuove le chiavi canoniche del CRS dai metadati di un campo geometria,

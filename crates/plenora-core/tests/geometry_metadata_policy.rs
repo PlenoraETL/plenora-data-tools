@@ -20,7 +20,7 @@ fn ogni_chiave_per_ogni_operazione_e_fusione() {
                                     "bbox" | "plenora.geometry.native.geoparquet.bbox"
                                 ))
                     }
-                    Class::Types => effect != Effect::Merge || equal,
+                    Class::Types => effect != Effect::Types && (effect != Effect::Merge || equal),
                     Class::Representation => {
                         matches!(effect, Effect::Unchanged | Effect::Rows)
                             || (effect == Effect::Merge && equal)
@@ -125,4 +125,19 @@ fn proprieta_crs_native_verificate_anche_senza_geoparquet() {
     assert!(matches!(error, plenora_core::PlenoraError::Crs(_)));
     assert!(!error.to_string().contains("2023"));
     assert!(!error.to_string().contains("2024"));
+}
+
+#[test]
+fn geometria_nuova_accetta_estensione_crs_vuota() {
+    use plenora_core::contract::arrow_metadata::{
+        geometry_output_field, read_geometry_contract_keys,
+    };
+    let field = geometry_output_field("geometry", "EPSG:32632").unwrap();
+    for raw in ["", "   ", "{}"] {
+        let mut metadata = field.metadata().clone();
+        metadata.insert("ARROW:extension:metadata", raw);
+        let source = field.clone().with_metadata(metadata);
+        let inherited = policy::inherit_crs(&field, &source).unwrap();
+        assert!(read_geometry_contract_keys(&inherited).is_ok());
+    }
 }

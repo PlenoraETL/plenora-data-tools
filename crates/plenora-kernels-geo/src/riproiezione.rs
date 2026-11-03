@@ -38,7 +38,7 @@ use plenora_core::arrow::array::BinaryArray;
 use plenora_core::arrow::{Field, RecordBatch, Schema, SchemaRef};
 use plenora_core::contract::arrow_metadata::{
     canonical_geometry_axis_order, geo_metadata_json_with_encoding, geometry_column_index,
-    read_geometry_contract_keys, strip_rewritten_crs_keys, GEO_METADATA_KEY, MAX_CELL_COORDINATES,
+    read_geometry_contract_keys, strip_rewritten_crs_keys, MAX_CELL_COORDINATES,
     PLENORA_GEOMETRY_AXIS_ORDER_KEY,
 };
 use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
@@ -236,10 +236,10 @@ pub fn campo_riproiettato(
 ) -> Result<Field, PlenoraError> {
     let mut metadata = ingresso.metadata().clone();
     strip_rewritten_crs_keys(&mut metadata);
-    metadata.insert(
-        GEO_METADATA_KEY.to_owned(),
-        geo_metadata_json_with_encoding(target.definition(), dimensions, encoding)?,
-    );
+    plenora_core::contract::geometry_metadata_policy::rewrite_geo(
+        &mut metadata,
+        &geo_metadata_json_with_encoding(target.definition(), dimensions, encoding)?,
+    )?;
     metadata.insert(
         crate::arrow_adapter::PLENORA_GEOMETRY_PRECISION_KEY.to_owned(),
         "float64".to_owned(),
