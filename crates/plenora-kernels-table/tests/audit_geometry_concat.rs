@@ -75,6 +75,15 @@ fn ogni_concatenazione_rifiuta_dichiarazioni_incompatibili() {
                         &limits,
                     ),
                 };
+                if kind == "linestring" {
+                    let output = result.expect("C4 diversa si toglie");
+                    assert!(!output
+                        .schema()
+                        .field(0)
+                        .metadata()
+                        .contains_key("plenora.geometry.types"));
+                    continue;
+                }
                 let error = result.unwrap_err();
                 assert!(matches!(error, PlenoraError::Schema(_)), "{error}");
                 let analyzed = analyze_table_contract(
@@ -128,10 +137,9 @@ fn fusione_non_eredita_precisione_discordante() {
     let mut metadata = field.metadata().clone();
     metadata.insert("plenora.geometry.precision", "float32");
     let b = field.with_metadata(metadata);
-    assert!(matches!(
-        merged_geometry_metadata(&[a.schema().field(0), &b], &[]),
-        Err(PlenoraError::Unsupported(_))
-    ));
+    let output =
+        merged_geometry_metadata(&[a.schema().field(0), &b], &[]).expect("C3 diversa si toglie");
+    assert!(!output.contains_key("plenora.geometry.precision"));
 }
 
 // L'oracolo pubblica le dichiarazioni nel campo Arrow prima del kernel:
@@ -222,7 +230,7 @@ fn dichiarazioni_solo_nel_contratto_hanno_lo_stesso_esito_del_kernel() {
                     _ => setops::validate_schema(&left_batch, &right_batch)
                         .map(|()| left_batch.clone()),
                 };
-                let accepts = a == b || matches!(op, "table.intersect" | "table.except");
+                let accepts = true;
                 assert_eq!(
                     analyzed.is_ok(),
                     accepts,
@@ -235,7 +243,13 @@ fn dichiarazioni_solo_nel_contratto_hanno_lo_stesso_esito_del_kernel() {
                         assert_eq!(a.to_string(), b.to_string());
                     }
                     (Ok(output), Ok(_)) => {
-                        assert_eq!(output.geometries[0].types, left.geometries[0].types);
+                        let expected = if a == b || matches!(op, "table.intersect" | "table.except")
+                        {
+                            left.geometries[0].types.clone()
+                        } else {
+                            plenora_core::contract::GeometryColumnContract::undeclared_types()
+                        };
+                        assert_eq!(output.geometries[0].types, expected);
                     }
                     _ => panic!("analisi e kernel divergono"),
                 }

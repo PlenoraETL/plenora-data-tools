@@ -39,66 +39,72 @@ const NATIVE: &[&str] = &[
 
 fn sorgente() -> RecordBatch {
     let batch = comune::utm32_integrata();
-    let fields: Vec<Field> = batch
-        .schema()
-        .fields()
-        .iter()
-        .map(|field| {
-            let mut md = field.metadata().clone();
-            md.insert("utente.nota".to_owned(), "conservata".to_owned());
-            md.insert("driver.native", "conservata");
-            if field.name() == "geometry" {
-                // Testo letterale di GEO_CRS_KEY di IO-tools, non costante del codec.
-                md.insert("crs".to_owned(), "EPSG:32632".to_owned());
-                md.insert(
-                    PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
-                    plenora_io::crs_projjson::projjson_di("EPSG:32632")
-                        .unwrap()
-                        .to_string(),
-                );
-                md.insert(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "projjson");
-                for suffix in NATIVE {
+    let fields: Vec<Field> =
+        batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| {
+                let mut md = field.metadata().clone();
+                md.insert("utente.nota".to_owned(), "conservata".to_owned());
+                md.insert("driver.native", "conservata");
+                if field.name() == "geometry" {
+                    // Testo letterale di GEO_CRS_KEY di IO-tools, non costante del codec.
+                    md.insert("crs".to_owned(), "EPSG:32632".to_owned());
                     md.insert(
-                        format!("plenora.geometry.native.{suffix}"),
-                        "vecchio".to_owned(),
+                        PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
+                        plenora_io::crs_projjson::projjson_di("EPSG:32632")
+                            .unwrap()
+                            .to_string(),
                     );
-                }
-                md.insert(PLENORA_GEOMETRY_SRID_KEY, "100001");
-                md.insert("plenora.geometry.native.geoparquet.epoch", "2023.5");
-                md.insert(
-                    "plenora.geometry.native.geoparquet.orientation",
-                    "counterclockwise",
-                );
-                md.insert("plenora.geometry.futura".to_owned(), "vecchio".to_owned());
-                for key in ["bbox", "covering", "geometry_types"] {
-                    md.insert(key.to_owned(), "vecchio".to_owned());
-                }
-                let mut geo: serde_json::Value =
-                    serde_json::from_str(&md[GEO_METADATA_KEY]).unwrap();
-                for key in [
-                    "bbox",
-                    "covering",
-                    "epoch",
-                    "geometry_types",
-                    "precision",
-                    "axis_order",
-                ] {
-                    geo[key] = json!("vecchio");
-                }
-                md.insert(GEO_METADATA_KEY.to_owned(), geo.to_string());
-                md.insert("ARROW:extension:metadata".to_owned(), json!({
+                    md.insert(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "projjson");
+                    for suffix in NATIVE {
+                        md.insert(
+                            format!("plenora.geometry.native.{suffix}"),
+                            "vecchio".to_owned(),
+                        );
+                    }
+                    md.insert(PLENORA_GEOMETRY_SRID_KEY, "100001");
+                    md.insert("plenora.geometry.native.geoparquet.epoch", "2023.5");
+                    md.insert("plenora.geometry.native.geoparquet.edges", "planar");
+                    md.insert(
+                        "plenora.geometry.native.geoparquet.orientation",
+                        "counterclockwise",
+                    );
+                    md.insert("plenora.geometry.futura".to_owned(), "vecchio".to_owned());
+                    for key in ["bbox", "covering", "geometry_types"] {
+                        md.insert(key.to_owned(), "vecchio".to_owned());
+                    }
+                    let mut geo: serde_json::Value =
+                        serde_json::from_str(&md[GEO_METADATA_KEY]).unwrap();
+                    for key in [
+                        "bbox",
+                        "covering",
+                        "epoch",
+                        "geometry_types",
+                        "precision",
+                        "axis_order",
+                    ] {
+                        geo[key] = if key == "epoch" {
+                            json!(2023.5)
+                        } else {
+                            json!("vecchio")
+                        };
+                    }
+                    md.insert(GEO_METADATA_KEY.to_owned(), geo.to_string());
+                    md.insert("ARROW:extension:metadata".to_owned(), json!({
                 "crs": plenora_io::crs_projjson::projjson_di("EPSG:32632").unwrap(),
                 "crs_type": "projjson",
-                "bbox": "vecchio", "covering": "vecchio", "epoch": "vecchio", "edges": "planar"
+                "bbox": "vecchio", "covering": "vecchio", "epoch": 2023.5, "edges": "planar"
             }).to_string());
-                md.insert(
-                    PLENORA_GEOMETRY_PRECISION_KEY.to_owned(),
-                    "native".to_owned(),
-                );
-            }
-            field.as_ref().clone().with_metadata(md)
-        })
-        .collect();
+                    md.insert(
+                        PLENORA_GEOMETRY_PRECISION_KEY.to_owned(),
+                        "native".to_owned(),
+                    );
+                }
+                field.as_ref().clone().with_metadata(md)
+            })
+            .collect();
     let mut md = batch.schema().metadata().clone();
     md.insert("utente.dataset".to_owned(), "conservato".to_owned());
     md.insert(
@@ -113,6 +119,7 @@ fn sorgente() -> RecordBatch {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Matrice delle trasformazioni e dei tre trasporti.
 fn chiavi_derivate_non_sopravvivono_ai_tre_trasporti() {
     let dir = comune::cartella();
     for input_ext in ["arrow", "arrows", "parquet"] {
@@ -151,8 +158,20 @@ fn chiavi_derivate_non_sopravvivono_ai_tre_trasporti() {
                 assert_eq!(md["driver.native"], "conservata");
                 assert_eq!(schema.metadata()["utente.dataset"], "conservato");
                 for suffix in NATIVE {
-                    assert!(
-                        !md.contains_key(&format!("plenora.geometry.native.{suffix}")),
+                    let preserved = (op != "geo.reproject"
+                        && matches!(*suffix, "geoparquet.epoch" | "geoparquet.edges"))
+                        || (matches!(op, "geo.reproject" | "geo.snap_to_grid")
+                            && matches!(
+                                *suffix,
+                                "gpkg.geometry_type_name"
+                                    | "gpkg.z"
+                                    | "gpkg.m"
+                                    | "shp.shape_type"
+                                    | "filegdb.ogr_geometry_type"
+                            ));
+                    assert_eq!(
+                        md.contains_key(&format!("plenora.geometry.native.{suffix}")),
+                        preserved,
                         "{op}: {suffix}"
                     );
                 }
@@ -161,10 +180,13 @@ fn chiavi_derivate_non_sopravvivono_ai_tre_trasporti() {
                     assert!(!md.contains_key(key));
                 }
                 for key in [GEO_METADATA_KEY, "ARROW:extension:metadata"] {
-                    assert!(
-                        !md.get(key).is_some_and(|value| value.contains("vecchio")),
-                        "{op}: {key}"
-                    );
+                    if let Some(raw) = md.get(key) {
+                        let object: serde_json::Value = serde_json::from_str(raw).unwrap();
+                        for member in ["bbox", "covering", "geometry_types", "precision"] {
+                            assert!(object.get(member).is_none(), "{op}: {key}.{member}");
+                        }
+                        assert_eq!(object.get("epoch").is_some(), op != "geo.reproject");
+                    }
                 }
                 assert!(!schema.metadata().values().any(|v| v.contains("vecchio")));
                 if op == "geo.reproject" {
@@ -468,8 +490,13 @@ fn colonne_invariate_conservano_le_dichiarazioni_native() {
             let md = schema.field_with_name("geometry").unwrap().metadata();
             assert_eq!(md["plenora.geometry.native.geoparquet.epoch"], "2023.5");
             assert_eq!(
-                md["plenora.geometry.native.geoparquet.orientation"],
-                "counterclockwise"
+                md.get("plenora.geometry.native.geoparquet.orientation")
+                    .map(String::as_str),
+                if matches!(op, "table.filter" | "table.sort") {
+                    None
+                } else {
+                    Some("counterclockwise")
+                }
             );
             assert_eq!(md[PLENORA_GEOMETRY_SRID_KEY], "100001");
         }
@@ -477,24 +504,23 @@ fn colonne_invariate_conservano_le_dichiarazioni_native() {
         let field = schema.field_with_name("geometry").unwrap();
         let original = input.schema();
         let original = original.field_with_name("geometry").unwrap();
+        let changed_rows = matches!(op, "table.filter" | "table.sort");
         for suffix in NATIVE {
             let key = format!("plenora.geometry.native.{suffix}");
+            let derived = matches!(
+                *suffix,
+                "geoparquet.column"
+                    | "geoparquet.orientation"
+                    | "geoparquet.bbox"
+                    | "futuro.non_interpretato"
+            );
             assert_eq!(
                 field.metadata().get(&key),
-                original.metadata().get(&key),
-                "{op}: {key}"
-            );
-        }
-        for key in [
-            "geo",
-            "ARROW:extension:metadata",
-            "bbox",
-            "covering",
-            "geometry_types",
-        ] {
-            assert_eq!(
-                field.metadata().get(key),
-                original.metadata().get(key),
+                if changed_rows && derived {
+                    None
+                } else {
+                    original.metadata().get(&key)
+                },
                 "{op}: {key}"
             );
         }
@@ -512,6 +538,11 @@ fn fusione_con_epoche_diverse_rifiutata() {
             let mut md = field.metadata().clone();
             if field.name() == "geometry" {
                 md.insert("plenora.geometry.native.geoparquet.epoch", "2025.0");
+                for key in [GEO_METADATA_KEY, "ARROW:extension:metadata"] {
+                    let mut value: serde_json::Value = serde_json::from_str(&md[key]).unwrap();
+                    value["epoch"] = json!(2025.0);
+                    md.insert(key, value.to_string());
+                }
             }
             field.as_ref().clone().with_metadata(md)
         })
@@ -534,5 +565,82 @@ fn fusione_con_epoche_diverse_rifiutata() {
                 .category(),
             ErrorCategory::Schema
         );
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Fixture reale, tre trasporti e fusioni verticali.
+fn io700_epoch_covering_e_fusioni() {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/riferimenti/io700/epoch-covering.arrow");
+    let input = leggi_tabella(&source, None, u64::MAX).unwrap();
+    assert!(input.schema().field_with_name("bbox").is_err());
+    let dir = comune::cartella();
+    for (op, config) in [
+        ("", json!({})),
+        ("geo.to_wkt", json!({})),
+        ("geo.vertex_count", json!({})),
+        ("geo.explode", json!({})),
+    ] {
+        let steps = if op.is_empty() {
+            json!([])
+        } else {
+            json!([{"out":"o","op":op,"in":["t"],"config":config}])
+        };
+        let plan = Pipeline::from_json(&json!({"version":1,"inputs":["t"],"steps":steps,"outputs":[if op.is_empty() { "t" } else { "o" }]}).to_string()).unwrap();
+        let result = plan
+            .validate(&[("t", input.schema())])
+            .unwrap()
+            .run(vec![("t".into(), input.clone())])
+            .unwrap();
+        for ext in ["arrow", "arrows", "parquet"] {
+            if ext == "parquet" {
+                let prepared = plenora_io::geoparquet::prepara(&result.outputs[0].1)
+                    .unwrap()
+                    .unwrap();
+                let standard: serde_json::Value = serde_json::from_str(&prepared.geo).unwrap();
+                assert_eq!(standard["columns"]["geometry"]["epoch"], json!(2023.5));
+                assert_eq!(standard["columns"]["geometry"]["edges"], json!("planar"));
+            }
+            let path = dir.path().join(format!("io700-{op}.{ext}"));
+            scrivi_tabella(&result.outputs[0].1, &path, &OpzioniScrittura::default()).unwrap();
+            let output = leggi_tabella(&path, None, u64::MAX).unwrap();
+            let schema = output.schema();
+            let md = schema.field_with_name("geometry").unwrap().metadata();
+            assert_eq!(md["plenora.geometry.native.geoparquet.epoch"], "2023.5");
+            if let Some(raw) = md.get("plenora.geometry.native.geoparquet.column") {
+                let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+                assert!(value.get("covering").is_none());
+            }
+        }
+    }
+    for op in [
+        "table.concat",
+        "table.concat_by_name",
+        "table.union_distinct",
+    ] {
+        let schema = input.schema();
+        let mut md = schema.field(0).metadata().clone();
+        md.insert(
+            "plenora.geometry.native.geoparquet.bbox",
+            "0,0,600000,6000000",
+        );
+        md.insert("plenora.geometry.native.gpkg.rtree_index", "true");
+        let right_schema = Arc::new(Schema::new_with_metadata(
+            vec![schema.field(0).clone().with_metadata(md)],
+            schema.metadata().clone(),
+        ));
+        let right = RecordBatch::try_new(right_schema, input.columns().to_vec()).unwrap();
+        let plan = Pipeline::from_json(&json!({"version":1,"inputs":["a","b"],"steps":[{"out":"o","op":op,"in":["a","b"],"config":{}}],"outputs":["o"]}).to_string()).unwrap();
+        let result = plan
+            .validate(&[("a", input.schema()), ("b", right.schema())])
+            .unwrap()
+            .run(vec![("a".into(), input.clone()), ("b".into(), right)])
+            .expect(op);
+        let schema = result.outputs[0].1.schema();
+        let md = schema.field(0).metadata();
+        assert_eq!(md["plenora.geometry.native.geoparquet.epoch"], "2023.5");
+        assert!(!md.contains_key("plenora.geometry.native.geoparquet.bbox"));
+        assert!(!md.contains_key("plenora.geometry.native.gpkg.rtree_index"));
     }
 }

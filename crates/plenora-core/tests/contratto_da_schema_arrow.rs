@@ -1011,7 +1011,7 @@ fn crs_io_non_confrontabile_preserva_errore_del_risolutore() {
 }
 
 #[test]
-fn pubblicazione_preserva_json_esatto_e_rifiuta_covering_troncato() {
+fn pubblicazione_preserva_json_esatto_e_rimuove_covering_troncato() {
     use plenora_core::contract::arrow_schema::pubblica_schema;
     use std::collections::BTreeSet;
     let raw = r#"{"columns":{"geometry":{"epoch":2023.1234567890123456789}},"primary_column":"geometry"}"#;
@@ -1034,7 +1034,7 @@ fn pubblicazione_preserva_json_esatto_e_rifiuta_covering_troncato() {
                 true,
             ),
         ]);
-        let error = pubblica_schema(&schema, &BTreeSet::new(), &BTreeSet::new()).unwrap_err();
-        assert!(matches!(error, PlenoraError::Schema(_)));
+        let output = pubblica_schema(&schema, &BTreeSet::new(), &BTreeSet::new()).unwrap();
+        assert!(!output.field(0).metadata().contains_key("covering"));
     }
 }

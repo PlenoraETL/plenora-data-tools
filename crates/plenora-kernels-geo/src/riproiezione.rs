@@ -235,11 +235,11 @@ pub fn campo_riproiettato(
     encoding: Option<GeometryEncoding>,
 ) -> Result<Field, PlenoraError> {
     let mut metadata = ingresso.metadata().clone();
+    strip_rewritten_crs_keys(&mut metadata);
     metadata.insert(
         GEO_METADATA_KEY.to_owned(),
         geo_metadata_json_with_encoding(target.definition(), dimensions, encoding)?,
     );
-    strip_rewritten_crs_keys(&mut metadata);
     metadata.insert(
         crate::arrow_adapter::PLENORA_GEOMETRY_PRECISION_KEY.to_owned(),
         "float64".to_owned(),

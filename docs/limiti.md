@@ -1810,3 +1810,19 @@ fornire una definizione completa dell'ensemble o della realizzazione,
 con un profilo che conservi membri, accuratezza ed eventuale epoca, e il
 consumatore deve poterla verificare senza equivalenze storiche implicite.
 Profilo e prove: [CRS WKT1](crs.md#definizioni-wkt1).
+
+
+## Politica dei metadati geometrici residui
+
+**Regola:** classi ed effetti descritti nella
+[tabella dei metadati Arrow](metadati-arrow.md#dichiarazioni-geometriche-residue-correzione-410).
+**Ambito:** dichiarazioni trasportate dai campi Arrow, incluse quelle
+native di IO 7.0.0. Conservare una epoca non implementa trasformazioni
+geodetiche temporali. Il membro standard GeoParquet `epoch` viene trasportato insieme alla
+dichiarazione nativa Arrow; non attiva un modello temporale del CRS.
+**Hazard:** i tipi di una colonna fusa possono diventare `unresolved`;
+un bbox conservato dopo selezione puo' essere sovrabbondante. La matrice
+unitaria del catalogo verifica la politica, mentre le regressioni dei
+trasporti non enumerano ancora tutte le configurazioni dei kernel.
+**Rientro:** oracolo end-to-end completo per chiave, operazione e trasporto,
+e supporto contrattuale alle trasformazioni temporali.

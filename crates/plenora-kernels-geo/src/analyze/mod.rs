@@ -346,42 +346,45 @@ pub fn analyze_geo_contract(
     // Il contratto e' l'unica fonte delle identita' sopravvissute.
     fields.bind_contract(&output);
     output.validate()?;
-    Ok(senza_precisione_ereditata(output))
+    Ok(senza_precisione_ereditata(output, descriptor))
 }
 
-/// Toglie precisione ereditata e riepiloghi geometrici dall'uscita geo.
-///
-/// Un kernel geo decodifica e ricodifica le coordinate in `f64`: una
-/// precisione `float32` o `native` dichiarata dall'ingresso direbbe il
-/// falso sulle geometrie che escono. Senza la chiave, l'emissione del blocco
-/// canonico dichiara `float64`, la precisione di ogni coordinata WKB. Le
-/// operazioni tabellari non toccano le coordinate e la precisione
-/// ereditata le attraversa intatta. Per semplicita' vale anche per le
-/// operazioni geo che restituiscono la geometria com'era (misure,
-/// predicati): l'informazione d'origine si perde, ma la dichiarazione
-/// resta vera.
-/// I riepiloghi nativi e i membri JSON non tipizzati si eliminano anche
-/// quando la precisione era gia' `float64`; i metadati utente restano.
-fn senza_precisione_ereditata(mut output: DataContract) -> DataContract {
+/// Applica l'effetto del catalogo alla geometria d'uscita.
+fn senza_precisione_ereditata(
+    mut output: DataContract,
+    descriptor: &plenora_core::catalog::OperationDescriptor,
+) -> DataContract {
+    use plenora_core::contract::geometry_metadata_policy::{apply, operation_effect, Effect};
+    let effect = operation_effect(descriptor);
+    if effect == Effect::Unchanged {
+        return output;
+    }
     let geometria = output.active_geometry_column().map(|g| g.name.clone());
     let campi: Vec<Field> = output
         .schema
         .fields()
         .iter()
         .map(|campo| {
+            let mut metadati = campo.metadata().clone();
             if geometria.as_ref() == Some(campo.name()) {
-                let mut metadati = campo.metadata().clone();
-                if metadati
-                    .get(PLENORA_GEOMETRY_PRECISION_KEY)
-                    .is_some_and(|v| v != "float64")
+                if matches!(effect, Effect::Values | Effect::Crs)
+                    && metadati
+                        .get(PLENORA_GEOMETRY_PRECISION_KEY)
+                        .is_some_and(|value| value != "float64")
                 {
                     metadati.remove(PLENORA_GEOMETRY_PRECISION_KEY);
                 }
-                crate::arrow_adapter::strip_derived_geometry_metadata(&mut metadati);
-                campo.as_ref().clone().with_metadata(metadati)
-            } else {
-                campo.as_ref().clone()
+                // La riproiezione ha gia' riscritto il CRS target.
+                apply(
+                    &mut metadati,
+                    if effect == Effect::Crs {
+                        Effect::Values
+                    } else {
+                        effect
+                    },
+                );
             }
+            campo.as_ref().clone().with_metadata(metadati)
         })
         .collect();
     output.schema = Arc::new(Schema::new_with_metadata(

@@ -499,7 +499,17 @@ pub fn limit(batch: &RecordBatch, config: &Limit) -> Result<RecordBatch> {
         // Finestra che copre l'intero batch: nessuna copia.
         return Ok(batch.clone());
     }
-    Ok(batch.slice(start, count))
+    let output = batch.slice(start, count);
+    let schema = plenora_core::contract::geometry_metadata_policy::schema_effect(
+        &output.schema(),
+        &[],
+        plenora_core::contract::geometry_metadata_policy::Effect::Rows,
+    )?;
+    crate::batch_with_rows(
+        std::sync::Arc::new(schema),
+        output.columns().to_vec(),
+        output.num_rows(),
+    )
 }
 
 /// Config di `table.uuid_generator`.

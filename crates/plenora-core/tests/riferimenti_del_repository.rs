@@ -59,7 +59,7 @@ const TESTO_PER_PREFISSO: &[&str] = &[
 /// Estensioni binarie: non si leggono, si contano. Un file con
 /// un'estensione fuori da [`TESTO`] e da questo elenco fa fallire il test,
 /// così un formato nuovo si classifica invece di sparire dalla scansione.
-const BINARI: &[&str] = &["parquet", "wkb", "gsb", "pyc"];
+const BINARI: &[&str] = &["parquet", "wkb", "gsb", "pyc", "arrow"];
 /// Voci fuori scansione: prodotti di build, storia git (`.git` è un file
 /// in un worktree), patch di codice upstream. Dei vendor si leggono solo le
 /// provenienze.

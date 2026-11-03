@@ -347,7 +347,7 @@ fn scrive_geoparquet_valido_e_lo_rilegge() {
         .field_with_name("geometry")
         .unwrap()
         .clone();
-    assert!(!campo.metadata().contains_key(GEO_METADATA_KEY));
+    assert!(campo.metadata().contains_key(GEO_METADATA_KEY));
 
     let letta = leggi(&percorso).expect("rilettura");
     assert_eq!(letta.columns(), tabella.columns());
@@ -537,9 +537,9 @@ fn rifiuti_in_lettura() {
         ),
         (
             "epoch",
-            colonna(json!({"epoch": 2021.5})),
+            colonna(json!({"epoch": "non numerica"})),
             p(),
-            ErrorCategory::Unsupported,
+            ErrorCategory::InvalidPlan,
             "epoch",
         ),
         (
@@ -1027,7 +1027,7 @@ fn senza_geometrie_la_dimensionalita_non_si_rappresenta() {
     let letta = leggi(&percorso).unwrap();
     assert_eq!(
         contratto(&letta).geometries[0].dimensions,
-        GeometryDimensions::Unknown
+        GeometryDimensions::Xy
     );
 }
 

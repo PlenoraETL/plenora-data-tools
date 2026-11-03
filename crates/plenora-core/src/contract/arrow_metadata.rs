@@ -229,10 +229,7 @@ pub fn require_geometry_compatibility(
     if matches!(
         comparison,
         GeometryComparison::Declaration | GeometryComparison::Derived
-    ) && (left.encoding != right.encoding
-        || left.dimensions != right.dimensions
-        || left.precision != right.precision
-        || (comparison == GeometryComparison::Declaration && left.types != right.types))
+    ) && (left.encoding != right.encoding || left.dimensions != right.dimensions)
     {
         return Err(if comparison == GeometryComparison::Derived {
             PlenoraError::Unsupported(
@@ -247,58 +244,15 @@ pub fn require_geometry_compatibility(
     Ok(())
 }
 
-// I contenitori geometrici possono avere rappresentazioni CRS equivalenti:
-// si confrontano qui soltanto i membri non interpretati dal contratto.
-fn native_declarations(
-    field: &Field,
-) -> Result<std::collections::BTreeMap<String, String>, PlenoraError> {
-    let mut output = std::collections::BTreeMap::new();
-    for (key, value) in field.metadata() {
-        if key.starts_with("plenora.geometry.native.")
-            || matches!(key.as_str(), "bbox" | "covering" | "geometry_types")
-        {
-            output.insert(key.clone(), value.clone());
-        }
-    }
-    for (key, interpreted) in [
-        (GEO_METADATA_KEY, &["crs", "dimensions", "encoding"][..]),
-        (
-            super::arrow_schema::GEOARROW_EXTENSION_METADATA_KEY,
-            &["crs", "crs_type", "edges"][..],
-        ),
-    ] {
-        if let Some(raw) = field.metadata().get(key) {
-            crate::json::ensure_no_duplicate_keys(raw).map_err(|_| {
-                PlenoraError::Schema(
-                    "metadato geometrico con chiavi duplicate o JSON non valido".into(),
-                )
-            })?;
-            crate::json::ensure_numbers_exact(raw).map_err(|_| {
-                PlenoraError::Schema(
-                    "metadato geometrico con numeri non rappresentabili esattamente".into(),
-                )
-            })?;
-            let value: serde_json::Value = serde_json::from_str(raw)
-                .map_err(|_| PlenoraError::Schema("metadato geometrico non JSON".into()))?;
-            if let Some(object) = value.as_object() {
-                for (member, value) in object {
-                    if !interpreted.contains(&member.as_str()) {
-                        output.insert(format!("{key}.{member}"), value.to_string());
-                    }
-                }
-            }
-        }
-    }
-    Ok(output)
-}
-
 fn require_same_native_declarations(left: &Field, right: &Field) -> Result<(), PlenoraError> {
-    if native_declarations(left)? != native_declarations(right)? {
-        return Err(PlenoraError::Schema(
-            "fusione con dichiarazioni geometriche native diverse".into(),
-        ));
-    }
-    Ok(())
+    let native = |field: &Field| {
+        let mut metadata = field.metadata().clone();
+        metadata.retain(|key, _| {
+            !CRS_KEYS_REPLACED_BY_DECISION.contains(&key.as_str()) && key != GEO_CRS_KEY
+        });
+        metadata
+    };
+    super::geometry_metadata_policy::merge(&native(left), &native(right)).map(|_| ())
 }
 
 // Queste nozioni appartengono al campo, non a GeometryColumnContract:
@@ -437,7 +391,12 @@ pub fn merged_geometry_metadata(
     }
     let mut metadata = first.metadata().clone();
     metadata.remove(PLENORA_FIELD_ID_KEY);
-    strip_rewritten_types_declarations(&mut metadata);
+    for field in fields.iter().skip(1) {
+        metadata = super::geometry_metadata_policy::merge(&metadata, field.metadata())?;
+    }
+    for key in TYPES_KEYS_REWRITTEN_BY_TRANSFORM {
+        metadata.remove(key);
+    }
     Ok(metadata)
 }
 
@@ -1086,75 +1045,22 @@ pub const TYPES_KEYS_REWRITTEN_BY_TRANSFORM: [&str; 2] = [
     PLENORA_GEOMETRY_TYPES_KEY,
 ];
 
-/// Nozioni geometriche tipizzate che possono attraversare una trasformazione
-/// solo con le regole specifiche di CRS, tipi e precisione del chiamante.
-/// Il namespace geometrico aperto (incluso `native.*`) non si eredita.
-const TYPED_GEOMETRY_KEYS: [&str; 12] = [
-    PLENORA_GEOMETRY_ENCODING_KEY,
-    PLENORA_GEOMETRY_DIMENSIONS_KEY,
-    PLENORA_GEOMETRY_TYPES_KEY,
-    PLENORA_GEOMETRY_TYPES_DECLARATION_KEY,
-    PLENORA_GEOMETRY_CRS_RESOLUTION_KEY,
-    PLENORA_GEOMETRY_CRS_ID_KEY,
-    PLENORA_GEOMETRY_CRS_DEFINITION_KEY,
-    PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY,
-    PLENORA_GEOMETRY_AXIS_ORDER_KEY,
-    PLENORA_GEOMETRY_SRID_KEY,
-    PLENORA_GEOMETRY_SPATIAL_SEMANTICS_KEY,
-    PLENORA_GEOMETRY_PRECISION_KEY,
-];
-
-/// Elimina descrizioni derivate non ricostruibili dal contratto tipizzato.
-///
-/// I metadati utente esterni ai namespace geometrici restano intatti.
-/// Nei contenitori JSON si conserva solo l'allowlist interpretata dal codec;
-/// un documento invalido resta visibile alle guardie, mai riparato in silenzio.
+/// Applica la politica centrale per una colonna con valori modificati.
 pub fn strip_derived_geometry_metadata(metadata: &mut Metadata) {
-    metadata.retain(|key, _| {
-        (!key.starts_with(PLENORA_GEOMETRY_NAMESPACE_PREFIX)
-            || TYPED_GEOMETRY_KEYS.contains(&key.as_str()))
-            && !matches!(key.as_str(), "bbox" | "covering" | "geometry_types")
-    });
-    retain_geometry_json_keys(
+    super::geometry_metadata_policy::apply(
         metadata,
-        GEO_METADATA_KEY,
-        &["crs", "dimensions", "encoding"],
+        super::geometry_metadata_policy::Effect::Values,
     );
-    retain_geometry_json_keys(
-        metadata,
-        super::arrow_schema::GEOARROW_EXTENSION_METADATA_KEY,
-        &["crs", "crs_type", "edges"],
-    );
-}
-
-fn retain_geometry_json_keys(metadata: &mut Metadata, key: &str, allowed: &[&str]) {
-    let Some(raw) = metadata.get(key) else { return };
-    if crate::json::ensure_no_duplicate_keys(raw).is_err()
-        || crate::json::ensure_numbers_exact(raw).is_err()
-    {
-        return;
-    }
-    if let Ok(serde_json::Value::Object(mut object)) = serde_json::from_str(raw) {
-        if object.keys().any(|key| !allowed.contains(&key.as_str())) {
-            object.retain(|key, _| allowed.contains(&key.as_str()));
-            metadata.insert(
-                key.to_owned(),
-                serde_json::Value::Object(object).to_string(),
-            );
-        }
-    }
 }
 
 /// Metadati di schema dopo una trasformazione geometrica: i riepiloghi del
 /// produttore non descrivono piu' l'uscita. `GeoParquet` li ricalcola sui dati.
 #[must_use]
 pub fn transformed_geometry_schema_metadata(metadata: &Metadata) -> Metadata {
-    let mut output = metadata.clone();
-    output.retain(|key, _| {
-        !key.starts_with(PLENORA_GEOMETRY_NAMESPACE_PREFIX)
-            && !matches!(key.as_str(), "geo" | "bbox" | "covering" | "geometry_types")
-    });
-    output
+    super::geometry_metadata_policy::schema_metadata(
+        metadata,
+        super::geometry_metadata_policy::Effect::Values,
+    )
 }
 
 /// Rimuove le chiavi canoniche dei tipi dai metadati di un campo geometria.
@@ -1166,6 +1072,11 @@ pub fn transformed_geometry_schema_metadata(metadata: &Metadata) -> Metadata {
 /// trasformazione) né provocare un conflitto di chiave.
 pub fn strip_rewritten_types_declarations(metadata: &mut Metadata) {
     strip_derived_geometry_metadata(metadata);
+    metadata.retain(|key, _| {
+        !key.starts_with("plenora.geometry.native.")
+            || super::geometry_metadata_policy::class(key)
+                != super::geometry_metadata_policy::Class::Types
+    });
     for key in TYPES_KEYS_REWRITTEN_BY_TRANSFORM {
         metadata.remove(key);
     }
@@ -1178,31 +1089,7 @@ pub fn strip_rewritten_types_declarations(metadata: &mut Metadata) {
 /// della sorgente si sostituiscono e il blocco canonico ri-emette il target
 /// senza conflitto di chiave.
 pub fn strip_rewritten_crs_keys(metadata: &mut Metadata) {
-    strip_derived_geometry_metadata(metadata);
-    metadata.remove(GEO_CRS_KEY);
-    strip_extension_crs(metadata);
-    for key in CRS_KEYS_REPLACED_BY_DECISION {
-        metadata.remove(key);
-    }
-}
-
-/// Il contratto ha gia' verificato il metadato; se il chiamante lo usa
-/// prima della lettura, un documento invalido resta visibile al confine.
-fn strip_extension_crs(metadata: &mut Metadata) {
-    let key = super::arrow_schema::GEOARROW_EXTENSION_METADATA_KEY;
-    let Some(raw) = metadata.get(key) else {
-        return;
-    };
-    if crate::json::ensure_no_duplicate_keys(raw).is_err()
-        || crate::json::ensure_numbers_exact(raw).is_err()
-    {
-        return;
-    }
-    if let Ok(serde_json::Value::Object(mut m)) = serde_json::from_str(raw) {
-        m.remove("crs");
-        m.remove("crs_type");
-        metadata.insert(key, serde_json::Value::Object(m).to_string());
-    }
+    super::geometry_metadata_policy::apply(metadata, super::geometry_metadata_policy::Effect::Crs);
 }
 
 /// Rimuove le dichiarazioni CRS dai metadati di un campo geometria.
@@ -1215,35 +1102,7 @@ fn strip_extension_crs(metadata: &mut Metadata) {
 /// Anche i duplicati, nel documento o nella stringa PROJJSON, restano
 /// invariati per essere rifiutati dalla lettura del contratto.
 pub fn strip_decided_crs_declarations(metadata: &mut Metadata) {
-    strip_derived_geometry_metadata(metadata);
-    metadata.remove(GEO_CRS_KEY);
-    strip_extension_crs(metadata);
-    for key in CRS_KEYS_REPLACED_BY_DECISION {
-        metadata.remove(key);
-    }
-    let Some(raw) = metadata.get(GEO_METADATA_KEY).cloned() else {
-        return;
-    };
-    if crate::json::ensure_no_duplicate_keys(&raw).is_err() {
-        return;
-    }
-    if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw) {
-        if let Some(object) = value.as_object_mut() {
-            if object
-                .get("crs")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|text| crate::json::ensure_no_duplicate_keys(text).is_err())
-            {
-                return;
-            }
-            object.remove("crs");
-            if object.is_empty() {
-                metadata.remove(GEO_METADATA_KEY);
-            } else if let Ok(compact) = serde_json::to_string(&value) {
-                metadata.insert(GEO_METADATA_KEY.to_owned(), compact);
-            }
-        }
-    }
+    super::geometry_metadata_policy::apply(metadata, super::geometry_metadata_policy::Effect::Crs);
 }
 
 /// Errore di metadato contrattuale nella categoria che il vocabolario
@@ -1942,6 +1801,7 @@ pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKey
     completa_crs_io(field, &mut keys)?;
     completa_crs_estensione(field, &mut keys)?;
     verifica_coerenza_crs_completato(&keys)?;
+    super::geometry_metadata_policy::crs_properties(field)?;
 
     Ok(keys)
 }

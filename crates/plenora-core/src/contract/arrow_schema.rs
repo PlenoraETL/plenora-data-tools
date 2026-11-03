@@ -655,8 +655,9 @@ pub fn pubblica_schema(
     osservate: &BTreeSet<u32>,
     ambigue: &BTreeSet<u32>,
 ) -> Result<SchemaRef, PlenoraError> {
+    let sanitized = super::geometry_metadata_policy::sanitize_covering(schema)?;
+    let schema = &sanitized;
     let mut metadata = schema.metadata().clone();
-    verifica_covering(schema)?;
     conserva_colonne_geo(schema, &mut metadata)?;
     aggiungi_versione(&mut metadata)?;
     let mut portate = Vec::with_capacity(schema.fields().len());
@@ -898,69 +899,6 @@ pub fn canonical_geometry_field(
     verifica_metadato_estensione(&output)?;
     read_geometry_contract_keys(&output)?;
     Ok(output)
-}
-
-// Un covering e' un insieme di percorsi a colonne, non un indice di righe.
-// Filtri e sort lo conservano; eliminare una colonna referenziata e' un errore.
-fn verifica_covering(schema: &Schema) -> Result<(), PlenoraError> {
-    fn visit(
-        value: &serde_json::Value,
-        schema: &Schema,
-        in_covering: bool,
-    ) -> Result<(), PlenoraError> {
-        match value {
-            serde_json::Value::Object(object) => {
-                for (key, child) in object {
-                    visit(child, schema, in_covering || key == "covering")?;
-                }
-            }
-            serde_json::Value::Array(path) if in_covering => {
-                let error = || {
-                    PlenoraError::Schema(
-                        "covering riferito a un percorso assente o non valido".into(),
-                    )
-                };
-                let mut names = path.iter();
-                let name = names
-                    .next()
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(error)?;
-                let mut field = schema.field_with_name(name).map_err(|_| error())?;
-                for name in names {
-                    let name = name.as_str().ok_or_else(error)?;
-                    let DataType::Struct(fields) = field.data_type() else {
-                        return Err(error());
-                    };
-                    field = fields
-                        .iter()
-                        .find(|field| field.name() == name)
-                        .ok_or_else(error)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-    for metadata in std::iter::once(schema.metadata())
-        .chain(schema.fields().iter().map(|field| field.metadata()))
-    {
-        for key in [
-            "geo",
-            "covering",
-            "ARROW:extension:metadata",
-            "plenora.geometry.native.geoparquet.column",
-        ] {
-            if let Some(raw) = metadata.get(key) {
-                if let Ok(value) = serde_json::from_str(raw) {
-                    crate::json::ensure_no_duplicate_keys(raw).map_err(|_| {
-                        PlenoraError::Schema("metadato geometrico con chiavi duplicate".into())
-                    })?;
-                    visit(&value, schema, key == "covering")?;
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 fn conserva_colonne_geo(

@@ -384,7 +384,7 @@ fn precisione_conservata_dalle_tabellari_normalizzata_dalle_geo() {
             "geo.arrow"
         )
         .as_deref(),
-        Some("float64")
+        Some("float32")
     );
 }
 

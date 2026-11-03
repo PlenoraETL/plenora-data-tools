@@ -21,25 +21,13 @@ ai profili WKT2 e PROJJSON. Prove IPC `data.run` di identità per EPSG:4326
 e UTM 32632, mutazioni e corpus fuzz. Deviazione, hazard e condizione di
 rientro: [limiti](docs/limiti.md#equivalenza-del-datum-wkt1-per-codice-epsg).
 
-Corrette le dichiarazioni geometriche residue presenti in 4.0.0 e precedenti:
-`geo.reproject` elimina anche `crs` di IO-tools; le uscite geo eliminano
-riepiloghi nativi, bbox/covering e membri geometrici non verificabili tramite
-allowlist, preservando i metadati utente. Conflitti CRS decidibili in ingresso
-sono errori espliciti, anche tra `crs` semplice e dichiarazioni canoniche.
-Precisione coerente anche nelle API Arrow dirette. GeoParquet dichiara
-esplicitamente il rifiuto del CRS assente già imposto dalla guardia degli assi.
-Inventario delle chiavi, decisioni e ambito delle prove in
-[Metadati Arrow](docs/metadati-arrow.md#dichiarazioni-geometriche-residue-correzione-410).
-
-Corrette anche due regressioni della PR 145 prima del rilascio:
-identita', select, filter e sort conservano epoca, orientamento e le altre
-dichiarazioni delle geometrie invariate. Bbox resta un contenitore valido
-anche se non minimo; covering con riferimenti eliminati e fusioni con
-metadati nativi diversi falliscono esplicitamente. Lo SRID nativo e'
-indipendente dal codice CRS (GPKG 100001 con EPSG:32632 e' valido);
-reproject lo sostituisce secondo il mapping documentato. Un CRS non
-confrontabile conserva l'errore del risolutore, incluso `CRS_NOT_BUILTIN`,
-anziche' essere dichiarato discordante.
+Politica centrale dei metadati geometrici per classe e per effetto sulla
+colonna: proprieta' CRS, riepiloghi, provenienza/rappresentazione e tipi.
+Le geometrie lette dalle misure conservano epoca e provenienza; le fusioni
+rimuovono bbox e riepiloghi invece di rifiutarli. Epoche diverse restano
+un errore. I covering senza colonne Arrow referenziate vengono rimossi.
+Fixture reale IO 7.0.0 e regressioni sui tre trasporti; tabella e ambito
+preciso delle prove in [Metadati Arrow](docs/metadati-arrow.md#dichiarazioni-geometriche-residue-correzione-410).
 
 ## [4.0.0] - 2026-11-02
 

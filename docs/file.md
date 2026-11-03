@@ -71,7 +71,7 @@ In lettura il metadato di file `geo` è l'autorità:
 | `geometry_types` | tipi dichiarati (`exact`) e dimensionalità: tutti ` Z` → `xyz`, nessuno → `xy`, misti o elenco vuoto → `unknown`; ogni cella si verifica, un tipo non dichiarato è `DataMapping` |
 | `crs` | assente → `OGC:CRS84`; `null` → CRS mancante; PROJJSON → confronto semantico completo con la tabella (sotto) |
 | `edges` | assente o `planar`; `spherical` è `Unsupported` |
-| `epoch` | `Unsupported` (il contratto non ha epoche) |
+| `epoch` | numero finito conservato come proprieta' CRS nativa e nel file riscritto; nessuna trasformazione temporale |
 | `orientation`, `bbox`, `covering` | validati nella forma e lasciati cadere |
 | altre chiavi di colonna | `Unsupported` |
 | altre chiavi di primo livello | ignorate, come chiede la specifica |
@@ -85,8 +85,8 @@ canoniche del campo, o `unknown`); poi
 blocco canonico `plenora.geometry.*`, completo, e `plenora.contract.version`,
 e rifiutano chiavi canoniche già presenti in conflitto (categoria `schema`,
 o `crs` per le chiavi del CRS: [«Metadati Arrow»](metadati-arrow.md#metadati-arrow)). Il
-metadato `geo` di schema si toglie, `ARROW:extension:metadata` si
-sostituisce. Le identità dei campi (`plenora.field_id`) le assegna il
+metadato `geo` di schema si toglie; i membri aggiuntivi di `geo` di campo
+e `ARROW:extension:metadata` si conservano dopo il controllo di coerenza. Le identità dei campi (`plenora.field_id`) le assegna il
 runner all'uscita, non la lettura.
 
 **CRS.** Un PROJJSON passa dal validatore comune del core: l'ID radice
@@ -116,8 +116,9 @@ rilettura ridà lo stesso contratto:
 | dimensionalità `xy`/`xyz`, tipi non dichiarati (anche `unresolved`, che si legge come non dichiarati) | i tipi trovati nei dati (la rilettura li dichiara `exact`) |
 | dimensionalità `unknown`, o dichiarazione `mixed` senza elenco | `[]` |
 
-Tipi e dimensionalità dei dati si verificano comunque contro il contratto. Il `geo` di campo non entra nello schema incorporato: lo porta il
-metadato di file. Si rifiutano: EWKB, coordinate M, curve, un ordine degli
+Tipi e dimensionalita' dei dati si verificano contro il contratto.
+I contenitori di campo restano nello schema Arrow incorporato; `epoch`
+e `edges` vengono emessi anche nel metadato standard del file. Si rifiutano: EWKB, coordinate M, curve, un ordine degli
 assi dichiarato diverso da `lon_lat`/`easting_northing`, un CRS dichiarato
 ma non risolto, geometrie di un tipo o di una dimensionalità diversi dal
 contratto.
@@ -376,8 +377,8 @@ limite della tabella.
   byte del file: chi usa `plenora-io` installa
   `plenora_core::panic_policy::install` (limite già dichiarato lì).
 - **GeoParquet, ciò che il contratto non porta**: `orientation`, `bbox` e
-  `covering` letti si validano e si perdono; `epoch` e `edges: spherical` si
-  rifiutano; il contratto ammette una sola colonna geometrica, quindi
+  `covering` letti si validano e si perdono; `epoch` si conserva senza
+  trasformazioni temporali, `edges: spherical` si rifiuta; il contratto ammette una sola colonna geometrica, quindi
   un file con più colonne geometriche si rifiuta (`Schema`). Il PROJJSON
   letto deve coincidere semanticamente con una voce integrata; un ID EPSG
   con parametri discordanti viene rifiutato.
@@ -387,10 +388,9 @@ limite della tabella.
   (provato su ogni combinazione di dimensionalità, dati e dichiarazione dei
   tipi), i byte dei metadati no. Due cambi voluti: con dimensionalità nota
   e tipi non dichiarati (o `unresolved`) la rilettura dichiara `exact` i
-  tipi dei dati; senza
-  blocco canonico e senza geometrie (zero righe o tutte nulle) la
-  dimensionalità `xy`/`xyz` non si rappresenta (`geometry_types` vuoto) e si
-  rilegge `unknown`.
+  tipi dei dati. Con zero righe o tutte geometrie nulle, lo schema Arrow
+  incorporato conserva la dimensionalita' dichiarata; nel solo metadato
+  standard `geometry_types` vuoto non basta a rappresentarla.
 - **Interi stretti da file malformati.**
   *Regola*: `parquet` legge `Int8`, `Int16`, `UInt8`, `UInt16` da colonne
   fisiche `INT32` con un cast che tronca.

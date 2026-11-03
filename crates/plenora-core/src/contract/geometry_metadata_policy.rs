@@ -1,0 +1,584 @@
+//! Politica unica delle dichiarazioni geometriche, indipendente dal trasporto.
+use crate::arrow::Metadata;
+use crate::PlenoraError;
+
+/// Significato di una chiave geometrica.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Class {
+    /// Significato delle coordinate.
+    Crs,
+    /// Riepilogo dei valori.
+    Derived,
+    /// Provenienza o rappresentazione.
+    Representation,
+    /// Tipi e dimensioni.
+    Types,
+}
+/// Effetto sulla singola colonna geometrica.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Effect {
+    /// Celle e righe invariate.
+    Unchanged,
+    /// Celle invariate, righe selezionate o riordinate.
+    Rows,
+    /// Coordinate o geometrie modificate.
+    Values,
+    /// Riferimento delle coordinate cambiato.
+    Crs,
+    /// Colonna risultante da piu' sorgenti.
+    Merge,
+}
+/// Elenco esaustivo delle chiavi conosciute; gli altri membri geometrici sono derivati.
+pub const KEYS: &[(&str, Class)] = &[
+    ("crs", Class::Crs),
+    ("epoch", Class::Crs),
+    ("edges", Class::Crs),
+    ("crs_type", Class::Crs),
+    ("axis_order", Class::Crs),
+    ("plenora.geometry.crs_resolution", Class::Crs),
+    ("plenora.geometry.crs_id", Class::Crs),
+    ("plenora.geometry.crs_definition", Class::Crs),
+    ("plenora.geometry.crs_definition_format", Class::Crs),
+    ("plenora.geometry.axis_order", Class::Crs),
+    ("plenora.geometry.srid", Class::Crs),
+    ("plenora.geometry.spatial_semantics", Class::Crs),
+    ("plenora.geometry.native.geoparquet.epoch", Class::Crs),
+    ("plenora.geometry.native.geoparquet.edges", Class::Crs),
+    ("bbox", Class::Derived),
+    ("covering", Class::Derived),
+    ("geometry_types", Class::Derived),
+    ("orientation", Class::Derived),
+    ("precision", Class::Derived),
+    ("plenora.geometry.native.geoparquet.column", Class::Derived),
+    ("plenora.geometry.native.geoparquet.bbox", Class::Derived),
+    (
+        "plenora.geometry.native.geoparquet.orientation",
+        Class::Derived,
+    ),
+    ("encoding", Class::Representation),
+    ("ARROW:extension:name", Class::Representation),
+    ("plenora.geometry.encoding", Class::Representation),
+    ("plenora.geometry.precision", Class::Representation),
+    (
+        "plenora.geometry.native.geoparquet.primary_column",
+        Class::Representation,
+    ),
+    (
+        "plenora.geometry.native.geoparquet.version",
+        Class::Representation,
+    ),
+    (
+        "plenora.geometry.native.geoparquet.compatibilita",
+        Class::Representation,
+    ),
+    (
+        "plenora.geometry.native.geoparquet.altre_colonne",
+        Class::Representation,
+    ),
+    (
+        "plenora.geometry.native.gpkg.rtree_index",
+        Class::Representation,
+    ),
+    (
+        "plenora.geometry.native.shp.measure_no_data",
+        Class::Representation,
+    ),
+    (
+        "plenora.geometry.native.filegdb.geometry_field_count",
+        Class::Representation,
+    ),
+    (
+        "plenora.geometry.native.dxf.geometry_model",
+        Class::Representation,
+    ),
+    (
+        "plenora.geometry.native.dxf.z_inference",
+        Class::Representation,
+    ),
+    (
+        "plenora.geometry.native.csv.geometry_encoding",
+        Class::Representation,
+    ),
+    (
+        "plenora.geometry.native.xlsx.geometry_encoding",
+        Class::Representation,
+    ),
+    ("dimensions", Class::Types),
+    ("types", Class::Types),
+    ("types_declaration", Class::Types),
+    ("plenora.geometry.dimensions", Class::Types),
+    ("plenora.geometry.types", Class::Types),
+    ("plenora.geometry.types_declaration", Class::Types),
+    (
+        "plenora.geometry.native.gpkg.geometry_type_name",
+        Class::Types,
+    ),
+    ("plenora.geometry.native.gpkg.z", Class::Types),
+    ("plenora.geometry.native.gpkg.m", Class::Types),
+    ("plenora.geometry.native.shp.shape_type", Class::Types),
+    (
+        "plenora.geometry.native.filegdb.ogr_geometry_type",
+        Class::Types,
+    ),
+];
+/// Classe di una chiave nel namespace geometrico o in un contenitore geometrico.
+#[must_use]
+pub fn class(key: &str) -> Class {
+    KEYS.iter()
+        .find(|(name, _)| *name == key)
+        .map_or(Class::Derived, |(_, class)| *class)
+}
+/// Chiavi di primo livello governate da questa politica.
+#[must_use]
+pub fn governed(key: &str) -> bool {
+    key.starts_with("plenora.geometry.") || KEYS.iter().any(|(name, _)| *name == key)
+}
+/// Decisione unica per classe ed effetto; bbox e' un contenitore dei valori superstiti.
+#[must_use]
+pub fn keep(key: &str, effect: Effect, equal: bool) -> bool {
+    match (class(key), effect) {
+        (_, Effect::Unchanged)
+        | (Class::Crs | Class::Representation | Class::Types, Effect::Rows)
+        | (Class::Crs, Effect::Values | Effect::Merge)
+        | (Class::Types, Effect::Values | Effect::Crs) => true,
+        (Class::Derived, Effect::Rows) => {
+            matches!(key, "bbox" | "plenora.geometry.native.geoparquet.bbox")
+        }
+        (Class::Representation | Class::Types, Effect::Merge) => equal,
+        _ => false,
+    }
+}
+/// Applica la politica ai membri opachi, lasciando i campi tipizzati al codec.
+/// Il codec riscrive encoding, precisione, tipi e dimensioni dall'uscita effettiva.
+pub fn apply(metadata: &mut Metadata, effect: Effect) {
+    if effect == Effect::Unchanged {
+        return;
+    }
+    metadata.retain(|key, value| {
+        (!governed(key)
+            || (typed(key) && !(effect == Effect::Crs && class(key) == Class::Crs))
+            || keep(key, effect, true))
+            && (effect != Effect::Rows
+                || !matches!(
+                    key.as_str(),
+                    "bbox" | "plenora.geometry.native.geoparquet.bbox"
+                )
+                || valid_bbox(value))
+    });
+    for container in ["geo", "ARROW:extension:metadata"] {
+        let Some(raw) = metadata.get(container) else {
+            continue;
+        };
+        // Un documento malformato rimane visibile al validatore.
+        if crate::json::ensure_no_duplicate_keys(raw).is_err()
+            || crate::json::ensure_numbers_exact(raw).is_err()
+        {
+            continue;
+        }
+        if let Ok(serde_json::Value::Object(mut object)) = serde_json::from_str(raw) {
+            if object
+                .get("crs")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|text| crate::json::ensure_no_duplicate_keys(text).is_err())
+            {
+                continue;
+            }
+            object.retain(|key, value| {
+                (matches!(key.as_str(), "dimensions" | "encoding") || keep(key, effect, true))
+                    && (effect != Effect::Rows || key != "bbox" || valid_bbox(&value.to_string()))
+            });
+            if object.is_empty() {
+                metadata.remove(container);
+            } else {
+                metadata.insert(container, serde_json::Value::Object(object).to_string());
+            }
+        }
+    }
+}
+fn typed(key: &str) -> bool {
+    key == "ARROW:extension:name"
+        || (key.starts_with("plenora.geometry.")
+            && !key.starts_with("plenora.geometry.native.")
+            && KEYS.iter().any(|(name, _)| *name == key))
+}
+/// Fondi dichiarazioni senza ereditare riepiloghi del primo ramo.
+///
+/// # Errors
+/// Rifiuta proprieta' CRS diverse o presenti da un solo lato.
+pub fn merge(left: &Metadata, right: &Metadata) -> Result<Metadata, PlenoraError> {
+    let mut result = left.clone();
+    for key in left.keys().chain(right.keys()) {
+        if !governed(key) {
+            continue;
+        }
+        let equal = left.get(key) == right.get(key);
+        if class(key) == Class::Crs && !typed(key) && key != "crs" && !equal {
+            return Err(PlenoraError::Schema(
+                "fusione con proprieta' del CRS diverse".into(),
+            ));
+        }
+        if !keep(key, Effect::Merge, equal) {
+            result.remove(key);
+        }
+    }
+    if left.get("plenora.geometry.types") != right.get("plenora.geometry.types")
+        || left.get("plenora.geometry.types_declaration")
+            != right.get("plenora.geometry.types_declaration")
+    {
+        result.remove("plenora.geometry.types");
+        result.insert("plenora.geometry.types_declaration", "unresolved");
+    }
+    for container in ["geo", "ARROW:extension:metadata"] {
+        let parse =
+            |md: &Metadata| -> Result<serde_json::Map<String, serde_json::Value>, PlenoraError> {
+                let Some(raw) = md.get(container) else {
+                    return Ok(serde_json::Map::new());
+                };
+                crate::json::ensure_no_duplicate_keys(raw)
+                    .map_err(|_| PlenoraError::Schema("metadato geometrico non valido".into()))?;
+                crate::json::ensure_numbers_exact(raw)
+                    .map_err(|_| PlenoraError::Schema("numero geometrico non esatto".into()))?;
+                match serde_json::from_str(raw) {
+                    Ok(serde_json::Value::Object(object)) => Ok(object),
+                    _ => Err(PlenoraError::Schema(
+                        "metadato geometrico non oggetto".into(),
+                    )),
+                }
+            };
+        let a = parse(left)?;
+        let b = parse(right)?;
+        let mut merged = a.clone();
+        for key in a.keys().chain(b.keys()) {
+            let equal = a.get(key) == b.get(key);
+            // Il codec confronta le rappresentazioni CRS equivalenti.
+            if class(key) == Class::Crs && !matches!(key.as_str(), "crs" | "crs_type") && !equal {
+                return Err(PlenoraError::Schema(
+                    "fusione con proprieta' del CRS diverse".into(),
+                ));
+            }
+            if !keep(key, Effect::Merge, equal) {
+                merged.remove(key);
+            }
+        }
+        if left.contains_key(container) {
+            result.insert(container, serde_json::Value::Object(merged).to_string());
+        }
+    }
+    Ok(result)
+}
+
+/// Effetto di catalogo sulla geometria ereditata. Le colonne prodotte hanno
+/// dichiarazioni nuove; le trasformazioni tabellari di colonne specifiche
+/// applicano inoltre `Values` alla sola colonna sostituita.
+#[must_use]
+pub fn operation_effect(op: &crate::catalog::OperationDescriptor) -> Effect {
+    use crate::catalog::{Family, GeoFusion, SourceRowProvenance};
+    if op.id == "geo.reproject" {
+        return Effect::Crs;
+    }
+    if matches!(
+        op.id,
+        "table.concat" | "table.concat_by_name" | "table.union_distinct"
+    ) {
+        return Effect::Merge;
+    }
+    if op.family == Family::Geo {
+        if op.geo_fusion == GeoFusion::TerminalMeasure
+            || op.id.starts_with("geo.predicate_")
+            || matches!(
+                op.id,
+                "geo.bounds"
+                    | "geo.geometry_diagnostics"
+                    | "geo.geometry_accessors"
+                    | "geo.line_locate_point"
+                    | "geo.cluster_dbscan"
+                    | "geo.distance"
+                    | "geo.hausdorff_distance"
+                    | "geo.frechet_distance"
+                    | "geo.haversine_distance"
+                    | "geo.geodesic_distance"
+                    | "geo.bearing"
+                    | "geo.geodesic_area"
+                    | "geo.geodesic_line_length"
+                    | "geo.within"
+                    | "geo.count_points_in_polygons"
+            )
+        {
+            return Effect::Unchanged;
+        }
+        if matches!(op.id, "geo.sjoin" | "geo.nearest") {
+            return Effect::Rows;
+        }
+        return Effect::Values;
+    }
+    if op.source_row_provenance() == SourceRowProvenance::Preserved {
+        Effect::Unchanged
+    } else {
+        Effect::Rows
+    }
+}
+/// Applica l'effetto alle colonne geometriche di uno schema.
+///
+/// # Errors
+/// Proprieta' CRS incompatibili in una fusione.
+pub fn schema_effect(
+    schema: &crate::arrow::Schema,
+    inputs: &[&crate::arrow::Schema],
+    effect: Effect,
+) -> Result<crate::arrow::Schema, PlenoraError> {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let mut md = field.metadata().clone();
+            if super::arrow_metadata::field_declares_wkb_geometry(field) {
+                if effect == Effect::Merge {
+                    for input in inputs {
+                        if let Ok(other) = input.field_with_name(field.name()) {
+                            md = merge(&md, other.metadata())?;
+                        }
+                    }
+                } else {
+                    apply(&mut md, effect);
+                }
+            }
+            Ok(field.as_ref().clone().with_metadata(md))
+        })
+        .collect::<Result<Vec<_>, PlenoraError>>()?;
+    let mut md = schema.metadata().clone();
+    if effect != Effect::Unchanged {
+        apply(&mut md, effect);
+        // Il geo di schema e' un riepilogo dell'intero dataset, rigenerato dal writer.
+        md.remove("geo");
+    }
+    Ok(crate::arrow::Schema::new_with_metadata(fields, md))
+}
+
+/// Rimuove dichiarazioni covering che non referenziano lo schema pubblicato.
+/// I contenitori nativi rimangono opachi: nessun percorso e' un requisito di input.
+///
+/// # Errors
+/// JSON con chiavi duplicate o numeri non esatti.
+pub fn sanitize_covering(
+    schema: &crate::arrow::Schema,
+) -> Result<crate::arrow::Schema, PlenoraError> {
+    fn valid(value: &serde_json::Value, schema: &crate::arrow::Schema) -> bool {
+        match value {
+            serde_json::Value::Object(object) => {
+                !object.is_empty() && object.values().all(|v| valid(v, schema))
+            }
+            serde_json::Value::Array(path) => {
+                let mut names = path.iter();
+                let Some(name) = names.next().and_then(serde_json::Value::as_str) else {
+                    return false;
+                };
+                let Ok(mut field) = schema.field_with_name(name) else {
+                    return false;
+                };
+                for name in names {
+                    let Some(name) = name.as_str() else {
+                        return false;
+                    };
+                    let crate::arrow::DataType::Struct(fields) = field.data_type() else {
+                        return false;
+                    };
+                    let Some(child) = fields.iter().find(|f| f.name() == name) else {
+                        return false;
+                    };
+                    field = child;
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+    fn prune(value: &mut serde_json::Value, schema: &crate::arrow::Schema) {
+        if let serde_json::Value::Object(object) = value {
+            if object.get("covering").is_some_and(|v| !valid(v, schema)) {
+                object.remove("covering");
+            }
+            for child in object.values_mut() {
+                prune(child, schema);
+            }
+        }
+    }
+    let clean = |source: &Metadata| -> Result<Metadata, PlenoraError> {
+        let mut md = source.clone();
+        for key in [
+            "geo",
+            "covering",
+            "ARROW:extension:metadata",
+            "plenora.geometry.native.geoparquet.column",
+        ] {
+            let Some(raw) = source.get(key) else { continue };
+            let Ok(mut value) = serde_json::from_str(raw) else {
+                continue;
+            };
+            crate::json::ensure_no_duplicate_keys(raw).map_err(|_| {
+                PlenoraError::Schema("metadato geometrico con chiavi duplicate".into())
+            })?;
+            if key == "covering" {
+                if !valid(&value, schema) {
+                    md.remove(key);
+                }
+            } else {
+                let original = value.clone();
+                prune(&mut value, schema);
+                if value != original {
+                    crate::json::ensure_numbers_exact(raw).map_err(|_| {
+                        PlenoraError::Schema("metadato geometrico con numero non esatto".into())
+                    })?;
+                    md.insert(key, value.to_string());
+                }
+            }
+        }
+        Ok(md)
+    };
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            Ok(field
+                .as_ref()
+                .clone()
+                .with_metadata(clean(field.metadata())?))
+        })
+        .collect::<Result<Vec<_>, PlenoraError>>()?;
+    Ok(crate::arrow::Schema::new_with_metadata(
+        fields,
+        clean(schema.metadata())?,
+    ))
+}
+
+fn valid_bbox(raw: &str) -> bool {
+    let wrapped;
+    let raw = if raw.starts_with('[') {
+        raw
+    } else {
+        wrapped = format!("[{raw}]");
+        &wrapped
+    };
+    if crate::json::ensure_numbers_exact(raw).is_err() {
+        return false;
+    }
+    let Ok(serde_json::Value::Array(values)) = serde_json::from_str(raw) else {
+        return false;
+    };
+    if !matches!(values.len(), 4 | 6) {
+        return false;
+    }
+    let half = values.len() / 2;
+    values.iter().take(half).zip(values.iter().skip(half)).all(|(lo, hi)| {
+        matches!((lo.as_f64(), hi.as_f64()), (Some(lo), Some(hi)) if lo.is_finite() && hi.is_finite() && lo <= hi)
+    })
+}
+/// Metadati del dataset dopo un effetto su righe o geometrie.
+#[must_use]
+pub fn schema_metadata(metadata: &Metadata, effect: Effect) -> Metadata {
+    let mut output = metadata.clone();
+    apply(&mut output, effect);
+    if effect != Effect::Unchanged {
+        output.remove("geo");
+    }
+    output
+}
+
+/// Fusione dei metadati di dataset: stessa politica per le chiavi geometriche,
+/// conflitto esplicito per le chiavi applicative.
+///
+/// # Errors
+/// Dichiarazioni CRS diverse o metadati applicativi incompatibili.
+pub fn merge_schema(sources: &[&Metadata]) -> Result<Metadata, PlenoraError> {
+    let Some(first) = sources.first() else {
+        return Ok(Metadata::new());
+    };
+    let mut output = (*first).clone();
+    output.remove("geo");
+    for source in sources.iter().skip(1) {
+        let mut source = (*source).clone();
+        source.remove("geo");
+        for key in output.keys().chain(source.keys()) {
+            if governed(key) && class(key) == Class::Crs && output.get(key) != source.get(key) {
+                return Err(PlenoraError::Schema(
+                    "proprieta' CRS di schema in conflitto".into(),
+                ));
+            }
+        }
+        let mut next = merge(&output, &source)?;
+        for (key, value) in &source {
+            if governed(key) {
+                continue;
+            }
+            if output.get(key).is_some_and(|old| old != value) {
+                return Err(PlenoraError::Schema(format!(
+                    "metadato applicativo di schema in conflitto: {key}"
+                )));
+            }
+            next.insert(key.clone(), value.clone());
+        }
+        output = next;
+    }
+    apply(&mut output, Effect::Merge);
+    Ok(output)
+}
+
+/// Proprieta' CRS opache, coerenti fra le rappresentazioni e trasportabili.
+///
+/// # Errors
+/// CRS per epoca non numerica o dichiarazioni discordanti; Unsupported per lati sferici.
+pub fn crs_properties(
+    campo: &crate::arrow::Field,
+) -> Result<serde_json::Map<String, serde_json::Value>, PlenoraError> {
+    use serde_json::{Map, Value};
+    let invalido = |message: &str| PlenoraError::Crs(message.to_owned());
+    let mut output = Map::new();
+    for (member, native) in [
+        ("epoch", "plenora.geometry.native.geoparquet.epoch"),
+        ("edges", "plenora.geometry.native.geoparquet.edges"),
+    ] {
+        let mut candidates = Vec::new();
+        if let Some(raw) = campo.metadata().get(native) {
+            if member == "epoch" {
+                crate::json::ensure_numbers_exact(raw).map_err(|_| invalido("epoch non esatta"))?;
+                candidates.push(
+                    serde_json::from_str::<Value>(raw)
+                        .map_err(|_| invalido("epoch non numerica"))?,
+                );
+            } else {
+                candidates.push(Value::String(raw.clone()));
+            }
+        }
+        for container in [
+            super::arrow_metadata::GEO_METADATA_KEY,
+            super::arrow_schema::GEOARROW_EXTENSION_METADATA_KEY,
+        ] {
+            if let Some(raw) = campo.metadata().get(container).filter(|raw| {
+                container != super::arrow_schema::GEOARROW_EXTENSION_METADATA_KEY
+                    || !raw.trim().is_empty()
+            }) {
+                crate::json::ensure_no_duplicate_keys(raw)
+                    .map_err(|_| invalido("metadato geometrico duplicato"))?;
+                crate::json::ensure_numbers_exact(raw)
+                    .map_err(|_| invalido("metadato geometrico non esatto"))?;
+                let parsed: Value = serde_json::from_str(raw)
+                    .map_err(|_| invalido("metadato geometrico non JSON"))?;
+                if let Some(value) = parsed.get(member) {
+                    candidates.push(value.clone());
+                }
+            }
+        }
+        if let Some(value) = candidates.first() {
+            if candidates.iter().any(|other| other != value) {
+                return Err(invalido("proprieta' CRS discordanti"));
+            }
+            if member == "epoch" && !value.as_f64().is_some_and(f64::is_finite) {
+                return Err(invalido("epoch non numerica"));
+            }
+            if member == "edges" && value.as_str() != Some("planar") {
+                return Err(PlenoraError::Unsupported("edges non planare".into()));
+            }
+            output.insert(member.into(), value.clone());
+        }
+    }
+    Ok(output)
+}
