@@ -617,6 +617,25 @@ struct Audit {
     refusals: BTreeMap<String, usize>,
     divergences: Vec<String>,
 }
+fn unexpected_error(error: &PlenoraError) -> bool {
+    matches!(
+        error.category(),
+        plenora_core::ErrorCategory::Internal | plenora_core::ErrorCategory::Io
+    )
+}
+
+#[test]
+fn errori_interni_non_sono_rifiuti_espliciti() {
+    assert!(unexpected_error(&PlenoraError::Internal("prova".into())));
+    assert!(unexpected_error(&PlenoraError::Io(std::io::Error::other(
+        "prova"
+    ))));
+    assert!(!unexpected_error(&PlenoraError::Unsupported(
+        "prova".into()
+    )));
+    assert!(!unexpected_error(&PlenoraError::Schema("prova".into())));
+}
+
 #[allow(clippy::too_many_lines)] // Casi indipendenti, raccolti prima del fallimento.
 fn run_part(operations: &'static [OperationDescriptor]) -> Audit {
     let classifications: BTreeMap<_, _> = include_str!("../riferimenti/operazioni_metadati.txt")
@@ -661,6 +680,9 @@ fn run_part(operations: &'static [OperationDescriptor]) -> Audit {
             for (transport_index, ext) in ["arrow", "arrows", "parquet"].iter().enumerate() {
                 let baseline = execute(&scheda, &bases, how)
                     .and_then(|b| transport(&b, &dir.path().join(format!("baseline.{ext}"))));
+                if baseline.as_ref().is_err_and(unexpected_error) {
+                    divergences.push(format!("{} / {ext}: baseline con errore interno/IO", op.id));
+                }
                 for &(key, class) in policy::KEYS {
                     for site in sites(key) {
                         let merge = matches!(
@@ -686,8 +708,7 @@ fn run_part(operations: &'static [OperationDescriptor]) -> Audit {
                                 }
                             }
                             if let Some(error) = input_error {
-                                if matches!(error, PlenoraError::Internal(_) | PlenoraError::Io(_))
-                                {
+                                if unexpected_error(&error) {
                                     divergences
                                         .push(format!("{label}: errore interno/IO in ingresso"));
                                 }
@@ -715,8 +736,7 @@ fn run_part(operations: &'static [OperationDescriptor]) -> Audit {
                             let output = match execute(&scheda, &inputs, how) {
                                 Ok(b) => b,
                                 Err(e) => {
-                                    if matches!(e, PlenoraError::Internal(_) | PlenoraError::Io(_))
-                                    {
+                                    if unexpected_error(&e) {
                                         divergences.push(format!("{label}: errore interno/IO"));
                                     }
                                     *refusals
@@ -940,7 +960,7 @@ fn catalogo_chiavi_trasporti() {
         divergences.extend(audit.divergences);
     }
     divergences.sort();
-    let mut report = format!("# Matrice metadati\n\nUscite rilette: {counts:?}. Confronti: {checked:?}.\n\n## Rifiuti espliciti\n\n");
+    let mut report = format!("# Matrice metadati\n\nUscite rilette: {counts:?}. Confronti: {checked:?}.\n\n## Copertura\n\nLe fixture di melt e pivot non collocano la geometria fra i valori. Il difetto preesistente di quei casi resta una voce separata, fuori da questa PR. Internal e IO falliscono la matrice anche nella baseline.\n\n## Rifiuti espliciti\n\n");
     for (label, count) in refusals {
         writeln!(report, "- {label}: {count}").unwrap();
     }

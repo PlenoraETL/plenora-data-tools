@@ -492,11 +492,7 @@ fn colonne_invariate_conservano_le_dichiarazioni_native() {
             assert_eq!(
                 md.get("plenora.geometry.native.geoparquet.orientation")
                     .map(String::as_str),
-                if matches!(op, "table.filter" | "table.sort") {
-                    None
-                } else {
-                    Some("counterclockwise")
-                }
+                Some("counterclockwise")
             );
             assert_eq!(md[PLENORA_GEOMETRY_SRID_KEY], "100001");
         }
@@ -509,10 +505,7 @@ fn colonne_invariate_conservano_le_dichiarazioni_native() {
             let key = format!("plenora.geometry.native.{suffix}");
             let derived = matches!(
                 *suffix,
-                "geoparquet.column"
-                    | "geoparquet.orientation"
-                    | "geoparquet.bbox"
-                    | "futuro.non_interpretato"
+                "geoparquet.column" | "geoparquet.bbox" | "futuro.non_interpretato"
             );
             assert_eq!(
                 field.metadata().get(&key),
@@ -642,5 +635,69 @@ fn io700_epoch_covering_e_fusioni() {
         assert_eq!(md["plenora.geometry.native.geoparquet.epoch"], "2023.5");
         assert!(!md.contains_key("plenora.geometry.native.geoparquet.bbox"));
         assert!(!md.contains_key("plenora.geometry.native.gpkg.rtree_index"));
+    }
+}
+
+#[test]
+fn fusioni_srid_presente_assente_e_uguale() {
+    let source = comune::utm32_integrata();
+    let schema_with = |srid: Option<&str>| {
+        let schema = source.schema();
+        let fields: Vec<_> = schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let mut md = field.metadata().clone();
+                if field.name() == "geometry" {
+                    md.remove(PLENORA_GEOMETRY_SRID_KEY);
+                    if let Some(srid) = srid {
+                        md.insert(PLENORA_GEOMETRY_SRID_KEY, srid);
+                    }
+                }
+                field.as_ref().clone().with_metadata(md)
+            })
+            .collect();
+        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+    };
+    for op in [
+        "table.concat",
+        "table.concat_by_name",
+        "table.union_distinct",
+    ] {
+        let plan = Pipeline::from_json(&json!({"version":1,"inputs":["a","b"],"steps":[{"out":"o","op":op,"in":["a","b"],"config":{}}],"outputs":["o"]}).to_string()).unwrap();
+        for (left, right) in [
+            (Some("32632"), None),
+            (None, Some("32632")),
+            (None, None),
+            (Some("32632"), Some("32632")),
+            (Some("032632"), Some("32632")),
+        ] {
+            let a = schema_with(left);
+            let b = schema_with(right);
+            let left = RecordBatch::try_new(a.clone(), source.columns().to_vec()).unwrap();
+            let right = RecordBatch::try_new(b.clone(), source.columns().to_vec()).unwrap();
+            let result = plan
+                .validate(&[("a", a), ("b", b)])
+                .unwrap()
+                .run(vec![("a".into(), left), ("b".into(), right)])
+                .unwrap();
+            assert_eq!(
+                canonical_geometry_srid(
+                    result.outputs[0]
+                        .1
+                        .schema()
+                        .field_with_name("geometry")
+                        .unwrap()
+                )
+                .unwrap(),
+                Some(32632)
+            );
+        }
+        for (left, right) in [(Some("100001"), None), (None, Some("100001"))] {
+            let error = plan
+                .validate(&[("a", schema_with(left)), ("b", schema_with(right))])
+                .unwrap_err();
+            assert_eq!(error.category(), ErrorCategory::Crs, "{op}");
+        }
     }
 }

@@ -244,10 +244,36 @@ encoding, precisione e tipi dell'uscita descrivono i byte prodotti.
 
 | Classe | Invariata | RigheFiltrate | ValoriModificati | CrsCambiato | Fusione |
 | --- | --- | --- | --- | --- | --- |
-| C1: proprieta' CRS | conserva | conserva | conserva | elimina/riscrive | uguali conserva; diversi o assenti da un lato rifiuta |
+| C1: proprieta' CRS (srid sotto) | conserva | conserva | conserva | elimina/riscrive | uguali conserva; diversi o assenti da un lato rifiuta |
+| C1 tipizzata: srid | conserva/completa dal CRS | conserva/completa dal CRS | conserva/completa dal CRS | elimina/riscrive | confronta i valori effettivi dopo il mapping documentato |
 | C2: derivata | conserva | solo bbox valido come contenitore | elimina | elimina | elimina |
 | C3: provenienza/rappresentazione | conserva | conserva | elimina/riscrive | elimina/riscrive | uguali conserva; diversi elimina |
 | C4: tipi/dimensioni | conserva | conserva | riscrive/toglie se cambiano | riscrive/toglie se cambiano | unione coerente o unresolved |
+
+`RigheFiltrate` comprende selezione, ordinamento e ripetizione di righe
+senza cambiare le celle (anche join, sjoin e nearest). `orientation`, anche
+nella chiave nativa, descrive il verso degli anelli di ciascuna geometria:
+e' C3, si conserva con `Rows` e in fusione con dichiarazioni uguali.
+`geometry_types` resta C2: [GeoParquet 1.1.0](https://geoparquet.org/releases/v1.1.0/)
+richiede i tipi effettivamente presenti, non un sovrainsieme ammissibile;
+un sottoinsieme di righe puo' perderne alcuni. Il writer lo ricalcola.
+`covering` dipende dalle colonne referenziate e resta invalidato con Rows;
+`precision` opaca e chiavi sconosciute non hanno una semantica dimostrata
+per cella e restano C2. Il contenitore nativo `column` resta invalidato:
+non e' una proprieta' atomica e puo' contenere riepiloghi non piu' veri.
+
+Lo `srid` tipizzato non e' una C1 opaca: su WKB con CRS risolto il
+codec completa l'assenza con il codice numerico dell'autorita', solo se
+rappresentabile in `i32`. La dichiarazione esplicita prevale. La fusione
+confronta questi valori effettivi: GPKG con `srid = 32632` e CSV senza
+srid, entrambi WKB con CRS EPSG:32632, sono compatibili in entrambi gli
+ordini; valori effettivi diversi si rifiutano. Non si deduce dal primo
+ramo: ogni campo e' completato dal proprio CRS e i CRS devono coincidere.
+Con CRS mancante o irrisolto non si completa; su EWKB l'assenza resta
+assenza (GEO-009). Non si modificano byte WKB ne' flag SRID: GEO-008
+continua a rifiutare un flag SRID incorporato sotto WKB sul dato originale.
+Il mapping e' quello dell'emissione canonica nel runner: l'API diretta dei
+kernel senza contratti non risolve CRS ne' deduce uno srid mancante.
 
 Il bbox non e' necessariamente minimo. Il formato nativo IO usa anche
 quattro o sei numeri separati da virgole. Il covering che referenzia
@@ -268,18 +294,18 @@ Le chiavi utente esterne al namespace non cambiano classe implicitamente.
 | `plenora.geometry.crs_definition` | C1 |
 | `plenora.geometry.crs_definition_format` | C1 |
 | `plenora.geometry.axis_order` | C1 |
-| `plenora.geometry.srid` | C1 |
+| `plenora.geometry.srid` | C1 tipizzata: mapping CRS descritto sopra |
 | `plenora.geometry.spatial_semantics` | C1 |
 | `plenora.geometry.native.geoparquet.epoch` | C1 |
 | `plenora.geometry.native.geoparquet.edges` | C1 |
 | `bbox` | C2 |
 | `covering` | C2 |
 | `geometry_types` | C2 |
-| `orientation` | C2 |
+| `orientation` | C3 |
 | `precision` | C2 |
 | `plenora.geometry.native.geoparquet.column` | C2 |
 | `plenora.geometry.native.geoparquet.bbox` | C2 |
-| `plenora.geometry.native.geoparquet.orientation` | C2 |
+| `plenora.geometry.native.geoparquet.orientation` | C3 |
 | `encoding` | C3 |
 | `ARROW:extension:name` | C3 |
 | `plenora.geometry.encoding` | C3 |

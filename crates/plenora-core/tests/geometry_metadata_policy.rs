@@ -141,3 +141,60 @@ fn geometria_nuova_accetta_estensione_crs_vuota() {
         assert!(read_geometry_contract_keys(&inherited).is_ok());
     }
 }
+
+#[test]
+fn orientamento_per_cella_e_fusione() {
+    use plenora_core::arrow::Metadata;
+    for key in [
+        "orientation",
+        "plenora.geometry.native.geoparquet.orientation",
+    ] {
+        let mut md = Metadata::new();
+        md.insert(key, "counterclockwise");
+        let original = md.clone();
+        policy::apply(&mut md, Effect::Rows);
+        assert_eq!(md, original);
+        assert_eq!(policy::merge(&md, &md).unwrap(), md);
+        assert!(!policy::merge(&md, &Metadata::new())
+            .unwrap()
+            .contains_key(key));
+        policy::apply(&mut md, Effect::Values);
+        assert!(!md.contains_key(key));
+    }
+}
+
+#[test]
+fn srid_derivato_solo_con_mapping_wkb_risolto() {
+    use plenora_core::arrow::Schema;
+    use plenora_core::contract::arrow_metadata::{
+        geometry_output_field, require_geometry_compatibility, GeometryComparison,
+    };
+    use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
+    use plenora_core::crs::resolve_crs;
+    for encoding in ["wkb", "ewkb"] {
+        let base = geometry_output_field("geometry", "EPSG:32632").unwrap();
+        let mut md = base.metadata().clone();
+        md.remove("geo");
+        md.insert("plenora.geometry.encoding", encoding);
+        md.insert("plenora.geometry.crs_id", "EPSG:32632");
+        md.insert("plenora.geometry.crs_resolution", "resolved");
+        let absent = base.with_metadata(md.clone());
+        md.insert("plenora.geometry.srid", "32632");
+        let present = absent.clone().with_metadata(md);
+        let mut metadata = plenora_core::arrow::Metadata::new();
+        metadata.insert("plenora.contract.version", "1");
+        let schema = Schema::new_with_metadata(vec![absent.clone()], metadata);
+        let contract =
+            contract_from_arrow_schema(std::sync::Arc::new(schema), resolve_crs).unwrap();
+        for (left, right) in [(&present, &absent), (&absent, &present)] {
+            let result = require_geometry_compatibility(
+                left,
+                &contract.geometries,
+                right,
+                &contract.geometries,
+                GeometryComparison::Declaration,
+            );
+            assert_eq!(result.is_ok(), encoding == "wkb");
+        }
+    }
+}

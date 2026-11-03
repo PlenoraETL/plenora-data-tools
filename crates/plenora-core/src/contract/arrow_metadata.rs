@@ -206,8 +206,14 @@ pub fn require_geometry_compatibility(
     }
     super::arrow_schema::verifica_metadato_estensione(&left)?;
     super::arrow_schema::verifica_metadato_estensione(&right)?;
-    let left = comparison_keys(read_geometry_contract_keys(&left)?, &left_raw);
-    let right = comparison_keys(read_geometry_contract_keys(&right)?, &right_raw);
+    let left = read_geometry_contract_keys(&left)?;
+    let right = read_geometry_contract_keys(&right)?;
+    // Fra framing diversi resta il confronto SRID preesistente; nessun mapping.
+    // Due assenze concordano anche se un solo lato dispone del contratto tipizzato.
+    let map_srid =
+        left.encoding == right.encoding && (left_raw.srid.is_some() || right_raw.srid.is_some());
+    let left = comparison_keys(left, &left_raw, map_srid);
+    let right = comparison_keys(right, &right_raw, map_srid);
     if a != b
         || left.crs_id != right.crs_id
         || left.crs_definition != right.crs_definition
@@ -256,9 +262,19 @@ fn require_same_native_declarations(left: &Field, right: &Field) -> Result<(), P
 fn comparison_keys(
     mut effective: CanonicalGeometryKeys,
     raw: &CanonicalGeometryKeys,
+    map_srid: bool,
 ) -> CanonicalGeometryKeys {
     effective.axis_order = raw.axis_order;
-    effective.srid = raw.srid;
+    // Solo WKB con CRS risolto puo' riusare lo SRID derivato dal codec.
+    // EWKB conserva l'assenza: lo SRID incorporato si verifica sul campo originale.
+    effective.srid = if map_srid
+        && effective.encoding == Some(GeometryEncoding::Wkb)
+        && comparison_crs_resolution(&effective) == CrsResolution::Resolved
+    {
+        raw.srid.or(effective.srid)
+    } else {
+        raw.srid
+    };
     effective.precision = raw.precision;
     effective.spatial_semantics = raw.spatial_semantics;
     effective.crs_resolution = Some(comparison_crs_resolution(&effective));
