@@ -244,7 +244,7 @@ Le concatenazioni conservano i metadati geometrici del primo campo solo
 se encoding, dimensioni, tipi e precisione concordano fra tutti gli ingressi.
 
 
-## Primaria e contratto multigeometria (4.1.0, PR 1, PR 2 e PR 3)
+## Primaria e contratto multigeometria (4.1.0, PR 1-4)
 
 Il core conserva tutte le colonne geometriche con identita' interne distinte.
 `active_geometry = None` significa nessuna primaria, anche con una sola
@@ -287,8 +287,9 @@ aggregazioni e overlay mantengono lo schema ridotto documentato.
 la geometria selezionata, senza promuovere quelle superstiti.
 `geo.sjoin` conserva le colonne sinistre e aggiunge `__right_index`.
 
-GeoParquet resta monogeometria fino alla PR 4; la scrittura senza primaria
-rifiuta con `unsupported`. Questa PR non dichiara ancora l'adozione completa
+GeoParquet legge e scrive tutte le geometrie e importa la primaria dal footer,
+anche non iniziale. IPC file, stream e Arrow SDK conservano identità e stato
+della primaria. La scrittura GeoParquet senza primaria rifiuta con `unsupported`. Questa PR non dichiara ancora l'adozione completa
 del nuovo contratto su tutte le operazioni.
 
 ### Ricerca della classe: costruzioni dei contratti d'uscita

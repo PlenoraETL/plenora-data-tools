@@ -44,6 +44,10 @@ canoniche CRS della sorgente (`plenora.geometry.crs_*`,
 `plenora.geometry.srid`, `plenora.geometry.axis_order`) si tolgono, e `axis_order` si riscrive con l'ordine GIS
 normalizzato del target. Gli altri metadati del campo restano.
 
+La successiva scrittura GeoParquet verifica tutte le colonne, anche le
+secondarie passanti, e ricalcola i bbox senza riusare covering o metadati
+derivati del file sorgente ([File](file.md#geoparquet)).
+
 ### Righe
 
 1:1. Il runner chiama l'adapter di tabella dei kernel

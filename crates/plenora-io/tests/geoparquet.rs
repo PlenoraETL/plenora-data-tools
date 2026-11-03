@@ -675,9 +675,7 @@ fn rifiuti_in_lettura() {
 }
 
 #[test]
-fn una_sola_colonna_geometrica() {
-    // Il contratto v1 ammette una sola colonna geometrica: un file con
-    // due si rifiuta, qualunque sia la primaria.
+fn primaria_indipendente_dall_ordine_fisico() {
     let dir = cartella();
     let schema: SchemaRef = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Binary, true),
@@ -686,10 +684,7 @@ fn una_sola_colonna_geometrica() {
     let celle =
         || -> ArrayRef { Arc::new(BinaryArray::from(vec![Some(punto(1.0, 1.0).as_slice())])) };
     let tabella = RecordBatch::try_new(schema.clone(), vec![celle(), celle()]).unwrap();
-    for (primaria, categoria) in [
-        ("a", ErrorCategory::Unsupported),
-        ("b", ErrorCategory::Unsupported),
-    ] {
+    for primaria in ["a", "b"] {
         let geo = json!({"version": "1.1.0", "primary_column": primaria, "columns": {
             "a": {"encoding": "WKB", "geometry_types": ["Point"]},
             "b": {"encoding": "WKB", "geometry_types": ["Point"], "crs": null}}});
@@ -705,8 +700,11 @@ fn una_sola_colonna_geometrica() {
         .unwrap();
         w.write(&tabella).unwrap();
         w.close().unwrap();
-        let errore = leggi(&percorso).expect_err("due geometrie");
-        assert_eq!(errore.category(), categoria, "{primaria}: {errore}");
+        let letta = leggi(&percorso).unwrap();
+        let c = contratto(&letta);
+        assert_eq!(c.geometries.len(), 2);
+        assert_eq!(c.active_geometry_column().unwrap().name, primaria);
+        assert_eq!(tabella.columns(), letta.columns());
     }
 }
 

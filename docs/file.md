@@ -66,7 +66,7 @@ In lettura il metadato di file `geo` è l'autorità:
 | chiave | lettura |
 | --- | --- |
 | `version` | `1.0.0` o `1.1.0`, altrimenti `Unsupported` |
-| `primary_column` | deve essere fra le `columns` e la prima colonna geometrica dello schema |
+| `primary_column` | deve essere fra le `columns`; identifica la primaria indipendentemente dall'ordine fisico |
 | `encoding` | solo `WKB`; le codifiche GeoArrow native (`point`, …) sono `Unsupported` |
 | `geometry_types` | tipi dichiarati (`exact`) e dimensionalità: tutti ` Z` → `xyz`, nessuno → `xy`, misti o elenco vuoto → `unknown`; ogni cella si verifica, un tipo non dichiarato è `DataMapping` |
 | `crs` | assente → `OGC:CRS84`; `null` → CRS mancante; PROJJSON → confronto semantico completo con la tabella (sotto) |
@@ -86,8 +86,8 @@ blocco canonico `plenora.geometry.*`, completo, e `plenora.contract.version`,
 e rifiutano chiavi canoniche già presenti in conflitto (categoria `schema`,
 o `crs` per le chiavi del CRS: [«Metadati Arrow»](metadati-arrow.md#metadati-arrow)). Il
 metadato `geo` di schema si toglie, `ARROW:extension:metadata` si
-sostituisce. Le identità dei campi (`plenora.field_id`) le assegna il
-runner all'uscita, non la lettura.
+sostituisce. Le identità dichiarate (`plenora.field_id`) si conservano; quelle assenti
+si completano deterministicamente in lettura prima di emettere la primaria.
 
 **CRS.** Un PROJJSON passa dal validatore comune del core: l'ID radice
 seleziona il candidato e il confronto completo verifica datum, ensemble,
@@ -101,7 +101,7 @@ Un CRS nell'estensione Arrow incorporata viene validato e confrontato con
 quello di file prima della normalizzazione; una discordanza è `CRS_MISMATCH`.
 
 In scrittura, dal contratto: `version` `1.1.0`, `primary_column` la
-geometria attiva, `encoding` `WKB`, `crs` il PROJJSON **completo** del CRS
+geometria primaria effettiva, una voce per ogni geometria, `encoding` `WKB`, `crs` il PROJJSON **completo** del CRS
 integrato (`crates/plenora-io/data/projjson_integrati.json`, generato con
 PROJ 9.5.1 da `scripts/genera_projjson_integrati.py` con la terna di
 `genera_crs_integrati.py`; un test verifica che copra esattamente i CRS
@@ -116,6 +116,12 @@ rilettura ridà lo stesso contratto:
 | dimensionalità `xy`/`xyz`, tipi non dichiarati (anche `unresolved`, che si legge come non dichiarati) | i tipi trovati nei dati (la rilettura li dichiara `exact`) |
 | dimensionalità `unknown`, o dichiarazione `mixed` senza elenco | `[]` |
 
+Tutte le colonne si verificano prima della pubblicazione atomica. Senza primaria
+la scrittura rifiuta con `Unsupported`, anche con una sola geometria rimasta.
+BBox si ricalcola; covering, orientation e le corrispondenti chiavi native
+GeoParquet derivate non si riusano. La definizione PROJJSON Arrow incorporata
+si normalizza alla stessa definizione integrata completa del footer dopo la
+verifica semantica, evitando dichiarazioni testualmente discordanti.
 Tipi e dimensionalità dei dati si verificano comunque contro il contratto. Il `geo` di campo non entra nello schema incorporato: lo porta il
 metadato di file. Si rifiutano: EWKB, coordinate M, curve, un ordine degli
 assi dichiarato diverso da `lon_lat`/`easting_northing`, un CRS dichiarato
@@ -135,6 +141,16 @@ Fixture: `crates/plenora-io/tests/dati/` contiene file scritti da pyarrow
 PROJ, uno con timestamp `INT96` e uno con i checksum di pagina
 (`scripts/genera_fixture_geoparquet.py`). La fixture UTM con PROJJSON esterno
 semanticamente equivalente si legge senza modificare le coordinate.
+
+Le fixture IO-tools 7.0.0 e la loro
+[provenienza](../crates/plenora-io/tests/dati/io700_multigeometria.provenienza.json)
+coprono primaria non iniziale e null indipendenti. Il PROJJSON ridotto della
+fixture originale IO resta rifiutato; i round-trip positivi usano definizioni
+complete e file scritti dal binario IO. La prova incrociata ripetibile e'
+`scripts/verifica_multigeometria_io700.py` (PyArrow e i due binari locali).
+Rinomina esplicitamente `bbox` in `bbox_origine`: data-tools conserva la
+colonna letta, mentre IO riserva `bbox` al proprio covering. La prova verifica
+anche i valori della colonna rinominata; non e' una perdita implicita.
 
 ## Scrittura atomica
 
@@ -377,8 +393,8 @@ limite della tabella.
   `plenora_core::panic_policy::install` (limite già dichiarato lì).
 - **GeoParquet, ciò che il contratto non porta**: `orientation`, `bbox` e
   `covering` letti si validano e si perdono; `epoch` e `edges: spherical` si
-  rifiutano; il core ammette piu' geometrie ma il lettore e lo scrittore
-  GeoParquet restano monogeometria: piu' colonne si rifiutano (`Unsupported`).
+  rifiutano. Tutte le geometrie sono lette e scritte con CRS, encoding,
+  tipi e coordinate verificati per colonna.
   La scrittura senza primaria si rifiuta (`Unsupported`). Il PROJJSON
   letto deve coincidere semanticamente con una voce integrata; un ID EPSG
   con parametri discordanti viene rifiutato.

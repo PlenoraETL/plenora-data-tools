@@ -80,14 +80,14 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 
 | crate | unitari | integrazione | totale |
 | --- | --- | --- | --- |
-| `plenora-cli` | 6 | 62 | 68 |
+| `plenora-cli` | 6 | 63 | 69 |
 | `plenora-core` | 206 | 80 | 286 |
 | `plenora-data-py` | 0 | 0 | 0 |
-| `plenora-io` | 20 | 220 | 240 |
+| `plenora-io` | 20 | 228 | 248 |
 | `plenora-kernels-geo` | 531 | 108 | 639 |
 | `plenora-kernels-table` | 472 | 138 | 610 |
 | `plenora-pipeline` | 12 | 171 | 183 |
-| **totale** | 1247 | 779 | 2026 |
+| **totale** | 1247 | 788 | 2035 |
 
 ### Prove Python dell'SDK
 
@@ -99,9 +99,9 @@ che gira sul wheel installato (`scripts/verifica_sdk_python.py`): il
 | --- | --- |
 | `crates/plenora-data-py/python/tests/test_controlli.py` | 21 |
 | `crates/plenora-data-py/python/tests/test_errori.py` | 12 |
-| `crates/plenora-data-py/python/tests/test_operazioni.py` | 12 |
+| `crates/plenora-data-py/python/tests/test_operazioni.py` | 13 |
 | `crates/plenora-data-py/python/tests/test_superficie.py` | 9 |
-| **totale** | 54 |
+| **totale** | 55 |
 
 ### Prove delle guardie
 

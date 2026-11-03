@@ -38,7 +38,15 @@ assi e precisione circoscritti agli operandi, geometrie passanti invariate.
 I produttori aggiungono senza promuovere; le operazioni a schema ridotto
 conservano solo i campi previsti. `sjoin` conserva il suo schema sinistro.
 Matrice differenziale del catalogo con due e tre geometrie indipendenti.
-GeoParquet resta esplicitamente limitato a una geometria fino alla PR 4.
+PR 4 - IO e superfici pubbliche: GeoParquet legge e scrive tutte le geometrie,
+con primaria indipendente dall'ordine fisico e identita' conservate o completate.
+Controlli per colonna anche sulle secondarie; senza primaria la scrittura
+rifiuta senza scegliere. BBox ricalcolati e metadati derivati eliminati.
+La definizione PROJJSON Arrow si normalizza alla stessa definizione integrata
+completa del footer, dopo il confronto semantico.
+Round-trip IPC file/stream e prove delle superfici CLI/SDK. Fixture scritte
+con IO-tools 7.0.0: CRS completi per i casi positivi; il PROJJSON ridotto della
+fixture originale resta rifiutato, senza dedurre equivalenza dal solo ID.
 
 ## [4.0.0] - 2026-11-02
 
