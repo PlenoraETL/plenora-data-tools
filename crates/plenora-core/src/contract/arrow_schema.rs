@@ -301,9 +301,7 @@ pub fn contract_from_arrow_schema(
 /// 2. conflitti decidibili senza risolutore, che danno `DeclaredUnresolved`:
 ///    (2a) solo per input **non dichiarati** (`crs_resolution` assente),
 ///    `crs_id` e `crs_definition` co-presenti, perché il loro accordo non è
-///    decidibile testualmente; (2b) sempre, anche con `resolved`, un
-///    `crs_id` `authority:code` con codice numerico diverso da `srid`. Il
-///    limite della (2a) evita di rovesciare la dichiarazione del produttore;
+///    decidibile testualmente. Lo SRID e' indipendente dal codice autorita'.
 /// 3. una rappresentazione (canonica o legacy `geo.crs`), o `resolved`
 ///    dichiarato: risoluzione con il risolutore dato (con
 ///    [`crate::crs::resolve_crs`], la tabella dei CRS integrati), e un
@@ -343,18 +341,6 @@ pub fn contract_crs_from_keys(
             definition,
             definition_format: keys.crs_definition_format,
         });
-    }
-    // (2) Un conflitto numerico decidibile fra identificatore e SRID non puo'
-    // essere nascosto da una dichiarazione `resolved`: si preservano tutte
-    // le rappresentazioni originali e non si invoca il backend CRS.
-    if let (Some(id), Some(srid)) = (&crs_id, keys.srid) {
-        if authority_code(id).is_some_and(|code| i64::from(code) != i64::from(srid)) {
-            return Ok(ContractCrs::DeclaredUnresolved {
-                crs_id,
-                definition,
-                definition_format: keys.crs_definition_format,
-            });
-        }
     }
     // (3) La co-presenza di due rappresentazioni risolvibili resta
     // indecidibile per gli input che non dichiarano uno stato.
@@ -669,8 +655,9 @@ pub fn pubblica_schema(
     osservate: &BTreeSet<u32>,
     ambigue: &BTreeSet<u32>,
 ) -> Result<SchemaRef, PlenoraError> {
-    let mut metadata =
-        super::arrow_metadata::transformed_geometry_schema_metadata(schema.metadata());
+    let mut metadata = schema.metadata().clone();
+    verifica_covering(schema)?;
+    conserva_colonne_geo(schema, &mut metadata)?;
     aggiungi_versione(&mut metadata)?;
     let mut portate = Vec::with_capacity(schema.fields().len());
     let mut conteggi: BTreeMap<u32, usize> = BTreeMap::new();
@@ -685,12 +672,7 @@ pub fn pubblica_schema(
     let mut prossima = massimo.map_or(0, |massimo| u64::from(massimo) + 1);
     let mut fields = Vec::with_capacity(schema.fields().len());
     for (field, id) in schema.fields().iter().zip(portate) {
-        let mut field = field.as_ref().clone();
-        if super::arrow_metadata::field_declares_wkb_geometry(&field) {
-            let mut cleaned = field.metadata().clone();
-            super::arrow_metadata::strip_derived_geometry_metadata(&mut cleaned);
-            field = field.with_metadata(cleaned);
-        }
+        let field = field.as_ref().clone();
         let tenuta = id.filter(|id| conteggi.get(id) == Some(&1) && !ambigue.contains(id));
         if tenuta.is_some() {
             fields.push(field);
@@ -916,4 +898,116 @@ pub fn canonical_geometry_field(
     verifica_metadato_estensione(&output)?;
     read_geometry_contract_keys(&output)?;
     Ok(output)
+}
+
+// Un covering e' un insieme di percorsi a colonne, non un indice di righe.
+// Filtri e sort lo conservano; eliminare una colonna referenziata e' un errore.
+fn verifica_covering(schema: &Schema) -> Result<(), PlenoraError> {
+    fn visit(
+        value: &serde_json::Value,
+        schema: &Schema,
+        in_covering: bool,
+    ) -> Result<(), PlenoraError> {
+        match value {
+            serde_json::Value::Object(object) => {
+                for (key, child) in object {
+                    visit(child, schema, in_covering || key == "covering")?;
+                }
+            }
+            serde_json::Value::Array(path) if in_covering => {
+                let error = || {
+                    PlenoraError::Schema(
+                        "covering riferito a un percorso assente o non valido".into(),
+                    )
+                };
+                let mut names = path.iter();
+                let name = names
+                    .next()
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(error)?;
+                let mut field = schema.field_with_name(name).map_err(|_| error())?;
+                for name in names {
+                    let name = name.as_str().ok_or_else(error)?;
+                    let DataType::Struct(fields) = field.data_type() else {
+                        return Err(error());
+                    };
+                    field = fields
+                        .iter()
+                        .find(|field| field.name() == name)
+                        .ok_or_else(error)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    for metadata in std::iter::once(schema.metadata())
+        .chain(schema.fields().iter().map(|field| field.metadata()))
+    {
+        for key in [
+            "geo",
+            "covering",
+            "ARROW:extension:metadata",
+            "plenora.geometry.native.geoparquet.column",
+        ] {
+            if let Some(raw) = metadata.get(key) {
+                if let Ok(value) = serde_json::from_str(raw) {
+                    crate::json::ensure_no_duplicate_keys(raw).map_err(|_| {
+                        PlenoraError::Schema("metadato geometrico con chiavi duplicate".into())
+                    })?;
+                    visit(&value, schema, key == "covering")?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn conserva_colonne_geo(
+    schema: &Schema,
+    metadata: &mut crate::arrow::Metadata,
+) -> Result<(), PlenoraError> {
+    let Some(raw) = metadata.get("geo") else {
+        return Ok(());
+    };
+    crate::json::ensure_no_duplicate_keys(raw).map_err(|_| {
+        PlenoraError::Schema("metadato geometrico con chiavi duplicate o JSON non valido".into())
+    })?;
+    let Ok(serde_json::Value::Object(mut geo)) = serde_json::from_str(raw) else {
+        return Ok(());
+    };
+    let Some(serde_json::Value::Object(columns)) = geo.get_mut("columns") else {
+        return Ok(());
+    };
+    if columns
+        .keys()
+        .all(|name| schema.field_with_name(name).is_ok())
+    {
+        return Ok(());
+    }
+    crate::json::ensure_numbers_exact(raw).map_err(|_| {
+        PlenoraError::Schema(
+            "metadato geometrico con numeri non rappresentabili esattamente".into(),
+        )
+    })?;
+    columns.retain(|name, _| schema.field_with_name(name).is_ok());
+    let first = columns.keys().min().cloned();
+    let names: BTreeSet<String> = columns.keys().cloned().collect();
+    if geo
+        .get("primary_column")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|name| !names.contains(name))
+    {
+        if let Some(first) = first {
+            geo.insert("primary_column".into(), serde_json::Value::String(first));
+        } else {
+            geo.remove("primary_column");
+        }
+    }
+    if names.is_empty() {
+        metadata.remove("geo");
+    } else {
+        metadata.insert("geo", serde_json::Value::Object(geo).to_string());
+    }
+    Ok(())
 }

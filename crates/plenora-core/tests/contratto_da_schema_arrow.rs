@@ -341,33 +341,26 @@ fn discovery_declared_unresolved_is_preserved_never_auto_resolved() {
 }
 
 #[test]
-fn discovery_conflicting_crs_id_and_srid_are_rejected() {
-    // Un conflitto decidibile non si pubblica come dichiarazione irrisolta.
-    let field = canonical_crs_field(&[
-        (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
-        (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lon_lat"),
-        (PLENORA_GEOMETRY_SRID_KEY, "3003"),
-    ]);
-    let error =
-        discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs).unwrap_err();
-    assert!(matches!(error, PlenoraError::Crs(_)));
-    assert!(!error.to_string().contains("EPSG"));
-}
-
-#[test]
-fn discovery_declared_resolved_with_conflicting_crs_id_and_srid_is_rejected() {
-    // Una dichiarazione `resolved` non puo' nascondere un conflitto
-    // numerico decidibile fra identificatore e SRID.
-    let field = canonical_crs_field(&[
-        (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "resolved"),
-        (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
-        (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lon_lat"),
-        (PLENORA_GEOMETRY_SRID_KEY, "3003"),
-    ]);
-    let error =
-        discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs).unwrap_err();
-    assert!(matches!(error, PlenoraError::Crs(_)));
-    assert!(!error.to_string().contains("EPSG"));
+fn discovery_srid_nativo_indipendente_dal_crs() {
+    for state in [None, Some("resolved")] {
+        let mut entries = vec![
+            ("crs", "EPSG:32632"),
+            (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:32632"),
+            (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "easting_northing"),
+            (PLENORA_GEOMETRY_SRID_KEY, "100001"),
+        ];
+        if let Some(state) = state {
+            entries.push((PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, state));
+        }
+        let field = canonical_crs_field(&entries);
+        let keys = read_geometry_contract_keys(&field).unwrap();
+        assert_eq!(keys.srid, Some(100_001));
+        let contract =
+            discover_input_contract_from_schema(schema_v1(vec![field.clone()]), resolve_crs)
+                .unwrap();
+        let crs = contract.geometries[0].crs.as_resolved().unwrap();
+        plenora_core::contract::arrow_metadata::require_geometry_source_crs(&field, crs).unwrap();
+    }
 }
 
 #[test]
@@ -995,4 +988,53 @@ fn metadati_crs_rifiutano_duplicati_senza_payload() {
         metadata.get(GEO_METADATA_KEY).map(String::as_str),
         Some(r#"{"dimensions":"xy"}"#)
     );
+}
+
+#[test]
+fn crs_io_non_confrontabile_preserva_errore_del_risolutore() {
+    let corpus: serde_json::Value =
+        serde_json::from_str(include_str!("../src/crs/definizioni/wkt_corpus.json")).unwrap();
+    let wkt = corpus["OGC:CRS84"]["wkt1_assi"]
+        .as_str()
+        .unwrap()
+        .replace("6378137", "6378136");
+    let expected = resolve_crs(&wkt, "crs").unwrap_err();
+    assert!(expected.to_string().contains("CRS_NOT_BUILTIN"));
+    let field = canonical_crs_field(&[
+        ("crs", "EPSG:32632"),
+        (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, &wkt),
+        (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt"),
+    ]);
+    let error = read_geometry_contract_keys(&field).unwrap_err();
+    assert_eq!(error.to_string(), PlenoraError::from(expected).to_string());
+    assert!(!error.to_string().contains("discordante"));
+}
+
+#[test]
+fn pubblicazione_preserva_json_esatto_e_rifiuta_covering_troncato() {
+    use plenora_core::contract::arrow_schema::pubblica_schema;
+    use std::collections::BTreeSet;
+    let raw = r#"{"columns":{"geometry":{"epoch":2023.1234567890123456789}},"primary_column":"geometry"}"#;
+    let schema = Schema::new(vec![Field::new("geometry", DataType::Binary, true)]).with_metadata(
+        std::collections::HashMap::from([("geo".to_owned(), raw.to_owned())]),
+    );
+    let output = pubblica_schema(&schema, &BTreeSet::new(), &BTreeSet::new()).unwrap();
+    assert_eq!(output.metadata()["geo"], raw);
+    for path in [r#"["assente","xmin"]"#, r#"["bounds","assente"]"#] {
+        let schema = Schema::new(vec![
+            Field::new("geometry", DataType::Binary, true).with_metadata(
+                std::collections::HashMap::from([(
+                    "covering".to_owned(),
+                    format!(r#"{{"bbox":{{"xmin":{path}}}}}"#),
+                )]),
+            ),
+            Field::new(
+                "bounds",
+                DataType::Struct(vec![Field::new("xmin", DataType::Float64, true)].into()),
+                true,
+            ),
+        ]);
+        let error = pubblica_schema(&schema, &BTreeSet::new(), &BTreeSet::new()).unwrap_err();
+        assert!(matches!(error, PlenoraError::Schema(_)));
+    }
 }

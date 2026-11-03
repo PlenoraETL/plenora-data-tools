@@ -63,6 +63,12 @@ fn sorgente() -> RecordBatch {
                         "vecchio".to_owned(),
                     );
                 }
+                md.insert(PLENORA_GEOMETRY_SRID_KEY, "100001");
+                md.insert("plenora.geometry.native.geoparquet.epoch", "2023.5");
+                md.insert(
+                    "plenora.geometry.native.geoparquet.orientation",
+                    "counterclockwise",
+                );
                 md.insert("plenora.geometry.futura".to_owned(), "vecchio".to_owned());
                 for key in ["bbox", "covering", "geometry_types"] {
                     md.insert(key.to_owned(), "vecchio".to_owned());
@@ -121,11 +127,7 @@ fn chiavi_derivate_non_sopravvivono_ai_tre_trasporti() {
             ),
             ("geo.snap_to_grid", json!({"grid_size":0.01}), "EPSG:32632"),
             ("geo.buffer", json!({"distance":1.0}), "EPSG:32632"),
-            (
-                "table.filter",
-                json!({"column":"id","operator":">","value":1}),
-                "EPSG:32632",
-            ),
+            ("geo.explode", json!({}), "EPSG:32632"),
         ] {
             let plan = Pipeline::from_json(
                 &json!({"version":1,"inputs":["t"],
@@ -185,6 +187,10 @@ fn chiavi_derivate_non_sopravvivono_ai_tre_trasporti() {
                 if op == "geo.buffer" {
                     assert_eq!(md[PLENORA_GEOMETRY_TYPES_KEY], "multipolygon");
                 }
+                assert_eq!(
+                    keys.srid,
+                    Some(if op == "geo.reproject" { 3857 } else { 100_001 })
+                );
                 assert_eq!(keys.dimensions.unwrap().as_str(), "xy");
                 assert_eq!(keys.encoding.unwrap().as_str(), "wkb");
                 let contract = contract_from_arrow_schema(schema, resolve_crs).unwrap();
@@ -359,7 +365,6 @@ fn conflitti_crs_nei_file_rifiutati_prima_del_piano() {
     for (n, extra) in [
         (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:3857".to_owned()),
         ("ARROW:extension:metadata", "{\"crs\":null}".to_owned()),
-        (PLENORA_GEOMETRY_SRID_KEY, "3857".to_owned()),
     ]
     .into_iter()
     .enumerate()
@@ -420,5 +425,114 @@ fn conflitti_crs_nei_file_rifiutati_prima_del_piano() {
             assert_eq!(error.category(), ErrorCategory::Crs);
             assert!(!error.to_string().contains("EPSG"));
         }
+    }
+}
+
+#[test]
+fn colonne_invariate_conservano_le_dichiarazioni_native() {
+    let input = sorgente();
+    let dir = comune::cartella();
+    for (op, config) in [
+        ("", json!({})),
+        (
+            "table.select_columns",
+            json!({"columns":["geometry", "id"]}),
+        ),
+        (
+            "table.filter",
+            json!({"column":"id","operator":">","value":1}),
+        ),
+        ("table.sort", json!({"columns":["id"]})),
+    ] {
+        let steps = if op.is_empty() {
+            json!([])
+        } else {
+            json!([{"out":"o","op":op,"in":["t"],"config":config}])
+        };
+        let plan = Pipeline::from_json(
+            &json!({"version":1,"inputs":["t"],
+            "steps":steps,"outputs":[if op.is_empty() {"t"} else {"o"}]})
+            .to_string(),
+        )
+        .unwrap();
+        let result = plan
+            .validate(&[("t", input.schema())])
+            .unwrap()
+            .run(vec![("t".to_owned(), input.clone())])
+            .unwrap();
+        for ext in ["arrow", "arrows", "parquet"] {
+            let path = dir.path().join(format!("invariata-{op}.{ext}"));
+            scrivi_tabella(&result.outputs[0].1, &path, &OpzioniScrittura::default()).unwrap();
+            let restored = leggi_tabella(&path, None, u64::MAX).unwrap();
+            let schema = restored.schema();
+            let md = schema.field_with_name("geometry").unwrap().metadata();
+            assert_eq!(md["plenora.geometry.native.geoparquet.epoch"], "2023.5");
+            assert_eq!(
+                md["plenora.geometry.native.geoparquet.orientation"],
+                "counterclockwise"
+            );
+            assert_eq!(md[PLENORA_GEOMETRY_SRID_KEY], "100001");
+        }
+        let schema = result.outputs[0].1.schema();
+        let field = schema.field_with_name("geometry").unwrap();
+        let original = input.schema();
+        let original = original.field_with_name("geometry").unwrap();
+        for suffix in NATIVE {
+            let key = format!("plenora.geometry.native.{suffix}");
+            assert_eq!(
+                field.metadata().get(&key),
+                original.metadata().get(&key),
+                "{op}: {key}"
+            );
+        }
+        for key in [
+            "geo",
+            "ARROW:extension:metadata",
+            "bbox",
+            "covering",
+            "geometry_types",
+        ] {
+            assert_eq!(
+                field.metadata().get(key),
+                original.metadata().get(key),
+                "{op}: {key}"
+            );
+        }
+    }
+}
+
+#[test]
+fn fusione_con_epoche_diverse_rifiutata() {
+    let left = sorgente();
+    let schema = left.schema();
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let mut md = field.metadata().clone();
+            if field.name() == "geometry" {
+                md.insert("plenora.geometry.native.geoparquet.epoch", "2025.0");
+            }
+            field.as_ref().clone().with_metadata(md)
+        })
+        .collect();
+    let right = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+    for op in [
+        "table.concat",
+        "table.concat_by_name",
+        "table.union_distinct",
+    ] {
+        let plan = Pipeline::from_json(
+            &json!({"version":1,"inputs":["a", "b"],
+            "steps":[{"out":"o","op":op,"in":["a","b"],"config":{}}],"outputs":["o"]})
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.validate(&[("a", schema.clone()), ("b", right.clone())])
+                .unwrap_err()
+                .category(),
+            ErrorCategory::Schema
+        );
     }
 }

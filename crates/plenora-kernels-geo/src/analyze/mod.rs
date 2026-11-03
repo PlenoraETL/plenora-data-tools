@@ -363,17 +363,13 @@ pub fn analyze_geo_contract(
 /// I riepiloghi nativi e i membri JSON non tipizzati si eliminano anche
 /// quando la precisione era gia' `float64`; i metadati utente restano.
 fn senza_precisione_ereditata(mut output: DataContract) -> DataContract {
-    let geometrie: Vec<&str> = output
-        .geometries
-        .iter()
-        .map(|geometria| geometria.name.as_str())
-        .collect();
+    let geometria = output.active_geometry_column().map(|g| g.name.clone());
     let campi: Vec<Field> = output
         .schema
         .fields()
         .iter()
         .map(|campo| {
-            if geometrie.contains(&campo.name().as_str()) {
+            if geometria.as_ref() == Some(campo.name()) {
                 let mut metadati = campo.metadata().clone();
                 if metadati
                     .get(PLENORA_GEOMETRY_PRECISION_KEY)

@@ -252,90 +252,90 @@ La lettura di quella chiave dava un CRS errato senza errore; IO-tools 7.0.0
 rifiuta tale incoerenza. La correzione riguarda IPC file, IPC stream e
 GeoParquet, le analisi dei piani e gli adapter Arrow geo diretti.
 
-Scelta: **allowlist nel namespace `plenora.geometry.*` e nei contenitori
-JSON geometrici**, non allowlist globale dei metadati utente. Le chiavi
-canoniche note seguono le regole sotto; ogni altra chiave del namespace,
-compreso l'intero `plenora.geometry.native.*`, si elimina dalle uscite geo
-e dagli schemi pubblicati dal piano, incluse le operazioni tabellari.
-Una nuova chiave geometrica non diventa quindi automaticamente ereditabile.
-Le chiavi utente esterne restano, incluse `driver.native`, `utente.*`,
-`plenora.field_id` (con le regole d'identità) e `plenora.contract.version`.
-`bbox`, `covering`, `geometry_types` sui campi geometrici e sullo schema
-sono trattati come riepiloghi geometrici, mai come annotazioni utente.
+La pubblicazione dello schema non e' una trasformazione geometrica.
+Identita' (`steps: []`), select, filter e sort conservano i metadati delle
+colonne geometriche invariate: valori, CRS e tipi non sono riscritti.
+Questo conserva anche l'evidenza che IO-tools usa per dichiarare
+`crs_coordinate_epoch_not_preserved` e `geometry_orientation_not_preserved`
+verso formati incapaci di rappresentarle. La rimozione indiscriminata alla
+pubblicazione introdotta durante la PR 145 e' corretta prima del rilascio.
 
-Inventario verificato nei produttori IO-tools 7.0.0, in ARROW-VOCABULARY e
-ARROW-GEOMETRY-SEMANTICS (che non aggiunge chiavi),
-nei percorsi GeoArrow/legacy e nel codec GeoParquet di data. Nella tabella,
-le chiavi canoniche abbreviate hanno prefisso `plenora.geometry.`; «geo»
-indica ogni operazione del catalogo `geo.*`, anche quelle che conservano
-le celle (rimozione conservativa dei riepiloghi non verificabili).
+L'allowlist `plenora.geometry.*` e dei contenitori JSON si applica invece
+alla geometria operando di una geo, ai produttori e alle colonne derivate
+da piu' sorgenti. Le altre colonne trasportate restano invariate. Le chiavi
+utente esterne restano, incluse `driver.native`, `utente.*`,
+`plenora.field_id` (con le regole d'identita') e `plenora.contract.version`.
 
-| chiavi di campo | decisione |
+| chiavi di campo | invariate | trasformate |
+| --- | --- | --- |
+| `crs` semplice di IO | conservata e confrontata con le altre rappresentazioni CRS | rimossa da reproject/decisione CRS; conservata se CRS invariato |
+| `crs_resolution`, `crs_id`, `crs_definition`, `crs_definition_format`, `axis_order` | conservate | reproject/decisione emettono il target |
+| `srid` | conservato come intero indipendente, anche 100001 con EPSG:32632 | reproject elimina la sorgente; mapping documentato: codice numerico di autorita' del target se rappresentabile in i32, altrimenti assente |
+| `encoding`, `dimensions`, `spatial_semantics` | conservate | produttori WKB XY; semantica planare; Z/M e archi non planari non ridotti in silenzio |
+| `precision` | conservata nelle tabellari | `float64` per l'operando geo, anche nelle API dirette |
+| `types_declaration`, `types` | dichiarazione dei tipi ammessi, conservata anche sui sottoinsiemi | riscritta per cambio tipo, altrimenti conservata |
+| `ARROW:extension:name` | conservata | `geoarrow.wkb` |
+| `geo` di campo | conservato, inclusi epoch e orientation | allowlist `crs`, `dimensions`, `encoding`; CRS riscritto da reproject |
+| `ARROW:extension:metadata` | conservato | allowlist `crs`, `crs_type`, `edges`; reproject elimina CRS e formato; edges solo planar |
+| `bbox`, `covering`, `geometry_types` | conservati con la semantica sotto | rimossi |
+| `plenora.geometry.native.*` e chiavi geometriche non tipizzate | conservate | rimosse, anche se sconosciute |
+
+Inventario dei suffissi sotto `plenora.geometry.native.` di IO-tools 7.0.0:
+la colonna invariata conserva **ciascuna** chiave; la colonna trasformata
+le elimina tutte, senza reinterpretare i payload opachi.
+
+| suffissi | natura e decisione sulle righe invariate |
 | --- | --- |
-| `crs` semplice (IO `GEO_CRS_KEY`) | confrontata con tutte le rappresentazioni in ingresso; rimossa da reproject e dalle decisioni CRS; conservata solo se il CRS resta lo stesso |
-| `crs_resolution`, `crs_id`, `crs_definition`, `crs_definition_format`, `srid`, `axis_order` | reproject/decisione CRS eliminano la sorgente e il contratto emette il target; le altre operazioni conservano il riferimento verificato; i produttori dichiarano il proprio CRS e gli assi delle coordinate costruite |
-| `encoding` | conservato se framing compatibile; i produttori emettono WKB; EWKB con SRID incorporato è rifiutato dalle trasformazioni |
-| `dimensions` | le trasformazioni accettano solo XY; i produttori emettono XY; estensioni Z/M non vengono ridotte in silenzio |
-| `precision` | uscita geo `float64`, anche negli adapter Arrow diretti; snap non eredita precisioni native |
-| `spatial_semantics` | `geometry`; geography/archi non planari rifiutati |
-| `types_declaration`, `types` | riscritti dal contratto per ogni cambio tipo; eliminati quando il tipo non è dichiarabile; conservati per reproject e trasformazioni che mantengono il tipo |
-| `ARROW:extension:name` | `geoarrow.wkb`; altre estensioni rifiutate |
-| `geo` di campo | allowlist dei membri `crs`, `dimensions`, `encoding`; CRS riscritto da reproject; ogni altro membro (bbox, covering, epoch, precisione, assi, tipi, futuri) eliminato nelle uscite geo |
-| `ARROW:extension:metadata` | allowlist `crs`, `crs_type`, `edges`; reproject/decisione eliminano `crs` e `crs_type`; `edges` può essere solo planar; gli altri membri eliminati |
-| `bbox`, `covering`, `geometry_types` | eliminati nelle uscite geo |
-| `plenora.geometry.native.*` e altre chiavi geometriche non tipizzate | eliminate interamente nelle uscite geo, anche se sconosciute |
+| `geoparquet.epoch`, `geoparquet.orientation`, `geoparquet.edges` | dichiarazioni per colonna; conservate dopo identita', select, filter e sort |
+| `gpkg.geometry_type_name`, `gpkg.z`, `gpkg.m`, `shp.shape_type`, `filegdb.ogr_geometry_type` | tipi/dimensioni per colonna, conservati anche su sottoinsiemi |
+| `shp.measure_no_data`, `dxf.geometry_model`, `dxf.z_inference`, `csv.geometry_encoding`, `xlsx.geometry_encoding` | rappresentazione e provenienza per colonna, conservate |
+| `geoparquet.bbox` | derivata dalle righe: contenitore valido, non promessa di minimo; conservata su sottoinsiemi e riordinamenti |
+| `geoparquet.column` | contenitore misto: CRS, tipo, epoch/orientation per colonna, bbox contenitore e covering con percorsi; conservato sulle colonne invariate |
+| `geoparquet.primary_column`, `geoparquet.version`, `geoparquet.compatibilita`, `geoparquet.altre_colonne`, `filegdb.geometry_field_count`, `gpkg.rtree_index` | provenienza/struttura nativa della sorgente, conservata come tale; non promessa di un indice fisico ricostruito nell'Arrow d'uscita |
+| chiavi native future | opache, conservate sulla colonna invariata; eliminate sulla trasformata |
 
-L'ultima riga comprende **ciascuna** delle seguenti chiavi IO, tutte con
-prefisso `plenora.geometry.native.` e tutte eliminate (non reinterpretate):
+`bbox` e' un contenitore, anche dopo filter: puo' non essere minimo, ma non
+esclude alcuna geometria rimasta. Sort non cambia neppure gli estremi.
+`geometry_types` dichiara tipi ammessi, non frequenze o presenza obbligatoria.
+`covering` GeoParquet contiene percorsi a colonne di bounds per riga:
+filter/sort muovono insieme geometrie e bounds, quindi resta valido.
+Un percorso a una colonna eliminata da select viene rifiutato con `Schema`,
+senza cancellazione silenziosa. Nessuna di queste conservazioni sopprime
+le dichiarazioni di perdita di epoca o orientamento di IO.
 
-| suffissi nativi enumerati | decisione |
-| --- | --- |
-| `geoparquet.primary_column`, `geoparquet.column`, `geoparquet.version`, `geoparquet.compatibilita`, `geoparquet.edges`, `geoparquet.orientation`, `geoparquet.bbox`, `geoparquet.epoch`, `geoparquet.altre_colonne` | rimozione; `column` è un JSON intero, può contenere CRS, encoding, tipi, bbox e covering |
-| `gpkg.geometry_type_name`, `gpkg.z`, `gpkg.m`, `gpkg.rtree_index` | rimozione |
-| `shp.shape_type`, `shp.measure_no_data` | rimozione |
-| `filegdb.ogr_geometry_type`, `filegdb.geometry_field_count` | rimozione |
-| `dxf.geometry_model`, `dxf.z_inference` | rimozione |
-| `csv.geometry_encoding`, `xlsx.geometry_encoding` | rimozione |
+Le fusioni (`concat`, `concat_by_name`, `union_distinct` e colonne derivate)
+rifiutano con `Schema` dichiarazioni native diverse, incluse epoche diverse
+o presenti da un solo lato. Il confronto delle chiavi native opache e'
+esatto; per `geo` e l'estensione confronta i soli membri non interpretati,
+cosi' il formato testuale del CRS non sostituisce il confronto semantico.
+Una fusione derivata elimina poi i riepiloghi ereditati; la concatenazione
+puo' conservare dichiarazioni identiche. I predicati fra ingressi distinti
+non richiedono l'uguaglianza dei metadati nativi.
 
-A livello **schema**, `geo` (GeoParquet: `version`, `primary_column`,
-`columns.*.{crs,encoding,geometry_types,bbox,covering,edges,orientation,epoch}`),
-`bbox`, `covering`, `geometry_types` e `plenora.geometry.*` sono eliminati
-nelle uscite geo. Il writer GeoParquet ricostruisce `geo` dal contratto e
-dalle celle: CRS PROJJSON, WKB, tipi/dimensioni e bbox calcolati sull'uscita;
-non riutilizza covering, epoca o orientamento della sorgente.
-Il footer `ARROW:schema` è rigenerato dal writer Parquet; il reader lo
-consuma senza trasferirlo nei metadati di schema.
-Non esiste un'operazione axis swap: reproject normalizza gli assi del target,
-le altre trasformazioni che interpretano gli assi esigono la convenzione
-compatibile. `from_coords`, `from_wkt`, `generate_grid` creano metadati nuovi.
+A livello schema i riepiloghi restano nei passaggi tabellari; `geo.columns`
+esclude i campi eliminati e `primary_column` passa deterministicamente al
+primo nome geometrico rimasto (senza colonne si elimina `geo`). Le uscite
+geo eliminano i riepiloghi di schema opachi che non possono ricostruire.
+Il writer GeoParquet ricalcola dal contratto e dalle celle CRS, tipi e bbox;
+non interpreta i metadati nativi di IO-tools come istruzioni di scrittura.
+Il suo supporto delle epoche nel footer resta quello dichiarato in
+[File](file.md): questa correzione conserva l'evidenza Arrow per IO-tools,
+non aggiunge al codec locale il supporto dei CRS dinamici.
 
-In ingresso `crs` semplice prima era ignorata; ora è un identificatore
-controllato contro **entrambe** `crs_id` e `crs_definition`, oltre a `geo`,
-estensione e SRID. Un conflitto produce `Crs`, senza valori nel messaggio,
-anche se lo stato è `declared_unresolved`. Anche i conflitti canonici
-numericamente o semanticamente decidibili sono rifiutati (prima potevano
-diventare `declared_unresolved`). Uno stato irrisolto senza contraddizione
-provata resta irrisolto: il limite del risolutore integrato non autorizza
-la scelta di una rappresentazione. La presenza di una rappresentazione
-aggiuntiva `crs` semplice o GeoArrow richiede invece un confronto riuscito:
-se non è possibile, si rifiuta, anche con `declared_unresolved`.
-L'API tipizzata `contract_crs_from_keys`
-preserva le proprie regole per chiavi già costruite dal chiamante; il
-confine Arrow applica prima i controlli descritti qui.
+GEO-008 distingue lo SRID numerico dal CRS: nessun confronto fra `srid` e
+codice EPSG, neppure nel risolutore del contratto o nelle API geo dirette.
+Il mapping codice di autorita' -> SRID si usa solo in assenza di un valore
+esplicito e dopo una riproiezione; non converte un ID nativo in un CRS.
+Restano i confronti dello SRID fra campi da fondere e fra EWKB e campo.
+`crs` semplice si confronta con ID, definizione, `geo` ed estensione:
+una discordanza provata e' `Crs`; un confronto non eseguibile propaga
+l'errore del risolutore, incluso `CRS_NOT_BUILTIN` per WKT1 non riconosciuta,
+senza chiamarlo discordanza e senza valori nel messaggio.
 
-La scrittura GeoParquet richiede un CRS risolto e assi compatibili: il
-precedente ramo `Missing -> null` non poteva superare la guardia degli assi.
-Ora rifiuta esplicitamente il CRS assente; la lettura del `null` esterno
-resta distinta. La pubblicazione di ogni schema del piano applica la stessa rimozione dei
-riepiloghi opachi anche alle uscite tabellari: filtri, riordinamenti e rinomine
-possono invalidare bbox e covering senza cambiare una coordinata. La semplice
-lettura/scrittura fisica IPC resta distinta dalla validazione del piano:
-non risolve il contratto geometrico; il rifiuto semantico avviene in validate.
-GeoParquet verifica invece il contratto anche alla lettura/scrittura.
-
-Prove: `crates/plenora-io/tests/metadati_derivati.rs` attraversa i tre
-trasporti in ingresso e uscita, riproiezione, snap e cambio tipo con tutte
-le chiavi native enumerate, contenitori JSON e annotazioni utente;
-`kernel_crosscheck` confronta gli schemi delle API dirette con l'analisi
-anche con metadati derivati residui. I casi CRS coprono il testo letterale
-`crs` di IO e la definizione discordante nascosta dietro un ID concordante.
+Prove: `crates/plenora-io/tests/metadati_derivati.rs` copre identita', select,
+filter e sort, conservazione epoch/orientation/SRID su IPC file, IPC stream
+e Parquet, reproject, snap, buffer, explode, produttori e fusioni discordanti.
+`contratto_da_schema_arrow.rs` copre SRID GPKG indipendente e confronto WKT1
+non eseguibile. `kernel_crosscheck` confronta gli schemi delle API dirette
+con l'analisi. Il percorso esterno IO-tools -> GPKG non e' eseguito da questi
+test: si verifica che l'evidenza necessaria gli arrivi intatta.

@@ -187,6 +187,12 @@ pub fn require_geometry_compatibility(
         } else {
             right
         })?;
+    if comparison != GeometryComparison::Inputs
+        && field_declares_wkb_geometry(left)
+        && field_declares_wkb_geometry(right)
+    {
+        require_same_native_declarations(&left_effective, &right_effective)?;
+    }
     // Una decisione CRS non decide precisione o semantica spaziale.
     left_raw.precision = canonical_geometry_precision(left)?;
     left_raw.spatial_semantics = canonical_geometry_spatial_semantics(left)?;
@@ -241,6 +247,60 @@ pub fn require_geometry_compatibility(
     Ok(())
 }
 
+// I contenitori geometrici possono avere rappresentazioni CRS equivalenti:
+// si confrontano qui soltanto i membri non interpretati dal contratto.
+fn native_declarations(
+    field: &Field,
+) -> Result<std::collections::BTreeMap<String, String>, PlenoraError> {
+    let mut output = std::collections::BTreeMap::new();
+    for (key, value) in field.metadata() {
+        if key.starts_with("plenora.geometry.native.")
+            || matches!(key.as_str(), "bbox" | "covering" | "geometry_types")
+        {
+            output.insert(key.clone(), value.clone());
+        }
+    }
+    for (key, interpreted) in [
+        (GEO_METADATA_KEY, &["crs", "dimensions", "encoding"][..]),
+        (
+            super::arrow_schema::GEOARROW_EXTENSION_METADATA_KEY,
+            &["crs", "crs_type", "edges"][..],
+        ),
+    ] {
+        if let Some(raw) = field.metadata().get(key) {
+            crate::json::ensure_no_duplicate_keys(raw).map_err(|_| {
+                PlenoraError::Schema(
+                    "metadato geometrico con chiavi duplicate o JSON non valido".into(),
+                )
+            })?;
+            crate::json::ensure_numbers_exact(raw).map_err(|_| {
+                PlenoraError::Schema(
+                    "metadato geometrico con numeri non rappresentabili esattamente".into(),
+                )
+            })?;
+            let value: serde_json::Value = serde_json::from_str(raw)
+                .map_err(|_| PlenoraError::Schema("metadato geometrico non JSON".into()))?;
+            if let Some(object) = value.as_object() {
+                for (member, value) in object {
+                    if !interpreted.contains(&member.as_str()) {
+                        output.insert(format!("{key}.{member}"), value.to_string());
+                    }
+                }
+            }
+        }
+    }
+    Ok(output)
+}
+
+fn require_same_native_declarations(left: &Field, right: &Field) -> Result<(), PlenoraError> {
+    if native_declarations(left)? != native_declarations(right)? {
+        return Err(PlenoraError::Schema(
+            "fusione con dichiarazioni geometriche native diverse".into(),
+        ));
+    }
+    Ok(())
+}
+
 // Queste nozioni appartengono al campo, non a GeometryColumnContract:
 // i default dell'emissione non devono cancellare l'evidenza di assenza.
 fn comparison_keys(
@@ -261,18 +321,7 @@ fn comparison_keys(
 
 // Stesso stato implicito del lettore di contratto, senza invocare un backend
 // CRS nel kernel: le rappresentazioni si confrontano comunque esattamente.
-fn comparison_crs_resolution(keys: &CanonicalGeometryKeys) -> CrsResolution {
-    let conflicting_srid = keys
-        .crs_id
-        .as_deref()
-        .and_then(authority_code_srid)
-        .is_some_and(|code| {
-            keys.srid
-                .is_some_and(|srid| i64::from(code) != i64::from(srid))
-        });
-    if conflicting_srid {
-        return CrsResolution::DeclaredUnresolved;
-    }
+const fn comparison_crs_resolution(keys: &CanonicalGeometryKeys) -> CrsResolution {
     if let Some(resolution) = keys.crs_resolution {
         return resolution;
     }
@@ -333,12 +382,6 @@ pub fn require_geometry_source_crs(
             .crs_definition
             .as_deref()
             .is_some_and(|value| !matches(value))
-        || keys.srid.is_some_and(|srid| {
-            source
-                .authority_srid()
-                .and_then(|code| i32::try_from(code).ok())
-                != Some(srid)
-        })
     {
         return Err(PlenoraError::Crs(
             "CRS sorgente diverso dalla dichiarazione del campo geometrico".into(),
@@ -1906,19 +1949,6 @@ pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKey
 fn verifica_coerenza_crs_completato(keys: &CanonicalGeometryKeys) -> Result<(), PlenoraError> {
     // Un conflitto decidibile e' un errore, non una precedenza implicita
     // e nemmeno una dichiarazione irrisolta che un consumatore puo' ignorare.
-    if keys
-        .crs_id
-        .as_deref()
-        .and_then(authority_code_srid)
-        .is_some_and(|code| {
-            keys.srid
-                .is_some_and(|srid| i64::from(code) != i64::from(srid))
-        })
-    {
-        return Err(PlenoraError::Crs(
-            "identificatore CRS e SRID discordanti".into(),
-        ));
-    }
     if let (Some(id), Some(definition)) = (&keys.crs_id, &keys.crs_definition) {
         if let (Ok(a), Ok(b)) = (
             crate::crs::resolve_crs(id, "crs"),
@@ -1929,17 +1959,6 @@ fn verifica_coerenza_crs_completato(keys: &CanonicalGeometryKeys) -> Result<(), 
                     "identificatore e definizione CRS discordanti".into(),
                 ));
             }
-        }
-    }
-
-    if let (Some(srid), Some(definition)) = (keys.srid, keys.crs_definition.as_deref()) {
-        if crate::crs::resolve_crs(definition, "crs").is_ok_and(|crs| {
-            crs.authority_srid()
-                .is_some_and(|code| i64::from(code) != i64::from(srid))
-        }) {
-            return Err(PlenoraError::Crs(
-                "definizione CRS e SRID discordanti".into(),
-            ));
         }
     }
 
@@ -1965,22 +1984,13 @@ fn completa_crs_io(field: &Field, keys: &mut CanonicalGeometryKeys) -> Result<()
         .flatten()
     {
         if other != id
-            && !crate::crs::resolve_crs(id, "crs").is_ok_and(|a| {
-                crate::crs::resolve_crs(other, "crs").is_ok_and(|b| a.semantically_equals(&b))
-            })
+            && !crate::crs::resolve_crs(id, "crs")?
+                .semantically_equals(&crate::crs::resolve_crs(other, "crs")?)
         {
             return Err(PlenoraError::Crs(
                 "chiave `crs` discordante dalle altre dichiarazioni CRS".into(),
             ));
         }
-    }
-    if keys
-        .srid
-        .is_some_and(|srid| authority_code_srid(id).map(i64::from) != Some(i64::from(srid)))
-    {
-        return Err(PlenoraError::Crs(
-            "chiave `crs` discordante dallo SRID".into(),
-        ));
     }
     if keys.crs_id.is_none() && keys.crs_definition.is_none() {
         keys.crs_id = Some(id.clone());

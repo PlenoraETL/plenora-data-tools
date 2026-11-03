@@ -22,6 +22,16 @@ esplicitamente il rifiuto del CRS assente già imposto dalla guardia degli assi.
 Inventario delle chiavi, decisioni e ambito delle prove in
 [Metadati Arrow](docs/metadati-arrow.md#dichiarazioni-geometriche-residue-correzione-410).
 
+Corrette anche due regressioni della PR 145 prima del rilascio:
+identita', select, filter e sort conservano epoca, orientamento e le altre
+dichiarazioni delle geometrie invariate. Bbox resta un contenitore valido
+anche se non minimo; covering con riferimenti eliminati e fusioni con
+metadati nativi diversi falliscono esplicitamente. Lo SRID nativo e'
+indipendente dal codice CRS (GPKG 100001 con EPSG:32632 e' valido);
+reproject lo sostituisce secondo il mapping documentato. Un CRS non
+confrontabile conserva l'errore del risolutore, incluso `CRS_NOT_BUILTIN`,
+anziche' essere dichiarato discordante.
+
 ## [4.0.0] - 2026-11-02
 
 Ordine degli assi fail-closed: il solo identificatore CRS legacy non prova
