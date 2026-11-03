@@ -38,7 +38,7 @@ use plenora_core::arrow::array::BinaryArray;
 use plenora_core::arrow::{Field, RecordBatch, Schema, SchemaRef};
 use plenora_core::contract::arrow_metadata::{
     canonical_geometry_axis_order, geo_metadata_json_with_encoding, geometry_column_index,
-    read_geometry_contract_keys, strip_rewritten_crs_keys, GEO_METADATA_KEY, MAX_CELL_COORDINATES,
+    read_geometry_contract_keys, strip_rewritten_crs_keys, MAX_CELL_COORDINATES,
     PLENORA_GEOMETRY_AXIS_ORDER_KEY,
 };
 use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
@@ -235,11 +235,15 @@ pub fn campo_riproiettato(
     encoding: Option<GeometryEncoding>,
 ) -> Result<Field, PlenoraError> {
     let mut metadata = ingresso.metadata().clone();
-    metadata.insert(
-        GEO_METADATA_KEY.to_owned(),
-        geo_metadata_json_with_encoding(target.definition(), dimensions, encoding)?,
-    );
     strip_rewritten_crs_keys(&mut metadata);
+    plenora_core::contract::geometry_metadata_policy::rewrite_geo(
+        &mut metadata,
+        &geo_metadata_json_with_encoding(target.definition(), dimensions, encoding)?,
+    )?;
+    metadata.insert(
+        crate::arrow_adapter::PLENORA_GEOMETRY_PRECISION_KEY.to_owned(),
+        "float64".to_owned(),
+    );
     metadata.insert(
         PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
         target.normalized_gis_axis_order().as_str().to_owned(),
@@ -794,7 +798,10 @@ pub fn reproject_batches(
         .map(|field| field.as_ref().clone())
         .collect();
     fields[geometry_index] = uscita_campo;
-    let output_schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+    let output_schema = Arc::new(Schema::new_with_metadata(
+        fields,
+        crate::arrow_adapter::transformed_geometry_schema_metadata(schema.metadata()),
+    ));
     let mut output = Vec::with_capacity(batches.len());
     for batch in batches {
         let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;

@@ -63,7 +63,6 @@ use std::sync::Arc;
 
 use plenora_core::arrow::{DataType, Field, Schema};
 use plenora_core::catalog::{find_operation, Arity, Family};
-use plenora_core::contract::arrow_metadata::PLENORA_GEOMETRY_PRECISION_KEY;
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::crs::ResolvedCrs;
 use plenora_core::{PlenoraError, Result};
@@ -346,60 +345,43 @@ pub fn analyze_geo_contract(
     // Il contratto e' l'unica fonte delle identita' sopravvissute.
     fields.bind_contract(&output);
     output.validate()?;
-    Ok(senza_precisione_ereditata(output))
+    Ok(senza_precisione_ereditata(output, descriptor))
 }
 
-/// Toglie `plenora.geometry.precision` ereditata dalle colonne geometriche
-/// dell'uscita di un'operazione geo.
-///
-/// Un kernel geo decodifica e ricodifica le coordinate in `f64`: una
-/// precisione `float32` o `native` dichiarata dall'ingresso direbbe il
-/// falso sulle geometrie che escono. Senza la chiave, l'emissione del blocco
-/// canonico dichiara `float64`, la precisione di ogni coordinata WKB. Le
-/// operazioni tabellari non toccano le coordinate e la precisione
-/// ereditata le attraversa intatta. Per semplicita' vale anche per le
-/// operazioni geo che restituiscono la geometria com'era (misure,
-/// predicati): l'informazione d'origine si perde, ma la dichiarazione
-/// resta vera.
-fn senza_precisione_ereditata(mut output: DataContract) -> DataContract {
-    let geometrie: Vec<&str> = output
-        .geometries
-        .iter()
-        .map(|geometria| geometria.name.as_str())
-        .collect();
-    // `float64` ereditata resta: e' gia' vera dopo la ricodifica.
-    let da_togliere = |campo: &Field| {
-        geometrie.contains(&campo.name().as_str())
-            && campo
-                .metadata()
-                .get(PLENORA_GEOMETRY_PRECISION_KEY)
-                .is_some_and(|precisione| precisione != "float64")
-    };
-    let eredita = output
-        .schema
-        .fields()
-        .iter()
-        .any(|campo| da_togliere(campo));
-    if !eredita {
+/// Applica l'effetto del catalogo alla geometria d'uscita.
+fn senza_precisione_ereditata(
+    mut output: DataContract,
+    descriptor: &plenora_core::catalog::OperationDescriptor,
+) -> DataContract {
+    use plenora_core::contract::geometry_metadata_policy::{apply, operation_effect, Effect};
+    let effect = operation_effect(descriptor);
+    if effect == Effect::Unchanged {
         return output;
     }
+    let geometria = output.active_geometry_column().map(|g| g.name.clone());
     let campi: Vec<Field> = output
         .schema
         .fields()
         .iter()
         .map(|campo| {
-            if da_togliere(campo) {
-                let mut metadati = campo.metadata().clone();
-                metadati.remove(PLENORA_GEOMETRY_PRECISION_KEY);
-                campo.as_ref().clone().with_metadata(metadati)
-            } else {
-                campo.as_ref().clone()
+            let mut metadati = campo.metadata().clone();
+            if geometria.as_ref() == Some(campo.name()) {
+                // La riproiezione ha gia' riscritto il CRS target.
+                apply(
+                    &mut metadati,
+                    if effect == Effect::Crs {
+                        Effect::Values
+                    } else {
+                        effect
+                    },
+                );
             }
+            campo.as_ref().clone().with_metadata(metadati)
         })
         .collect();
     output.schema = Arc::new(Schema::new_with_metadata(
         campi,
-        output.schema.metadata().clone(),
+        crate::arrow_adapter::transformed_geometry_schema_metadata(output.schema.metadata()),
     ));
     output
 }
@@ -3934,6 +3916,9 @@ mod tests {
                     let mut nullable = field.is_nullable();
                     if field.name() == DEFAULT_GEOMETRY_COLUMN {
                         nullable = geometria_nullable;
+                        metadata.insert("plenora.geometry.native.geoparquet.column", "obsoleto");
+                        metadata.insert("plenora.geometry.futura", "obsoleto");
+                        metadata.insert("bbox", "obsoleto");
                         metadata.insert("descrizione".to_owned(), "lineage".to_owned());
                     }
                     if field.name() == "label" {
@@ -3944,6 +3929,7 @@ mod tests {
                 })
                 .collect();
             let mut schema_metadata = emesso.metadata().clone();
+            schema_metadata.insert("geo", "obsoleto");
             schema_metadata.insert("dataset".to_owned(), "prova".to_owned());
             let schema = Arc::new(Schema::new_with_metadata(fields, schema_metadata));
             // La scoperta, come per un file d'ingresso vero.

@@ -261,6 +261,25 @@ pub fn analyze_table_contract(
             "{id}: analyze_contract non disponibile"
         ))),
     }?;
+    let mut output = output;
+    let descriptor = plenora_core::catalog::find_operation(id)
+        .ok_or_else(|| PlenoraError::Unsupported("operazione senza catalogo".into()))?;
+    output.schema = std::sync::Arc::new(
+        plenora_core::contract::geometry_metadata_policy::schema_effect(
+            &output.schema,
+            &inputs
+                .iter()
+                .map(|input| input.schema.as_ref())
+                .collect::<Vec<_>>(),
+            plenora_core::contract::geometry_metadata_policy::operation_effect(descriptor),
+        )?,
+    );
+    if plenora_core::contract::geometry_metadata_policy::operation_effect(descriptor)
+        == plenora_core::contract::geometry_metadata_policy::Effect::Merge
+    {
+        plenora_core::contract::geometry_metadata_policy::merge_types(&mut output, inputs);
+    }
+
     output.validate()?;
     fields.bind_contract(&output);
     Ok(output)

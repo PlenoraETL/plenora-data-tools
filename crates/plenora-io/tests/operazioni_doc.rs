@@ -3535,3 +3535,6 @@ fn concat_sorgente_effettiva_emissione_e_conflitti() {
         }
     }
 }
+
+#[path = "comune/matrice_metadati.rs"]
+mod matrice_metadati;

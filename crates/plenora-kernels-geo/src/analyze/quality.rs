@@ -33,6 +33,7 @@ use super::{
 /// dataset, non le colonne attributo soppresse.
 pub(in crate::analyze) fn analyze_coverage_rows(
     geometry: &GeometryColumnContract,
+    source: &Field,
     schema_metadata: &plenora_core::arrow::Metadata,
     columns: &[(&str, DataType)],
     fields_allocator: &mut FieldAllocator,
@@ -50,7 +51,7 @@ pub(in crate::analyze) fn analyze_coverage_rows(
         .iter()
         .map(|(name, data_type)| Field::new(*name, data_type.clone(), false))
         .collect();
-    fields.push(new_geometry_field(
+    let output_field = new_geometry_field(
         DEFAULT_GEOMETRY_COLUMN,
         crs,
         GeometryDimensions::Xy,
@@ -58,7 +59,10 @@ pub(in crate::analyze) fn analyze_coverage_rows(
         // encoding dichiarato (chiave omessa, mai ereditata dall'input).
         None,
         false,
-    )?);
+    )?;
+    fields.push(
+        plenora_core::contract::geometry_metadata_policy::inherit_crs(&output_field, source)?,
+    );
     // Segnaposto per il riferimento attivo: `New` assegna l'ID nel costruttore.
     let field_id = fields_allocator.peek();
     let output_geometry = GeometryColumnContract {
@@ -108,6 +112,7 @@ pub(in crate::analyze) fn analyze_coverage_validate(
     }
     analyze_coverage_rows(
         geometry,
+        input.schema.field_with_name(&geometry.name)?,
         input.schema.metadata(),
         &[
             (ISSUE_TYPE_COLUMN, DataType::Utf8),
@@ -137,6 +142,7 @@ pub(in crate::analyze) fn analyze_shared_paths(
     }
     analyze_coverage_rows(
         geometry,
+        input.schema.field_with_name(&geometry.name)?,
         input.schema.metadata(),
         &[
             (INDEX_A_COLUMN, DataType::UInt64),

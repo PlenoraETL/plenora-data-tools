@@ -390,13 +390,30 @@ fn esegui_kernel(
             "numero di input diverso da quello validato".to_owned(),
         )),
     };
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(chiamata)).unwrap_or_else(|payload| {
-        Err(PlenoraError::Internal(format!(
-            "panico nel kernel {}: {}",
-            passo.descrittore.id,
-            plenora_core::panic_policy::forma_payload(payload.as_ref())
-        )))
-    })
+    let (mut output, effects) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(chiamata))
+        .unwrap_or_else(|payload| {
+            Err(PlenoraError::Internal(format!(
+                "panico nel kernel {}: {}",
+                passo.descrittore.id,
+                plenora_core::panic_policy::forma_payload(payload.as_ref())
+            )))
+        })?;
+    if matches!(passo.kernel, KernelPasso::Tabellare(_)) {
+        use plenora_core::contract::geometry_metadata_policy as policy;
+        let schemas = ingressi.iter().map(|b| b.schema()).collect::<Vec<_>>();
+        let references = schemas.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+        let schema = policy::schema_effect(
+            &output.schema(),
+            &references,
+            policy::operation_effect(passo.descrittore),
+        )?;
+        output = plenora_core::batch_with_rows(
+            Arc::new(schema),
+            output.columns().to_vec(),
+            output.num_rows(),
+        )?;
+    }
+    Ok((output, effects))
 }
 
 /// La diagnostica per riga di un passo nella base decisa in validazione.

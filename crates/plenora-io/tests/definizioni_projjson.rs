@@ -327,7 +327,7 @@ fn target_reproject_projjson_uguale_al_codice_anche_da_geoarrow() {
 }
 
 #[test]
-fn geoarrow_non_risolve_una_dichiarazione_esplicitamente_irrisolta() {
+fn geoarrow_verifica_anche_una_dichiarazione_esplicitamente_irrisolta() {
     let t = projjson_di("EPSG:4326").unwrap().to_string();
     let f = campo(&t, 2, "unknown");
     let mut m = f.metadata().clone();
@@ -337,6 +337,16 @@ fn geoarrow_non_risolve_una_dichiarazione_esplicitamente_irrisolta() {
         "GEOGCS[\"SENTINELLA\"]",
     );
     m.insert(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt");
+    let error = contract_from_arrow_schema(
+        Arc::new(schema(f.clone().with_metadata(m.clone()))),
+        resolve_crs,
+    )
+    .unwrap_err();
+    assert_eq!(error.category(), plenora_core::ErrorCategory::Crs);
+    assert!(!error.to_string().contains("SENTINELLA"));
+    // Verificare l'accordo non promuove lo stato irrisolto del produttore.
+    m.insert(PLENORA_GEOMETRY_CRS_DEFINITION_KEY, t);
+    m.insert(PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "projjson");
     let c = contract_from_arrow_schema(Arc::new(schema(f.with_metadata(m))), resolve_crs).unwrap();
     assert!(matches!(
         c.geometries[0].crs,

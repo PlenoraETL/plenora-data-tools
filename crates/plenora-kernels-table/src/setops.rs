@@ -378,11 +378,12 @@ pub fn concat_compatible(
     // errore).
     let metadata =
         crate::metadata_schema_input("union_distinct", &[&left.schema(), &right.schema()])?;
-    crate::batch_with_rows(
-        Arc::new(Schema::new_with_metadata(fields, metadata)),
-        columns,
-        rows,
-    )
+    let schema = plenora_core::contract::geometry_metadata_policy::schema_effect(
+        &Schema::new_with_metadata(fields, metadata),
+        &[&left.schema(), &right.schema()],
+        plenora_core::contract::geometry_metadata_policy::Effect::Merge,
+    )?;
+    crate::batch_with_rows(Arc::new(schema), columns, rows)
 }
 
 fn unique_rows(batch: &RecordBatch, predicate: impl Fn(&[u8]) -> bool) -> Result<Vec<usize>> {

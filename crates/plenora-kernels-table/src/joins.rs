@@ -1122,6 +1122,11 @@ pub fn concat(
         .collect::<Vec<_>>();
     let metadata = crate::metadata_schema_input("concat", &[&left.schema(), &right.schema()])?;
     let schema = Schema::new_with_metadata(fields, metadata);
+    let schema = plenora_core::contract::geometry_metadata_policy::schema_effect(
+        &schema,
+        &[&left.schema(), &right.schema()],
+        plenora_core::contract::geometry_metadata_policy::Effect::Merge,
+    )?;
     // `rows` e' la somma gia' calcolata sopra: e' la cardinalita' corretta
     // anche quando non c'e' alcuna colonna da cui dedurla.
     crate::batch_with_rows(Arc::new(schema), columns, rows)
@@ -1231,7 +1236,17 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
             *field = field.clone().with_nullable(true);
         }
     }
-    Ok(fields)
+    let schema = Schema::new(fields);
+    let schemas = inputs
+        .iter()
+        .map(|input| input.schema())
+        .collect::<Vec<_>>();
+    let output = plenora_core::contract::geometry_metadata_policy::schema_effect(
+        &schema,
+        &schemas.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
+        plenora_core::contract::geometry_metadata_policy::Effect::Merge,
+    )?;
+    Ok(output.fields().iter().map(|f| f.as_ref().clone()).collect())
 }
 
 /// Concatenazione N-aria per NOME colonna, non per posizione.
@@ -1338,6 +1353,11 @@ pub fn concat_by_name(
         &sorgenti.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
     )?;
     let schema = Schema::new_with_metadata(fields, metadata);
+    let schema = plenora_core::contract::geometry_metadata_policy::schema_effect(
+        &schema,
+        &sorgenti.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
+        plenora_core::contract::geometry_metadata_policy::Effect::Merge,
+    )?;
     crate::batch_with_rows(Arc::new(schema), columns, rows)
 }
 

@@ -21,6 +21,14 @@ ai profili WKT2 e PROJJSON. Prove IPC `data.run` di identità per EPSG:4326
 e UTM 32632, mutazioni e corpus fuzz. Deviazione, hazard e condizione di
 rientro: [limiti](docs/limiti.md#equivalenza-del-datum-wkt1-per-codice-epsg).
 
+Politica centrale dei metadati geometrici per classe e per effetto sulla
+colonna: proprieta' CRS, riepiloghi, provenienza/rappresentazione e tipi.
+Le geometrie lette dalle misure conservano epoca e provenienza; le fusioni
+rimuovono bbox e riepiloghi invece di rifiutarli. Epoche diverse restano
+un errore. I covering senza colonne Arrow referenziate vengono rimossi.
+Fixture reale IO 7.0.0 e regressioni sui tre trasporti; tabella e ambito
+preciso delle prove in [Metadati Arrow](docs/metadati-arrow.md#dichiarazioni-geometriche-residue-correzione-410).
+
 ## [4.0.0] - 2026-11-02
 
 Ordine degli assi fail-closed: il solo identificatore CRS legacy non prova

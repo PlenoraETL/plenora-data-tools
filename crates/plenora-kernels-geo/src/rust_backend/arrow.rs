@@ -81,7 +81,10 @@ pub fn make_valid_batches(
         .collect();
     let input_geometry = schema.field(geometry_index);
     fields[geometry_index] = output_geometry_field(input_geometry, input_geometry.is_nullable());
-    let output_schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+    let output_schema = Arc::new(Schema::new_with_metadata(
+        fields,
+        crate::arrow_adapter::transformed_geometry_schema_metadata(schema.metadata()),
+    ));
     let mut output = Vec::with_capacity(batches.len());
     for batch in batches {
         let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;
@@ -179,7 +182,7 @@ pub fn polygonize_batches(
             output_geometry_field(schema.field(geometry_index), false),
             Field::new(CLASS_COLUMN, DataType::Utf8, false),
         ],
-        schema.metadata().clone(),
+        crate::arrow_adapter::transformed_geometry_schema_metadata(schema.metadata()),
     ));
     let columns: Vec<ArrayRef> = vec![
         Arc::new(
@@ -195,8 +198,8 @@ pub fn polygonize_batches(
 }
 
 /// Il campo geometria dell'uscita di `make_valid`, `polygonize` e `split`: quello
-/// dell'ingresso, con tutti i suoi metadati (CRS, dimensioni,
-/// encoding e lineage passano invariati), senza la dichiarazione dei tipi
+/// dell'ingresso, con CRS, dimensioni, encoding e annotazioni utente,
+/// precisione `float64`, senza riepiloghi derivati e dichiarazione dei tipi
 /// geometrici, che l'operazione riscrive (l'analisi la ridichiara nel
 /// contratto, `analyze::tipi`), e con la nullability del contratto: non
 /// nullable per `polygonize` e `split` (una riga per geometria prodotta; una
@@ -208,6 +211,10 @@ pub fn polygonize_batches(
 fn output_geometry_field(input: &Field, nullable: bool) -> Field {
     let mut metadata = input.metadata().clone();
     strip_rewritten_types_declarations(&mut metadata);
+    metadata.insert(
+        crate::arrow_adapter::PLENORA_GEOMETRY_PRECISION_KEY.to_owned(),
+        "float64".to_owned(),
+    );
     Field::new(input.name(), DataType::Binary, nullable).with_metadata(metadata)
 }
 
@@ -455,7 +462,7 @@ fn split_output(
     output_fields.push(Field::new(PARENT_INDEX_COLUMN, DataType::UInt64, false));
     let output_schema = Arc::new(Schema::new_with_metadata(
         output_fields,
-        left_schema.metadata().clone(),
+        crate::arrow_adapter::transformed_geometry_schema_metadata(left_schema.metadata()),
     ));
     let take_indices = UInt64Array::from(parents.clone());
     let mut columns: Vec<ArrayRef> = Vec::with_capacity(left_schema.fields().len() + 1);
@@ -734,7 +741,13 @@ mod tests {
         assert!((repaired.unsigned_area() - 2.0).abs() < 1e-12);
         assert!(cells.is_null(1));
         assert_eq!(cells.value(2), square.as_slice());
-        assert_eq!(output[0].schema(), schema, "schema invariato");
+        let mut expected_field = schema.field(1).clone();
+        let mut metadata = expected_field.metadata().clone();
+        metadata.insert("plenora.geometry.precision", "float64");
+        expected_field = expected_field.with_metadata(metadata);
+        assert_eq!(output[0].schema().field(0), schema.field(0));
+        assert_eq!(output[0].schema().field(1), &expected_field);
+        assert_eq!(output[0].schema().metadata(), schema.metadata());
     }
 
     #[test]

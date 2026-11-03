@@ -385,22 +385,11 @@ pub(in crate::analyze) fn merge_schema_metadata(
     left: &DataContract,
     right: &DataContract,
 ) -> Result<Metadata> {
-    let mut merged = left.schema.metadata().clone();
-    // `Metadata` itera in ordine di chiave (`BTreeMap`).
-    for (key, value) in right.schema.metadata() {
-        match merged.get(key) {
-            None => {
-                merged.insert(key.clone(), value.clone());
-            }
-            Some(existing) if existing == value => {}
-            Some(_) => {
-                return Err(PlenoraError::InvalidPlan(format!(
-                    "{op}: metadato di schema `{key}` in conflitto fra le due sorgenti"
-                )));
-            }
-        }
-    }
-    Ok(merged)
+    plenora_core::contract::geometry_metadata_policy::merge_schema(&[
+        left.schema.metadata(),
+        right.schema.metadata(),
+    ])
+    .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))
 }
 
 /// Sostituisce i metadati di SCHEMA del contratto (campi, geometrie e

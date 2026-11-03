@@ -407,21 +407,10 @@ pub fn utf8_column<'a>(
 pub(crate) fn unisci_metadata_schema<'a>(
     sorgenti: impl IntoIterator<Item = &'a plenora_core::arrow::Metadata>,
 ) -> std::result::Result<HashMap<String, String>, String> {
-    let mut uniti = HashMap::new();
-    for sorgente in sorgenti {
-        // `Metadata` itera in ordine di chiave (`BTreeMap`): il primo
-        // conflitto e' deterministico.
-        for (chiave, valore) in sorgente {
-            match uniti.get(chiave) {
-                None => {
-                    uniti.insert(chiave.clone(), valore.clone());
-                }
-                Some(esistente) if esistente == valore => {}
-                Some(_) => return Err(chiave.clone()),
-            }
-        }
-    }
-    Ok(uniti)
+    let sources = sorgenti.into_iter().collect::<Vec<_>>();
+    plenora_core::contract::geometry_metadata_policy::merge_schema(&sources)
+        .map(|metadata| metadata.into_iter().collect())
+        .map_err(|error| error.to_string())
 }
 
 /// [`unisci_metadata_schema`] sugli schemi degli input di un kernel.
@@ -2189,7 +2178,12 @@ pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
     // Righe DICHIARATE: `select_rows` e' attraversata da molti kernel, e su
     // un batch a zero colonne il numero di righe selezionate non e' deducibile
     // da alcuna colonna.
-    batch_with_rows(batch.schema(), columns, rows.len())
+    let schema = plenora_core::contract::geometry_metadata_policy::schema_effect(
+        &batch.schema(),
+        &[],
+        plenora_core::contract::geometry_metadata_policy::Effect::Rows,
+    )?;
+    batch_with_rows(Arc::new(schema), columns, rows.len())
 }
 
 #[cfg(test)]

@@ -185,20 +185,12 @@ un'operazione.
   Le schede non lo ripetono operazione per operazione.
   *Rientro*: una dichiarazione per operazione nel catalogo, se il
   contratto la chiederà.
-- **Precisione normalizzata dalle operazioni geo.**
-  *Regola*: ARROW-010 vuole dichiarata ogni normalizzazione di metadati.
-  *Ambito*: `analyze_geo_contract`, ogni operazione `geo.*`.
-  *Hazard*: dopo un'operazione geo `precision` esce `float64` anche se
-  l'ingresso dichiarava `float32` o `native`, e anche per le operazioni che
-  restituiscono la geometria com'era (misure, predicati: dove la scheda
-  dice che la colonna geometria passa invariata, vale salvo questa
-  chiave): una `float32`
-  ereditata direbbe il falso dopo un kernel che ricodifica in `f64`, e
-  distinguere le operazioni che non ricodificano non vale la complessità.
-  Si perde l'informazione sulla precisione d'origine; le operazioni
-  tabellari la conservano.
-  *Rientro*: la precisione nel contratto della colonna, con le operazioni
-  che la conservano dichiarate.
+- **Precisione delle geometrie riscritte.**
+  *Regola*: ARROW-010 richiede di dichiarare la normalizzazione.
+  *Ambito*: colonne i cui valori geometrici vengono ricodificati.
+  *Hazard*: la precisione d'origine diventa `float64`; misure e predicati
+  che leggono soltanto la geometria mantengono la precisione ricevuta.
+  *Rientro*: rappresentare anche la precisione d'origine nel contratto.
 - **`encoding` completato dal nome d'estensione.**
   *Regola*: l'encoding emesso è una dichiarazione sui byte.
   *Ambito*: colonne `geoarrow.wkb` senza `encoding` né `geo.encoding`.
@@ -238,5 +230,200 @@ L'audit successivo della 4.0.0 incrementa invece le versioni delle
 concatenazioni, delle fusioni geometriche e di `flatten_json`, e quelle di
 analisi di finestre e rinomina. I controlli contro nomi duplicati proteggono
 anche l'API Rust diretta; tali schemi erano gia' contratti non validi.
-Le concatenazioni conservano i metadati geometrici del primo campo solo
-se encoding, dimensioni, tipi e precisione concordano fra tutti gli ingressi.
+Le concatenazioni verificano compatibilita' del framing e delle dimensioni;
+i residui seguono la tabella per classi sotto, senza ereditare i riepiloghi
+del primo campo.
+
+
+## Dichiarazioni geometriche residue (correzione 4.1.0)
+
+La tabella unica e' `geometry_metadata_policy::KEYS` in `plenora-core`.
+La politica e' per colonna: leggere una geometria non la trasforma.
+Le proprieta' tipizzate vengono poi riscritte dal codec del contratto;
+encoding, precisione e tipi dell'uscita descrivono i byte prodotti.
+
+| Classe | Invariata | RigheFiltrate | ValoriModificati | CrsCambiato | Fusione |
+| --- | --- | --- | --- | --- | --- |
+| C1: proprieta' CRS (srid sotto) | conserva | conserva | conserva | elimina/riscrive | uguali conserva; diversi o assenti da un lato rifiuta |
+| C1 tipizzata: srid | conserva/completa dal CRS | conserva/completa dal CRS | conserva/completa dal CRS | elimina/riscrive | confronta i valori effettivi dopo il mapping documentato |
+| C2: derivata | conserva | solo bbox valido come contenitore | elimina | elimina | elimina |
+| C3: provenienza/rappresentazione | conserva | conserva | elimina/riscrive | elimina/riscrive | uguali conserva; diversi elimina |
+| C4: tipi/dimensioni | conserva | conserva | riscrive/toglie se cambiano | riscrive/toglie se cambiano | unione coerente o unresolved |
+
+`RigheFiltrate` comprende selezione, ordinamento e ripetizione di righe
+senza cambiare le celle (anche join, sjoin e nearest). `orientation`, anche
+nella chiave nativa, descrive il verso degli anelli di ciascuna geometria:
+e' C3, si conserva con `Rows` e in fusione con dichiarazioni uguali.
+`geometry_types` resta C2: [GeoParquet 1.1.0](https://geoparquet.org/releases/v1.1.0/)
+richiede i tipi effettivamente presenti, non un sovrainsieme ammissibile;
+un sottoinsieme di righe puo' perderne alcuni. Il writer lo ricalcola.
+`covering` dipende dalle colonne referenziate e resta invalidato con Rows;
+`precision` opaca e chiavi sconosciute non hanno una semantica dimostrata
+per cella e restano C2. Il contenitore nativo `column` resta invalidato:
+non e' una proprieta' atomica e puo' contenere riepiloghi non piu' veri.
+
+Lo `srid` tipizzato non e' una C1 opaca: su WKB con CRS risolto il
+codec completa l'assenza con il codice numerico dell'autorita', solo se
+rappresentabile in `i32`. La dichiarazione esplicita prevale. La fusione
+confronta questi valori effettivi: GPKG con `srid = 32632` e CSV senza
+srid, entrambi WKB con CRS EPSG:32632, sono compatibili in entrambi gli
+ordini; valori effettivi diversi si rifiutano. Non si deduce dal primo
+ramo: ogni campo e' completato dal proprio CRS e i CRS devono coincidere.
+Con CRS mancante o irrisolto non si completa; su EWKB l'assenza resta
+assenza (GEO-009). Non si modificano byte WKB ne' flag SRID: GEO-008
+continua a rifiutare un flag SRID incorporato sotto WKB sul dato originale.
+Il mapping e' quello dell'emissione canonica nel runner: l'API diretta dei
+kernel senza contratti non risolve CRS ne' deduce uno srid mancante.
+
+Il bbox non e' necessariamente minimo. Il formato nativo IO usa anche
+quattro o sei numeri separati da virgole. Il covering che referenzia
+colonne non presenti si elimina, anche nel contenitore opaco
+`native.geoparquet.column`: non rende invalido il piano identita'.
+Le chiavi sconosciute nel namespace geometrico appartengono a C2.
+Le chiavi utente esterne al namespace non cambiano classe implicitamente.
+
+| Chiave | Classe |
+| --- | --- |
+| `crs` | C1 |
+| `epoch` | C1 |
+| `edges` | C1 |
+| `crs_type` | C1 |
+| `axis_order` | C1 |
+| `plenora.geometry.crs_resolution` | C1 |
+| `plenora.geometry.crs_id` | C1 |
+| `plenora.geometry.crs_definition` | C1 |
+| `plenora.geometry.crs_definition_format` | C1 |
+| `plenora.geometry.axis_order` | C1 |
+| `plenora.geometry.srid` | C1 tipizzata: mapping CRS descritto sopra |
+| `plenora.geometry.spatial_semantics` | C1 |
+| `plenora.geometry.native.geoparquet.epoch` | C1 |
+| `plenora.geometry.native.geoparquet.edges` | C1 |
+| `bbox` | C2 |
+| `covering` | C2 |
+| `geometry_types` | C2 |
+| `orientation` | C3 |
+| `precision` | C2 |
+| `plenora.geometry.native.geoparquet.column` | C2 |
+| `plenora.geometry.native.geoparquet.bbox` | C2 |
+| `plenora.geometry.native.geoparquet.orientation` | C3 |
+| `encoding` | C3 |
+| `ARROW:extension:name` | C3 |
+| `plenora.geometry.encoding` | C3 |
+| `plenora.geometry.precision` | C3 |
+| `plenora.geometry.native.geoparquet.primary_column` | C3 |
+| `plenora.geometry.native.geoparquet.version` | C3 |
+| `plenora.geometry.native.geoparquet.compatibilita` | C3 |
+| `plenora.geometry.native.geoparquet.altre_colonne` | C3 |
+| `plenora.geometry.native.gpkg.rtree_index` | C3 |
+| `plenora.geometry.native.shp.measure_no_data` | C3 |
+| `plenora.geometry.native.filegdb.geometry_field_count` | C3 |
+| `plenora.geometry.native.dxf.geometry_model` | C3 |
+| `plenora.geometry.native.dxf.z_inference` | C3 |
+| `plenora.geometry.native.csv.geometry_encoding` | C3 |
+| `plenora.geometry.native.xlsx.geometry_encoding` | C3 |
+| `dimensions` | C4 |
+| `types` | C4 |
+| `types_declaration` | C4 |
+| `plenora.geometry.dimensions` | C4 |
+| `plenora.geometry.types` | C4 |
+| `plenora.geometry.types_declaration` | C4 |
+| `plenora.geometry.native.gpkg.geometry_type_name` | C4 |
+| `plenora.geometry.native.gpkg.z` | C4 |
+| `plenora.geometry.native.gpkg.m` | C4 |
+| `plenora.geometry.native.shp.shape_type` | C4 |
+| `plenora.geometry.native.filegdb.ogr_geometry_type` | C4 |
+
+Le chiavi brevi della tabella classificano anche i membri dei contenitori
+`geo` di campo e `ARROW:extension:metadata`. I documenti malformati non
+vengono riparati silenziosamente. I numeri si verificano prima di una
+riscrittura JSON; i contenitori invariati restano byte per byte.
+
+Le regressioni `metadati_derivati` comprendono una fixture prodotta dal
+binario IO 7.0.0, con epoca e covering senza colonna Arrow referenziata.
+Provenienza: `crates/plenora-io/tests/riferimenti/io700/PROVENANCE.md`.
+L'enumerazione `geometry_metadata_policy` verifica le decisioni pure.
+La matrice `operazioni_doc::matrice_metadati::catalogo_chiavi_trasporti`
+itera invece il catalogo e le 48 chiavi, usando le fixture delle schede:
+scrive e rilegge gli ingressi IPC file, IPC stream e GeoParquet, esegue
+`Pipeline::validate` e `run`, scrive l'uscita e la rilegge con Arrow pubblico.
+Controlla anche il footer GeoParquet, con bbox calcolato indipendentemente
+dai dati. Le chiavi brevi sono provate nel campo, nei due contenitori di
+campo e nelle colonne del documento `geo` di schema.
+
+Concat, concat_by_name e union_distinct ricevono dichiarazioni uguali,
+assenti da un lato e discordanti; un conflitto fuori dal vocabolario
+supportato deve produrre un rifiuto esplicito. Join riceve geometria a
+sinistra, a destra e su entrambi i lati, per inner e left. Il registro
+`tests/riferimenti/operazioni_metadati.txt` di `plenora-io` deve contenere
+esattamente il catalogo e concordare con la classificazione della politica:
+un'operazione nuova senza classificazione fa fallire il test.
+
+Il report `target/matrice-metadati.md` elenca tutti i rifiuti per fase,
+le uscite effettivamente rilette per trasporto e le divergenze. Un errore
+interno o IO non e' un rifiuto accettabile. La prova raccoglie tutti gli
+esiti prima di fallire; non pretende di coprire ogni configurazione dei
+kernel. La mappa `geometry_metadata_policy::types` calcola anche le
+dichiarazioni canoniche dipendenti dai tipi d'ingresso (collect, explode,
+subdivide); l'oracolo preesistente `kernel_crosscheck` la confronta con i
+kernel. La matrice usa tipi d'ingresso ricavati dal WKB, non soltanto una
+dichiarazione che ammette tutti i tipi. Le dichiarazioni native dei tipi
+sono invalidate da `Effect::Types`.
+
+### Precisione dichiarata e precisione della rappresentazione
+
+`precision` (C2) e `plenora.geometry.precision` (C3) non sono alias.
+Il codec legacy legge da `geo` solo `crs`, `dimensions` ed `encoding`:
+non interpreta `precision`, che resta una dichiarazione opaca del
+produttore, senza unita' o semantica canonica. La politica la tratta
+prudenzialmente come riepilogo derivato. La chiave canonica, invece,
+passa da `canonical_geometry_precision` e dall'enumerazione
+`GeometryPrecision`: descrive la rappresentazione delle coordinate
+(`float64`, per esempio), viene preservata dalle operazioni tabellari e
+riemessa dal codec dopo le trasformazioni geometriche. Non si deduce
+mai una tolleranza geometrica dal valore di nessuna delle due chiavi.
+
+### Struttura dei contenitori geometrici
+
+Questi nomi sono registrati separatamente dalle 48 proprieta': individuano
+contenitori o elementi della sintassi GeoParquet, non una classe C1-C4.
+
+| Nome | Ruolo |
+| --- | --- |
+| `geo` | Contenitore legacy di campo o documento GeoParquet di schema |
+| `ARROW:extension:metadata` | Contenitore GeoArrow di campo |
+| `version` | Versione del documento GeoParquet, riemessa dal writer |
+| `primary_column` | Nome della geometria primaria pubblicata |
+| `columns` | Mappa da nomi dei campi alle proprieta' geometriche |
+
+### Guardia del vocabolario nel sorgente
+
+La guardia `scripts/test_geometry_metadata_guard.py`, eseguita dalla suite
+Python delle guardie, usa una scansione lessicale del Rust. Riconosce
+commenti annidati, stringhe raw, item `cfg(test)`, accessi con chiave
+letterale anche fuori dai codec geometrici, costanti e costruzioni con
+`format!`/`concat!`. Una costruzione geometrica non risolta non e' una
+chiave implicitamente ammessa. Il vocabolario delle proprieta' e i nomi
+strutturali provengono dalla politica e devono comparire nelle tabelle.
+
+`scripts/metadati_literal_contexts.json` registra i contesti dei letterali
+non geometrici (configurazioni, valori degli enum, diagnostica e altre
+mappe). Non e' una lista globale di nomi permessi: spostare un letterale
+in un nuovo accesso richiede una nuova verifica. Il file non ha un comando
+di aggiornamento automatico nella guardia. Le prove negative aggiungono
+membri JSON sconosciuti, stringhe con escape e chiavi costruite per
+verificare che non passino come proprieta' registrate.
+
+La classificazione degli effetti distingue `Values` (tipi invariati) da
+`Types` (dichiarazioni dei tipi riscritte). Il secondo effetto elimina
+anche le dichiarazioni native C4; il codec ricostruisce quelle canoniche.
+`geo.bounds_extractor` legge la geometria e ha effetto `Unchanged`.
+Le geometrie nuove di `coverage_validate` e `shared_paths` ereditano le
+proprieta' C1, incluse epoca e convenzione dei lati, dalla sorgente.
+
+L'esecuzione tabellare applica la stessa politica dell'analisi allo schema
+materializzato prima del confronto esatto con il contratto. Il confronto
+resta obbligatorio; non si copia lo schema atteso per nascondere differenze.
+Una fusione con precisioni canoniche diverse riemette `float64`; un
+contenitore JSON rimasto vuoto viene eliminato in entrambi i percorsi.
+La riproiezione sostituisce il CRS nel JSON legacy conservando i membri
+C4 sopravvissuti alla politica.
