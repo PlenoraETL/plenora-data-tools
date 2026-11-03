@@ -47,7 +47,7 @@ fn corpus_completo_con_esclusioni_esplicite() {
             }
         }
     }
-    assert_eq!(accettati, 32);
+    assert_eq!(accettati, 165);
 }
 
 #[test]
@@ -100,16 +100,6 @@ fn assi_id_unita_e_struttura_non_si_inferiscono() {
     ] {
         assert!(t.contains(da), "{da}");
         rifiuto(&t.replace(da, a), "CRS_NOT_BUILTIN");
-    }
-    // Anche aggiungendo tutti gli assi, i vecchi datum non sono ensemble.
-    for id in [
-        "EPSG:4326",
-        "EPSG:4258",
-        "OGC:CRS84",
-        "EPSG:32632",
-        "EPSG:25832",
-    ] {
-        rifiuto(&wkt(id), "CRS_NOT_BUILTIN");
     }
 }
 
@@ -164,10 +154,10 @@ fn numeri_alias_e_errori_lessicali_wkt1() {
     ] {
         rifiuto(&variante, "CRS_INVALID");
     }
-    // Senza AUTHORITY annidate valgono solo i nomi canonici del registro.
+    // Il datum WKT1 richiede AUTHORITY anche con nome canonico.
     let t = wkt("EPSG:4265").replace(",AUTHORITY[\"EPSG\",\"6265\"]", "");
     rifiuto(&t, "CRS_NOT_BUILTIN");
-    resolve_crs(&t.replace("Monte_Mario", "Monte Mario"), "crs").unwrap();
+    rifiuto(&t.replace("Monte_Mario", "Monte Mario"), "CRS_NOT_BUILTIN");
 }
 
 #[test]
@@ -200,4 +190,100 @@ fn authority_del_metodo_deve_concordare_con_alias_e_tabella() {
         ),
         "CRS_NOT_BUILTIN",
     );
+}
+
+#[test]
+fn datum_epsg_obbligatorio_e_assi_radice_esatti() {
+    for (id, codice) in [
+        ("EPSG:4326", "6326"),
+        ("EPSG:4258", "6258"),
+        ("EPSG:32632", "6326"),
+        ("EPSG:25832", "6258"),
+        ("EPSG:4265", "6265"),
+    ] {
+        let t = wkt(id);
+        let authority = format!(",AUTHORITY[\"EPSG\",\"{codice}\"]");
+        for cambio in [
+            String::new(),
+            ",AUTHORITY[\"EPSG\",\"6269\"]".into(),
+            ",AUTHORITY[\"EPSG\",\"9999\"]".into(),
+            ",AUTHORITY[\"SENTINELLA\",\"6326\"]".into(),
+        ] {
+            rifiuto(&t.replace(&authority, &cambio), "CRS_NOT_BUILTIN");
+        }
+        rifiuto(
+            &t.replace("6378137", "6378137.00000000001")
+                .replace("6378388", "6378388.00000000001"),
+            "CRS_NOT_BUILTIN",
+        );
+        rifiuto(&t.replace("NORTH", "SOUTH"), "CRS_NOT_BUILTIN");
+    }
+    let assi = ",AXIS[\"Latitude\",NORTH],AXIS[\"Longitude\",EAST]";
+    rifiuto(&wkt("EPSG:4326").replace(assi, ""), "CRS_NOT_BUILTIN");
+    resolve_crs(&wkt("EPSG:32632").replace(assi, ""), "crs").unwrap();
+    rifiuto(
+        &wkt("EPSG:32632").replace(",AXIS[\"Easting\",EAST],AXIS[\"Northing\",NORTH]", ""),
+        "CRS_NOT_BUILTIN",
+    );
+    resolve_crs(&wkt("EPSG:4326").replace("WGS_1984", "SENTINELLA"), "crs").unwrap();
+}
+
+#[test]
+fn gdal_senza_assi_base_non_perde_unita_o_identita() {
+    let c = corpus();
+    let t = c["EPSG:32632"]["wkt1_gdal"].as_str().unwrap();
+    for (da, a) in [
+        ("0.0174532925199433", "0.01745329251994331"),
+        ("\"9122\"", "\"9001\""),
+        ("\"4326\"", "\"4258\""),
+        ("PRIMEM[\"Greenwich\",0", "PRIMEM[\"Greenwich\",1"),
+    ] {
+        assert!(t.contains(da));
+        rifiuto(&t.replace(da, a), "CRS_NOT_BUILTIN");
+    }
+}
+
+#[test]
+fn classe_datum_storico_con_id_ensemble_resta_rifiutata_negli_altri_formati() {
+    let corpus = corpus();
+    let sorgenti: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../plenora-io/data/projjson_integrati.json"
+    ))
+    .unwrap();
+    let mut casi = 0;
+    for attesa in super::tabella().unwrap() {
+        if attesa.base.datum.tipo != "DatumEnsemble" {
+            continue;
+        }
+        let id = attesa.id.unwrap();
+        let codice = format!("{}:{}", id.authority, id.code);
+        let datum_id = attesa.base.datum.identita.id.unwrap();
+        let t = corpus[&codice]["wkt2_2015"].as_str().unwrap();
+        // Inserisce ID sul DATUM, dopo la chiusura di ELLIPSOID.
+        let da = "]],PRIMEM[";
+        assert_eq!(t.matches(da).count(), 1);
+        let a = format!("],ID[\"EPSG\",{}]],PRIMEM[", datum_id.code);
+        rifiuto(&t.replace(da, &a), "CRS_NOT_BUILTIN");
+        let mut documento = sorgenti[&codice].clone();
+        let base = if documento.get("base_crs").is_some() {
+            documento.get_mut("base_crs").unwrap()
+        } else {
+            &mut documento
+        };
+        let base = base.as_object_mut().unwrap();
+        let mut datum = base.remove("datum_ensemble").unwrap();
+        let d = datum.as_object_mut().unwrap();
+        d.remove("members");
+        d.remove("accuracy");
+        d.insert("type".into(), "GeodeticReferenceFrame".into());
+        d.insert("name".into(), "SENTINELLA datum storico".into());
+        d.insert(
+            "id".into(),
+            serde_json::json!({"authority":"EPSG", "code":datum_id.code}),
+        );
+        base.insert("datum".into(), datum);
+        rifiuto(&documento.to_string(), "CRS_NOT_BUILTIN");
+        casi += 1;
+    }
+    assert_eq!(casi, 136);
 }

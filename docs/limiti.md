@@ -1782,3 +1782,31 @@ attestabile. Nessun conteggio saturato viene pubblicato come esatto.
 **Rientro.** Rendere univoci i nomi prima dell'ingresso, riordinare dopo la
 trasformazione per ristabilire la prova; cardinalita' oltre `u64` richiedono
 un contratto numerico piu' ampio e controlli coerenti in tutti i consumatori.
+
+## Equivalenza del datum WKT1 per codice EPSG
+
+**Deviazione esplicita (4.1.0).** Il solo profilo WKT1 tratta un DATUM
+storico come il datum/ensemble integrato se e solo se porta
+`AUTHORITY["EPSG","codice"]` con codice esattamente identico a quello del
+registro. Il nome non decide. Membri e accuratezza dell'ensemble, non
+rappresentabili in WKT1, sono quelli della voce integrata. WKT2 e PROJJSON
+non adottano questa equivalenza.
+
+**Hazard.** Un produttore può attribuire il codice dell'ensemble a una
+realizzazione storica specifica: l'accettazione perde tale distinzione e
+non prova l'epoca o l'accuratezza fisica delle coordinate. Non introduce
+una trasformazione di datum né una nuova garanzia centimetrica.
+Ellissoide, meridiano, unità, metodo, parametri e assi dichiarati restano
+verificati esattamente; codici diversi o mancanti sono rifiutati senza
+valori della definizione nell'errore.
+
+**Ambito.** Gli assi del GEOGCS base di PROJCS possono essere assenti;
+se presenti devono coincidere. GEOGCS radice e PROJCS richiedono entrambi
+i propri assi. L'ordine fisico delle ordinate rimane una dichiarazione
+separata (`axis_order`), mai inferita dal codice EPSG.
+
+**Condizione di rientro.** Per eliminare la deviazione il produttore deve
+fornire una definizione completa dell'ensemble o della realizzazione,
+con un profilo che conservi membri, accuratezza ed eventuale epoca, e il
+consumatore deve poterla verificare senza equivalenze storiche implicite.
+Profilo e prove: [CRS WKT1](crs.md#definizioni-wkt1).

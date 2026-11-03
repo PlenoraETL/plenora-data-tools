@@ -81,6 +81,12 @@ fn definizione_integrata(name: &str) -> bool {
     matches!(
         name,
         "crs-proj-epsg-4326-projjson.json"
+            | "crs-proj-epsg-4326-wkt1.json"
+            | "crs-ellipsoid-other-decimal-spelling.json"
+            | "crs-id-with-consistent-wkt1-definition.json"
+            | "crs-projcs-3003-consistent.json"
+            | "crs-proj-epsg-32632-wkt1.json"
+            | "crs-proj-epsg-3003-wkt1.json"
             | "crs-proj-epsg-3003-wkt2.json"
             | "crs-proj-epsg-32632-wkt2.json"
             | "crs-proj-epsg-3857-wkt2.json"
@@ -159,7 +165,12 @@ fn expected<'a>(v: &'a Value, name: &str, compute: bool) -> (&'a str, &'static s
     if !compute {
         return ("ok", "", false);
     }
-    if name == "crs-proj-epsg-3003-wkt2.json" {
+    if matches!(
+        name,
+        "crs-proj-epsg-3003-wkt2.json"
+            | "crs-proj-epsg-3003-wkt1.json"
+            | "crs-projcs-3003-consistent.json"
+    ) {
         // Monte Mario risolve, ma il cambio datum verso WGS84 non e' supportato.
         return ("crs", "validate", v["computation"] == "accepted");
     }
@@ -689,5 +700,38 @@ fn fusioni_geometriche_rifiutano_in_validazione_senza_effetti() {
             assert_eq!(err.remote_effect(), RemoteEffect::None);
             assert_eq!(err.retry_disposition(), RetryDisposition::Never);
         }
+    }
+}
+
+#[test]
+fn ipc_wkt1_gdal_identita_conserva_metadati() {
+    let corpus: Value = serde_json::from_str(include_str!(
+        "../../plenora-core/src/crs/definizioni/wkt_corpus.json"
+    ))
+    .unwrap();
+    let geopackage = r#"GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AXIS["Latitude",NORTH],AXIS["Longitude",EAST],AUTHORITY["EPSG","4326"]]"#;
+    assert_eq!(corpus["EPSG:4326"]["wkt1_gdal"], geopackage);
+    for (codice, fixture) in [
+        (
+            "EPSG:4326",
+            include_str!("fixtures/arrow-data-v1/crs-proj-epsg-4326-wkt1.json"),
+        ),
+        (
+            "EPSG:32632",
+            include_str!("fixtures/arrow-data-v1/crs-proj-epsg-32632-wkt1.json"),
+        ),
+    ] {
+        let mut v: Value = serde_json::from_str(fixture).unwrap();
+        v["fields"][1]["metadata"]["plenora.geometry.crs_definition"] =
+            corpus[codice]["wkt1_gdal"].clone();
+        let input = tabella(&v);
+        verifica_cli(
+            &input,
+            r#"{"version":1,"inputs":["t"],"steps":[],"outputs":["t"]}"#,
+            "ok",
+            "",
+            codice,
+            false,
+        );
     }
 }

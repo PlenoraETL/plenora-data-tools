@@ -13,6 +13,11 @@ def semi():
     wkt = json.loads((RADICE / "crates/plenora-core/src/crs/definizioni/wkt_corpus.json").read_text(encoding="utf-8"))
     if set(proj) != set(wkt) or len(proj) != 169:
         raise ValueError("corpus CRS incompleto")
+    # Mutazioni mirate dell'equivalenza WKT1, oltre agli export GDAL interi.
+    for codice in ("EPSG:4326", "EPSG:32632"):
+        testo = wkt[codice]["wkt1_gdal"]
+        for sostituto in ("", ',AUTHORITY["EPSG","6258"]'):
+            yield testo.replace(',AUTHORITY["EPSG","6326"]', sostituto).encode()
     for codice in sorted(proj):
         yield codice.encode()
         documenti = [json.dumps(proj[codice], ensure_ascii=False, separators=(",", ":"))]
