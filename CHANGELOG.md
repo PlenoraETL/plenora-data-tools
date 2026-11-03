@@ -10,6 +10,18 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [4.1.0] - non rilasciata
+
+Corrette le dichiarazioni geometriche residue presenti in 4.0.0 e precedenti:
+`geo.reproject` elimina anche `crs` di IO-tools; le uscite geo eliminano
+riepiloghi nativi, bbox/covering e membri geometrici non verificabili tramite
+allowlist, preservando i metadati utente. Conflitti CRS decidibili in ingresso
+sono errori espliciti, anche tra `crs` semplice e dichiarazioni canoniche.
+Precisione coerente anche nelle API Arrow dirette. GeoParquet dichiara
+esplicitamente il rifiuto del CRS assente già imposto dalla guardia degli assi.
+Inventario delle chiavi, decisioni e ambito delle prove in
+[Metadati Arrow](docs/metadati-arrow.md#dichiarazioni-geometriche-residue-correzione-410).
+
 ## [4.0.0] - 2026-11-02
 
 Ordine degli assi fail-closed: il solo identificatore CRS legacy non prova

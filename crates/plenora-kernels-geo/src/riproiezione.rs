@@ -241,6 +241,10 @@ pub fn campo_riproiettato(
     );
     strip_rewritten_crs_keys(&mut metadata);
     metadata.insert(
+        crate::arrow_adapter::PLENORA_GEOMETRY_PRECISION_KEY.to_owned(),
+        "float64".to_owned(),
+    );
+    metadata.insert(
         PLENORA_GEOMETRY_AXIS_ORDER_KEY.to_owned(),
         target.normalized_gis_axis_order().as_str().to_owned(),
     );
@@ -794,7 +798,10 @@ pub fn reproject_batches(
         .map(|field| field.as_ref().clone())
         .collect();
     fields[geometry_index] = uscita_campo;
-    let output_schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+    let output_schema = Arc::new(Schema::new_with_metadata(
+        fields,
+        crate::arrow_adapter::transformed_geometry_schema_metadata(schema.metadata()),
+    ));
     let mut output = Vec::with_capacity(batches.len());
     for batch in batches {
         let cells = batch_geometry_cells(batch, geometry_index, geometry_column)?;

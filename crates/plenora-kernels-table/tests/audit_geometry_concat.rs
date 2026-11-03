@@ -449,7 +449,7 @@ fn decisione_crs_sostituisce_la_lineage_anche_nelle_fusioni() {
 }
 
 #[test]
-fn crs_con_srid_in_conflitto_resta_irrisolto_su_entrambi_i_percorsi() {
+fn crs_con_srid_in_conflitto_e_rifiutato_su_entrambi_i_percorsi() {
     use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
     let field = geometry_output_field("g", "EPSG:3857").unwrap();
     let mut metadata = field.metadata().clone();
@@ -460,18 +460,27 @@ fn crs_con_srid_in_conflitto_resta_irrisolto_su_entrambi_i_percorsi() {
         vec![field.with_metadata(metadata)],
         plenora_core::contract::arrow_metadata::canonical_schema_version_metadata(),
     ));
-    let contract =
-        contract_from_arrow_schema(schema.clone(), plenora_core::crs::resolve_crs).unwrap();
-    assert!(matches!(
-        contract.geometries[0].crs,
-        plenora_core::contract::ContractCrs::DeclaredUnresolved { .. }
-    ));
-    analyze_table_contract(
+    let error =
+        contract_from_arrow_schema(schema.clone(), plenora_core::crs::resolve_crs).unwrap_err();
+    assert!(matches!(error, PlenoraError::Crs(_)));
+    let batch = plenora_core::batch_vuoto(schema.clone()).unwrap();
+    let error = joins::concat_by_name(
+        &[&batch, &batch],
+        &joins::ConcatByName { strict: false },
+        &Limits::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(error, PlenoraError::Crs(_)));
+    let error = analyze_table_contract(
         "table.concat",
-        &[contract, DataContract::tabular(schema)],
+        &[
+            DataContract::tabular(schema.clone()),
+            DataContract::tabular(schema),
+        ],
         &json!({}),
         &mut FieldAllocator::default(),
         &Limits::default(),
     )
-    .unwrap();
+    .unwrap_err();
+    assert!(matches!(error, PlenoraError::Crs(_)));
 }

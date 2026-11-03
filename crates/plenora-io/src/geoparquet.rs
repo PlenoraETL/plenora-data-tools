@@ -29,7 +29,7 @@
 //! contratto elegge quella come geometria attiva.
 //!
 //! **Scrittura** ([`prepara`]): dal contratto della tabella; `crs` è il
-//! `PROJJSON` completo del CRS integrato (o `null` per un CRS assente),
+//! `PROJJSON` completo del CRS integrato; un CRS assente viene rifiutato,
 //! `geometry_types` i tipi dichiarati dal contratto (verificati sui dati) o,
 //! senza dichiarazione, quelli trovati nei dati, `bbox` il riquadro XY delle
 //! coordinate quando tutte le geometrie sono 2D. Il metadato `geo` di campo
@@ -611,7 +611,11 @@ fn colonna_da_scrivere(
         ContractCrs::Resolved(crs) | ContractCrs::ResolvedByDecision(crs) => {
             projjson_di(&identificativo_di(crs)?)?
         }
-        ContractCrs::Missing => Value::Null,
+        ContractCrs::Missing => {
+            return Err(PlenoraError::Crs(
+                "CRS assente: GeoParquet richiede un CRS risolto e assi compatibili".to_owned(),
+            ));
+        }
         ContractCrs::DeclaredUnresolved { .. } => {
             return Err(PlenoraError::Crs(
                 "CRS dichiarato ma non risolto: GeoParquet vuole un PROJJSON".to_owned(),

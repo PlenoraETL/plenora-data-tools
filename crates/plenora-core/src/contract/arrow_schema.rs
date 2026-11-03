@@ -2,7 +2,7 @@
 //!
 //! Due operazioni **non speculari**: [`contract_from_arrow_schema`] preserva
 //! cio' che lo schema dichiara (un CRS assente resta [`ContractCrs::Missing`],
-//! una dichiarazione incoerente resta `DeclaredUnresolved`), mentre
+//! una dichiarazione non risolvibile resta `DeclaredUnresolved`), mentre
 //! `arrow_schema_from_contract` emette i metadati canonici e rifiuta i
 //! conflitti. Renderle simmetriche vorrebbe dire normalizzare in lettura o
 //! accettare l'ambiguita' in scrittura.
@@ -286,6 +286,9 @@ pub fn contract_from_arrow_schema(
 /// Le chiavi arrivano già completate da [`read_geometry_contract_keys`].
 /// Un'incoerenza dichiarata non si risolve: si preserva come
 /// [`ContractCrs::DeclaredUnresolved`] con le dichiarazioni originali.
+///
+/// Il lettore Arrow rifiuta prima i conflitti decidibili fra dichiarazioni;
+/// le regole seguenti descrivono anche l'API tipizzata chiamata direttamente.
 ///
 /// Regole, in ordine:
 ///
@@ -666,7 +669,8 @@ pub fn pubblica_schema(
     osservate: &BTreeSet<u32>,
     ambigue: &BTreeSet<u32>,
 ) -> Result<SchemaRef, PlenoraError> {
-    let mut metadata = schema.metadata().clone();
+    let mut metadata =
+        super::arrow_metadata::transformed_geometry_schema_metadata(schema.metadata());
     aggiungi_versione(&mut metadata)?;
     let mut portate = Vec::with_capacity(schema.fields().len());
     let mut conteggi: BTreeMap<u32, usize> = BTreeMap::new();
@@ -681,9 +685,15 @@ pub fn pubblica_schema(
     let mut prossima = massimo.map_or(0, |massimo| u64::from(massimo) + 1);
     let mut fields = Vec::with_capacity(schema.fields().len());
     for (field, id) in schema.fields().iter().zip(portate) {
+        let mut field = field.as_ref().clone();
+        if super::arrow_metadata::field_declares_wkb_geometry(&field) {
+            let mut cleaned = field.metadata().clone();
+            super::arrow_metadata::strip_derived_geometry_metadata(&mut cleaned);
+            field = field.with_metadata(cleaned);
+        }
         let tenuta = id.filter(|id| conteggi.get(id) == Some(&1) && !ambigue.contains(id));
         if tenuta.is_some() {
-            fields.push(field.as_ref().clone());
+            fields.push(field);
             continue;
         }
         let nuova = u32::try_from(prossima).map_err(|_| {
@@ -696,7 +706,7 @@ pub fn pubblica_schema(
         prossima += 1;
         let mut campo_metadata = field.metadata().clone();
         campo_metadata.insert(PLENORA_FIELD_ID_KEY.to_owned(), nuova.to_string());
-        fields.push(field.as_ref().clone().with_metadata(campo_metadata));
+        fields.push(field.with_metadata(campo_metadata));
     }
     Ok(Arc::new(Schema::new_with_metadata(fields, metadata)))
 }

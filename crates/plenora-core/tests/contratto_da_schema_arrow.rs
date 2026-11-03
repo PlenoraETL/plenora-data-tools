@@ -341,25 +341,21 @@ fn discovery_declared_unresolved_is_preserved_never_auto_resolved() {
 }
 
 #[test]
-fn discovery_conflicting_crs_id_and_srid_become_declared_unresolved() {
-    // Il caso `conflicting_crs` del corpus di conformita': crs_id=EPSG:4326
-    // con srid=3003. Il centro preserva: lo stato diventa
-    // DeclaredUnresolved con la dichiarazione originale. Resta preservato
-    // anche con `resolved` dichiarato (test successivo).
+fn discovery_conflicting_crs_id_and_srid_are_rejected() {
+    // Un conflitto decidibile non si pubblica come dichiarazione irrisolta.
     let field = canonical_crs_field(&[
         (PLENORA_GEOMETRY_CRS_ID_KEY, "EPSG:4326"),
         (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lon_lat"),
         (PLENORA_GEOMETRY_SRID_KEY, "3003"),
     ]);
-    let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
-        .expect("discovery");
-    let (crs_id, definition, _) = declared_unresolved_parts(&contract.geometries[0].crs);
-    assert_eq!(crs_id, Some("EPSG:4326"));
-    assert_eq!(definition, None);
+    let error =
+        discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs).unwrap_err();
+    assert!(matches!(error, PlenoraError::Crs(_)));
+    assert!(!error.to_string().contains("EPSG"));
 }
 
 #[test]
-fn discovery_declared_resolved_with_conflicting_crs_id_and_srid_stays_unresolved() {
+fn discovery_declared_resolved_with_conflicting_crs_id_and_srid_is_rejected() {
     // Una dichiarazione `resolved` non puo' nascondere un conflitto
     // numerico decidibile fra identificatore e SRID.
     let field = canonical_crs_field(&[
@@ -368,11 +364,10 @@ fn discovery_declared_resolved_with_conflicting_crs_id_and_srid_stays_unresolved
         (PLENORA_GEOMETRY_AXIS_ORDER_KEY, "lon_lat"),
         (PLENORA_GEOMETRY_SRID_KEY, "3003"),
     ]);
-    let contract = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs)
-        .expect("discovery");
-    let (crs_id, definition, _) = declared_unresolved_parts(&contract.geometries[0].crs);
-    assert_eq!(crs_id, Some("EPSG:4326"));
-    assert_eq!(definition, None);
+    let error =
+        discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs).unwrap_err();
+    assert!(matches!(error, PlenoraError::Crs(_)));
+    assert!(!error.to_string().contains("EPSG"));
 }
 
 #[test]
