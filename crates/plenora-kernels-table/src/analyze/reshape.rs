@@ -10,8 +10,8 @@ use serde_json::Value;
 use super::helpers::{
     analyze_append, check_name_list, check_output_name, check_text_len, clone_fields, con_op,
     contract_error, field_of, finish, map_row_count, merge_schema_metadata, produce,
-    propagate_geometry, require_numeric, require_scalar_string, require_scalar_string_field,
-    require_scalar_strings, typed, unsupported,
+    propagate_geometry, require_key, require_key_field, require_keys, require_numeric,
+    require_text_value, require_text_value_field, typed, unsupported,
 };
 use super::joins::check_key_pairs;
 use crate::{reshape, Limits};
@@ -115,6 +115,7 @@ pub(in crate::analyze) fn analyze_melt(
         // resta `Schema`: e' il tipo della colonna a non essere convertibile.
         for index in &value_indices {
             let campo = &source_fields[*index];
+            crate::require_non_geometry(campo)?;
             crate::validate_text_convertible(campo.data_type(), campo.name())
                 .map_err(|errore| PlenoraError::Schema(format!("{op}: {errore}")))?;
         }
@@ -250,17 +251,17 @@ pub(in crate::analyze) fn analyze_pivot(
         .iter()
         .map(|name| {
             let field = field_of(op, input, name)?;
-            require_scalar_string_field(op, field)?;
+            require_key_field(op, field)?;
             Ok(field.clone())
         })
         .collect::<Result<_>>()?;
-    require_scalar_string(op, input, &config.column)?;
+    require_text_value(op, input, &config.column)?;
     con_op(op, config.verifica_mapping(&tipo_pivot, limits.max_columns))?;
     let data_type = match config.aggr_func {
         reshape::PivotAgg::First | reshape::PivotAgg::Last => valore.data_type().clone(),
         reshape::PivotAgg::Count => DataType::Int64,
         reshape::PivotAgg::Concat => {
-            require_scalar_string_field(op, valore)?;
+            require_text_value_field(op, valore)?;
             DataType::Utf8
         }
         reshape::PivotAgg::Sum
@@ -348,7 +349,7 @@ pub(in crate::analyze) fn analyze_transpose(
         true,
     )?;
     if let Some(id_column) = &config.id_column {
-        field_of(op, input, id_column)?;
+        require_text_value(op, input, id_column)?;
     }
     plenora_core::contract::arrow_metadata::merged_geometry_metadata(
         &input
@@ -516,8 +517,8 @@ pub(in crate::analyze) fn analyze_table_diff(
     check_key_pairs(op, left, right, &config.left_keys, &config.right_keys)?;
     // Chiavi e valori confrontati si leggono come testo (chiave composta,
     // `_diff_old_values`).
-    require_scalar_strings(op, left, &config.left_keys)?;
-    require_scalar_strings(op, right, &config.right_keys)?;
+    require_keys(op, left, &config.left_keys)?;
+    require_keys(op, right, &config.right_keys)?;
     let compare: Vec<String> = if config.compare_columns.is_empty() {
         // Default: colonne di left non chiave presenti anche in right.
         left.schema
@@ -549,8 +550,8 @@ pub(in crate::analyze) fn analyze_table_diff(
             &right.geometries,
             plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
         )?;
-        require_scalar_string(op, left, name)?;
-        require_scalar_string(op, right, name)?;
+        require_key(op, left, name)?;
+        require_key(op, right, name)?;
         let right_field = field_of(op, right, name)?;
         if field_of(op, left, name)?.data_type() != right_field.data_type() {
             return contract_error(

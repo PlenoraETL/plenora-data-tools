@@ -1082,6 +1082,24 @@ pub fn scalar_key_string(array: &dyn Array, row: usize) -> Result<Option<String>
     scalar_as_string(array, row)
 }
 
+/// Risolve una colonna letta come testo, rifiutando il WKB prima delle celle.
+pub(crate) fn text_column_index(batch: &RecordBatch, name: &str) -> Result<usize> {
+    let index = column_index(batch, name)?;
+    require_non_geometry(batch.schema().field(index))?;
+    Ok(index)
+}
+
+/// Identità per partizioni di una sola colonna: per Binary l'esadecimale
+/// conserva uguaglianza e ordine dei byte, anche quando non sono UTF-8.
+/// Non è il framing di `BinaryKeyEncoder`, che incorpora i byte originali.
+pub(crate) fn scalar_partition_key(array: &dyn Array, row: usize) -> Result<Option<String>> {
+    if let Some(values) = array.as_any().downcast_ref::<BinaryArray>() {
+        return Ok((!values.is_null(row))
+            .then(|| plenora_core::esadecimale::esadecimale(values.value(row))));
+    }
+    scalar_key_string(array, row)
+}
+
 /// Valore scalare della riga come `String` (profilo scalare testuale).
 /// `None` se la riga e' null.
 ///

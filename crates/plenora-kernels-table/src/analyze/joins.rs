@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use super::helpers::{
     check_name_list, check_output_name, clone_fields, con_op, contract_error, field_of, finish,
-    merge_schema_metadata, merge_schema_metadata_many, propagate_geometry, require_scalar_strings,
+    merge_schema_metadata, merge_schema_metadata_many, propagate_geometry, require_keys,
     require_utf8, sorted_only, typed, vertical_primary,
 };
 use super::quality::check_foreign_keys;
@@ -51,8 +51,8 @@ pub(in crate::analyze) fn check_text_key_pairs(
     check_key_pairs(op, left, right, left_keys, right_keys)?;
     check_name_list(op, left_keys, limits.max_columns, "left_keys", false)?;
     check_name_list(op, right_keys, limits.max_columns, "right_keys", false)?;
-    require_scalar_strings(op, left, left_keys)?;
-    require_scalar_strings(op, right, right_keys)
+    require_keys(op, left, left_keys)?;
+    require_keys(op, right, right_keys)
 }
 
 type HorizontalFields = (
@@ -444,8 +444,8 @@ pub(in crate::analyze) fn analyze_asof_join(
     }
     check_foreign_keys(op, left, right, &config.left_by, &config.right_by)?;
     // Le partizioni `by` si leggono come testo.
-    require_scalar_strings(op, left, &config.left_by)?;
-    require_scalar_strings(op, right, &config.right_by)?;
+    require_keys(op, left, &config.left_by)?;
+    require_keys(op, right, &config.right_by)?;
     let omitted: HashSet<usize> = config
         .right_by
         .iter()

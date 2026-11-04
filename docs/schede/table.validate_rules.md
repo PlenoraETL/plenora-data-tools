@@ -90,6 +90,9 @@ In esecuzione: nessuno che dipenda dai valori.
 
 ### Limiti e deviazioni
 
+Le regole `eq`/`ne` su colonne geometriche sono rifiutate con `Crs` prima
+delle celle, in validazione e nell'API diretta (regola GT).
+
 Un nome di regola può contenere `;`: in `_errors` e `_warnings` l'elenco
 non si separa più senza ambiguità. Il contratto di `summary` non dichiara il
 numero di righe, anche se è noto. Il runner misura l'espansione di `summary`

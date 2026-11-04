@@ -7,8 +7,8 @@ use serde_json::Value;
 
 use super::helpers::{
     analyze_append, check_json_text, check_name_list, check_output_name, check_text_len, con_op,
-    contract_error, field_of, map_row_count, require_numeric, require_scalar_string, round_scaled,
-    typed, unsupported,
+    contract_error, field_of, map_row_count, require_key, require_numeric, require_text_value,
+    round_scaled, typed, unsupported,
 };
 use crate::{analysis, Limits};
 
@@ -25,7 +25,7 @@ pub(in crate::analyze) fn analyze_lookup(
 ) -> Result<DataContract> {
     let config: analysis::Lookup = typed(op, config)?;
     let input = &inputs[0];
-    require_scalar_string(op, input, &config.column)?;
+    require_text_value(op, input, &config.column)?;
     if config.mapping.len() > limits.max_rows {
         return contract_error(op, "mapping oltre max_rows");
     }
@@ -99,7 +99,7 @@ pub(in crate::analyze) fn analyze_flatten_json(
 ) -> Result<DataContract> {
     let config: analysis::FlattenJson = typed(op, config)?;
     let input = &inputs[0];
-    require_scalar_string(op, input, &config.column)?;
+    require_text_value(op, input, &config.column)?;
     if config.max_level > 5 {
         return contract_error(op, "max_level oltre 5");
     }
@@ -160,7 +160,7 @@ pub(in crate::analyze) fn analyze_statistics(
     require_numeric(op, input, &config.column)?;
     // Il kernel legge `group_by` come scalare testuale: stessi tipi ammessi.
     if let Some(group_by) = &config.group_by {
-        require_scalar_string(op, input, group_by)?;
+        require_key(op, input, group_by)?;
     }
     // Nomi e tipi del kernel (`nomi_uscita`, `Stat::tipo_uscita`).
     let nomi = con_op(op, config.nomi_uscita())?;
@@ -192,7 +192,7 @@ pub(in crate::analyze) fn analyze_sample(
     let input = &inputs[0];
     con_op(op, config.verifica_parametri())?;
     if let Some(stratify) = &config.stratify_column {
-        require_scalar_string(op, input, stratify)?;
+        require_key(op, input, stratify)?;
     }
     if config.fraction.is_some()
         && input

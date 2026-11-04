@@ -848,7 +848,7 @@ pub fn canonical_key_order(
 
 /// Sorgente testuale per nunique/concat/partizioni: valori Utf8 presi in
 /// prestito, `scalar_as_string` (il testo, per `concat`) o
-/// `scalar_key_string` (l'identita', per `nunique` e le partizioni) per gli
+/// `scalar_partition_key` (identit? sui byte, per `nunique` e partizioni) per gli
 /// altri tipi.
 pub(in crate::aggregation) enum TextSource<'a> {
     Utf8(&'a StringArray),
@@ -881,7 +881,9 @@ impl<'a> TextSource<'a> {
                 Some(Cow::Borrowed(values.value(row)))
             }),
             Self::Generic(array) => Ok(scalar_as_string(array.as_ref(), row)?.map(Cow::Owned)),
-            Self::Chiave(array) => Ok(scalar_key_string(array.as_ref(), row)?.map(Cow::Owned)),
+            Self::Chiave(array) => {
+                Ok(crate::scalar_partition_key(array.as_ref(), row)?.map(Cow::Owned))
+            }
         }
     }
 }

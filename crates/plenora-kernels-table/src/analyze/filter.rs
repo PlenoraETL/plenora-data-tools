@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::helpers::{
     analyze_append, check_json_text, check_output_name, con_op, contract_error, field_of,
-    require_scalar_string_field, sorted_only, typed,
+    require_text_value_field, sorted_only, typed,
 };
 use crate::{filtering, scalar_compare_supported, Limits, NumericBound};
 
@@ -51,12 +51,12 @@ fn check_operator(
                     return contract_error(op, "confronto numerico con valore non numerico");
                 }
             } else {
-                require_scalar_string_field(op, field)?;
+                require_text_value_field(op, field)?;
             }
         }
         filtering::Operator::Contains
         | filtering::Operator::Startswith
-        | filtering::Operator::Endswith => require_scalar_string_field(op, field)?,
+        | filtering::Operator::Endswith => require_text_value_field(op, field)?,
         filtering::Operator::Gt
         | filtering::Operator::Ge
         | filtering::Operator::Lt

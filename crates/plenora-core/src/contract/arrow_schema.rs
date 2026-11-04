@@ -677,6 +677,23 @@ pub fn pubblica_schema_con_primaria(
     osservate: &BTreeSet<u32>,
     ambigue: &BTreeSet<u32>,
 ) -> Result<SchemaRef, PlenoraError> {
+    pubblica_schema_con_cursore(schema, primary, osservate, ambigue, &mut 0)
+}
+
+/// Pubblica nell'ordine delle uscite, senza riusare identità nuove nel piano.
+///
+/// Il cursore condiviso può raggiungere `u32::MAX + 1`: la successiva
+/// assegnazione fallisce, mentre i campi conservati restano pubblicabili.
+///
+/// # Errors
+/// Gli stessi di [`pubblica_schema_con_primaria`].
+pub fn pubblica_schema_con_cursore(
+    schema: &Schema,
+    primary: Option<usize>,
+    osservate: &BTreeSet<u32>,
+    ambigue: &BTreeSet<u32>,
+    prossima: &mut u64,
+) -> Result<SchemaRef, PlenoraError> {
     if primary.is_some_and(|p| {
         schema
             .fields()
@@ -701,7 +718,7 @@ pub fn pubblica_schema_con_primaria(
         portate.push(id);
     }
     let massimo = osservate.iter().chain(conteggi.keys()).max().copied();
-    let mut prossima = massimo.map_or(0, |massimo| u64::from(massimo) + 1);
+    *prossima = (*prossima).max(massimo.map_or(0, |massimo| u64::from(massimo) + 1));
     let mut fields = Vec::with_capacity(schema.fields().len());
     for (field, id) in schema.fields().iter().zip(portate) {
         let field = field.as_ref().clone();
@@ -710,14 +727,14 @@ pub fn pubblica_schema_con_primaria(
             fields.push(field);
             continue;
         }
-        let nuova = u32::try_from(prossima).map_err(|_| {
+        let nuova = u32::try_from(*prossima).map_err(|_| {
             PlenoraError::Unsupported(format!(
                 "`{PLENORA_FIELD_ID_KEY}`: identita' nuove oltre {} (limite di questo \
                  componente)",
                 u32::MAX
             ))
         })?;
-        prossima += 1;
+        *prossima += 1;
         let mut campo_metadata = field.metadata().clone();
         campo_metadata.insert(PLENORA_FIELD_ID_KEY.to_owned(), nuova.to_string());
         fields.push(field.with_metadata(campo_metadata));

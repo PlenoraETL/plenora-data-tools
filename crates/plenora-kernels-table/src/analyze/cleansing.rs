@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::helpers::{
     analyze_append, check_json_text, check_text_len, clone_fields, con_op, contract_error,
-    field_of, finish, produce, propagate_geometry, require_scalar_string, require_utf8, rows_only,
+    field_of, finish, produce, propagate_geometry, require_text_value, require_utf8, rows_only,
     typed,
 };
 use crate::{cleansing, Limits};
@@ -200,7 +200,7 @@ pub(in crate::analyze) fn analyze_type_cast(
         )?;
         con_op(op, cleansing::verifica_cast_temporale(&config))?;
     } else {
-        require_scalar_string(op, input, &config.column)?;
+        require_text_value(op, input, &config.column)?;
     }
     check_type_cast_parameters(op, &config)?;
     // Vuoto e' il parser multi-formato di default.

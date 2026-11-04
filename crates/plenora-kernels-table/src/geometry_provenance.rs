@@ -1,6 +1,9 @@
 //! Provenienza geometrica degli schemi prodotti dagli adapter diretti.
 use plenora_core::arrow::schema::{Field, Schema};
-use plenora_core::contract::arrow_metadata::field_declares_wkb_geometry;
+use plenora_core::contract::arrow_metadata::{
+    field_declares_wkb_geometry, schema_has_canonical_keys, PLENORA_CONTRACT_VERSION,
+    PLENORA_CONTRACT_VERSION_KEY,
+};
 use plenora_core::contract::arrow_schema::{primary_geometry_position, PRIMARY_GEOMETRY_KEY};
 use plenora_core::{PlenoraError, Result};
 use std::collections::{BTreeSet, HashMap};
@@ -124,7 +127,20 @@ pub fn emit(
         }
         _ => {}
     }
-    Ok(Schema::new_with_metadata(fields, metadata))
+    // Anche una dichiarazione derivata nuova richiede la versione del trasporto,
+    // senza inventare identita pubbliche per i campi.
+    let schema = Schema::new_with_metadata(fields, metadata);
+    if schema_has_canonical_keys(&schema)
+        && !schema.metadata().contains_key(PLENORA_CONTRACT_VERSION_KEY)
+    {
+        let mut metadata = schema.metadata().clone();
+        metadata.insert(
+            PLENORA_CONTRACT_VERSION_KEY,
+            PLENORA_CONTRACT_VERSION.to_string(),
+        );
+        return Ok(schema.with_metadata(metadata));
+    }
+    Ok(schema)
 }
 
 /// Colonne conservate per nome; le derivate con un nome nuovo non sono promosse.

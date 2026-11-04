@@ -1701,6 +1701,7 @@ anche con dichiarazioni presenti solo nel contratto Rust. La pipeline e le API t
 distinti, anche senza primaria. Coalesce, melt, pivot first/last e
 transpose conservano i metadati del riferimento comune ma non copiano
 l'identita' del campo ne' la dichiarazione dei tipi geometrici del primo;
+la dichiarazione derivata è sempre `types_declaration=unresolved`, senza `types`;
 dimensioni/encoding differenti nella fusione sono rifiutati. I kernel che
 ricevono solo WKB o Geometry senza schema non possono verificare metadati
 che l'API non riceve: il chiamante deve dichiarare il riferimento al confine.
@@ -1853,3 +1854,40 @@ d'origine e non determinano mai la primaria corrente.
 e semantica senza dichiarazioni discordanti; il rifiuto richiede un contratto di
 scrittura esplicito per CRS mancanti; la precisione richiede kernel che preservino e
 provino la rappresentazione numerica originale.
+
+## Geometrie lette come testo
+
+**Regola (GT).** Una cella geometrica WKB non è testo. `require_non_geometry`
+rifiuta con `Crs` prima delle celle, anche quando i byte sono UTF-8 validi.
+
+**Ambito.** Pivot `pivot_col` e `concat`, aggregate `concat`, lookup in posto
+ o verso una nuova colonna, mask_data, flatten_json, sorgenti testuali di date,
+md5/sha256/hmac/stable_fingerprint, predicati testuali di filter/conditional e validate_rules `eq`/`ne`,
+colonne referenziate da formula/expression, nomi di transpose e conversioni testuali di melt/transpose. La guardia vale
+anche per le API dirette. Chiavi di join, gruppi, partizioni, ordinamenti,
+distinct/dedup, assert_unique e nunique mantengono il confronto sui byte.
+
+**Hazard.** Gli hash che selezionano una geometria e stable_fingerprint con
+la selezione predefinita di tutte le colonne sono rifiutati in validazione,
+anche se prima un WKB UTF-8 valido produceva un hash. I Binary senza
+annotazione geometrica mantengono il profilo testuale ordinario.
+
+**Rientro.** Una futura operazione di hash dei byte deve dichiarare un
+contratto binario distinto; la conversione esplicita della geometria in testo
+richiede un formato geometrico, per esempio WKT.
+
+## Identità nuove fra uscite del piano
+
+**Regola.** Un cursore unico pubblica gli ID nuovi nell'ordine di `outputs`
+e delle colonne. Nessun ID nuovo si riusa in un'altra uscita. Gli ID ricevuti,
+unici e non ambigui, restano invariati.
+
+**Ambito.** Tutte le uscite, incluse quelle che nominano direttamente un
+ingresso, campi senza ID, collisioni e geometrie prodotte o derivate.
+
+**Hazard.** Uno stesso campo nuovo presente in due uscite riceve due ID
+diversi. Il consumatore non ritrova quel campo per ID, ma non ne trova un
+altro. Piani indipendenti non condividono il cursore.
+
+**Rientro.** Derivare gli ID pubblici dalla lineage interna, registrando una
+sola volta tutti i campi d'ingresso e allineando `FieldOrigin` e metadati.

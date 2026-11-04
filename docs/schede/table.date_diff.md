@@ -73,6 +73,11 @@ In esecuzione:
 
 ### Limiti e deviazioni
 
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 Il risultato è `float64` per contratto: oltre `2^53` nanosecondi (circa 104
 giorni) il numero esatto di nanosecondi si arrotonda al double più vicino
 prima della divisione. Mesi e anni non sono unità ammesse, perché non

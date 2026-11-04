@@ -101,6 +101,9 @@ In esecuzione:
 
 ### Limiti e deviazioni
 
+Le colonne geometriche referenziate sono rifiutate con `Crs` prima delle celle
+in validazione e nell'API diretta: il WKB non è un valore testuale (regola GT).
+
 Il calcolo è in `f64`: un `int64` oltre `2^53` si arrotonda. Un `NaN` o
 un infinito già presenti in una colonna si propagano senza errore (a
 differenza di [`table.expression`](#tableexpression), che rifiuta la

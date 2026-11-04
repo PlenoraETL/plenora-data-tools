@@ -81,6 +81,11 @@ In esecuzione:
 
 ### Limiti e deviazioni
 
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 Il confronto fra numeri è esatto per costruzione, anche oltre `2^53` e fra
 interi e decimali ([Runner, «Validazione»](runner.md#validazione)). Gli
 operatori ordinati confrontano le date come numero di giorni dall'epoca e i

@@ -688,6 +688,9 @@ pub fn aggregate_con_limiti(
     // indexing out-of-bounds a meta' esecuzione.
     for aggregation in &config.aggregations {
         aggregation.verifica_parametri()?;
+        if matches!(aggregation.function, AggFunction::Concat) {
+            crate::text_column_index(batch, &aggregation.column)?;
+        }
         if matches!(aggregation.function, AggFunction::Quantile)
             && aggregation
                 .quantile

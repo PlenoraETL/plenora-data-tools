@@ -80,6 +80,15 @@ In esecuzione:
 
 ### Limiti e deviazioni
 
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
+Le colonne derivate da celle geometriche intatte conservano il riferimento
+comune, anche con più geometrie, e dichiarano `types_declaration=unresolved`
+senza `types` né identità ereditata (regola GD).
+
 Prima di allocare, il kernel stima i byte dell'uscita (colonne id
 ripetute, nome della colonna valore più lungo, colonna valore più larga,
 misurata in testo con la conversione) e rifiuta oltre

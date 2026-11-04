@@ -4,7 +4,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_core::contract::arrow_schema::pubblica_schema;
+use plenora_core::contract::arrow_schema::{pubblica_schema, pubblica_schema_con_cursore};
 use plenora_core::PlenoraError;
 
 const ID: &str = "plenora.field_id";
@@ -100,5 +100,32 @@ fn versione_diversa_e_spazio_esaurito_sono_errori() {
     assert!(
         matches!(errore, Err(PlenoraError::Unsupported(_))),
         "{errore:?}"
+    );
+}
+
+#[test]
+fn cursore_condiviso_non_riusa_identita_e_rifiuta_l_esaurimento() {
+    let schema = Schema::new(vec![campo("tenuta", Some("07")), campo("nuova", None)]);
+    let osservate = insieme(&[7]);
+    let ambigue = BTreeSet::new();
+    let mut cursore = 0;
+    for attesa in 8..32 {
+        let pubblicato =
+            pubblica_schema_con_cursore(&schema, None, &osservate, &ambigue, &mut cursore)
+                .expect("pubblicazione");
+        assert_eq!(identita(&pubblicato), ["07".to_owned(), attesa.to_string()]);
+    }
+    cursore = u64::from(u32::MAX);
+    let ultima = pubblica_schema_con_cursore(&schema, None, &osservate, &ambigue, &mut cursore)
+        .expect("ultima identita");
+    assert_eq!(identita(&ultima)[1], u32::MAX.to_string());
+    assert_eq!(cursore, u64::from(u32::MAX) + 1);
+    assert!(matches!(
+        pubblica_schema_con_cursore(&schema, None, &osservate, &ambigue, &mut cursore,),
+        Err(PlenoraError::Unsupported(_))
+    ));
+    let conservata = Schema::new(vec![campo("tenuta", Some("07"))]);
+    assert!(
+        pubblica_schema_con_cursore(&conservata, None, &osservate, &ambigue, &mut cursore,).is_ok()
     );
 }

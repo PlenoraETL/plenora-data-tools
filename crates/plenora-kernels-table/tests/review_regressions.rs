@@ -3782,9 +3782,11 @@ fn celle_geometriche_non_diventano_binary_anonimo() {
                     &Limits::default(),
                 )
                 .expect("geometria conservata");
-                assert_eq!(kernel.schema().field(1).metadata(), geometry.metadata());
+                let mut expected = geometry.metadata().clone();
+                expected.insert("plenora.geometry.types_declaration", "unresolved");
+                assert_eq!(kernel.schema().field(1).metadata(), &expected);
                 assert_eq!(analysis.geometries.len(), 1);
-                assert_eq!(analysis.schema.field(1).metadata(), geometry.metadata());
+                assert_eq!(analysis.schema.field(1).metadata(), &expected);
             }
             let config = json!({"column":"g", "target_type":"binary_utf8"});
             let kernel =

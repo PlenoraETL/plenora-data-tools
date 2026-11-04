@@ -1,0 +1,89 @@
+{
+  "analysis.rs:analyze_lookup": [
+    "require_text_value"
+  ],
+  "analysis.rs:analyze_flatten_json": [
+    "require_text_value"
+  ],
+  "analysis.rs:analyze_statistics": [
+    "require_key"
+  ],
+  "analysis.rs:analyze_sample": [
+    "require_key"
+  ],
+  "cleansing.rs:analyze_type_cast": [
+    "require_text_value"
+  ],
+  "dates.rs:check_input": [
+    "require_text_value"
+  ],
+  "filter.rs:check_operator": [
+    "require_text_value_field",
+    "require_text_value_field"
+  ],
+  "generators.rs:analyze_add_row_number": [
+    "require_key"
+  ],
+  "generators.rs:analyze_date_extract": [
+    "require_text_value"
+  ],
+  "joins.rs:check_text_key_pairs": [
+    "require_keys",
+    "require_keys"
+  ],
+  "joins.rs:analyze_asof_join": [
+    "require_keys",
+    "require_keys"
+  ],
+  "quality.rs:analyze_assert_unique": [
+    "require_key"
+  ],
+  "reshape.rs:analyze_pivot": [
+    "require_key_field",
+    "require_text_value",
+    "require_text_value_field"
+  ],
+  "reshape.rs:analyze_transpose": [
+    "require_text_value"
+  ],
+  "reshape.rs:analyze_table_diff": [
+    "require_keys",
+    "require_keys",
+    "require_key",
+    "require_key"
+  ],
+  "sort_agg.rs:analyze_distinct": [
+    "require_key_field",
+    "require_keys"
+  ],
+  "sort_agg.rs:analyze_dedup_advanced": [
+    "require_keys"
+  ],
+  "sort_agg.rs:analyze_aggregate": [
+    "require_key_field",
+    "require_key_field",
+    "require_text_value_field"
+  ],
+  "sort_agg.rs:analyze_rolling_window": [
+    "require_key"
+  ],
+  "sort_agg.rs:analyze_window_function": [
+    "require_key"
+  ],
+  "strings.rs:analyze_md5_hash": [
+    "require_text_value"
+  ],
+  "strings.rs:analyze_sha256_hash": [
+    "require_text_value"
+  ],
+  "strings.rs:analyze_stable_fingerprint": [
+    "require_text_value_field",
+    "require_text_values"
+  ],
+  "strings.rs:analyze_hmac_sha256": [
+    "require_text_values"
+  ],
+  "strings.rs:analyze_mask_data": [
+    "require_text_value"
+  ]
+}

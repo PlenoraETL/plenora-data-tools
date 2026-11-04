@@ -20,7 +20,7 @@ use serde_json::Value;
 use super::filter::json_text;
 use super::helpers::{
     analyze_append, check_name_list, check_output_name, check_text_len, con_op, contract_error,
-    field_of, finish, require_numeric, require_scalar_string, require_utf8, typed,
+    field_of, finish, require_key, require_numeric, require_utf8, typed,
 };
 use super::joins::check_text_key_pairs;
 use crate::{governance, quality, Limits};
@@ -173,7 +173,7 @@ pub(in crate::analyze) fn analyze_assert_unique(
     let _ = fields;
     check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
     for name in &config.columns {
-        require_scalar_string(op, input, name)?;
+        require_key(op, input, name)?;
     }
     Ok(input.clone())
 }
@@ -489,6 +489,7 @@ pub(in crate::analyze) fn analyze_validate_rules(
         match rule.operator {
             governance::RuleOperator::Isnull | governance::RuleOperator::Notnull => {}
             governance::RuleOperator::Eq | governance::RuleOperator::Ne => {
+                crate::require_non_geometry(field)?;
                 if !governance::is_rule_comparable(field.data_type()) {
                     return contract_error(
                         op,

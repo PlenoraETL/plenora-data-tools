@@ -567,6 +567,7 @@ impl<'a> FastProgram<'a> {
     ) -> Result<RecordBatch> {
         let kind = infer_expr_type(expression, &|name| {
             let index = column_index(batch, name)?;
+            crate::require_non_geometry(batch.schema_ref().field(index))?;
             column_formula_type(batch.schema_ref().field(index).data_type(), name)
         })?;
         let limits = crate::Limits::default();
@@ -1034,6 +1035,7 @@ pub fn formula_con_effetti(
     // assente fallisce anche su un batch vuoto.
     let kind = infer_expr_type(&expression, &|name| {
         let index = column_index(batch, name)?;
+        crate::require_non_geometry(batch.schema_ref().field(index))?;
         column_formula_type(batch.schema_ref().field(index).data_type(), name)
     })?;
     let mut esecuzione = Esecuzione::new(config, limits);

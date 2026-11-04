@@ -645,6 +645,7 @@ pub(super) fn static_output_kind(
 ) -> Result<Kind> {
     let lookup = |name: &str| -> Result<DataType> {
         let index = column_index(batch, name)?;
+        crate::require_non_geometry(batch.schema_ref().field(index))?;
         Ok(batch.schema_ref().field(index).data_type().clone())
     };
     static_type::verifica_domini_temporali("table.expression", &config.expression, &lookup)?;

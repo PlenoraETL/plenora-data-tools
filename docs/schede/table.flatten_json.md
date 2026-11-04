@@ -75,6 +75,11 @@ In esecuzione:
 
 ### Limiti e deviazioni
 
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 Un documento si valida come lo valida `serde_json`: numeri oltre il
 dominio di `f64`, surrogati isolati e annidamento oltre 128 livelli lo
 rendono invalido, anche dove il valore non verrebbe estratto. Il kernel
