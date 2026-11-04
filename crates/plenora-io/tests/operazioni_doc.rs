@@ -3649,15 +3649,20 @@ fn catalogo_tabellare_multigeometria() {
                     let indices = (inputs[0].num_columns() - count..inputs[0].num_columns())
                         .collect::<Vec<_>>();
                     let input = inputs[0].project(&indices).unwrap();
-                    assert!(
-                        matches!(
-                            plenora_kernels_table::reshape::transpose(
-                                &input,
-                                &config,
-                                &plenora_kernels_table::Limits::default()
-                            ),
-                            Err(PlenoraError::Crs(_))
-                        ),
+                    let error = plenora_kernels_table::reshape::transpose(
+                        &input,
+                        &config,
+                        &plenora_kernels_table::Limits::default(),
+                    )
+                    .expect_err(&context);
+                    assert_eq!(
+                        error.category(),
+                        plenora_core::ErrorCategory::Crs,
+                        "{context}"
+                    );
+                    assert_eq!(
+                        error.phase(),
+                        plenora_core::ErrorPhase::Validate,
                         "{context}"
                     );
                     continue;
@@ -3779,16 +3784,34 @@ fn catalogo_geo_multigeometria_operandi_e_passanti() {
             let mut invalida = config.clone();
             invalida[key] = value.clone();
             scheda.esempio.config = RawValue::from_string(invalida.to_string()).unwrap();
-            let errore = esegui_su(&scheda, &originali)
-                .expect("errore classificato")
-                .expect_err(op.id);
-            assert!(!errore.contains("SEGRETO"), "{}: {errore}", op.id);
-            let categoria = if value == serde_json::json!("SEGRETO_ASSENTE") && !produttore {
-                "schema violation"
-            } else {
-                "contract violation"
+            let piano = Pipeline::from_json(&testo_piano(&scheda)).unwrap();
+            let schemi: Vec<_> = scheda
+                .esempio
+                .ingressi
+                .iter()
+                .zip(&originali)
+                .map(|(s, b)| (s.nome.as_str(), b.schema()))
+                .collect();
+            let Err(errore) = piano.validate(&schemi) else {
+                panic!("{}: selettore invalido accettato in validazione", op.id);
             };
-            assert!(errore.contains(categoria), "{} categoria: {errore}", op.id);
+            assert!(
+                !errore.to_string().contains("SEGRETO"),
+                "{}: {errore}",
+                op.id
+            );
+            let categoria = if value == serde_json::json!("SEGRETO_ASSENTE") && !produttore {
+                plenora_core::ErrorCategory::Schema
+            } else {
+                plenora_core::ErrorCategory::InvalidPlan
+            };
+            assert_eq!(errore.category(), categoria, "{} categoria", op.id);
+            assert_eq!(
+                errore.phase(),
+                plenora_core::ErrorPhase::Validate,
+                "{} fase",
+                op.id
+            );
         }
 
         let ridotto = matches!(

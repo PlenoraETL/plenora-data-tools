@@ -348,6 +348,7 @@ fn il_filtro_precede_la_lettura_dei_valori_e_srid_malformato_e_schema() {
     )
     .unwrap_err();
     assert_eq!(e.category().as_str(), "schema");
+    assert_eq!(e.phase().as_str(), "validate");
     assert!(!e.to_string().contains("NON_UN_NUMERO"));
 }
 
@@ -797,7 +798,14 @@ fn decisione_0022_mixed_omette_elenco_vuoto() {
         let input = tabella(&vector);
         let mut typed = contract.clone();
         typed.schema = input.schema();
-        assert_eq!(typed.validate().is_err(), empty);
+        let validation = typed.validate();
+        if empty {
+            let error = validation.unwrap_err();
+            assert_eq!(error.category().as_str(), "schema");
+            assert_eq!(error.phase().as_str(), "validate");
+        } else {
+            validation.unwrap();
+        }
         let result = plenora_cli::api::esegui_in_memoria(
             &pipeline,
             vec![Ingresso::Tabella {
@@ -807,7 +815,9 @@ fn decisione_0022_mixed_omette_elenco_vuoto() {
             &Interruzione::default(),
         );
         if empty {
-            assert_eq!(result.unwrap_err().category().as_str(), "schema");
+            let error = result.unwrap_err();
+            assert_eq!(error.category().as_str(), "schema");
+            assert_eq!(error.phase().as_str(), "validate");
         } else {
             let (_, tables) = result.unwrap();
             same_values(&input, &tables[0].1);
