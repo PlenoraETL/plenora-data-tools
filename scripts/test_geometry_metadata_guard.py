@@ -202,6 +202,16 @@ class GeometryMetadataGuard(unittest.TestCase):
         for name in known:
             self.assertIn(f'| `{name}` |', document)
 
+    def test_native_primary_is_provenance_only(self):
+        # Le chiavi native sono provenienza: classificate, mai lette per decidere.
+        forbidden = {'plenora.geometry.native.geoparquet.primary_column',
+                     'plenora.geometry.native.geoparquet.altre_colonne'}
+        for path in sorted((ROOT / 'crates').glob('*/src/**/*.rs')):
+            if path == POLICY:
+                continue
+            items = production(tokens(path.read_text(encoding='utf-8-sig')))
+            self.assertFalse(forbidden.intersection(v for kind, v in items if kind == 'string'), str(path))
+
     def test_new_members_and_constructions_fail(self):
         known = vocabulary()
         for source in [

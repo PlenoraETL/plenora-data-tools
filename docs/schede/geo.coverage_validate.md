@@ -13,6 +13,13 @@ precisione del CRS della colonna ([Runner, «Operazioni geo»](runner.md#operazi
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `tolerance` | numero | `0` | finito, `>= 0` | area minima, nelle unità del CRS al quadrato, perché una sovrapposizione sia segnalata (strettamente maggiore) |
@@ -25,6 +32,11 @@ Schema nuovo, in quest'ordine: `issue_type` (`utf8`), `index_a` e
 colonna d'ingresso, dimensioni `xy`, senza dichiarazione dei tipi), tutte
 non nullable. Le colonne dell'ingresso spariscono, i metadati di schema
 restano; nessuna proprietà del contratto sopravvive.
+
+La geometria d'uscita e' primaria solo se l'operando selezionato era la
+primaria d'ingresso; altrimenti l'uscita ha primaria assente (`none`),
+anche se contiene una sola geometria. Dall'operando eredita solo le
+proprieta' del CRS; tipi e rappresentazione sono prodotti dal codec.
 
 ### Righe
 
@@ -53,7 +65,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti; `tolerance` negativa o non
   finita; `max_issues` pari a zero o non intero;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.

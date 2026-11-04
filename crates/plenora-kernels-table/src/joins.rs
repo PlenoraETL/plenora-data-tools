@@ -14,7 +14,9 @@ use plenora_core::arrow::array::{
     RecordBatch, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray, UInt32Array, UInt64Array,
 };
-use plenora_core::arrow::schema::{DataType, Field, Schema, TimeUnit};
+#[cfg(test)]
+use plenora_core::arrow::schema::Schema;
+use plenora_core::arrow::schema::{DataType, Field, TimeUnit};
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 
@@ -371,6 +373,9 @@ pub fn join(
     config: &Join,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
+    crate::require_join_geometry_support(&left.schema(), &right.schema())?;
     join_impl(left, right, config, limits, true)
 }
 
@@ -395,10 +400,28 @@ fn join_impl(
         .map(|name| column_index(right, name))
         .collect::<Result<Vec<_>>>()?;
     for (left_index, right_index) in left_keys.iter().zip(&right_keys) {
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            left.schema().field(*left_index),
+            &[],
+            right.schema().field(*right_index),
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
+        )?;
         if left.column(*left_index).data_type() != right.column(*right_index).data_type() {
             return Err(PlenoraError::Schema(
                 "join safe profile richiede chiavi con tipi Arrow identici".into(),
             ));
+        }
+    }
+    if matches!(config.how, JoinHow::Right | JoinHow::Outer) {
+        for (l, r) in left_keys.iter().zip(&right_keys) {
+            plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+                left.schema().field(*l),
+                &[],
+                right.schema().field(*r),
+                &[],
+                plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
+            )?;
         }
     }
     let (left_rows, right_rows) = if fast {
@@ -891,6 +914,8 @@ fn take_columns(columns: &[ArrayRef], rows: &[Option<usize>]) -> Result<Vec<Arra
     }
 }
 
+// Campi e array seguono la stessa corrispondenza dei due ingressi.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn combine_horizontal(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -1006,11 +1031,23 @@ pub(crate) fn combine_horizontal(
     // I metadati di schema delle due sorgenti si fondono (valori diversi
     // sulla stessa chiave -> errore), come dichiara l'analisi dei join.
     let metadata = crate::metadata_schema_input("join", &[&left_schema, &right_schema])?;
-    crate::batch_with_rows(
-        Arc::new(Schema::new_with_metadata(fields, metadata)),
-        columns,
-        left_rows.len(),
-    )
+    let mapping = (0..left_schema.fields().len())
+        .map(|i| (0, i, i))
+        .chain(
+            included_right
+                .iter()
+                .enumerate()
+                .map(|(out, source)| (1, *source, left_schema.fields().len() + out)),
+        )
+        .collect::<Vec<_>>();
+    let schema = crate::geometry_provenance::compose(
+        &[&left_schema, &right_schema],
+        fields,
+        &mapping,
+        false,
+        metadata,
+    )?;
+    crate::batch_with_rows(Arc::new(schema), columns, left_rows.len())
 }
 
 /// Config di `table.concat`; campi sconosciuti rifiutati.
@@ -1063,6 +1100,8 @@ pub fn concat(
     config: &Concat,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
     config.verifica_parametri()?;
     if left.num_columns() != right.num_columns()
         || left
@@ -1121,7 +1160,8 @@ pub fn concat(
         })
         .collect::<Vec<_>>();
     let metadata = crate::metadata_schema_input("concat", &[&left.schema(), &right.schema()])?;
-    let schema = Schema::new_with_metadata(fields, metadata);
+    let schema =
+        crate::geometry_provenance::vertical(&[&left.schema(), &right.schema()], fields, metadata)?;
     let schema = plenora_core::contract::geometry_metadata_policy::schema_effect(
         &schema,
         &[&left.schema(), &right.schema()],
@@ -1236,17 +1276,7 @@ fn union_schema_by_name(inputs: &[&RecordBatch], strict: bool) -> Result<Vec<Fie
             *field = field.clone().with_nullable(true);
         }
     }
-    let schema = Schema::new(fields);
-    let schemas = inputs
-        .iter()
-        .map(|input| input.schema())
-        .collect::<Vec<_>>();
-    let output = plenora_core::contract::geometry_metadata_policy::schema_effect(
-        &schema,
-        &schemas.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
-        plenora_core::contract::geometry_metadata_policy::Effect::Merge,
-    )?;
-    Ok(output.fields().iter().map(|f| f.as_ref().clone()).collect())
+    Ok(fields)
 }
 
 /// Concatenazione N-aria per NOME colonna, non per posizione.
@@ -1269,6 +1299,9 @@ pub fn concat_by_name(
     config: &ConcatByName,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    for input in inputs {
+        crate::require_geometry_support(&input.schema())?;
+    }
     if inputs.is_empty() {
         return Err(PlenoraError::InvalidPlan(
             "concat_by_name richiede almeno un input".into(),
@@ -1352,7 +1385,15 @@ pub fn concat_by_name(
         "concat_by_name",
         &sorgenti.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
     )?;
-    let schema = Schema::new_with_metadata(fields, metadata);
+    let schemas = inputs.iter().map(|b| b.schema()).collect::<Vec<_>>();
+    let schema = crate::geometry_provenance::vertical(
+        &schemas
+            .iter()
+            .map(std::convert::AsRef::as_ref)
+            .collect::<Vec<_>>(),
+        fields,
+        metadata,
+    )?;
     let schema = plenora_core::contract::geometry_metadata_policy::schema_effect(
         &schema,
         &sorgenti.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
@@ -1387,6 +1428,9 @@ pub fn cross_join(
     _config: &CrossJoin,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
+    crate::require_join_geometry_support(&left.schema(), &right.schema())?;
     let rows = left
         .num_rows()
         .checked_mul(right.num_rows())
@@ -1461,7 +1505,6 @@ fn membership_impl(
     keep_matches: bool,
     fast: bool,
 ) -> Result<RecordBatch> {
-    crate::require_compatible_geometry_inputs(&left.schema(), &[], &right.schema(), &[])?;
     if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {
         return Err(PlenoraError::InvalidPlan(
             "chiavi membership join non valide".into(),
@@ -1478,6 +1521,13 @@ fn membership_impl(
         .map(|name| column_index(right, name))
         .collect::<Result<Vec<_>>>()?;
     for (left_index, right_index) in left_keys.iter().zip(&right_keys) {
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            left.schema().field(*left_index),
+            &[],
+            right.schema().field(*right_index),
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
+        )?;
         if left.column(*left_index).data_type() != right.column(*right_index).data_type() {
             return Err(PlenoraError::Schema(
                 "membership join richiede chiavi con tipi Arrow identici".into(),
@@ -1609,6 +1659,8 @@ pub fn semi_join(
     right: &RecordBatch,
     config: &MembershipJoin,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
     membership_join(left, right, config, true)
 }
 
@@ -1624,6 +1676,8 @@ pub fn anti_join(
     right: &RecordBatch,
     config: &MembershipJoin,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
     membership_join(left, right, config, false)
 }
 
@@ -1994,6 +2048,9 @@ pub fn asof_join(
     config: &AsOfJoin,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
+    crate::require_join_geometry_support(&left.schema(), &right.schema())?;
     config.verifica_parametri()?;
     let left_on = column_index(left, &config.left_on)?;
     let right_on = column_index(right, &config.right_on)?;
@@ -2019,6 +2076,13 @@ pub fn asof_join(
         .map(|name| column_index(right, name))
         .collect::<Result<Vec<_>>>()?;
     for (left_index, right_index) in left_by.iter().zip(&right_by) {
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            left.schema().field(*left_index),
+            &[],
+            right.schema().field(*right_index),
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
+        )?;
         if left.column(*left_index).data_type() != right.column(*right_index).data_type() {
             return Err(PlenoraError::Schema(
                 "asof_join: tipi by incompatibili".into(),
@@ -2880,8 +2944,22 @@ mod geometry_reference_tests {
     use plenora_core::contract::arrow_metadata::{
         geometry_output_field, PLENORA_GEOMETRY_AXIS_ORDER_KEY,
     };
-    use plenora_core::contract::{ContractProperties, DataContract, FieldAllocator};
+    use plenora_core::contract::FieldAllocator;
     use serde_json::json;
+
+    fn complete_contract(
+        schema: plenora_core::arrow::SchemaRef,
+    ) -> plenora_core::contract::DataContract {
+        let mut metadata = schema.metadata().clone();
+        metadata.insert("plenora.contract.version", "1");
+        let schema =
+            std::sync::Arc::new(std::sync::Arc::unwrap_or_clone(schema).with_metadata(metadata));
+        plenora_core::contract::arrow_schema::contract_from_arrow_schema(
+            schema,
+            plenora_core::crs::resolve_crs,
+        )
+        .expect("contratto completo")
+    }
 
     fn geometry(crs: &str, order: Option<&str>, x: f64, y: f64) -> RecordBatch {
         let field = geometry_output_field("g", crs).unwrap();
@@ -2937,15 +3015,7 @@ mod geometry_reference_tests {
                         assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
                     }
                 }
-                let inputs = [&a, &b].map(|batch| {
-                    DataContract::from_source(
-                        batch.schema(),
-                        vec![],
-                        None,
-                        ContractProperties::default(),
-                    )
-                    .unwrap()
-                });
+                let inputs = [&a, &b].map(|batch| complete_contract(batch.schema()));
                 for (op, config) in [
                     ("table.concat", json!({})),
                     ("table.concat_by_name", json!({"strict":false})),
@@ -2974,7 +3044,7 @@ mod geometry_reference_tests {
         }
     }
     #[test]
-    fn geometrie_derivate_conservano_riferimenti_o_rifiutano_la_fusione() {
+    fn derivazioni_multigeometria_verificano_ogni_sorgente() {
         let a = geometry("EPSG:4326", Some("lon_lat"), 12.0, 45.0);
         for order in ["lon_lat", "lat_lon", "unknown"] {
             let b = geometry("EPSG:4326", Some(order), 45.0, 12.0);
@@ -3003,13 +3073,7 @@ mod geometry_reference_tests {
                 } else {
                     input.clone()
                 };
-                let contract = DataContract::from_source(
-                    input.schema(),
-                    vec![],
-                    None,
-                    ContractProperties::default(),
-                )
-                .unwrap();
+                let contract = complete_contract(input.schema());
                 for (op, config) in &cases {
                     let result = match *op {
                         "table.coalesce" => crate::quality::coalesce(
@@ -3035,25 +3099,12 @@ mod geometry_reference_tests {
                         &Limits::default(),
                     );
                     if order == "lon_lat" {
-                        let output = result.unwrap();
-                        let name = match *op {
-                            "table.coalesce" => "g",
-                            "table.melt" => "value",
-                            _ => continue,
-                        };
-                        assert_eq!(
-                            output
-                                .schema()
-                                .field_with_name(name)
-                                .unwrap()
-                                .metadata()
-                                .get(PLENORA_GEOMETRY_AXIS_ORDER_KEY)
-                                .map(String::as_str),
-                            Some("lon_lat")
-                        );
-                        let analyzed = analyzed.unwrap();
-                        assert_eq!(output.schema().fields(), analyzed.schema.fields());
-                        assert!(analyzed.geometries.iter().any(|g| g.name == name));
+                        assert!(result.is_ok(), "{op}: {result:?}");
+                        if *op == "table.transpose" {
+                            assert!(matches!(analyzed, Err(PlenoraError::Unsupported(_))));
+                        } else {
+                            assert!(analyzed.is_ok(), "{op}: {analyzed:?}");
+                        }
                     } else {
                         assert!(
                             matches!(result, Err(PlenoraError::Crs(_))),

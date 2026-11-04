@@ -13,6 +13,13 @@ condizionato anche agli antipodi. Per la distanza sull'ellissoide c'è
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `other_wkb` | stringa | obbligatorio | WKB 2D in esadecimale (cifre maiuscole o minuscole, lunghezza pari) di un `Point`, longitudine in `[-180, 180]` e latitudine in `[-90, 90]` | secondo operando, nello stesso CRS della colonna |
@@ -40,7 +47,7 @@ Per contratto quello d'ingresso (forma 1:1).
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', la
   colonna non si dichiara geometria WKB, o `output_column` esiste già;
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate), o `other_wkb` con Z/M o SRID;

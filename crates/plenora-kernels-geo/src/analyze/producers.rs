@@ -23,7 +23,7 @@ use super::config::{
     CollectConfig, FromCoordsConfig, FromWktConfig, GenerateGridConfig, SnapConfig, SubdivideConfig,
 };
 use super::helpers::{
-    ensure_name, ensure_name_free, ensure_non_negative, geometry_field, input_crs, invalid_param,
+    ensure_name, ensure_name_free, ensure_non_negative, geometry_field, invalid_param,
     new_geometry_field, output_fields, parametro_non_decodificabile, parse_config, rebuild,
     resolve_definition, validate_config_geometry_domain, validate_wkb_hex,
 };
@@ -49,10 +49,10 @@ use super::{
 pub(in crate::analyze) fn analyze_reproject(
     op: &str,
     input: &DataContract,
+    geometry: &GeometryColumnContract,
     config: &Value,
     allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
-    let geometry = super::helpers::single_geometry(op, input)?;
     super::helpers::require_identifiable_geometry(op, input, geometry)?;
     super::helpers::require_xy_dimensions(op, geometry)?;
     // CRS risolto e ordine degli assi prima del target: dipendono dalla
@@ -90,7 +90,17 @@ pub(in crate::analyze) fn analyze_reproject(
             input.schema.metadata().clone(),
         )),
         input.field_origins(),
-        vec![reprojected],
+        input
+            .geometries
+            .iter()
+            .map(|g| {
+                if g.field_id == geometry.field_id {
+                    reprojected.clone()
+                } else {
+                    g.clone()
+                }
+            })
+            .collect(),
         input.active_geometry,
         input.properties.clone(),
         allocator,
@@ -105,7 +115,7 @@ pub(in crate::analyze) fn analyze_reproject(
 ///
 /// `nullable` e' quello che il kernel emette davvero: la colonna e' null
 /// dove la geometria della riga e' null, quindi nullable se lo e' la
-/// geometria ([`geometry_nullable`]), e in piu' dove il kernel rende un
+/// geometria selezionata, e in piu' dove il kernel rende un
 /// valore assente per una geometria presente (distanze da una geometria
 /// vuota, `line_locate_point` di una non linea). Il test
 /// `geo_nullabilita` del runner confronta la dichiarazione con l'uscita.
@@ -123,14 +133,6 @@ pub(in crate::analyze) fn analyze_add_column(
     rebuild(input, fields, input.properties.clone(), allocator)
 }
 
-/// Se la colonna geometria attiva dell'ingresso ammette null (in assenza,
-/// `true`: la dichiarazione prudente).
-pub(in crate::analyze) fn geometry_nullable(input: &DataContract) -> bool {
-    input
-        .active_geometry_column()
-        .is_none_or(|geometry| geometry.nullable)
-}
-
 /// Espansione 1:N (`explode`, `delaunay`, `split`): schema invariato piu'
 /// `__parent_index`; `sorted_by` preservato (espansione stabile), `row_count`
 /// eliminato. La geometria d'uscita non e' nullable: una riga a geometria
@@ -138,6 +140,7 @@ pub(in crate::analyze) fn geometry_nullable(input: &DataContract) -> bool {
 pub(in crate::analyze) fn analyze_expand(
     op: &str,
     input: &DataContract,
+    geometry: &GeometryColumnContract,
     allocator: &mut plenora_core::contract::FieldAllocator,
 ) -> Result<DataContract> {
     let mut fields = output_fields(input);
@@ -146,11 +149,12 @@ pub(in crate::analyze) fn analyze_expand(
     let mut properties = input.properties.clone();
     properties.row_count = None;
     let output = rebuild(input, fields, properties, allocator)?;
-    with_active_geometry_nullability(&output, false, allocator)
+    with_geometry_nullability(&output, geometry, false, allocator)
 }
 
 /// Il contratto con la colonna geometria attiva dichiarata `nullable` (campo
 /// e contratto di colonna), il resto invariato.
+#[cfg(test)]
 pub(in crate::analyze) fn with_active_geometry_nullability(
     contract: &DataContract,
     nullable: bool,
@@ -159,6 +163,16 @@ pub(in crate::analyze) fn with_active_geometry_nullability(
     let Some(active) = contract.active_geometry_column() else {
         return Ok(contract.clone());
     };
+    with_geometry_nullability(contract, active, nullable, allocator)
+}
+
+/// Aggiorna la nullabilita' del solo operando selezionato.
+pub(in crate::analyze) fn with_geometry_nullability(
+    contract: &DataContract,
+    active: &GeometryColumnContract,
+    nullable: bool,
+    allocator: &mut FieldAllocator,
+) -> Result<DataContract> {
     let (name, field_id) = (active.name.clone(), active.field_id);
     let fields: Vec<Field> = contract
         .schema
@@ -233,20 +247,6 @@ pub(in crate::analyze) fn analyze_geometry_only(
     )
 }
 
-/// I produttori creano la colonna geometria: un input che ne ha gia' una si
-/// rifiuta.
-fn require_no_geometry(op: &str, input: &DataContract) -> Result<()> {
-    if !input.geometries.is_empty() {
-        return Err(PlenoraError::Schema(format!(
-            "{op}: l'input ha gia' una colonna geometria"
-        )));
-    }
-    Ok(())
-}
-
-/// Il CRS di un produttore: quello della config `crs` se presente,
-/// altrimenti quello di piano, altrimenti errore `Crs`; poi il requisito del
-/// catalogo.
 fn producer_crs(
     op: &str,
     definition: Option<&str>,
@@ -265,7 +265,7 @@ fn producer_crs(
     Ok(crs)
 }
 
-/// `from_coords`: nessuna geometria in input; due colonne numeriche
+/// `from_coords`: aggiunge una geometria da due colonne numeriche
 /// (`Float64`/`Int64`) producono la colonna geometria (nuovo `FieldId`,
 /// `nullable=false`), CRS da config o di piano.
 pub(in crate::analyze) fn analyze_from_coords(
@@ -277,7 +277,6 @@ pub(in crate::analyze) fn analyze_from_coords(
     fields_allocator: &mut FieldAllocator,
 ) -> Result<DataContract> {
     let parsed: FromCoordsConfig = parse_config(op, config)?;
-    require_no_geometry(op, input)?;
     let x_column = parsed.x_column.as_deref().unwrap_or(DEFAULT_X_COLUMN);
     let y_column = parsed.y_column.as_deref().unwrap_or(DEFAULT_Y_COLUMN);
     let name = parsed
@@ -335,14 +334,22 @@ pub(in crate::analyze) fn analyze_from_coords(
             input.schema.metadata().clone(),
         )),
         origins,
-        vec![geometry],
-        Some(field_id),
+        {
+            let mut geometries = input.geometries.clone();
+            geometries.push(geometry);
+            geometries
+        },
+        if input.geometries.is_empty() {
+            Some(field_id)
+        } else {
+            input.active_geometry
+        },
         input.properties.clone(),
         fields_allocator,
     )
 }
 
-/// `from_wkt`: nessuna geometria in input; una colonna `Utf8` WKT produce la
+/// `from_wkt`: una colonna `Utf8` WKT produce una nuova
 /// colonna geometria (nuovo `FieldId`, **nullable** per le celle sorgente
 /// null; WKT invalido rifiuta l'output con diagnostica row-scoped). CRS da config `crs` o di
 /// piano; requisito del catalogo (`Known`).
@@ -356,7 +363,6 @@ pub(in crate::analyze) fn analyze_from_wkt(
 ) -> Result<DataContract> {
     let parsed: FromWktConfig = parse_config(op, config)?;
     let _ = &parsed.on_error;
-    require_no_geometry(op, input)?;
     if !ensure_name(&parsed.wkt_column) {
         return Err(invalid_param(op, "wkt_column", "non deve essere vuoto"));
     }
@@ -435,8 +441,16 @@ pub(in crate::analyze) fn analyze_from_wkt(
             input.schema.metadata().clone(),
         )),
         origins,
-        vec![geometry],
-        Some(field_id),
+        {
+            let mut geometries = input.geometries.clone();
+            geometries.push(geometry);
+            geometries
+        },
+        if input.geometries.is_empty() {
+            Some(field_id)
+        } else {
+            input.active_geometry
+        },
         input.properties.clone(),
         fields_allocator,
     )
@@ -460,7 +474,7 @@ pub(in crate::analyze) fn analyze_collect(
         if !ensure_name(name) {
             return Err(invalid_param(op, "group_by", "nomi colonna non vuoti"));
         }
-        if name == &geometry.name {
+        if input.geometries.iter().any(|g| &g.name == name) {
             return Err(invalid_param(
                 op,
                 "group_by",
@@ -492,7 +506,7 @@ pub(in crate::analyze) fn analyze_collect(
     analyze_geometry_only(input, geometry, &extra, geometry.nullable, allocator)
 }
 
-/// `generate_grid` (generativa): input senza geometrie (trigger); lo
+/// `generate_grid` (generativa): input usato solo come trigger; lo
 /// schema di output e' nuovo (geometria nuovo `FieldId` non null +
 /// `cell_i`/`cell_j`, piu' centroidi opzionali) e il numero di celle,
 /// limitato da [`crate::extensions2::MAX_GRID_CELLS`], e' noto a secco
@@ -509,7 +523,6 @@ pub(in crate::analyze) fn analyze_generate_grid(
     fields_allocator: &mut FieldAllocator,
 ) -> Result<DataContract> {
     let parsed: GenerateGridConfig = parse_config(op, config)?;
-    require_no_geometry(op, input)?;
     let extent = crate::extensions2::GridExtent::new(
         parsed.extent.xmin,
         parsed.extent.ymin,
@@ -645,7 +658,17 @@ pub(in crate::analyze) fn analyze_subdivide(
             origins.push(FieldOrigin::New);
             origins
         },
-        vec![output_geometry],
+        input
+            .geometries
+            .iter()
+            .map(|g| {
+                if g.field_id == geometry.field_id {
+                    output_geometry.clone()
+                } else {
+                    g.clone()
+                }
+            })
+            .collect(),
         input.active_geometry,
         properties,
         allocator,
@@ -658,6 +681,7 @@ pub(in crate::analyze) fn analyze_subdivide(
 pub(in crate::analyze) fn analyze_snap(
     op: &str,
     input: &DataContract,
+    geometry: &GeometryColumnContract,
     config: &Value,
 ) -> Result<DataContract> {
     let parsed: SnapConfig = parse_config(op, config)?;
@@ -665,7 +689,12 @@ pub(in crate::analyze) fn analyze_snap(
     let reference = crate::geometry_from_wkb(&bytes).map_err(|error| {
         parametro_non_decodificabile(op, "reference_wkb", "WKB non decodificabile", &error)
     })?;
-    validate_config_geometry_domain(op, "reference_wkb", &reference, input_crs(op, input)?)?;
+    validate_config_geometry_domain(
+        op,
+        "reference_wkb",
+        &reference,
+        super::dispatch::require_resolved_crs(op, geometry)?,
+    )?;
     ensure_non_negative(op, "tolerance", parsed.tolerance)?;
     Ok(input.clone())
 }

@@ -53,7 +53,7 @@ Le colonne di `index_col` nel loro ordine, con tipo, nullabilità e
 metadati di campo; poi le colonne pivot, nullabili, con il tipo sopra.
 `first` e `last` su geometrie conservano i metadati geometrici della
 sorgente, senza identita' e dichiarazione dei tipi; le altre aggregazioni
-non li ereditano. La pipeline rifiuta piu' di una geometria in uscita:
+non li ereditano. La pipeline supporta tutte le geometrie prodotte, senza promuoverle a primaria:
 
 - senza `mapping`, una per valore pivot distinto dei dati, nell'ordine dei
   byte del testo del valore;

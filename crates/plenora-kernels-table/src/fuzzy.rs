@@ -841,6 +841,9 @@ pub fn fuzzy_join(
     config: &FuzzyJoin,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
+    crate::require_join_geometry_support(&left.schema(), &right.schema())?;
     fuzzy_join_con_chunk(left, right, config, limits, CHUNK_PROBE_FUZZY)
 }
 

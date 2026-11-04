@@ -241,3 +241,36 @@ def test_il_risultato_non_si_modifica() -> None:
         risultato.tables["altro"] = tabella_semplice()  # type: ignore[index]
     with pytest.raises(AttributeError):
         risultato.result = {}  # type: ignore[misc]
+
+@pytest.mark.parametrize('primary', ['73', 'none', None])
+def test_multigeometria_arrow_ipc_geoparquet(tmp_path: pathlib.Path, primary: str | None) -> None:
+    import struct
+    fields = []
+    for name, identity in [('traccia', '42'), ('posizione', '73')]:
+        fields.append(pa.field(name, pa.binary(), metadata={
+            b'ARROW:extension:name': b'geoarrow.wkb',
+            b'plenora.field_id': identity.encode(),
+            b'geo': b'{"crs":"OGC:CRS84","encoding":"wkb","dimensions":"xy"}',
+            b'plenora.geometry.axis_order': b'lon_lat',
+        }))
+    md = {b'plenora.contract.version': b'1'}
+    if primary is not None:
+        md[b'plenora.primary_geometry'] = primary.encode()
+    point = struct.pack('<BIdd', 1, 1, 9.0, 45.0)
+    table = pa.Table.from_arrays([pa.array([point, None, point]), pa.array([point, point, None])], schema=pa.schema(fields, metadata=md))
+    result = pd.run(piano_identita(), {'t': table}).tables['t']
+    assert result.to_pydict() == table.to_pydict()
+    assert result.schema.metadata.get(b'plenora.primary_geometry') == (b'73' if primary == '73' else None)
+    assert [f.metadata[b'plenora.field_id'] for f in result.schema] == [b'42', b'73']
+    for ext in ['arrow', 'arrows', 'parquet']:
+        path = tmp_path / f'roundtrip.{ext}'
+        if ext == 'parquet' and primary != '73':
+            with pytest.raises(pd.PlenoraUnsupportedError):
+                pd.run(piano_identita(), {'t': table}, outputs={'t': path})
+            assert not path.exists()
+            continue
+        pd.run(piano_identita(), {'t': table}, outputs={'t': path})
+        read = pd.run(piano_identita(), {'t': path}).tables['t']
+        assert read.to_pydict() == result.to_pydict()
+        assert read.schema.metadata.get(b'plenora.primary_geometry') == result.schema.metadata.get(b'plenora.primary_geometry')
+        assert [f.metadata[b'plenora.field_id'] for f in read.schema] == [b'42', b'73']

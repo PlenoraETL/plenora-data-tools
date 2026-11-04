@@ -1,6 +1,6 @@
 ### Che cosa fa
 
-Crea la colonna geometria di una tabella che non ne ha, leggendo il testo
+Aggiunge una colonna geometria alla tabella, leggendo il testo
 WKT di una colonna `utf8`: ogni cella diventa la geometria WKB
 corrispondente, una cella nulla una geometria nulla. Il testo deve essere
 WKT 2D senza SRID e descrivere una geometria valida: basta una cella che non
@@ -25,11 +25,14 @@ nome: nessun valore produce un rimedio silenzioso.
 
 ### Schema
 
+La geometria aggiunta diventa primaria solo se e' la prima geometria della
+tabella; altrimenti conserva la primaria esistente o la sua assenza.
+
 Le colonne dell'ingresso restano, con i loro metadati; in coda si aggiunge
 `output_column`, `binary`, nullable solo se lo è la colonna WKT (una cella
 WKT null dà una geometria null), con l'estensione `geoarrow.wkb` e i
 metadati `geo` (CRS, dimensioni `xy`, encoding WKB). Il contratto la dichiara
-colonna geometria attiva, con i tipi `mixed` dei sette tipi WKB XY (`Point`,
+colonna geometria aggiunta, con i tipi `mixed` dei sette tipi WKB XY (`Point`,
 `LineString`, `Polygon` e i multi, `GeometryCollection`). I metadati di
 schema e le proprietà del contratto (`sorted_by`, `row_count`) restano.
 
@@ -50,7 +53,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti o `on_error` fuori elenco;
   `wkt_column` o `output_column` vuoti;
-- `Schema`: l'ingresso ha già una colonna geometria; `wkt_column` assente
+- `Schema`: `wkt_column` assente
   o di tipo diverso da `utf8` (`large_utf8` compreso); `output_column` già
   presente;
 - `Crs`: né `crs` né un CRS di piano; `crs` non risolvibile (codice fuori

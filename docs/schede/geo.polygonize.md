@@ -16,6 +16,13 @@ dell'arco d'uscita ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `node_input` | booleano | `true` | `true`, `false` | noda le linee negli incroci prima di costruire il grafo |
@@ -61,7 +68,7 @@ Deterministico: stesso ingresso, stesse righe nello stesso ordine.
 In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti o valori non booleani;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto, o CRS non proiettato.

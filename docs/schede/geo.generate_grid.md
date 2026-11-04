@@ -28,6 +28,9 @@ di colonne): il conteggio si verifica in validazione, prima di allocare.
 
 ### Schema
 
+Accetta anche ingressi multigeometria: le loro colonne non partecipano al
+calcolo. La griglia prodotta e' la primaria del nuovo schema.
+
 Schema nuovo, in quest'ordine: `geometry` (`binary` non nullable,
 estensione `geoarrow.wkb`, CRS della griglia, dimensioni `xy`; il contratto
 dichiara i tipi `exact` `Polygon`), `cell_i` e `cell_j` (`uint64` non
@@ -65,7 +68,6 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: config con campi sconosciuti o `shape` fuori elenco;
   `extent` non finito o degenere; `cell_size` non finito o non positivo;
   più di 1.000.000 celle; numero di celle per asse non rappresentabile;
-- `Schema`: l'ingresso ha già una colonna geometria;
 - `Crs`: né `crs` né un CRS di piano; `crs` non risolvibile; un vertice di
   `extent` fuori dal dominio del CRS.
 

@@ -33,6 +33,7 @@ use super::{
 /// dataset, non le colonne attributo soppresse.
 pub(in crate::analyze) fn analyze_coverage_rows(
     geometry: &GeometryColumnContract,
+    primary: bool,
     source: &Field,
     schema_metadata: &plenora_core::arrow::Metadata,
     columns: &[(&str, DataType)],
@@ -82,7 +83,7 @@ pub(in crate::analyze) fn analyze_coverage_rows(
         Arc::new(Schema::new_with_metadata(fields, schema_metadata.clone())),
         origins,
         vec![output_geometry],
-        Some(field_id),
+        primary.then_some(field_id),
         ContractProperties::default(),
         fields_allocator,
     )
@@ -112,6 +113,7 @@ pub(in crate::analyze) fn analyze_coverage_validate(
     }
     analyze_coverage_rows(
         geometry,
+        input.active_geometry == Some(geometry.field_id),
         input.schema.field_with_name(&geometry.name)?,
         input.schema.metadata(),
         &[
@@ -142,6 +144,7 @@ pub(in crate::analyze) fn analyze_shared_paths(
     }
     analyze_coverage_rows(
         geometry,
+        input.active_geometry == Some(geometry.field_id),
         input.schema.field_with_name(&geometry.name)?,
         input.schema.metadata(),
         &[

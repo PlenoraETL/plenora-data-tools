@@ -9,6 +9,13 @@ longitudine e latitudine in gradi.
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `output_column` | stringa | `geodesic_line_length` | nome non vuoto e non già nello schema | colonna aggiunta |
@@ -36,7 +43,7 @@ Per contratto quello d'ingresso (forma 1:1).
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', la
   colonna non si dichiara geometria WKB, o `output_column` esiste già;
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate);

@@ -77,7 +77,7 @@ fn fixture(original: &RecordBatch, origin: usize, geometry: bool) -> RecordBatch
         .map(|f| {
             let mut md = f.metadata().clone();
             if e_geometria(f) {
-                md.insert(ORIGIN, origin.to_string());
+                md.insert(ORIGIN, format!("{origin}:{}", f.name()));
                 if let Some(id) = md.get("plenora.geometry.crs_id") {
                     let axis = resolve_crs(id, "crs").unwrap().normalized_gis_axis_order();
                     md.insert("plenora.geometry.axis_order", axis.as_str());
@@ -92,6 +92,184 @@ fn fixture(original: &RecordBatch, origin: usize, geometry: bool) -> RecordBatch
     )
     .unwrap()
 }
+fn primary_name(batch: &RecordBatch) -> Option<String> {
+    plenora_core::contract::arrow_schema::primary_geometry_position(&batch.schema())
+        .unwrap()
+        .map(|p| batch.schema().field(p).name().clone())
+}
+
+fn plural(
+    batch: RecordBatch,
+    count: usize,
+    primary: Option<usize>,
+    selected_primary: bool,
+) -> RecordBatch {
+    if !batch.schema().fields().iter().any(|f| e_geometria(f)) {
+        return batch;
+    }
+    let mut fields: Vec<_> = batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect();
+    let mut columns = batch.columns().to_vec();
+    let source = fields.iter().find(|f| e_geometria(f)).unwrap();
+    let origin = source
+        .metadata()
+        .get(ORIGIN)
+        .unwrap()
+        .split_once(':')
+        .unwrap()
+        .0
+        .to_owned();
+    for extra in 1..count {
+        let name = format!("__passante_{extra}");
+        let mut field =
+            geometry_output_field(&name, if extra == 1 { "EPSG:3857" } else { "EPSG:4326" })
+                .unwrap();
+        let mut md = field.metadata().clone();
+        md.insert(
+            "plenora.geometry.axis_order",
+            if extra == 1 {
+                "easting_northing"
+            } else {
+                "lon_lat"
+            },
+        );
+        md.insert(ORIGIN, format!("{origin}:{name}"));
+        field = field.with_metadata(md);
+        let mut bytes = vec![1, 1, 0, 0, 0];
+        bytes.extend_from_slice(&12_f64.to_le_bytes());
+        bytes.extend_from_slice(&45_f64.to_le_bytes());
+        let array: ArrayRef = Arc::new(plenora_core::arrow::array::BinaryArray::from(vec![
+            Some(
+                bytes.as_slice()
+            );
+            batch
+                .num_rows(
+                )
+        ]));
+        if extra == 2 {
+            fields.insert(0, field);
+            columns.insert(0, array);
+        } else {
+            fields.push(field);
+            columns.push(array);
+        }
+    }
+    let positions: Vec<_> = fields
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| e_geometria(f))
+        .map(|(i, _)| i)
+        .collect();
+    let original = positions
+        .iter()
+        .position(|&i| !fields[i].name().starts_with("__passante_"))
+        .unwrap();
+    let desired = if selected_primary {
+        primary.unwrap()
+    } else if primary == Some(original) {
+        (original + 1) % count
+    } else {
+        original
+    };
+    fields.swap(positions[original], positions[desired]);
+    columns.swap(positions[original], positions[desired]);
+    let mut geometries = Vec::new();
+    for (index, field) in fields.iter_mut().enumerate() {
+        let mut md = field.metadata().clone();
+        md.insert("plenora.field_id", index.to_string());
+        *field = field.clone().with_metadata(md);
+        if e_geometria(field) {
+            geometries.push(index);
+        }
+    }
+    let mut md = batch.schema().metadata().clone();
+    md.insert("plenora.contract.version", "1");
+    md.insert(
+        "plenora.primary_geometry",
+        primary.map_or_else(|| "none".into(), |p| geometries[p].to_string()),
+    );
+    let schema = Arc::new(Schema::new_with_metadata(fields, md));
+    let contract = contract_from_arrow_schema(schema, resolve_crs).unwrap();
+    RecordBatch::try_new(arrow_schema_from_contract(&contract).unwrap(), columns).unwrap()
+}
+
+fn catalog_effect(op: &OperationDescriptor) -> Effect {
+    let declared = include_str!("../riferimenti/operazioni_metadati.txt")
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .find(|(id, _)| *id == op.id)
+        .expect("classificazione dell'operazione")
+        .1;
+    match declared {
+        "Unchanged" => Effect::Unchanged,
+        "Rows" => Effect::Rows,
+        "Values" => Effect::Values,
+        "Types" => Effect::Types,
+        "Crs" => Effect::Crs,
+        "Merge" => Effect::Merge,
+        _ => panic!("classificazione non riconosciuta"),
+    }
+}
+
+pub fn expected_effects(
+    op: &OperationDescriptor,
+    inputs: &[RecordBatch],
+    output: &RecordBatch,
+) -> Vec<(usize, Effect)> {
+    use plenora_core::catalog::SourceRowProvenance;
+    // Oracolo dalla regola scritta: nessuna chiamata a column_effects.
+    let effect = if op.id == "table.table_diff" {
+        Effect::Merge
+    } else {
+        catalog_effect(op)
+    };
+    output
+        .schema()
+        .fields()
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| e_geometria(field))
+        .map(|(position, field)| {
+            let origin = field.metadata().get(ORIGIN).and_then(|s| s.split_once(':'));
+            let source_name = origin.map_or_else(|| field.name().as_str(), |(_, name)| name);
+            let inherited = inputs.iter().any(|input| {
+                input
+                    .schema()
+                    .field_with_name(source_name)
+                    .is_ok_and(e_geometria)
+            });
+            let column_effect = if op.family != Family::Geo {
+                effect
+            } else if !inherited
+                || (matches!(
+                    op.id,
+                    "geo.coverage_validate" | "geo.shared_paths" | "geo.generate_grid"
+                ) && !source_name.starts_with("__passante_"))
+            {
+                // Le nuove geometrie derivate ereditano soltanto C1;
+                // tipi e rappresentazione sono quelli prodotti dal codec.
+                Effect::Types
+            } else if !source_name.starts_with("__passante_")
+                && !matches!(
+                    op.id,
+                    "geo.from_coords" | "geo.from_wkt" | "geo.generate_grid"
+                )
+            {
+                effect
+            } else if op.source_row_provenance() == SourceRowProvenance::Preserved {
+                Effect::Unchanged
+            } else {
+                Effect::Rows
+            };
+            (position, column_effect)
+        })
+        .collect()
+}
+
 fn sample(key: &str, field: &Field, site: Site, different: bool) -> Value {
     if different {
         let first = sample(key, field, site, false);
@@ -102,7 +280,7 @@ fn sample(key: &str, field: &Field, site: Site, different: bool) -> Value {
             "epoch" | "plenora.geometry.native.geoparquet.epoch" => Some(json!(2024.5)),
             "precision" => Some(json!(0.02)),
             "bbox" | "plenora.geometry.native.geoparquet.bbox" => {
-                Some(json!([-90_000_000, -90_000_000, 90_000_000, 90_000_000]))
+                Some(json!([90_000_000, 90_000_000, 90_000_001, 90_000_001]))
             }
             "edges" | "plenora.geometry.native.geoparquet.edges" => Some(json!("spherical")),
             "plenora.geometry.srid" => Some(json!("100002")),
@@ -171,6 +349,16 @@ fn mapped_types(key: &str, op: &str, source: Option<&Field>) -> TypeExpectation 
     let Some(source) = source else {
         return TypeExpectation::Other;
     };
+    if op == "table.table_diff" {
+        return TypeExpectation::Value(if key == "plenora.geometry.types" {
+            None
+        } else {
+            source
+                .metadata()
+                .contains_key("plenora.geometry.types_declaration")
+                .then(|| json!("unresolved"))
+        });
+    }
     let property = plenora_core::contract::arrow_metadata::canonical_geometry_types(source)
         .unwrap()
         .map_or_else(GeometryColumnContract::undeclared_types, |types| {
@@ -191,6 +379,37 @@ fn mapped_types(key: &str, op: &str, source: Option<&Field>) -> TypeExpectation 
     })
 }
 fn sample_equal(key: &str, field: &Field, site: Site) -> Value {
+    let ordinal = field
+        .name()
+        .strip_prefix("__passante_")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    let probe = match key {
+        "epoch" | "plenora.geometry.native.geoparquet.epoch" => {
+            Some(json!(2023.5 + f64::from(ordinal)))
+        }
+        "bbox" | "plenora.geometry.native.geoparquet.bbox" => {
+            let bound = 100_000_000 + i64::from(ordinal);
+            Some(json!([bound, bound, bound + 1, bound + 1]))
+        }
+        "precision" => Some(json!(0.01 * f64::from(ordinal + 1))),
+        "orientation" => Some(json!(format!("orientamento-colonna-{ordinal}"))),
+        key if key.starts_with("plenora.geometry.native.")
+            && !matches!(policy::class(key), Class::Crs) =>
+        {
+            Some(json!(format!("matrice-colonna-{ordinal}")))
+        }
+        _ => None,
+    };
+    if let Some(value) = probe {
+        return if matches!(site, Site::Field) {
+            json!(value
+                .as_str()
+                .map_or_else(|| value.to_string(), str::to_owned))
+        } else {
+            value
+        };
+    }
     let different = false;
     if let Some(value) = read(field, key, site) {
         if !different && key != "plenora.geometry.precision" {
@@ -216,7 +435,7 @@ fn sample_equal(key: &str, field: &Field, site: Site) -> Value {
         }
         "edges" | "plenora.geometry.native.geoparquet.edges" => json!("planar"),
         "bbox" | "plenora.geometry.native.geoparquet.bbox" => {
-            json!([-100_000_000, -100_000_000, 100_000_000, 100_000_000])
+            json!([100_000_000, 100_000_000, 100_000_001, 100_000_001])
         }
         "covering" => json!({"bbox":{"xmin":[field.name()]}}),
         "geometry_types" => json!(["Point"]),
@@ -248,7 +467,7 @@ fn sample_equal(key: &str, field: &Field, site: Site) -> Value {
 fn mark(batch: &RecordBatch, key: &str, site: Site, mode: usize, origin: usize) -> RecordBatch {
     if matches!(site, Site::SchemaGeo) {
         let mut columns = serde_json::Map::new();
-        let mut primary = None;
+        let primary = primary_name(batch);
         for field in batch.schema().fields().iter().filter(|f| e_geometria(f)) {
             let id = field.metadata().get("plenora.geometry.crs_id").unwrap();
             let mut column = json!({"encoding":"WKB","geometry_types":[],"crs":plenora_io::crs_projjson::projjson_di(id).unwrap()});
@@ -269,7 +488,6 @@ fn mark(batch: &RecordBatch, key: &str, site: Site, mode: usize, origin: usize) 
                 column.as_object_mut().unwrap().remove(key);
             }
             columns.insert(field.name().clone(), column);
-            primary.get_or_insert_with(|| field.name().clone());
         }
         let mut md = batch.schema().metadata().clone();
         if let Some(primary) = primary {
@@ -353,6 +571,32 @@ fn execute(
     let mut plan: Value = serde_json::from_str(&testo_piano(scheda)).unwrap();
     if let Some(how) = how {
         plan["steps"][0]["config"]["how"] = how.into();
+    }
+    if scheda.operazione.family == Family::Geo
+        && !matches!(
+            scheda.operazione.id,
+            "geo.from_wkt" | "geo.from_coords" | "geo.generate_grid"
+        )
+    {
+        for (side, batch) in batches.iter().enumerate() {
+            if let Some(field) = batch
+                .schema()
+                .fields()
+                .iter()
+                .find(|f| e_geometria(f) && !f.name().starts_with("__passante_"))
+            {
+                let key = if batches.len() == 2 {
+                    if side == 0 {
+                        "left_geometry"
+                    } else {
+                        "right_geometry"
+                    }
+                } else {
+                    "input_geometry"
+                };
+                plan["steps"][0]["config"][key] = field.name().clone().into();
+            }
+        }
     }
     let pipeline = Pipeline::from_json(&plan.to_string())?;
     let schemas: Vec<_> = scheda
@@ -475,8 +719,23 @@ fn footer(path: &Path, output: &RecordBatch) -> Result<(), String> {
     }
     let geo: Value =
         serde_json::from_str(raw.ok_or("footer geo assente")?).map_err(|e| e.to_string())?;
-    if geo["version"] != "1.1.0" || geo["primary_column"] != fields[0].name().as_str() {
+    if geo["version"] != "1.1.0"
+        || geo["primary_column"].as_str() != primary_name(output).as_deref()
+    {
         return Err("intestazione footer".into());
+    }
+    let actual_names = geo["columns"]
+        .as_object()
+        .ok_or("colonne footer assenti")?
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let expected_names = fields
+        .iter()
+        .map(|f| f.name().as_str())
+        .collect::<BTreeSet<_>>();
+    if actual_names != expected_names {
+        return Err("insieme colonne footer diverso".into());
     }
     for field in fields {
         let column = &geo["columns"][field.name()];
@@ -637,7 +896,7 @@ fn errori_interni_non_sono_rifiuti_espliciti() {
 }
 
 #[allow(clippy::too_many_lines)] // Casi indipendenti, raccolti prima del fallimento.
-fn run_part(operations: &'static [OperationDescriptor]) -> Audit {
+fn run_part(operations: &'static [OperationDescriptor], full: bool) -> Audit {
     let classifications: BTreeMap<_, _> = include_str!("../riferimenti/operazioni_metadati.txt")
         .lines()
         .map(|line| line.split_once('\t').unwrap())
@@ -671,239 +930,384 @@ fn run_part(operations: &'static [OperationDescriptor]) -> Audit {
         } else {
             vec![(None, 2)]
         };
-        for (how, sides) in variants {
-            let bases: Vec<_> = originals
-                .iter()
-                .enumerate()
-                .map(|(i, b)| fixture(b, i, sides == 2 || sides == i))
-                .collect();
-            for (transport_index, ext) in ["arrow", "arrows", "parquet"].iter().enumerate() {
-                let baseline = execute(&scheda, &bases, how)
-                    .and_then(|b| transport(&b, &dir.path().join(format!("baseline.{ext}"))));
-                if baseline.as_ref().is_err_and(unexpected_error) {
-                    divergences.push(format!("{} / {ext}: baseline con errore interno/IO", op.id));
-                }
-                for &(key, class) in policy::KEYS {
-                    for site in sites(key) {
-                        let merge = matches!(
-                            op.id,
-                            "table.concat" | "table.concat_by_name" | "table.union_distinct"
-                        );
-                        for mode in 0..if merge { 3 } else { 1 } {
-                            let label = format!("{} / {key} / {site:?} / {ext} / {how:?} / lati={sides} / fusione={mode}",op.id);
-                            let mut inputs = Vec::new();
-                            let mut input_error = None;
-                            for (i, b) in bases.iter().enumerate() {
-                                let b = mark(b, key, site, mode, i);
-                                match input_transport(
-                                    &b,
-                                    &dir.path().join(format!("in-{i}.{ext}")),
-                                    site,
-                                ) {
-                                    Ok(b) => inputs.push(b),
-                                    Err(e) => {
-                                        input_error = Some(e);
-                                        break;
+        let configurations: Vec<_> = if full {
+            [2, 3]
+                .into_iter()
+                .flat_map(|count| {
+                    if op.family == Family::Geo {
+                        vec![
+                            (count, Some(0), true),
+                            (count, Some(count - 1), true),
+                            (count, Some(0), false),
+                            (count, Some(count - 1), false),
+                            (count, None, false),
+                        ]
+                    } else {
+                        vec![
+                            (count, None, false),
+                            (count, Some(0), false),
+                            (count, Some(count - 1), false),
+                        ]
+                    }
+                })
+                .collect()
+        } else if op.family == Family::Geo {
+            vec![(2, None, false), (2, Some(1), false), (2, Some(0), true)]
+        } else {
+            vec![(2, None, false), (2, Some(1), false)]
+        };
+        let configurations: Vec<_> = configurations
+            .into_iter()
+            .flat_map(|(count, primary, selected)| {
+                let modes = if op.id == "geo.subdivide" {
+                    vec![false, true]
+                } else {
+                    vec![false]
+                };
+                modes
+                    .into_iter()
+                    .map(move |renamed| (count, primary, selected, renamed))
+            })
+            .collect();
+        for (count, primary, selected_primary, renamed) in configurations {
+            let mut scheda = leggi_scheda(op).unwrap();
+            if renamed {
+                let mut config: Value = serde_json::from_str(scheda.esempio.config.get()).unwrap();
+                config["output_column"] = json!("__derivata");
+                scheda.esempio.config = serde_json::value::to_raw_value(&config).unwrap();
+            }
+            for &(how, sides) in &variants {
+                let bases: Vec<_> = originals
+                    .iter()
+                    .enumerate()
+                    .map(|(i, b)| {
+                        plural(
+                            fixture(b, i, sides == 2 || sides == i),
+                            count,
+                            primary,
+                            selected_primary,
+                        )
+                    })
+                    .collect();
+                for (transport_index, ext) in ["arrow", "arrows", "parquet"].iter().enumerate() {
+                    let baseline = execute(&scheda, &bases, how)
+                        .and_then(|b| transport(&b, &dir.path().join(format!("baseline.{ext}"))));
+                    if baseline.as_ref().is_err_and(unexpected_error) {
+                        divergences
+                            .push(format!("{} / {ext}: baseline con errore interno/IO", op.id));
+                    }
+                    for &(key, class) in policy::KEYS {
+                        for site in sites(key) {
+                            let merge = matches!(
+                                op.id,
+                                "table.concat" | "table.concat_by_name" | "table.union_distinct"
+                            );
+                            for mode in 0..if merge { 3 } else { 1 } {
+                                let label = format!("{} / G={count} primaria={primary:?} rinomina={renamed} / {key} / {site:?} / {ext} / {how:?} / lati={sides} / fusione={mode}",op.id);
+                                let mut inputs = Vec::new();
+                                let mut input_error = None;
+                                for (i, b) in bases.iter().enumerate() {
+                                    let b = mark(b, key, site, mode, i);
+                                    match input_transport(
+                                        &b,
+                                        &dir.path().join(format!("in-{i}.{ext}")),
+                                        site,
+                                    ) {
+                                        Ok(b) => inputs.push(b),
+                                        Err(e) => {
+                                            input_error = Some(e);
+                                            break;
+                                        }
                                     }
                                 }
-                            }
-                            if let Some(error) = input_error {
-                                if unexpected_error(&error) {
-                                    divergences
-                                        .push(format!("{label}: errore interno/IO in ingresso"));
-                                }
-                                *refusals
-                                    .entry(format!("{label} / ingresso / {:?}", error.category()))
-                                    .or_default() += 1;
-                                continue;
-                            }
-                            let must_reject = merge
-                                && inputs.windows(2).any(|pair| {
-                                    pair[0]
-                                        .schema()
-                                        .fields()
-                                        .iter()
-                                        .filter(|f| e_geometria(f))
-                                        .any(|left| {
-                                            pair[1].schema().field_with_name(left.name()).is_ok_and(
-                                                |right| {
-                                                    policy::merge(left.metadata(), right.metadata())
-                                                        .is_err()
-                                                },
-                                            )
-                                        })
-                                });
-                            let output = match execute(&scheda, &inputs, how) {
-                                Ok(b) => b,
-                                Err(e) => {
-                                    if unexpected_error(&e) {
-                                        divergences.push(format!("{label}: errore interno/IO"));
+                                if let Some(error) = input_error {
+                                    if unexpected_error(&error) {
+                                        divergences.push(format!(
+                                            "{label}: errore interno/IO in ingresso"
+                                        ));
                                     }
                                     *refusals
                                         .entry(format!(
-                                            "{label} / validate-run / {:?}",
-                                            e.category()
+                                            "{label} / ingresso / {:?}",
+                                            error.category()
                                         ))
                                         .or_default() += 1;
                                     continue;
                                 }
-                            };
-                            if must_reject {
-                                divergences.push(format!(
-                                    "{label}: fusione accettata contro il rifiuto della politica"
-                                ));
-                            }
-                            let path = dir.path().join(format!("out.{ext}"));
-                            let before_write = output.clone();
-                            let output = match transport(&output, &path) {
-                                Ok(b) => b,
-                                Err(e) => {
-                                    divergences.push(format!(
-                                        "{label}: uscita non rileggibile / {:?}",
-                                        e.category()
-                                    ));
-                                    *refusals
-                                        .entry(format!("{label} / uscita / {:?}", e.category()))
-                                        .or_default() += 1;
-                                    continue;
-                                }
-                            };
-                            counts[transport_index] += 1;
-                            let effect = policy::operation_effect(op);
-                            if matches!(site, Site::SchemaGeo) {
-                                if *ext != "parquet" {
-                                    for source in &inputs {
-                                        for f in source
+                                let must_reject = merge
+                                    && inputs.windows(2).any(|pair| {
+                                        pair[0]
                                             .schema()
                                             .fields()
                                             .iter()
                                             .filter(|f| e_geometria(f))
-                                        {
-                                            let expected = if effect == Effect::Unchanged
-                                                && (inputs.len() == 1
-                                                    || op.id == "table.assert_foreign_key")
-                                                && output
+                                            .any(|left| {
+                                                pair[1]
                                                     .schema()
-                                                    .fields()
-                                                    .iter()
-                                                    .any(|f| e_geometria(f))
+                                                    .field_with_name(left.name())
+                                                    .is_ok_and(|right| {
+                                                        policy::merge(
+                                                            left.metadata(),
+                                                            right.metadata(),
+                                                        )
+                                                        .is_err()
+                                                    })
+                                            })
+                                    });
+                                let output = match execute(&scheda, &inputs, how) {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        if unexpected_error(&e) {
+                                            divergences
+                                                .push(format!("{label}: errore interno/IO: {e}"));
+                                        }
+                                        *refusals
+                                            .entry(format!(
+                                                "{label} / validate-run / {:?}",
+                                                e.category()
+                                            ))
+                                            .or_default() += 1;
+                                        continue;
+                                    }
+                                };
+                                if matches!(op.id, "geo.coverage_validate" | "geo.shared_paths") {
+                                    let expected = primary_name(&inputs[0])
+                                        .filter(|name| !name.starts_with("__passante_"))
+                                        .map(|_| "geometry".to_owned());
+                                    checked[transport_index] += 1;
+                                    if primary_name(&output) != expected {
+                                        divergences.push(format!(
+                                            "{label}: primaria derivata diversa dalla provenienza"
+                                        ));
+                                    }
+                                }
+                                if must_reject {
+                                    divergences.push(format!(
+                                    "{label}: fusione accettata contro il rifiuto della politica"
+                                ));
+                                }
+                                let path = dir.path().join(format!("out.{ext}"));
+                                let before_write = output.clone();
+                                let output = match transport(&output, &path) {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        let no_primary = *ext == "parquet"
+                                            && primary_name(&before_write).is_none()
+                                            && matches!(e, PlenoraError::Unsupported(_));
+                                        if !no_primary {
+                                            divergences.push(format!(
+                                                "{label}: uscita non rileggibile / {:?}",
+                                                e.category()
+                                            ));
+                                        }
+                                        *refusals
+                                            .entry(format!("{label} / uscita / {:?}", e.category()))
+                                            .or_default() += 1;
+                                        continue;
+                                    }
+                                };
+                                counts[transport_index] += 1;
+                                let effect = policy::operation_effect(op);
+                                if matches!(site, Site::SchemaGeo) {
+                                    if *ext != "parquet" {
+                                        for source in &inputs {
+                                            for f in source
+                                                .schema()
+                                                .fields()
+                                                .iter()
+                                                .filter(|f| e_geometria(f))
                                             {
-                                                read_schema(source, key, f.name())
-                                            } else {
-                                                None
-                                            };
-                                            let actual = read_schema(&output, key, f.name());
-                                            checked[transport_index] += 1;
-                                            if actual != expected {
-                                                divergences.push(format!(
-                                                    "{label}: geo di schema diverso"
-                                                ));
+                                                let expected = if effect == Effect::Unchanged
+                                                    && (inputs.len() == 1
+                                                        || op.id == "table.assert_foreign_key")
+                                                    && primary_name(source) == primary_name(&output)
+                                                    && source
+                                                        .schema()
+                                                        .fields()
+                                                        .iter()
+                                                        .filter(|f| e_geometria(f))
+                                                        .map(|f| f.name())
+                                                        .collect::<BTreeSet<_>>()
+                                                        == output
+                                                            .schema()
+                                                            .fields()
+                                                            .iter()
+                                                            .filter(|f| e_geometria(f))
+                                                            .map(|f| f.name())
+                                                            .collect::<BTreeSet<_>>()
+                                                {
+                                                    read_schema(source, key, f.name())
+                                                } else {
+                                                    None
+                                                };
+                                                let actual = read_schema(&output, key, f.name());
+                                                checked[transport_index] += 1;
+                                                if actual != expected {
+                                                    divergences.push(format!(
+                                                        "{label}: geo di schema diverso"
+                                                    ));
+                                                }
                                             }
                                         }
+                                    }
+                                    if *ext == "parquet" {
+                                        if let Err(e) = footer(&path, &before_write) {
+                                            divergences.push(format!("{label}: {e}"));
+                                        }
+                                        checked[transport_index] += 1;
+                                    }
+                                    continue;
+                                }
+
+                                if !output.schema().fields().iter().any(|f| e_geometria(f)) {
+                                    checked[transport_index] += 1;
+                                    if baseline.as_ref().is_ok_and(|b| {
+                                        b.schema().fields().iter().any(|f| e_geometria(f))
+                                    }) {
+                                        divergences.push(format!(
+                                            "{label}: geometria eliminata solo nel caso marcato"
+                                        ));
+                                    }
+                                }
+                                for f in output.schema().fields().iter().filter(|f| e_geometria(f))
+                                {
+                                    let origin =
+                                        f.metadata().get(ORIGIN).and_then(|s| s.split_once(':'));
+                                    if origin.is_some_and(|(_, name)| name != f.name())
+                                        && !f.name().starts_with("__passante_")
+                                        && matches!(
+                                            op.id,
+                                            "geo.from_coords"
+                                                | "geo.from_wkt"
+                                                | "geo.generate_grid"
+                                                | "geo.coverage_validate"
+                                                | "geo.shared_paths"
+                                        )
+                                    {
+                                        divergences.push(format!(
+                                            "{label}: colonna nuova con provenienza clonata"
+                                        ));
+                                    }
+                                    let source = origin
+                                        .and_then(|(i, name)| {
+                                            i.parse::<usize>()
+                                                .ok()
+                                                .and_then(|i| inputs.get(i))
+                                                .and_then(|b| {
+                                                    b.schema().field_with_name(name).ok().cloned()
+                                                })
+                                        })
+                                        .or_else(|| {
+                                            if class == Class::Crs
+                                                && matches!(
+                                                    op.id,
+                                                    "geo.coverage_validate" | "geo.shared_paths"
+                                                )
+                                            {
+                                                inputs.first().and_then(|b| {
+                                                    b.schema()
+                                                        .fields()
+                                                        .iter()
+                                                        .find(|f| {
+                                                            e_geometria(f)
+                                                                && !f
+                                                                    .name()
+                                                                    .starts_with("__passante_")
+                                                        })
+                                                        .map(|f| f.as_ref().clone())
+                                                })
+                                            } else {
+                                                None
+                                            }
+                                        });
+                                    if f.name().starts_with("__passante_") && source.is_none() {
+                                        divergences.push(format!("{label}: provenienza della passante assente o non risolvibile"));
+                                        continue;
+                                    }
+                                    let index = output.schema().index_of(f.name()).unwrap();
+                                    let effect = expected_effects(op, &inputs, &output)
+                                        .into_iter()
+                                        .find(|(p, _)| *p == index)
+                                        .unwrap()
+                                        .1;
+                                    let base_field = baseline.as_ref().ok().and_then(|b| {
+                                        b.schema().field_with_name(f.name()).ok().cloned()
+                                    });
+                                    let inherited =
+                                        source.as_ref().and_then(|f| read(f, key, site));
+                                    let regenerated =
+                                        base_field.as_ref().and_then(|f| read(f, key, site));
+                                    let equal = inputs
+                                        .iter()
+                                        .filter_map(|b| {
+                                            b.schema().field_with_name(f.name()).ok().cloned()
+                                        })
+                                        .map(|f| read(&f, key, site))
+                                        .all(|v| v == inherited);
+                                    let preserve = source.is_some()
+                                        && if site.container().is_some() {
+                                            policy::keep_member(key, effect, equal)
+                                        } else {
+                                            policy::keep(key, effect, equal)
+                                        };
+                                    let preserves_types = source.is_some()
+                                        && effect != Effect::Merge
+                                        && effect != Effect::Types;
+                                    let recoded = canonical(key)
+                                        && matches!(
+                                            effect,
+                                            Effect::Values | Effect::Types | Effect::Crs
+                                        )
+                                        && !(class == Class::Crs
+                                            && matches!(effect, Effect::Values | Effect::Types))
+                                        && !(class == Class::Types && preserves_types);
+                                    let container_encoding = effect != Effect::Merge
+                                        && key == "encoding"
+                                        && site.container().is_some()
+                                        && !(effect == Effect::Crs && matches!(site, Site::Geo));
+                                    let expected =
+                                        match if matches!(effect, Effect::Unchanged | Effect::Rows)
+                                        {
+                                            TypeExpectation::Other
+                                        } else {
+                                            mapped_types(key, op.id, source.as_ref())
+                                        } {
+                                            TypeExpectation::Value(mapped) => mapped,
+                                            TypeExpectation::Other => {
+                                                if recoded {
+                                                    regenerated
+                                                } else if preserve
+                                                    || container_encoding
+                                                    || (canonical(key)
+                                                        && class == Class::Types
+                                                        && preserves_types)
+                                                {
+                                                    inherited
+                                                } else if source.is_none()
+                                                    || canonical(key)
+                                                    || (effect == Effect::Crs
+                                                        && matches!(site, Site::Geo)
+                                                        && matches!(
+                                                            key,
+                                                            "crs" | "dimensions" | "encoding"
+                                                        ))
+                                                {
+                                                    regenerated
+                                                } else {
+                                                    None
+                                                }
+                                            }
+                                        };
+                                    let actual = read(f, key, site);
+                                    checked[transport_index] += 1;
+                                    if actual != expected {
+                                        divergences.push(format!("{label}: {effect:?} {class:?}, dichiarazione diversa (origine={origin:?})"));
                                     }
                                 }
                                 if *ext == "parquet" {
                                     if let Err(e) = footer(&path, &before_write) {
                                         divergences.push(format!("{label}: {e}"));
                                     }
-                                    checked[transport_index] += 1;
-                                }
-                                continue;
-                            }
-
-                            if !output.schema().fields().iter().any(|f| e_geometria(f)) {
-                                checked[transport_index] += 1;
-                                if baseline.as_ref().is_ok_and(|b| {
-                                    b.schema().fields().iter().any(|f| e_geometria(f))
-                                }) {
-                                    divergences.push(format!(
-                                        "{label}: geometria eliminata solo nel caso marcato"
-                                    ));
-                                }
-                            }
-                            for f in output.schema().fields().iter().filter(|f| e_geometria(f)) {
-                                let origin = f
-                                    .metadata()
-                                    .get(ORIGIN)
-                                    .and_then(|s| s.parse::<usize>().ok())
-                                    .or_else(|| {
-                                        (class == Class::Crs
-                                            && matches!(
-                                                op.id,
-                                                "geo.coverage_validate" | "geo.shared_paths"
-                                            ))
-                                        .then_some(0)
-                                    });
-                                let source = origin.and_then(|i| inputs.get(i)).and_then(|b| {
-                                    b.schema().fields().iter().find(|f| e_geometria(f)).cloned()
-                                });
-                                let base_field = baseline.as_ref().ok().and_then(|b| {
-                                    b.schema().field_with_name(f.name()).ok().cloned()
-                                });
-                                let inherited = source.as_ref().and_then(|f| read(f, key, site));
-                                let regenerated =
-                                    base_field.as_ref().and_then(|f| read(f, key, site));
-                                let equal = inputs
-                                    .iter()
-                                    .filter_map(|b| {
-                                        b.schema().fields().iter().find(|f| e_geometria(f)).cloned()
-                                    })
-                                    .map(|f| read(&f, key, site))
-                                    .all(|v| v == inherited);
-                                let preserve = source.is_some()
-                                    && if site.container().is_some() {
-                                        policy::keep_member(key, effect, equal)
-                                    } else {
-                                        policy::keep(key, effect, equal)
-                                    };
-                                let preserves_types = source.is_some()
-                                    && effect != Effect::Merge
-                                    && effect != Effect::Types;
-                                let recoded = canonical(key)
-                                    && matches!(
-                                        effect,
-                                        Effect::Values | Effect::Types | Effect::Crs
-                                    )
-                                    && !(class == Class::Crs
-                                        && matches!(effect, Effect::Values | Effect::Types))
-                                    && !(class == Class::Types && preserves_types);
-                                let container_encoding = effect != Effect::Merge
-                                    && key == "encoding"
-                                    && site.container().is_some()
-                                    && !(effect == Effect::Crs && matches!(site, Site::Geo));
-                                let expected = match mapped_types(key, op.id, source.as_deref()) {
-                                    TypeExpectation::Value(mapped) => mapped,
-                                    TypeExpectation::Other => {
-                                        if recoded {
-                                            regenerated
-                                        } else if preserve
-                                            || container_encoding
-                                            || (canonical(key)
-                                                && class == Class::Types
-                                                && preserves_types)
-                                        {
-                                            inherited
-                                        } else if source.is_none()
-                                            || canonical(key)
-                                            || (effect == Effect::Crs
-                                                && matches!(site, Site::Geo)
-                                                && matches!(key, "crs" | "dimensions" | "encoding"))
-                                        {
-                                            regenerated
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                };
-                                let actual = read(f, key, site);
-                                checked[transport_index] += 1;
-                                if actual != expected {
-                                    divergences.push(format!("{label}: {effect:?} {class:?}, dichiarazione diversa (origine={origin:?})"));
-                                }
-                            }
-                            if *ext == "parquet" {
-                                if let Err(e) = footer(&path, &before_write) {
-                                    divergences.push(format!("{label}: {e}"));
                                 }
                             }
                         }
@@ -924,6 +1328,17 @@ fn run_part(operations: &'static [OperationDescriptor]) -> Audit {
 #[test]
 #[allow(clippy::too_many_lines)] // Raccolta completa prima del fallimento.
 fn catalogo_chiavi_trasporti() {
+    run_matrix(false);
+}
+
+#[test]
+#[ignore = "matrice completa multigeometria"]
+fn catalogo_chiavi_trasporti_completo() {
+    run_matrix(true);
+}
+
+#[allow(clippy::too_many_lines)] // Raccolta completa prima del fallimento.
+fn run_matrix(full: bool) {
     prepara_ambiente();
     let classifications: BTreeMap<_, _> = include_str!("../riferimenti/operazioni_metadati.txt")
         .lines()
@@ -938,7 +1353,7 @@ fn catalogo_chiavi_trasporti() {
         #[allow(clippy::needless_collect)] // Avvia tutti i worker prima dei join.
         let handles: Vec<_> = CATALOG
             .chunks(CATALOG.len().div_ceil(6))
-            .map(|part| scope.spawn(move || run_part(part)))
+            .map(|part| scope.spawn(move || run_part(part, full)))
             .collect();
         handles
             .into_iter()
@@ -960,11 +1375,22 @@ fn catalogo_chiavi_trasporti() {
         divergences.extend(audit.divergences);
     }
     divergences.sort();
-    let mut report = format!("# Matrice metadati\n\nUscite rilette: {counts:?}. Confronti: {checked:?}.\n\n## Copertura\n\nLe fixture di melt e pivot non collocano la geometria fra i valori. Il difetto preesistente di quei casi resta una voce separata, fuori da questa PR. Internal e IO falliscono la matrice anche nella baseline.\n\n## Rifiuti espliciti\n\n");
+    let mut report = format!("# Matrice metadati\n\nUscite rilette: {counts:?}. Confronti: {checked:?}.\n\n## Copertura\n\nPolitica verificata per colonna, con provenienza ingresso:nome, primaria risolta e bbox separati nel footer. I casi senza primaria rifiutati da GeoParquet sono conteggiati come rifiuti attesi. Le fixture di melt e pivot non collocano la geometria fra i valori. Internal e IO falliscono la matrice anche nella baseline.\n\n## Rifiuti espliciti\n\n");
+    writeln!(
+        report,
+        "Totale rifiuti: {}.\n",
+        refusals.values().sum::<usize>()
+    )
+    .unwrap();
     for (label, count) in refusals {
         writeln!(report, "- {label}: {count}").unwrap();
     }
-    report.push_str("\n## Divergenze\n\n");
+    write!(
+        report,
+        "\n## Divergenze\n\nTotale: {}.\n\n",
+        divergences.len()
+    )
+    .unwrap();
     for d in &divergences {
         writeln!(report, "- {d}").unwrap();
     }
@@ -979,4 +1405,74 @@ fn catalogo_chiavi_trasporti() {
         divergences.len()
     );
     assert!(divergences.is_empty(), "vedere target/matrice-metadati.md");
+}
+
+#[test]
+fn integrazione_sonde_tabellari() {
+    prepara_ambiente();
+    let index = CATALOG
+        .iter()
+        .position(|op| op.id == "table.table_diff")
+        .unwrap();
+    let audit = run_part(&CATALOG[index..=index], false);
+    assert!(audit.divergences.is_empty(), "{:?}", audit.divergences);
+}
+
+#[test]
+fn operandi_secondari_non_ereditano_bbox_e_passanti_seguono_righe() {
+    prepara_ambiente();
+    let dir = tempfile::tempdir().unwrap();
+    for op in CATALOG.iter().filter(|op| {
+        op.family == Family::Geo && matches!(catalog_effect(op), Effect::Values | Effect::Types)
+    }) {
+        if matches!(
+            op.id,
+            "geo.from_coords" | "geo.from_wkt" | "geo.generate_grid"
+        ) {
+            continue;
+        }
+        let scheda = leggi_scheda(op).unwrap();
+        let inputs: Vec<_> = scheda
+            .esempio
+            .ingressi
+            .iter()
+            .enumerate()
+            .map(|(side, spec)| {
+                let original = tabella_con_metadati(&spec.colonne, &spec.metadati).unwrap();
+                let batch = plural(fixture(&original, side, true), 2, Some(1), false);
+                let batch = mark(
+                    &batch,
+                    "plenora.geometry.native.geoparquet.bbox",
+                    Site::Field,
+                    0,
+                    side,
+                );
+                mark(&batch, "bbox", Site::Geo, 0, side)
+            })
+            .collect();
+        let output = execute(&scheda, &inputs, None).unwrap_or_else(|e| panic!("{}: {e}", op.id));
+        let output = transport(&output, &dir.path().join("probe.arrow")).unwrap();
+        let effects = expected_effects(op, &inputs, &output);
+        for (position, effect) in effects {
+            let schema = output.schema();
+            let field = schema.field(position);
+            if matches!(effect, Effect::Values | Effect::Types) {
+                assert!(
+                    !field
+                        .metadata()
+                        .contains_key("plenora.geometry.native.geoparquet.bbox"),
+                    "{}",
+                    op.id
+                );
+                assert!(read(field, "bbox", Site::Geo).is_none(), "{}", op.id);
+            } else if let Ok(source) = inputs[0].schema().field_with_name(field.name()) {
+                let mut expected = source.metadata().clone();
+                policy::apply(&mut expected, effect);
+                expected.remove("plenora.field_id");
+                let mut actual = field.metadata().clone();
+                actual.remove("plenora.field_id");
+                assert_eq!(actual, expected, "{}", op.id);
+            }
+        }
+    }
 }

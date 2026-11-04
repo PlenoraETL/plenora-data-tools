@@ -456,14 +456,18 @@ mod tests {
     // Config posseduta per ergonomia dei test (json! inline).
     #[allow(clippy::needless_pass_by_value)]
     fn ok(op: &str, inputs: &[DataContract], config: Value) -> DataContract {
-        analyze_table_contract(
+        let output = analyze_table_contract(
             op,
             inputs,
             &config,
             &mut FieldAllocator::default(),
             &crate::Limits::default(),
         )
-        .unwrap_or_else(|error| panic!("{op} con config valida fallisce: {error}"))
+        .unwrap_or_else(|error| panic!("{op} con config valida fallisce: {error}"));
+        assert!(output
+            .active_geometry
+            .is_none_or(|id| output.geometries.iter().any(|g| g.field_id == id)));
+        output
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -3643,6 +3647,75 @@ mod tests {
     // -- joins / setops ------------------------------------------------------------
 
     #[test]
+    fn join_primaria_sopravvissuta_oracolo_composizione() {
+        // Copia del vettore contracts #57: la proiezione lascia solo la primaria.
+        // Gli ingressi plurali restano unsupported; si prova il suo stato residuo.
+        let oracle: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/join-one-surviving-primary-canonical.json"
+        ))
+        .unwrap();
+        assert_eq!(oracle["mapping"][0]["output"], oracle["expected_primary"]);
+        assert!(oracle["expected_key"].is_null());
+        let expected_id: u32 = oracle["expected_primary"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let mut surviving = geo_contract();
+        surviving.geometries[0].field_id = FieldId(expected_id);
+        surviving
+            .field_ids
+            .insert("geom".into(), FieldId(expected_id));
+        surviving.active_geometry = Some(FieldId(expected_id));
+        for side in 0..2 {
+            let inputs = if side == 0 {
+                [surviving.clone(), right_contract()]
+            } else {
+                [right_contract(), surviving.clone()]
+            };
+            let (left_id, right_id, left_name, right_name) = if side == 0 {
+                ("id", "rid", "name", "rname")
+            } else {
+                ("rid", "id", "rname", "name")
+            };
+            for (op, config) in [
+                (
+                    "table.join",
+                    json!({"left_keys":[left_id],"right_keys":[right_id]}),
+                ),
+                (
+                    "table.asof_join",
+                    json!({"left_on":left_id,"right_on":right_id}),
+                ),
+                (
+                    "table.fuzzy_join",
+                    json!({"left_key":left_name,"right_key":right_name,"metric":"jaro_winkler","threshold":0.9,"blocking":"prefix"}),
+                ),
+                ("table.cross_join", json!({})),
+            ] {
+                let output = ok(op, &inputs, config);
+                assert_eq!(
+                    output.active_geometry,
+                    Some(FieldId(expected_id)),
+                    "{op} lato {side}"
+                );
+                let schema =
+                    plenora_core::contract::arrow_schema::arrow_schema_from_contract(&output)
+                        .unwrap();
+                assert!(
+                    !schema
+                        .metadata()
+                        .contains_key(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY),
+                    "{op}"
+                );
+                let sort_column = output.schema.field(0).name().clone();
+                let sorted = ok("table.sort", &[output], json!({"columns":[sort_column]}));
+                assert!(sorted.active_geometry.is_some(), "{op}");
+            }
+        }
+    }
+
+    #[test]
     fn join_suffixes_columns_and_forces_nullable() {
         let output = ok(
             "table.join",
@@ -3687,7 +3760,7 @@ mod tests {
     }
 
     #[test]
-    fn join_with_two_geometries_fails_closed() {
+    fn join_with_two_geometries_preserves_both_without_primary() {
         let mut right = right_contract();
         let mut fields: Vec<Field> = right
             .schema
@@ -3703,14 +3776,13 @@ mod tests {
             ContractProperties::default(),
         )
         .unwrap();
-        assert_invalid_plan(
-            &err(
-                "table.join",
-                &[geo_contract(), right],
-                json!({"left_keys": ["id"], "right_keys": ["rid"]}),
-            ),
-            "due colonne geometriche in output",
+        let output = ok(
+            "table.join",
+            &[geo_contract(), right],
+            json!({"left_keys": ["id"], "right_keys": ["rid"]}),
         );
+        assert_eq!(output.geometries.len(), 2);
+        assert!(output.active_geometry.is_none());
     }
 
     #[test]
@@ -3962,6 +4034,34 @@ mod tests {
     }
 
     #[test]
+    fn conflitto_c1_di_schema_non_diventa_un_nome_di_chiave() {
+        let (left, right) = simple_pair();
+        let left = with_schema_metadata(&left, &[("epoch", "2023.125")]);
+        let right = with_schema_metadata(&right, &[("epoch", "2024.875")]);
+        let analysis = err(
+            "table.union_distinct",
+            &[left.clone(), right.clone()],
+            json!({}),
+        );
+        let kernel =
+            crate::metadata_schema_input("table.union_distinct", &[&left.schema, &right.schema])
+                .unwrap_err();
+        assert!(matches!(analysis, PlenoraError::InvalidPlan(_)));
+        assert!(matches!(kernel, PlenoraError::Schema(_)));
+        for error in [analysis, kernel] {
+            let message = error.to_string();
+            assert!(message.contains("proprieta' CRS di schema in conflitto"));
+            assert!(!message.contains("sulla chiave"));
+            assert_eq!(
+                message.matches("schema violation:").count(),
+                usize::from(matches!(error, PlenoraError::Schema(_)))
+            );
+            assert!(!message.contains("2023.125"));
+            assert!(!message.contains("2024.875"));
+        }
+    }
+
+    #[test]
     fn union_distinct_merges_schema_metadata_and_fails_on_conflict() {
         let (left, right) = simple_pair();
         let left = with_schema_metadata(&left, &[("shared", "one")]);
@@ -3974,7 +4074,7 @@ mod tests {
         let conflicting = with_schema_metadata(&simple_pair().1, &[("shared", "other")]);
         assert_invalid_plan(
             &err("table.union_distinct", &[left, conflicting], json!({})),
-            "metadata di schema in conflitto sulla chiave",
+            "metadato applicativo di schema in conflitto",
         );
     }
 

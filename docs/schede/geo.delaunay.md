@@ -8,6 +8,13 @@ triangolo è un poligono chiuso antiorario `[a, b, c, a]`.
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 Nessuno: la config è `{}`.
 
 ### Schema
@@ -47,7 +54,7 @@ In validazione (analisi del contratto; nell'ordine: forma dell'ingresso,
 config, CRS, nomi):
 
 - `InvalidPlan`: più o meno di un ingresso; config non vuota;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `__parent_index` già
   presente;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;

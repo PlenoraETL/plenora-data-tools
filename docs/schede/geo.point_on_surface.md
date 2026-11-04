@@ -11,6 +11,13 @@ geometria. Per una geometria vuota il kernel non dà un punto.
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 Nessuno: la config è `{}`.
 
 ### Schema
@@ -39,7 +46,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`);
 - `Unsupported`: dimensioni della geometria diverse da `xy`;

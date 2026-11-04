@@ -11,6 +11,13 @@ risultato (la distanza continua sarebbe minore o uguale).
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `other_wkb` | stringa | obbligatorio | WKB 2D in esadecimale (cifre maiuscole o minuscole, in numero pari) di una `LineString` valida OGC, nel CRS dell'input e dentro il suo dominio di validità | la linea di confronto, uguale per tutte le righe |
@@ -54,7 +61,7 @@ CRS, config):
   non è una `LineString`; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o

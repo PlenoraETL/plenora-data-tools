@@ -49,6 +49,7 @@ Esempi: 146 eseguiti con l'uscita confrontata, 0 verificati solo sul contratto.
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `add_row_number` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -173,6 +174,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `aggregate` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -193,9 +195,8 @@ per gruppo: le colonne di gruppo, poi una colonna per ogni aggregazione di
 `aggregations` (conteggi, somme, medie, estremi, varianze, quantili,
 testi). Senza aggregazioni conta le righe di ogni gruppo.
 
-`first` e `last` rifiutano i campi geometrici, anche annidati e con zero righe
-oppure tutte le celle nulle, con errore `crs/validate` sia nel kernel sia
-nell'analisi: non produce celle WKB senza metadati.
+`first` e `last` conservano le colonne geometriche con il riferimento della
+rispettiva sorgente, anche quando il gruppo contiene solo celle nulle.
 
 #### Parametri
 
@@ -272,12 +273,14 @@ numero (spazi ai lati ignorati, virgola decimale ammessa).
 
 #### Schema
 
+First e last conservano CRS, assi ed encoding di ogni sorgente geometrica in una nuova identità. Non promuovono una geometria derivata; la primaria sopravvive solo fra le chiavi di raggruppamento.
+
 Le colonne di `group_by` nel loro ordine, con tipo, nullabilità e metadati
 di campo dell'ingresso; poi una colonna per aggregazione, nell'ordine di
 `aggregations`, senza metadati di campo (tipi sopra); senza aggregazioni,
 una colonna `count` `int64` non nullabile con le righe del gruppo, null
-compresi. I metadati di schema si conservano. Una colonna geometrica resta
-geometrica solo se è una chiave di gruppo. Il contratto non dichiara né
+compresi. I metadati di schema si conservano. Le chiavi di gruppo geometriche conservano identità e metadati; first/last
+producono nuove identità geometriche senza eleggere una primaria. Il contratto non dichiara né
 ordinamento né conteggio.
 
 #### Righe
@@ -389,6 +392,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -534,6 +538,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `anti_join` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -659,6 +664,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `asof_join` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -819,6 +825,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `assert_cardinality` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -933,6 +940,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `assert_foreign_key` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -1080,6 +1088,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `assert_metadata` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -1184,6 +1193,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `assert_not_null` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -1289,6 +1299,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `assert_range` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -1422,6 +1433,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `assert_regex` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -1531,6 +1543,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `assert_schema` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -1661,6 +1674,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `assert_unique` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -1788,6 +1802,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `bin` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -1929,6 +1944,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `coalesce` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -1972,7 +1988,11 @@ esiste, la colonna si sostituisce nella sua posizione; altrimenti si
 aggiunge in coda. I metadati di campo tabellari non si ereditano. Se tutte
 le sorgenti sono geometriche compatibili, si conservano CRS, assi,
 dimensioni ed encoding, senza identita' e dichiarazione dei tipi del primo
-campo. La pipeline ammette al massimo una geometria in uscita.
+campo. Ogni geometria sopravvissuta mantiene il proprio contratto; una nuova
+geometria non diventa primaria automaticamente. Eccezione dichiarata
+(PRIM-005): se `output_column` e' la colonna primaria, la sostituzione resta
+primaria, con una nuova identita' e il contratto (CRS, assi, encoding) delle
+sorgenti, non quello della colonna sostituita.
 Le altre colonne e i metadati di schema restano invariati.
 
 Il contratto conserva il numero di righe; l'ordinamento dichiarato
@@ -2047,6 +2067,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `concat` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | N-aria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -2075,6 +2096,8 @@ usa [`table.concat_by_name`](#tableconcat_by_name).
 | `ignore_index` | booleano | assente | nessuno: scritto si rifiuta, anche `null` | una tabella Arrow non ha indice di riga, nessun valore avrebbe effetto |
 
 #### Schema
+
+Ogni colonna geometrica è verificata separatamente. La primaria resta solo quando ogni ingresso la fa confluire nello stesso campo.
 
 Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
 delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
@@ -2174,6 +2197,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | N-aria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -2201,6 +2225,8 @@ gli schemi devono essere identici, come in [`table.concat`](#tableconcat).
 | `strict` | booleano | `false` | `true`, `false` | `true`: stesse colonne, con stesso nome e tipo, nello stesso ordine |
 
 #### Schema
+
+Ogni colonna geometrica conserva il proprio contratto, anche se altri ingressi contribuiscono solo null. La primaria richiede il consenso di tutti gli ingressi sulla stessa colonna. Un ingresso senza geometrie non ha primaria e rompe il consenso: concatenare una tabella con una geometria e una senza geometrie da' primaria assente (`none`), e un'operazione geo successiva senza selettore esplicito (`input_geometry`) si rifiuta in validazione con `schema`.
 
 Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
 delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
@@ -2309,6 +2335,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `concat_columns` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -2419,6 +2446,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `conditional` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -2578,6 +2606,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `cross_join` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -2603,13 +2632,16 @@ Nessuno: la config è `{}`.
 
 #### Schema
 
+Le geometrie dei due ingressi conservano separatamente CRS e metadati. Quando entrambi contribuiscono geometrie, l’uscita non ha primaria.
+
 Prima tutte le colonne di sinistra, poi tutte quelle di destra. Una colonna
 di sinistra il cui nome compare anche a destra diventa `<nome>_x`, una di
 destra il cui nome compare anche a sinistra `<nome>_y`; le altre tengono il
 nome. Tipi e metadati di campo restano quelli d'origine; ogni colonna
 d'uscita è nullable. I metadati di schema dei due lati si fondono: una
 chiave presente da un lato solo, o con lo stesso valore, resta. L'uscita
-ammette una sola colonna geometrica. Il conteggio delle righe del
+conserva tutte le colonne geometriche con effetto `Rows`; se entrambi i lati
+portano geometrie, non ha primaria. Il conteggio delle righe del
 contratto è il prodotto dei due, quando entrambi lo dichiarano con la
 stessa portata e la stessa confidenza; l'ordinamento dichiarato no.
 
@@ -2691,6 +2723,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `date_add` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -2837,6 +2870,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `date_diff` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -2971,6 +3005,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `date_extract` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -3109,6 +3144,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `date_format` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -3246,6 +3282,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `dedup_advanced` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -3365,6 +3402,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `distinct` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -3490,6 +3528,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `drop_columns` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -3592,6 +3631,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `except` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -3712,6 +3752,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `explode` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -3827,6 +3868,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `expression` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -4059,6 +4101,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `fill_na` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -4187,6 +4230,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `filter` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -4331,6 +4375,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `flatten_json` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -4470,6 +4515,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `formula` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -4632,6 +4678,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -4696,7 +4743,8 @@ compresa, `_R`. Tipi e metadati di campo restano quelli d'origine e ogni
 colonna degli ingressi è nullable. La colonna `score_column` è `float64`,
 nullable solo con `how: left`. I metadati di schema dei due lati si
 fondono: una chiave presente da un lato solo, o con lo stesso valore,
-resta. L'uscita ammette una sola colonna geometrica. Nessuna proprietà del
+resta. L'uscita conserva tutte le colonne geometriche con effetto `Rows`; se entrambi i lati
+portano geometrie, non ha primaria. Nessuna proprietà del
 contratto sopravvive.
 
 #### Righe
@@ -4801,6 +4849,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -4938,6 +4987,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `intersect` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -5057,6 +5107,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `join` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -5096,6 +5147,8 @@ sono solo `utf8`, `int64`, `uint64`, `float64`, `bool`, `date32`, `date64`
 e `timestamp` (la chiave fusa tiene unità e fuso).
 
 #### Schema
+
+Ogni geometria sopravvissuta segue il proprio campo e suffisso. Se restano geometrie da entrambi gli ingressi, l’uscita non ha primaria; se provengono da un solo ingresso, ne conserva lo stato per provenienza.
 
 Prima tutte le colonne di sinistra, nel loro ordine, poi quelle di destra
 che non sono chiave. Le colonne chiave di sinistra tengono il nome, le
@@ -5231,6 +5284,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -5334,6 +5388,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `lookup` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -5460,6 +5515,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `mask_data` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -5602,6 +5658,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `md5_hash` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -5736,6 +5793,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `melt` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -5789,8 +5847,8 @@ hanno tutte lo stesso tipo Arrow, altrimenti `utf8` con
 `type_policy: "string"`. I metadati di schema si conservano. Una colonna
 geometrica nelle colonne valore trasmette i metadati geometrici al campo
 derivato se tutte le sorgenti sono compatibili; identita' e dichiarazione
-dei tipi non si copiano. Le colonne id conservano i loro metadati. La
-pipeline ammette al massimo una geometria in uscita. Il contratto dichiara
+dei tipi non si copiano. Le colonne id conservano i loro metadati. Le geometrie id conservano la primaria se presente; il campo derivato
+non viene promosso. Il contratto dichiara
 righe × colonne valore quando il conteggio d'ingresso è noto, e nessun
 ordinamento.
 
@@ -5880,6 +5938,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `pivot` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -5948,7 +6007,7 @@ Le colonne di `index_col` nel loro ordine, con tipo, nullabilità e
 metadati di campo; poi le colonne pivot, nullabili, con il tipo sopra.
 `first` e `last` su geometrie conservano i metadati geometrici della
 sorgente, senza identita' e dichiarazione dei tipi; le altre aggregazioni
-non li ereditano. La pipeline rifiuta piu' di una geometria in uscita:
+non li ereditano. La pipeline supporta tutte le geometrie prodotte, senza promuoverle a primaria:
 
 - senza `mapping`, una per valore pivot distinto dei dati, nell'ordine dei
   byte del testo del valore;
@@ -6060,6 +6119,7 @@ Verifica: eseguito dal kernel (il runner rifiuta questa config in validazione, p
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `reconcile` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -6215,6 +6275,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `rename` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -6331,6 +6392,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `reorder_columns` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -6437,6 +6499,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `replace` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -6552,6 +6615,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `rolling_window` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -6700,6 +6764,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `sample` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -6831,6 +6896,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -6928,6 +6994,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `semi_join` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -7055,6 +7122,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `sha256_hash` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -7197,6 +7265,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `sort` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -7322,6 +7391,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `split_column` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -7439,6 +7509,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -7567,6 +7638,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `statistics` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -7713,6 +7785,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `string_extract` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -7835,6 +7908,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `string_length` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -7936,6 +8010,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `string_pad` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -8048,6 +8123,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `table_diff` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -8088,16 +8164,16 @@ uguale a ogni NaN; sugli altri tipi fuori da `int64`, `uint64`, `utf8`,
 
 #### Schema
 
-Chiavi e colonne confrontate geometriche sono rifiutate preventivamente
-con `crs`, nel kernel e in validazione, anche con ingressi vuoti o celle
-nulle: il diff ricostruisce campi privi di metadati e puo' convertire i
-valori precedenti in testo
+Le colonne geometriche fuse conservano CRS, assi ed encoding compatibili per colonna. La primaria richiede consenso dei due ingressi sulla corrispondenza d’uscita; i vecchi valori geometrici nel resoconto sono WKB esadecimale.
+
+Chiavi e colonne geometriche confrontate richiedono CRS, assi e dichiarazioni
+compatibili per ciascuna coppia, anche con ingressi vuoti o celle nulle
 ([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
 
 Le colonne di `left_keys` (nomi della sinistra), poi quelle confrontate,
 tutte nullabili e con il tipo d'ingresso; poi `_diff_status` (`utf8` non
 nullabile), `_diff_columns` e `_diff_old_values` (`utf8` nullabili).
-Nessun metadato di campo; i metadati di schema dei due lati si fondono, e
+I campi geometrici conservano il riferimento comune senza copiare identità e tipi dichiarati; i campi tabellari non ereditano metadati. i metadati di schema dei due lati si fondono, e
 una chiave con valori diversi è un errore. Il contratto non dichiara né
 ordinamento né conteggio.
 
@@ -8141,7 +8217,7 @@ In esecuzione:
 
 - `InvalidPlan`: una chiave ripetuta nella sinistra o nella destra;
 - `Schema`: una cella che non si converte in testo (date fuori
-  intervallo, `binary` non UTF-8 fra i valori confrontati per testo);
+  intervallo, `binary` tabellare non UTF-8 fra i valori confrontati per testo);
 - `ResourceLimit`: righe d'uscita oltre `max_rows`; colonne d'uscita oltre
   `max_columns`; più di `u32::MAX` righe; `_diff_columns` o
   `_diff_old_values` di una riga oltre `max_string_bytes` byte.
@@ -8207,6 +8283,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `text_normalize` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -8331,6 +8408,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `timezone_convert` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -8497,6 +8575,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -8609,6 +8688,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `transpose` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -8649,6 +8729,8 @@ tutti distinti
 cambia niente: dipende dall'ingresso.
 
 #### Schema
+
+Le geometrie che alimentano una colonna trasposta devono avere riferimenti compatibili. Le geometrie derivate non diventano primarie, neppure quando ne rimane una sola.
 
 Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
 delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
@@ -8739,6 +8821,7 @@ Verifica: eseguito dal kernel (il runner rifiuta questa config in validazione, p
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `type_cast` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -8965,6 +9048,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `union_distinct` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -8994,6 +9078,8 @@ Ogni colonna ha un tipo fra `utf8`, `int64`, `uint64`, `float64`, `bool`,
 (chiave int32).
 
 #### Schema
+
+Il consenso della primaria è per colonna d’uscita, indipendentemente dagli ID numerici degli ingressi. CRS e assi si verificano per ogni coppia di colonne.
 
 Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
 delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
@@ -9093,6 +9179,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `unnest` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -9196,6 +9283,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `uuid_generator` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -9292,6 +9380,7 @@ Verifica: eseguito dal runner come passo unico; schema e numero di righe confron
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -9447,6 +9536,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `window_function` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -9625,6 +9715,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `affine_transform` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -9636,7 +9727,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -9647,6 +9738,13 @@ non cambiano. [`geo.translate`](#geotranslate), [`geo.scale`](#geoscale) e
 [`geo.rotate`](#georotate) sono casi particolari della stessa funzione.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -9673,7 +9771,7 @@ Per contratto quello d'ingresso (forma 1:1).
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si dichiara geometria WKB (né estensione `geoarrow.wkb` né
   chiavi `plenora.geometry.*`);
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
@@ -9772,6 +9870,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_area` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -9783,7 +9882,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -9795,6 +9894,13 @@ membri senza unirli: due poligoni sovrapposti contano la sovrapposizione
 due volte.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -9819,7 +9925,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`); `output_column` esiste già;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -9906,6 +10012,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `bearing` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -9917,7 +10024,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 2 |
+| versioni | semantica 2, config 2, analisi 5, kernel 2 |
 
 #### Che cosa fa
 
@@ -9930,6 +10037,13 @@ latitudine (`y`) in gradi; il calcolo è il problema inverso di Karney
 ([Limiti dichiarati, «Misure geodetiche: l'ellissoide del datum»](limiti.md#misure-geodetiche-lellissoide-del-datum)).
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -9974,7 +10088,7 @@ CRS, config):
   `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non geografico; CRS
@@ -10080,6 +10194,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_boundary` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -10091,7 +10206,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -10107,6 +10222,13 @@ Sostituisce ogni geometria con il suo confine OGC, nella stessa colonna:
 - `GeometryCollection`: la collezione dei confini dei membri.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -10137,7 +10259,7 @@ non nell'ordine d'ingresso né in quello numerico per i valori negativi.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`);
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -10225,6 +10347,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_bounds_extractor` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -10236,7 +10359,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -10245,6 +10368,13 @@ geometria di ogni riga: coordinate minime e massime in x e in y, nelle
 unità del CRS. Per una geometria vuota il kernel non dà un rettangolo.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -10270,7 +10400,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`); una delle quattro colonne esiste già;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -10349,6 +10479,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_buffer` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -10360,7 +10491,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -10373,6 +10504,13 @@ spariscono. Con `distance` nulla l'uscita è l'unione delle parti areali
 tonde; `cap` sceglie le estremità delle linee.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -10405,7 +10543,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`);
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -10530,6 +10668,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_centroid` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -10541,7 +10680,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -10552,6 +10691,13 @@ coordinate. In una collezione contano solo le parti della dimensione più
 alta: un punto accanto a un poligono non sposta il centroide del poligono.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -10578,7 +10724,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`);
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -10664,6 +10810,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_clean_topology` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -10675,7 +10822,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 2, analisi 5, kernel 1 |
+| versioni | semantica 2, config 3, analisi 6, kernel 1 |
 
 #### Che cosa fa
 
@@ -10689,6 +10836,13 @@ su tutta la tabella insieme ([Runner, «Operazioni
 geo»](runner.md#operazioni-geo)).
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -10749,8 +10903,7 @@ In validazione (analisi del contratto), `InvalidPlan`:
   sbagliato;
 - `snap_tolerance` negativa o non finita.
 
-Sempre in validazione: `Schema` se l'ingresso non ha esattamente una
-colonna geometria o la colonna non è riconoscibile come geometria WKB;
+Sempre in validazione: `Schema` se l'ingresso non ha una colonna geometria selezionabile senza ambiguita' o la colonna non è riconoscibile come geometria WKB;
 `Unsupported` se non è XY; `Crs` se il CRS non è risolto o non è
 proiettato (o non ha unità lineare).
 
@@ -10861,6 +11014,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_clip` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -10872,7 +11026,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -10884,6 +11038,13 @@ geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon`.
 
 #### Parametri
+
+`left_geometry` e `right_geometry` (stringhe facoltative) selezionano per nome
+la colonna geometrica dei rispettivi ingressi. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -10918,7 +11079,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: un numero di ingressi diverso da due; config non vuota;
   un metadato di schema presente sui due lati con valori diversi;
-- `Schema`: un lato senza esattamente una colonna geometria, o con una
+- `Schema`: un lato senza una colonna geometria selezionabile senza ambiguita', o con una
   colonna non riconoscibile come geometria WKB (né estensione
   `geoarrow.wkb` né chiavi canoniche `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;
@@ -11035,6 +11196,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -11046,7 +11208,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -11060,6 +11222,13 @@ La conversione di colonna è `cluster::dbscan_column`, che il runner
 chiama su tutta la colonna e aggiunge in coda l'etichetta ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -11092,7 +11261,7 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: config con campi sconosciuti; `eps` mancante, non finito o
   non positivo; `min_points` mancante, zero o non intero; `output_column`
   vuota;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB; `output_column` già presente;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.
@@ -11179,6 +11348,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -11190,7 +11360,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 5, kernel 3 |
+| versioni | semantica 3, config 2, analisi 6, kernel 3 |
 
 #### Che cosa fa
 
@@ -11206,6 +11376,13 @@ Il runner forma i gruppi su tutta la tabella e per ciascuno chiama
 delle righe ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -11258,7 +11435,7 @@ In validazione (analisi del contratto):
   senza un ordine naturale (`is_sortable` dei kernel tabellari, lo stesso
   controllo di `table.sort`);
 - `Schema`: una colonna di `group_by` non esiste; l'ingresso non ha
-  esattamente una colonna geometria, o la colonna non è riconoscibile come
+  una colonna geometria selezionabile senza ambiguita', o la colonna non è riconoscibile come
   WKB;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS o con un'incoerenza CRS non risolta.
@@ -11336,6 +11513,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `concave_hull` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -11347,7 +11525,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 3, kernel 1 |
+| versioni | semantica 3, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -11360,6 +11538,13 @@ divisa per `concavity`. Più `concavity` è piccola, più il poligono è
 concavo; molto grande, è l'inviluppo convesso.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -11395,7 +11580,7 @@ Per contratto quello d'ingresso (forma 1:1).
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si dichiara geometria WKB;
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate);
@@ -11495,6 +11680,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_convex_hull` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -11506,7 +11692,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -11517,6 +11703,13 @@ segmento, punti collineari) non è un poligono valido e si rifiuta; una
 geometria vuota dà `POLYGON EMPTY`.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -11544,7 +11737,7 @@ dell'inviluppo è antiorario, con il primo vertice scelto da `geo`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`);
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -11638,6 +11831,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_count_points_in_polygons` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -11649,7 +11843,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 5, kernel 1 |
+| versioni | semantica 2, config 2, analisi 6, kernel 1 |
 
 #### Che cosa fa
 
@@ -11662,6 +11856,13 @@ geometrie della destra, di norma punti, che ogni sua geometria contiene
 ognuno.
 
 #### Parametri
+
+`left_geometry` e `right_geometry` (stringhe facoltative) selezionano per nome
+la colonna geometrica dei rispettivi ingressi. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -11700,7 +11901,7 @@ In validazione (analisi del contratto):
   sconosciuti; `output_column` vuota; un metadato di schema presente sui
   due lati con valori diversi;
 - `Schema`: `output_column` esiste già nella sinistra; un lato senza
-  esattamente una colonna geometria, o con una colonna non riconoscibile
+  una colonna geometria selezionabile senza ambiguita', o con una colonna non riconoscibile
   come geometria WKB (né estensione `geoarrow.wkb` né chiavi canoniche
   `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;
@@ -11813,6 +12014,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -11824,7 +12026,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -11841,6 +12043,13 @@ precisione del CRS della colonna ([Runner, «Operazioni geo»](runner.md#operazi
 
 #### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `tolerance` | numero | `0` | finito, `>= 0` | area minima, nelle unità del CRS al quadrato, perché una sovrapposizione sia segnalata (strettamente maggiore) |
@@ -11853,6 +12062,11 @@ Schema nuovo, in quest'ordine: `issue_type` (`utf8`), `index_a` e
 colonna d'ingresso, dimensioni `xy`, senza dichiarazione dei tipi), tutte
 non nullable. Le colonne dell'ingresso spariscono, i metadati di schema
 restano; nessuna proprietà del contratto sopravvive.
+
+La geometria d'uscita e' primaria solo se l'operando selezionato era la
+primaria d'ingresso; altrimenti l'uscita ha primaria assente (`none`),
+anche se contiene una sola geometria. Dall'operando eredita solo le
+proprieta' del CRS; tipi e rappresentazione sono prodotti dal codec.
 
 #### Righe
 
@@ -11881,7 +12095,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti; `tolerance` negativa o non
   finita; `max_issues` pari a zero o non intero;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.
@@ -11981,6 +12195,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `delaunay` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -11992,7 +12207,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 4, kernel 2 |
+| versioni | semantica 3, config 2, analisi 5, kernel 2 |
 
 #### Che cosa fa
 
@@ -12003,6 +12218,13 @@ contano una volta; i lati d'ingresso non vincolano la triangolazione. Ogni
 triangolo è un poligono chiuso antiorario `[a, b, c, a]`.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -12043,7 +12265,7 @@ In validazione (analisi del contratto; nell'ordine: forma dell'ingresso,
 config, CRS, nomi):
 
 - `InvalidPlan`: più o meno di un ingresso; config non vuota;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `__parent_index` già
   presente;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
@@ -12145,6 +12367,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `densify` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -12156,7 +12379,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 3, kernel 1 |
+| versioni | semantica 3, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -12168,6 +12391,13 @@ cambiano; le collezioni si densificano membro per membro. La lunghezza è
 quella euclidea nel piano del CRS.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -12202,7 +12432,7 @@ config, CRS):
 - `InvalidPlan`: più o meno di un ingresso; config con campi sconosciuti,
   senza `max_segment_length` o con un tipo sbagliato; `max_segment_length`
   non finito o non maggiore di zero;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -12300,6 +12530,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_difference` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -12311,7 +12542,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -12322,6 +12553,13 @@ geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
 #### Parametri
+
+`left_geometry` e `right_geometry` (stringhe facoltative) selezionano per nome
+la colonna geometrica dei rispettivi ingressi. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -12357,7 +12595,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: un numero di ingressi diverso da due; config non vuota;
   un metadato di schema presente sui due lati con valori diversi;
-- `Schema`: un lato senza esattamente una colonna geometria, o con una
+- `Schema`: un lato senza una colonna geometria selezionabile senza ambiguita', o con una
   colonna non riconoscibile come geometria WKB (né estensione
   `geoarrow.wkb` né chiavi canoniche `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;
@@ -12469,6 +12707,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_dissolve` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -12480,7 +12719,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -12491,6 +12730,13 @@ dello stesso `MultiPolygon`. Lavora solo su `Polygon` e `MultiPolygon`. Le
 colonne attributo non passano e non ci sono gruppi.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -12520,7 +12766,7 @@ nell'ordine che `i_overlay` produce, lo stesso a ogni esecuzione.
 In validazione (analisi del contratto):
 
 - `InvalidPlan`: config non vuota;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB (né estensione
   `geoarrow.wkb` né chiavi canoniche `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;
@@ -12617,6 +12863,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_distance` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -12628,7 +12875,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -12640,12 +12887,19 @@ geometria vuota, da una parte o dall'altra, il kernel non dà una distanza.
 
 #### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `other_wkb` | stringa | obbligatorio | WKB in esadecimale (cifre maiuscole o minuscole) di una geometria valida OGC, solo XY, senza SRID, coordinate nel dominio del CRS dell'ingresso | secondo operando, nel CRS della colonna geometria |
 | `output_column` | stringa | `distance` | nome non vuoto (non di soli spazi) e non già presente nell'ingresso | colonna aggiunta |
 
-L'ingresso ha una sola colonna geometria: il secondo operando arriva dalla
+L'operazione consuma la colonna geometria selezionata: il secondo operando arriva dalla
 config ed è assunto nello stesso CRS, che nessun dato può confermare.
 L'analisi ne verifica la struttura WKB, la validità OGC e il dominio delle
 coordinate.
@@ -12671,7 +12925,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`); `output_column` esiste già;
 - `Unsupported`: dimensioni della geometria diverse da `xy`; `other_wkb`
@@ -12776,6 +13030,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_envelope` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -12787,7 +13042,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | protocollo pubblico |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -12797,6 +13052,13 @@ nulle diventa il `Point` comune, se solo una è nulla la `LineString` di due
 vertici dall'angolo minimo al massimo.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -12824,7 +13086,7 @@ rettangolo parte da (`max x`, `min y`) e gira in senso antiorario.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`);
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -12910,6 +13172,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_explode` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -12921,7 +13184,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -12933,6 +13196,13 @@ resta una riga, invariata. Le altre colonne si ripetono sulle righe della
 stessa madre, e `__parent_index` dice da quale riga vengono.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -12969,7 +13239,7 @@ delle parti; l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`); `__parent_index` esiste già;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -13046,6 +13316,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `frechet_distance` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -13057,7 +13328,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -13071,6 +13342,13 @@ i vertici, quindi un vertice in più su un lato dritto può cambiare il
 risultato (la distanza continua sarebbe minore o uguale).
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -13115,7 +13393,7 @@ CRS, config):
   non è una `LineString`; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -13218,6 +13496,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_from_coords` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -13229,13 +13508,13 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 1, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
 Costruisce una colonna geometria di punti da due colonne numeriche: per
 ogni riga il `Point` (x, y), nel CRS dato dalla config o dal piano. È un
-produttore: l'ingresso non ha colonne geometria, l'uscita ne ha una.
+produttore: aggiunge una geometria, conservando quelle esistenti.
 
 #### Parametri
 
@@ -13251,10 +13530,13 @@ inventa.
 
 #### Schema
 
+La geometria aggiunta diventa primaria solo se e' la prima geometria della
+tabella; altrimenti conserva la primaria esistente o la sua assenza.
+
 Le colonne d'ingresso restano tutte, `x_column` e `y_column` comprese. In
 coda si aggiunge `geometry_column`: `binary` GeoArrow-WKB (estensione
 `geoarrow.wkb`, metadato `geo` con il CRS e dimensioni `xy`), non
-nullable, colonna geometria attiva con un nuovo identificatore di campo e
+nullable, con un nuovo identificatore di campo e
 senza tipi dichiarati. I metadati di schema e le proprietà del contratto
 (`sorted_by`, `row_count`) passano invariati.
 
@@ -13275,7 +13557,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso ha già una colonna geometria; `x_column` o
+- `Schema`: `x_column` o
   `y_column` non esiste o non è `float64` né `int64`; `geometry_column`
   esiste già;
 - `InvalidPlan`: campi sconosciuti; `x_column`, `y_column` o
@@ -13357,6 +13639,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -13368,11 +13651,11 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 5, kernel 2 |
+| versioni | semantica 3, config 1, analisi 6, kernel 2 |
 
 #### Che cosa fa
 
-Crea la colonna geometria di una tabella che non ne ha, leggendo il testo
+Aggiunge una colonna geometria alla tabella, leggendo il testo
 WKT di una colonna `utf8`: ogni cella diventa la geometria WKB
 corrispondente, una cella nulla una geometria nulla. Il testo deve essere
 WKT 2D senza SRID e descrivere una geometria valida: basta una cella che non
@@ -13397,11 +13680,14 @@ nome: nessun valore produce un rimedio silenzioso.
 
 #### Schema
 
+La geometria aggiunta diventa primaria solo se e' la prima geometria della
+tabella; altrimenti conserva la primaria esistente o la sua assenza.
+
 Le colonne dell'ingresso restano, con i loro metadati; in coda si aggiunge
 `output_column`, `binary`, nullable solo se lo è la colonna WKT (una cella
 WKT null dà una geometria null), con l'estensione `geoarrow.wkb` e i
 metadati `geo` (CRS, dimensioni `xy`, encoding WKB). Il contratto la dichiara
-colonna geometria attiva, con i tipi `mixed` dei sette tipi WKB XY (`Point`,
+colonna geometria aggiunta, con i tipi `mixed` dei sette tipi WKB XY (`Point`,
 `LineString`, `Polygon` e i multi, `GeometryCollection`). I metadati di
 schema e le proprietà del contratto (`sorted_by`, `row_count`) restano.
 
@@ -13422,7 +13708,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti o `on_error` fuori elenco;
   `wkt_column` o `output_column` vuoti;
-- `Schema`: l'ingresso ha già una colonna geometria; `wkt_column` assente
+- `Schema`: `wkt_column` assente
   o di tipo diverso da `utf8` (`large_utf8` compreso); `output_column` già
   presente;
 - `Crs`: né `crs` né un CRS di piano; `crs` non risolvibile (codice fuori
@@ -13500,6 +13786,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -13511,7 +13798,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 1, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -13542,6 +13829,9 @@ Le celle non possono superare 1.000.000 (per le esagonali, anche il numero
 di colonne): il conteggio si verifica in validazione, prima di allocare.
 
 #### Schema
+
+Accetta anche ingressi multigeometria: le loro colonne non partecipano al
+calcolo. La griglia prodotta e' la primaria del nuovo schema.
 
 Schema nuovo, in quest'ordine: `geometry` (`binary` non nullable,
 estensione `geoarrow.wkb`, CRS della griglia, dimensioni `xy`; il contratto
@@ -13580,7 +13870,6 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: config con campi sconosciuti o `shape` fuori elenco;
   `extent` non finito o degenere; `cell_size` non finito o non positivo;
   più di 1.000.000 celle; numero di celle per asse non rappresentabile;
-- `Schema`: l'ingresso ha già una colonna geometria;
 - `Crs`: né `crs` né un CRS di piano; `crs` non risolvibile; un vertice di
   `extent` fuori dal dominio del CRS.
 
@@ -13652,6 +13941,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geodesic_area` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -13663,7 +13953,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 4, kernel 2 |
+| versioni | semantica 3, config 2, analisi 5, kernel 2 |
 
 #### Che cosa fa
 
@@ -13679,6 +13969,13 @@ calcolo di `geodesic_area_unsigned` di `geo` sul `PolygonArea` di
 suoi poligoni.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -13710,7 +14007,7 @@ CRS, config):
 
 - `InvalidPlan`: più o meno di un ingresso; config con campi sconosciuti o
   `output_column` non stringa; `output_column` vuoto;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
@@ -13839,6 +14136,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geodesic_distance` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -13850,7 +14148,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 2 |
+| versioni | semantica 2, config 2, analisi 5, kernel 2 |
 
 #### Che cosa fa
 
@@ -13863,6 +14161,13 @@ ellissoide di comodo ([Limiti dichiarati, «Misure geodetiche: l'ellissoide del 
 latitudine in gradi.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -13891,7 +14196,7 @@ Per contratto quello d'ingresso (forma 1:1).
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', la
   colonna non si dichiara geometria WKB, o `output_column` esiste già;
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate), o `other_wkb` con Z/M o SRID;
@@ -13993,6 +14298,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geodesic_line_length` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -14004,7 +14310,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 4, kernel 2 |
+| versioni | semantica 3, config 2, analisi 5, kernel 2 |
 
 #### Che cosa fa
 
@@ -14016,6 +14322,13 @@ Karney di [`geo.geodesic_distance`](#geogeodesic_distance)
 longitudine e latitudine in gradi.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -14044,7 +14357,7 @@ Per contratto quello d'ingresso (forma 1:1).
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', la
   colonna non si dichiara geometria WKB, o `output_column` esiste già;
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate);
@@ -14137,6 +14450,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -14148,7 +14462,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -14161,6 +14475,13 @@ Il calcolo per geometria è `extensions::geometry_accessors`, che il
 runner chiama su ogni riga non nulla.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -14208,7 +14529,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti; `fields` vuota, con
   ripetizioni o con un nome fuori elenco;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB; una colonna da aggiungere esiste
   già;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -14283,6 +14604,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geometry_diagnostics` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -14294,7 +14616,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -14305,6 +14627,13 @@ geometrie non valide, che descrive invece di rifiutare; non esegue alcun
 algoritmo su coordinate non finite.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -14328,8 +14657,8 @@ solo se lo è la colonna geometria (nulle dove la geometria è null):
 Le ragioni sono `coordinate NaN o infinite`, `punti distinti insufficienti`,
 `anello con auto-intersezione`, `anelli che si intersecano`, `anello
 interno fuori dal proprio esterno`, `poligoni sovrapposti` e `forma non
-valida non ulteriormente distinta`. Il contratto d'uscita non ha più
-colonne geometria; le altre colonne, i metadati di schema e le proprietà del
+valida non ulteriormente distinta`. Il contratto d'uscita perde solo la geometria selezionata, senza promuovere
+le secondarie; le altre colonne, i metadati di schema e le proprietà del
 contratto (`sorted_by`, `row_count`) restano.
 
 #### Righe
@@ -14352,7 +14681,7 @@ In validazione (analisi del contratto; nell'ordine: forma dell'ingresso,
 config, CRS, nomi):
 
 - `InvalidPlan`: più o meno di un ingresso; config non vuota;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; un'altra colonna ha già
   il nome di una delle dieci;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
@@ -14440,6 +14769,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `hausdorff_distance` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -14451,7 +14781,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -14463,6 +14793,13 @@ euclidea fra un vertice di una geometria e il vertice più vicino
 dell'altra. I lati non contano.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -14490,7 +14827,7 @@ Per contratto quello d'ingresso (forma 1:1).
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', la
   colonna non si dichiara geometria WKB, o `output_column` esiste già;
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate), o `other_wkb` con Z/M o SRID;
@@ -14596,6 +14933,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `haversine_distance` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -14607,7 +14945,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 2 |
+| versioni | semantica 2, config 2, analisi 5, kernel 2 |
 
 #### Che cosa fa
 
@@ -14623,6 +14961,13 @@ condizionato anche agli antipodi. Per la distanza sull'ellissoide c'è
 [`geo.geodesic_distance`](#geogeodesic_distance).
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -14651,7 +14996,7 @@ Per contratto quello d'ingresso (forma 1:1).
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', la
   colonna non si dichiara geometria WKB, o `output_column` esiste già;
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate), o `other_wkb` con Z/M o SRID;
@@ -14760,6 +15105,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_intersection` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -14771,7 +15117,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -14782,6 +15128,13 @@ geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
 #### Parametri
+
+`left_geometry` e `right_geometry` (stringhe facoltative) selezionano per nome
+la colonna geometrica dei rispettivi ingressi. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -14818,7 +15171,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: un numero di ingressi diverso da due; config non vuota;
   un metadato di schema presente sui due lati con valori diversi;
-- `Schema`: un lato senza esattamente una colonna geometria, o con una
+- `Schema`: un lato senza una colonna geometria selezionabile senza ambiguita', o con una
   colonna non riconoscibile come geometria WKB (né estensione
   `geoarrow.wkb` né chiavi canoniche `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;
@@ -14931,6 +15284,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_length` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -14942,7 +15296,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -14953,6 +15307,13 @@ un poligono il suo perimetro, anello esterno più buchi (la semantica di
 parti; i punti valgono 0.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -14977,7 +15338,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`); `output_column` esiste già;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -15066,6 +15427,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_line_builder` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -15077,7 +15439,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -15087,6 +15449,13 @@ quindi per contratto tutta la tabella diventa una sola geometria, e le
 colonne attributo si perdono.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -15117,7 +15486,7 @@ forma della linea.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`);
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -15201,6 +15570,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `line_interpolate_point` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -15212,7 +15582,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -15223,6 +15593,13 @@ primo vertice, 1 l'ultimo. La lunghezza è quella euclidea nel piano del
 CRS.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -15259,7 +15636,7 @@ config, CRS):
 - `InvalidPlan`: più o meno di un ingresso; config con campi sconosciuti,
   senza `ratio` o con un tipo sbagliato; `ratio` non finito o fuori da
   `[0, 1]`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -15345,6 +15722,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -15356,7 +15734,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -15370,6 +15748,13 @@ Il calcolo per geometria è `extensions::line_locate_point`, che il
 runner chiama su ogni riga non nulla.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -15407,7 +15792,7 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: config con campi sconosciuti; `point_wkb` mancante, non
   esadecimale, malformato, OGC-invalido o non `Point`; `output_column`
   vuota;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB; `output_column` già presente;
 - `Unsupported`: dimensioni della geometria diverse da `xy`; `point_wkb`
   con dimensioni Z/M o SRID;
@@ -15493,6 +15878,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `line_merge` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -15504,7 +15890,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 5, kernel 1 |
+| versioni | semantica 3, config 2, analisi 6, kernel 1 |
 
 #### Che cosa fa
 
@@ -15516,6 +15902,13 @@ inverte per proseguire il percorso. Gli estremi si confrontano per bit, con
 `-0.0` uguale a `0.0`, senza tolleranza.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -15558,7 +15951,7 @@ In validazione (analisi del contratto; nell'ordine: forma dell'ingresso,
 config, CRS):
 
 - `InvalidPlan`: più o meno di un ingresso; config non vuota;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -15651,6 +16044,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `line_substring` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -15662,7 +16056,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -15674,6 +16068,13 @@ che cadono strettamente fra le due distanze. Con due frazioni uguali la
 porzione è un punto. La lunghezza è quella euclidea nel piano del CRS.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -15715,7 +16116,7 @@ config, CRS):
 - `InvalidPlan`: più o meno di un ingresso; config con campi sconosciuti,
   senza una delle due frazioni o con un tipo sbagliato; frazione non
   finita o fuori da `[0, 1]`; `start_ratio` maggiore di `end_ratio`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -15807,6 +16208,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_make_valid` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione non interrompibile |
@@ -15818,7 +16220,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 3, kernel 2 |
+| versioni | semantica 3, config 2, analisi 4, kernel 2 |
 
 #### Che cosa fa
 
@@ -15838,6 +16240,13 @@ la tabella con la precisione del CRS della colonna ([Runner, «Operazioni
 geo»](runner.md#operazioni-geo)).
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`. Metodo e parti collassate non si scelgono dal
 piano: l'esecuzione Arrow usa sempre `LINEWORK` con le parti collassate
@@ -15867,7 +16276,7 @@ Quello d'ingresso.
 In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con un campo qualunque;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB (né estensione `geoarrow.wkb` né
   chiavi `plenora.geometry.*`);
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -16000,6 +16409,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_nearest` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -16011,7 +16421,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -16022,6 +16432,13 @@ geo»](runner.md#operazioni-geo)): in caso di pari tutte le destre alla
 distanza minima, come `sjoin_nearest` di GeoPandas.
 
 #### Parametri
+
+`left_geometry` e `right_geometry` (stringhe facoltative) selezionano per nome
+la colonna geometrica dei rispettivi ingressi. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -16065,7 +16482,7 @@ In validazione (analisi del contratto):
   sconosciuti; `max_distance` negativa o non finita; un metadato di
   schema presente sui due lati con valori diversi;
 - `Schema`: `__right_index` o `distance` esiste già nella sinistra; un
-  lato senza esattamente una colonna geometria, o con una colonna non
+  lato senza una colonna geometria selezionabile senza ambiguita', o con una colonna non
   riconoscibile come geometria WKB (né estensione `geoarrow.wkb` né chiavi
   canoniche `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;
@@ -16194,6 +16611,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_overlay` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -16205,7 +16623,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 4, kernel 2 |
+| versioni | semantica 3, config 2, analisi 5, kernel 2 |
 
 #### Che cosa fa
 
@@ -16217,6 +16635,13 @@ sovrappongono e, secondo `mode`, i resti di ciascun lato fuori dall'altro.
 Lavora solo su `Polygon` e `MultiPolygon`.
 
 #### Parametri
+
+`left_geometry` e `right_geometry` (stringhe facoltative) selezionano per nome
+la colonna geometrica dei rispettivi ingressi. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -16271,7 +16696,7 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: un numero di ingressi diverso da due; config con campi
   sconosciuti, `mode` assente o fuori elenco; un metadato di schema
   presente sui due lati con valori diversi;
-- `Schema`: un lato senza esattamente una colonna geometria, o con una
+- `Schema`: un lato senza una colonna geometria selezionabile senza ambiguita', o con una
   colonna non riconoscibile come geometria WKB (né estensione
   `geoarrow.wkb` né chiavi canoniche `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;
@@ -16398,6 +16823,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_perimeter` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -16409,7 +16835,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -16420,6 +16846,13 @@ anche una linea vale la sua lunghezza (non 0), una multi-geometria o una
 collezione la somma delle parti, un punto 0.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -16445,7 +16878,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`); `output_column` esiste già;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -16532,6 +16965,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_point_on_surface` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -16543,7 +16977,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -16557,6 +16991,13 @@ vicino al centroide. A differenza del centroide il punto sta sempre sulla
 geometria. Per una geometria vuota il kernel non dà un punto.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -16586,7 +17027,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`);
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -16683,6 +17124,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_polygon_builder` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -16694,7 +17136,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -16705,6 +17147,13 @@ gruppo né d'ordine, quindi per contratto tutta la tabella diventa una sola
 geometria, e le colonne attributo si perdono.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -16735,7 +17184,7 @@ poligono diverso, o un anello che si incrocia e quindi un errore.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`);
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -16822,6 +17271,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `polygonize` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione non interrompibile |
@@ -16833,7 +17283,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 5, kernel 3 |
+| versioni | semantica 3, config 2, analisi 6, kernel 3 |
 
 #### Che cosa fa
 
@@ -16852,6 +17302,13 @@ la tabella con la precisione del CRS della colonna e il limite di righe
 dell'arco d'uscita ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -16898,7 +17355,7 @@ Deterministico: stesso ingresso, stesse righe nello stesso ordine.
 In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti o valori non booleani;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto, o CRS non proiettato.
@@ -17021,6 +17478,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `predicate_contains` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -17032,7 +17490,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -17041,6 +17499,13 @@ Aggiunge una colonna `bool` che dice se la geometria della riga (A) contiene la 
 Maschera DE-9IM `T*****FF*`: interno/interno non vuota, esterno di A/interno di B ed esterno di A/confine di B vuote. Un B tutto sul confine di A (un punto sul lato di un poligono, un lato dell'anello) non è contenuto: per questo c'è [`geo.predicate_covers`](#geopredicate_covers). Una geometria contiene se stessa. Il contrario di [`geo.predicate_within`](#geopredicate_within) a operandi scambiati. Con una geometria vuota è falso.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -17086,7 +17551,7 @@ CRS, config):
   per l'OGC; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -17121,7 +17586,7 @@ voce «Errori»):
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
-  seconda colonna: un input ha una sola colonna geometria.
+  seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
 - La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
   segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
   linee di una `MultiLineString` è interno, una linea chiusa non ha
@@ -17201,6 +17666,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `predicate_contains_properly` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -17212,7 +17678,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -17221,6 +17687,13 @@ Aggiunge una colonna `bool` che dice se la geometria della riga (A) contiene pro
 Maschera DE-9IM `T**FF*FF*`: interno/interno non vuota; confine di A vuoto contro interno e confine di B; esterno di A vuoto contro interno e confine di B. Più forte di [`geo.predicate_contains`](#geopredicate_contains): basta che B tocchi il confine di A perché sia falso, quindi una geometria non contiene propriamente se stessa. Con una geometria vuota è falso.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -17266,7 +17739,7 @@ CRS, config):
   per l'OGC; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -17301,7 +17774,7 @@ voce «Errori»):
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
-  seconda colonna: un input ha una sola colonna geometria.
+  seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
 - La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
   segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
   linee di una `MultiLineString` è interno, una linea chiusa non ha
@@ -17381,6 +17854,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `predicate_covered_by` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -17392,7 +17866,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -17401,6 +17875,13 @@ Aggiunge una colonna `bool` che dice se la geometria della riga (A) è coperta d
 Maschera DE-9IM: vero se interno di A/esterno di B e confine di A/esterno di B sono vuote e almeno una fra interno/interno, interno/confine, confine/interno, confine/confine non lo è (`T*F**F***`, `*TF**F***`, `**FT*F***`, `**F*TF***`). È [`geo.predicate_covers`](#geopredicate_covers) a operandi scambiati; a differenza di [`geo.predicate_within`](#geopredicate_within), un A tutto sul confine di B è coperto. Con una geometria vuota (anche A soltanto) è falso.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -17446,7 +17927,7 @@ CRS, config):
   per l'OGC; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -17481,7 +17962,7 @@ voce «Errori»):
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
-  seconda colonna: un input ha una sola colonna geometria.
+  seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
 - La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
   segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
   linee di una `MultiLineString` è interno, una linea chiusa non ha
@@ -17561,6 +18042,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `predicate_covers` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -17572,7 +18054,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -17581,6 +18063,13 @@ Aggiunge una colonna `bool` che dice se la geometria della riga (A) copre la geo
 Maschera DE-9IM: vero se esterno di A/interno di B ed esterno di A/confine di B sono vuote e almeno una fra interno/interno, interno/confine, confine/interno, confine/confine non lo è (`T*****FF*`, `*T****FF*`, `***T**FF*`, `****T*FF*`). A differenza di [`geo.predicate_contains`](#geopredicate_contains), un B tutto sul confine di A è coperto. Una geometria copre se stessa. Il contrario di [`geo.predicate_covered_by`](#geopredicate_covered_by) a operandi scambiati. Con una geometria vuota (anche B soltanto) è falso.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -17626,7 +18115,7 @@ CRS, config):
   per l'OGC; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -17661,7 +18150,7 @@ voce «Errori»):
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
-  seconda colonna: un input ha una sola colonna geometria.
+  seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
 - La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
   segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
   linee di una `MultiLineString` è interno, una linea chiusa non ha
@@ -17741,6 +18230,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `predicate_crosses` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -17752,7 +18242,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -17761,6 +18251,13 @@ Aggiunge una colonna `bool` che dice se la geometria della riga (A) attraversa l
 Con le dimensioni ricavate dalla matrice (quella degli interni): se dim(A) < dim(B), interno/interno non vuota e parte dell'interno di A fuori da B (`T*T******`); se dim(A) > dim(B), interno/interno non vuota e parte dell'interno di B fuori da A (`T*****T**`); fra due linee, interni che si toccano solo in punti (`0********`). Falso fra due poligoni, fra due punti e con una geometria vuota. Una linea tutta dentro un poligono non lo attraversa (è [`geo.predicate_within`](#geopredicate_within)). Simmetrico.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -17806,7 +18303,7 @@ CRS, config):
   per l'OGC; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -17841,7 +18338,7 @@ voce «Errori»):
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
-  seconda colonna: un input ha una sola colonna geometria.
+  seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
 - La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
   segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
   linee di una `MultiLineString` è interno, una linea chiusa non ha
@@ -17921,6 +18418,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `predicate_disjoint` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -17932,7 +18430,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -17941,6 +18439,13 @@ Aggiunge una colonna `bool` che dice se la geometria della riga (A) e la geometr
 Maschera DE-9IM `FF*FF****`: vuote le celle interno/interno, interno/confine, confine/interno, confine/confine. Un punto sul confine di un poligono non ne è disgiunto. Simmetrico. Con una geometria vuota (da una parte o dall'altra) è vero.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -17986,7 +18491,7 @@ CRS, config):
   per l'OGC; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -18021,7 +18526,7 @@ voce «Errori»):
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
-  seconda colonna: un input ha una sola colonna geometria.
+  seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
 - La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
   segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
   linee di una `MultiLineString` è interno, una linea chiusa non ha
@@ -18101,6 +18606,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `predicate_equals_topo` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -18112,7 +18618,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -18121,6 +18627,13 @@ Aggiunge una colonna `bool` che dice se la geometria della riga (A) e la geometr
 Maschera DE-9IM `T*F**FFF*`: interno/interno non vuota; interno e confine di ciascuna mai nell'esterno dell'altra. Non confronta i vertici: `LINESTRING(0 0,2 0)` e `LINESTRING(0 0,1 0,2 0)` sono uguali, e lo sono anche due geometrie di tipo diverso con gli stessi punti. Due geometrie vuote sono uguali (anche di tipo diverso); una vuota e una no, mai. Simmetrico.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -18166,7 +18679,7 @@ CRS, config):
   per l'OGC; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -18201,7 +18714,7 @@ voce «Errori»):
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
-  seconda colonna: un input ha una sola colonna geometria.
+  seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
 - La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
   segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
   linee di una `MultiLineString` è interno, una linea chiusa non ha
@@ -18281,6 +18794,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `predicate_intersects` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -18292,7 +18806,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -18301,6 +18815,13 @@ Aggiunge una colonna `bool` che dice se la geometria della riga (A) e la geometr
 Maschera DE-9IM: vero se è non vuota almeno una fra le celle interno/interno, interno/confine, confine/interno, confine/confine (`T********`, `*T*******`, `***T*****`, `****T****`). Un punto sul confine di un poligono lo interseca. Simmetrico. Con una geometria vuota (da una parte o dall'altra) è falso.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -18346,7 +18867,7 @@ CRS, config):
   per l'OGC; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -18381,7 +18902,7 @@ voce «Errori»):
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
-  seconda colonna: un input ha una sola colonna geometria.
+  seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
 - La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
   segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
   linee di una `MultiLineString` è interno, una linea chiusa non ha
@@ -18461,6 +18982,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `predicate_overlaps` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -18472,7 +18994,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -18481,6 +19003,13 @@ Aggiunge una colonna `bool` che dice se la geometria della riga (A) e la geometr
 Con le dimensioni ricavate dalla matrice: fra due linee, interno/interno di dimensione 1 (un tratto in comune) e parte dell'interno di ciascuna fuori dall'altra (`1*T***T**`); fra punti o fra poligoni `T*T***T**`. Falso fra dimensioni diverse, quando una copre l'altra, quando si toccano solo sul confine e con una geometria vuota. Simmetrico.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -18526,7 +19055,7 @@ CRS, config):
   per l'OGC; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -18561,7 +19090,7 @@ voce «Errori»):
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
-  seconda colonna: un input ha una sola colonna geometria.
+  seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
 - La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
   segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
   linee di una `MultiLineString` è interno, una linea chiusa non ha
@@ -18641,6 +19170,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `predicate_touches` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -18652,7 +19182,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -18661,6 +19191,13 @@ Aggiunge una colonna `bool` che dice se la geometria della riga (A) e la geometr
 Maschera DE-9IM: interno/interno vuota e almeno una fra interno/confine, confine/interno, confine/confine non vuota (`FT*******`, `F**T*****`, `F***T****`). Due poligoni con un lato in comune si toccano; un punto sul lato di un poligono lo tocca. Fra due punti è sempre falso (un punto non ha confine). Simmetrico. Con una geometria vuota è falso.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -18706,7 +19243,7 @@ CRS, config):
   per l'OGC; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -18741,7 +19278,7 @@ voce «Errori»):
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
-  seconda colonna: un input ha una sola colonna geometria.
+  seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
 - La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
   segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
   linee di una `MultiLineString` è interno, una linea chiusa non ha
@@ -18821,6 +19358,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `predicate_within` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -18832,7 +19370,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -18841,6 +19379,13 @@ Aggiunge una colonna `bool` che dice se la geometria della riga (A) sta dentro l
 Maschera DE-9IM `T*F**F***`: interno/interno non vuota, interno di A/esterno di B e confine di A/esterno di B vuote. È [`geo.predicate_contains`](#geopredicate_contains) a operandi scambiati: un A tutto sul confine di B (un punto sul lato) non è dentro; per questo c'è [`geo.predicate_covered_by`](#geopredicate_covered_by). Una geometria sta dentro se stessa. Con una geometria vuota è falso.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -18886,7 +19431,7 @@ CRS, config):
   per l'OGC; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -18921,7 +19466,7 @@ voce «Errori»):
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
-  seconda colonna: un input ha una sola colonna geometria.
+  seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
 - La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
   segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
   linee di una `MultiLineString` è interno, una linea chiusa non ha
@@ -19001,6 +19546,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_reproject` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione non interrompibile |
@@ -19012,7 +19558,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 2, analisi 4, kernel 2 |
+| versioni | semantica 2, config 3, analisi 5, kernel 2 |
 
 #### Che cosa fa
 
@@ -19025,6 +19571,13 @@ cambiano. Il quadro completo è in
 [«Riproiezione»](riproiezione.md#riproiezione).
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -19053,6 +19606,10 @@ canoniche CRS della sorgente (`plenora.geometry.crs_*`,
 `plenora.geometry.srid`, `plenora.geometry.axis_order`) si tolgono, e `axis_order` si riscrive con l'ordine GIS
 normalizzato del target. Gli altri metadati del campo restano.
 
+La successiva scrittura GeoParquet verifica tutte le colonne, anche le
+secondarie passanti, e ricalcola i bbox senza riusare covering o metadati
+derivati del file sorgente ([File](file.md#geoparquet)).
+
 #### Righe
 
 1:1. Il runner chiama l'adapter di tabella dei kernel
@@ -19071,7 +19628,7 @@ quello che si riporta.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si dichiara geometria WKB;
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate);
@@ -19201,6 +19758,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `rotate` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -19212,7 +19770,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -19223,6 +19781,13 @@ centro `(x_origin, y_origin)`. È
 `f64` dall'angolo in radianti e `x_off`, `y_off` tengono fermo il centro.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -19256,7 +19821,7 @@ Per contratto quello d'ingresso (forma 1:1).
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si dichiara geometria WKB;
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate);
@@ -19351,6 +19916,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `scale` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -19362,7 +19928,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -19373,6 +19939,13 @@ x_origin (1 - x_factor)`, e lo stesso per y. È
 corrispondente. Un fattore negativo riflette la geometria.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -19407,7 +19980,7 @@ Per contratto quello d'ingresso (forma 1:1).
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si dichiara geometria WKB;
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate);
@@ -19498,6 +20071,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -19509,7 +20083,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | esente da `max_expansion_factor` (restano i limiti di righe) |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -19524,6 +20098,13 @@ runner chiama su tutta la colonna con i default della tabella sotto
 ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -19541,6 +20122,11 @@ Schema nuovo, in quest'ordine: `index_a` e `index_b` (`uint64`),
 d'ingresso, dimensioni `xy`, senza dichiarazione dei tipi), tutte non
 nullable. Le colonne dell'ingresso spariscono, i metadati di schema
 restano; nessuna proprietà del contratto sopravvive.
+
+La geometria d'uscita e' primaria solo se l'operando selezionato era la
+primaria d'ingresso; altrimenti l'uscita ha primaria assente (`none`),
+anche se contiene una sola geometria. Dall'operando eredita solo le
+proprieta' del CRS; tipi e rappresentazione sono prodotti dal codec.
 
 #### Righe
 
@@ -19570,7 +20156,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti; `tolerance` o `min_length`
   negativi o non finiti;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
 - `Crs`: colonna senza CRS risolto o CRS non proiettato.
@@ -19655,6 +20241,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_simplify` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -19666,7 +20253,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 2, analisi 4, kernel 2 |
+| versioni | semantica 3, config 3, analisi 5, kernel 2 |
 
 #### Che cosa fa
 
@@ -19689,6 +20276,13 @@ l'altra si rifiuta. Punti e multi-punti passano invariati; una collezione
 si semplifica membro per membro. Con soglia 0 la geometria non cambia.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -19718,7 +20312,7 @@ restano nel loro ordine.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`);
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -19833,6 +20427,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `sjoin` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -19844,7 +20439,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / (sinistra + destra) |
 | fusione geo | non fondibile |
 | maturità | protocollo pubblico |
-| versioni | semantica 3, config 1, analisi 4, kernel 1 |
+| versioni | semantica 3, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -19855,6 +20450,13 @@ coppia, con la posizione della riga destra in `__right_index` (kernel
 geo»](runner.md#operazioni-geo)).
 
 #### Parametri
+
+`left_geometry` e `right_geometry` (stringhe facoltative) selezionano per nome
+la colonna geometrica dei rispettivi ingressi. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -19903,7 +20505,7 @@ In validazione (analisi del contratto):
   sconosciuti, `predicate` assente o fuori elenco; un metadato di schema
   presente sui due lati con valori diversi;
 - `Schema`: `__right_index` esiste già nella sinistra; un lato senza
-  esattamente una colonna geometria, o con una colonna non riconoscibile
+  una colonna geometria selezionabile senza ambiguita', o con una colonna non riconoscibile
   come geometria WKB (né estensione `geoarrow.wkb` né chiavi canoniche
   `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;
@@ -20027,6 +20629,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -20038,7 +20641,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -20052,6 +20655,13 @@ La conversione di colonna è `extensions2::snap_column`, che il runner
 chiama sulla colonna intera.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -20082,7 +20692,7 @@ In validazione (analisi del contratto):
 - `InvalidPlan`: config con campi sconosciuti; `reference_wkb` mancante,
   non esadecimale, malformato o OGC-invalido; `tolerance` mancante,
   negativa o non finita;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
   `reference_wkb` con dimensioni Z/M o SRID;
@@ -20176,6 +20786,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `snap_to_grid` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -20187,7 +20798,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -20200,6 +20811,13 @@ linea ridotta a un punto, un anello degenere o auto-intersecato) è un
 errore, non una correzione.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -20232,7 +20850,7 @@ config, CRS):
 - `InvalidPlan`: più o meno di un ingresso; config con campi sconosciuti,
   senza `grid_size` o con un tipo sbagliato; `grid_size` non finito o non
   maggiore di zero;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -20329,6 +20947,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `split` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione non interrompibile |
@@ -20340,7 +20959,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 3 |
+| versioni | semantica 2, config 2, analisi 5, kernel 3 |
 
 #### Che cosa fa
 
@@ -20359,6 +20978,13 @@ con la stessa lama su ogni riga ([Runner, «Operazioni
 geo»](runner.md#operazioni-geo)).
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -20402,7 +21028,7 @@ In validazione (analisi del contratto):
   esadecimale, strutturalmente malformato o non valido per l'OGC;
   `tolerance` negativa o non finita;
 - `Internal`: la validazione OGC di `other_wkb` non conclude;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB; una colonna `__parent_index` esiste
   già;
 - `Unsupported`: dimensioni della geometria diverse da `xy`; `other_wkb`
@@ -20528,6 +21154,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -20539,7 +21166,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 3, kernel 1 |
+| versioni | semantica 1, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -20556,6 +21183,13 @@ su ogni cella non nulla, con la precisione del CRS della colonna, e scrive
 l'indice della riga d'origine.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -20607,7 +21241,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti; `max_vertices` mancante,
   non intero non negativo o minore di 4; `output_column` vuota;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB; `output_column` già presente
   come altra colonna (il nome della colonna geometria stessa è ammesso),
   o `__parent_index` già presente;
@@ -20701,6 +21335,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_symmetric_difference` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -20712,7 +21347,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 1, config 1, analisi 4, kernel 1 |
+| versioni | semantica 1, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -20723,6 +21358,13 @@ geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
 #### Parametri
+
+`left_geometry` e `right_geometry` (stringhe facoltative) selezionano per nome
+la colonna geometrica dei rispettivi ingressi. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -20758,7 +21400,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: un numero di ingressi diverso da due; config non vuota;
   un metadato di schema presente sui due lati con valori diversi;
-- `Schema`: un lato senza esattamente una colonna geometria, o con una
+- `Schema`: un lato senza una colonna geometria selezionabile senza ambiguita', o con una
   colonna non riconoscibile come geometria WKB (né estensione
   `geoarrow.wkb` né chiavi canoniche `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;
@@ -20869,6 +21511,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_to_wkt` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -20880,7 +21523,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -20892,6 +21535,13 @@ senza esponente e con il segno dello zero conservato (`-0`); le geometrie
 vuote come `POINT EMPTY`, `MULTIPOLYGON EMPTY`.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -20916,7 +21566,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`); `output_column` esiste già;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -21001,6 +21651,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, estensione |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `translate` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -21012,7 +21663,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 3, kernel 1 |
+| versioni | semantica 2, config 2, analisi 4, kernel 1 |
 
 #### Che cosa fa
 
@@ -21022,6 +21673,13 @@ Sposta ogni geometria di `(x_offset, y_offset)` nelle unità del CRS: è
 cambiano.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -21049,7 +21707,7 @@ Per contratto quello d'ingresso (forma 1:1).
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si dichiara geometria WKB;
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate);
@@ -21138,6 +21796,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_union` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -21149,7 +21808,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -21160,6 +21819,13 @@ geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
 #### Parametri
+
+`left_geometry` e `right_geometry` (stringhe facoltative) selezionano per nome
+la colonna geometrica dei rispettivi ingressi. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 Nessuno: la config è `{}`.
 
@@ -21195,7 +21861,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: un numero di ingressi diverso da due; config non vuota;
   un metadato di schema presente sui due lati con valori diversi;
-- `Schema`: un lato senza esattamente una colonna geometria, o con una
+- `Schema`: un lato senza una colonna geometria selezionabile senza ambiguita', o con una
   colonna non riconoscibile come geometria WKB (né estensione
   `geoarrow.wkb` né chiavi canoniche `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;
@@ -21308,6 +21974,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_vertex_count` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
@@ -21319,7 +21986,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | misura terminale |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 4, kernel 1 |
+| versioni | semantica 2, config 2, analisi 5, kernel 1 |
 
 #### Che cosa fa
 
@@ -21328,6 +21995,13 @@ di ogni riga, sommato su tutte le parti. Ogni anello conta anche il vertice
 di chiusura (un quadrato ne ha 5); una geometria vuota ne ha 0.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -21352,7 +22026,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`); `output_column` esiste già;
 - `Unsupported`: dimensioni della geometria diverse da `xy`;
@@ -21437,6 +22111,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_voronoi` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
@@ -21448,7 +22123,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 3, config 1, analisi 4, kernel 2 |
+| versioni | semantica 3, config 2, analisi 5, kernel 2 |
 
 #### Che cosa fa
 
@@ -21459,6 +22134,13 @@ rettangolo d'ingombro dei punti allargato su ogni lato della metà del suo
 lato maggiore. I punti duplicati ricevono la stessa cella.
 
 #### Parametri
+
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -21494,7 +22176,7 @@ config, CRS):
 
 - `InvalidPlan`: più o meno di un ingresso; config con campi sconosciuti o
   `max_points` non intero non negativo; `max_points` minore di 2;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -21614,6 +22296,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | dal catalogo | |
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
+| geometrie multiple | supportate per colonna |
 | alias legacy | `geo_within` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
@@ -21625,7 +22308,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / sinistra |
 | fusione geo | non fondibile |
 | maturità | kernel validato |
-| versioni | semantica 2, config 1, analisi 5, kernel 1 |
+| versioni | semantica 2, config 2, analisi 6, kernel 1 |
 
 #### Che cosa fa
 
@@ -21637,6 +22320,13 @@ spaziale; [Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 solo bordo, come un punto sul lato di un poligono, non è dentro.
 
 #### Parametri
+
+`left_geometry` e `right_geometry` (stringhe facoltative) selezionano per nome
+la colonna geometrica dei rispettivi ingressi. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
@@ -21672,7 +22362,7 @@ In validazione (analisi del contratto):
   sconosciuti; `output_column` vuota; un metadato di schema presente sui
   due lati con valori diversi;
 - `Schema`: `output_column` esiste già nella sinistra; un lato senza
-  esattamente una colonna geometria, o con una colonna non riconoscibile
+  una colonna geometria selezionabile senza ambiguita', o con una colonna non riconoscibile
   come geometria WKB (né estensione `geoarrow.wkb` né chiavi canoniche
   `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;

@@ -535,6 +535,7 @@ fn fill_array(array: &dyn Array, method: &FillMethod, value: &Value) -> Result<A
 /// - `DataMapping`: errore Arrow nella sostituzione (guardia interna, non
 ///   attesa).
 pub fn fill_na(batch: &RecordBatch, config: &FillNa) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     let targets: Vec<usize> = if let Some(name) = &config.column {
         vec![column_index(batch, name)?]
@@ -647,6 +648,7 @@ pub fn coalesce_fast(batch: &RecordBatch, indices: &[usize]) -> Option<ArrayRef>
 ///
 /// Come [`replace_con_limiti`].
 pub fn replace(batch: &RecordBatch, config: &Replace) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     replace_con_limiti(batch, config, &crate::Limits::default())
 }
 
@@ -670,6 +672,7 @@ pub fn replace_con_limiti(
     config: &Replace,
     limits: &crate::Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     if config.regex && config.old_value.len() > limits.max_regex_bytes {
         return Err(PlenoraError::InvalidPlan(
             "replace: pattern oltre max_regex_bytes".into(),
@@ -1398,6 +1401,7 @@ fn type_cast_fast(source: &ArrayRef, config: &TypeCast) -> Result<Option<ArrayRe
 ///   (nessun tipo Arrow omogeneo garantibile); `decimal128` senza
 ///   `precision`/`scale`; `date_format` con un elemento non riconosciuto.
 pub fn type_cast(batch: &RecordBatch, config: &TypeCast) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     type_cast_with_source_offset(batch, config, 0)
 }
 
@@ -1412,6 +1416,7 @@ pub fn type_cast_with_source_offset(
     config: &TypeCast,
     source_offset: u64,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     // Un formato non riconosciuto non combacia con nessun valore: errore di
     // piano, non righe rifiutate. Vuoto e' il parser di default.

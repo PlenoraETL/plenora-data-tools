@@ -38,8 +38,8 @@ hanno tutte lo stesso tipo Arrow, altrimenti `utf8` con
 `type_policy: "string"`. I metadati di schema si conservano. Una colonna
 geometrica nelle colonne valore trasmette i metadati geometrici al campo
 derivato se tutte le sorgenti sono compatibili; identita' e dichiarazione
-dei tipi non si copiano. Le colonne id conservano i loro metadati. La
-pipeline ammette al massimo una geometria in uscita. Il contratto dichiara
+dei tipi non si copiano. Le colonne id conservano i loro metadati. Le geometrie id conservano la primaria se presente; il campo derivato
+non viene promosso. Il contratto dichiara
 righe × colonne valore quando il conteggio d'ingresso è noto, e nessun
 ordinamento.
 

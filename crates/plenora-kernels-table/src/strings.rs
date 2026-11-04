@@ -103,6 +103,7 @@ impl StringPad {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn string_pad(batch: &RecordBatch, config: &StringPad, limits: &Limits) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     let output_name = config.output_column.as_deref().unwrap_or(&config.column);
     validate_output_name(output_name)?;
     config.verifica_parametri()?;
@@ -174,6 +175,7 @@ pub struct StringLength {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn string_length(batch: &RecordBatch, config: &StringLength) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     let output_name = config
         .output_column
         .clone()
@@ -291,6 +293,7 @@ pub fn string_extract(
     config: &StringExtract,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     if config.pattern.len() > limits.max_regex_bytes {
         return Err(PlenoraError::InvalidPlan(
             "pattern oltre max_regex_bytes".into(),
@@ -544,6 +547,7 @@ pub fn text_normalize(
     config: &TextNormalize,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
             "text_normalize richiede almeno una colonna".into(),

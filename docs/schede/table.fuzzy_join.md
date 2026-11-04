@@ -49,7 +49,8 @@ compresa, `_R`. Tipi e metadati di campo restano quelli d'origine e ogni
 colonna degli ingressi è nullable. La colonna `score_column` è `float64`,
 nullable solo con `how: left`. I metadati di schema dei due lati si
 fondono: una chiave presente da un lato solo, o con lo stesso valore,
-resta. L'uscita ammette una sola colonna geometrica. Nessuna proprietà del
+resta. L'uscita conserva tutte le colonne geometriche con effetto `Rows`; se entrambi i lati
+portano geometrie, non ha primaria. Nessuna proprietà del
 contratto sopravvive.
 
 ### Righe

@@ -1,0 +1,47 @@
+{
+  "$schema": "../../schemas/primary-composition-vector-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-primary-composition-vector-v1",
+  "description": "append different ids same output.",
+  "operation": "append",
+  "inputs": [
+    {
+      "geometry_ids": [
+        "1",
+        "2"
+      ],
+      "primary": "2"
+    },
+    {
+      "geometry_ids": [
+        "7",
+        "8"
+      ],
+      "primary": "7"
+    }
+  ],
+  "mapping": [
+    {
+      "input": 0,
+      "field": "1",
+      "output": "20"
+    },
+    {
+      "input": 0,
+      "field": "2",
+      "output": "10"
+    },
+    {
+      "input": 1,
+      "field": "7",
+      "output": "10"
+    },
+    {
+      "input": 1,
+      "field": "8",
+      "output": "20"
+    }
+  ],
+  "expected_primary": "10",
+  "expected_key": "10"
+}

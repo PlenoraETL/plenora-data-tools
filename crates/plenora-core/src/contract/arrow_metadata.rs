@@ -401,13 +401,23 @@ pub fn merged_geometry_metadata(
     if !field_declares_wkb_geometry(&first) {
         return Ok(Metadata::new());
     }
-    let mut metadata = first.metadata().clone();
+    // L'uscita derivata non dichiara i tipi delle celle: la fusione con
+    // questa dichiarazione fresca rende unresolved tramite la politica.
+    let mut fresh = first.metadata().clone();
+    for key in TYPES_KEYS_REWRITTEN_BY_TRANSFORM {
+        fresh.remove(key);
+    }
+    let mut metadata = super::geometry_metadata_policy::merge(first.metadata(), &fresh)?;
     metadata.remove(PLENORA_FIELD_ID_KEY);
     for field in fields.iter().skip(1) {
         metadata = super::geometry_metadata_policy::merge(&metadata, field.metadata())?;
     }
     for key in TYPES_KEYS_REWRITTEN_BY_TRANSFORM {
-        metadata.remove(key);
+        if key != "plenora.geometry.types_declaration"
+            || metadata.get(key).is_none_or(|value| value != "unresolved")
+        {
+            metadata.remove(key);
+        }
     }
     Ok(metadata)
 }

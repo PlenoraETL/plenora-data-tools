@@ -198,3 +198,184 @@ fn srid_derivato_solo_con_mapping_wkb_risolto() {
         }
     }
 }
+
+#[test]
+fn effetti_per_operando_passante_e_primaria_assente() {
+    use plenora_core::arrow::Schema;
+    use plenora_core::catalog::{Family, SourceRowProvenance};
+    use plenora_core::contract::arrow_metadata::geometry_output_field;
+    use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
+    let fields = ["passante", "operando", "altra"]
+        .map(|name| geometry_output_field(name, "EPSG:32632").unwrap());
+    let contract = contract_from_arrow_schema(
+        std::sync::Arc::new(Schema::new(fields.to_vec())),
+        plenora_core::crs::resolve_crs,
+    )
+    .unwrap();
+    assert!(contract.active_geometry.is_none());
+    let operand = contract
+        .geometries
+        .iter()
+        .find(|g| g.name == "operando")
+        .unwrap();
+    for op in CATALOG.iter().filter(|op| op.family == Family::Geo) {
+        let effects = policy::column_effects(op, &contract.schema, &[Some(operand)]).unwrap();
+        let effect = policy::operation_effect(op);
+        assert_eq!(effects[1], (1, effect), "{}", op.id);
+        let expected = if op.source_row_provenance() == SourceRowProvenance::Preserved {
+            Effect::Unchanged
+        } else {
+            Effect::Rows
+        };
+        assert_eq!(effects[0], (0, expected), "{}", op.id);
+        assert_eq!(effects[2], (2, expected), "{}", op.id);
+    }
+}
+
+#[test]
+fn pubblicazione_non_rielegge_geo_di_schema() {
+    use plenora_core::arrow::{Metadata, Schema};
+    use plenora_core::contract::arrow_metadata::geometry_output_field;
+    use plenora_core::contract::arrow_schema::pubblica_schema_con_primaria;
+    let fields = ["a", "b"].map(|name| geometry_output_field(name, "EPSG:32632").unwrap());
+    let mut metadata = Metadata::new();
+    metadata.insert("geo", r#"{"primary_column":"b","columns":{"a":{},"b":{}}}"#);
+    let schema = Schema::new_with_metadata(fields.to_vec(), metadata);
+    for primary in [None, Some(0)] {
+        let output = pubblica_schema_con_primaria(
+            &schema,
+            primary,
+            &std::collections::BTreeSet::default(),
+            &std::collections::BTreeSet::default(),
+        )
+        .unwrap();
+        assert!(!output.metadata().contains_key("geo"));
+    }
+    let output = pubblica_schema_con_primaria(
+        &schema,
+        Some(1),
+        &std::collections::BTreeSet::default(),
+        &std::collections::BTreeSet::default(),
+    )
+    .unwrap();
+    assert!(output.metadata().contains_key("geo"));
+    let renamed = Schema::new_with_metadata(
+        vec![
+            schema.field(0).clone().with_name("renamed"),
+            schema.field(1).clone(),
+        ],
+        schema.metadata().clone(),
+    );
+    let output = pubblica_schema_con_primaria(
+        &renamed,
+        Some(1),
+        &std::collections::BTreeSet::default(),
+        &std::collections::BTreeSet::default(),
+    )
+    .unwrap();
+    assert!(!output.metadata().contains_key("geo"));
+    let reordered = schema.project(&[1, 0]).unwrap();
+    let output = pubblica_schema_con_primaria(
+        &reordered,
+        Some(0),
+        &std::collections::BTreeSet::default(),
+        &std::collections::BTreeSet::default(),
+    )
+    .unwrap();
+    assert!(output.metadata().contains_key("geo"));
+    let projected = schema.project(&[0]).unwrap();
+    let output = pubblica_schema_con_primaria(
+        &projected,
+        None,
+        &std::collections::BTreeSet::default(),
+        &std::collections::BTreeSet::default(),
+    )
+    .unwrap();
+    assert!(!output.metadata().contains_key("geo"));
+}
+
+#[test]
+fn metadati_derivati_identici_con_e_senza_contratto() {
+    use plenora_core::arrow::{Field, Schema};
+    use plenora_core::contract::arrow_metadata::{geometry_output_field, merged_geometry_metadata};
+    use plenora_core::contract::arrow_schema::{
+        arrow_schema_from_contract, contract_from_arrow_schema,
+    };
+    let field = geometry_output_field("g", "EPSG:32632").unwrap();
+    let mut md = field.metadata().clone();
+    md.insert("plenora.geometry.types", "point");
+    md.insert("plenora.geometry.types_declaration", "mixed");
+    let field: Field = field.with_metadata(md);
+    let contract = contract_from_arrow_schema(
+        std::sync::Arc::new(Schema::new_with_metadata(
+            vec![field],
+            std::iter::once(("plenora.contract.version", "1"))
+                .collect::<plenora_core::arrow::Metadata>(),
+        )),
+        plenora_core::crs::resolve_crs,
+    )
+    .unwrap();
+    let schema = arrow_schema_from_contract(&contract).unwrap();
+    let raw = merged_geometry_metadata(&[schema.field(0)], &[]).unwrap();
+    let typed = merged_geometry_metadata(&[schema.field(0)], &contract.geometries).unwrap();
+    assert_eq!(raw, typed);
+}
+
+#[test]
+fn effetti_operandi_multipli_e_ruoli_assenti() {
+    use plenora_core::arrow::Schema;
+    use plenora_core::contract::arrow_metadata::geometry_output_field;
+    use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
+    let fields = ["passante", "primo", "secondo"]
+        .map(|name| geometry_output_field(name, "EPSG:32632").unwrap());
+    let contract = contract_from_arrow_schema(
+        std::sync::Arc::new(Schema::new(fields.to_vec())),
+        plenora_core::crs::resolve_crs,
+    )
+    .unwrap();
+    let op = CATALOG.iter().find(|op| op.id == "geo.explode").unwrap();
+    let operands = [&contract.geometries[1], &contract.geometries[2]];
+    for selected in [
+        vec![Some(operands[0]), Some(operands[1])],
+        vec![Some(operands[1]), Some(operands[0])],
+        vec![None, Some(operands[0]), Some(operands[1])],
+    ] {
+        assert_eq!(
+            policy::column_effects(op, &contract.schema, &selected).unwrap(),
+            vec![(0, Effect::Rows), (1, Effect::Types), (2, Effect::Types)]
+        );
+    }
+    let partial = Schema::new(vec![fields[0].clone(), fields[1].clone()]);
+    for selected in [
+        vec![Some(operands[0]), Some(operands[1])],
+        vec![Some(operands[1]), Some(operands[0])],
+    ] {
+        assert!(matches!(
+            policy::column_effects(op, &partial, &selected),
+            Err(plenora_core::PlenoraError::Internal(_))
+        ));
+    }
+    let absent = Schema::new(vec![fields[0].clone()]);
+    for selected in [vec![], vec![None], vec![Some(operands[0])]] {
+        let error = policy::column_effects(op, &absent, &selected).unwrap_err();
+        assert!(matches!(error, plenora_core::PlenoraError::Internal(_)));
+        assert_eq!(error.to_string(),
+            "internal error: politica metadati: operando assente dall'uscita con righe non conservate");
+    }
+    let preserved = CATALOG.iter().find(|op| op.id == "geo.buffer").unwrap();
+    assert_eq!(
+        policy::column_effects(preserved, &absent, &[None]).unwrap(),
+        vec![(0, Effect::Unchanged)]
+    );
+    for id in [
+        "geo.coverage_validate",
+        "geo.shared_paths",
+        "geo.generate_grid",
+    ] {
+        let producer = CATALOG.iter().find(|op| op.id == id).unwrap();
+        assert_eq!(
+            policy::column_effects(producer, &absent, &[None]).unwrap(),
+            vec![(0, Effect::Unchanged)]
+        );
+    }
+}

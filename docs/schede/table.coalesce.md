@@ -28,7 +28,11 @@ esiste, la colonna si sostituisce nella sua posizione; altrimenti si
 aggiunge in coda. I metadati di campo tabellari non si ereditano. Se tutte
 le sorgenti sono geometriche compatibili, si conservano CRS, assi,
 dimensioni ed encoding, senza identita' e dichiarazione dei tipi del primo
-campo. La pipeline ammette al massimo una geometria in uscita.
+campo. Ogni geometria sopravvissuta mantiene il proprio contratto; una nuova
+geometria non diventa primaria automaticamente. Eccezione dichiarata
+(PRIM-005): se `output_column` e' la colonna primaria, la sostituzione resta
+primaria, con una nuova identita' e il contratto (CRS, assi, encoding) delle
+sorgenti, non quello della colonna sostituita.
 Le altre colonne e i metadati di schema restano invariati.
 
 Il contratto conserva il numero di righe; l'ordinamento dichiarato

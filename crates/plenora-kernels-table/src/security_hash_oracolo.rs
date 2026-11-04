@@ -65,6 +65,7 @@ fn reject_null_hash_rows(batch: &RecordBatch, columns: &[String], indices: &[usi
 /// - `Schema`: colonna assente dal batch o tipo non coperto dal profilo
 ///   scalare.
 pub fn md5_hash_riferimento(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     validate_output_name(&config.output_column)?;
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
@@ -149,6 +150,7 @@ fn framed_part(digest: &mut Sha256, value: &[u8]) -> Result<()> {
 /// - `Schema`: colonna assente dal batch o tipo non coperto dal profilo
 ///   scalare.
 pub fn sha256_hash_riferimento(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     validate_output_name(&config.output_column)?;
     let mut names = config.columns.clone();
     names.sort();
@@ -403,6 +405,7 @@ pub fn stable_fingerprint_riferimento(
     batch: &RecordBatch,
     config: &StableFingerprint,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     validate_output_name(&config.output_column)?;
     let names: Vec<String> = if config.columns.is_empty() {
         batch
@@ -516,6 +519,7 @@ fn framed_bytes(message: &mut Vec<u8>, value: &[u8]) -> Result<()> {
 /// - `Schema`: colonna assente dal batch;
 /// - `DataMapping`: qualunque null sorgente, con row diagnostics.
 pub fn hmac_sha256_riferimento(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     validate_output_name(&config.output_column)?;
     if config.key_env.trim().is_empty() {
         return Err(PlenoraError::InvalidPlan(

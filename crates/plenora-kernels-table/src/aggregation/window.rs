@@ -309,6 +309,7 @@ fn ranghi(
 ///   schema; testo non numerico in `column`; in piu' gli errori di `sort`,
 ///   `scalar_as_string` (partizioni) e `replace_or_append`.
 pub fn rolling_window(batch: &RecordBatch, config: &RollingWindow) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     if config.window == 0 || config.min_periods == 0 || config.min_periods > config.window {
         return Err(PlenoraError::InvalidPlan(
@@ -550,6 +551,7 @@ impl WindowFunction {
 /// `cumcount` e `ntile` dipendono dalla posizione, ma il contratto numerico
 /// della colonna vale anche per loro.
 pub fn window_function(batch: &RecordBatch, config: &WindowFunction) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     config.verifica_offset()?;
     if matches!(config.function, WindowKind::Ntile) {
         if config.buckets.is_none_or(|buckets| buckets == 0) {

@@ -88,6 +88,7 @@ impl AssertCardinality {
 ///   righe diverse da `exact_rows`, oppure fuori dall'intervallo
 ///   `min_rows`/`max_rows`.
 pub fn assert_cardinality(batch: &RecordBatch, config: &AssertCardinality) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     let valid = config.exact_rows.map_or_else(
         || {
@@ -136,6 +137,7 @@ const fn default_true() -> bool {
 /// - `Schema`: chiave attesa assente o con valore diverso; con
 ///   `allow_extra = false`, anche numero di metadati diverso da `expected`.
 pub fn assert_metadata(batch: &RecordBatch, config: &AssertMetadata) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     let schema = batch.schema();
     let metadata = schema.metadata();
     if (!config.allow_extra && metadata.len() != config.expected.len())
@@ -179,6 +181,15 @@ fn validate_key_types(
     left_indices: &[usize],
     right_indices: &[usize],
 ) -> Result<()> {
+    for (l, r) in left_indices.iter().zip(right_indices) {
+        plenora_core::contract::arrow_metadata::require_geometry_compatibility(
+            left.schema().field(*l),
+            &[],
+            right.schema().field(*r),
+            &[],
+            plenora_core::contract::arrow_metadata::GeometryComparison::Reference,
+        )?;
+    }
     if left_indices
         .iter()
         .zip(right_indices)
@@ -635,7 +646,8 @@ pub fn assert_foreign_key(
     config: &ForeignKey,
     limits: &Limits,
 ) -> Result<RecordBatch> {
-    crate::require_compatible_geometry_inputs(&left.schema(), &[], &right.schema(), &[])?;
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
     let left_indices = key_indices(left, &config.left_keys)?;
     let right_indices = key_indices(right, &config.right_keys)?;
     validate_key_types(left, right, &left_indices, &right_indices)?;
@@ -798,7 +810,8 @@ pub fn reconcile(
     config: &Reconcile,
     limits: &Limits,
 ) -> Result<RecordBatch> {
-    crate::require_compatible_geometry_inputs(&left.schema(), &[], &right.schema(), &[])?;
+    crate::require_geometry_support(&left.schema())?;
+    crate::require_geometry_support(&right.schema())?;
     let left_indices = key_indices(left, &config.left_keys)?;
     let right_indices = key_indices(right, &config.right_keys)?;
     validate_key_types(left, right, &left_indices, &right_indices)?;
@@ -1514,6 +1527,7 @@ fn aggiungi_nome(elenco: &mut String, vuoto: &mut bool, nome: &str) {
 /// - `DataMapping` (`arrow error`): errore Arrow nella costruzione
 ///   dell'output.
 pub fn validate_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     let rules = compile_rules(batch, config)?;
     let colonne = rules
         .iter()

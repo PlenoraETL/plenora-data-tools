@@ -66,14 +66,12 @@ pub struct Lato {
 }
 
 impl Lato {
-    /// La colonna geometria attiva del contratto, con il suo CRS risolto.
+    /// L'operando geometrico scelto dal selettore (o la primaria), con il
+    /// suo CRS risolto.
     ///
-    /// L'analisi ha gia' chiesto una sola geometria identificabile, XY e con
-    /// CRS risolto: un'assenza qui e' `Internal`.
-    fn di(op: &str, contratto: &DataContract) -> Result<Self> {
-        let geometria = contratto.active_geometry_column().ok_or_else(|| {
-            PlenoraError::Internal(format!("{op}: ingresso senza geometria dopo l'analisi"))
-        })?;
+    /// L'analisi ha gia' risolto l'operando, XY e con CRS risolto: un'assenza
+    /// qui e' `Internal`.
+    fn di(op: &str, contratto: &DataContract, geometria: &GeometryColumnContract) -> Result<Self> {
         let crs = geometria.crs.as_resolved().cloned().ok_or_else(|| {
             PlenoraError::Internal(format!("{op}: geometria senza CRS risolto dopo l'analisi"))
         })?;
@@ -320,14 +318,16 @@ impl PassoGeo {
         uscita_del_piano: bool,
     ) -> Result<Self> {
         let op = descrittore.id;
+        let (operands, kernel_config) =
+            plenora_kernels_geo::analyze::resolve_operands(descrittore, ingressi, valore)?;
+        let valore = &kernel_config;
         let lati = ingressi
             .iter()
-            .map(|contratto| {
-                if contratto.geometries.is_empty() {
-                    Ok(None)
-                } else {
-                    Lato::di(op, contratto).map(Some)
-                }
+            .zip(operands)
+            .map(|(contratto, geometry)| {
+                geometry
+                    .map(|geometry| Lato::di(op, contratto, geometry))
+                    .transpose()
             })
             .collect::<Result<Vec<_>>>()?;
         let righe = righe_massime(limiti, uscita_del_piano);

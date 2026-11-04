@@ -9,6 +9,13 @@ quella euclidea nel piano del CRS.
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `max_segment_length` | numero | obbligatorio | finito, maggiore di zero | lunghezza massima di un lato, nelle unità del CRS |
@@ -42,7 +49,7 @@ config, CRS):
 - `InvalidPlan`: più o meno di un ingresso; config con campi sconosciuti,
   senza `max_segment_length` o con un tipo sbagliato; `max_segment_length`
   non finito o non maggiore di zero;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB;
 - `Unsupported`: colonna geometria con dimensioni diverse da `xy`;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o

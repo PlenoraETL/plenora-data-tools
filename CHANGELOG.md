@@ -12,6 +12,15 @@ la cui versione non ha qui una voce datata.
 
 ## [4.1.0] - non rilasciata
 
+`coverage_validate` e `shared_paths` mantengono primaria la geometria
+nuova derivata solo quando l'operando era primario; con un operando
+secondario o senza primaria emettono `none`. Oracolo della matrice dei
+metadati indipendente dalla selezione degli effetti di produzione, bbox
+sentinella disgiunti dai dati, gestione esplicita di piu' operandi e
+rifiuto dei ruoli mancanti con righe non conservate. Gli errori delle
+fusioni di metadati mantengono il messaggio senza citarlo come chiave.
+
+
 WKT1 GDAL: equivalenza del DATUM al datum/ensemble integrato solo con
 codice EPSG identico; nome irrilevante, autorità obbligatoria anche per i
 datum non ensemble. Il GEOGCS base di PROJCS può omettere gli assi; gli
@@ -28,6 +37,49 @@ rimuovono bbox e riepiloghi invece di rifiutarli. Epoche diverse restano
 un errore. I covering senza colonne Arrow referenziate vengono rimossi.
 Fixture reale IO 7.0.0 e regressioni sui tre trasporti; tabella e ambito
 preciso delle prove in [Metadati Arrow](docs/metadati-arrow.md#dichiarazioni-geometriche-residue-correzione-410).
+
+
+PR 1 - contratto e identita': il core trasporta piu' geometrie con identita'
+distinte e corrispondenza completa con lo schema. Primaria facoltativa secondo
+Arrow Primary Geometry 1.0: `plenora.primary_geometry`, assenza esplicita e
+nessuna elezione per ordine. Selettore comune sulle identita' ricevute,
+rimappatura completa nel planner e pubblicazione Arrow che segue la primaria.
+PR 2 - operazioni tabellari: propagazione di tutte le geometrie sopravvissute,
+primaria per provenienza secondo contracts #57, join senza elezione fra
+sorgenti, consenso verticale per append/union/concat. Guardie CRS e assi per
+colonna, anche senza righe; coalesce, melt, pivot, first/last e table_diff
+conservano i contratti geometrici. Projection e rinomina non promuovono
+secondarie. Adapter diretti e pipeline condividono l'emissione della primaria.
+Vettori primary-composition-v1 e matrice tabellare con due e tre geometrie.
+Cambio rispetto alla 4.0.0: `concat_by_name` (e le altre fusioni verticali)
+fra un ingresso con una geometria e uno senza geometrie non conserva piu' la
+primaria implicita; l'uscita dichiara primaria assente e `geo.*` a valle si
+rifiuta con `schema` senza un selettore esplicito (`input_geometry`,
+PR 3).
+`coalesce` su `output_column` primaria la sostituisce restando primaria
+(PRIM-005), ora dichiarato nella scheda.
+PR 3 - operazioni geo: `input_geometry`, `left_geometry` e `right_geometry`
+selezionano per nome gli operandi senza cambiare la primaria. Selettore omesso
+usa la primaria; assenza della primaria rifiutata. Riproiezione per colonna,
+assi e precisione circoscritti agli operandi, geometrie passanti invariate.
+I produttori aggiungono senza promuovere; le operazioni a schema ridotto
+conservano solo i campi previsti. `sjoin` conserva il suo schema sinistro.
+Matrice differenziale del catalogo con due e tre geometrie indipendenti.
+PR 4 - IO e superfici pubbliche: GeoParquet legge e scrive tutte le geometrie,
+con primaria indipendente dall'ordine fisico e identita' conservate o completate.
+Controlli per colonna anche sulle secondarie; senza primaria la scrittura
+rifiuta senza scegliere. BBox ricalcolati; contenitori e provenienza conservati secondo la politica.
+La definizione PROJJSON Arrow si normalizza alla stessa definizione integrata
+completa del footer, dopo il confronto semantico.
+Round-trip IPC file/stream e prove delle superfici CLI/SDK. Fixture scritte
+con IO-tools 7.0.0: CRS completi per i casi positivi; il PROJJSON ridotto della
+fixture originale resta rifiutato, senza dedurre equivalenza dal solo ID.
+
+Integrazione: effetti per colonna secondo operando e provenienza delle righe;
+primaria strutturale esclusa dalle fusioni di metadati, senza rielezioni.
+Le dichiarazioni irrisolte provengono dalla politica; i nativi di file
+restano provenienza C3. PROJJSON normalizzato anche nei contenitori, scrittura rifiutata per qualunque geometria senza CRS, precisione
+invalidata solo sugli operandi ricodificati.
 
 ## [4.0.0] - 2026-11-02
 

@@ -181,24 +181,15 @@ pub(in crate::analyze) fn validate_other_wkb(op: &str, hex: &str) -> Result<()> 
 pub(in crate::analyze) fn validate_other_wkb_domain(
     op: &str,
     hex: &str,
-    input: &DataContract,
+    geometry: &GeometryColumnContract,
 ) -> Result<geo::Geometry<f64>> {
-    let crs = input_crs(op, input)?;
+    let crs = super::dispatch::require_resolved_crs(op, geometry)?;
     let bytes = validate_wkb_hex(op, "other_wkb", hex)?;
     let geometry = crate::geometry_from_wkb(&bytes).map_err(|error| {
         parametro_non_decodificabile(op, "other_wkb", "WKB non decodificabile", &error)
     })?;
     validate_config_geometry_domain(op, "other_wkb", &geometry, crs)?;
     Ok(geometry)
-}
-
-/// Il CRS risolto della colonna geometria dell'input, per le geometrie che
-/// arrivano dalla config con lo stesso CRS.
-pub(in crate::analyze) fn input_crs<'a>(
-    op: &str,
-    input: &'a DataContract,
-) -> Result<&'a ResolvedCrs> {
-    super::dispatch::require_resolved_crs(op, single_geometry(op, input)?)
 }
 
 /// Dominio di validita' del CRS sulle coordinate di una geometria da config.
@@ -218,21 +209,6 @@ pub(in crate::analyze) fn validate_config_geometry_domain(
 // ---------------------------------------------------------------------------
 // Helper su contratti e schemi.
 // ---------------------------------------------------------------------------
-
-/// Esattamente una colonna geometria attiva per input: il secondo operando
-/// di un'operazione binaria arriva da un secondo input o dalla config.
-pub(in crate::analyze) fn single_geometry<'a>(
-    op: &str,
-    input: &'a DataContract,
-) -> Result<&'a GeometryColumnContract> {
-    if input.geometries.len() != 1 {
-        return Err(PlenoraError::Schema(format!(
-            "{op}: l'input deve avere esattamente una colonna geometria attiva (v1), trovate {}",
-            input.geometries.len()
-        )));
-    }
-    Ok(&input.geometries[0])
-}
 
 /// Identificazione della colonna geometria sul campo dello schema.
 ///
@@ -385,11 +361,15 @@ pub(in crate::analyze) fn merge_schema_metadata(
     left: &DataContract,
     right: &DataContract,
 ) -> Result<Metadata> {
-    plenora_core::contract::geometry_metadata_policy::merge_schema(&[
-        left.schema.metadata(),
-        right.schema.metadata(),
-    ])
-    .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))
+    let mut sources = [
+        left.schema.metadata().clone(),
+        right.schema.metadata().clone(),
+    ];
+    for source in &mut sources {
+        source.remove(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY);
+    }
+    plenora_core::contract::geometry_metadata_policy::merge_schema(&[&sources[0], &sources[1]])
+        .map_err(|error| PlenoraError::InvalidPlan(format!("{op}: {error}")))
 }
 
 /// Sostituisce i metadati di SCHEMA del contratto (campi, geometrie e

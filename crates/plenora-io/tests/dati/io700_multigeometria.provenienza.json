@@ -1,0 +1,21 @@
+{
+  "io_version": "7.0.0",
+  "release_revision": "fc98634b9cde7f1204aaace098ff48def957c943",
+  "checkout_revision": "ad1f80778bc1f618adb7dbfe3957fe8324832cc5",
+  "binary_sha256": "bd208c7a5bcfbde5898b05489f56697ee7c6782222275e08be0ef874f565e166",
+  "files": {
+    "io700_multigeometria.parquet": "70498420a91a126440e2e4597299e1ab2f8ed76dd90970df220c14a7ad59a99e",
+    "io700_multigeometria_crs_ridotto.parquet": "301c1f6528e0343db8b1f147fed461796de1dd11b7ab372d8a78a9e829cbf8d2"
+  },
+  "command": "C:/pg/io-700/target/debug/plenora-io.exe convert INPUT OUTPUT --from geoparquet --to geoparquet",
+  "source": "C:/pg/io-700/crates/driver-geoparquet/tests/fixtures/multigeometria-pyarrow.parquet",
+  "source_sha256": "dd929de573f64b67e7b8b7cc07ac5013fc3bd2e78f0f7d9e76a0d080e3f53ec8",
+  "preparation": {
+    "io700_multigeometria_crs_ridotto.parquet": "INPUT = source invariato. Il PROJJSON ridotto non equivale alla definizione integrata: rifiuto CRS_NOT_BUILTIN atteso.",
+    "io700_multigeometria.parquet": "PyArrow 25.0.1: read_table(source); sostituire soltanto geo.columns.traccia.crs e geo.columns.posizione.crs con EPSG:32632 e OGC:CRS84 da crates/plenora-io/data/projjson_integrati.json; write_table con default in target/io700_input.parquet; INPUT = tale file. Valori, null e ordine invariati. OUTPUT scritto da IO, non modificato successivamente. La tabella JSON integrata si legge esplicitamente come UTF-8."
+  },
+  "independent_reader": "PyArrow 25.0.1: footer primary_column=posizione, columns={posizione,traccia}; tre righe, traccia null alla riga 2, posizione null alla riga 3; WKB invariato rispetto a source.",
+  "cross_round_trip": "python scripts/verifica_multigeometria_io700.py --io C:/pg/io-700/target/debug/plenora-io.exe --data target/debug/plenora-data.exe --work target/pr4-cross",
+  "covering": "Rinomina esplicita bbox -> bbox_origine nel primo passo data: IO riserva bbox al covering rigenerato. Tutti i valori della colonna originale restano verificati.",
+  "revision_check": "git diff --name-only fc98634 HEAD in C:/pg/io-700: differiscono solo assurance/ e docs/RELEASE.md, nessun sorgente o manifest."
+}

@@ -6,6 +6,13 @@ Maschera DE-9IM: vero se è non vuota almeno una fra le celle interno/interno, i
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `other_wkb` | stringa | obbligatorio | WKB 2D in esadecimale (cifre maiuscole o minuscole, in numero pari), nel CRS dell'input e dentro il suo dominio di validità | la geometria B, uguale per tutte le righe |
@@ -50,7 +57,7 @@ CRS, config):
   per l'OGC; `output_column` vuoto;
 - `Unsupported`: `other_wkb` con coordinate Z/M o con SRID (EWKB); colonna
   geometria con dimensioni diverse da `xy`;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB; `output_column` già
   presente;
 - `Crs`: CRS della colonna assente o non risolto; CRS non proiettato o
@@ -85,7 +92,7 @@ voce «Errori»):
 ### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
-  seconda colonna: un input ha una sola colonna geometria.
+  seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
 - La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
   segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
   linee di una `MultiLineString` è interno, una linea chiusa non ha

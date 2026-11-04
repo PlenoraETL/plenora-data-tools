@@ -10,6 +10,13 @@ ognuno.
 
 ### Parametri
 
+`left_geometry` e `right_geometry` (stringhe facoltative) selezionano per nome
+la colonna geometrica dei rispettivi ingressi. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `output_column` | stringa | `count` | nome non vuoto e libero nella sinistra | colonna aggiunta |
@@ -47,7 +54,7 @@ In validazione (analisi del contratto):
   sconosciuti; `output_column` vuota; un metadato di schema presente sui
   due lati con valori diversi;
 - `Schema`: `output_column` esiste già nella sinistra; un lato senza
-  esattamente una colonna geometria, o con una colonna non riconoscibile
+  una colonna geometria selezionabile senza ambiguita', o con una colonna non riconoscibile
   come geometria WKB (né estensione `geoarrow.wkb` né chiavi canoniche
   `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;

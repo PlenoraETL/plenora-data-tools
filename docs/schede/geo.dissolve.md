@@ -8,6 +8,13 @@ colonne attributo non passano e non ci sono gruppi.
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 Nessuno: la config è `{}`.
 
 ### Schema
@@ -36,7 +43,7 @@ nell'ordine che `i_overlay` produce, lo stesso a ogni esecuzione.
 In validazione (analisi del contratto):
 
 - `InvalidPlan`: config non vuota;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come geometria WKB (né estensione
   `geoarrow.wkb` né chiavi canoniche `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;

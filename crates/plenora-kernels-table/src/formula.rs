@@ -1001,6 +1001,7 @@ fn verifica_divisione(config: &Formula, expression: &Expr) -> Result<()> {
 /// - `Internal`: invarianti interne violate, fra cui un valore calcolato di
 ///   tipo diverso da quello statico, in ENTRAMBI i versi.
 pub fn formula(batch: &RecordBatch, config: &Formula) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     formula_con_effetti(batch, config, &crate::Limits::default()).map(|(uscita, _)| uscita)
 }
 
@@ -1026,6 +1027,7 @@ pub fn formula_con_effetti(
     config: &Formula,
     limits: &crate::Limits,
 ) -> Result<(RecordBatch, crate::EffettiKernel)> {
+    crate::require_geometry_support(&batch.schema())?;
     let expression = parse(&config.formula)?;
     verifica_divisione(config, &expression)?;
     // Tipo dallo schema, mai dai valori (vedi il doc sopra): una colonna

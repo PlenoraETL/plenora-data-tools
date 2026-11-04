@@ -11,6 +11,13 @@ geo»](runner.md#operazioni-geo)).
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `snap_tolerance` | numero | obbligatorio | finito, `>= 0`, nelle unità del CRS | raggio della chiusura morfologica di `fill_gaps` |
@@ -70,8 +77,7 @@ In validazione (analisi del contratto), `InvalidPlan`:
   sbagliato;
 - `snap_tolerance` negativa o non finita.
 
-Sempre in validazione: `Schema` se l'ingresso non ha esattamente una
-colonna geometria o la colonna non è riconoscibile come geometria WKB;
+Sempre in validazione: `Schema` se l'ingresso non ha una colonna geometria selezionabile senza ambiguita' o la colonna non è riconoscibile come geometria WKB;
 `Unsupported` se non è XY; `Crs` se il CRS non è risolto o non è
 proiettato (o non ha unità lineare).
 

@@ -25,6 +25,8 @@ e `timestamp` (la chiave fusa tiene unità e fuso).
 
 ### Schema
 
+Ogni geometria sopravvissuta segue il proprio campo e suffisso. Se restano geometrie da entrambi gli ingressi, l’uscita non ha primaria; se provengono da un solo ingresso, ne conserva lo stato per provenienza.
+
 Prima tutte le colonne di sinistra, nel loro ordine, poi quelle di destra
 che non sono chiave. Le colonne chiave di sinistra tengono il nome, le
 altre di sinistra prendono il suffisso `_L`, tutte quelle di destra `_R`,

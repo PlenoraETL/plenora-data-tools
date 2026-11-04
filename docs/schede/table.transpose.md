@@ -26,6 +26,8 @@ cambia niente: dipende dall'ingresso.
 
 ### Schema
 
+Le geometrie che alimentano una colonna trasposta devono avere riferimenti compatibili. Le geometrie derivate non diventano primarie, neppure quando ne rimane una sola.
+
 Per colonne geometriche che confluiscono nello stesso campo, CRS e ordine
 delle ordinate devono coincidere in tutti gli ingressi, anche vuoti o
 tutti null; altrimenti `crs` in validazione, senza effetti. Si confrontano

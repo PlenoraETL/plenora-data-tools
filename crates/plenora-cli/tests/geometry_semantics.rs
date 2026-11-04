@@ -94,6 +94,7 @@ fn definizione_integrata(name: &str) -> bool {
     )
 }
 
+#[allow(clippy::too_many_lines)] // Oracolo dei vettori con precedenza delle categorie nello stesso punto.
 fn expected<'a>(v: &'a Value, name: &str, compute: bool) -> (&'a str, &'static str, bool) {
     let geometry = v["fields"]
         .as_array()
@@ -119,7 +120,12 @@ fn expected<'a>(v: &'a Value, name: &str, compute: bool) -> (&'a str, &'static s
         return (v["category"].as_str().unwrap(), "validate", false);
     }
     if geometry.len() > 1 {
-        return ("unsupported", "validate", false);
+        // I vettori plurali non dichiarano una primaria: il calcolo e' ambiguo.
+        return if compute {
+            ("schema", "validate", false)
+        } else {
+            ("ok", "", false)
+        };
     }
     if geometry
         .iter()

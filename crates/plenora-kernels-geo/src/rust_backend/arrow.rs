@@ -177,12 +177,22 @@ pub fn polygonize_batches(
             classes.push(class);
         }
     }
+    // Lo schema ridotto conserva la primaria solo se era l'operando.
+    let mut metadata = schema.metadata().clone();
+    let primary = plenora_core::contract::arrow_schema::primary_geometry_position(schema)?;
+    metadata.remove(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY);
+    if primary != Some(geometry_index) {
+        metadata.insert(
+            plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY,
+            "none",
+        );
+    }
     let output_schema = Arc::new(Schema::new_with_metadata(
         vec![
             output_geometry_field(schema.field(geometry_index), false),
             Field::new(CLASS_COLUMN, DataType::Utf8, false),
         ],
-        crate::arrow_adapter::transformed_geometry_schema_metadata(schema.metadata()),
+        crate::arrow_adapter::transformed_geometry_schema_metadata(&metadata),
     ));
     let columns: Vec<ArrayRef> = vec![
         Arc::new(
@@ -774,6 +784,85 @@ mod tests {
             .collect();
         assert_eq!(classes, ["polygon", "dangle"]);
         assert_eq!(out_schema.fields().len(), 2, "nessun attributo propagato");
+    }
+
+    #[test]
+    fn adapter_multigeometria_preservano_passanti_e_primaria() {
+        use plenora_core::contract::arrow_schema::{
+            primary_geometry_position, PRIMARY_GEOMETRY_KEY,
+        };
+        let ring = linestring_wkb_le(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)]);
+        let (base_schema, base) = fixture_batch(&[Some(&ring), None]);
+        let baseline = polygonize_batches(
+            &base_schema,
+            std::slice::from_ref(&base),
+            "geometry",
+            PolygonizeParams::default(),
+            16,
+            precisione(),
+        )
+        .unwrap();
+        for primary in [None, Some("none"), Some("10"), Some("20")] {
+            let mut fields: Vec<_> = base_schema
+                .fields()
+                .iter()
+                .map(|f| f.as_ref().clone())
+                .collect();
+            let mut metadata = fields[1].metadata().clone();
+            metadata.insert(
+                plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY,
+                "10",
+            );
+            fields[1] = fields[1].clone().with_metadata(metadata);
+            let mut other = geometry_output_field("other", "EPSG:4326").unwrap();
+            let mut metadata = other.metadata().clone();
+            metadata.insert(
+                plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY,
+                "20",
+            );
+            metadata.insert("plenora.geometry.axis_order", "lat_lon");
+            metadata.insert("plenora.geometry.precision", "float32");
+            other = other.with_metadata(metadata).with_nullable(true);
+            fields.push(other.clone());
+            let mut metadata = base_schema.metadata().clone();
+            if let Some(primary) = primary {
+                metadata.insert(PRIMARY_GEOMETRY_KEY, primary);
+            }
+            let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
+            let point = point_wkb_le(45.0, 12.0);
+            let passante: ArrayRef =
+                Arc::new(BinaryArray::from(vec![None, Some(point.as_slice())]));
+            let mut columns = base.columns().to_vec();
+            columns.push(passante.clone());
+            let batch = RecordBatch::try_new(schema.clone(), columns).unwrap();
+            let repaired = make_valid_batches(
+                &schema,
+                std::slice::from_ref(&batch),
+                "geometry",
+                precisione(),
+            )
+            .unwrap();
+            assert_eq!(repaired[0].column(2).to_data(), passante.to_data());
+            assert_eq!(repaired[0].schema().field(2), &other);
+            assert_eq!(
+                primary_geometry_position(&repaired[0].schema()).unwrap(),
+                primary_geometry_position(&schema).unwrap()
+            );
+            let (output_schema, output) = polygonize_batches(
+                &schema,
+                &[batch],
+                "geometry",
+                PolygonizeParams::default(),
+                16,
+                precisione(),
+            )
+            .unwrap();
+            assert_eq!(
+                primary_geometry_position(&output_schema).unwrap(),
+                if primary == Some("10") { Some(0) } else { None }
+            );
+            assert_eq!(output[0].columns(), baseline.1[0].columns());
+        }
     }
 
     #[test]

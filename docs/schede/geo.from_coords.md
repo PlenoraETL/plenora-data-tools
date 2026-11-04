@@ -2,7 +2,7 @@
 
 Costruisce una colonna geometria di punti da due colonne numeriche: per
 ogni riga il `Point` (x, y), nel CRS dato dalla config o dal piano. È un
-produttore: l'ingresso non ha colonne geometria, l'uscita ne ha una.
+produttore: aggiunge una geometria, conservando quelle esistenti.
 
 ### Parametri
 
@@ -18,10 +18,13 @@ inventa.
 
 ### Schema
 
+La geometria aggiunta diventa primaria solo se e' la prima geometria della
+tabella; altrimenti conserva la primaria esistente o la sua assenza.
+
 Le colonne d'ingresso restano tutte, `x_column` e `y_column` comprese. In
 coda si aggiunge `geometry_column`: `binary` GeoArrow-WKB (estensione
 `geoarrow.wkb`, metadato `geo` con il CRS e dimensioni `xy`), non
-nullable, colonna geometria attiva con un nuovo identificatore di campo e
+nullable, con un nuovo identificatore di campo e
 senza tipi dichiarati. I metadati di schema e le proprietà del contratto
 (`sorted_by`, `row_count`) passano invariati.
 
@@ -42,7 +45,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso ha già una colonna geometria; `x_column` o
+- `Schema`: `x_column` o
   `y_column` non esiste o non è `float64` né `int64`; `geometry_column`
   esiste già;
 - `InvalidPlan`: campi sconosciuti; `x_column`, `y_column` o

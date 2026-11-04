@@ -403,14 +403,22 @@ pub fn utf8_column<'a>(
 ///
 /// # Errors
 ///
-/// La chiave in conflitto.
+/// Conflitto fra metadati, senza valori dei dati.
 pub(crate) fn unisci_metadata_schema<'a>(
     sorgenti: impl IntoIterator<Item = &'a plenora_core::arrow::Metadata>,
-) -> std::result::Result<HashMap<String, String>, String> {
-    let sources = sorgenti.into_iter().collect::<Vec<_>>();
-    plenora_core::contract::geometry_metadata_policy::merge_schema(&sources)
-        .map(|metadata| metadata.into_iter().collect())
-        .map_err(|error| error.to_string())
+) -> Result<HashMap<String, String>> {
+    let sources = sorgenti
+        .into_iter()
+        .map(|source| {
+            let mut source = source.clone();
+            source.remove(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY);
+            source
+        })
+        .collect::<Vec<_>>();
+    plenora_core::contract::geometry_metadata_policy::merge_schema(
+        &sources.iter().collect::<Vec<_>>(),
+    )
+    .map(|metadata| metadata.into_iter().collect())
 }
 
 /// [`unisci_metadata_schema`] sugli schemi degli input di un kernel.
@@ -422,11 +430,8 @@ pub(crate) fn metadata_schema_input(
     op: &str,
     schemi: &[&Schema],
 ) -> Result<HashMap<String, String>> {
-    unisci_metadata_schema(schemi.iter().map(|schema| schema.metadata())).map_err(|chiave| {
-        PlenoraError::Schema(format!(
-            "{op}: metadata di schema in conflitto sulla chiave {chiave:?}"
-        ))
-    })
+    unisci_metadata_schema(schemi.iter().map(|schema| schema.metadata()))
+        .map_err(|error| error.con_contesto(op))
 }
 
 /// Come [`replace_or_append`], ma una colonna esistente sostituita con lo
@@ -469,7 +474,7 @@ pub fn replace_keeping_field_metadata(
             }
         })
         .collect::<Vec<_>>();
-    let schema = Schema::new_with_metadata(fields, schema.metadata().clone());
+    let schema = crate::geometry_provenance::unary(&batch.schema(), fields)?;
     batch_with_rows(
         Arc::new(schema),
         output.columns().to_vec(),
@@ -519,7 +524,7 @@ pub fn replace_or_append(
         fields.push(Field::new(name, data_type, nullable));
         columns.push(array);
     }
-    let schema = Schema::new_with_metadata(fields, batch.schema().metadata().clone());
+    let schema = crate::geometry_provenance::unary(&batch.schema(), fields)?;
     batch_with_rows(Arc::new(schema), columns, batch.num_rows())
 }
 
@@ -735,9 +740,18 @@ pub fn preflight_output_bytes(
 
 /// Costruttore di `RecordBatch` che DICHIARA la cardinalita'.
 ///
-/// Ri-esportato da [`plenora_core::batch_with_rows`]: l'invariante «un batch
+/// Delega a [`plenora_core::batch_with_rows`]: l'invariante «un batch
 /// a zero colonne puo' avere righe» vale per tutto il workspace.
-pub use plenora_core::batch_with_rows;
+///
+/// # Errors
+/// `Unsupported` per un'uscita plurale; errori Arrow per uno schema incoerente.
+pub fn batch_with_rows(
+    schema: Arc<Schema>,
+    columns: Vec<ArrayRef>,
+    rows_if_empty: usize,
+) -> Result<RecordBatch> {
+    plenora_core::batch_with_rows(schema, columns, rows_if_empty)
+}
 
 /// Verifica sullo SCHEMA tutto cio' che la conversione in testo puo'
 /// rifiutare senza guardare i valori.
@@ -764,35 +778,6 @@ pub fn validate_text_convertible(data_type: &DataType, column: &str) -> Result<(
             return Err(PlenoraError::Schema(format!(
                 "colonna `{column}`: timezone Arrow del tipo non valida"
             )));
-        }
-    }
-    Ok(())
-}
-
-/// Le operazioni binarie richiedono riferimenti concordi anche quando
-/// la geometria non e' una chiave o non contribuisce all'uscita.
-pub(crate) fn require_compatible_geometry_inputs(
-    left: &Schema,
-    left_geometries: &[plenora_core::contract::GeometryColumnContract],
-    right: &Schema,
-    right_geometries: &[plenora_core::contract::GeometryColumnContract],
-) -> Result<()> {
-    use plenora_core::contract::arrow_metadata::{
-        field_declares_wkb_geometry, require_geometry_compatibility, GeometryComparison,
-    };
-    for a in left.fields().iter().filter(|f| {
-        field_declares_wkb_geometry(f) || left_geometries.iter().any(|g| g.name == *f.name())
-    }) {
-        for b in right.fields().iter().filter(|f| {
-            field_declares_wkb_geometry(f) || right_geometries.iter().any(|g| g.name == *f.name())
-        }) {
-            require_geometry_compatibility(
-                a,
-                left_geometries,
-                b,
-                right_geometries,
-                GeometryComparison::Inputs,
-            )?;
         }
     }
     Ok(())
@@ -2185,6 +2170,21 @@ pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
     )?;
     batch_with_rows(Arc::new(schema), columns, rows.len())
 }
+
+/// Valida la dichiarazione della primaria prima di accedere ai dati.
+pub(crate) fn require_geometry_support(schema: &Schema) -> Result<()> {
+    plenora_core::contract::arrow_schema::verifica_identita_campi(schema)?;
+    plenora_core::contract::arrow_schema::primary_geometry_position(schema)?;
+    Ok(())
+}
+
+/// Valida separatamente gli schemi affiancati: non esiste un CRS di tabella.
+pub(crate) fn require_join_geometry_support(left: &Schema, right: &Schema) -> Result<()> {
+    require_geometry_support(left)?;
+    require_geometry_support(right)
+}
+
+pub(crate) mod geometry_provenance;
 
 #[cfg(test)]
 mod tests {

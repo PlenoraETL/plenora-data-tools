@@ -1485,6 +1485,15 @@ fn scheda_catalogo(operazione: &OperationDescriptor) -> String {
     let righe: Vec<(&str, String)> = vec![
         ("famiglia", famiglia(operazione).into()),
         (
+            "geometrie multiple",
+            if operazione.supports_multiple_geometries() {
+                "supportate per colonna"
+            } else {
+                "rifiutate: limite transitorio"
+            }
+            .into(),
+        ),
+        (
             "alias legacy",
             if alias.is_empty() {
                 "nessuno".into()
@@ -2648,12 +2657,30 @@ fn catalogo_conserva_i_riferimenti_dei_byte_geometrici() {
                                     metadata.insert("plenora.geometry.encoding", "ewkb");
                                 }
                                 *campo = campo.clone().with_metadata(metadata);
+                                // Riferimenti diversi hanno byte sentinella distinti: la provenienza
+                                // non si puo' dedurre da celle identiche di due sorgenti diverse.
+                                let index = posizione.min(b.num_columns());
+                                let array = batch
+                                    .column(index)
+                                    .as_any()
+                                    .downcast_ref::<plenora_core::arrow::array::BinaryArray>()
+                                    .unwrap();
+                                let mut builder = BinaryBuilder::new();
+                                for bytes in array.iter().flatten() {
+                                    let mut bytes = bytes.to_vec();
+                                    let y =
+                                        f64::from_le_bytes(bytes[13..21].try_into().unwrap()) + 1.0;
+                                    bytes[13..21].copy_from_slice(&y.to_le_bytes());
+                                    builder.append_value(bytes);
+                                }
+                                let mut columns = batch.columns().to_vec();
+                                columns[index] = Arc::new(builder.finish());
                                 batch = RecordBatch::try_new(
                                     Arc::new(Schema::new_with_metadata(
                                         campi,
                                         batch.schema().metadata().clone(),
                                     )),
-                                    batch.columns().to_vec(),
+                                    columns,
                                 )
                                 .unwrap();
                             }
@@ -2700,11 +2727,10 @@ fn catalogo_conserva_i_riferimenti_dei_byte_geometrici() {
                         casi += 1;
                         match esito {
                             Ok(esito) => {
-                                if divergente != 0
-                                    || esito
-                                        .outputs
-                                        .iter()
-                                        .any(|(_, b)| !verifica_byte_geometrici(&ingressi, b))
+                                if esito
+                                    .outputs
+                                    .iter()
+                                    .any(|(_, b)| !verifica_byte_geometrici(&ingressi, b))
                                 {
                                     violazioni.push(format!("{}: posizione {posizione}, proiettato {proiettato}, divergente {divergente}, vuoto {vuoto}", operazione.id));
                                 }
@@ -3285,7 +3311,11 @@ fn catalogo_colonne_presenti_in_un_solo_ingresso() {
                         ) {
                             assert_eq!(
                                 output.active_geometry,
-                                Some(source.field_ids[NAME]),
+                                if op.id == "table.concat_by_name" {
+                                    None
+                                } else {
+                                    Some(source.field_ids[NAME])
+                                },
                                 "{context}"
                             );
                         }
@@ -3423,7 +3453,7 @@ fn concat_sorgente_effettiva_emissione_e_conflitti() {
             assert_eq!(output.geometries[0].field_id, source.geometries[0].field_id);
             assert!(output.geometries[0].nullable);
             assert_eq!(output.geometries[0].types, source.geometries[0].types);
-            assert_eq!(output.active_geometry, source.active_geometry);
+            assert_eq!(output.active_geometry, None);
             assert_eq!(
                 output.properties.row_count,
                 Some(ContractProperty::new(
@@ -3511,7 +3541,11 @@ fn concat_sorgente_effettiva_emissione_e_conflitti() {
         match divergence {
             0 => assert!(matches!(result, Err(PlenoraError::Schema(_)))),
             1 => assert!(matches!(result, Err(PlenoraError::Crs(_)))),
-            _ => assert!(matches!(result, Err(PlenoraError::InvalidPlan(_)))),
+            _ => {
+                let output = result.unwrap();
+                assert_eq!(output.geometries.len(), 2);
+                assert!(output.active_geometry.is_none());
+            }
         }
     }
     // Allineare aggiunge un Binary anonimo: non puo' attribuirgli la
@@ -3536,5 +3570,509 @@ fn concat_sorgente_effettiva_emissione_e_conflitti() {
     }
 }
 
+/// Ogni operazione tabellare del catalogo attraversa due e tre geometrie indipendenti.
+#[test]
+// La stessa matrice copre tutte le operazioni, senza accettare rifiuti generici.
+#[allow(clippy::too_many_lines)]
+fn catalogo_tabellare_multigeometria() {
+    use plenora_core::arrow::array::BinaryArray;
+    prepara_ambiente();
+    for op in CATALOG.iter().filter(|op| op.family == Family::Table) {
+        let mut scheda = leggi_scheda(op).unwrap();
+        if op.id == "table.assert_schema" {
+            let mut config: Value = serde_json::from_str(scheda.esempio.config.get()).unwrap();
+            config["allow_extra"] = Value::Bool(true);
+            scheda.esempio.config = serde_json::value::to_raw_value(&config).unwrap();
+        }
+        for count in [2, 3] {
+            for primary in [None, Some(0), Some(count - 1)] {
+                let inputs = scheda
+                    .esempio
+                    .ingressi
+                    .iter()
+                    .map(|spec| {
+                        let batch = tabella_con_metadati(&spec.colonne, &spec.metadati).unwrap();
+                        let mut fields = batch
+                            .schema()
+                            .fields()
+                            .iter()
+                            .map(|f| f.as_ref().clone())
+                            .collect::<Vec<_>>();
+                        let mut columns = batch.columns().to_vec();
+                        for i in 0..count {
+                            let mut field = geometry_output_field(
+                                &format!("geom_{i}"),
+                                ["EPSG:32632", "EPSG:3857", "EPSG:32633"][i],
+                            )
+                            .unwrap();
+                            let mut md = field.metadata().clone();
+                            md.insert("plenora.field_id", (1000 + i).to_string());
+                            field = field.with_metadata(md);
+                            fields.push(field);
+                            let mut wkb = vec![1, 1, 0, 0, 0];
+                            wkb.extend_from_slice(
+                                &f64::from(u32::try_from(i).unwrap()).to_le_bytes(),
+                            );
+                            wkb.extend_from_slice(&0_f64.to_le_bytes());
+                            let values = (0..batch.num_rows())
+                                .map(|row| {
+                                    if (row + i) % 3 == 0 {
+                                        None
+                                    } else {
+                                        Some(wkb.as_slice())
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+                            columns.push(Arc::new(BinaryArray::from(values)));
+                        }
+                        let mut md = batch.schema().metadata().clone();
+                        md.insert("plenora.contract.version", "1");
+                        if let Some(primary) = primary {
+                            md.insert("plenora.primary_geometry", (1000 + primary).to_string());
+                        }
+                        RecordBatch::try_new(
+                            Arc::new(Schema::new_with_metadata(fields, md)),
+                            columns,
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let context = format!("{} geometrie={count} primaria={primary:?}", op.id);
+                if op.id == "table.transpose" {
+                    // Una trasposizione fonde tutte le sorgenti: CRS diversi devono essere rifiutati.
+                    let config = plenora_kernels_table::reshape::Transpose {
+                        id_column: None,
+                        output_columns: vec![],
+                        type_policy: None,
+                    };
+                    let indices = (inputs[0].num_columns() - count..inputs[0].num_columns())
+                        .collect::<Vec<_>>();
+                    let input = inputs[0].project(&indices).unwrap();
+                    assert!(
+                        matches!(
+                            plenora_kernels_table::reshape::transpose(
+                                &input,
+                                &config,
+                                &plenora_kernels_table::Limits::default()
+                            ),
+                            Err(PlenoraError::Crs(_))
+                        ),
+                        "{context}"
+                    );
+                    continue;
+                }
+                let execute = || {
+                    if op.id == "table.pivot" {
+                        kernel_diretto(&scheda, &inputs[0])
+                    } else {
+                        esegui_su(&scheda, &inputs)
+                            .unwrap_or_else(|| panic!("supporto mancante: {context}"))
+                    }
+                };
+                let output = execute().unwrap_or_else(|error| panic!("{context}: {error}"));
+                let repeated = execute().unwrap_or_else(|error| panic!("{context}: {error}"));
+                assert_eq!(output.schema(), repeated.schema(), "{context}");
+                assert_eq!(output.num_rows(), repeated.num_rows(), "{context}");
+                let contract = contract_from_arrow_schema(output.schema(), resolve_crs)
+                    .unwrap_or_else(|e| panic!("{context}: {e}"));
+                let expected_count = match op.id {
+                    "table.join" | "table.cross_join" | "table.asof_join" | "table.fuzzy_join" => {
+                        2 * count
+                    }
+                    "table.aggregate"
+                    | "table.melt"
+                    | "table.pivot"
+                    | "table.select_columns"
+                    | "table.reconcile"
+                    | "table.align_schema" => 0,
+                    _ => count,
+                };
+                assert_eq!(
+                    contract.geometries.len(),
+                    expected_count,
+                    "{context}: presenza delle secondarie"
+                );
+                if !USCITA_CASUALE.contains(&op.id) {
+                    assert_eq!(output, repeated, "{context}: determinismo");
+                }
+                for geometry in &contract.geometries {
+                    let index = output.schema().index_of(&geometry.name).unwrap();
+                    assert_eq!(output.column(index), repeated.column(index), "{context}");
+                    let source = inputs
+                        .iter()
+                        .flat_map(|b| b.schema().fields().to_vec())
+                        .find(|f| {
+                            geometry.name == *f.name()
+                                || geometry.name.starts_with(&format!("{}_", f.name()))
+                        })
+                        .unwrap();
+                    for (key, value) in source.metadata() {
+                        if key != "plenora.field_id" {
+                            assert_eq!(
+                                output.schema().field(index).metadata().get(key),
+                                Some(value),
+                                "{context}: {key}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Il catalogo enumera tutti i kernel: l'operando conserva l'esito storico,
+/// le geometrie passanti hanno CRS, assi e precisione indipendenti.
+#[test]
+#[allow(clippy::too_many_lines)] // Matrice completa e oracolo nello stesso punto.
+fn catalogo_geo_multigeometria_operandi_e_passanti() {
+    use plenora_core::contract::arrow_schema::primary_geometry_position;
+    prepara_ambiente();
+    for op in CATALOG.iter().filter(|op| op.family == Family::Geo) {
+        let mut scheda = leggi_scheda(op).unwrap();
+        let originali: Vec<_> = scheda
+            .esempio
+            .ingressi
+            .iter()
+            .map(|spec| tabella_con_metadati(&spec.colonne, &spec.metadati).unwrap())
+            .collect();
+        let config: Value = serde_json::from_str(scheda.esempio.config.get()).unwrap();
+        let base = esegui_su(&scheda, &originali)
+            .expect("kernel presente")
+            .expect(op.id);
+        let produttore = matches!(
+            op.id,
+            "geo.from_coords" | "geo.from_wkt" | "geo.generate_grid"
+        );
+        // Su una geometria il selettore esplicito riproduce il default storico.
+        let mut esplicita = config.clone();
+        for (side, batch) in originali.iter().enumerate() {
+            if let Some(index) = primary_geometry_position(&batch.schema()).unwrap() {
+                let key = if originali.len() == 2 {
+                    if side == 0 {
+                        "left_geometry"
+                    } else {
+                        "right_geometry"
+                    }
+                } else {
+                    "input_geometry"
+                };
+                esplicita[key] = Value::String(batch.schema().field(index).name().clone());
+            }
+        }
+        scheda.esempio.config = RawValue::from_string(esplicita.to_string()).unwrap();
+        let esplicito = esegui_su(&scheda, &originali).unwrap().unwrap();
+        assert_eq!(esplicito, base, "{} default storico e selettore", op.id);
+        // Tipi invalidi e nomi non geometrici hanno categorie precise e non citano dati.
+        let key = if originali.len() == 2 {
+            "left_geometry"
+        } else {
+            "input_geometry"
+        };
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!(7),
+            serde_json::json!(""),
+            serde_json::json!("SEGRETO_ASSENTE"),
+        ] {
+            let mut invalida = config.clone();
+            invalida[key] = value.clone();
+            scheda.esempio.config = RawValue::from_string(invalida.to_string()).unwrap();
+            let errore = esegui_su(&scheda, &originali)
+                .expect("errore classificato")
+                .expect_err(op.id);
+            assert!(!errore.contains("SEGRETO"), "{}: {errore}", op.id);
+            let categoria = if value == serde_json::json!("SEGRETO_ASSENTE") && !produttore {
+                "schema violation"
+            } else {
+                "contract violation"
+            };
+            assert!(errore.contains(categoria), "{} categoria: {errore}", op.id);
+        }
+
+        let ridotto = matches!(
+            op.id,
+            "geo.generate_grid"
+                | "geo.collect"
+                | "geo.dissolve"
+                | "geo.line_builder"
+                | "geo.polygon_builder"
+                | "geo.line_merge"
+                | "geo.polygonize"
+                | "geo.overlay"
+                | "geo.coverage_validate"
+                | "geo.shared_paths"
+        );
+        for numero in [2, 3] {
+            // La primaria puo' precedere o seguire l'operando, oppure mancare.
+            for primaria in [Some(0), Some(numero - 1), None] {
+                let mut selezionata = config.clone();
+                let ingressi: Vec<_> = originali
+                    .iter()
+                    .enumerate()
+                    .map(|(lato, batch)| {
+                        let mut campi: Vec<Field> = batch
+                            .schema()
+                            .fields()
+                            .iter()
+                            .map(|f| f.as_ref().clone())
+                            .collect();
+                        let mut colonne = batch.columns().to_vec();
+                        let operando = primary_geometry_position(&batch.schema()).unwrap();
+                        if let Some(index) = operando {
+                            let key = if originali.len() == 2 {
+                                if lato == 0 {
+                                    "left_geometry"
+                                } else {
+                                    "right_geometry"
+                                }
+                            } else {
+                                "input_geometry"
+                            };
+                            selezionata[key] = Value::String(campi[index].name().clone());
+                        }
+                        campi.push(Field::new("__lineage_test", DataType::UInt64, false));
+                        colonne.push(Arc::new(plenora_core::arrow::array::UInt64Array::from(
+                            (0..batch.num_rows())
+                                .map(|row| u64::try_from(row).unwrap())
+                                .collect::<Vec<_>>(),
+                        )));
+                        let aggiunte = numero - usize::from(operando.is_some());
+                        for extra in 0..aggiunte {
+                            let nome = format!("__passante_{extra}");
+                            let crs = if extra == 0 { "EPSG:4326" } else { "EPSG:3857" };
+                            let mut campo = geometry_output_field(&nome, crs).unwrap();
+                            let mut metadata = campo.metadata().clone();
+                            metadata.insert(
+                                "plenora.geometry.axis_order",
+                                if extra == 0 {
+                                    "lat_lon"
+                                } else {
+                                    "northing_easting"
+                                },
+                            );
+                            metadata.insert("plenora.geometry.precision", "float32");
+                            metadata.insert("plenora.geometry.crs_id", crs);
+                            metadata.insert("plenora.geometry.crs_resolution", "resolved");
+                            metadata.insert(
+                                "plenora.geometry.srid",
+                                if extra == 0 { "4326" } else { "3857" },
+                            );
+                            metadata.insert("plenora.geometry.dimensions", "xy");
+                            metadata.insert("plenora.geometry.encoding", "wkb");
+                            metadata.insert("plenora.geometry.spatial_semantics", "geometry");
+                            metadata.insert("plenora.geometry.types_declaration", "unresolved");
+                            campo = campo.with_metadata(metadata);
+                            campo = campo.with_nullable(true);
+                            let mut builder = BinaryBuilder::new();
+                            for row in 0..batch.num_rows() {
+                                if row % 2 == 1 {
+                                    builder.append_null();
+                                    continue;
+                                }
+                                let mut bytes = vec![1, 1, 0, 0, 0];
+                                bytes.extend_from_slice(
+                                    &(45.0 + f64::from(u32::try_from(row).unwrap()) / 100.0)
+                                        .to_le_bytes(),
+                                );
+                                bytes.extend_from_slice(&12.0_f64.to_le_bytes());
+                                builder.append_value(&bytes);
+                            }
+                            // La seconda passante precede anche fisicamente l'operando.
+                            if extra == 1 {
+                                campi.insert(0, campo);
+                                colonne.insert(0, Arc::new(builder.finish()));
+                            } else {
+                                campi.push(campo);
+                                colonne.push(Arc::new(builder.finish()));
+                            }
+                        }
+                        let mut geometrie = Vec::new();
+                        for (index, campo) in campi.iter_mut().enumerate() {
+                            let mut metadata = campo.metadata().clone();
+                            metadata.insert("plenora.field_id", index.to_string());
+                            *campo = campo.clone().with_metadata(metadata);
+                            if plenora_core::contract::arrow_metadata::field_declares_wkb_geometry(
+                                campo,
+                            ) {
+                                geometrie.push(index);
+                            }
+                        }
+                        let mut metadata = batch.schema().metadata().clone();
+                        metadata.insert("plenora.contract.version", "1");
+                        metadata.insert(
+                            "plenora.primary_geometry",
+                            primaria.map_or_else(|| "none".into(), |p| geometrie[p].to_string()),
+                        );
+                        RecordBatch::try_new(
+                            Arc::new(Schema::new_with_metadata(campi, metadata)),
+                            colonne,
+                        )
+                        .unwrap()
+                    })
+                    .collect();
+                scheda.esempio.config = RawValue::from_string(selezionata.to_string()).unwrap();
+                let uscita = esegui_su(&scheda, &ingressi)
+                    .expect("multigeometria supportata")
+                    .unwrap_or_else(|e| panic!("{} n={numero} primaria={primaria:?}: {e}", op.id));
+                assert_eq!(uscita.num_rows(), base.num_rows(), "{}", op.id);
+                for (campo, valori) in base.schema().fields().iter().zip(base.columns()) {
+                    let index = uscita.schema().index_of(campo.name()).unwrap();
+                    assert_eq!(
+                        uscita.column(index).to_data(),
+                        valori.to_data(),
+                        "{} {}",
+                        op.id,
+                        campo.name()
+                    );
+                    let mut attesi = campo.metadata().clone();
+                    attesi.remove("plenora.field_id");
+                    let mut effettivi = uscita.schema().field(index).metadata().clone();
+                    effettivi.remove("plenora.field_id");
+                    assert_eq!(effettivi, attesi, "{} {} metadati", op.id, campo.name());
+                }
+                for campo in ingressi[0]
+                    .schema()
+                    .fields()
+                    .iter()
+                    .filter(|f| f.name().starts_with("__passante_"))
+                {
+                    let index = uscita.schema().index_of(campo.name());
+                    if ridotto {
+                        assert!(index.is_err(), "{} schema ridotto", op.id);
+                        continue;
+                    }
+                    let index = index.unwrap_or_else(|_| panic!("{}: passante persa", op.id));
+                    let mut attesi = campo.metadata().clone();
+                    attesi.remove("plenora.field_id");
+                    let mut effettivi = uscita.schema().field(index).metadata().clone();
+                    effettivi.remove("plenora.field_id");
+                    let effect = matrice_metadati::expected_effects(op, &ingressi, &uscita)
+                        .into_iter()
+                        .find(|(position, _)| *position == index)
+                        .unwrap()
+                        .1;
+                    plenora_core::contract::geometry_metadata_policy::apply(&mut attesi, effect);
+                    assert_eq!(effettivi, attesi, "{} passante metadati", op.id);
+                    let originali = ingressi[0]
+                        .column(ingressi[0].schema().index_of(campo.name()).unwrap())
+                        .as_any()
+                        .downcast_ref::<plenora_core::arrow::array::BinaryArray>()
+                        .unwrap();
+                    let effettivi = uscita
+                        .column(index)
+                        .as_any()
+                        .downcast_ref::<plenora_core::arrow::array::BinaryArray>()
+                        .unwrap();
+                    let lineage = uscita
+                        .column(uscita.schema().index_of("__lineage_test").unwrap())
+                        .as_any()
+                        .downcast_ref::<plenora_core::arrow::array::UInt64Array>()
+                        .unwrap();
+                    for row in 0..uscita.num_rows() {
+                        let source = usize::try_from(lineage.value(row)).unwrap();
+                        assert_eq!(
+                            effettivi.is_null(row),
+                            originali.is_null(source),
+                            "{} passante null",
+                            op.id
+                        );
+                        if !originali.is_null(source) {
+                            assert_eq!(
+                                effettivi.value(row),
+                                originali.value(source),
+                                "{} passante byte e lineage",
+                                op.id
+                            );
+                        }
+                    }
+                }
+                let primaria_ingresso = primary_geometry_position(&ingressi[0].schema())
+                    .unwrap()
+                    .map(|p| ingressi[0].schema().field(p).name().clone());
+                let primaria_attesa = if op.id == "geo.generate_grid" {
+                    Some("geometry".to_owned())
+                } else if matches!(op.id, "geo.coverage_validate" | "geo.shared_paths") {
+                    primaria_ingresso
+                        .filter(|name| !name.starts_with("__passante_"))
+                        .map(|_| "geometry".to_owned())
+                } else {
+                    primaria_ingresso.filter(|name| uscita.schema().index_of(name).is_ok())
+                };
+                let primaria_effettiva = primary_geometry_position(&uscita.schema())
+                    .unwrap()
+                    .map(|p| uscita.schema().field(p).name().clone());
+                assert_eq!(primaria_effettiva, primaria_attesa, "{} primaria", op.id);
+                if !produttore {
+                    // Default sulla stessa colonna, anche fisicamente non iniziale.
+                    let impliciti: Vec<_> = ingressi
+                        .iter()
+                        .enumerate()
+                        .map(|(side, batch)| {
+                            let key = if ingressi.len() == 2 {
+                                if side == 0 {
+                                    "left_geometry"
+                                } else {
+                                    "right_geometry"
+                                }
+                            } else {
+                                "input_geometry"
+                            };
+                            let name = selezionata[key].as_str().unwrap();
+                            let schema = batch.schema();
+                            let field = schema.field_with_name(name).unwrap();
+                            let mut metadata = schema.metadata().clone();
+                            metadata.insert(
+                                "plenora.primary_geometry",
+                                field.metadata().get("plenora.field_id").unwrap().clone(),
+                            );
+                            RecordBatch::try_new(
+                                Arc::new(Schema::new_with_metadata(
+                                    schema.fields().clone(),
+                                    metadata,
+                                )),
+                                batch.columns().to_vec(),
+                            )
+                            .unwrap()
+                        })
+                        .collect();
+                    scheda.esempio.config = RawValue::from_string(config.to_string()).unwrap();
+                    let implicito = esegui_su(&scheda, &impliciti)
+                        .unwrap()
+                        .unwrap_or_else(|e| panic!("{} default: {e}", op.id));
+                    assert_eq!(implicito.columns(), uscita.columns(), "{} implicito", op.id);
+                    // La passante con assi invertiti diventa un errore solo se consumata.
+                    if plenora_kernels_geo::analyze::richiede_ordine_assi(op.id) {
+                        let mut assi = selezionata.clone();
+                        assi[if ingressi.len() == 2 {
+                            "left_geometry"
+                        } else {
+                            "input_geometry"
+                        }] = Value::String("__passante_0".into());
+                        scheda.esempio.config = RawValue::from_string(assi.to_string()).unwrap();
+                        let errore = esegui_su(&scheda, &ingressi).unwrap().expect_err(op.id);
+                        assert!(
+                            errore.contains("AXIS_ORDER_REQUIRED"),
+                            "{} assi: {errore}",
+                            op.id
+                        );
+                    }
+                }
+                // Nessun selettore e nessuna primaria: rifiuto, mai la prima colonna.
+                if !produttore && primaria.is_none() {
+                    scheda.esempio.config = RawValue::from_string(config.to_string()).unwrap();
+                    let errore = esegui_su(&scheda, &ingressi)
+                        .expect("rifiuto esplicito")
+                        .expect_err(op.id);
+                    assert!(
+                        errore.contains("operando geometrico assente"),
+                        "{}: {errore}",
+                        op.id
+                    );
+                }
+            }
+        }
+    }
+}
 #[path = "comune/matrice_metadati.rs"]
 mod matrice_metadati;

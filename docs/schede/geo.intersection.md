@@ -8,6 +8,13 @@ geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 
 ### Parametri
 
+`left_geometry` e `right_geometry` (stringhe facoltative) selezionano per nome
+la colonna geometrica dei rispettivi ingressi. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 Nessuno: la config è `{}`.
 
 ### Schema
@@ -43,7 +50,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: un numero di ingressi diverso da due; config non vuota;
   un metadato di schema presente sui due lati con valori diversi;
-- `Schema`: un lato senza esattamente una colonna geometria, o con una
+- `Schema`: un lato senza una colonna geometria selezionabile senza ambiguita', o con una
   colonna non riconoscibile come geometria WKB (né estensione
   `geoarrow.wkb` né chiavi canoniche `plenora.geometry.*`);
 - `Unsupported`: una colonna geometria non XY;

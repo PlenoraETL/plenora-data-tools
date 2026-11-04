@@ -8,12 +8,19 @@ geometria vuota, da una parte o dall'altra, il kernel non dà una distanza.
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `other_wkb` | stringa | obbligatorio | WKB in esadecimale (cifre maiuscole o minuscole) di una geometria valida OGC, solo XY, senza SRID, coordinate nel dominio del CRS dell'ingresso | secondo operando, nel CRS della colonna geometria |
 | `output_column` | stringa | `distance` | nome non vuoto (non di soli spazi) e non già presente nell'ingresso | colonna aggiunta |
 
-L'ingresso ha una sola colonna geometria: il secondo operando arriva dalla
+L'operazione consuma la colonna geometria selezionata: il secondo operando arriva dalla
 config ed è assunto nello stesso CRS, che nessun dato può confermare.
 L'analisi ne verifica la struttura WKB, la validità OGC e il dominio delle
 coordinate.
@@ -39,7 +46,7 @@ L'ordine d'ingresso: l'analisi conserva `sorted_by`.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si riconosce come WKB (né estensione `geoarrow.wkb` né chiavi
   `plenora.geometry.*`); `output_column` esiste già;
 - `Unsupported`: dimensioni della geometria diverse da `xy`; `other_wkb`

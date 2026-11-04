@@ -10,6 +10,13 @@ cambiano. Il quadro completo è in
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `target_crs` | stringa | obbligatorio | identificatore della tabella integrata (`EPSG:<codice>`, `OGC:CRS84`, forme URN), oppure PROJJSON completo equivalente | CRS d'arrivo |
@@ -37,6 +44,10 @@ canoniche CRS della sorgente (`plenora.geometry.crs_*`,
 `plenora.geometry.srid`, `plenora.geometry.axis_order`) si tolgono, e `axis_order` si riscrive con l'ordine GIS
 normalizzato del target. Gli altri metadati del campo restano.
 
+La successiva scrittura GeoParquet verifica tutte le colonne, anche le
+secondarie passanti, e ricalcola i bbox senza riusare covering o metadati
+derivati del file sorgente ([File](file.md#geoparquet)).
+
 ### Righe
 
 1:1. Il runner chiama l'adapter di tabella dei kernel
@@ -55,7 +66,7 @@ quello che si riporta.
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si dichiara geometria WKB;
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non
   dichiarate);

@@ -5,9 +5,8 @@ per gruppo: le colonne di gruppo, poi una colonna per ogni aggregazione di
 `aggregations` (conteggi, somme, medie, estremi, varianze, quantili,
 testi). Senza aggregazioni conta le righe di ogni gruppo.
 
-`first` e `last` rifiutano i campi geometrici, anche annidati e con zero righe
-oppure tutte le celle nulle, con errore `crs/validate` sia nel kernel sia
-nell'analisi: non produce celle WKB senza metadati.
+`first` e `last` conservano le colonne geometriche con il riferimento della
+rispettiva sorgente, anche quando il gruppo contiene solo celle nulle.
 
 ### Parametri
 
@@ -84,12 +83,14 @@ numero (spazi ai lati ignorati, virgola decimale ammessa).
 
 ### Schema
 
+First e last conservano CRS, assi ed encoding di ogni sorgente geometrica in una nuova identità. Non promuovono una geometria derivata; la primaria sopravvive solo fra le chiavi di raggruppamento.
+
 Le colonne di `group_by` nel loro ordine, con tipo, nullabilità e metadati
 di campo dell'ingresso; poi una colonna per aggregazione, nell'ordine di
 `aggregations`, senza metadati di campo (tipi sopra); senza aggregazioni,
 una colonna `count` `int64` non nullabile con le righe del gruppo, null
-compresi. I metadati di schema si conservano. Una colonna geometrica resta
-geometrica solo se è una chiave di gruppo. Il contratto non dichiara né
+compresi. I metadati di schema si conservano. Le chiavi di gruppo geometriche conservano identità e metadati; first/last
+producono nuove identità geometriche senza eleggere una primaria. Il contratto non dichiara né
 ordinamento né conteggio.
 
 ### Righe

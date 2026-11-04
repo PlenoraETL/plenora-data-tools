@@ -489,3 +489,39 @@ fn stesso_ingresso_stessi_byte() {
     }
     assert_eq!(raccolti[0], raccolti[1]);
 }
+
+#[test]
+fn multigeometria_geoparquet_ipc_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../plenora-io/tests/dati/io700_multigeometria.parquet");
+    let original = leggi_tabella(&input, None, u64::MAX).unwrap();
+    let plan = dir.path().join("plan.json");
+    std::fs::write(
+        &plan,
+        r#"{"version":1,"inputs":["t"],"steps":[],"outputs":["t"]}"#,
+    )
+    .unwrap();
+    for ext in ["parquet", "arrow", "arrows"] {
+        let output = dir.path().join(format!("out.{ext}"));
+        let result = invoca(&[
+            "run",
+            "--plan",
+            plan.to_str().unwrap(),
+            "--input",
+            &format!("t={}", input.display()),
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+        assert_eq!(result.codice, 0, "{}", result.stdout);
+        let read = leggi_tabella(&output, None, u64::MAX).unwrap();
+        assert_eq!(original.columns(), read.columns());
+        assert_eq!(read.schema().metadata()["plenora.primary_geometry"], "2");
+        for index in [0, 2] {
+            assert_eq!(
+                original.schema().field(index).metadata()["plenora.field_id"],
+                read.schema().field(index).metadata()["plenora.field_id"]
+            );
+        }
+    }
+}

@@ -25,16 +25,16 @@ uguale a ogni NaN; sugli altri tipi fuori da `int64`, `uint64`, `utf8`,
 
 ### Schema
 
-Chiavi e colonne confrontate geometriche sono rifiutate preventivamente
-con `crs`, nel kernel e in validazione, anche con ingressi vuoti o celle
-nulle: il diff ricostruisce campi privi di metadati e puo' convertire i
-valori precedenti in testo
+Le colonne geometriche fuse conservano CRS, assi ed encoding compatibili per colonna. La primaria richiede consenso dei due ingressi sulla corrispondenza d’uscita; i vecchi valori geometrici nel resoconto sono WKB esadecimale.
+
+Chiavi e colonne geometriche confrontate richiedono CRS, assi e dichiarazioni
+compatibili per ciascuna coppia, anche con ingressi vuoti o celle nulle
 ([censimento](limiti.md#fusione-di-celle-geometriche-e-crs-espliciti)).
 
 Le colonne di `left_keys` (nomi della sinistra), poi quelle confrontate,
 tutte nullabili e con il tipo d'ingresso; poi `_diff_status` (`utf8` non
 nullabile), `_diff_columns` e `_diff_old_values` (`utf8` nullabili).
-Nessun metadato di campo; i metadati di schema dei due lati si fondono, e
+I campi geometrici conservano il riferimento comune senza copiare identità e tipi dichiarati; i campi tabellari non ereditano metadati. i metadati di schema dei due lati si fondono, e
 una chiave con valori diversi è un errore. Il contratto non dichiara né
 ordinamento né conteggio.
 
@@ -78,7 +78,7 @@ In esecuzione:
 
 - `InvalidPlan`: una chiave ripetuta nella sinistra o nella destra;
 - `Schema`: una cella che non si converte in testo (date fuori
-  intervallo, `binary` non UTF-8 fra i valori confrontati per testo);
+  intervallo, `binary` tabellare non UTF-8 fra i valori confrontati per testo);
 - `ResourceLimit`: righe d'uscita oltre `max_rows`; colonne d'uscita oltre
   `max_columns`; più di `u32::MAX` righe; `_diff_columns` o
   `_diff_old_values` di una riga oltre `max_string_bytes` byte.

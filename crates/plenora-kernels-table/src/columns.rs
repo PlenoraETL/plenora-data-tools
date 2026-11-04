@@ -13,7 +13,9 @@ use plenora_core::arrow::array::{
     Date32Array, Decimal128Array, Float64Array, Int64Array, RecordBatch, StringArray,
     TimestampMillisecondArray, UInt64Array,
 };
-use plenora_core::arrow::schema::{DataType, Field, Schema, TimeUnit};
+#[cfg(test)]
+use plenora_core::arrow::schema::Schema;
+use plenora_core::arrow::schema::{DataType, Field, TimeUnit};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -73,6 +75,7 @@ impl DropColumns {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn drop_columns(batch: &RecordBatch, config: &DropColumns) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     let removed: HashSet<&str> = config.columns.iter().map(String::as_str).collect();
     let mut fields = Vec::new();
@@ -83,10 +86,7 @@ pub fn drop_columns(batch: &RecordBatch, config: &DropColumns) -> Result<RecordB
             columns.push(Arc::clone(column));
         }
     }
-    let schema = Arc::new(Schema::new_with_metadata(
-        fields,
-        batch.schema().metadata().clone(),
-    ));
+    let schema = Arc::new(crate::geometry_provenance::unary(&batch.schema(), fields)?);
     // La cardinalita' la dichiara il costruttore condiviso, non una copia
     // locale che potrebbe divergere.
     crate::batch_with_rows(schema, columns, batch.num_rows())
@@ -114,6 +114,7 @@ pub struct SelectColumns {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn select_columns(batch: &RecordBatch, config: &SelectColumns) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     crate::require_unique_names(&batch.schema())?;
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
@@ -139,7 +140,7 @@ pub fn select_columns(batch: &RecordBatch, config: &SelectColumns) -> Result<Rec
     // Righe DICHIARATE: la lista di colonne deriva dall'input e puo'
     // essere vuota (batch a zero colonne, legittimi in Arrow).
     crate::batch_with_rows(
-        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
+        Arc::new(crate::geometry_provenance::unary(&schema, fields)?),
         columns,
         batch.num_rows(),
     )
@@ -448,6 +449,7 @@ pub fn check_align_default(value: &Value, align_type: AlignType) -> Result<()> {
 /// - `Internal`: colonna costruita con un tipo diverso da quello dichiarato
 ///   (guardia interna).
 pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     crate::require_unique_names(&batch.schema())?;
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
@@ -502,7 +504,7 @@ pub fn align_schema(batch: &RecordBatch, config: &AlignSchema) -> Result<RecordB
     // Righe DICHIARATE: la lista di colonne deriva dall'input e puo'
     // essere vuota (batch a zero colonne, legittimi in Arrow).
     crate::batch_with_rows(
-        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
+        Arc::new(crate::geometry_provenance::unary(&schema, fields)?),
         columns,
         batch.num_rows(),
     )
@@ -589,6 +591,7 @@ impl Rename {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn rename(batch: &RecordBatch, config: &Rename) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     let mapping: HashMap<&str, &str> = config
         .renames
@@ -610,7 +613,15 @@ pub fn rename(batch: &RecordBatch, config: &Rename) -> Result<RecordBatch> {
         }
         fields.push(field.as_ref().clone().with_name(name));
     }
-    let schema = Schema::new_with_metadata(fields, batch.schema().metadata().clone());
+    let schema = crate::geometry_provenance::compose(
+        &[&batch.schema()],
+        fields,
+        &(0..batch.num_columns())
+            .map(|i| (0, i, i))
+            .collect::<Vec<_>>(),
+        false,
+        batch.schema().metadata().clone().into_iter().collect(),
+    )?;
     // Righe DICHIARATE: la lista di colonne deriva dall'input e puo'
     // essere vuota (batch a zero colonne, legittimi in Arrow).
     crate::batch_with_rows(Arc::new(schema), batch.columns().to_vec(), batch.num_rows())
@@ -676,6 +687,7 @@ impl ReorderColumns {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn reorder_columns(batch: &RecordBatch, config: &ReorderColumns) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     crate::require_unique_names(&batch.schema())?;
     let schema = batch.schema();
     let mut selected = Vec::with_capacity(batch.num_columns());
@@ -710,7 +722,7 @@ pub fn reorder_columns(batch: &RecordBatch, config: &ReorderColumns) -> Result<R
     // Righe DICHIARATE: la lista di colonne deriva dall'input e puo'
     // essere vuota (batch a zero colonne, legittimi in Arrow).
     crate::batch_with_rows(
-        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
+        Arc::new(crate::geometry_provenance::unary(&schema, fields)?),
         columns,
         batch.num_rows(),
     )
@@ -790,6 +802,7 @@ pub fn concat_columns(
     config: &ConcatColumns,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     if config.columns.is_empty() {
         return Err(PlenoraError::InvalidPlan(
             "concat_columns richiede almeno una colonna".into(),
@@ -926,6 +939,7 @@ pub fn split_column(
     config: &SplitColumn,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    crate::require_geometry_support(&batch.schema())?;
     if config.delimitatore().is_empty() {
         return Err(PlenoraError::InvalidPlan("delimiter vuoto".into()));
     }

@@ -128,6 +128,7 @@ pub const KEYS: &[(&str, Class)] = &[
 /// Nomi strutturali dei contenitori: non sono proprieta' di una geometria.
 /// `columns` contiene nomi di campi, non ulteriori chiavi di proprieta'.
 pub const STRUCTURAL_MEMBERS: &[&str] = &[
+    "plenora.primary_geometry",
     "geo",
     "ARROW:extension:metadata",
     "version",
@@ -382,6 +383,72 @@ pub fn operation_effect(op: &crate::catalog::OperationDescriptor) -> Effect {
         Effect::Rows
     }
 }
+/// Effetto per ruolo sulle geometrie d'uscita, senza consultare la primaria.
+///
+/// Le colonne nuove hanno dichiarazioni fresche; i produttori ereditano solo C1.
+/// Gli operandi sono quelli trasformati sopravvissuti, rimappati per identita' dal chiamante.
+///
+/// # Errors
+/// Internal se una trasformazione perde operandi con righe non conservate,
+/// fuori dai produttori. Le misure possono eliminare il solo operando letto.
+pub fn column_effects(
+    descriptor: &crate::catalog::OperationDescriptor,
+    output_schema: &crate::arrow::Schema,
+    operands: &[Option<&super::GeometryColumnContract>],
+) -> Result<Vec<(usize, Effect)>, PlenoraError> {
+    use crate::catalog::{Family, SourceRowProvenance};
+    let effect = if descriptor.id == "table.table_diff" {
+        Effect::Merge
+    } else {
+        operation_effect(descriptor)
+    };
+    let passthrough = if descriptor.source_row_provenance() == SourceRowProvenance::Preserved {
+        Effect::Unchanged
+    } else {
+        Effect::Rows
+    };
+    let selected = operands.iter().copied().flatten().collect::<Vec<_>>();
+    let present = |operand: &&super::GeometryColumnContract| {
+        output_schema.fields().iter().any(|field| {
+            super::arrow_metadata::field_declares_wkb_geometry(field)
+                && operand.name == *field.name()
+        })
+    };
+    let survives = selected.iter().any(present);
+    let missing = selected.iter().any(|operand| !present(operand));
+    let producer = matches!(
+        descriptor.id,
+        "geo.coverage_validate" | "geo.shared_paths" | "geo.generate_grid"
+    );
+    if descriptor.family == Family::Geo
+        && !matches!(effect, Effect::Unchanged | Effect::Rows)
+        && passthrough == Effect::Rows
+        && (!survives || missing)
+        && !producer
+    {
+        return Err(PlenoraError::Internal(
+            "politica metadati: operando assente dall'uscita con righe non conservate".into(),
+        ));
+    }
+    Ok(output_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| super::arrow_metadata::field_declares_wkb_geometry(field))
+        .map(|(position, field)| {
+            let selected = selected.iter().any(|operand| operand.name == *field.name());
+            let effect = if descriptor.family != Family::Geo || selected {
+                effect
+            } else if producer && !survives {
+                Effect::Unchanged
+            } else {
+                passthrough
+            };
+            (position, effect)
+        })
+        .collect())
+}
+
 /// Applica l'effetto alle colonne geometriche di uno schema.
 ///
 /// # Errors

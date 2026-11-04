@@ -40,9 +40,10 @@ file di `esegui_da_file`:
 | `crs_resolution` | `resolved`, `declared_unresolved` o `missing`, dallo stato del CRS |
 | `crs_id`, `crs_definition`, `crs_definition_format`, `axis_order`, `srid` | `axis_order` resta `unknown` senza dichiarazione esplicita o provenienza certa; `srid` deriva dall autorita' se rappresentabile in `i32`; con `missing` resta solo un eventuale `srid` ereditato |
 
-Dentro il piano gli schemi restano quelli interni (versione e blocco
-canonico solo sulle tabelle con geometrie, nessuna identità assegnata):
-versione e identità sono del confine.
+Dentro il piano gli schemi portano versione e blocco canonico sulle tabelle
+con geometrie. I contratti plurali completano anche le identita' pubbliche
+per trasportare il riferimento alla primaria; le identita' interne del
+planner restano un namespace distinto.
 
 ## Identità dei campi
 
@@ -394,6 +395,7 @@ contenitori o elementi della sintassi GeoParquet, non una classe C1-C4.
 | `version` | Versione del documento GeoParquet, riemessa dal writer |
 | `primary_column` | Nome della geometria primaria pubblicata |
 | `columns` | Mappa da nomi dei campi alle proprieta' geometriche |
+| `plenora.primary_geometry` | Riferimento alla primaria per identità; ricalcolato per provenienza a ogni uscita, escluso dalla fusione dei metadati. |
 
 ### Guardia del vocabolario nel sorgente
 
@@ -427,3 +429,119 @@ Una fusione con precisioni canoniche diverse riemette `float64`; un
 contenitore JSON rimasto vuoto viene eliminato in entrambi i percorsi.
 La riproiezione sostituisce il CRS nel JSON legacy conservando i membri
 C4 sopravvissuti alla politica.
+Le concatenazioni fondono per nome le sole sorgenti della colonna:
+C1 discordanti sono rifiutate, C2 eliminate, C3 conservate solo se uguali
+e C4 unite o dichiarate irrisolte dalla politica.
+
+
+## Primaria e contratto multigeometria (4.1.0, PR 1-4)
+
+Il core conserva tutte le colonne geometriche con identita' interne distinte.
+`active_geometry = None` significa nessuna primaria, anche con una sola
+geometria; l'accessor non ripiega sulla prima. Lo schema Arrow usa
+`plenora.primary_geometry` secondo Arrow Primary Geometry 1.0 (contracts PR
+57): identita' pubblica `plenora.field_id` oppure `none`. Senza chiave,
+l'unica geometria e' primaria; con zero o almeno due geometrie non c'e' primaria.
+In emissione la chiave compare solo per una geometria senza primaria (`none`)
+o per piu' geometrie con primaria (identita' del campo). La risoluzione
+avviene prima del completamento delle identita'; riferimenti pendenti,
+non geometrici e dichiarazioni malformate sono errori `schema`.
+
+Il selettore comune riceve lo schema originale per risolvere un'identita'
+esplicita; gli ID interni del planner non sono selettori pubblici. Il planner
+costruisce l'intera mappa delle identita' prima di riscrivere la primaria.
+La pubblicazione segue il campo anche quando il suo ID pubblico cambia.
+I piani senza passi trasportano tutte le geometrie e i loro byte indipendenti.
+
+Le operazioni tabellari e gli adapter diretti propagano ogni geometria
+sopravvissuta con identità, CRS, assi, encoding e nullabilità per colonna.
+Non esiste un CRS globale di tabella. Una proiezione che elimina la primaria
+non promuove le secondarie. Un join con geometrie sopravvissute da almeno
+due ingressi non ha primaria; con geometrie da un solo ingresso ne conserva
+lo stato attraverso la corrispondenza dei campi. Append/union/concat
+conservano la primaria solo se tutti gli ingressi la fanno confluire nello
+stesso campo d'uscita. Le guardie di compatibilità operano sulle coppie di
+chiavi e sulle sorgenti che alimentano lo stesso campo, anche a zero righe.
+Le geo selezionano per nome con `input_geometry` (unaria), oppure
+`left_geometry` e `right_geometry` (binaria). Omissione significa primaria;
+assenza della primaria significa errore `Schema`, anche con una sola geometria
+esplicitamente senza primaria. La selezione non modifica la primaria.
+`geo.reproject` modifica soltanto la colonna scelta: le altre mantengono CRS,
+assi, precisione e byte. Le verifiche operative riguardano solo gli operandi;
+la validazione strutturale del contratto riguarda comunque tutti i campi.
+`from_coords` e `from_wkt` aggiungono una geometria senza promuoverla quando
+ne esistono altre; `buffer` e `centroid` trasformano sul posto la selezionata.
+Espansioni e join duplicano le passanti secondo la lineage delle righe;
+aggregazioni e overlay mantengono lo schema ridotto documentato.
+`generate_grid` produce uno schema nuovo; `geometry_diagnostics` elimina solo
+la geometria selezionata, senza promuovere quelle superstiti.
+`geo.sjoin` conserva le colonne sinistre e aggiunge `__right_index`.
+
+GeoParquet legge e scrive tutte le geometrie e importa la primaria dal footer,
+anche non iniziale. IPC file, stream e Arrow SDK conservano identità e stato
+della primaria. La scrittura GeoParquet senza primaria rifiuta con `unsupported`. Questa PR non dichiara ancora l'adozione completa
+del nuovo contratto su tutte le operazioni.
+
+### Ricerca della classe: costruzioni dei contratti d'uscita
+
+La verifica delle PR 1 e 2 comprende tutte le chiamate a `finish`, `new` e
+`rebuild` nelle analisi. La tabella enumera i percorsi; i nomi senza prefisso
+sono le funzioni dei moduli `analyze` indicati. Le prove tabellari passano
+per `ok`, che verifica che ogni primaria riferisca una geometria presente;
+la matrice `every_geo_op_produces_the_expected_contract` verifica anche
+l'emissione canonica per tutte le operazioni geo.
+
+| Modulo | Costruzioni verificate | Primaria e prova |
+| --- | --- | --- |
+| table/cleansing | `analyze_fill_na`, `analyze_replace` | Conservata; prove delle operazioni tramite `ok`. |
+| table/columns | `analyze_drop_columns`, `analyze_select_columns`, `analyze_align_schema` | Filtrata sul campo sopravvissuto; prove di selezione e rimozione tramite `ok`. |
+| table/columns | `analyze_rename`, `analyze_reorder_columns` | Conservata; prove di rinomina e riordino tramite `ok`. |
+| table/helpers | `finish`, `analyze_append_inner`, `derive_geometry` | Costruttore comune, filtro del campo sostituito o primaria derivata; prove append/coalesce tramite `ok`. |
+| table/joins | `analyze_join`, `analyze_asof_join`, `analyze_fuzzy_join`, `analyze_cross_join` | Primaria del solo lato che contribuisce geometrie; nessuna se entrambi contribuiscono; `join_primaria_sopravvissuta_oracolo_composizione`, entrambi i lati, canone e sort. |
+| table/joins | `analyze_concat`, `analyze_concat_by_name`, `analyze_set_operation` | Consenso di tutti gli ingressi sul campo primario per le fusioni verticali; intersect/except conservano lo stato sinistro. |
+| table/quality | `analyze_reconcile`, `analyze_validate_rules` in modalità summary | `None` intenzionale: schema di metriche senza geometrie; prove tramite `ok`. Annotate passa per append. |
+| table/reshape | `analyze_melt`, `analyze_pivot`, `analyze_unnest` | Conservata sulle colonne id/indice; nessuna elezione delle derivate. Prove di catalogo e derivazioni plurali. |
+| table/reshape | `analyze_table_diff` | Consenso verticale sulle colonne fuse; resoconto dei vecchi WKB in esadecimale. |
+| table/sort_agg | `analyze_aggregate` | Filtrata sulle chiavi di raggruppamento; first/last derivano ogni geometria separatamente senza promuoverla. |
+| geo/helpers | `with_geometry_types_property`, `rebuild`, `with_schema_metadata` | Conservata; matrice geo. |
+| geo/producers e geo/dispatch | `analyze_reproject`, `with_geometry_nullability`, `analyze_subdivide`, `with_nullable_geometry` | Conservata; matrice geo. |
+| geo/producers | `analyze_geometry_only` | Filtrata sul campo sopravvissuto; matrice geo, inclusi overlay. |
+| geo/producers | `analyze_from_coords`, `analyze_from_wkt` | Primaria nuova solo senza geometrie precedenti; altrimenti conserva lo stato sorgente; matrice geo plurale. |
+| geo/producers e geo/quality | `analyze_generate_grid`, `analyze_coverage_rows` | Schema nuovo: `generate_grid` crea una primaria autonoma; `coverage_validate` e `shared_paths` rendono primaria la geometria derivata solo se l'operando era primario, altrimenti primaria assente (`none`); matrice geo plurale. |
+| geo/measures | `analyze_diagnostics` | Primaria filtrata sulla geometria rimossa; le altre sopravvivono; matrice geo. |
+
+I percorsi che clonano il contratto preservano la primaria (fra questi
+membership join, intersect/except e operazioni sulle righe). Sjoin e nearest
+passano per `rebuild` del lato sinistro. Nessun altro `None` cancella una
+geometria sopravvissuta nelle analisi attualmente ammesse.
+
+L'oracolo di composizione comprende tutti i 13 vettori contracts #57
+`primary-composition-v1`, anche invertendo gli ingressi. Include
+`primary-composition-v1/join-one-surviving-primary-canonical.json`: il test
+applica lo stato successivo alla proiezione, con l'identità d'uscita attesa;
+il test dei vettori copre anche gli ingressi plurali. La
+regressione `cross_join_sort_preserva_primaria_esportabile_geoparquet` prova
+anche esecuzione e preparazione GeoParquet.
+
+Gli adapter tabellari possono usare ID provvisori per rappresentare una
+primaria plurale. Il registro di provenienza pubblica li distingue dagli ID
+ricevuti: il confine li elimina prima di assegnare identità con tutti gli
+ingressi osservati. Copie self-join e riscritture sul posto conservano la
+provenienza pubblica separata dall’identità logica. Il test
+`identita_nuove_solo_al_confine_con_tutti_gli_input` verifica che un ID
+osservato nell'altro ingresso non venga assegnato a un campo nuovo, anche
+con identità ambigue e primaria plurale presente o assente. I
+[limiti transitori](limiti.md#geometrie-multiple-limiti-transitori-della-pr-1)
+restano espliciti per le operazioni geo e GeoParquet.
+
+### Più geometrie
+
+Gli effetti seguono l'operando selezionato, indipendentemente dalla primaria.
+Le passanti hanno effetto `Unchanged` se la provenienza delle righe è
+`Preserved`, altrimenti `Rows`; `sjoin` e `nearest` applicano `Rows` a tutte.
+Misure e predicati conservano la precisione. `Values`, `Types` e `Crs`
+invalidano la precisione ereditata del solo operando ricodificato.
+Le colonne nuove ricevono solo le proprietà CRS dell'operando (`inherit_crs`).
+La primaria segue la provenienza, mai l'ordine dei campi. Il `geo` di schema
+si elimina quando cambiano nomi geometrici o primaria, e a ogni effetto
+diverso da `Unchanged`; il writer ricostruisce i riepiloghi per colonna.

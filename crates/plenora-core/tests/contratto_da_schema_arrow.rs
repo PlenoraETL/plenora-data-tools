@@ -1015,9 +1015,15 @@ fn pubblicazione_preserva_json_esatto_e_rimuove_covering_troncato() {
     use plenora_core::contract::arrow_schema::pubblica_schema;
     use std::collections::BTreeSet;
     let raw = r#"{"columns":{"geometry":{"epoch":2023.1234567890123456789}},"primary_column":"geometry"}"#;
-    let schema = Schema::new(vec![Field::new("geometry", DataType::Binary, true)]).with_metadata(
-        std::collections::HashMap::from([("geo".to_owned(), raw.to_owned())]),
-    );
+    let schema = Schema::new(vec![Field::new("geometry", DataType::Binary, true)
+        .with_metadata(std::collections::HashMap::from([(
+            "ARROW:extension:name".to_owned(),
+            "geoarrow.wkb".to_owned(),
+        )]))])
+    .with_metadata(std::collections::HashMap::from([(
+        "geo".to_owned(),
+        raw.to_owned(),
+    )]));
     let output = pubblica_schema(&schema, &BTreeSet::new(), &BTreeSet::new()).unwrap();
     assert_eq!(output.metadata()["geo"], raw);
     for path in [r#"["assente","xmin"]"#, r#"["bounds","assente"]"#] {

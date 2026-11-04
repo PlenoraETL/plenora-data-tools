@@ -14,6 +14,13 @@ l'indice della riga d'origine.
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `max_vertices` | intero | obbligatorio | `>= 4` | vertici massimi per parte (contati come `coords_count`: il vertice di chiusura e i buchi compresi) |
@@ -64,7 +71,7 @@ In validazione (analisi del contratto):
 
 - `InvalidPlan`: config con campi sconosciuti; `max_vertices` mancante,
   non intero non negativo o minore di 4; `output_column` vuota;
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non è riconoscibile come WKB; `output_column` già presente
   come altra colonna (il nome della colonna geometria stessa è ammesso),
   o `__parent_index` già presente;

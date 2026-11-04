@@ -8,6 +8,13 @@ non cambiano. [`geo.translate`](#geotranslate), [`geo.scale`](#geoscale) e
 
 ### Parametri
 
+`input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
+da elaborare. Omettendo un selettore si usa
+la primaria; senza primaria la selezione implicita fallisce con `Schema`.
+Il selettore non cambia la primaria. CRS, assi e precisione del calcolo
+riguardano solo gli operandi selezionati; le geometrie passanti conservano
+i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
+
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
 | `coefficients` | lista di numeri | obbligatorio | esattamente 6 numeri finiti | `[a, b, xoff, d, e, yoff]`, nelle unità del CRS |
@@ -33,7 +40,7 @@ Per contratto quello d'ingresso (forma 1:1).
 
 In validazione (analisi del contratto):
 
-- `Schema`: l'ingresso non ha esattamente una colonna geometria, o la
+- `Schema`: l'ingresso non ha una colonna geometria selezionabile senza ambiguita', o la
   colonna non si dichiara geometria WKB (né estensione `geoarrow.wkb` né
   chiavi `plenora.geometry.*`);
 - `Unsupported`: dimensioni della colonna diverse da XY (anche non

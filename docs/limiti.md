@@ -37,6 +37,14 @@ relative prove; per gli opt-in, implementare e verificare tutte le regole
 prima di rivendicarli. Le assenze DT-ABS-001 e DT-ABS-002 sono intenzionali:
 non rientrano sulla stessa identita di operazione.
 
+## Geometrie multiple: limiti transitori della PR 1
+
+| Regola | Ambito | Hazard | Condizione di rientro |
+| --- | --- | --- | --- |
+| Le operazioni geo richiedono un operando esplicito o la primaria. | `input_geometry` nelle unarie, `left_geometry` e `right_geometry` nelle binarie; nomi di colonne geometriche. | Senza primaria il selettore omesso fallisce con `Schema`; nessuna elezione della prima colonna. | Supporto plurale dalla PR 3; CRS, assi e precisione riguardano solo gli operandi. |
+| GeoParquet richiede una primaria e non la elegge. | Scrittura GeoParquet. | IPC e Arrow trasportano tabelle senza primaria; GeoParquet le rifiuta con `Unsupported`. Tutte le geometrie restano soggette ai limiti CRS e WKB. | Selezione esplicita della primaria prima della scrittura. |
+| Il canone interno non assegna ID pubblici mancanti; una primaria plurale sintetica senza ID pubblico viene rifiutata. | `arrow_schema_from_contract` su contratti costruiti direttamente in Rust; gli ingressi Arrow con primaria esplicita hanno già il suo ID. | Assegnare ID prima di conoscere tutti gli ingressi potrebbe confondere campi distinti. | Gli output tabellari distinguono gli ID provvisori dagli ID ricevuti; la pubblicazione segue la provenienza e la posizione primaria con tutte le identità del piano. Restano da adattare i produttori geo. |
+
 ## Precisione delle operazioni geografiche: 1 cm a terra
 
 **Regola.** Ogni operazione geografica è garantita entro **1 cm a terra**,
@@ -345,7 +353,7 @@ prodotto. Per l'assenza del controllo a posteriori, vedi l'hazard
 `geo.geodesic_area` e `geo.bearing` risolvono il problema geodetico
 (Karney 2013, `geographiclib-rs`) sull'**ellissoide del datum del CRS
 della colonna**, quello della tabella integrata
-([«CRS integrati»](crs.md#crs-integrati)): Internazionale 1924 per ED50 e Monte
+([«CRS integrati»](crs.md#crs-integrati)): Internazionale 1924 per Eil rifiuto0 e Monte
 Mario, Clarke 1866 per NAD27, Airy per OSGB36, Bessel per DHDN, GRS 80,
 WGS 84. `geo.haversine_distance` misura sulla sfera del raggio medio
 IUGG `R1 = a (1 - f / 3)` dello stesso ellissoide. Il kernel riceve
@@ -408,7 +416,7 @@ a meno di circa 3 cm; lati di 100 m sotto il millimetro), lati oltre
 qualche centinaio di chilometri e lati vicino ai poli. Fino alla versione
 di catalogo precedente (distanza e azimut 1, lunghezza e area 2) ogni
 misura usava WGS 84 qualunque fosse il datum (circa 4 m ogni 100 km su
-ED50) e l'area non verificava la topologia delle geodetiche, senza errore.
+Eil rifiuto0) e l'area non verificava la topologia delle geodetiche, senza errore.
 
 **Condizione di rientro.** Una verifica esatta della topologia delle
 geodetiche (intersezioni di geodetiche, contenimento sul globo) al posto
@@ -429,7 +437,7 @@ esplicita di chi scrive il piano, mai implicita.
 registro ([«La regola dell'accuratezza»](riproiezione.md#la-regola-dellaccuratezza)).
 
 **Hazard.** Il risultato può scostarsi dal vero fino all'accuratezza
-accettata (metri per Monte Mario, ED50, OSGB36, NAD27 senza griglie), senza
+accettata (metri per Monte Mario, Eil rifiuto0, OSGB36, NAD27 senza griglie), senza
 errore; due geometrie vicine possono usare percorsi diversi e scostarsi fra
 loro fino alla somma delle due accuratezze. WGS 84 e la famiglia ETRS89
 sono equivalenti per convenzione (EPSG:1149 conta 0,
@@ -1640,7 +1648,7 @@ quella gia' risolta. I dettagli di un errore non includono coordinate.
 | `table.melt` (unpivot) | Tutte le colonne valore; il campo derivato conserva il riferimento comune. | `crates/plenora-kernels-table/src/reshape.rs:247` / `crates/plenora-kernels-table/src/analyze/reshape.rs:77` |
 | `table.transpose` | Tutte le colonne dati; controllo anche senza righe. Analisi poi Unsupported: numero di colonne dipendente dai dati. | `crates/plenora-kernels-table/src/reshape.rs:1220` / `crates/plenora-kernels-table/src/analyze/reshape.rs:284` |
 | `table.pivot` first/last | Una sola colonna sorgente per ciascun campo derivato, metadati geometrici conservati. Altre riduzioni producono scalari. | `crates/plenora-kernels-table/src/reshape.rs:939` / `crates/plenora-kernels-table/src/analyze/reshape.rs:193` |
-| `table.table_diff` | Rifiuto preventivo di chiavi e colonne confrontate geometriche, anche vuote/null, nel kernel e in analisi. | `crates/plenora-kernels-table/src/reshape.rs:1936` / `crates/plenora-kernels-table/src/analyze/reshape.rs:424` |
+| `table.table_diff` | Compatibilità per coppia delle colonne fuse; riferimenti preservati e vecchi valori WKB esadecimali nel resoconto. | `crates/plenora-kernels-table/src/reshape.rs:1936` / `crates/plenora-kernels-table/src/analyze/reshape.rs:424` |
 | `table.join` inner/left/right/outer | Campi non chiave separati e rinominati conservano la propria sorgente. Chiavi Binary ammesse dal profilo scalare; fusione delle chiavi soggetta alla guardia dei riferimenti. | `crates/plenora-kernels-table/src/joins.rs:368` / `crates/plenora-kernels-table/src/analyze/joins.rs:153` |
 | `table.cross_join` | Campi separati: metadati della rispettiva sorgente. | `crates/plenora-kernels-table/src/joins.rs:1345` / `crates/plenora-kernels-table/src/analyze/joins.rs:288` |
 | `table.semi_join`, `table.anti_join` | Solo campi sinistri con metadati conservati; chiavi Binary confrontate come byte. | `crates/plenora-kernels-table/src/joins.rs:1567` / `crates/plenora-kernels-table/src/analyze/joins.rs:344` |
@@ -1689,10 +1697,8 @@ rifiutano dichiarazioni geometriche annidate prima di creare un campo nuovo.
 identita' e dichiarazione geometrica vengono dalla prima sorgente effettiva,
 con nullabilita' aggiornata. La prova di catalogo
 `catalogo_colonne_presenti_in_un_solo_ingresso` verifica entrambi i lati,
-anche con dichiarazioni presenti solo nel contratto Rust. La pipeline
-ammette al massimo una colonna geometrica: derivarne
-una seconda resta un rifiuto esplicito. Le API tabellari dirette possono
-conservare piu' campi geometrici distinti. Coalesce, melt, pivot first/last e
+anche con dichiarazioni presenti solo nel contratto Rust. La pipeline e le API tabellari dirette conservano più campi geometrici
+distinti, anche senza primaria. Coalesce, melt, pivot first/last e
 transpose conservano i metadati del riferimento comune ma non copiano
 l'identita' del campo ne' la dichiarazione dei tipi geometrici del primo;
 dimensioni/encoding differenti nella fusione sono rifiutati. I kernel che
@@ -1713,11 +1719,11 @@ restano rifiuti espliciti. Le sentinelle cancellano metadati mantenendo i
 byte e devono essere riconosciute dall'oracolo. Questa e' una matrice
 finita sugli esempi, non una prova di tutte le configurazioni possibili.
 
-`table.table_diff` rifiuta chiavi e valori geometrici prima delle celle.
-`table.semi_join`, `table.anti_join`, `table.assert_foreign_key` e
-`table.reconcile` richiedono riferimenti ed encoding concordi fra le
-geometrie dichiarate dei due ingressi anche se non sono chiavi o non
-sopravvivono nell'uscita. Kernel e analisi applicano la stessa guardia.
+`table.table_diff` conserva i riferimenti compatibili delle colonne fuse e
+rappresenta i vecchi WKB in esadecimale nel resoconto. Semi/anti join,
+assert_foreign_key e reconcile verificano le coppie di chiavi configurate,
+anche con nomi diversi; non confrontano i CRS delle geometrie passanti.
+Kernel e analisi applicano la stessa guardia per coppia.
 
 **Rientro.** Regressioni con POINT(12 45)/POINT(45 12), assi invertiti,
 unknown/assenti, CRS diversi, geometrie compatibili, tabelle vuote e
@@ -1826,3 +1832,24 @@ unitaria del catalogo verifica la politica, mentre le regressioni dei
 trasporti non enumerano ancora tutte le configurazioni dei kernel.
 **Rientro:** oracolo end-to-end completo per chiave, operazione e trasporto,
 e supporto contrattuale alle trasformazioni temporali.
+
+### Metadati con più geometrie
+
+**Regola e ambito.** In scrittura GeoParquet, la definizione PROJJSON canonica
+e i membri `crs` in formato PROJJSON dei contenitori di ogni campo vengono normalizzati alla
+forma integrata del footer dopo il confronto semantico. La scrittura
+rifiuta con categoria `Crs` anche una sola secondaria senza CRS.
+Gli effetti `Values`, `Types` e `Crs` invalidano la precisione ereditata
+solo dell'operando ricodificato; misure, predicati e passanti con righe
+preservate la conservano.
+
+**Hazard.** La normalizzazione conserva la semantica C1 ma cambia il testo originale; il rifiuto
+impedisce l'esportazione di dataset parzialmente georeferenziati; la precisione perde
+la precisione della rappresentazione originaria quando il kernel ricodifica.
+I nativi `primary_column` e `altre_colonne` descrivono soltanto il file
+d'origine e non determinano mai la primaria corrente.
+
+**Rientro.** La normalizzazione richiede una rappresentazione CRS comune che conservi testo
+e semantica senza dichiarazioni discordanti; il rifiuto richiede un contratto di
+scrittura esplicito per CRS mancanti; la precisione richiede kernel che preservino e
+provino la rappresentazione numerica originale.
