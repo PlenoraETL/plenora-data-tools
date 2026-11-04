@@ -38,7 +38,7 @@ except ImportError:
 # a ragione: Python legge i .pyc esistenti anche con -B.
 sys.dont_write_bytecode = True
 
-REVISIONE = "3aec9f724f5a0ad21366f293895b4d0dbcd0aad1"
+REVISIONE = "38d68b402389855edbcecb7ce57c31e91282cb4e"
 
 
 class Verifica:

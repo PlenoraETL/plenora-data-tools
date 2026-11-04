@@ -12,6 +12,23 @@ la cui versione non ha qui una voce datata.
 
 ## [4.1.0] - non rilasciata
 
+La 4.1.0 completa il supporto alle geometrie multiple su API Rust, CLI e SDK
+Python, IPC file/stream e GeoParquet: CRS per colonna, primaria facoltativa,
+selettori espliciti e conservazione delle geometrie passanti. Include le
+correzioni della politica dei metadati (#145) e della raccolta (#147).
+
+PR 5 - qualificazione: matrice guidata da tutte le operazioni del catalogo,
+con una, due e tre geometrie, primaria iniziale/non iniziale/assente,
+operandi primari e secondari, null e ingressi vuoti sui tre trasporti.
+Adozione di Arrow Primary Geometry 1.0 e dei tredici vettori
+primary-composition-v1 verificati al pin; rimosso il limite
+`data-una-geometria`. Guide con esempi eseguiti dai test.
+`table.expression` ammette `is_null` e `is_not_null` direttamente sulle
+geometrie, leggendo solo la bitmap; gli usi testuali restano rifiutati.
+La proposta di aggiornamento della catena interop richiede la verifica del
+contenuto e deve essere eseguita nella VM prima di dichiarare verde la catena.
+
+
 Correzione geometrie fra i valori: melt, pivot first/last, coalesce e transpose
 emettono `types_declaration=unresolved` coerente con il contratto, anche con
 più geometrie. Le letture testuali del WKB sono rifiutate con `Crs` in

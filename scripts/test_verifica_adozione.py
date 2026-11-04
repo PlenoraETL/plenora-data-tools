@@ -175,3 +175,17 @@ class CensimentoGeometricoTests(unittest.TestCase):
         sorgente["conforming"].remove("plenora-arrow-geometry-semantics-v1")
         with self.assertRaises(ValueError):
             verifica_adozione.verifica_regole_geometriche(sorgente)
+
+
+class PrimariaTests(unittest.TestCase):
+    def test_convenzione_o_regola_mancante(self):
+        import json
+        source = json.loads((verifica_adozione.RADICE / "crates/plenora-cli/adozione.json").read_text("utf-8"))
+        source["conforming"].remove("plenora-arrow-primary-geometry-v1")
+        with self.assertRaisesRegex(ValueError, "convenzione primaria"):
+            verifica_adozione.verifica_primaria(Path("non-letto"), source)
+        source["conforming"].append("plenora-arrow-primary-geometry-v1")
+        req = next(r for r in source["requirements"] if "PRIM-001" in r["rules"])
+        req["rules"].remove("PRIM-006")
+        with self.assertRaisesRegex(ValueError, "regole primaria"):
+            verifica_adozione.verifica_primaria(Path("non-letto"), source)

@@ -1,0 +1,18 @@
+{
+  "commit": "38d68b402389855edbcecb7ce57c31e91282cb4e",
+  "file": {
+    "append-different-ids-same-output.json": "77c72b6df551ecea188453549280e383ec88cf27f55bade974d0835c3bb7e73c",
+    "append-dropped-primary.json": "a2534eedacdd7c8a1e6d2a9cd449fad0e7e2420c354b08f508db3fd90796777e",
+    "append-equal-ids-different-outputs.json": "f28bbde2a8532dad491f9287faaf7478b268115b71c61ba84d613b5c6304127c",
+    "append-missing-primary.json": "90439ef0101836b0c5b0d2aa4a5658385e64c1504407f0d5f883c527f7f584a7",
+    "join-dropped-primary-no-promotion.json": "92c1f14497d24804951a8098a157911aea812a2012072d86eb4e52fea0333797",
+    "join-one-surviving-primary-canonical.json": "a740f6d446734437faa19b5206ff260b9c787c54eca37e5f3ef3b7d348301a67",
+    "join-preserves-no-primary.json": "424d5b186bd951bca86217b7340eb6108e0711a5f663980868989ba71be953aa",
+    "join-preserves-remapped-primary.json": "c73701d9f8c7e998c193250f860514950b0c4fdce0d7955a84c78a882d1d12d8",
+    "join-two-geometry-inputs-no-election.json": "8ec8bcd2cda29359920eed3387efe58cbadcc91be0322e38c20a16b189c52809",
+    "union-different-ids-same-output.json": "ba4b35f84275aaf04657409d6ea8cd1a5f93dd78b5e37dbcfa9edb8f35fd4c3a",
+    "union-dropped-primary.json": "8e12085c16b577e31e305d44d3391c8f9f3cd8feff77585577eb03eaadf434a4",
+    "union-equal-ids-different-outputs.json": "aec9496b905c65f655597a913f8316794d0ebe1bb4a5a7fd13ffc48f5cbacb56",
+    "union-missing-primary.json": "5e96fa98ad3db7a8039026857c61e63094ff05fc37fe29260b03be7997b75dad"
+  }
+}

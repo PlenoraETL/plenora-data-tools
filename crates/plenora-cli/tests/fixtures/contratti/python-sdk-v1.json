@@ -196,9 +196,49 @@
     },
     {
       "component": "plenora-io-tools",
-      "artifact": null,
-      "discovery": [],
-      "bindings": []
+      "artifact": "plenora-io / plenora_io",
+      "discovery": [
+        "plenora_io.version",
+        "Client.capabilities"
+      ],
+      "bindings": [
+        {
+          "operation": "io.catalog",
+          "version": 2,
+          "requirement": "required",
+          "entrypoints": ["Client.catalog"]
+        },
+        {
+          "operation": "io.inspect",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": ["Client.inspect"]
+        },
+        {
+          "operation": "io.layers",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": ["Client.layers"]
+        },
+        {
+          "operation": "io.read",
+          "version": 2,
+          "requirement": "required",
+          "entrypoints": ["Client.read", "Client.read_table", "Client.validate"]
+        },
+        {
+          "operation": "io.write",
+          "version": 2,
+          "requirement": "required",
+          "entrypoints": ["Client.write"]
+        },
+        {
+          "operation": "io.convert",
+          "version": 1,
+          "requirement": "required",
+          "entrypoints": ["Client.convert"]
+        }
+      ]
     },
     {
       "component": "plenora-rest-tools",

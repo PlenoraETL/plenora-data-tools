@@ -83,11 +83,11 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 | `plenora-cli` | 6 | 64 | 70 |
 | `plenora-core` | 209 | 92 | 301 |
 | `plenora-data-py` | 0 | 0 | 0 |
-| `plenora-io` | 20 | 253 | 273 |
+| `plenora-io` | 20 | 256 | 276 |
 | `plenora-kernels-geo` | 532 | 108 | 640 |
-| `plenora-kernels-table` | 475 | 138 | 613 |
+| `plenora-kernels-table` | 476 | 138 | 614 |
 | `plenora-pipeline` | 12 | 174 | 186 |
-| **totale** | 1254 | 829 | 2083 |
+| **totale** | 1255 | 832 | 2087 |
 
 ### Prove Python dell'SDK
 
@@ -121,5 +121,5 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 | `scripts/test_geometry_text_classification.py` | 1 |
 | `scripts/test_semantica_crs.py` | 2 |
 | `scripts/test_strict_json.py` | 5 |
-| `scripts/test_verifica_adozione.py` | 12 |
+| `scripts/test_verifica_adozione.py` | 13 |
 | `scripts/test_verifica_sdk_python.py` | 2 |

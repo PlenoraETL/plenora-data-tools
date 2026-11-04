@@ -3,7 +3,7 @@
   "component": "plenora-data-tools",
   "contracts_source": {
     "repository": "https://github.com/PlenoraETL/plenora-contracts.git",
-    "revision": "3aec9f724f5a0ad21366f293895b4d0dbcd0aad1"
+    "revision": "38d68b402389855edbcecb7ce57c31e91282cb4e"
   },
   "profile": "plenora-data-tools-profile-v3",
   "conforming": [
@@ -19,7 +19,8 @@
     "plenora-surface-bindings-v1",
     "plenora-composition-v1",
     "plenora-public-catalog-v2",
-    "plenora-arrow-geometry-semantics-v1"
+    "plenora-arrow-geometry-semantics-v1",
+    "plenora-arrow-primary-geometry-v1"
   ],
   "not_applicable": [
     "plenora-runtime-binding-v2",
@@ -377,7 +378,7 @@
         "GEO-012"
       ],
       "status": "implemented",
-      "reason": "Piu geometrie rifiutate unsupported/validate, nessun campo scartato.",
+      "reason": "Geometrie multiple conservate con CRS e assi per colonna; primaria facoltativa e selettori espliciti. GeoParquet senza primaria rifiutato unsupported.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
     },
     {
@@ -499,6 +500,26 @@
       "status": "implemented",
       "reason": "86 vettori al pin, SHA-256, conformita distinta dalle deviazioni e dall applicabilita del calcolo.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
+    },
+    {
+      "rules": [
+        "PRIM-001",
+        "PRIM-002",
+        "PRIM-003",
+        "PRIM-004",
+        "PRIM-005",
+        "PRIM-006",
+        "PRIM-007",
+        "PRIM-008",
+        "PRIM-009"
+      ],
+      "status": "implemented",
+      "reason": "Primaria per identita e provenienza, selettori per operando, GeoParquet plurale. Vettori primary-composition-v1 e matrice catalogo sui tre trasporti.",
+      "verification": [
+        "cargo test -p plenora-kernels-table vettori_contratti_primary_composition_v1",
+        "cargo test -p plenora-io --test integrazione_primary_composition",
+        "cargo test -p plenora-io --test operazioni_doc"
+      ]
     }
   ]
 }

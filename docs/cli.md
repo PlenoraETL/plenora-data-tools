@@ -2,7 +2,7 @@
 
 `crates/plenora-cli` è la superficie pubblica del componente
 `plenora-data-tools` secondo il profilo data-tools di `plenora-contracts`,
-versione 3, fissato al commit `3aec9f724f5a0ad21366f293895b4d0dbcd0aad1`: il binario
+versione 3, fissato al commit `38d68b402389855edbcecb7ce57c31e91282cb4e`: il binario
 `plenora-data` (CLI 2.0) e le stesse quattro operazioni come funzioni Rust
 (`plenora_cli::api`), più `data.run` 3, che sta solo su Rust
 ([«`data.run` 3 sul runtime»](#datarun-3-sul-runtime)). Una sola tabella (`plenora_cli::operazioni::OPERAZIONI`)
@@ -231,7 +231,7 @@ tabelle pubblicate sono quelle di `esegui_in_memoria` sullo stesso piano.
 
 Il profilo adottato e' data-tools versione 3 (`plenora-data-tools-profile-v3`,
 decisione 0015), con `catalogs/data-tools-v3.json` e Public Catalogs 2.0.
-Il pin e' `3aec9f724f5a0ad21366f293895b4d0dbcd0aad1`; la sorgente del
+Il pin e' `38d68b402389855edbcecb7ce57c31e91282cb4e`; la sorgente del
 manifesto (`crates/plenora-cli/adozione.json`) registra requisiti, stati e
 motivazioni. Identita delle operazioni e registro `data-kernels-v2` invariati.
 
@@ -418,3 +418,5 @@ non modificano le campagne Rust di questo repository.
   `plenora-data-capability-attributes-v1` e i documenti dei risultati
   (`plenora-data-*-v1`) sono descritti qui, non da uno schema JSON
   pubblicato; i test ne verificano la forma campo per campo.
+
+Geometrie multiple complete dalla 4.1.0: [primaria, selettori ed esempi eseguiti](geometrie-multiple.md).

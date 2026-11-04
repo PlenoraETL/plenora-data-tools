@@ -65,9 +65,9 @@ pub(in crate::analyze) fn analyze_expression(
     // L'AST si analizza SEMPRE, anche quando `output_type` e' dichiarato: il
     // tipo dichiarato non dice niente sulle colonne referenziate ne' sugli
     // operandi.
+    expressions::verifica_accessi_geometrici(&config.expression, &input.schema)?;
     let lookup = |name: &str| {
         let field = field_of(op, input, name)?;
-        crate::require_non_geometry(field)?;
         Ok(field.data_type().clone())
     };
     expressions::static_type::verifica_domini_temporali(op, &config.expression, &lookup)?;

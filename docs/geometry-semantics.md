@@ -42,7 +42,7 @@ non si cambia quel requisito per farli passare.
 | GEO-009 | conforme | Buona forma prima dello SRID; confronto contro il campo originale; lo SRID assente resta assente sotto EWKB. |
 | GEO-010 | conforme | Insiemi di tipi preservati; verifica dei valori contro la lista prima del calcolo. |
 | GEO-011 | conforme | Lettore strutturale dei valori prima dei kernel, poi SRID, tipi e dimensioni; limite di 32 livelli. |
-| GEO-012 | conforme | Piu geometrie rifiutate unsupported/validate, nessun campo scartato. |
+| GEO-012 | conforme | Geometrie multiple conservate con CRS e assi per colonna; primaria facoltativa e selettori espliciti. GeoParquet senza primaria rifiutato unsupported. |
 | GEO-013 | deviazione | Le identita nuove partono oltre il massimo osservato, per non riusare identita perse dalla lineage. |
 | GEO-014 | deviazione | Il cambio di precisione e visibile nello schema; manca un evento dedicato di normalizzazione nel risultato. |
 | GEO-015 | deviazione | Le definizioni fuori dai profili integrati PROJJSON, WKT1 e WKT2 vengono rifiutate, anche quando verificabili. |

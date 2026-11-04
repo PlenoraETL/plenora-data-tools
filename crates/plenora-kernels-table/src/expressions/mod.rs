@@ -116,6 +116,32 @@ fn figli(expr: &Expression) -> Vec<&Expression> {
     }
 }
 
+/// Verifica gli accessi ai valori; i test diretti sul null leggono solo la bitmap.
+pub(crate) fn verifica_accessi_geometrici(
+    expr: &Expression,
+    schema: &plenora_core::arrow::schema::Schema,
+) -> plenora_core::Result<()> {
+    match expr {
+        Expression::Unary {
+            op: UnaryOperator::IsNull | UnaryOperator::IsNotNull,
+            value,
+        } if matches!(value.as_ref(), Expression::Column { .. }) => Ok(()),
+        Expression::Column { name } => {
+            // I nomi assenti conservano la diagnostica del lookup statico.
+            if let Ok(field) = schema.field_with_name(name) {
+                crate::require_non_geometry(field)?;
+            }
+            Ok(())
+        }
+        _ => {
+            for child in figli(expr) {
+                verifica_accessi_geometrici(child, schema)?;
+            }
+            Ok(())
+        }
+    }
+}
+
 /// `true` se l'albero contiene una divisione.
 fn contiene_divisione(expr: &Expression) -> bool {
     matches!(
@@ -495,6 +521,56 @@ mod tests {
 
     use super::*;
     use crate::test_support::single_column_batch;
+
+    #[test]
+    fn geometria_null_bitmap_oracolo() {
+        use plenora_core::arrow::array::BinaryArray;
+        let mut metadata = plenora_core::arrow::Metadata::default();
+        metadata.insert("ARROW:extension:name", "geoarrow.wkb");
+        let field = Field::new("g", DataType::Binary, true).with_metadata(metadata);
+        // Byte non UTF-8: il test sul null non deve decodificare il valore.
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![field])),
+            vec![Arc::new(BinaryArray::from(vec![Some(&[255_u8][..]), None]))],
+        )
+        .unwrap();
+        for batch in [batch.clone(), batch.slice(1, 1), batch.slice(0, 0)] {
+            for op in ["is_null", "is_not_null"] {
+                let cfg: ExpressionTransform = serde_json::from_value(json!({
+                    "output_column": "n", "expression": {"kind":"unary", "op":op,
+                    "value":{"kind":"column", "name":"g"}}
+                }))
+                .unwrap();
+                let fast = expression(&batch, &cfg).unwrap();
+                assert_eq!(fast, expression_generic(&batch, &cfg).unwrap());
+                let values = fast
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap();
+                for row in 0..batch.num_rows() {
+                    assert_eq!(
+                        values.value(row),
+                        batch.column(0).is_null(row) ^ (op == "is_not_null")
+                    );
+                }
+            }
+            for expr in [
+                json!({"kind":"column","name":"g"}),
+                json!({
+                    "kind":"unary", "op":"is_null", "value":{"kind":"function", "name":"lower",
+                    "args":[{"kind":"column","name":"g"}]}
+                }),
+            ] {
+                let cfg: ExpressionTransform =
+                    serde_json::from_value(json!({"output_column":"n","expression":expr})).unwrap();
+                assert!(matches!(
+                    expression(&batch, &cfg),
+                    Err(PlenoraError::Crs(_))
+                ));
+            }
+        }
+    }
 
     /// Fixture con null, -0.0, zeri, testi (anche data-like) e booleani.
     ///

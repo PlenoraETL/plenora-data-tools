@@ -657,6 +657,10 @@ fn fast_substring_index(value: &FastValue<'_>, context: &str) -> Result<Option<u
 
 /// Nodo compilato: colonne risolte, letterali pre-materializzati, errori lazy.
 enum FastNode<'a> {
+    NullColumn {
+        array: &'a dyn plenora_core::arrow::array::Array,
+        negate: bool,
+    },
     Literal(FastLiteral<'a>),
     Column(FastColumn<'a>),
     Error(LazyError),
@@ -763,6 +767,21 @@ fn compile_expression<'a>(expression: &'a Expression, batch: &'a RecordBatch) ->
             |index| FastNode::Column(FastColumn::new(batch.column(index))),
         ),
         Expression::Literal { value } => compile_literal(value),
+        Expression::Unary { op, value }
+            if matches!(op, UnaryOperator::IsNull | UnaryOperator::IsNotNull)
+                && matches!(value.as_ref(), Expression::Column { name } if batch.schema_ref().field_with_name(name).is_ok_and(plenora_core::contract::arrow_metadata::field_declares_wkb_geometry)) =>
+        {
+            let Expression::Column { name } = value.as_ref() else {
+                return FastNode::Error(LazyError::InvalidPlan("operando null non valido".into()));
+            };
+            column_index(batch, name).map_or_else(
+                |_| FastNode::Error(LazyError::Schema("colonna assente".into())),
+                |index| FastNode::NullColumn {
+                    array: batch.column(index).as_ref(),
+                    negate: matches!(op, UnaryOperator::IsNotNull),
+                },
+            )
+        }
         Expression::Unary { op, value } => FastNode::Unary {
             op: *op,
             value: Box::new(compile_expression(value, batch)),
@@ -922,6 +941,9 @@ fn evaluate_fast<'e, 'a: 'e>(
     match node {
         FastNode::Literal(literal) => Ok(literal.value()),
         FastNode::Column(column) => column.get(row),
+        FastNode::NullColumn { array, negate } => {
+            Ok(FastValue::Boolean(array.is_null(row) ^ negate))
+        }
         FastNode::Error(error) => Err(error.build()),
         FastNode::Unary { op, value } => {
             let value = evaluate_fast(value, row, ctx)?;

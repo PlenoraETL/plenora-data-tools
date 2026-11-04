@@ -1,6 +1,6 @@
 {
   "sorgente": "plenora-contracts",
-  "commit": "3aec9f724f5a0ad21366f293895b4d0dbcd0aad1",
+  "commit": "38d68b402389855edbcecb7ce57c31e91282cb4e",
   "nota": "Copie byte per byte (git show <commit>:<percorso>) degli schemi, del catalogo pubblico, del registro dei kernel e dei binding CLI e Python che i test della CLI (e la suite dell'SDK Python) usano come attese. Non si modificano: un file nuovo o cambiato si ricopia dal commit dei contratti e si aggiorna questo file. tests/comune/mod.rs verifica gli SHA-256 prima di usarli.",
   "file": {
     "capabilities-v2.schema.json": [
@@ -73,7 +73,7 @@
     ],
     "python-sdk-v1.json": [
       "bindings/python-sdk-v1.json",
-      "ffc5680bb9a595ba9162693e75f70d664ebaadf684d4338da7d72ea00569fbd8"
+      "fe4df58a115db15e63146f4c031f73dda34c04c8ea52a21d8e90bde45257ee11"
     ],
     "row-diagnostics-v1.schema.json": [
       "schemas/row-diagnostics-v1.schema.json",
