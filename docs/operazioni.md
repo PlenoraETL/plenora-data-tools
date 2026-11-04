@@ -12063,6 +12063,11 @@ colonna d'ingresso, dimensioni `xy`, senza dichiarazione dei tipi), tutte
 non nullable. Le colonne dell'ingresso spariscono, i metadati di schema
 restano; nessuna proprietà del contratto sopravvive.
 
+La geometria d'uscita e' primaria solo se l'operando selezionato era la
+primaria d'ingresso; altrimenti l'uscita ha primaria assente (`none`),
+anche se contiene una sola geometria. Dall'operando eredita solo le
+proprieta' del CRS; tipi e rappresentazione sono prodotti dal codec.
+
 #### Righe
 
 Una riga per coppia di righe d'ingresso `(a, b)`, con `a < b`, i cui
@@ -20117,6 +20122,11 @@ Schema nuovo, in quest'ordine: `index_a` e `index_b` (`uint64`),
 d'ingresso, dimensioni `xy`, senza dichiarazione dei tipi), tutte non
 nullable. Le colonne dell'ingresso spariscono, i metadati di schema
 restano; nessuna proprietà del contratto sopravvive.
+
+La geometria d'uscita e' primaria solo se l'operando selezionato era la
+primaria d'ingresso; altrimenti l'uscita ha primaria assente (`none`),
+anche se contiene una sola geometria. Dall'operando eredita solo le
+proprieta' del CRS; tipi e rappresentazione sono prodotti dal codec.
 
 #### Righe
 

@@ -12,6 +12,15 @@ la cui versione non ha qui una voce datata.
 
 ## [4.1.0] - non rilasciata
 
+`coverage_validate` e `shared_paths` mantengono primaria la geometria
+nuova derivata solo quando l'operando era primario; con un operando
+secondario o senza primaria emettono `none`. Oracolo della matrice dei
+metadati indipendente dalla selezione degli effetti di produzione, bbox
+sentinella disgiunti dai dati, gestione esplicita di piu' operandi e
+rifiuto dei ruoli mancanti con righe non conservate. Gli errori delle
+fusioni di metadati mantengono il messaggio senza citarlo come chiave.
+
+
 WKT1 GDAL: equivalenza del DATUM al datum/ensemble integrato solo con
 codice EPSG identico; nome irrilevante, autorità obbligatoria anche per i
 datum non ensemble. Il GEOGCS base di PROJCS può omettere gli assi; gli

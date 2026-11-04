@@ -459,7 +459,7 @@ pub fn analyze_geo_contract(
     // Il contratto e' l'unica fonte delle identita' sopravvissute.
     fields.bind_contract(&output);
     output.validate()?;
-    Ok(senza_precisione_ereditata(output, descriptor, &operands))
+    senza_precisione_ereditata(output, descriptor, &operands)
 }
 
 /// Applica la politica alle colonne secondo il ruolo risolto nell'analisi.
@@ -467,13 +467,16 @@ fn senza_precisione_ereditata(
     mut output: DataContract,
     descriptor: &plenora_core::catalog::OperationDescriptor,
     operands: &[Option<&plenora_core::contract::GeometryColumnContract>],
-) -> DataContract {
+) -> Result<DataContract> {
     use plenora_core::contract::geometry_metadata_policy::{
         apply, column_effects, operation_effect, Effect,
     };
     // Gli ID interni del contratto non sono gli ID pubblici dei metadati Arrow.
+    // Le binarie geo ereditano solo la sinistra (analyze_binary): il destro
+    // e' letto, non trasformato nell'uscita, anche se condivide gli ID.
     let resolved = operands
         .iter()
+        .take(1)
         .map(|operand| {
             operand.and_then(|operand| {
                 output
@@ -483,7 +486,7 @@ fn senza_precisione_ereditata(
             })
         })
         .collect::<Vec<_>>();
-    let effects = column_effects(descriptor, &output.schema, &resolved);
+    let effects = column_effects(descriptor, &output.schema, &resolved)?;
     let fields: Vec<Field> = output
         .schema
         .fields()
@@ -515,7 +518,7 @@ fn senza_precisione_ereditata(
         output.schema.metadata().clone()
     };
     output.schema = Arc::new(Schema::new_with_metadata(fields, metadata));
-    output
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -837,6 +840,70 @@ mod tests {
             ],
             ContractCrs::Resolved(crs),
         )
+    }
+
+    #[test]
+    fn operando_destro_dello_stesso_dataset_resta_passante_a_sinistra() {
+        let input = with_geometry_field_metadata(geo_contract(projected_crs()), false, |md| {
+            md.insert("bbox", "[100000000,100000000,100000001,100000001]");
+            md.insert("test.provenienza", "geometria-originale");
+        });
+        let mut fields: Vec<_> = input
+            .schema
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+        fields.push(
+            input
+                .schema
+                .field_with_name("geometry")
+                .unwrap()
+                .clone()
+                .with_name("altra"),
+        );
+        let mut geometries = input.geometries.clone();
+        geometries.push(GeometryColumnContract {
+            field_id: FieldId(3),
+            name: "altra".into(),
+            ..geometries[0].clone()
+        });
+        let input = DataContract::from_source(
+            Arc::new(Schema::new(fields)),
+            geometries,
+            input.active_geometry,
+            ContractProperties::default(),
+        )
+        .unwrap();
+        for op in [
+            "geo.clip",
+            "geo.intersection",
+            "geo.union",
+            "geo.difference",
+            "geo.symmetric_difference",
+        ] {
+            let output = analyze_one(
+                op,
+                &[input.clone(), input.clone()],
+                &json!({"left_geometry": "geometry", "right_geometry": "altra"}),
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                output.schema.field_with_name("altra").unwrap().metadata(),
+                input.schema.field_with_name("altra").unwrap().metadata(),
+                "{op}: l'operando destro e' letto, la passante sinistra non e' trasformata",
+            );
+            assert!(
+                !output
+                    .schema
+                    .field_with_name("geometry")
+                    .unwrap()
+                    .metadata()
+                    .contains_key("bbox"),
+                "{op}"
+            );
+        }
     }
 
     /// Il contratto con i metadati del campo geometria modificati da

@@ -403,10 +403,10 @@ pub fn utf8_column<'a>(
 ///
 /// # Errors
 ///
-/// La chiave in conflitto.
+/// Conflitto fra metadati, senza valori dei dati.
 pub(crate) fn unisci_metadata_schema<'a>(
     sorgenti: impl IntoIterator<Item = &'a plenora_core::arrow::Metadata>,
-) -> std::result::Result<HashMap<String, String>, String> {
+) -> Result<HashMap<String, String>> {
     let sources = sorgenti
         .into_iter()
         .map(|source| {
@@ -419,7 +419,6 @@ pub(crate) fn unisci_metadata_schema<'a>(
         &sources.iter().collect::<Vec<_>>(),
     )
     .map(|metadata| metadata.into_iter().collect())
-    .map_err(|error| error.to_string())
 }
 
 /// [`unisci_metadata_schema`] sugli schemi degli input di un kernel.
@@ -431,11 +430,8 @@ pub(crate) fn metadata_schema_input(
     op: &str,
     schemi: &[&Schema],
 ) -> Result<HashMap<String, String>> {
-    unisci_metadata_schema(schemi.iter().map(|schema| schema.metadata())).map_err(|chiave| {
-        PlenoraError::Schema(format!(
-            "{op}: metadata di schema in conflitto sulla chiave {chiave:?}"
-        ))
-    })
+    unisci_metadata_schema(schemi.iter().map(|schema| schema.metadata()))
+        .map_err(|error| error.con_contesto(op))
 }
 
 /// Come [`replace_or_append`], ma una colonna esistente sostituita con lo

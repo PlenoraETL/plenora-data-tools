@@ -197,48 +197,77 @@ fn plural(
     RecordBatch::try_new(arrow_schema_from_contract(&contract).unwrap(), columns).unwrap()
 }
 
+fn catalog_effect(op: &OperationDescriptor) -> Effect {
+    let declared = include_str!("../riferimenti/operazioni_metadati.txt")
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .find(|(id, _)| *id == op.id)
+        .expect("classificazione dell'operazione")
+        .1;
+    match declared {
+        "Unchanged" => Effect::Unchanged,
+        "Rows" => Effect::Rows,
+        "Values" => Effect::Values,
+        "Types" => Effect::Types,
+        "Crs" => Effect::Crs,
+        "Merge" => Effect::Merge,
+        _ => panic!("classificazione non riconosciuta"),
+    }
+}
+
 pub fn expected_effects(
     op: &OperationDescriptor,
     inputs: &[RecordBatch],
     output: &RecordBatch,
 ) -> Vec<(usize, Effect)> {
-    let contracts: Vec<_> = inputs
-        .iter()
-        .map(|b| contract_from_arrow_schema(b.schema(), resolve_crs).unwrap())
-        .collect();
-    let selected: Vec<_> = contracts
+    use plenora_core::catalog::SourceRowProvenance;
+    // Oracolo dalla regola scritta: nessuna chiamata a column_effects.
+    let effect = if op.id == "table.table_diff" {
+        Effect::Merge
+    } else {
+        catalog_effect(op)
+    };
+    output
+        .schema()
+        .fields()
         .iter()
         .enumerate()
-        .map(|(side, c)| {
-            if matches!(
-                op.id,
-                "geo.from_coords" | "geo.from_wkt" | "geo.generate_grid"
-            ) {
-                return None;
-            }
-            c.geometries
-                .iter()
-                .find(|g| !g.name.starts_with("__passante_"))
-                .map(|g| {
-                    let mut selected = g.clone();
-                    let origin = format!("{side}:{}", g.name);
-                    if let Some(field) = output
-                        .schema()
-                        .fields()
-                        .iter()
-                        .find(|f| f.metadata().get(ORIGIN) == Some(&origin))
-                    {
-                        selected.name.clone_from(field.name());
-                    }
-                    selected
-                })
+        .filter(|(_, field)| e_geometria(field))
+        .map(|(position, field)| {
+            let origin = field.metadata().get(ORIGIN).and_then(|s| s.split_once(':'));
+            let source_name = origin.map_or_else(|| field.name().as_str(), |(_, name)| name);
+            let inherited = inputs.iter().any(|input| {
+                input
+                    .schema()
+                    .field_with_name(source_name)
+                    .is_ok_and(e_geometria)
+            });
+            let column_effect = if op.family != Family::Geo {
+                effect
+            } else if !inherited
+                || (matches!(
+                    op.id,
+                    "geo.coverage_validate" | "geo.shared_paths" | "geo.generate_grid"
+                ) && !source_name.starts_with("__passante_"))
+            {
+                // Le nuove geometrie derivate ereditano soltanto C1;
+                // tipi e rappresentazione sono quelli prodotti dal codec.
+                Effect::Types
+            } else if !source_name.starts_with("__passante_")
+                && !matches!(
+                    op.id,
+                    "geo.from_coords" | "geo.from_wkt" | "geo.generate_grid"
+                )
+            {
+                effect
+            } else if op.source_row_provenance() == SourceRowProvenance::Preserved {
+                Effect::Unchanged
+            } else {
+                Effect::Rows
+            };
+            (position, column_effect)
         })
-        .collect();
-    policy::column_effects(
-        op,
-        &output.schema(),
-        &selected.iter().map(Option::as_ref).collect::<Vec<_>>(),
-    )
+        .collect()
 }
 
 fn sample(key: &str, field: &Field, site: Site, different: bool) -> Value {
@@ -251,7 +280,7 @@ fn sample(key: &str, field: &Field, site: Site, different: bool) -> Value {
             "epoch" | "plenora.geometry.native.geoparquet.epoch" => Some(json!(2024.5)),
             "precision" => Some(json!(0.02)),
             "bbox" | "plenora.geometry.native.geoparquet.bbox" => {
-                Some(json!([-90_000_000, -90_000_000, 90_000_000, 90_000_000]))
+                Some(json!([90_000_000, 90_000_000, 90_000_001, 90_000_001]))
             }
             "edges" | "plenora.geometry.native.geoparquet.edges" => Some(json!("spherical")),
             "plenora.geometry.srid" => Some(json!("100002")),
@@ -361,7 +390,7 @@ fn sample_equal(key: &str, field: &Field, site: Site) -> Value {
         }
         "bbox" | "plenora.geometry.native.geoparquet.bbox" => {
             let bound = 100_000_000 + i64::from(ordinal);
-            Some(json!([-bound, -bound, bound, bound]))
+            Some(json!([bound, bound, bound + 1, bound + 1]))
         }
         "precision" => Some(json!(0.01 * f64::from(ordinal + 1))),
         "orientation" => Some(json!(format!("orientamento-colonna-{ordinal}"))),
@@ -406,7 +435,7 @@ fn sample_equal(key: &str, field: &Field, site: Site) -> Value {
         }
         "edges" | "plenora.geometry.native.geoparquet.edges" => json!("planar"),
         "bbox" | "plenora.geometry.native.geoparquet.bbox" => {
-            json!([-100_000_000, -100_000_000, 100_000_000, 100_000_000])
+            json!([100_000_000, 100_000_000, 100_000_001, 100_000_001])
         }
         "covering" => json!({"bbox":{"xmin":[field.name()]}}),
         "geometry_types" => json!(["Point"]),
@@ -1041,6 +1070,17 @@ fn run_part(operations: &'static [OperationDescriptor], full: bool) -> Audit {
                                         continue;
                                     }
                                 };
+                                if matches!(op.id, "geo.coverage_validate" | "geo.shared_paths") {
+                                    let expected = primary_name(&inputs[0])
+                                        .filter(|name| !name.starts_with("__passante_"))
+                                        .map(|_| "geometry".to_owned());
+                                    checked[transport_index] += 1;
+                                    if primary_name(&output) != expected {
+                                        divergences.push(format!(
+                                            "{label}: primaria derivata diversa dalla provenienza"
+                                        ));
+                                    }
+                                }
                                 if must_reject {
                                     divergences.push(format!(
                                     "{label}: fusione accettata contro il rifiuto della politica"
@@ -1383,8 +1423,7 @@ fn operandi_secondari_non_ereditano_bbox_e_passanti_seguono_righe() {
     prepara_ambiente();
     let dir = tempfile::tempdir().unwrap();
     for op in CATALOG.iter().filter(|op| {
-        op.family == Family::Geo
-            && matches!(policy::operation_effect(op), Effect::Values | Effect::Types)
+        op.family == Family::Geo && matches!(catalog_effect(op), Effect::Values | Effect::Types)
     }) {
         if matches!(
             op.id,

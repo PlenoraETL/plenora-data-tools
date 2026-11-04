@@ -351,7 +351,10 @@
     "[[\"token\",\"|\"],[\"string\",\"geo.union\"],[\"token\",\"|\"],[\"string\",\"geo.voronoi\"],[\"token\",\"|\"],[\"string\",\"geo.coverage_validate\"],[\"token\",\"|\"],[\"string\",\"geo.shared_paths\"],[\"token\",\")\"],[\"token\",\"{\"],[\"token\",\"return\"]]",
     "[[\"token\",\"|\"],[\"string\",\"geo.voronoi\"],[\"token\",\"|\"],[\"string\",\"geo.coverage_validate\"],[\"token\",\"|\"],[\"string\",\"geo.shared_paths\"],[\"token\",\")\"],[\"token\",\"{\"],[\"token\",\"return\"],[\"token\",\"Effect\"],[\"token\",\":\"]]",
     "[[\"token\",\".\"],[\"token\",\"insert\"],[\"token\",\"(\"],[\"string\",\"plenora.geometry.precision\"],[\"token\",\",\"],[\"string\",\"float64\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\"}\"],[\"token\",\"else\"]]",
-    "[[\"token\",\"descriptor\"],[\"token\",\".\"],[\"token\",\"id\"],[\"token\",\"=\"],[\"token\",\"=\"],[\"string\",\"table.table_diff\"],[\"token\",\"{\"],[\"token\",\"Effect\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Merge\"]]"
+    "[[\"token\",\"descriptor\"],[\"token\",\".\"],[\"token\",\"id\"],[\"token\",\"=\"],[\"token\",\"=\"],[\"string\",\"table.table_diff\"],[\"token\",\"{\"],[\"token\",\"Effect\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Merge\"]]",
+    "[[\"token\",\"(\"],[\"token\",\"descriptor\"],[\"token\",\".\"],[\"token\",\"id\"],[\"token\",\",\"],[\"string\",\"geo.coverage_validate\"],[\"token\",\"|\"],[\"string\",\"geo.shared_paths\"],[\"token\",\"|\"],[\"string\",\"geo.generate_grid\"],[\"token\",\")\"]]",
+    "[[\"token\",\".\"],[\"token\",\"id\"],[\"token\",\",\"],[\"string\",\"geo.coverage_validate\"],[\"token\",\"|\"],[\"string\",\"geo.shared_paths\"],[\"token\",\"|\"],[\"string\",\"geo.generate_grid\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"if\"]]",
+    "[[\"token\",\",\"],[\"string\",\"geo.coverage_validate\"],[\"token\",\"|\"],[\"string\",\"geo.shared_paths\"],[\"token\",\"|\"],[\"string\",\"geo.generate_grid\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"if\"],[\"token\",\"descriptor\"],[\"token\",\".\"]]"
   ],
   "crates/plenora-core/src/crs/definizioni/projjson.rs": [
     "[[\"string\",\"usages\"],[\"token\",\")\"],[\"token\",\"{\"],[\"token\",\"if\"],[\"token\",\"[\"],[\"string\",\"scope\"],[\"token\",\",\"],[\"string\",\"area\"],[\"token\",\",\"],[\"string\",\"bbox\"],[\"token\",\"]\"]]",

@@ -507,7 +507,7 @@ l'emissione canonica per tutte le operazioni geo.
 | geo/producers e geo/dispatch | `analyze_reproject`, `with_geometry_nullability`, `analyze_subdivide`, `with_nullable_geometry` | Conservata; matrice geo. |
 | geo/producers | `analyze_geometry_only` | Filtrata sul campo sopravvissuto; matrice geo, inclusi overlay. |
 | geo/producers | `analyze_from_coords`, `analyze_from_wkt` | Primaria nuova solo senza geometrie precedenti; altrimenti conserva lo stato sorgente; matrice geo plurale. |
-| geo/producers e geo/quality | `analyze_generate_grid`, `analyze_coverage_rows` | Schema nuovo con primaria nuova esplicita; matrice geo plurale. |
+| geo/producers e geo/quality | `analyze_generate_grid`, `analyze_coverage_rows` | Schema nuovo: `generate_grid` crea una primaria autonoma; `coverage_validate` e `shared_paths` rendono primaria la geometria derivata solo se l'operando era primario, altrimenti primaria assente (`none`); matrice geo plurale. |
 | geo/measures | `analyze_diagnostics` | Primaria filtrata sulla geometria rimossa; le altre sopravvivono; matrice geo. |
 
 I percorsi che clonano il contratto preservano la primaria (fra questi

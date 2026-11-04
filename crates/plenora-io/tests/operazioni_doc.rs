@@ -3987,16 +3987,17 @@ fn catalogo_geo_multigeometria_operandi_e_passanti() {
                         }
                     }
                 }
-                let primaria_attesa = if matches!(
-                    op.id,
-                    "geo.generate_grid" | "geo.coverage_validate" | "geo.shared_paths"
-                ) {
+                let primaria_ingresso = primary_geometry_position(&ingressi[0].schema())
+                    .unwrap()
+                    .map(|p| ingressi[0].schema().field(p).name().clone());
+                let primaria_attesa = if op.id == "geo.generate_grid" {
                     Some("geometry".to_owned())
+                } else if matches!(op.id, "geo.coverage_validate" | "geo.shared_paths") {
+                    primaria_ingresso
+                        .filter(|name| !name.starts_with("__passante_"))
+                        .map(|_| "geometry".to_owned())
                 } else {
-                    primary_geometry_position(&ingressi[0].schema())
-                        .unwrap()
-                        .map(|p| ingressi[0].schema().field(p).name().clone())
-                        .filter(|name| uscita.schema().index_of(name).is_ok())
+                    primaria_ingresso.filter(|name| uscita.schema().index_of(name).is_ok())
                 };
                 let primaria_effettiva = primary_geometry_position(&uscita.schema())
                     .unwrap()

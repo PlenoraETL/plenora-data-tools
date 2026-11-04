@@ -312,11 +312,9 @@ fn merge_metadata_maps<'a>(
     op: &str,
     sorgenti: impl IntoIterator<Item = &'a plenora_core::arrow::Metadata>,
 ) -> Result<HashMap<String, String>> {
-    crate::unisci_metadata_schema(sorgenti).or_else(|chiave| {
-        contract_error(
-            op,
-            format!("metadata di schema in conflitto sulla chiave {chiave:?}"),
-        )
+    crate::unisci_metadata_schema(sorgenti).or_else(|error| match error {
+        PlenoraError::Schema(message) => contract_error(op, message),
+        other => Err(other.con_contesto(op)),
     })
 }
 

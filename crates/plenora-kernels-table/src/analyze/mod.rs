@@ -4034,6 +4034,34 @@ mod tests {
     }
 
     #[test]
+    fn conflitto_c1_di_schema_non_diventa_un_nome_di_chiave() {
+        let (left, right) = simple_pair();
+        let left = with_schema_metadata(&left, &[("epoch", "2023.125")]);
+        let right = with_schema_metadata(&right, &[("epoch", "2024.875")]);
+        let analysis = err(
+            "table.union_distinct",
+            &[left.clone(), right.clone()],
+            json!({}),
+        );
+        let kernel =
+            crate::metadata_schema_input("table.union_distinct", &[&left.schema, &right.schema])
+                .unwrap_err();
+        assert!(matches!(analysis, PlenoraError::InvalidPlan(_)));
+        assert!(matches!(kernel, PlenoraError::Schema(_)));
+        for error in [analysis, kernel] {
+            let message = error.to_string();
+            assert!(message.contains("proprieta' CRS di schema in conflitto"));
+            assert!(!message.contains("sulla chiave"));
+            assert_eq!(
+                message.matches("schema violation:").count(),
+                usize::from(matches!(error, PlenoraError::Schema(_)))
+            );
+            assert!(!message.contains("2023.125"));
+            assert!(!message.contains("2024.875"));
+        }
+    }
+
+    #[test]
     fn union_distinct_merges_schema_metadata_and_fails_on_conflict() {
         let (left, right) = simple_pair();
         let left = with_schema_metadata(&left, &[("shared", "one")]);
@@ -4046,7 +4074,7 @@ mod tests {
         let conflicting = with_schema_metadata(&simple_pair().1, &[("shared", "other")]);
         assert_invalid_plan(
             &err("table.union_distinct", &[left, conflicting], json!({})),
-            "metadata di schema in conflitto sulla chiave",
+            "metadato applicativo di schema in conflitto",
         );
     }
 
