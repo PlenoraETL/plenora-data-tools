@@ -10,7 +10,25 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
-## [Non rilasciata] - 4.1.0
+## [4.1.0] - non rilasciata
+
+WKT1 GDAL: equivalenza del DATUM al datum/ensemble integrato solo con
+codice EPSG identico; nome irrilevante, autorità obbligatoria anche per i
+datum non ensemble. Il GEOGCS base di PROJCS può omettere gli assi; gli
+assi radice restano obbligatori e quelli presenti restano esatti.
+165 dei 169 export GDAL del corpus sono ora accettati. Nessuna modifica
+ai profili WKT2 e PROJJSON. Prove IPC `data.run` di identità per EPSG:4326
+e UTM 32632, mutazioni e corpus fuzz. Deviazione, hazard e condizione di
+rientro: [limiti](docs/limiti.md#equivalenza-del-datum-wkt1-per-codice-epsg).
+
+Politica centrale dei metadati geometrici per classe e per effetto sulla
+colonna: proprieta' CRS, riepiloghi, provenienza/rappresentazione e tipi.
+Le geometrie lette dalle misure conservano epoca e provenienza; le fusioni
+rimuovono bbox e riepiloghi invece di rifiutarli. Epoche diverse restano
+un errore. I covering senza colonne Arrow referenziate vengono rimossi.
+Fixture reale IO 7.0.0 e regressioni sui tre trasporti; tabella e ambito
+preciso delle prove in [Metadati Arrow](docs/metadati-arrow.md#dichiarazioni-geometriche-residue-correzione-410).
+
 
 PR 1 - contratto e identita': il core trasporta piu' geometrie con identita'
 distinte e corrispondenza completa con lo schema. Primaria facoltativa secondo
@@ -41,12 +59,18 @@ Matrice differenziale del catalogo con due e tre geometrie indipendenti.
 PR 4 - IO e superfici pubbliche: GeoParquet legge e scrive tutte le geometrie,
 con primaria indipendente dall'ordine fisico e identita' conservate o completate.
 Controlli per colonna anche sulle secondarie; senza primaria la scrittura
-rifiuta senza scegliere. BBox ricalcolati e metadati derivati eliminati.
+rifiuta senza scegliere. BBox ricalcolati; contenitori e provenienza conservati secondo la politica.
 La definizione PROJJSON Arrow si normalizza alla stessa definizione integrata
 completa del footer, dopo il confronto semantico.
 Round-trip IPC file/stream e prove delle superfici CLI/SDK. Fixture scritte
 con IO-tools 7.0.0: CRS completi per i casi positivi; il PROJJSON ridotto della
 fixture originale resta rifiutato, senza dedurre equivalenza dal solo ID.
+
+Integrazione: effetti per colonna secondo operando e provenienza delle righe;
+primaria strutturale esclusa dalle fusioni di metadati, senza rielezioni.
+Le dichiarazioni irrisolte provengono dalla politica; i nativi di file
+restano provenienza C3. PROJJSON normalizzato anche nei contenitori, scrittura rifiutata per qualunque geometria senza CRS, precisione
+invalidata solo sugli operandi ricodificati.
 
 ## [4.0.0] - 2026-11-02
 

@@ -590,9 +590,19 @@ pub(in crate::analyze) fn analyze_table_diff(
             &right.geometries,
             plenora_core::contract::arrow_metadata::GeometryComparison::Declaration,
         )?;
+        let canonical = |input: &DataContract, name: &str| -> Result<Field> {
+            let field = field_of(op, input, name)?;
+            let metadata = plenora_core::contract::arrow_metadata::merged_geometry_metadata(
+                &[field],
+                &input.geometries,
+            )?;
+            Ok(field.clone().with_metadata(metadata))
+        };
+        let left_field = canonical(left, source)?;
+        let right_field = canonical(right, right_name)?;
         let metadata = plenora_core::contract::arrow_metadata::merged_geometry_metadata(
-            &[field_of(op, left, source)?],
-            &left.geometries,
+            &[&left_field, &right_field],
+            &[],
         )?;
         output =
             super::helpers::derive_geometry(output, left, source, source, false, metadata, fields)?;

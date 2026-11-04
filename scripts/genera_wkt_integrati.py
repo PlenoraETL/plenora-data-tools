@@ -5,18 +5,17 @@ Richiede pyproj 3.7.2 / PROJ 9.5.1 / EPSG v11.022, come la tabella.
 WKT2 e WKT1_GDAL grezzo sono esportati senza adattamenti. La variante
 WKT1 con assi sostituisce il GEOGCS interno (che PROJ esporta senza AXIS)
 con l'export autonomo della stessa base, con output_axis_rule=True.
-Gli ensemble persi non vengono ricostruiti e devono essere rifiutati.
+Il datum WKT1 richiede lo stesso codice EPSG del datum/ensemble integrato.
 Uso: PYTHONPATH=<ambiente fissato> python scripts/genera_wkt_integrati.py
 """
 
 import json
+import re
 from pathlib import Path
-
-from pyproj import CRS
-import genera_crs_integrati as tabella
 
 
 def wkt1(crs, base, esclusione_ellissoide):
+    from pyproj import CRS
     grezzo = crs.to_wkt("WKT1_GDAL", output_axis_rule=True)
     esplicito = grezzo
     if crs.is_projected:
@@ -27,23 +26,41 @@ def wkt1(crs, base, esclusione_ellissoide):
         if grezzo.count(senza_assi) != 1:
             raise ValueError("Base WKT1 non individuata univocamente")
         esplicito = grezzo.replace(senza_assi, con_assi, 1)
-    motivo = (
-        "WKT1 sostituisce l'ensemble con un datum storico: membri e accuratezza persi."
-        if "datum_ensemble" in base else esclusione_ellissoide
-    )
     return {
         "wkt1_gdal": grezzo,
         "wkt1_assi": esplicito,
-        "esclusione_wkt1": motivo,
-        "esclusione_wkt1_gdal": (
-            "GEOGCS di base senza AXIS espliciti."
-            + (" " + motivo if motivo else "")
-            if crs.is_projected else motivo
-        ),
+        **esclusioni_wkt1(grezzo, esplicito, json.loads(crs.datum.to_json())["id"], esclusione_ellissoide),
     }
+
+def esclusioni_wkt1(grezzo, esplicito, atteso, esclusione_ellissoide):
+    risultato = {}
+    for campo, testo in (("esclusione_wkt1_gdal", grezzo),
+                         ("esclusione_wkt1", esplicito)):
+        # L'export fissato ha SPHEROID con AUTHORITY opzionale, poi
+        # l'AUTHORITY del DATUM: non confondere i due identificativi.
+        trovato = re.search(
+            r'DATUM\["[^"]*",SPHEROID\["[^"]*",[^,\]]+,[^,\]]+'
+            r'(?:,AUTHORITY\["[^"]*","[^"]*"\])?\]'
+            r',AUTHORITY\["EPSG","([^"\]]+)"\]\]', testo)
+        risultato[campo] = (
+            esclusione_ellissoide if trovato and atteso["authority"] == "EPSG"
+            and trovato[1] == str(atteso["code"]) else
+            "DATUM WKT1 senza codice EPSG identico al datum/ensemble del registro."
+        )
+        metodo = re.search(r'PROJECTION\["([^"]+)"', testo)
+        if metodo and metodo[1] not in (
+            "Transverse_Mercator", "Lambert_Conformal_Conic_2SP",
+            "Hotine_Oblique_Mercator_Azimuth_Center", "Oblique_Stereographic",
+        ):
+            risultato[campo] = "Metodo WKT1 fuori dal profilo dei quattro alias ammessi."
+        if "EXTENSION[" in testo:
+            risultato[campo] = "Metodo WKT1 fuori profilo e nodo EXTENSION non ammesso."
+    return risultato
 
 
 def main():
+    import genera_crs_integrati as tabella
+    from pyproj import CRS
     tabella.verifica_ambiente()
     radice = Path(__file__).resolve().parent.parent
     fonte = radice / "crates/plenora-io/data/projjson_integrati.json"

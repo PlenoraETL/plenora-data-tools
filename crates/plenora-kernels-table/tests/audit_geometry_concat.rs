@@ -75,6 +75,15 @@ fn ogni_concatenazione_rifiuta_dichiarazioni_incompatibili() {
                         &limits,
                     ),
                 };
+                if kind == "linestring" {
+                    let output = result.expect("C4 diversa si toglie");
+                    assert!(!output
+                        .schema()
+                        .field(0)
+                        .metadata()
+                        .contains_key("plenora.geometry.types"));
+                    continue;
+                }
                 let error = result.unwrap_err();
                 assert!(matches!(error, PlenoraError::Schema(_)), "{error}");
                 let analyzed = analyze_table_contract(
@@ -128,10 +137,9 @@ fn fusione_non_eredita_precisione_discordante() {
     let mut metadata = field.metadata().clone();
     metadata.insert("plenora.geometry.precision", "float32");
     let b = field.with_metadata(metadata);
-    assert!(matches!(
-        merged_geometry_metadata(&[a.schema().field(0), &b], &[]),
-        Err(PlenoraError::Unsupported(_))
-    ));
+    let output = merged_geometry_metadata(&[a.schema().field(0), &b], &[])
+        .expect("C3 diversa si toglie prima della pubblicazione canonica");
+    assert!(!output.contains_key("plenora.geometry.precision"));
 }
 
 // L'oracolo pubblica le dichiarazioni nel campo Arrow prima del kernel:
@@ -222,7 +230,7 @@ fn dichiarazioni_solo_nel_contratto_hanno_lo_stesso_esito_del_kernel() {
                     _ => setops::validate_schema(&left_batch, &right_batch)
                         .map(|()| left_batch.clone()),
                 };
-                let accepts = a == b || matches!(op, "table.intersect" | "table.except");
+                let accepts = true;
                 assert_eq!(
                     analyzed.is_ok(),
                     accepts,
@@ -235,7 +243,13 @@ fn dichiarazioni_solo_nel_contratto_hanno_lo_stesso_esito_del_kernel() {
                         assert_eq!(a.to_string(), b.to_string());
                     }
                     (Ok(output), Ok(_)) => {
-                        assert_eq!(output.geometries[0].types, left.geometries[0].types);
+                        let expected = if a == b || matches!(op, "table.intersect" | "table.except")
+                        {
+                            left.geometries[0].types.clone()
+                        } else {
+                            plenora_core::contract::GeometryColumnContract::undeclared_types()
+                        };
+                        assert_eq!(output.geometries[0].types, expected);
                     }
                     _ => panic!("analisi e kernel divergono"),
                 }
@@ -449,7 +463,7 @@ fn decisione_crs_sostituisce_la_lineage_anche_nelle_fusioni() {
 }
 
 #[test]
-fn crs_con_srid_in_conflitto_resta_irrisolto_su_entrambi_i_percorsi() {
+fn srid_indipendente_conservato_su_entrambi_i_percorsi() {
     use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
     let field = geometry_output_field("g", "EPSG:3857").unwrap();
     let mut metadata = field.metadata().clone();
@@ -462,18 +476,30 @@ fn crs_con_srid_in_conflitto_resta_irrisolto_su_entrambi_i_percorsi() {
     ));
     let contract =
         contract_from_arrow_schema(schema.clone(), plenora_core::crs::resolve_crs).unwrap();
-    assert!(matches!(
-        contract.geometries[0].crs,
-        plenora_core::contract::ContractCrs::DeclaredUnresolved { .. }
-    ));
-    analyze_table_contract(
+    assert!(contract.geometries[0].crs.as_resolved().is_some());
+    let batch = plenora_core::batch_vuoto(schema).unwrap();
+    let output = joins::concat_by_name(
+        &[&batch, &batch],
+        &joins::ConcatByName { strict: false },
+        &Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        output.schema().field(0).metadata()["plenora.geometry.srid"],
+        "4326"
+    );
+    let analyzed = analyze_table_contract(
         "table.concat",
-        &[contract, complete_contract(schema)],
+        &[contract.clone(), contract],
         &json!({}),
         &mut FieldAllocator::default(),
         &Limits::default(),
     )
     .unwrap();
+    assert_eq!(
+        analyzed.schema.field(0).metadata()["plenora.geometry.srid"],
+        "4326"
+    );
 }
 
 fn complete_contract(

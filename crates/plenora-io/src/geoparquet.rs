@@ -6,7 +6,7 @@
 //! - `encoding` deve essere `WKB` (le codifiche `GeoArrow` native si
 //!   rifiutano, `Unsupported`);
 //! - `edges` assente o `planar` (`spherical` si rifiuta: i kernel sono
-//!   planari); `epoch` si rifiuta (il contratto non ha epoche);
+//!   planari); `epoch` si trasporta senza applicare trasformazioni temporali;
 //!   `orientation` può valere solo `counterclockwise`, `bbox` deve avere 4 o
 //!   6 numeri finiti e `covering` deve essere un oggetto: sono dichiarazioni
 //!   che il contratto non porta e si lasciano cadere;
@@ -28,12 +28,11 @@
 //! identifica la primaria indipendentemente dall'ordine fisico dei campi.
 //!
 //! **Scrittura** ([`prepara`]): dal contratto della tabella; `crs` è il
-//! `PROJJSON` completo del CRS integrato (o `null` per un CRS assente),
+//! `PROJJSON` completo del CRS integrato; un CRS assente viene rifiutato,
 //! `geometry_types` i tipi dichiarati dal contratto (verificati sui dati) o,
 //! senza dichiarazione, quelli trovati nei dati, `bbox` il riquadro XY delle
-//! coordinate quando tutte le geometrie sono 2D. Il metadato `geo` di campo
-//! e `ARROW:extension:metadata` si tolgono dallo schema scritto: li porta il
-//! metadato di file.
+//! coordinate quando tutte le geometrie sono 2D. I contenitori di campo
+//! restano nello schema Arrow; epoch ed edges sono anche nel geo standard.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -160,6 +159,8 @@ struct ColonnaGeo {
     crs: CrsColonna,
     /// Tipi dichiarati, con Z; vuoto = sconosciuti.
     tipi: BTreeSet<(GeometryType, bool)>,
+    epoch: Option<Value>,
+    edges: Option<String>,
 }
 
 impl ColonnaGeo {
@@ -258,10 +259,11 @@ fn analizza_colonna(valore: &Value) -> Result<ColonnaGeo> {
         }
         Some(_) => return Err(invalido("`edges` non riconosciuto")),
     }
-    if colonna.contains_key("epoch") {
-        return Err(PlenoraError::Unsupported(
-            "`epoch` di un CRS dinamico: il contratto non la rappresenta".to_owned(),
-        ));
+    if colonna
+        .get("epoch")
+        .is_some_and(|value| !value.as_f64().is_some_and(f64::is_finite))
+    {
+        return Err(invalido("epoch non numerica o non finita"));
     }
     match colonna.get("orientation") {
         None => {}
@@ -300,7 +302,15 @@ fn analizza_colonna(valore: &Value) -> Result<ColonnaGeo> {
         Some(Value::Null) => CrsColonna::Assente,
         Some(documento) => CrsColonna::Integrato(identificativo_da_projjson(documento)?),
     };
-    Ok(ColonnaGeo { crs, tipi })
+    Ok(ColonnaGeo {
+        crs,
+        tipi,
+        epoch: colonna.get("epoch").cloned(),
+        edges: colonna
+            .get("edges")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    })
 }
 
 /// La colonna come `BinaryArray`: `LargeBinary` si converte (la specifica
@@ -369,10 +379,17 @@ fn geo_di_campo(crs: &CrsColonna, dimensioni: GeometryDimensions) -> Result<Stri
 pub fn applica(tabella: &RecordBatch, testo_geo: &str) -> Result<RecordBatch> {
     let geo = analizza(testo_geo)?;
     let schema = tabella.schema();
-    if let Some(primary) = schema.metadata().get("plenora.primary_geometry") {
+    if let Some(primary) = schema
+        .metadata()
+        .get(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY)
+    {
         let native_id = schema
             .column_with_name(&geo.primaria)
-            .and_then(|(_, field)| field.metadata().get("plenora.field_id"));
+            .and_then(|(_, field)| {
+                field
+                    .metadata()
+                    .get(plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY)
+            });
         if primary == "none" || native_id != Some(primary) {
             return Err(PlenoraError::Schema(
                 "primaria Arrow discordante dal metadato GeoParquet".into(),
@@ -439,8 +456,36 @@ pub fn applica(tabella: &RecordBatch, testo_geo: &str) -> Result<RecordBatch> {
         }
         let mut metadati = campo.metadata().clone();
         verifica_crs_estensione(campo, &dichiarata.crs).map_err(errore)?;
-        metadati.remove(EXTENSION_METADATA_KEY);
-        elimina_derivati(&mut metadati);
+        let inherited = plenora_core::contract::geometry_metadata_policy::crs_properties(campo)?;
+        if dichiarata
+            .epoch
+            .as_ref()
+            .is_some_and(|value| inherited.get("epoch").is_some_and(|old| old != value))
+            || dichiarata.edges.as_ref().is_some_and(|value| {
+                inherited
+                    .get("edges")
+                    .is_some_and(|old| old.as_str() != Some(value))
+            })
+        {
+            return Err(invalido("proprieta' CRS di campo e file discordanti"));
+        }
+        for (key, value) in [
+            (
+                "plenora.geometry.native.geoparquet.epoch",
+                dichiarata.epoch.as_ref().map(Value::to_string),
+            ),
+            (
+                "plenora.geometry.native.geoparquet.edges",
+                dichiarata.edges.clone(),
+            ),
+        ] {
+            if let Some(value) = value {
+                if metadati.get(key).is_some_and(|existing| existing != &value) {
+                    return Err(invalido("proprieta' CRS di campo e file discordanti"));
+                }
+                metadati.insert(key, value);
+            }
+        }
         completa_assi_geoparquet(campo, &dichiarata.crs, &mut metadati)?;
         let celle = come_binary(colonna).map_err(errore)?;
         let trovati = sommario(&celle).map_err(errore)?;
@@ -474,10 +519,23 @@ pub fn applica(tabella: &RecordBatch, testo_geo: &str) -> Result<RecordBatch> {
             GEOARROW_EXTENSION_KEY.to_owned(),
             GEOARROW_WKB_EXTENSION.to_owned(),
         );
-        metadati.insert(
-            GEO_METADATA_KEY.to_owned(),
-            geo_di_campo(&dichiarata.crs, dimensioni)?,
-        );
+        let normalized = geo_di_campo(&dichiarata.crs, dimensioni)?;
+        if let Some(raw) = metadati.get(GEO_METADATA_KEY) {
+            plenora_core::json::ensure_numbers_exact(raw)
+                .map_err(|_| invalido("numero geometrico non esatto"))?;
+            let mut retained: Value = serde_json::from_str(raw)?;
+            let normalized: Value = serde_json::from_str(&normalized)?;
+            if let (Some(retained), Some(normalized)) =
+                (retained.as_object_mut(), normalized.as_object())
+            {
+                for (key, value) in normalized {
+                    retained.insert(key.clone(), value.clone());
+                }
+            }
+            metadati.insert(GEO_METADATA_KEY, retained.to_string());
+        } else {
+            metadati.insert(GEO_METADATA_KEY, normalized);
+        }
         campi.push(
             Field::new(campo.name(), DataType::Binary, campo.is_nullable()).with_metadata(metadati),
         );
@@ -610,7 +668,6 @@ pub fn prepara(tabella: &RecordBatch) -> Result<Option<Preparata>> {
         ));
     }
     let mut colonne_geo = Map::new();
-    let mut nomi_geometrici = BTreeSet::new();
     for geometria in &contratto.geometries {
         let (indice, campo) = schema
             .column_with_name(&geometria.name)
@@ -618,7 +675,6 @@ pub fn prepara(tabella: &RecordBatch) -> Result<Option<Preparata>> {
         let voce = colonna_da_scrivere(geometria, campo, tabella.column(indice))
             .map_err(|errore| di_colonna(&geometria.name, errore))?;
         colonne_geo.insert(geometria.name.clone(), voce);
-        nomi_geometrici.insert(geometria.name.clone());
     }
     let primaria = contratto
         .active_geometry_column()
@@ -641,27 +697,45 @@ pub fn prepara(tabella: &RecordBatch) -> Result<Option<Preparata>> {
     let campi: Vec<Field> = schema
         .fields()
         .iter()
-        .map(|campo| {
-            if nomi_geometrici.contains(campo.name()) {
-                let mut metadati = campo.metadata().clone();
-                metadati.remove(GEO_METADATA_KEY);
-                metadati.remove(EXTENSION_METADATA_KEY);
-                elimina_derivati(&mut metadati);
+        .map(|campo| -> Result<Field> {
+            let mut metadati = campo.metadata().clone();
+            if let Some(definizione) = definizioni.get(campo.name()) {
                 if metadati
                     .get("plenora.geometry.crs_definition_format")
                     .is_some_and(|f| f == "projjson")
                 {
-                    if let Some(definizione) = definizioni.get(campo.name()) {
-                        metadati.insert("plenora.geometry.crs_definition", definizione.clone());
+                    metadati.insert("plenora.geometry.crs_definition", definizione.clone());
+                }
+                for key in [GEO_METADATA_KEY, EXTENSION_METADATA_KEY] {
+                    if let Some(raw) = metadati.get(key).filter(|raw| !raw.trim().is_empty()) {
+                        plenora_core::json::ensure_no_duplicate_keys(raw)
+                            .map_err(|_| invalido("contenitore geometrico non valido"))?;
+                        plenora_core::json::ensure_numbers_exact(raw)
+                            .map_err(|_| invalido("numero geometrico non esatto"))?;
+                        let mut value: Value = serde_json::from_str(raw)?;
+                        if let Some(object) = value.as_object_mut() {
+                            if object.get("crs").is_some_and(|crs| {
+                                crs.is_object()
+                                    || crs
+                                        .as_str()
+                                        .is_some_and(|text| text.trim_start().starts_with('{'))
+                            }) {
+                                object.insert("crs".into(), serde_json::from_str(definizione)?);
+                                if object.contains_key("crs_type") {
+                                    object.insert(
+                                        "crs_type".into(),
+                                        Value::String("projjson".into()),
+                                    );
+                                }
+                                metadati.insert(key, value.to_string());
+                            }
+                        }
                     }
                 }
-
-                campo.as_ref().clone().with_metadata(metadati)
-            } else {
-                campo.as_ref().clone()
             }
+            Ok(campo.as_ref().clone().with_metadata(metadati))
         })
-        .collect();
+        .collect::<Result<_>>()?;
     let mut metadati_schema = schema.metadata().clone();
     metadati_schema.remove(GEO_METADATA_KEY);
     let schema_scritto = Arc::new(Schema::new_with_metadata(campi, metadati_schema));
@@ -690,7 +764,11 @@ fn colonna_da_scrivere(
         ContractCrs::Resolved(crs) | ContractCrs::ResolvedByDecision(crs) => {
             projjson_di(&identificativo_di(crs)?)?
         }
-        ContractCrs::Missing => Value::Null,
+        ContractCrs::Missing => {
+            return Err(PlenoraError::Crs(
+                "CRS assente: GeoParquet richiede un CRS risolto e assi compatibili".to_owned(),
+            ));
+        }
         ContractCrs::DeclaredUnresolved { .. } => {
             return Err(PlenoraError::Crs(
                 "CRS dichiarato ma non risolto: GeoParquet vuole un PROJJSON".to_owned(),
@@ -771,6 +849,7 @@ fn colonna_da_scrivere(
     voce.insert("encoding".to_owned(), Value::String("WKB".to_owned()));
     voce.insert("geometry_types".to_owned(), Value::Array(nomi));
     voce.insert("crs".to_owned(), crs);
+    voce.extend(plenora_core::contract::geometry_metadata_policy::crs_properties(campo)?);
     if let (Some(riquadro), false) = (trovati.riquadro, z_dati.contains(&true)) {
         voce.insert(
             "bbox".to_owned(),
@@ -778,11 +857,4 @@ fn colonna_da_scrivere(
         );
     }
     Ok(Value::Object(voce))
-}
-
-/// I metadati derivati di un file precedente non descrivono i dati correnti.
-fn elimina_derivati(metadata: &mut plenora_core::arrow::Metadata) {
-    for key in ["bbox", "covering", "orientation", "primary_column"] {
-        metadata.remove(&format!("plenora.geometry.native.geoparquet.{key}"));
-    }
 }

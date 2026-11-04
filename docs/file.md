@@ -71,7 +71,7 @@ In lettura il metadato di file `geo` è l'autorità:
 | `geometry_types` | tipi dichiarati (`exact`) e dimensionalità: tutti ` Z` → `xyz`, nessuno → `xy`, misti o elenco vuoto → `unknown`; ogni cella si verifica, un tipo non dichiarato è `DataMapping` |
 | `crs` | assente → `OGC:CRS84`; `null` → CRS mancante; PROJJSON → confronto semantico completo con la tabella (sotto) |
 | `edges` | assente o `planar`; `spherical` è `Unsupported` |
-| `epoch` | `Unsupported` (il contratto non ha epoche) |
+| `epoch` | numero finito conservato come proprieta' CRS nativa e nel file riscritto; nessuna trasformazione temporale |
 | `orientation`, `bbox`, `covering` | validati nella forma e lasciati cadere |
 | altre chiavi di colonna | `Unsupported` |
 | altre chiavi di primo livello | ignorate, come chiede la specifica |
@@ -85,9 +85,9 @@ canoniche del campo, o `unknown`); poi
 blocco canonico `plenora.geometry.*`, completo, e `plenora.contract.version`,
 e rifiutano chiavi canoniche già presenti in conflitto (categoria `schema`,
 o `crs` per le chiavi del CRS: [«Metadati Arrow»](metadati-arrow.md#metadati-arrow)). Il
-metadato `geo` di schema si toglie, `ARROW:extension:metadata` si
-sostituisce. Le identità dichiarate (`plenora.field_id`) si conservano; quelle assenti
-si completano deterministicamente in lettura prima di emettere la primaria.
+metadato `geo` di schema si toglie; i membri aggiuntivi di `geo` di campo
+e `ARROW:extension:metadata` si conservano dopo il controllo di coerenza. Le identità dei campi (`plenora.field_id`) le assegna il
+confine di pubblicazione, anche in lettura.
 
 **CRS.** Un PROJJSON passa dal validatore comune del core: l'ID radice
 seleziona il candidato e il confronto completo verifica datum, ensemble,
@@ -105,7 +105,7 @@ geometria primaria effettiva, una voce per ogni geometria, `encoding` `WKB`, `cr
 integrato (`crates/plenora-io/data/projjson_integrati.json`, generato con
 PROJ 9.5.1 da `scripts/genera_projjson_integrati.py` con la terna di
 `genera_crs_integrati.py`; un test verifica che copra esattamente i CRS
-integrati) o `null` per un CRS mancante, `bbox` il riquadro XY di tutte le
+integrati); un CRS mancante in qualsiasi colonna rifiuta la scrittura. `bbox` il riquadro XY di tutte le
 coordinate quando le geometrie sono 2D. `geometry_types` porta insieme tipi
 e dimensionalità, e si scrive solo ciò che il contratto decide, così la
 rilettura ridà lo stesso contratto:
@@ -118,12 +118,13 @@ rilettura ridà lo stesso contratto:
 
 Tutte le colonne si verificano prima della pubblicazione atomica. Senza primaria
 la scrittura rifiuta con `Unsupported`, anche con una sola geometria rimasta.
-BBox si ricalcola; covering, orientation e le corrispondenti chiavi native
-GeoParquet derivate non si riusano. La definizione PROJJSON Arrow incorporata
+BBox si ricalcola; covering e orientation non entrano nel footer. Le chiavi
+native e i contenitori incorporati seguono la politica per colonna. La definizione PROJJSON Arrow incorporata
 si normalizza alla stessa definizione integrata completa del footer dopo la
 verifica semantica, evitando dichiarazioni testualmente discordanti.
-Tipi e dimensionalità dei dati si verificano comunque contro il contratto. Il `geo` di campo non entra nello schema incorporato: lo porta il
-metadato di file. Si rifiutano: EWKB, coordinate M, curve, un ordine degli
+Tipi e dimensionalita' dei dati si verificano contro il contratto.
+I contenitori di campo restano nello schema Arrow incorporato; `epoch`
+e `edges` vengono emessi anche nel metadato standard del file. Si rifiutano: EWKB, coordinate M, curve, un ordine degli
 assi dichiarato diverso da `lon_lat`/`easting_northing`, un CRS dichiarato
 ma non risolto, geometrie di un tipo o di una dimensionalità diversi dal
 contratto.
@@ -392,8 +393,8 @@ limite della tabella.
   byte del file: chi usa `plenora-io` installa
   `plenora_core::panic_policy::install` (limite già dichiarato lì).
 - **GeoParquet, ciò che il contratto non porta**: `orientation`, `bbox` e
-  `covering` letti si validano e si perdono; `epoch` e `edges: spherical` si
-  rifiutano. Tutte le geometrie sono lette e scritte con CRS, encoding,
+  `covering` seguono la politica; `epoch` si conserva per colonna, mentre
+  `edges: spherical` si rifiuta. Tutte le geometrie sono lette e scritte con CRS, encoding,
   tipi e coordinate verificati per colonna.
   La scrittura senza primaria si rifiuta (`Unsupported`). Il PROJJSON
   letto deve coincidere semanticamente con una voce integrata; un ID EPSG
@@ -404,10 +405,9 @@ limite della tabella.
   (provato su ogni combinazione di dimensionalità, dati e dichiarazione dei
   tipi), i byte dei metadati no. Due cambi voluti: con dimensionalità nota
   e tipi non dichiarati (o `unresolved`) la rilettura dichiara `exact` i
-  tipi dei dati; senza
-  blocco canonico e senza geometrie (zero righe o tutte nulle) la
-  dimensionalità `xy`/`xyz` non si rappresenta (`geometry_types` vuoto) e si
-  rilegge `unknown`.
+  tipi dei dati. Con zero righe o tutte geometrie nulle, lo schema Arrow
+  incorporato conserva la dimensionalita' dichiarata; nel solo metadato
+  standard `geometry_types` vuoto non basta a rappresentarla.
 - **Interi stretti da file malformati.**
   *Regola*: `parquet` legge `Int8`, `Int16`, `UInt8`, `UInt16` da colonne
   fisiche `INT32` con un cast che tronca.

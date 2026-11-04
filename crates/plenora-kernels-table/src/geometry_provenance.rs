@@ -76,7 +76,10 @@ pub fn emit(
     // Identita' pubbliche duplicate da ingressi distinti diventano nuove identita'.
     let mut reserved = BTreeSet::new();
     for field in &fields {
-        if let Some(id) = field.metadata().get("plenora.field_id") {
+        if let Some(id) = field
+            .metadata()
+            .get(plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY)
+        {
             let id = id
                 .parse::<u32>()
                 .map_err(|_| PlenoraError::Schema("identita' pubblica non valida".into()))?;
@@ -85,7 +88,10 @@ pub fn emit(
     }
     let mut seen = BTreeSet::new();
     for (index, field) in fields.iter_mut().enumerate() {
-        let old = field.metadata().get("plenora.field_id").cloned();
+        let old = field
+            .metadata()
+            .get(plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY)
+            .cloned();
         let duplicate = old.as_ref().is_some_and(|id| !seen.insert(id.clone()));
         if duplicate || (primary == Some(index) && count > 1 && old.is_none()) {
             let id = reserved
@@ -96,7 +102,10 @@ pub fn emit(
             reserved.insert(id);
             seen.insert(id.to_string());
             let mut md = field.metadata().clone();
-            md.insert("plenora.field_id", id.to_string());
+            md.insert(
+                plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY,
+                id.to_string(),
+            );
             *field = field.clone().with_metadata(md);
             metadata.insert("plenora.contract.version".into(), "1".into());
         }
@@ -109,7 +118,7 @@ pub fn emit(
         (2.., Some(p)) => {
             let id = fields[p]
                 .metadata()
-                .get("plenora.field_id")
+                .get(plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY)
                 .ok_or_else(|| PlenoraError::Schema("primaria senza identita' pubblica".into()))?;
             metadata.insert(PRIMARY_GEOMETRY_KEY.into(), id.clone());
         }
@@ -183,7 +192,10 @@ mod tests {
     fn field(id: &str) -> Field {
         Field::new(id, DataType::Binary, true).with_metadata(HashMap::from([
             ("ARROW:extension:name".into(), "geoarrow.wkb".into()),
-            ("plenora.field_id".into(), id.into()),
+            (
+                plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY.into(),
+                id.into(),
+            ),
         ]))
     }
     #[test]

@@ -737,9 +737,13 @@ impl Pipeline {
                         .get(field.name())
                         .and_then(|id| campi.public_identity(*id))
                     {
-                        metadata.remove("plenora.field_id");
+                        metadata
+                            .remove(plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY);
                         if let Some(id) = original {
-                            metadata.insert("plenora.field_id", id.clone());
+                            metadata.insert(
+                                plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY,
+                                id.clone(),
+                            );
                         }
                     }
                     field.as_ref().clone().with_metadata(metadata)

@@ -353,7 +353,7 @@ prodotto. Per l'assenza del controllo a posteriori, vedi l'hazard
 `geo.geodesic_area` e `geo.bearing` risolvono il problema geodetico
 (Karney 2013, `geographiclib-rs`) sull'**ellissoide del datum del CRS
 della colonna**, quello della tabella integrata
-([«CRS integrati»](crs.md#crs-integrati)): Internazionale 1924 per ED50 e Monte
+([«CRS integrati»](crs.md#crs-integrati)): Internazionale 1924 per Eil rifiuto0 e Monte
 Mario, Clarke 1866 per NAD27, Airy per OSGB36, Bessel per DHDN, GRS 80,
 WGS 84. `geo.haversine_distance` misura sulla sfera del raggio medio
 IUGG `R1 = a (1 - f / 3)` dello stesso ellissoide. Il kernel riceve
@@ -416,7 +416,7 @@ a meno di circa 3 cm; lati di 100 m sotto il millimetro), lati oltre
 qualche centinaio di chilometri e lati vicino ai poli. Fino alla versione
 di catalogo precedente (distanza e azimut 1, lunghezza e area 2) ogni
 misura usava WGS 84 qualunque fosse il datum (circa 4 m ogni 100 km su
-ED50) e l'area non verificava la topologia delle geodetiche, senza errore.
+Eil rifiuto0) e l'area non verificava la topologia delle geodetiche, senza errore.
 
 **Condizione di rientro.** Una verifica esatta della topologia delle
 geodetiche (intersezioni di geodetiche, contenimento sul globo) al posto
@@ -437,7 +437,7 @@ esplicita di chi scrive il piano, mai implicita.
 registro ([«La regola dell'accuratezza»](riproiezione.md#la-regola-dellaccuratezza)).
 
 **Hazard.** Il risultato può scostarsi dal vero fino all'accuratezza
-accettata (metri per Monte Mario, ED50, OSGB36, NAD27 senza griglie), senza
+accettata (metri per Monte Mario, Eil rifiuto0, OSGB36, NAD27 senza griglie), senza
 errore; due geometrie vicine possono usare percorsi diversi e scostarsi fra
 loro fino alla somma delle due accuratezze. WGS 84 e la famiglia ETRS89
 sono equivalenti per convenzione (EPSG:1149 conta 0,
@@ -1788,3 +1788,68 @@ attestabile. Nessun conteggio saturato viene pubblicato come esatto.
 **Rientro.** Rendere univoci i nomi prima dell'ingresso, riordinare dopo la
 trasformazione per ristabilire la prova; cardinalita' oltre `u64` richiedono
 un contratto numerico piu' ampio e controlli coerenti in tutti i consumatori.
+
+## Equivalenza del datum WKT1 per codice EPSG
+
+**Deviazione esplicita (4.1.0).** Il solo profilo WKT1 tratta un DATUM
+storico come il datum/ensemble integrato se e solo se porta
+`AUTHORITY["EPSG","codice"]` con codice esattamente identico a quello del
+registro. Il nome non decide. Membri e accuratezza dell'ensemble, non
+rappresentabili in WKT1, sono quelli della voce integrata. WKT2 e PROJJSON
+non adottano questa equivalenza.
+
+**Hazard.** Un produttore può attribuire il codice dell'ensemble a una
+realizzazione storica specifica: l'accettazione perde tale distinzione e
+non prova l'epoca o l'accuratezza fisica delle coordinate. Non introduce
+una trasformazione di datum né una nuova garanzia centimetrica.
+Ellissoide, meridiano, unità, metodo, parametri e assi dichiarati restano
+verificati esattamente; codici diversi o mancanti sono rifiutati senza
+valori della definizione nell'errore.
+
+**Ambito.** Gli assi del GEOGCS base di PROJCS possono essere assenti;
+se presenti devono coincidere. GEOGCS radice e PROJCS richiedono entrambi
+i propri assi. L'ordine fisico delle ordinate rimane una dichiarazione
+separata (`axis_order`), mai inferita dal codice EPSG.
+
+**Condizione di rientro.** Per eliminare la deviazione il produttore deve
+fornire una definizione completa dell'ensemble o della realizzazione,
+con un profilo che conservi membri, accuratezza ed eventuale epoca, e il
+consumatore deve poterla verificare senza equivalenze storiche implicite.
+Profilo e prove: [CRS WKT1](crs.md#definizioni-wkt1).
+
+
+## Politica dei metadati geometrici residui
+
+**Regola:** classi ed effetti descritti nella
+[tabella dei metadati Arrow](metadati-arrow.md#dichiarazioni-geometriche-residue-correzione-410).
+**Ambito:** dichiarazioni trasportate dai campi Arrow, incluse quelle
+native di IO 7.0.0. Conservare una epoca non implementa trasformazioni
+geodetiche temporali. Il membro standard GeoParquet `epoch` viene trasportato insieme alla
+dichiarazione nativa Arrow; non attiva un modello temporale del CRS.
+**Hazard:** i tipi di una colonna fusa possono diventare `unresolved`;
+un bbox conservato dopo selezione puo' essere sovrabbondante. La matrice
+unitaria del catalogo verifica la politica, mentre le regressioni dei
+trasporti non enumerano ancora tutte le configurazioni dei kernel.
+**Rientro:** oracolo end-to-end completo per chiave, operazione e trasporto,
+e supporto contrattuale alle trasformazioni temporali.
+
+### Metadati con più geometrie
+
+**Regola e ambito.** In scrittura GeoParquet, la definizione PROJJSON canonica
+e i membri `crs` in formato PROJJSON dei contenitori di ogni campo vengono normalizzati alla
+forma integrata del footer dopo il confronto semantico. La scrittura
+rifiuta con categoria `Crs` anche una sola secondaria senza CRS.
+Gli effetti `Values`, `Types` e `Crs` invalidano la precisione ereditata
+solo dell'operando ricodificato; misure, predicati e passanti con righe
+preservate la conservano.
+
+**Hazard.** La normalizzazione conserva la semantica C1 ma cambia il testo originale; il rifiuto
+impedisce l'esportazione di dataset parzialmente georeferenziati; la precisione perde
+la precisione della rappresentazione originaria quando il kernel ricodifica.
+I nativi `primary_column` e `altre_colonne` descrivono soltanto il file
+d'origine e non determinano mai la primaria corrente.
+
+**Rientro.** La normalizzazione richiede una rappresentazione CRS comune che conservi testo
+e semantica senza dichiarazioni discordanti; il rifiuto richiede un contratto di
+scrittura esplicito per CRS mancanti; la precisione richiede kernel che preservino e
+provino la rappresentazione numerica originale.

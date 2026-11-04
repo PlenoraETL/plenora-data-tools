@@ -18,7 +18,8 @@ destra il cui nome compare anche a sinistra `<nome>_y`; le altre tengono il
 nome. Tipi e metadati di campo restano quelli d'origine; ogni colonna
 d'uscita è nullable. I metadati di schema dei due lati si fondono: una
 chiave presente da un lato solo, o con lo stesso valore, resta. L'uscita
-ammette una sola colonna geometrica. Il conteggio delle righe del
+conserva tutte le colonne geometriche con effetto `Rows`; se entrambi i lati
+portano geometrie, non ha primaria. Il conteggio delle righe del
 contratto è il prodotto dei due, quando entrambi lo dichiarano con la
 stessa portata e la stessa confidenza; l'ordinamento dichiarato no.
 

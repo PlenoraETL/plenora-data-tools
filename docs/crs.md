@@ -172,6 +172,8 @@ collega nelle prove i codici dei parametri ai campi della riproiezione.
 I soli alias senza ID sono i nomi canonici del registro: non si equiparano
 datum storici ed ensemble, né WGS84 ed ETRS89. Gli ID annidati presenti
 devono coincidere. Il modello richiede assi espliciti, anche nella base.
+Il solo adattatore WKT1 applica l'equivalenza per codice EPSG del datum e
+completa gli assi della base se omessi, secondo il profilo qui sotto.
 
 Il modello confronta numeri come decimali esatti:
 `500000`, `500000.0` e `5e5` coincidono. Il token è limitato a 64 KiB;
@@ -319,17 +321,25 @@ originale e usa solo i parametri operativi della tabella integrata.
 Il profilo accetta `GEOGCS` e `PROJCS` bidimensionali. La sequenza geografica
 è nome, `DATUM` con `SPHEROID`, `PRIMEM`, `UNIT`, due `AXIS`, `AUTHORITY`.
 Quella proiettata è nome, `GEOGCS` completo, `PROJECTION`, `PARAMETER`,
-`UNIT`, due `AXIS`, `AUTHORITY`. Gli assi sono obbligatori anche nel
-`GEOGCS` interno: non si ricavano dall'EPSG. L'ordine scritto deve coincidere
+`UNIT`, due `AXIS`, `AUTHORITY`. Gli assi della radice sono obbligatori:
+un `GEOGCS` radice o un `PROJCS` senza assi è rifiutato. Nel solo `GEOGCS`
+interno i due `AXIS` possono essere entrambi assenti; se presenti, devono
+coincidere esattamente con la base del registro. L'ordine scritto deve coincidere
 con quello della tabella; i nomi degli assi sono descrittivi. Nessuna
 permutazione delle coordinate dei dati.
 
 `AUTHORITY["autorità","codice"]` richiede due stringhe: obbligatoria alla
-radice, opzionale su base, datum, ellissoide, meridiano, unità e metodo.
+radice e sul datum, opzionale su base, ellissoide, meridiano, unità e metodo.
 Le identità presenti si confrontano con il registro. I nomi senza autorità
 sono soltanto quelli canonici, sensibili al caso: non si convertono
-arbitrariamente underscore, spazi o prefissi ESRI. In particolare un nome
-di datum WKT1 con underscore privo di autorità può essere rifiutato.
+arbitrariamente underscore, spazi o prefissi ESRI. Il nome del datum non
+decide: è obbligatoria `AUTHORITY["EPSG","codice"]` con codice identico
+a quello del datum o ensemble del registro. Solo in WKT1 questo consente
+al datum storico di rappresentare l'ensemble (6326 WGS84, 6258 ETRS89).
+Senza autorità, con altra autorità o codice diverso si rifiuta, anche con
+nome canonico. Ellissoide, meridiano, unità, metodo e parametri restano
+confrontati esattamente, senza epsilon o conversione a `f64`.
+Deviazione e hazard: [registro dei limiti](limiti.md#equivalenza-del-datum-wkt1-per-codice-epsg).
 
 I quattro alias di metodo sono chiusi; l'eventuale autorità di `PROJECTION`
 deve concordare anche con l'alias, perché questo determina i parametri:
@@ -361,10 +371,10 @@ lineari quella proiettata, la scala è adimensionale (`unity`, fattore 1).
 Non si convertono unità o numeri attraverso `f64`.
 
 Si applicano limiti lessicali, consumo integrale ed errori del profilo WKT2.
-`TOWGS84`, `EXTENSION`, nodi WKT2 mescolati, assi omessi (inclusi gli export
+`TOWGS84`, `EXTENSION`, nodi WKT2 mescolati, assi radice omessi (inclusi gli export
 ESRI), CRS verticali, geocentrici e composti sono fuori profilo:
-`CRS_NOT_BUILTIN`. I datum storici WGS84/ETRS89 non sostituiscono gli
-ensemble, nemmeno con lo stesso codice EPSG. Le proj-string restano
+`CRS_NOT_BUILTIN`. La sola equivalenza del datum per codice EPSG descritta
+sopra è ammessa; WKT2 e PROJJSON restano invariati. Le proj-string restano
 `CRS_BACKEND_UNAVAILABLE`.
 
 **Corpus.** Nello stesso `wkt_corpus.json`, per ciascuno dei 169 CRS:
@@ -373,12 +383,27 @@ ensemble, nemmeno con lo stesso codice EPSG. Le proj-string restano
 l'export autonomo della base dal suo codice, sempre con assi espliciti.
 Il generatore verifica che l'export autonomo senza assi coincida esattamente
 con l'unica base da sostituire: non corregge numeri o datum.
-Questa variante è necessaria perché PROJ omette gli assi della base anche
+Questa variante prova gli assi espliciti: PROJ omette quelli della base anche
 con `output_axis_rule=True`. Entrambe le forme hanno un motivo di esclusione
 per ciascun caso rifiutato (`esclusione_wkt1_gdal`, `esclusione_wkt1`).
-La variante esplicita risolve **32** CRS: **136** sono esclusi per perdita
-dell'ensemble e **1** (NAD27) per l'inverso dello schiacciamento arrotondato.
-Il corpus grezzo dei proiettati è inoltre rifiutato per assi della base assenti.
+Entrambe le varianti risolvono **165** CRS. Restano esclusi **4** casi:
+EPSG:4267 (NAD27) per l'inverso dello schiacciamento arrotondato;
+EPSG:3035 e 3395 per metodi fuori dai quattro alias ammessi;
+EPSG:3857 per metodo fuori profilo e nodo `EXTENSION`.
+Per questa modifica pyproj 3.7.2 non era disponibile: i testi non sono
+stati rigenerati da PROJ. `scripts/aggiorna_esclusioni_wkt1.py` aggiorna
+soltanto le esclusioni, usando i documenti e la semantica versionati.
+
+La classe equivalente esiste anche in WKT2_2015 e PROJJSON: per tutti i
+**136** CRS con ensemble, un datum storico con ID EPSG uguale all'ensemble
+resta rifiutato con `CRS_NOT_BUILTIN`. Le prove costruiscono questi casi
+esplicitamente. Gli export WKT2_2015 del corpus non portano tale ID sul
+DATUM; i PROJJSON originali conservano l'ensemble. Nessun cambiamento a
+questi due profili.
+
+L'enumerazione comprende 124 CRS con datum EPSG:6326 (`OGC:CRS84`,
+EPSG:3395, 3857, 4326, 32601–32660 e 32701–32760) e 12 con datum
+EPSG:6258 (EPSG:3035, 4258 e 25828–25837).
 
 Le prove verificano tutte le voci e mutano ogni parametro, identità,
 ellissoide, meridiano, unità e assi. IPC e GeoParquet conservano le coordinate
@@ -420,7 +445,7 @@ dello standard. GeoParquet, invece, richiede esplicitamente PROJJSON.
 
 `definizioni_crs` esercita PROJJSON e WKT1/WKT2 attraverso `resolve_crs`:
 i parser rimangono privati. Usa i 169 PROJJSON e tutti gli export WKT del
-corpus, comprese le esclusioni documentate e i 32 WKT1 ammessi. Il generatore
+corpus, comprese le esclusioni documentate e i 165 WKT1 ammessi. Il generatore
 `scripts/corpus_definizioni_crs.py`, chiamato da quello comune del fuzz,
 aggiunge troncamenti, duplicati, sentinelle, mutazioni numeriche e degli assi,
 profondità e budget strutturali intorno ai limiti, NUL e lunghezze al confine.

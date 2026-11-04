@@ -2,7 +2,7 @@
 //!
 //! Due operazioni **non speculari**: [`contract_from_arrow_schema`] preserva
 //! cio' che lo schema dichiara (un CRS assente resta [`ContractCrs::Missing`],
-//! una dichiarazione incoerente resta `DeclaredUnresolved`), mentre
+//! una dichiarazione non risolvibile resta `DeclaredUnresolved`), mentre
 //! `arrow_schema_from_contract` emette i metadati canonici e rifiuta i
 //! conflitti. Renderle simmetriche vorrebbe dire normalizzare in lettura o
 //! accettare l'ambiguita' in scrittura.
@@ -277,6 +277,9 @@ pub fn contract_from_arrow_schema(
 /// Un'incoerenza dichiarata non si risolve: si preserva come
 /// [`ContractCrs::DeclaredUnresolved`] con le dichiarazioni originali.
 ///
+/// Il lettore Arrow rifiuta prima i conflitti decidibili fra dichiarazioni;
+/// le regole seguenti descrivono anche l'API tipizzata chiamata direttamente.
+///
 /// Regole, in ordine:
 ///
 /// 1. `crs_resolution = declared_unresolved` con `crs_id` o
@@ -288,9 +291,7 @@ pub fn contract_from_arrow_schema(
 /// 2. conflitti decidibili senza risolutore, che danno `DeclaredUnresolved`:
 ///    (2a) solo per input **non dichiarati** (`crs_resolution` assente),
 ///    `crs_id` e `crs_definition` co-presenti, perché il loro accordo non è
-///    decidibile testualmente; (2b) sempre, anche con `resolved`, un
-///    `crs_id` `authority:code` con codice numerico diverso da `srid`. Il
-///    limite della (2a) evita di rovesciare la dichiarazione del produttore;
+///    decidibile testualmente. Lo SRID e' indipendente dal codice autorita'.
 /// 3. una rappresentazione (canonica o legacy `geo.crs`), o `resolved`
 ///    dichiarato: risoluzione con il risolutore dato (con
 ///    [`crate::crs::resolve_crs`], la tabella dei CRS integrati), e un
@@ -330,18 +331,6 @@ pub fn contract_crs_from_keys(
             definition,
             definition_format: keys.crs_definition_format,
         });
-    }
-    // (2) Un conflitto numerico decidibile fra identificatore e SRID non puo'
-    // essere nascosto da una dichiarazione `resolved`: si preservano tutte
-    // le rappresentazioni originali e non si invoca il backend CRS.
-    if let (Some(id), Some(srid)) = (&crs_id, keys.srid) {
-        if authority_code(id).is_some_and(|code| i64::from(code) != i64::from(srid)) {
-            return Ok(ContractCrs::DeclaredUnresolved {
-                crs_id,
-                definition,
-                definition_format: keys.crs_definition_format,
-            });
-        }
     }
     // (3) La co-presenza di due rappresentazioni risolvibili resta
     // indecidibile per gli input che non dichiarano uno stato.
@@ -696,7 +685,10 @@ pub fn pubblica_schema_con_primaria(
     }) {
         return Err(errore_di_contratto("primaria assente dalle geometrie"));
     }
+    let sanitized = super::geometry_metadata_policy::sanitize_covering(schema)?;
+    let schema = &sanitized;
     let mut metadata = schema.metadata().clone();
+    conserva_colonne_geo(schema, primary, &mut metadata)?;
     metadata.remove(PRIMARY_GEOMETRY_KEY);
     aggiungi_versione(&mut metadata)?;
     let mut portate = Vec::with_capacity(schema.fields().len());
@@ -712,9 +704,10 @@ pub fn pubblica_schema_con_primaria(
     let mut prossima = massimo.map_or(0, |massimo| u64::from(massimo) + 1);
     let mut fields = Vec::with_capacity(schema.fields().len());
     for (field, id) in schema.fields().iter().zip(portate) {
+        let field = field.as_ref().clone();
         let tenuta = id.filter(|id| conteggi.get(id) == Some(&1) && !ambigue.contains(id));
         if tenuta.is_some() {
-            fields.push(field.as_ref().clone());
+            fields.push(field);
             continue;
         }
         let nuova = u32::try_from(prossima).map_err(|_| {
@@ -727,7 +720,7 @@ pub fn pubblica_schema_con_primaria(
         prossima += 1;
         let mut campo_metadata = field.metadata().clone();
         campo_metadata.insert(PLENORA_FIELD_ID_KEY.to_owned(), nuova.to_string());
-        fields.push(field.as_ref().clone().with_metadata(campo_metadata));
+        fields.push(field.with_metadata(campo_metadata));
     }
     emit_primary_geometry(&Schema::new_with_metadata(fields, metadata), primary)
 }
@@ -1113,4 +1106,40 @@ fn schema_con_assi_espliciti(schema: SchemaRef) -> SchemaRef {
     } else {
         Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
     }
+}
+fn conserva_colonne_geo(
+    schema: &Schema,
+    primary: Option<usize>,
+    metadata: &mut crate::arrow::Metadata,
+) -> Result<(), PlenoraError> {
+    let Some(raw) = metadata.get("geo") else {
+        return Ok(());
+    };
+    crate::json::ensure_no_duplicate_keys(raw).map_err(|_| {
+        PlenoraError::Schema("metadato geometrico con chiavi duplicate o JSON non valido".into())
+    })?;
+    let Ok(serde_json::Value::Object(geo)) = serde_json::from_str(raw) else {
+        return Ok(());
+    };
+    let Some(serde_json::Value::Object(columns)) = geo.get("columns") else {
+        return Ok(());
+    };
+    let names: BTreeSet<&str> = schema
+        .fields()
+        .iter()
+        .filter(|field| super::arrow_metadata::field_declares_wkb_geometry(field))
+        .map(|field| field.name().as_str())
+        .collect();
+    let declared: BTreeSet<&str> = columns.keys().map(String::as_str).collect();
+    let primary_name = primary.map(|position| schema.field(position).name().as_str());
+    if names != declared
+        || primary_name.is_none()
+        || geo
+            .get("primary_column")
+            .and_then(serde_json::Value::as_str)
+            != primary_name
+    {
+        metadata.remove("geo");
+    }
+    Ok(())
 }

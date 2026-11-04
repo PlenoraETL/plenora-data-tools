@@ -1162,6 +1162,11 @@ pub fn concat(
     let metadata = crate::metadata_schema_input("concat", &[&left.schema(), &right.schema()])?;
     let schema =
         crate::geometry_provenance::vertical(&[&left.schema(), &right.schema()], fields, metadata)?;
+    let schema = plenora_core::contract::geometry_metadata_policy::schema_effect(
+        &schema,
+        &[&left.schema(), &right.schema()],
+        plenora_core::contract::geometry_metadata_policy::Effect::Merge,
+    )?;
     // `rows` e' la somma gia' calcolata sopra: e' la cardinalita' corretta
     // anche quando non c'e' alcuna colonna da cui dedurla.
     crate::batch_with_rows(Arc::new(schema), columns, rows)
@@ -1388,6 +1393,11 @@ pub fn concat_by_name(
             .collect::<Vec<_>>(),
         fields,
         metadata,
+    )?;
+    let schema = plenora_core::contract::geometry_metadata_policy::schema_effect(
+        &schema,
+        &sorgenti.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
+        plenora_core::contract::geometry_metadata_policy::Effect::Merge,
     )?;
     crate::batch_with_rows(Arc::new(schema), columns, rows)
 }

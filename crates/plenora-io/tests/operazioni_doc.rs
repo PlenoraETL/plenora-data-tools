@@ -3947,6 +3947,12 @@ fn catalogo_geo_multigeometria_operandi_e_passanti() {
                     attesi.remove("plenora.field_id");
                     let mut effettivi = uscita.schema().field(index).metadata().clone();
                     effettivi.remove("plenora.field_id");
+                    let effect = matrice_metadati::expected_effects(op, &ingressi, &uscita)
+                        .into_iter()
+                        .find(|(position, _)| *position == index)
+                        .unwrap()
+                        .1;
+                    plenora_core::contract::geometry_metadata_policy::apply(&mut attesi, effect);
                     assert_eq!(effettivi, attesi, "{} passante metadati", op.id);
                     let originali = ingressi[0]
                         .column(ingressi[0].schema().index_of(campo.name()).unwrap())
@@ -4067,3 +4073,5 @@ fn catalogo_geo_multigeometria_operandi_e_passanti() {
         }
     }
 }
+#[path = "comune/matrice_metadati.rs"]
+mod matrice_metadati;

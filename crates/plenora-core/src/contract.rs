@@ -23,6 +23,7 @@
 
 pub mod arrow_metadata;
 pub mod arrow_schema;
+pub mod geometry_metadata_policy;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;

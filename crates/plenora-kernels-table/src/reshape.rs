@@ -2244,7 +2244,7 @@ pub fn table_diff(
         .enumerate()
     {
         let md = plenora_core::contract::arrow_metadata::merged_geometry_metadata(
-            &[left.schema().field(*l)],
+            &[left.schema().field(*l), right.schema().field(*r)],
             &[],
         )?;
         fields[out] = fields[out].clone().with_metadata(md);

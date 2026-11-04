@@ -382,9 +382,12 @@ pub(in crate::analyze) fn finish(
                 }
                 plenora_core::contract::FieldOrigin::New => None,
             };
-            inherited
-                .cloned()
-                .unwrap_or_else(|| field.metadata().get("plenora.field_id").cloned())
+            inherited.cloned().unwrap_or_else(|| {
+                field
+                    .metadata()
+                    .get(plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY)
+                    .cloned()
+            })
         })
         .collect::<Vec<_>>();
     let schema = crate::geometry_provenance::emit(
@@ -402,7 +405,11 @@ pub(in crate::analyze) fn finish(
         allocator,
     )?;
     for (field, original) in output.schema.fields().iter().zip(originals) {
-        if field.metadata().get("plenora.field_id") != original.as_ref() {
+        if field
+            .metadata()
+            .get(plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY)
+            != original.as_ref()
+        {
             allocator.record_public_identity(output.field_ids[field.name()], original);
         }
     }

@@ -42,6 +42,8 @@ pub const GEOARROW_WKB_EXTENSION: &str = "geoarrow.wkb";
 /// Chiave del metadato `GeoArrow` `geo` del campo (JSON con `crs`,
 /// `dimensions`, `encoding`).
 pub const GEO_METADATA_KEY: &str = "geo";
+/// Identificatore CRS legacy di IO-tools, indipendente dalle chiavi canoniche.
+pub const GEO_CRS_KEY: &str = "crs";
 /// Nome della colonna geometria prodotta dai produttori geo (`from_coords`,
 /// `from_wkt`, `generate_grid`...).
 pub const DEFAULT_GEOMETRY_COLUMN: &str = "geometry";
@@ -185,6 +187,12 @@ pub fn require_geometry_compatibility(
         } else {
             right
         })?;
+    if comparison != GeometryComparison::Inputs
+        && field_declares_wkb_geometry(left)
+        && field_declares_wkb_geometry(right)
+    {
+        require_same_native_declarations(&left_effective, &right_effective)?;
+    }
     // Una decisione CRS non decide precisione o semantica spaziale.
     left_raw.precision = canonical_geometry_precision(left)?;
     left_raw.spatial_semantics = canonical_geometry_spatial_semantics(left)?;
@@ -198,8 +206,14 @@ pub fn require_geometry_compatibility(
     }
     super::arrow_schema::verifica_metadato_estensione(&left)?;
     super::arrow_schema::verifica_metadato_estensione(&right)?;
-    let left = comparison_keys(read_geometry_contract_keys(&left)?, &left_raw);
-    let right = comparison_keys(read_geometry_contract_keys(&right)?, &right_raw);
+    let left = read_geometry_contract_keys(&left)?;
+    let right = read_geometry_contract_keys(&right)?;
+    // Fra framing diversi resta il confronto SRID preesistente; nessun mapping.
+    // Due assenze concordano anche se un solo lato dispone del contratto tipizzato.
+    let map_srid =
+        left.encoding == right.encoding && (left_raw.srid.is_some() || right_raw.srid.is_some());
+    let left = comparison_keys(left, &left_raw, map_srid);
+    let right = comparison_keys(right, &right_raw, map_srid);
     if a != b
         || left.crs_id != right.crs_id
         || left.crs_definition != right.crs_definition
@@ -221,10 +235,7 @@ pub fn require_geometry_compatibility(
     if matches!(
         comparison,
         GeometryComparison::Declaration | GeometryComparison::Derived
-    ) && (left.encoding != right.encoding
-        || left.dimensions != right.dimensions
-        || left.precision != right.precision
-        || (comparison == GeometryComparison::Declaration && left.types != right.types))
+    ) && (left.encoding != right.encoding || left.dimensions != right.dimensions)
     {
         return Err(if comparison == GeometryComparison::Derived {
             PlenoraError::Unsupported(
@@ -239,14 +250,31 @@ pub fn require_geometry_compatibility(
     Ok(())
 }
 
+fn require_same_native_declarations(left: &Field, right: &Field) -> Result<(), PlenoraError> {
+    super::geometry_metadata_policy::require_same_reference_metadata(
+        left.metadata(),
+        right.metadata(),
+    )
+}
+
 // Queste nozioni appartengono al campo, non a GeometryColumnContract:
 // i default dell'emissione non devono cancellare l'evidenza di assenza.
 fn comparison_keys(
     mut effective: CanonicalGeometryKeys,
     raw: &CanonicalGeometryKeys,
+    map_srid: bool,
 ) -> CanonicalGeometryKeys {
     effective.axis_order = raw.axis_order;
-    effective.srid = raw.srid;
+    // Solo WKB con CRS risolto puo' riusare lo SRID derivato dal codec.
+    // EWKB conserva l'assenza: lo SRID incorporato si verifica sul campo originale.
+    effective.srid = if map_srid
+        && effective.encoding == Some(GeometryEncoding::Wkb)
+        && comparison_crs_resolution(&effective) == CrsResolution::Resolved
+    {
+        raw.srid.or(effective.srid)
+    } else {
+        raw.srid
+    };
     effective.precision = raw.precision;
     effective.spatial_semantics = raw.spatial_semantics;
     effective.crs_resolution = Some(comparison_crs_resolution(&effective));
@@ -259,18 +287,7 @@ fn comparison_keys(
 
 // Stesso stato implicito del lettore di contratto, senza invocare un backend
 // CRS nel kernel: le rappresentazioni si confrontano comunque esattamente.
-fn comparison_crs_resolution(keys: &CanonicalGeometryKeys) -> CrsResolution {
-    let conflicting_srid = keys
-        .crs_id
-        .as_deref()
-        .and_then(authority_code_srid)
-        .is_some_and(|code| {
-            keys.srid
-                .is_some_and(|srid| i64::from(code) != i64::from(srid))
-        });
-    if conflicting_srid {
-        return CrsResolution::DeclaredUnresolved;
-    }
+const fn comparison_crs_resolution(keys: &CanonicalGeometryKeys) -> CrsResolution {
     if let Some(resolution) = keys.crs_resolution {
         return resolution;
     }
@@ -331,12 +348,6 @@ pub fn require_geometry_source_crs(
             .crs_definition
             .as_deref()
             .is_some_and(|value| !matches(value))
-        || keys.srid.is_some_and(|srid| {
-            source
-                .authority_srid()
-                .and_then(|code| i32::try_from(code).ok())
-                != Some(srid)
-        })
     {
         return Err(PlenoraError::Crs(
             "CRS sorgente diverso dalla dichiarazione del campo geometrico".into(),
@@ -390,14 +401,23 @@ pub fn merged_geometry_metadata(
     if !field_declares_wkb_geometry(&first) {
         return Ok(Metadata::new());
     }
-    let mut metadata = first.metadata().clone();
+    // L'uscita derivata non dichiara i tipi delle celle: la fusione con
+    // questa dichiarazione fresca rende unresolved tramite la politica.
+    let mut fresh = first.metadata().clone();
+    for key in TYPES_KEYS_REWRITTEN_BY_TRANSFORM {
+        fresh.remove(key);
+    }
+    let mut metadata = super::geometry_metadata_policy::merge(first.metadata(), &fresh)?;
     metadata.remove(PLENORA_FIELD_ID_KEY);
-    strip_rewritten_types_declarations(&mut metadata);
-    if first
-        .metadata()
-        .contains_key("plenora.geometry.types_declaration")
-    {
-        metadata.insert("plenora.geometry.types_declaration", "unresolved");
+    for field in fields.iter().skip(1) {
+        metadata = super::geometry_metadata_policy::merge(&metadata, field.metadata())?;
+    }
+    for key in TYPES_KEYS_REWRITTEN_BY_TRANSFORM {
+        if key != "plenora.geometry.types_declaration"
+            || metadata.get(key).is_none_or(|value| value != "unresolved")
+        {
+            metadata.remove(key);
+        }
     }
     Ok(metadata)
 }
@@ -1047,6 +1067,24 @@ pub const TYPES_KEYS_REWRITTEN_BY_TRANSFORM: [&str; 2] = [
     PLENORA_GEOMETRY_TYPES_KEY,
 ];
 
+/// Applica la politica centrale per una colonna con valori modificati.
+pub fn strip_derived_geometry_metadata(metadata: &mut Metadata) {
+    super::geometry_metadata_policy::apply(
+        metadata,
+        super::geometry_metadata_policy::Effect::Values,
+    );
+}
+
+/// Metadati di schema dopo una trasformazione geometrica: i riepiloghi del
+/// produttore non descrivono piu' l'uscita. `GeoParquet` li ricalcola sui dati.
+#[must_use]
+pub fn transformed_geometry_schema_metadata(metadata: &Metadata) -> Metadata {
+    super::geometry_metadata_policy::schema_metadata(
+        metadata,
+        super::geometry_metadata_policy::Effect::Values,
+    )
+}
+
 /// Rimuove le chiavi canoniche dei tipi dai metadati di un campo geometria.
 ///
 /// Usata dall'analisi delle trasformazioni che cambiano il tipo geometrico:
@@ -1055,9 +1093,7 @@ pub const TYPES_KEYS_REWRITTEN_BY_TRANSFORM: [&str; 2] = [
 /// accanto (un consumatore a valle leggerebbe il tipo di prima della
 /// trasformazione) né provocare un conflitto di chiave.
 pub fn strip_rewritten_types_declarations(metadata: &mut Metadata) {
-    for key in TYPES_KEYS_REWRITTEN_BY_TRANSFORM {
-        metadata.remove(key);
-    }
+    super::geometry_metadata_policy::rewrite_types(metadata);
 }
 
 /// Rimuove le chiavi canoniche del CRS dai metadati di un campo geometria,
@@ -1067,29 +1103,7 @@ pub fn strip_rewritten_types_declarations(metadata: &mut Metadata) {
 /// della sorgente si sostituiscono e il blocco canonico ri-emette il target
 /// senza conflitto di chiave.
 pub fn strip_rewritten_crs_keys(metadata: &mut Metadata) {
-    strip_extension_crs(metadata);
-    for key in CRS_KEYS_REPLACED_BY_DECISION {
-        metadata.remove(key);
-    }
-}
-
-/// Il contratto ha gia' verificato il metadato; se il chiamante lo usa
-/// prima della lettura, un documento invalido resta visibile al confine.
-fn strip_extension_crs(metadata: &mut Metadata) {
-    let key = super::arrow_schema::GEOARROW_EXTENSION_METADATA_KEY;
-    let Some(raw) = metadata.get(key) else {
-        return;
-    };
-    if crate::json::ensure_no_duplicate_keys(raw).is_err()
-        || crate::json::ensure_numbers_exact(raw).is_err()
-    {
-        return;
-    }
-    if let Ok(serde_json::Value::Object(mut m)) = serde_json::from_str(raw) {
-        m.remove("crs");
-        m.remove("crs_type");
-        metadata.insert(key, serde_json::Value::Object(m).to_string());
-    }
+    super::geometry_metadata_policy::apply(metadata, super::geometry_metadata_policy::Effect::Crs);
 }
 
 /// Rimuove le dichiarazioni CRS dai metadati di un campo geometria.
@@ -1102,33 +1116,7 @@ fn strip_extension_crs(metadata: &mut Metadata) {
 /// Anche i duplicati, nel documento o nella stringa PROJJSON, restano
 /// invariati per essere rifiutati dalla lettura del contratto.
 pub fn strip_decided_crs_declarations(metadata: &mut Metadata) {
-    strip_extension_crs(metadata);
-    for key in CRS_KEYS_REPLACED_BY_DECISION {
-        metadata.remove(key);
-    }
-    let Some(raw) = metadata.get(GEO_METADATA_KEY).cloned() else {
-        return;
-    };
-    if crate::json::ensure_no_duplicate_keys(&raw).is_err() {
-        return;
-    }
-    if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw) {
-        if let Some(object) = value.as_object_mut() {
-            if object
-                .get("crs")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|text| crate::json::ensure_no_duplicate_keys(text).is_err())
-            {
-                return;
-            }
-            object.remove("crs");
-            if object.is_empty() {
-                metadata.remove(GEO_METADATA_KEY);
-            } else if let Ok(compact) = serde_json::to_string(&value) {
-                metadata.insert(GEO_METADATA_KEY.to_owned(), compact);
-            }
-        }
-    }
+    super::geometry_metadata_policy::apply(metadata, super::geometry_metadata_policy::Effect::Crs);
 }
 
 /// Errore di metadato contrattuale nella categoria che il vocabolario
@@ -1824,9 +1812,64 @@ pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKey
         }
     }
 
+    completa_crs_io(field, &mut keys)?;
     completa_crs_estensione(field, &mut keys)?;
+    verifica_coerenza_crs_completato(&keys)?;
+    super::geometry_metadata_policy::crs_properties(field)?;
 
     Ok(keys)
+}
+
+fn verifica_coerenza_crs_completato(keys: &CanonicalGeometryKeys) -> Result<(), PlenoraError> {
+    // Un conflitto decidibile e' un errore, non una precedenza implicita
+    // e nemmeno una dichiarazione irrisolta che un consumatore puo' ignorare.
+    if let (Some(id), Some(definition)) = (&keys.crs_id, &keys.crs_definition) {
+        if let (Ok(a), Ok(b)) = (
+            crate::crs::resolve_crs(id, "crs"),
+            crate::crs::resolve_crs(definition, "crs"),
+        ) {
+            if !a.semantically_equals(&b) {
+                return Err(PlenoraError::Crs(
+                    "identificatore e definizione CRS discordanti".into(),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn completa_crs_io(field: &Field, keys: &mut CanonicalGeometryKeys) -> Result<(), PlenoraError> {
+    let Some(id) = field.metadata().get(GEO_CRS_KEY) else {
+        return Ok(());
+    };
+    if id.is_empty()
+        || id.len() > MAX_CRS_ID_BYTES
+        || id.trim() != id
+        || !matches!(definition_form(id), DefinitionForm::AuthorityCode)
+        || keys.crs_resolution == Some(CrsResolution::Missing)
+    {
+        return Err(PlenoraError::Crs(
+            "chiave `crs` non valida o incoerente".into(),
+        ));
+    }
+    for other in [keys.crs_id.as_deref(), keys.crs_definition.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        if other != id
+            && !crate::crs::resolve_crs(id, "crs")?
+                .semantically_equals(&crate::crs::resolve_crs(other, "crs")?)
+        {
+            return Err(PlenoraError::Crs(
+                "chiave `crs` discordante dalle altre dichiarazioni CRS".into(),
+            ));
+        }
+    }
+    if keys.crs_id.is_none() && keys.crs_definition.is_none() {
+        keys.crs_id = Some(id.clone());
+    }
+    Ok(())
 }
 
 fn completa_crs_estensione(
@@ -1840,13 +1883,20 @@ fn completa_crs_estensione(
         .filter(|s| !s.trim().is_empty())
     {
         super::arrow_schema::verifica_metadato_estensione(field)?;
-        if keys.crs_resolution == Some(CrsResolution::DeclaredUnresolved)
-            && (keys.crs_id.is_some() || keys.crs_definition.is_some())
-        {
-            return Ok(());
-        }
         let value: serde_json::Value =
             serde_json::from_str(raw).map_err(|_| divergent_geometry_keys("crs"))?;
+        if value.get("crs").is_some_and(serde_json::Value::is_null) {
+            if keys.crs_id.is_some()
+                || keys.crs_definition.is_some()
+                || keys.axis_order.is_some()
+                || keys
+                    .crs_resolution
+                    .is_some_and(|state| state != CrsResolution::Missing)
+            {
+                return Err(divergent_geometry_keys("crs"));
+            }
+            keys.crs_resolution = Some(CrsResolution::Missing);
+        }
         if let Some(v) = value.get("crs").filter(|v| !v.is_null()) {
             let (definition, format) = match v {
                 serde_json::Value::String(t) => (t.clone(), CrsDefinitionFormat::Wkt2),

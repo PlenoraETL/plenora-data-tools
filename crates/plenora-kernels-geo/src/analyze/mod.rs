@@ -63,7 +63,6 @@ use std::sync::Arc;
 
 use plenora_core::arrow::{DataType, Field, Schema};
 use plenora_core::catalog::{find_operation, Arity, Family};
-use plenora_core::contract::arrow_metadata::PLENORA_GEOMETRY_PRECISION_KEY;
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::crs::ResolvedCrs;
 use plenora_core::{PlenoraError, Result};
@@ -460,71 +459,62 @@ pub fn analyze_geo_contract(
     // Il contratto e' l'unica fonte delle identita' sopravvissute.
     fields.bind_contract(&output);
     output.validate()?;
-    Ok(senza_precisione_ereditata(output, &operands))
+    Ok(senza_precisione_ereditata(output, descriptor, &operands))
 }
 
-/// Toglie `plenora.geometry.precision` ereditata dalle colonne geometriche
-/// selezionate nell'uscita di un'operazione geo; le passanti restano intatte.
-///
-/// Un kernel geo decodifica e ricodifica le coordinate in `f64`: una
-/// precisione `float32` o `native` dichiarata dall'ingresso direbbe il
-/// falso sulle geometrie che escono. Senza la chiave, l'emissione del blocco
-/// canonico dichiara `float64`, la precisione di ogni coordinata WKB. Le
-/// operazioni tabellari non toccano le coordinate e la precisione
-/// ereditata le attraversa intatta. Per semplicita' vale anche per le
-/// operazioni geo che restituiscono la geometria com'era (misure,
-/// predicati): l'informazione d'origine si perde, ma la dichiarazione
-/// resta vera.
+/// Applica la politica alle colonne secondo il ruolo risolto nell'analisi.
 fn senza_precisione_ereditata(
     mut output: DataContract,
+    descriptor: &plenora_core::catalog::OperationDescriptor,
     operands: &[Option<&plenora_core::contract::GeometryColumnContract>],
 ) -> DataContract {
-    let geometrie: Vec<&str> = output
-        .geometries
-        .iter()
-        .filter(|geometry| {
-            operands
-                .first()
-                .copied()
-                .flatten()
-                .is_some_and(|operand| operand.field_id == geometry.field_id)
-        })
-        .map(|geometria| geometria.name.as_str())
-        .collect();
-    // `float64` ereditata resta: e' gia' vera dopo la ricodifica.
-    let da_togliere = |campo: &Field| {
-        geometrie.contains(&campo.name().as_str())
-            && campo
-                .metadata()
-                .get(PLENORA_GEOMETRY_PRECISION_KEY)
-                .is_some_and(|precisione| precisione != "float64")
+    use plenora_core::contract::geometry_metadata_policy::{
+        apply, column_effects, operation_effect, Effect,
     };
-    let eredita = output
+    // Gli ID interni del contratto non sono gli ID pubblici dei metadati Arrow.
+    let resolved = operands
+        .iter()
+        .map(|operand| {
+            operand.and_then(|operand| {
+                output
+                    .geometries
+                    .iter()
+                    .find(|geometry| geometry.field_id == operand.field_id)
+            })
+        })
+        .collect::<Vec<_>>();
+    let effects = column_effects(descriptor, &output.schema, &resolved);
+    let fields: Vec<Field> = output
         .schema
         .fields()
         .iter()
-        .any(|campo| da_togliere(campo));
-    if !eredita {
-        return output;
-    }
-    let campi: Vec<Field> = output
-        .schema
-        .fields()
-        .iter()
-        .map(|campo| {
-            if da_togliere(campo) {
-                let mut metadati = campo.metadata().clone();
-                metadati.remove(PLENORA_GEOMETRY_PRECISION_KEY);
-                campo.as_ref().clone().with_metadata(metadati)
-            } else {
-                campo.as_ref().clone()
+        .enumerate()
+        .map(|(index, field)| {
+            let mut metadata = field.metadata().clone();
+            if let Some((_, effect)) = effects.iter().find(|(position, _)| *position == index) {
+                // Il produttore della riproiezione ha gia' riscritto C1.
+                apply(
+                    &mut metadata,
+                    if *effect == Effect::Crs {
+                        Effect::Values
+                    } else {
+                        *effect
+                    },
+                );
             }
+            field.as_ref().clone().with_metadata(metadata)
         })
         .collect();
-    output.schema = Arc::new(Schema::new_with_metadata(
-        campi,
-        output.schema.metadata().clone(),
-    ));
+    let metadata = if operation_effect(descriptor) != Effect::Unchanged
+        || effects
+            .iter()
+            .any(|(_, effect)| *effect != Effect::Unchanged)
+    {
+        crate::arrow_adapter::transformed_geometry_schema_metadata(output.schema.metadata())
+    } else {
+        output.schema.metadata().clone()
+    };
+    output.schema = Arc::new(Schema::new_with_metadata(fields, metadata));
     output
 }
 
@@ -1613,7 +1603,9 @@ mod tests {
             let schema =
                 plenora_core::contract::arrow_schema::arrow_schema_from_contract(&output).unwrap();
             assert!(
-                !schema.metadata().contains_key("plenora.primary_geometry"),
+                !schema
+                    .metadata()
+                    .contains_key(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY),
                 "{}",
                 case.op
             );
@@ -4071,6 +4063,9 @@ mod tests {
                     let mut nullable = field.is_nullable();
                     if field.name() == DEFAULT_GEOMETRY_COLUMN {
                         nullable = geometria_nullable;
+                        metadata.insert("plenora.geometry.native.geoparquet.column", "obsoleto");
+                        metadata.insert("plenora.geometry.futura", "obsoleto");
+                        metadata.insert("bbox", "obsoleto");
                         metadata.insert("descrizione".to_owned(), "lineage".to_owned());
                     }
                     if field.name() == "label" {
@@ -4081,6 +4076,7 @@ mod tests {
                 })
                 .collect();
             let mut schema_metadata = emesso.metadata().clone();
+            schema_metadata.insert("geo", "obsoleto");
             schema_metadata.insert("dataset".to_owned(), "prova".to_owned());
             let schema = Arc::new(Schema::new_with_metadata(fields, schema_metadata));
             // La scoperta, come per un file d'ingresso vero.

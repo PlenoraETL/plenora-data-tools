@@ -295,7 +295,7 @@ fn dichiarazioni_secondarie_incoerenti_rifiutate_anche_senza_righe() {
 }
 
 #[test]
-fn metadati_derivati_non_si_riusano_e_riferimenti_pendenti_si_rifiutano() {
+fn metadati_invariati_conservati_e_riferimenti_pendenti_rifiutati() {
     let t = fixture_io();
     let mut fields: Vec<_> = t
         .schema()
@@ -323,13 +323,16 @@ fn metadati_derivati_non_si_riusano_e_riferimenti_pendenti_si_rifiutano() {
     .unwrap();
     let prepared = prepara(&t).unwrap().unwrap();
     for index in [0, 2] {
-        assert!(!prepared
-            .tabella
-            .schema()
-            .field(index)
-            .metadata()
-            .values()
-            .any(|v| v == "obsoleto"));
+        assert_eq!(
+            prepared
+                .tabella
+                .schema()
+                .field(index)
+                .metadata()
+                .get("plenora.geometry.native.geoparquet.orientation")
+                .map(String::as_str),
+            Some("obsoleto")
+        );
     }
     let mut geo: serde_json::Value = serde_json::from_str(&prepared.geo).unwrap();
     geo["primary_column"] = serde_json::json!("assente");
@@ -384,6 +387,12 @@ fn footer_senza_tipi_non_nasconde_dichiarazioni_secondarie() {
             .collect();
         let mut md = fields[0].metadata().clone();
         md.insert(key, value);
+        if key == "plenora.geometry.dimensions" {
+            let mut legacy: serde_json::Value =
+                serde_json::from_str(md.get("geo").unwrap()).unwrap();
+            legacy["dimensions"] = value.into();
+            md.insert("geo", legacy.to_string());
+        }
         fields[0] = fields[0].clone().with_metadata(md);
         let t = RecordBatch::try_new(
             Arc::new(Schema::new_with_metadata(
@@ -406,6 +415,275 @@ fn footer_senza_tipi_non_nasconde_dichiarazioni_secondarie() {
                     .category(),
                 category
             );
+        }
+    }
+}
+
+#[test]
+fn secondaria_senza_crs_rifiuta_scrittura() {
+    let input = fixture_io();
+    let mut fields: Vec<_> = input
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect();
+    let mut md = plenora_core::arrow::Metadata::new();
+    md.insert("ARROW:extension:name", "geoarrow.wkb");
+    md.insert(
+        "plenora.field_id",
+        fields[2]
+            .metadata()
+            .get("plenora.field_id")
+            .unwrap()
+            .clone(),
+    );
+    fields[2] = fields[2].clone().with_metadata(md);
+    let input = RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            input.schema().metadata().clone(),
+        )),
+        input.columns().to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        prepara(&input).err().unwrap().category(),
+        ErrorCategory::Crs
+    );
+}
+
+#[test]
+fn estensione_vuota_conservata_in_scrittura_multigeometria() {
+    let input = fixture_io();
+    let fields: Vec<_> = input
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| {
+            let mut md = f.metadata().clone();
+            if md
+                .get("ARROW:extension:name")
+                .is_some_and(|v| v == "geoarrow.wkb")
+            {
+                md.insert("ARROW:extension:metadata", " ");
+            }
+            f.as_ref().clone().with_metadata(md)
+        })
+        .collect();
+    let input = RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            input.schema().metadata().clone(),
+        )),
+        input.columns().to_vec(),
+    )
+    .unwrap();
+    let prepared = prepara(&input).unwrap().unwrap();
+    assert_eq!(
+        prepared
+            .tabella
+            .schema()
+            .field(0)
+            .metadata()
+            .get("ARROW:extension:metadata")
+            .map(String::as_str),
+        Some(" ")
+    );
+}
+
+#[test]
+fn io700_covering_ripulito_ed_epoch_per_colonna_in_parquet() {
+    let input = plenora_io::leggi_tabella(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/riferimenti/io700/epoch-covering.arrow"),
+        None,
+        u64::MAX,
+    )
+    .unwrap();
+    let source = input
+        .schema()
+        .fields()
+        .iter()
+        .position(|f| {
+            f.metadata()
+                .get("ARROW:extension:name")
+                .is_some_and(|v| v == "geoarrow.wkb")
+        })
+        .unwrap();
+    let mut fields = Vec::new();
+    for (index, name) in ["prima", "secondaria"].into_iter().enumerate() {
+        let mut md = input.schema().field(source).metadata().clone();
+        md.insert("plenora.field_id", index.to_string());
+        let mut geo: serde_json::Value =
+            serde_json::from_str(md.get("geo").map_or("{}", String::as_str)).unwrap();
+        geo["covering"] = serde_json::json!({"bbox":{"xmin":["assente"]}});
+        md.insert("geo", geo.to_string());
+        fields.push(
+            input
+                .schema()
+                .field(source)
+                .clone()
+                .with_name(name)
+                .with_metadata(md),
+        );
+    }
+    let mut md = plenora_core::arrow::Metadata::new();
+    md.insert("plenora.contract.version", "1");
+    md.insert("plenora.primary_geometry", "1");
+    let input = RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(fields, md)),
+        vec![input.column(source).clone(); 2],
+    )
+    .unwrap();
+    let prepared = prepara(&input).unwrap().unwrap();
+    let read = applica(&prepared.tabella, &prepared.geo).unwrap();
+    for field in read.schema().fields() {
+        assert_eq!(
+            field
+                .metadata()
+                .get("plenora.geometry.native.geoparquet.epoch")
+                .map(String::as_str),
+            Some("2023.5")
+        );
+        let geo: serde_json::Value =
+            serde_json::from_str(field.metadata().get("geo").unwrap()).unwrap();
+        assert!(geo.get("covering").is_none());
+    }
+}
+
+#[test]
+fn binaria_geo_non_copia_primaria_dal_destro() {
+    let right = fixture_io();
+    let mut md = right.schema().metadata().clone();
+    md.insert("plenora.primary_geometry", "none");
+    let left = RecordBatch::try_new(
+        Arc::new(Schema::new_with_metadata(
+            right.schema().fields().clone(),
+            md,
+        )),
+        right.columns().to_vec(),
+    )
+    .unwrap();
+    let pipeline = plenora_pipeline::Pipeline::from_json(r#"{"version":1,"inputs":["l","r"],"steps":[{"op":"geo.nearest","in":["l","r"],"out":"o","config":{"left_geometry":"traccia","right_geometry":"traccia"}}],"outputs":["o"]}"#).unwrap();
+    let valid = pipeline
+        .validate(&[("l", left.schema()), ("r", right.schema())])
+        .unwrap();
+    let output = valid
+        .run(vec![("l".into(), left), ("r".into(), right)])
+        .unwrap();
+    assert!(contratto(&output.outputs[0].1).active_geometry.is_none());
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Stessa fixture e oracolo invertito per i tre kernel diretti.
+fn fusioni_dirette_multigeometria_senza_bbox_e_crs_discordanti_a_zero_righe() {
+    let input = fixture_io().project(&[0, 1, 2]).unwrap();
+    let marked = |different: bool| {
+        let fields: Vec<_> = input
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| {
+                let mut md = f.metadata().clone();
+                if md
+                    .get("ARROW:extension:name")
+                    .is_some_and(|v| v == "geoarrow.wkb")
+                {
+                    md.insert(
+                        "plenora.geometry.native.geoparquet.bbox",
+                        if different {
+                            "-180,-90,180,90"
+                        } else {
+                            "-200,-100,200,100"
+                        },
+                    );
+                    md.insert(
+                        "plenora.geometry.native.geoparquet.orientation",
+                        if different { "destra" } else { "sinistra" },
+                    );
+                }
+                f.as_ref().clone().with_metadata(md)
+            })
+            .collect();
+        RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                fields,
+                input.schema().metadata().clone(),
+            )),
+            input.columns().to_vec(),
+        )
+        .unwrap()
+    };
+    let left = marked(false);
+    let right = marked(true);
+    let run = |op, left: &RecordBatch, right: &RecordBatch| {
+        let limits = plenora_kernels_table::Limits::default();
+        match op {
+            0 => plenora_kernels_table::joins::concat(
+                left,
+                right,
+                &serde_json::from_str("{}").unwrap(),
+                &limits,
+            ),
+            1 => plenora_kernels_table::joins::concat_by_name(
+                &[left, right],
+                &serde_json::from_str("{}").unwrap(),
+                &limits,
+            ),
+            _ => plenora_kernels_table::setops::union_distinct(
+                left,
+                right,
+                &serde_json::from_str("{}").unwrap(),
+                &limits,
+            ),
+        }
+    };
+    for op in 0..3 {
+        let output = run(op, &left, &right).unwrap();
+        let reversed = run(op, &right, &left).unwrap();
+        assert_eq!(output.schema(), reversed.schema());
+        for f in output.schema().fields() {
+            assert!(!f
+                .metadata()
+                .contains_key("plenora.geometry.native.geoparquet.bbox"));
+            assert!(!f
+                .metadata()
+                .contains_key("plenora.geometry.native.geoparquet.orientation"));
+        }
+        let mut fields: Vec<_> = right
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+        let mut replacement = plenora_core::contract::arrow_metadata::geometry_output_field(
+            fields[2].name(),
+            "EPSG:3857",
+        )
+        .unwrap();
+        let mut md = replacement.metadata().clone();
+        md.insert(
+            "plenora.field_id",
+            fields[2]
+                .metadata()
+                .get("plenora.field_id")
+                .unwrap()
+                .clone(),
+        );
+        replacement = replacement.with_metadata(md);
+        fields[2] = replacement;
+        let wrong = RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                fields,
+                right.schema().metadata().clone(),
+            )),
+            right.columns().to_vec(),
+        )
+        .unwrap();
+        for count in [0, left.num_rows()] {
+            let error = run(op, &left.slice(0, count), &wrong.slice(0, count)).unwrap_err();
+            assert_eq!(error.category(), ErrorCategory::Crs);
         }
     }
 }
