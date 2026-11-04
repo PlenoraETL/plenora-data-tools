@@ -413,12 +413,9 @@ pub fn merged_geometry_metadata(
         metadata = super::geometry_metadata_policy::merge(&metadata, field.metadata())?;
     }
     for key in TYPES_KEYS_REWRITTEN_BY_TRANSFORM {
-        if key != "plenora.geometry.types_declaration"
-            || metadata.get(key).is_none_or(|value| value != "unresolved")
-        {
-            metadata.remove(key);
-        }
+        metadata.remove(key);
     }
+    metadata.insert("plenora.geometry.types_declaration", "unresolved");
     Ok(metadata)
 }
 

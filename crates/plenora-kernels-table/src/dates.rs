@@ -19,7 +19,7 @@ use serde::Deserialize;
 
 use crate::temporale::{ColonnaTemporale, Momento};
 use crate::utility::InvalidDatePolicy;
-use crate::{column_index, reject_rows, replace_or_append, scalar_as_string, RowRejection};
+use crate::{reject_rows, replace_or_append, scalar_as_string, text_column_index, RowRejection};
 use plenora_core::{PlenoraError, Result};
 
 fn default_output_format() -> String {
@@ -530,7 +530,7 @@ pub fn date_format(batch: &RecordBatch, config: &DateFormat) -> Result<RecordBat
     crate::require_geometry_support(&batch.schema())?;
     verifica_politiche(config.invalid.as_ref(), None)?;
     let uscita = FormatoUscita::senza_fuso(&config.output_format)?;
-    let index = column_index(batch, &config.column)?;
+    let index = text_column_index(batch, &config.column)?;
     let lettore = Lettore::new(batch.column(index), config.input_format.as_deref())?;
     let celle = (0..batch.num_rows())
         .map(|row| lettore.momento(row))
@@ -697,7 +697,7 @@ pub fn date_add(batch: &RecordBatch, config: &DateAdd) -> Result<RecordBatch> {
     crate::require_geometry_support(&batch.schema())?;
     verifica_politiche(config.invalid.as_ref(), None)?;
     let uscita = FormatoUscita::senza_fuso(&config.output_format)?;
-    let index = column_index(batch, &config.column)?;
+    let index = text_column_index(batch, &config.column)?;
     let lettore = Lettore::new(batch.column(index), config.input_format.as_deref())?;
     // Delta precomputato per le unita' a durata fissa (mai ricalcolato per
     // riga); anni e mesi restano sull'aritmetica di calendario per riga.
@@ -846,8 +846,8 @@ fn diff_value(delta: TimeDelta, divisor: f64, _row: usize) -> Result<f64> {
 pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> {
     crate::require_geometry_support(&batch.schema())?;
     verifica_politiche(config.invalid.as_ref(), None)?;
-    let start_index = column_index(batch, &config.start_column)?;
-    let end_index = column_index(batch, &config.end_column)?;
+    let start_index = text_column_index(batch, &config.start_column)?;
+    let end_index = text_column_index(batch, &config.end_column)?;
     verifica_generi_date_diff(
         batch.column(start_index).data_type(),
         batch.column(end_index).data_type(),
@@ -1033,7 +1033,7 @@ pub struct TimezoneConvert {
 pub fn timezone_convert(batch: &RecordBatch, config: &TimezoneConvert) -> Result<RecordBatch> {
     crate::require_geometry_support(&batch.schema())?;
     verifica_politiche(config.invalid.as_ref(), config.ambiguous.as_ref())?;
-    let index = column_index(batch, &config.column)?;
+    let index = text_column_index(batch, &config.column)?;
     let source_tz: Tz = config
         .source_timezone
         .parse()
@@ -1752,7 +1752,7 @@ mod tests {
     }
 
     fn generic_date_format(batch: &RecordBatch, config: &DateFormat) -> Result<RecordBatch> {
-        let index = column_index(batch, &config.column)?;
+        let index = text_column_index(batch, &config.column)?;
         let outcomes = (0..batch.num_rows())
             .map(|row| {
                 let Some(value) = scalar_as_string(batch.column(index).as_ref(), row)? else {
@@ -1775,7 +1775,7 @@ mod tests {
     }
 
     fn generic_date_add(batch: &RecordBatch, config: &DateAdd) -> Result<RecordBatch> {
-        let index = column_index(batch, &config.column)?;
+        let index = text_column_index(batch, &config.column)?;
         let outcomes = (0..batch.num_rows())
             .map(|row| {
                 let Some(value) = scalar_as_string(batch.column(index).as_ref(), row)? else {
@@ -1802,8 +1802,8 @@ mod tests {
 
     #[allow(clippy::cast_precision_loss)] // Come `diff_value`: l'output e' Float64.
     fn generic_date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> {
-        let start_index = column_index(batch, &config.start_column)?;
-        let end_index = column_index(batch, &config.end_column)?;
+        let start_index = text_column_index(batch, &config.start_column)?;
+        let end_index = text_column_index(batch, &config.end_column)?;
         let divisor = match config.unit {
             DiffUnit::Days => 86_400.0,
             DiffUnit::Hours => 3_600.0,
@@ -1851,7 +1851,7 @@ mod tests {
         batch: &RecordBatch,
         config: &TimezoneConvert,
     ) -> Result<RecordBatch> {
-        let index = column_index(batch, &config.column)?;
+        let index = text_column_index(batch, &config.column)?;
         let source: Tz = config
             .source_timezone
             .parse()

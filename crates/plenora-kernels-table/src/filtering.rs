@@ -627,6 +627,17 @@ pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
     crate::require_geometry_support(&batch.schema())?;
     verifica_valore(&config.operator, config.value.as_ref())?;
     let index = column_index(batch, &config.column)?;
+    if matches!(
+        config.operator,
+        Operator::Eq
+            | Operator::Ne
+            | Operator::Contains
+            | Operator::Startswith
+            | Operator::Endswith
+    ) {
+        crate::require_non_geometry(batch.schema().field(index))?;
+    }
+
     let array = batch.column(index);
     let rows = if let Some(result) = fast_rows(array, &config.operator, config.valore()) {
         result?
@@ -755,6 +766,19 @@ pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBa
     }
     config.verifica_risultati()?;
     let index = column_index(batch, &config.column)?;
+    for condition in &config.conditions {
+        if matches!(
+            condition.operator,
+            Operator::Eq
+                | Operator::Ne
+                | Operator::Contains
+                | Operator::Startswith
+                | Operator::Endswith
+        ) {
+            crate::require_non_geometry(batch.schema().field(index))?;
+        }
+    }
+
     let source = batch.column(index);
     // Valori attesi e testi di risultato risolti una volta per batch (hot path minimale):
     // per riga restano solo valutazione e clone della stringa di output.

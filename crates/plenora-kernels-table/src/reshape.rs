@@ -301,6 +301,7 @@ pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<Recor
                 // l'operazione dopo le allocazioni, quando la timezone non e'
                 // valida, pur essendo nota fin da qui.
                 for index in &value_indices {
+                    crate::require_non_geometry(batch.schema().field(*index))?;
                     crate::validate_text_convertible(
                         batch.column(*index).data_type(),
                         batch.schema().field(*index).name(),
@@ -942,8 +943,11 @@ pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<Rec
         .iter()
         .map(|name| column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
-    let pivot_index = column_index(batch, &config.column)?;
+    let pivot_index = crate::text_column_index(batch, &config.column)?;
     let value_index = column_index(batch, &config.value_col)?;
+    if matches!(config.aggr_func, PivotAgg::Concat) {
+        crate::require_non_geometry(batch.schema().field(value_index))?;
+    }
     config.verifica_mapping(batch.column(pivot_index).data_type(), limits.max_columns)?;
     // Una passata sulle righe, in ordine crescente:
     // - chiave indice con l'identita' di `row_key` (`visit_key_ids`: valore
@@ -1235,6 +1239,9 @@ pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Re
         .as_deref()
         .map(|name| column_index(batch, name))
         .transpose()?;
+    if let Some(index) = id_index {
+        crate::require_non_geometry(batch.schema().field(index))?;
+    }
     let data_indices = (0..batch.num_columns())
         .filter(|index| Some(*index) != id_index)
         .collect::<Vec<_>>();

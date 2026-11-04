@@ -140,6 +140,14 @@ In esecuzione:
 
 ### Limiti e deviazioni
 
+`first`/`last` supportano le celle geometriche intatte: il campo derivato
+conserva il riferimento comune e dichiara `types_declaration=unresolved`.
+
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 Le funzioni a risultato `float64` calcolano in `f64`: un `decimal128` o un
 testo con più cifre di quante un `f64` ne tenga si arrotondano senza errore
 (con `distinct` i distinti si decidono comunque sul valore esatto); sulle

@@ -722,6 +722,7 @@ impl Pipeline {
         // Lo schema che ogni output porta fuori dal runner: versione e
         // identità dei campi, deciso qui una volta (`run` lo applica).
         let mut schemi_uscita = BTreeMap::new();
+        let mut prossima_identita = 0;
         for nome in &self.outputs {
             let interno = contratti.get(nome).ok_or_else(|| {
                 PlenoraError::Internal(format!("contratto dell'output `{nome}` assente"))
@@ -754,11 +755,12 @@ impl Pipeline {
                 .map(|g| interno.schema.index_of(&g.name))
                 .transpose()?;
             let schema = Schema::new_with_metadata(fields, interno.schema.metadata().clone());
-            let pubblicato = plenora_core::contract::arrow_schema::pubblica_schema_con_primaria(
+            let pubblicato = plenora_core::contract::arrow_schema::pubblica_schema_con_cursore(
                 &schema,
                 primary,
                 &identita_osservate,
                 &identita_ambigue,
+                &mut prossima_identita,
             )
             .map_err(|errore| nel_passo_o_input(&format!("output `{nome}`"), errore))?;
             schemi_uscita.insert(nome.clone(), pubblicato);

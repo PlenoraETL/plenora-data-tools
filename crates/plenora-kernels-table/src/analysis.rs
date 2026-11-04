@@ -162,7 +162,7 @@ const RIGHE_PER_CHUNK_LOOKUP: usize = if cfg!(test) { 16 } else { 65_536 };
 ///   di `replace_or_append`.
 pub fn lookup(batch: &RecordBatch, config: &Lookup) -> Result<RecordBatch> {
     crate::require_geometry_support(&batch.schema())?;
-    let index = column_index(batch, &config.column)?;
+    let index = crate::text_column_index(batch, &config.column)?;
     let source = batch.column(index);
     let output = config.output_column.as_deref().unwrap_or(&config.column);
     validate_output_name(output)?;
@@ -1429,7 +1429,7 @@ pub fn flatten_json(
     if config.max_level > 5 {
         return Err(PlenoraError::InvalidPlan("max_level oltre 5".into()));
     }
-    let index = column_index(batch, &config.column)?;
+    let index = crate::text_column_index(batch, &config.column)?;
     let source = batch.column(index);
     let prefix = if config.prefix.is_empty() {
         format!("{}_", config.column)
@@ -1829,7 +1829,7 @@ pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatc
         let group_column = batch.column(group_index);
         let value_column = batch.column(value_index);
         for row in 0..batch.num_rows() {
-            let key = crate::scalar_key_string(group_column.as_ref(), row)?;
+            let key = crate::scalar_partition_key(group_column.as_ref(), row)?;
             let value = scalar_as_f64_rounded(value_column.as_ref(), row)?;
             let id = *intern.entry(key).or_insert_with(|| {
                 groups.push(Vec::new());
@@ -2072,7 +2072,10 @@ pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
         let mut groups: BTreeMap<Option<String>, Vec<usize>> = BTreeMap::new();
         for row in 0..batch.num_rows() {
             groups
-                .entry(crate::scalar_key_string(batch.column(index).as_ref(), row)?)
+                .entry(crate::scalar_partition_key(
+                    batch.column(index).as_ref(),
+                    row,
+                )?)
                 .or_default()
                 .push(row);
         }
@@ -2222,7 +2225,7 @@ mod tests {
         let mut righe: HashMap<Option<String>, Vec<usize>> = HashMap::new();
         for row in 0..batch.num_rows() {
             let key = group_index
-                .map(|index| crate::scalar_key_string(batch.column(index).as_ref(), row))
+                .map(|index| crate::scalar_partition_key(batch.column(index).as_ref(), row))
                 .transpose()?
                 .flatten();
             if let Some(value) = scalar_as_f64_rounded(batch.column(value_index).as_ref(), row)? {
@@ -2264,7 +2267,7 @@ mod tests {
             let chiavi = (0..batch.num_rows())
                 .map(|row| {
                     group_index
-                        .map(|index| crate::scalar_key_string(batch.column(index).as_ref(), row))
+                        .map(|index| crate::scalar_partition_key(batch.column(index).as_ref(), row))
                         .transpose()
                         .map(Option::flatten)
                 })

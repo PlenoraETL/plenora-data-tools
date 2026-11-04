@@ -1375,7 +1375,7 @@ fn run_matrix(full: bool) {
         divergences.extend(audit.divergences);
     }
     divergences.sort();
-    let mut report = format!("# Matrice metadati\n\nUscite rilette: {counts:?}. Confronti: {checked:?}.\n\n## Copertura\n\nPolitica verificata per colonna, con provenienza ingresso:nome, primaria risolta e bbox separati nel footer. I casi senza primaria rifiutati da GeoParquet sono conteggiati come rifiuti attesi. Le fixture di melt e pivot non collocano la geometria fra i valori. Internal e IO falliscono la matrice anche nella baseline.\n\n## Rifiuti espliciti\n\n");
+    let mut report = format!("# Matrice metadati\n\nUscite rilette: {counts:?}. Confronti: {checked:?}.\n\n## Copertura\n\nPolitica verificata per colonna, con provenienza ingresso:nome, primaria risolta e bbox separati nel footer. I casi senza primaria rifiutati da GeoParquet sono conteggiati come rifiuti attesi. Le geometrie fra i valori di melt e pivot sono enumerate, con le altre operazioni del catalogo, dalla prova catalogo_geometria_in_ogni_ruolo_non_legge_wkb_come_testo in operazioni_doc.rs. Internal e IO falliscono la matrice anche nella baseline.\n\n## Rifiuti espliciti\n\n");
     writeln!(
         report,
         "Totale rifiuti: {}.\n",

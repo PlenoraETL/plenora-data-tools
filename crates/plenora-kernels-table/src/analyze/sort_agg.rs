@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::helpers::{
     analyze_append, check_name_list, check_output_name, check_rows, check_text_len, con_op,
     contract_error, field_of, finish, map_row_count, produce, propagate_geometry, proven_sorted,
-    require_numeric, require_scalar_string, require_scalar_string_field, require_scalar_strings,
+    require_key, require_key_field, require_keys, require_numeric, require_text_value_field,
     sorted_only, typed,
 };
 use crate::{aggregation, Limits};
@@ -112,10 +112,10 @@ pub(in crate::analyze) fn analyze_distinct(
     if config.subset.is_empty() {
         // Senza subset la chiave e' la riga intera, letta come testo.
         for field in input.schema.fields() {
-            require_scalar_string_field(op, field)?;
+            require_key_field(op, field)?;
         }
     } else {
-        require_scalar_strings(op, input, &config.subset)?;
+        require_keys(op, input, &config.subset)?;
     }
     let mut output = input.clone();
     // Righe rimosse; l'ordine relativo delle occorrenze mantenute e' preservato.
@@ -137,7 +137,7 @@ pub(in crate::analyze) fn analyze_dedup_advanced(
     }
     check_name_list(op, &config.subset, limits.max_columns, "subset", false)?;
     con_op(op, aggregation::verifica_verso_dedup(&config))?;
-    require_scalar_strings(op, input, &config.subset)?;
+    require_keys(op, input, &config.subset)?;
     let sorted_by = if let Some(order_column) = &config.order_column {
         require_sortable(op, input, std::slice::from_ref(order_column))?;
         // Sort interno su order_column, nel verso della config, prima della
@@ -192,14 +192,14 @@ pub(in crate::analyze) fn analyze_aggregate(
     if config.aggregations.len() > limits.max_columns {
         return contract_error(op, "aggregations oltre il limite di colonne");
     }
-    // Il kernel legge le chiavi di gruppo come scalari testuali: stessi tipi
+    // Il kernel legge le chiavi geometriche come byte nativi: stessi tipi
     // ammessi, rifiutati qui e non a esecuzione iniziata.
     let mut fields_out: Vec<Field> = config
         .group_by
         .iter()
         .map(|name| {
             let field = field_of(op, input, name)?;
-            require_scalar_string_field(op, field)?;
+            require_key_field(op, field)?;
             Ok(field.clone())
         })
         .collect::<Result<_>>()?;
@@ -213,8 +213,11 @@ pub(in crate::analyze) fn analyze_aggregate(
         let field = field_of(op, input, &aggregation.column)?;
         match aggregation.function {
             aggregation::AggFunction::Count => {}
-            aggregation::AggFunction::Nunique | aggregation::AggFunction::Concat => {
-                require_scalar_string_field(op, field)?;
+            aggregation::AggFunction::Nunique => {
+                require_key_field(op, field)?;
+            }
+            aggregation::AggFunction::Concat => {
+                require_text_value_field(op, field)?;
             }
             // La cella com'e' (`take`): il tipo del profilo, senza il fuso,
             // con la stessa funzione del kernel.
@@ -327,7 +330,7 @@ pub(in crate::analyze) fn analyze_rolling_window(
     // Le partizioni leggono `group_by` come scalare testuale
     // (`build_partitions`): stessi tipi ammessi del kernel.
     if let Some(group_by) = &config.group_by {
-        require_scalar_string(op, input, group_by)?;
+        require_key(op, input, group_by)?;
     }
     let sorted_by = if let Some(order_column) = &config.order_column {
         require_sortable(op, input, std::slice::from_ref(order_column))?;
@@ -398,7 +401,7 @@ pub(in crate::analyze) fn analyze_window_function(
     // Partizioni su `group_by` come scalare testuale e sort su
     // `order_column`, come nel kernel.
     if let Some(group_by) = &config.group_by {
-        require_scalar_string(op, input, group_by)?;
+        require_key(op, input, group_by)?;
     }
     if let Some(order_column) = &config.order_column {
         require_sortable(op, input, std::slice::from_ref(order_column))?;

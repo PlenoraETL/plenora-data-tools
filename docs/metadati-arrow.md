@@ -63,9 +63,10 @@ tiene l'identità). All'uscita (`pubblica_schema`):
 - ogni campo senza identità ne riceve una nuova, in ordine di colonna,
   dalla prima sopra la massima dichiarata da tutti gli ingressi del piano
   (non solo da quelli da cui l'uscita discende): una colonna nuova non
-  prende mai il numero che un ingresso usava per un altro campo. Due uscite
-  dello stesso piano possono dare lo stesso numero a campi diversi:
-  l'unicità vale nello schema.
+  prende mai il numero che un ingresso usava per un altro campo. Il cursore
+  è unico per piano e avanza nell'ordine di `outputs`: un ID nuovo non si
+  riusa fra uscite. Un ID comune a due uscite identifica un campo conservato
+  dallo stesso ingresso, con identità non ambigua.
 
 `concat`, `concat_by_name` e `union_distinct` tengono i metadati di campo
 della prima sorgente che contiene la colonna, e con loro la sua identita':
@@ -161,6 +162,14 @@ un'operazione.
 
 ## Limiti dichiarati
 
+- **Campo nuovo comune a più uscite.**
+  *Regola*: le identità nuove sono uniche nel piano, nell'ordine di `outputs`.
+  *Ambito*: pubblicazione degli schemi, anche uscite che nominano ingressi.
+  *Hazard*: uno stesso campo nuovo presente in due uscite riceve due ID diversi;
+  il consumatore non lo ritrova per ID, ma non trova un campo diverso.
+  *Rientro*: assegnare gli ID dalla lineage interna, registrando una sola volta
+  tutti i campi d'ingresso e allineando `FieldOrigin` e lineage dei metadati.
+
 - **Identità persa nelle collisioni.**
   *Regola*: ARROW-004 chiede di conservare l'identità di un campo
   invariato; DT-ARROW-001 del profilo v2 stabilisce che, in una collisione,
@@ -170,8 +179,8 @@ un'operazione.
   dichiarato da due ingressi del piano o compare su due campi dell'uscita;
   riceve un'identità nuova, come una colonna derivata. Garanzia indebolita:
   il consumatore non ritrova il campo, ma non ne trova mai un altro. Non è
-  un caso raro: ogni uscita numera da 0 i campi che non avevano identità,
-  quindi due tabelle prodotte da questo runner condividono quasi sempre
+  un caso raro: piani indipendenti numerano da 0 i campi senza identità,
+  quindi due tabelle prodotte da piani indipendenti possono condividere
   0, 1, 2…, e in un piano che le usa entrambe quasi tutte le identità si
   perdono.
   *Rientro*: un namespace d'identità condiviso fra gli ingressi (per
@@ -545,3 +554,19 @@ Le colonne nuove ricevono solo le proprietà CRS dell'operando (`inherit_crs`).
 La primaria segue la provenienza, mai l'ordine dei campi. Il `geo` di schema
 si elimina quando cambiano nomi geometrici o primaria, e a ogni effetto
 diverso da `Unchanged`; il writer ricostruisce i riepiloghi per colonna.
+
+## Celle geometriche derivate e letture testuali
+
+La fusione di celle intatte in `melt`, `pivot` first/last, `coalesce` e
+`transpose` conserva il riferimento comune, anche con più geometrie, ma
+scrive sempre `plenora.geometry.types_declaration = unresolved` senza `types`
+e senza ereditare l'identità del primo campo. Analisi e kernel condividono
+questa regola (GD), applicata anche ad `aggregate` first/last nel supporto
+multigeometria; `nunique` confronta i byte nativi. Quando una API diretta
+emette chiavi canoniche su un ingresso solo GeoArrow, completa anche
+`plenora.contract.version = 1` nello schema.
+
+La regola GT rifiuta con `Crs` in validazione qualsiasi colonna geometrica
+usata come testo, indipendentemente dai byte WKB, anche su input vuoti o null.
+Le chiavi native restano ammesse. Ambito, hazard e rientro sono nel
+[registro dei limiti](limiti.md#geometrie-lette-come-testo).

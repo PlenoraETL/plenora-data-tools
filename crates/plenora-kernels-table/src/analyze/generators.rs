@@ -8,8 +8,8 @@ use serde_json::Value;
 
 use super::dates::check_format_text;
 use super::helpers::{
-    analyze_append, check_output_name, check_rows, con_op, contract_error, field_of,
-    require_scalar_string, sorted_only, typed,
+    analyze_append, check_output_name, check_rows, con_op, contract_error, field_of, require_key,
+    require_text_value, sorted_only, typed,
 };
 use crate::{utility, Limits};
 
@@ -36,7 +36,7 @@ pub(in crate::analyze) fn analyze_add_row_number(
     }
     con_op(op, utility::verifica_ascending(&config))?;
     if let Some(partition) = &config.partition_column {
-        require_scalar_string(op, input, partition)?;
+        require_key(op, input, partition)?;
     }
     analyze_append(
         input,
@@ -85,7 +85,7 @@ pub(in crate::analyze) fn analyze_date_extract(
         )?;
         con_op(op, utility::verifica_date_extract_temporale(&config))?;
     } else {
-        require_scalar_string(op, input, &config.column)?;
+        require_text_value(op, input, &config.column)?;
     }
     if let Some(format) = &config.date_format {
         check_format_text(op, format, limits, "date_format")?;

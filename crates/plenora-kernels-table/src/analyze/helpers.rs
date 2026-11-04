@@ -75,13 +75,13 @@ pub(in crate::analyze) fn field_of<'a>(
         .map_err(|_| PlenoraError::InvalidPlan(format!("{op}: colonna non trovata: {name}")))
 }
 
-/// Verifica che un campo sia leggibile come scalare testuale, timezone
-/// COMPRESA.
+/// Verifica il dominio delle chiavi, timezone compresa. I Binary sono
+/// confrontati sui byte nativi, senza interpretarli come UTF-8.
 ///
 /// Delega a [`crate::validate_text_convertible`] — la stessa funzione che
 /// usano i kernel — e riporta l'errore nella categoria che questi
 /// analizzatori usano per un contratto non soddisfacibile (`InvalidPlan`).
-pub(in crate::analyze) fn require_scalar_string_field(op: &str, field: &Field) -> Result<()> {
+pub(in crate::analyze) fn require_key_field(op: &str, field: &Field) -> Result<()> {
     crate::validate_text_convertible(field.data_type(), field.name()).map_err(|errore| {
         PlenoraError::InvalidPlan(format!(
             "{op}: non leggibile come scalare testuale: {errore}"
@@ -89,12 +89,32 @@ pub(in crate::analyze) fn require_scalar_string_field(op: &str, field: &Field) -
     })
 }
 
-pub(in crate::analyze) fn require_scalar_string(
+pub(in crate::analyze) fn require_key(op: &str, input: &DataContract, name: &str) -> Result<()> {
+    require_key_field(op, field_of(op, input, name)?)
+}
+
+/// Valori testuali: il WKB non rappresenta testo, qualunque siano i byte.
+pub(in crate::analyze) fn require_text_value_field(op: &str, field: &Field) -> Result<()> {
+    crate::require_non_geometry(field)?;
+    require_key_field(op, field)
+}
+
+pub(in crate::analyze) fn require_text_value(
     op: &str,
     input: &DataContract,
     name: &str,
 ) -> Result<()> {
-    require_scalar_string_field(op, field_of(op, input, name)?)
+    require_text_value_field(op, field_of(op, input, name)?)
+}
+
+pub(in crate::analyze) fn require_text_values<'a>(
+    op: &str,
+    input: &DataContract,
+    names: impl IntoIterator<Item = &'a String>,
+) -> Result<()> {
+    names
+        .into_iter()
+        .try_for_each(|name| require_text_value(op, input, name))
 }
 
 pub(in crate::analyze) fn require_numeric(
@@ -208,14 +228,14 @@ pub(in crate::analyze) fn check_rows(
 }
 
 /// Ogni colonna nominata esiste ed e' leggibile come scalare testuale.
-pub(in crate::analyze) fn require_scalar_strings<'a>(
+pub(in crate::analyze) fn require_keys<'a>(
     op: &str,
     input: &DataContract,
     names: impl IntoIterator<Item = &'a String>,
 ) -> Result<()> {
     names
         .into_iter()
-        .try_for_each(|name| require_scalar_string(op, input, name))
+        .try_for_each(|name| require_key(op, input, name))
 }
 
 /// `round(rows * fraction)` con l'aritmetica f64 del kernel `sample`

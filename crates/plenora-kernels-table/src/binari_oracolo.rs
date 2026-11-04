@@ -212,6 +212,115 @@ fn prima_erano_errori_ora_sono_chiavi() {
 }
 
 #[test]
+fn chiave_di_partizione_preserva_uguaglianza_e_ordine_di_ogni_byte() {
+    let mut valori = pool();
+    for byte in 0..=u8::MAX {
+        valori.push(Some(vec![byte]));
+        valori.push(Some(vec![byte, 0]));
+        valori.push(Some(vec![byte, 255]));
+    }
+    let array = BinaryArray::from(valori.iter().map(Option::as_deref).collect::<Vec<_>>());
+    let chiavi: Vec<_> = (0..valori.len())
+        .map(|row| crate::scalar_partition_key(&array, row).expect("chiave"))
+        .collect();
+    for (a, valore_a) in valori.iter().enumerate() {
+        for (b, valore_b) in valori.iter().enumerate() {
+            assert_eq!(chiavi[a].cmp(&chiavi[b]), valore_a.cmp(valore_b));
+        }
+    }
+}
+
+#[test]
+fn partizioni_e_nunique_contro_ranghi_testuali_indipendenti() {
+    for righe in [0, 1, 40, 200] {
+        let batch = fixture(righe, 7, 0);
+        let binary = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        let distinti: BTreeSet<_> = binary.iter().flatten().collect();
+        let ranghi: BTreeMap<_, _> = distinti
+            .into_iter()
+            .enumerate()
+            .map(|(i, bytes)| (bytes, format!("{i:08}")))
+            .collect();
+        let mut campi: Vec<_> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+        campi[0] = Field::new("g", DataType::Utf8, true);
+        let mut colonne = batch.columns().to_vec();
+        colonne[0] = Arc::new(StringArray::from(
+            binary
+                .iter()
+                .map(|v| v.map(|bytes| ranghi[bytes].clone()))
+                .collect::<Vec<_>>(),
+        ));
+        let riferimento =
+            plenora_core::batch_with_rows(Arc::new(Schema::new(campi)), colonne, batch.num_rows())
+                .unwrap();
+        let operazioni: Vec<(&str, Value)> = vec![
+            (
+                "statistics",
+                json!({"column":"v","group_by":"g","stats":["count","sum"]}),
+            ),
+            (
+                "sample",
+                json!({"n":12,"stratify_column":"g","random_state":9}),
+            ),
+            (
+                "add_row_number",
+                json!({"partition_column":"g","output_column":"numero"}),
+            ),
+            (
+                "rolling_window",
+                json!({"column":"v","group_by":"g","function":"sum","window":3,"output_column":"finestra"}),
+            ),
+            (
+                "window_function",
+                json!({"column":"v","group_by":"g","function":"cumcount"}),
+            ),
+            (
+                "aggregate",
+                json!({"group_by":["s"],"aggregations":[{"column":"g","function":"nunique","alias":"numero"}]}),
+            ),
+        ];
+        for (nome, configurazione) in operazioni {
+            let esegui = |input: &RecordBatch| match nome {
+                "statistics" => crate::analysis::statistics(input, &config(configurazione.clone())),
+                "sample" => crate::analysis::sample(input, &config(configurazione.clone())),
+                "add_row_number" => {
+                    crate::utility::add_row_number(input, &config(configurazione.clone()))
+                }
+                "rolling_window" => {
+                    aggregation::rolling_window(input, &config(configurazione.clone()))
+                }
+                "window_function" => {
+                    aggregation::window_function(input, &config(configurazione.clone()))
+                }
+                "aggregate" => aggregation::aggregate(input, &config(configurazione.clone())),
+                _ => unreachable!(),
+            };
+            let attesa = esegui(&riferimento).expect(nome);
+            let effettiva = esegui(&batch).expect(nome);
+            assert_eq!(effettiva.num_rows(), attesa.num_rows(), "{nome}");
+            for campo in effettiva.schema().fields() {
+                if campo.name() != "g" {
+                    assert_eq!(
+                        effettiva.column_by_name(campo.name()),
+                        attesa.column_by_name(campo.name()),
+                        "{nome}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn distinct_dedup_assert_unique_come_sul_testo_rimappato() {
     for (rows, seed) in [(0_usize, 1_u64), (1, 2), (13, 3), (200, 4), (1_000, 5)] {
         let batch = fixture(rows, seed, 0);

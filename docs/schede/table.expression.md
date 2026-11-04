@@ -165,6 +165,9 @@ In esecuzione:
 
 ### Limiti e deviazioni
 
+Le colonne geometriche referenziate sono rifiutate con `Crs` prima delle celle
+in validazione e nell'API diretta: il WKB non viene interpretato come testo.
+
 L'aritmetica e l'uscita numerica sono in `f64`: gli interi oltre `2^53` e i
 decimali si arrotondano nel calcolo, non nei confronti. `date_trunc` tronca
 in UTC e non accetta istanti con fuso. Gli errori che dipendono dai valori

@@ -6,8 +6,7 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::helpers::{
-    analyze_append, check_output_name, con_op, contract_error, field_of, require_scalar_string,
-    typed,
+    analyze_append, check_output_name, con_op, contract_error, field_of, require_text_value, typed,
 };
 use crate::{dates, Limits};
 
@@ -67,7 +66,7 @@ fn check_input(
                 .map_err(|errore| PlenoraError::InvalidPlan(errore.to_string())),
         )?;
     } else {
-        require_scalar_string(op, input, column)?;
+        require_text_value(op, input, column)?;
     }
     if let Some(formato) = input_format {
         check_format_text(op, formato, limits, "input_format")?;

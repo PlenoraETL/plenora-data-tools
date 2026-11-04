@@ -82,6 +82,27 @@ fn esegui(piano: &str, tabelle: Vec<(&str, RecordBatch)>) -> BTreeMap<String, Re
             )
         })
         .collect();
+    let mut ingressi = BTreeMap::<u32, usize>::new();
+    for (_, tabella) in &tabelle {
+        for campo in tabella.schema().fields() {
+            if let Some(id) = campo.metadata().get(ID) {
+                *ingressi.entry(id.parse().unwrap()).or_default() += 1;
+            }
+        }
+    }
+    let uscite: Vec<_> = pubblicati.values().collect();
+    for (i, sinistra) in uscite.iter().enumerate() {
+        for destra in &uscite[i + 1..] {
+            for a in sinistra.fields() {
+                for b in destra.fields() {
+                    let id: u32 = a.metadata()[ID].parse().unwrap();
+                    if id == b.metadata()[ID].parse::<u32>().unwrap() {
+                        assert_eq!(ingressi.get(&id), Some(&1), "ID nuovo riusato");
+                    }
+                }
+            }
+        }
+    }
     let esito = validata
         .run(
             tabelle
@@ -227,4 +248,117 @@ fn un_piano_in_catena_sull_uscita_di_un_altro_conserva_le_identita() {
         vec![("t", intermedia.clone())],
     );
     assert_eq!(identita(&secondo["f"]), identita(&intermedia));
+}
+
+#[test]
+fn identita_ambigue_e_assenti_non_collidono_fra_uscite() {
+    let uscite = esegui(
+        r#"{"version":1,"inputs":["o","k"],"steps":[
+          {"out":"a","op":"table.select_columns","in":["o"],"config":{"columns":["cliente"]}},
+          {"out":"b","op":"table.select_columns","in":["k"],"config":{"columns":["cliente"]}}
+        ],"outputs":["a","b"]}"#,
+        vec![
+            ("o", ordini(Some(["0", "1", "2"]))),
+            ("k", clienti(["1", "5"])),
+        ],
+    );
+    assert_eq!(identita(&uscite["a"])["cliente"], "6");
+    assert_eq!(identita(&uscite["b"])["cliente"], "7");
+    let uscite = esegui(
+        r#"{"version":1,"inputs":["o"],"steps":[
+          {"out":"a","op":"table.select_columns","in":["o"],"config":{"columns":["id","importo"]}},
+          {"out":"b","op":"table.select_columns","in":["o"],"config":{"columns":["importo"]}}
+        ],"outputs":["a","b","o"]}"#,
+        vec![("o", ordini(None))],
+    );
+    assert_eq!(
+        identita(&uscite["a"]),
+        attese(&[("id", "0"), ("importo", "1")])
+    );
+    assert_eq!(identita(&uscite["b"])["importo"], "2");
+    assert_eq!(identita(&uscite["o"])["id"], "3");
+    // Il secondo piano non deve togliere come ambigue le nuove identità.
+    let secondo = esegui(
+        r#"{"version":1,"inputs":["a","b","o"],"steps":[],"outputs":["a","b","o"]}"#,
+        uscite
+            .iter()
+            .map(|(nome, batch)| (nome.as_str(), batch.clone()))
+            .collect(),
+    );
+    for nome in ["a", "b", "o"] {
+        assert_eq!(identita(&uscite[nome]), identita(&secondo[nome]));
+    }
+}
+
+#[test]
+fn enumerazione_rami_e_ordine_outputs_conserva_solo_le_identita_di_ingresso() {
+    use serde_json::json;
+    for id in [None, Some(["0", "1", "2"]), Some(["10", "11", "12"])] {
+        for numero_rami in 2..=8 {
+            let steps: Vec<_> = (0..numero_rami)
+                .map(|i| {
+                    json!({
+                        "out": format!("r{i}"), "op": "table.formula", "in": ["o"],
+                        "config": {"new_column": format!("nuova{i}"), "formula": "importo * 2"}
+                    })
+                })
+                .collect();
+            let mut outputs: Vec<_> = (0..numero_rami).map(|i| format!("r{i}")).collect();
+            outputs.push("o".into());
+            for inverti in [false, true] {
+                if inverti {
+                    outputs.reverse();
+                }
+                let piano =
+                    json!({"version":1,"inputs":["o"],"steps":steps,"outputs":outputs}).to_string();
+                let prima = esegui(&piano, vec![("o", ordini(id))]);
+                let seconda = esegui(&piano, vec![("o", ordini(id))]);
+                for nome in &outputs {
+                    assert_eq!(identita(&prima[nome]), identita(&seconda[nome]));
+                    if let Some(ids) = id {
+                        for (colonna, atteso) in ["id", "cliente", "importo"].into_iter().zip(ids) {
+                            assert_eq!(identita(&prima[nome])[colonna], atteso);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn campo_nuovo_condiviso_e_geometrie_prodotte_ricevono_identita_distinte() {
+    let uscite = esegui(
+        r#"{"version":1,"inputs":["o"],"steps":[
+          {"out":"a","op":"table.formula","in":["o"],"config":{"new_column":"doppio","formula":"importo * 2"}},
+          {"out":"b","op":"table.filter","in":["a"],"config":{"column":"id","operator":">","value":0}}
+        ],"outputs":["a","b"]}"#,
+        vec![("o", ordini(Some(["0", "1", "2"])))],
+    );
+    assert_ne!(
+        identita(&uscite["a"])["doppio"],
+        identita(&uscite["b"])["doppio"]
+    );
+    let coordinate = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Float64, false),
+            Field::new("y", DataType::Float64, false),
+        ])),
+        vec![
+            Arc::new(Float64Array::from(vec![500_000.0])),
+            Arc::new(Float64Array::from(vec![5_000_000.0])),
+        ],
+    )
+    .unwrap();
+    let uscite = esegui(
+        r#"{"version":1,"inputs":["o"],"crs":"EPSG:32632","steps":[
+          {"out":"a","op":"geo.from_coords","in":["o"],"config":{}},
+          {"out":"b","op":"geo.from_coords","in":["o"],"config":{}}
+        ],"outputs":["a","b"]}"#,
+        vec![("o", coordinate)],
+    );
+    assert_ne!(
+        identita(&uscite["a"])["geometry"],
+        identita(&uscite["b"])["geometry"]
+    );
 }

@@ -10,8 +10,7 @@ use serde_json::Value;
 
 use super::helpers::{
     analyze_append, check_name_list, check_output_name, check_text_len, con_op, contract_error,
-    require_scalar_string, require_scalar_string_field, require_scalar_strings, require_utf8,
-    typed,
+    require_text_value, require_text_value_field, require_text_values, require_utf8, typed,
 };
 use crate::{security, strings, Limits};
 
@@ -144,7 +143,7 @@ pub(in crate::analyze) fn analyze_md5_hash(
         "null_literal",
     )?;
     for name in &config.columns {
-        require_scalar_string(op, input, name)?;
+        require_text_value(op, input, name)?;
     }
     analyze_append(
         input,
@@ -177,7 +176,7 @@ pub(in crate::analyze) fn analyze_sha256_hash(
         "null_literal",
     )?;
     for name in &config.columns {
-        require_scalar_string(op, input, name)?;
+        require_text_value(op, input, name)?;
     }
     analyze_append(
         input,
@@ -207,10 +206,10 @@ pub(in crate::analyze) fn analyze_stable_fingerprint(
         // via `scalar_as_string`, quindi i tipi fuori profilo (List, Struct)
         // fallirebbero a runtime: fail-closed gia' in validazione.
         for field in input.schema.fields() {
-            require_scalar_string_field(op, field)?;
+            require_text_value_field(op, field)?;
         }
     } else {
-        require_scalar_strings(op, input, &config.columns)?;
+        require_text_values(op, input, &config.columns)?;
     }
     analyze_append(
         input,
@@ -235,7 +234,7 @@ pub(in crate::analyze) fn analyze_hmac_sha256(
     // La chiave NON e' mai letta in analisi: nel contratto passa solo il nome
     // della variabile d'ambiente, mai il valore.
     check_name_list(op, &config.columns, limits.max_columns, "columns", false)?;
-    require_scalar_strings(op, input, &config.columns)?;
+    require_text_values(op, input, &config.columns)?;
     let nullable = matches!(config.null_policy, security::HmacNullPolicy::Null);
     analyze_append(
         input,
@@ -262,7 +261,7 @@ pub(in crate::analyze) fn analyze_mask_data(
     con_op(op, config.verifica_colonne())?;
     // `available` accumula le uscite delle masking precedenti, ma ogni
     // colonna mascherata deve comunque essere una colonna di testo
-    // dell'ingresso (`require_scalar_string` sotto): una masking su una
+    // dell'ingresso (`require_text_value` sotto): una masking su una
     // colonna `_masked` creata da una precedente si rifiuta, anche se il
     // kernel la applicherebbe in sequenza.
     let mut available: HashSet<String> = input
@@ -276,7 +275,7 @@ pub(in crate::analyze) fn analyze_mask_data(
         if !available.contains(&masking.column) {
             return contract_error(op, format!("colonna non trovata: {}", masking.column));
         }
-        require_scalar_string(op, input, &masking.column)?;
+        require_text_value(op, input, &masking.column)?;
         con_op(op, masking.verifica_parametri())?;
         if matches!(masking.mask_type, security::MaskType::Custom)
             && masking.mask_char().chars().count() != 1

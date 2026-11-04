@@ -330,6 +330,14 @@ In esecuzione:
 
 #### Limiti e deviazioni
 
+`first`/`last` supportano le celle geometriche intatte: il campo derivato
+conserva il riferimento comune e dichiara `types_declaration=unresolved`.
+
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 Le funzioni a risultato `float64` calcolano in `f64`: un `decimal128` o un
 testo con più cifre di quante un `f64` ne tenga si arrotondano senza errore
 (con `distinct` i distinti si decidono comunque sul valore esatto); sulle
@@ -2023,6 +2031,10 @@ le colonne: entrambi fuori dai volumi ammessi dai limiti.
 
 #### Limiti e deviazioni
 
+Le colonne derivate da celle geometriche intatte conservano il riferimento
+comune, anche con più geometrie, e dichiarano `types_declaration=unresolved`
+senza `types` né identità ereditata (regola GD).
+
 Nessuno oltre ai limiti comuni.
 
 #### Complessità
@@ -2548,6 +2560,11 @@ sotto un operatore testuale.
 
 #### Limiti e deviazioni
 
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 - **Tipo deciso dai letterali**: basta un risultato non numerico (anche
   `""`) perché anche i risultati numerici diventino testo (`2` diventa
   `"2"`).
@@ -2824,6 +2841,11 @@ In esecuzione:
 
 #### Limiti e deviazioni
 
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 Le date rappresentabili sono quelle di `chrono` (anni da -262143 a
 262142). Un `amount` che alcune date sopportano e quelle dei dati no
 fallisce in esecuzione
@@ -2958,6 +2980,11 @@ In esecuzione:
 - `Schema`: una cella che non si converte in testo.
 
 #### Limiti e deviazioni
+
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
 
 Il risultato è `float64` per contratto: oltre `2^53` nanosecondi (circa 104
 giorni) il numero esatto di nanosecondi si arrotonda al double più vicino
@@ -3100,6 +3127,11 @@ In esecuzione:
 
 #### Limiti e deviazioni
 
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 Nessuna oltre quelle dette sopra: una colonna temporale si legge dal
 valore nativo, un testo con `date_format` o con i formati ISO di default.
 
@@ -3237,6 +3269,11 @@ In esecuzione:
 - `Schema`: una cella che non si converte in testo.
 
 #### Limiti e deviazioni
+
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
 
 Non esiste un modo di trasformare un valore non leggibile in null: per
 questo `invalid` si rifiuta.
@@ -4049,6 +4086,9 @@ In esecuzione:
 
 #### Limiti e deviazioni
 
+Le colonne geometriche referenziate sono rifiutate con `Crs` prima delle celle
+in validazione e nell'API diretta: il WKB non viene interpretato come testo.
+
 L'aritmetica e l'uscita numerica sono in `f64`: gli interi oltre `2^53` e i
 decimali si arrotondano nel calcolo, non nei confronti. `date_trunc` tronca
 in UTC e non accetta istanti con fuso. Gli errori che dipendono dai valori
@@ -4327,6 +4367,11 @@ In esecuzione:
 
 #### Limiti e deviazioni
 
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 Il confronto fra numeri è esatto per costruzione, anche oltre `2^53` e fra
 interi e decimali ([Runner, «Validazione»](runner.md#validazione)). Gli
 operatori ordinati confrontano le date come numero di giorni dall'epoca e i
@@ -4465,6 +4510,11 @@ In esecuzione:
   testo JSON) oltre `max_string_bytes` byte.
 
 #### Limiti e deviazioni
+
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
 
 Un documento si valida come lo valida `serde_json`: numeri oltre il
 dominio di `f64`, surrogati isolati e annidamento oltre 128 livelli lo
@@ -4631,6 +4681,9 @@ In esecuzione:
 - `Schema`: una cella che non si converte in testo.
 
 #### Limiti e deviazioni
+
+Le colonne geometriche referenziate sono rifiutate con `Crs` prima delle celle
+in validazione e nell'API diretta: il WKB non è un valore testuale (regola GT).
 
 Il calcolo è in `f64`: un `int64` oltre `2^53` si arrotonda. Un `NaN` o
 un infinito già presenti in una colonna si propagano senza errore (a
@@ -4937,6 +4990,11 @@ In esecuzione:
   nulla di una riga non si leggono.
 
 #### Limiti e deviazioni
+
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
 
 La variabile d'ambiente si controlla in validazione, ma può cambiare prima
 dell'esecuzione: allora l'errore arriva al passo
@@ -5468,6 +5526,11 @@ non UTF-8, data o istante fuori intervallo).
 
 #### Limiti e deviazioni
 
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 Nessuno oltre ai limiti comuni.
 
 #### Complessità
@@ -5614,6 +5677,11 @@ In esecuzione:
 
 #### Limiti e deviazioni
 
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 La maschera conta i caratteri Unicode, non i grafemi: un carattere composto
 da più code point (emoji con modificatori, lettere con diacritici
 combinanti) conta per più di uno. Non riconosce il formato del dato: un
@@ -5740,6 +5808,11 @@ In esecuzione:
   data o istante fuori intervallo).
 
 #### Limiti e deviazioni
+
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
 
 MD5 non è resistente alle collisioni: non usarlo come impronta di
 sicurezza. Il messaggio non ha delimitazioni: un valore che contiene U+001F
@@ -5888,6 +5961,15 @@ In esecuzione:
   (`binary` non UTF-8, date fuori intervallo).
 
 #### Limiti e deviazioni
+
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
+Le colonne derivate da celle geometriche intatte conservano il riferimento
+comune, anche con più geometrie, e dichiarano `types_declaration=unresolved`
+senza `types` né identità ereditata (regola GD).
 
 Prima di allocare, il kernel stima i byte dell'uscita (colonne id
 ripetute, nome della colonna valore più lungo, colonna valore più larga,
@@ -6070,6 +6152,15 @@ In esecuzione (dal runner con `mapping`, o chiamando il kernel):
 - `DataMapping`: `sum` su una colonna intera oltre la gamma di `int64`.
 
 #### Limiti e deviazioni
+
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
+Le colonne derivate da celle geometriche intatte conservano il riferimento
+comune, anche con più geometrie, e dichiarano `types_declaration=unresolved`
+senza `types` né identità ereditata (regola GD).
 
 Senza `mapping` il runner non esegue l'operazione (lo schema dipende dai
 dati); `table.transpose` ha lo stesso limite. Su `decimal128` e testo
@@ -7213,6 +7304,11 @@ In esecuzione:
 
 #### Limiti e deviazioni
 
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 Con `empty` una cella nulla e una vuota danno lo stesso hash, con `literal`
 una cella nulla e una che contiene `null_literal`; per distinguerle
 [`table.stable_fingerprint`](#tablestable_fingerprint). Nome e tipo Arrow
@@ -7590,6 +7686,11 @@ In esecuzione, `Schema`: una cella che non si converte in testo (`binary`
 non UTF-8, data o istante fuori intervallo).
 
 #### Limiti e deviazioni
+
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
 
 L'impronta dipende da nome e tipo Arrow delle colonne: rinominare o cambiare
 tipo cambia l'impronta. Con `columns` vuoto entra anche una colonna
@@ -8523,6 +8624,11 @@ In esecuzione:
 
 #### Limiti e deviazioni
 
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 Le regole dei fusi sono quelle della banca dati IANA inclusa in
 `chrono-tz` 0.10.4: un cambio di regole successivo non si vede finché la
 dipendenza non si aggiorna.
@@ -8780,6 +8886,15 @@ Chiamando il kernel:
   `max_columns`; un testo oltre `max_string_bytes`.
 
 #### Limiti e deviazioni
+
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
+Le colonne derivate da celle geometriche intatte conservano il riferimento
+comune, anche con più geometrie, e dichiarano `types_declaration=unresolved`
+senza `types` né identità ereditata (regola GD).
 
 Nessuno oltre allo schema che dipende dai dati.
 
@@ -9485,6 +9600,9 @@ In validazione, `InvalidPlan`:
 In esecuzione: nessuno che dipenda dai valori.
 
 #### Limiti e deviazioni
+
+Le regole `eq`/`ne` su colonne geometriche sono rifiutate con `Crs` prima
+delle celle, in validazione e nell'API diretta (regola GT).
 
 Un nome di regola può contenere `;`: in `_errors` e `_warnings` l'elenco
 non si separa più senza ambiguità. Il contratto di `summary` non dichiara il

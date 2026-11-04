@@ -86,6 +86,11 @@ sotto un operatore testuale.
 
 ### Limiti e deviazioni
 
+Una colonna geometrica usata come valore testuale, nome o predicato testuale
+è rifiutata con `Crs` in validazione e prima delle celle nell'API diretta,
+anche su WKB UTF-8 valido, input vuoto o tutto null (regola GT).
+Le chiavi confrontate sui byte nativi restano ammesse.
+
 - **Tipo deciso dai letterali**: basta un risultato non numerico (anche
   `""`) perché anche i risultati numerici diventino testo (`2` diventa
   `"2"`).

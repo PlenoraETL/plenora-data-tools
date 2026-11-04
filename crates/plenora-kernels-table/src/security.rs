@@ -20,7 +20,7 @@ use serde::Deserialize;
 use sha2::Sha256;
 
 use crate::{
-    column_index, reject_rows, replace_or_append, scalar_as_string, validate_output_name,
+    reject_rows, replace_or_append, scalar_as_string, text_column_index, validate_output_name,
     RowRejection,
 };
 use plenora_core::{PlenoraError, Result};
@@ -154,7 +154,7 @@ pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
     columns.dedup();
     let indices = columns
         .iter()
-        .map(|name| column_index(batch, name))
+        .map(|name| text_column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     // Il pre-rifiuto row-scoped vale solo per null_policy=error: empty
     // (default) e literal danno un valore alla cella nulla.
@@ -263,7 +263,7 @@ pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBat
     names.sort();
     let indices = names
         .iter()
-        .map(|name| column_index(batch, name))
+        .map(|name| text_column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     // Come `md5_hash`: pre-rifiuto solo per null_policy=error.
     if matches!(config.null_policy, HashNullPolicy::Error) {
@@ -700,7 +700,7 @@ pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Re
     }
     let indices = names
         .iter()
-        .map(|name| column_index(batch, name))
+        .map(|name| text_column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     let values = match config.algorithm {
         FingerprintAlgorithm::Sha256 => fingerprint_rows::<Sha256>(batch, &names, &indices)?,
@@ -882,7 +882,7 @@ pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBat
     let indices = config
         .columns
         .iter()
-        .map(|name| column_index(batch, name))
+        .map(|name| text_column_index(batch, name))
         .collect::<Result<Vec<_>>>()?;
     let key = load_hmac_key(&config.key_env)?;
     // hmac non ha null_policy=error: Empty (default), Null e Skip danno
@@ -1201,9 +1201,12 @@ pub fn mask_data_con_limiti(
         masking.verifica_parametri()?;
     }
     config.verifica_colonne()?;
+    for masking in &config.maskings {
+        text_column_index(batch, &masking.column)?;
+    }
     let mut result = batch.clone();
     for masking in &config.maskings {
-        let index = column_index(&result, &masking.column)?;
+        let index = text_column_index(&result, &masking.column)?;
         let output = if config.overwrite {
             masking.column.clone()
         } else {
@@ -1476,7 +1479,7 @@ mod tests {
         }
         let mut result = batch.clone();
         for masking in &config.maskings {
-            let index = column_index(&result, &masking.column)?;
+            let index = text_column_index(&result, &masking.column)?;
             let output = if config.overwrite {
                 masking.column.clone()
             } else {
@@ -2180,7 +2183,7 @@ mod tests {
         }
         let indices = names
             .iter()
-            .map(|name| column_index(batch, name))
+            .map(|name| text_column_index(batch, name))
             .collect::<Result<Vec<_>>>()?;
         let values = match config.algorithm {
             FingerprintAlgorithm::Sha256 => {
@@ -2255,7 +2258,7 @@ mod tests {
         let indices = config
             .columns
             .iter()
-            .map(|name| column_index(batch, name))
+            .map(|name| text_column_index(batch, name))
             .collect::<Result<Vec<_>>>()?;
         let key = load_hmac_key(&config.key_env)?;
         let values = (0..batch.num_rows())

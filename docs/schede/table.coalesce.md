@@ -63,6 +63,10 @@ le colonne: entrambi fuori dai volumi ammessi dai limiti.
 
 ### Limiti e deviazioni
 
+Le colonne derivate da celle geometriche intatte conservano il riferimento
+comune, anche con più geometrie, e dichiarano `types_declaration=unresolved`
+senza `types` né identità ereditata (regola GD).
+
 Nessuno oltre ai limiti comuni.
 
 ### Complessità

@@ -112,7 +112,7 @@ pub fn add_row_number(batch: &RecordBatch, config: &AddRowNumber) -> Result<Reco
         let mut positions: HashMap<Option<String>, usize> = HashMap::new();
         (0..batch.num_rows())
             .map(|row| {
-                let key = crate::scalar_key_string(source.as_ref(), row)?;
+                let key = crate::scalar_partition_key(source.as_ref(), row)?;
                 let position = positions.entry(key).or_insert(0);
                 let current = numero_di_riga(config.start, *position)?;
                 *position += 1;
@@ -339,7 +339,7 @@ pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordB
         crate::dates::validate_format_items(format, "date_format")?;
     }
     let nomi = nomi_date_extract(config)?;
-    let index = column_index(batch, &config.column)?;
+    let index = crate::text_column_index(batch, &config.column)?;
     let source = batch.column(index);
     if let Some(temporale) = crate::temporale::ColonnaTemporale::new(source)? {
         verifica_date_extract_temporale(config)?;

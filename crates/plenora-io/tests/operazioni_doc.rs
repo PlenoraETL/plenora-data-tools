@@ -2468,6 +2468,7 @@ fn ingresso_geometrico(batch: &RecordBatch, posizione: usize, proiettato: bool) 
     metadata.insert("plenora.geometry.axis_order", axis);
     metadata.insert("plenora.geometry.crs_id", crs);
     metadata.insert("plenora.geometry.encoding", "wkb");
+    metadata.insert("plenora.geometry.precision", "float64");
     let campo = campo.with_metadata(metadata);
     let mut builder = BinaryBuilder::new();
     for riga in 0..batch.num_rows() {
@@ -4076,3 +4077,739 @@ fn catalogo_geo_multigeometria_operandi_e_passanti() {
 }
 #[path = "comune/matrice_metadati.rs"]
 mod matrice_metadati;
+
+// Ogni ruolo nominato dall'esempio viene isolato: una lista [a,b] diventa
+// [a] e [b], così le fusioni non si fermano solo sul tipo eterogeneo.
+fn ruoli_geometrici(config: &Value, nomi: &BTreeSet<String>) -> Vec<(Value, String)> {
+    let mut varianti = Vec::new();
+    match config {
+        Value::String(nome) if nomi.contains(nome) => {
+            varianti.push((config.clone(), nome.clone()));
+        }
+        Value::Array(lista) => {
+            if lista
+                .iter()
+                .all(|v| v.as_str().is_some_and(|n| nomi.contains(n)))
+            {
+                for nome in lista.iter().filter_map(Value::as_str) {
+                    varianti.push((serde_json::json!([nome]), nome.to_owned()));
+                }
+            } else {
+                for (indice, valore) in lista.iter().enumerate() {
+                    for (variante, nome) in ruoli_geometrici(valore, nomi) {
+                        let mut copia = lista.clone();
+                        copia[indice] = variante;
+                        varianti.push((Value::Array(copia), nome));
+                    }
+                }
+            }
+        }
+        Value::Object(mappa) => {
+            for (chiave, valore) in mappa {
+                for (variante, nome) in ruoli_geometrici(valore, nomi) {
+                    let mut copia = mappa.clone();
+                    copia.insert(chiave.clone(), variante);
+                    varianti.push((Value::Object(copia), nome));
+                }
+            }
+        }
+        _ => {}
+    }
+    varianti
+}
+
+fn geometria_per_ruolo(
+    batch: &RecordBatch,
+    nome: &str,
+    utf8: bool,
+    multipla: bool,
+    stato: usize,
+) -> RecordBatch {
+    let Ok(posizione) = batch.schema().index_of(nome) else {
+        return batch.clone();
+    };
+    let mut batch = ingresso_geometrico(batch, posizione, false);
+    if multipla {
+        // La seconda geometria conserva la prima, anziché sostituirla.
+        let aggiunta = ingresso_geometrico(&batch, batch.num_columns(), false);
+        let mut campi = aggiunta.schema().fields().to_vec();
+        campi[posizione] = batch.schema().field(posizione).clone().into();
+        batch = RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                campi,
+                batch.schema().metadata().clone(),
+            )),
+            aggiunta.columns().to_vec(),
+        )
+        .unwrap();
+    }
+    let mut colonne = batch.columns().to_vec();
+    for (indice, campo) in batch.schema().fields().iter().enumerate() {
+        if !plenora_core::contract::arrow_metadata::field_declares_wkb_geometry(campo) {
+            continue;
+        }
+        let (x, y): (f64, f64) = if utf8 { (2.0, 4.0) } else { (12.5, 45.1) };
+        let mut bytes = vec![1, 1, 0, 0, 0];
+        bytes.extend_from_slice(&x.to_le_bytes());
+        bytes.extend_from_slice(&y.to_le_bytes());
+        assert_eq!(std::str::from_utf8(&bytes).is_ok(), utf8);
+        let mut builder = BinaryBuilder::new();
+        for _ in 0..batch.num_rows() {
+            if stato == 2 {
+                builder.append_null();
+            } else {
+                builder.append_value(&bytes);
+            }
+        }
+        colonne[indice] = Arc::new(builder.finish());
+    }
+    let batch = RecordBatch::try_new(batch.schema(), colonne).unwrap();
+    if stato == 1 {
+        batch.slice(0, 0)
+    } else {
+        batch
+    }
+}
+
+fn esito_ruolo_geometrico(
+    scheda: &Scheda,
+    config: &Value,
+    ingressi: &[RecordBatch],
+) -> (bool, Option<plenora_core::error::ErrorCategory>) {
+    let mut testo: Value = serde_json::from_str(&testo_piano(scheda)).unwrap();
+    testo["steps"][0]["config"] = config.clone();
+    let piano = Pipeline::from_json(&testo.to_string()).unwrap();
+    let schemi: Vec<_> = scheda
+        .esempio
+        .ingressi
+        .iter()
+        .zip(ingressi)
+        .map(|(s, b)| (s.nome.as_str(), b.schema()))
+        .collect();
+    let validato = match piano.validate(&schemi) {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(
+                e.category() != plenora_core::ErrorCategory::Internal,
+                "{}: validazione Internal",
+                scheda.operazione.id
+            );
+            return (false, Some(e.category()));
+        }
+    };
+    let atteso = validato.schema_uscita(USCITA).unwrap().clone();
+    let contratto = arrow_schema_from_contract(validato.contratto(USCITA).unwrap()).unwrap();
+    let tabelle = scheda
+        .esempio
+        .ingressi
+        .iter()
+        .zip(ingressi)
+        .map(|(s, b)| (s.nome.clone(), b.clone()))
+        .collect();
+    match validato.run(tabelle) {
+        Ok(esito) => {
+            for (_, batch) in esito.outputs {
+                assert_eq!(
+                    batch.schema(),
+                    atteso,
+                    "{}: schema pubblicato",
+                    scheda.operazione.id
+                );
+                for (reale, inferito) in batch.schema().fields().iter().zip(contratto.fields()) {
+                    let mut metadata = reale.metadata().clone();
+                    metadata.remove("plenora.field_id");
+                    let mut previsto = inferito.metadata().clone();
+                    previsto.remove("plenora.field_id");
+                    assert_eq!(
+                        metadata, previsto,
+                        "{}: metadati inferiti",
+                        scheda.operazione.id
+                    );
+                }
+                assert!(
+                    verifica_byte_geometrici(ingressi, &batch),
+                    "{}: byte senza riferimento",
+                    scheda.operazione.id
+                );
+            }
+            (true, None)
+        }
+        Err(e) => {
+            assert!(
+                e.category() != plenora_core::ErrorCategory::Internal,
+                "{}: esecuzione Internal",
+                scheda.operazione.id
+            );
+            (true, Some(e.category()))
+        }
+    }
+}
+
+#[test]
+fn catalogo_geometria_in_ogni_ruolo_non_legge_wkb_come_testo() {
+    prepara_ambiente();
+    let mut casi = 0;
+    for operazione in CATALOG {
+        let scheda = leggi_scheda(operazione).unwrap();
+        let originali: Vec<_> = scheda
+            .esempio
+            .ingressi
+            .iter()
+            .map(|s| tabella_con_metadati(&s.colonne, &s.metadati).unwrap())
+            .collect();
+        let nomi = originali
+            .iter()
+            .flat_map(|b| {
+                b.schema()
+                    .fields()
+                    .iter()
+                    .map(|f| f.name().clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let mut config: Value = serde_json::from_str(scheda.esempio.config.get()).unwrap();
+        if operazione.id == "table.pivot" {
+            config["mapping"] = serde_json::json!({"gen":"gen","feb":"feb"});
+        }
+        for (config, nome) in ruoli_geometrici(&config, &nomi) {
+            for multipla in [false, true] {
+                for stato in 0..3 {
+                    let mut esiti = Vec::new();
+                    for utf8 in [false, true] {
+                        let ingressi: Vec<_> = originali
+                            .iter()
+                            .map(|b| geometria_per_ruolo(b, &nome, utf8, multipla, stato))
+                            .collect();
+                        esiti.push(esito_ruolo_geometrico(&scheda, &config, &ingressi));
+                        casi += 1;
+                    }
+                    assert_eq!(
+                        esiti[0], esiti[1],
+                        "{}: ruolo {nome}, multipla {multipla}, stato {stato}",
+                        operazione.id
+                    );
+                }
+            }
+        }
+    }
+    assert!(casi > CATALOG.len());
+    eprintln!(
+        "catalogo: {} operazioni, {casi} varianti di ruolo geometriche",
+        CATALOG.len()
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Oracolo unico: ingresso, due ordini delle uscite e confronto delle identita.
+fn catalogo_identita_nuove_non_correlano_uscite_diverse() {
+    prepara_ambiente();
+    let mut provate = 0;
+    for operazione in CATALOG {
+        let scheda = leggi_scheda(operazione).unwrap();
+        let mut prossimo = 0_u64;
+        let schemi: Vec<_> = scheda
+            .esempio
+            .ingressi
+            .iter()
+            .map(|s| {
+                let batch = tabella_con_metadati(&s.colonne, &s.metadati).unwrap();
+                let campi: Vec<_> = batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|f| {
+                        let mut metadata = f.metadata().clone();
+                        metadata.insert("plenora.field_id", prossimo.to_string());
+                        prossimo += 1;
+                        f.as_ref().clone().with_metadata(metadata)
+                    })
+                    .collect();
+                let mut metadata = batch.schema().metadata().clone();
+                metadata.insert("plenora.contract.version", "1");
+                (
+                    s.nome.as_str(),
+                    Arc::new(Schema::new_with_metadata(campi, metadata)),
+                )
+            })
+            .collect();
+        let mut testo: Value = serde_json::from_str(&testo_piano(&scheda)).unwrap();
+        let piano = Pipeline::from_json(&testo.to_string()).unwrap();
+        let iniziale = match piano.validate(&schemi) {
+            Ok(v) => v,
+            Err(e) => {
+                assert_eq!(
+                    e.category(),
+                    plenora_core::ErrorCategory::Unsupported,
+                    "{}: esempio non validabile",
+                    operazione.id
+                );
+                continue;
+            }
+        };
+        verifica_origini_catalogo(
+            operazione,
+            &schemi,
+            &testo["steps"][0]["config"],
+            iniziale.crs_piano(),
+        );
+        let nomi: Vec<_> = iniziale
+            .schema_uscita(USCITA)
+            .unwrap()
+            .fields()
+            .iter()
+            .map(|f| f.name())
+            .collect();
+        testo["steps"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "out": "copia", "op": "table.select_columns", "in": [USCITA], "config": {"columns": nomi}
+            }));
+        let mut uscite = vec![USCITA.to_owned(), "copia".to_owned()];
+        uscite.extend(scheda.esempio.ingressi.iter().map(|s| s.nome.clone()));
+        for inverso in [false, true] {
+            if inverso {
+                uscite.reverse();
+            }
+            testo["outputs"] = serde_json::json!(uscite);
+            let piano = Pipeline::from_json(&testo.to_string()).unwrap();
+            let validato = piano.validate(&schemi).unwrap();
+            let ripetuto = piano.validate(&schemi).unwrap();
+            let mut assegnati = BTreeSet::new();
+            for uscita in &uscite {
+                let schema = validato.schema_uscita(uscita).unwrap();
+                assert_eq!(
+                    Some(schema),
+                    ripetuto.schema_uscita(uscita),
+                    "{}: determinismo ID",
+                    operazione.id
+                );
+                let contratto = validato.contratto(uscita).unwrap();
+                for campo in schema.fields() {
+                    let id: u64 = campo
+                        .metadata()
+                        .get("plenora.field_id")
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    if id >= prossimo {
+                        assert!(assegnati.insert(id), "{}: ID nuovo riusato", operazione.id);
+                    } else {
+                        // Un ID conservato deve gia' essere presente nel contratto,
+                        // prima dell'assegnazione delle identita' pubblicate.
+                        let fonte: u64 = contratto
+                            .schema
+                            .field_with_name(campo.name())
+                            .unwrap()
+                            .metadata()
+                            .get("plenora.field_id")
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                        assert_eq!(
+                            id, fonte,
+                            "{}: ID conservato da un'altra origine",
+                            operazione.id
+                        );
+                    }
+                }
+            }
+            provate += 1;
+        }
+    }
+    assert!(provate > CATALOG.len());
+}
+
+#[test]
+fn geometrie_derivate_melt_pivot_coalesce_hanno_tipi_irrisolti() {
+    prepara_ambiente();
+    let casi = [
+        (
+            "table.melt",
+            "q1",
+            serde_json::json!({"id_columns":["id"],"value_columns":["q1"],"value_name":"valore"}),
+            "valore",
+        ),
+        (
+            "table.coalesce",
+            "cellulare",
+            serde_json::json!({"columns":["cellulare"],"output_column":"cellulare"}),
+            "cellulare",
+        ),
+        (
+            "table.coalesce",
+            "cellulare",
+            serde_json::json!({"columns":["cellulare"],"output_column":"nuova"}),
+            "nuova",
+        ),
+        (
+            "table.pivot",
+            "vendite",
+            serde_json::json!({"index_col":"negozio","pivot_col":"mese","value_col":"vendite","aggr_func":"first","mapping":{"gen":"gen"}}),
+            "gen",
+        ),
+        (
+            "table.pivot",
+            "vendite",
+            serde_json::json!({"index_col":"negozio","pivot_col":"mese","value_col":"vendite","aggr_func":"last","mapping":{"gen":"gen","feb":"feb"}}),
+            "gen",
+        ),
+    ];
+    for (op, nome, config, derivata) in casi {
+        let scheda = leggi_scheda(find_operation(op).unwrap()).unwrap();
+        let originale = tabella_con_metadati(
+            &scheda.esempio.ingressi[0].colonne,
+            &scheda.esempio.ingressi[0].metadati,
+        )
+        .unwrap();
+        for multipla in [false, true] {
+            for stato in 0..3 {
+                for utf8 in [false, true] {
+                    let batch = geometria_per_ruolo(&originale, nome, utf8, multipla, stato);
+                    assert_eq!(
+                        esito_ruolo_geometrico(&scheda, &config, std::slice::from_ref(&batch)),
+                        (true, None),
+                        "{op}: geometria derivata supportata"
+                    );
+                    let mut testo: Value = serde_json::from_str(&testo_piano(&scheda)).unwrap();
+                    testo["steps"][0]["config"] = config.clone();
+                    let piano = Pipeline::from_json(&testo.to_string()).unwrap();
+                    let validato = piano
+                        .validate(&[(&scheda.esempio.ingressi[0].nome, batch.schema())])
+                        .unwrap();
+                    let schema = validato.schema_uscita(USCITA).unwrap();
+                    let campo = schema.field_with_name(derivata).unwrap();
+                    assert_eq!(
+                        campo
+                            .metadata()
+                            .get("plenora.geometry.types_declaration")
+                            .map(String::as_str),
+                        Some("unresolved")
+                    );
+                    assert!(!campo.metadata().contains_key("plenora.geometry.types"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn transpose_diretto_conserva_geometrie_derivate() {
+    let scheda = leggi_scheda(find_operation("table.coalesce").unwrap()).unwrap();
+    let originale = tabella_con_metadati(
+        &scheda.esempio.ingressi[0].colonne,
+        &scheda.esempio.ingressi[0].metadati,
+    )
+    .unwrap();
+    for utf8 in [false, true] {
+        let batch = geometria_per_ruolo(&originale, "cellulare", utf8, true, 0);
+        let batch = batch.project(&[1, 3]).unwrap();
+        let config = serde_json::from_value(serde_json::json!({})).unwrap();
+        let out = plenora_kernels_table::reshape::transpose(
+            &batch,
+            &config,
+            &plenora_kernels_table::Limits::default(),
+        )
+        .unwrap();
+        assert!(verifica_byte_geometrici(std::slice::from_ref(&batch), &out));
+        for campo in out.schema().fields().iter().skip(1) {
+            assert_eq!(
+                campo
+                    .metadata()
+                    .get("plenora.geometry.types_declaration")
+                    .map(String::as_str),
+                Some("unresolved")
+            );
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // La tabella dei consumatori testuali e' l'oracolo indipendente.
+fn valori_geometrici_rifiutati_prima_delle_celle_anche_api_diretta() {
+    prepara_ambiente();
+    let casi = [
+        ("table.pivot", "vendite"),
+        ("table.pivot", "mese"),
+        ("table.aggregate", "importo"),
+        ("table.lookup", "stato"),
+        ("table.mask_data", "email"),
+        ("table.date_format", "data"),
+        ("table.date_add", "scadenza"),
+        ("table.date_diff", "inizio"),
+        ("table.date_diff", "fine"),
+        ("table.date_extract", "quando"),
+        ("table.timezone_convert", "ora"),
+        ("table.md5_hash", "nome"),
+        ("table.sha256_hash", "codice"),
+        ("table.hmac_sha256", "cliente"),
+        ("table.stable_fingerprint", "nome"),
+        ("table.flatten_json", "doc"),
+        ("table.filter", "importo"),
+        ("table.conditional", "classe"),
+        ("table.formula", "prezzo"),
+        ("table.expression", "importo"),
+        ("table.validate_rules", "importo"),
+    ];
+    for (op, nome) in casi {
+        let scheda = leggi_scheda(find_operation(op).unwrap()).unwrap();
+        let originale = tabella_con_metadati(
+            &scheda.esempio.ingressi[0].colonne,
+            &scheda.esempio.ingressi[0].metadati,
+        )
+        .unwrap();
+        let mut config: Value = serde_json::from_str(scheda.esempio.config.get()).unwrap();
+        match op {
+            "table.pivot" => {
+                config["mapping"] = serde_json::json!({"gen":"gen"});
+                config["aggr_func"] = serde_json::json!("concat");
+            }
+            "table.aggregate" => {
+                config["aggregations"] =
+                    serde_json::json!([{"column":"importo","function":"concat"}]);
+            }
+            "table.lookup" => {
+                config.as_object_mut().unwrap().remove("output_column");
+            }
+            "table.stable_fingerprint" => {
+                config.as_object_mut().unwrap().remove("columns");
+            }
+            "table.filter" => {
+                config["operator"] = serde_json::json!("contains");
+            }
+            "table.formula" => {
+                config["formula"] = serde_json::json!("prezzo");
+            }
+            "table.expression" => {
+                config["expression"] = serde_json::json!({"kind":"column","name":"importo"});
+            }
+            "table.validate_rules" => {
+                config["rules"] = serde_json::json!([{"name":"confronto","operator":"eq","column":"importo","value":"testo"}]);
+            }
+            _ => {}
+        }
+        for stato in 0..3 {
+            for utf8 in [false, true] {
+                let batch = geometria_per_ruolo(&originale, nome, utf8, true, stato);
+                assert_eq!(
+                    esito_ruolo_geometrico(&scheda, &config, std::slice::from_ref(&batch)),
+                    (false, Some(plenora_core::ErrorCategory::Crs)),
+                    "{op}: rifiuto in validazione"
+                );
+                let errore =
+                    esegui_testo_diretto(op, &config, &batch).expect_err("rifiuto API diretta");
+                assert_eq!(
+                    errore.category(),
+                    plenora_core::ErrorCategory::Crs,
+                    "{op}: rifiuto API diretta"
+                );
+            }
+        }
+    }
+}
+
+fn esegui_testo_diretto(
+    op: &str,
+    config: &Value,
+    batch: &RecordBatch,
+) -> plenora_core::Result<RecordBatch> {
+    use plenora_kernels_table::{
+        aggregation, analysis, dates, expressions, filtering, formula, governance, quality,
+        reshape, security, utility,
+    };
+    let limits = plenora_kernels_table::Limits::default();
+    macro_rules! chiama {
+        ($funzione:path) => {{
+            let config = serde_json::from_value(config.clone()).unwrap();
+            $funzione(batch, &config)
+        }};
+        ($funzione:path, limiti) => {{
+            let config = serde_json::from_value(config.clone()).unwrap();
+            $funzione(batch, &config, &limits)
+        }};
+    }
+    match op {
+        "table.melt" => chiama!(reshape::melt, limiti),
+        "table.coalesce" => chiama!(quality::coalesce),
+        "table.pivot" => chiama!(reshape::pivot, limiti),
+        "table.aggregate" => chiama!(aggregation::aggregate_con_limiti, limiti),
+        "table.lookup" => chiama!(analysis::lookup),
+        "table.mask_data" => chiama!(security::mask_data_con_limiti, limiti),
+        "table.date_format" => chiama!(dates::date_format),
+        "table.date_add" => chiama!(dates::date_add),
+        "table.date_diff" => chiama!(dates::date_diff),
+        "table.date_extract" => chiama!(utility::date_extract),
+        "table.timezone_convert" => chiama!(dates::timezone_convert),
+        "table.md5_hash" => chiama!(security::md5_hash),
+        "table.sha256_hash" => chiama!(security::sha256_hash),
+        "table.hmac_sha256" => chiama!(security::hmac_sha256),
+        "table.stable_fingerprint" => chiama!(security::stable_fingerprint),
+        "table.flatten_json" => chiama!(analysis::flatten_json, limiti),
+        "table.filter" => chiama!(filtering::filter),
+        "table.conditional" => chiama!(filtering::conditional),
+        "table.formula" => chiama!(formula::formula_con_effetti, limiti).map(|(batch, _)| batch),
+        "table.expression" => {
+            chiama!(expressions::expression_con_effetti, limiti).map(|(batch, _)| batch)
+        }
+        "table.validate_rules" => chiama!(governance::validate_rules),
+        _ => panic!("consumatore testuale senza oracolo diretto"),
+    }
+}
+
+#[test]
+fn fusione_geometrica_con_crs_deciso_e_crs_del_piano() {
+    use plenora_core::contract::ContractCrs;
+    let scheda = leggi_scheda(find_operation("table.coalesce").unwrap()).unwrap();
+    let originale = tabella_con_metadati(
+        &scheda.esempio.ingressi[0].colonne,
+        &scheda.esempio.ingressi[0].metadati,
+    )
+    .unwrap();
+    let batch = geometria_per_ruolo(&originale, "cellulare", true, false, 0);
+    let mut deciso = contract_from_arrow_schema(batch.schema(), resolve_crs).unwrap();
+    deciso.geometries[0].crs =
+        ContractCrs::ResolvedByDecision(resolve_crs("EPSG:4326", "crs").unwrap());
+    let canonico = arrow_schema_from_contract(&deciso).unwrap();
+    let batch = RecordBatch::try_new(canonico, batch.columns().to_vec()).unwrap();
+    for (op, config, colonna) in [
+        (
+            "table.melt",
+            serde_json::json!({"id_columns":["id"],"value_columns":["cellulare"],"value_name":"valore"}),
+            "valore",
+        ),
+        (
+            "table.coalesce",
+            serde_json::json!({"columns":["cellulare"],"output_column":"valore"}),
+            "valore",
+        ),
+        (
+            "table.pivot",
+            serde_json::json!({"index_col":"id","pivot_col":"fisso","value_col":"cellulare","aggr_func":"first","mapping":{"02 9":"valore"}}),
+            "valore",
+        ),
+    ] {
+        let contratto = plenora_kernels_table::analyze::analyze_table_contract(
+            op,
+            std::slice::from_ref(&deciso),
+            &config,
+            &mut FieldAllocator::default(),
+            &plenora_kernels_table::Limits::default(),
+        )
+        .unwrap();
+        let atteso = arrow_schema_from_contract(&contratto).unwrap();
+        let uscita = esegui_testo_diretto(op, &config, &batch).unwrap();
+        assert_eq!(
+            uscita.schema().field_with_name(colonna).unwrap().metadata(),
+            atteso.field_with_name(colonna).unwrap().metadata(),
+            "{op}: decisione CRS"
+        );
+    }
+    let scheda = leggi_scheda(find_operation("geo.from_coords").unwrap()).unwrap();
+    let input = tabella_con_metadati(
+        &scheda.esempio.ingressi[0].colonne,
+        &scheda.esempio.ingressi[0].metadati,
+    )
+    .unwrap();
+    let piano = Pipeline::from_json(&serde_json::json!({
+        "version":1,"inputs":["t"],"crs":"EPSG:3857",
+        "steps":[
+            {"out":"g","op":"geo.from_coords","in":["t"],"config":{}},
+            {"out":"m","op":"table.melt","in":["g"],"config":{"id_columns":["id"],"value_columns":["geometry"],"value_name":"valore"}}
+        ],"outputs":["m"]
+    }).to_string()).unwrap();
+    let validato = piano.validate(&[("t", input.schema())]).unwrap();
+    let atteso = validato.schema_uscita("m").unwrap().clone();
+    let esito = validato
+        .run(vec![("t".to_owned(), input)].into_iter().collect())
+        .unwrap();
+    assert_eq!(esito.outputs[0].1.schema(), atteso);
+    let campo = atteso.field_with_name("valore").unwrap();
+    assert_eq!(
+        campo
+            .metadata()
+            .get("plenora.geometry.crs_id")
+            .map(String::as_str),
+        Some("EPSG:3857")
+    );
+    assert_eq!(
+        campo
+            .metadata()
+            .get("plenora.geometry.types_declaration")
+            .map(String::as_str),
+        Some("unresolved")
+    );
+}
+
+fn verifica_origini_catalogo(
+    op: &OperationDescriptor,
+    schemi: &[(&str, SchemaRef)],
+    config: &Value,
+    crs: Option<&plenora_core::crs::ResolvedCrs>,
+) {
+    use plenora_core::contract::FieldId;
+    let mut ingressi = Vec::new();
+    let mut originali = BTreeSet::new();
+    let mut allocatore = FieldAllocator::default();
+    for (_, schema) in schemi {
+        let mut contratto = contract_from_arrow_schema(schema.clone(), resolve_crs).unwrap();
+        let primaria = contratto
+            .geometries
+            .iter()
+            .find(|g| Some(g.field_id) == contratto.active_geometry)
+            .map(|g| g.name.clone());
+        for campo in schema.fields() {
+            let id = FieldId(
+                campo
+                    .metadata()
+                    .get("plenora.field_id")
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            );
+            contratto.field_ids.insert(campo.name().clone(), id);
+            originali.insert(id);
+            allocatore
+                .record_public_identity(id, campo.metadata().get("plenora.field_id").cloned());
+        }
+        for g in &mut contratto.geometries {
+            g.field_id = contratto.field_ids[&g.name];
+        }
+        contratto.active_geometry = primaria.map(|nome| contratto.field_ids[&nome]);
+        ingressi.push(contratto);
+    }
+    let uscita = if op.family == Family::Geo {
+        plenora_kernels_geo::analyze::analyze_geo_contract(
+            op.id,
+            &ingressi,
+            config,
+            crs,
+            &mut allocatore,
+        )
+    } else {
+        plenora_kernels_table::analyze::analyze_table_contract(
+            op.id,
+            &ingressi,
+            config,
+            &mut allocatore,
+            &plenora_kernels_table::Limits::default(),
+        )
+    }
+    .unwrap();
+    for campo in uscita.schema.fields() {
+        let interno = uscita.field_ids[campo.name()];
+        if !originali.contains(&interno) {
+            // Una riscrittura sul posto puo' cambiare l'identita' interna
+            // conservando esplicitamente quella pubblica della sorgente.
+            let ereditata = allocatore.public_identity(interno).and_then(Option::as_ref);
+            assert_eq!(
+                campo.metadata().get("plenora.field_id"),
+                ereditata,
+                "{}: origine nuova senza lineage pubblica dichiarata",
+                op.id
+            );
+            if let Some(id) = ereditata {
+                assert!(originali.contains(&FieldId(id.parse().unwrap())));
+            }
+        }
+    }
+}

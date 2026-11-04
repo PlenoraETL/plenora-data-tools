@@ -12,6 +12,19 @@ la cui versione non ha qui una voce datata.
 
 ## [4.1.0] - non rilasciata
 
+Correzione geometrie fra i valori: melt, pivot first/last, coalesce e transpose
+emettono `types_declaration=unresolved` coerente con il contratto, anche con
+più geometrie. Le letture testuali del WKB sono rifiutate con `Crs` in
+validazione e prima delle celle nelle API dirette. Impatto osservabile:
+md5_hash, sha256_hash, hmac_sha256 e stable_fingerprint che leggono una
+geometria (compreso stable_fingerprint predefinito su tutte le colonne)
+sono ora rifiutati in validazione anche con WKB UTF-8 valido.
+Le chiavi binarie native restano supportate.
+
+Identità nuove uniche fra tutte le uscite del piano, assegnate con un cursore
+nell'ordine di `outputs`. Un campo nuovo comune a due uscite riceve due ID
+diversi: hazard e rientro dichiarati in [limiti](docs/limiti.md#identità-nuove-fra-uscite-del-piano).
+
 `coverage_validate` e `shared_paths` mantengono primaria la geometria
 nuova derivata solo quando l'operando era primario; con un operando
 secondario o senza primaria emettono `none`. Oracolo della matrice dei

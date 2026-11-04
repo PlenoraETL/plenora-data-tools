@@ -1150,6 +1150,7 @@ fn compile_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Vec<Comp
         match rule.operator {
             RuleOperator::Isnull | RuleOperator::Notnull => {}
             RuleOperator::Eq | RuleOperator::Ne => {
+                crate::require_non_geometry(batch.schema().field(column_index))?;
                 if !is_rule_comparable(&data_type) {
                     return Err(PlenoraError::InvalidPlan(format!(
                         "validate_rules: regola {}: tipo {} non confrontabile",
