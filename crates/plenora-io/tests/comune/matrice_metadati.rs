@@ -1266,7 +1266,7 @@ fn run_part(operations: &'static [OperationDescriptor], full: bool) -> Audit {
                                 if !conforms {
                                     continue;
                                 }
-                                // La sonda D2 deve riuscire e degradare entrambe le chiavi:
+                                // La sonda delle chiavi derivate deve riuscire e degradare entrambe le chiavi:
                                 // controllare soltanto l'assenza dell'elenco non basta.
                                 if merge && mode == 1 && key == "plenora.geometry.types" {
                                     for field in

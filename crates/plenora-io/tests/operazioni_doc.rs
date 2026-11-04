@@ -2167,6 +2167,41 @@ fn con_una_riga_in_coda(batch: &RecordBatch, null: bool) -> Option<RecordBatch> 
     .ok()
 }
 
+/// Un rifiuto deve corrispondere a entrambi gli assi attesi.
+#[track_caller]
+fn verifica_rifiuto(
+    errore: &PlenoraError,
+    categoria: plenora_core::ErrorCategory,
+    fase: plenora_core::ErrorPhase,
+) {
+    assert_eq!((errore.category(), errore.phase()), (categoria, fase));
+}
+
+fn esegui_su_tipizzato(
+    scheda: &Scheda,
+    ingressi: &[RecordBatch],
+) -> Result<RecordBatch, PlenoraError> {
+    let piano = Pipeline::from_json(&testo_piano(scheda)).expect("piano");
+    let schemi: Vec<_> = scheda
+        .esempio
+        .ingressi
+        .iter()
+        .zip(ingressi)
+        .map(|(spec, batch)| (spec.nome.as_str(), batch.schema()))
+        .collect();
+    let validata = piano.validate(&schemi)?;
+    let tabelle = scheda
+        .esempio
+        .ingressi
+        .iter()
+        .zip(ingressi)
+        .map(|(spec, batch)| (spec.nome.clone(), batch.clone()))
+        .collect();
+    validata
+        .run(tabelle)
+        .map(|esito| esito.outputs.into_iter().next().expect("un'uscita").1)
+}
+
 /// L'esempio della scheda su ingressi dati; `None` se il runner non esegue
 /// l'operazione (verifica sul solo contratto).
 fn esegui_su(scheda: &Scheda, ingressi: &[RecordBatch]) -> Option<Result<RecordBatch, String>> {
@@ -2386,12 +2421,9 @@ fn con_una_geometria_vuota(batch: &RecordBatch) -> Option<RecordBatch> {
     RecordBatch::try_new(schema, colonne).ok()
 }
 
-/// Casi limite della nullabilita' dichiarata: ingressi vuoti (zero righe) e
-/// una geometria vuota al posto della prima, con ingressi senza null. Un
-/// rifiuto dei dati o del piano e' ammesso; non lo e' un errore interno,
-/// ne' una geometria null in una colonna dichiarata non nullable (il runner
-/// la rende con «non ammette null»): sarebbe una dichiarazione piu' stretta
-/// dell'uscita.
+/// Casi limite della nullabilita' dichiarata: ingressi senza righe e una
+/// geometria vuota al posto della prima. Le schede determinano l'unico
+/// esito ammesso; i successi rispettano forma e nullabilita'.
 #[test]
 fn le_geo_rispettano_la_nullabilita_su_ingressi_vuoti_e_geometrie_vuote() {
     prepara_ambiente();
@@ -2418,13 +2450,34 @@ fn le_geo_rispettano_la_nullabilita_su_ingressi_vuoti_e_geometrie_vuote() {
             varianti.push(("una geometria vuota", con_vuota));
         }
         for (nome, variante) in varianti {
-            if let Some(Err(errore)) = esegui_su(scheda, &variante) {
-                let dichiarato = nome == "una geometria vuota" && VUOTA_RIFIUTATA.contains(&op);
-                if errore.contains("internal")
-                    || (errore.contains("non ammette null") && !dichiarato)
-                {
-                    difetti.push(format!("{op}, {nome}: {errore}"));
+            let rifiuto = if nome == "ingressi vuoti" {
+                // Voronoi richiede almeno due punti anche su una tabella vuota.
+                (op == "geo.voronoi").then_some(plenora_core::ErrorCategory::InvalidPlan)
+            } else {
+                // Le schede dichiarano il rifiuto dell'assenza di centroide,
+                // inviluppo o geometria non nullable, anche per WKB vuoto valido.
+                (VUOTA_RIFIUTATA.contains(&op) || matches!(op, "geo.centroid" | "geo.envelope"))
+                    .then_some(plenora_core::ErrorCategory::InvalidPlan)
+            };
+            let esito = esegui_su_tipizzato(scheda, &variante);
+            let atteso = rifiuto.map(|c| (c, plenora_core::ErrorPhase::Validate));
+            let effettivo = esito.as_ref().err().map(|e| (e.category(), e.phase()));
+            if effettivo != atteso {
+                difetti.push(format!(
+                    "{op}, {nome}: atteso {atteso:?}, ottenuto {effettivo:?}"
+                ));
+                continue;
+            }
+            if let Ok(uscita) = esito {
+                for (campo, colonna) in uscita.schema().fields().iter().zip(uscita.columns()) {
+                    assert!(
+                        campo.is_nullable() || colonna.null_count() == 0,
+                        "{op}, {nome}"
+                    );
                 }
+                let righe: Vec<_> = variante.iter().map(RecordBatch::num_rows).collect();
+                verifica_forma(scheda.operazione, &righe, uscita.num_rows(), false)
+                    .unwrap_or_else(|e| panic!("{op}, {nome}: {e}"));
             }
         }
     }
@@ -2988,13 +3041,16 @@ fn catalogo_identita_seguono_la_provenienza() {
                         || op.id.starts_with("geo.predicate_"))
             });
             if rejects_collision {
-                assert!(
-                    matches!(
-                        result,
-                        Err(PlenoraError::Schema(_) | PlenoraError::InvalidPlan(_))
-                    ),
-                    "{}: {variant:?}",
-                    op.id
+                // L'unnest rifiuta il piano; i produttori geo rifiutano lo schema.
+                let categoria = if op.id == "table.unnest" {
+                    plenora_core::ErrorCategory::InvalidPlan
+                } else {
+                    plenora_core::ErrorCategory::Schema
+                };
+                verifica_rifiuto(
+                    &result.expect_err(op.id),
+                    categoria,
+                    plenora_core::ErrorPhase::Validate,
                 );
                 continue;
             }
@@ -3235,15 +3291,17 @@ fn catalogo_colonne_presenti_in_un_solo_ingresso() {
                             | "table.intersect"
                     ) || (op.family == Family::Geo && geometry);
                     if reject {
-                        assert!(
-                            matches!(
-                                result,
-                                Err(PlenoraError::Schema(_)
-                                    | PlenoraError::InvalidPlan(_)
-                                    | PlenoraError::Crs(_)
-                                    | PlenoraError::Unsupported(_))
-                            ),
-                            "{context}: {result:?}"
+                        // Le operazioni insiemistiche richiedono schemi della stessa
+                        // larghezza; le binarie geo richiedono l'operando su ogni lato.
+                        let categoria = if op.family == Family::Geo {
+                            plenora_core::ErrorCategory::Schema
+                        } else {
+                            plenora_core::ErrorCategory::InvalidPlan
+                        };
+                        verifica_rifiuto(
+                            &result.expect_err(&context),
+                            categoria,
+                            plenora_core::ErrorPhase::Validate,
                         );
                         continue;
                     }
@@ -4074,24 +4132,22 @@ fn catalogo_geo_multigeometria_operandi_e_passanti() {
                             "input_geometry"
                         }] = Value::String("__passante_0".into());
                         scheda.esempio.config = RawValue::from_string(assi.to_string()).unwrap();
-                        let errore = esegui_su(&scheda, &ingressi).unwrap().expect_err(op.id);
-                        assert!(
-                            errore.contains("AXIS_ORDER_REQUIRED"),
-                            "{} assi: {errore}",
-                            op.id
+                        let errore = esegui_su_tipizzato(&scheda, &ingressi).expect_err(op.id);
+                        verifica_rifiuto(
+                            &errore,
+                            plenora_core::ErrorCategory::Crs,
+                            plenora_core::ErrorPhase::Validate,
                         );
                     }
                 }
                 // Nessun selettore e nessuna primaria: rifiuto, mai la prima colonna.
                 if !produttore && primaria.is_none() {
                     scheda.esempio.config = RawValue::from_string(config.to_string()).unwrap();
-                    let errore = esegui_su(&scheda, &ingressi)
-                        .expect("rifiuto esplicito")
-                        .expect_err(op.id);
-                    assert!(
-                        errore.contains("operando geometrico assente"),
-                        "{}: {errore}",
-                        op.id
+                    let errore = esegui_su_tipizzato(&scheda, &ingressi).expect_err(op.id);
+                    verifica_rifiuto(
+                        &errore,
+                        plenora_core::ErrorCategory::Schema,
+                        plenora_core::ErrorPhase::Validate,
                     );
                 }
             }

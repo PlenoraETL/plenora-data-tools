@@ -186,16 +186,33 @@ fn formato_esplicito_e_contenuto() {
         ..OpzioniScrittura::default()
     };
     scrivi_tabella(&tabella, &percorso, &opzioni).unwrap();
-    assert!(
-        leggi_tabella(&percorso, None, u64::MAX).is_err(),
-        "estensione ignota"
+    let errore = leggi_tabella(&percorso, None, u64::MAX).expect_err("estensione ignota");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (
+            plenora_core::ErrorCategory::Unsupported,
+            plenora_core::ErrorPhase::Validate
+        )
     );
     identiche(
         &tabella,
         &leggi_tabella(&percorso, Some(Formato::Parquet), u64::MAX).unwrap(),
     );
-    // Un Parquet letto come IPC fallisce con un errore, non con una tabella.
-    assert!(leggi_tabella(&percorso, Some(Formato::ArrowIpc), u64::MAX).is_err());
+    // Lo stream IPC interpreta PAR1 come lunghezza del primo messaggio:
+    // supera i 16 MiB documentati prima della verifica dei metadati.
+    let bytes = std::fs::read(&percorso).unwrap();
+    let prefisso: [u8; 4] = bytes[..4].try_into().unwrap();
+    assert_eq!(&prefisso, b"PAR1");
+    assert!(u32::from_le_bytes(prefisso) > 16 * 1024 * 1024);
+    let errore = leggi_tabella(&percorso, Some(Formato::ArrowIpc), u64::MAX)
+        .expect_err("Parquet non e' IPC");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (
+            plenora_core::ErrorCategory::ResourceLimit,
+            plenora_core::ErrorPhase::Write
+        )
+    );
 }
 
 #[test]

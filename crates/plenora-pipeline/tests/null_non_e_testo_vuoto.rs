@@ -64,6 +64,13 @@ fn messaggio(errore: &PlenoraError) -> Option<String> {
 
 fn rifiutata(op: &str, config: &Value, frammento: &str) {
     let errore = valida(op, config).expect_err("config da rifiutare");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        )
+    );
     let testo = messaggio(&errore).unwrap_or_else(|| panic!("{op}: non InvalidPlan: {errore:?}"));
     assert!(testo.contains(frammento), "{op}: {testo}");
 }
@@ -118,7 +125,14 @@ fn filter_rifiuta_value_null_e_assente() {
     assert_eq!(messaggio(&errore).as_deref(), Some(MESSAGGIO_VALUE_NULL));
     let config: filtering::Filter =
         serde_json::from_value(json!({"column": "s", "operator": "!="})).expect("config");
-    assert!(filtering::filter(&tabella(), &config).is_err());
+    let errore = filtering::filter(&tabella(), &config).expect_err("value obbligatorio");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        )
+    );
 }
 
 #[test]
