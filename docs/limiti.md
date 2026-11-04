@@ -39,15 +39,15 @@ non rientrano sulla stessa identita di operazione.
 
 ## Geometrie multiple: condizioni dei formati
 
-Il limite `data-una-geometria` ? rimosso dalla 4.1.0. Ogni colonna conserva
+Il limite `data-una-geometria` è rimosso dalla 4.1.0. Ogni colonna conserva
 CRS e assi propri; le operazioni selezionano gli operandi per nome.
 Senza primaria, un selettore omesso causa `Schema`; la scrittura GeoParquet
 causa `Unsupported`. IPC file e stream conservano anche l'assenza esplicita
 della primaria. Queste sono condizioni del contratto, non limiti transitori.
 Per i contratti costruiti direttamente in Rust, l'emissione Arrow di una
-primaria plurale richiede identit? pubbliche gi? coerenti: senza l'ID della
+primaria plurale richiede identità pubbliche già coerenti: senza l'ID della
 primaria `arrow_schema_from_contract` rifiuta con `Schema`. Il completamento
-delle identit? degli ingressi e delle uscite del piano avviene nei relativi
+delle identità degli ingressi e delle uscite del piano avviene nei relativi
 confini; non si inventano ID nella sola serializzazione del contratto.
 Restano i limiti CRS, WKB e precisione delle singole operazioni.
 Esempi eseguiti e adozione: [geometrie multiple](geometrie-multiple.md).

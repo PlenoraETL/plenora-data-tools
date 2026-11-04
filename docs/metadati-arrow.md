@@ -375,10 +375,10 @@ non iniziale o assente, operando primario o secondario, valori/null/vuoto.
 Controlla byte, primaria e semantica per colonna dopo ogni trasporto;
 GeoParquet senza primaria deve rifiutare con `Unsupported`. I rifiuti delle
 fixture hanno categorie precise: Voronoi senza punti, asserzione di
-cardinalit? sul vuoto e transpose con CRS incompatibili. Pivot usa mapping
+cardinalità sul vuoto e transpose con CRS incompatibili. Pivot usa mapping
 esplicito; transpose passa dall'adapter pubblico a schema dinamico.
 Le mutazioni dell'oracolo perdono una secondaria, scambiano metadati o
-cambiano primaria e devono essere rilevate. Il conteggio dei casi ? in
+cambiano primaria e devono essere rilevate. Il conteggio dei casi è in
 `target/qualificazione-mg5.txt`.
 
 La variante `catalogo_chiavi_trasporti_completo` (`--ignored`) incrocia

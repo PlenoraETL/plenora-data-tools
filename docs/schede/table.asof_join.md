@@ -29,8 +29,10 @@ tranne `right_on` e le `right_by`. Una colonna di destra con lo stesso nome
 di una colonna di sinistra diventa `<nome>_R`; le altre tengono il nome.
 Tipi e metadati di campo restano quelli d'origine; ogni colonna d'uscita è
 nullable. I metadati di schema dei due lati si fondono: una chiave presente
-da un lato solo, o con lo stesso valore, resta. L'uscita ammette una sola
-colonna geometrica. Le proprietà del contratto (`sorted_by`, `row_count`)
+da un lato solo, o con lo stesso valore, resta. Ogni geometria sopravvissuta
+conserva il proprio contratto. Con geometrie da entrambi i lati non si elegge
+una primaria; da un solo lato si conserva lo stato per provenienza.
+Le proprietà del contratto (`sorted_by`, `row_count`)
 sono quelle della sinistra.
 
 ### Righe

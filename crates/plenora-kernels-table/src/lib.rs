@@ -744,7 +744,7 @@ pub fn preflight_output_bytes(
 /// a zero colonne puo' avere righe» vale per tutto il workspace.
 ///
 /// # Errors
-/// `Unsupported` per un'uscita plurale; errori Arrow per uno schema incoerente.
+/// Errori di contratto per metadati incoerenti; errori Arrow per uno schema incoerente.
 pub fn batch_with_rows(
     schema: Arc<Schema>,
     columns: Vec<ArrayRef>,

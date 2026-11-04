@@ -7,10 +7,10 @@ kernel chiamati fuori dal runner ne catene fra componenti.
 
 ## Verifica
 
-Esito locale: 112 scenari conformi e 60 con deviazione dichiarata, ciascuno
-verificato su API e CLI (172 scenari, 344 invocazioni).
+Il test stampa il conteggio degli scenari conformi e di quelli con deviazione
+dichiarata, ciascuno verificato su API e CLI, derivandolo dall'inventario.
 
-`cargo test -p plenora-cli --test geometry_semantics --locked` legge le 86 copie
+`cargo test -p plenora-cli --test geometry_semantics --locked` legge le copie enumerate in `provenienza.json`
 byte per byte di `vectors/arrow-data-v1`, controlla pin, inventario e SHA-256,
 e prova piano identita e riproiezione verso EPSG:3857 via API pubblica e CLI.
 Le risposte sono confrontate con le attese del contratto, le eccezioni del
@@ -54,7 +54,7 @@ non si cambia quel requisito per farli passare.
 | REJ-001 | conforme | Categorie dei rifiuti verificate da API e CLI; WKB e SRID non diventano errori del piano. |
 | REJ-002 | deviazione | La lettura dei metadati non ha passate globali separate per vocabolario, CRS e supporto. |
 | REJ-003 | conforme | Assi categoria/fase/effetto/retry ed exit 3 verificati sui vettori da memoria e IPC. |
-| REJ-004 | conforme | 86 vettori al pin, SHA-256, conformita distinta dalle deviazioni e dall applicabilita del calcolo. |
+| REJ-004 | conforme | Inventario completo dei vettori al pin, SHA-256, conformita distinta dalle deviazioni e dall applicabilita del calcolo. |
 
 ## Deviazioni e rientro
 

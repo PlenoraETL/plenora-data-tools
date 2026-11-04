@@ -88,10 +88,34 @@ def verifica_primaria(contratti: Path, sorgente: dict) -> None:
             raise ValueError("vettore primaria o digest incoerente")
 
 
+def verifica_delta(contratti: Path, sorgente: dict) -> None:
+    """Ogni file cambiato fra i pin ha una classificazione motivata."""
+    delta = sorgente["contract_delta"]
+    if delta["to"] != sorgente["contracts_source"]["revision"]:
+        raise ValueError("pin del censimento incoerente")
+    names = subprocess.run(
+        ["git", "-C", str(contratti), "diff", "--name-only", delta["from"], delta["to"]],
+        capture_output=True, check=True, text=True,
+    ).stdout.splitlines()
+    entries = delta["files"]
+    if len(entries) != len(names) or {e["file"] for e in entries} != set(names):
+        raise ValueError("censimento del delta incompleto o duplicato")
+    for entry in entries:
+        group = delta["groups"][entry["classification"]]
+        if group["status"] not in {"adottata", "non applicabile", "deviazione"}:
+            raise ValueError("stato del delta sconosciuto")
+        required = ("scope", "evidence")
+        if group["status"] == "deviazione":
+            required += ("rule", "hazard", "reentry")
+        if not all(group.get(key) for key in required):
+            raise ValueError("classificazione del delta senza motivazione")
+
+
 def verifica(contratti: Path) -> None:
     sorgente = strict_json.loads((RADICE / "crates/plenora-cli/adozione.json").read_text("utf-8"))
     revisione = sorgente["contracts_source"]["revision"]
     verifica_checkout(contratti, revisione)
+    verifica_delta(contratti, sorgente)
     cartella = RADICE / "crates/plenora-cli/tests/fixtures/contratti"
     provenienza = strict_json.loads((cartella / "provenienza.json").read_text("utf-8"))
     if provenienza["commit"] != revisione:

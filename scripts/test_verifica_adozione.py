@@ -136,6 +136,27 @@ class ProveContrattiTests(unittest.TestCase):
                 self.assertNotIn("SEGRETO", output.getvalue())
 
 
+class DeltaTests(unittest.TestCase):
+    def test_censimento_chiuso(self):
+        import copy
+        source = {"contracts_source": {"revision": "new"}, "contract_delta": {
+            "from": "old", "to": "new", "groups": {"g": {
+                "status": "adottata", "scope": "regola", "evidence": "prova"}},
+            "files": [{"file": "a", "classification": "g"}]}}
+        with patch.object(verifica_adozione.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "a\n")):
+            verifica_adozione.verifica_delta(Path("contracts"), source)
+            for entries in ([], source["contract_delta"]["files"] * 2,
+                            [{"file": "b", "classification": "g"}]):
+                bad = copy.deepcopy(source)
+                bad["contract_delta"]["files"] = entries
+                with self.assertRaises(ValueError):
+                    verifica_adozione.verifica_delta(Path("contracts"), bad)
+            bad = copy.deepcopy(source)
+            bad["contract_delta"]["groups"]["g"]["status"] = "deviazione"
+            with self.assertRaises(ValueError):
+                verifica_adozione.verifica_delta(Path("contracts"), bad)
+
+
 if __name__ == "__main__":
     unittest.main()
 

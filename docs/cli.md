@@ -420,3 +420,24 @@ non modificano le campagne Rust di questo repository.
   pubblicato; i test ne verificano la forma campo per campo.
 
 Geometrie multiple complete dalla 4.1.0: [primaria, selettori ed esempi eseguiti](geometrie-multiple.md).
+
+## Delta dei contratti al pin 38d68b4
+
+Il censimento completo dei 135 file cambiati fra `3aec9f7` e `38d68b4`
+è in `contract_delta` di [`adozione.json`](../crates/plenora-cli/adozione.json).
+Ogni percorso rinvia a una classificazione con ambito e prova; il gate
+`verifica_adozione.py` confronta l'insieme con Git, senza esclusioni implicite.
+
+| Modifica | Stato per data e prova |
+| --- | --- |
+| Decisione 0022, fixture field-id e vettori arrow-v1 mixed | Adottata: ID ricevuti conservati, mancanti assegnati al confine pubblico, metadati uguali fra API e CLI; `mixed` senza lista omette la chiave, `types=""` è un errore `schema`. Prove in `geometry_semantics.rs`; SDK sullo stesso percorso API. La lettura da database resta fuori dal profilo data. |
+| Decisione 0023, specifica primaria, vettori arrow-primary, geoparquet-primary, primary-composition e interop-primary | Adottata per il ruolo data: PRIM-001..009, identità e provenienza, selettori e GeoParquet. Prove di composizione primaria e matrice metadati; non si rivendica l'esecuzione di altri componenti. |
+| Oracolo CRS con maiuscole solo ASCII | Adottata nel sottoinsieme supportato dal risolutore, che usa confronti ASCII. Restano le deviazioni GEO già dichiarate in [Geometry Semantics](geometry-semantics.md). |
+| Profilo IO v3, IO-PY-001, IO-ARROW-001 e binding IO | Non applicabili al profilo data-tools v3. Data mantiene DT-ARROW-001..004 e le relative deviazioni; IO-ARROW-001 non sostituisce le sue regole di completamento. |
+| File Interchange, catene io/storage | Non applicabili: data non espone queste operazioni né runtime/storage. |
+| Harness intercomponente, vettori interop-v1 e interop-assignment field-id | Catene non applicabili al componente isolato; la regola locale della decisione 0022 è adottata e provata separatamente. |
+| Validatore e gate dei contratti | Adottati come strumenti esterni da `verifica_adozione.py` e `verifica_cli_contratti.py`. |
+| CI, dipendenze, guardie e documentazione informativa dei contratti | Non applicabili come requisiti data; le specifiche normative collegate sono censite separatamente. |
+
+Non si introducono nuove deviazioni: ambito, hazard e rientro delle deviazioni
+GEO e DT-ARROW restano nel manifesto e nelle guide collegate.

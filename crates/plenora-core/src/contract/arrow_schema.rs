@@ -1042,8 +1042,9 @@ fn emit_primary_geometry(
     )))
 }
 
-/// Rifiuto transitorio degli schemi non gestiti dalle operazioni monogeometria.
-/// I trasporti Arrow usano invece il contratto plurale.
+/// Guardia esplicita per chiamanti che richiedono al massimo una geometria.
+/// Nessuna operazione del catalogo usa questa restrizione; i trasporti Arrow
+/// usano il contratto plurale.
 ///
 /// # Errors
 /// `Unsupported` per piu' geometrie, `Schema` per primaria malformata.

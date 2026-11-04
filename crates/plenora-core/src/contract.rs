@@ -1376,7 +1376,8 @@ impl DataContract {
         })
     }
 
-    /// Guardia transitoria delle operazioni non ancora multigeometria.
+    /// Guardia esplicita per chiamanti che richiedono al massimo una geometria.
+    /// Nessuna operazione del catalogo usa questa restrizione.
     ///
     /// # Errors
     /// `Unsupported` per piu' geometrie.
@@ -1476,32 +1477,11 @@ fn validate_declared_types(
     // dichiarazione dev'essere canonica, l'elenco dev'essere parsabile con
     // quella dichiarazione (ordine, unicita', coerenza cardinalita'-stato), e
     // `types` senza `types_declaration` e' una coppia incompleta.
-    let metadata_types = metadata.get(PLENORA_GEOMETRY_TYPES_KEY);
-    let Some(metadata_declaration) = metadata.get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY) else {
-        if metadata_types.is_some() {
-            return Err(PlenoraError::Schema(format!(
-                "colonna geometrica `{}`: chiave types senza types_declaration",
-                geometry.name
-            )));
-        }
+    let Some(parsed_types) = arrow_metadata::canonical_geometry_types_from_metadata(metadata)?
+    else {
         return Ok(());
     };
-    let metadata_types = metadata_types.map_or("", String::as_str);
-    let parsed_declaration: TypesDeclaration = metadata_declaration.parse().map_err(|_| {
-        PlenoraError::Schema(format!(
-            "colonna geometrica `{}`: types_declaration canonica non riconosciuta",
-            geometry.name
-        ))
-    })?;
-    let parsed_types =
-        GeometryTypesProperty::from_canonical_list(parsed_declaration, metadata_types).map_err(
-            |error| {
-                PlenoraError::Schema(format!(
-                    "colonna geometrica `{}`: elenco dei tipi canonico non valido: {error}",
-                    geometry.name
-                ))
-            },
-        )?;
+    let parsed_declaration = parsed_types.declaration();
     // Lo stato di risoluzione del CRS non si confronta qui: il contratto puo'
     // divergere legittimamente dai metadati in entrambe le direzioni (la
     // lettura declassa un `resolved` con chiavi in conflitto; una decisione

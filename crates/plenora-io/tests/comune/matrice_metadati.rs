@@ -892,23 +892,65 @@ struct Audit {
     refusals: BTreeMap<String, usize>,
     divergences: Vec<String>,
 }
-fn unexpected_error(error: &PlenoraError) -> bool {
+// I rifiuti sono parte dell'oracolo, non una via di uscita per errori nuovi.
+fn operation_refusal(op: &str, count: usize, category: plenora_core::ErrorCategory) -> bool {
+    use plenora_core::ErrorCategory::{Crs, InvalidPlan, Unsupported};
     matches!(
-        error.category(),
-        plenora_core::ErrorCategory::Internal | plenora_core::ErrorCategory::Io
-    )
+        (op, category),
+        ("table.assert_schema", InvalidPlan) | ("table.pivot", Unsupported)
+    ) || (op == "table.transpose" && count > 1 && category == Crs)
+}
+fn probe_refusal(key: &str, site: Site, category: plenora_core::ErrorCategory) -> bool {
+    use plenora_core::ErrorCategory::{Crs, Schema, Unsupported};
+    match category {
+        Crs => matches!(
+            key,
+            "crs"
+                | "plenora.geometry.axis_order"
+                | "plenora.geometry.crs_definition"
+                | "plenora.geometry.crs_definition_format"
+                | "plenora.geometry.crs_id"
+                | "plenora.geometry.crs_resolution"
+                | "plenora.geometry.srid"
+        ),
+        Schema => matches!(
+            key,
+            "ARROW:extension:name"
+                | "axis_order"
+                | "crs_type"
+                | "dimensions"
+                | "edges"
+                | "epoch"
+                | "plenora.geometry.dimensions"
+                | "plenora.geometry.encoding"
+                | "plenora.geometry.native.geoparquet.edges"
+                | "plenora.geometry.native.geoparquet.epoch"
+                | "plenora.geometry.spatial_semantics"
+                | "plenora.geometry.types"
+                | "plenora.geometry.types_declaration"
+        ),
+        Unsupported => matches!(
+            (key, site),
+            ("crs_type", Site::Extension)
+                | ("edges", Site::Extension | Site::Geo | Site::SchemaGeo)
+                | ("encoding", Site::Geo)
+                | ("plenora.geometry.native.geoparquet.edges", Site::Field)
+        ),
+        _ => false,
+    }
 }
 
 #[test]
 fn errori_interni_non_sono_rifiuti_espliciti() {
-    assert!(unexpected_error(&PlenoraError::Internal("prova".into())));
-    assert!(unexpected_error(&PlenoraError::Io(std::io::Error::other(
-        "prova"
-    ))));
-    assert!(!unexpected_error(&PlenoraError::Unsupported(
-        "prova".into()
-    )));
-    assert!(!unexpected_error(&PlenoraError::Schema("prova".into())));
+    use plenora_core::ErrorCategory::{DataMapping, Internal, InvalidPlan, Io};
+    for category in [Internal, Io, DataMapping, InvalidPlan] {
+        for &(key, _) in policy::KEYS {
+            for site in sites(key) {
+                assert!(!probe_refusal(key, site, category));
+            }
+        }
+        assert!(!operation_refusal("table.limit", 2, category));
+    }
 }
 
 #[allow(clippy::too_many_lines)] // Casi indipendenti, raccolti prima del fallimento.
@@ -1010,9 +1052,15 @@ fn run_part(operations: &'static [OperationDescriptor], full: bool) -> Audit {
                 for (transport_index, ext) in ["arrow", "arrows", "parquet"].iter().enumerate() {
                     let baseline = execute(&scheda, &bases, how)
                         .and_then(|b| transport(&b, &dir.path().join(format!("baseline.{ext}"))));
-                    if baseline.as_ref().is_err_and(unexpected_error) {
+                    if baseline.as_ref().is_err_and(|e| {
+                        !(operation_refusal(op.id, count, e.category())
+                            || (*ext == "parquet"
+                                && e.category() == plenora_core::ErrorCategory::Unsupported
+                                && execute(&scheda, &bases, how)
+                                    .is_ok_and(|b| without_primary_geometry(&b))))
+                    }) {
                         divergences
-                            .push(format!("{} / {ext}: baseline con errore interno/IO", op.id));
+                            .push(format!("{} / {ext}: baseline con rifiuto inatteso", op.id));
                     }
                     for &(key, class) in policy::KEYS {
                         for site in sites(key) {
@@ -1039,9 +1087,26 @@ fn run_part(operations: &'static [OperationDescriptor], full: bool) -> Audit {
                                     }
                                 }
                                 if let Some(error) = input_error {
-                                    if unexpected_error(&error) {
+                                    let expected_input = (*ext == "parquet"
+                                        && error.category()
+                                            == plenora_core::ErrorCategory::Unsupported
+                                        && bases.iter().any(without_primary_geometry))
+                                        // Il footer accetta solo gli otto membri di GeoParquet 1.1.
+                                        || (*ext == "parquet" && matches!(site, Site::SchemaGeo)
+                                            && !matches!(key, "encoding" | "geometry_types" | "crs" | "epoch"
+                                                | "edges" | "orientation" | "bbox" | "covering")
+                                            && error.category() == plenora_core::ErrorCategory::Unsupported)
+                                        || (*ext == "parquet" && matches!(site, Site::SchemaGeo)
+                                            && (key == "orientation" || (mode != 0 && matches!(key, "encoding" | "geometry_types")))
+                                            && error.category() == plenora_core::ErrorCategory::InvalidPlan)
+                                        // Assenza su un lato e conflitto sono entrambi sonde
+                                        // di dichiarazioni incompatibili; mode=0 resta conforme.
+                                        || (mode != 0
+                                            && probe_refusal(key, site, error.category()));
+                                    if !expected_input {
                                         divergences.push(format!(
-                                            "{label}: errore interno/IO in ingresso"
+                                            "{label}: rifiuto inatteso in ingresso: {:?}",
+                                            error.category()
                                         ));
                                     }
                                     *refusals
@@ -1075,9 +1140,15 @@ fn run_part(operations: &'static [OperationDescriptor], full: bool) -> Audit {
                                 let output = match execute(&scheda, &inputs, how) {
                                     Ok(b) => b,
                                     Err(e) => {
-                                        if unexpected_error(&e) {
-                                            divergences
-                                                .push(format!("{label}: errore interno/IO: {e}"));
+                                        if !(operation_refusal(op.id, count, e.category())
+                                            || (merge
+                                                && mode != 0
+                                                && probe_refusal(key, site, e.category())))
+                                        {
+                                            divergences.push(format!(
+                                                "{label}: rifiuto inatteso: {:?}",
+                                                e.category()
+                                            ));
                                         }
                                         *refusals
                                             .entry(format!(
@@ -1393,7 +1464,7 @@ fn run_matrix(full: bool) {
         divergences.extend(audit.divergences);
     }
     divergences.sort();
-    let mut report = format!("# Matrice metadati\n\nUscite rilette: {counts:?}. Confronti: {checked:?}.\n\n## Copertura\n\nPolitica verificata per colonna, con provenienza ingresso:nome, primaria risolta e bbox separati nel footer. I casi senza primaria rifiutati da GeoParquet sono conteggiati come rifiuti attesi. Le geometrie fra i valori di melt e pivot sono enumerate, con le altre operazioni del catalogo, dalla prova catalogo_geometria_in_ogni_ruolo_non_legge_wkb_come_testo in operazioni_doc.rs. Internal e IO falliscono la matrice anche nella baseline.\n\n## Rifiuti espliciti\n\n");
+    let mut report = format!("# Matrice metadati\n\nUscite rilette: {counts:?}. Confronti: {checked:?}.\n\n## Copertura\n\nPolitica verificata per colonna, con provenienza ingresso:nome, primaria risolta e bbox separati nel footer. I casi senza primaria rifiutati da GeoParquet sono conteggiati come rifiuti attesi. Le geometrie fra i valori di melt e pivot sono enumerate, con le altre operazioni del catalogo, dalla prova catalogo_geometria_in_ogni_ruolo_non_legge_wkb_come_testo in operazioni_doc.rs. Ogni categoria fuori dai rifiuti enumerati fallisce, anche nella baseline.\n\n## Rifiuti espliciti\n\n");
     writeln!(
         report,
         "Totale rifiuti: {}.\n",
@@ -1524,20 +1595,69 @@ fn same_geometry_semantics(left: &RecordBatch, right: &RecordBatch) -> bool {
             x.name() == y.name()
                 && (!x.metadata().contains_key("plenora.geometry.crs_definition")
                     || y.metadata().contains_key("plenora.geometry.crs_definition"))
-                && [
-                    "plenora.geometry.crs_id",
-                    "plenora.geometry.crs_resolution",
-                    "plenora.geometry.axis_order",
-                    "plenora.geometry.encoding",
-                    "plenora.geometry.spatial_semantics",
-                    "plenora.field_id",
-                    "plenora.geometry.dimensions",
-                    "plenora.geometry.srid",
-                    "plenora.geometry.precision",
-                ]
-                .iter()
-                .all(|key| x.metadata().get(key) == y.metadata().get(key))
+                && x.metadata()
+                    .keys()
+                    .chain(y.metadata().keys())
+                    .filter(|key| canonical(key) || key.as_str() == "plenora.field_id")
+                    // La rappresentazione CRS puo' cambiare in GeoParquet;
+                    // sopra si confronta il riferimento risolto per intero.
+                    .filter(|key| {
+                        !matches!(
+                            key.as_str(),
+                            "plenora.geometry.crs_definition"
+                                | "plenora.geometry.crs_definition_format"
+                        )
+                    })
+                    .all(|key| x.metadata().get(key) == y.metadata().get(key))
         })
+}
+
+// GeoParquet dichiara exact i tipi osservati quando il campo non ne dichiara.
+// Oracolo sui valori originali, senza passare per writer o reader.
+fn parquet_type_completion(batch: &RecordBatch) -> RecordBatch {
+    let fields: Vec<_> = batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| {
+            let mut field = field.as_ref().clone();
+            if e_geometria(&field)
+                && matches!(
+                    field
+                        .metadata()
+                        .get("plenora.geometry.dimensions")
+                        .map(String::as_str),
+                    Some("xy" | "xyz")
+                )
+                && plenora_core::contract::arrow_metadata::canonical_geometry_types(&field)
+                    .unwrap()
+                    .is_none_or(|t| {
+                        t.declaration() == plenora_core::contract::TypesDeclaration::Unresolved
+                    })
+            {
+                let types = input_types(batch, &field);
+                let types = types.as_str().unwrap();
+                let mut md = field.metadata().clone();
+                if types.is_empty() {
+                    md.insert("plenora.geometry.types_declaration", "unresolved");
+                } else {
+                    md.insert("plenora.geometry.types", types);
+                    md.insert("plenora.geometry.types_declaration", "exact");
+                }
+                field = field.with_metadata(md);
+            }
+            field
+        })
+        .collect();
+    plenora_core::batch_with_rows(
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            batch.schema().metadata().clone(),
+        )),
+        batch.columns().to_vec(),
+        batch.num_rows(),
+    )
+    .unwrap()
 }
 
 fn qualification_execute(
@@ -1732,7 +1852,16 @@ fn qualification_part(operations: &'static [OperationDescriptor]) -> Audit {
                                     .or_default() += 1;
                                 continue;
                             }
-                            let expected = expected.as_ref().unwrap();
+                            let parquet_expected;
+                            let expected = if *ext == "parquet" {
+                                let completed: Vec<_> =
+                                    inputs.iter().map(parquet_type_completion).collect();
+                                parquet_expected =
+                                    qualification_execute(&spec, &completed).unwrap();
+                                &parquet_expected
+                            } else {
+                                expected.as_ref().unwrap()
+                            };
                             let output = output
                                 .unwrap_or_else(|e| panic!("{} {ext} state={state}: {e}", op.id));
                             assert!(
@@ -1752,13 +1881,19 @@ fn qualification_part(operations: &'static [OperationDescriptor]) -> Audit {
                                 "{} colonne",
                                 op.id
                             );
-                            if !USCITA_CASUALE.contains(&op.id) {
-                                assert_eq!(
-                                    output.columns(),
-                                    expected.columns(),
-                                    "{} {ext} valori",
-                                    op.id
-                                );
+                            let config: Value =
+                                serde_json::from_str(spec.esempio.config.get()).unwrap();
+                            let generated = (op.id == "table.uuid_generator")
+                                .then(|| config["output_column"].as_str().unwrap_or("uuid"));
+                            for (i, field) in expected.schema().fields().iter().enumerate() {
+                                if generated != Some(field.name().as_str()) {
+                                    assert_eq!(
+                                        output.column(i),
+                                        expected.column(i),
+                                        "{} {ext} valori",
+                                        op.id
+                                    );
+                                }
                             }
                             for field in
                                 expected.schema().fields().iter().filter(|f| e_geometria(f))
@@ -1953,6 +2088,43 @@ fn oracolo_plurale_rifiuta_perdita_scambio_e_primaria() {
     let original = tabella_con_metadati(&input.colonne, &input.metadati).unwrap();
     let batch = plural(fixture(&original, 0, true), 3, Some(0), true);
     assert!(same_geometry_semantics(&batch, &batch));
+    // Entrambe le chiavi dei tipi devono partecipare anche quando le celle
+    // e tutte le altre dichiarazioni restano identiche.
+    let with_types = |declaration: &str, types: Option<&str>| {
+        let fields: Vec<_> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| {
+                let mut md = f.metadata().clone();
+                if e_geometria(f) {
+                    md.insert("plenora.geometry.types_declaration", declaration);
+                    md.remove("plenora.geometry.types");
+                    if let Some(types) = types {
+                        md.insert("plenora.geometry.types", types);
+                    }
+                }
+                f.as_ref().clone().with_metadata(md)
+            })
+            .collect();
+        RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                fields,
+                batch.schema().metadata().clone(),
+            )),
+            batch.columns().to_vec(),
+        )
+        .unwrap()
+    };
+    let declared = with_types("mixed", Some(ALL_TYPES));
+    assert!(!same_geometry_semantics(
+        &declared,
+        &with_types("mixed", None)
+    ));
+    assert!(!same_geometry_semantics(
+        &declared,
+        &with_types("exact", Some(ALL_TYPES))
+    ));
     let geometries: Vec<_> = batch
         .schema()
         .fields()
@@ -2006,4 +2178,15 @@ fn oracolo_plurale_rifiuta_perdita_scambio_e_primaria() {
     )
     .unwrap();
     assert!(!same_geometry_semantics(&batch, &changed));
+}
+
+#[test]
+fn qualificazione_tipi_geoparquet() {
+    prepara_ambiente();
+    let i = CATALOG
+        .iter()
+        .position(|op| op.id == "geo.from_coords")
+        .unwrap();
+    let audit = qualification_part(&CATALOG[i..=i]);
+    assert!(audit.divergences.is_empty());
 }
