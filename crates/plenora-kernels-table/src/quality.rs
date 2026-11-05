@@ -789,41 +789,65 @@ mod tests {
     /// ne' l'uno ne' l'altro.
     #[test]
     fn nome_canonico_e_tipo_atteso_concordano() {
-        for scritto in [
-            "utf8",
-            "string",
-            " StRiNg ",
-            "int64",
-            "integer",
-            "float64",
-            "float",
-            "double",
-            "boolean",
-            "bool",
-            "uint64",
-            "unsigned",
-            "date32",
-            "timestamp_seconds",
-            "timestamp_millis",
-            "timestamp_micros",
-            "timestamp_nanos",
-            "decimal128",
-            "binary",
-            "dictionary_utf8",
-            "list",
-            "struct",
-        ] {
-            let canonico = super::nome_canonico_tipo(scritto).expect(scritto);
-            assert_eq!(
-                super::expected_type(scritto).expect(scritto),
-                super::expected_type(canonico).expect(canonico),
-                "{scritto}"
-            );
-            assert_eq!(super::nome_canonico_tipo(canonico), Some(canonico));
+        use plenora_core::arrow::schema::{Fields, TimeUnit};
+        let casi: &[(&[&str], &str, DataType)] = &[
+            (&["utf8", "string", " StRiNg "], "utf8", DataType::Utf8),
+            (&["int64", "integer"], "int64", DataType::Int64),
+            (
+                &["float64", "float", "double"],
+                "float64",
+                DataType::Float64,
+            ),
+            (&["boolean", "bool"], "boolean", DataType::Boolean),
+            (&["uint64", "unsigned"], "uint64", DataType::UInt64),
+            (&["date32"], "date32", DataType::Date32),
+            (
+                &["timestamp_seconds"],
+                "timestamp_seconds",
+                DataType::Timestamp(TimeUnit::Second, None),
+            ),
+            (
+                &["timestamp_millis"],
+                "timestamp_millis",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+            ),
+            (
+                &["timestamp_micros"],
+                "timestamp_micros",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+            ),
+            (
+                &["timestamp_nanos"],
+                "timestamp_nanos",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ),
+            (&["decimal128"], "decimal128", DataType::Decimal128(38, 0)),
+            (&["binary"], "binary", DataType::Binary),
+            (
+                &["dictionary_utf8"],
+                "dictionary_utf8",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            ),
+            (
+                &["list"],
+                "list",
+                DataType::List(Arc::new(Field::new("item", DataType::Null, true))),
+            ),
+            (&["struct"], "struct", DataType::Struct(Fields::empty())),
+        ];
+        for (alias, canonico, tipo) in casi {
+            for scritto in *alias {
+                assert_eq!(super::nome_canonico_tipo(scritto), Some(*canonico));
+                assert_successo!(super::expected_type(scritto), *tipo);
+            }
         }
         for fuori in ["", "text", "int32", "SEGRETO"] {
-            assert!(super::nome_canonico_tipo(fuori).is_none(), "{fuori}");
-            assert!(super::expected_type(fuori).is_err(), "{fuori}");
+            assert_eq!(super::nome_canonico_tipo(fuori), None);
+            assert_rifiuto!(
+                super::expected_type(fuori),
+                plenora_core::ErrorCategory::InvalidPlan,
+                plenora_core::ErrorPhase::Validate
+            );
         }
     }
 
@@ -867,7 +891,11 @@ mod tests {
             allow_null: true,
         };
         // La riga con 2^53+1 viola il massimo (il null e' ammesso).
-        assert!(assert_range(&ints, &config).is_err());
+        assert_rifiuto!(
+            assert_range(&ints, &config),
+            plenora_core::ErrorCategory::DataMapping,
+            plenora_core::ErrorPhase::Write
+        );
         // Senza la riga oltre 2^53 il vincolo passa.
         let ok = single_column_batch(
             "i",
@@ -875,7 +903,7 @@ mod tests {
             DataType::Int64,
             true,
         );
-        assert!(assert_range(&ok, &config).is_ok());
+        assert_successo!(assert_range(&ok, &config), ok);
 
         let uints = single_column_batch(
             "u",
@@ -888,20 +916,25 @@ mod tests {
         );
         // u64 oltre 2^53 contro max = 2^53: violazione esatta (9 < 10 anche
         // in ordinato, mai confronto testuale).
-        assert!(assert_range(&uints, &config_u64()).is_err());
+        assert_rifiuto!(
+            assert_range(&uints, &config_u64()),
+            plenora_core::ErrorCategory::DataMapping,
+            plenora_core::ErrorPhase::Write
+        );
         let uints_ok = single_column_batch(
             "u",
             Arc::new(UInt64Array::from(vec![Some(9), Some(10)])),
             DataType::UInt64,
             true,
         );
-        assert!(assert_range(&uints_ok, &config_u64_min()).is_ok());
+        assert_successo!(assert_range(&uints_ok, &config_u64_min()), uints_ok);
     }
 
     /// Regressione: gli estremi si leggono esatti dal JSON. Come `f64`,
     /// `max = 2^53 + 1` arrivava come 2^53 e rifiutava il valore 2^53 + 1,
     /// che e' dentro; `min = 2^53 + 1` lasciava passare 2^53, che e' fuori.
     #[test]
+    #[allow(clippy::too_many_lines)] // Matrice degli estremi numerici e delle loro forme JSON.
     fn assert_range_legge_gli_estremi_interi_esatti_dal_json() {
         let config = |testo: &str| -> AssertRange {
             serde_json::from_str(testo).expect("config assert_range")
@@ -917,10 +950,14 @@ mod tests {
             r#"{"column": "i", "min": 9007199254740993}"#,
         ];
         for testo in dentro {
-            assert!(assert_range(&ints, &config(testo)).is_ok(), "{testo}");
+            assert_successo!(assert_range(&ints, &config(testo)), ints);
         }
         let fuori = r#"{"column": "i", "min": 9007199254740994}"#;
-        assert!(assert_range(&ints, &config(fuori)).is_err());
+        assert_rifiuto!(
+            assert_range(&ints, &config(fuori)),
+            plenora_core::ErrorCategory::DataMapping,
+            plenora_core::ErrorPhase::Write
+        );
         let limite = single_column_batch(
             "i",
             Arc::new(Int64Array::from(vec![Some(9_007_199_254_740_992)])),
@@ -928,7 +965,11 @@ mod tests {
             true,
         );
         let sopra = r#"{"column": "i", "min": 9007199254740993}"#;
-        assert!(assert_range(&limite, &config(sopra)).is_err());
+        assert_rifiuto!(
+            assert_range(&limite, &config(sopra)),
+            plenora_core::ErrorCategory::DataMapping,
+            plenora_core::ErrorPhase::Write
+        );
         // u64 oltre i64::MAX: l'estremo resta u64 esatto.
         let uints = single_column_batch(
             "u",
@@ -938,8 +979,12 @@ mod tests {
         );
         let sotto_max = r#"{"column": "u", "max": 18446744073709551614}"#;
         let al_max = r#"{"column": "u", "max": 18446744073709551615}"#;
-        assert!(assert_range(&uints, &config(sotto_max)).is_err());
-        assert!(assert_range(&uints, &config(al_max)).is_ok());
+        assert_rifiuto!(
+            assert_range(&uints, &config(sotto_max)),
+            plenora_core::ErrorCategory::DataMapping,
+            plenora_core::ErrorPhase::Write
+        );
+        assert_successo!(assert_range(&uints, &config(al_max)), uints);
         // Un decimale posizionale resta decimale: 0.1 non e' il double 0.1.
         let decimali = single_column_batch(
             "d",
@@ -954,7 +999,11 @@ mod tests {
             true,
         );
         let un_decimo = r#"{"column": "d", "max": 0.1}"#;
-        assert!(assert_range(&decimali, &config(un_decimo)).is_err());
+        assert_rifiuto!(
+            assert_range(&decimali, &config(un_decimo)),
+            plenora_core::ErrorCategory::DataMapping,
+            plenora_core::ErrorPhase::Write
+        );
         // Esponente: `0.0000001` riscritto da serde_json come
         // `1e-7` resta un decimale esatto, e il Decimal128 1e-7 e' dentro.
         let piccolo = single_column_batch(
@@ -971,7 +1020,7 @@ mod tests {
             r#"{"column": "d", "max": 0.0000001}"#,
             r#"{"column": "d", "max": 1e-7, "min": 1e-7}"#,
         ] {
-            assert!(assert_range(&piccolo, &config(testo)).is_ok(), "{testo}");
+            assert_successo!(assert_range(&piccolo, &config(testo)), piccolo);
         }
         // Intero oltre u64: arriva come double 1e20, riletto esatto.
         let interi = single_column_batch(
@@ -981,11 +1030,20 @@ mod tests {
             true,
         );
         // Oltre la forma esatta il numero si rifiuta alla lettura della config.
-        assert!(serde_json::from_str::<AssertRange>(r#"{"column": "i", "max": 1e-128}"#).is_err());
+        assert_eq!(
+            serde_json::from_str::<AssertRange>(r#"{"column": "i", "max": 1e-128}"#)
+                .expect_err("config non valida")
+                .classify(),
+            serde_json::error::Category::Data
+        );
         let oltre = r#"{"column": "i", "min": 100000000000000000000}"#;
-        assert!(assert_range(&interi, &config(oltre)).is_err());
+        assert_rifiuto!(
+            assert_range(&interi, &config(oltre)),
+            plenora_core::ErrorCategory::DataMapping,
+            plenora_core::ErrorPhase::Write
+        );
         let sotto = r#"{"column": "i", "max": 100000000000000000000, "min": 1.5e3}"#;
-        assert!(assert_range(&interi, &config(sotto)).is_ok());
+        assert_successo!(assert_range(&interi, &config(sotto)), interi);
     }
 
     fn config_u64() -> AssertRange {
@@ -1013,43 +1071,55 @@ mod tests {
     #[test]
     fn defensive_runtime_guards_remain_fail_closed_without_plan_validation() {
         let input = fixture();
-        assert!(assert_regex(
-            &input,
-            &AssertRegex {
-                column: "text".into(),
-                pattern: "(".into(),
-                allow_null: true,
-            },
-        )
-        .is_err());
-        assert!(assert_schema(
-            &input,
-            &AssertSchema {
-                fields: vec![SchemaExpectation {
-                    name: "text".into(),
-                    data_type: "decimal128".into(),
-                    nullable: None,
-                }],
-                allow_extra: true,
-                ordered: true,
-            },
-        )
-        .is_err());
-        assert!(assert_not_null(
-            &input,
-            &AssertNotNull {
-                columns: vec!["missing".into()],
-            },
-        )
-        .is_err());
-        assert!(coalesce(
-            &input,
-            &Coalesce {
-                columns: Vec::new(),
-                output_column: "result".into(),
-            },
-        )
-        .is_err());
+        assert_rifiuto!(
+            assert_regex(
+                &input,
+                &AssertRegex {
+                    column: "text".into(),
+                    pattern: "(".into(),
+                    allow_null: true,
+                },
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            assert_schema(
+                &input,
+                &AssertSchema {
+                    fields: vec![SchemaExpectation {
+                        name: "text".into(),
+                        data_type: "decimal128".into(),
+                        nullable: None,
+                    }],
+                    allow_extra: true,
+                    ordered: true,
+                },
+            ),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            assert_not_null(
+                &input,
+                &AssertNotNull {
+                    columns: vec!["missing".into()],
+                },
+            ),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            coalesce(
+                &input,
+                &Coalesce {
+                    columns: Vec::new(),
+                    output_column: "result".into(),
+                },
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     #[test]
@@ -1082,9 +1152,9 @@ mod tests {
     // -----------------------------------------------------------------------
     // Test-oracolo del percorso a indici di chiave di `assert_unique`: qui
     // sotto un'implementazione di riferimento indipendente, che si ferma al
-    // primo duplicato. Ogni scenario confronta l'esito (ok/errore), e il
-    // messaggio solo se l'errore non porta diagnostica per riga (colonna
-    // mancante, conversione): il riferimento la diagnostica non la produce.
+    // primo duplicato. Ogni scenario confronta il batch completo oppure
+    // categoria e fase; il riferimento non produce la diagnostica, di cui
+    // qui si pretende la presenza. I suoi contenuti hanno prove dedicate.
     // -----------------------------------------------------------------------
 
     /// Oracolo indipendente di `assert_unique`: stesso contratto, percorso
@@ -1127,25 +1197,34 @@ mod tests {
         }
     }
 
-    /// Esito uguale all'oracolo; messaggio identico se l'errore non ha
-    /// diagnostica per riga.
+    /// Il riferimento generico decide l'esito prima di osservare il kernel.
+    /// Il suo rifiuto del duplicato precede il protocollo diagnostico: il
+    /// contratto pubblico richiede `DataMapping/Write`, non `InvalidPlan`.
     fn assert_unique_equivalent(batch: &RecordBatch, config: &AssertUnique) {
         let reference = assert_unique_reference(batch, config);
         let fast = assert_unique(batch, config);
-        match (&reference, &fast) {
-            (Ok(expected), Ok(actual)) => {
-                assert_eq!(expected.num_rows(), actual.num_rows());
-                assert_eq!(expected.num_columns(), actual.num_columns());
+        match reference {
+            Ok(expected) => {
+                assert_successo!(fast, expected);
             }
-            (Err(expected), Err(actual)) => {
-                if actual.row_diagnostics().is_none() {
-                    assert_eq!(expected.to_string(), actual.to_string());
-                }
+            Err(PlenoraError::InvalidPlan(_)) => {
+                let error = assert_rifiuto!(
+                    fast,
+                    plenora_core::ErrorCategory::DataMapping,
+                    plenora_core::ErrorPhase::Write
+                );
+                assert!(error.row_diagnostics().is_some());
             }
-            _ => panic!(
-                "esiti divergenti: reference={} fast={}",
-                describe(&reference),
-                describe(&fast)
+            Err(PlenoraError::Schema(_)) => {
+                assert_rifiuto!(
+                    fast,
+                    plenora_core::ErrorCategory::Schema,
+                    plenora_core::ErrorPhase::Validate
+                );
+            }
+            Err(error) => panic!(
+                "categoria del riferimento non prevista: {:?}",
+                error.category()
             ),
         }
     }
@@ -1300,8 +1379,11 @@ mod tests {
         assert_unique_equivalent(&batch, &unique_config(&[], true));
         // Colonna mancante: stesso errore di schema.
         assert_unique_equivalent(&batch, &unique_config(&["missing"], true));
-        let error = assert_unique(&batch, &unique_config(&["missing"], true))
-            .expect_err("colonna mancante");
+        let error = assert_rifiuto!(
+            assert_unique(&batch, &unique_config(&["missing"], true)),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
         assert!(error.to_string().contains("missing"));
     }
 
@@ -1365,6 +1447,7 @@ mod tests {
             groups.push(Some(if row % 3 == 0 { "a" } else { "b" }));
         }
         ids[75_000] = ids[25_000];
+        groups[75_000] = groups[25_000];
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int64, true),
@@ -1377,6 +1460,21 @@ mod tests {
         )
         .expect("batch scala");
         assert_unique_equivalent(&batch, &unique_config(&["id", "grp"], true));
+        let error = assert_rifiuto!(
+            assert_unique(&batch, &unique_config(&["id", "grp"], true)),
+            plenora_core::ErrorCategory::DataMapping,
+            plenora_core::ErrorPhase::Write
+        );
+        let report = error.row_diagnostics().expect("diagnostica duplicato");
+        assert_eq!(report.observed_total, 2);
+        assert_eq!(
+            report
+                .examples
+                .iter()
+                .map(|example| example.source_index)
+                .collect::<Vec<_>>(),
+            [25_000, 75_000]
+        );
         // Senza duplicato (chiave composta unica): ok, output invariato.
         let unique_batch = RecordBatch::try_new(
             batch.schema(),

@@ -426,7 +426,11 @@ fn l_errore_di_cella_esce_nell_ordine_delle_colonne() {
             mapping: BTreeMap::new(),
         };
         let veloce = pivot(&batch, &config, &Limits::default());
-        assert!(veloce.is_err());
+        assert_rifiuto!(
+            veloce.as_ref(),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
         assert_same_outcome_bits(veloce, pivot_reference(&batch, &config, &Limits::default()));
     }
     // Nome invalido ("  ") in una colonna che precede quella in errore.

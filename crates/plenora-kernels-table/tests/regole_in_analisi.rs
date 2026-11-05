@@ -8,9 +8,14 @@
 //! la identifica, perche' un rifiuto per un altro motivo non conti) e, dove
 //! il confine e' sottile, un caso accettato accanto.
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
+use plenora_core::{ErrorCategory, ErrorPhase};
+
 use std::sync::Arc;
 
-use plenora_core::arrow::array::new_null_array;
 use plenora_core::arrow::schema::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use plenora_core::contract::{DataContract, FieldAllocator};
 use plenora_core::{PlenoraError, Result};
@@ -254,6 +259,7 @@ fn gli_operatori_di_filter_e_conditional_seguono_il_tipo_della_colonna() {
 
 #[test]
 fn scalar_compare_supported_e_l_elenco_di_scalar_compare() {
+    use plenora_core::arrow::array::*;
     // Oracolo: per ogni tipo, il predicato dice di no esattamente quando
     // `scalar_compare` rifiuta il tipo (il testo non numerico di una cella
     // Utf8 e' un errore dei dati, non del tipo).
@@ -287,16 +293,65 @@ fn scalar_compare_supported_e_l_elenco_di_scalar_compare() {
         DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int64, true)])),
     ];
     for tipo in tipi {
-        let colonna = new_null_array(&tipo, 1);
-        let rifiuta_il_tipo = matches!(
-            scalar_compare(colonna.as_ref(), 0, NumericBound::I64(0)),
-            Err(PlenoraError::Schema(messaggio)) if messaggio.contains("non confrontabile")
+        let supportato = matches!(
+            tipo,
+            DataType::Int64
+                | DataType::UInt64
+                | DataType::Float64
+                | DataType::Date32
+                | DataType::Date64
+                | DataType::Timestamp(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Utf8
         );
-        assert_eq!(
-            scalar_compare_supported(&tipo),
-            !rifiuta_il_tipo,
-            "{tipo:?}"
-        );
+        assert_eq!(scalar_compare_supported(&tipo), supportato);
+        if tipo == DataType::Null {
+            continue;
+        }
+        // Il comparatore richiede una cella non nulla: zero e' nel dominio
+        // di tutti i tipi ammessi, incluso il testo numerico.
+        let colonna: ArrayRef = match &tipo {
+            DataType::Int64 => Arc::new(Int64Array::from(vec![0])),
+            DataType::UInt64 => Arc::new(UInt64Array::from(vec![0])),
+            DataType::Float64 => Arc::new(Float64Array::from(vec![0.0])),
+            DataType::Date32 => Arc::new(Date32Array::from(vec![0])),
+            DataType::Date64 => Arc::new(Date64Array::from(vec![0])),
+            DataType::Decimal128(p, s) => Arc::new(
+                Decimal128Array::from(vec![0])
+                    .with_precision_and_scale(*p, *s)
+                    .unwrap(),
+            ),
+            DataType::Utf8 => Arc::new(StringArray::from(vec!["0"])),
+            DataType::Timestamp(TimeUnit::Second, tz) => {
+                Arc::new(TimestampSecondArray::from(vec![0]).with_timezone_opt(tz.clone()))
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+                Arc::new(TimestampMillisecondArray::from(vec![0]).with_timezone_opt(tz.clone()))
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+                Arc::new(TimestampMicrosecondArray::from(vec![0]).with_timezone_opt(tz.clone()))
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                Arc::new(TimestampNanosecondArray::from(vec![0]).with_timezone_opt(tz.clone()))
+            }
+            DataType::Dictionary(_, _) => {
+                Arc::new(DictionaryArray::<types::Int32Type>::from_iter([Some("0")]))
+            }
+            _ => make_array(
+                new_null_array(&tipo, 1)
+                    .to_data()
+                    .into_builder()
+                    .nulls(None)
+                    .build()
+                    .unwrap(),
+            ),
+        };
+        let risultato = scalar_compare(colonna.as_ref(), 0, NumericBound::I64(0));
+        if supportato {
+            assert_successo!(risultato, Some(std::cmp::Ordering::Equal));
+        } else {
+            assert_rifiuto!(risultato, ErrorCategory::Schema, ErrorPhase::Validate);
+        }
     }
 }
 
@@ -893,11 +948,12 @@ fn verifica_amount_ha_il_confine_dei_valori_leggibili() {
     // e' quello di `NaiveDateTime::MAX` (23:59:59.999999999), da cui
     // `giorni - 1` giorni all'indietro arrivano al primo giorno.
     let giorni = (NaiveDate::MAX - NaiveDate::MIN).num_days();
-    assert!(verifica_amount(-giorni, &DateUnit::Days).is_ok());
-    assert!(matches!(
+    assert_successo!(verifica_amount(-giorni, &DateUnit::Days), ());
+    assert_rifiuto!(
         verifica_amount(-giorni - 1, &DateUnit::Days),
-        Err(PlenoraError::InvalidPlan(_))
-    ));
+        ErrorCategory::InvalidPlan,
+        ErrorPhase::Validate
+    );
     let intercalare = RecordBatch::try_new(
         schema(vec![Field::new("ts", DataType::Utf8, false)]),
         vec![Arc::new(StringArray::from(vec!["+262142-12-31 23:59:60"]))],
@@ -914,23 +970,28 @@ fn verifica_amount_ha_il_confine_dei_valori_leggibili() {
             "output_column": "d"}))
         .expect("config")
     };
-    assert!(date_add(&intercalare, &config(0))
-        .expect_err("secondo intercalare")
-        .row_diagnostics()
-        .is_some());
+    assert!(assert_rifiuto!(
+        date_add(&intercalare, &config(0)),
+        ErrorCategory::DataMapping,
+        ErrorPhase::Write
+    )
+    .row_diagnostics()
+    .is_some());
     let uscita = date_add(&batch, &config(-giorni)).expect("il kernel lo esegue");
     let colonna = uscita
         .column_by_name("d")
         .and_then(|colonna| colonna.as_any().downcast_ref::<StringArray>())
         .expect("colonna d");
     assert!(!colonna.is_null(0));
-    assert!(
-        colonna.value(0).starts_with("-262143-01-01"),
-        "{}",
-        colonna.value(0)
-    );
+    assert_eq!(colonna.value(0), "-262143-01-01 23:59:59");
     // Oltre: il kernel rifiuta anche la data piu' favorevole.
-    assert!(date_add(&batch, &config(-giorni - 1)).is_err());
+    // L'API diretta segnala il risultato fuori gamma per riga;
+    // verifica_amount e l'analisi rifiutano invece la config prima dei dati.
+    assert_rifiuto!(
+        date_add(&batch, &config(-giorni - 1)),
+        ErrorCategory::DataMapping,
+        ErrorPhase::Write
+    );
     // In analisi, lo stesso confine.
     let w = largo();
     let analisi = |amount: i64| {
@@ -1218,18 +1279,35 @@ fn validate_rules_analisi_e_kernel_leggono_i_valori_allo_stesso_modo() {
                 "operator": "range", "value": format!("{basso}, {alto}")}]}));
         }
     }
-    let mut difformi = Vec::new();
+    // La fixture copre tre numeri decimali esatti, infinito e sei
+    // rappresentazioni fuori dal dominio o sintatticamente invalide.
+    let mut campi = w.fields().to_vec();
+    campi.extend([
+        Arc::new(Field::new("_valid", DataType::Boolean, false)),
+        Arc::new(Field::new("_errors", DataType::Utf8, false)),
+        Arc::new(Field::new("_warnings", DataType::Utf8, false)),
+    ]);
+    let schema_atteso = Arc::new(Schema::new(campi));
     for config in &casi {
-        let analisi = analizza("table.validate_rules", &[&w], config).is_ok();
-        let kernel = serde_json::from_value::<ValidateRules>(config.clone())
-            .map_err(|errore| PlenoraError::InvalidPlan(errore.to_string()))
-            .and_then(|regole| validate_rules(&vuota, &regole))
-            .is_ok();
-        if analisi != kernel {
-            difformi.push(format!("{config}: analisi {analisi}, kernel {kernel}"));
+        let regola = &config["rules"][0];
+        let letterale = regola["value"].as_str().unwrap();
+        let valido = if regola["operator"] == "range" {
+            letterale == "1, 2"
+        } else {
+            matches!(letterale, "5" | "-0.5" | "1e2" | "inf")
+        };
+        let analisi = analizza("table.validate_rules", &[&w], config);
+        let configurazione: ValidateRules =
+            serde_json::from_value(config.clone()).expect("config fixture");
+        let kernel = validate_rules(&vuota, &configurazione);
+        if valido {
+            assert_eq!(analisi.expect("config valida").schema, schema_atteso);
+            assert_successo!(kernel, RecordBatch::new_empty(schema_atteso.clone()));
+        } else {
+            assert_rifiuto!(analisi, ErrorCategory::InvalidPlan, ErrorPhase::Validate);
+            assert_rifiuto!(kernel, ErrorCategory::InvalidPlan, ErrorPhase::Validate);
         }
     }
-    assert!(difformi.is_empty(), "{}", difformi.join("\n"));
     // Il caso limite: rifiutato gia' in analisi.
     rifiuta(
         "table.validate_rules",

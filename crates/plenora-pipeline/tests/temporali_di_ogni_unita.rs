@@ -21,7 +21,7 @@ use plenora_core::arrow::array::{
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
-use plenora_core::ErrorCategory;
+use plenora_core::{ErrorCategory, ErrorPhase};
 use serde_json::{json, Value};
 
 const UNITA: [TimeUnit; 4] = [
@@ -540,6 +540,9 @@ fn date_trunc_in_secondi_oltre_i_millisecondi_e_un_errore() {
         &["x"],
     );
     let errore = esegui(&pipeline, &[("t", ingresso)]).expect_err("fuori gamma");
+    // La rappresentazione temporale non e' disponibile: Schema deriva Validate.
+    assert_eq!(errore.category(), ErrorCategory::Schema);
+    assert_eq!(errore.phase(), ErrorPhase::Validate);
     assert!(errore.to_string().contains("fuori range"), "{errore}");
     assert!(
         !errore.to_string().contains(&i64::MAX.to_string()),
@@ -860,6 +863,13 @@ fn l_ora_media_locale_non_ha_testo_rfc_3339() {
                 .unwrap_or_else(|errore| panic!("{unita:?} {op}: {errore}"));
             let errore =
                 esegui(&pipeline, &[("t", ingresso.clone())]).expect_err("offset ai secondi");
+            let (categoria, fase) = if op == "table.timezone_convert" {
+                (ErrorCategory::DataMapping, ErrorPhase::Write)
+            } else {
+                (ErrorCategory::Schema, ErrorPhase::Validate)
+            };
+            assert_eq!(errore.category(), categoria);
+            assert_eq!(errore.phase(), fase);
             if op == "table.timezone_convert" {
                 // Per riga: le due celle LMT (righe 0 e 2), non le tre a
                 // -10:00:00.

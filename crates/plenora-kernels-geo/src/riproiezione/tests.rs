@@ -20,6 +20,15 @@ use serde_json::json;
 use super::*;
 use plenora_core::contract::arrow_metadata::GEO_METADATA_KEY;
 
+fn assert_crs_error(errore: &PlenoraError, atteso: &str) {
+    assert_eq!(errore.category(), plenora_core::ErrorCategory::Crs);
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
+    let PlenoraError::CrsCoded { code, .. } = errore else {
+        panic!("atteso codice CRS strutturato: {errore:?}");
+    };
+    assert_eq!(code.as_str(), atteso);
+}
+
 fn crs(definizione: &str) -> ResolvedCrs {
     resolve_crs(definizione, "crs").expect("CRS integrato")
 }
@@ -209,6 +218,7 @@ fn l_antimeridiano_d_uscita_e_un_errore_esplicito() {
     let (x2, y2) = da_lonlat("EPSG:32601", -179.5, 50.0);
     let linea = Geometry::LineString(line_string![(x: x1, y: y1), (x: x2, y: y2)]);
     let errore = riproietta_geometria(&linea, &r, tolleranza("EPSG:4326")).expect_err("salto");
+    assert_crs_error(&errore, "REPROJECTION_EDGE_NOT_CONVERGED");
     assert!(
         errore
             .to_string()
@@ -276,6 +286,7 @@ fn una_geometria_non_mescola_i_percorsi_e_fuori_da_tutti_e_un_errore() {
     assert_ne!(per_percorso(2, sardegna), per_percorso(0, sardegna));
     let mista = Geometry::LineString(LineString::new(vec![roma, sardegna]));
     let errore = riproietta_geometria(&mista, &r, t).expect_err("percorsi misti");
+    assert_crs_error(&errore, "REPROJECTION_MIXED_TRANSFORMATION_AREAS");
     assert!(
         errore
             .to_string()
@@ -296,6 +307,7 @@ fn una_geometria_non_mescola_i_percorsi_e_fuori_da_tutti_e_un_errore() {
     // Fuori da ogni area d'uso: errore esplicito, mai un ripiego.
     let lontano = Geometry::LineString(line_string![(x: 12.5, y: 41.9), (x: 20.5, y: 41.9)]);
     let errore = riproietta_geometria(&lontano, &r, t).expect_err("fuori area");
+    assert_crs_error(&errore, "REPROJECTION_OUTSIDE_TRANSFORMATION_AREA");
     assert!(
         errore
             .to_string()
@@ -309,6 +321,7 @@ fn fuori_dominio_si_rifiuta_senza_riportare_coordinate() {
     let r = riproiettore("EPSG:4326", &json!({"target_crs": "EPSG:3857"}));
     let polo = Geometry::Point(point!(x: 12.345_678, y: 88.765_432));
     let errore = riproietta_geometria(&polo, &r, tolleranza("EPSG:3857")).expect_err("polo");
+    assert_crs_error(&errore, "COORDINATE_OUT_OF_CRS_DOMAIN");
     let testo = errore.to_string();
     assert!(testo.contains("COORDINATE_OUT_OF_CRS_DOMAIN"), "{testo}");
     assert!(
@@ -332,8 +345,15 @@ fn la_griglia_ntv2_fornita_si_usa_e_ha_la_sua_accuratezza() {
         .geografiche_sorgente(1_600_000.0, 4_850_000.0)
         .expect("dominio");
     assert!((9.0..13.0).contains(&x) && (43.0..45.0).contains(&y));
-    let punto = Geometry::Point(point!(x: 1_600_000.0, y: 4_850_000.0));
-    riproietta_geometria(&punto, &r, tolleranza("EPSG:7791")).expect("dentro la griglia");
+    // Stessa griglia sintetica, oracolo PROJ in core/tests/fixtures/riproiezione/catene.csv (9734).
+    let punto = Geometry::Point(point!(x: 1_405_806.762_073_702, y: 4_826_345.213_214_798));
+    let Geometry::Point(uscita) =
+        riproietta_geometria(&punto, &r, tolleranza("EPSG:7791")).expect("dentro la griglia")
+    else {
+        panic!("tipo punto preservato");
+    };
+    assert!((uscita.x() - 405_866.879_181_395_46).abs() < 0.01);
+    assert!((uscita.y() - 4_826_364.577_457_145).abs() < 0.01);
     // Un file che non c'e': errore alla lettura, non all'analisi.
     let assente = json!({
         "target_crs": "EPSG:7791",
@@ -343,6 +363,7 @@ fn la_griglia_ntv2_fornita_si_usa_e_ha_la_sua_accuratezza() {
     let errore = params("EPSG:3003", &assente)
         .riproiettore()
         .expect_err("file assente");
+    assert_crs_error(&errore, "NTV2_GRID_UNREADABLE");
     assert!(
         errore.to_string().contains("NTV2_GRID_UNREADABLE"),
         "{errore}"
@@ -352,24 +373,46 @@ fn la_griglia_ntv2_fornita_si_usa_e_ha_la_sua_accuratezza() {
 #[test]
 fn config_non_valide_si_rifiutano() {
     let sorgente = crs("EPSG:3003");
-    for config in [
-        json!({}),
-        json!({"target_crs": "EPSG:7791", "sconosciuto": 1}),
-        json!({"target_crs": "EPSG:999999"}),
-        json!({"target_crs": "EPSG:7791"}),
-        json!({"target_crs": "EPSG:7791", "accuratezza_accettata_m": 1.0}),
-        json!({"target_crs": "EPSG:7791", "accuratezza_accettata_m": 4.0,
+    for (config, codice) in [
+        (json!({}), None),
+        (json!({"target_crs": "EPSG:7791", "sconosciuto": 1}), None),
+        (
+            json!({"target_crs": "EPSG:999999"}),
+            Some("CRS_NOT_BUILTIN"),
+        ),
+        (
+            json!({"target_crs": "EPSG:7791"}),
+            Some("REPROJECTION_ACCURACY_NOT_ACCEPTED"),
+        ),
+        (
+            json!({"target_crs": "EPSG:7791", "accuratezza_accettata_m": 1.0}),
+            Some("REPROJECTION_ACCURACY_NOT_ACCEPTED"),
+        ),
+        (
+            json!({"target_crs": "EPSG:7791", "accuratezza_accettata_m": 4.0,
                "griglie": [{"trasformazione": 9734, "file": ""}]}),
-        json!({"target_crs": "EPSG:7791", "accuratezza_accettata_m": 4.0,
+            None,
+        ),
+        (
+            json!({"target_crs": "EPSG:7791", "accuratezza_accettata_m": 4.0,
                "griglie": [{"trasformazione": 9734, "file": "a.gsb"},
                            {"trasformazione": 9734, "file": "b.gsb"}]}),
-        json!({"target_crs": "EPSG:7791", "accuratezza_accettata_m": 4.0,
+            Some("REPROJECTION_CONFIG_INVALID"),
+        ),
+        (
+            json!({"target_crs": "EPSG:7791", "accuratezza_accettata_m": 4.0,
                "trasformazioni": [1149]}),
+            Some("REPROJECTION_CONFIG_INVALID"),
+        ),
     ] {
-        assert!(
-            ReprojectParams::da_config("geo.reproject", &config, &sorgente).is_err(),
-            "{config}"
-        );
+        let errore = ReprojectParams::da_config("geo.reproject", &config, &sorgente)
+            .expect_err("config non valida");
+        if let Some(codice) = codice {
+            assert_crs_error(&errore, codice);
+        } else {
+            assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+            assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
+        }
     }
 }
 
@@ -414,8 +457,10 @@ fn la_config_illeggibile_non_cita_i_valori_scritti() {
         (json!({}), "campo obbligatorio assente: `target_crs`"),
     ] {
         let errore = ReprojectParams::da_config("geo.reproject", &config, &sorgente)
-            .expect_err("config illeggibile")
-            .to_string();
+            .expect_err("config illeggibile");
+        assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
+        let errore = errore.to_string();
         assert!(errore.contains(atteso), "{config}: {errore}");
         for scritto in ["CHIAVE_SEGRETA", "98765431"] {
             assert!(!errore.contains(scritto), "{config}: {errore}");
@@ -453,13 +498,13 @@ fn la_tabella_conserva_righe_null_e_attributi() {
     ]));
     let celle: Vec<Option<Vec<u8>>> = vec![
         Some(
-            Geometry::Point(point!(x: 9.0, y: 45.0))
+            Geometry::Point(point!(x: 9.0, y: 52.5))
                 .to_wkb(CoordDimensions::xy())
                 .expect("wkb"),
         ),
         None,
         Some(
-            Geometry::LineString(line_string![(x: 8.0, y: 44.0), (x: 10.0, y: 46.0)])
+            Geometry::LineString(line_string![(x: 9.0, y: 31.5), (x: 9.0, y: 52.5)])
                 .to_wkb(CoordDimensions::xy())
                 .expect("wkb"),
         ),
@@ -483,7 +528,37 @@ fn la_tabella_conserva_righe_null_e_attributi() {
         .expect("binario");
     assert!(geometrie.is_valid(0) && geometrie.is_null(1) && geometrie.is_valid(2));
     let punto = crate::geometry_from_wkb(geometrie.value(0)).expect("wkb");
-    assert!(punto.coords_iter().all(|c| c.x > 100_000.0));
+    // Valori PROJ indipendenti: fixtures/riproiezione/proiezioni.csv del core.
+    let Geometry::Point(punto) = punto else {
+        panic!("tipo punto preservato");
+    };
+    assert!((punto.x() - 500_000.0).abs() < 0.01);
+    assert!((punto.y() - 5_816_652.006_459_358).abs() < 0.01);
+    let Geometry::LineString(linea) = crate::geometry_from_wkb(geometrie.value(2)).expect("linea")
+    else {
+        panic!("tipo linea preservato");
+    };
+    assert_eq!(linea.0.len(), 2, "meridiano rettilineo");
+    for (c, y) in linea
+        .0
+        .iter()
+        .zip([3_485_016.646_197_933_2, 5_816_652.006_459_358])
+    {
+        assert!((c.x - 500_000.0).abs() < 0.01 && (c.y - y).abs() < 0.01);
+    }
+    assert_eq!(uscita[0].num_rows(), 3);
+    assert_eq!(
+        uscita[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("id")
+            .values()
+            .as_ref(),
+        &[1, 2, 3]
+    );
+    assert_eq!(uscita_schema.field(0), schema.field(0));
+    assert_eq!(uscita_schema.metadata(), schema.metadata());
     let metadata = uscita_schema.field(1).metadata();
     let geo: Value = serde_json::from_str(&metadata[GEO_METADATA_KEY]).expect("geo");
     assert_eq!(geo["crs"], "EPSG:32632");
@@ -492,7 +567,11 @@ fn la_tabella_conserva_righe_null_e_attributi() {
         "easting_northing"
     );
     // Il piano deciso per un'altra sorgente non si applica.
-    assert!(reproject_batches(&schema, &[], "geometry", &crs("EPSG:4258"), &p).is_err());
+    let errore = reproject_batches(&schema, &[], "geometry", &crs("EPSG:4258"), &p)
+        .expect_err("sorgente diversa dal piano");
+    assert!(matches!(errore, PlenoraError::Crs(_)));
+    assert_eq!(errore.category(), plenora_core::ErrorCategory::Crs);
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
 }
 
 #[test]
@@ -510,6 +589,7 @@ fn l_esito_non_dipende_dalla_segmentazione() {
     ] {
         let errore =
             riproietta_geometria(&Geometry::LineString(linea), &r, t).expect_err("percorsi misti");
+        assert_crs_error(&errore, "REPROJECTION_MIXED_TRANSFORMATION_AREAS");
         assert!(
             errore
                 .to_string()

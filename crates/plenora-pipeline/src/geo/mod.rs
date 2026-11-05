@@ -455,8 +455,10 @@ mod tests {
             "geo.buffer",
             &serde_json::json!({"distance": "VALORE_SEGRETO", "CHIAVE_SEGRETA": 1}),
         )
-        .expect_err("config rifiutata")
-        .to_string();
+        .expect_err("config rifiutata");
+        assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
+        let errore = errore.to_string();
         assert!(
             errore.contains("geo.buffer: config non valida: "),
             "{errore}"

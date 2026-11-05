@@ -1632,7 +1632,10 @@ mod tests {
             Geometry::Point(Point::new(1.0, 0.0))
         );
         let tiny = rect(0.0, 0.0, 0.1, 0.1);
-        assert!(snap_to_grid(&tiny, 1.0).is_err());
+        assert!(matches!(
+            snap_to_grid(&tiny, 1.0),
+            Err(ExtendedAlgorithmError::InvalidOutput(_))
+        ));
     }
 
     #[test]
@@ -1870,6 +1873,9 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::suboptimal_flops)]
+    // Gli scenari avversari restano insieme con tutti gli attesi espliciti.
+    #[allow(clippy::too_many_lines)]
     fn adversarial_geometry_families_and_numeric_overflow_fail_closed() {
         let polygon = polygon![
             exterior: [
@@ -1891,15 +1897,76 @@ mod tests {
         let collection = Geometry::GeometryCollection(
             vec![Geometry::Polygon(polygon.clone()), multi_line.clone()].into(),
         );
-        for geometry in [
-            Geometry::Point(Point::new(0.0, 0.0)),
-            Geometry::MultiPoint(vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)].into()),
-            Geometry::Polygon(polygon.clone()),
-            multi_polygon.clone(),
-            multi_line.clone(),
-            collection,
+        // Reticoli attesi della fixture: sei intervalli per lato lungo 4,
+        // due per lato lungo 1, tre per ciascuna linea lunga 2.
+        let ring = |vertices: &[(f64, f64)], intervals: i32| {
+            let mut points = Vec::new();
+            for edge in vertices.windows(2) {
+                for k in 0..intervals {
+                    let t = f64::from(k) / f64::from(intervals);
+                    points.push((
+                        edge[0].0 + (edge[1].0 - edge[0].0) * t,
+                        edge[0].1 + (edge[1].1 - edge[0].1) * t,
+                    ));
+                }
+            }
+            points.push(*vertices.last().unwrap());
+            LineString::from(points)
+        };
+        let expected_polygon = geo::Polygon::new(
+            ring(
+                &[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0)],
+                6,
+            ),
+            vec![ring(
+                &[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0), (1.0, 1.0)],
+                2,
+            )],
+        );
+        let expected_lines = geo::MultiLineString(vec![
+            ring(&[(0.0, 0.0), (2.0, 0.0)], 3),
+            ring(&[(0.0, 1.0), (2.0, 1.0)], 3),
+        ]);
+        for (geometry, expected) in [
+            (
+                Geometry::Point(Point::new(0.0, 0.0)),
+                Geometry::Point(Point::new(0.0, 0.0)),
+            ),
+            (
+                Geometry::MultiPoint(vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)].into()),
+                Geometry::MultiPoint(vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)].into()),
+            ),
+            (
+                Geometry::Polygon(polygon.clone()),
+                Geometry::Polygon(expected_polygon.clone()),
+            ),
+            (
+                multi_polygon.clone(),
+                Geometry::MultiPolygon(geo::MultiPolygon(vec![expected_polygon.clone()])),
+            ),
+            (
+                multi_line.clone(),
+                Geometry::MultiLineString(expected_lines.clone()),
+            ),
+            (
+                collection,
+                Geometry::GeometryCollection(
+                    vec![
+                        Geometry::Polygon(expected_polygon),
+                        Geometry::MultiLineString(expected_lines),
+                    ]
+                    .into(),
+                ),
+            ),
         ] {
-            assert!(densify(&geometry, 0.75, 1_000).is_ok());
+            let dense = densify(&geometry, 0.75, 1_000).expect("famiglia supportata");
+            assert_eq!(geometry_type(&dense), geometry_type(&expected));
+            assert_eq!(dense.coords_count(), expected.coords_count());
+            for (got, want) in dense.coords_iter().zip(expected.coords_iter()) {
+                assert!((got.x - want.x).abs() < 1e-12);
+                assert!((got.y - want.y).abs() < 1e-12);
+            }
+            assert!((dense.unsigned_area() - expected.unsigned_area()).abs() < 1e-12);
         }
         assert!(matches!(
             densify(
@@ -1911,17 +1978,25 @@ mod tests {
             ),
             Err(ExtendedAlgorithmError::IndexOverflow)
         ));
-        assert!(snap_to_grid(&Geometry::Point(Point::new(f64::MAX, 0.0)), 0.1).is_err());
+        assert!(matches!(
+            snap_to_grid(&Geometry::Point(Point::new(f64::MAX, 0.0)), 0.1),
+            Err(ExtendedAlgorithmError::InvalidOutput(_))
+        ));
 
         let geodesic_multi = Geometry::MultiPolygon(geo::MultiPolygon(vec![polygon]));
         assert!(
             geodesic_area_m2(&geodesic_multi, &crate::geodetica::wgs84_di_prova()).unwrap() > 0.0
         );
-        assert!(geodesic_area_m2(
-            &Geometry::Point(Point::new(0.0, 0.0)),
-            &crate::geodetica::wgs84_di_prova()
-        )
-        .is_err());
+        assert!(matches!(
+            geodesic_area_m2(
+                &Geometry::Point(Point::new(0.0, 0.0)),
+                &crate::geodetica::wgs84_di_prova()
+            ),
+            Err(ExtendedAlgorithmError::UnsupportedGeometry {
+                operation: "geodesic_area",
+                actual: "Point"
+            })
+        ));
         assert!(
             geometry_diagnostics(&Geometry::GeometryCollection(
                 Vec::<Geometry<f64>>::new().into()
@@ -1937,8 +2012,20 @@ mod tests {
         )
         .unwrap()
         .is_empty());
-        assert!(line_merge(&multi_line, 100, 10).is_ok());
-        assert!(line_merge(&multi_polygon, 100, 10).is_err());
+        assert_eq!(
+            line_merge(&multi_line, 100, 10).expect("due linee disgiunte"),
+            vec![
+                line_string![(x: 0.0, y: 0.0), (x: 2.0, y: 0.0)],
+                line_string![(x: 0.0, y: 1.0), (x: 2.0, y: 1.0)]
+            ]
+        );
+        assert!(matches!(
+            line_merge(&multi_polygon, 100, 10),
+            Err(ExtendedAlgorithmError::UnsupportedGeometry {
+                operation: "line_merge",
+                actual: "MultiPolygon"
+            })
+        ));
     }
 
     #[test]
@@ -2090,7 +2177,7 @@ mod tests {
 #[cfg(test)]
 mod oracolo_delaunay {
     use super::*;
-    use geo::{MultiPoint, TriangulateDelaunayUnconstrained};
+    use geo::{Area, MultiPoint, TriangulateDelaunayUnconstrained};
 
     /// `delaunay` di prima, alla lettera: `unconstrained_triangulation` di
     /// `geo` 0.33.1, inserimento incrementale.
@@ -2437,9 +2524,59 @@ mod oracolo_delaunay {
             assert!(confronta(&multipunto(coppie), u64::MAX), "{coppie:?}");
         }
         let quadrato = multipunto(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.3, 0.6)]);
-        for massimo in [0, 3, 4, 5] {
-            confronta(&quadrato, massimo);
+        for massimo in [0, 3, 4] {
+            assert!(matches!(
+                delaunay(&quadrato, massimo, massimo),
+                Err(ExtendedAlgorithmError::CoordinateLimit { actual: 5, limit }) if limit == massimo
+            ));
         }
+        // Il punto interno rende unica questa triangolazione: quattro
+        // facce che uniscono ogni lato del quadrato al punto (0.3, 0.6).
+        let attesi = [(0, 1), (1, 2), (2, 3), (3, 0)].map(|(a, b)| {
+            let vertici = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+            Polygon::new(
+                LineString::from(vec![vertici[a], vertici[b], (0.3, 0.6), vertici[a]]),
+                vec![],
+            )
+        });
+        let ottenuti = delaunay(&quadrato, 5, 5).expect("quattro triangoli");
+        assert!(ottenuti
+            .iter()
+            .all(|triangolo| triangolo.interiors().is_empty()));
+        assert_eq!(insieme(&ottenuti), insieme(&attesi));
+        // Senza punto interno entrambe le diagonali sono Delaunay: tutti
+        // i vertici sono sul medesimo cerchio. I lati orientati devono
+        // cancellare la diagonale e lasciare esattamente il bordo quadrato.
+        let vertici = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let triangoli = delaunay(&multipunto(&vertici), 4, 2).expect("quadrato");
+        assert_eq!(triangoli.len(), 2);
+        let mut bordi = std::collections::BTreeMap::new();
+        for triangolo in &triangoli {
+            assert!(triangolo.interiors().is_empty());
+            let anello = &triangolo.exterior().0;
+            assert_eq!(anello.len(), 4);
+            assert_eq!(anello.first(), anello.last());
+            assert_eq!(triangolo.signed_area().to_bits(), 0.5_f64.to_bits());
+            for lato in anello.windows(2) {
+                let a = vertici
+                    .iter()
+                    .position(|&(x, y)| lato[0] == Coord { x, y })
+                    .expect("vertice del quadrato");
+                let b = vertici
+                    .iter()
+                    .position(|&(x, y)| lato[1] == Coord { x, y })
+                    .expect("vertice del quadrato");
+                let (chiave, verso) = if a < b { ((a, b), 1_i32) } else { ((b, a), -1) };
+                *bordi.entry(chiave).or_insert(0) += verso;
+            }
+        }
+        bordi.retain(|_, verso| *verso != 0);
+        assert_eq!(
+            bordi,
+            std::collections::BTreeMap::from(
+                [((0, 1), 1), ((1, 2), 1), ((2, 3), 1), ((0, 3), -1),]
+            )
+        );
         assert!(matches!(
             delaunay(&quadrato, 5, 3),
             Err(ExtendedAlgorithmError::OutputLimit {

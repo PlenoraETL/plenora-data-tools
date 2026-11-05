@@ -1,5 +1,9 @@
 //! Enumerazione della politica: catalogo e vocabolario sono le uniche liste.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use plenora_core::catalog::CATALOG;
 use plenora_core::contract::geometry_metadata_policy::{self as policy, Class, Effect, KEYS};
 
@@ -194,7 +198,15 @@ fn srid_derivato_solo_con_mapping_wkb_risolto() {
                 &contract.geometries,
                 GeometryComparison::Declaration,
             );
-            assert_eq!(result.is_ok(), encoding == "wkb");
+            if encoding == "wkb" {
+                assert_successo!(result, ());
+            } else {
+                assert_rifiuto!(
+                    result,
+                    plenora_core::ErrorCategory::Crs,
+                    plenora_core::ErrorPhase::Validate
+                );
+            }
         }
     }
 }
@@ -318,7 +330,23 @@ fn metadati_derivati_identici_con_e_senza_contratto() {
     let schema = arrow_schema_from_contract(&contract).unwrap();
     let raw = merged_geometry_metadata(&[schema.field(0)], &[]).unwrap();
     let typed = merged_geometry_metadata(&[schema.field(0)], &contract.geometries).unwrap();
-    assert_eq!(raw, typed);
+    let atteso: plenora_core::arrow::Metadata = [
+        ("ARROW:extension:name", "geoarrow.wkb"),
+        ("geo", r#"{"crs":"EPSG:32632","dimensions":"xy"}"#),
+        ("plenora.geometry.encoding", "wkb"),
+        ("plenora.geometry.dimensions", "xy"),
+        ("plenora.geometry.types_declaration", "unresolved"),
+        ("plenora.geometry.crs_resolution", "resolved"),
+        ("plenora.geometry.crs_id", "EPSG:32632"),
+        ("plenora.geometry.srid", "32632"),
+        ("plenora.geometry.axis_order", "unknown"),
+        ("plenora.geometry.spatial_semantics", "geometry"),
+        ("plenora.geometry.precision", "float64"),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(raw, atteso);
+    assert_eq!(typed, atteso);
 }
 
 #[test]

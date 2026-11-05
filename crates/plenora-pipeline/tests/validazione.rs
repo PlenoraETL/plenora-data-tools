@@ -1,7 +1,15 @@
 //! Validazione del piano: accettazione allineata all'analisi dei contratti,
 //! rifiuti prima dell'esecuzione.
 
+#[allow(dead_code)] // Questo target usa solo gli schemi dell'oracolo condiviso.
+#[path = "comune/attesi.rs"]
+mod attesi;
 mod comune;
+
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+use plenora_core::{ErrorCategory as Categoria, ErrorPhase as Fase};
 
 use std::collections::BTreeSet;
 
@@ -79,7 +87,6 @@ fn ogni_operazione_tabellare_del_catalogo_ha_un_caso() {
 fn la_validazione_accetta_se_e_solo_se_l_analisi_accetta() {
     // hmac_sha256 controlla in validazione che la chiave sia disponibile.
     std::env::set_var(comune::CHIAVE_HMAC, "chiave-di-test-del-runner");
-    let mut rifiutate = Vec::new();
     for caso in CASI {
         let config: Value = serde_json::from_str(caso.config).expect("config del caso");
         let tavole = tabelle(caso.fixture);
@@ -98,30 +105,23 @@ fn la_validazione_accetta_se_e_solo_se_l_analisi_accetta() {
             .collect();
         let validata = pipeline.validate(&forniti);
         let analisi = analisi_diretta(caso.op, &schemi, &config);
-        assert_eq!(
-            validata.is_ok(),
-            analisi.is_ok(),
-            "{}: validazione {:?}, analisi {:?}",
-            caso.op,
-            validata.as_ref().err(),
-            analisi.as_ref().err()
-        );
-        if let (Ok(validata), Ok(analisi)) = (&validata, &analisi) {
+        if caso.op == "table.transpose" {
+            assert_rifiuto!(validata, Categoria::Unsupported, Fase::Validate);
+            assert_rifiuto!(analisi, Categoria::Unsupported, Fase::Validate);
+        } else {
+            let validata = validata.expect("fixture con schema statico valida");
+            let analisi = analisi.expect("fixture con schema statico analizzabile");
             let contratto = validata.contratto("uscita").expect("contratto dell'uscita");
+            let schema_atteso = attesi::tabella(caso.op, &tavole).schema();
+            assert_eq!(&contratto.schema, &schema_atteso, "schema di {}", caso.op);
             assert_eq!(
-                format!("{contratto:?}"),
-                format!("{analisi:?}"),
-                "{}: contratto diverso dall'analisi diretta",
+                &analisi.schema, &schema_atteso,
+                "schema analizzato di {}",
                 caso.op
             );
-        }
-        if validata.is_err() {
-            rifiutate.push(caso.op);
+            assert_eq!(format!("{contratto:?}"), format!("{analisi:?}"));
         }
     }
-    // La sola operazione con schema d'uscita che dipende dai dati: `pivot`
-    // del caso ha un `mapping`, che fissa le colonne.
-    assert_eq!(rifiutate, ["table.transpose"]);
 }
 
 #[test]
@@ -276,11 +276,22 @@ fn operazioni_sconosciute_e_alias_si_rifiutano_le_geo_come_l_analisi() {
         );
         let mut campi = FieldAllocator::default();
         let ingresso = contract_from_arrow_schema(schema_wide(), resolve_crs).expect("contratto");
-        let atteso =
-            analyze_geo_contract(descrittore.id, &[ingresso], &json!({}), None, &mut campi)
-                .expect_err("l'analisi rifiuta");
-        let ottenuto = valida_wide(&geo).expect_err("la validazione rifiuta");
-        assert_eq!(ottenuto.category(), atteso.category(), "{}", descrittore.id);
+        // Il corpus ha un solo ingresso privo di geometria: le binarie
+        // rifiutano l'arieta', i produttori i campi richiesti mancanti;
+        // from_coords usa x/y predefiniti, assenti nello schema.
+        let categoria = if descrittore.arity == plenora_core::catalog::Arity::BinaryOrdered
+            || matches!(descrittore.id, "geo.from_wkt" | "geo.generate_grid")
+        {
+            Categoria::InvalidPlan
+        } else {
+            Categoria::Schema
+        };
+        assert_rifiuto!(
+            analyze_geo_contract(descrittore.id, &[ingresso], &json!({}), None, &mut campi),
+            categoria,
+            Fase::Validate
+        );
+        assert_rifiuto!(valida_wide(&geo), categoria, Fase::Validate);
     }
 }
 
@@ -346,15 +357,19 @@ fn il_json_rifiuta_campi_sconosciuti_e_chiavi_duplicate() {
 fn il_crs_di_piano_si_risolve_in_validazione() {
     let mut pipeline = piano(&["t"], vec![], &["t"]);
     pipeline.crs = Some("EPSG:4326".to_owned());
-    assert!(valida_wide(&pipeline)
-        .expect("CRS integrato")
-        .crs_piano()
-        .is_some());
+    let valida = valida_wide(&pipeline).expect("CRS integrato");
+    let crs = valida.crs_piano().expect("CRS del piano");
+    assert_eq!(crs.authority_srid(), Some(4326));
+    assert_eq!(
+        crs.authority_axis_order(),
+        Some(plenora_core::contract::AxisOrder::LatLon)
+    );
+    assert_eq!(
+        crs.normalized_gis_axis_order(),
+        plenora_core::contract::AxisOrder::LonLat
+    );
     pipeline.crs = Some("EPSG:999999".to_owned());
-    assert!(matches!(
-        valida_wide(&pipeline),
-        Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
-    ));
+    assert_rifiuto!(valida_wide(&pipeline), Categoria::Crs, Fase::Validate);
 }
 
 #[test]
@@ -1062,16 +1077,23 @@ fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
             ],
             &["secondo"],
         );
-        let esito = pipeline.validate(&[("t", schema)]);
-        assert!(
-            matches!(
-                &esito,
-                Err(PlenoraError::InvalidPlan(messaggio)
-                    | PlenoraError::ResourceLimit(messaggio))
-                    if messaggio.contains("passo `secondo`") && messaggio.contains(frammento)
-            ),
-            "{op} {config}: atteso `{frammento}`, avuto {esito:?}"
-        );
+        // Solo l'espansione oltre MAX_COLUMNS e' un limite di risorse;
+        // gli altri scenari hanno parametri o schemi incompatibili.
+        let categoria = if op == "table.flatten_json" && schema.fields().len() == massimo {
+            Categoria::ResourceLimit
+        } else {
+            Categoria::InvalidPlan
+        };
+        // ResourceLimit non taggato conserva la fase derivata Write:
+        // il contratto PlenoraError::phase dichiara questa approssimazione.
+        let fase = if categoria == Categoria::ResourceLimit {
+            Fase::Write
+        } else {
+            Fase::Validate
+        };
+        let errore = assert_rifiuto!(pipeline.validate(&[("t", schema)]), categoria, fase);
+        let messaggio = errore.to_string();
+        assert!(messaggio.contains("passo `secondo`") && messaggio.contains(frammento));
     }
 }
 
@@ -1165,7 +1187,11 @@ fn la_chiave_hmac_non_utf8_si_rifiuta_in_validazione() {
         )],
         &["h"],
     );
-    let errore = valida_wide(&pipeline).expect_err("chiave non UTF-8");
+    let errore = assert_rifiuto!(
+        valida_wide(&pipeline),
+        Categoria::InvalidPlan,
+        Fase::Validate
+    );
     assert!(
         matches!(
             errore,

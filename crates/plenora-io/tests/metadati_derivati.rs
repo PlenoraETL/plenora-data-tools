@@ -567,7 +567,11 @@ fn io700_epoch_covering_e_fusioni() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/riferimenti/io700/epoch-covering.arrow");
     let input = leggi_tabella(&source, None, u64::MAX).unwrap();
-    assert!(input.schema().field_with_name("bbox").is_err());
+    assert!(input
+        .schema()
+        .fields()
+        .iter()
+        .all(|campo| campo.name() != "bbox"));
     let dir = comune::cartella();
     for (op, config) in [
         ("", json!({})),

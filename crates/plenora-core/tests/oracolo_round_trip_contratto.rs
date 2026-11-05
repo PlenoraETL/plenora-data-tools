@@ -27,6 +27,10 @@
 //! È l'unica formulazione che dice ciò che serve a chi scrive: che scrivere
 //! e rileggere non perda né inventi nulla.
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -203,6 +207,62 @@ fn il_round_trip_converge_in_un_giro() {
             contract_from_arrow_schema(secondo.clone(), resolve_crs).expect("seconda rilettura");
         let terzo = arrow_schema_from_contract(&dopo_due).expect("terza emissione");
 
+        // Canone atteso dalla fixture: nessun dato ricavato dai due round-trip.
+        let geometrico = nome != "senza_geometrie";
+        let atteso = if geometrico {
+            let mut md: HashMap<String, String> = [
+                ("ARROW:extension:name", "geoarrow.wkb"),
+                ("plenora.geometry.encoding", "wkb"),
+                (
+                    "plenora.geometry.dimensions",
+                    if nome == "dimensioni_xyz_senza_crs" {
+                        "xyz"
+                    } else {
+                        "xy"
+                    },
+                ),
+                ("plenora.geometry.types_declaration", "unresolved"),
+                ("plenora.geometry.spatial_semantics", "geometry"),
+                ("plenora.geometry.precision", "float64"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
+            let riferimento = match nome {
+                "crs_integrato_utm" => Some(("EPSG:32632", Some("32632"))),
+                "crs_integrato_geografico_lat_lon" => Some(("EPSG:4326", Some("4326"))),
+                "crs_integrato_crs84" => Some(("OGC:CRS84", None)),
+                "crs_integrato_northing_first" => Some(("EPSG:6707", Some("6707"))),
+                "crs_assente" | "dimensioni_xyz_senza_crs" => None,
+                _ => panic!("fixture non classificata"),
+            };
+            md.insert(
+                "plenora.geometry.crs_resolution".into(),
+                if riferimento.is_some() {
+                    "resolved"
+                } else {
+                    "missing"
+                }
+                .into(),
+            );
+            if let Some((id, srid)) = riferimento {
+                md.insert("plenora.geometry.crs_id".into(), id.into());
+                md.insert("plenora.geometry.axis_order".into(), "unknown".into());
+                if let Some(srid) = srid {
+                    md.insert("plenora.geometry.srid".into(), srid.into());
+                }
+            }
+            Schema::new_with_metadata(
+                vec![
+                    Field::new("id", DataType::Int64, false),
+                    Field::new("geom", DataType::Binary, true).with_metadata(md),
+                ],
+                HashMap::from([("plenora.contract.version".into(), "1".into())]),
+            )
+        } else {
+            contratto.schema.as_ref().clone()
+        };
+        assert_eq!(secondo.as_ref(), &atteso, "{nome}: canone atteso");
         assert_eq!(
             secondo, terzo,
             "{nome}: lo schema non e' stabile dal secondo giro"
@@ -287,9 +347,10 @@ fn un_metadato_divergente_e_un_errore_non_un_arbitrato() {
         ContractProperties::default(),
     );
 
-    assert!(
-        esito.is_err(),
-        "una chiave canonica divergente deve fallire, non essere sovrascritta"
+    assert_rifiuto!(
+        esito,
+        plenora_core::ErrorCategory::Schema,
+        plenora_core::ErrorPhase::Validate
     );
 }
 

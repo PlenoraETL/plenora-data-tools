@@ -1513,13 +1513,39 @@ mod tests {
         let batch = fixture();
         for text in ["1e999", "1e999 - 1e999", "f / 1e999", "-1e400"] {
             let error = formula(&batch, &config(text)).expect_err(text);
+            assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+            assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
             assert!(
                 matches!(error, PlenoraError::InvalidPlan(_)),
                 "{text}: {error:?}"
             );
-            assert!(validate(&config(text), 1024).is_err(), "{text}");
+            assert_rifiuto!(
+                validate(&config(text), 1024),
+                plenora_core::ErrorCategory::InvalidPlan,
+                plenora_core::ErrorPhase::Validate
+            );
         }
-        assert!(formula(&batch, &config("1e308")).is_ok());
+        let mut campi: Vec<_> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+        campi.push(Field::new("out", DataType::Float64, true));
+        let mut colonne = batch.columns().to_vec();
+        colonne.push(Arc::new(Float64Array::from(vec![
+            Some(1e308);
+            batch.num_rows()
+        ])));
+        let atteso = RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                campi,
+                batch.schema().metadata().clone(),
+            )),
+            colonne,
+        )
+        .expect("fixture costante");
+        assert_successo!(formula(&batch, &config("1e308")), atteso);
     }
 
     #[test]
@@ -1625,13 +1651,19 @@ mod tests {
         ] {
             let cfg = con_politica("f * 2", politica);
             let error = formula(&batch, &cfg).expect_err("senza divisioni");
+            assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+            assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
             assert!(
                 error
                     .to_string()
                     .contains("on_division_by_zero senza effetto"),
                 "{error}"
             );
-            assert!(validate(&cfg, 1024).is_err());
+            assert_rifiuto!(
+                validate(&cfg, 1024),
+                plenora_core::ErrorCategory::InvalidPlan,
+                plenora_core::ErrorPhase::Validate
+            );
         }
         assert!(validate(&con_politica("f / 2", crate::OnDivisionByZero::Error), 1024).is_ok());
     }
@@ -1776,6 +1808,8 @@ mod tests {
         let error = program
             .eval_numeric_row(&mut stack, 0)
             .expect_err("operandi residui");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
+        assert_eq!(error.phase(), plenora_core::ErrorPhase::Write);
         assert!(error.to_string().contains("operandi residui"), "{error}");
 
         // Stesso controllo sul tier generico, che condivide l'invariante.
@@ -1790,6 +1824,8 @@ mod tests {
         let Err(error) = generic.eval_slot_row(&mut slots, 0) else {
             panic!("il tier generico ha accettato operandi residui");
         };
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
+        assert_eq!(error.phase(), plenora_core::ErrorPhase::Write);
         assert!(error.to_string().contains("operandi residui"), "{error}");
     }
 }

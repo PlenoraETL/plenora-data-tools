@@ -1123,7 +1123,10 @@ mod tests {
         confronta_pipeline(&duplicati).unwrap();
         // Collineari: `geo` rifiuta la costruzione, stesso errore da entrambe.
         let collineari = [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0)];
-        assert!(confronta_pipeline(&collineari).is_err());
+        let errore =
+            confronta_pipeline(&collineari).expect_err("nessuna cella per siti collineari");
+        assert!(matches!(errore, AdvancedError::Voronoi(ref motivo)
+            if motivo == &VoronoiError::CollinearInput.to_string()));
         let _ = confronta_pipeline(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 1.0e-9)]);
         confronta_pipeline(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (1.0, 1.0), (1.0, -1.0)]).unwrap();
         for (passo, origine) in [
@@ -1498,9 +1501,59 @@ mod tests {
         }
     }
 
+    #[allow(clippy::suboptimal_flops)]
+    fn celle_da_semipiani(punti: &[(f64, f64)]) -> Vec<Geometry<f64>> {
+        // Oracolo geometrico indipendente: intersezione dei semipiani
+        // di equidistanza, senza triangolazione o overlay di produzione.
+        let xmin = punti.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+        let xmax = punti.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+        let ymin = punti.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+        let ymax = punti.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+        let padding = (xmax - xmin).max(ymax - ymin) / 2.0;
+        punti
+            .iter()
+            .map(|&(sx, sy)| {
+                let mut vertices = vec![
+                    (xmin - padding, ymin - padding),
+                    (xmax + padding, ymin - padding),
+                    (xmax + padding, ymax + padding),
+                    (xmin - padding, ymax + padding),
+                ];
+                for &(tx, ty) in punti {
+                    let dx = tx - sx;
+                    let dy = ty - sy;
+                    if dx == 0.0 && dy == 0.0 {
+                        continue;
+                    }
+                    let signed = |(x, y): (f64, f64)| {
+                        (x - sx) * dx + (y - sy) * dy - f64::midpoint(dx * dx, dy * dy)
+                    };
+                    let mut clipped = Vec::new();
+                    for index in 0..vertices.len() {
+                        let a = vertices[index];
+                        let b = vertices[(index + 1) % vertices.len()];
+                        let da = signed(a);
+                        let db = signed(b);
+                        if da <= 0.0 {
+                            clipped.push(a);
+                        }
+                        if (da < 0.0 && db > 0.0) || (da > 0.0 && db < 0.0) {
+                            let t = da / (da - db);
+                            clipped.push((a.0 + t * (b.0 - a.0), a.1 + t * (b.1 - a.1)));
+                        }
+                    }
+                    vertices = clipped;
+                }
+                assert!(vertices.len() >= 3);
+                Geometry::Polygon(Polygon::new(LineString::from(vertices), vec![]))
+            })
+            .collect()
+    }
+
     /// Stesso ingresso, stessa uscita: due chiamate danno gli stessi bit,
     /// anche sugli ingressi degeneri dove la triangolazione non e' unica.
     #[test]
+    #[allow(clippy::suboptimal_flops)]
     fn voronoi_deterministico() {
         let mut griglia_duplicata = griglia(15, 1.0, (0.0, 0.0));
         griglia_duplicata.extend(griglia(9, 1.0, (0.5, 0.5)));
@@ -1509,10 +1562,17 @@ mod tests {
                 .iter()
                 .map(|&(x, y)| Geometry::Point(Point::new(x, y)))
                 .collect();
-            let prima = impronta(&voronoi_cells(&geometrie, usize::MAX, prova()));
+            let prima = voronoi_cells(&geometrie, usize::MAX, prova())
+                .expect("siti finiti rappresentabili");
+            let attese = celle_da_semipiani(&punti);
+            assert_eq!(prima.len(), punti.len());
+            for (cella, attesa) in prima.iter().zip(&attese) {
+                assert!(cella.hausdorff_distance(attesa) < 1e-4);
+                assert!((cella.unsigned_area() - attesa.unsigned_area()).abs() < 1e-3);
+            }
             for _ in 0..3 {
                 assert_eq!(
-                    impronta(&voronoi_cells(&geometrie, usize::MAX, prova())),
+                    voronoi_cells(&geometrie, usize::MAX, prova()).expect("ripetizione"),
                     prima
                 );
             }
@@ -1545,10 +1605,23 @@ mod tests {
             .iter()
             .map(|&(x, y)| Geometry::Point(Point::new(500_000.0 + x, 4_500_000.0 + y)))
             .collect();
-        assert_eq!(
-            voronoi_cells(&vicini, 10, centimetro).expect("celle").len(),
-            3
-        );
+        let coordinate: Vec<_> = siti
+            .iter()
+            .map(|&(x, y)| (500_000.0 + x, 4_500_000.0 + y))
+            .collect();
+        let attese = celle_da_semipiani(&coordinate);
+        let celle = voronoi_cells(&vicini, 10, centimetro).expect("celle");
+        assert_eq!(celle.len(), 3);
+        for (cella, attesa) in celle.iter().zip(&attese) {
+            assert!(cella.hausdorff_distance(attesa) <= 0.01);
+            let Geometry::Polygon(poligono) = attesa else {
+                unreachable!()
+            };
+            assert!(
+                (cella.unsigned_area() - attesa.unsigned_area()).abs()
+                    <= perimetro(poligono) * 0.01
+            );
+        }
         // Al limite: attorno a 2^38 m passa (spaziatura 2^-14 m), a 2^41 m no.
         for (origine, passa) in [(2.0_f64.powi(38), true), (2.0_f64.powi(41), false)] {
             let quadrato: Vec<Geometry<f64>> = griglia(3, 10.0, (origine, origine))
@@ -1556,7 +1629,27 @@ mod tests {
                 .map(|(x, y)| Geometry::Point(Point::new(x, y)))
                 .collect();
             let esito = voronoi_cells(&quadrato, 100, centimetro);
-            assert_eq!(esito.is_ok(), passa, "{esito:?}");
+            if passa {
+                let celle = esito.expect("reticolo rappresentabile entro un centimetro");
+                assert_eq!(celle.len(), 9);
+                let bordi = [-10.0, 5.0, 15.0, 30.0];
+                for (index, cella) in celle.iter().enumerate() {
+                    let i = index / 3;
+                    let j = index % 3;
+                    let rettangolo = Geometry::Polygon(
+                        Rect::new(
+                            (origine + bordi[i], origine + bordi[j]),
+                            (origine + bordi[i + 1], origine + bordi[j + 1]),
+                        )
+                        .to_polygon(),
+                    );
+                    assert!(cella.hausdorff_distance(&rettangolo) <= 0.01);
+                    let area = (bordi[i + 1] - bordi[i]) * (bordi[j + 1] - bordi[j]);
+                    assert!((cella.unsigned_area() - area).abs() <= 0.6);
+                }
+            } else {
+                assert!(matches!(esito, Err(AdvancedError::PrecisionInsufficient)));
+            }
         }
     }
 

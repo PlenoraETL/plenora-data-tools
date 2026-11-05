@@ -594,7 +594,12 @@ mod tests {
             expression(&batch, &cfg),
             interpreter::expression_generic(&batch, &cfg),
         ] {
-            let errore = esito.expect_err("pattern non valido").to_string();
+            let errore = assert_rifiuto!(
+                esito,
+                plenora_core::ErrorCategory::InvalidPlan,
+                plenora_core::ErrorPhase::Validate
+            )
+            .to_string();
             assert!(errore.contains("regex non valida: sintassi"), "{errore}");
             assert!(!errore.contains("PATTERN_SEGRETO"), "{errore}");
         }
@@ -1039,6 +1044,8 @@ mod tests {
         for politica in ["null", "error"] {
             let cfg = con_politica(bin("add", col("n"), lit(json!(1))), politica);
             let errore = expression(&batch, &cfg).expect_err("senza divisioni");
+            assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+            assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
             assert!(
                 errore
                     .to_string()
@@ -1047,10 +1054,14 @@ mod tests {
             );
         }
         // Un valore sconosciuto si rifiuta dalla config.
-        assert!(serde_json::from_value::<ExpressionTransform>(json!({
+        assert_eq!(
+            (serde_json::from_value::<ExpressionTransform>(json!({
             "output_column": "out", "on_division_by_zero": "zero",
-            "expression": bin("divide", col("n"), col("i"))}))
-        .is_err());
+            "expression": bin("divide", col("n"), col("i"))})))
+            .expect_err("configurazione non valida")
+            .classify(),
+            serde_json::error::Category::Data
+        );
     }
 
     #[test]
@@ -1523,16 +1534,36 @@ mod tests {
     fn validate_rifiuta_unita_e_liste_non_valide() {
         // Unita' fuori dal set chiuso o non letterale: errore in validazione.
         let bad = config(func("date_trunc", vec![lit(json!("week")), col("d")]), None);
-        assert!(validate(&bad, 100).is_err());
+        assert_rifiuto!(
+            validate(&bad, 100),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         let bad = config(func("date_trunc", vec![col("s"), col("d")]), None);
-        assert!(validate(&bad, 100).is_err());
+        assert_rifiuto!(
+            validate(&bad, 100),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         let bad = config(func("date_trunc", vec![lit(json!("day"))]), None);
-        assert!(validate(&bad, 100).is_err());
+        assert_rifiuto!(
+            validate(&bad, 100),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // in: il secondo argomento deve essere una lista di letterali scalari.
         let bad = config(func("in", vec![col("s"), col("s")]), None);
-        assert!(validate(&bad, 100).is_err());
+        assert_rifiuto!(
+            validate(&bad, 100),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         let bad = config(func("in", vec![col("s"), lit(json!([[1]]))]), None);
-        assert!(validate(&bad, 100).is_err());
+        assert_rifiuto!(
+            validate(&bad, 100),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // Forme valide accettate.
         let good = config(
             func("date_trunc", vec![lit(json!("month")), col("d")]),
@@ -1875,11 +1906,15 @@ mod tests {
     /// `date_trunc`, non un panico della somma.
     #[test]
     fn date_trunc_su_date32_fuori_da_chrono_e_un_errore() {
-        assert!(
-            super::temporal::trunc_date32_days(i32::MAX, super::temporal::TruncUnit::Year).is_err()
+        assert_rifiuto!(
+            super::temporal::trunc_date32_days(i32::MAX, super::temporal::TruncUnit::Year),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
         );
-        assert!(
-            super::temporal::trunc_date32_days(i32::MIN, super::temporal::TruncUnit::Day).is_err()
+        assert_rifiuto!(
+            super::temporal::trunc_date32_days(i32::MIN, super::temporal::TruncUnit::Day),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
         );
     }
 
@@ -1893,8 +1928,22 @@ mod tests {
             super::temporal::TruncUnit::Hour,
             super::temporal::TruncUnit::Day,
         ] {
-            assert!(super::temporal::trunc_timestamp_ms_value(i64::MIN, unit).is_err());
-            assert!(super::temporal::trunc_timestamp_ms_value(i64::MAX, unit).is_ok());
+            assert_rifiuto!(
+                super::temporal::trunc_timestamp_ms_value(i64::MIN, unit),
+                plenora_core::ErrorCategory::Schema,
+                plenora_core::ErrorPhase::Validate
+            );
+            let passo = match unit {
+                super::temporal::TruncUnit::Second => 1_000,
+                super::temporal::TruncUnit::Minute => 60_000,
+                super::temporal::TruncUnit::Hour => 3_600_000,
+                super::temporal::TruncUnit::Day => 86_400_000,
+                _ => panic!("unita non prevista dalla fixture"),
+            };
+            assert_successo!(
+                super::temporal::trunc_timestamp_ms_value(i64::MAX, unit),
+                i64::MAX - i64::MAX % passo
+            );
         }
     }
 
@@ -1904,7 +1953,8 @@ mod tests {
     /// millisecondo), e il rifiuto delle unita' miste, uguale nei due
     /// percorsi e nell'analisi.
     // Fixture di cinque colonne e i casi su ciascuna: una matrice sola.
-    #[allow(clippy::too_many_lines)]
+    // Il contratto numerico dell’espressione arrotonda in f64; i confronti restano interi.
+    #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
     #[test]
     fn oracle_temporali_di_ogni_unita() {
         use plenora_core::arrow::array::{
@@ -1962,27 +2012,231 @@ mod tests {
                 ])),
             ),
         ];
+        // Ogni scenario impone l'esito a fast e generico separatamente.
+        let verifica =
+            |batch: &RecordBatch,
+             ast: Value,
+             output: std::result::Result<ArrayRef, plenora_core::ErrorCategory>| {
+                let cfg = config(ast, None);
+                for result in [
+                    FastProgram::compile(&cfg.expression, batch).run_auto(batch, &cfg),
+                    expression_generic(batch, &cfg),
+                ] {
+                    match &output {
+                        Ok(array) => {
+                            let mut fields: Vec<Field> = batch
+                                .schema()
+                                .fields()
+                                .iter()
+                                .map(|f| f.as_ref().clone())
+                                .collect();
+                            fields.push(Field::new("out", array.data_type().clone(), true));
+                            let mut columns = batch.columns().to_vec();
+                            columns.push(array.clone());
+                            let expected =
+                                RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
+                                    .unwrap();
+                            assert_successo!(result, expected);
+                        }
+                        Err(category) => {
+                            assert_rifiuto!(result, *category, plenora_core::ErrorPhase::Validate);
+                        }
+                    }
+                }
+            };
         for (nome, colonna) in &colonne {
             let batch =
                 single_column_batch(nome, colonna.clone(), colonna.data_type().clone(), true);
-            assert_equivalent(&batch, col(nome), None);
-            assert_equivalent(&batch, bin("add", col(nome), lit(json!(1))), None);
-            assert_equivalent(&batch, bin("subtract", col(nome), col(nome)), None);
-            for op in ["equal", "greater", "less_equal"] {
-                assert_equivalent(
-                    &batch,
-                    bin(op, col(nome), lit(json!(1_706_696_430_123_000_i64))),
+            let native: Vec<Option<i64>> = match *nome {
+                "s" => vec![
+                    Some(1_706_696_430),
+                    Some(-1),
                     None,
-                );
-                assert_equivalent(&batch, bin(op, col(nome), lit(json!(-1))), None);
+                    Some(0),
+                    Some(i64::MAX),
+                    Some(59),
+                ],
+                "us" | "us_roma" => vec![
+                    Some(1_706_696_430_123_000),
+                    Some(1_706_696_430_123_001),
+                    None,
+                    Some(-1),
+                    Some(-1_000_001),
+                    Some(0),
+                ],
+                "ns" => vec![
+                    Some(1_706_696_430_123_000_000),
+                    Some(1_706_696_430_123_000_001),
+                    None,
+                    Some(-1),
+                    Some(i64::MIN),
+                    Some(i64::MAX),
+                ],
+                "d64" => vec![
+                    Some(86_400_000),
+                    Some(0),
+                    None,
+                    Some(-86_400_000),
+                    Some(1),
+                    Some(19_753 * 86_400_000),
+                ],
+                _ => panic!("fixture non censita"),
+            };
+            for (ast, values) in [
+                (
+                    col(nome),
+                    native
+                        .iter()
+                        .map(|v| v.map(|v| v as f64))
+                        .collect::<Vec<_>>(),
+                ),
+                (
+                    bin("add", col(nome), lit(json!(1))),
+                    native.iter().map(|v| v.map(|v| v as f64 + 1.0)).collect(),
+                ),
+                (
+                    bin("subtract", col(nome), col(nome)),
+                    native.iter().map(|v| v.map(|_| 0.0)).collect(),
+                ),
+            ] {
+                verifica(&batch, ast, Ok(Arc::new(Float64Array::from(values))));
+            }
+            for op in ["equal", "greater", "less_equal"] {
+                for bound in [1_706_696_430_123_000_i64, -1] {
+                    let values: Vec<_> = native
+                        .iter()
+                        .map(|v| {
+                            v.map(|v| match op {
+                                "equal" => v == bound,
+                                "greater" => v > bound,
+                                "less_equal" => v <= bound,
+                                _ => unreachable!(),
+                            })
+                        })
+                        .collect();
+                    verifica(
+                        &batch,
+                        bin(op, col(nome), lit(json!(bound))),
+                        Ok(Arc::new(BooleanArray::from(values))),
+                    );
+                }
             }
             for unita in ["year", "month", "day", "hour", "minute", "second"] {
-                assert_equivalent(
+                let output = match *nome {
+                    "us_roma" | "d64" => Err(plenora_core::ErrorCategory::InvalidPlan),
+                    "s" => Err(plenora_core::ErrorCategory::Schema),
+                    "us" | "ns" => {
+                        // Costanti UTC calcolate sul calendario della fixture,
+                        // indipendenti dal troncamento e dalla conversione di produzione.
+                        let values: Vec<Option<i64>> = match (*nome, unita) {
+                            ("us", "year") => vec![
+                                Some(1_704_067_200_000),
+                                Some(1_704_067_200_000),
+                                None,
+                                Some(-31_536_000_000),
+                                Some(-31_536_000_000),
+                                Some(0),
+                            ],
+                            ("us", "month") => vec![
+                                Some(1_704_067_200_000),
+                                Some(1_704_067_200_000),
+                                None,
+                                Some(-2_678_400_000),
+                                Some(-2_678_400_000),
+                                Some(0),
+                            ],
+                            ("us", "day") => vec![
+                                Some(1_706_659_200_000),
+                                Some(1_706_659_200_000),
+                                None,
+                                Some(-86_400_000),
+                                Some(-86_400_000),
+                                Some(0),
+                            ],
+                            ("us", "hour") => vec![
+                                Some(1_706_695_200_000),
+                                Some(1_706_695_200_000),
+                                None,
+                                Some(-3_600_000),
+                                Some(-3_600_000),
+                                Some(0),
+                            ],
+                            ("us", "minute") => vec![
+                                Some(1_706_696_400_000),
+                                Some(1_706_696_400_000),
+                                None,
+                                Some(-60_000),
+                                Some(-60_000),
+                                Some(0),
+                            ],
+                            ("us", "second") => vec![
+                                Some(1_706_696_430_000),
+                                Some(1_706_696_430_000),
+                                None,
+                                Some(-1000),
+                                Some(-2000),
+                                Some(0),
+                            ],
+                            ("ns", "year") => vec![
+                                Some(1_704_067_200_000),
+                                Some(1_704_067_200_000),
+                                None,
+                                Some(-31_536_000_000),
+                                Some(-9_246_096_000_000),
+                                Some(9_214_646_400_000),
+                            ],
+                            ("ns", "month") => vec![
+                                Some(1_704_067_200_000),
+                                Some(1_704_067_200_000),
+                                None,
+                                Some(-2_678_400_000),
+                                Some(-9_225_100_800_000),
+                                Some(9_222_422_400_000),
+                            ],
+                            ("ns", "day") => vec![
+                                Some(1_706_659_200_000),
+                                Some(1_706_659_200_000),
+                                None,
+                                Some(-86_400_000),
+                                Some(-9_223_372_800_000),
+                                Some(9_223_286_400_000),
+                            ],
+                            ("ns", "hour") => vec![
+                                Some(1_706_695_200_000),
+                                Some(1_706_695_200_000),
+                                None,
+                                Some(-3_600_000),
+                                Some(-9_223_372_800_000),
+                                Some(9_223_369_200_000),
+                            ],
+                            ("ns", "minute") => vec![
+                                Some(1_706_696_400_000),
+                                Some(1_706_696_400_000),
+                                None,
+                                Some(-60_000),
+                                Some(-9_223_372_080_000),
+                                Some(9_223_372_020_000),
+                            ],
+                            ("ns", "second") => vec![
+                                Some(1_706_696_430_000),
+                                Some(1_706_696_430_000),
+                                None,
+                                Some(-1000),
+                                Some(-9_223_372_037_000),
+                                Some(9_223_372_036_000),
+                            ],
+                            _ => panic!("troncamento senza atteso"),
+                        };
+                        Ok(Arc::new(TimestampMillisecondArray::from(values)) as ArrayRef)
+                    }
+                    _ => panic!("fixture non censita"),
+                };
+                verifica(
                     &batch,
                     func("date_trunc", vec![lit(json!(unita)), col(nome)]),
-                    None,
+                    output.clone(),
                 );
-                assert_equivalent(
+                verifica(
                     &batch,
                     func(
                         "date_trunc",
@@ -1991,7 +2245,7 @@ mod tests {
                             func("date_trunc", vec![lit(json!("second")), col(nome)]),
                         ],
                     ),
-                    None,
+                    output,
                 );
             }
         }
@@ -2009,8 +2263,14 @@ mod tests {
         .expect("batch");
         for (sinistra, destra) in [("s", "us"), ("us", "ns"), ("ns", "d64"), ("s", "d64")] {
             let espressione = bin("greater", col(sinistra), col(destra));
-            assert_equivalent(&batch, espressione.clone(), None);
+            verifica(
+                &batch,
+                espressione.clone(),
+                Err(plenora_core::ErrorCategory::InvalidPlan),
+            );
             let errore = expression(&batch, &config(espressione, None)).expect_err("unita' miste");
+            assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+            assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
             assert!(
                 errore.to_string().contains("unita' diverse"),
                 "{sinistra}/{destra}: {errore}"
@@ -2018,18 +2278,46 @@ mod tests {
         }
         // Stessa unita' (anche con fusi diversi) e millisecondi con Date64:
         // ammesse. La sorgente di `date_trunc` non conta.
-        for espressione in [
+        verifica(
+            &batch,
             bin("greater", col("us"), col("us_roma")),
+            Ok(Arc::new(BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+                Some(false),
+            ]))),
+        );
+        verifica(
+            &batch,
             bin(
                 "greater",
                 func("date_trunc", vec![lit(json!("day")), col("ns")]),
                 func("date_trunc", vec![lit(json!("day")), col("us")]),
             ),
-        ] {
-            assert_equivalent(&batch, espressione.clone(), None);
-            expression(&batch, &config(espressione, None)).expect("stessa unita'");
-        }
+            Ok(Arc::new(BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+                Some(true),
+            ]))),
+        );
         let solo_ms = single_column_batch("d64", colonne[4].1.clone(), DataType::Date64, true);
-        assert_equivalent(&solo_ms, bin("greater", col("d64"), col("d64")), None);
+        verifica(
+            &solo_ms,
+            bin("greater", col("d64"), col("d64")),
+            Ok(Arc::new(BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+                Some(false),
+            ]))),
+        );
     }
 }

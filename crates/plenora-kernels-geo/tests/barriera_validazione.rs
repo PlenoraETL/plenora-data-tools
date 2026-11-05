@@ -51,7 +51,7 @@
 //! casi che lo ospitano, e osservare stderr dall'interno dello stesso processo
 //! non e' osservare cio' che esce.
 
-use plenora_core::ErrorCategory;
+use plenora_core::{ErrorCategory, ErrorPhase};
 use plenora_kernels_geo::geometry_from_wkb;
 
 /// Il primo reperto di una campagna schedulata (`5 settembre` nei messaggi).
@@ -82,18 +82,6 @@ fn i_reperti_geo_sono_un_ingresso_invalido_in_ogni_profilo() {
         );
     }
 }
-
-/// Il vocabolario **controllato** delle ragioni: cio' che il confine puo'
-/// pubblicare, per intero. Il testo di `geo` non ne fa parte.
-const RAGIONI_NOSTRE: [&str; 7] = [
-    "coordinata non finita",
-    "punti distinti insufficienti",
-    "anello con auto-intersezione",
-    "anelli che si intersecano",
-    "anello interno fuori dal proprio esterno",
-    "poligoni sovrapposti",
-    "forma non valida non ulteriormente distinta",
-];
 
 /// WKB scritto a mano: little-endian, tipo 3 (Polygon), un anello con i punti
 /// dati. A mano e non con un encoder, perche' cio' che i casi fissano sono i
@@ -159,13 +147,14 @@ fn il_rifiuto_di_un_ingresso_invalido_non_pubblica_il_testo_della_dipendenza() {
     //    `i_reperti_geo_sono_un_ingresso_invalido_in_ogni_profilo` — quindi
     //    la ragione appartiene sempre al vocabolario controllato, non piu'
     //    condizionata dal profilo.
-    let reperto = geometry_from_wkb(REPERTO_A)
-        .expect_err("rifiutato")
-        .to_string();
+    let reperto = {
+        let errore = geometry_from_wkb(REPERTO_A).expect_err("rifiutato");
+        assert_eq!(errore.category(), ErrorCategory::InvalidPlan);
+        assert_eq!(errore.phase(), ErrorPhase::Validate);
+        errore.to_string()
+    };
     assert!(
-        RAGIONI_NOSTRE
-            .iter()
-            .any(|nostra| reperto.ends_with(nostra)),
+        reperto.ends_with("anello con auto-intersezione"),
         "la ragione non appartiene al vocabolario controllato: {reperto}"
     );
     // Il testo di `geo` non attraversa il confine.
@@ -177,13 +166,14 @@ fn il_rifiuto_di_un_ingresso_invalido_non_pubblica_il_testo_della_dipendenza() {
     }
 
     // 2. Geometria invalida: la ragione appartiene al vocabolario nostro.
-    let invalida = geometry_from_wkb(&farfalla())
-        .expect_err("farfalla")
-        .to_string();
+    let invalida = {
+        let errore = geometry_from_wkb(&farfalla()).expect_err("farfalla");
+        assert_eq!(errore.category(), ErrorCategory::InvalidPlan);
+        assert_eq!(errore.phase(), ErrorPhase::Validate);
+        errore.to_string()
+    };
     assert!(
-        RAGIONI_NOSTRE
-            .iter()
-            .any(|nostra| invalida.ends_with(nostra)),
+        invalida.ends_with("anello con auto-intersezione"),
         "la ragione non appartiene al vocabolario controllato: {invalida}"
     );
     // E il testo di `geo` non compare: nessun indice, nessuna sua parola.

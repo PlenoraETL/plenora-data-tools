@@ -1050,21 +1050,32 @@ mod tests {
             Err(AnalysisError::InvalidWorkLimit)
         ));
         assert_eq!(minimum_distances(&[None], &[], 1).unwrap(), vec![None]);
-        assert!(minimum_distances(
-            &[Some(Geometry::Point(Point::new(f64::NAN, 0.0)))],
-            &[point(0.0, 0.0)],
-            10,
-        )
-        .is_err());
-        assert!(nearest_matches(
-            &[point(0.0, 0.0)],
-            &[point(0.0, 0.0)],
-            Some(f64::NAN),
-            10,
-            10,
-        )
-        .is_err());
-        assert!(nearest_matches(&[point(0.0, 0.0)], &[point(0.0, 0.0)], None, 0, 10).is_err());
+        assert!(matches!(
+            minimum_distances(
+                &[Some(Geometry::Point(Point::new(f64::NAN, 0.0)))],
+                &[point(0.0, 0.0)],
+                10,
+            ),
+            Err(AnalysisError::InvalidGeometry {
+                side: "left",
+                index: 0,
+                ..
+            })
+        ));
+        assert!(matches!(
+            nearest_matches(
+                &[point(0.0, 0.0)],
+                &[point(0.0, 0.0)],
+                Some(f64::NAN),
+                10,
+                10,
+            ),
+            Err(AnalysisError::InvalidMaximumDistance)
+        ));
+        assert!(matches!(
+            nearest_matches(&[point(0.0, 0.0)], &[point(0.0, 0.0)], None, 0, 10),
+            Err(AnalysisError::InvalidWorkLimit)
+        ));
         assert!(matches!(
             nearest_matches(
                 &[point(0.0, 0.0)],

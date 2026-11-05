@@ -847,7 +847,12 @@ mod tests {
         // Default serde: offset 0; config strict.
         let decoded: Limit = serde_json::from_value(json!({"n": 1})).expect("default offset");
         assert_eq!(decoded.offset, 0);
-        assert!(serde_json::from_value::<Limit>(json!({"n": 1, "bogus": 1})).is_err());
+        assert_eq!(
+            (serde_json::from_value::<Limit>(json!({"n": 1, "bogus": 1})))
+                .expect_err("configurazione non valida")
+                .classify(),
+            serde_json::error::Category::Data
+        );
     }
 
     #[test]

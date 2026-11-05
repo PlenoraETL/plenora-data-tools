@@ -26,6 +26,11 @@
 //! [`esegui_ingressi`], [`valida_ingressi`] ed [`esegui_in_memoria`]
 //! accettano anche tabelle già in memoria ([`Ingresso`]).
 
+#[cfg(test)]
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 pub mod atomico;
 pub mod confine;
 pub mod crs_projjson;

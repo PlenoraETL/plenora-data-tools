@@ -2283,6 +2283,7 @@ pub fn polygonize_linework_rust_bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use geo::Relate as _;
     use geo::{line_string, polygon, Area, MultiLineString};
 
     /// Precisione dei test del laboratorio: coordinate astratte, un
@@ -2475,6 +2476,19 @@ mod tests {
             line_string![(x: 2.0, y: 2.0), (x: 3.0, y: 2.0)],
         ]));
         let first = polygonize_linework_rust(&input, options(true, false))?;
+        assert_eq!(first.polygons.len(), 1);
+        assert!(first.polygons[0]
+            .relate(&polygon![
+                (x: 0.0, y: 0.0), (x: 2.0, y: 0.0), (x: 2.0, y: 2.0),
+                (x: 0.0, y: 2.0), (x: 0.0, y: 0.0)
+            ])
+            .is_equal_topo());
+        assert_eq!(first.dangles.len(), 1);
+        assert!(first.dangles[0]
+            .relate(&line_string![(x: 2.0, y: 2.0), (x: 3.0, y: 2.0)])
+            .is_equal_topo());
+        assert!(first.cut_edges.is_empty());
+        assert!(first.invalid_ring_lines.is_empty());
         let second = polygonize_linework_rust(&input, options(true, false))?;
         if first != second {
             return Err(PolygonizeError::InvalidOutput(

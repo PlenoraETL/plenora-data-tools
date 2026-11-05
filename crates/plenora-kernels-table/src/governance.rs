@@ -2219,87 +2219,118 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Batteria di configurazioni invalide, una guardia per caso.
     fn validate_rules_static_errors_before_data() {
         let batch = rules_batch();
         // Regex invalida: errore di validazione, non a meta' dei dati.
-        let error = validate_rules(
-            &batch,
-            &rules(serde_json::json!({
-                "rules": [{"name": "bad", "operator": "regex", "column": "name", "value": "("}]
-            })),
-        )
-        .expect_err("regex invalida");
+        let error = assert_rifiuto!(
+            validate_rules(
+                &batch,
+                &rules(serde_json::json!({
+                    "rules": [{"name": "bad", "operator": "regex", "column": "name", "value": "("}]
+                })),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         assert!(error.to_string().contains("regex non valida"));
         // Confronto ordinato su colonna non numerica: errore di validazione.
-        assert!(validate_rules(
-            &batch,
-            &rules(serde_json::json!({
-                "rules": [{"name": "bad", "operator": "gt", "column": "name", "value": 1}]
-            })),
-        )
-        .is_err());
+        assert_rifiuto!(
+            validate_rules(
+                &batch,
+                &rules(serde_json::json!({
+                    "rules": [{"name": "bad", "operator": "gt", "column": "name", "value": 1}]
+                })),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // Regex su colonna non Utf8.
-        assert!(validate_rules(
-            &batch,
-            &rules(serde_json::json!({
-                "rules": [{"name": "bad", "operator": "regex", "column": "id", "value": "1"}]
-            })),
-        )
-        .is_err());
+        assert_rifiuto!(
+            validate_rules(
+                &batch,
+                &rules(serde_json::json!({
+                    "rules": [{"name": "bad", "operator": "regex", "column": "id", "value": "1"}]
+                })),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // Eq numerica con valore non numerico; range malformato.
-        assert!(validate_rules(
-            &batch,
-            &rules(serde_json::json!({
-                "rules": [{"name": "bad", "operator": "eq", "column": "id", "value": "abc"}]
-            })),
-        )
-        .is_err());
-        assert!(validate_rules(
-            &batch,
-            &rules(serde_json::json!({
-                "rules": [{"name": "bad", "operator": "range", "column": "id", "value": "1-2"}]
-            })),
-        )
-        .is_err());
+        assert_rifiuto!(
+            validate_rules(
+                &batch,
+                &rules(serde_json::json!({
+                    "rules": [{"name": "bad", "operator": "eq", "column": "id", "value": "abc"}]
+                })),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            validate_rules(
+                &batch,
+                &rules(serde_json::json!({
+                    "rules": [{"name": "bad", "operator": "range", "column": "id", "value": "1-2"}]
+                })),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // value mancante / non ammesso; colonna mancante; regole vuote;
         // nomi duplicati.
-        assert!(validate_rules(
-            &batch,
-            &rules(serde_json::json!({
-                "rules": [{"name": "bad", "operator": "eq", "column": "id"}]
-            })),
-        )
-        .is_err());
-        assert!(validate_rules(
-            &batch,
-            &rules(serde_json::json!({
-                "rules": [{"name": "bad", "operator": "isnull", "column": "id", "value": 1}]
-            })),
-        )
-        .is_err());
-        assert!(validate_rules(
-            &batch,
-            &rules(serde_json::json!({
-                "rules": [{"name": "bad", "operator": "eq", "column": "missing", "value": 1}]
-            })),
-        )
-        .is_err());
-        assert!(validate_rules(&batch, &rules(serde_json::json!({"rules": []}))).is_err());
-        assert!(validate_rules(
-            &batch,
-            &rules(serde_json::json!({
-                "rules": [
-                    {"name": "dup", "operator": "isnull", "column": "id"},
-                    {"name": "dup", "operator": "notnull", "column": "id"}
-                ]
-            })),
-        )
-        .is_err());
+        assert_rifiuto!(
+            validate_rules(
+                &batch,
+                &rules(serde_json::json!({
+                    "rules": [{"name": "bad", "operator": "eq", "column": "id"}]
+                })),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            validate_rules(
+                &batch,
+                &rules(serde_json::json!({
+                    "rules": [{"name": "bad", "operator": "isnull", "column": "id", "value": 1}]
+                })),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            validate_rules(
+                &batch,
+                &rules(serde_json::json!({
+                    "rules": [{"name": "bad", "operator": "eq", "column": "missing", "value": 1}]
+                })),
+            ),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            validate_rules(&batch, &rules(serde_json::json!({"rules": []}))),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            validate_rules(
+                &batch,
+                &rules(serde_json::json!({
+                    "rules": [
+                        {"name": "dup", "operator": "isnull", "column": "id"},
+                        {"name": "dup", "operator": "notnull", "column": "id"}
+                    ]
+                })),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // Config strict: campo sconosciuto rifiutato.
-        assert!(serde_json::from_value::<ValidateRules>(serde_json::json!({
+        assert_eq!(serde_json::from_value::<ValidateRules>(serde_json::json!({
             "rules": [{"name": "r", "operator": "eq", "column": "id", "value": 1, "surprise": 1}]
-        }))
-        .is_err());
+        })).expect_err("config non valida").classify(), serde_json::error::Category::Data);
     }
 
     #[test]

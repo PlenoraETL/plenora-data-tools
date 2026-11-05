@@ -2825,6 +2825,8 @@ mod tests {
         let right = batch(vec![("a", utf8_column(&[Some("x")]))]);
         let error = concat_by_name(&[&left, &right], &concat_config(false), &Limits::default())
             .expect_err("tipi incompatibili");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Schema);
+        assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
         assert!(error.to_string().contains("tipi incompatibili"));
         // Strict: stessa unione di colonne ma ordine permutato -> errore.
         let permuted = batch(vec![
@@ -2835,12 +2837,15 @@ mod tests {
             ("a", i64_column(&[Some(1)])),
             ("b", utf8_column(&[Some("x")])),
         ]);
-        assert!(concat_by_name(
-            &[&wide, &permuted],
-            &concat_config(true),
-            &Limits::default()
-        )
-        .is_err());
+        assert_rifiuto!(
+            concat_by_name(
+                &[&wide, &permuted],
+                &concat_config(true),
+                &Limits::default()
+            ),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
         // Strict con schemi identici: ok.
         let other = batch(vec![
             ("a", i64_column(&[Some(2)])),
@@ -2848,14 +2853,28 @@ mod tests {
         ]);
         let output = concat_by_name(&[&wide, &other], &concat_config(true), &Limits::default())
             .expect("strict ok");
-        assert_eq!(output.num_rows(), 2);
+        assert_eq!(
+            output,
+            batch(vec![
+                ("a", i64_column(&[Some(1), Some(2)])),
+                ("b", utf8_column(&[Some("x"), Some("y")])),
+            ])
+        );
         // Zero input: errore di contratto.
-        assert!(concat_by_name(&[], &concat_config(false), &Limits::default()).is_err());
+        assert_rifiuto!(
+            concat_by_name(&[], &concat_config(false), &Limits::default()),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // Config strict: campo sconosciuto rifiutato.
-        assert!(serde_json::from_value::<ConcatByName>(
-            serde_json::json!({"strict": false, "surprise": 1})
-        )
-        .is_err());
+        assert_eq!(
+            (serde_json::from_value::<ConcatByName>(
+                serde_json::json!({"strict": false, "surprise": 1})
+            ))
+            .expect_err("configurazione non valida")
+            .classify(),
+            serde_json::error::Category::Data
+        );
     }
 
     /// Regressione: le distanze di `asof_join` si decidono esatte. Con

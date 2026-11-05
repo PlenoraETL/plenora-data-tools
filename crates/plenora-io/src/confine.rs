@@ -169,10 +169,10 @@ fn figli<'a>(tipo: &'a DataType, uscita: &mut Vec<&'a Field>) {
 
 #[cfg(test)]
 mod tests {
+    use plenora_core::{ErrorCategory, ErrorPhase};
     use std::collections::HashMap;
 
     use plenora_core::arrow::schema::{DataType, Field, Schema};
-    use plenora_core::ErrorCategory;
 
     use super::{barriera, verifica_metadati_custom};
 
@@ -191,9 +191,16 @@ mod tests {
         let foglia = Field::new("x", DataType::Int32, true).with_metadata(metadati);
         let lista = Field::new_list("l", foglia, true);
         let schema = Schema::new(vec![lista]);
-        assert!(verifica_metadati_custom(&schema, 0, 101).is_ok());
-        assert!(verifica_metadati_custom(&schema, 1, 101).is_err());
-        let errore = verifica_metadati_custom(&schema, 0, 100).expect_err("oltre");
-        assert_eq!(errore.category(), ErrorCategory::ResourceLimit);
+        assert_successo!(verifica_metadati_custom(&schema, 0, 101), ());
+        assert_rifiuto!(
+            verifica_metadati_custom(&schema, 1, 101),
+            ErrorCategory::ResourceLimit,
+            ErrorPhase::Write
+        );
+        assert_rifiuto!(
+            verifica_metadati_custom(&schema, 0, 100),
+            ErrorCategory::ResourceLimit,
+            ErrorPhase::Write
+        );
     }
 }

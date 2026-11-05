@@ -9,6 +9,23 @@
 //! I casi il cui esito non dipende dal risolutore stanno in
 //! `plenora-core/tests/contratto_da_schema_arrow.rs`.
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
+fn assert_crs<T: std::fmt::Debug>(result: Result<T, PlenoraError>, expected: &str) -> PlenoraError {
+    let error = assert_rifiuto!(
+        result,
+        plenora_core::ErrorCategory::Crs,
+        plenora_core::ErrorPhase::Validate
+    );
+    let PlenoraError::CrsCoded { code, .. } = &error else {
+        panic!("atteso codice CRS: {error:?}");
+    };
+    assert_eq!(code.as_str(), expected);
+    error
+}
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -134,13 +151,7 @@ fn discovery_recognizes_canonical_geometry_field() {
         ),
     ]);
     let result = discover_input_contract_from_schema(schema, resolve_crs);
-    assert!(
-        matches!(
-            result,
-            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
-        ),
-        "atteso fallimento di risoluzione CRS, ottenuto {result:?}"
-    );
+    assert_crs(result, "CRS_NOT_BUILTIN");
 }
 
 // -------------------------------------------------------------------
@@ -169,13 +180,7 @@ fn discovery_resolved_with_double_representation_needs_the_backend() {
     // `resolved` a rappresentazione singola.
     let field = monte_mario_field("EPSG:3003");
     let result = discover_input_contract_from_schema(schema_v1(vec![field]), resolve_crs);
-    assert!(
-        matches!(
-            result,
-            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
-        ),
-        "atteso errore Crs senza backend: {result:?}"
-    );
+    assert_crs(result, "CRS_NOT_BUILTIN");
 }
 
 #[test]
@@ -192,13 +197,7 @@ fn contract_crs_from_keys_legacy_fallback_feeds_the_resolution() {
     );
     let legacy_wkt = format!(r#"{{"crs":{}}}"#, serde_json::Value::from(MONTE_MARIO_WKT));
     let result = contract_crs_from_keys("geometry", Some(&legacy_wkt), &keys, resolve_crs);
-    assert!(
-        matches!(
-            result,
-            Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
-        ),
-        "{result:?}"
-    );
+    assert_crs(result, "CRS_NOT_BUILTIN");
     // Nessuna rappresentazione: `Missing`, mai errore (il rifiuto spetta
     // all'analisi delle op che chiedono un CRS).
     let missing = contract_crs_from_keys("geometry", None, &keys, resolve_crs).expect("assente");

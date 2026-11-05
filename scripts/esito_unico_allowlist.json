@@ -1,0 +1,212 @@
+[
+  {
+    "file": "crates/plenora-kernels-table/src/binari_oracolo.rs",
+    "riga": 193,
+    "regola": "rifiuto_booleano",
+    "testo": ".any(|v| std::str::from_utf8(v).is_err())",
+    "motivo": "Classificatore indipendente della fixture: verifica che il corpus contenga byte non UTF-8 tramite std::str::from_utf8. Non e una asserzione sul risultato della produzione; ogni scalar_as_string e controllato separatamente per valore o categoria/fase."
+  },
+  {
+    "file": "crates/plenora-cli/tests/panico_di_un_altro_thread.rs",
+    "riga": 32,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(figlio.join().is_err());",
+    "motivo": "join di un thread che esegue panic_any: atteso un panico, non un errore Plenora. Il contatore e la categoria internal della CLI sono verificati separatamente."
+  },
+  {
+    "file": "crates/plenora-cli/tests/panico_di_un_altro_thread.rs",
+    "riga": 45,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(barriera_di_dipendenza(|| -> () { std::panic::panic_any(\"atteso\") }).is_err());",
+    "motivo": "Barriera di panico intenzionale: Result contiene un payload Any, senza categoria o fase. Si verifica anche che il contatore resti invariato."
+  },
+  {
+    "file": "crates/plenora-cli/tests/scoperta.rs",
+    "riga": 321,
+    "regola": "rifiuto_booleano",
+    "testo": "comune::valida_inviluppo(&documento).is_err(),",
+    "motivo": "Mutazioni del documento buono sottoposte al validatore JSON Schema di prova indipendente. Si deve rifiutare ciascuna mutazione; non è un esito di produzione Plenora."
+  },
+  {
+    "file": "crates/plenora-cli/tests/scoperta.rs",
+    "riga": 329,
+    "regola": "rifiuto_booleano",
+    "testo": ".is_err());",
+    "motivo": "Mutazione dello status capabilities vietata dallo schema dei contratti: rifiuto del validatore di prova, privo degli assi Plenora."
+  },
+  {
+    "file": "crates/plenora-core/src/panic_policy.rs",
+    "riga": 258,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(esito.is_err());",
+    "motivo": "Panico intenzionale nella barriera: il payload Any non ha assi Plenora. La prova verifica la chiusura della barriera dopo unwind."
+  },
+  {
+    "file": "crates/plenora-core/tests/conto_dei_panici.rs",
+    "riga": 22,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(barriera_di_dipendenza(|| -> () { std::panic::panic_any(\"atteso\") }).is_err());",
+    "motivo": "Panico intenzionale nel thread corrente, dentro barriera; esito unwind senza assi Plenora e incremento atteso zero verificato."
+  },
+  {
+    "file": "crates/plenora-core/tests/conto_dei_panici.rs",
+    "riga": 27,
+    "regola": "rifiuto_booleano",
+    "testo": "barriera_di_dipendenza(|| -> () { std::panic::panic_any(\"atteso\") }).is_err()",
+    "motivo": "Panico intenzionale nel thread figlio, dentro barriera; esito unwind senza assi Plenora e incremento atteso zero verificato."
+  },
+  {
+    "file": "crates/plenora-core/tests/conto_dei_panici.rs",
+    "riga": 34,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(figlio.join().is_err());",
+    "motivo": "join del thread con panic_any intenzionale fuori barriera; incremento esatto uno verificato, nessun errore Plenora."
+  },
+  {
+    "file": "crates/plenora-core/tests/conto_dei_panici.rs",
+    "riga": 39,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(std::panic::catch_unwind(|| -> () { std::panic::panic_any(0_u8) }).is_err());",
+    "motivo": "catch_unwind del panico intenzionale fuori barriera; incremento esatto due cumulativo verificato, nessun errore Plenora."
+  },
+  {
+    "file": "crates/plenora-core/tests/errore_pubblico_schema.rs",
+    "riga": 313,
+    "regola": "rifiuto_booleano",
+    "testo": "valida_errore(&documento).is_err(),",
+    "motivo": "Mutazioni negative del vettore del contratto contro il validatore JSON Schema di prova: tutte devono essere rifiutate; non è un errore di produzione."
+  },
+  {
+    "file": "crates/plenora-core/tests/errore_pubblico_schema.rs",
+    "riga": 325,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(valida_errore(&senza_messaggio).is_err());",
+    "motivo": "Documento senza message obbligatorio: rifiuto del validatore JSON Schema di prova, senza categoria/fase Plenora."
+  },
+  {
+    "file": "crates/plenora-core/tests/errore_pubblico_schema.rs",
+    "riga": 350,
+    "regola": "rifiuto_booleano",
+    "testo": "valida_diagnostica(&documento).is_err(),",
+    "motivo": "Mutazioni negative della diagnostica contro il validatore JSON Schema indipendente: ciascuna deve essere rifiutata, senza assi Plenora."
+  },
+  {
+    "file": "crates/plenora-core/tests/errore_pubblico_schema.rs",
+    "riga": 357,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(valida_diagnostica(&chiave).is_err());",
+    "motivo": "Chiave redacted con value vietato: rifiuto dello schema di prova, seguito dal successo esatto dopo rimozione di value."
+  },
+  {
+    "file": "crates/plenora-core/tests/errore_pubblico_schema.rs",
+    "riga": 562,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(std::panic::catch_unwind(|| schema(testo)).is_err());",
+    "motivo": "Metaprova del lettore di schemi con chiavi duplicate: schema deve andare in panico, non produce PlenoraError."
+  },
+  {
+    "file": "crates/plenora-core/tests/riferimenti_del_repository.rs",
+    "riga": 309,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(esito.is_err());",
+    "motivo": "Metaprova del censimento: estensione sconosciuta deve causare panico, non un rifiuto di produzione."
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/analysis/nearest_oracolo.rs",
+    "riga": 761,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(std::panic::catch_unwind(|| forza_bruta(&left, &right, None, 10, 10, false)).is_err());",
+    "motivo": "Controprova del panico del percorso generico geo sulla fixture; i percorsi protetti di produzione sono verificati separatamente per variante."
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/lib.rs",
+    "riga": 2254,
+    "regola": "rifiuto_booleano",
+    "testo": "if std::env::var(VARIABILE).is_err() {",
+    "motivo": "Selettore del processo figlio attraverso variabile ambiente: controllo del contesto del test, non asserzione su un esito di produzione."
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/validazione_ogc/tests.rs",
+    "riga": 84,
+    "regola": "rifiuto_booleano",
+    "testo": "generico.is_err(),",
+    "motivo": "Solo diagnostica nel ramo che fallisce già per divergenza fra generico e rapido; non accetta alcun esito."
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/validazione_ogc/tests.rs",
+    "riga": 85,
+    "regola": "rifiuto_booleano",
+    "testo": "rapido.is_err()",
+    "motivo": "Solo diagnostica del percorso rapido nel ramo panic di divergenza; il confronto completo degli esiti è obbligatorio nel match precedente."
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/validazione_ogc/tests.rs",
+    "riga": 98,
+    "regola": "rifiuto_booleano",
+    "testo": "std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| visita(&raccolti))).is_err();",
+    "motivo": "Cattura del panico del visitatore generico: restituisce prefisso completo e stato unwind per il confronto differenziale, non scarta un rifiuto."
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/validazione_ogc/tests.rs",
+    "riga": 945,
+    "regola": "rifiuto_booleano",
+    "testo": ".is_err();",
+    "motivo": "Cattura dello stato unwind insieme a tutti gli errori del visitatore; entrambi sono confrontati dal chiamante con il percorso generico."
+  },
+  {
+    "file": "crates/plenora-kernels-geo/tests/simplify_scale_miste.rs",
+    "riga": 38,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(result.is_err());",
+    "motivo": "Controprova isolata del vendor: in debug il panico è obbligatorio, in release si confronta il risultato completo. Il prodotto ha prove protette distinte."
+  },
+  {
+    "file": "crates/plenora-kernels-table/src/analyze/mod.rs",
+    "riga": 1000,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(overwritten.schema.field_with_name(\"name_masked\").is_err());",
+    "motivo": "Assenza della colonna name_masked nello schema di successo con overwrite; non è un rifiuto del kernel. La colonna name è verificata per tipo e nullabilità."
+  },
+  {
+    "file": "crates/plenora-kernels-table/src/analyze/mod.rs",
+    "riga": 2152,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(output.schema.field_with_name(\"geom\").is_err());",
+    "motivo": "Assenza di geom dopo drop_columns riuscito; si verificano separatamente geometrie e contratto tabellare. field_with_name è una ricerca Arrow, non l’esito del kernel."
+  },
+  {
+    "file": "crates/plenora-kernels-table/src/analyze/mod.rs",
+    "riga": 3665,
+    "regola": "rifiuto_booleano",
+    "testo": "output.schema.field_with_name(\"st\").is_err(),",
+    "motivo": "Assenza della sorgente st dopo unnest riuscito con drop_source predefinito; i campi espansi sono verificati per tipo e nullabilità."
+  },
+  {
+    "file": "crates/plenora-kernels-table/src/analyze/mod.rs",
+    "riga": 3825,
+    "regola": "rifiuto_booleano",
+    "testo": "output.schema.field_with_name(\"rid\").is_err(),",
+    "motivo": "Assenza della chiave destra rid dopo join riuscito; colonne risultanti e geometria sono verificate separatamente, non è un rifiuto di produzione."
+  },
+  {
+    "file": "crates/plenora-kernels-table/src/analyze/mod.rs",
+    "riga": 3942,
+    "regola": "rifiuto_booleano",
+    "testo": "assert!(output.schema.field_with_name(\"rid\").is_err());",
+    "motivo": "Assenza della chiave rid dopo asof_join riuscito; campi, numero righe e ordinamento del contratto sono verificati separatamente."
+  },
+  {
+    "file": "crates/plenora-kernels-table/src/cleansing.rs",
+    "riga": 2082,
+    "regola": "rifiuto_booleano",
+    "testo": "fast.is_err(),",
+    "motivo": "Solo testo diagnostico nel ramo panic di divergenza: il risultato generico indipendente deve coincidere integralmente con quello ottimizzato."
+  },
+  {
+    "file": "crates/plenora-kernels-table/src/cleansing.rs",
+    "riga": 2083,
+    "regola": "rifiuto_booleano",
+    "testo": "generic.is_err()",
+    "motivo": "Solo stato del riferimento nella diagnostica di un fallimento già obbligatorio; nessun esito accettato da questo booleano."
+  }
+]

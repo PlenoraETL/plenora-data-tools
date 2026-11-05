@@ -1,13 +1,15 @@
 //! Esecuzione: ogni passo uguale alla chiamata diretta del kernel,
 //! vivibilità delle tabelle, byte vivi del resoconto, limiti sui dati.
 
+#[path = "comune/attesi.rs"]
+mod attesi;
 mod comune;
 
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{Array, ArrayRef, LargeStringArray, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
-use plenora_core::{PlenoraError, Result};
+use plenora_core::{ErrorCategory, ErrorPhase, PlenoraError, Result};
 use plenora_pipeline::{byte_vivi, Esito, LimitiParziali, Passo, Pipeline};
 use serde_json::{json, Value};
 
@@ -84,6 +86,8 @@ fn ogni_passo_e_uguale_alla_chiamata_diretta_del_kernel() {
         let esito =
             esegui(&pipeline, &coppie).unwrap_or_else(|errore| panic!("{}: {errore}", caso.op));
         let runner = output(&esito, "uscita");
+        let atteso = attesi::tabella(caso.op, &tavole);
+        attesi::verifica(caso.op, runner, &atteso);
         let diretta = chiamata_diretta(caso.op, &config, &tavole)
             .unwrap_or_else(|errore| panic!("{} diretta: {errore}", caso.op));
 
@@ -253,6 +257,13 @@ fn stesso_input_stesso_esito() {
     );
     let primo = esegui(&pipeline, &[("t", wide(false))]).expect("primo");
     let secondo = esegui(&pipeline, &[("t", wide(false))]).expect("secondo");
+    let ingresso = wide(false);
+    let ordinato = attesi::tabella("table.sort", std::slice::from_ref(&ingresso));
+    let aggregato = attesi::tabella("table.aggregate", std::slice::from_ref(&ingresso));
+    for esito in [&primo, &secondo] {
+        attesi::verifica_da("table.sort", output(esito, "ord"), &ordinato, 2);
+        attesi::verifica("table.aggregate", output(esito, "agg"), &aggregato);
+    }
     assert_eq!(primo.outputs, secondo.outputs);
     assert_eq!(primo.report, secondo.report);
 }
@@ -420,6 +431,8 @@ fn l_errore_di_un_kernel_non_porta_valori_di_riga() {
         &["controllo"],
     );
     let errore = esegui(&pipeline, &[("t", wide(false))]).expect_err("6 righe, non 7");
+    assert_eq!(errore.category(), ErrorCategory::InvalidPlan);
+    assert_eq!(errore.phase(), ErrorPhase::Validate);
     let testo = errore.to_string();
     for valore in ["wkb-a", "2024-01-02", "{\"a\":1}"] {
         assert!(!testo.contains(valore), "{testo}");

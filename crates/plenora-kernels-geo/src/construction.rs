@@ -319,7 +319,7 @@ pub fn polygon_from_ordered_points(
 mod tests {
     use super::*;
     use crate::test_support::some_point as point;
-    use geo::{Area, CoordsIter};
+    use geo::Area;
 
     #[test]
     fn creates_point_line_and_polygon_with_strict_validation() {
@@ -327,13 +327,29 @@ mod tests {
             point_from_lon_lat(12.0, 41.0).unwrap(),
             point(12.0, 41.0).unwrap()
         );
-        assert!(point_from_lon_lat(f64::NAN, 41.0).is_err());
+        assert!(matches!(
+            point_from_lon_lat(f64::NAN, 41.0),
+            Err(ConstructionError::NonFiniteCoordinate { name: "lon" })
+        ));
 
         let points = vec![point(0.0, 0.0), None, point(2.0, 0.0), point(2.0, 2.0)];
         let line = line_from_ordered_points(&points).unwrap().unwrap();
-        assert_eq!(line.coords_count(), 3);
+        assert_eq!(
+            line,
+            Geometry::LineString(geo::LineString::from(vec![
+                (0.0, 0.0),
+                (2.0, 0.0),
+                (2.0, 2.0)
+            ]))
+        );
         let polygon = polygon_from_ordered_points(&points).unwrap().unwrap();
-        assert_eq!(polygon.coords_count(), 4);
+        assert_eq!(
+            polygon,
+            Geometry::Polygon(geo::Polygon::new(
+                geo::LineString::from(vec![(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 0.0)]),
+                vec![]
+            ))
+        );
         assert_eq!(polygon.unsigned_area(), 2.0);
 
         assert_eq!(
@@ -344,8 +360,14 @@ mod tests {
             geometry_from_wkt("POINT Z (12 41 3)"),
             Err(ConstructionError::UnsupportedWktDimension)
         ));
-        assert!(geometry_from_wkt("POINT (12 41 3)").is_err());
-        assert!(geometry_from_wkt("SRID=4326;POINT (12 41)").is_err());
+        assert!(matches!(
+            geometry_from_wkt("POINT (12 41 3)"),
+            Err(ConstructionError::InvalidWkt(_))
+        ));
+        assert!(matches!(
+            geometry_from_wkt("SRID=4326;POINT (12 41)"),
+            Err(ConstructionError::UnsupportedWktDimension)
+        ));
     }
 
     #[test]

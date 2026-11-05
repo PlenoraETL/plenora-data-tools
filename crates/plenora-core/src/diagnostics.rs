@@ -725,11 +725,17 @@ pub(crate) mod tests {
     fn rc17_rejects_false_truncation_and_read_input_total() {
         let mut false_truncation = report(1, vec![example(0)]);
         false_truncation.examples_truncated = true;
-        assert!(false_truncation.validate_for_emission().is_err());
+        assert_eq!(
+            false_truncation.validate_for_emission(),
+            Err("conteggi incoerenti")
+        );
 
         let mut read_input_total = report(1, vec![example(0)]);
         read_input_total.input_total = Some(1);
-        assert!(read_input_total.validate_for_emission().is_err());
+        assert_eq!(
+            read_input_total.validate_for_emission(),
+            Err("campi write in report read")
+        );
     }
 
     #[test]
@@ -832,7 +838,10 @@ pub(crate) mod tests {
             certainly_rolled_back: KnownOrUnknownCount::Known { value: 4_998 },
             effect_unknown: KnownOrUnknownCount::Known { value: 0 },
         });
-        assert!(mismatch.validate_for_emission().is_err());
+        assert_eq!(
+            mismatch.validate_for_emission(),
+            Err("partizione write incoerente")
+        );
 
         let mut overflow = report(u64::MAX, Vec::new());
         overflow.completeness = RowDiagnosticsCompleteness::Partial;
@@ -857,7 +866,7 @@ pub(crate) mod tests {
             let mut payload = report(1, vec![example(0)]);
             payload.counts = BTreeMap::from([(invalida.to_owned(), 1)]);
             invalida.clone_into(&mut payload.examples[0].cause);
-            assert!(payload.validate_for_emission().is_err(), "{invalida}");
+            assert_eq!(payload.validate_for_emission(), Err("conteggi incoerenti"));
         }
     }
 
@@ -884,7 +893,7 @@ pub(crate) mod tests {
         // Tutte le righe osservate negli esempi: non troncati.
         let mut tutti = parziale;
         tutti.examples.push(example(8));
-        assert!(tutti.validate_for_emission().is_err());
+        assert_eq!(tutti.validate_for_emission(), Err("conteggi incoerenti"));
         tutti.examples_truncated = false;
         assert_eq!(tutti.validate_for_emission(), Ok(()));
     }
@@ -901,7 +910,7 @@ pub(crate) mod tests {
         // Con `examples_truncated` falso il payload mente.
         let mut falso = ridotto.clone();
         falso.examples_truncated = false;
-        assert!(falso.validate_for_emission().is_err());
+        assert_eq!(falso.validate_for_emission(), Err("conteggi incoerenti"));
         assert_eq!(ridotto.completeness, RowDiagnosticsCompleteness::Partial);
         assert_eq!(
             ridotto.knowledge_limits,
@@ -945,7 +954,10 @@ pub(crate) mod tests {
             .as_mut()
             .expect("chiave fixture")
             .field = "é".repeat(257);
-        assert!(invalid_length.validate_for_emission().is_err());
+        assert_eq!(
+            invalid_length.validate_for_emission(),
+            Err("chiave non valida")
+        );
 
         let mut invalid_redaction = valid;
         let key = invalid_redaction.examples[0]
@@ -953,7 +965,10 @@ pub(crate) mod tests {
             .as_mut()
             .expect("chiave fixture");
         key.state = RowDiagnosticKeyState::Redacted;
-        assert!(invalid_redaction.validate_for_emission().is_err());
+        assert_eq!(
+            invalid_redaction.validate_for_emission(),
+            Err("valore chiave non valido")
+        );
     }
 
     #[test]
@@ -968,11 +983,17 @@ pub(crate) mod tests {
             "scan.interrupted".to_owned(),
             "scan.interrupted".to_owned(),
         ]);
-        assert!(unknown_zero.validate_for_emission().is_err());
+        assert_eq!(
+            unknown_zero.validate_for_emission(),
+            Err("limiti di conoscenza non validi")
+        );
 
         let mut missing_state = confirmed_write_report();
         missing_state.examples[0].write_state = None;
-        assert!(missing_state.validate_for_emission().is_err());
+        assert_eq!(
+            missing_state.validate_for_emission(),
+            Err("report write incoerente")
+        );
     }
 
     /// **`null` non e' l'assenza.** Lo schema `plenora-row-diagnostics-v1`
@@ -1009,27 +1030,27 @@ pub(crate) mod tests {
                 .and_then(serde_json::Value::as_object_mut)
                 .expect("oggetto")
                 .insert(campo.to_owned(), serde_json::Value::Null);
-            assert!(
-                serde_json::from_value::<RowDiagnostics>(con_null).is_err(),
-                "{percorso}: null letto come assente"
-            );
+            let errore =
+                serde_json::from_value::<RowDiagnostics>(con_null).expect_err("null esplicito");
+            assert_eq!(errore.classify(), serde_json::error::Category::Data);
             let mut omesso = base.clone();
             omesso
                 .pointer_mut(genitore)
                 .and_then(serde_json::Value::as_object_mut)
                 .expect("oggetto")
                 .remove(campo);
-            assert!(
-                serde_json::from_value::<RowDiagnostics>(omesso).is_ok(),
-                "{percorso}: omesso deve leggersi"
-            );
+            let riletto = serde_json::from_value::<RowDiagnostics>(omesso.clone())
+                .expect("campo omesso ammesso");
+            assert_successo!(serde_json::to_value(riletto), omesso);
         }
     }
 
     #[test]
     fn serde_refuses_a_directly_constructed_invalid_report() {
         let invalid = report(1, vec![example(0), example(1)]);
-        assert!(serde_json::to_value(invalid).is_err());
+        let errore = serde_json::to_value(invalid).expect_err("esempi oltre osservati");
+        assert_eq!(errore.classify(), serde_json::error::Category::Data);
+        assert_eq!(errore.to_string(), "limite esempi superato");
     }
 
     #[test]
@@ -1063,8 +1084,17 @@ pub(crate) mod tests {
                 value
             },
         ];
-        for document in invalid_documents {
-            assert!(serde_json::from_value::<RowDiagnostics>(document).is_err());
+        for (document, motivo) in invalid_documents.into_iter().zip([
+            "campi radice non validi",
+            "campi radice non validi",
+            "conteggi incoerenti",
+            "complete incoerente",
+            "campi write in report read",
+        ]) {
+            let errore = serde_json::from_value::<RowDiagnostics>(document)
+                .expect_err("diagnostica invalida");
+            assert_eq!(errore.classify(), serde_json::error::Category::Data);
+            assert_eq!(errore.to_string(), motivo);
         }
     }
 }

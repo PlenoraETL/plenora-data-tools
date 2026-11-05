@@ -1925,12 +1925,20 @@ mod tests {
             }
             other => panic!("variante non preservata: {other:?}"),
         }
-        for make in [
-            PlenoraError::Unsupported as fn(String) -> PlenoraError,
-            PlenoraError::Schema,
-            PlenoraError::Crs,
+        for (make, categoria) in [
+            (
+                PlenoraError::Unsupported as fn(String) -> PlenoraError,
+                ErrorCategory::Unsupported,
+            ),
+            (PlenoraError::Schema, ErrorCategory::Schema),
+            (PlenoraError::Crs, ErrorCategory::Crs),
         ] {
-            let prefixed = make("boom".to_owned()).con_contesto(contesto);
+            let originale = make("boom".to_owned());
+            let variante = std::mem::discriminant(&originale);
+            let prefixed = originale.con_contesto(contesto);
+            assert_eq!(std::mem::discriminant(&prefixed), variante);
+            assert_eq!(prefixed.category(), categoria);
+            assert_eq!(prefixed.phase(), ErrorPhase::Validate);
             let message = match &prefixed {
                 PlenoraError::Unsupported(message)
                 | PlenoraError::Schema(message)

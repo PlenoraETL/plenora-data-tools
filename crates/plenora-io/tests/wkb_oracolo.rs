@@ -6,6 +6,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use geo::{
     Coord, CoordsIter, Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint,
     MultiPolygon, Point, Polygon,
@@ -107,6 +111,6 @@ proptest! {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
         let n = ((cella.len() as f64) * taglio) as usize;
         prop_assume!(n < cella.len());
-        prop_assert!(scansiona_cella(&cella[..n], &mut Sommario::default()).is_err());
+        assert_rifiuto!(scansiona_cella(&cella[..n], &mut Sommario::default()), plenora_core::ErrorCategory::DataMapping, plenora_core::ErrorPhase::Write);
     }
 }

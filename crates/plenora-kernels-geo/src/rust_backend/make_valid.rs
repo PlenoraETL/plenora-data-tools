@@ -2021,6 +2021,7 @@ mod tests {
         }
         for method in [RepairMethod::Structure, RepairMethod::Linework] {
             let first = make_valid_geometry_rust(&input, method, true, PRECISION)?;
+            crate::rust_backend::assert_bowtie_repaired(&first);
             let second = make_valid_geometry_rust(&input, method, true, PRECISION)?;
             if first != second {
                 return Err(MakeValidError::InvalidOutput(
@@ -2057,11 +2058,7 @@ mod tests {
             ]),
             vec![],
         ));
-        if input.check_validation().is_err() {
-            return Err(MakeValidError::InvalidOutput(
-                "fixture non valida".to_owned(),
-            ));
-        }
+        assert_successo!(input.check_validation(), ());
         for method in [RepairMethod::Structure, RepairMethod::Linework] {
             let output = make_valid_geometry_rust(&input, method, false, PRECISION)?;
             if output != input {

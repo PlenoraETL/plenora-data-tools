@@ -1,4 +1,8 @@
 //! Invarianti plurali e primaria: casi limite e proprieta' deterministiche.
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use plenora_core::{
     arrow::schema::{DataType, Field, Schema, SchemaRef},
     contract::{
@@ -282,10 +286,14 @@ fn precedenza_identita_e_vocabolario_prima_della_primaria_prima_del_crs() {
         Some("bad"),
     );
     let error = contract_from_arrow_schema(repeated, resolve_crs).expect_err("id ripetuti");
+    assert_eq!(error.category(), plenora_core::ErrorCategory::Schema);
+    assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
     assert!(error.to_string().contains("plenora.field_id"));
     let wrong_type = geometry("a", Some(1)).with_data_type(DataType::Utf8);
     let error = contract_from_arrow_schema(schema(vec![wrong_type], Some("bad")), resolve_crs)
         .expect_err("tipo");
+    assert_eq!(error.category(), plenora_core::ErrorCategory::Schema);
+    assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
     assert!(!error.to_string().contains(PRIMARY));
     let mut field = geometry("a", Some(1));
     let mut metadata = field.metadata().clone();
@@ -293,6 +301,8 @@ fn precedenza_identita_e_vocabolario_prima_della_primaria_prima_del_crs() {
     field = field.with_metadata(metadata);
     let error = contract_from_arrow_schema(schema(vec![field], Some("bad")), resolve_crs)
         .expect_err("primaria");
+    assert_eq!(error.category(), plenora_core::ErrorCategory::Schema);
+    assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
     assert!(error.to_string().contains(PRIMARY));
 }
 

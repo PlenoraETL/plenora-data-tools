@@ -908,10 +908,7 @@ mod tests {
             0.01,
             &source_vertices(&source),
         );
-        assert!(matches!(
-            result,
-            Err(SplitError::AreaMismatch | SplitError::CoverageMismatch)
-        ));
+        assert!(matches!(result, Err(SplitError::AreaMismatch)));
         // Solo copertura: l'anello del buco resta scoperto per 4 m.
         let boundary = without_hole[0]
             .exterior()
@@ -1003,10 +1000,7 @@ mod tests {
             0.01,
             &source_vertices(&source),
         );
-        assert!(matches!(
-            result,
-            Err(SplitError::AreaMismatch | SplitError::CoverageMismatch)
-        ));
+        assert!(matches!(result, Err(SplitError::AreaMismatch)));
     }
 
     #[test]

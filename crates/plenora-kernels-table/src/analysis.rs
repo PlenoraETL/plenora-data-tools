@@ -2506,62 +2506,166 @@ mod tests {
         }
     }
 
-    fn assert_flatten_equiv(batch: &RecordBatch, config: &FlattenJson, limits: &Limits) {
-        let fast = flatten_json(batch, config, limits);
-        if let Err(error) = &fast {
-            if let Some(report) = error.row_diagnostics() {
-                // Un oracolo che trasformasse i documenti invalidi in mappe
-                // vuote non direbbe nulla su quali righe siano rifiutate.
-                // Si verifica indipendentemente che il rifiuto coincida
-                // esattamente con le righe non-object/non-JSON; sui soli input
-                // conformi resta valido l'oracolo byte-identico sottostante.
-                let index = column_index(batch, &config.column).expect("colonna fixture");
-                let expected = (0..batch.num_rows())
-                    .filter(|row| {
-                        scalar_as_string(batch.column(index).as_ref(), *row)
-                            .expect("profilo scalare fixture")
-                            .is_some_and(|text| {
-                                !matches!(
-                                    serde_json::from_str::<Value>(&text),
-                                    Ok(Value::Object(_))
-                                )
-                            })
-                    })
-                    .map(|row| u64::try_from(row).expect("indice fixture"))
-                    .collect::<Vec<_>>();
-                assert!(
-                    !expected.is_empty(),
-                    "input conforme rifiutato dal fast path"
-                );
-                assert_eq!(
-                    report.observed_total,
-                    u64::try_from(expected.len()).expect("fixture")
-                );
-                assert_eq!(
-                    report
-                        .examples
-                        .iter()
-                        .map(|example| example.source_index)
-                        .collect::<Vec<_>>(),
-                    expected
-                        .into_iter()
-                        .take(report.examples.len())
-                        .collect::<Vec<_>>()
-                );
-                return;
+    /// Confronta due rappresentazioni decimali come segno, cifre e potenza
+    /// di dieci; non passa dalle conversioni numeriche del kernel.
+    fn decimale_del_corpus(testo: &str) -> (bool, String, i64) {
+        let negativo = testo.starts_with('-');
+        let testo = testo.trim_start_matches('-');
+        let (mantissa, esponente) = testo.split_once(['e', 'E']).map_or((testo, 0), |(m, e)| {
+            (m, e.parse::<i64>().expect("esponente fixture"))
+        });
+        let frazione = mantissa.split_once('.').map_or(0, |(_, f)| f.len());
+        let cifre = mantissa.replace('.', "");
+        let senza_zeri = cifre.trim_start_matches('0');
+        if senza_zeri.is_empty() {
+            return (false, "0".into(), 0);
+        }
+        let significative = senza_zeri.trim_end_matches('0');
+        let scala = esponente - i64::try_from(frazione).unwrap()
+            + i64::try_from(senza_zeri.len() - significative.len()).unwrap();
+        (negativo, significative.to_owned(), scala)
+    }
+
+    /// Legge tutti i token numerici, anche nei campi duplicati che il DOM
+    /// JSON perderebbe. Le stringhe e i loro escape non sono numeri.
+    fn numeri_del_corpus_esatti(testo: &str) -> bool {
+        let mut in_stringa = false;
+        let mut escape = false;
+        let mut inizio = None;
+        let mut token = Vec::new();
+        for (i, carattere) in testo
+            .char_indices()
+            .chain(std::iter::once((testo.len(), ' ')))
+        {
+            if in_stringa {
+                if escape {
+                    escape = false;
+                } else if carattere == '\\' {
+                    escape = true;
+                } else if carattere == '"' {
+                    in_stringa = false;
+                }
+            } else if carattere == '"' {
+                if let Some(a) = inizio.take() {
+                    token.push(&testo[a..i]);
+                }
+                in_stringa = true;
+            } else if carattere.is_ascii_digit()
+                || (inizio.is_some() && matches!(carattere, '.' | 'e' | 'E' | '+' | '-'))
+                || carattere == '-'
+            {
+                inizio.get_or_insert(i);
+            } else if let Some(a) = inizio.take() {
+                token.push(&testo[a..i]);
             }
         }
-        let fast = fast.map_err(|err| format!("{err:?}"));
-        let oracle = oracle_flatten_json(batch, config, limits).map_err(|err| format!("{err:?}"));
-        match (fast, oracle) {
-            (Ok(fast), Ok(oracle)) => assert_batch_identical(&fast, &oracle),
-            (Err(fast), Err(oracle)) => assert_eq!(fast, oracle),
-            (fast, oracle) => panic!(
-                "flatten_json: fast/oracolo divergono (fast ok={}, oracolo ok={})",
-                fast.is_ok(),
-                oracle.is_ok()
-            ),
+        token.into_iter().all(|t| {
+            let Ok(n) = serde_json::from_str::<serde_json::Number>(t) else {
+                return true;
+            };
+            let riscritto = n.to_string();
+            if t.contains(['e', 'E']) && riscritto.contains(['e', 'E']) {
+                // Il corpus usa solo potenze di dieci nella forma breve.
+                // Altre mantisse esponenziali richiedono un atteso dedicato.
+                assert_eq!(t.split(['e', 'E']).next(), Some("1"));
+            }
+            decimale_del_corpus(t) == decimale_del_corpus(&riscritto)
+        })
+    }
+
+    // La matrice verifica in ordine configurazione, lessico e diagnostica.
+    #[allow(clippy::too_many_lines)]
+    fn assert_flatten_equiv(batch: &RecordBatch, config: &FlattenJson, limits: &Limits) {
+        use plenora_core::{ErrorCategory, ErrorPhase};
+        let fast = flatten_json(batch, config, limits);
+        if config.max_level > 5 {
+            assert_rifiuto!(fast, ErrorCategory::InvalidPlan, ErrorPhase::Validate);
+            return;
         }
+        let Some(source) = batch.column_by_name(&config.column) else {
+            assert_rifiuto!(fast, ErrorCategory::Schema, ErrorPhase::Validate);
+            return;
+        };
+        let testi: Vec<Option<String>> = source.as_any().downcast_ref::<StringArray>().map_or_else(
+            || {
+                // L'unico caso non testuale di questa matrice e' 1.5, null.
+                assert_eq!(
+                    source.as_ref(),
+                    &Float64Array::from(vec![Some(1.5), None]) as &dyn Array
+                );
+                vec![Some("1.5".into()), None]
+            },
+            |testi| testi.iter().map(|t| t.map(str::to_owned)).collect(),
+        );
+        if testi.iter().flatten().any(|t| !numeri_del_corpus_esatti(t)) {
+            let errore = assert_rifiuto!(fast, ErrorCategory::DataMapping, ErrorPhase::Write);
+            assert!(
+                errore.row_diagnostics().is_none(),
+                "il lessico precede la diagnostica JSON"
+            );
+            return;
+        }
+        let rifiuti: Vec<_> = testi
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| {
+                let t = t.as_ref()?;
+                let causa = match serde_json::from_str::<Value>(t) {
+                    Ok(Value::Object(_)) => return None,
+                    Ok(_) => "json.root_not_object",
+                    Err(_) => "json.invalid_syntax",
+                };
+                Some((u64::try_from(i).unwrap(), causa))
+            })
+            .collect();
+        if !rifiuti.is_empty() {
+            let errore = assert_rifiuto!(fast, ErrorCategory::DataMapping, ErrorPhase::Write);
+            let report = errore.row_diagnostics().expect("diagnostica JSON");
+            let totale = u64::try_from(rifiuti.len()).unwrap();
+            let mut counts = BTreeMap::new();
+            for (_, causa) in &rifiuti {
+                *counts.entry((*causa).to_owned()).or_insert(0_u64) += 1;
+            }
+            assert_eq!(report.counts, counts);
+            assert_eq!(report.observed_total, totale);
+            assert_eq!(report.total, Some(totale));
+            assert_eq!(report.examples_limit, 10);
+            assert_eq!(report.examples_truncated, rifiuti.len() > 10);
+            assert_eq!(
+                report
+                    .examples
+                    .iter()
+                    .map(|e| (e.source_index, e.cause.as_str()))
+                    .collect::<Vec<_>>(),
+                rifiuti.into_iter().take(10).collect::<Vec<_>>()
+            );
+            assert!(report
+                .examples
+                .iter()
+                .all(|e| e.column.as_deref() == Some(config.column.as_str())));
+            return;
+        }
+        let prefix = if config.prefix.is_empty() {
+            format!("{}_", config.column)
+        } else {
+            config.prefix.clone()
+        };
+        if config
+            .output_columns
+            .iter()
+            .any(|c| !c.starts_with(&prefix))
+        {
+            assert_rifiuto!(fast, ErrorCategory::InvalidPlan, ErrorPhase::Validate);
+            return;
+        }
+        if limits.max_columns == 1 {
+            // Questa fixture contiene {"a":1}: ingresso doc piu' doc_a.
+            assert_eq!(testi, vec![Some(r#"{"a":1}"#.into())]);
+            assert_rifiuto!(fast, ErrorCategory::ResourceLimit, ErrorPhase::Write);
+            return;
+        }
+        let oracle = oracle_flatten_json(batch, config, limits).expect("fixture JSON valida");
+        assert_successo!(fast, oracle);
     }
 
     fn stats_batch(values: Vec<Option<f64>>, groups: Vec<Option<&str>>) -> RecordBatch {

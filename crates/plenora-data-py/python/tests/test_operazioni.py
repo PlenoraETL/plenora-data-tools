@@ -17,6 +17,8 @@ import pytest
 import plenora_data as pd
 from aiuti import (
     CANARINO,
+    assert_filtro_e_ordine,
+    assert_successo_tabella,
     piano_filtro_e_ordine,
     piano_identita,
     tabella_semplice,
@@ -107,6 +109,7 @@ def test_run_in_memoria_rende_le_tabelle_nell_ordine_del_piano() -> None:
 def test_run_su_file_scrive_cio_che_rende_in_memoria(tmp_path: pathlib.Path) -> None:
     tabella = tabella_semplice()
     in_memoria = pd.run(piano_filtro_e_ordine(), {"t": tabella})
+    assert_filtro_e_ordine(in_memoria.tables)
     for estensione, tipo in [
         ("arrow", "application/vnd.apache.arrow.file"),
         ("arrows", "application/vnd.apache.arrow.stream"),
@@ -152,6 +155,9 @@ def test_run_da_input_su_file_e_in_memoria_insieme(tmp_path: pathlib.Path) -> No
     feather.write_feather(tabella, file_a, compression="uncompressed")
     misto = pd.run(piano, {"a": file_a, "b": tabella})
     memoria = pd.run(piano, {"a": tabella, "b": tabella})
+    attesi = {nome: valori * 2 for nome, valori in tabella.to_pydict().items()}
+    assert_successo_tabella(misto.tables["u"], attesi)
+    assert_successo_tabella(memoria.tables["u"], attesi)
     assert misto.tables["u"].equals(memoria.tables["u"], check_metadata=True)
     assert misto.result == memoria.result
 
@@ -222,6 +228,7 @@ def test_tipi_che_il_runner_non_supporta_si_rifiutano() -> None:
 def test_determinismo() -> None:
     tabella = tabella_semplice()
     primo = pd.run(piano_filtro_e_ordine(), {"t": tabella})
+    assert_filtro_e_ordine(primo.tables)
     for _ in range(3):
         altro = pd.run(piano_filtro_e_ordine(), {"t": tabella})
         assert altro.result == primo.result

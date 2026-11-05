@@ -504,8 +504,11 @@ fn split_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use geo::Relate as _;
 
     #[test]
+    // Gli scenari avversari restano insieme con tutti gli attesi espliciti.
+    #[allow(clippy::too_many_lines)]
     fn adapter_verificano_assi_prima_delle_celle() {
         let linea = linestring_wkb_le(&[(12.0, 45.0), (22.0, 45.0)]);
         let lama = point_wkb_le(17.0, 45.0);
@@ -563,12 +566,75 @@ mod tests {
                                 matches!(errore, PlenoraError::Crs(_)),
                                 "{ordine:?}: {errore:?}"
                             );
+                            assert_eq!(errore.category(), plenora_core::ErrorCategory::Crs);
+                            assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
                             assert!(errore.to_string().contains("AXIS_ORDER_REQUIRED"));
                         } else if payload == &linea || righe == 0 {
                             risultato.unwrap();
                         } else {
-                            assert!(risultato.is_err());
+                            let errore = risultato.expect_err("WKB troncato");
+                            assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+                            assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
                         }
+                    }
+                    if ordine == Some("easting_northing") && (payload == &linea || righe == 0) {
+                        let riparata = riparata.as_ref().expect("assi e celle valide");
+                        assert_eq!(riparata.len(), batches.len());
+                        assert_eq!(
+                            riparata.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                            righe
+                        );
+                        let mut metadata = schema.field(0).metadata().clone();
+                        metadata.insert(
+                            "plenora.geometry.precision".to_owned(),
+                            "float64".to_owned(),
+                        );
+                        let campo = schema.field(0).clone().with_metadata(metadata);
+                        for batch in riparata {
+                            assert_eq!(batch.schema().fields().len(), 1);
+                            assert_eq!(batch.schema().field(0), &campo);
+                            let cells = batch
+                                .column(0)
+                                .as_any()
+                                .downcast_ref::<BinaryArray>()
+                                .expect("WKB");
+                            for row in 0..cells.len() {
+                                assert_eq!(cells.value(row), linea);
+                            }
+                        }
+                        let (polygon_schema, polygons) = poligoni.as_ref().expect("linea valida");
+                        assert_eq!(polygons.len(), 1);
+                        assert_eq!(polygons[0].num_rows(), righe);
+                        assert_eq!(polygon_schema.field(0), &campo.clone().with_nullable(false));
+                        assert_eq!(
+                            polygon_schema.field(1),
+                            &Field::new(CLASS_COLUMN, DataType::Utf8, false)
+                        );
+                        if righe == 1 {
+                            let cells = polygons[0]
+                                .column(0)
+                                .as_any()
+                                .downcast_ref::<BinaryArray>()
+                                .expect("WKB");
+                            assert!(geometry_from_wkb(cells.value(0))
+                                .unwrap()
+                                .relate(&geometry_from_wkb(&linea).unwrap())
+                                .is_equal_topo());
+                            let classes = polygons[0]
+                                .column(1)
+                                .as_any()
+                                .downcast_ref::<StringArray>()
+                                .expect("classe");
+                            assert_eq!(classes.value(0), "dangle");
+                        }
+                        let (split_schema, pieces) = split.as_ref().expect("split valido");
+                        assert_eq!(pieces.len(), 1);
+                        assert_eq!(pieces[0].num_rows(), 2 * righe);
+                        assert_eq!(split_schema.field(0), &campo.with_nullable(false));
+                        assert_eq!(
+                            split_schema.field(1),
+                            &Field::new(PARENT_INDEX_COLUMN, DataType::UInt64, false)
+                        );
                     }
                     if ordine == Some("easting_northing") && payload == &linea && righe == 1 {
                         let (_, pezzi) = split.unwrap();
@@ -741,13 +807,16 @@ mod tests {
     #[test]
     fn make_valid_repairs_bowtie_and_preserves_valid_geometries() {
         let bowtie = polygon_wkb_le(&[(0.0, 0.0), (2.0, 2.0), (0.0, 2.0), (2.0, 0.0), (0.0, 0.0)]);
-        assert!(geometry_from_wkb(&bowtie).is_err());
+        let errore = geometry_from_wkb(&bowtie).expect_err("farfalla invalida");
+        assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
         let square = square_wkb(2.0);
         let (schema, batch) = fixture_batch(&[Some(&bowtie), None, Some(&square)]);
         let output = make_valid_batches(&schema, &[batch], DEFAULT_GEOMETRY_COLUMN, precisione())
             .expect("make_valid");
         let cells = column::<BinaryArray>(&output[0], &schema, DEFAULT_GEOMETRY_COLUMN);
         let repaired = geometry_from_wkb(cells.value(0)).expect("riparata");
+        crate::rust_backend::assert_bowtie_repaired(&repaired);
         assert!((repaired.unsigned_area() - 2.0).abs() < 1e-12);
         assert!(cells.is_null(1));
         assert_eq!(cells.value(2), square.as_slice());
@@ -1000,37 +1069,35 @@ mod tests {
         for bad in [&malformed, &bowtie] {
             let (schema, batch) = fixture_batch(&[None]);
             let splitters = std::iter::once(Some(bad.as_slice())).collect::<BinaryArray>();
-            assert!(
-                split_batches(
-                    &schema,
-                    &[batch],
-                    DEFAULT_GEOMETRY_COLUMN,
-                    &splitters,
-                    None,
-                    16,
-                    precisione()
-                )
-                .is_err(),
-                "splitter non valido accettato accanto a una sorgente null"
-            );
+            let errore = split_batches(
+                &schema,
+                &[batch],
+                DEFAULT_GEOMETRY_COLUMN,
+                &splitters,
+                None,
+                16,
+                precisione(),
+            )
+            .expect_err("splitter non valido accettato accanto a una sorgente null");
+            assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+            assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
         }
         // Splitter null, sorgente malformata o invalida.
         for bad in [&malformed, &bowtie] {
             let (schema, batch) = fixture_batch(&[Some(bad)]);
             let splitters = std::iter::once(None::<&[u8]>).collect::<BinaryArray>();
-            assert!(
-                split_batches(
-                    &schema,
-                    &[batch],
-                    DEFAULT_GEOMETRY_COLUMN,
-                    &splitters,
-                    None,
-                    16,
-                    precisione()
-                )
-                .is_err(),
-                "sorgente non valida accettata accanto a uno splitter null"
-            );
+            let errore = split_batches(
+                &schema,
+                &[batch],
+                DEFAULT_GEOMETRY_COLUMN,
+                &splitters,
+                None,
+                16,
+                precisione(),
+            )
+            .expect_err("sorgente non valida accettata accanto a uno splitter null");
+            assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+            assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
         }
         // Coppie valide con un lato null: nessuna riga, nessun errore.
         let (schema, batch) = fixture_batch(&[Some(&square), None]);

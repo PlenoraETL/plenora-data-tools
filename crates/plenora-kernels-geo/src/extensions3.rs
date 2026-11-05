@@ -859,8 +859,38 @@ mod tests {
         let issues =
             coverage_validate(&inputs, 7.9, DEFAULT_MAX_ISSUES, precisione()).expect("issues");
         assert_eq!(issues.len(), 1);
-        assert!(coverage_validate(&inputs, -1.0, DEFAULT_MAX_ISSUES, precisione()).is_err());
-        assert!(coverage_validate(&inputs, f64::NAN, DEFAULT_MAX_ISSUES, precisione()).is_err());
+        assert_eq!(issues[0].issue_type, CoverageIssueType::Overlap);
+        assert_eq!((issues[0].index_a, issues[0].index_b), (0, 1));
+        assert_close(issues[0].area, 8.0);
+        let geometry = issues[0].geometry.clone();
+        let Geometry::Polygon(polygon) = &geometry else {
+            panic!("rettangolo di overlap");
+        };
+        assert!(polygon.interiors().is_empty());
+        assert_eq!(polygon.exterior().0.len(), 5);
+        let mut corners: Vec<_> = polygon.exterior().0[..4]
+            .iter()
+            .map(|p| (p.x, p.y))
+            .collect();
+        corners.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(
+            corners,
+            vec![(2.0, 0.0), (2.0, 4.0), (4.0, 0.0), (4.0, 4.0)]
+        );
+        assert!(matches!(
+            coverage_validate(&inputs, -1.0, DEFAULT_MAX_ISSUES, precisione()),
+            Err(ExtensionError::InvalidParameter {
+                name: "tolerance",
+                ..
+            })
+        ));
+        assert!(matches!(
+            coverage_validate(&inputs, f64::NAN, DEFAULT_MAX_ISSUES, precisione()),
+            Err(ExtensionError::InvalidParameter {
+                name: "tolerance",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -951,7 +981,25 @@ mod tests {
         assert_close(rows[0].area, 8.0);
         let geometry = crate::geometry_from_wkb(&rows[0].wkb).expect("decode");
         assert_close(geometry.unsigned_area(), 8.0);
-        assert!(coverage_validate_rows(&cells, -1.0, DEFAULT_MAX_ISSUES, precisione()).is_err());
+        let Geometry::Polygon(polygon) = &geometry else {
+            panic!("rettangolo di overlap");
+        };
+        assert!(polygon.interiors().is_empty());
+        assert_eq!(polygon.exterior().0.len(), 5);
+        let mut corners: Vec<_> = polygon.exterior().0[..4]
+            .iter()
+            .map(|p| (p.x, p.y))
+            .collect();
+        corners.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(
+            corners,
+            vec![(2.0, 0.0), (2.0, 4.0), (4.0, 0.0), (4.0, 4.0)]
+        );
+        assert_rifiuto!(
+            coverage_validate_rows(&cells, -1.0, DEFAULT_MAX_ISSUES, precisione()),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     // --- geo.shared_paths ----------------------------------------------------
@@ -1015,13 +1063,49 @@ mod tests {
         let inputs = vec![rectangle(0.0, 0.0, 4.0, 4.0), rectangle(4.0, 0.0, 8.0, 4.0)];
         // Tratto da 4.0: min_length oltre il tratto esclude la riga.
         assert!(shared_paths(&inputs, 0.0, 4.1).expect("tratti").is_empty());
-        assert_eq!(shared_paths(&inputs, 0.0, 4.0).expect("tratti").len(), 1);
+        let paths = shared_paths(&inputs, 0.0, 4.0).expect("tratti");
+        assert_eq!(paths.len(), 1);
+        assert_eq!((paths[0].index_a, paths[0].index_b), (0, 1));
+        assert_close(paths[0].shared_length, 4.0);
+        let Geometry::LineString(line) = &paths[0].geometry else {
+            panic!("parete condivisa");
+        };
+        let mut endpoints: Vec<_> = line.0.iter().map(|p| (p.x, p.y)).collect();
+        endpoints.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(endpoints, vec![(4.0, 0.0), (4.0, 4.0)]);
         // tolerance >= lunghezza del segmento: scartato (confronto stretto).
         assert!(shared_paths(&inputs, 4.0, 0.0).expect("tratti").is_empty());
-        assert_eq!(shared_paths(&inputs, 3.9, 0.0).expect("tratti").len(), 1);
-        assert!(shared_paths(&inputs, -1.0, 0.0).is_err());
-        assert!(shared_paths(&inputs, 0.0, -1.0).is_err());
-        assert!(shared_paths(&inputs, f64::NAN, 0.0).is_err());
+        let paths = shared_paths(&inputs, 3.9, 0.0).expect("tratti");
+        assert_eq!(paths.len(), 1);
+        assert_eq!((paths[0].index_a, paths[0].index_b), (0, 1));
+        assert_close(paths[0].shared_length, 4.0);
+        let Geometry::LineString(line) = &paths[0].geometry else {
+            panic!("parete condivisa");
+        };
+        let mut endpoints: Vec<_> = line.0.iter().map(|p| (p.x, p.y)).collect();
+        endpoints.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(endpoints, vec![(4.0, 0.0), (4.0, 4.0)]);
+        assert!(matches!(
+            shared_paths(&inputs, -1.0, 0.0),
+            Err(ExtensionError::InvalidParameter {
+                name: "tolerance",
+                ..
+            })
+        ));
+        assert!(matches!(
+            shared_paths(&inputs, 0.0, -1.0),
+            Err(ExtensionError::InvalidParameter {
+                name: "min_length",
+                ..
+            })
+        ));
+        assert!(matches!(
+            shared_paths(&inputs, f64::NAN, 0.0),
+            Err(ExtensionError::InvalidParameter {
+                name: "tolerance",
+                ..
+            })
+        ));
     }
 
     #[test]

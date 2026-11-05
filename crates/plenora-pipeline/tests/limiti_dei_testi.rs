@@ -4,6 +4,11 @@
 //! calcolati dalle colonne nel kernel (`ResourceLimit`), prima o durante il
 //! passo, mai un testo oltre il limite nell'uscita.
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+use plenora_core::{ErrorCategory as Categoria, ErrorPhase as Fase};
+
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{Array, RecordBatch, StringArray};
@@ -168,11 +173,15 @@ fn i_testi_e_i_pattern_della_config_si_rifiutano_in_validazione() {
             let tabella = tabella();
             let schemi: Vec<(&str, SchemaRef)> =
                 vec![("t", tabella.schema()), ("u", tabella.schema())];
-            let errore = pipeline.validate(&schemi).expect_err(op);
+            let errore = assert_rifiuto!(
+                pipeline.validate(&schemi),
+                Categoria::InvalidPlan,
+                Fase::Validate
+            );
             assert!(errore.to_string().contains(frammento), "{op}: {errore}");
             continue;
         }
-        let errore = valida(&pipeline).expect_err(op);
+        let errore = assert_rifiuto!(valida(&pipeline), Categoria::InvalidPlan, Fase::Validate);
         assert!(
             matches!(errore, PlenoraError::InvalidPlan(_))
                 && errore.to_string().contains(frammento),

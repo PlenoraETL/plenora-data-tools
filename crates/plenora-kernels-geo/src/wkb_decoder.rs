@@ -250,25 +250,25 @@ mod tests {
     };
     use crate::validate_wkb_contract;
 
-    /// Oracolo differenziale: per ogni payload, il percorso
-    /// di riferimento (`validate_wkb_contract` + `Wkb::to_geo`) e il decoder
-    /// validante devono produrre lo stesso esito e, in caso di successo,
-    /// la stessa geometria coordinata per coordinata.
+    /// Le fixture valide devono riuscire: geozero e' l'oracolo generico
+    /// indipendente per tutte le coordinate, senza invocare il validatore.
     fn assert_parity(payload: &[u8], label: &str) {
-        let reference = validate_wkb_contract(payload).and_then(|()| {
-            Wkb(payload)
-                .to_geo()
-                .map_err(|error| PlenoraError::InvalidPlan(error.to_string()))
-        });
-        let decoded = decode_validated(payload);
-        match (&reference, &decoded) {
-            (Ok(expected), Ok(actual)) => {
-                assert_eq!(expected, actual, "{label}: geometrie diverse");
-            }
-            (Err(_), Err(_)) => {}
-            (Ok(_), Err(error)) => panic!("{label}: riferimento Ok, decoder Err: {error}"),
-            (Err(error), Ok(_)) => panic!("{label}: riferimento Err ({error}), decoder Ok"),
-        }
+        let expected = Wkb(payload).to_geo().expect("fixture valida per geozero");
+        assert_successo!(validate_wkb_contract(payload), ());
+        assert_eq!(decode_validated(payload).expect(label), expected, "{label}");
+    }
+
+    fn assert_rejected(payload: &[u8], category: plenora_core::ErrorCategory) {
+        assert_rifiuto!(
+            validate_wkb_contract(payload),
+            category,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            decode_validated(payload),
+            category,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     #[test]
@@ -331,23 +331,32 @@ mod tests {
 
     #[test]
     fn parity_on_rejected_payloads() {
-        assert_parity(&[], "vuoto");
-        assert_parity(&[1, 2, 3], "troncato");
-        assert_parity(&point_wkb_le(f64::NAN, 0.0), "NaN in X");
-        assert_parity(&point_wkb_le(0.0, f64::INFINITY), "inf in Y");
-        assert_parity(&linestring_wkb_le(&[(0.0, 0.0)]), "linestring da un punto");
-        assert_parity(
-            &polygon_wkb_le(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]),
-            "anello con 3 coordinate",
+        assert_rejected(&[], plenora_core::ErrorCategory::InvalidPlan);
+        assert_rejected(&[1, 2, 3], plenora_core::ErrorCategory::InvalidPlan);
+        assert_rejected(
+            &point_wkb_le(f64::NAN, 0.0),
+            plenora_core::ErrorCategory::InvalidPlan,
         );
-        assert_parity(
+        assert_rejected(
+            &point_wkb_le(0.0, f64::INFINITY),
+            plenora_core::ErrorCategory::InvalidPlan,
+        );
+        assert_rejected(
+            &linestring_wkb_le(&[(0.0, 0.0)]),
+            plenora_core::ErrorCategory::InvalidPlan,
+        );
+        assert_rejected(
+            &polygon_wkb_le(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]),
+            plenora_core::ErrorCategory::InvalidPlan,
+        );
+        assert_rejected(
             &polygon_wkb_le(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (9.0, 9.0)]),
-            "anello non chiuso",
+            plenora_core::ErrorCategory::InvalidPlan,
         );
         {
             let mut payload = point_wkb_le(0.0, 0.0);
             payload.push(0);
-            assert_parity(&payload, "byte residui");
+            assert_rejected(&payload, plenora_core::ErrorCategory::InvalidPlan);
         }
         {
             let mut payload = vec![1_u8];
@@ -355,7 +364,7 @@ mod tests {
             payload.extend_from_slice(&1.0_f64.to_le_bytes());
             payload.extend_from_slice(&2.0_f64.to_le_bytes());
             payload.extend_from_slice(&3.0_f64.to_le_bytes());
-            assert_parity(&payload, "serie Z rifiutata (protocollo 2D)");
+            assert_rejected(&payload, plenora_core::ErrorCategory::Unsupported);
         }
         {
             let mut payload = vec![1_u8];
@@ -363,21 +372,21 @@ mod tests {
             payload.extend_from_slice(&32632_u32.to_le_bytes());
             payload.extend_from_slice(&1.0_f64.to_le_bytes());
             payload.extend_from_slice(&2.0_f64.to_le_bytes());
-            assert_parity(&payload, "SRID EWKB rifiutato");
+            assert_rejected(&payload, plenora_core::ErrorCategory::Unsupported);
         }
         // Annidamento oltre il limite.
         let mut nested = point_wkb_le(0.0, 0.0);
         for _ in 0..70 {
             nested = collection_wkb_le(&[nested]);
         }
-        assert_parity(&nested, "annidamento oltre 64");
+        assert_rejected(&nested, plenora_core::ErrorCategory::InvalidPlan);
         // Tipo figlio incompatibile nella multi.
         {
             let mut payload = vec![1_u8];
             payload.extend_from_slice(&4_u32.to_le_bytes());
             payload.extend_from_slice(&1_u32.to_le_bytes());
             payload.extend_from_slice(&linestring_wkb_le(&[(0.0, 0.0), (1.0, 1.0)]));
-            assert_parity(&payload, "multipoint con figlio linestring");
+            assert_rejected(&payload, plenora_core::ErrorCategory::InvalidPlan);
         }
     }
 

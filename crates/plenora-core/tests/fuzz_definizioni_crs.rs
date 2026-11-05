@@ -39,7 +39,26 @@ fn corpus_reale_e_troncamenti_con_oracolo_fuzz() {
             ("wkt1_gdal", "esclusione_wkt1_gdal"),
         ] {
             let testo = wkt[id][forma].as_str().unwrap();
-            assert_eq!(resolve_crs(testo, "crs").is_ok(), wkt[id][motivo].is_null());
+            if wkt[id][motivo].is_null() {
+                let risolto = resolve_crs(testo, "crs").expect("forma ammessa nel corpus");
+                let atteso = if id == "OGC:CRS84" {
+                    None
+                } else {
+                    let (autorita, numero) = id.split_once(':').expect("identificativo corpus");
+                    Some((
+                        autorita,
+                        numero.parse::<u32>().expect("codice numerico corpus"),
+                    ))
+                };
+                assert_eq!(risolto.authority_identifier(), atteso);
+            } else {
+                // Tutte le esclusioni del corpus sono definizioni fuori profilo:
+                // datum 2015, metodo WKT1, ellissoide arrotondato o EXTENSION.
+                assert!(matches!(
+                    resolve_crs(testo, "crs"),
+                    Err(plenora_core::crs::CrsError::NotBuiltin)
+                ));
+            }
             crs::verifica(testo);
             for taglio in [0, 1, testo.len() / 2, testo.len() - 1] {
                 if testo.is_char_boundary(taglio) {

@@ -1898,3 +1898,29 @@ altro. Piani indipendenti non condividono il cursore.
 
 **Rientro.** Derivare gli ID pubblici dalla lineage interna, registrando una
 sola volta tutti i campi d'ingresso e allineando `FieldOrigin` e metadati.
+
+## Concave hull: regola di scavo
+
+**Regola.** `geo.concave_hull` dovrebbe scegliere un candidato più vicino
+al lato scavato che ai lati adiacenti, secondo la regola concaveman della
+[scheda](schede/geo.concave_hull.md). Il vendor attuale diverge dal modello
+razionale indipendente che enumera coda, orientamenti e pareggi.
+
+**Ambito.** Riproduzione nel runner con `concavity = 2`,
+`length_threshold = 0`, EPSG:32632 e dodici punti relativi a
+(500000, 5000000): `(10*i, 10*(i*i mod 7))`, per `i` da 0 a 11.
+La prova `concave_hull_rispetta_il_modello_di_scavo` in
+`crates/plenora-pipeline/tests/geo_unari.rs` è ignorata esplicitamente;
+le altre sedici trasformazioni restano attive con gli stessi oracoli.
+
+**Hazard.** L'operazione riesce con un bordo non raggiungibile secondo
+la regola documentata, senza segnalare errore. Non è una tolleranza di
+1 cm: il bordo può differire a scala metrica. Il modello ammette il bordo
+(indici dei punti, chiusura implicita) `0,1,2,5,9,11,10,8,7,6,4,3`;
+il risultato osservato è `7,8,11,10,9,5,2,1,0,3,4,6`.
+
+**Rientro.** Correggere il vendor in una PR separata, verificando in
+particolare l'aggiornamento delle adiacenze dei lati dopo lo scavo;
+la prova ignorata deve passare senza modificare l'atteso indipendente.
+Rimuovere quindi `ignore` e questa deviazione. I dettagli dell'oracolo
+sono in `crates/plenora-pipeline/tests/comune_geo/genera_trasformazioni.py`.

@@ -635,8 +635,23 @@ fn web_mercator_a_85_06_gradi() {
 #[test]
 fn i_messaggi_del_dominio_proiettato_non_riportano_la_coordinata() {
     let crs = risolto("EPSG:32632");
-    for (x, y) in [(5_123_456.5, 4_000_000.0), (500_000.0, 12_345_678.25)] {
-        let errore = validate_geometry_domain([(x, y)].into_iter(), &crs).expect_err("fuori");
+    for (x, y, attesa) in [
+        (
+            5_123_456.5,
+            4_000_000.0,
+            CoordinateDomainViolation::EastingOutOfValidityDomain,
+        ),
+        (
+            500_000.0,
+            12_345_678.25,
+            CoordinateDomainViolation::NorthingOutOfValidityDomain,
+        ),
+    ] {
+        let errore = validate_geometry_domain([(x, y)].into_iter(), &crs)
+            .expect_err("coordinata fuori dominio");
+        assert!(
+            matches!(&errore, CrsError::CoordinateOutOfDomain { violation } if *violation == attesa)
+        );
         let testo = PlenoraError::from(errore).to_string();
         for numero in [x, y] {
             for forma in [format!("{numero}"), format!("{numero:?}")] {

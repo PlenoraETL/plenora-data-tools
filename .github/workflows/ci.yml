@@ -48,6 +48,8 @@ jobs:
         run: python scripts/check_docs.py
       - name: scripts/check_comments.py
         run: python scripts/check_comments.py
+      - name: scripts/check_esito_unico.py
+        run: python scripts/check_esito_unico.py
       # `docs/inventario.md` è generato: se resta indietro rispetto ai
       # sorgenti, è un documento che ha l'aria di essere sempre vero.
       - name: scripts/genera_inventario.py --check

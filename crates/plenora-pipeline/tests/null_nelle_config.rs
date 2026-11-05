@@ -13,13 +13,18 @@
 
 mod comune_geo;
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+use plenora_core::{ErrorCategory as Categoria, ErrorPhase as Fase};
+
 use std::sync::Arc;
 
 use geo::{Coord, Geometry, LineString, Point};
 use plenora_core::arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::json::MESSAGGIO_NULL_NON_AMMESSO;
-use plenora_core::{ErrorCategory, PlenoraError};
+use plenora_core::PlenoraError;
 use serde_json::{json, Value};
 
 use comune_geo::{esadecimale_di, linee, passo, piano, poligoni, punti, UTM, X0, Y0};
@@ -76,23 +81,18 @@ fn frammento(op: &str) -> &'static str {
 }
 
 fn verifica(casi: &[Caso]) {
-    let mut difetti = Vec::new();
     for caso in casi {
-        if let Err(errore) = valida(caso.op, &caso.base, &caso.tabelle, caso.crs) {
-            difetti.push(format!("{} omesso: {errore}", caso.op));
-            continue;
-        }
+        assert_successo!(valida(caso.op, &caso.base, &caso.tabelle, caso.crs), ());
         for percorso in caso.campi {
             let config = con_null(&caso.base, percorso);
-            match valida(caso.op, &config, &caso.tabelle, caso.crs) {
-                Err(errore)
-                    if errore.category() == ErrorCategory::InvalidPlan
-                        && errore.to_string().contains(frammento(caso.op)) => {}
-                altro => difetti.push(format!("{} {percorso} null: {altro:?}", caso.op)),
-            }
+            let errore = assert_rifiuto!(
+                valida(caso.op, &config, &caso.tabelle, caso.crs),
+                Categoria::InvalidPlan,
+                Fase::Validate
+            );
+            assert!(errore.to_string().contains(frammento(caso.op)));
         }
     }
-    assert!(difetti.is_empty(), "{}", difetti.join("\n"));
 }
 
 fn colonna_testo(valori: &[&str]) -> ArrayRef {
@@ -197,13 +197,16 @@ fn le_config_tabellari_distinguono_null_e_assente() {
     ]);
     // `column` di una regola: omessa la regola si rifiuta comunque, quindi
     // qui si prova solo che il `null` si rifiuta per il `null`.
-    let errore = valida(
-        "table.validate_rules",
-        &json!({"rules": [{"name": "r", "operator": "isnull", "column": null}]}),
-        &[tabellare()],
-        None,
-    )
-    .expect_err("null non e' l'assenza");
+    let errore = assert_rifiuto!(
+        valida(
+            "table.validate_rules",
+            &json!({"rules": [{"name": "r", "operator": "isnull", "column": null}]}),
+            &[tabellare()],
+            None,
+        ),
+        Categoria::InvalidPlan,
+        Fase::Validate
+    );
     assert!(
         errore.to_string().contains(MESSAGGIO_NULL_NON_AMMESSO),
         "{errore}"

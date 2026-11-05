@@ -14,15 +14,21 @@
 
 mod comune;
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use std::sync::Arc;
 
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::ArrowWriterOptions;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Encoding;
+use parquet::errors::ParquetError;
 use parquet::file::properties::{WriterProperties, WriterVersion};
 use plenora_core::arrow::array::{ArrayRef, FixedSizeBinaryArray, Float64Array, RecordBatch};
-use plenora_core::arrow::schema::{Field, Schema};
+use plenora_core::arrow::schema::{DataType, Field, Schema};
+use plenora_core::arrow::ArrowError;
 use plenora_core::ErrorCategory;
 use plenora_io::{leggi_tabella_con_limiti, Formato, LimitiLettura};
 
@@ -48,8 +54,19 @@ fn scrivi(colonna: ArrayRef, proprieta: WriterProperties, schema_arrow: bool) ->
     byte
 }
 
-/// Lettura diretta con `parquet`: righe lette, errore, o il testo del panico.
-fn diretta(byte: &[u8]) -> Result<Result<usize, String>, String> {
+/// Stadio e variante originali: un errore di apertura non sostituisce
+/// quello di decodifica atteso e una conversione a testo non perde il tipo.
+#[derive(Debug)]
+#[allow(dead_code)] // Apertura conserva la causa anche nei fallimenti inattesi.
+enum ErroreDiretto {
+    Apertura(ParquetError),
+    Costruzione(ParquetError),
+    Lettura(ArrowError),
+    Colonna(ParquetError),
+}
+
+/// Lettura diretta con `parquet`: batch completi, errore, o il testo del panico.
+fn diretta(byte: &[u8]) -> Result<Result<Vec<RecordBatch>, ErroreDiretto>, String> {
     // Da un file: `bytes::Bytes` non e' fra le dipendenze di questo crate.
     let dir = cartella();
     let percorso = dir.path().join("d.parquet");
@@ -57,14 +74,12 @@ fn diretta(byte: &[u8]) -> Result<Result<usize, String>, String> {
     std::panic::catch_unwind(move || {
         let file = std::fs::File::open(&percorso).unwrap();
         let lettore = ParquetRecordBatchReaderBuilder::try_new(file)
-            .map_err(|e| e.to_string())?
+            .map_err(ErroreDiretto::Apertura)?
             .build()
-            .map_err(|e| e.to_string())?;
-        let mut righe = 0;
-        for batch in lettore {
-            righe += batch.map_err(|e| e.to_string())?.num_rows();
-        }
-        Ok(righe)
+            .map_err(ErroreDiretto::Costruzione)?;
+        lettore
+            .map(|batch| batch.map_err(ErroreDiretto::Lettura))
+            .collect()
     })
     .map_err(|carico| {
         carico
@@ -78,7 +93,7 @@ fn diretta(byte: &[u8]) -> Result<Result<usize, String>, String> {
 /// La stessa colonna dall'API per colonne di `parquet` (decoder `PLAIN`
 /// generico, non quello del lettore Arrow): questo crate non la usa, ma il
 /// fork la corregge per la stessa classe (`assert!` sulla larghezza).
-fn colonna_diretta(byte: &[u8]) -> Result<Result<usize, String>, String> {
+fn colonna_diretta(byte: &[u8]) -> Result<Result<usize, ErroreDiretto>, String> {
     use parquet::column::reader::get_typed_column_reader;
     use parquet::data_type::FixedLenByteArrayType;
     use parquet::file::reader::{FileReader, SerializedFileReader};
@@ -88,14 +103,18 @@ fn colonna_diretta(byte: &[u8]) -> Result<Result<usize, String>, String> {
     std::fs::write(&percorso, byte).unwrap();
     std::panic::catch_unwind(move || {
         let file = std::fs::File::open(&percorso).unwrap();
-        let lettore = SerializedFileReader::new(file).map_err(|e| e.to_string())?;
-        let gruppo = lettore.get_row_group(0).map_err(|e| e.to_string())?;
-        let colonna = gruppo.get_column_reader(0).map_err(|e| e.to_string())?;
+        let lettore = SerializedFileReader::new(file).map_err(ErroreDiretto::Apertura)?;
+        let gruppo = lettore
+            .get_row_group(0)
+            .map_err(ErroreDiretto::Costruzione)?;
+        let colonna = gruppo
+            .get_column_reader(0)
+            .map_err(ErroreDiretto::Costruzione)?;
         let mut tipizzata = get_typed_column_reader::<FixedLenByteArrayType>(colonna);
         let mut valori = Vec::new();
         let (record, _, _) = tipizzata
             .read_records(16, None, None, &mut valori)
-            .map_err(|e| e.to_string())?;
+            .map_err(ErroreDiretto::Colonna)?;
         Ok(record)
     })
     .map_err(|carico| {
@@ -128,85 +147,62 @@ fn inizio_del_footer(byte: &[u8]) -> usize {
     n - 8 - usize::try_from(lunghezza).unwrap()
 }
 
-/// Le posizioni dei campi thrift compatti con intestazione `intestazione`
-/// (delta 1 e tipo) seguita dal varint zigzag di `valore` in un byte.
-fn siti(byte: &[u8], intestazione: u8, valore: u8, dove: std::ops::Range<usize>) -> Vec<usize> {
-    let zigzag = valore << 1;
-    dove.filter(|&i| byte[i] == intestazione && byte[i + 1] == zigzag)
-        .collect()
-}
-
-/// Un `FIXED_LEN_BYTE_ARRAY` di larghezza 0, in `PLAIN` e in
-/// `BYTE_STREAM_SPLIT`. Lo schema Parquet ammette la larghezza 0, e il
-/// lettore Arrow di `parquet` 60.0.0 ci divide sopra (`attempt to divide by
-/// zero`). Il file si ottiene scrivendo una colonna di larghezza 1 e
-/// riscrivendo `type_length` (i32 dopo un campo contiguo: `0x15`, zigzag(1) =
-/// `0x02`) nello schema del footer; i siti candidati sono tutti quelli con
-/// lo stesso valore, e nessuno deve panicare.
+/// La fixture ha una radice con un figlio `x`, REQUIRED `FIXED_LEN_BYTE_ARRAY(1)`.
+/// La sequenza copre l'intero `SchemaElement`: tipo, `type_length`, repetition,
+/// nome e STOP. Si identifica l'unico campo reale, non coppie di byte candidate.
 #[test]
 fn una_larghezza_zero_e_un_errore_e_non_una_divisione_per_zero() {
     let colonna: ArrayRef =
         Arc::new(FixedSizeBinaryArray::try_from_iter(vec![vec![7_u8]; 3].into_iter()).unwrap());
-    // `BYTE_STREAM_SPLIT` non è più qualificata per la lettura (prova sotto):
-    // la larghezza 0 si prova in `PLAIN`, con e senza `ARROW:schema`.
-    for (bss, schema_arrow) in [(false, false), (false, true)] {
-        // Senza statistiche: con la larghezza 0 una statistica di 1 byte è
-        // della larghezza sbagliata, e il footer si rifiuterebbe prima del
-        // decoder che la prova esercita.
-        let mut proprieta = WriterProperties::builder()
+    for schema_arrow in [false, true] {
+        let proprieta = WriterProperties::builder()
             .set_dictionary_enabled(false)
-            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::None);
-        if bss {
-            proprieta = proprieta
-                .set_writer_version(WriterVersion::PARQUET_2_0)
-                .set_encoding(Encoding::BYTE_STREAM_SPLIT);
-        }
-        let originale = scrivi(Arc::clone(&colonna), proprieta.build(), schema_arrow);
-        assert_eq!(diretta(&originale), Ok(Ok(3)), "bss={bss}: controfattuale");
-        let footer = inizio_del_footer(&originale)..originale.len() - 9;
-        let candidati = siti(&originale, 0x15, 1, footer);
-        let mut rifiutati = 0;
-        for sito in &candidati {
-            let mut alterato = originale.clone();
-            alterato[sito + 1] = 0x00;
-            match diretta(&alterato) {
-                Err(panico) => panic!("bss={bss}, sito {sito}: panico «{panico}»"),
-                Ok(Err(testo)) if testo.contains("FIXED_LEN_BYTE_ARRAY width 0") => {
-                    rifiutati += 1;
-                    if !bss {
-                        match colonna_diretta(&alterato) {
-                            Err(panico) => {
-                                panic!("sito {sito}: API per colonne in panico «{panico}»")
-                            }
-                            Ok(Ok(record)) => panic!("sito {sito}: {record} valori di larghezza 0"),
-                            Ok(Err(testo)) => assert!(
-                                testo.contains("FIXED_LEN_BYTE_ARRAY width 0"),
-                                "sito {sito}: {testo}"
-                            ),
-                        }
-                    }
-                    // La categoria esatta: con `ARROW:schema` il confine
-                    // rifiuta prima lo schema incorporato non applicabile
-                    // (`Schema`); senza, il decoder (`DataMapping`), e mai
-                    // con il testo della barriera, che converte un panico
-                    // proprio in `DataMapping` («parquet in panico»).
-                    let errore = dal_confine(&alterato).expect_err("larghezza 0 rifiutata");
-                    let attesa = if schema_arrow {
-                        ErrorCategory::Schema
-                    } else {
-                        ErrorCategory::DataMapping
-                    };
-                    assert_eq!(errore.category(), attesa, "{errore}");
-                    assert!(!errore.to_string().contains("panico"), "{errore}");
-                }
-                Ok(_) => {}
-            }
-        }
-        assert!(
-            rifiutati > 0,
-            "bss={bss}: nessuno dei siti {candidati:?} e' `type_length`: il layout \
-             del writer e' cambiato, e la prova va rifatta"
-        );
+            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::None)
+            .build();
+        let originale = scrivi(Arc::clone(&colonna), proprieta, schema_arrow);
+        let atteso = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "x",
+                DataType::FixedSizeBinary(1),
+                false,
+            )])),
+            vec![Arc::clone(&colonna)],
+        )
+        .expect("fixture attesa");
+        assert_successo!(diretta(&originale).expect("nessun panico"), vec![atteso]);
+        let inizio = inizio_del_footer(&originale);
+        let schema_element = [0x15, 0x0e, 0x15, 0x02, 0x15, 0x00, 0x18, 0x01, b'x', 0x00];
+        let siti: Vec<_> = originale[inizio..originale.len() - 8]
+            .windows(schema_element.len())
+            .enumerate()
+            .filter_map(|(i, bytes)| (bytes == schema_element).then_some(inizio + i + 3))
+            .collect();
+        assert_eq!(siti.len(), 1, "unico SchemaElement della colonna x");
+        let mut alterato = originale.clone();
+        alterato[siti[0]] = 0;
+        assert!(matches!(
+            diretta(&alterato).expect("nessun panico"),
+            Err(ErroreDiretto::Costruzione(ParquetError::General(message)))
+                if message == "invalid FIXED_LEN_BYTE_ARRAY width 0 for the arrow reader"
+        ));
+        assert!(matches!(
+            colonna_diretta(&alterato).expect("nessun panico"),
+            Err(ErroreDiretto::Colonna(ParquetError::General(message)))
+                if message == "invalid FIXED_LEN_BYTE_ARRAY width 0 for the plain decoder"
+        ));
+        let categoria = if schema_arrow {
+            ErrorCategory::Schema
+        } else {
+            ErrorCategory::DataMapping
+        };
+        // API diretta: fasi derivate dalle varianti; il runner da file
+        // applica Read quando avvolge questa API (docs/file.md).
+        let fase = if schema_arrow {
+            plenora_core::ErrorPhase::Validate
+        } else {
+            plenora_core::ErrorPhase::Write
+        };
+        assert_rifiuto!(dal_confine(&alterato), categoria, fase);
     }
 }
 
@@ -224,13 +220,14 @@ fn byte_stream_split_non_e_qualificata() {
         .set_encoding(Encoding::BYTE_STREAM_SPLIT)
         .build();
     let byte = scrivi(Arc::new(Float64Array::from(valori)), proprieta, true);
-    match diretta(&byte) {
-        Ok(Err(testo)) => assert!(
-            testo.contains(parquet::basic::ENCODING_NOT_QUALIFIED),
-            "{testo}"
-        ),
-        altro => panic!("atteso il rifiuto della codifica: {altro:?}"),
-    }
-    let errore = dal_confine(&byte).expect_err("codifica non qualificata");
-    assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+    assert!(matches!(
+        diretta(&byte).expect("nessun panico"),
+        Err(ErroreDiretto::Lettura(ArrowError::ParquetError(message)))
+            if message == format!("NYI: {}: BYTE_STREAM_SPLIT", parquet::basic::ENCODING_NOT_QUALIFIED)
+    ));
+    assert_rifiuto!(
+        dal_confine(&byte),
+        ErrorCategory::Unsupported,
+        plenora_core::ErrorPhase::Validate
+    );
 }

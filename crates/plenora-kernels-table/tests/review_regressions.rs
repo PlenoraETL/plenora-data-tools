@@ -5,6 +5,10 @@
 //! una proprieta' vale in generale, il suo posto e' accanto al kernel che la
 //! garantisce.
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -114,6 +118,8 @@ fn il_join_applica_max_rows_al_totale_non_al_singolo_chunk() {
         ..Limits::default()
     };
     let error = join(&left, &right, &config, &limits).expect_err("oltre max_rows");
+    assert_eq!(error.category(), plenora_core::ErrorCategory::ResourceLimit);
+    assert_eq!(error.phase(), plenora_core::ErrorPhase::Write);
     assert!(
         error.to_string().contains("max_rows"),
         "atteso il limite del join, ottenuto: {error}"
@@ -154,6 +160,8 @@ fn il_join_right_conta_anche_le_righe_destre_non_abbinate() {
         ..Limits::default()
     };
     let error = join(&left, &right, &config, &limits).expect_err("oltre max_rows");
+    assert_eq!(error.category(), plenora_core::ErrorCategory::ResourceLimit);
+    assert_eq!(error.phase(), plenora_core::ErrorPhase::Write);
     assert!(
         error.to_string().contains("max_rows"),
         "atteso il limite del join, ottenuto: {error}"
@@ -1215,9 +1223,10 @@ fn il_confronto_valida_dominio_e_indici_prima_dei_null() {
     //    valori non nulli gli stessi due tipi danno `Schema` — la stessa
     //    coppia di colonne avrebbe due contratti a seconda del contenuto.
     let esito = compare_cells_typed(&interi, 0, &testi, 0);
-    assert!(
-        esito.is_err(),
-        "due null di tipi diversi non sono uguali: sono un errore, ottenuto {esito:?}"
+    assert_rifiuto!(
+        esito,
+        plenora_core::ErrorCategory::Schema,
+        plenora_core::ErrorPhase::Validate
     );
 
     // 2. Un tipo non ordinabile del tutto, con la cella nulla.
@@ -1225,20 +1234,23 @@ fn il_confronto_valida_dominio_e_indici_prima_dei_null() {
         None,
         Some(1.0_f32),
     ]));
-    assert!(
-        compare_cells_typed(&non_ordinabile, 0, &non_ordinabile, 0).is_err(),
-        "un tipo senza confronto nativo resta un errore anche fra celle nulle"
+    assert_rifiuto!(
+        compare_cells_typed(&non_ordinabile, 0, &non_ordinabile, 0),
+        plenora_core::ErrorCategory::Schema,
+        plenora_core::ErrorPhase::Validate
     );
 
     // 3. Indice fuori intervallo: senza controllo e' un panico di arrow su
     //    un'API pubblica.
-    assert!(
-        compare_cells_typed(&interi, 99, &interi, 0).is_err(),
-        "un indice fuori dall'array e' un errore, non un panico"
+    assert_rifiuto!(
+        compare_cells_typed(&interi, 99, &interi, 0),
+        plenora_core::ErrorCategory::Schema,
+        plenora_core::ErrorPhase::Validate
     );
-    assert!(
-        compare_cells_typed(&interi, 0, &interi, 99).is_err(),
-        "e vale per entrambi i lati"
+    assert_rifiuto!(
+        compare_cells_typed(&interi, 0, &interi, 99),
+        plenora_core::ErrorCategory::Schema,
+        plenora_core::ErrorPhase::Validate
     );
 
     // 4. Dictionary FUORI dal profilo supportato, con entrambe le celle
@@ -1259,9 +1271,10 @@ fn il_confronto_valida_dominio_e_indici_prima_dei_null() {
     let non_supportato: ArrayRef = Arc::new(
         DictionaryArray::<Int32Type>::try_new(chiavi, Arc::new(valori)).expect("dictionary"),
     );
-    assert!(
-        compare_cells_typed(&non_supportato, 0, &non_supportato, 1).is_err(),
-        "una dictionary fuori profilo non viene mascherata dai null"
+    assert_rifiuto!(
+        compare_cells_typed(&non_supportato, 0, &non_supportato, 1),
+        plenora_core::ErrorCategory::Schema,
+        plenora_core::ErrorPhase::Validate
     );
 
     // 5. Il caso conforme resta corretto: stessa famiglia, null in coda.
@@ -1342,6 +1355,11 @@ fn cross_join_stima_la_somma_dei_due_lati_non_il_massimo() {
         &limiti,
     )
     .expect_err("la somma dei due lati supera il budget");
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::ResourceLimit
+    );
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Write);
     assert!(
         errore.to_string().contains("output stimato"),
         "dev'essere il rifiuto PREVENTIVO: {errore}"
@@ -1386,6 +1404,11 @@ fn concat_by_name_conta_le_colonne_portate_da_un_input_vuoto() {
         &limiti,
     )
     .expect_err("le venti colonne di null non stanno nel budget");
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::ResourceLimit
+    );
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Write);
     assert!(
         errore.to_string().contains("output stimato"),
         "dev'essere il rifiuto PREVENTIVO: {errore}"
@@ -1434,6 +1457,11 @@ fn melt_conta_la_colonna_dei_nomi_di_colonna() {
         &limiti,
     )
     .expect_err("la colonna dei nomi non sta nel budget");
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::ResourceLimit
+    );
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Write);
     assert!(
         errore.to_string().contains("output stimato"),
         "dev'essere il rifiuto PREVENTIVO: {errore}"
@@ -1650,6 +1678,11 @@ fn melt_stima_la_larghezza_testuale_quando_converte_in_stringa() {
         &limiti,
     )
     .expect_err("la conversione in testo non sta nel budget");
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::ResourceLimit
+    );
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Write);
     assert!(
         errore.to_string().contains("output stimato"),
         "dev'essere il rifiuto PREVENTIVO: {errore}"
@@ -1768,6 +1801,11 @@ fn melt_conta_la_dictionary_dereferenziata_non_il_dizionario() {
         &limiti,
     )
     .expect_err("la dictionary dereferenziata non sta nel budget");
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::ResourceLimit
+    );
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Write);
     assert!(
         errore.to_string().contains("output stimato"),
         "dev'essere il rifiuto PREVENTIVO: {errore}"
@@ -1812,6 +1850,8 @@ fn melt_rifiuta_un_tipo_non_convertibile_prima_di_allocare() {
         &Limits::default(),
     )
     .expect_err("Float32 non e' convertibile in testo");
+    assert_eq!(errore.category(), plenora_core::ErrorCategory::Schema);
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
     assert!(
         errore.to_string().contains("non convertibile in testo"),
         "il rifiuto nomina il tipo e la colonna: {errore}"
@@ -1926,6 +1966,8 @@ fn melt_rifiuta_timestamp_e_decimal_fuori_dal_formatter_prima_di_allocare() {
             &Limits::default(),
         )
         .expect_err("il tipo non e' convertibile");
+        assert_eq!(errore.category(), plenora_core::ErrorCategory::Schema);
+        assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
         assert!(
             errore.to_string().contains("non convertibile in testo"),
             "{nome}: il rifiuto dev'essere quello della prevalidazione: {errore}"
@@ -2099,6 +2141,8 @@ fn melt_rifiuta_una_timezone_non_valida_dallo_schema() {
         &Limits::default(),
     )
     .expect_err("la timezone non e' risolvibile");
+    assert_eq!(errore.category(), plenora_core::ErrorCategory::Schema);
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
     assert!(
         errore.to_string().contains("timezone Arrow"),
         "il rifiuto viene dalla prevalidazione sullo schema: {errore}"
@@ -2278,6 +2322,8 @@ fn un_nome_al_limite_che_collide_non_produce_un_nome_oltre_il_limite() {
     let errore =
         plenora_kernels_table::resolve_output_names([al_limite.as_str()], &[al_limite.as_str()])
             .expect_err("nessun candidato puo' stare nel limite");
+    assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
     assert!(
         errore
             .to_string()
@@ -2329,6 +2375,8 @@ fn i_suffissi_offerti_sono_quelli_dichiarati() {
     let riferimenti: Vec<&str> = tutti.iter().map(String::as_str).collect();
     let errore = plenora_kernels_table::resolve_output_names(riferimenti, &[base])
         .expect_err("tutti i suffissi sono occupati");
+    assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
     assert!(
         errore
             .to_string()
@@ -2812,27 +2860,20 @@ fn analisi_ed_esecuzione_di_expression_decidono_insieme() {
         ),
     ];
 
-    // Gli scarti si ACCUMULANO invece di fermare il test al primo: una
-    // matrice che si ferma subito dimostra un solo difetto per esecuzione, e
-    // qui i difetti chiusi sono cinque.
-    let mut scarti: Vec<String> = Vec::new();
-
-    for CasoExpression {
-        nome,
-        espressione,
-        tipo_output,
-        analisi: atteso_analisi,
-        tipo_atteso,
-        runtime: atteso_runtime,
-    } in casi
+    for (
+        indice,
+        CasoExpression {
+            espressione,
+            tipo_output,
+            analisi: atteso_analisi,
+            tipo_atteso,
+            runtime: atteso_runtime,
+            nome,
+        },
+    ) in casi.into_iter().enumerate()
     {
-        let config = json!({
-            "output_column": "e",
-            "expression": espressione,
-            "output_type": tipo_output
-        });
-
-        // ANALISI.
+        let config = json!({"output_column": "e", "expression": espressione,
+            "output_type": tipo_output});
         let analisi = plenora_kernels_table::analyze::analyze_table_contract(
             "table.expression",
             std::slice::from_ref(&contratto_ingresso),
@@ -2840,67 +2881,49 @@ fn analisi_ed_esecuzione_di_expression_decidono_insieme() {
             &mut plenora_core::contract::FieldAllocator::new(100),
             &plenora_kernels_table::Limits::default(),
         );
-        match (atteso_analisi, &analisi) {
-            (Verdetto::Accetta, Ok(contratto_uscita)) => {
-                let campo = contratto_uscita
-                    .schema
-                    .field_with_name("e")
-                    .unwrap_or_else(|errore| panic!("{nome}: colonna di output assente: {errore}"));
-                assert_eq!(
-                    campo.data_type(),
-                    tipo_atteso.as_ref().unwrap_or_else(|| -> &DataType {
-                        panic!("{nome}: tipo atteso mancante nel caso")
-                    }),
-                    "{nome}: tipo dichiarato dall'analisi"
-                );
-            }
-            (Verdetto::Rifiuta, Err(_)) => {}
-            (atteso, esito) => scarti.push(format!(
-                "{nome}: l'analisi doveva {atteso:?}, esito {}",
-                if esito.is_ok() { "Accetta" } else { "Rifiuta" }
-            )),
-        }
-
-        // ESECUZIONE, sulla stessa configurazione e sugli stessi dati.
         let esecuzione = plenora_kernels_table::expressions::expression(
             &ingresso,
             &serde_json::from_value(config).expect("config"),
         );
-        match (atteso_runtime, &esecuzione) {
-            (Verdetto::Accetta, Ok(uscita)) => {
-                // Il tipo si confronta solo dove ANCHE l'analisi accetta: e'
-                // li' che c'e' una promessa da mantenere. Dove l'analisi
-                // rifiuta e l'esecuzione riesce — la conservativita' di
-                // `auto` — non c'e' nessun tipo promesso da verificare.
-                if let Some(atteso) = tipo_atteso.as_ref() {
-                    let campo = uscita.schema().field_with_name("e").map_or_else(
-                        |errore| panic!("{nome}: colonna prodotta assente: {errore}"),
-                        Clone::clone,
-                    );
-                    assert_eq!(
-                        campo.data_type(),
-                        atteso,
-                        "{nome}: il tipo prodotto e' quello che l'analisi aveva promesso"
-                    );
-                }
-            }
-            (Verdetto::Rifiuta, Err(_)) => {}
-            (atteso, esito) => scarti.push(format!(
-                "{nome}: l'esecuzione doveva {atteso:?}, esito {}",
-                if esito.is_ok() { "Accetta" } else { "Rifiuta" }
-            )),
+        assert_eq!(atteso_analisi, atteso_runtime, "{nome}");
+        if atteso_runtime == Verdetto::Rifiuta {
+            assert_rifiuto!(
+                analisi,
+                plenora_core::ErrorCategory::InvalidPlan,
+                plenora_core::ErrorPhase::Validate
+            );
+            let categoria = if indice == 13 {
+                plenora_core::ErrorCategory::Schema // Colonna assente nell'API diretta.
+            } else {
+                plenora_core::ErrorCategory::InvalidPlan
+            };
+            assert_rifiuto!(esecuzione, categoria, plenora_core::ErrorPhase::Validate);
+        } else {
+            use plenora_core::arrow::array::{
+                BooleanArray, Date32Array, Float64Array, StringArray,
+            };
+            // Una sola riga: attesi letterali per ogni scenario accettato.
+            let valore: ArrayRef = match indice {
+                0 | 20 | 27 => Arc::new(StringArray::from(vec!["2024-01-15"])),
+                1 => Arc::new(Float64Array::from(vec![1_700_000_000.0])),
+                2 => Arc::new(Float64Array::from(vec![1_700_000_000_000.0])),
+                3 => Arc::new(Float64Array::from(vec![2024.0])),
+                5 => Arc::new(StringArray::from(vec!["2024-01-15!"])),
+                7 => Arc::new(Float64Array::from(vec![1.0])),
+                12 => Arc::new(Date32Array::from(vec![19_738])),
+                15 => Arc::new(BooleanArray::from(vec![true])),
+                _ => panic!("scenario accettato senza atteso"),
+            };
+            assert_eq!(Some(valore.data_type()), tipo_atteso.as_ref());
+            let mut campi = ingresso.schema().fields().to_vec();
+            campi.push(Arc::new(Field::new("e", valore.data_type().clone(), true)));
+            let mut arrays = ingresso.columns().to_vec();
+            arrays.push(valore);
+            let atteso = RecordBatch::try_new(Arc::new(Schema::new(campi)), arrays).unwrap();
+            assert_eq!(analisi.expect("analisi accettata").schema, atteso.schema());
+            assert_successo!(esecuzione, atteso);
         }
     }
-
-    assert!(
-        scarti.is_empty(),
-        "analisi ed esecuzione non decidono insieme:
-  {}",
-        scarti.join(
-            "
-  "
-        )
-    );
 }
 
 #[test]
@@ -2987,21 +3010,25 @@ fn il_predicato_e_l_encoder_accettano_gli_stessi_tipi() {
     ];
 
     for tipo in tipi {
-        let dichiarato = plenora_kernels_table::setops::key_encodable(&tipo);
+        let ammesso = !matches!(&tipo, DataType::Int32 | DataType::List(_))
+            && !matches!(&tipo, DataType::Dictionary(k, _) if k.as_ref() == &DataType::Int64);
+        assert_eq!(plenora_kernels_table::setops::key_encodable(&tipo), ammesso);
         let colonna: ArrayRef = new_null_array(&tipo, 1);
         let ingresso = batch(vec![Field::new("k", tipo.clone(), true)], vec![colonna]);
-        // `except` con se stesso costruisce l'encoder su questo schema: e'
-        // l'unico modo di interrogarlo da fuori dal crate.
-        let accettato = plenora_kernels_table::setops::except(
+        let esito = plenora_kernels_table::setops::except(
             &ingresso,
             &ingresso,
             &serde_json::from_value(json!({})).expect("config"),
-        )
-        .is_ok();
-        assert_eq!(
-            dichiarato, accettato,
-            "{tipo:?}: il predicato dice {dichiarato}, l'encoder {accettato}"
         );
+        if ammesso {
+            assert_successo!(esito, RecordBatch::new_empty(ingresso.schema()));
+        } else {
+            assert_rifiuto!(
+                esito,
+                plenora_core::ErrorCategory::Schema,
+                plenora_core::ErrorPhase::Validate
+            );
+        }
     }
 }
 
@@ -3027,6 +3054,8 @@ fn l_analisi_di_formula_rifiuta_la_timezone_che_il_formatter_rifiuta() {
         &plenora_kernels_table::Limits::default(),
     )
     .expect_err("la timezone non e' risolvibile");
+    assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
     assert!(
         errore.to_string().contains("timezone Arrow"),
         "il rifiuto viene dallo schema, non dai dati: {errore}"
@@ -3040,11 +3069,13 @@ fn l_analisi_di_formula_rifiuta_la_timezone_che_il_formatter_rifiuta() {
                 .with_timezone("Non/Esiste".to_owned()),
         ) as ArrayRef],
     );
-    plenora_kernels_table::formula::formula(
+    let errore = plenora_kernels_table::formula::formula(
         &ingresso,
         &serde_json::from_value(config).expect("config"),
     )
     .expect_err("anche il kernel rifiuta");
+    assert_eq!(errore.category(), plenora_core::ErrorCategory::Schema);
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
 }
 
 // ---------------------------------------------------------------------------
@@ -3376,6 +3407,22 @@ fn due_batch_consecutivi_producono_lo_stesso_schema() {
         esegui_formula(&pieno),
         "formula: vuoto poi pieno"
     );
+    for ingresso in [&pieno, &tutto_null, &vuoto] {
+        for (schema, nome, tipo) in [
+            (esegui(ingresso), "e", DataType::Boolean),
+            (esegui_formula(ingresso), "f", DataType::Utf8),
+        ] {
+            let mut campi: Vec<Field> = ingresso
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.as_ref().clone())
+                .collect();
+            campi.push(Field::new(nome, tipo, true));
+            let atteso = Schema::new_with_metadata(campi, ingresso.schema().metadata().clone());
+            assert_eq!(schema.as_ref(), &atteso);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

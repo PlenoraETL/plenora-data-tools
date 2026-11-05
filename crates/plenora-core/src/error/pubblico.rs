@@ -464,8 +464,12 @@ mod tests {
             serde_json::to_value(RetryDisposition::Quarantine).expect("serializzabile"),
             json!({"kind": "quarantine"})
         );
-        assert!(
-            serde_json::to_value(RetryDisposition::After(Duration::from_secs(86_401))).is_err()
+        let errore = serde_json::to_value(RetryDisposition::After(Duration::from_secs(86_401)))
+            .expect_err("ritardo oltre contratto");
+        assert_eq!(errore.classify(), serde_json::error::Category::Data);
+        assert_eq!(
+            errore.to_string(),
+            "delay_ms oltre il massimo del contratto"
         );
         // Per eccesso: 1,5 ms non diventa 1 ms.
         assert_eq!(

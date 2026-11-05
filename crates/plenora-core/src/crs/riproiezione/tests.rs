@@ -357,7 +357,10 @@ fn le_griglie_entrano_solo_se_fornite_e_se_servono() {
     let mut due = BTreeMap::new();
     due.insert(9734, griglia_sintetica());
     due.insert(7709, griglia_sintetica());
-    assert!(Riproiettore::nuovo(piano_griglia.clone(), due).is_err());
+    assert!(matches!(
+        Riproiettore::nuovo(piano_griglia.clone(), due),
+        Err(CrsError::ReprojectionConfig(_))
+    ));
     // Codice che non e' una griglia, ripetuto, o inutile per la coppia.
     for griglie in [vec![1659], vec![9734, 9734], vec![7709], vec![1]] {
         let opzioni = OpzioniRiproiezione {
@@ -432,7 +435,12 @@ fn dominio_e_regione_si_controllano_su_entrambi_i_lati() {
     ));
     // Verso un fuso UTM: la longitudine deve stare nella regione del fuso.
     let r = riproiettore("EPSG:4326", "EPSG:32632", &OpzioniRiproiezione::default());
-    assert!(r.trasforma(0, 30.0, 45.0).is_err());
+    assert!(matches!(
+        r.trasforma(0, 30.0, 45.0),
+        Err(CrsError::CoordinateOutOfDomain {
+            violation: CoordinateDomainViolation::OutsideProjectionRegion
+        })
+    ));
     assert!(r.trasforma(0, 9.0, 45.0).expect("dentro").is_some());
 }
 
@@ -445,7 +453,12 @@ fn i_fusi_vicini_all_antimeridiano_accettano_le_longitudini_oltre_180() {
     assert!(x < 500_000.0, "a ovest del meridiano centrale");
     let (x, _) = r.trasforma(0, -170.0, 50.0).expect("dentro").expect("area");
     assert!(x > 500_000.0);
-    assert!(r.trasforma(0, 160.0, 50.0).is_err());
+    assert!(matches!(
+        r.trasforma(0, 160.0, 50.0),
+        Err(CrsError::CoordinateOutOfDomain {
+            violation: CoordinateDomainViolation::OutsideProjectionRegion
+        })
+    ));
 }
 
 #[test]
@@ -454,6 +467,12 @@ fn i_messaggi_non_riportano_coordinate() {
     let errore = r
         .trasforma(0, 12.345_678, 88.765_432)
         .expect_err("fuori regione");
+    assert!(matches!(
+        &errore,
+        CrsError::CoordinateOutOfDomain {
+            violation: CoordinateDomainViolation::OutsideProjectionRegion
+        }
+    ));
     let testo = errore.to_string();
     for frammento in ["12.34", "88.76", "12,34", "88,76"] {
         assert!(!testo.contains(frammento), "{testo}");
@@ -558,8 +577,19 @@ fn griglia_ntv2_big_endian_uguale_alla_little_endian() {
     let le = byte_griglia_sintetica();
     let piccola = GrigliaNtv2::da_byte(&le).expect("LE");
     let grande = GrigliaNtv2::da_byte(&big_endian(&le)).expect("BE");
-    for (lon, lat) in [(7.0, 40.0), (11.0, 44.0), (18.0, 47.0)] {
-        assert_eq!(piccola.avanti(lon, lat), grande.avanti(lon, lat));
+    // Nodi esatti: formula della fixture in genera_oracolo_riproiezione.py,
+    // spostamenti in secondi memorizzati f32, longitudine NTv2 verso ovest.
+    for (lon, lat, dlat, dlon_ovest) in [
+        (7.0, 40.0, 3.392_836_332_321_167, -2.599_999_904_632_568_4),
+        (11.0, 44.0, 3.057_163_715_362_549, -2.5),
+        (18.0, 47.0, 3.549_999_952_316_284, -2.306_814_908_981_323_2),
+    ] {
+        let atteso = (lon - dlon_ovest / 3600.0, lat + dlat / 3600.0);
+        for griglia in [&piccola, &grande] {
+            let ottenuto = griglia.avanti(lon, lat).expect("nodo nella griglia");
+            assert!((ottenuto.0 - atteso.0).abs() < 1e-12);
+            assert!((ottenuto.1 - atteso.1).abs() < 1e-12);
+        }
     }
 }
 

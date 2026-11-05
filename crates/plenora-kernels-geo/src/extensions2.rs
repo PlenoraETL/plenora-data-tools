@@ -944,13 +944,43 @@ mod tests {
 
     #[test]
     fn generate_grid_rejects_degenerate_extents_and_bad_cell_sizes() {
-        assert!(GridExtent::new(5.0, 0.0, 5.0, 10.0).is_err());
-        assert!(GridExtent::new(0.0, 0.0, 10.0, -1.0).is_err());
-        assert!(GridExtent::new(0.0, f64::NAN, 10.0, 10.0).is_err());
-        assert!(GridExtent::new(0.0, 0.0, f64::INFINITY, 10.0).is_err());
+        assert!(matches!(
+            GridExtent::new(5.0, 0.0, 5.0, 10.0),
+            Err(ExtensionError::InvalidParameter { name: "extent", .. })
+        ));
+        assert!(matches!(
+            GridExtent::new(0.0, 0.0, 10.0, -1.0),
+            Err(ExtensionError::InvalidParameter { name: "extent", .. })
+        ));
+        assert!(matches!(
+            GridExtent::new(0.0, f64::NAN, 10.0, 10.0),
+            Err(ExtensionError::InvalidParameter {
+                name: "extent.ymin",
+                ..
+            })
+        ));
+        assert!(matches!(
+            GridExtent::new(0.0, 0.0, f64::INFINITY, 10.0),
+            Err(ExtensionError::InvalidParameter {
+                name: "extent.xmax",
+                ..
+            })
+        ));
         for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-            assert!(generate_grid(&extent(), bad, GridShape::Square).is_err());
-            assert!(grid_cell_count(&extent(), bad, GridShape::Hex).is_err());
+            assert!(matches!(
+                generate_grid(&extent(), bad, GridShape::Square),
+                Err(ExtensionError::InvalidParameter {
+                    name: "cell_size",
+                    ..
+                })
+            ));
+            assert!(matches!(
+                grid_cell_count(&extent(), bad, GridShape::Hex),
+                Err(ExtensionError::InvalidParameter {
+                    name: "cell_size",
+                    ..
+                })
+            ));
         }
     }
 
@@ -980,11 +1010,22 @@ mod tests {
     fn generate_grid_rows_encodes_decodable_wkb() {
         let rows = generate_grid_rows(&extent(), 5.0, GridShape::Square).expect("righe");
         assert_eq!(rows.len(), 4);
-        for row in &rows {
+        for (row, (i, j, x, y)) in rows.iter().zip([
+            (0, 0, 0.0, 0.0),
+            (1, 0, 5.0, 0.0),
+            (0, 1, 0.0, 5.0),
+            (1, 1, 5.0, 5.0),
+        ]) {
+            assert_eq!((row.cell_i, row.cell_j), (i, j));
+            assert_eq!((row.centroid_x, row.centroid_y), (x + 2.5, y + 2.5));
             let geometry = crate::geometry_from_wkb(&row.wkb).expect("decode");
-            assert!(matches!(geometry, Geometry::Polygon(_)));
+            assert_eq!(geometry, rect(x, y, x + 5.0, y + 5.0));
         }
-        assert!(generate_grid_rows(&extent(), 0.0, GridShape::Square).is_err());
+        assert_rifiuto!(
+            generate_grid_rows(&extent(), 0.0, GridShape::Square),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     // --- geo.subdivide -------------------------------------------------------
@@ -1169,7 +1210,10 @@ mod tests {
             LineString::from(vec![(1.0, 1.0); 10]),
             Vec::new(),
         ));
-        assert!(subdivide(&degenerate, 4, precisione()).is_err());
+        assert!(matches!(
+            subdivide(&degenerate, 4, precisione()),
+            Err(ExtensionError::InvalidInput(_))
+        ));
     }
 
     #[test]
@@ -1185,10 +1229,22 @@ mod tests {
         let payload = line.to_wkb(CoordDimensions::xy()).expect("encode");
         let parts = subdivide_wkb(&payload, 4, precisione()).expect("parti");
         assert_eq!(parts.len(), 3);
-        for part in &parts {
-            crate::geometry_from_wkb(part).expect("decode parte");
+        for (part, start) in parts.iter().zip([0, 3, 6]) {
+            let expected = Geometry::LineString(LineString::from(
+                (start..=start + 3)
+                    .map(|x| (f64::from(x), 0.0))
+                    .collect::<Vec<_>>(),
+            ));
+            assert_eq!(
+                crate::geometry_from_wkb(part).expect("decode parte"),
+                expected
+            );
         }
-        assert!(subdivide_wkb(&payload, 2, precisione()).is_err());
+        assert_rifiuto!(
+            subdivide_wkb(&payload, 2, precisione()),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     // --- geo.snap ------------------------------------------------------------
@@ -1297,17 +1353,20 @@ mod tests {
                 })
             ));
         }
-        assert!(snap_column(
-            &BinaryArray::from_iter([Some(
-                Geometry::Point(Point::new(0.0, 0.0))
-                    .to_wkb(CoordDimensions::xy())
-                    .expect("encode")
-                    .as_slice()
-            )]),
-            &reference_line(),
-            -1.0,
-        )
-        .is_err());
+        assert_rifiuto!(
+            snap_column(
+                &BinaryArray::from_iter([Some(
+                    Geometry::Point(Point::new(0.0, 0.0))
+                        .to_wkb(CoordDimensions::xy())
+                        .expect("encode")
+                        .as_slice()
+                )]),
+                &reference_line(),
+                -1.0,
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     #[test]

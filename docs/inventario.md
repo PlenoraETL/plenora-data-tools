@@ -86,8 +86,8 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 | `plenora-io` | 20 | 260 | 280 |
 | `plenora-kernels-geo` | 532 | 108 | 640 |
 | `plenora-kernels-table` | 477 | 138 | 615 |
-| `plenora-pipeline` | 12 | 174 | 186 |
-| **totale** | 1256 | 840 | 2096 |
+| `plenora-pipeline` | 12 | 175 | 187 |
+| **totale** | 1256 | 841 | 2097 |
 
 ### Prove Python dell'SDK
 
@@ -114,6 +114,7 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 | `scripts/test_check_comments.py` | 27 |
 | `scripts/test_check_coverage.py` | 10 |
 | `scripts/test_check_docs.py` | 14 |
+| `scripts/test_check_esito_unico.py` | 6 |
 | `scripts/test_fuzz_crs.py` | 4 |
 | `scripts/test_genera_inventario.py` | 6 |
 | `scripts/test_genera_sbom_rilascio.py` | 5 |

@@ -5,6 +5,10 @@
 
 mod comune;
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use std::fs::File;
 use std::path::Path;
 
@@ -270,7 +274,10 @@ fn scrittura_atomica() {
     std::fs::write(&destinazione, b"vecchio").unwrap();
     let errore = scrivi_tabella(&ordini(), &destinazione, &OpzioniScrittura::default())
         .expect_err("esistente");
-    assert_eq!(errore.category(), ErrorCategory::Conflict);
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (ErrorCategory::Conflict, plenora_core::ErrorPhase::Commit)
+    );
     assert_eq!(std::fs::read(&destinazione).unwrap(), b"vecchio");
     // Errore durante la scrittura: la destinazione resta quella di prima e
     // nessun temporaneo resta nella directory.
@@ -284,7 +291,11 @@ fn scrittura_atomica() {
         sovrascrivi: true,
         ..OpzioniScrittura::default()
     };
-    assert!(scrivi_tabella(&senza_colonne, &destinazione, &sovrascrivi).is_err());
+    assert_rifiuto!(
+        scrivi_tabella(&senza_colonne, &destinazione, &sovrascrivi),
+        ErrorCategory::Unsupported,
+        plenora_core::ErrorPhase::Validate
+    );
     assert_eq!(std::fs::read(&destinazione).unwrap(), b"vecchio");
     assert_eq!(file_nella(dir.path()), vec!["t.parquet".to_owned()]);
     // Sovrascrittura riuscita.
@@ -296,16 +307,18 @@ fn scrittura_atomica() {
     assert_eq!(file_nella(dir.path()), vec!["t.parquet".to_owned()]);
     // Directory mancante o destinazione directory: errore, niente creato.
     let manca = dir.path().join("manca").join("t.arrow");
-    assert_eq!(
-        scrivi_tabella(&ordini(), &manca, &OpzioniScrittura::default())
-            .expect_err("directory mancante")
-            .category(),
-        // `Io` con `ErrorKind::NotFound`: categoria `not_found`.
-        ErrorCategory::NotFound
+    assert_rifiuto!(
+        scrivi_tabella(&ordini(), &manca, &OpzioniScrittura::default()),
+        ErrorCategory::NotFound,
+        plenora_core::ErrorPhase::Write
     );
     let sottodirectory = dir.path().join("d.arrow");
     std::fs::create_dir(&sottodirectory).unwrap();
-    assert!(scrivi_tabella(&ordini(), &sottodirectory, &sovrascrivi).is_err());
+    assert_rifiuto!(
+        scrivi_tabella(&ordini(), &sottodirectory, &sovrascrivi),
+        ErrorCategory::Io,
+        plenora_core::ErrorPhase::Write
+    );
     assert!(sottodirectory.is_dir());
 }
 

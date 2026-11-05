@@ -2936,7 +2936,11 @@ mod tests {
         let batch = single_batch(Arc::new(LargeStringArray::from(vec![Some("42"), None])));
         for target in all_targets() {
             let config = cast_config(target, CastErrors::Coerce);
-            assert!(type_cast(&batch, &config).is_err());
+            assert_rifiuto!(
+                type_cast(&batch, &config),
+                plenora_core::ErrorCategory::Schema,
+                plenora_core::ErrorPhase::Validate
+            );
         }
     }
 

@@ -16,6 +16,11 @@
 //! di memoria per il rifiuto preventivo ([`preflight_output_bytes`]) e la
 //! costruzione dei batch d'uscita.
 
+#[cfg(test)]
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use serde::{Deserialize, Serialize};
 
 /// Limiti dei kernel tabellari.
@@ -2392,17 +2397,32 @@ mod tests {
     #[test]
     fn helper_guards_cover_type_length_and_names() {
         let input = batch();
-        assert!(replace_or_append(
-            &input,
-            "bad",
-            DataType::Utf8,
-            true,
-            Arc::new(StringArray::from(vec![Some("only one")]))
-        )
-        .is_err());
-        assert!(validate_output_name(" ").is_err());
-        assert!(validate_output_name(&"x".repeat(1_025)).is_err());
-        assert!(column_index(&input, "missing").is_err());
+        assert_rifiuto!(
+            replace_or_append(
+                &input,
+                "bad",
+                DataType::Utf8,
+                true,
+                Arc::new(StringArray::from(vec![Some("only one")]))
+            ),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            validate_output_name(" "),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            validate_output_name(&"x".repeat(1_025)),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            column_index(&input, "missing"),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
 
         let integers = single_column_batch(
             "n",
@@ -2410,7 +2430,11 @@ mod tests {
             DataType::Int64,
             false,
         );
-        assert!(utf8_column(&integers, "n").is_err());
+        assert_rifiuto!(
+            utf8_column(&integers, "n"),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     #[test]

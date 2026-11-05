@@ -388,9 +388,11 @@ mod tests {
             ),
         ];
         for (nome, limits) in rifiutati {
-            let errore = limits
-                .validate()
-                .expect_err("un limite di piano a zero deve essere rifiutato");
+            let errore = assert_rifiuto!(
+                limits.validate(),
+                crate::ErrorCategory::InvalidPlan,
+                crate::ErrorPhase::Validate
+            );
             let testo = errore.to_string();
             assert!(testo.contains(nome), "{nome}: {testo}");
         }

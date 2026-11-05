@@ -7,6 +7,11 @@
 //! combinazioni non ne ha e con quale regola (in analisi e nel kernel,
 //! `verifica_*`) si rifiuta (docs/runner.md, «Parametri ignorati: censimento»).
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+use plenora_core::{ErrorCategory as Categoria, ErrorPhase as Fase};
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use plenora_core::catalog::{Family, CATALOG};
@@ -28,14 +33,17 @@ fn campi_serde(op: &str) -> BTreeSet<String> {
         Some(plenora_core::catalog::Arity::Unary) => 1,
         _ => 2,
     };
-    let errore = analyze_table_contract(
-        op,
-        &ingressi[..arieta],
-        &json!({"zz_campo_sconosciuto": 0}),
-        &mut FieldAllocator::default(),
-        &Limits::default(),
+    let errore = assert_rifiuto!(
+        analyze_table_contract(
+            op,
+            &ingressi[..arieta],
+            &json!({"zz_campo_sconosciuto": 0}),
+            &mut FieldAllocator::default(),
+            &Limits::default(),
+        ),
+        Categoria::InvalidPlan,
+        Fase::Validate
     )
-    .expect_err("un campo sconosciuto si rifiuta")
     .to_string();
     assert!(
         !errore.contains("zz_campo_sconosciuto"),
@@ -321,7 +329,12 @@ fn rifiuta_null(op: &str, config: &serde_json::Value) -> Result<(), String> {
         return match serde_json::from_value::<plenora_kernels_table::reshape::Transpose>(
             config.clone(),
         ) {
-            Err(errore) if !errore.to_string().contains("missing field") => Ok(()),
+            Err(errore)
+                if errore.classify() == serde_json::error::Category::Data
+                    && !errore.to_string().contains("missing field") =>
+            {
+                Ok(())
+            }
             altro => Err(format!("{:?}", altro.map(|_| ()))),
         };
     }
@@ -335,7 +348,9 @@ fn rifiuta_null(op: &str, config: &serde_json::Value) -> Result<(), String> {
         // Un errore di deserializzazione che non e' il campo mancante: il
         // `null` non si e' letto (anche un enum senza tag lo rifiuta cosi').
         Err(errore)
-            if errore.to_string().contains("config non valida")
+            if errore.category() == Categoria::InvalidPlan
+                && errore.phase() == Fase::Validate
+                && errore.to_string().contains("config non valida")
                 && !errore.to_string().contains("campo obbligatorio assente") =>
         {
             Ok(())

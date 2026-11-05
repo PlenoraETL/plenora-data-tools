@@ -3893,9 +3893,11 @@ mod tests {
                 "right_keys": ["id"],
                 "include_unchanged": valore,
             });
-            assert!(
-                serde_json::from_value::<TableDiff>(config).is_err(),
-                "include_unchanged {valore:?} accettato"
+            assert_eq!(
+                (serde_json::from_value::<TableDiff>(config))
+                    .expect_err("configurazione non valida")
+                    .classify(),
+                serde_json::error::Category::Data
             );
         }
         // Solo le due stringhe: niente forma a oggetto di serde, null,
@@ -3913,9 +3915,11 @@ mod tests {
                 "right_keys": ["id"],
                 "include_unchanged": valore,
             });
-            assert!(
-                serde_json::from_value::<TableDiff>(config).is_err(),
-                "include_unchanged {valore} accettato"
+            assert_eq!(
+                (serde_json::from_value::<TableDiff>(config))
+                    .expect_err("configurazione non valida")
+                    .classify(),
+                serde_json::error::Category::Data
             );
         }
         for (valore, atteso) in [("yes", IncludeUnchanged::Yes), ("no", IncludeUnchanged::No)] {

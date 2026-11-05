@@ -696,7 +696,12 @@ mod tests {
         coords.extend((0..10).map(|index| (200.0 + f64::from(index) * 7.0, -30.0)));
         let first = dbscan(&points(&coords), 0.5, 4).expect("prima");
         let second = dbscan(&points(&coords), 0.5, 4).expect("seconda");
-        assert_eq!(first, second);
+        let expected: Vec<_> = std::iter::repeat_n(Some(0), 40)
+            .chain(std::iter::repeat_n(Some(1), 40))
+            .chain(std::iter::repeat_n(None, 10))
+            .collect();
+        assert_eq!(first, expected);
+        assert_eq!(second, expected);
     }
 
     #[test]
@@ -790,8 +795,12 @@ mod tests {
         assert!(labels[..9].iter().all(|label| *label == Some(0)));
         assert_eq!(labels[9], None, "geometria null -> null");
         assert_eq!(labels[10], None, "outlier -> noise");
-        assert!(dbscan_column(&cells, 0.0, 3).is_err());
-        assert!(dbscan_column(&cells, 0.5, 0).is_err());
+        let error = dbscan_column(&cells, 0.0, 3).expect_err("parametro invalido");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
+        let error = dbscan_column(&cells, 0.5, 0).expect_err("parametro invalido");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
     }
 
     #[test]

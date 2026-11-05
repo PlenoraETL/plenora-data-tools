@@ -19,9 +19,12 @@
 
 use std::sync::Arc;
 
-use geo::{line_string, polygon, Area, Geometry, LineString, MultiLineString, Polygon};
+use geo::{
+    line_string, polygon, Area, Distance, Euclidean, Geometry, LineString, MultiLineString,
+    Polygon, Relate,
+};
 use geozero::{CoordDimensions, ToWkb};
-use plenora_core::arrow::array::{Array, BinaryArray};
+use plenora_core::arrow::array::{Array, BinaryArray, Int64Array, StringArray, UInt64Array};
 use plenora_core::arrow::{DataType, Field, RecordBatch, Schema, SchemaRef};
 use plenora_core::contract::arrow_metadata::{geometry_output_field, DEFAULT_GEOMETRY_COLUMN};
 use plenora_kernels_geo::rust_backend::arrow::{
@@ -290,11 +293,449 @@ fn integer_network() -> Vec<LineString<f64>> {
     lines
 }
 
+// Facce ricavate dalle intersezioni razionali delle rette della fixture,
+// indipendentemente dal kernel. Gli anelli fissano copertura, non solo area.
+// Fixture esplicite: coordinate e metadati indipendenti dalla produzione.
+#[allow(clippy::too_many_lines)]
+fn integer_faces() -> Vec<Polygon<f64>> {
+    vec![
+        Polygon::new(
+            LineString::from(vec![(0.0, 0.0), (1.0, 0.0), (1.0, 0.5), (0.0, 0.0)]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (0.0, 0.0),
+                (1.0, 0.5),
+                (1.0, 1.0),
+                (0.0, 1.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (0.0, 1.0),
+                (1.0, 1.0),
+                (1.0, 2.0),
+                (0.0, 2.0),
+                (0.0, 1.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![(0.0, 2.0), (1.0, 2.0), (0.0, 3.0), (0.0, 2.0)]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![(0.0, 3.0), (1.0, 2.0), (1.0, 3.0), (0.0, 3.0)]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (1.0, 0.0),
+                (2.0, 0.0),
+                (2.0, 1.0),
+                (1.0, 0.5),
+                (1.0, 0.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![(1.0, 0.5), (2.0, 1.0), (1.0, 1.0), (1.0, 0.5)]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![(1.0, 1.0), (2.0, 1.0), (1.0, 2.0), (1.0, 1.0)]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![(1.0, 2.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (1.0, 2.0),
+                (2.0, 2.0),
+                (2.0, 3.0),
+                (1.0, 3.0),
+                (1.0, 2.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (2.0, 0.0),
+                (3.0, 0.0),
+                (3.0, 1.0),
+                (2.0, 1.0),
+                (2.0, 0.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![(2.0, 1.0), (3.0, 1.0), (3.0, 1.5), (2.0, 1.0)]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (2.0, 1.0),
+                (3.0, 1.5),
+                (3.0, 2.0),
+                (2.0, 2.0),
+                (2.0, 1.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (2.0, 2.0),
+                (3.0, 2.0),
+                (3.0, 3.0),
+                (2.0, 3.0),
+                (2.0, 2.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (3.0, 0.0),
+                (4.0, 0.0),
+                (4.0, 1.0),
+                (3.0, 1.0),
+                (3.0, 0.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (3.0, 1.0),
+                (4.0, 1.0),
+                (4.0, 2.0),
+                (3.0, 1.5),
+                (3.0, 1.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![(3.0, 1.5), (4.0, 2.0), (3.0, 2.0), (3.0, 1.5)]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (3.0, 2.0),
+                (4.0, 2.0),
+                (4.0, 3.0),
+                (3.0, 3.0),
+                (3.0, 2.0),
+            ]),
+            vec![],
+        ),
+    ]
+}
+fn split_faces() -> Vec<Polygon<f64>> {
+    vec![
+        Polygon::new(
+            LineString::from(vec![
+                (0.0, 0.0),
+                (5.0, 0.0),
+                (5.0, 2.0),
+                (2.0, 2.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![(0.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.0)]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (0.0, 2.0),
+                (2.0, 2.0),
+                (4.0, 4.0),
+                (4.0, 6.0),
+                (5.0, 6.0),
+                (5.0, 10.0),
+                (0.0, 10.0),
+                (0.0, 2.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (2.0, 2.0),
+                (5.0, 2.0),
+                (5.0, 4.0),
+                (4.0, 4.0),
+                (2.0, 2.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (5.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 2.0),
+                (5.0, 2.0),
+                (5.0, 0.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (5.0, 2.0),
+                (10.0, 2.0),
+                (10.0, 10.0),
+                (6.0, 6.0),
+                (6.0, 4.0),
+                (5.0, 4.0),
+                (5.0, 2.0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (5.0, 6.0),
+                (6.0, 6.0),
+                (10.0, 10.0),
+                (5.0, 10.0),
+                (5.0, 6.0),
+            ]),
+            vec![],
+        ),
+    ]
+}
+fn nonrepresentable_faces() -> Vec<Polygon<f64>> {
+    vec![
+        Polygon::new(
+            LineString::from(vec![(-1.2, -6.7), (-0.2, -6.7), (-0.2, -2.7), (-1.2, -6.7)]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![(-1.2, -6.7), (-0.2, -2.7), (-1.2, -2.7), (-1.2, -6.7)]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (-1.2, -2.7),
+                (-0.2, -2.7),
+                (-0.2, 5.3),
+                (-1.2, 5.3),
+                (-1.2, -2.7),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (-0.2, -2.7),
+                (1.3, -2.7),
+                (1.55, -2.7),
+                (2.55, -2.7),
+                (2.55, 8.3),
+                (-0.2, -2.7),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (0.3, 9.3),
+                (1.05, 9.3),
+                (1.05, 13.3),
+                (0.3, 13.3),
+                (0.3, 9.3),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (0.3, 13.3),
+                (1.05, 13.3),
+                (1.05, 17.3),
+                (0.3, 17.3),
+                (0.3, 13.3),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (1.05, 9.3),
+                (1.8, 9.3),
+                (1.8, 13.3),
+                (1.05, 13.3),
+                (1.05, 9.3),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (1.3, -10.7),
+                (1.55, -10.7),
+                (1.55, -2.7),
+                (1.3, -2.7),
+                (1.3, -10.7),
+            ]),
+            vec![],
+        ),
+    ]
+}
+
+fn assert_faces(actual: &[Polygon<f64>], expected: &[Polygon<f64>]) {
+    assert_eq!(actual.len(), expected.len());
+    let mut remaining = expected.to_vec();
+    for polygon in actual {
+        let position = remaining
+            .iter()
+            .position(|expected| polygon.relate(expected).is_equal_topo())
+            .expect("faccia con copertura attesa");
+        remaining.remove(position);
+    }
+}
+
+fn assert_integer_network(result: &PolygonizeResult, node_input: bool) {
+    if node_input {
+        assert_faces(&result.polygons, &integer_faces());
+        assert_eq!(result.dangles.len(), 1);
+        assert!(result.dangles[0]
+            .relate(&line_string![(x: 4.0, y: 3.0), (x: 6.0, y: 5.0)])
+            .is_equal_topo());
+    } else {
+        // Senza noding solo i quattro lati esterni hanno estremi comuni.
+        assert_faces(
+            &result.polygons,
+            &[polygon![(x: 0.0, y: 0.0), (x: 4.0, y: 0.0),
+            (x: 4.0, y: 3.0), (x: 0.0, y: 3.0), (x: 0.0, y: 0.0)]],
+        );
+        let expected = MultiLineString(vec![
+            line_string![(x: 1.0, y: 0.0), (x: 1.0, y: 3.0)],
+            line_string![(x: 2.0, y: 0.0), (x: 2.0, y: 3.0)],
+            line_string![(x: 3.0, y: 0.0), (x: 3.0, y: 3.0)],
+            line_string![(x: 0.0, y: 1.0), (x: 4.0, y: 1.0)],
+            line_string![(x: 0.0, y: 2.0), (x: 4.0, y: 2.0)],
+            line_string![(x: 0.0, y: 0.0), (x: 4.0, y: 2.0)],
+            line_string![(x: 0.0, y: 3.0), (x: 2.0, y: 1.0)],
+            line_string![(x: 4.0, y: 3.0), (x: 6.0, y: 5.0)],
+        ]);
+        assert!(MultiLineString(result.dangles.clone())
+            .relate(&expected)
+            .is_equal_topo());
+    }
+    assert!(result.cut_edges.is_empty());
+    assert!(result.invalid_ring_lines.is_empty());
+}
+
+fn assert_nonrepresentable(result: &PolygonizeResult) {
+    // docs/topologia.md: otto facce macroscopiche e la scheggia esatta che
+    // GEOS scarta. Aree razionali: 2,2,8,121/8,3,3,3,2, totale 305/8.
+    assert_eq!(counts(result), [9, 0, 4, 0]);
+    // Le sei code esterne sono quattro componenti residue: le due code
+    // incidenti in (2.55, -2.7) e quelle in (2.55, 8.3) si concatenano.
+    // Gli estremi di innesto vengono dall'intersezione y = 4x - 1.9
+    // con x = 2.55 e con i bordi dei rettangoli della fixture.
+    let mut expected_dangles = vec![
+        line_string![(x: 2.55, y: -24.7), (x: 2.55, y: -2.7), (x: 3.3, y: -2.7)],
+        line_string![(x: 2.55, y: 23.3), (x: 2.55, y: 8.3), (x: 3.3, y: 11.3)],
+        line_string![(x: -2.7, y: -2.7), (x: -1.2, y: -2.7)],
+        line_string![(x: -2.7, y: -12.7), (x: -1.2, y: -6.7)],
+    ];
+    let length = |line: &LineString<f64>| {
+        line.lines()
+            .map(|segment| (segment.end.x - segment.start.x).hypot(segment.end.y - segment.start.y))
+            .sum::<f64>()
+    };
+    for actual in &result.dangles {
+        let position = expected_dangles
+            .iter()
+            .position(|expected| {
+                (length(actual) - length(expected)).abs() < 1e-12
+                    && line_close(actual, expected)
+                    && line_close(expected, actual)
+            })
+            .expect("copertura e lunghezza del residuo atteso");
+        expected_dangles.remove(position);
+    }
+    assert!(expected_dangles.is_empty());
+    let mut remaining = nonrepresentable_faces();
+    let mut slivers = 0;
+    for polygon in &result.polygons {
+        if polygon.unsigned_area() < 1e-30 {
+            slivers += 1;
+            assert!(polygon
+                .exterior()
+                .0
+                .iter()
+                .all(|c| (c.x + 0.2).abs() < 1e-12 && (c.y + 2.7).abs() < 1e-12));
+            continue;
+        }
+        let position = remaining
+            .iter()
+            .position(|expected| {
+                (polygon.unsigned_area() - expected.unsigned_area()).abs() < 1e-12
+                    && boundary_close(polygon, expected)
+                    && boundary_close(expected, polygon)
+            })
+            .expect("copertura della faccia razionale entro l'arrotondamento");
+        remaining.remove(position);
+    }
+    assert_eq!(slivers, 1);
+    assert!(remaining.is_empty());
+    assert!((result.polygons.iter().map(Area::unsigned_area).sum::<f64>() - 38.125).abs() < 1e-12);
+}
+
+fn boundary_close(actual: &Polygon<f64>, expected: &Polygon<f64>) -> bool {
+    actual.interiors().is_empty()
+        && expected.interiors().is_empty()
+        && line_close(actual.exterior(), expected.exterior())
+}
+
+fn line_close(actual: &LineString<f64>, expected: &LineString<f64>) -> bool {
+    actual.lines().all(|line| {
+        [
+            line.start,
+            line.end,
+            geo::Coord {
+                x: f64::midpoint(line.start.x, line.end.x),
+                y: f64::midpoint(line.start.y, line.end.y),
+            },
+        ]
+        .iter()
+        .all(|c| Euclidean.distance(&geo::Point(*c), expected) < 1e-12)
+    })
+}
+
+fn repaired_faces(bowtie: bool, method: RepairMethod) -> Vec<Polygon<f64>> {
+    if bowtie {
+        vec![
+            polygon![(x: 0.0, y: 0.0), (x: 4.0, y: 0.0), (x: 2.0, y: 2.0), (x: 0.0, y: 0.0)],
+            polygon![(x: 0.0, y: 4.0), (x: 2.0, y: 2.0), (x: 4.0, y: 4.0), (x: 0.0, y: 4.0)],
+        ]
+    } else {
+        let mut faces = vec![
+            polygon![(x: 0.0, y: 0.0), (x: 4.0, y: 0.0), (x: 4.0, y: 1.0),
+            (x: 3.0, y: 1.0), (x: 3.0, y: 3.0), (x: 4.0, y: 3.0), (x: 4.0, y: 4.0),
+            (x: 0.0, y: 4.0), (x: 0.0, y: 0.0)],
+        ];
+        if matches!(method, RepairMethod::Linework) {
+            faces.push(polygon![(x: 4.0, y: 1.0), (x: 5.0, y: 1.0), (x: 5.0, y: 3.0), (x: 4.0, y: 3.0), (x: 4.0, y: 1.0)]);
+        }
+        faces
+    }
+}
+
+fn polygons(geometry: Geometry<f64>) -> Vec<Polygon<f64>> {
+    match geometry {
+        Geometry::Polygon(p) => vec![p],
+        Geometry::MultiPolygon(p) => p.0,
+        _ => panic!("atteso esito soltanto poligonale"),
+    }
+}
+
 #[test]
 fn polygonize_deterministico_e_canonico_su_input_permutato() {
     let lines = integer_network();
     for node_input in [true, false] {
         let base = polygonize(&multi(lines.clone()), node_input);
+        assert_integer_network(&base, node_input);
         assert_eq!(
             base,
             polygonize(&multi(lines.clone()), node_input),
@@ -340,9 +781,11 @@ fn polygonize_equivalente_per_classe_su_intersezioni_non_rappresentabili() {
         line_string![(x: 0.3, y: 9.3), (x: 0.3, y: 13.3), (x: 1.8, y: 13.3), (x: 1.8, y: 9.3), (x: 0.3, y: 9.3)],
     ];
     let base = polygonize(&multi(lines.clone()), true);
+    assert_nonrepresentable(&base);
     assert_eq!(base, polygonize(&multi(lines.clone()), true), "due volte");
     for variant in [reversed(&lines), interleaved(&lines)] {
         let other = polygonize(&multi(variant), true);
+        assert_nonrepresentable(&other);
         assert_eq!(counts(&base), counts(&other));
         let total = |result: &PolygonizeResult| {
             result.polygons.iter().map(Area::unsigned_area).sum::<f64>()
@@ -389,7 +832,7 @@ fn split(source: &Geometry<f64>, lines: Vec<LineString<f64>>) -> Vec<Polygon<f64
 fn split_deterministico_e_canonico_su_input_permutato() {
     let source = holed_source();
     let base = split(&source, split_lines());
-    assert!(base.len() > 4);
+    assert_faces(&base, &split_faces());
     assert_eq!(base, split(&source, split_lines()), "due volte");
     let Geometry::Polygon(polygon) = &source else {
         unreachable!("sorgente poligonale")
@@ -433,11 +876,15 @@ fn make_valid_deterministico() {
     ))
     .to_wkb(CoordDimensions::xy())
     .expect("wkb");
-    for payload in [bow_tie_wkb(), crossing_hole] {
+    for (bowtie, payload) in [(true, bow_tie_wkb()), (false, crossing_hole)] {
         for method in [RepairMethod::Linework, RepairMethod::Structure] {
             for keep_collapsed in [false, true] {
                 let first = make_valid_wkb(&payload, method, keep_collapsed, precisione())
                     .expect("riparata");
+                assert_faces(
+                    &polygons(plenora_kernels_geo::geometry_from_wkb(&first).expect("WKB valido")),
+                    &repaired_faces(bowtie, method),
+                );
                 let second = make_valid_wkb(&payload, method, keep_collapsed, precisione())
                     .expect("riparata");
                 assert_eq!(first, second, "{method:?} keep_collapsed={keep_collapsed}");
@@ -495,12 +942,21 @@ fn wkb_lines(lines: &[LineString<f64>]) -> Vec<Vec<u8>> {
         .collect()
 }
 
+fn output_field(input: &Field, nullable: bool) -> Field {
+    let mut metadata = input.metadata().clone();
+    metadata.insert(
+        "plenora.geometry.precision".to_owned(),
+        "float64".to_owned(),
+    );
+    Field::new(input.name(), DataType::Binary, nullable).with_metadata(metadata)
+}
+
 #[test]
 fn polygonize_arrow_deterministico_e_canonico_su_righe_permutate() {
     let lines = integer_network();
     let run = |cells: &[Vec<u8>]| {
         let (schema, batch) = table(cells);
-        polygonize_batches(
+        let (out_schema, output) = polygonize_batches(
             &schema,
             &[batch],
             DEFAULT_GEOMETRY_COLUMN,
@@ -508,8 +964,46 @@ fn polygonize_arrow_deterministico_e_canonico_su_righe_permutate() {
             LIMIT,
             precisione(),
         )
-        .expect("polygonize")
-        .1
+        .expect("polygonize");
+        assert_eq!(out_schema.fields().len(), 2);
+        assert_eq!(out_schema.field(0), &output_field(schema.field(1), false));
+        assert_eq!(
+            out_schema.field(1),
+            &Field::new("__class", DataType::Utf8, false)
+        );
+        assert_eq!(out_schema.metadata(), schema.metadata());
+        assert_eq!(output.len(), 1);
+        let geometries = output[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .expect("WKB");
+        let classes = output[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("classi");
+        assert_eq!(geometries.null_count(), 0);
+        assert_eq!(classes.null_count(), 0);
+        let mut result = PolygonizeResult {
+            polygons: vec![],
+            cut_edges: vec![],
+            dangles: vec![],
+            invalid_ring_lines: vec![],
+        };
+        for row in 0..output[0].num_rows() {
+            match (
+                classes.value(row),
+                plenora_kernels_geo::geometry_from_wkb(geometries.value(row))
+                    .expect("geometria valida"),
+            ) {
+                ("polygon", Geometry::Polygon(p)) => result.polygons.push(p),
+                ("dangle", Geometry::LineString(l)) => result.dangles.push(l),
+                other => panic!("classe o forma inattesa: {other:?}"),
+            }
+        }
+        assert_integer_network(&result, true);
+        output
     };
     let base = run(&wkb_lines(&lines));
     assert_eq!(base, run(&wkb_lines(&lines)), "due volte");
@@ -522,6 +1016,8 @@ fn polygonize_arrow_deterministico_e_canonico_su_righe_permutate() {
 }
 
 #[test]
+// Fixture esplicite: coordinate e metadati indipendenti dalla produzione.
+#[allow(clippy::too_many_lines)]
 fn make_valid_e_split_arrow_deterministici() {
     let square = polygon![
         (x: 0.0, y: 0.0), (x: 2.0, y: 0.0), (x: 2.0, y: 2.0), (x: 0.0, y: 2.0), (x: 0.0, y: 0.0)
@@ -548,6 +1044,26 @@ fn make_valid_e_split_arrow_deterministici() {
     )
     .expect("make_valid");
     assert_eq!(first, second);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].num_rows(), 2);
+    assert_eq!(first[0].schema().field(0), schema.field(0));
+    assert_eq!(
+        first[0].schema().field(1),
+        &output_field(schema.field(1), true)
+    );
+    assert_eq!(first[0].schema().metadata(), schema.metadata());
+    assert_eq!(first[0].column(0), batch.column(0));
+    let repaired = first[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .expect("WKB");
+    assert_eq!(repaired.null_count(), 0);
+    assert_faces(
+        &polygons(plenora_kernels_geo::geometry_from_wkb(repaired.value(0)).expect("riparata")),
+        &repaired_faces(true, RepairMethod::Linework),
+    );
+    assert_eq!(repaired.value(1), cells[1]);
 
     let source = holed_source().to_wkb(CoordDimensions::xy()).expect("wkb");
     let splitter = multi(split_lines())
@@ -572,5 +1088,46 @@ fn make_valid_e_split_arrow_deterministici() {
     };
     let base = run();
     assert_eq!(base, run());
-    assert!(base[0].num_rows() > 8, "due sorgenti divise");
+    assert_eq!(base.len(), 1);
+    assert_eq!(base[0].num_rows(), 14);
+    assert_eq!(base[0].schema().fields().len(), 3);
+    assert_eq!(base[0].schema().field(0), schema.field(0));
+    assert_eq!(
+        base[0].schema().field(1),
+        &output_field(schema.field(1), false)
+    );
+    assert_eq!(
+        base[0].schema().field(2),
+        &Field::new("__parent_index", DataType::UInt64, false)
+    );
+    assert_eq!(base[0].schema().metadata(), schema.metadata());
+    let parts = base[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .expect("WKB");
+    let ids = base[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("id");
+    let parents = base[0]
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .expect("genitori");
+    assert_eq!(parts.null_count(), 0);
+    assert_eq!(ids.null_count(), 0);
+    assert_eq!(parents.null_count(), 0);
+    for (parent, start) in [(0, 0), (1, 7)] {
+        let mut actual = Vec::new();
+        for row in start..start + 7 {
+            assert_eq!(ids.value(row), parent);
+            assert_eq!(parents.value(row), u64::try_from(parent).expect("indice"));
+            actual.extend(polygons(
+                plenora_kernels_geo::geometry_from_wkb(parts.value(row)).expect("parte valida"),
+            ));
+        }
+        assert_faces(&actual, &split_faces());
+    }
 }

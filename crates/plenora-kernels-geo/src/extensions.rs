@@ -613,6 +613,8 @@ mod tests {
         for policy in [OnWktError::Null, OnWktError::Fail] {
             let error = from_wkt_column(&values, policy)
                 .expect_err("WKT invalido trasformato in output accettato");
+            assert_eq!(error.category(), plenora_core::ErrorCategory::DataMapping);
+            assert_eq!(error.phase(), plenora_core::ErrorPhase::Write);
             let report = error
                 .row_diagnostics()
                 .expect("diagnostica row-scoped mancante");

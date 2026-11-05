@@ -684,7 +684,7 @@ mod tests {
     #[test]
     fn il_lato_con_latitudini_arrotondate_si_rifiuta() {
         let e = wgs84_di_prova();
-        assert!(scarto_del_lato(
+        assert_eq!(scarto_del_lato(
             &e,
             Coord { x: 0.0, y: 1e-18 },
             Coord {
@@ -692,7 +692,7 @@ mod tests {
                 y: 1e-18
             }
         )
-        .is_err());
+        , Err("lato troppo lungo (oltre 1000 km) o troppo vicino a un polo per verificare che la topologia delle geodetiche sia quella del piano lon/lat"));
     }
 
     /// Il bordo del dominio: un lato equatoriale est-ovest con lunghezza
@@ -712,10 +712,11 @@ mod tests {
         };
         let origine = Coord { x: 0.0, y: 0.0 };
         assert!(scarto_del_lato(&e, origine, dentro).is_ok());
-        assert!(scarto_del_lato(&e, origine, fuori).is_err());
+        assert_eq!(scarto_del_lato(&e, origine, fuori), Err("lato troppo lungo (oltre 1000 km) o troppo vicino a un polo per verificare che la topologia delle geodetiche sia quella del piano lon/lat"));
         // Vicino al polo: la latitudine maggiorata raggiunge 90 gradi.
-        assert!(
-            scarto_del_lato(&e, Coord { x: 0.0, y: 89.999 }, Coord { x: 0.1, y: 89.999 }).is_err()
+        assert_eq!(
+            scarto_del_lato(&e, Coord { x: 0.0, y: 89.999 }, Coord { x: 0.1, y: 89.999 }),
+            Err("lato troppo lungo (oltre 1000 km) o troppo vicino a un polo per verificare che la topologia delle geodetiche sia quella del piano lon/lat")
         );
     }
 

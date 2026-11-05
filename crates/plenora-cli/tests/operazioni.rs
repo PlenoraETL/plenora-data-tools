@@ -5,6 +5,10 @@
 
 mod comune;
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -481,6 +485,55 @@ fn stesso_ingresso_stessi_byte() {
             &format!("b={b}"),
         ]);
         assert_eq!(esito.codice, 0, "{}", esito.stdout);
+        assert_eq!(
+            esito.documento["result"],
+            serde_json::json!({
+                "outputs": [
+                    {"name":"a", "content_type":"application/vnd.apache.arrow.file", "rows":2, "columns":3},
+                    {"name":"b", "content_type":"application/vnd.apache.parquet", "rows":1, "columns":3},
+                ],
+                "steps": [
+                    {"out":"a", "op":"table.filter", "rows_in":[4], "rows_out":2, "division_by_zero_rows":0},
+                    {"out":"b", "op":"table.limit", "rows_in":[4], "rows_out":1, "division_by_zero_rows":0},
+                ],
+            })
+        );
+        // Attesi dalla fixture: filtro positivo = righe 1 e 4; limite = riga 1.
+        // Senza ID in ingresso, il cursore pubblicato avanza fra le due uscite.
+        for (percorso, primo_id, ids, nomi, valori) in [
+            (&a, 0, vec![1, 4], vec!["10", "40"], vec![1.5, 4.0]),
+            (&b, 3, vec![1], vec!["10"], vec![1.5]),
+        ] {
+            let campi: Vec<Field> = tabella()
+                .schema()
+                .fields()
+                .iter()
+                .enumerate()
+                .map(|(indice, campo)| {
+                    campo
+                        .as_ref()
+                        .clone()
+                        .with_metadata(std::collections::HashMap::from([(
+                            "plenora.field_id".into(),
+                            (primo_id + indice).to_string(),
+                        )]))
+                })
+                .collect();
+            let schema = Arc::new(Schema::new_with_metadata(
+                campi,
+                std::collections::HashMap::from([("plenora.contract.version".into(), "1".into())]),
+            ));
+            let atteso = RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(Int64Array::from(ids)),
+                    Arc::new(StringArray::from(nomi)),
+                    Arc::new(Float64Array::from(valori)),
+                ],
+            )
+            .expect("fixture attesa");
+            assert_successo!(leggi_tabella(Path::new(percorso), None, u64::MAX), atteso);
+        }
         raccolti.push((
             esito.stdout,
             std::fs::read(&a).expect("a"),

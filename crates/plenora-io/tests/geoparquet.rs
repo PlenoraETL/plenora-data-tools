@@ -7,6 +7,10 @@
 
 mod comune;
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -659,7 +663,18 @@ fn rifiuti_in_lettura() {
     ];
     for (nome, geo, celle, categoria, frammento) in casi {
         let errore = errore_di(&geo, celle);
-        assert_eq!(errore.category(), categoria, "{nome}: {errore}");
+        let fase = match categoria {
+            ErrorCategory::DataMapping => plenora_core::ErrorPhase::Write,
+            ErrorCategory::Crs | ErrorCategory::InvalidPlan | ErrorCategory::Unsupported => {
+                plenora_core::ErrorPhase::Validate
+            }
+            _ => panic!("categoria non prevista dalla matrice"),
+        };
+        assert_eq!(
+            (errore.category(), errore.phase()),
+            (categoria, fase),
+            "{nome}: {errore}"
+        );
         assert!(errore.to_string().contains(frammento), "{nome}: {errore}");
         // Errori senza dati: il valore letto dal metadato non compare.
         assert!(!errore.to_string().contains("2.0.0"), "{nome}: {errore}");
@@ -670,7 +685,11 @@ fn rifiuti_in_lettura() {
     let wkb = punto(1.0, 2.0);
     let celle = BinaryArray::from(vec![Some(wkb.as_slice())]);
     let percorso = file_con_colonna(dir.path(), testo, Arc::new(celle), 1);
-    let errore = leggi(&percorso).expect_err("duplicate");
+    let errore = assert_rifiuto!(
+        leggi(&percorso),
+        ErrorCategory::InvalidPlan,
+        plenora_core::ErrorPhase::Validate
+    );
     assert!(errore.to_string().contains("duplicate"), "{errore}");
 }
 
@@ -763,6 +782,7 @@ fn con_metadati(campo: Field, coppie: &[(&str, &str)]) -> Field {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Fixture e attesi espliciti tenuti insieme.
 fn rifiuti_in_scrittura() {
     let base = || geometry_output_field("geometry", "EPSG:32632").unwrap();
     let p = || vec![Some(punto(500_000.0, 5_000_000.0))];
@@ -774,11 +794,21 @@ fn rifiuti_in_scrittura() {
         ),
         p(),
     );
-    assert_eq!(errore.category(), ErrorCategory::Crs, "{errore}");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (ErrorCategory::Crs, plenora_core::ErrorPhase::Validate)
+    );
     // Encoding EWKB dichiarato.
     let errore = errore_scrittura(
         con_metadati(base(), &[(PLENORA_GEOMETRY_ENCODING_KEY, "ewkb")]),
         p(),
+    );
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (
+            ErrorCategory::Unsupported,
+            plenora_core::ErrorPhase::Validate
+        )
     );
     assert!(
         errore.to_string().contains("EWKB") || errore.to_string().contains("ewkb"),
@@ -795,14 +825,20 @@ fn rifiuti_in_scrittura() {
         ),
         p(),
     );
-    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (ErrorCategory::DataMapping, plenora_core::ErrorPhase::Write)
+    );
     // Dimensionalita' dichiarata xyz, dati 2D.
     let errore = errore_scrittura(
         geometry_output_field_with_dimensions("geometry", "EPSG:32632", GeometryDimensions::Xyz)
             .unwrap(),
         p(),
     );
-    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (ErrorCategory::DataMapping, plenora_core::ErrorPhase::Write)
+    );
     // CRS dichiarato non risolto.
     let campo = Field::new("geometry", DataType::Binary, true).with_metadata(HashMap::from([
         ("ARROW:extension:name".to_owned(), "geoarrow.wkb".to_owned()),
@@ -836,12 +872,18 @@ fn rifiuti_in_scrittura() {
         &OpzioniScrittura::default(),
     )
     .expect_err("non risolto");
-    assert_eq!(errore.category(), ErrorCategory::Crs, "{errore}");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (ErrorCategory::Crs, plenora_core::ErrorPhase::Validate)
+    );
     // Curva nei dati.
     let mut curva = linea(&[(0.0, 0.0), (1.0, 1.0), (2.0, 0.0)]);
     curva[1..5].copy_from_slice(&8_u32.to_le_bytes());
     let errore = errore_scrittura(base(), vec![Some(curva)]);
-    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (ErrorCategory::DataMapping, plenora_core::ErrorPhase::Write)
+    );
     // Metadato di schema `geo` senza geometrie.
     let tabella = comune::ordini();
     let elenco = tabella.schema().fields().clone();
@@ -857,7 +899,13 @@ fn rifiuti_in_scrittura() {
         &OpzioniScrittura::default(),
     )
     .expect_err("geo riservato");
-    assert_eq!(errore.category(), ErrorCategory::InvalidPlan);
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (
+            ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        )
+    );
 }
 
 #[test]

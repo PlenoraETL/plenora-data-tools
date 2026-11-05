@@ -100,6 +100,7 @@ pub fn identificativo_da_projjson(documento: &Value) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use plenora_core::{ErrorCategory, ErrorPhase};
     #[test]
     fn catalogo_rifiuta_duplicati_in_superficie_e_annidati() {
         for testo in [
@@ -162,7 +163,11 @@ mod tests {
             serde_json::json!({"type": "BoundCRS", "id": {"authority": "EPSG", "code": 4326}}),
             serde_json::json!({"ids": [{"authority": "EPSG", "code": 4326}, {"authority": "EPSG", "code": 4326}]}),
         ] {
-            let errore = identificativo_da_projjson(&documento).expect_err("rifiutato");
+            let errore = assert_rifiuto!(
+                identificativo_da_projjson(&documento),
+                ErrorCategory::Crs,
+                ErrorPhase::Validate
+            );
             assert!(
                 errore.to_string().contains("CRS_NOT_BUILTIN"),
                 "{documento}: {errore}"
@@ -193,6 +198,10 @@ mod tests {
                 }
             }
         }
-        assert!(identificativo_da_projjson(&Value::String("EPSG:4326".to_owned())).is_err());
+        assert_rifiuto!(
+            identificativo_da_projjson(&Value::String("EPSG:4326".to_owned())),
+            ErrorCategory::InvalidPlan,
+            ErrorPhase::Validate
+        );
     }
 }

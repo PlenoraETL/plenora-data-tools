@@ -8,6 +8,10 @@
 
 mod comune;
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::sync::Arc;
@@ -155,7 +159,28 @@ fn file_troncati_a_ogni_lunghezza_sono_errori() {
         for lunghezza in posizioni(byte.len()) {
             std::fs::write(&percorso, &byte[..lunghezza]).unwrap();
             let esito = leggi_tabella_con_limiti(&percorso, Some(formato), u64::MAX, &limiti);
-            assert!(esito.is_err(), "{formato:?} troncato a {lunghezza} letto");
+            // ARRO (quattro/cinque byte) non e' ancora la magia ARROW1:
+            // come prefisso stream dichiara 0x4f525241 byte, oltre il tetto.
+            // Il confine Parquet verifica prima la lunghezza in coda contro
+            // il tetto (docs/file.md, Confine di lettura), prima del decoder.
+            let footer_oltre_tetto = formato == Formato::Parquet
+                && lunghezza >= 8
+                && u64::from(u32::from_le_bytes(
+                    byte[lunghezza - 8..lunghezza - 4].try_into().unwrap(),
+                )) > limiti.max_byte_metadati;
+            let categoria = if footer_oltre_tetto
+                || (byte.starts_with(b"ARROW1") && (4..6).contains(&lunghezza))
+            {
+                ErrorCategory::ResourceLimit
+            } else {
+                ErrorCategory::DataMapping
+            };
+            let errore = esito.expect_err("prefisso troncato");
+            assert_eq!(
+                (errore.category(), errore.phase()),
+                (categoria, plenora_core::ErrorPhase::Write),
+                "{formato:?} troncato a {lunghezza}: {errore}"
+            );
         }
     }
 }
@@ -814,28 +839,50 @@ fn un_header_di_pagina_oltre_la_fine_dei_dati_e_un_errore_immediato() {
             "352e302e31191c1c0000007a00000050415231",
         ]),
     ];
-    let motivi = ["Unexpected EOF", "integer overflow decoding thrift value"];
-    for (byte, motivo) in casi.iter().zip(motivi) {
+    // Ogni fixture viene visitata: il terzo footer tronca la lista dichiarata.
+    for (indice, byte) in casi.iter().enumerate() {
         let errore = errore(byte, Formato::Parquet, &LimitiLettura::default());
-        assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
-        // Il motivo, deterministico, al posto di una soglia di tempo: la
-        // lettura diretta con `parquet` si ferma alla fine dei dati o al
-        // conteggio dichiarato, non dopo averli percorsi o riservati.
+        assert_eq!(
+            (errore.category(), errore.phase()),
+            (ErrorCategory::DataMapping, plenora_core::ErrorPhase::Write)
+        );
         let dir = cartella();
         let percorso = dir.path().join("p.parquet");
         std::fs::write(&percorso, byte).unwrap();
-        let messaggio = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+        let risultato = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
             File::open(&percorso).unwrap(),
-        )
-        .and_then(parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::build)
-        .map_or_else(
-            |e| e.to_string(),
-            |lettore| {
-                lettore
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_or_else(|e| e.to_string(), |_| String::from("letto"))
-            },
         );
-        assert!(messaggio.contains(motivo), "{messaggio}");
+        if indice == 2 {
+            // Il conteggio di gruppi e' nel footer, prima di costruire il lettore.
+            let Err(errore) = risultato else {
+                panic!("footer malformato alla costruzione")
+            };
+            let parquet::errors::ParquetError::General(messaggio) = errore else {
+                panic!("atteso conteggio impossibile nel footer: {errore:?}");
+            };
+            // Il conteggio varint della fixture e' 53846527, con 56 byte residui.
+            assert_eq!(
+                messaggio,
+                "Thrift list size 53846527 exceeds remaining input length 56"
+            );
+        } else {
+            // I primi due guasti sono negli header di pagina: il footer resta leggibile.
+            let lettore = risultato
+                .expect("footer integro")
+                .build()
+                .expect("schema leggibile");
+            let errore = lettore
+                .collect::<Result<Vec<_>, _>>()
+                .expect_err("header di pagina malformato");
+            let plenora_core::arrow::schema::ArrowError::ParquetError(messaggio) = errore else {
+                panic!("atteso errore Parquet durante la lettura: {errore:?}");
+            };
+            let atteso = if indice == 0 {
+                "EOF: Unexpected EOF"
+            } else {
+                "Parquet error: integer overflow decoding thrift value"
+            };
+            assert_eq!(messaggio, atteso);
+        }
     }
 }

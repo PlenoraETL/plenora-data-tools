@@ -996,16 +996,17 @@ mod tests {
     #[test]
     fn serde_defaults_and_padding_guards_are_covered() {
         let pad: StringPad = serde_json::from_value(json!({"column": "text"})).expect("defaults");
-        assert!(
-            serde_json::from_value::<StringPad>(json!({"column": "text", "output_column": null}))
-                .is_err(),
-            "null non e' l'assenza"
+        assert_eq!(
+            (serde_json::from_value::<StringPad>(json!({"column": "text", "output_column": null})))
+                .expect_err("configurazione non valida")
+                .classify(),
+            serde_json::error::Category::Data
         );
         assert_eq!(pad.width, 5);
         assert_eq!(pad.fill_char, "0");
         assert!(matches!(pad.side, PadSide::Left));
         let output = string_pad(&batch(), &pad, &Limits::default()).expect("default pad");
-        assert_eq!(output.num_columns(), 1);
+        assert_eq!(output, batch());
 
         for fill_char in ["", "xx"] {
             let invalid = StringPad {
@@ -1015,7 +1016,11 @@ mod tests {
                 fill_char: fill_char.into(),
                 output_column: None,
             };
-            assert!(string_pad(&batch(), &invalid, &Limits::default()).is_err());
+            assert_rifiuto!(
+                string_pad(&batch(), &invalid, &Limits::default()),
+                plenora_core::ErrorCategory::InvalidPlan,
+                plenora_core::ErrorPhase::Validate
+            );
         }
         let right = StringPad {
             column: "text".into(),
@@ -1024,17 +1029,38 @@ mod tests {
             fill_char: "x".into(),
             output_column: Some("right".into()),
         };
-        assert!(string_pad(&batch(), &right, &Limits::default()).is_ok());
+        let testo_atteso = format!(
+            "  élÈVE   d'ÉCOLE  {}",
+            "x".repeat(24 - "  élÈVE   d'ÉCOLE  ".chars().count())
+        );
+        let atteso = RecordBatch::try_new(
+            Arc::new(plenora_core::arrow::Schema::new(vec![
+                plenora_core::arrow::Field::new("text", DataType::Utf8, true),
+                plenora_core::arrow::Field::new("right", DataType::Utf8, true),
+            ])),
+            vec![
+                batch().column(0).clone(),
+                Arc::new(StringArray::from(vec![Some(testo_atteso.as_str()), None])),
+            ],
+        )
+        .expect("fixture padding");
+        assert_successo!(string_pad(&batch(), &right, &Limits::default()), atteso);
 
         let tiny = Limits {
             max_string_bytes: 3,
             ..Limits::default()
         };
-        assert!(string_pad(&batch(), &right, &tiny).is_err());
+        assert_rifiuto!(
+            string_pad(&batch(), &right, &tiny),
+            plenora_core::ErrorCategory::ResourceLimit,
+            plenora_core::ErrorPhase::Write
+        );
     }
 
     #[test]
     fn every_normalization_mode_and_defaults_are_exercised() {
+        use plenora_core::arrow::array::ArrayRef;
+        use plenora_core::arrow::{Field, Schema};
         let default: TextNormalize =
             serde_json::from_value(json!({"columns": ["text"]})).expect("defaults");
         assert!(default.overwrite);
@@ -1060,33 +1086,61 @@ mod tests {
                 &Limits::default(),
             )
             .expect("normalize");
-            assert_eq!(output.num_rows(), 2);
+            let atteso = [
+                "élÈVE   d'ÉCOLE",
+                "  élève   d'école  ",
+                "  ÉLÈVE   D'ÉCOLE  ",
+                "  Élève   D'École  ",
+                "  elEVE   d'ECOLE  ",
+                "élÈVE d'ÉCOLE",
+                "eleve d'ecole",
+            ][index];
+            let valori: ArrayRef = Arc::new(StringArray::from(vec![Some(atteso), None]));
+            let expected = if index % 2 == 0 {
+                single_column_batch("text", valori, DataType::Utf8, true)
+            } else {
+                RecordBatch::try_new(
+                    Arc::new(Schema::new(vec![
+                        Field::new("text", DataType::Utf8, true),
+                        Field::new("text_norm", DataType::Utf8, true),
+                    ])),
+                    vec![batch().column(0).clone(), valori],
+                )
+                .expect("fixture normalizzata")
+            };
+            assert_eq!(output, expected);
         }
 
-        assert!(text_normalize(
-            &batch(),
-            &TextNormalize {
-                columns: vec![],
-                operations: NormalizeOperation::Full,
-                overwrite: true,
-            },
-            &Limits::default(),
-        )
-        .is_err());
+        assert_rifiuto!(
+            text_normalize(
+                &batch(),
+                &TextNormalize {
+                    columns: vec![],
+                    operations: NormalizeOperation::Full,
+                    overwrite: true,
+                },
+                &Limits::default(),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         let tiny = Limits {
             max_string_bytes: 2,
             ..Limits::default()
         };
-        assert!(text_normalize(
-            &batch(),
-            &TextNormalize {
-                columns: vec!["text".into()],
-                operations: NormalizeOperation::Full,
-                overwrite: true,
-            },
-            &tiny,
-        )
-        .is_err());
+        assert_rifiuto!(
+            text_normalize(
+                &batch(),
+                &TextNormalize {
+                    columns: vec!["text".into()],
+                    operations: NormalizeOperation::Full,
+                    overwrite: true,
+                },
+                &tiny,
+            ),
+            plenora_core::ErrorCategory::ResourceLimit,
+            plenora_core::ErrorPhase::Write
+        );
     }
 
     #[test]

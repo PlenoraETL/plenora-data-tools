@@ -23,6 +23,11 @@
 //! - [`memoria`]: byte Arrow di tabelle (per allocazione) e colonne (per
 //!   vista), la misura unica di runner e kernel.
 
+#[cfg(test)]
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 pub mod catalog;
 pub mod contract;
 pub mod crs;
@@ -170,9 +175,21 @@ mod tests {
             crate::arrow::schema::UnionFields::empty(),
             crate::arrow::schema::UnionMode::Dense,
         );
-        assert!(super::array_vuoto(&mappa).is_err());
-        assert!(super::array_null(&mappa, 3).is_err());
-        assert!(super::array_null(&unione, 0).is_err());
+        assert_rifiuto!(
+            super::array_vuoto(&mappa),
+            crate::ErrorCategory::Schema,
+            crate::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            super::array_null(&mappa, 3),
+            crate::ErrorCategory::Schema,
+            crate::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            super::array_null(&unione, 0),
+            crate::ErrorCategory::Schema,
+            crate::ErrorPhase::Validate
+        );
         assert_eq!(
             super::array_null(&DataType::Utf8, 2).unwrap().null_count(),
             2

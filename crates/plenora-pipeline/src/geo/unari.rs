@@ -1047,20 +1047,46 @@ mod tests {
         })
         .expect("senza margine");
         assert_eq!(ampio, attese);
-        let uscita: u64 = ampio
-            .iter()
-            .flatten()
-            .map(|wkb| (wkb.capacity() + wkb.len()) as u64)
-            .sum();
-        // Meta' dell'uscita: ogni riga (qualche KB) sta nella sua parte,
-        // l'accumulo no.
-        let errore = celle_nel_margine(
-            "geo.buffer",
-            &celle,
-            MargineMemoria::byte(uscita / 2),
-            kernel,
-        )
-        .expect_err("uscita accumulata oltre il margine");
+        assert_eq!(ampio.len(), 1_000);
+        for (indice, cella) in ampio.iter().enumerate() {
+            let g = plenora_kernels_geo::geometry_from_wkb(cella.as_deref().expect("cerchio"))
+                .expect("geometria");
+            let Geometry::MultiPolygon(poligoni) = g else {
+                panic!("buffer multipoligonale")
+            };
+            assert_eq!(poligoni.0.len(), 1);
+            assert!(poligoni.0[0].interiors().is_empty());
+            let anello = &poligoni.0[0].exterior().0;
+            assert_eq!(anello.first(), anello.last());
+            let x = 10.0_f64.mul_add(f64::from(u32::try_from(indice).expect("indice")), 500_000.0);
+            let mut angolo_totale = 0.0;
+            let mut segni = Vec::new();
+            for lato in anello.windows(2) {
+                let (ax, ay) = (lato[0].x - x, lato[0].y - 5_000_000.0);
+                let (bx, by) = (lato[1].x - x, lato[1].y - 5_000_000.0);
+                assert!((ax.hypot(ay) - 1_000.0).abs() <= 0.01);
+                let delta = ax.mul_add(by, -ay * bx).atan2(ax.mul_add(bx, ay * by));
+                assert!(
+                    delta.abs() <= 2.0_f64.mul_add(0.999_f64.acos(), 1e-5),
+                    "freccia dichiarata di un metro"
+                );
+                segni.push(delta > 0.0);
+                assert!(delta.abs() > 1e-10, "vertici distinti");
+                angolo_totale += delta;
+            }
+            assert!(segni.iter().all(|s| *s == segni[0]), "ordine circolare");
+            assert!((angolo_totale.abs() - std::f64::consts::TAU).abs() < 1e-8);
+        }
+        // Almeno 70 lati per cerchio (freccia <= 1 m): oltre un milione
+        // di byte per 1 000 geometrie. 500 000 byte non contengono l'uscita,
+        // pur bastando alla singola riga. Il limite non dipende dall'output.
+        let errore = celle_nel_margine("geo.buffer", &celle, MargineMemoria::byte(500_000), kernel)
+            .expect_err("uscita accumulata oltre il margine");
+        assert_eq!(
+            errore.category(),
+            plenora_core::ErrorCategory::ResourceLimit
+        );
+        assert_eq!(errore.phase(), plenora_core::ErrorPhase::Write);
         assert!(errore.to_string().contains("margine"), "{errore}");
     }
 }

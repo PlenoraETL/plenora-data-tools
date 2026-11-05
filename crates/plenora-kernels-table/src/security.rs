@@ -1535,14 +1535,31 @@ mod tests {
         .expect("fixture")
     }
 
+    fn assert_digest_schema(batch: &RecordBatch, output: &RecordBatch, name: &str, nullable: bool) {
+        assert!(
+            batch.column_by_name(name).is_none(),
+            "fixture con digest aggiunto"
+        );
+        let mut fields = batch.schema().fields().to_vec();
+        fields.push(Arc::new(Field::new(name, DataType::Utf8, nullable)));
+        let schema = Schema::new_with_metadata(fields, batch.schema().metadata().clone());
+        assert_eq!(output.schema().as_ref(), &schema);
+        assert_eq!(output.num_rows(), batch.num_rows());
+        for (i, input) in batch.columns().iter().enumerate() {
+            assert_eq!(output.column(i).to_data(), input.to_data());
+        }
+    }
+
     fn fingerprint_values(batch: &RecordBatch, config: &StableFingerprint) -> Vec<String> {
         let output = stable_fingerprint(batch, config).expect("fingerprint");
+        assert_digest_schema(batch, &output, &config.output_column, false);
         let column = output
             .column_by_name(&config.output_column)
             .expect("colonna fingerprint")
             .as_any()
             .downcast_ref::<StringArray>()
             .expect("utf8");
+        assert_eq!(column.null_count(), 0);
         (0..column.len())
             .map(|row| column.value(row).to_owned())
             .collect()
@@ -1592,6 +1609,16 @@ mod tests {
         let batch = fingerprint_fixture();
         let config = fingerprint_config(&["a", "b"]);
         let first = fingerprint_values(&batch, &config);
+        // Known-answer indipendenti: SHA-256 del framing canonico con
+        // lunghezze u64 big-endian, nomi, tipi e byte di presenza.
+        assert_eq!(
+            first,
+            [
+                "4e1f09e49d945536920b917446d005d90e62d4bb2cc231557ed6a8bef6c4f21f",
+                "6e3287ac9fa4620912257e28e717331a8ef94082d281fe02181bc1222eda8e3a",
+                "a68f1a62fc38765101963851077d269991ea2a84b48295f464df5417948c8afb"
+            ]
+        );
         let second = fingerprint_values(&batch, &config);
         assert_eq!(first, second, "stesso input -> stesso hash");
         assert!(first.iter().all(|value| value.len() == 64));
@@ -1600,9 +1627,25 @@ mod tests {
         assert_ne!(first[1], first[2], "null e stringa vuota devono differire");
         // L'ordine delle colonne di config cambia il digest.
         let swapped = fingerprint_values(&batch, &fingerprint_config(&["b", "a"]));
+        assert_eq!(
+            swapped,
+            [
+                "3a8d44ba00f1671d8711df4c9bd4a8a5df4846953845125f9049d370b8907d4f",
+                "538cf578c631df06397f4912c223f5c923721533e4704551eb871b00e731c86e",
+                "aa3cb28b52a4e85dbc956388d7fb22225ca9c8df3201589c503ff36488ad1b51"
+            ]
+        );
         assert_ne!(first, swapped);
         // Un subset di colonne ignora le altre.
         let subset = fingerprint_values(&batch, &fingerprint_config(&["b"]));
+        assert_eq!(
+            subset,
+            [
+                "91a93dc0359d10631c74f0ffe1ce491d31603db125829917931d03c6b83929fa",
+                "42f91ce5edb0253be8eb8d3557b6a27359feb99e00ec40a5e42e3ac0ca04a2d4",
+                "42f91ce5edb0253be8eb8d3557b6a27359feb99e00ec40a5e42e3ac0ca04a2d4"
+            ]
+        );
         assert_eq!(subset[1], subset[2], "stessa colonna b -> stesso hash");
         assert_ne!(subset[0], subset[1]);
     }
@@ -1631,18 +1674,42 @@ mod tests {
             fingerprint_values(&batch, &decoded),
             fingerprint_values(&batch, &fingerprint_config(&["a", "b"]))
         );
+        assert_eq!(
+            fingerprint_values(&batch, &decoded),
+            [
+                "4e1f09e49d945536920b917446d005d90e62d4bb2cc231557ed6a8bef6c4f21f",
+                "6e3287ac9fa4620912257e28e717331a8ef94082d281fe02181bc1222eda8e3a",
+                "a68f1a62fc38765101963851077d269991ea2a84b48295f464df5417948c8afb"
+            ]
+        );
         // Errori: colonna mancante, duplicata, campo config sconosciuto.
-        assert!(stable_fingerprint(&batch, &fingerprint_config(&["missing"])).is_err());
-        assert!(stable_fingerprint(&batch, &fingerprint_config(&["a", "a"])).is_err());
-        assert!(serde_json::from_value::<StableFingerprint>(json!({"algo": "sha256"})).is_err());
-        assert!(stable_fingerprint(
-            &batch,
-            &StableFingerprint {
-                output_column: " ".into(),
-                ..fingerprint_config(&["a"])
-            },
-        )
-        .is_err());
+        assert_rifiuto!(
+            stable_fingerprint(&batch, &fingerprint_config(&["missing"])),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            stable_fingerprint(&batch, &fingerprint_config(&["a", "a"])),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_eq!(
+            serde_json::from_value::<StableFingerprint>(json!({"algo": "sha256"}))
+                .expect_err("config non valida")
+                .classify(),
+            serde_json::error::Category::Data
+        );
+        assert_rifiuto!(
+            stable_fingerprint(
+                &batch,
+                &StableFingerprint {
+                    output_column: " ".into(),
+                    ..fingerprint_config(&["a"])
+                },
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     // -------------------------------------------------------------------
@@ -1675,6 +1742,12 @@ mod tests {
 
     fn hmac_values(batch: &RecordBatch, config: &HmacSha256) -> Vec<Option<String>> {
         let output = hmac_sha256(batch, config).expect("hmac");
+        assert_digest_schema(
+            batch,
+            &output,
+            &config.output_column,
+            matches!(config.null_policy, HmacNullPolicy::Null),
+        );
         let column = output
             .column_by_name(&config.output_column)
             .expect("colonna hmac")
@@ -1781,13 +1854,35 @@ mod tests {
         .expect("fixture senza null");
         let config = hmac_config(&["a", "b"], "PLENORA_HMAC_DET_KEY");
         let first = hmac_values(&batch, &config);
+        // Known-answer indipendenti dell'HMAC-SHA256 sul framing canonico.
+        assert_eq!(
+            first,
+            [
+                Some("46424a38201bbe2cf03b90d3d48444bd54dc41a70002f4991a146138ca4e0d10".to_owned()),
+                Some("683e3b110d294ec336e8da60a20f842f6ae7020bc47f8a07a10c8103c10553ba".to_owned())
+            ]
+        );
         let second = hmac_values(&batch, &config);
         assert_eq!(first, second, "stesso input -> stesso hmac");
         // Ordine delle colonne e chiave diversa cambiano il digest.
         let swapped = hmac_values(&batch, &hmac_config(&["b", "a"], "PLENORA_HMAC_DET_KEY"));
+        assert_eq!(
+            swapped,
+            [
+                Some("dad4f8314cc77ab52d51f073ad2b1da91a0e8f5737a84103959606cd51f7d304".to_owned()),
+                Some("e4a6534575f7e7faafeeebbc2b0ed3bb3c330caedcc2f55165fa4f7a833f2fed".to_owned())
+            ]
+        );
         assert_ne!(first, swapped);
         std::env::set_var("PLENORA_HMAC_DET_KEY2", "altra-chiave");
         let other_key = hmac_values(&batch, &hmac_config(&["a", "b"], "PLENORA_HMAC_DET_KEY2"));
+        assert_eq!(
+            other_key,
+            [
+                Some("47faa462e4bc0cf5f6d9c1cc2070e7602150cf5d50e899cd35bccee3b12c98ca".to_owned()),
+                Some("98a441578a3a39e4c37021124a60a30279e093db3620fbf9bc4f5da7935c5048".to_owned())
+            ]
+        );
         assert_ne!(first, other_key);
     }
 
@@ -1799,8 +1894,11 @@ mod tests {
         // 1. Variabile assente: l'errore non rivela ne' il NOME della
         //    variabile ne' (ovviamente) il valore.
         std::env::remove_var("PLENORA_HMAC_LEAK_MISSING");
-        let error = hmac_sha256(&batch, &hmac_config(&["a"], "PLENORA_HMAC_LEAK_MISSING"))
-            .expect_err("variabile assente");
+        let error = assert_rifiuto!(
+            hmac_sha256(&batch, &hmac_config(&["a"], "PLENORA_HMAC_LEAK_MISSING")),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         let display = error.to_string();
         let debug = format!("{error:?}");
         assert!(
@@ -1813,16 +1911,22 @@ mod tests {
         );
         // 2. Variabile vuota: stesso errore generico, niente valore/nome.
         std::env::set_var("PLENORA_HMAC_LEAK_EMPTY", "");
-        let error = hmac_sha256(&batch, &hmac_config(&["a"], "PLENORA_HMAC_LEAK_EMPTY"))
-            .expect_err("variabile vuota");
+        let error = assert_rifiuto!(
+            hmac_sha256(&batch, &hmac_config(&["a"], "PLENORA_HMAC_LEAK_EMPTY")),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         assert!(!error.to_string().contains("PLENORA_HMAC_LEAK_EMPTY"));
         // 3. Errori successivi alla lettura della chiave (colonna mancante):
         //    il valore segreto non compare in nessuna forma.
-        let error = hmac_sha256(
-            &batch,
-            &hmac_config(&["missing_column"], "PLENORA_HMAC_LEAK_NAME"),
-        )
-        .expect_err("colonna mancante");
+        let error = assert_rifiuto!(
+            hmac_sha256(
+                &batch,
+                &hmac_config(&["missing_column"], "PLENORA_HMAC_LEAK_NAME"),
+            ),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
         let display = error.to_string();
         let debug = format!("{error:?}");
         assert!(!display.contains(secret), "chiave in {display}");
@@ -1832,7 +1936,11 @@ mod tests {
             columns: vec!["a".into(), "a".into()],
             ..hmac_config(&["a"], "PLENORA_HMAC_LEAK_NAME")
         };
-        let error = hmac_sha256(&batch, &config).expect_err("colonna ripetuta");
+        let error = assert_rifiuto!(
+            hmac_sha256(&batch, &config),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         assert!(!error.to_string().contains(secret));
     }
 
@@ -1857,28 +1965,41 @@ mod tests {
         // mentre il runner (`var_os`) la accettava: verdetti diversi sulla
         // stessa variabile. Ora una sola funzione, con una causa propria.
         std::env::set_var("PLENORA_HMAC_NON_UTF8", valore_non_utf8());
-        let errore = carica_chiave_hmac("PLENORA_HMAC_NON_UTF8").expect_err("non UTF-8");
+        let errore = assert_rifiuto!(
+            carica_chiave_hmac("PLENORA_HMAC_NON_UTF8"),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         assert!(matches!(errore, PlenoraError::InvalidPlan(_)), "{errore:?}");
         assert!(errore.to_string().contains("non UTF-8"), "{errore}");
         assert!(!errore.to_string().contains("PLENORA_HMAC_NON_UTF8"));
-        let errore = hmac_sha256(
-            &hmac_fixture(),
-            &hmac_config(&["a"], "PLENORA_HMAC_NON_UTF8"),
-        )
-        .expect_err("kernel");
+        let errore = assert_rifiuto!(
+            hmac_sha256(
+                &hmac_fixture(),
+                &hmac_config(&["a"], "PLENORA_HMAC_NON_UTF8"),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         assert!(errore.to_string().contains("non UTF-8"), "{errore}");
         std::env::remove_var("PLENORA_HMAC_NON_UTF8");
         // Assente e vuota restano distinte.
         std::env::remove_var("PLENORA_HMAC_NON_UTF8_ASSENTE");
-        assert!(carica_chiave_hmac("PLENORA_HMAC_NON_UTF8_ASSENTE")
-            .expect_err("assente")
-            .to_string()
-            .contains("variabile assente"));
+        assert!(assert_rifiuto!(
+            carica_chiave_hmac("PLENORA_HMAC_NON_UTF8_ASSENTE"),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        )
+        .to_string()
+        .contains("variabile assente"));
         std::env::set_var("PLENORA_HMAC_NON_UTF8_VUOTA", "");
-        assert!(carica_chiave_hmac("PLENORA_HMAC_NON_UTF8_VUOTA")
-            .expect_err("vuota")
-            .to_string()
-            .contains("variabile vuota"));
+        assert!(assert_rifiuto!(
+            carica_chiave_hmac("PLENORA_HMAC_NON_UTF8_VUOTA"),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        )
+        .to_string()
+        .contains("variabile vuota"));
         std::env::set_var("PLENORA_HMAC_NON_UTF8_BUONA", "k\u{e9}");
         assert_eq!(
             carica_chiave_hmac("PLENORA_HMAC_NON_UTF8_BUONA").expect("utf-8"),
@@ -1891,10 +2012,14 @@ mod tests {
         std::env::set_var("PLENORA_HMAC_CFG_KEY", "k");
         let batch = hmac_fixture();
         // Config strict: campo sconosciuto rifiutato.
-        assert!(serde_json::from_value::<HmacSha256>(
-            json!({"columns": ["a"], "key_env": "PLENORA_HMAC_CFG_KEY", "surprise": 1})
-        )
-        .is_err());
+        assert_eq!(
+            serde_json::from_value::<HmacSha256>(
+                json!({"columns": ["a"], "key_env": "PLENORA_HMAC_CFG_KEY", "surprise": 1})
+            )
+            .expect_err("config non valida")
+            .classify(),
+            serde_json::error::Category::Data
+        );
         // Defaults: output "hmac", null_policy empty.
         let decoded: HmacSha256 =
             serde_json::from_value(json!({"columns": ["a"], "key_env": "PLENORA_HMAC_CFG_KEY"}))
@@ -1902,14 +2027,30 @@ mod tests {
         assert_eq!(decoded.output_column, "hmac");
         assert!(matches!(decoded.null_policy, HmacNullPolicy::Empty));
         // Colonne vuote, ripetute, key_env vuoto, nome output non valido.
-        assert!(hmac_sha256(&batch, &hmac_config(&[], "PLENORA_HMAC_CFG_KEY")).is_err());
-        assert!(hmac_sha256(&batch, &hmac_config(&["a", "a"], "PLENORA_HMAC_CFG_KEY")).is_err());
-        assert!(hmac_sha256(&batch, &hmac_config(&["a"], " ")).is_err());
+        assert_rifiuto!(
+            hmac_sha256(&batch, &hmac_config(&[], "PLENORA_HMAC_CFG_KEY")),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            hmac_sha256(&batch, &hmac_config(&["a", "a"], "PLENORA_HMAC_CFG_KEY")),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            hmac_sha256(&batch, &hmac_config(&["a"], " ")),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         let config = HmacSha256 {
             output_column: " ".into(),
             ..hmac_config(&["a"], "PLENORA_HMAC_CFG_KEY")
         };
-        assert!(hmac_sha256(&batch, &config).is_err());
+        assert_rifiuto!(
+            hmac_sha256(&batch, &config),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     #[test]

@@ -151,8 +151,10 @@ def test_i_messaggi_non_portano_dati_ne_percorsi(
         ],
         "outputs": ["u"],
     }
-    with pytest.raises(pd.PlenoraError) as valore:
+    with pytest.raises(pd.PlenoraInvalidPlanError) as valore:
         pd.run(piano, {"t": tabella})
+    assert valore.value.category == "invalid_plan"
+    assert valore.value.phase == "validate"
     verifica(valore.value, valida)
     assert CANARINO not in json.dumps(valore.value.to_dict())
 

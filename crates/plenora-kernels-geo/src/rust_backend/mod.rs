@@ -852,8 +852,23 @@ pub fn residual_classes(result: &PolygonizeResult) -> [(&'static str, &[LineStri
 // `plenora-cli/tests/geo_adversarial.rs`, sullo stesso contratto: le attese
 // (conteggi, aree, varianti d'errore) sono quelle che GEOS soddisfaceva.
 #[cfg(test)]
+pub(crate) fn assert_bowtie_repaired(geometry: &Geometry<f64>) {
+    use geo::{polygon, MultiPolygon, Relate};
+    let expected = Geometry::MultiPolygon(MultiPolygon(vec![
+        polygon![(x: 0.0, y: 0.0), (x: 2.0, y: 0.0), (x: 1.0, y: 1.0), (x: 0.0, y: 0.0)],
+        polygon![(x: 0.0, y: 2.0), (x: 1.0, y: 1.0), (x: 2.0, y: 2.0), (x: 0.0, y: 2.0)],
+    ]));
+    assert!(matches!(geometry, Geometry::MultiPolygon(parts) if parts.0.len() == 2));
+    assert!(
+        geometry.relate(&expected).is_equal_topo(),
+        "due triangoli della farfalla"
+    );
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use geo::Relate as _;
     use geozero::{CoordDimensions, ToWkb};
 
     /// Precisione dei test: coordinate astratte fino a qualche decina di
@@ -872,10 +887,13 @@ mod tests {
     #[test]
     fn repairs_self_intersection_with_both_methods() {
         let input = bow_tie_wkb();
-        assert!(geometry_from_wkb(&input).is_err());
+        let errore = geometry_from_wkb(&input).expect_err("farfalla invalida");
+        assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
         for method in [RepairMethod::Linework, RepairMethod::Structure] {
             let output = make_valid_wkb(&input, method, false, precisione()).unwrap();
             let repaired = geometry_from_wkb(&output).unwrap();
+            assert_bowtie_repaired(&repaired);
             assert!((repaired.unsigned_area() - 2.0).abs() < 1e-12);
         }
     }
@@ -893,14 +911,23 @@ mod tests {
 
     #[test]
     fn malformed_or_non_finite_wkb_never_reaches_the_kernel() {
-        assert!(make_valid_wkb(&[1, 2, 3], RepairMethod::Structure, false, precisione()).is_err());
+        let errore = make_valid_wkb(&[1, 2, 3], RepairMethod::Structure, false, precisione())
+            .expect_err("WKB troncato");
+        let RustBackendError::InputContract(errore) = errore else {
+            panic!("atteso contratto WKB");
+        };
+        assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
         let mut nan_point = vec![1_u8, 1, 0, 0, 0];
         nan_point.extend_from_slice(&f64::NAN.to_le_bytes());
         nan_point.extend_from_slice(&1.0_f64.to_le_bytes());
-        assert!(matches!(
-            make_valid_wkb(&nan_point, RepairMethod::Structure, false, precisione()),
-            Err(RustBackendError::InputContract(_))
-        ));
+        let errore = make_valid_wkb(&nan_point, RepairMethod::Structure, false, precisione())
+            .expect_err("coordinata non finita");
+        let RustBackendError::InputContract(errore) = errore else {
+            panic!("atteso contratto WKB");
+        };
+        assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
     }
 
     #[test]
@@ -1171,7 +1198,13 @@ mod tests {
     #[test]
     fn rejects_hostile_inputs_and_handles_complex_topology() {
         let square = |x: f64, y: f64, size: f64| rect(x, y, x + size, y + size);
-        assert!(make_valid_wkb(&[1, 2, 3], RepairMethod::Linework, false, precisione()).is_err());
+        let errore = make_valid_wkb(&[1, 2, 3], RepairMethod::Linework, false, precisione())
+            .expect_err("WKB troncato");
+        let RustBackendError::InputContract(errore) = errore else {
+            panic!("atteso contratto WKB");
+        };
+        assert_eq!(errore.category(), plenora_core::ErrorCategory::InvalidPlan);
+        assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
         let valid = square(0.0, 0.0, 4.0).to_wkb(CoordDimensions::xy()).unwrap();
         assert_eq!(
             make_valid_wkb(&valid, RepairMethod::Structure, false, precisione()).unwrap(),
@@ -1190,27 +1223,47 @@ mod tests {
             Geometry::LineString(line_string![(x: 0.0, y: 4.0), (x: 0.0, y: 0.0)]),
             Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 4.0, y: 4.0)]),
         ]));
-        assert_eq!(
+        let faces =
             polygonize_linework(&network, true, true, 100, 10_000, 100, 1_000, precisione())
-                .unwrap()
-                .polygons
-                .len(),
-            2
-        );
-        assert!(
-            split_polygon_by_linework(&wrong, &network, 100, 10_000, 100, 1_000, precisione())
-                .is_err()
-        );
-        assert!(split_polygon_by_linework(
-            &square(0.0, 0.0, 4.0),
-            &wrong,
-            100,
-            10_000,
-            100,
-            1_000,
-            precisione()
-        )
-        .is_err());
+                .expect("quadrato diviso");
+        let expected = [
+            polygon![(x: 0.0, y: 0.0), (x: 4.0, y: 0.0), (x: 4.0, y: 4.0), (x: 0.0, y: 0.0)],
+            polygon![(x: 0.0, y: 0.0), (x: 4.0, y: 4.0), (x: 0.0, y: 4.0), (x: 0.0, y: 0.0)],
+        ];
+        assert_eq!(faces.polygons.len(), 2);
+        for expected in &expected {
+            assert_eq!(
+                faces
+                    .polygons
+                    .iter()
+                    .filter(|p| p.relate(expected).is_equal_topo())
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(faces.residual_count(), 0);
+        assert!(matches!(
+            split_polygon_by_linework(&wrong, &network, 100, 10_000, 100, 1_000, precisione()),
+            Err(RustBackendError::UnsupportedGeometry {
+                operation: "split",
+                actual: "Point"
+            })
+        ));
+        assert!(matches!(
+            split_polygon_by_linework(
+                &square(0.0, 0.0, 4.0),
+                &wrong,
+                100,
+                10_000,
+                100,
+                1_000,
+                precisione()
+            ),
+            Err(RustBackendError::UnsupportedGeometry {
+                operation: "split",
+                actual: "Point"
+            })
+        ));
     }
 
     /// La firma di `geos_backend::PolygonizeResult::residual_count` a
@@ -1282,7 +1335,30 @@ mod tests {
                 .unwrap_err()
                 .into(),
         ];
-        for error in errors {
+        for (error, categoria, fase) in errors
+            .into_iter()
+            .zip([
+                (
+                    plenora_core::ErrorCategory::ResourceLimit,
+                    plenora_core::ErrorPhase::Write,
+                ),
+                (
+                    plenora_core::ErrorCategory::ResourceLimit,
+                    plenora_core::ErrorPhase::Write,
+                ),
+                (
+                    plenora_core::ErrorCategory::InvalidPlan,
+                    plenora_core::ErrorPhase::Validate,
+                ),
+                (
+                    plenora_core::ErrorCategory::InvalidPlan,
+                    plenora_core::ErrorPhase::Validate,
+                ),
+            ])
+            .map(|(error, (categoria, fase))| (error, categoria, fase))
+        {
+            assert_eq!(error.category(), categoria);
+            assert_eq!(error.phase(), fase);
             let message = error.to_string();
             for forbidden in ["7654321", "7654", "7.654"] {
                 assert!(

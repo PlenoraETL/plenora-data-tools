@@ -20,6 +20,7 @@ use std::sync::Arc;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, Encoding};
+use parquet::errors::ParquetError;
 use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::properties::{WriterProperties, WriterVersion};
 use parquet::file::reader::{FileReader, SerializedFileReader};
@@ -28,7 +29,8 @@ use plenora_core::arrow::array::{
     ArrayRef, FixedSizeBinaryArray, Float64Array, Int64Array, RecordBatch, StringArray,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_core::ErrorCategory;
+use plenora_core::arrow::ArrowError;
+use plenora_core::{ErrorCategory, ErrorPhase};
 use plenora_io::{leggi_tabella, Formato};
 
 use comune::{cartella, identiche};
@@ -86,10 +88,11 @@ fn leggi(byte: &[u8]) -> plenora_core::Result<RecordBatch> {
 /// contiene `motivo` (il messaggio di dt2 non porta quello di `parquet`).
 /// Il motivo, deterministico, al posto di una soglia di tempo, che dipende
 /// dalla macchina.
-fn rifiutato(byte: &[u8], motivo: &str) {
+fn rifiutato(byte: &[u8], motivo: &str, apertura: bool) {
     let errore = leggi(byte).expect_err("il file doveva essere rifiutato");
     assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
-    let messaggio = messaggio_parquet(byte, false);
+    assert_eq!(errore.phase(), ErrorPhase::Write);
+    let messaggio = messaggio_parquet(byte, false, apertura);
     assert!(messaggio.contains(motivo), "{messaggio}");
 }
 
@@ -97,8 +100,8 @@ fn rifiutato(byte: &[u8], motivo: &str) {
 /// (`PAGE_INDEX_NOT_QUALIFIED`): l'altro stato del lettore di pagine, sulle
 /// posizioni dell'offset index, non si raggiunge.
 fn rifiutato_nei_due_stati(byte: &[u8], motivo: &str) {
-    rifiutato(byte, motivo);
-    let messaggio = messaggio_parquet(byte, true);
+    rifiutato(byte, motivo, false);
+    let messaggio = messaggio_parquet(byte, true, true);
     assert!(
         messaggio.contains(parquet::basic::PAGE_INDEX_NOT_QUALIFIED),
         "{messaggio}"
@@ -107,7 +110,7 @@ fn rifiutato_nei_due_stati(byte: &[u8], motivo: &str) {
 
 /// L'errore di `parquet` sullo stesso file, letto fino in fondo; con
 /// `indice` l'offset index è obbligatorio e deve essere caricato.
-fn messaggio_parquet(byte: &[u8], indice: bool) -> String {
+fn messaggio_parquet(byte: &[u8], indice: bool, apertura: bool) -> String {
     let dir = cartella();
     let percorso = dir.path().join("q.parquet");
     std::fs::write(&percorso, byte).unwrap();
@@ -121,10 +124,23 @@ fn messaggio_parquet(byte: &[u8], indice: bool) -> String {
         opzioni,
     ) {
         Ok(costruttore) => costruttore,
-        Err(errore) => return errore.to_string(),
+        Err(errore) => {
+            assert!(apertura, "il rifiuto atteso e nella lettura delle pagine");
+            if indice {
+                assert!(matches!(&errore, ParquetError::NYI(_)), "{errore}");
+            } else {
+                assert!(matches!(&errore, ParquetError::General(_)), "{errore}");
+            }
+            return errore.to_string();
+        }
     };
+    assert!(
+        !apertura,
+        "il costruttore doveva rifiutare il footer o gli indici"
+    );
     for batch in costruttore.build().unwrap() {
         if let Err(errore) = batch {
+            assert!(matches!(&errore, ArrowError::ParquetError(_)), "{errore}");
             return errore.to_string();
         }
     }
@@ -228,7 +244,7 @@ fn trova(byte: &[u8], da: usize, cerca: &[u8]) -> usize {
 fn una_pagina_piu_grande_del_suo_chunk_e_rifiutata() {
     for compressione in [Compression::UNCOMPRESSED, Compression::SNAPPY] {
         let originale = scrivi(&interi(2000, 2000), proprieta(compressione, false));
-        assert!(leggi(&originale).is_ok());
+        identiche(&interi(2000, 2000), &leggi(&originale).unwrap());
         let chunk = chunk(&originale);
         let campi = header(&originale, chunk.pagina_dati);
         let nuovo = massimo_zigzag(campi.non_compressi.1);
@@ -260,7 +276,7 @@ fn un_dizionario_con_piu_voci_dei_suoi_byte_e_rifiutato() {
         &interi(2000, 100),
         proprieta(Compression::UNCOMPRESSED, true),
     );
-    assert!(leggi(&originale).is_ok());
+    identiche(&interi(2000, 100), &leggi(&originale).unwrap());
     let chunk = chunk(&originale);
     let inizio = chunk.dizionario.expect("pagina del dizionario");
     let campi = header(&originale, inizio);
@@ -269,7 +285,7 @@ fn un_dizionario_con_piu_voci_dei_suoi_byte_e_rifiutato() {
     assert!(nuovo > 6400);
     let mut byte = originale;
     riscrivi_zigzag(&mut byte, campi.valori, nuovo);
-    rifiutato(&byte, "more values than its bytes can encode");
+    rifiutato(&byte, "more values than its bytes can encode", false);
 }
 
 /// Il conteggio dell'header delta (`block_size` 128 o 256, 4 miniblocchi, 10
@@ -320,7 +336,7 @@ fn uno_schema_con_piu_figli_degli_elementi_e_rifiutato() {
     let campo = varint(&originale, nome + 14);
     let mut byte = originale;
     riscrivi_zigzag(&mut byte, campo, massimo_zigzag(campo.1));
-    rifiutato(&byte, "more children than elements remain");
+    rifiutato(&byte, "more children than elements remain", true);
 }
 
 /// Le codifiche e le compressioni valide si rileggono uguali: le verifiche
@@ -392,11 +408,12 @@ fn byte_oltre_la_fine_del_file_sono_un_errore_senza_riserva() {
     let percorso = dir.path().join("corto");
     std::fs::write(&percorso, [0_u8; 16]).unwrap();
     let file = File::open(&percorso).unwrap();
-    assert_eq!(file.get_bytes(4, 12).unwrap().len(), 12);
+    assert_eq!(file.get_bytes(4, 12).unwrap().as_ref(), &[0_u8; 12]);
     for (inizio, lunghezza) in [(4, 13), (0, usize::MAX / 2), (u64::MAX, 1)] {
         let errore = file
             .get_bytes(inizio, lunghezza)
             .expect_err("oltre la fine");
+        assert!(matches!(&errore, ParquetError::EOF(_)), "{errore}");
         assert!(
             errore.to_string().contains("past the end of the file"),
             "{errore}"
@@ -406,18 +423,12 @@ fn byte_oltre_la_fine_del_file_sono_un_errore_senza_riserva() {
 
 /// L'offset index di un file valido non si carica: non è qualificato
 /// (`PAGE_INDEX_NOT_QUALIFIED`).
-fn indice_non_qualificato(byte: &[u8]) -> bool {
-    let dir = cartella();
-    let percorso = dir.path().join("i.parquet");
-    std::fs::write(&percorso, byte).unwrap();
-    let opzioni = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
-    ParquetRecordBatchReaderBuilder::try_new_with_options(File::open(&percorso).unwrap(), opzioni)
-        .err()
-        .is_some_and(|errore| {
-            errore
-                .to_string()
-                .contains(parquet::basic::PAGE_INDEX_NOT_QUALIFIED)
-        })
+fn indice_non_qualificato(byte: &[u8]) {
+    let messaggio = messaggio_parquet(byte, true, true);
+    assert!(
+        messaggio.contains(parquet::basic::PAGE_INDEX_NOT_QUALIFIED),
+        "{messaggio}"
+    );
 }
 
 /// Scrittore minimo del protocollo Thrift compact, per un header di pagina
@@ -532,7 +543,7 @@ fn il_controllo_guarda_l_header_del_tipo_di_pagina() {
     assert_eq!(nuovo.len(), lunghezza_header);
     let mut byte = originale;
     byte[chunk.pagina_dati..chunk.pagina_dati + lunghezza_header].copy_from_slice(&nuovo);
-    rifiutato(&byte, "exceeds the column chunk value count");
+    rifiutato(&byte, "exceeds the column chunk value count", false);
 }
 
 /// Una pagina v1 compressa con un header v2 aggiunto che dichiara
@@ -676,7 +687,7 @@ fn nulli_e_ripetizioni_si_rileggono_uguali() {
                 leggi(&byte).unwrap_or_else(|errore| panic!("{codifica:?} {versione:?}: {errore}"));
             identiche(tabella, &letta);
             // L'offset index non si carica: non è qualificato.
-            assert!(indice_non_qualificato(&byte), "{codifica:?} {versione:?}");
+            indice_non_qualificato(&byte);
         }
     }
 }

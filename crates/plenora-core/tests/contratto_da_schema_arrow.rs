@@ -12,6 +12,10 @@
 //! è iniettato dal caso). I casi il cui esito dipende dal risolutore stanno
 //! in `plenora-kernels-geo/tests/scoperta_contratto_con_risolutore.rs`.
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -178,7 +182,11 @@ fn discovery_rejects_unreadable_dimensions_never_ignores_them() {
         r#"{"crs":"EPSG:32632","dimensions":42}"#,
     ] {
         let result = read_geometry_contract_keys(&geometry_field(Some(geo_json)));
-        assert!(result.is_err(), "geo: {geo_json}");
+        assert_rifiuto!(
+            result,
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 }
 
@@ -311,7 +319,11 @@ fn discovery_rejects_malformed_geo_metadata_never_treats_it_as_missing() {
     // `missing` non lo trasforma in un CRS mancante.
     let schema = Arc::new(Schema::new(vec![geometry_field(Some("not json"))]));
     let result = discover_input_contract_from_schema(schema, resolve_crs);
-    assert!(result.is_err(), "metadato geo malformato -> errore");
+    assert_rifiuto!(
+        result,
+        plenora_core::ErrorCategory::Schema,
+        plenora_core::ErrorPhase::Validate
+    );
 }
 
 // -------------------------------------------------------------------
@@ -977,7 +989,11 @@ fn metadati_crs_rifiutano_duplicati_senza_payload() {
         }
     }
     let raw = r#"{"crs":"EPSG:4326","crs":"EPSG:3857"}"#.to_owned();
-    assert!(crs_definition_from_metadata("geometry", Some(&raw)).is_err());
+    assert_rifiuto!(
+        crs_definition_from_metadata("geometry", Some(&raw)),
+        plenora_core::ErrorCategory::DataMapping,
+        plenora_core::ErrorPhase::Write
+    );
     let mut metadata = geometry_field(Some(&raw)).metadata().clone();
     strip_decided_crs_declarations(&mut metadata);
     assert_eq!(metadata.get(GEO_METADATA_KEY), Some(&raw));
@@ -999,13 +1015,20 @@ fn crs_io_non_confrontabile_preserva_errore_del_risolutore() {
         .unwrap()
         .replace("6378137", "6378136");
     let expected = resolve_crs(&wkt, "crs").unwrap_err();
-    assert!(expected.to_string().contains("CRS_NOT_BUILTIN"));
+    assert!(matches!(expected, plenora_core::crs::CrsError::NotBuiltin));
     let field = canonical_crs_field(&[
         ("crs", "EPSG:32632"),
         (PLENORA_GEOMETRY_CRS_DEFINITION_KEY, &wkt),
         (PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY, "wkt"),
     ]);
-    let error = read_geometry_contract_keys(&field).unwrap_err();
+    let error = assert_rifiuto!(
+        read_geometry_contract_keys(&field),
+        plenora_core::ErrorCategory::Crs,
+        plenora_core::ErrorPhase::Validate
+    );
+    assert!(
+        matches!(&error, PlenoraError::CrsCoded { code, .. } if code.as_str() == "CRS_NOT_BUILTIN")
+    );
     assert_eq!(error.to_string(), PlenoraError::from(expected).to_string());
     assert!(!error.to_string().contains("discordante"));
 }

@@ -186,6 +186,7 @@ python scripts/genera_costi_geo.py --verifica         # modello di costo geo
 python scripts/genera_inventario.py --check           # docs/inventario.md aggiornato
 python scripts/check_docs.py                          # link, ancore, comandi, generati
 python scripts/check_comments.py                      # regole oggettive dei commenti
+python scripts/check_esito_unico.py                    # rifiuti non tipizzati nelle prove
 python -m unittest discover -s scripts -p "test_*.py" # prove delle guardie
 ```
 

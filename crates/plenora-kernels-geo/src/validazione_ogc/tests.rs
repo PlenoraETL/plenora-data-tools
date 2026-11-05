@@ -587,7 +587,12 @@ fn coordinate_non_finite_rifiutate_come_da_geo() {
             let denso = con_lato_denso(&punti, 30);
             verifica_caso(&denso);
             let geometria = Geometry::Polygon(Polygon::new(denso, vec![]));
-            assert!(geometria.valida_ogc_rapida().is_err());
+            // Il generico stabilisce anche la precedenza: un'autointersezione
+            // puo' essere segnalata prima della coordinata non finita.
+            let atteso = geometria
+                .check_validation()
+                .expect_err("coordinate non finite");
+            assert_eq!(geometria.valida_ogc_rapida(), Err(atteso));
         }
     }
 }
