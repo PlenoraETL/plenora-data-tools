@@ -11645,7 +11645,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 2, analisi 4, kernel 1 |
+| versioni | semantica 3, config 2, analisi 4, kernel 2 |
 
 #### Che cosa fa
 
@@ -11656,6 +11656,10 @@ convesso e scava verso i punti interni ogni lato più lungo di
 `length_threshold`, se il punto candidato sta entro la lunghezza del lato
 divisa per `concavity`. Più `concavity` è piccola, più il poligono è
 concavo; molto grande, è l'inviluppo convesso.
+
+I confronti di distanza usano i lati adiacenti del bordo corrente, anche
+dopo uno scavo. La coda visita ciascun lato una volta e accoda solo i due
+figli dell'inserimento; non riparte dai lati gia' visitati.
 
 #### Parametri
 

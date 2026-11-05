@@ -541,7 +541,7 @@ where
     let mut interior_points_tree: RTree<Coord<T>> = RTree::bulk_load(coords.to_owned());
     let mut current_hull_tree: RTree<Line<T>> = RTree::bulk_load(convex_hull.lines().collect());
 
-    let mut edge_queue: VecDeque<CurrentHullEdge<T>> = VecDeque::new();
+    let mut edge_queue: VecDeque<usize> = VecDeque::new();
     let mut current_hull_edges: Vec<CurrentHullEdge<T>> = Vec::new();
 
     // Populate edge queue and current hull edges with convex hull edges
@@ -554,7 +554,7 @@ where
             next_i: if i == hull_length - 1 { 0 } else { i + 1 },
         };
         current_hull_edges.push(edge.clone());
-        edge_queue.push_back(edge);
+        edge_queue.push_back(i);
 
         // Remove hull points from interior points
         if i == 0 {
@@ -563,7 +563,9 @@ where
         remove_interior_point(&line.end, &mut interior_points_tree);
     }
 
-    while let Some(hull_edge) = edge_queue.pop_front() {
+    while let Some(edge_i) = edge_queue.pop_front() {
+        // Queue identities, not snapshots: adjacent edges may have been split.
+        let hull_edge = current_hull_edges[edge_i].clone();
         let line = hull_edge.line;
         let length = Euclidean.length(&line);
 
@@ -612,6 +614,9 @@ where
                         next_i: hull_edge.next_i,
                     };
 
+                    // The start edge retains its index; only the successor changes predecessor.
+                    current_hull_edges[hull_edge.next_i].prev_i = end_edge_i;
+
                     // Replace the current edge with the new start edge
                     current_hull_edges[hull_edge.i] = start_hull_edge.clone();
 
@@ -619,8 +624,8 @@ where
                     current_hull_edges.push(end_hull_edge.clone());
 
                     // Push both new edges to queue
-                    edge_queue.push_back(start_hull_edge);
-                    edge_queue.push_back(end_hull_edge);
+                    edge_queue.push_back(start_hull_edge.i);
+                    edge_queue.push_back(end_hull_edge.i);
 
                     continue;
                 }

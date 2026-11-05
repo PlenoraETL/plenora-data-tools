@@ -8,6 +8,10 @@ convesso e scava verso i punti interni ogni lato più lungo di
 divisa per `concavity`. Più `concavity` è piccola, più il poligono è
 concavo; molto grande, è l'inviluppo convesso.
 
+I confronti di distanza usano i lati adiacenti del bordo corrente, anche
+dopo uno scavo. La coda visita ciascun lato una volta e accoda solo i due
+figli dell'inserimento; non riparte dai lati gia' visitati.
+
 ### Parametri
 
 `input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
