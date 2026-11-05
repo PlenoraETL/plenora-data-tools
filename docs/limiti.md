@@ -37,13 +37,20 @@ relative prove; per gli opt-in, implementare e verificare tutte le regole
 prima di rivendicarli. Le assenze DT-ABS-001 e DT-ABS-002 sono intenzionali:
 non rientrano sulla stessa identita di operazione.
 
-## Geometrie multiple: limiti transitori della PR 1
+## Geometrie multiple: condizioni dei formati
 
-| Regola | Ambito | Hazard | Condizione di rientro |
-| --- | --- | --- | --- |
-| Le operazioni geo richiedono un operando esplicito o la primaria. | `input_geometry` nelle unarie, `left_geometry` e `right_geometry` nelle binarie; nomi di colonne geometriche. | Senza primaria il selettore omesso fallisce con `Schema`; nessuna elezione della prima colonna. | Supporto plurale dalla PR 3; CRS, assi e precisione riguardano solo gli operandi. |
-| GeoParquet richiede una primaria e non la elegge. | Scrittura GeoParquet. | IPC e Arrow trasportano tabelle senza primaria; GeoParquet le rifiuta con `Unsupported`. Tutte le geometrie restano soggette ai limiti CRS e WKB. | Selezione esplicita della primaria prima della scrittura. |
-| Il canone interno non assegna ID pubblici mancanti; una primaria plurale sintetica senza ID pubblico viene rifiutata. | `arrow_schema_from_contract` su contratti costruiti direttamente in Rust; gli ingressi Arrow con primaria esplicita hanno già il suo ID. | Assegnare ID prima di conoscere tutti gli ingressi potrebbe confondere campi distinti. | Gli output tabellari distinguono gli ID provvisori dagli ID ricevuti; la pubblicazione segue la provenienza e la posizione primaria con tutte le identità del piano. Restano da adattare i produttori geo. |
+Il limite `data-una-geometria` è rimosso dalla 4.1.0. Ogni colonna conserva
+CRS e assi propri; le operazioni selezionano gli operandi per nome.
+Senza primaria, un selettore omesso causa `Schema`; la scrittura GeoParquet
+causa `Unsupported`. IPC file e stream conservano anche l'assenza esplicita
+della primaria. Queste sono condizioni del contratto, non limiti transitori.
+Per i contratti costruiti direttamente in Rust, l'emissione Arrow di una
+primaria plurale richiede identità pubbliche già coerenti: senza l'ID della
+primaria `arrow_schema_from_contract` rifiuta con `Schema`. Il completamento
+delle identità degli ingressi e delle uscite del piano avviene nei relativi
+confini; non si inventano ID nella sola serializzazione del contratto.
+Restano i limiti CRS, WKB e precisione delle singole operazioni.
+Esempi eseguiti e adozione: [geometrie multiple](geometrie-multiple.md).
 
 ## Precisione delle operazioni geografiche: 1 cm a terra
 

@@ -177,7 +177,7 @@ struct UscitaSpec {
     colonne: Vec<ColonnaSpec>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ColonnaSpec {
     nome: String,
@@ -2167,6 +2167,41 @@ fn con_una_riga_in_coda(batch: &RecordBatch, null: bool) -> Option<RecordBatch> 
     .ok()
 }
 
+/// Un rifiuto deve corrispondere a entrambi gli assi attesi.
+#[track_caller]
+fn verifica_rifiuto(
+    errore: &PlenoraError,
+    categoria: plenora_core::ErrorCategory,
+    fase: plenora_core::ErrorPhase,
+) {
+    assert_eq!((errore.category(), errore.phase()), (categoria, fase));
+}
+
+fn esegui_su_tipizzato(
+    scheda: &Scheda,
+    ingressi: &[RecordBatch],
+) -> Result<RecordBatch, PlenoraError> {
+    let piano = Pipeline::from_json(&testo_piano(scheda)).expect("piano");
+    let schemi: Vec<_> = scheda
+        .esempio
+        .ingressi
+        .iter()
+        .zip(ingressi)
+        .map(|(spec, batch)| (spec.nome.as_str(), batch.schema()))
+        .collect();
+    let validata = piano.validate(&schemi)?;
+    let tabelle = scheda
+        .esempio
+        .ingressi
+        .iter()
+        .zip(ingressi)
+        .map(|(spec, batch)| (spec.nome.clone(), batch.clone()))
+        .collect();
+    validata
+        .run(tabelle)
+        .map(|esito| esito.outputs.into_iter().next().expect("un'uscita").1)
+}
+
 /// L'esempio della scheda su ingressi dati; `None` se il runner non esegue
 /// l'operazione (verifica sul solo contratto).
 fn esegui_su(scheda: &Scheda, ingressi: &[RecordBatch]) -> Option<Result<RecordBatch, String>> {
@@ -2386,12 +2421,9 @@ fn con_una_geometria_vuota(batch: &RecordBatch) -> Option<RecordBatch> {
     RecordBatch::try_new(schema, colonne).ok()
 }
 
-/// Casi limite della nullabilita' dichiarata: ingressi vuoti (zero righe) e
-/// una geometria vuota al posto della prima, con ingressi senza null. Un
-/// rifiuto dei dati o del piano e' ammesso; non lo e' un errore interno,
-/// ne' una geometria null in una colonna dichiarata non nullable (il runner
-/// la rende con «non ammette null»): sarebbe una dichiarazione piu' stretta
-/// dell'uscita.
+/// Casi limite della nullabilita' dichiarata: ingressi senza righe e una
+/// geometria vuota al posto della prima. Le schede determinano l'unico
+/// esito ammesso; i successi hanno schema, metadati e celle attesi indipendenti.
 #[test]
 fn le_geo_rispettano_la_nullabilita_su_ingressi_vuoti_e_geometrie_vuote() {
     prepara_ambiente();
@@ -2418,12 +2450,35 @@ fn le_geo_rispettano_la_nullabilita_su_ingressi_vuoti_e_geometrie_vuote() {
             varianti.push(("una geometria vuota", con_vuota));
         }
         for (nome, variante) in varianti {
-            if let Some(Err(errore)) = esegui_su(scheda, &variante) {
-                let dichiarato = nome == "una geometria vuota" && VUOTA_RIFIUTATA.contains(&op);
-                if errore.contains("internal")
-                    || (errore.contains("non ammette null") && !dichiarato)
-                {
-                    difetti.push(format!("{op}, {nome}: {errore}"));
+            let rifiuto = if nome == "ingressi vuoti" {
+                // Voronoi richiede almeno due punti anche su una tabella vuota.
+                (op == "geo.voronoi").then_some(plenora_core::ErrorCategory::InvalidPlan)
+            } else {
+                // Le schede dichiarano il rifiuto dell'assenza di centroide,
+                // inviluppo o geometria non nullable, anche per WKB vuoto valido.
+                (VUOTA_RIFIUTATA.contains(&op) || matches!(op, "geo.centroid" | "geo.envelope"))
+                    .then_some(plenora_core::ErrorCategory::InvalidPlan)
+            };
+            let esito = esegui_su_tipizzato(scheda, &variante);
+            let atteso = rifiuto.map(|c| (c, plenora_core::ErrorPhase::Validate));
+            let effettivo = esito.as_ref().err().map(|e| (e.category(), e.phase()));
+            if effettivo != atteso {
+                difetti.push(format!(
+                    "{op}, {nome}: atteso {atteso:?}, ottenuto {effettivo:?}"
+                ));
+                continue;
+            }
+            if let Ok(uscita) = esito {
+                let attesa = attesa_geo_vuota(scheda, &senza, nome == "ingressi vuoti");
+                if !stessi_valori(&attesa, &uscita) {
+                    difetti.push(format!(
+                        "{op}, {nome}: valori, tipi, nomi o numero di righe diversi"
+                    ));
+                }
+                if attesa.schema() != uscita.schema() {
+                    difetti.push(format!(
+                        "{op}, {nome}: schema, nullabilita' o metadati diversi"
+                    ));
                 }
             }
         }
@@ -2726,20 +2781,25 @@ fn catalogo_conserva_i_riferimenti_dei_byte_geometrici() {
                             .collect();
                         let esito = piano.validate(&schemi).and_then(|v| v.run(tabelle));
                         casi += 1;
-                        match esito {
-                            Ok(esito) => {
-                                if esito
-                                    .outputs
-                                    .iter()
-                                    .any(|(_, b)| !verifica_byte_geometrici(&ingressi, b))
-                                {
-                                    violazioni.push(format!("{}: posizione {posizione}, proiettato {proiettato}, divergente {divergente}, vuoto {vuoto}", operazione.id));
-                                }
+                        let atteso = rifiuto_byte_catalogo(
+                            operazione.id,
+                            posizione,
+                            proiettato,
+                            divergente,
+                            vuoto,
+                        );
+                        let effettivo = esito.as_ref().err().map(|e| (e.category(), e.phase()));
+                        if effettivo != atteso {
+                            violazioni.push(format!("{}: posizione {posizione}, proiettato {proiettato}, divergente {divergente}, vuoto {vuoto}: atteso {atteso:?}, ottenuto {effettivo:?}", operazione.id));
+                        }
+                        if let Ok(esito) = esito {
+                            if esito
+                                .outputs
+                                .iter()
+                                .any(|(_, b)| !verifica_byte_geometrici(&ingressi, b))
+                            {
+                                violazioni.push(format!("{}: posizione {posizione}, proiettato {proiettato}, divergente {divergente}, vuoto {vuoto}: riferimenti persi", operazione.id));
                             }
-                            Err(PlenoraError::Internal(_)) => {
-                                panic!("{}: errore interno", operazione.id)
-                            }
-                            Err(_) => {}
                         }
                     }
                 }
@@ -2988,13 +3048,16 @@ fn catalogo_identita_seguono_la_provenienza() {
                         || op.id.starts_with("geo.predicate_"))
             });
             if rejects_collision {
-                assert!(
-                    matches!(
-                        result,
-                        Err(PlenoraError::Schema(_) | PlenoraError::InvalidPlan(_))
-                    ),
-                    "{}: {variant:?}",
-                    op.id
+                // L'unnest rifiuta il piano; i produttori geo rifiutano lo schema.
+                let categoria = if op.id == "table.unnest" {
+                    plenora_core::ErrorCategory::InvalidPlan
+                } else {
+                    plenora_core::ErrorCategory::Schema
+                };
+                verifica_rifiuto(
+                    &result.expect_err(op.id),
+                    categoria,
+                    plenora_core::ErrorPhase::Validate,
                 );
                 continue;
             }
@@ -3235,15 +3298,17 @@ fn catalogo_colonne_presenti_in_un_solo_ingresso() {
                             | "table.intersect"
                     ) || (op.family == Family::Geo && geometry);
                     if reject {
-                        assert!(
-                            matches!(
-                                result,
-                                Err(PlenoraError::Schema(_)
-                                    | PlenoraError::InvalidPlan(_)
-                                    | PlenoraError::Crs(_)
-                                    | PlenoraError::Unsupported(_))
-                            ),
-                            "{context}: {result:?}"
+                        // Le operazioni insiemistiche richiedono schemi della stessa
+                        // larghezza; le binarie geo richiedono l'operando su ogni lato.
+                        let categoria = if op.family == Family::Geo {
+                            plenora_core::ErrorCategory::Schema
+                        } else {
+                            plenora_core::ErrorCategory::InvalidPlan
+                        };
+                        verifica_rifiuto(
+                            &result.expect_err(&context),
+                            categoria,
+                            plenora_core::ErrorPhase::Validate,
                         );
                         continue;
                     }
@@ -3649,15 +3714,20 @@ fn catalogo_tabellare_multigeometria() {
                     let indices = (inputs[0].num_columns() - count..inputs[0].num_columns())
                         .collect::<Vec<_>>();
                     let input = inputs[0].project(&indices).unwrap();
-                    assert!(
-                        matches!(
-                            plenora_kernels_table::reshape::transpose(
-                                &input,
-                                &config,
-                                &plenora_kernels_table::Limits::default()
-                            ),
-                            Err(PlenoraError::Crs(_))
-                        ),
+                    let error = plenora_kernels_table::reshape::transpose(
+                        &input,
+                        &config,
+                        &plenora_kernels_table::Limits::default(),
+                    )
+                    .expect_err(&context);
+                    assert_eq!(
+                        error.category(),
+                        plenora_core::ErrorCategory::Crs,
+                        "{context}"
+                    );
+                    assert_eq!(
+                        error.phase(),
+                        plenora_core::ErrorPhase::Validate,
                         "{context}"
                     );
                     continue;
@@ -3779,16 +3849,34 @@ fn catalogo_geo_multigeometria_operandi_e_passanti() {
             let mut invalida = config.clone();
             invalida[key] = value.clone();
             scheda.esempio.config = RawValue::from_string(invalida.to_string()).unwrap();
-            let errore = esegui_su(&scheda, &originali)
-                .expect("errore classificato")
-                .expect_err(op.id);
-            assert!(!errore.contains("SEGRETO"), "{}: {errore}", op.id);
-            let categoria = if value == serde_json::json!("SEGRETO_ASSENTE") && !produttore {
-                "schema violation"
-            } else {
-                "contract violation"
+            let piano = Pipeline::from_json(&testo_piano(&scheda)).unwrap();
+            let schemi: Vec<_> = scheda
+                .esempio
+                .ingressi
+                .iter()
+                .zip(&originali)
+                .map(|(s, b)| (s.nome.as_str(), b.schema()))
+                .collect();
+            let Err(errore) = piano.validate(&schemi) else {
+                panic!("{}: selettore invalido accettato in validazione", op.id);
             };
-            assert!(errore.contains(categoria), "{} categoria: {errore}", op.id);
+            assert!(
+                !errore.to_string().contains("SEGRETO"),
+                "{}: {errore}",
+                op.id
+            );
+            let categoria = if value == serde_json::json!("SEGRETO_ASSENTE") && !produttore {
+                plenora_core::ErrorCategory::Schema
+            } else {
+                plenora_core::ErrorCategory::InvalidPlan
+            };
+            assert_eq!(errore.category(), categoria, "{} categoria", op.id);
+            assert_eq!(
+                errore.phase(),
+                plenora_core::ErrorPhase::Validate,
+                "{} fase",
+                op.id
+            );
         }
 
         let ridotto = matches!(
@@ -4051,24 +4139,22 @@ fn catalogo_geo_multigeometria_operandi_e_passanti() {
                             "input_geometry"
                         }] = Value::String("__passante_0".into());
                         scheda.esempio.config = RawValue::from_string(assi.to_string()).unwrap();
-                        let errore = esegui_su(&scheda, &ingressi).unwrap().expect_err(op.id);
-                        assert!(
-                            errore.contains("AXIS_ORDER_REQUIRED"),
-                            "{} assi: {errore}",
-                            op.id
+                        let errore = esegui_su_tipizzato(&scheda, &ingressi).expect_err(op.id);
+                        verifica_rifiuto(
+                            &errore,
+                            plenora_core::ErrorCategory::Crs,
+                            plenora_core::ErrorPhase::Validate,
                         );
                     }
                 }
                 // Nessun selettore e nessuna primaria: rifiuto, mai la prima colonna.
                 if !produttore && primaria.is_none() {
                     scheda.esempio.config = RawValue::from_string(config.to_string()).unwrap();
-                    let errore = esegui_su(&scheda, &ingressi)
-                        .expect("rifiuto esplicito")
-                        .expect_err(op.id);
-                    assert!(
-                        errore.contains("operando geometrico assente"),
-                        "{}: {errore}",
-                        op.id
+                    let errore = esegui_su_tipizzato(&scheda, &ingressi).expect_err(op.id);
+                    verifica_rifiuto(
+                        &errore,
+                        plenora_core::ErrorCategory::Schema,
+                        plenora_core::ErrorPhase::Validate,
                     );
                 }
             }
@@ -4249,8 +4335,9 @@ fn esito_ruolo_geometrico(
 fn catalogo_geometria_in_ogni_ruolo_non_legge_wkb_come_testo() {
     prepara_ambiente();
     let mut casi = 0;
+    let mut difetti = Vec::new();
     for operazione in CATALOG {
-        let scheda = leggi_scheda(operazione).unwrap();
+        let mut scheda = leggi_scheda(operazione).unwrap();
         let originali: Vec<_> = scheda
             .esempio
             .ingressi
@@ -4280,7 +4367,31 @@ fn catalogo_geometria_in_ogni_ruolo_non_legge_wkb_come_testo() {
                             .iter()
                             .map(|b| geometria_per_ruolo(b, &nome, utf8, multipla, stato))
                             .collect();
-                        esiti.push(esito_ruolo_geometrico(&scheda, &config, &ingressi));
+                        scheda.esempio.config = RawValue::from_string(config.to_string()).unwrap();
+                        let atteso = rifiuto_ruolo_catalogo(operazione.id, &nome, stato, multipla);
+                        let esito = esegui_su_tipizzato(&scheda, &ingressi);
+                        let effettivo = esito.as_ref().err().map(|e| (e.category(), e.phase()));
+                        let scenario = format!(
+                            "{}: ruolo {nome}, multipla {multipla}, stato {stato}, utf8 {utf8}",
+                            operazione.id
+                        );
+                        if atteso != effettivo {
+                            difetti.push(format!(
+                                "{scenario}: atteso {atteso:?}, ottenuto {effettivo:?}"
+                            ));
+                        } else if let Ok(out) = &esito {
+                            let previsto =
+                                valori_ruolo_catalogo(&scheda, &config, &nome, stato, &ingressi);
+                            if !stessi_valori(&previsto, out) || previsto.schema() != out.schema() {
+                                difetti.push(format!(
+                                    "{scenario}: valori o schema diversi dall'oracolo"
+                                ));
+                            }
+                            if !verifica_byte_geometrici(&ingressi, out) {
+                                difetti.push(format!("{scenario}: riferimenti persi"));
+                            }
+                        }
+                        esiti.push(effettivo);
                         casi += 1;
                     }
                     assert_eq!(
@@ -4293,6 +4404,7 @@ fn catalogo_geometria_in_ogni_ruolo_non_legge_wkb_come_testo() {
         }
     }
     assert!(casi > CATALOG.len());
+    assert!(difetti.is_empty(), "ruoli:\n{}", difetti.join("\n"));
     eprintln!(
         "catalogo: {} operazioni, {casi} varianti di ruolo geometriche",
         CATALOG.len()
@@ -4812,4 +4924,949 @@ fn verifica_origini_catalogo(
             }
         }
     }
+}
+
+/// Attese delle fixture di riferimenti: le posizioni sono quelle delle schede,
+/// prima di eseguire il piano. Un nuovo id richiede una classificazione esplicita.
+// Bracci separati per la regola documentata (tipo, testo, fusione, CRS).
+#[allow(clippy::too_many_lines, clippy::match_same_arms)]
+fn rifiuto_byte_catalogo(
+    op: &str,
+    posizione: usize,
+    proiettato: bool,
+    divergente: usize,
+    vuoto: usize,
+) -> Option<(plenora_core::ErrorCategory, plenora_core::ErrorPhase)> {
+    use plenora_core::{ErrorCategory as C, ErrorPhase as F};
+    let categoria = match op {
+        "table.pivot" => Some(C::Unsupported),
+        // Id geometrico oppure dati eterogenei da convertire in testo.
+        "table.transpose" => Some(C::Crs),
+        "table.add_row_number"
+        | "table.assert_cardinality"
+        | "table.assert_metadata"
+        | "table.assert_not_null"
+        | "table.assert_unique"
+        | "table.cross_join"
+        | "table.dedup_advanced"
+        | "table.distinct"
+        | "table.drop_columns"
+        | "table.limit"
+        | "table.rename"
+        | "table.reorder_columns"
+        | "table.sample"
+        | "table.select_columns"
+        | "table.sort"
+        | "table.top_n"
+        | "table.uuid_generator" => None,
+        "table.assert_schema" => Some(C::InvalidPlan),
+        "table.align_schema" => (posizione == 1).then_some(C::InvalidPlan),
+        "table.aggregate" => (posizione == 1).then_some(C::InvalidPlan),
+        "table.assert_range"
+        | "table.bin"
+        | "table.rolling_window"
+        | "table.fill_na"
+        | "table.assert_regex"
+        | "table.filter"
+        | "table.statistics"
+        | "table.window_function" => {
+            (posizione == usize::from(op != "table.bin")).then_some(C::InvalidPlan)
+        }
+        "table.lookup" | "table.type_cast" => (posizione == 1).then_some(C::Crs),
+        "table.explode" | "table.unnest" => (posizione == 1).then_some(C::Crs),
+        "table.coalesce" => matches!(posizione, 1 | 2).then_some(C::InvalidPlan),
+        "table.melt" => matches!(posizione, 1 | 2).then_some(C::Crs),
+        "table.concat_columns" => (posizione < 3).then_some(C::InvalidPlan),
+        "table.replace"
+        | "table.split_column"
+        | "table.string_extract"
+        | "table.string_length"
+        | "table.string_pad"
+        | "table.text_normalize" => (posizione == 0).then_some(C::InvalidPlan),
+        "table.conditional"
+        | "table.date_add"
+        | "table.date_extract"
+        | "table.date_format"
+        | "table.expression"
+        | "table.flatten_json"
+        | "table.hmac_sha256"
+        | "table.sha256_hash"
+        | "table.timezone_convert" => (posizione == 0).then_some(C::Crs),
+        "table.date_diff"
+        | "table.formula"
+        | "table.mask_data"
+        | "table.md5_hash"
+        | "table.stable_fingerprint" => (posizione < 2).then_some(C::Crs),
+        "table.validate_rules" => (posizione < 2).then_some(C::InvalidPlan),
+        "table.asof_join" => (posizione == 0).then_some(C::InvalidPlan),
+        "table.fuzzy_join" => (posizione < 2).then_some(C::InvalidPlan),
+        "table.join" | "table.anti_join" | "table.semi_join" | "table.assert_foreign_key" => {
+            // Le chiavi occupano posizioni diverse: si fonderebbe WKB con uno scalare.
+            if position_cle_incompatible(op, posizione) {
+                Some(C::Crs)
+            } else if op == "table.assert_foreign_key" && vuoto == 2 {
+                return Some((C::DataMapping, F::Write));
+            } else {
+                None
+            }
+        }
+        "table.reconcile" => (posizione == 0 && divergente != 0).then_some(C::Crs),
+        "table.concat" | "table.except" | "table.intersect" | "table.union_distinct" => {
+            (divergente != 0).then_some(C::Crs)
+        }
+        "table.concat_by_name" => {
+            if posizione < 2 {
+                Some(C::Crs)
+            } else {
+                (divergente != 0).then_some(C::Crs)
+            }
+        }
+        "table.table_diff" => {
+            if divergente != 0 {
+                Some(C::Crs)
+            } else {
+                None
+            }
+        }
+        "geo.from_coords" => matches!(posizione, 1 | 2).then_some(C::Schema),
+        "geo.from_wkt" => (posizione == 1).then_some(C::Schema),
+        "geo.generate_grid" => None,
+        "geo.to_wkt"
+        | "geo.vertex_count"
+        | "geo.explode"
+        | "geo.geometry_accessors"
+        | "geo.geometry_diagnostics" => None,
+        "geo.boundary" | "geo.bounds_extractor" => (!proiettato).then_some(C::Crs),
+        "geo.collect" => (posizione == 0).then_some(C::InvalidPlan),
+        "geo.affine_transform"
+        | "geo.area"
+        | "geo.bearing"
+        | "geo.buffer"
+        | "geo.centroid"
+        | "geo.clean_topology"
+        | "geo.clip"
+        | "geo.cluster_dbscan"
+        | "geo.concave_hull"
+        | "geo.convex_hull"
+        | "geo.count_points_in_polygons"
+        | "geo.coverage_validate"
+        | "geo.delaunay"
+        | "geo.densify"
+        | "geo.difference"
+        | "geo.dissolve"
+        | "geo.distance"
+        | "geo.envelope"
+        | "geo.frechet_distance"
+        | "geo.geodesic_area"
+        | "geo.geodesic_distance"
+        | "geo.geodesic_line_length"
+        | "geo.hausdorff_distance"
+        | "geo.haversine_distance"
+        | "geo.intersection"
+        | "geo.length"
+        | "geo.line_builder"
+        | "geo.line_interpolate_point"
+        | "geo.line_locate_point"
+        | "geo.line_merge"
+        | "geo.line_substring"
+        | "geo.make_valid"
+        | "geo.nearest"
+        | "geo.overlay"
+        | "geo.perimeter"
+        | "geo.point_on_surface"
+        | "geo.polygonize"
+        | "geo.polygon_builder"
+        | "geo.predicate_contains"
+        | "geo.predicate_contains_properly"
+        | "geo.predicate_covered_by"
+        | "geo.predicate_covers"
+        | "geo.predicate_crosses"
+        | "geo.predicate_disjoint"
+        | "geo.predicate_equals_topo"
+        | "geo.predicate_intersects"
+        | "geo.predicate_overlaps"
+        | "geo.predicate_touches"
+        | "geo.predicate_within"
+        | "geo.reproject"
+        | "geo.rotate"
+        | "geo.scale"
+        | "geo.shared_paths"
+        | "geo.simplify"
+        | "geo.sjoin"
+        | "geo.snap"
+        | "geo.snap_to_grid"
+        | "geo.split"
+        | "geo.subdivide"
+        | "geo.symmetric_difference"
+        | "geo.translate"
+        | "geo.union"
+        | "geo.voronoi"
+        | "geo.within" => {
+            // Gli assi lat_lon della fixture sono incompatibili con l'ordine GIS.
+            // Sui due ingressi, ogni divergenza impedisce l'operazione comune.
+            // La lama di split contiene una ordinata negativa, fuori dal dominio
+            // UTM EPSG:32632 della fixture: Crs anche con assi proiettati corretti.
+            if !proiettato
+                || divergente != 0
+                || matches!(
+                    op,
+                    "geo.bearing"
+                        | "geo.geodesic_area"
+                        | "geo.geodesic_distance"
+                        | "geo.geodesic_line_length"
+                        | "geo.haversine_distance"
+                        | "geo.split"
+                )
+            {
+                Some(C::Crs)
+            } else if matches!(
+                op,
+                "geo.clean_topology"
+                    | "geo.clip"
+                    | "geo.coverage_validate"
+                    | "geo.difference"
+                    | "geo.dissolve"
+                    | "geo.frechet_distance"
+                    | "geo.intersection"
+                    | "geo.line_merge"
+                    | "geo.overlay"
+                    | "geo.polygonize"
+                    | "geo.shared_paths"
+                    | "geo.symmetric_difference"
+                    | "geo.union"
+                    | "geo.convex_hull"
+                    | "geo.concave_hull"
+                    | "geo.polygon_builder"
+                    | "geo.voronoi"
+                    | "geo.line_substring"
+                    | "geo.line_interpolate_point"
+            ) && (op != "geo.clip" || vuoto != 2)
+            {
+                Some(C::InvalidPlan)
+            } else {
+                None
+            }
+        }
+        _ => panic!("{op}: operazione senza attesa dei riferimenti"),
+    };
+    categoria.map(|c| (c, F::Validate))
+}
+
+fn position_cle_incompatible(op: &str, posizione: usize) -> bool {
+    match op {
+        "table.join" | "table.assert_foreign_key" | "table.anti_join" | "table.semi_join" => {
+            posizione < 2
+        }
+        _ => panic!("operazione senza chiavi classificate"),
+    }
+}
+
+/// Il controllo non stampa mai celle, neppure in caso di differenza.
+fn stessi_valori(atteso: &RecordBatch, reale: &RecordBatch) -> bool {
+    atteso.num_rows() == reale.num_rows()
+        && atteso.num_columns() == reale.num_columns()
+        && atteso
+            .schema()
+            .fields()
+            .iter()
+            .zip(reale.schema().fields())
+            .all(|(a, b)| a.name() == b.name() && a.data_type() == b.data_type())
+        && atteso.columns() == reale.columns()
+}
+
+#[allow(clippy::too_many_lines)]
+fn rifiuto_ruolo_catalogo(
+    op: &str,
+    nome: &str,
+    stato: usize,
+    multipla: bool,
+) -> Option<(plenora_core::ErrorCategory, plenora_core::ErrorPhase)> {
+    use plenora_core::{ErrorCategory as C, ErrorPhase as F};
+    let categoria = match op {
+        "table.assert_not_null" if stato == 2 => return Some((C::DataMapping, F::Write)),
+        "table.assert_unique" if stato == 0 => return Some((C::DataMapping, F::Write)),
+        "table.add_row_number"
+        | "table.coalesce"
+        | "table.dedup_advanced"
+        | "table.distinct"
+        | "table.drop_columns"
+        | "table.melt"
+        | "table.reconcile"
+        | "table.rename"
+        | "table.reorder_columns"
+        | "table.select_columns"
+        | "table.sort"
+        | "table.top_n"
+        | "table.assert_not_null"
+        | "table.assert_unique" => None,
+
+        "table.aggregate" | "table.statistics" => (nome == "importo").then_some(C::InvalidPlan),
+        "table.window_function" => (nome == "punti").then_some(C::InvalidPlan),
+        "table.pivot" => match nome {
+            "negozio" => None,
+            "mese" => Some(C::Crs),
+            "vendite" => Some(C::InvalidPlan),
+            _ => panic!("ruolo pivot non classificato"),
+        },
+        "table.table_diff" => (stato != 1).then_some(C::InvalidPlan),
+        "table.join"
+        | "table.align_schema"
+        | "table.asof_join"
+        | "table.assert_range"
+        | "table.assert_regex"
+        | "table.assert_schema"
+        | "table.bin"
+        | "table.concat_columns"
+        | "table.fill_na"
+        | "table.filter"
+        | "table.fuzzy_join"
+        | "table.replace"
+        | "table.rolling_window"
+        | "table.split_column"
+        | "table.string_extract"
+        | "table.string_length"
+        | "table.string_pad"
+        | "table.text_normalize"
+        | "table.validate_rules" => Some(C::InvalidPlan),
+        "table.anti_join"
+        | "table.semi_join"
+        | "table.assert_foreign_key"
+        | "table.conditional"
+        | "table.date_add"
+        | "table.date_diff"
+        | "table.date_extract"
+        | "table.date_format"
+        | "table.explode"
+        | "table.expression"
+        | "table.flatten_json"
+        | "table.hmac_sha256"
+        | "table.lookup"
+        | "table.mask_data"
+        | "table.md5_hash"
+        | "table.sha256_hash"
+        | "table.stable_fingerprint"
+        | "table.timezone_convert"
+        | "table.transpose"
+        | "table.type_cast"
+        | "table.unnest" => Some(C::Crs),
+        "geo.collect" => Some(if multipla { C::Schema } else { C::InvalidPlan }),
+        "geo.from_wkt" => Some(C::Schema),
+        _ => panic!("{op}: ruolo senza attesa indipendente"),
+    };
+    categoria.map(|c| (c, F::Validate))
+}
+
+/// Selezione di righe dell'oracolo: solo indici scritti nella prova, nessuna
+/// decisione presa dall'ordinamento, dal join o dal raggruppamento di produzione.
+fn righe_oracolo(array: &ArrayRef, righe: &[Option<u32>]) -> ArrayRef {
+    let indici = plenora_core::arrow::array::UInt32Array::from(righe.to_vec());
+    plenora_core::arrow::select::take::take(array.as_ref(), &indici, None).unwrap()
+}
+
+fn colonna_oracolo(nome: &str, tipo: &str, valori: Value) -> (Field, ArrayRef) {
+    let mut spec = serde_json::json!({"nome":nome,"tipo":tipo});
+    spec["valori"] = valori;
+    let spec: ColonnaSpec = serde_json::from_value(spec).unwrap();
+    colonna(&spec).unwrap()
+}
+
+#[allow(clippy::too_many_lines)]
+fn valori_ruolo_catalogo(
+    scheda: &Scheda,
+    config: &Value,
+    nome: &str,
+    stato: usize,
+    ingressi: &[RecordBatch],
+) -> RecordBatch {
+    use serde_json::json;
+    let op = scheda.operazione.id;
+    let input = &ingressi[0];
+    let tutti: Vec<_> = (0..input.num_rows())
+        .map(|i| Some(u32::try_from(i).unwrap()))
+        .collect();
+    let mut campi: Vec<(Field, ArrayRef)> = input
+        .schema()
+        .fields()
+        .iter()
+        .zip(input.columns())
+        .map(|(f, a)| (f.as_ref().clone(), a.clone()))
+        .collect();
+    let seleziona = |righe: &[Option<u32>]| -> Vec<(Field, ArrayRef)> {
+        input
+            .schema()
+            .fields()
+            .iter()
+            .zip(input.columns())
+            .map(|(f, a)| {
+                (
+                    f.as_ref().clone().with_nullable(true),
+                    righe_oracolo(a, righe),
+                )
+            })
+            .collect()
+    };
+    match op {
+        "table.assert_not_null" | "table.assert_unique" | "table.sort" => {}
+        "table.add_row_number" => campi.push(colonna_oracolo(
+            "n",
+            "int64",
+            json!((1..=input.num_rows()).collect::<Vec<_>>()),
+        )),
+        "table.coalesce" => {
+            let i = input.schema().index_of(nome).unwrap();
+            campi.push((
+                input.schema().field(i).clone().with_name("telefono"),
+                input.column(i).clone(),
+            ));
+        }
+        "table.dedup_advanced" => {
+            campi = seleziona(if stato == 1 {
+                &[]
+            } else if nome == "cliente" {
+                &[Some(2)]
+            } else {
+                &[Some(0), Some(1)]
+            });
+        }
+        "table.distinct" => {
+            campi = seleziona(&tutti.last().copied().into_iter().collect::<Vec<_>>());
+        }
+        "table.drop_columns" => campi.retain(|(f, _)| f.name() != "note"),
+        "table.select_columns" => campi.retain(|(f, _)| f.name() == nome),
+        "table.top_n" => campi = seleziona(if stato == 1 { &[] } else { &[Some(0), Some(1)] }),
+        "table.rename" => {
+            for (f, _) in &mut campi {
+                let nuovo = match f.name().as_str() {
+                    "a" => "b",
+                    "b" => "a",
+                    "cod" => "codice",
+                    _ => continue,
+                };
+                *f = f.clone().with_name(nuovo);
+            }
+        }
+        "table.reorder_columns" => {
+            campi.sort_by_key(|(f, _)| (f.name() != "id", f.name().to_lowercase()));
+        }
+        "table.aggregate" => {
+            let righe = if stato == 1 { vec![] } else { vec![Some(0)] };
+            campi = vec![
+                (
+                    input.schema().field(0).clone(),
+                    righe_oracolo(input.column(0), &righe),
+                ),
+                colonna_oracolo(
+                    "importo_sum",
+                    "float64",
+                    if stato == 1 { json!([]) } else { json!([17.5]) },
+                ),
+                colonna_oracolo(
+                    "n",
+                    "int64",
+                    if stato == 1 { json!([]) } else { json!([3]) },
+                ),
+            ];
+        }
+        "table.statistics" => {
+            for (suffix, value) in [("count", 3.0), ("mean", 35.0 / 3.0), ("max", 20.0)] {
+                campi.push(colonna_oracolo(
+                    &format!("importo_{suffix}"),
+                    "float64",
+                    json!(vec![value; input.num_rows()]),
+                ));
+            }
+        }
+        "table.window_function" => campi.push(colonna_oracolo(
+            "punti_rank",
+            "float64",
+            if stato == 1 {
+                json!([])
+            } else {
+                json!([2.5, 4.0, 1.0, 2.5])
+            },
+        )),
+        "table.pivot" => {
+            let righe = if stato == 1 { vec![] } else { vec![Some(0)] };
+            campi = vec![
+                (
+                    input.schema().field(0).clone(),
+                    righe_oracolo(input.column(0), &righe),
+                ),
+                colonna_oracolo(
+                    "feb",
+                    "float64",
+                    if stato == 1 { json!([]) } else { json!([5.0]) },
+                ),
+                colonna_oracolo(
+                    "gen",
+                    "float64",
+                    if stato == 1 { json!([]) } else { json!([18.0]) },
+                ),
+            ];
+        }
+        "table.melt" => {
+            let valori: Vec<_> = config["value_columns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+            let righe: Vec<_> = valori.iter().flat_map(|_| tutti.clone()).collect();
+            let id = input.schema().index_of("id").unwrap();
+            let variabili: Vec<_> = valori
+                .iter()
+                .flat_map(|n| vec![*n; input.num_rows()])
+                .collect();
+            let arrays: Vec<_> = valori
+                .iter()
+                .map(|n| input.column(input.schema().index_of(n).unwrap()).as_ref())
+                .collect();
+            let array = plenora_core::arrow::select::concat::concat(&arrays).unwrap();
+            let campo = input
+                .schema()
+                .field_with_name(valori[0])
+                .unwrap()
+                .clone()
+                .with_name("vendite");
+            campi = vec![
+                (
+                    input.schema().field(id).clone(),
+                    righe_oracolo(input.column(id), &righe),
+                ),
+                colonna_oracolo("trimestre", "utf8", json!(variabili)),
+                (campo, array),
+            ];
+        }
+        "table.reconcile" => {
+            campi = vec![
+                colonna_oracolo(
+                    "metric",
+                    "utf8",
+                    json!([
+                        "matched_rows",
+                        "left_only_rows",
+                        "right_only_rows",
+                        "left_duplicate_rows",
+                        "right_duplicate_rows"
+                    ]),
+                ),
+                colonna_oracolo(
+                    "value",
+                    "uint64",
+                    match stato {
+                        0 | 2 => json!([4, 0, 0, 3, 3]),
+                        1 => json!([0, 0, 0, 0, 0]),
+                        _ => unreachable!(),
+                    },
+                ),
+            ];
+        }
+        "table.table_diff" => {
+            assert_eq!(stato, 1);
+            campi.truncate(2);
+            for n in ["_diff_status", "_diff_columns", "_diff_old_values"] {
+                campi.push(colonna_oracolo(n, "utf8", json!([])));
+            }
+            if input.num_columns() == 3 {
+                campi.insert(
+                    2,
+                    (input.schema().field(2).clone(), input.column(2).clone()),
+                );
+            }
+        }
+        _ => panic!("{op}: successo senza valori attesi"),
+    }
+    for (campo, _) in &mut campi {
+        let non_nullable = matches!(
+            (op, campo.name().as_str()),
+            ("table.add_row_number" | "table.aggregate", "n")
+                | ("table.table_diff", "_diff_status")
+                | ("table.melt", "trimestre")
+        ) || op == "table.reconcile";
+        *campo = campo.clone().with_nullable(!non_nullable);
+    }
+    let (fields, arrays): (Vec<_>, Vec<_>) = campi.into_iter().unzip();
+    let schema = schema_ruolo_catalogo(op, nome, input, fields);
+    RecordBatch::try_new(Arc::new(schema), arrays).unwrap()
+}
+
+/// I valori non modificati provengono dall'esempio scritto; quelli influenzati
+/// dall'assenza della prima geometria sono espliciti, non calcolati dal kernel.
+#[allow(clippy::too_many_lines)]
+fn attesa_geo_vuota(scheda: &Scheda, ingressi: &[RecordBatch], senza_righe: bool) -> RecordBatch {
+    use serde_json::json;
+    let op = scheda.operazione.id;
+    let mut colonne = scheda.esempio.uscita.colonne.clone();
+    let prima = |colonne: &mut Vec<ColonnaSpec>, nome: &str, valore: Value| {
+        let c = colonne.iter_mut().find(|c| c.nome == nome).unwrap();
+        c.valori[0] = RawValue::from_string(valore.to_string()).unwrap();
+    };
+    let tutte = |colonne: &mut Vec<ColonnaSpec>, nome: &str, valori: Value| {
+        let c = colonne.iter_mut().find(|c| c.nome == nome).unwrap();
+        c.valori = valori
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| RawValue::from_string(v.to_string()).unwrap())
+            .collect();
+    };
+    let azzera = |colonne: &mut Vec<ColonnaSpec>| {
+        for c in colonne {
+            c.valori.clear();
+        }
+    };
+    if senza_righe {
+        if op != "geo.generate_grid" {
+            azzera(&mut colonne);
+            if matches!(
+                op,
+                "geo.dissolve" | "geo.line_builder" | "geo.polygon_builder"
+            ) {
+                tutte(&mut colonne, "geometry", json!([null]));
+            }
+        }
+    } else {
+        let spec = scheda.esempio.ingressi[0]
+            .colonne
+            .iter()
+            .find(|c| c.tipo == "geometry")
+            .unwrap();
+        let wkt: String = serde_json::from_str(spec.valori[0].get()).unwrap();
+        let tipo = wkt.split('(').next().unwrap().trim();
+        let vuota = format!("{tipo} EMPTY");
+        match op {
+            "geo.affine_transform"
+            | "geo.densify"
+            | "geo.scale"
+            | "geo.simplify"
+            | "geo.snap"
+            | "geo.make_valid" => prima(&mut colonne, "geometry", json!(vuota)),
+            "geo.area"
+            | "geo.length"
+            | "geo.perimeter"
+            | "geo.geodesic_area"
+            | "geo.geodesic_line_length"
+            | "geo.vertex_count"
+            | "geo.count_points_in_polygons" => {
+                prima(&mut colonne, "geometry", json!(vuota));
+                let nome = colonne.last().unwrap().nome.clone();
+                // La riduzione orientata di Karney restituisce -0 per l'anello
+                // esterno vuoto; le altre misure hanno lo zero positivo.
+                prima(
+                    &mut colonne,
+                    &nome,
+                    if op == "geo.geodesic_area" {
+                        json!(-0.0)
+                    } else {
+                        json!(0)
+                    },
+                );
+            }
+            "geo.bounds_extractor"
+            | "geo.frechet_distance"
+            | "geo.hausdorff_distance"
+            | "geo.line_locate_point" => {
+                prima(&mut colonne, "geometry", json!(vuota));
+                for c in colonne.iter_mut().skip(2) {
+                    c.valori[0] = RawValue::from_string("null".into()).unwrap();
+                }
+            }
+            "geo.boundary" => prima(&mut colonne, "geometry", json!("MULTILINESTRING(EMPTY)")),
+            "geo.buffer" => prima(&mut colonne, "geometry", json!("MULTIPOLYGON EMPTY")),
+            "geo.convex_hull" | "geo.concave_hull" => {
+                prima(&mut colonne, "geometry", json!("POLYGON EMPTY"));
+            }
+            "geo.clean_topology" => tutte(
+                &mut colonne,
+                "geometry",
+                json!([
+                    "POLYGON EMPTY",
+                    "POLYGON((1 0,3 0,3 2,1 2,1 0))",
+                    "MULTIPOLYGON(((0.5 1.5,0.5 0.5,1 0.5,1 1.5,0.5 1.5)))"
+                ]),
+            ),
+            "geo.clip" | "geo.difference" | "geo.intersection" => {
+                prima(&mut colonne, "geometry", Value::Null);
+            }
+            "geo.union" | "geo.symmetric_difference" => prima(
+                &mut colonne,
+                "geometry",
+                json!("MULTIPOLYGON(((1 2,1 0,3 0,3 2,1 2)))"),
+            ),
+            "geo.dissolve" => prima(
+                &mut colonne,
+                "geometry",
+                json!("MULTIPOLYGON(((1 2,1 0,3 0,3 2,1 2)),((10 11,10 10,11 10,11 11,10 11)))"),
+            ),
+            "geo.coverage_validate"
+            | "geo.delaunay"
+            | "geo.line_merge"
+            | "geo.shared_paths"
+            | "geo.split" => azzera(&mut colonne),
+            "geo.subdivide" => {
+                for c in &mut colonne {
+                    c.valori.remove(1);
+                }
+                prima(&mut colonne, "geometry", json!("LINESTRING EMPTY"));
+            }
+            "geo.explode" => {
+                // Le due parti della prima geometria spariscono; la seconda resta.
+                for c in &mut colonne {
+                    c.valori = c.valori[2..].to_vec();
+                }
+            }
+            "geo.geometry_accessors" => {
+                prima(&mut colonne, "geometry", json!(vuota));
+                prima(&mut colonne, "start_point", Value::Null);
+                prima(&mut colonne, "is_closed", json!(true));
+            }
+            "geo.geometry_diagnostics" => {
+                prima(&mut colonne, "coordinate_count", json!(0));
+                prima(&mut colonne, "is_empty", json!(true));
+                for n in ["bounds_minx", "bounds_miny", "bounds_maxx", "bounds_maxy"] {
+                    prima(&mut colonne, n, Value::Null);
+                }
+            }
+            "geo.predicate_contains"
+            | "geo.predicate_contains_properly"
+            | "geo.predicate_covers"
+            | "geo.predicate_crosses"
+            | "geo.predicate_equals_topo"
+            | "geo.predicate_overlaps" => {
+                prima(&mut colonne, "geometry", json!(vuota));
+                prima(&mut colonne, op.strip_prefix("geo.").unwrap(), json!(false));
+            }
+            "geo.overlay" => {
+                tutte(
+                    &mut colonne,
+                    "geometry",
+                    json!(["MULTIPOLYGON(((1 2,1 0,3 0,3 2,1 2)))"]),
+                );
+                tutte(&mut colonne, "__left_index", json!([null]));
+                tutte(&mut colonne, "__right_index", json!([0]));
+            }
+            "geo.polygonize" => {
+                tutte(
+                    &mut colonne,
+                    "geometry",
+                    json!([
+                        "LINESTRING(0 0,0 10,10 10)",
+                        "LINESTRING(10 0,10 10)",
+                        "LINESTRING(10 10,15 10)"
+                    ]),
+                );
+                tutte(
+                    &mut colonne,
+                    "__class",
+                    json!(["dangle", "dangle", "dangle"]),
+                );
+            }
+            _ => panic!("{op}: geometria vuota senza valori attesi"),
+        }
+    }
+    let valori = tabella(&colonne).unwrap();
+    let campi: Vec<_> = valori
+        .schema()
+        .fields()
+        .iter()
+        .map(|campo| {
+            let mut campo = campo.as_ref().clone();
+            let nullable = nullabilita_geo_vuota(op, campo.name(), &ingressi[0].schema());
+            campo = campo.with_nullable(nullable);
+            campo
+        })
+        .collect();
+    let schema = schema_geo_vuota(op, ingressi, campi);
+    RecordBatch::try_new(Arc::new(schema), valori.columns().to_vec()).unwrap()
+}
+
+fn nullabilita_geo_vuota(op: &str, nome: &str, ingresso: &Schema) -> bool {
+    if matches!(
+        op,
+        "geo.coverage_validate"
+            | "geo.shared_paths"
+            | "geo.generate_grid"
+            | "geo.polygonize"
+            | "geo.line_merge"
+    ) {
+        return false;
+    }
+    if matches!(nome, "__parent_index" | "__right_index") && op != "geo.overlay" {
+        return false;
+    }
+    if op == "geo.overlay" {
+        return nome != "geometry";
+    }
+    if nome == "geometry" {
+        if matches!(
+            op,
+            "geo.dissolve"
+                | "geo.line_builder"
+                | "geo.polygon_builder"
+                | "geo.clip"
+                | "geo.intersection"
+                | "geo.union"
+                | "geo.difference"
+                | "geo.symmetric_difference"
+                | "geo.clean_topology"
+        ) {
+            return true;
+        }
+        if matches!(
+            op,
+            "geo.delaunay"
+                | "geo.explode"
+                | "geo.nearest"
+                | "geo.sjoin"
+                | "geo.split"
+                | "geo.from_coords"
+        ) {
+            return false;
+        }
+        if op == "geo.from_wkt" {
+            return ingresso.field_with_name("wkt").unwrap().is_nullable();
+        }
+    }
+    if let Ok(campo) = ingresso.field_with_name(nome) {
+        return campo.is_nullable();
+    }
+    if matches!(
+        op,
+        "geo.bounds_extractor"
+            | "geo.distance"
+            | "geo.frechet_distance"
+            | "geo.hausdorff_distance"
+            | "geo.line_locate_point"
+            | "geo.cluster_dbscan"
+    ) || matches!(
+        nome,
+        "start_point"
+            | "validity_reason"
+            | "bounds_minx"
+            | "bounds_miny"
+            | "bounds_maxx"
+            | "bounds_maxy"
+    ) {
+        return true;
+    }
+    if op == "geo.nearest" {
+        return false;
+    }
+    ingresso.field_with_name("geometry").unwrap().is_nullable()
+}
+
+/// Politica delle schede: elenco chiuso anche per le trasformazioni che non
+/// cambiano la dichiarazione. Non consulta l'analisi o le policy di produzione.
+#[allow(clippy::too_many_lines)]
+fn tipi_geo_vuota(op: &str) -> (&'static str, Option<&'static str>) {
+    match op {
+        "geo.boundary" => ("exact",Some("MultiPoint,MultiLineString,GeometryCollection")),
+        "geo.buffer" | "geo.clip" | "geo.difference" | "geo.dissolve" | "geo.intersection"
+        | "geo.symmetric_difference" | "geo.union" => ("exact",Some("MultiPolygon")),
+        "geo.centroid" | "geo.line_interpolate_point" | "geo.point_on_surface" => ("exact",Some("Point")),
+        "geo.clean_topology" | "geo.overlay" => ("exact",Some("Polygon,MultiPolygon")),
+        "geo.concave_hull" | "geo.convex_hull" | "geo.delaunay" | "geo.generate_grid" | "geo.voronoi" => ("exact",Some("Polygon")),
+        "geo.envelope" => ("exact",Some("Point,LineString,Polygon")),
+        "geo.line_merge" => ("exact",Some("LineString")),
+        "geo.line_substring" => ("exact",Some("Point,LineString")),
+        "geo.polygonize" | "geo.split" => ("exact",Some("LineString,Polygon")),
+        "geo.make_valid" => ("mixed",None),
+        "geo.from_wkt" => ("mixed",Some("Point,LineString,Polygon,MultiPoint,MultiLineString,MultiPolygon,GeometryCollection")),
+        "geo.affine_transform" | "geo.area" | "geo.bearing" | "geo.bounds_extractor"
+        | "geo.cluster_dbscan" | "geo.collect" | "geo.count_points_in_polygons"
+        | "geo.coverage_validate" | "geo.densify" | "geo.distance" | "geo.explode"
+        | "geo.frechet_distance" | "geo.from_coords" | "geo.geodesic_area"
+        | "geo.geodesic_distance" | "geo.geodesic_line_length" | "geo.geometry_accessors"
+        | "geo.geometry_diagnostics" | "geo.hausdorff_distance" | "geo.haversine_distance"
+        | "geo.length" | "geo.line_builder" | "geo.line_locate_point" | "geo.nearest"
+        | "geo.perimeter" | "geo.polygon_builder" | "geo.predicate_contains"
+        | "geo.predicate_contains_properly" | "geo.predicate_covered_by" | "geo.predicate_covers"
+        | "geo.predicate_crosses" | "geo.predicate_disjoint" | "geo.predicate_equals_topo"
+        | "geo.predicate_intersects" | "geo.predicate_overlaps" | "geo.predicate_touches"
+        | "geo.predicate_within" | "geo.reproject" | "geo.rotate" | "geo.scale"
+        | "geo.shared_paths" | "geo.simplify" | "geo.sjoin" | "geo.snap" | "geo.snap_to_grid"
+        | "geo.subdivide" | "geo.to_wkt" | "geo.translate" | "geo.vertex_count" | "geo.within" => ("unresolved",None),
+        _ => panic!("{op}: schema geografico senza oracolo"),
+    }
+}
+
+fn schema_geo_vuota(op: &str, ingressi: &[RecordBatch], mut campi: Vec<Field>) -> Schema {
+    let (dichiarazione, tipi) = tipi_geo_vuota(op);
+    let mut metadata = ingressi[0].schema().metadata().clone();
+    metadata.insert("plenora.contract.version", "1");
+    // Una sola geometria primaria (o nessuna geometria): chiave omessa,
+    // come il profilo di emissione in docs/metadati-arrow.md.
+    for (i, campo) in campi.iter_mut().enumerate() {
+        let mut md = campo.metadata().clone();
+        md.insert("plenora.field_id", i.to_string());
+        if e_geometria(campo) {
+            let geo: Value = serde_json::from_str(md.get("geo").unwrap()).unwrap();
+            let crs = geo["crs"].as_str().unwrap();
+            md.insert("plenora.geometry.crs_id", crs);
+            if op == "geo.reproject" {
+                md.insert(
+                    "geo",
+                    serde_json::json!({"crs":crs,"dimensions":"xy","encoding":"wkb"}).to_string(),
+                );
+            }
+            md.insert("plenora.geometry.crs_resolution", "resolved");
+            // Identificatore EPSG: nessuna definizione WKT/PROJJSON.
+            md.insert("plenora.geometry.srid", crs.strip_prefix("EPSG:").unwrap());
+            md.insert("plenora.geometry.encoding", "wkb");
+            md.insert("plenora.geometry.dimensions", "xy");
+            md.insert("plenora.geometry.spatial_semantics", "geometry");
+            md.insert("plenora.geometry.precision", "float64");
+            md.insert("plenora.geometry.types_declaration", dichiarazione);
+            if let Some(tipi) = tipi {
+                md.insert("plenora.geometry.types", tipi.to_ascii_lowercase());
+            }
+        }
+        *campo = campo.clone().with_metadata(md);
+    }
+    Schema::new_with_metadata(campi, metadata)
+}
+
+/// Pubblicazione attesa delle fixture senza ID iniziali. Le geometrie derivate
+/// conservano i riferimenti, ma non diventano primarie (metadati-arrow.md).
+fn schema_ruolo_catalogo(
+    op: &str,
+    ruolo: &str,
+    input: &RecordBatch,
+    mut campi: Vec<Field>,
+) -> Schema {
+    let geometrie_input = input
+        .schema()
+        .fields()
+        .iter()
+        .filter(|f| e_geometria(f))
+        .count();
+    let geometrie_output: Vec<_> = campi
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| e_geometria(f))
+        .map(|(i, _)| i)
+        .collect();
+    let primaria = geometrie_input == 1
+        && !matches!(op, "table.drop_columns" | "table.reconcile")
+        && (op != "table.melt" || ruolo == "id");
+    let mut metadata = input.schema().metadata().clone();
+    metadata.insert("plenora.contract.version", "1");
+    if geometrie_output.len() == 1 && !primaria {
+        metadata.insert("plenora.primary_geometry", "none");
+    } else if geometrie_output.len() > 1 && primaria {
+        metadata.insert("plenora.primary_geometry", geometrie_output[0].to_string());
+    }
+    for (i, f) in campi.iter_mut().enumerate() {
+        let mut md = f.metadata().clone();
+        md.insert("plenora.field_id", i.to_string());
+        if e_geometria(f) {
+            md.insert("plenora.geometry.crs_resolution", "resolved");
+            md.insert("plenora.geometry.srid", "4326");
+            md.insert("plenora.geometry.dimensions", "xy");
+            md.insert("plenora.geometry.spatial_semantics", "geometry");
+            md.insert("plenora.geometry.types_declaration", "unresolved");
+        }
+        *f = f.clone().with_metadata(md);
+    }
+    Schema::new_with_metadata(campi, metadata)
 }

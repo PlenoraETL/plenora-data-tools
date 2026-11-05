@@ -31,3 +31,5 @@ i loro link sono relativi a questa cartella, non a `schede/`.
 
 La dichiarazione di [Arrow Geometry Semantics 1.0](geometry-semantics.md)
 censisce le 25 regole, le deviazioni e il runner dei vettori al pin.
+
+[Geometrie multiple: primaria, selettori, GeoParquet e adozione](geometrie-multiple.md).

@@ -60,10 +60,62 @@ def verifica_regole_geometriche(sorgente: dict) -> None:
             raise ValueError("regola geometrica conforme e deviata insieme")
 
 
+def verifica_primaria(contratti: Path, sorgente: dict) -> None:
+    """PRIM-001..009 e copie esatte dei vettori di composizione al pin."""
+    if "plenora-arrow-primary-geometry-v1" not in sorgente["conforming"]:
+        raise ValueError("convenzione primaria non adottata")
+    rules = [rule for req in sorgente["requirements"] for rule in req["rules"]
+             if rule.startswith("PRIM-") and req["status"] == "implemented"]
+    if sorted(rules) != [f"PRIM-{i:03}" for i in range(1, 10)]:
+        raise ValueError("regole primaria incomplete o duplicate")
+    folder = RADICE / "crates/plenora-kernels-table/tests/riferimenti"
+    provenance = strict_json.loads((folder / "primary-composition-provenienza.json").read_text("utf-8"))
+    revision = sorgente["contracts_source"]["revision"]
+    if provenance["commit"] != revision:
+        raise ValueError("pin composizione primaria incoerente")
+    prefix = "vectors/primary-composition-v1"
+    names = subprocess.run(["git", "-C", str(contratti), "ls-tree", "-r", "--name-only",
+                            revision, prefix], capture_output=True, check=True, text=True).stdout.splitlines()
+    if {Path(n).name for n in names} != set(provenance["file"]):
+        raise ValueError("inventario composizione primaria incoerente")
+    if {p.name for p in (folder / "primary-composition-v1").iterdir()} != set(provenance["file"]):
+        raise ValueError("copie composizione primaria incomplete")
+    for name in names:
+        original = subprocess.run(["git", "-C", str(contratti), "show", f"{revision}:{name}"],
+                                  capture_output=True, check=True).stdout
+        copy = (folder / "primary-composition-v1" / Path(name).name).read_bytes()
+        if copy != original or hashlib.sha256(copy).hexdigest() != provenance["file"][Path(name).name]:
+            raise ValueError("vettore primaria o digest incoerente")
+
+
+def verifica_delta(contratti: Path, sorgente: dict) -> None:
+    """Ogni file cambiato fra i pin ha una classificazione motivata."""
+    delta = sorgente["contract_delta"]
+    if delta["to"] != sorgente["contracts_source"]["revision"]:
+        raise ValueError("pin del censimento incoerente")
+    names = subprocess.run(
+        ["git", "-C", str(contratti), "diff", "--name-only", delta["from"], delta["to"]],
+        capture_output=True, check=True, text=True,
+    ).stdout.splitlines()
+    entries = delta["files"]
+    if len(entries) != len(names) or {e["file"] for e in entries} != set(names):
+        raise ValueError("censimento del delta incompleto o duplicato")
+    for entry in entries:
+        group = delta["groups"][entry["classification"]]
+        if group["status"] not in {"adottata", "non applicabile", "deviazione"}:
+            raise ValueError("stato del delta sconosciuto")
+        required = ("scope", "evidence")
+        if group["status"] == "deviazione":
+            required += ("rule", "hazard", "reentry")
+        if not all(group.get(key) for key in required):
+            raise ValueError("classificazione del delta senza motivazione")
+
+
 def verifica(contratti: Path) -> None:
     sorgente = strict_json.loads((RADICE / "crates/plenora-cli/adozione.json").read_text("utf-8"))
     revisione = sorgente["contracts_source"]["revision"]
     verifica_checkout(contratti, revisione)
+    verifica_delta(contratti, sorgente)
     cartella = RADICE / "crates/plenora-cli/tests/fixtures/contratti"
     provenienza = strict_json.loads((cartella / "provenienza.json").read_text("utf-8"))
     if provenienza["commit"] != revisione:
@@ -99,6 +151,7 @@ def verifica(contratti: Path) -> None:
         if copia != originale or hashlib.sha256(copia).hexdigest() != prova["file"][nome]:
             raise ValueError("vettore geometrico o digest incoerente")
     verifica_regole_geometriche(sorgente)
+    verifica_primaria(contratti, sorgente)
     catalogo = strict_json.loads((cartella / "data-tools-v3.json").read_text("utf-8"))
     from jsonschema import Draft202012Validator
 

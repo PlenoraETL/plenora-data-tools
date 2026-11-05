@@ -368,6 +368,23 @@ sinistra, a destra e su entrambi i lati, per inner e left. Il registro
 esattamente il catalogo e concordare con la classificazione della politica:
 un'operazione nuova senza classificazione fa fallire il test.
 
+La qualificazione `qualification_multigeometria_catalogo`, nello stesso
+modulo e con gli stessi trasporti, fixture e classificazioni, incrocia tutte
+le 146 operazioni con una, due e tre geometrie, primaria iniziale,
+non iniziale o assente, operando primario o secondario, valori/null/vuoto.
+Controlla byte, primaria e semantica per colonna dopo ogni trasporto;
+GeoParquet senza primaria deve rifiutare con `Unsupported`. I rifiuti delle
+fixture hanno categorie precise: Voronoi senza punti, asserzione di
+cardinalità sul vuoto e transpose con CRS incompatibili. Pivot usa mapping
+esplicito; transpose passa dall'adapter pubblico a schema dinamico.
+Le mutazioni dell'oracolo perdono una secondaria, scambiano metadati o
+cambiano primaria e devono essere rilevate. Il conteggio dei casi è in
+`target/qualificazione-mg5.txt`.
+
+La variante `catalogo_chiavi_trasporti_completo` (`--ignored`) incrocia
+anche tutte le sonde delle 48 chiavi con una, due e tre geometrie; il test
+di default conserva un sottoinsieme delle combinazioni di queste sonde.
+
 Il report `target/matrice-metadati.md` elenca tutti i rifiuti per fase,
 le uscite effettivamente rilette per trasporto e le divergenze. Un errore
 interno o IO non e' un rifiuto accettabile. La prova raccoglie tutti gli
@@ -488,8 +505,7 @@ la geometria selezionata, senza promuovere quelle superstiti.
 
 GeoParquet legge e scrive tutte le geometrie e importa la primaria dal footer,
 anche non iniziale. IPC file, stream e Arrow SDK conservano identità e stato
-della primaria. La scrittura GeoParquet senza primaria rifiuta con `unsupported`. Questa PR non dichiara ancora l'adozione completa
-del nuovo contratto su tutte le operazioni.
+della primaria. La scrittura GeoParquet senza primaria rifiuta con `unsupported`. La 4.1.0 adotta Arrow Primary Geometry 1.0: [adozione ed esempi](geometrie-multiple.md).
 
 ### Ricerca della classe: costruzioni dei contratti d'uscita
 
@@ -540,7 +556,7 @@ provenienza pubblica separata dall’identità logica. Il test
 `identita_nuove_solo_al_confine_con_tutti_gli_input` verifica che un ID
 osservato nell'altro ingresso non venga assegnato a un campo nuovo, anche
 con identità ambigue e primaria plurale presente o assente. I
-[limiti transitori](limiti.md#geometrie-multiple-limiti-transitori-della-pr-1)
+[vincoli dei formati](limiti.md#geometrie-multiple-condizioni-dei-formati)
 restano espliciti per le operazioni geo e GeoParquet.
 
 ### Più geometrie
@@ -568,5 +584,7 @@ emette chiavi canoniche su un ingresso solo GeoArrow, completa anche
 
 La regola GT rifiuta con `Crs` in validazione qualsiasi colonna geometrica
 usata come testo, indipendentemente dai byte WKB, anche su input vuoti o null.
-Le chiavi native restano ammesse. Ambito, hazard e rientro sono nel
+I test diretti `is_null` e `is_not_null` di `table.expression` leggono solo
+la bitmap e sono ammessi anche sulle geometrie. Gli usi testuali annidati
+restano rifiutati. Le chiavi native restano ammesse. Ambito, hazard e rientro sono nel
 [registro dei limiti](limiti.md#geometrie-lette-come-testo).

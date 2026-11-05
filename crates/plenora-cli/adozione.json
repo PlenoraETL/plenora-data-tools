@@ -3,7 +3,7 @@
   "component": "plenora-data-tools",
   "contracts_source": {
     "repository": "https://github.com/PlenoraETL/plenora-contracts.git",
-    "revision": "3aec9f724f5a0ad21366f293895b4d0dbcd0aad1"
+    "revision": "38d68b402389855edbcecb7ce57c31e91282cb4e"
   },
   "profile": "plenora-data-tools-profile-v3",
   "conforming": [
@@ -19,7 +19,8 @@
     "plenora-surface-bindings-v1",
     "plenora-composition-v1",
     "plenora-public-catalog-v2",
-    "plenora-arrow-geometry-semantics-v1"
+    "plenora-arrow-geometry-semantics-v1",
+    "plenora-arrow-primary-geometry-v1"
   ],
   "not_applicable": [
     "plenora-runtime-binding-v2",
@@ -377,7 +378,7 @@
         "GEO-012"
       ],
       "status": "implemented",
-      "reason": "Piu geometrie rifiutate unsupported/validate, nessun campo scartato.",
+      "reason": "Geometrie multiple conservate con CRS e assi per colonna; primaria facoltativa e selettori espliciti. GeoParquet senza primaria rifiutato unsupported.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
     },
     {
@@ -497,8 +498,621 @@
         "REJ-004"
       ],
       "status": "implemented",
-      "reason": "86 vettori al pin, SHA-256, conformita distinta dalle deviazioni e dall applicabilita del calcolo.",
+      "reason": "Inventario completo dei vettori al pin, SHA-256, conformita distinta dalle deviazioni e dall applicabilita del calcolo.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md"
+    },
+    {
+      "rules": [
+        "PRIM-001",
+        "PRIM-002",
+        "PRIM-003",
+        "PRIM-004",
+        "PRIM-005",
+        "PRIM-006",
+        "PRIM-007",
+        "PRIM-008",
+        "PRIM-009"
+      ],
+      "status": "implemented",
+      "reason": "Primaria per identita e provenienza, selettori per operando, GeoParquet plurale. Vettori primary-composition-v1 e matrice catalogo sui tre trasporti.",
+      "verification": [
+        "cargo test -p plenora-kernels-table vettori_contratti_primary_composition_v1",
+        "cargo test -p plenora-io --test integrazione_primary_composition",
+        "cargo test -p plenora-io --test operazioni_doc"
+      ]
     }
-  ]
+  ],
+  "contract_delta": {
+    "from": "3aec9f7",
+    "to": "38d68b402389855edbcecb7ce57c31e91282cb4e",
+    "groups": {
+      "identity": {
+        "status": "adottata",
+        "scope": "Decisione 0022: preservare ID non posizionali, assegnare ID mancanti, parita API/CLI, mixed senza lista; stringa vuota rifiutata.",
+        "evidence": "crates/plenora-cli/tests/geometry_semantics.rs; crates/plenora-core/src/contract/arrow_schema.rs; crates/plenora-core/src/contract/arrow_metadata.rs"
+      },
+      "primary": {
+        "status": "adottata",
+        "scope": "Decisione 0023 e PRIM-001..009: primaria per identita e provenienza, selettori e GeoParquet.",
+        "evidence": "crates/plenora-cli/adozione.json requirements PRIM-001..009; crates/plenora-core/src/contract/arrow_schema.rs; crates/plenora-kernels-table/tests/riferimenti/primary-composition.md; crates/plenora-io/tests/comune/matrice_metadati.rs"
+      },
+      "ascii": {
+        "status": "adottata",
+        "scope": "Oracolo con case folding solo ASCII; il sottoinsieme CRS implementato usa eq_ignore_ascii_case/to_ascii_lowercase. Restano le deviazioni GEO gia dichiarate per il risolutore limitato.",
+        "evidence": "crates/plenora-core/src/crs; docs/geometry-semantics.md; scripts/verifica_adozione.py"
+      },
+      "io": {
+        "status": "non applicabile",
+        "scope": "Profilo IO v3: IO-PY-001, binding delle sei operazioni IO e IO-ARROW-001 riguardano io-tools, non il profilo data-tools v3. Data mantiene DT-ARROW-001..004, non rivendica il profilo IO.",
+        "evidence": "crates/plenora-cli/adozione.json profile e requirements DT-ARROW-001..004; docs/cli.md"
+      },
+      "file": {
+        "status": "non applicabile",
+        "scope": "File Interchange 1.0: catene io.write/storage.put e storage.get/io.read, formati e digest degli oggetti; data non espone queste operazioni ne runtime/storage.",
+        "evidence": "crates/plenora-cli/adozione.json profile, not_applicable; crates/plenora-cli/tests/fixtures/contratti/data-tools-v3.json"
+      },
+      "interop": {
+        "status": "non applicabile",
+        "scope": "Harness e catene intercomponente non rivendicati da data. La parte locale della decisione 0022 e della primaria e adottata e provata separatamente.",
+        "evidence": "crates/plenora-cli/adozione.json not_applicable plenora-interop-vectors-v1; crates/plenora-cli/tests/geometry_semantics.rs"
+      },
+      "validation": {
+        "status": "adottata",
+        "scope": "Validatore e gate del pin usati come strumenti esterni, senza copiarne implementazione o rivendicare superfici aggiuntive.",
+        "evidence": "scripts/verifica_adozione.py prove_contratti; scripts/verifica_cli_contratti.py"
+      },
+      "infra": {
+        "status": "non applicabile",
+        "scope": "CI, dipendenze e guardie interne di contracts; non sono requisiti del componente data e non entrano nel suo Cargo.lock.",
+        "evidence": "README.md Cosa fa girare le prove; .github/workflows/ci.yml"
+      },
+      "info": {
+        "status": "non applicabile",
+        "scope": "Documentazione, changelog, proposta o indice informativo: nessuna nuova regola data. Le modifiche normative collegate sono censite nelle altre righe.",
+        "evidence": "crates/plenora-cli/adozione.json; docs/cli.md#delta-dei-contratti-al-pin-38d68b4"
+      }
+    },
+    "files": [
+      {
+        "file": ".coveragerc",
+        "classification": "infra"
+      },
+      {
+        "file": ".github/workflows/spec-validation.yml",
+        "classification": "infra"
+      },
+      {
+        "file": ".github/workflows/supply-chain.yml",
+        "classification": "infra"
+      },
+      {
+        "file": "CHANGELOG.md",
+        "classification": "info"
+      },
+      {
+        "file": "README.md",
+        "classification": "info"
+      },
+      {
+        "file": "bindings/python-sdk-v1.json",
+        "classification": "io"
+      },
+      {
+        "file": "catalogs/io-tools-v3.json",
+        "classification": "io"
+      },
+      {
+        "file": "composition/file-pipelines-v1.json",
+        "classification": "file"
+      },
+      {
+        "file": "decisions/0016-io-tools-python-sdk.md",
+        "classification": "io"
+      },
+      {
+        "file": "decisions/0022-field-id-across-operations-and-the-mixed-form.md",
+        "classification": "identity"
+      },
+      {
+        "file": "decisions/0023-primary-geometry-across-components.md",
+        "classification": "primary"
+      },
+      {
+        "file": "examples/invalid/interop-assignment-vector-divergent-surfaces.json",
+        "classification": "interop"
+      },
+      {
+        "file": "guida/README.md",
+        "classification": "info"
+      },
+      {
+        "file": "guida/data.md",
+        "classification": "info"
+      },
+      {
+        "file": "guida/database.md",
+        "classification": "info"
+      },
+      {
+        "file": "guida/fondamenta.md",
+        "classification": "info"
+      },
+      {
+        "file": "guida/insieme.md",
+        "classification": "info"
+      },
+      {
+        "file": "guida/io.md",
+        "classification": "info"
+      },
+      {
+        "file": "guida/rest.md",
+        "classification": "info"
+      },
+      {
+        "file": "guida/storage.md",
+        "classification": "info"
+      },
+      {
+        "file": "profiles/io-tools-v3.md",
+        "classification": "io"
+      },
+      {
+        "file": "proposals/full-interop-matrix.md",
+        "classification": "interop"
+      },
+      {
+        "file": "requirements-audit.in",
+        "classification": "infra"
+      },
+      {
+        "file": "requirements-audit.txt",
+        "classification": "infra"
+      },
+      {
+        "file": "requirements-coverage.in",
+        "classification": "infra"
+      },
+      {
+        "file": "requirements-coverage.txt",
+        "classification": "infra"
+      },
+      {
+        "file": "schemas/README.md",
+        "classification": "info"
+      },
+      {
+        "file": "schemas/file-composition-v1.schema.json",
+        "classification": "file"
+      },
+      {
+        "file": "schemas/file-interchange-v1.schema.json",
+        "classification": "file"
+      },
+      {
+        "file": "schemas/file-interop-vector-v1.schema.json",
+        "classification": "file"
+      },
+      {
+        "file": "schemas/geoparquet-primary-vector-v1.schema.json",
+        "classification": "primary"
+      },
+      {
+        "file": "schemas/interop-assignment-vector-v1.schema.json",
+        "classification": "interop"
+      },
+      {
+        "file": "schemas/interop-primary-vector-v1.schema.json",
+        "classification": "primary"
+      },
+      {
+        "file": "schemas/primary-composition-vector-v1.schema.json",
+        "classification": "primary"
+      },
+      {
+        "file": "specs/composition/FILE-INTERCHANGE-1.0.md",
+        "classification": "file"
+      },
+      {
+        "file": "specs/data/ARROW-GEOMETRY-SEMANTICS-1.0.md",
+        "classification": "primary"
+      },
+      {
+        "file": "specs/data/ARROW-PRIMARY-GEOMETRY-1.0.md",
+        "classification": "primary"
+      },
+      {
+        "file": "specs/surfaces/SURFACE-BINDINGS-1.0.md",
+        "classification": "io"
+      },
+      {
+        "file": "tools/arrow_data.py",
+        "classification": "ascii"
+      },
+      {
+        "file": "tools/arrow_primary.py",
+        "classification": "primary"
+      },
+      {
+        "file": "tools/check_comments.py",
+        "classification": "infra"
+      },
+      {
+        "file": "tools/check_docs.py",
+        "classification": "infra"
+      },
+      {
+        "file": "tools/check_schema_immutability.py",
+        "classification": "validation"
+      },
+      {
+        "file": "tools/crs_grammar.py",
+        "classification": "ascii"
+      },
+      {
+        "file": "tools/file_interop.py",
+        "classification": "file"
+      },
+      {
+        "file": "tools/gate_fuzz.py",
+        "classification": "validation"
+      },
+      {
+        "file": "tools/interop_vectors.py",
+        "classification": "interop"
+      },
+      {
+        "file": "tools/test_arrow_data.py",
+        "classification": "ascii"
+      },
+      {
+        "file": "tools/test_arrow_primary.py",
+        "classification": "primary"
+      },
+      {
+        "file": "tools/test_check_comments.py",
+        "classification": "infra"
+      },
+      {
+        "file": "tools/test_check_docs.py",
+        "classification": "infra"
+      },
+      {
+        "file": "tools/test_conformance_checks.py",
+        "classification": "validation"
+      },
+      {
+        "file": "tools/test_decision_0022.py",
+        "classification": "identity"
+      },
+      {
+        "file": "tools/test_file_interop.py",
+        "classification": "file"
+      },
+      {
+        "file": "tools/test_gate_fuzz.py",
+        "classification": "validation"
+      },
+      {
+        "file": "tools/test_io_python_sdk.py",
+        "classification": "io"
+      },
+      {
+        "file": "tools/validate_specs.py",
+        "classification": "validation"
+      },
+      {
+        "file": "vectors/README.md",
+        "classification": "info"
+      },
+      {
+        "file": "vectors/arrow-data-v1/field-id-round-trip.json",
+        "classification": "identity"
+      },
+      {
+        "file": "vectors/arrow-data-v1/store-field-without-id.json",
+        "classification": "identity"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/invalid-precedence-primary-before-crs.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/invalid-precedence-repeated-id-before-primary.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/invalid-primary-by-name.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/invalid-primary-dangling.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/invalid-primary-leading-zero.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/invalid-primary-not-geometry.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/invalid-primary-on-field.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/invalid-primary-truncated-secondary-unknown-crs.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/invalid-primary-without-geometry.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/missing-geometry-identities-reversed.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/missing-geometry-identities.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/primary-explicit-one-geometry.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/primary-first-of-two.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/primary-none-one-geometry.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/primary-none-two-geometries.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/primary-second-of-two.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-primary-v1/primary-secondary-unknown-crs.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/arrow-v1/invalid-mixed-empty-types.json",
+        "classification": "identity"
+      },
+      {
+        "file": "vectors/arrow-v1/mixed-without-types.json",
+        "classification": "identity"
+      },
+      {
+        "file": "vectors/file-interop-v1/io-write-storage-put-cli-accepted.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/io-write-storage-put-cli-content_type_mismatch.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/io-write-storage-put-cli-digest_mismatch.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/io-write-storage-put-cli-truncated_payload.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/io-write-storage-put-cli-undeclared_format_family.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/io-write-storage-put-runtime-accepted.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/io-write-storage-put-runtime-content_type_mismatch.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/io-write-storage-put-runtime-digest_mismatch.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/io-write-storage-put-runtime-truncated_payload.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/io-write-storage-put-runtime-undeclared_format_family.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/storage-get-io-read-cli-accepted.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/storage-get-io-read-cli-content_type_mismatch.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/storage-get-io-read-cli-digest_mismatch.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/storage-get-io-read-cli-truncated_payload.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/storage-get-io-read-cli-undeclared_format_family.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/storage-get-io-read-runtime-accepted.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/storage-get-io-read-runtime-content_type_mismatch.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/storage-get-io-read-runtime-digest_mismatch.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/storage-get-io-read-runtime-truncated_payload.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/file-interop-v1/storage-get-io-read-runtime-undeclared_format_family.json",
+        "classification": "file"
+      },
+      {
+        "file": "vectors/geoparquet-primary-v1/read-one-geometry.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/geoparquet-primary-v1/read-primary-first.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/geoparquet-primary-v1/read-primary-second.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/geoparquet-primary-v1/write-no-primary.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/geoparquet-primary-v1/write-one-geometry.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/geoparquet-primary-v1/write-primary-none-one-geometry.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/geoparquet-primary-v1/write-primary-second.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-assignment-v1/handoff-store-assigned-field-id.json",
+        "classification": "interop"
+      },
+      {
+        "file": "vectors/interop-primary-v1/handoff-io-data-io-no-primary.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-primary-v1/handoff-io-data-io-primary-canonical-form.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-primary-v1/handoff-io-data-io-primary-none-one-geometry.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-primary-v1/handoff-io-data-io-primary-second.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-primary-v1/rejection-dangling-primary-data-run.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-primary-v1/rejection-dangling-primary-io-read.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-primary-v1/rejection-no-primary-geo-operation.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-primary-v1/rejection-primary-io-write-gpkg.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-primary-v1/rejection-primary-none-one-geometry-geo-operation.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-primary-v1/rejection-primary-truncated-secondary-unknown-crs-geo-operation.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-primary-v1/rejection-selected-secondary-unknown-crs-geo-operation.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-primary-v1/rejection-selection-absent-reversed.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-primary-v1/rejection-selection-absent.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-primary-v1/rejection-selection-not-geometry-geo-operation.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/interop-v1/handoff-field-id-round-trip.json",
+        "classification": "interop"
+      },
+      {
+        "file": "vectors/primary-composition-v1/append-different-ids-same-output.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/primary-composition-v1/append-dropped-primary.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/primary-composition-v1/append-equal-ids-different-outputs.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/primary-composition-v1/append-missing-primary.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/primary-composition-v1/join-dropped-primary-no-promotion.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/primary-composition-v1/join-one-surviving-primary-canonical.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/primary-composition-v1/join-preserves-no-primary.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/primary-composition-v1/join-preserves-remapped-primary.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/primary-composition-v1/join-two-geometry-inputs-no-election.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/primary-composition-v1/union-different-ids-same-output.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/primary-composition-v1/union-dropped-primary.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/primary-composition-v1/union-equal-ids-different-outputs.json",
+        "classification": "primary"
+      },
+      {
+        "file": "vectors/primary-composition-v1/union-missing-primary.json",
+        "classification": "primary"
+      }
+    ]
+  }
 }

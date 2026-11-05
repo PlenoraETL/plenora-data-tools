@@ -1,0 +1,24 @@
+{
+  "$schema": "../../schemas/arrow-data-vector-v1.schema.json",
+  "schema_version": 1,
+  "contract": "plenora-arrow-data-vector-v1",
+  "expect": "valid",
+  "schema_metadata": {
+    "plenora.contract.version": "1"
+  },
+  "fields": [
+    {
+      "name": "measurement",
+      "type": "int64",
+      "nullable": false,
+      "metadata": {
+        "plenora.field_id": "314159"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "measurement": 42
+    }
+  ]
+}

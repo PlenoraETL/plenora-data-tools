@@ -1225,11 +1225,23 @@ pub fn canonical_geometry_dimensions(
 pub fn canonical_geometry_types(
     field: &Field,
 ) -> Result<Option<GeometryTypesProperty>, PlenoraError> {
+    canonical_geometry_types_from_metadata(field.metadata())
+}
+
+/// Unico lettore della coppia canonica, anche per `TableContract::validate`.
+pub(crate) fn canonical_geometry_types_from_metadata(
+    metadata: &Metadata,
+) -> Result<Option<GeometryTypesProperty>, PlenoraError> {
     let declaration = parse_canonical_enum::<crate::contract::TypesDeclaration>(
-        field.metadata().get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
+        metadata.get(PLENORA_GEOMETRY_TYPES_DECLARATION_KEY),
         PLENORA_GEOMETRY_TYPES_DECLARATION_KEY,
     )?;
-    let types = field.metadata().get(PLENORA_GEOMETRY_TYPES_KEY);
+    let types = metadata.get(PLENORA_GEOMETRY_TYPES_KEY);
+    if types.is_some_and(String::is_empty) {
+        return Err(PlenoraError::Schema(
+            "elenco dei tipi geometrici presente ma vuoto".into(),
+        ));
+    }
     match (declaration, types) {
         (None, None) => Ok(None),
         (None, Some(_)) => Err(PlenoraError::Schema(format!(

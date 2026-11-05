@@ -75,15 +75,22 @@ fn analizza(op: &str, schemi: &[&SchemaRef], config: &Value) -> Result<DataContr
     )
 }
 
-/// Il rifiuto deve essere un errore di piano (o di risorsa, per le colonne)
-/// e nominare la regola.
+/// Configurazioni invalide: una sola categoria e fase per tutti questi casi.
 #[allow(clippy::needless_pass_by_value)] // Config posseduta: `json!` in linea nei casi.
 fn rifiuta(op: &str, schemi: &[&SchemaRef], config: Value, frammento: &str) {
-    match analizza(op, schemi, &config) {
-        Err(PlenoraError::InvalidPlan(messaggio) | PlenoraError::ResourceLimit(messaggio))
-            if messaggio.contains(frammento) => {}
-        altro => panic!("{op} {config}: atteso il rifiuto `{frammento}`, avuto {altro:?}"),
-    }
+    let errore = analizza(op, schemi, &config).expect_err("config invalida");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        ),
+        "{op}"
+    );
+    assert!(
+        errore.to_string().contains(frammento),
+        "{op}: regola {frammento}"
+    );
 }
 
 #[allow(clippy::needless_pass_by_value)] // Config posseduta: `json!` in linea nei casi.

@@ -97,7 +97,14 @@ fn la_sonda_passa_fra_i_passi_e_fra_le_scritture() {
     };
     sonda::chiama_prima(&mut con_scadenza).unwrap();
     assert!(con_scadenza.scadenza.unwrap() < lontana);
-    assert!(con_scadenza.verifica("").is_err());
+    let errore = con_scadenza.verifica("").expect_err("scadenza anticipata");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (
+            plenora_core::ErrorCategory::Timeout,
+            plenora_core::ErrorPhase::Write
+        )
+    );
     let mut senza = Interruzione::default();
     sonda::chiama_prima(&mut senza).unwrap();
     assert!(senza.scadenza.is_none());

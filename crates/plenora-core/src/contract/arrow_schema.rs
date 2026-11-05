@@ -551,7 +551,8 @@ pub fn arrow_schema_from_contract(contract: &DataContract) -> Result<SchemaRef, 
     aggiungi_versione(&mut metadata)?;
     metadata.remove(PRIMARY_GEOMETRY_KEY);
     let schema = Schema::new_with_metadata(fields, metadata);
-    // Gli ID mancanti spettano al confine, con tutte le identita' del piano.
+    // Gli ID mancanti spettano al confine, salvo quello necessario a riferire
+    // una primaria fra piu' geometrie nello schema interno.
     let schema = Arc::new(schema);
     let position = contract
         .active_geometry_column()
@@ -1005,8 +1006,16 @@ pub fn primary_geometry_position(schema: &Schema) -> Result<Option<usize>, Pleno
     selected.map(Some).ok_or_else(invalid)
 }
 
-/// Emette PRIM-004 dal riferimento gia' risolto, dopo la pubblicazione degli ID.
-fn emit_primary_geometry(
+/// Emette PRIM-004 dalla posizione risolta per provenienza, mai da un ID indovinato.
+///
+/// Se occorre riferire una primaria senza ID, le assegna il primo ID sopra
+/// tutti quelli dello schema (zero se assenti). Gli altri campi senza ID
+/// attendono la pubblicazione al confine, che conosce tutti gli ingressi.
+///
+/// # Errors
+/// `Schema` per primaria non geometrica o identita' non conformi;
+/// `Unsupported` se l'identita' necessaria non e' rappresentabile.
+pub fn emit_primary_geometry(
     schema: &Schema,
     primary: Option<usize>,
 ) -> Result<SchemaRef, PlenoraError> {
@@ -1020,15 +1029,43 @@ fn emit_primary_geometry(
                 .is_some_and(|v| v == GEOARROW_WKB_EXTENSION)
         })
         .count();
+    if primary.is_some_and(|p| {
+        schema.fields().get(p).is_none_or(|field| {
+            field.data_type() != &DataType::Binary
+                || field
+                    .metadata()
+                    .get(GEOARROW_EXTENSION_KEY)
+                    .is_none_or(|v| v != GEOARROW_WKB_EXTENSION)
+        })
+    }) {
+        return Err(errore_di_contratto("primaria assente dalle geometrie"));
+    }
+    let mut fields = schema
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect::<Vec<_>>();
     let mut metadata = schema.metadata().clone();
     metadata.remove(PRIMARY_GEOMETRY_KEY);
+    if let Some(position) = primary.filter(|_| count > 1) {
+        let identities = verifica_identita_campi(schema)?;
+        if canonical_field_id(&fields[position])?.is_none() {
+            let next = identities.last().map_or(0, |id| u64::from(*id) + 1);
+            let id = u32::try_from(next)
+                .map_err(|_| PlenoraError::Unsupported("identita' pubbliche esaurite".into()))?;
+            let mut field_metadata = fields[position].metadata().clone();
+            field_metadata.insert(PLENORA_FIELD_ID_KEY, id.to_string());
+            fields[position] = fields[position].clone().with_metadata(field_metadata);
+        }
+        aggiungi_versione(&mut metadata)?;
+    }
     match (count, primary) {
         (1, None) => {
             metadata.insert(PRIMARY_GEOMETRY_KEY, "none");
+            aggiungi_versione(&mut metadata)?;
         }
         (2.., Some(position)) => {
-            let id = schema
-                .fields()
+            let id = fields
                 .get(position)
                 .and_then(|field| field.metadata().get(PLENORA_FIELD_ID_KEY))
                 .ok_or_else(|| errore_di_contratto("primaria senza identita' pubblica"))?;
@@ -1036,14 +1073,12 @@ fn emit_primary_geometry(
         }
         _ => {}
     }
-    Ok(Arc::new(Schema::new_with_metadata(
-        schema.fields().clone(),
-        metadata,
-    )))
+    Ok(Arc::new(Schema::new_with_metadata(fields, metadata)))
 }
 
-/// Rifiuto transitorio degli schemi non gestiti dalle operazioni monogeometria.
-/// I trasporti Arrow usano invece il contratto plurale.
+/// Guardia esplicita per chiamanti che richiedono al massimo una geometria.
+/// Nessuna operazione del catalogo usa questa restrizione; i trasporti Arrow
+/// usano il contratto plurale.
 ///
 /// # Errors
 /// `Unsupported` per piu' geometrie, `Schema` per primaria malformata.

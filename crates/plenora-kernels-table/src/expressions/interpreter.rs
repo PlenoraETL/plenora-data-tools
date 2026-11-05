@@ -303,6 +303,20 @@ pub fn evaluate(
         Expression::Column { name } => column(batch, name, row),
         Expression::Literal { value } => literal(value),
         Expression::Unary { op, value } => {
+            if let Expression::Column { name } = value.as_ref() {
+                if matches!(op, UnaryOperator::IsNull | UnaryOperator::IsNotNull)
+                    && plenora_core::contract::arrow_metadata::field_declares_wkb_geometry(
+                        batch.schema_ref().field(column_index(batch, name)?),
+                    )
+                {
+                    let null = batch.column(column_index(batch, name)?).is_null(row);
+                    return Ok(Scalar::Boolean(if matches!(op, UnaryOperator::IsNull) {
+                        null
+                    } else {
+                        !null
+                    }));
+                }
+            }
             let value = evaluate(value, batch, row, ctx)?;
             Ok(match op {
                 UnaryOperator::IsNull => Scalar::Boolean(value == Scalar::Null),
@@ -643,9 +657,9 @@ pub(super) fn static_output_kind(
     batch: &RecordBatch,
     config: &ExpressionTransform,
 ) -> Result<Kind> {
+    super::verifica_accessi_geometrici(&config.expression, batch.schema_ref())?;
     let lookup = |name: &str| -> Result<DataType> {
         let index = column_index(batch, name)?;
-        crate::require_non_geometry(batch.schema_ref().field(index))?;
         Ok(batch.schema_ref().field(index).data_type().clone())
     };
     static_type::verifica_domini_temporali("table.expression", &config.expression, &lookup)?;

@@ -33,8 +33,8 @@ altre di sinistra prendono il suffisso `_L`, tutte quelle di destra `_R`,
 anche quando il nome non collide. Tipi e metadati di campo restano quelli
 d'origine; ogni colonna d'uscita è nullable. I metadati di schema dei due
 lati si fondono: una chiave presente da un lato solo, o con lo stesso
-valore, resta. La colonna geometrica di un lato si conserva con il suo
-nome d'uscita; l'uscita ne ammette una sola. Nessuna proprietà del
+valore, resta. Ogni colonna geometrica sopravvissuta conserva il proprio
+nome d'uscita e contratto. Nessuna proprietà del
 contratto (`sorted_by`, `row_count`) sopravvive.
 
 ### Righe

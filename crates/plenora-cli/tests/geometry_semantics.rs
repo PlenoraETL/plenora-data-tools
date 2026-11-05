@@ -119,6 +119,9 @@ fn expected<'a>(v: &'a Value, name: &str, compute: bool) -> (&'a str, &'static s
     {
         return (v["category"].as_str().unwrap(), "validate", false);
     }
+    if compute && geometry.is_empty() {
+        return ("schema", "validate", false);
+    }
     if geometry.len() > 1 {
         // I vettori plurali non dichiarano una primaria: il calcolo e' ambiguo.
         return if compute {
@@ -215,7 +218,12 @@ fn same_values(input: &RecordBatch, output: &RecordBatch) {
             "passaggio: valori alterati"
         );
     }
+    let mut ids = std::collections::BTreeSet::new();
     for (left, right) in input.schema().fields().iter().zip(output.schema().fields()) {
+        let id = plenora_core::contract::arrow_metadata::canonical_field_id(right)
+            .unwrap()
+            .unwrap();
+        assert!(ids.insert(id.0), "identita duplicate");
         for (key, value) in left.metadata() {
             assert_eq!(
                 right.metadata().get(key),
@@ -238,8 +246,14 @@ fn vettori_geometry_semantics() {
         provenance["commit"],
         adoption["contracts_source"]["revision"]
     );
-    assert_eq!(provenance["file"].as_object().unwrap().len(), 86);
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 87);
+    let inventory = provenance["file"].as_object().unwrap();
+    let names: std::collections::BTreeSet<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name != "provenienza.json")
+        .collect();
+    assert_eq!(names, inventory.keys().cloned().collect());
+    let count = inventory.len();
     let mut conformi = 0;
     let mut deviazioni = 0;
     for (name, hash) in provenance["file"].as_object().unwrap() {
@@ -295,7 +309,7 @@ fn vettori_geometry_semantics() {
             verifica_cli(&input, &plan, category, phase, name, compute);
         }
     }
-    println!("86 vettori, API e CLI: {conformi} scenari conformi, {deviazioni} con deviazione dichiarata");
+    println!("{count} vettori, API e CLI: {conformi} scenari conformi, {deviazioni} con deviazione dichiarata");
 }
 
 #[test]
@@ -334,6 +348,7 @@ fn il_filtro_precede_la_lettura_dei_valori_e_srid_malformato_e_schema() {
     )
     .unwrap_err();
     assert_eq!(e.category().as_str(), "schema");
+    assert_eq!(e.phase().as_str(), "validate");
     assert!(!e.to_string().contains("NON_UN_NUMERO"));
 }
 
@@ -374,6 +389,20 @@ fn verifica_cli(
             verifica_calcolo(&out, name);
         } else {
             same_values(input, &out);
+            let (_, api) = plenora_cli::api::esegui_in_memoria(
+                &Pipeline::from_json(plan).unwrap(),
+                vec![Ingresso::Tabella {
+                    nome: "t".into(),
+                    tabella: input.clone(),
+                }],
+                &Interruzione::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                api[0].1.schema(),
+                out.schema(),
+                "metadata API e CLI diversi"
+            );
         }
     } else {
         assert_eq!(run.status.code(), Some(3), "{name}, calcolo={compute}");
@@ -737,6 +766,74 @@ fn ipc_wkt1_gdal_identita_conserva_metadati() {
             "ok",
             "",
             codice,
+            false,
+        );
+    }
+}
+
+#[test]
+fn decisione_0022_mixed_omette_elenco_vuoto() {
+    let mut vector: Value = serde_json::from_str(include_str!(
+        "fixtures/arrow-data-v1/axis-lon-lat-epsg4326.json"
+    ))
+    .unwrap();
+    vector["fields"][1]["metadata"]["plenora.geometry.types_declaration"] =
+        Value::String("mixed".into());
+    vector["fields"][1]["metadata"]
+        .as_object_mut()
+        .unwrap()
+        .remove("plenora.geometry.types");
+    let plan = r#"{"version":1,"inputs":["t"],"steps":[],"outputs":["t"]}"#;
+    let pipeline = Pipeline::from_json(plan).unwrap();
+    let contract = plenora_core::contract::arrow_schema::contract_from_arrow_schema(
+        tabella(&vector).schema(),
+        plenora_core::crs::resolve_crs,
+    )
+    .unwrap();
+    for empty in [false, true] {
+        if empty {
+            vector["fields"][1]["metadata"]["plenora.geometry.types"] =
+                Value::String(String::new());
+        }
+        let input = tabella(&vector);
+        let mut typed = contract.clone();
+        typed.schema = input.schema();
+        let validation = typed.validate();
+        if empty {
+            let error = validation.unwrap_err();
+            assert_eq!(error.category().as_str(), "schema");
+            assert_eq!(error.phase().as_str(), "validate");
+        } else {
+            validation.unwrap();
+        }
+        let result = plenora_cli::api::esegui_in_memoria(
+            &pipeline,
+            vec![Ingresso::Tabella {
+                nome: "t".into(),
+                tabella: input.clone(),
+            }],
+            &Interruzione::default(),
+        );
+        if empty {
+            let error = result.unwrap_err();
+            assert_eq!(error.category().as_str(), "schema");
+            assert_eq!(error.phase().as_str(), "validate");
+        } else {
+            let (_, tables) = result.unwrap();
+            same_values(&input, &tables[0].1);
+            assert!(!tables[0]
+                .1
+                .schema()
+                .field(1)
+                .metadata()
+                .contains_key("plenora.geometry.types"));
+        }
+        verifica_cli(
+            &input,
+            plan,
+            if empty { "schema" } else { "ok" },
+            if empty { "validate" } else { "" },
+            "decisione-0022",
             false,
         );
     }

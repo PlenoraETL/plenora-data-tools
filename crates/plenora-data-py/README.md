@@ -383,3 +383,8 @@ superfici, censite in [Geometry Semantics](../../docs/geometry-semantics.md).
   scadenza corre da prima, dall'ingresso di `arun`), e l'annullamento di un
   task aspetta che il lavoro arrivi al suo controllo successivo (al più un
   passo del piano).
+
+Le tabelle PyArrow possono contenere più geometrie, ciascuna con CRS e assi
+propri. Primaria, selettori `input_geometry`/`left_geometry`/`right_geometry`
+e GeoParquet seguono gli stessi [esempi eseguiti](../../docs/geometrie-multiple.md)
+della CLI e dell'API Rust.

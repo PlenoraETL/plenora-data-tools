@@ -428,3 +428,5 @@ limite della tabella.
 - **Errori di `parquet` come codici**: il testo della dipendenza non entra
   nei messaggi (può contenere valori), solo la variante (`parquet error:
   general`, …), come per Arrow.
+
+Geometrie multiple complete dalla 4.1.0: [primaria, selettori ed esempi eseguiti](geometrie-multiple.md).
