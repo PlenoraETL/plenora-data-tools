@@ -30,6 +30,18 @@ la cui versione non ha qui una voce datata.
   schema è ora anticipato prima del primo blocco C Stream: i tipi già
   vietati falliscono con `unsupported` in fase `read`.
 
+### Cambiamenti osservabili portati da Arrow 60.1.0
+
+- SDK Python: una colonna `Map(keys_sorted=True)` conserva il flag anche in
+  uscita; prima l'esportazione FFI lo perdeva.
+- IPC in scrittura: una colonna senza null è scritta con una bitmap di
+  validità vuota. I valori riletti non cambiano, ma i byte dei file IPC
+  differiscono da quelli della 4.1.0 a parità di ingresso; restano
+  deterministici fra esecuzioni della 4.1.1.
+- IPC malformato in lettura: una bitmap di validità troppo corta produce un
+  errore esplicito di Arrow invece di un panico intercettato. La categoria
+  resta `data_mapping`; cambia solo il messaggio.
+
 ## [4.1.0] - 2026-11-05
 
 La 4.1.0 completa il supporto alle geometrie multiple su API Rust, CLI e SDK
