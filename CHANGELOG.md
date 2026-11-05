@@ -17,6 +17,12 @@ Python, IPC file/stream e GeoParquet: CRS per colonna, primaria facoltativa,
 selettori espliciti e conservazione delle geometrie passanti. Include le
 correzioni della politica dei metadati (#145) e della raccolta (#147).
 
+La primaria implicita senza `plenora.field_id` resta primaria quando un
+produttore aggiunge una seconda geometria: l'emissione comune assegna
+l'identita' necessaria prima di scrivere il riferimento esplicito.
+`geo.from_coords` e `geo.from_wkt` accettano ora questo ingresso anche
+nella validazione del piano.
+
 PR 5 - qualificazione: matrice guidata da tutte le operazioni del catalogo,
 con una, due e tre geometrie, primaria iniziale/non iniziale/assente,
 operandi primari e secondari, null e ingressi vuoti sui tre trasporti.

@@ -687,3 +687,313 @@ fn fusioni_dirette_multigeometria_senza_bbox_e_crs_discordanti_a_zero_righe() {
         }
     }
 }
+
+#[test]
+fn primaria_implicita_senza_id_produttori_catena_e_trasporti() {
+    use plenora_core::arrow::array::{ArrayRef, Float64Array, Int64Array, StringArray};
+    use plenora_core::contract::arrow_metadata::geometry_output_field;
+    use plenora_core::contract::arrow_schema::primary_geometry_position;
+    use serde_json::json;
+    for producer in ["geo.from_coords", "geo.from_wkt"] {
+        for position in [0, 3] {
+            let mut fields = vec![
+                Field::new("x", DataType::Float64, false),
+                Field::new("y", DataType::Float64, false),
+                Field::new("wkt", DataType::Utf8, false),
+            ];
+            let mut columns: Vec<ArrayRef> = vec![
+                Arc::new(Float64Array::from(vec![1., 2.])),
+                Arc::new(Float64Array::from(vec![3., 4.])),
+                Arc::new(StringArray::from(vec!["POINT(1 3)", "POINT(2 4)"])),
+            ];
+            let field = geometry_output_field("old", "EPSG:3857").unwrap();
+            let mut metadata = field.metadata().clone();
+            metadata.insert("plenora.geometry.axis_order", "easting_northing");
+            fields.insert(position, field.with_metadata(metadata));
+            columns.insert(
+                position,
+                Arc::new(BinaryArray::from(vec![None::<&[u8]>, None])),
+            );
+            let input = RecordBatch::try_new(
+                Arc::new(Schema::new_with_metadata(
+                    fields,
+                    HashMap::from([("plenora.contract.version".into(), "1".into())]),
+                )),
+                columns,
+            )
+            .unwrap();
+            let right = RecordBatch::try_new(
+                Arc::new(Schema::new_with_metadata(
+                    vec![Field::new("key", DataType::Int64, false)
+                        .with_metadata(HashMap::from([("plenora.field_id".into(), "0".into())]))],
+                    HashMap::from([("plenora.contract.version".into(), "1".into())]),
+                )),
+                vec![Arc::new(Int64Array::from(vec![1]))],
+            )
+            .unwrap();
+            let config = if producer == "geo.from_coords" {
+                json!({"x_column":"x", "y_column":"y", "geometry_column":"new", "crs":"EPSG:3857"})
+            } else {
+                json!({"wkt_column":"wkt", "output_column":"new", "crs":"EPSG:3857"})
+            };
+            let plan = plenora_pipeline::Pipeline::from_json(&json!({"version":1,"inputs":["t","r"],"steps":[
+                {"op":producer,"in":["t"],"out":"added","config":config},
+                {"op":"table.rename","in":["added"],"out":"renamed","config":{"renames":[{"old_name":"old","new_name":"primary"}]}},
+                {"op":"table.reorder_columns","in":["renamed"],"out":"ordered","config":{"columns":["new","primary"]}},
+                {"op":"table.cross_join","in":["ordered","r"],"out":"joined","config":{}}
+            ],"outputs":["added","joined"]}).to_string()).unwrap();
+            for rows in [0, 2] {
+                let t = input.slice(0, rows);
+                let valid = plan
+                    .validate(&[("t", t.schema()), ("r", right.schema())])
+                    .unwrap();
+                let output = valid
+                    .run(vec![("t".into(), t.clone()), ("r".into(), right.clone())])
+                    .unwrap();
+                let mut new_ids = std::collections::BTreeSet::new();
+                for (name, table) in &output.outputs {
+                    let expected = if name == "added" { "old" } else { "primary" };
+                    let schema = table.schema();
+                    let p = primary_geometry_position(&schema).unwrap().unwrap();
+                    assert_eq!(schema.field(p).name(), expected);
+                    assert_eq!(table.column(p), t.column(position));
+                    for field in schema.fields() {
+                        let id = &field.metadata()["plenora.field_id"];
+                        if field.name() == "key" {
+                            assert_eq!(id, "0");
+                        } else {
+                            assert_ne!(id, "0");
+                            assert!(new_ids.insert(id.clone()));
+                        }
+                    }
+                    let dir = tempfile::tempdir().unwrap();
+                    for ext in ["arrow", "arrows", "parquet"] {
+                        let path = dir.path().join(format!("roundtrip.{ext}"));
+                        plenora_io::scrivi_tabella(
+                            table,
+                            &path,
+                            &plenora_io::OpzioniScrittura::default(),
+                        )
+                        .unwrap();
+                        let read = plenora_io::leggi_tabella(&path, None, u64::MAX).unwrap();
+                        assert_eq!(read.columns(), table.columns());
+                        assert_eq!(
+                            contratto(&read).active_geometry_column().unwrap().name,
+                            expected
+                        );
+                        assert_eq!(
+                            read.schema().field(p).metadata()["plenora.field_id"],
+                            schema.field(p).metadata()["plenora.field_id"]
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+// La matrice confronta le classi sulla stessa fixture e sullo stesso oracolo.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn primaria_senza_id_composizioni_e_derivate_non_promosse() {
+    use plenora_core::arrow::array::{ArrayRef, Int64Array, StringArray, StructArray};
+    use plenora_core::contract::arrow_metadata::geometry_output_field;
+    use plenora_core::contract::arrow_schema::primary_geometry_position;
+    use plenora_kernels_table::{aggregation, joins, reshape, setops, Limits};
+    use serde_json::json;
+    let limits = Limits::default();
+    let make = |name: &str| {
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("key", DataType::Int64, false),
+                geometry_output_field(name, "EPSG:3857").unwrap(),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 1])),
+                Arc::new(BinaryArray::from(vec![None::<&[u8]>, None])),
+            ],
+        )
+        .unwrap()
+    };
+    let a = make("a");
+    let b = make("b");
+    let primary = |batch: &RecordBatch| {
+        primary_geometry_position(&batch.schema())
+            .unwrap()
+            .map(|p| batch.schema().field(p).name().clone())
+    };
+    for rows in [0, 2] {
+        let a = a.slice(0, rows);
+        let b = b.slice(0, rows);
+        for op in ["table.join", "table.concat_by_name", "table.union_distinct"] {
+            let config = match op {
+                "table.join" => json!({"left_keys":["key"],"right_keys":["key"]}),
+                "table.concat_by_name" => json!({"strict":false}),
+                _ => json!({}),
+            };
+            // Union richiede gli stessi nomi: conserva l'unica primaria implicita.
+            let right = if op == "table.union_distinct" { &a } else { &b };
+            let direct = match op {
+                "table.join" => joins::join(
+                    &a,
+                    right,
+                    &serde_json::from_value(config.clone()).unwrap(),
+                    &limits,
+                ),
+                "table.concat_by_name" => joins::concat_by_name(
+                    &[&a, right],
+                    &serde_json::from_value(config.clone()).unwrap(),
+                    &limits,
+                ),
+                _ => setops::union_distinct(
+                    &a,
+                    right,
+                    &serde_json::from_value(config.clone()).unwrap(),
+                    &limits,
+                ),
+            }
+            .unwrap();
+            let expected = (op == "table.union_distinct").then(|| "a".to_owned());
+            assert_eq!(primary(&direct), expected, "{op}");
+            let plan = plenora_pipeline::Pipeline::from_json(&json!({"version":1,"inputs":["l","r"],"steps":[{"op":op,"in":["l","r"],"out":"o","config":config}],"outputs":["o"]}).to_string()).unwrap();
+            let result = plan
+                .validate(&[("l", a.schema()), ("r", right.schema())])
+                .unwrap()
+                .run(vec![("l".into(), a.clone()), ("r".into(), right.clone())])
+                .unwrap();
+            assert_eq!(primary(&result.outputs[0].1), expected, "{op}");
+        }
+        let appended =
+            joins::concat(&a, &a, &serde_json::from_value(json!({})).unwrap(), &limits).unwrap();
+        assert_eq!(primary(&appended), Some("a".into()));
+        let config = json!({"group_by":["key"],"aggregations":[{"column":"a","function":"first","alias":"a"},{"column":"a","function":"last","alias":"copy"}]});
+        let aggregated =
+            aggregation::aggregate(&a, &serde_json::from_value(config.clone()).unwrap()).unwrap();
+        assert_eq!(primary(&aggregated), None);
+        let plan = plenora_pipeline::Pipeline::from_json(&json!({"version":1,"inputs":["t"],"steps":[{"op":"table.aggregate","in":["t"],"out":"o","config":config}],"outputs":["o"]}).to_string()).unwrap();
+        assert_eq!(
+            primary(
+                &plan
+                    .validate(&[("t", a.schema())])
+                    .unwrap()
+                    .run(vec![("t".into(), a.clone())])
+                    .unwrap()
+                    .outputs[0]
+                    .1
+            ),
+            None
+        );
+        let pivot = reshape::pivot(&a, &serde_json::from_value(json!({"index_col":"key","pivot_col":"key","value_col":"a","mapping":{"1":"a","2":"copy"}})).unwrap(), &limits).unwrap();
+        assert_eq!(primary(&pivot), None);
+    }
+    let transposed = reshape::transpose(
+        &a.project(&[1]).unwrap(),
+        &serde_json::from_value(json!({})).unwrap(),
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(primary(&transposed), None);
+    // Unnest non puo' introdurre geometrie: i figli geometrici sono rifiutati.
+    let child = Arc::new(geometry_output_field("nested", "EPSG:3857").unwrap());
+    let structure = StructArray::new(
+        vec![child.clone()].into(),
+        vec![Arc::new(BinaryArray::from(vec![None::<&[u8]>, None])) as ArrayRef],
+        None,
+    );
+    let nested = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            a.schema().field(1).clone(),
+            Field::new("s", DataType::Struct(vec![child].into()), false),
+        ])),
+        vec![a.column(1).clone(), Arc::new(structure)],
+    )
+    .unwrap();
+    for rows in [0, 2] {
+        let nested = nested.slice(0, rows);
+        assert_eq!(
+            reshape::unnest(
+                &nested,
+                &serde_json::from_value(json!({"column":"s"})).unwrap(),
+                &limits
+            )
+            .unwrap_err()
+            .category(),
+            ErrorCategory::Crs
+        );
+        let plan = plenora_pipeline::Pipeline::from_json(&json!({"version":1,"inputs":["t"],"steps":[{"op":"table.unnest","in":["t"],"out":"o","config":{"column":"s"}}],"outputs":["o"]}).to_string()).unwrap();
+        assert_eq!(
+            plan.validate(&[("t", nested.schema())])
+                .unwrap_err()
+                .category(),
+            ErrorCategory::Crs
+        );
+    }
+    // Join da un solo ingresso geometrico conserva la primaria senza ID.
+    let plain = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new(
+            "label",
+            DataType::Utf8,
+            false,
+        )])),
+        vec![Arc::new(StringArray::from(vec!["x"]))],
+    )
+    .unwrap();
+    for (left, right) in [(&a, &plain), (&plain, &a)] {
+        let joined = joins::cross_join(
+            left,
+            right,
+            &serde_json::from_value(json!({})).unwrap(),
+            &limits,
+        )
+        .unwrap();
+        assert_eq!(primary(&joined), Some("a".into()));
+    }
+}
+
+#[test]
+fn concat_per_nome_esplicita_primaria_implicita_senza_id() {
+    use plenora_core::contract::arrow_schema::primary_geometry_position;
+    use plenora_kernels_table::{joins, Limits};
+    use serde_json::json;
+    let mut old = batch(1, None);
+    let mut field = old.schema().field(0).clone();
+    let mut metadata = field.metadata().clone();
+    metadata.remove("plenora.field_id");
+    field = field.with_metadata(metadata);
+    old = RecordBatch::try_new(Arc::new(Schema::new(vec![field])), old.columns().to_vec()).unwrap();
+    let multi = batch(2, Some("0"));
+    for reverse in [false, true] {
+        let inputs = if reverse {
+            [&multi, &old]
+        } else {
+            [&old, &multi]
+        };
+        let direct = joins::concat_by_name(
+            &inputs,
+            &serde_json::from_value(json!({})).unwrap(),
+            &Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            primary_geometry_position(&direct.schema()).unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            direct.schema().metadata()["plenora.primary_geometry"],
+            direct.schema().field(0).metadata()["plenora.field_id"]
+        );
+        let plan = plenora_pipeline::Pipeline::from_json(&json!({"version":1,"inputs":["a","b"],"steps":[{"op":"table.concat_by_name","in":["a","b"],"out":"o","config":{}}],"outputs":["o"]}).to_string()).unwrap();
+        let result = plan
+            .validate(&[("a", inputs[0].schema()), ("b", inputs[1].schema())])
+            .unwrap()
+            .run(vec![
+                ("a".into(), inputs[0].clone()),
+                ("b".into(), inputs[1].clone()),
+            ])
+            .unwrap();
+        assert_eq!(
+            primary_geometry_position(&result.outputs[0].1.schema()).unwrap(),
+            Some(0)
+        );
+    }
+}

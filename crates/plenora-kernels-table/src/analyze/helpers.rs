@@ -408,20 +408,27 @@ pub(in crate::analyze) fn finish(
             })
         })
         .collect::<Vec<_>>();
-    let schema = crate::geometry_provenance::emit(
+    let schema = crate::geometry_provenance::prepare(
         schema.fields().iter().map(|f| f.as_ref().clone()).collect(),
-        primary,
-        geometry.len(),
         schema.metadata().clone().into_iter().collect(),
     )?;
-    let output = DataContract::new(
-        Arc::new(schema),
-        origins,
-        geometry,
-        active,
-        properties,
-        allocator,
-    )?;
+    // Un contratto logico puo' dichiarare geometrie senza estensione Arrow.
+    // In quel caso active conserva lo stato fino ad arrow_schema_from_contract;
+    // emettere qui cambierebbe i metadati grezzi o produrrebbe un riferimento falso.
+    let complete = geometry.iter().all(|g| {
+        schema.field_with_name(&g.name).is_ok_and(|field| {
+            field
+                .metadata()
+                .get("ARROW:extension:name")
+                .is_some_and(|v| v == "geoarrow.wkb")
+        })
+    });
+    let schema = if complete {
+        plenora_core::contract::arrow_schema::emit_primary_geometry(&schema, primary)?
+    } else {
+        Arc::new(schema)
+    };
+    let output = DataContract::new(schema, origins, geometry, active, properties, allocator)?;
     for (field, original) in output.schema.fields().iter().zip(originals) {
         if field
             .metadata()

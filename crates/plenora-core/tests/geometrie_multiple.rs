@@ -340,7 +340,7 @@ fn eliminazione_della_primaria_non_promuove_la_secondaria() {
 }
 
 #[test]
-fn canone_interno_non_assegna_identita_pubbliche() {
+fn canone_interno_assegna_solo_identita_necessaria_alla_primaria() {
     for primary in [None, Some("10")] {
         let raw = schema(
             vec![
@@ -362,8 +362,96 @@ fn canone_interno_non_assegna_identita_pubbliche() {
     }
     let mut synthetic = read(schema(vec![geometry("a", None), geometry("b", None)], None));
     synthetic.active_geometry = Some(synthetic.geometries[0].field_id);
+    let output = arrow_schema_from_contract(&synthetic).unwrap();
+    assert_eq!(output.field(0).metadata()[ID], "0");
+    assert!(!output.field(1).metadata().contains_key(ID));
+    assert_eq!(primary_name(&read(output)), Some("a"));
+}
+
+#[test]
+fn emissione_primaria_senza_id_canonica_e_fail_closed() {
+    use plenora_core::contract::arrow_schema::{emit_primary_geometry, primary_geometry_position};
+    for position in 0..3 {
+        for existing in [None, Some(17), Some(u32::MAX - 1)] {
+            let mut fields = vec![
+                geometry("secondary", existing),
+                Field::new("value", DataType::Int64, true),
+            ];
+            fields.insert(position, geometry("primary", None));
+            let input = schema(fields, None);
+            let output = emit_primary_geometry(&input, Some(position)).unwrap();
+            let expected_id = existing.map_or(0, |id| id + 1).to_string();
+            assert_eq!(output.field(position).metadata()[ID], expected_id);
+            assert_eq!(output.metadata()[PRIMARY], expected_id);
+            assert_eq!(primary_geometry_position(&output).unwrap(), Some(position));
+            for index in 0..3 {
+                if index != position {
+                    assert_eq!(input.field(index), output.field(index));
+                }
+            }
+            assert_eq!(
+                emit_primary_geometry(&output, Some(position)).unwrap(),
+                output
+            );
+            assert_eq!(
+                emit_primary_geometry(&input, Some(position)).unwrap(),
+                output
+            );
+            // Nessuna elezione quando la provenienza non indica una primaria.
+            assert_eq!(emit_primary_geometry(&input, None).unwrap(), input);
+        }
+    }
+    let exhausted = schema(
+        vec![geometry("other", Some(u32::MAX)), geometry("primary", None)],
+        None,
+    );
     assert!(matches!(
-        arrow_schema_from_contract(&synthetic),
+        emit_primary_geometry(&exhausted, Some(1)),
+        Err(PlenoraError::Unsupported(_))
+    ));
+    for position in [2, usize::MAX] {
+        assert!(matches!(
+            emit_primary_geometry(&exhausted, Some(position)),
+            Err(PlenoraError::Schema(_))
+        ));
+    }
+    let single = schema(vec![geometry("primary", None)], None);
+    assert_eq!(emit_primary_geometry(&single, Some(0)).unwrap(), single);
+    // Il riferimento ricevuto si risolve prima del completamento.
+    let dangling = schema(vec![geometry("a", None), geometry("b", None)], Some("0"));
+    assert!(matches!(
+        pubblica_schema(&dangling, &BTreeSet::new(), &BTreeSet::new()),
         Err(PlenoraError::Schema(_))
     ));
+}
+
+#[test]
+fn emissione_none_extension_only_aggiunge_versione() {
+    use plenora_core::contract::arrow_schema::emit_primary_geometry;
+    let input = Schema::new(vec![geometry("secondary", None)]);
+    let output = emit_primary_geometry(&input, None).unwrap();
+    assert_eq!(output.metadata()[PRIMARY], "none");
+    assert_eq!(output.metadata()["plenora.contract.version"], "1");
+    assert!(primary_name(&read(output)).is_none());
+}
+
+#[test]
+fn emissione_rifiuta_primaria_senza_estensione_o_non_binaria() {
+    use plenora_core::contract::arrow_schema::emit_primary_geometry;
+    for field in [
+        Field::new("invalid", DataType::Binary, true).with_metadata(HashMap::from([(
+            "plenora.geometry.encoding".into(),
+            "wkb".into(),
+        )])),
+        Field::new("invalid", DataType::Utf8, true).with_metadata(HashMap::from([(
+            "ARROW:extension:name".into(),
+            "geoarrow.wkb".into(),
+        )])),
+    ] {
+        let input = Schema::new(vec![field, geometry("other", None)]);
+        assert!(matches!(
+            emit_primary_geometry(&input, Some(0)),
+            Err(PlenoraError::Schema(_))
+        ));
+    }
 }

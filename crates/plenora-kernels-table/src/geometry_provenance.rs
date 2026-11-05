@@ -4,7 +4,9 @@ use plenora_core::contract::arrow_metadata::{
     field_declares_wkb_geometry, schema_has_canonical_keys, PLENORA_CONTRACT_VERSION,
     PLENORA_CONTRACT_VERSION_KEY,
 };
-use plenora_core::contract::arrow_schema::{primary_geometry_position, PRIMARY_GEOMETRY_KEY};
+use plenora_core::contract::arrow_schema::{
+    emit_primary_geometry, primary_geometry_position, PRIMARY_GEOMETRY_KEY,
+};
 use plenora_core::{PlenoraError, Result};
 use std::collections::{BTreeSet, HashMap};
 
@@ -62,20 +64,23 @@ pub fn compose(
             None
         }
     };
-    let count = fields
-        .iter()
-        .filter(|f| field_declares_wkb_geometry(f))
-        .count();
-    emit(fields, primary, count, metadata)
+    emit(fields, primary, metadata)
 }
 
 /// Emette lo stato della primaria e disambigua le identita' pubbliche dell'uscita.
 pub fn emit(
-    mut fields: Vec<Field>,
+    fields: Vec<Field>,
     primary: Option<usize>,
-    count: usize,
-    mut metadata: HashMap<String, String>,
+    metadata: HashMap<String, String>,
 ) -> Result<Schema> {
+    let schema = prepare(fields, metadata)?;
+    Ok(emit_primary_geometry(&schema, primary)?.as_ref().clone())
+}
+
+/// Disambigua gli ID senza materializzare geometrie dichiarate solo dal contratto.
+pub fn prepare(mut fields: Vec<Field>, mut metadata: HashMap<String, String>) -> Result<Schema> {
+    // La primaria resta nel contratto logico finche' lo schema e' completo.
+    metadata.remove(PRIMARY_GEOMETRY_KEY);
     // Identita' pubbliche duplicate da ingressi distinti diventano nuove identita'.
     let mut reserved = BTreeSet::new();
     for field in &fields {
@@ -90,13 +95,13 @@ pub fn emit(
         }
     }
     let mut seen = BTreeSet::new();
-    for (index, field) in fields.iter_mut().enumerate() {
+    for field in &mut fields {
         let old = field
             .metadata()
             .get(plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY)
             .cloned();
         let duplicate = old.as_ref().is_some_and(|id| !seen.insert(id.clone()));
-        if duplicate || (primary == Some(index) && count > 1 && old.is_none()) {
+        if duplicate {
             let id = reserved
                 .last()
                 .copied()
@@ -112,20 +117,6 @@ pub fn emit(
             *field = field.clone().with_metadata(md);
             metadata.insert("plenora.contract.version".into(), "1".into());
         }
-    }
-    metadata.remove(PRIMARY_GEOMETRY_KEY);
-    match (count, primary) {
-        (1, None) => {
-            metadata.insert(PRIMARY_GEOMETRY_KEY.into(), "none".into());
-        }
-        (2.., Some(p)) => {
-            let id = fields[p]
-                .metadata()
-                .get(plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY)
-                .ok_or_else(|| PlenoraError::Schema("primaria senza identita' pubblica".into()))?;
-            metadata.insert(PRIMARY_GEOMETRY_KEY.into(), id.clone());
-        }
-        _ => {}
     }
     // Anche una dichiarazione derivata nuova richiede la versione del trasporto,
     // senza inventare identita pubbliche per i campi.
@@ -214,6 +205,81 @@ mod tests {
             ),
         ]))
     }
+    #[test]
+    fn contratti_parziali_emettono_primaria_solo_dopo_materializzazione() {
+        use plenora_core::contract::arrow_schema::{
+            arrow_schema_from_contract, contract_from_arrow_schema,
+        };
+        use plenora_core::contract::FieldAllocator;
+        use plenora_core::crs::resolve_crs;
+        use std::sync::Arc;
+        for primary in ["none", "10", "20"] {
+            for materialized in 0..4 {
+                let raw = Arc::new(Schema::new_with_metadata(
+                    vec![field("10"), field("20")],
+                    HashMap::from([
+                        ("plenora.contract.version".into(), "1".into()),
+                        (PRIMARY_GEOMETRY_KEY.into(), primary.into()),
+                    ]),
+                ));
+                let mut input = contract_from_arrow_schema(raw, resolve_crs).unwrap();
+                let fields = input
+                    .schema
+                    .fields()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, field)| {
+                        let mut md = field.metadata().clone();
+                        if materialized & (1 << i) == 0 {
+                            md.remove("ARROW:extension:name");
+                        }
+                        field.as_ref().clone().with_metadata(md)
+                    })
+                    .collect::<Vec<_>>();
+                input.schema = Arc::new(Schema::new_with_metadata(
+                    fields,
+                    input.schema.metadata().clone(),
+                ));
+                let output = crate::analyze::analyze_table_contract(
+                    "table.reorder_columns",
+                    std::slice::from_ref(&input),
+                    &serde_json::json!({"columns":["20","10"]}),
+                    &mut FieldAllocator::default(),
+                    &crate::Limits::default(),
+                )
+                .unwrap();
+                let expected = (primary != "none").then_some(primary);
+                assert_eq!(
+                    output.active_geometry_column().map(|g| g.name.as_str()),
+                    expected
+                );
+                for field in output.schema.fields() {
+                    assert_eq!(
+                        field.metadata(),
+                        input
+                            .schema
+                            .field_with_name(field.name())
+                            .unwrap()
+                            .metadata()
+                    );
+                }
+                let emitted = arrow_schema_from_contract(&output).unwrap();
+                assert_eq!(
+                    primary_geometry_position(&emitted)
+                        .unwrap()
+                        .map(|p| emitted.field(p).name().as_str()),
+                    expected
+                );
+                let reread = contract_from_arrow_schema(emitted, resolve_crs).unwrap();
+                assert_eq!(reread.geometries.len(), 2);
+                assert_eq!(
+                    reread.active_geometry_column().map(|g| g.name.as_str()),
+                    expected
+                );
+            }
+        }
+    }
+
     #[test]
     fn vettori_contratti_primary_composition_v1() {
         let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -386,8 +386,24 @@ fn verifica_limiti_del_piano(piano: &Pipeline, limiti: &PlanLimits) -> Result<()
 /// ridichiara) sarebbero nel batch e non nel contratto, e il controllo
 /// dopo il passo seguente li vedrebbe divergere. Uno schema senza
 /// geometrie resta invariato.
-fn canonico(mut contratto: DataContract) -> Result<DataContract> {
-    contratto.schema = arrow_schema_from_contract(&contratto)?;
+fn canonico(mut contratto: DataContract, campi: &mut FieldAllocator) -> Result<DataContract> {
+    let schema = arrow_schema_from_contract(&contratto)?;
+    for (before, after) in contratto.schema.fields().iter().zip(schema.fields()) {
+        let key = plenora_core::contract::arrow_metadata::PLENORA_FIELD_ID_KEY;
+        if before.metadata().get(key) != after.metadata().get(key) {
+            let id = contratto
+                .field_ids
+                .get(before.name())
+                .copied()
+                .ok_or_else(|| {
+                    PlenoraError::Schema("identita' logica assente durante l'emissione".into())
+                })?;
+            if campi.public_identity(id).is_none() {
+                campi.record_public_identity(id, before.metadata().get(key).cloned());
+            }
+        }
+    }
+    contratto.schema = schema;
     contratto.validate()?;
     Ok(contratto)
 }
@@ -581,7 +597,7 @@ impl Pipeline {
             }
             verifica_colonne(&letto, limiti_kernel.max_columns)
                 .map_err(|errore| nel_passo_o_input(&format!("input `{nome}`"), errore))?;
-            letto = canonico(letto)
+            letto = canonico(letto, &mut campi)
                 .map_err(|errore| nel_passo_o_input(&format!("input `{nome}`"), errore))?;
             schemi_input.insert(nome.clone(), normalizzato);
             contratti.insert(nome.clone(), letto);
@@ -696,7 +712,8 @@ impl Pipeline {
             };
             verifica_colonne(&uscita, limiti_kernel.max_columns)
                 .map_err(|errore| nel_passo(&passo.out, errore))?;
-            let uscita = canonico(uscita).map_err(|errore| nel_passo(&passo.out, errore))?;
+            let uscita =
+                canonico(uscita, &mut campi).map_err(|errore| nel_passo(&passo.out, errore))?;
             let colonne_uscita = u64::try_from(uscita.schema.fields().len()).unwrap_or(u64::MAX);
             contratti.insert(passo.out.clone(), uscita);
             // Un'operazione che conserva le righe conserva quelle del primo

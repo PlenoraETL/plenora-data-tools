@@ -282,7 +282,7 @@
     "[[\"token\",\"t\"],[\"token\",\"|\"],[\"token\",\"t\"],[\"token\",\"=\"],[\"token\",\"=\"],[\"string\",\"wkt2:2019\"],[\"token\",\")\"],[\"token\",\"&\"],[\"token\",\"&\"],[\"token\",\"crate\"],[\"token\",\":\"]]",
     "[[\"token\",\"value\"],[\"token\",\"|\"],[\"token\",\"value\"],[\"token\",\"!\"],[\"token\",\"=\"],[\"string\",\"unresolved\"],[\"token\",\")\"],[\"token\",\"&\"],[\"token\",\"&\"],[\"token\",\"!\"],[\"token\",\"metadata\"]]",
     "[[\"token\",\"}\"],[\"token\",\"if\"],[\"token\",\"raw\"],[\"token\",\"=\"],[\"token\",\"=\"],[\"string\",\"none\"],[\"token\",\"{\"],[\"token\",\"return\"],[\"token\",\"Ok\"],[\"token\",\"(\"],[\"token\",\"None\"]]",
-    "[[\"token\",\".\"],[\"token\",\"insert\"],[\"token\",\"(\"],[\"token\",\"PRIMARY_GEOMETRY_KEY\"],[\"token\",\",\"],[\"string\",\"none\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\"(\"],[\"token\",\"2\"]]"
+    "[[\"token\",\".\"],[\"token\",\"insert\"],[\"token\",\"(\"],[\"token\",\"PRIMARY_GEOMETRY_KEY\"],[\"token\",\",\"],[\"string\",\"none\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"aggiungi_versione\"],[\"token\",\"(\"],[\"token\",\"&\"]]"
   ],
   "crates/plenora-core/src/contract/geometry_metadata_policy.rs": [
     "[[\"token\",\"(\"],[\"token\",\"op\"],[\"token\",\".\"],[\"token\",\"id\"],[\"token\",\",\"],[\"string\",\"geo.boundary\"],[\"token\",\"|\"],[\"string\",\"geo.buffer\"],[\"token\",\"|\"],[\"string\",\"geo.centroid\"],[\"token\",\"|\"]]",
