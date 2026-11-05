@@ -103,6 +103,7 @@ def test_run_in_memoria_rende_le_tabelle_nell_ordine_del_piano() -> None:
     assert [passo["op"] for passo in documento["steps"]] == ["table.filter", "table.sort"]
     # Lo schema pubblicato: versione del contratto e identità dei campi.
     assert ordinati.schema.metadata[b"plenora.contract.version"] == b"1"
+    assert len(ordinati.schema) == 3
     assert all(campo.metadata and b"plenora.field_id" in campo.metadata for campo in ordinati.schema)
 
 

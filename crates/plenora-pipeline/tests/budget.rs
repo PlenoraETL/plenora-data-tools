@@ -488,6 +488,7 @@ proptest! {
         let budget = BUDGET_AMPIO + budget_mib * 1024 * 1024;
         let pipeline = piano(&["a", "b"], steps, &uscite, budget);
         let esito = esegui(&pipeline, &tabelle).expect("budget sufficiente per la catena non espansiva");
+        prop_assert_eq!(esito.report.passi.len(), passi.len());
         for passo in &esito.report.passi {
             prop_assert!(passo.byte_vivi_con_uscita <= budget);
             prop_assert!(passo.byte_vivi <= budget);
@@ -496,9 +497,10 @@ proptest! {
                 prop_assert!(passo.byte_previsti >= passo.byte_output_esclusivi);
             }
         }
+        prop_assert_eq!(esito.outputs.len(), uscite.len());
         let mut prossimo_id=0_usize;
-        for ((nome,ottenuta), attesa) in esito.outputs.iter().zip(attese.iter().rev().take(ultimi)) {
-            prop_assert!(uscite.contains(&nome.as_str()));
+        for (indice, ((nome,ottenuta), attesa)) in esito.outputs.iter().zip(attese.iter().rev().take(ultimi)).enumerate() {
+            prop_assert_eq!(nome.as_str(), uscite[indice]);
             prop_assert_eq!(ottenuta.columns(), attesa.columns());
             prop_assert_eq!(ottenuta.schema_ref().metadata().get("plenora.contract.version").map(String::as_str),Some("1"));
             for f in ottenuta.schema().fields() {

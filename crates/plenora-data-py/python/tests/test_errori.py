@@ -236,7 +236,7 @@ def test_la_preparazione_degli_argomenti_classifica_e_tace(
         ),
     ]
     for caso, classe in casi:
-        with pytest.raises(pd.PlenoraError) as errore:
+        with pytest.raises(classe) as errore:
             caso()
         assert type(errore.value) is classe, repr(errore.value)
         verifica(errore.value, valida)

@@ -500,13 +500,16 @@ mod tests {
             let reference =
                 wkb_decoder::decode_validated_with_depth(&payload, max_depth).map(|_| ());
             let validated = validate_geometry_structural(&geometry, max_depth, MAX_WKB_COMPONENTS);
-            assert_eq!(
-                reference.is_ok(),
-                validated.is_ok(),
-                "esito diverso a {levels} livelli con limite {max_depth}"
-            );
-            assert_eq!(validated.is_ok(), expected_ok);
-            if let (Err(expected), Err(actual)) = (&reference, &validated) {
+            if expected_ok {
+                reference.expect("entro il limite");
+                validated.expect("entro il limite");
+            } else {
+                let expected = reference.expect_err("oltre il limite");
+                let actual = assert_rifiuto!(
+                    validated,
+                    plenora_core::ErrorCategory::InvalidPlan,
+                    plenora_core::ErrorPhase::Validate
+                );
                 assert_eq!(expected.to_string(), actual.to_string());
             }
         }

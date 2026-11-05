@@ -660,6 +660,7 @@ fn assert_nonrepresentable(result: &PolygonizeResult) {
     for polygon in &result.polygons {
         if polygon.unsigned_area() < 1e-30 {
             slivers += 1;
+            assert!(polygon.exterior().0.len() >= 4);
             assert!(polygon
                 .exterior()
                 .0
@@ -689,18 +690,20 @@ fn boundary_close(actual: &Polygon<f64>, expected: &Polygon<f64>) -> bool {
 }
 
 fn line_close(actual: &LineString<f64>, expected: &LineString<f64>) -> bool {
-    actual.lines().all(|line| {
-        [
-            line.start,
-            line.end,
-            geo::Coord {
-                x: f64::midpoint(line.start.x, line.end.x),
-                y: f64::midpoint(line.start.y, line.end.y),
-            },
-        ]
-        .iter()
-        .all(|c| Euclidean.distance(&geo::Point(*c), expected) < 1e-12)
-    })
+    actual.0.len() >= 2
+        && expected.0.len() >= 2
+        && actual.lines().all(|line| {
+            [
+                line.start,
+                line.end,
+                geo::Coord {
+                    x: f64::midpoint(line.start.x, line.end.x),
+                    y: f64::midpoint(line.start.y, line.end.y),
+                },
+            ]
+            .iter()
+            .all(|c| Euclidean.distance(&geo::Point(*c), expected) < 1e-12)
+        })
 }
 
 fn repaired_faces(bowtie: bool, method: RepairMethod) -> Vec<Polygon<f64>> {

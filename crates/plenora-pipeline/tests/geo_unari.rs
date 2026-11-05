@@ -700,6 +700,10 @@ fn accessori_diagnostica_snap_e_riproiezione_sono_i_kernel() {
         serde_json::from_str(include_str!("comune_geo/unari_attesi.json")).unwrap();
     let geometrie = geometrie(&uscita, "geometry");
     assert_eq!(geometrie.len(), 3);
+    assert_eq!(
+        geometrie.len(),
+        golden_values["reproject"].as_array().unwrap().len()
+    );
     for (geometria, coordinate_target) in geometrie
         .iter()
         .zip(golden_values["reproject"].as_array().unwrap())

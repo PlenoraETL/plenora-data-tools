@@ -935,6 +935,7 @@ mod tests {
                 .iter()
                 .map(|c| (c.x, c.y))
                 .collect();
+            assert_eq!(corners.len(), 4);
             corners.sort_by(|a, b| a.partial_cmp(b).unwrap());
             for (got, expected) in
                 corners

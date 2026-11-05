@@ -81,6 +81,14 @@ fn trasporto_senza_passi_preserva_colonne_byte_primaria_e_identita() {
                 .into(),
             )
             .expect("trasporto");
+        assert_eq!(
+            output
+                .outputs
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
         for (_, table) in &output.outputs {
             assert_eq!(table.columns(), input.columns());
             assert_ne!(
@@ -111,7 +119,15 @@ fn tutte_le_geo_del_catalogo_risolvono_operandi_senza_eleggere_primarie() {
             let implicit =
                 plenora_kernels_geo::analyze::resolve_operands(operation, &inputs, &json!({}));
             if producer {
-                assert!(implicit.unwrap().0.iter().all(Option::is_none));
+                assert_eq!(
+                    implicit
+                        .unwrap()
+                        .0
+                        .iter()
+                        .map(|g| g.map(|g| g.name.as_str()))
+                        .collect::<Vec<_>>(),
+                    vec![None; arity]
+                );
                 continue;
             }
             if primary.is_none() {
@@ -122,7 +138,15 @@ fn tutte_le_geo_del_catalogo_risolvono_operandi_senza_eleggere_primarie() {
                     operation.id
                 );
             } else {
-                assert!(implicit.unwrap().0.iter().all(|g| g.unwrap().name == "b"));
+                assert_eq!(
+                    implicit
+                        .unwrap()
+                        .0
+                        .iter()
+                        .map(|g| g.map(|g| g.name.as_str()))
+                        .collect::<Vec<_>>(),
+                    vec![Some("b"); arity]
+                );
             }
             let config = if arity == 1 {
                 json!({"input_geometry": "a"})
@@ -133,7 +157,13 @@ fn tutte_le_geo_del_catalogo_risolvono_operandi_senza_eleggere_primarie() {
                 plenora_kernels_geo::analyze::resolve_operands(operation, &inputs, &config)
                     .unwrap();
             assert_eq!(kernel, json!({}));
-            assert!(operands.iter().all(|g| g.unwrap().name == "a"));
+            assert_eq!(
+                operands
+                    .iter()
+                    .map(|g| g.map(|g| g.name.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![Some("a"); arity]
+            );
             assert!(inputs
                 .iter()
                 .all(|contract| contract.active_geometry == input.active_geometry));

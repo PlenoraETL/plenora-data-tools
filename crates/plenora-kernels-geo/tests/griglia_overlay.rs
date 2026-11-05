@@ -190,6 +190,7 @@ fn clean_topology_alle_tre_scale() {
         // Morfologia (buffer +-1 m) e rimozione delle sovrapposizioni.
         let pulite = clean_valid_polygon_topology(&righe, 1.0, true, true, 10, 1_000, centimetro())
             .unwrap_or_else(|errore| panic!("clean a {scala:?}: {errore}"));
+        assert_eq!(pulite.len(), righe.len());
         assert!(pulite.iter().all(Option::is_some));
     }
     {

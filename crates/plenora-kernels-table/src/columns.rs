@@ -1227,6 +1227,7 @@ mod tests {
         let error =
             serde_json::from_value::<SelectColumns>(json!({"columns": ["a"], "surprise": true}))
                 .expect_err("campo sconosciuto accettato");
+        assert_eq!(error.classify(), serde_json::error::Category::Data);
         assert!(
             error.to_string().contains("unknown field `surprise`"),
             "{error}"

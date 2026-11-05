@@ -1354,6 +1354,7 @@ mod tests {
             "Rect",
             "Triangle",
         ];
+        assert_eq!(values.len(), names.len());
         for (value, expected) in values.iter().zip(names) {
             assert!(matches!(
                 dissolve(std::slice::from_ref(value), precisione()),

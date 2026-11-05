@@ -1649,7 +1649,7 @@ fn uscite_di_intersezioni_di_stelle_con_molte_parti() {
         }
         assert!(matches!(
             verifica_multi(&MultiPolygon(sovrapposte)),
-            Some(Err(_))
+            Some(Err(InvalidMultiPolygon::ElementsOverlaps(..)))
         ));
 
         // Le stesse parti come buchi di un guscio che le contiene tutte:

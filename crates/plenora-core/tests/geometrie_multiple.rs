@@ -362,6 +362,7 @@ fn canone_interno_assegna_solo_identita_necessaria_alla_primaria() {
         );
         let contract = read(raw.clone());
         let internal = arrow_schema_from_contract(&contract).expect("canone interno");
+        assert_eq!(raw.fields().len(), internal.fields().len());
         for (before, after) in raw.fields().iter().zip(internal.fields()) {
             assert_eq!(before.metadata().get(ID), after.metadata().get(ID));
         }

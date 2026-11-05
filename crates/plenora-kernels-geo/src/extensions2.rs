@@ -906,6 +906,7 @@ mod tests {
             (1.5, 0.0),
             (2.0, half_height),
         ];
+        assert_eq!(coords(&first.geometry).len(), expected.len());
         for ((ax, ay), (ex, ey)) in coords(&first.geometry).iter().zip(expected.iter()) {
             assert_close(*ax, *ex);
             assert_close(*ay, *ey);

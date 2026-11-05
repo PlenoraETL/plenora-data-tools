@@ -128,6 +128,7 @@ fn le_stime_per_riga_non_dipendono_da_come_il_batch_e_stato_letto() {
         testo_per_riga,
     ];
     for tabella in [&originale, &letta] {
+        assert_eq!(tabella.num_columns(), attese.len());
         for (colonna, attesa) in tabella.columns().iter().zip(attese) {
             assert_eq!(column_bytes_per_row(colonna.as_ref()), attesa);
         }

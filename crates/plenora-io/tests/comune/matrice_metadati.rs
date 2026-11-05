@@ -1701,6 +1701,7 @@ fn same_geometry_semantics(left: &RecordBatch, right: &RecordBatch) -> bool {
         }
     });
     references
+        && lc.geometries.len() == rc.geometries.len()
         && a.len() == b.len()
         && primary_name(left) == primary_name(right)
         && a.iter().zip(b).all(|(x, y)| {

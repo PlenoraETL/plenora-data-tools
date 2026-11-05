@@ -1093,9 +1093,43 @@ mod tests {
         confronta_associazione(&rovesciate, &interrogazioni);
     }
 
-    /// Pipeline intera con siti a coordinate subnormali: le celle di `geo`
-    /// hanno allora rect con estremi subnormali (o la costruzione fallisce),
-    /// e le due associazioni devono dare la stessa uscita, errori compresi.
+    /// Rifiuto nella costruzione, prima dell'associazione: la variante e
+    /// il motivo sono fissati dall'ingresso, non dal percorso confrontato.
+    fn rifiuto_costruzione(punti: &[(f64, f64)], motivo: VoronoiError) {
+        let errore = confronta_pipeline(punti).expect_err("costruzione non definita");
+        let AdvancedError::Voronoi(testo) = errore else {
+            panic!("categoria diversa da costruzione Voronoi: {errore:?}");
+        };
+        assert_eq!(testo, motivo.to_string());
+    }
+
+    /// Un risultato per sito, nell'ordine, con celle coincidenti con
+    /// l'oracolo dei semipiani e copertura del rettangolo ritagliato.
+    fn successo_indipendente(punti: &[(f64, f64)]) {
+        let celle = confronta_pipeline(punti).expect("siti ordinari non collineari");
+        let attese = celle_da_semipiani(punti);
+        assert_eq!(celle.len(), punti.len());
+        assert_eq!(attese.len(), punti.len());
+        let mut area = 0.0;
+        for (i, cella) in celle.iter().enumerate() {
+            assert!(cella.intersects(&Point::new(punti[i].0, punti[i].1)));
+            assert!(cella.hausdorff_distance(&attese[i]) <= prova().value());
+            assert!((cella.unsigned_area() - attese[i].unsigned_area()).abs() < 1e-3);
+            if !punti[..i].contains(&punti[i]) {
+                area += cella.unsigned_area();
+            }
+        }
+        let xmin = punti.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+        let xmax = punti.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+        let ymin = punti.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+        let ymax = punti.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+        let lato = (xmax - xmin).max(ymax - ymin);
+        let copertura_attesa = (xmax - xmin + lato) * (ymax - ymin + lato);
+        assert!((area - copertura_attesa).abs() < 1e-3);
+    }
+
+    /// Tutti i siti non nulli sono sotto il minimo 2^-142 di Spade:
+    /// rifiuto `TooSmall` in costruzione, mai un successo vuoto.
     #[test]
     fn oracolo_voronoi_siti_subnormali() {
         let sub = |k: u64| f64::from_bits(k);
@@ -1105,39 +1139,76 @@ mod tests {
             (f64::MIN_POSITIVE / 8.0, (0.0, 0.0)),
             (f64::MIN_POSITIVE / 2.0, (-f64::MIN_POSITIVE, 0.0)),
         ] {
-            let _ = confronta_pipeline(&griglia(3, passo, origine));
-            let _ = confronta_pipeline(&griglia(4, passo, origine));
+            for lato in [3, 4] {
+                rifiuto_costruzione(
+                    &griglia(lato, passo, origine),
+                    VoronoiError::Triangulation(TriangulationError::SpadeError(
+                        spade::InsertionError::TooSmall,
+                    )),
+                );
+            }
         }
-        let _ = confronta_pipeline(&[(0.0, 0.0), (sub(1), 0.0), (0.0, sub(1)), (sub(1), sub(1))]);
-        let _ = confronta_pipeline(&[(-0.0, 0.0), (sub(2), sub(1)), (sub(1), sub(3))]);
+        for punti in [
+            vec![(0.0, 0.0), (sub(1), 0.0), (0.0, sub(1)), (sub(1), sub(1))],
+            vec![(-0.0, 0.0), (sub(2), sub(1)), (sub(1), sub(3))],
+        ] {
+            rifiuto_costruzione(
+                &punti,
+                VoronoiError::Triangulation(TriangulationError::SpadeError(
+                    spade::InsertionError::TooSmall,
+                )),
+            );
+        }
     }
 
-    /// Duplicati, quasi-collineari, collineari (errore di costruzione) e
-    /// scale estreme: coordinate minuscole, enormi e lontane dall'origine.
+    /// Gli esiti derivano da siti distinti, dominio Spade e condizionamento
+    /// del circocentro; i successi hanno un riferimento senza triangolazione.
     #[test]
     fn oracolo_voronoi_casi_degeneri_e_scale_estreme() {
-        confronta_pipeline(&[(0.0, 0.0), (0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]).unwrap();
-        let _ = confronta_pipeline(&[(0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (1.0, 1.0), (1.0, 1.0)]);
+        successo_indipendente(&[(0.0, 0.0), (0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]);
+        rifiuto_costruzione(
+            &[(0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (1.0, 1.0), (1.0, 1.0)],
+            VoronoiError::CollinearInput,
+        );
         let mut duplicati = griglia(4, 1.0, (0.0, 0.0));
         duplicati.extend(griglia(4, 1.0, (0.0, 0.0)));
-        confronta_pipeline(&duplicati).unwrap();
-        // Collineari: `geo` rifiuta la costruzione, stesso errore da entrambe.
-        let collineari = [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0)];
-        let errore =
-            confronta_pipeline(&collineari).expect_err("nessuna cella per siti collineari");
-        assert!(matches!(errore, AdvancedError::Voronoi(ref motivo)
-            if motivo == &VoronoiError::CollinearInput.to_string()));
-        let _ = confronta_pipeline(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 1.0e-9)]);
-        confronta_pipeline(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (1.0, 1.0), (1.0, -1.0)]).unwrap();
-        for (passo, origine) in [
-            (1.0e-300, (0.0, 0.0)),
-            (1.0e-9, (1.0e9, -1.0e9)),
-            (1.0e-3, (1.0e15, 1.0e15)),
-            (1.0e150, (0.0, 0.0)),
-            (1.0e300, (-1.0e300, -1.0e300)),
-            (f64::MIN_POSITIVE, (0.0, 0.0)),
-        ] {
-            let _ = confronta_pipeline(&griglia(4, passo, origine));
+        successo_indipendente(&duplicati);
+        rifiuto_costruzione(
+            &[(0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0)],
+            VoronoiError::CollinearInput,
+        );
+        // Il ritaglio della cella sottile (altezza 1e-9, sotto p) la
+        // elimina: rifiuto nell'associazione del primo sito, indice zero.
+        let errore = confronta_pipeline(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 1.0e-9)])
+            .expect_err("quasi collineari");
+        assert!(
+            matches!(errore, AdvancedError::UnmatchedPoint(0)),
+            "{errore:?}"
+        );
+        successo_indipendente(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (1.0, 1.0), (1.0, -1.0)]);
+        for passo in [1.0e-300, f64::MIN_POSITIVE] {
+            rifiuto_costruzione(
+                &griglia(4, passo, (0.0, 0.0)),
+                VoronoiError::Triangulation(TriangulationError::SpadeError(
+                    spade::InsertionError::TooSmall,
+                )),
+            );
+        }
+        // Il passo e' inferiore a un ulp dell'origine: tutti i siti coincidono.
+        for (passo, origine) in [(1.0e-9, (1.0e9, -1.0e9)), (1.0e-3, (1.0e15, 1.0e15))] {
+            rifiuto_costruzione(
+                &griglia(4, passo, origine),
+                VoronoiError::InsufficientVertices,
+            );
+        }
+        // Coordinate oltre 2^201: rifiuto prima dei calcoli di precisione.
+        for (passo, origine) in [(1.0e150, (0.0, 0.0)), (1.0e300, (-1.0e300, -1.0e300))] {
+            rifiuto_costruzione(
+                &griglia(4, passo, origine),
+                VoronoiError::Triangulation(TriangulationError::SpadeError(
+                    spade::InsertionError::TooLarge,
+                )),
+            );
         }
     }
 

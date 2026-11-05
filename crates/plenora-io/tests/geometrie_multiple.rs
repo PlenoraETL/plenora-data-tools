@@ -136,6 +136,7 @@ fn io700_geoparquet_ipc_file_stream_conservano_tutte_le_geometrie() {
         let read = plenora_io::leggi_tabella(&path, None, u64::MAX).unwrap();
         assert_eq!(t.columns(), read.columns());
         let after = contratto(&read);
+        assert_eq!(c.geometries.len(), after.geometries.len());
         for (before, after) in c.geometries.iter().zip(&after.geometries) {
             assert_eq!(before.name, after.name);
             assert_eq!(before.encoding, after.encoding);

@@ -2219,6 +2219,7 @@ mod tests {
         // Il pattern passa da una variabile: e' invalido apposta.
         let pattern = String::from("(PATTERN_SEGRETO");
         let sintassi = regex::Regex::new(&pattern).expect_err("sintassi");
+        assert!(matches!(sintassi, regex::Error::Syntax(_)));
         assert!(sintassi.to_string().contains("PATTERN_SEGRETO"));
         assert_eq!(
             super::motivo_regex_non_valida(&sintassi),

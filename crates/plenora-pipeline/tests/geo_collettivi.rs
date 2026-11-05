@@ -802,6 +802,10 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
         ))),
         Some(Geometry::Polygon(quadrato(X0 + 500.0, Y0, 30.0))),
     ];
+    assert_eq!(
+        geometrie(&uscita, "geometry").len(),
+        pulite_indipendenti.len()
+    );
     for (g, a) in geometrie(&uscita, "geometry")
         .iter()
         .zip(pulite_indipendenti)

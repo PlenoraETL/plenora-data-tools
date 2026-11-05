@@ -207,7 +207,9 @@ fn le_forme_in_memoria_dicono_cio_che_dicono_le_forme_da_file() {
     let nomi: Vec<&str> = tabelle.iter().map(|(nome, _)| nome.as_str()).collect();
     assert_eq!(nomi, ["alti", "ordinati"]);
     // Stesse tabelle, schema e metadati compresi.
-    for ((_, resa), uscita) in tabelle.iter().zip(&uscite) {
+    assert_eq!(tabelle.len(), uscite.len());
+    for ((nome, resa), uscita) in tabelle.iter().zip(&uscite) {
+        assert_eq!(nome, &uscita.nome);
         let riletta = leggi_tabella(&uscita.percorso, None, u64::MAX).expect("rilettura");
         assert_eq!(*resa, riletta, "{}", uscita.nome);
     }

@@ -146,11 +146,15 @@ fn le_altre_operazioni_e_le_divisioni_senza_zero_contano_zero() {
         ),
     ]))
     .expect("piano");
-    assert!(esito
-        .report
-        .passi
-        .iter()
-        .all(|passo| passo.righe_divisione_per_zero == 0));
+    assert_eq!(
+        esito
+            .report
+            .passi
+            .iter()
+            .map(|passo| passo.righe_divisione_per_zero)
+            .collect::<Vec<_>>(),
+        [0, 0]
+    );
 }
 
 #[test]

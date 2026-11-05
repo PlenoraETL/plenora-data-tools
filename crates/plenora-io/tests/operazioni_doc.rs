@@ -4380,13 +4380,16 @@ fn esito_ruolo_geometrico(
         .collect();
     match validato.run(tabelle) {
         Ok(esito) => {
-            for (_, batch) in esito.outputs {
+            assert_eq!(esito.outputs.len(), 1);
+            for (nome, batch) in esito.outputs {
+                assert_eq!(nome, USCITA);
                 assert_eq!(
                     batch.schema(),
                     atteso,
                     "{}: schema pubblicato",
                     scheda.operazione.id
                 );
+                assert_eq!(batch.num_columns(), contratto.fields().len());
                 for (reale, inferito) in batch.schema().fields().iter().zip(contratto.fields()) {
                     let mut metadata = reale.metadata().clone();
                     metadata.remove("plenora.field_id");
