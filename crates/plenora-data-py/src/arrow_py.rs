@@ -16,7 +16,7 @@
 //! copia (`arrow_pyarrow::Table`).
 
 use arrow_pyarrow::{FromPyArrow, IntoPyArrow, Table};
-use plenora_core::arrow::array::ffi_stream::ArrowArrayStreamReader;
+use plenora_core::arrow::array::ffi_stream::RecordBatchStreamReader;
 use plenora_core::arrow::array::{RecordBatch, RecordBatchReader};
 use plenora_core::arrow::select::concat::concat_batches;
 use plenora_core::arrow::ArrowError;
@@ -107,9 +107,14 @@ pub fn importa(
         &format!("prima di leggere l'{contesto}"),
         ErrorPhase::Read,
     )?;
-    let lettore = ArrowArrayStreamReader::from_pyarrow_bound(oggetto)
+    let lettore = RecordBatchStreamReader::from_pyarrow_bound(oggetto)
         .map_err(|errore| errore_del_produttore(py, errore, contesto))?;
     let schema = lettore.schema();
+    // L'import C Stream si fida dei buffer del produttore. Il contratto
+    // esclude run-end e union: rifiutarli prima di importare o concatenare
+    // blocchi impedisce che dati malformati arrivino ai kernel Arrow.
+    plenora_core::contract::arrow_schema::verifica_tipi_supportati(&schema)
+        .map_err(|errore| Errore::Plenora(errore.with_phase(ErrorPhase::Read)))?;
     let mut blocchi = Vec::new();
     let mut letti = 0_u64;
     for blocco in lettore {

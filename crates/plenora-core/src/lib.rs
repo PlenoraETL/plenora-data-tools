@@ -81,6 +81,38 @@ fn tipo_senza_array() -> PlenoraError {
     PlenoraError::Schema("schema Arrow non valido: un tipo non ammette nessun array".to_owned())
 }
 
+/// Conserva il rifiuto di Arrow 60.0 per Union senza figli, anche annidate:
+/// dalla 60.1 la costruzione a zero righe non va più in panico.
+fn verifica_union_costruibili(tipo: &arrow::schema::DataType) -> Result<()> {
+    use arrow::schema::DataType;
+    let mut pendenti = vec![tipo];
+    while let Some(tipo) = pendenti.pop() {
+        match tipo {
+            DataType::Union(campi, _) => {
+                if campi.is_empty() {
+                    return Err(tipo_senza_array());
+                }
+                pendenti.extend(campi.iter().map(|(_, campo)| campo.data_type()));
+            }
+            DataType::Struct(campi) => pendenti.extend(campi.iter().map(|campo| campo.data_type())),
+            DataType::List(campo)
+            | DataType::LargeList(campo)
+            | DataType::ListView(campo)
+            | DataType::LargeListView(campo)
+            | DataType::FixedSizeList(campo, _)
+            | DataType::Map(campo, _) => pendenti.push(campo.data_type()),
+            DataType::Dictionary(chiave, valore) => {
+                pendenti.extend([chiave.as_ref(), valore.as_ref()]);
+            }
+            DataType::RunEndEncoded(fini, valori) => {
+                pendenti.extend([fini.data_type(), valori.data_type()]);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// L'array vuoto di `tipo`, senza panico (`new_empty_array` va in panico su
 /// un tipo che non ammette array, come [`batch_vuoto`]).
 ///
@@ -88,6 +120,7 @@ fn tipo_senza_array() -> PlenoraError {
 ///
 /// [`PlenoraError::Schema`] se il tipo non ammette nessun array.
 pub fn array_vuoto(tipo: &arrow::schema::DataType) -> Result<arrow::array::ArrayRef> {
+    verifica_union_costruibili(tipo)?;
     panic_policy::barriera_di_dipendenza(|| arrow::array::new_empty_array(tipo))
         .map_err(|_| tipo_senza_array())
 }
@@ -100,6 +133,7 @@ pub fn array_vuoto(tipo: &arrow::schema::DataType) -> Result<arrow::array::Array
 ///
 /// [`PlenoraError::Schema`] se il tipo non ammette nessun array.
 pub fn array_null(tipo: &arrow::schema::DataType, righe: usize) -> Result<arrow::array::ArrayRef> {
+    verifica_union_costruibili(tipo)?;
     panic_policy::barriera_di_dipendenza(|| arrow::array::new_null_array(tipo, righe))
         .map_err(|_| tipo_senza_array())
 }
@@ -118,6 +152,9 @@ pub fn array_null(tipo: &arrow::schema::DataType, righe: usize) -> Result<arrow:
 pub fn batch_vuoto(
     schema: std::sync::Arc<arrow::schema::Schema>,
 ) -> Result<arrow::array::RecordBatch> {
+    for campo in schema.fields() {
+        verifica_union_costruibili(campo.data_type())?;
+    }
     panic_policy::barriera_di_dipendenza(|| arrow::array::RecordBatch::new_empty(schema))
         .map_err(|_| tipo_senza_array())
 }
@@ -140,7 +177,7 @@ pub mod arrow {
     /// tiene allineata ai pin del workspace. Nessun codice di questo
     /// repository la legge; nel progetto d'origine entrava nell'identità dei
     /// grafi validati.
-    pub const VERSION: &str = "60.0.0";
+    pub const VERSION: &str = "60.1.0";
 }
 
 #[cfg(test)]
@@ -173,6 +210,29 @@ mod tests {
         assert!(super::array_vuoto(&mappa).is_err());
         assert!(super::array_null(&mappa, 3).is_err());
         assert!(super::array_null(&unione, 0).is_err());
+        for tipo in [
+            unione.clone(),
+            DataType::Struct(vec![Field::new("u", unione.clone(), true)].into()),
+            DataType::List(Arc::new(Field::new("item", unione.clone(), true))),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(unione)),
+        ] {
+            assert!(super::array_vuoto(&tipo).is_err());
+            for righe in [0, 3] {
+                assert!(super::array_null(&tipo, righe).is_err());
+            }
+            let schema = Arc::new(Schema::new(vec![Field::new("u", tipo, true)]));
+            assert!(super::batch_vuoto(schema).is_err());
+        }
+        let unione_valida = DataType::Union(
+            crate::arrow::schema::UnionFields::try_new(
+                vec![0],
+                vec![Field::new("v", DataType::Int32, true)],
+            )
+            .unwrap(),
+            crate::arrow::schema::UnionMode::Dense,
+        );
+        assert!(super::array_vuoto(&unione_valida).is_ok());
+        assert!(super::array_null(&unione_valida, 3).is_ok());
         assert_eq!(
             super::array_null(&DataType::Utf8, 2).unwrap().null_count(),
             2
@@ -180,15 +240,23 @@ mod tests {
         assert_eq!(super::array_vuoto(&DataType::Int64).unwrap().len(), 0);
     }
 
-    /// I quattro crate Arrow del workspace sono un solo numero di versione:
+    /// I crate Arrow diretti del workspace sono un solo numero di versione:
     /// il test li verifica tutti, non solo `arrow-schema`.
-    const CRATE_ARROW: [&str; 4] = ["arrow-array", "arrow-schema", "arrow-ipc", "arrow-select"];
+    const CRATE_ARROW: [&str; 7] = [
+        "arrow-array",
+        "arrow-schema",
+        "arrow-ipc",
+        "arrow-select",
+        "arrow-buffer",
+        "arrow-data",
+        "arrow-pyarrow",
+    ];
 
     /// `arrow::VERSION` deve restare allineata al pin del workspace: un bump
     /// di Arrow senza aggiornarla la renderebbe falsa in silenzio.
     ///
     /// La versione dichiarata è una sola, ma i pin che la incarnano sono
-    /// quattro: sorvegliarne uno solo lascerebbe agli altri tre la libertà
+    /// sette: sorvegliarne uno solo lascerebbe agli altri la libertà
     /// di divergere in silenzio.
     #[test]
     fn arrow_version_matches_the_workspace_pin() {
