@@ -10,7 +10,7 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
-## [4.1.0] - non rilasciata
+## [4.1.0] - 2026-11-05
 
 La 4.1.0 completa il supporto alle geometrie multiple su API Rust, CLI e SDK
 Python, IPC file/stream e GeoParquet: CRS per colonna, primaria facoltativa,
