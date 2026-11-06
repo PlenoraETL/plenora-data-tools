@@ -54,6 +54,14 @@ impl std::fmt::Display for AssuranceError {
 
 type AssuranceResult<T> = Result<T, AssuranceError>;
 
+/// Un solo limite e' finito in ogni scenario: l'attesa e' dichiarata
+/// insieme al profilo, prima della chiamata al kernel.
+enum LimiteAtteso {
+    Coordinate,
+    Lavoro,
+    Uscita(u64),
+}
+
 #[derive(Clone, Copy)]
 struct Affine {
     xx: f64,
@@ -918,33 +926,54 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
 
     let source = rectangle(20.0, 10.0);
     let splitter = vertical_splitters(20, 10, 10);
-    for limits in [
-        SplitLimits {
-            max_input_coordinates: 1,
-            ..unlimited_split_limits()
-        },
-        SplitLimits {
-            max_noding_work: 1,
-            ..unlimited_split_limits()
-        },
-        SplitLimits {
-            max_output_parts: 1,
-            ..unlimited_split_limits()
-        },
-        SplitLimits {
-            max_output_coordinates: 4,
-            ..unlimited_split_limits()
-        },
+    // 5 coordinate del rettangolo e 18 dei nove splitter: oltre 1 in
+    // ingresso; i loro incroci richiedono piu' di un'unita' di noding.
+    // Dieci parti rettangolari richiedono piu' di una geometria e di
+    // quattro coordinate in uscita. Ogni altro limite e' illimitato.
+    for (limits, atteso) in [
+        (
+            SplitLimits {
+                max_input_coordinates: 1,
+                ..unlimited_split_limits()
+            },
+            LimiteAtteso::Coordinate,
+        ),
+        (
+            SplitLimits {
+                max_noding_work: 1,
+                ..unlimited_split_limits()
+            },
+            LimiteAtteso::Lavoro,
+        ),
+        (
+            SplitLimits {
+                max_output_parts: 1,
+                ..unlimited_split_limits()
+            },
+            LimiteAtteso::Uscita(1),
+        ),
+        (
+            SplitLimits {
+                max_output_coordinates: 4,
+                ..unlimited_split_limits()
+            },
+            LimiteAtteso::Uscita(4),
+        ),
     ] {
         let limited = split_polygon_by_linework_rust(&source, &splitter, limits, PRECISIONE);
-        require(
-            matches!(
+        let categoria_e_limite = match atteso {
+            LimiteAtteso::Coordinate => {
+                matches!(limited, Err(SplitError::CoordinateLimit { limit: 1, .. }))
+            }
+            LimiteAtteso::Lavoro => matches!(limited, Err(SplitError::WorkLimit { limit: 1, .. })),
+            LimiteAtteso::Uscita(atteso) => matches!(
                 limited,
-                Err(SplitError::CoordinateLimit { .. }
-                    | SplitError::WorkLimit { .. }
-                    | SplitError::OutputLimit { .. })
+                Err(SplitError::OutputLimit { limit, .. }) if limit == atteso
             ),
-            "split non fail-closed su un limite",
+        };
+        require(
+            categoria_e_limite,
+            "split: categoria o limite diversi dall'attesa",
         )?;
     }
 
@@ -985,23 +1014,38 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
         (x: 0.0, y: 0.0), (x: 2.0, y: 2.0),
         (x: 0.0, y: 2.0), (x: 2.0, y: 0.0), (x: 0.0, y: 0.0)
     ]);
-    for limits in [
-        MakeValidLimits {
-            max_input_coordinates: 1,
-            ..unlimited_make_valid_limits()
-        },
-        MakeValidLimits {
-            max_noding_work: 1,
-            ..unlimited_make_valid_limits()
-        },
-        MakeValidLimits {
-            max_output_geometries: 1,
-            ..unlimited_make_valid_limits()
-        },
-        MakeValidLimits {
-            max_output_coordinates: 4,
-            ..unlimited_make_valid_limits()
-        },
+    // Cinque coordinate e quattro segmenti: input oltre 1 e lavoro
+    // quadratico 16 oltre 1. Il bow-tie si ripara in due triangoli,
+    // quindi oltre una geometria e oltre quattro coordinate di output.
+    for (limits, atteso) in [
+        (
+            MakeValidLimits {
+                max_input_coordinates: 1,
+                ..unlimited_make_valid_limits()
+            },
+            LimiteAtteso::Coordinate,
+        ),
+        (
+            MakeValidLimits {
+                max_noding_work: 1,
+                ..unlimited_make_valid_limits()
+            },
+            LimiteAtteso::Lavoro,
+        ),
+        (
+            MakeValidLimits {
+                max_output_geometries: 1,
+                ..unlimited_make_valid_limits()
+            },
+            LimiteAtteso::Uscita(1),
+        ),
+        (
+            MakeValidLimits {
+                max_output_coordinates: 4,
+                ..unlimited_make_valid_limits()
+            },
+            LimiteAtteso::Uscita(4),
+        ),
     ] {
         let limited = make_valid_geometry_rust_with_limits(
             &bow_tie,
@@ -1010,14 +1054,22 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
             limits,
             PRECISIONE,
         );
-        require(
-            matches!(
+        let categoria_e_limite = match atteso {
+            LimiteAtteso::Coordinate => matches!(
                 limited,
-                Err(MakeValidError::CoordinateLimit { .. }
-                    | MakeValidError::WorkLimit { .. }
-                    | MakeValidError::OutputLimit { .. })
+                Err(MakeValidError::CoordinateLimit { limit: 1, .. })
             ),
-            "make_valid non fail-closed su un limite",
+            LimiteAtteso::Lavoro => {
+                matches!(limited, Err(MakeValidError::WorkLimit { limit: 1, .. }))
+            }
+            LimiteAtteso::Uscita(atteso) => matches!(
+                limited,
+                Err(MakeValidError::OutputLimit { limit, .. }) if limit == atteso
+            ),
+        };
+        require(
+            categoria_e_limite,
+            "make_valid: categoria o limite diversi dall'attesa",
         )?;
     }
 

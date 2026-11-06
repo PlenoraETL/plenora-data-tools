@@ -616,6 +616,7 @@ thread_local! {
     static GENERIC_COVERAGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 fn generic_coverage_path() -> bool {
     GENERIC_COVERAGE.with(std::cell::Cell::get)
@@ -852,6 +853,7 @@ pub fn split_polygon_by_linework_rust_bounded(
     split_polygon_by_linework_rust(source, splitter, limits, precision)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -908,10 +910,7 @@ mod tests {
             0.01,
             &source_vertices(&source),
         );
-        assert!(matches!(
-            result,
-            Err(SplitError::AreaMismatch | SplitError::CoverageMismatch)
-        ));
+        assert!(matches!(result, Err(SplitError::AreaMismatch)));
         // Solo copertura: l'anello del buco resta scoperto per 4 m.
         let boundary = without_hole[0]
             .exterior()
@@ -1003,10 +1002,7 @@ mod tests {
             0.01,
             &source_vertices(&source),
         );
-        assert!(matches!(
-            result,
-            Err(SplitError::AreaMismatch | SplitError::CoverageMismatch)
-        ));
+        assert!(matches!(result, Err(SplitError::AreaMismatch)));
     }
 
     #[test]

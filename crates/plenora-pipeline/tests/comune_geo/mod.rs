@@ -3,6 +3,12 @@
 
 #![allow(dead_code)] // Ogni file di test usa solo una parte delle fixture.
 
+mod schema;
+#[allow(unused_imports)] // Modulo condiviso da target con sottoinsiemi diversi.
+pub use schema::{
+    schema_analisi_geo_indipendente, schema_geo_indipendente, verifica_schema_geo_indipendente,
+};
+
 use std::sync::Arc;
 
 use geo::{Geometry, LineString, MultiPoint, Point, Polygon};
@@ -324,14 +330,21 @@ pub fn stesso_errore(runner: &PlenoraError, analisi: &PlenoraError) -> bool {
     let interno = testo
         .split_once(": ")
         .map_or(testo.as_str(), |(_, resto)| resto);
-    runner.category() == analisi.category() && runner.to_string().contains(interno)
+    runner.category() == analisi.category()
+        && runner.phase() == plenora_core::ErrorPhase::Validate
+        && analisi.phase() == plenora_core::ErrorPhase::Validate
+        && runner.to_string().contains(interno)
 }
 
 /// Per ogni caso la validazione del runner rifiuta esattamente cio' che
 /// l'analisi rifiuta, con lo stesso errore, e accetta con lo stesso
 /// contratto (nello schema emesso).
-pub fn stessa_validazione(casi: &[(&str, Value, Vec<RecordBatch>, Option<&str>)]) {
-    for (op, config, tabelle, crs) in casi {
+pub fn stessa_validazione(
+    casi: &[(&str, Value, Vec<RecordBatch>, Option<&str>)],
+    esiti: &[Option<plenora_core::ErrorCategory>],
+) {
+    assert_eq!(casi.len(), esiti.len());
+    for ((op, config, tabelle, crs), categoria) in casi.iter().zip(esiti) {
         let atteso = analisi(op, tabelle, config, *crs);
         let nomi: Vec<&str> = ["t", "u"].into_iter().take(tabelle.len()).collect();
         let mut pipeline = piano(&nomi, vec![passo("x", op, &nomi, config.clone())], &["x"]);
@@ -342,25 +355,204 @@ pub fn stessa_validazione(casi: &[(&str, Value, Vec<RecordBatch>, Option<&str>)]
             .zip(tabelle.iter().map(RecordBatch::schema))
             .collect();
         let validata = pipeline.validate(&schemi);
-        match (&validata, &atteso) {
-            (Ok(validata), Ok(contratto)) => {
-                let ottenuto = validata.contratto("x").expect("contratto del passo");
-                let emesso =
-                    plenora_core::contract::arrow_schema::arrow_schema_from_contract(contratto)
-                        .expect("schema emesso");
-                assert_eq!(ottenuto.schema, emesso, "{op} {config}");
-            }
-            (Err(runner), Err(analisi)) => {
+        if let Some(categoria) = categoria {
+            let runner = validata.expect_err("scenario rifiutato");
+            let analisi = atteso.expect_err("scenario rifiutato anche direttamente");
+            assert_eq!(runner.category(), *categoria, "{op} {config}");
+            assert_eq!(analisi.category(), *categoria, "{op} {config}");
+            assert!(stesso_errore(&runner, &analisi));
+            continue;
+        }
+        let validata = validata.expect("successo previsto dallo scenario");
+        let analizzata = atteso.expect("analisi accettata dallo scenario");
+        let previsto = schema_geo_indipendente(op, &tabelle[0], config, *crs);
+        assert_eq!(
+            validata.schema_uscita("x").expect("schema pubblicato"),
+            &previsto,
+            "schema runner {op}"
+        );
+        let emesso = plenora_core::contract::arrow_schema::arrow_schema_from_contract(&analizzata)
+            .expect("schema emesso");
+        assert_eq!(
+            emesso,
+            schema_analisi_geo_indipendente(op, &tabelle[0], config, *crs),
+            "schema analisi {op}"
+        );
+    }
+}
+
+/// Oracolo di forma per poligoni: confronta tutte le coordinate, anelli e
+/// componenti, ignorando soltanto l'origine/orientamento degli anelli e
+/// l'ordine delle componenti. Nessuna operazione geometrica di produzione.
+pub fn assert_poligoni(ottenuta: &Geometry<f64>, attesa: &Geometry<f64>) {
+    fn anello(linea: &LineString<f64>) -> Vec<(f64, f64)> {
+        let mut punti: Vec<_> = linea.0.iter().map(|c| (c.x, c.y)).collect();
+        assert_eq!(punti.first(), punti.last());
+        punti.pop();
+        let minimo = (0..punti.len())
+            .min_by(|&a, &b| {
+                punti[a]
+                    .0
+                    .total_cmp(&punti[b].0)
+                    .then(punti[a].1.total_cmp(&punti[b].1))
+            })
+            .expect("anello");
+        punti.rotate_left(minimo);
+        let mut inverso = punti.clone();
+        inverso[1..].reverse();
+        if inverso < punti {
+            inverso
+        } else {
+            punti
+        }
+    }
+    fn forma(g: &Geometry<f64>) -> Vec<Vec<Vec<(f64, f64)>>> {
+        let poligoni = match g {
+            Geometry::Polygon(p) => vec![p],
+            Geometry::MultiPolygon(p) => p.0.iter().collect(),
+            _ => panic!("attesa geometria poligonale"),
+        };
+        let mut parti: Vec<_> = poligoni
+            .into_iter()
+            .map(|p| {
+                let mut buchi: Vec<_> = p.interiors().iter().map(anello).collect();
+                buchi.sort_by(|a, b| a.partial_cmp(b).expect("coordinate finite"));
+                let mut anelli = vec![anello(p.exterior())];
+                anelli.extend(buchi);
+                anelli
+            })
+            .collect();
+        parti.sort_by(|a, b| a.partial_cmp(b).expect("coordinate finite"));
+        parti
+    }
+    let (ottenuta, attesa) = (forma(ottenuta), forma(attesa));
+    assert_eq!(ottenuta.len(), attesa.len(), "componenti");
+    for (a, b) in ottenuta.iter().zip(&attesa) {
+        assert_eq!(a.len(), b.len(), "anelli");
+        for (a, b) in a.iter().zip(b) {
+            assert_eq!(a.len(), b.len(), "vertici");
+            for (a, b) in a.iter().zip(b) {
                 assert!(
-                    stesso_errore(runner, analisi),
-                    "{op} {config}: {runner} / {analisi}"
+                    (a.0 - b.0).hypot(a.1 - b.1) <= 0.01,
+                    "coordinata oltre 1 cm"
                 );
             }
-            _ => panic!(
-                "{op} {config}: validazione {:?}, analisi {:?}",
-                validata.as_ref().err(),
-                atteso.as_ref().err()
-            ),
         }
+    }
+}
+
+/// Certifica una partizione del poligono convesso della fixture: ogni
+/// pezzo e' convesso, senza buchi, e la somma orientata dei bordi e' il
+/// bordo originale. I lati interni si cancellano anche se frazionati.
+/// L'unico aggancio ammesso tra vertici/lati e' entro il centimetro.
+#[allow(clippy::suboptimal_flops)] // Determinanti convenzionali, indipendenti dai kernel.
+pub fn assert_partizione(originale: &Polygon<f64>, parti: &[Polygon<f64>]) {
+    type P = (f64, f64);
+    let mut nodi: Vec<P> = Vec::new();
+    let mut anelli: Vec<Vec<usize>> = Vec::new();
+    for poligono in std::iter::once(originale).chain(parti) {
+        assert!(poligono.interiors().is_empty());
+        let raw: Vec<P> = poligono
+            .exterior()
+            .0
+            .iter()
+            .map(|p| (p.x - X0, p.y - Y0))
+            .collect();
+        assert_eq!(raw.first(), raw.last());
+        let area2: f64 = raw
+            .windows(2)
+            .map(|w| w[0].0 * w[1].1 - w[0].1 * w[1].0)
+            .sum();
+        assert!(area2.abs() > 0.0);
+        let mut punti = raw[..raw.len() - 1].to_vec();
+        if area2 < 0.0 {
+            punti.reverse();
+        }
+        for i in 0..punti.len() {
+            let (a, b, c) = (
+                punti[i],
+                punti[(i + 1) % punti.len()],
+                punti[(i + 2) % punti.len()],
+            );
+            assert!(
+                (b.0 - a.0) * (c.1 - b.1) - (b.1 - a.1) * (c.0 - b.0) >= -1e-6,
+                "pezzo non convesso"
+            );
+        }
+        for i in 0..punti.len() {
+            let (a, b) = (punti[i], punti[(i + 1) % punti.len()]);
+            for (j, c) in punti.iter().enumerate() {
+                if j != i {
+                    assert!((a.0 - c.0).hypot(a.1 - c.1) > 1e-9, "vertice ripetuto");
+                }
+                assert!(
+                    (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0) >= -1e-6,
+                    "vertice fuori dal semipiano interno"
+                );
+            }
+        }
+        let indici = punti
+            .into_iter()
+            .map(|p| {
+                nodi.iter()
+                    .position(|q| (p.0 - q.0).hypot(p.1 - q.1) <= 0.01)
+                    .unwrap_or_else(|| {
+                        nodi.push(p);
+                        nodi.len() - 1
+                    })
+            })
+            .collect();
+        anelli.push(indici);
+    }
+    let mut bordo = std::collections::BTreeMap::<(usize, usize), i32>::new();
+    for (riga, anello) in anelli.iter().enumerate() {
+        let segno = if riga == 0 { -1 } else { 1 };
+        for i in 0..anello.len() {
+            let (a, b) = (nodi[anello[i]], nodi[anello[(i + 1) % anello.len()]]);
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let lunghezza2 = dx * dx + dy * dy;
+            assert!(lunghezza2 > 0.0);
+            let mut sulla_retta: Vec<_> = nodi
+                .iter()
+                .enumerate()
+                .filter_map(|(j, p)| {
+                    let t = ((p.0 - a.0) * dx + (p.1 - a.1) * dy) / lunghezza2;
+                    let distanza = ((p.0 - a.0) * dy - (p.1 - a.1) * dx).abs() / lunghezza2.sqrt();
+                    ((-1e-10..=1.0 + 1e-10).contains(&t) && distanza <= 0.01).then_some((t, j))
+                })
+                .collect();
+            sulla_retta.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for w in sulla_retta.windows(2) {
+                let (a, b) = (w[0].1, w[1].1);
+                let (chiave, verso) = if a < b { ((a, b), 1) } else { ((b, a), -1) };
+                *bordo.entry(chiave).or_default() += segno * verso;
+            }
+        }
+    }
+    assert!(
+        bordo.values().all(|&n| n == 0),
+        "parti mancanti, duplicate o sovrapposte"
+    );
+}
+
+/// Colonne passanti selezionate secondo indici dichiarati dalla fixture.
+pub fn assert_attributi(
+    output: &RecordBatch,
+    input: &RecordBatch,
+    righe: &[u32],
+    con_geometria: bool,
+) {
+    let indices = plenora_core::arrow::array::UInt32Array::from(righe.to_vec());
+    for (field, array) in input.schema().fields().iter().zip(input.columns()) {
+        if !con_geometria && field.name() == "geometry" {
+            continue;
+        }
+        let attesa = plenora_core::arrow::select::take::take(array.as_ref(), &indices, None)
+            .expect("righe fixture");
+        assert_eq!(
+            output.column_by_name(field.name()).expect("campo passante"),
+            &attesa,
+            "valori passanti"
+        );
     }
 }

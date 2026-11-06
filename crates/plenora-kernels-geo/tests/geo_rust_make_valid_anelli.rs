@@ -208,7 +208,11 @@ fn linework_rejects_a_rounded_crossing_next_to_another_feature() {
     // incroci sono esatti, e il risultato resta quello di GEOS.
     let exact = wkt("POLYGON((0 0,10 0,10 10,0 10,0 0),(1 1,5 1,5 5,1 5,1 1),\
          (4.999999999999999 3,9 3,9 8,4.999999999999999 8,4.999999999999999 3))");
-    assert!(make_valid_geometry_rust(&exact, RepairMethod::Linework, false, CENTIMETRO).is_ok());
+    let output = make_valid_geometry_rust(&exact, RepairMethod::Linework, false, CENTIMETRO)
+        .expect("buchi sovrapposti");
+    assert!((polygonal_area(&output) - 64.0).abs() < 1e-9);
+    assert_eq!(line_length(&output).to_bits(), 0.0_f64.to_bits());
+    assert_eq!(points(&output), 0);
 }
 
 /// Il tratto ripercorso `(0 0) -> (5 5) -> (0 0)` sparisce dal

@@ -40,11 +40,14 @@ fn version_usa_l_inviluppo_di_successo() {
 
 #[test]
 fn help_testo_e_json_elencano_solo_i_comandi_del_binario() {
+    verifica_help(&invoca(&["--help", "--format", "json"]));
+}
+
+fn verifica_help(esito: &comune::Esito) {
     let uscita = processo(&["--help"]);
     assert!(uscita.status.success());
     assert!(uscita.stderr.is_empty());
     let testo = String::from_utf8(uscita.stdout).expect("UTF-8");
-    let esito = invoca(&["--help", "--format", "json"]);
     assert_eq!(esito.codice, 0);
     assert_eq!(esito.documento["result"]["usage"], testo.as_str());
     let elencati: BTreeSet<String> = esito.documento["result"]["commands"]
@@ -80,12 +83,22 @@ fn help_testo_e_json_elencano_solo_i_comandi_del_binario() {
             );
         }
     }
+    assert_eq!(
+        esito.documento["result"]["commands"]
+            .as_array()
+            .expect("commands")
+            .len(),
+        elencati.len()
+    );
     assert_eq!(elencati, attesi);
 }
 
 #[test]
 fn capabilities_descrive_il_binario_che_risponde() {
-    let esito = invoca(&["capabilities", "--format", "json"]);
+    verifica_capabilities(&invoca(&["capabilities", "--format", "json"]));
+}
+
+fn verifica_capabilities(esito: &comune::Esito) {
     assert_eq!(esito.codice, 0);
     assert_eq!(esito.documento["contract"], "plenora-capabilities-v2");
     let risultato = &esito.documento["result"];
@@ -181,7 +194,10 @@ fn capabilities_descrive_il_binario_che_risponde() {
 
 #[test]
 fn catalog_pubblica_il_registro_dei_kernel_del_runner() {
-    let esito = invoca(&["catalog", "--format", "json"]);
+    verifica_catalog(&invoca(&["catalog", "--format", "json"]));
+}
+
+fn verifica_catalog(esito: &comune::Esito) {
     assert_eq!(esito.codice, 0);
     assert_eq!(
         esito.documento["contract"],
@@ -279,9 +295,13 @@ type Alterazione = Box<dyn Fn(&mut Value)>;
 
 /// Il validatore dei test non è vacuo: inviluppi alterati si rifiutano.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Mutazioni del documento buono sottoposte al validatore JSON Schema di prova indipendente. Si deve rifiutare ciascuna mutazione; non è un esito di produzione Plenora. Mutazione dello status capabilities vietata dallo schema dei contratti: rifiuto del validatore di prova, privo degli assi Plenora."
+)]
 fn il_validatore_rifiuta_inviluppi_alterati() {
     let buono = invoca(&["describe"]).documento;
-    assert!(comune::valida_inviluppo(&buono).is_ok());
+    let () = comune::valida_inviluppo(&buono).expect("inviluppo valido");
     let alterazioni: Vec<Alterazione> = vec![
         Box::new(|d| {
             d.as_object_mut().expect("oggetto").remove("contract");
@@ -320,6 +340,16 @@ fn la_scoperta_e_deterministica() {
         &["catalog", "--format", "json"][..],
         &["--help", "--format", "json"][..],
     ] {
-        assert_eq!(invoca(argomenti).stdout, invoca(argomenti).stdout);
+        let primo = invoca(argomenti);
+        let secondo = invoca(argomenti);
+        for esito in [&primo, &secondo] {
+            match argomenti[0] {
+                "capabilities" => verifica_capabilities(esito),
+                "catalog" => verifica_catalog(esito),
+                "--help" => verifica_help(esito),
+                _ => unreachable!("fixture di scoperta"),
+            }
+        }
+        assert_eq!(primo.stdout, secondo.stdout);
     }
 }

@@ -15,6 +15,7 @@
 mod aggregate;
 mod compare;
 mod grouping;
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod oracolo_chiavi;
 mod sort;
@@ -72,6 +73,7 @@ use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::sync::Arc;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -233,14 +235,17 @@ mod tests {
         );
         // LargeUtf8 non e' nel profilo scalare: confrontando due valori non
         // nulli il percorso generico fallisce, errore di schema invariato.
-        assert!(sort(
-            &large,
-            &Sort {
-                columns: vec!["c".into()],
-                ascending: true,
-            }
-        )
-        .is_err());
+        assert_rifiuto!(
+            sort(
+                &large,
+                &Sort {
+                    columns: vec!["c".into()],
+                    ascending: true,
+                }
+            ),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     #[test]
@@ -263,14 +268,17 @@ mod tests {
             .num_rows(),
             0
         );
-        assert!(sort(
-            &empty,
-            &Sort {
-                columns: vec![],
-                ascending: true,
-            }
-        )
-        .is_err());
+        assert_rifiuto!(
+            sort(
+                &empty,
+                &Sort {
+                    columns: vec![],
+                    ascending: true,
+                }
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
 
         let mixed = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
@@ -442,31 +450,41 @@ mod tests {
         .expect_err("n=0");
         assert!(matches!(zero, PlenoraError::InvalidPlan(_)), "{zero:?}");
         // Errori: colonne vuote, colonna mancante, config non strict.
-        assert!(top_n(
-            &batch,
-            &TopN {
-                columns: vec![],
-                n: 1,
-                descending: false,
-            },
-        )
-        .is_err());
-        assert!(top_n(
-            &batch,
-            &TopN {
-                columns: vec!["missing".into()],
-                n: 1,
-                descending: false,
-            },
-        )
-        .is_err());
+        assert_rifiuto!(
+            top_n(
+                &batch,
+                &TopN {
+                    columns: vec![],
+                    n: 1,
+                    descending: false,
+                },
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            top_n(
+                &batch,
+                &TopN {
+                    columns: vec!["missing".into()],
+                    n: 1,
+                    descending: false,
+                },
+            ),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
         let decoded: TopN = serde_json::from_value(serde_json::json!({"columns": ["num"], "n": 2}))
             .expect("default descending");
         assert!(!decoded.descending);
-        assert!(serde_json::from_value::<TopN>(
-            serde_json::json!({"columns": ["num"], "n": 2, "ascending": true})
-        )
-        .is_err());
+        assert_eq!(
+            serde_json::from_value::<TopN>(
+                serde_json::json!({"columns": ["num"], "n": 2, "ascending": true})
+            )
+            .expect_err("campo sconosciuto")
+            .classify(),
+            serde_json::error::Category::Data
+        );
         // Tipo non confrontabile (LargeUtf8): stesso errore di `sort`.
         let large = single_column_batch(
             "c",
@@ -474,15 +492,18 @@ mod tests {
             DataType::LargeUtf8,
             true,
         );
-        assert!(top_n(
-            &large,
-            &TopN {
-                columns: vec!["c".into()],
-                n: 1,
-                descending: false,
-            },
-        )
-        .is_err());
+        assert_rifiuto!(
+            top_n(
+                &large,
+                &TopN {
+                    columns: vec!["c".into()],
+                    n: 1,
+                    descending: false,
+                },
+            ),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     // -------------------------------------------------------------------
@@ -1629,7 +1650,11 @@ mod tests {
             group_by: vec![],
             aggregations: vec![],
         };
-        assert!(aggregate(&batch, &empty_group).is_err());
+        assert_rifiuto!(
+            aggregate(&batch, &empty_group),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     #[test]
@@ -2865,13 +2890,25 @@ mod tests {
         // Finestra non valida: window 0, min_periods 0, min_periods > window.
         let mut config = rolling_config(RollingKind::Mean, 3, 1);
         config.window = 0;
-        assert!(rolling_window(&batch, &config).is_err());
+        assert_rifiuto!(
+            rolling_window(&batch, &config),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         config = rolling_config(RollingKind::Mean, 3, 1);
         config.min_periods = 0;
-        assert!(rolling_window(&batch, &config).is_err());
+        assert_rifiuto!(
+            rolling_window(&batch, &config),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         config = rolling_config(RollingKind::Mean, 3, 1);
         config.min_periods = 4;
-        assert!(rolling_window(&batch, &config).is_err());
+        assert_rifiuto!(
+            rolling_window(&batch, &config),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // Sorgente non numerica: stesso errore del riferimento.
         let config = RollingWindow {
             column: "txt".into(),
@@ -3018,21 +3055,37 @@ mod tests {
             offset: Some(0),
             ..window_config(WindowKind::Lag)
         };
-        assert!(window_function(&batch, &config).is_err());
+        assert_rifiuto!(
+            window_function(&batch, &config),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // buckets su funzione diversa da ntile.
         let config = WindowFunction {
             buckets: Some(2),
             ..window_config(WindowKind::Rank)
         };
-        assert!(window_function(&batch, &config).is_err());
+        assert_rifiuto!(
+            window_function(&batch, &config),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // ntile senza buckets o con buckets 0.
         let config = window_config(WindowKind::Ntile);
-        assert!(window_function(&batch, &config).is_err());
+        assert_rifiuto!(
+            window_function(&batch, &config),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         let config = WindowFunction {
             buckets: Some(0),
             ..window_config(WindowKind::Ntile)
         };
-        assert!(window_function(&batch, &config).is_err());
+        assert_rifiuto!(
+            window_function(&batch, &config),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // Sorgente non numerica: stesso errore del riferimento.
         let config = WindowFunction {
             column: "txt".into(),

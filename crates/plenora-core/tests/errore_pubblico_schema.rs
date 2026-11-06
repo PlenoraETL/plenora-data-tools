@@ -279,6 +279,10 @@ fn le_fixture_sono_quelle_del_contratto() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Mutazioni negative del vettore del contratto contro il validatore JSON Schema di prova: tutte devono essere rifiutate; non è un errore di produzione. Documento senza message obbligatorio: rifiuto del validatore JSON Schema di prova, senza categoria/fase Plenora. Mutazioni negative della diagnostica contro il validatore JSON Schema indipendente: ciascuna deve essere rifiutata, senza assi Plenora. Chiave redacted con value vietato: rifiuto dello schema di prova, seguito dal successo esatto dopo rimozione di value."
+)]
 fn il_validatore_rifiuta_i_documenti_fuori_schema() {
     // Il payload del vettore `runtime-v1/data-run-timeout-error.json`.
     let vettore = json!({
@@ -554,6 +558,10 @@ fn ritardo_e_quarantena_sono_validi_contro_lo_schema() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Metaprova del lettore di schemi con chiavi duplicate: schema deve andare in panico, non produce PlenoraError."
+)]
 fn schemi_rifiutano_duplicati_in_superficie_e_annidati() {
     for testo in [
         r#"{"type": "object", "type": "object"}"#,

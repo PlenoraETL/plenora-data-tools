@@ -504,6 +504,7 @@ fn spatial_join_refs(
     limite_superato.map_or(Ok(pairs), Err)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,13 +752,16 @@ mod tests {
             ),
             Err(SpatialJoinError::InvalidGeometry { side: "left", .. })
         ));
-        assert!(spatial_join_validated(
-            std::slice::from_ref(&bowtie),
-            std::slice::from_ref(&valid),
-            JoinPredicate::Intersects,
-            1,
-        )
-        .is_ok());
+        assert_eq!(
+            (spatial_join_validated(
+                std::slice::from_ref(&bowtie),
+                std::slice::from_ref(&valid),
+                JoinPredicate::Intersects,
+                1,
+            ))
+            .expect("successo atteso"),
+            vec![JoinPair { left: 0, right: 0 }]
+        );
     }
 
     proptest! {

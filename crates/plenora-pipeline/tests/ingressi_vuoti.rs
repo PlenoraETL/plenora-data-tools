@@ -9,6 +9,8 @@
 //! rappresentativa di `CASI` sulle fixture svuotate (stesso schema, zero
 //! righe), e anche con un solo lato vuoto per le binarie.
 
+#[path = "comune/attesi.rs"]
+mod attesi;
 mod comune;
 
 use plenora_core::arrow::array::RecordBatch;
@@ -35,7 +37,7 @@ fn piano(op: &str, ingressi: &[&str], config: Value) -> Pipeline {
     }
 }
 
-fn esegui(op: &str, config: &Value, tavole: &[RecordBatch]) -> Result<(), PlenoraError> {
+fn esegui(op: &str, config: &Value, tavole: &[RecordBatch]) -> Result<RecordBatch, PlenoraError> {
     let ingressi = nomi_input(tavole.len());
     let riferimenti: Vec<&str> = ingressi.iter().map(String::as_str).collect();
     let schemi: Vec<(&str, SchemaRef)> = riferimenti
@@ -46,17 +48,22 @@ fn esegui(op: &str, config: &Value, tavole: &[RecordBatch]) -> Result<(), Plenor
     let validata = piano(op, &riferimenti, config.clone()).validate(&schemi)?;
     validata
         .run(ingressi.into_iter().zip(tavole.iter().cloned()).collect())
-        .map(|_| ())
+        .map(|mut esito| esito.outputs.remove(0).1)
 }
 
 fn e_espansione(errore: &PlenoraError) -> bool {
+    assert_eq!(
+        errore.category(),
+        plenora_core::ErrorCategory::ResourceLimit
+    );
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Write);
     errore.to_string().contains("max_expansion_factor")
 }
 
 #[test]
 fn nessuna_operazione_rifiuta_ingressi_vuoti_per_il_fattore_di_espansione() {
     std::env::set_var(CHIAVE_HMAC, "chiave-di-test-del-runner");
-    let mut rifiuti = Vec::new();
+
     let mut provate = 0_usize;
     for caso in CASI {
         let config: Value = serde_json::from_str(caso.config).expect("config del caso");
@@ -69,16 +76,102 @@ fn nessuna_operazione_rifiuta_ingressi_vuoti_per_il_fattore_di_espansione() {
         }
         for tavole in combinazioni {
             provate += 1;
-            if let Err(errore) = esegui(caso.op, &config, &tavole) {
-                if e_espansione(&errore) {
-                    let righe: Vec<usize> = tavole.iter().map(RecordBatch::num_rows).collect();
-                    rifiuti.push(format!("{} righe {righe:?}: {errore}", caso.op));
+            let risultato = esegui(caso.op, &config, &tavole);
+            let categoria = match caso.op {
+                "table.assert_cardinality" => Some(plenora_core::ErrorCategory::InvalidPlan),
+                "table.bin" => Some(plenora_core::ErrorCategory::Schema),
+                "table.transpose" => Some(plenora_core::ErrorCategory::Unsupported),
+                "table.assert_foreign_key" if tavole[0].num_rows() > 0 => {
+                    Some(plenora_core::ErrorCategory::DataMapping)
                 }
+                _ => None,
+            };
+            if let Some(categoria) = categoria {
+                let errore = risultato.expect_err("vincolo non soddisfatto dalla fixture vuota");
+                assert_eq!(errore.category(), categoria, "{}", caso.op);
+                assert_eq!(
+                    errore.phase(),
+                    if matches!(
+                        caso.op,
+                        "table.assert_cardinality" | "table.bin" | "table.transpose"
+                    ) {
+                        plenora_core::ErrorPhase::Validate
+                    } else {
+                        plenora_core::ErrorPhase::Write
+                    },
+                    "{}",
+                    caso.op
+                );
+            } else {
+                let ottenuto = risultato.unwrap_or_else(|errore| panic!("{}: {errore}", caso.op));
+                let atteso = atteso_vuoto(caso.op, &tavole, &piene);
+                attesi::verifica(caso.op, &ottenuto, &atteso);
             }
         }
     }
     assert!(provate > CASI.len(), "casi provati: {provate}");
-    assert!(rifiuti.is_empty(), "{}", rifiuti.join("\n"));
+}
+
+/// Schema dalla fixture indipendente; valori determinati dai lati vuoti.
+fn atteso_vuoto(op: &str, tavole: &[RecordBatch], piene: &[RecordBatch]) -> RecordBatch {
+    use plenora_core::arrow::array::{new_null_array, ArrayRef, StringArray, UInt64Array};
+    use std::sync::Arc;
+    let schema = attesi::tabella(op, piene).schema();
+    let sinistra = &tavole[0];
+    let nr = tavole.get(1).map_or(0, RecordBatch::num_rows);
+    let nl = sinistra.num_rows();
+    let colonne: Vec<ArrayRef> = match op {
+        "table.concat" | "table.concat_by_name" | "table.union_distinct" => {
+            if nl > 0 {
+                sinistra.columns().to_vec()
+            } else {
+                tavole[1].columns().to_vec()
+            }
+        }
+        "table.anti_join" | "table.except" => sinistra.columns().to_vec(),
+        "table.asof_join" if nl > 0 => {
+            let mut colonne = sinistra.columns().to_vec();
+            for field in schema.fields().iter().skip(colonne.len()) {
+                colonne.push(new_null_array(field.data_type(), nl));
+            }
+            colonne
+        }
+        "table.reconcile" => vec![
+            Arc::new(StringArray::from(vec![
+                "matched_rows",
+                "left_only_rows",
+                "right_only_rows",
+                "left_duplicate_rows",
+                "right_duplicate_rows",
+            ])),
+            Arc::new(UInt64Array::from(vec![
+                0,
+                u64::try_from(nl).expect("righe"),
+                u64::try_from(nr).expect("righe"),
+                0,
+                0,
+            ])),
+        ],
+        "table.table_diff" if nl + nr > 0 => vec![
+            if nl > 0 {
+                sinistra.column(0).clone()
+            } else {
+                tavole[1].column(0).clone()
+            },
+            Arc::new(StringArray::from(vec![
+                if nl > 0 {
+                    "DELETED"
+                } else {
+                    "ADDED"
+                };
+                nl + nr
+            ])),
+            Arc::new(StringArray::from(vec![None::<&str>; nl + nr])),
+            Arc::new(StringArray::from(vec![None::<&str>; nl + nr])),
+        ],
+        _ => return RecordBatch::new_empty(schema),
+    };
+    RecordBatch::try_new(schema, colonne).expect("atteso vuoto")
 }
 
 fn tabella_int(nome: &str, valori: Vec<i64>) -> RecordBatch {
@@ -142,12 +235,20 @@ fn un_join_con_chiave_unica_su_un_lato_non_supera_il_fattore() {
     let dimensione = tabella_int("d", (0..100).collect());
     for how in ["inner", "left"] {
         let config = serde_json::json!({"left_keys": ["k"], "right_keys": ["d"], "how": how});
-        esegui("table.join", &config, &[fatti.clone(), dimensione.clone()])
+        let uscita = esegui("table.join", &config, &[fatti.clone(), dimensione.clone()])
             .unwrap_or_else(|errore| panic!("{how}: {errore}"));
+        verifica_join_unico(&uscita, "k", (0..10_600).map(|riga| riga % 100).collect());
         // Anche a lati invertiti (1:N): l'uscita e' il lato maggiore.
         let config = serde_json::json!({"left_keys": ["d"], "right_keys": ["k"], "how": how});
-        esegui("table.join", &config, &[dimensione.clone(), fatti.clone()])
+        let uscita = esegui("table.join", &config, &[dimensione.clone(), fatti.clone()])
             .unwrap_or_else(|errore| panic!("{how} invertito: {errore}"));
+        verifica_join_unico(
+            &uscita,
+            "d",
+            (0..100)
+                .flat_map(|id| std::iter::repeat_n(id, 106))
+                .collect(),
+        );
     }
     // Un molti-a-molti che moltiplica le righe resta un rifiuto: 300 righe
     // con la stessa chiave per lato danno 90 000 righe, 150 volte la somma.
@@ -156,4 +257,17 @@ fn un_join_con_chiave_unica_su_un_lato_non_supera_il_fattore() {
     let config = serde_json::json!({"left_keys": ["k"], "right_keys": ["d"], "how": "inner"});
     let errore = esegui("table.join", &config, &[molti, altri]).expect_err("molti-a-molti");
     assert!(e_espansione(&errore), "{errore}");
+}
+
+fn verifica_join_unico(uscita: &RecordBatch, nome: &str, valori: Vec<i64>) {
+    use plenora_core::arrow::schema::{DataType, Field, Schema};
+    use std::sync::Arc;
+    let atteso = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new(nome, DataType::Int64, true)])),
+        vec![Arc::new(plenora_core::arrow::array::Int64Array::from(
+            valori,
+        ))],
+    )
+    .expect("join atteso");
+    attesi::verifica("join_unico", uscita, &atteso);
 }

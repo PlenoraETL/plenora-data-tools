@@ -220,6 +220,7 @@ pub(crate) fn soundex(text: &str) -> String {
     out
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 fn jaro_similarity(left: &[char], right: &[char]) -> f64 {
     let mut left_matched = vec![false; left.len()];
@@ -283,6 +284,7 @@ fn jaro_similarity_scratch(
 
 /// Jaro-Winkler: Jaro + boost di prefisso comune (p = 0.1, massimo 4
 /// caratteri). Nessuna soglia minima di attivazione del boost.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub(crate) fn jaro_winkler(left: &str, right: &str) -> f64 {
     let left: Vec<char> = left.chars().collect();
@@ -300,6 +302,7 @@ pub(crate) fn jaro_winkler(left: &str, right: &str) -> f64 {
 }
 
 /// Distanza di Levenshtein su caratteri Unicode (DP a due righe).
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 fn levenshtein_distance(left: &[char], right: &[char]) -> usize {
     let mut previous: Vec<usize> = Vec::new();
@@ -311,6 +314,7 @@ fn levenshtein_distance(left: &[char], right: &[char]) -> usize {
 /// probe di `fuzzy_join`, hot path minimale): stesso ordine di calcolo, risultato identico.
 /// Il probe usa `levenshtein_entro`; questa DP completa resta il confronto
 /// dei test.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 fn levenshtein_distance_scratch(
     left: &[char],
@@ -342,6 +346,7 @@ fn levenshtein_distance_scratch(
 }
 
 /// Levenshtein normalizzato: `1 - dist/max_len`; due stringhe vuote -> 1.0.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub(crate) fn levenshtein_normalized(left: &str, right: &str) -> f64 {
     let left: Vec<char> = left.chars().collect();
@@ -357,6 +362,7 @@ pub(crate) fn levenshtein_normalized(left: &str, right: &str) -> f64 {
 
 /// Jaccard sui token (split whitespace, insiemi); due stringhe senza token
 /// -> 1.0.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub(crate) fn jaccard_tokens(left: &str, right: &str) -> f64 {
     let left_tokens: std::collections::HashSet<&str> = left.split_whitespace().collect();
@@ -1044,10 +1050,12 @@ fn fuzzy_join_con_chunk(
     Ok(output)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[path = "fuzzy_oracolo.rs"]
 mod oracolo;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1167,37 +1175,62 @@ mod tests {
     #[test]
     fn config_is_strict_and_validated() {
         // Campo ignoto rifiutato (deny_unknown_fields).
-        assert!(serde_json::from_value::<FuzzyJoin>(serde_json::json!({
-            "left_key": "a", "right_key": "b", "metric": "jaccard",
-            "threshold": 0.5, "blocking": "prefix", "surprise": 1
-        }))
-        .is_err());
+        assert_eq!(
+            (serde_json::from_value::<FuzzyJoin>(serde_json::json!({
+                "left_key": "a", "right_key": "b", "metric": "jaccard",
+                "threshold": 0.5, "blocking": "prefix", "surprise": 1
+            })))
+            .expect_err("configurazione non valida")
+            .classify(),
+            serde_json::error::Category::Data
+        );
         // Soglia ai bordi: 0 escluso, 1 incluso (NaN/infinito non sono
         // rappresentabili in JSON: la deserializzazione fail-closed li
         // rifiuta prima della validazione).
         for bad in [0.0, -0.5, 1.000_000_1] {
             let mut cfg = base_config();
             cfg["threshold"] = serde_json::json!(bad);
-            assert!(validate_config(&config(cfg)).is_err(), "threshold {bad}");
+            assert_rifiuto!(
+                validate_config(&config(cfg)),
+                plenora_core::ErrorCategory::InvalidPlan,
+                plenora_core::ErrorPhase::Validate
+            );
         }
         let mut nan = base_config();
         nan["threshold"] = serde_json::json!(f64::NAN);
-        assert!(serde_json::from_value::<FuzzyJoin>(nan).is_err());
+        assert_eq!(
+            (serde_json::from_value::<FuzzyJoin>(nan))
+                .expect_err("configurazione non valida")
+                .classify(),
+            serde_json::error::Category::Data
+        );
         let mut one = base_config();
         one["threshold"] = serde_json::json!(1.0);
-        assert!(validate_config(&config(one)).is_ok());
+        assert_successo!(validate_config(&config(one)), ());
         // blocking_param solo con prefix, e >= 1.
         let mut cfg = base_config();
         cfg["blocking_param"] = serde_json::json!(0);
-        assert!(validate_config(&config(cfg)).is_err());
+        assert_rifiuto!(
+            validate_config(&config(cfg)),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         let mut cfg = base_config();
         cfg["blocking"] = serde_json::json!("soundex");
         cfg["blocking_param"] = serde_json::json!(3);
-        assert!(validate_config(&config(cfg)).is_err());
+        assert_rifiuto!(
+            validate_config(&config(cfg)),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // max_candidates >= 1.
         let mut cfg = base_config();
         cfg["max_candidates"] = serde_json::json!(0);
-        assert!(validate_config(&config(cfg)).is_err());
+        assert_rifiuto!(
+            validate_config(&config(cfg)),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     // -- Semantica del kernel ---------------------------------------------------
@@ -1341,13 +1374,36 @@ mod tests {
         assert_eq!(output.num_rows(), 2);
     }
 
+    fn atteso_people(nome_score: &str) -> RecordBatch {
+        // Martha/Marhta: sei caratteri, una trasposizione, prefisso comune 3.
+        let score = 173.0 / 180.0;
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("name", DataType::Utf8, true),
+                Field::new("lv_L", DataType::Int64, true),
+                Field::new("name_R", DataType::Utf8, true),
+                Field::new("rv_R", DataType::Int64, true),
+                Field::new(nome_score, DataType::Float64, false),
+            ])),
+            vec![
+                utf8_column_of(&[Some("Martha")]),
+                i64_column_of(&[1]),
+                utf8_column_of(&[Some("Marhta")]),
+                i64_column_of(&[10]),
+                Arc::new(Float64Array::from(vec![score])),
+            ],
+        )
+        .expect("fixture coppia fuzzy")
+    }
+
     #[test]
     fn execution_is_deterministic_across_runs() {
         let (left, right) = people();
         let cfg = config(base_config());
         let first = fuzzy_join(&left, &right, &cfg, &Limits::default()).expect("prima");
         let second = fuzzy_join(&left, &right, &cfg, &Limits::default()).expect("seconda");
-        assert_eq!(format!("{first:?}"), format!("{second:?}"));
+        assert_eq!(first, atteso_people("score"));
+        assert_eq!(second, atteso_people("score"));
     }
 
     #[test]
@@ -1361,6 +1417,8 @@ mod tests {
         json["max_candidates"] = serde_json::json!(2);
         let error = fuzzy_join(&left, &right, &config(json), &Limits::default())
             .expect_err("blocco da 3 con max_candidates 2");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::ResourceLimit);
+        assert_eq!(error.phase(), plenora_core::ErrorPhase::Write);
         assert!(error.to_string().contains("max_candidates"), "{error}");
     }
 
@@ -1376,10 +1434,16 @@ mod tests {
         let mut json = base_config();
         json["how"] = serde_json::json!("left");
         let error = fuzzy_join(&left, &right, &config(json), &limits).expect_err("max_rows");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::ResourceLimit);
+        assert_eq!(error.phase(), plenora_core::ErrorPhase::Write);
         assert!(error.to_string().contains("max_rows"), "{error}");
         // Chiave non Utf8 -> errore di schema.
         let bad_left = batch(vec![("name", i64_column_of(&[1]))]);
-        assert!(fuzzy_join(&bad_left, &right, &cfg, &Limits::default()).is_err());
+        assert_rifiuto!(
+            fuzzy_join(&bad_left, &right, &cfg, &Limits::default()),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
         // Colonna score che collide con l'output -> errore. Le colonne
         // destre prendono sempre `_R` e le sinistre non chiave `_L`: l'unica
         // collisione possibile e' una chiave sinistra chiamata come la
@@ -1389,11 +1453,13 @@ mod tests {
         json["left_key"] = serde_json::json!("score");
         let error = fuzzy_join(&colliding_left, &right, &config(json), &Limits::default())
             .expect_err("collisione score");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Schema);
+        assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
         assert!(error.to_string().contains("score"), "{error}");
         // Nome score personalizzato.
         let mut json = base_config();
         json["score_column"] = serde_json::json!("similarity");
         let output = fuzzy_join(&left, &right, &config(json), &Limits::default()).expect("custom");
-        assert!(output.schema().field_with_name("similarity").is_ok());
+        assert_eq!(output, atteso_people("similarity"));
     }
 }

@@ -1578,6 +1578,7 @@ pub struct BatchSequence {
     pub sequence_number: u64,
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1615,11 +1616,19 @@ mod tests {
                 DataContract::tabular(schema(vec![Field::new("a", DataType::Int64, false)]));
             contract.properties.sorted_by =
                 Some(ContractProperty::new(confidence, PropertyScope::Stream));
-            assert!(contract.validate().is_err());
+            assert_rifiuto!(
+                contract.validate(),
+                crate::ErrorCategory::Schema,
+                crate::ErrorPhase::Validate
+            );
             contract.field_ids.insert("a".into(), FieldId(9));
-            contract.validate().unwrap();
+            assert_successo!(contract.validate(), ());
             contract.field_ids.insert("a".into(), FieldId(10));
-            assert!(contract.validate().is_err());
+            assert_rifiuto!(
+                contract.validate(),
+                crate::ErrorCategory::Schema,
+                crate::ErrorPhase::Validate
+            );
             contract.field_ids.insert("a".into(), FieldId(9));
             contract.schema = schema(vec![]);
             assert!(matches!(contract.validate(), Err(PlenoraError::Schema(_))));
@@ -1679,11 +1688,19 @@ mod tests {
     fn field_allocator_arriva_a_u32_max_e_non_riconsegna_l_osservato() {
         let mut allocator = FieldAllocator::new(u32::MAX);
         assert_eq!(allocator.alloc().expect("ultimo id"), FieldId(u32::MAX));
-        assert!(allocator.alloc().is_err());
+        assert_rifiuto!(
+            allocator.alloc(),
+            crate::ErrorCategory::InvalidPlan,
+            crate::ErrorPhase::Validate
+        );
 
         let mut allocator = FieldAllocator::default();
         allocator.observe(FieldId(u32::MAX));
-        assert!(allocator.alloc().is_err(), "u32::MAX e' gia' in uso");
+        assert_rifiuto!(
+            allocator.alloc(),
+            crate::ErrorCategory::InvalidPlan,
+            crate::ErrorPhase::Validate
+        );
     }
 
     #[test]
@@ -2107,7 +2124,12 @@ mod tests {
             "geomcollection",
         ] {
             assert_eq!(value.parse::<GeometryType>(), Err(UnknownGeometryType));
-            assert!(serde_json::from_str::<GeometryType>(&format!("\"{value}\"")).is_err());
+            assert_eq!(
+                serde_json::from_str::<GeometryType>(&format!("\"{value}\""))
+                    .expect_err("tipo non canonico")
+                    .classify(),
+                serde_json::error::Category::Data
+            );
         }
     }
 
@@ -2167,7 +2189,14 @@ mod tests {
             GeometryTypesProperty::new(TypesDeclaration::Exact, vec![GeometryType::Point]).unwrap();
         assert_eq!(exact.declaration(), TypesDeclaration::Exact);
         // unresolved senza elenco: ok.
-        assert!(GeometryTypesProperty::new(TypesDeclaration::Unresolved, Vec::new()).is_ok());
+        assert_eq!(
+            GeometryTypesProperty::new(TypesDeclaration::Unresolved, Vec::new())
+                .expect("tipi unresolved"),
+            GeometryTypesProperty {
+                declaration: TypesDeclaration::Unresolved,
+                types: Box::new([])
+            }
+        );
     }
 
     #[test]
@@ -2296,6 +2325,7 @@ mod tests {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod origin_tests {
     use super::*;
@@ -2327,16 +2357,18 @@ mod origin_tests {
         assert_eq!(output.field_ids["a"], FieldId(77));
         assert!(![FieldId(42), FieldId(77), estraneo].contains(&output.field_ids["b"]));
         for origins in [vec![], vec![FieldOrigin::New], vec![FieldOrigin::New; 3]] {
-            assert!(input
-                .rebuild(
+            assert_rifiuto!(
+                input.rebuild(
                     schema.clone(),
                     origins,
                     vec![],
                     None,
                     ContractProperties::default(),
                     &mut allocator
-                )
-                .is_err());
+                ),
+                crate::ErrorCategory::Schema,
+                crate::ErrorPhase::Validate
+            );
         }
         let mut last = FieldAllocator::new(u32::MAX);
         let output = input
@@ -2350,15 +2382,17 @@ mod origin_tests {
             )
             .unwrap();
         assert_eq!(output.field_ids["b"], FieldId(u32::MAX));
-        assert!(input
-            .rebuild(
+        assert_rifiuto!(
+            input.rebuild(
                 schema,
                 vec![FieldOrigin::New; 2],
                 vec![],
                 None,
                 ContractProperties::default(),
                 &mut last
-            )
-            .is_err());
+            ),
+            crate::ErrorCategory::InvalidPlan,
+            crate::ErrorPhase::Validate
+        );
     }
 }

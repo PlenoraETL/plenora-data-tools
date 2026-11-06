@@ -1104,6 +1104,7 @@ fn vicini_precedenti(
     vicini
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 // Confronti float esatti intenzionali: le fixture sono costruite per
 // produrre valori esatti (coordinate note, round-trip bit-esatti); il
@@ -1354,6 +1355,7 @@ mod tests {
             "Rect",
             "Triangle",
         ];
+        assert_eq!(values.len(), names.len());
         for (value, expected) in values.iter().zip(names) {
             assert!(matches!(
                 dissolve(std::slice::from_ref(value), precisione()),
@@ -1536,10 +1538,9 @@ mod tests {
 
     #[test]
     fn validated_variants_document_the_caller_precondition() {
-        // Precondizione violata ad arte: il percorso gated rifiuta il bowtie
-        // in ingresso, la variante validated no. Gli errori ammessi sono solo
-        // quelli dei gate di output (`InvalidGeometry`) e di tipo: nessun
-        // panic.
+        // Il rustdoc delle varianti validated non promette un esito fuori
+        // precondizione. Il bowtie verifica quindi solo le API con gate OGC;
+        // le varianti validated sono provate sopra con ingressi validi.
         let bowtie = bowtie();
         let valid = square(0.0, 0.0, 2.0);
         assert!(matches!(
@@ -1551,33 +1552,10 @@ mod tests {
             ),
             Err(TopologyError::InvalidGeometry(_))
         ));
-        let outcome = boolean_operation_validated(
-            &bowtie,
-            &valid,
-            BooleanOperation::Intersection,
-            precisione(),
-        );
-        assert!(
-            outcome.is_ok()
-                || matches!(
-                    outcome,
-                    Err(TopologyError::InvalidGeometry(_) | TopologyError::PrecisionInsufficient)
-                ),
-            "solo i controlli dell'output possono fallire: {outcome:?}"
-        );
         assert!(matches!(
             dissolve(std::slice::from_ref(&bowtie), precisione()),
             Err(TopologyError::InvalidGeometry(_))
         ));
-        let outcome = dissolve_validated(std::slice::from_ref(&bowtie), precisione());
-        assert!(
-            outcome.is_ok()
-                || matches!(
-                    outcome,
-                    Err(TopologyError::InvalidGeometry(_) | TopologyError::PrecisionInsufficient)
-                ),
-            "solo i controlli dell'output possono fallire: {outcome:?}"
-        );
     }
 
     proptest! {

@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Produzione: divieti degli esiti riattivati agli ingressi delle prove"
+)]
 //! plenora-kernels-table — kernel tabellari puri su Arrow `RecordBatch`.
 //!
 //! Ogni operazione `table.*` del catalogo ha due parti: l'analisi del
@@ -15,6 +19,12 @@
 //! confronti numerici esatti ([`NumericBound`], [`scalar_compare`]), le stime
 //! di memoria per il rifiuto preventivo ([`preflight_output_bytes`]) e la
 //! costruzione dei batch d'uscita.
+
+#[deny(clippy::disallowed_methods)]
+#[cfg(test)]
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
 
 use serde::{Deserialize, Serialize};
 
@@ -122,9 +132,11 @@ pub mod strings;
 mod temporale;
 pub mod utility;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod test_support;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod binari_oracolo;
 
@@ -2204,6 +2216,7 @@ pub(crate) fn require_join_geometry_support(left: &Schema, right: &Schema) -> Re
 
 pub(crate) mod geometry_provenance;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     /// **Il motivo di una regex rifiutata non cita il pattern**: il testo
@@ -2214,6 +2227,7 @@ mod tests {
         // Il pattern passa da una variabile: e' invalido apposta.
         let pattern = String::from("(PATTERN_SEGRETO");
         let sintassi = regex::Regex::new(&pattern).expect_err("sintassi");
+        assert!(matches!(sintassi, regex::Error::Syntax(_)));
         assert!(sintassi.to_string().contains("PATTERN_SEGRETO"));
         assert_eq!(
             super::motivo_regex_non_valida(&sintassi),
@@ -2392,17 +2406,32 @@ mod tests {
     #[test]
     fn helper_guards_cover_type_length_and_names() {
         let input = batch();
-        assert!(replace_or_append(
-            &input,
-            "bad",
-            DataType::Utf8,
-            true,
-            Arc::new(StringArray::from(vec![Some("only one")]))
-        )
-        .is_err());
-        assert!(validate_output_name(" ").is_err());
-        assert!(validate_output_name(&"x".repeat(1_025)).is_err());
-        assert!(column_index(&input, "missing").is_err());
+        assert_rifiuto!(
+            replace_or_append(
+                &input,
+                "bad",
+                DataType::Utf8,
+                true,
+                Arc::new(StringArray::from(vec![Some("only one")]))
+            ),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            validate_output_name(" "),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            validate_output_name(&"x".repeat(1_025)),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            column_index(&input, "missing"),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
 
         let integers = single_column_batch(
             "n",
@@ -2410,7 +2439,11 @@ mod tests {
             DataType::Int64,
             false,
         );
-        assert!(utf8_column(&integers, "n").is_err());
+        assert_rifiuto!(
+            utf8_column(&integers, "n"),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     #[test]

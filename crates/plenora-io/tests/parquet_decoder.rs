@@ -26,11 +26,16 @@ use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::column::reader::get_typed_column_reader;
 use parquet::data_type::{ByteArrayType, DoubleType, Int32Type};
+use parquet::errors::ParquetError;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use plenora_core::arrow::array::cast::AsArray;
-use plenora_core::arrow::array::{Array, RecordBatch};
+use plenora_core::arrow::array::{
+    Array, ArrayRef, BinaryArray, FixedSizeBinaryArray, Int32Array, ListArray, RecordBatch,
+    StructArray,
+};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_core::ErrorCategory;
+use plenora_core::arrow::ArrowError;
+use plenora_core::{ErrorCategory, ErrorPhase};
 use plenora_io::{leggi_tabella_con_limiti, Formato, LimitiLettura};
 
 use comune::cartella;
@@ -389,17 +394,102 @@ fn panico(carico: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_else(|| "(payload non testuale)".to_owned())
 }
 
+/// Stadio dell'API chiamata e variante nativa, conservati prima del testo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fase {
+    Apertura,
+    Gruppo,
+    SelezioneColonna,
+    Costruzione,
+    Lettura,
+    Colonna,
+    Salto,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Categoria {
+    Generale,
+    NonImplementato,
+    ConversioneArrow,
+    FineDati,
+    ArrowParquet,
+    ArrowArgomento,
+    ArrowSchema,
+    ArrowCalcolo,
+    Esterna,
+    Altra,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ErroreDiretto {
+    categoria: Categoria,
+    fase: Fase,
+    testo: String,
+}
+
+impl ErroreDiretto {
+    fn parquet(errore: &ParquetError, fase: Fase) -> Self {
+        let categoria = match &errore {
+            ParquetError::General(_) => Categoria::Generale,
+            ParquetError::EOF(_) => Categoria::FineDati,
+            ParquetError::NYI(_) => Categoria::NonImplementato,
+            ParquetError::ArrowError(_) => Categoria::ConversioneArrow,
+            ParquetError::External(_) => Categoria::Esterna,
+            _ => Categoria::Altra,
+        };
+        Self {
+            categoria,
+            fase,
+            testo: errore.to_string(),
+        }
+    }
+    fn arrow(errore: &ArrowError) -> Self {
+        let categoria = match &errore {
+            ArrowError::ParquetError(_) => Categoria::ArrowParquet,
+            ArrowError::InvalidArgumentError(_) => Categoria::ArrowArgomento,
+            ArrowError::SchemaError(_) => Categoria::ArrowSchema,
+            ArrowError::ComputeError(_) => Categoria::ArrowCalcolo,
+            _ => Categoria::Altra,
+        };
+        Self {
+            categoria,
+            fase: Fase::Lettura,
+            testo: errore.to_string(),
+        }
+    }
+    fn verifica(&self, categoria: Categoria, fase: Fase) {
+        assert_eq!(self.categoria, categoria, "{self}");
+        assert_eq!(self.fase, fase, "{self}");
+    }
+}
+impl std::ops::Deref for ErroreDiretto {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.testo
+    }
+}
+impl AsRef<str> for ErroreDiretto {
+    fn as_ref(&self) -> &str {
+        &self.testo
+    }
+}
+impl std::fmt::Display for ErroreDiretto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.testo.fmt(f)
+    }
+}
+
 /// Il lettore Arrow: righe lette o l'errore; un panico fa fallire la prova.
-fn arrow(byte: &[u8]) -> Result<usize, String> {
+fn arrow(byte: &[u8]) -> Result<usize, ErroreDiretto> {
     su_file(byte, |file| {
         std::panic::catch_unwind(move || {
             let lettore = ParquetRecordBatchReaderBuilder::try_new(file)
-                .map_err(|e| e.to_string())?
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Apertura))?
                 .build()
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Costruzione))?;
             let mut righe = 0;
             for batch in lettore {
-                righe += batch.map_err(|e| e.to_string())?.num_rows();
+                righe += batch.map_err(|e| ErroreDiretto::arrow(&e))?.num_rows();
             }
             Ok(righe)
         })
@@ -421,6 +511,7 @@ fn rifiutato_dal_confine(byte: &[u8]) {
     )
     .expect_err("il file doveva essere rifiutato");
     assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+    assert_eq!(errore.phase(), ErrorPhase::Write);
     assert!(!errore.to_string().contains("panico"), "{errore}");
 }
 
@@ -431,24 +522,31 @@ fn rifiutato_dal_confine(byte: &[u8]) {
 fn colonna_api<T: parquet::data_type::DataType>(
     byte: &[u8],
     salta: Option<usize>,
-) -> Result<usize, String>
+) -> Result<usize, ErroreDiretto>
 where
     T::T: Default + Clone,
 {
     su_file(byte, |file| {
         std::panic::catch_unwind(move || {
-            let lettore = SerializedFileReader::new(file).map_err(|e| e.to_string())?;
-            let gruppo = lettore.get_row_group(0).map_err(|e| e.to_string())?;
-            let colonna = gruppo.get_column_reader(0).map_err(|e| e.to_string())?;
+            let lettore = SerializedFileReader::new(file)
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Apertura))?;
+            let gruppo = lettore
+                .get_row_group(0)
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Gruppo))?;
+            let colonna = gruppo
+                .get_column_reader(0)
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::SelezioneColonna))?;
             let mut tipizzata = get_typed_column_reader::<T>(colonna);
             if let Some(quanti) = salta {
-                return tipizzata.skip_records(quanti).map_err(|e| e.to_string());
+                return tipizzata
+                    .skip_records(quanti)
+                    .map_err(|e| ErroreDiretto::parquet(&e, Fase::Salto));
             }
             let mut valori = Vec::new();
             tipizzata
                 .read_records(64, None, None, &mut valori)
                 .map(|(record, _, _)| record)
-                .map_err(|e| e.to_string())
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Colonna))
         })
         .unwrap_or_else(|carico| panic!("l'API per colonne va in panico: {}", panico(&*carico)))
     })
@@ -457,7 +555,12 @@ where
 /// Il rifiuto di una codifica non qualificata: dal lettore Arrow del fork,
 /// con il testo fisso, e dal confine, `Unsupported`.
 fn non_qualificata(byte: &[u8]) {
-    contiene(arrow(byte), parquet::basic::ENCODING_NOT_QUALIFIED);
+    contiene(
+        arrow(byte),
+        parquet::basic::ENCODING_NOT_QUALIFIED,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     let dir = cartella();
     let percorso = dir.path().join("q.parquet");
     std::fs::write(&percorso, byte).unwrap();
@@ -469,13 +572,18 @@ fn non_qualificata(byte: &[u8]) {
     )
     .expect_err("codifica non qualificata");
     assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+    assert_eq!(errore.phase(), ErrorPhase::Validate);
 }
 
-fn contiene(esito: Result<usize, String>, atteso: &str) {
-    match esito {
-        Ok(righe) => panic!("letto senza errore ({righe} righe), atteso «{atteso}»"),
-        Err(testo) => assert!(testo.contains(atteso), "atteso «{atteso}»: {testo}"),
-    }
+fn contiene<T: std::fmt::Debug>(
+    esito: Result<T, ErroreDiretto>,
+    atteso: &str,
+    categoria: Categoria,
+    fase: Fase,
+) {
+    let errore = esito.expect_err("lo scenario deve essere rifiutato");
+    errore.verifica(categoria, fase);
+    assert!(errore.contains(atteso), "atteso ?{atteso}?: {errore}");
 }
 
 // --- Le prove ---------------------------------------------------------------
@@ -511,7 +619,12 @@ fn un_indice_oltre_il_dizionario_flba_e_un_errore() {
     // Larghezza dei bit 3, una corsa RLE di un valore: l'indice 5.
     let indici = [3_u8, 2, 5];
     let byte = parquet(&flba, 1, RLE_DICTIONARY, &indici, Some((1, b"zz")), None);
-    contiene(arrow(&byte), "dictionary index out of bounds");
+    contiene(
+        arrow(&byte),
+        "dictionary index out of bounds",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&byte);
 }
 
@@ -530,7 +643,12 @@ fn un_indice_negativo_del_dizionario_e_un_errore() {
         Some((1, &dizionario)),
         None,
     );
-    contiene(arrow(&byte), "dictionary");
+    contiene(
+        arrow(&byte),
+        "dictionary",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&byte);
 }
 
@@ -544,7 +662,12 @@ fn un_resto_nella_pagina_e_un_errore() {
         ..colonna(FLBA)
     };
     let byte = parquet(&flba, 2, PLAIN, b"abcde", None, None);
-    contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+    contiene(
+        arrow(&byte),
+        parquet::basic::PAGE_NOT_AS_DECLARED,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&byte);
 }
 
@@ -567,7 +690,12 @@ fn una_statistica_decimale_malformata_e_un_errore() {
         (&[0_u8, 0, 1][..], &[0, 0, 0, 2][..]),
     ] {
         let byte = parquet(&decimale, 2, PLAIN, &valori, None, Some((minimo, massimo)));
-        contiene(arrow(&byte), "statistic of the wrong width");
+        contiene(
+            arrow(&byte),
+            "statistic of the wrong width",
+            Categoria::Generale,
+            Fase::Apertura,
+        );
         rifiutato_dal_confine(&byte);
     }
     // Controfattuale: 4 byte ciascuna, la statistica c'è.
@@ -605,7 +733,12 @@ fn un_decimale_byte_array_troppo_largo_e_un_errore() {
         let mut contenuto = u32::try_from(valore.len()).unwrap().to_le_bytes().to_vec();
         contenuto.extend_from_slice(&valore);
         let byte = parquet(&decimale, 1, PLAIN, &contenuto, None, None);
-        contiene(arrow(&byte), "decimal value");
+        contiene(
+            arrow(&byte),
+            "decimal value",
+            Categoria::ArrowParquet,
+            Fase::Lettura,
+        );
         rifiutato_dal_confine(&byte);
     }
 }
@@ -618,12 +751,14 @@ fn una_pagina_plain_piu_corta_dei_valori_e_un_errore() {
     let mut contenuto = 1_u32.to_le_bytes().to_vec();
     contenuto.push(b'a');
     let byte = parquet(&colonna(BYTE_ARRAY), 3, PLAIN, &contenuto, None, None);
-    assert!(arrow(&byte).is_err());
+    contiene(arrow(&byte), "", Categoria::ArrowParquet, Fase::Lettura);
     rifiutato_dal_confine(&byte);
     let corto = parquet(&colonna(BYTE_ARRAY), 1, PLAIN, &[1, 0], None, None);
     contiene(
         colonna_api::<ByteArrayType>(&corto, None),
         "Not enough bytes",
+        Categoria::FineDati,
+        Fase::Colonna,
     );
     // Il salto dentro una pagina non aveva nessun controllo (una lunghezza
     // oltre la pagina): ora non è qualificato.
@@ -638,6 +773,8 @@ fn una_pagina_plain_piu_corta_dei_valori_e_un_errore() {
     contiene(
         colonna_api::<ByteArrayType>(&oltre, Some(1)),
         parquet::basic::SKIP_NOT_QUALIFIED,
+        Categoria::NonImplementato,
+        Fase::Salto,
     );
 }
 
@@ -657,7 +794,12 @@ fn una_corsa_rle_oltre_u32_e_un_errore() {
         Some((1, &dizionario)),
         None,
     );
-    contiene(arrow(&byte), "RLE run length out of range");
+    contiene(
+        arrow(&byte),
+        "RLE run length out of range",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&byte);
 }
 
@@ -710,7 +852,7 @@ fn i_livelli_di_una_pagina_v2_oltre_i_byte_sono_un_errore() {
             )
             .fine();
         let byte = parquet_con_header(&colonna(INT32), 1, PLAIN, &contenuto, &header, None, None);
-        assert!(arrow(&byte).is_err(), "{definizione} + {ripetizione}");
+        contiene(arrow(&byte), "", Categoria::ArrowParquet, Fase::Lettura);
         rifiutato_dal_confine(&byte);
     }
 }
@@ -754,6 +896,8 @@ fn i_livelli_bit_packed_non_sono_qualificati() {
     contiene(
         colonna_api::<Int32Type>(&byte, None),
         parquet::basic::ENCODING_NOT_QUALIFIED,
+        Categoria::NonImplementato,
+        Fase::Colonna,
     );
     non_qualificata(&livelli_bit_packed(100, &[0xFF, 0xFF]));
     // Controfattuale: gli stessi livelli in RLE (un gruppo bit-packed da 8,
@@ -788,7 +932,12 @@ fn i_livelli_bit_packed_non_sono_qualificati() {
 #[test]
 fn una_pagina_a_dizionario_senza_dizionario_e_un_errore() {
     let byte = parquet(&colonna(INT32), 1, RLE_DICTIONARY, &[1, 2, 0], None, None);
-    contiene(arrow(&byte), "missing dictionary page");
+    contiene(
+        arrow(&byte),
+        "missing dictionary page",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&byte);
 }
 
@@ -1094,20 +1243,64 @@ fn i_semi_del_fuzz_sono_quelli_delle_prove_e_si_rifiutano() {
 
 /// Il lettore Arrow con uno schema Arrow dato (`with_schema`): i batch letti
 /// o l'errore; un panico fa fallire la prova.
-fn arrow_con_schema(byte: &[u8], schema: Schema) -> Result<Vec<RecordBatch>, String> {
+fn arrow_con_schema(byte: &[u8], schema: Schema) -> Result<Vec<RecordBatch>, ErroreDiretto> {
     su_file(byte, |file| {
         std::panic::catch_unwind(move || {
             let opzioni = ArrowReaderOptions::new().with_schema(Arc::new(schema));
             let lettore = ParquetRecordBatchReaderBuilder::try_new_with_options(file, opzioni)
-                .map_err(|e| e.to_string())?
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Apertura))?
                 .build()
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Costruzione))?;
             lettore
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())
+                .map_err(|e| ErroreDiretto::arrow(&e))
         })
         .unwrap_or_else(|carico| panic!("il lettore Arrow va in panico: {}", panico(&*carico)))
     })
+}
+
+/// Il batch atteso viene interamente dalla fixture, inclusi nomi e nullabilita.
+fn successo_batch(byte: &[u8], atteso: RecordBatch) {
+    su_file(byte, |file| {
+        let costruttore = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        assert_eq!(costruttore.schema(), &atteso.schema());
+        let letti: Vec<_> = costruttore
+            .build()
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        if atteso.num_rows() == 0 {
+            assert!(letti.is_empty());
+        } else {
+            assert_eq!(letti, vec![atteso]);
+        }
+    });
+}
+
+fn successo_colonna(byte: &[u8], nullable: bool, valori: ArrayRef) {
+    let schema = Schema::new(vec![Field::new("x", valori.data_type().clone(), nullable)]);
+    successo_batch(
+        byte,
+        RecordBatch::try_new(Arc::new(schema), vec![valori]).unwrap(),
+    );
+}
+
+fn successo_interi(byte: &[u8], nullable: bool, valori: Vec<Option<i32>>) {
+    successo_colonna(byte, nullable, Arc::new(Int32Array::from(valori)));
+}
+
+/// Anche il percorso generico conserva i valori, non solo il conteggio.
+fn successo_interi_generico(byte: &[u8], attesi: &[i32]) {
+    su_file(byte, |file| {
+        let lettore = SerializedFileReader::new(file).unwrap();
+        let gruppo = lettore.get_row_group(0).unwrap();
+        let mut colonna =
+            get_typed_column_reader::<Int32Type>(gruppo.get_column_reader(0).unwrap());
+        let mut valori = Vec::new();
+        let conteggi = colonna.read_records(64, None, None, &mut valori).unwrap();
+        assert_eq!(conteggi, (attesi.len(), attesi.len(), attesi.len()));
+        assert_eq!(valori, attesi);
+    });
 }
 
 /// I valori letti dal lettore Arrow, come testo di debug della colonna.
@@ -1223,7 +1416,12 @@ fn una_pagina_flba_a_dizionario_senza_dizionario_e_un_errore() {
         ..colonna(FLBA)
     };
     let byte = parquet(&flba, 1, RLE_DICTIONARY, &[1, 2, 0], None, None);
-    contiene(arrow(&byte), "missing dictionary page");
+    contiene(
+        arrow(&byte),
+        "missing dictionary page",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&byte);
 }
 
@@ -1245,7 +1443,12 @@ fn un_indice_oltre_le_voci_dichiarate_e_un_errore() {
         Some((1, b"zzyy")),
         None,
     );
-    contiene(arrow(&byte), parquet::basic::DICTIONARY_NOT_AS_DECLARED);
+    contiene(
+        arrow(&byte),
+        parquet::basic::DICTIONARY_NOT_AS_DECLARED,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&byte);
 }
 
@@ -1260,7 +1463,7 @@ fn un_varint_malformato_e_un_errore() {
     let mut largo = vec![1_u8];
     largo.extend_from_slice(&[0x80; 9]);
     largo.push(0x7F);
-    for (nome, indici) in [("11 byte", lungo), ("oltre 64 bit", largo)] {
+    for (_nome, indici) in [("11 byte", lungo), ("oltre 64 bit", largo)] {
         let byte = parquet(
             &colonna(BYTE_ARRAY),
             1,
@@ -1269,7 +1472,7 @@ fn un_varint_malformato_e_un_errore() {
             Some((1, &dizionario)),
             None,
         );
-        assert!(arrow(&byte).is_err(), "{nome}");
+        contiene(arrow(&byte), "", Categoria::ArrowParquet, Fase::Lettura);
         rifiutato_dal_confine(&byte);
     }
 }
@@ -1301,26 +1504,36 @@ fn i_livelli_rle_malformati_sono_un_errore() {
     varint(1 << 33, &mut enorme); // corsa RLE di 2^32
     enorme.push(1);
     let valore_due = [2_u8 << 1, 2]; // corsa di 2, valore 2
-    for (nome, livelli) in [
+    for (_nome, livelli) in [
         ("bit-packed oltre i dati", oltre),
         ("corsa di 2^32", enorme),
         ("valore 2", valore_due.to_vec()),
     ] {
         let byte = opzionale_con_livelli(2, &livelli, &[1, 0, 0, 0, 2, 0, 0, 0]);
-        assert!(arrow(&byte).is_err(), "{nome}");
+        contiene(arrow(&byte), "", Categoria::ArrowParquet, Fase::Lettura);
         rifiutato_dal_confine(&byte);
     }
     // Una corsa bit-packed dichiarata di 3 gruppi con il solo byte che
     // serve: errore, nei due decoder dei livelli.
     let troncata = opzionale_con_livelli(2, &[(3 << 1) | 1, 0b11], &[1, 0, 0, 0, 2, 0, 0, 0]);
-    contiene(arrow(&troncata), "bit-packed run beyond the data");
-    assert!(livelli_generici(&troncata).is_err());
+    contiene(
+        arrow(&troncata),
+        "bit-packed run beyond the data",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
+    contiene(
+        livelli_generici(&troncata),
+        "",
+        Categoria::Generale,
+        Fase::Colonna,
+    );
     // Controfattuali: una corsa RLE di 2 valori presenti, e una corsa
     // bit-packed di un gruppo.
     let byte = opzionale_con_livelli(2, &[2 << 1, 1], &[1, 0, 0, 0, 2, 0, 0, 0]);
-    assert_eq!(valori_arrow(&byte), ["1", "2"]);
+    successo_interi(&byte, true, vec![Some(1), Some(2)]);
     let byte = opzionale_con_livelli(2, &[(1 << 1) | 1, 0b11], &[1, 0, 0, 0, 2, 0, 0, 0]);
-    assert_eq!(valori_arrow(&byte), ["1", "2"]);
+    successo_interi(&byte, true, vec![Some(1), Some(2)]);
 }
 
 /// Secondo giro, punto 7: con una chiave Arrow stretta (`Int8`) l'indice 256 si
@@ -1346,6 +1559,8 @@ fn un_indice_oltre_la_chiave_stretta_e_un_errore() {
     contiene(
         arrow_con_schema(&byte, schema.clone()).map(|batch| batch.len()),
         "out of range for the key type",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
     );
     // Controfattuale: l'indice 0 con la stessa chiave si legge.
     let mut zero = vec![9_u8, 2];
@@ -1396,6 +1611,8 @@ fn una_colonna_flba_come_dizionario_arrow_e_non_supportata() {
         contiene(
             arrow_con_schema(&byte, schema.clone()).map(|batch| batch.len()),
             "FIXED_LEN_BYTE_ARRAY read as an Arrow dictionary",
+            Categoria::NonImplementato,
+            Fase::Costruzione,
         );
     }
     let valido = parquet(&flba, 1, RLE_DICTIONARY, &[1, 2, 0], Some((1, b"zz")), None);
@@ -1424,7 +1641,12 @@ fn i_livelli_v2_oltre_i_byte_letti_sono_un_errore() {
         )
         .fine();
     let byte = parquet_con_header(&colonna(INT32), 1, PLAIN, &contenuto, &header, None, None);
-    contiene(arrow(&byte), "implausible");
+    contiene(
+        arrow(&byte),
+        "implausible",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&byte);
 }
 
@@ -1548,6 +1770,17 @@ fn l_api_per_colonne_rifiuta_le_codifiche_non_qualificate() {
                 DOUBLE => colonna_api::<DoubleType>(&byte, salta),
                 _ => colonna_api::<ByteArrayType>(&byte, salta),
             };
+            esito
+                .as_ref()
+                .expect_err("codifica o salto esclusi")
+                .verifica(
+                    Categoria::NonImplementato,
+                    if salta.is_some() {
+                        Fase::Salto
+                    } else {
+                        Fase::Colonna
+                    },
+                );
             match esito {
                 Err(testo) => assert!(testo.contains(atteso), "{nome} ({salta:?}): {testo}"),
                 Ok(righe) => panic!("{nome} ({salta:?}): letto ({righe} righe)"),
@@ -1556,7 +1789,7 @@ fn l_api_per_colonne_rifiuta_le_codifiche_non_qualificate() {
     }
     // Controfattuale: la stessa pagina in PLAIN si legge.
     let byte = parquet(&colonna(INT32), 1, PLAIN, &7_i32.to_le_bytes(), None, None);
-    assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(1));
+    successo_interi_generico(&byte, &[7]);
 }
 
 // --- Livelli, interi stretti, UTF-8, varint ----------------------------------
@@ -1590,10 +1823,16 @@ fn i_livelli_del_decoder_generico_si_controllano() {
     let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
     // Controfattuale: una lista [1, 2].
     let valida = ripetuta(2, &[1 << 1, 0, 1 << 1, 1], &[2 << 1, 1], &dati);
-    assert_eq!(arrow(&valida), Ok(1));
+    let lista = ListArray::new(
+        Arc::new(Field::new("x", DataType::Int32, false)),
+        arrow_buffer::OffsetBuffer::new(vec![0, 2].into()),
+        Arc::new(Int32Array::from(vec![1, 2])),
+        None,
+    );
+    successo_colonna(&valida, false, Arc::new(lista));
     let mut bit_packed = Vec::new();
     varint((100 << 1) | 1, &mut bit_packed);
-    for (nome, ripetizione, definizione) in [
+    for (_nome, ripetizione, definizione) in [
         (
             "definizione 2 su massimo 1",
             vec![1 << 1, 0, 1 << 1, 1],
@@ -1611,7 +1850,7 @@ fn i_livelli_del_decoder_generico_si_controllano() {
         ),
     ] {
         let byte = ripetuta(2, &ripetizione, &definizione, &dati);
-        assert!(arrow(&byte).is_err(), "{nome}");
+        contiene(arrow(&byte), "", Categoria::ArrowParquet, Fase::Lettura);
         rifiutato_dal_confine(&byte);
     }
     // Indici di dizionario: un valore RLE oltre la larghezza dichiarata (1 bit).
@@ -1623,7 +1862,12 @@ fn i_livelli_del_decoder_generico_si_controllano() {
         Some((1, &testo_plain(&[b"a"]))),
         None,
     );
-    contiene(arrow(&byte), "RLE value wider than the bit width");
+    contiene(
+        arrow(&byte),
+        "RLE value wider than the bit width",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&byte);
 }
 
@@ -1642,7 +1886,12 @@ fn un_intero_stretto_fuori_dalla_larghezza_e_un_errore() {
             ..colonna(INT32)
         };
         let byte = parquet(&stretta, 1, PLAIN, &fuori.to_le_bytes(), None, None);
-        contiene(arrow(&byte), "outside its annotated integer width");
+        contiene(
+            arrow(&byte),
+            "outside its annotated integer width",
+            Categoria::ArrowParquet,
+            Fase::Lettura,
+        );
         rifiutato_dal_confine(&byte);
         let byte = parquet(&stretta, 1, PLAIN, &dentro.to_le_bytes(), None, None);
         su_file(&byte, |file| {
@@ -1671,13 +1920,26 @@ fn un_carattere_utf8_spezzato_fra_due_valori_si_rifiuta() {
     for tipo in [DataType::Utf8, DataType::Utf8View] {
         let schema = Schema::new(vec![Field::new("x", tipo.clone(), false)]);
         let byte = parquet(&testo_annotato, 2, PLAIN, &spezzato, None, None);
-        assert!(arrow_con_schema(&byte, schema.clone()).is_err(), "{tipo}");
-        let byte = parquet(&testo_annotato, 1, PLAIN, &intero, None, None);
-        assert_eq!(
-            arrow_con_schema(&byte, schema).map(|batch| batch[0].num_rows()),
-            Ok(1),
-            "{tipo}"
+        contiene(
+            arrow_con_schema(&byte, schema.clone()),
+            "",
+            Categoria::ArrowParquet,
+            Fase::Lettura,
         );
+        let byte = parquet(&testo_annotato, 1, PLAIN, &intero, None, None);
+        let valori: ArrayRef = match tipo {
+            DataType::Utf8 => Arc::new(plenora_core::arrow::array::StringArray::from(vec![
+                "\u{e9}",
+            ])),
+            DataType::Utf8View => {
+                Arc::new(plenora_core::arrow::array::StringViewArray::from(vec![
+                    "\u{e9}",
+                ]))
+            }
+            _ => unreachable!(),
+        };
+        let atteso = RecordBatch::try_new(Arc::new(schema.clone()), vec![valori]).unwrap();
+        assert_eq!(arrow_con_schema(&byte, schema).unwrap(), vec![atteso]);
     }
     let schema = Schema::new(vec![Field::new(
         "x",
@@ -1696,6 +1958,8 @@ fn un_carattere_utf8_spezzato_fra_due_valori_si_rifiuta() {
     contiene(
         arrow_con_schema(&byte, schema.clone()).map(|batch| batch.len()),
         "non UTF-8",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
     );
     let byte = parquet(
         &testo_annotato,
@@ -1739,7 +2003,7 @@ fn ogni_varint_malformato_ha_il_suo_errore() {
             Some((1, &dizionario)),
             None,
         );
-        contiene(arrow(&byte), atteso);
+        contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
         rifiutato_dal_confine(&byte);
     }
 }
@@ -1762,6 +2026,8 @@ fn un_tipo_testo_su_byte_non_annotati_e_non_supportato() {
         contiene(
             arrow_con_schema(&byte, schema).map(|batch| batch.len()),
             "Incompatible supplied Arrow schema",
+            Categoria::ConversioneArrow,
+            Fase::Apertura,
         );
     }
     assert_eq!(arrow(&byte), Ok(2));
@@ -1819,7 +2085,7 @@ fn un_dizionario_diverso_dal_dichiarato_e_un_errore() {
     let due_valori = testo_plain(&[b"a", b"b"]);
     let dizionario_binario =
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary));
-    for (nome, voci, dizionario) in [
+    for (_nome, voci, dizionario) in [
         ("zero voci con byte", 0, un_valore.clone()),
         ("due voci, una presente", 2, un_valore),
         ("una voce, byte di due", 1, due_valori),
@@ -1832,15 +2098,34 @@ fn un_dizionario_diverso_dal_dichiarato_e_un_errore() {
             Some((voci, &dizionario)),
             None,
         );
-        contiene(arrow(&byte), parquet::basic::DICTIONARY_NOT_AS_DECLARED);
+        contiene(
+            arrow(&byte),
+            parquet::basic::DICTIONARY_NOT_AS_DECLARED,
+            Categoria::ArrowParquet,
+            Fase::Lettura,
+        );
         rifiutato_dal_confine(&byte);
         // Il lettore dei dizionari Arrow e quello delle viste: un errore (le
         // viste riconoscono la fine dei dati prima, con il loro testo).
         for tipo in [dizionario_binario.clone(), DataType::BinaryView] {
             let schema = Schema::new(vec![Field::new("x", tipo.clone(), false)]);
-            assert!(arrow_con_schema(&byte, schema).is_err(), "{nome} {tipo}");
+            contiene(
+                arrow_con_schema(&byte, schema),
+                "",
+                Categoria::ArrowParquet,
+                Fase::Lettura,
+            );
         }
-        assert!(colonna_api::<ByteArrayType>(&byte, None).is_err(), "{nome}");
+        contiene(
+            colonna_api::<ByteArrayType>(&byte, None),
+            "",
+            if voci == 2 {
+                Categoria::FineDati
+            } else {
+                Categoria::Generale
+            },
+            Fase::Colonna,
+        );
     }
     // Il decoder generico: due voci dichiarate e i byte di una, o una voce e
     // i byte di due.
@@ -1855,15 +2140,27 @@ fn un_dizionario_diverso_dal_dichiarato_e_un_errore() {
             None,
         );
         if voci == 1 {
-            contiene(arrow(&byte), parquet::basic::DICTIONARY_NOT_AS_DECLARED);
+            contiene(
+                arrow(&byte),
+                parquet::basic::DICTIONARY_NOT_AS_DECLARED,
+                Categoria::ArrowParquet,
+                Fase::Lettura,
+            );
             contiene(
                 colonna_api::<Int32Type>(&byte, None),
                 parquet::basic::DICTIONARY_NOT_AS_DECLARED,
+                Categoria::Generale,
+                Fase::Colonna,
             );
         } else {
             // Meno byte delle voci: l'errore di fine dati del decoder.
-            assert!(arrow(&byte).is_err());
-            assert!(colonna_api::<Int32Type>(&byte, None).is_err());
+            contiene(arrow(&byte), "", Categoria::ArrowParquet, Fase::Lettura);
+            contiene(
+                colonna_api::<Int32Type>(&byte, None),
+                "Not enough bytes",
+                Categoria::FineDati,
+                Fase::Colonna,
+            );
         }
         rifiutato_dal_confine(&byte);
     }
@@ -1873,7 +2170,12 @@ fn un_dizionario_diverso_dal_dichiarato_e_un_errore() {
         ..colonna(FLBA)
     };
     let byte = parquet(&flba, 1, RLE_DICTIONARY, &[1, 2, 0], Some((1, b"z")), None);
-    contiene(arrow(&byte), parquet::basic::DICTIONARY_NOT_AS_DECLARED);
+    contiene(
+        arrow(&byte),
+        parquet::basic::DICTIONARY_NOT_AS_DECLARED,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     // Controfattuali: le voci dichiarate, esatte.
     let byte = parquet(
         &colonna(INT32),
@@ -1883,8 +2185,8 @@ fn un_dizionario_diverso_dal_dichiarato_e_un_errore() {
         Some((1, &7_i32.to_le_bytes())),
         None,
     );
-    assert_eq!(valori_arrow(&byte), ["7"]);
-    assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(1));
+    successo_interi(&byte, false, vec![Some(7)]);
+    successo_interi_generico(&byte, &[7]);
 }
 
 /// Una pagina di dizionario in una codifica esclusa ha il testo di ogni altro
@@ -1962,7 +2264,12 @@ fn v2_opzionale(righe: i64, nulli: i64, livelli: &[u8]) -> Vec<u8> {
 #[test]
 fn una_pagina_v2_con_livelli_contro_i_valori_e_un_errore() {
     let byte = v2_livelli_contro_valori(&[3, 0]);
-    contiene(arrow(&byte), "data page V2 declares");
+    contiene(
+        arrow(&byte),
+        "data page V2 declares",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&byte);
     // Controfattuale: una corsa RLE di 8 livelli 1, gli 8 valori.
     let byte = v2_livelli_contro_valori(&[8 << 1, 1]);
@@ -2009,17 +2316,34 @@ fn un_dizionario_di_testo_segue_l_annotazione() {
             let schema = Schema::new(vec![Field::new("x", tipo.clone(), false)]);
             let esito = arrow_con_schema(&byte, schema).map(|batch| batch.len());
             if al_lettore {
-                contiene(esito, parquet::basic::BINARY_DICTIONARY_OVER_TEXT);
+                contiene(
+                    esito,
+                    parquet::basic::BINARY_DICTIONARY_OVER_TEXT,
+                    Categoria::NonImplementato,
+                    Fase::Costruzione,
+                );
             } else {
-                assert!(esito.is_err(), "{nome} {tipo}");
+                contiene(
+                    esito,
+                    "Incompatible supplied Arrow schema",
+                    Categoria::ConversioneArrow,
+                    Fase::Apertura,
+                );
             }
         }
         for valori in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
             let tipo = DataType::Dictionary(Box::new(DataType::Int32), Box::new(valori.clone()));
             let schema = Schema::new(vec![Field::new("x", tipo, false)]);
-            let batch = arrow_con_schema(&byte, schema)
+            let batch = arrow_con_schema(&byte, schema.clone())
                 .unwrap_or_else(|errore| panic!("{nome} {valori}: {errore}"));
+            assert_eq!(batch.len(), 1);
+            assert_eq!(batch[0].schema().as_ref(), &schema);
+            assert_eq!(batch[0].num_rows(), 1);
             let colonna = batch[0].column(0);
+            let tipizzato = colonna.as_dictionary::<plenora_core::arrow::array::types::Int32Type>();
+            assert_eq!(tipizzato.keys(), &Int32Array::from(vec![0]));
+            assert_eq!(tipizzato.values().len(), 1);
+            assert_eq!(tipizzato.values().null_count(), 0);
             let dizionario = colonna.as_any_dictionary();
             let testo = match dizionario.values().data_type() {
                 DataType::Utf8 => dizionario.values().as_string::<i32>().value(0).to_owned(),
@@ -2060,18 +2384,26 @@ fn un_salto_dentro_una_pagina_non_e_qualificato() {
     contiene(
         colonna_api::<Int32Type>(&lista_troncata, Some(1)),
         parquet::basic::SKIP_NOT_QUALIFIED,
+        Categoria::NonImplementato,
+        Fase::Salto,
     );
     contiene(
         colonna_api::<ByteArrayType>(&fuori_dizionario, Some(1)),
         parquet::basic::SKIP_NOT_QUALIFIED,
+        Categoria::NonImplementato,
+        Fase::Salto,
     );
     contiene(
         colonna_api::<Int32Type>(&v2, Some(4)),
         parquet::basic::SKIP_NOT_QUALIFIED,
+        Categoria::NonImplementato,
+        Fase::Salto,
     );
     contiene(
         colonna_api::<Int32Type>(&due, Some(1)),
         parquet::basic::SKIP_NOT_QUALIFIED,
+        Categoria::NonImplementato,
+        Fase::Salto,
     );
     // Controfattuale: la pagina si legge.
     assert_eq!(colonna_api::<Int32Type>(&due, None), Ok(2));
@@ -2085,10 +2417,17 @@ fn un_salto_dentro_una_pagina_non_e_qualificato() {
 #[test]
 fn un_salto_di_pagine_intere_non_e_qualificato() {
     let troncata = parquet(&colonna(INT32), 2, PLAIN, &[1, 0, 0, 0], None, None);
-    assert!(colonna_api::<Int32Type>(&troncata, None).is_err());
+    contiene(
+        colonna_api::<Int32Type>(&troncata, None),
+        "Not enough bytes",
+        Categoria::FineDati,
+        Fase::Colonna,
+    );
     contiene(
         colonna_api::<Int32Type>(&troncata, Some(2)),
         parquet::basic::SKIP_NOT_QUALIFIED,
+        Categoria::NonImplementato,
+        Fase::Salto,
     );
     rifiutato_dal_confine(&troncata);
     let intera = parquet(
@@ -2102,9 +2441,11 @@ fn un_salto_di_pagine_intere_non_e_qualificato() {
     contiene(
         colonna_api::<Int32Type>(&intera, Some(2)),
         parquet::basic::SKIP_NOT_QUALIFIED,
+        Categoria::NonImplementato,
+        Fase::Salto,
     );
     assert_eq!(colonna_api::<Int32Type>(&intera, Some(0)), Ok(0));
-    assert_eq!(colonna_api::<Int32Type>(&intera, None), Ok(2));
+    successo_interi_generico(&intera, &[1, 2]);
 }
 
 /// Una pagina deve finire dove finiscono i suoi valori e i suoi livelli:
@@ -2125,8 +2466,13 @@ fn una_pagina_con_byte_o_valori_in_piu_e_un_errore() {
         None,
         None,
     );
-    contiene(arrow(&byte), atteso);
-    contiene(colonna_api::<Int32Type>(&byte, None), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
+    contiene(
+        colonna_api::<Int32Type>(&byte, None),
+        atteso,
+        Categoria::Generale,
+        Fase::Colonna,
+    );
     rifiutato_dal_confine(&byte);
     // BYTE_ARRAY, anche come viste.
     let byte = parquet(
@@ -2137,13 +2483,20 @@ fn una_pagina_con_byte_o_valori_in_piu_e_un_errore() {
         None,
         None,
     );
-    contiene(arrow(&byte), atteso);
-    contiene(colonna_api::<ByteArrayType>(&byte, None), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
+    contiene(
+        colonna_api::<ByteArrayType>(&byte, None),
+        atteso,
+        Categoria::Generale,
+        Fase::Colonna,
+    );
     rifiutato_dal_confine(&byte);
     let schema = Schema::new(vec![Field::new("x", DataType::BinaryView, false)]);
     contiene(
         arrow_con_schema(&byte, schema).map(|batch| batch.len()),
         atteso,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
     );
     // FLBA: due valori di larghezza 2, uno dichiarato.
     let flba = Colonna {
@@ -2151,16 +2504,16 @@ fn una_pagina_con_byte_o_valori_in_piu_e_un_errore() {
         ..colonna(FLBA)
     };
     let byte = parquet(&flba, 1, PLAIN, b"zzyy", None, None);
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     rifiutato_dal_confine(&byte);
     // Livelli di definizione: due corse di 2 per 2 righe (decoder
     // ottimizzato), e lo stesso nei livelli di ripetizione (decoder generico).
     let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
     let byte = opzionale_con_livelli(2, &[2 << 1, 1, 2 << 1, 1], &dati);
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     rifiutato_dal_confine(&byte);
     let byte = ripetuta(2, &[1 << 1, 0, 1 << 1, 1, 2 << 1, 1], &[2 << 1, 1], &dati);
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     // Indici di dizionario: una corsa in più dopo quella del valore.
     let byte = parquet(
         &colonna(BYTE_ARRAY),
@@ -2170,16 +2523,23 @@ fn una_pagina_con_byte_o_valori_in_piu_e_un_errore() {
         Some((1, &testo_plain(&[b"a"]))),
         None,
     );
-    contiene(arrow(&byte), atteso);
-    contiene(colonna_api::<ByteArrayType>(&byte, None), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
+    contiene(
+        colonna_api::<ByteArrayType>(&byte, None),
+        atteso,
+        Categoria::Generale,
+        Fase::Colonna,
+    );
     rifiutato_dal_confine(&byte);
     // Booleani RLE: lunghezza 2, una corsa di un `true`, poi un byte non zero.
     let booleana = colonna(0);
     let byte = parquet(&booleana, 1, RLE, &[2, 0, 0, 0, 2, 1, 5], None, None);
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     contiene(
         colonna_api::<parquet::data_type::BoolType>(&byte, None),
         atteso,
+        Categoria::Generale,
+        Fase::Colonna,
     );
     rifiutato_dal_confine(&byte);
     // Controfattuali: le stesse pagine esatte si leggono.
@@ -2224,7 +2584,7 @@ fn la_fine_della_pagina_tollera_le_forme_di_fastparquet_e_duckdb() {
     assert_eq!(colonna_api::<Int32Type>(&byte, None), Ok(1));
     valori.push(0);
     let byte = parquet(&colonna(INT32), 1, PLAIN, &valori, None, None);
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     rifiutato_dal_confine(&byte);
     // E dopo gli indici di dizionario.
     let mut indici = vec![1_u8, 2, 0];
@@ -2252,7 +2612,7 @@ fn la_fine_della_pagina_tollera_le_forme_di_fastparquet_e_duckdb() {
     assert_eq!(arrow(&byte), Ok(1));
     // Oltre il limite: 33 gruppi (256 valori di riempimento dopo il gruppo).
     let byte = opzionale_con_livelli(2, &corsa_bit_packed(33, 0xA5), &dati);
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     rifiutato_dal_confine(&byte);
     let byte = ripetuta(
         2,
@@ -2260,19 +2620,19 @@ fn la_fine_della_pagina_tollera_le_forme_di_fastparquet_e_duckdb() {
         &corsa_bit_packed(33, 0xA5),
         &dati,
     );
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     // Un byte dopo la corsa, anche zero: dopo i livelli niente coda.
     for coda in [1_u8, 0] {
         let mut dopo = corsa_bit_packed(32, 0);
         dopo.push(coda);
         let byte = opzionale_con_livelli(2, &dopo, &dati);
-        contiene(arrow(&byte), atteso);
+        contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     }
     let byte = opzionale_con_livelli(2, &[2 << 1, 1, 0], &dati);
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     // Un gruppo intero in più in una corsa che non è un blocco di 32.
     let byte = opzionale_con_livelli(2, &corsa_bit_packed(2, 0), &dati);
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     // Pagina v2: nessuna coda dopo i valori.
     let mut valori = 7_i32.to_le_bytes().to_vec();
     valori.extend_from_slice(&[0; 8]);
@@ -2285,7 +2645,7 @@ fn la_fine_della_pagina_tollera_le_forme_di_fastparquet_e_duckdb() {
         None,
         None,
     );
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
 }
 
 /// L'header di una pagina v2: righe, nulli, valori, codifica, lunghezze dei
@@ -2333,10 +2693,17 @@ fn gli_indici_a_larghezza_zero_in_piu_sono_un_errore() {
         Some((1, &dizionario)),
         None,
     );
-    contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+    contiene(
+        arrow(&byte),
+        parquet::basic::PAGE_NOT_AS_DECLARED,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     contiene(
         colonna_api::<ByteArrayType>(&byte, None),
         parquet::basic::PAGE_NOT_AS_DECLARED,
+        Categoria::Generale,
+        Fase::Colonna,
     );
     // Controfattuale: un gruppo, il riempimento del gruppo.
     let byte = parquet(
@@ -2367,8 +2734,18 @@ fn le_righe_di_una_pagina_v2_contro_i_valori_sono_controllate() {
             None,
             None,
         );
-        contiene(arrow(&byte), "rows for");
-        contiene(colonna_api::<Int32Type>(&byte, None), "rows for");
+        contiene(
+            arrow(&byte),
+            "rows for",
+            Categoria::ArrowParquet,
+            Fase::Lettura,
+        );
+        contiene(
+            colonna_api::<Int32Type>(&byte, None),
+            "rows for",
+            Categoria::Generale,
+            Fase::Colonna,
+        );
         rifiutato_dal_confine(&byte);
     }
     let byte = parquet_con_header(
@@ -2410,7 +2787,12 @@ fn uno_stream_di_livelli_senza_livelli_e_un_errore() {
             None,
             None,
         );
-        contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+        contiene(
+            arrow(&byte),
+            parquet::basic::PAGE_NOT_AS_DECLARED,
+            Categoria::ArrowParquet,
+            Fase::Lettura,
+        );
         rifiutato_dal_confine(&byte);
     }
 }
@@ -2433,7 +2815,12 @@ fn le_pagine_vuote_non_fermano_la_lettura() {
     piena.extend_from_slice(&[9, 0, 0, 0]);
     piena.extend(header_v1(2, PLAIN, dati.len()));
     let byte = parquet_con_header(&colonna(INT32), 2, PLAIN, &dati, &piena, None, None);
-    contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+    contiene(
+        arrow(&byte),
+        parquet::basic::PAGE_NOT_AS_DECLARED,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
 }
 
 /// Una pagina v2 compressa senza valori (tutti nulli): la parte compressa
@@ -2465,9 +2852,9 @@ fn una_pagina_compressa_senza_valori_verifica_il_suffisso() {
             .fine();
         let byte = parquet_con_codec(&opzionale, 1, PLAIN, &contenuto, &header, None, None, 1);
         if valido {
-            assert_eq!(arrow(&byte), Ok(1));
+            successo_interi(&byte, true, vec![None]);
         } else {
-            assert!(arrow(&byte).is_err());
+            contiene(arrow(&byte), "", Categoria::ArrowParquet, Fase::Lettura);
             rifiutato_dal_confine(&byte);
         }
     }
@@ -2496,12 +2883,19 @@ fn lista_v2(righe: i64) -> Vec<u8> {
 /// qualificato.
 #[test]
 fn le_righe_di_una_pagina_v2_ripetuta_si_contano() {
-    contiene(arrow(&lista_v2(2)), "rows but its levels start");
+    contiene(
+        arrow(&lista_v2(2)),
+        "rows but its levels start",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&lista_v2(2));
     assert_eq!(arrow(&lista_v2(1)), Ok(1));
     contiene(
         colonna_api::<Int32Type>(&lista_v2(1), Some(1)),
         parquet::basic::SKIP_NOT_QUALIFIED,
+        Categoria::NonImplementato,
+        Fase::Salto,
     );
 }
 
@@ -2529,8 +2923,13 @@ fn le_corse_vuote_in_coda_contano_come_byte() {
             Some((1, &dizionario)),
             None,
         );
-        contiene(arrow(&byte), atteso);
-        contiene(colonna_api::<ByteArrayType>(&byte, None), atteso);
+        contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
+        contiene(
+            colonna_api::<ByteArrayType>(&byte, None),
+            atteso,
+            Categoria::Generale,
+            Fase::Colonna,
+        );
     }
     // Pagina v2: nessuno zero dopo gli indici.
     let contenuto = indici(&[0]);
@@ -2552,13 +2951,13 @@ fn le_corse_vuote_in_coda_contano_come_byte() {
         Some((1, &dizionario)),
         None,
     );
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     // Livelli: uno zero dopo, nel decoder generico e in quello ottimizzato.
     let dati = [1_u8, 0, 0, 0, 2, 0, 0, 0];
     let byte = ripetuta(2, &[1 << 1, 0, 1 << 1, 1, 0], &[2 << 1, 1], &dati);
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     let byte = opzionale_con_livelli(2, &[2 << 1, 1, 0x80, 0], &dati);
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     // Una pagina tutta nulla: lo stream degli indici è solo la sua
     // larghezza e la coda, e il primo indicatore si leggeva già nel
     // `set_data` (9 zeri passavano come 8, uno in v2 come nessuno).
@@ -2586,15 +2985,23 @@ fn le_corse_vuote_in_coda_contano_come_byte() {
         vec![0x01],
     ] {
         // Un varint non minimo si rifiuta appena letto.
-        match arrow(&tutta_nulla(&coda)) {
-            Err(testo) => assert!(
-                testo.contains(atteso) || testo.contains("varint not minimal"),
-                "{testo}"
-            ),
-            Ok(righe) => panic!("letto ({righe} righe)"),
-        }
+        let motivo = if coda.starts_with(&[0x80, 0]) {
+            "varint not minimal"
+        } else {
+            atteso
+        };
+        contiene(
+            arrow(&tutta_nulla(&coda)),
+            motivo,
+            Categoria::ArrowParquet,
+            Fase::Lettura,
+        );
     }
-    assert_eq!(arrow(&tutta_nulla(&[0; 8])), Ok(1));
+    successo_colonna(
+        &tutta_nulla(&[0; 8]),
+        true,
+        Arc::new(BinaryArray::from(vec![None::<&[u8]>])),
+    );
     let mut v2 = vec![1 << 1, 0, 1, 0];
     let lunghezza = v2.len();
     let byte = parquet_con_header(
@@ -2606,7 +3013,7 @@ fn le_corse_vuote_in_coda_contano_come_byte() {
         Some((1, &dizionario)),
         None,
     );
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     v2.pop();
     let byte = parquet_con_header(
         &nulla,
@@ -2617,7 +3024,11 @@ fn le_corse_vuote_in_coda_contano_come_byte() {
         Some((1, &dizionario)),
         None,
     );
-    assert_eq!(arrow(&byte), Ok(1));
+    successo_colonna(
+        &byte,
+        true,
+        Arc::new(BinaryArray::from(vec![None::<&[u8]>])),
+    );
     // Controfattuale: 8 zeri dopo gli indici di una pagina v1.
     let byte = parquet(
         &colonna(BYTE_ARRAY),
@@ -2627,7 +3038,11 @@ fn le_corse_vuote_in_coda_contano_come_byte() {
         Some((1, &dizionario)),
         None,
     );
-    assert_eq!(valori_arrow(&byte), ["a"]);
+    successo_colonna(
+        &byte,
+        false,
+        Arc::new(BinaryArray::from(vec![b"a".as_slice()])),
+    );
 }
 
 /// La coda di fastparquet vale anche per FLBA (il lettore Arrow rifiutava il
@@ -2652,7 +3067,12 @@ fn la_coda_di_fastparquet_vale_anche_per_flba() {
         None,
         None,
     );
-    contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+    contiene(
+        arrow(&byte),
+        parquet::basic::PAGE_NOT_AS_DECLARED,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
 }
 
 /// Il riempimento di `DuckDB` solo nella sua forma: pagina v1, larghezza
@@ -2687,7 +3107,7 @@ fn il_riempimento_di_duckdb_solo_nella_sua_forma() {
         None,
         None,
     );
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     // Larghezza 0: un dizionario di una voce, un blocco di 32 gruppi.
     let byte = parquet(
         &colonna(BYTE_ARRAY),
@@ -2697,7 +3117,7 @@ fn il_riempimento_di_duckdb_solo_nella_sua_forma() {
         Some((1, &testo_plain(&[b"a"]))),
         None,
     );
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
 }
 
 /// Una pagina non decompressa (codec `UNCOMPRESSED`) dichiara la sua
@@ -2720,7 +3140,12 @@ fn la_dimensione_non_compressa_di_una_pagina_si_confronta() {
         )
         .fine();
     let byte = parquet_con_header(&colonna(INT32), 1, PLAIN, &dati, &header, None, None);
-    contiene(arrow(&byte), "declares 3 bytes");
+    contiene(
+        arrow(&byte),
+        "declares 3 bytes",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&byte);
 }
 
@@ -2749,10 +3174,12 @@ fn il_blocco_di_duckdb_solo_per_livelli_e_indici_letti() {
     let mut booleani = 33_u32.to_le_bytes().to_vec();
     booleani.extend(blocco(1));
     let byte = parquet(&colonna(0), 1, RLE, &booleani, None, None);
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
     contiene(
         colonna_api::<parquet::data_type::BoolType>(&byte, None),
         atteso,
+        Categoria::Generale,
+        Fase::Colonna,
     );
     // Indici di una pagina tutta nulla: il blocco intero, nessuno letto.
     let dizionario = testo_plain(&[b"a"]);
@@ -2775,7 +3202,12 @@ fn il_blocco_di_duckdb_solo_per_livelli_e_indici_letti() {
     };
     let mut indici = vec![1_u8];
     indici.extend(blocco(0));
-    contiene(arrow(&pagina(&[1 << 1, 0], &indici)), atteso);
+    contiene(
+        arrow(&pagina(&[1 << 1, 0], &indici)),
+        atteso,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     // Controfattuale: un indice letto dal blocco.
     assert_eq!(valori_arrow(&pagina(&[1 << 1, 1], &indici)), ["a"]);
 }
@@ -2802,10 +3234,12 @@ fn una_corsa_vuota_prima_dei_valori_e_un_errore() {
             Some((1, &dizionario)),
             None,
         );
-        assert!(arrow(&byte).is_err(), "{indici:02x?}");
-        assert!(
-            colonna_api::<ByteArrayType>(&byte, None).is_err(),
-            "{indici:02x?}"
+        contiene(arrow(&byte), "", Categoria::ArrowParquet, Fase::Lettura);
+        contiene(
+            colonna_api::<ByteArrayType>(&byte, None),
+            "",
+            Categoria::Generale,
+            Fase::Colonna,
         );
         let v2 = parquet_con_header(
             &colonna(BYTE_ARRAY),
@@ -2816,7 +3250,7 @@ fn una_corsa_vuota_prima_dei_valori_e_un_errore() {
             Some((1, &dizionario)),
             None,
         );
-        assert!(arrow(&v2).is_err(), "v2 {indici:02x?}");
+        contiene(arrow(&v2), "", Categoria::ArrowParquet, Fase::Lettura);
     }
     for livelli in [
         vec![0x01_u8, 2 << 1, 1],
@@ -2824,26 +3258,36 @@ fn una_corsa_vuota_prima_dei_valori_e_un_errore() {
         vec![0x80, 0, 2 << 1, 1],
     ] {
         let byte = opzionale_con_righe(2, &livelli);
-        assert!(arrow(&byte).is_err(), "ottimizzato {livelli:02x?}");
-        assert!(livelli_generici(&byte).is_err(), "generico {livelli:02x?}");
+        contiene(arrow(&byte), "", Categoria::ArrowParquet, Fase::Lettura);
+        contiene(
+            livelli_generici(&byte),
+            "",
+            Categoria::Generale,
+            Fase::Colonna,
+        );
     }
 }
 
 /// I livelli di definizione letti dal decoder generico (API per colonne,
 /// non il decoder ottimizzato del lettore Arrow): la validità per riga o
 /// l'errore.
-fn livelli_generici(byte: &[u8]) -> Result<Vec<bool>, String> {
+fn livelli_generici(byte: &[u8]) -> Result<Vec<bool>, ErroreDiretto> {
     su_file(byte, |file| {
         std::panic::catch_unwind(move || {
-            let lettore = SerializedFileReader::new(file).map_err(|e| e.to_string())?;
-            let gruppo = lettore.get_row_group(0).map_err(|e| e.to_string())?;
-            let colonna = gruppo.get_column_reader(0).map_err(|e| e.to_string())?;
+            let lettore = SerializedFileReader::new(file)
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Apertura))?;
+            let gruppo = lettore
+                .get_row_group(0)
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Gruppo))?;
+            let colonna = gruppo
+                .get_column_reader(0)
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::SelezioneColonna))?;
             let mut tipizzata = get_typed_column_reader::<Int32Type>(colonna);
             let (mut definizioni, mut valori) = (Vec::new(), Vec::new());
             loop {
                 let (righe, _, _) = tipizzata
                     .read_records(64, Some(&mut definizioni), None, &mut valori)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| ErroreDiretto::parquet(&e, Fase::Colonna))?;
                 if righe == 0 {
                     break;
                 }
@@ -2856,16 +3300,16 @@ fn livelli_generici(byte: &[u8]) -> Result<Vec<bool>, String> {
 
 /// La validità per riga letta dal lettore Arrow (decoder ottimizzato dei
 /// livelli a larghezza 1), o l'errore.
-fn livelli_ottimizzati(byte: &[u8]) -> Result<Vec<bool>, String> {
+fn livelli_ottimizzati(byte: &[u8]) -> Result<Vec<bool>, ErroreDiretto> {
     let batch = su_file(byte, |file| {
         std::panic::catch_unwind(move || {
             let lettore = ParquetRecordBatchReaderBuilder::try_new(file)
-                .map_err(|e| e.to_string())?
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Apertura))?
                 .build()
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Costruzione))?;
             lettore
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())
+                .map_err(|e| ErroreDiretto::arrow(&e))
         })
         .unwrap_or_else(|carico| panic!("il lettore Arrow va in panico: {}", panico(&*carico)))
     })?;
@@ -2914,7 +3358,7 @@ fn i_due_decoder_dei_livelli_danno_lo_stesso_esito() {
             }
             (Err(a), Err(b)) => assert_eq!(
                 a.strip_prefix("Parquet argument error: ").unwrap_or(a),
-                b,
+                b.as_ref(),
                 "{righe} righe, livelli {livelli:02x?}"
             ),
             _ => panic!(
@@ -2942,7 +3386,12 @@ fn una_pagina_v2_comincia_su_un_confine_di_record() {
     contenuto.extend_from_slice(&[1, 0, 0, 0, 2, 0, 0, 0]);
     let header = header_v2(1, 0, 2, PLAIN, 2, 2, contenuto.len(), contenuto.len());
     let byte = parquet_con_header(&lista, 2, PLAIN, &contenuto, &header, None, None);
-    contiene(arrow(&byte), "does not start on a record boundary");
+    contiene(
+        arrow(&byte),
+        "does not start on a record boundary",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&byte);
     // Controfattuale: `[0, 1]`, una riga di due elementi.
     assert_eq!(arrow(&lista_v2(1)), Ok(1));
@@ -2963,11 +3412,16 @@ fn una_corsa_troncata_o_enorme_e_un_errore() {
         vec![0x81, 0x80, 0x80, 0x80, 0x04, 0x01],
     ] {
         let byte = opzionale_con_righe(8, &livelli);
-        contiene(arrow(&byte), atteso);
-        assert!(livelli_generici(&byte).is_err(), "{livelli:02x?}");
+        contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
+        contiene(
+            livelli_generici(&byte),
+            "",
+            Categoria::Generale,
+            Fase::Colonna,
+        );
         rifiutato_dal_confine(&byte);
         let v2 = v2_opzionale(8, 0, &livelli);
-        assert!(arrow(&v2).is_err(), "v2 {livelli:02x?}");
+        contiene(arrow(&v2), "", Categoria::ArrowParquet, Fase::Lettura);
     }
     // Indici di una pagina tutta nulla: un blocco senza i suoi byte.
     let nulla = Colonna {
@@ -2984,7 +3438,7 @@ fn una_corsa_troncata_o_enorme_e_un_errore() {
         Some((1, &testo_plain(&[b"a"]))),
         None,
     );
-    contiene(arrow(&byte), atteso);
+    contiene(arrow(&byte), atteso, Categoria::ArrowParquet, Fase::Lettura);
 }
 
 /// I booleani `RLE` finiscono alla loro lunghezza prefissata: la coda di
@@ -2994,10 +3448,17 @@ fn una_corsa_troncata_o_enorme_e_un_errore() {
 fn i_booleani_rle_non_hanno_coda() {
     let booleana = colonna(0);
     let byte = parquet(&booleana, 1, RLE, &[2, 0, 0, 0, 2, 1, 0], None, None);
-    contiene(arrow(&byte), parquet::basic::PAGE_NOT_AS_DECLARED);
+    contiene(
+        arrow(&byte),
+        parquet::basic::PAGE_NOT_AS_DECLARED,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     contiene(
         colonna_api::<parquet::data_type::BoolType>(&byte, None),
         parquet::basic::PAGE_NOT_AS_DECLARED,
+        Categoria::Generale,
+        Fase::Colonna,
     );
     let byte = parquet(&booleana, 1, RLE, &[2, 0, 0, 0, 2, 1], None, None);
     assert_eq!(arrow(&byte), Ok(1));
@@ -3053,7 +3514,12 @@ fn i_dizionari_di_un_column_chunk_sono_uno_e_plain() {
         (flba, b"a".as_slice(), b"b".as_slice()),
     ] {
         let doppio = con_pagine(&colonna, 1, PLAIN, &[primo, secondo], &[1, 2, 0]);
-        contiene(arrow(&doppio), parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE);
+        contiene(
+            arrow(&doppio),
+            parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+            Categoria::ArrowParquet,
+            Fase::Lettura,
+        );
         if colonna.tipo == BYTE_ARRAY {
             for tipo in [
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
@@ -3063,15 +3529,24 @@ fn i_dizionari_di_un_column_chunk_sono_uno_e_plain() {
                 contiene(
                     arrow_con_schema(&doppio, schema).map(|batch| batch.len()),
                     parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+                    Categoria::ArrowParquet,
+                    Fase::Lettura,
                 );
             }
             contiene(
                 colonna_api::<ByteArrayType>(&doppio, None),
                 parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+                Categoria::Generale,
+                Fase::Colonna,
             );
         }
         let rle = con_pagine(&colonna, 1, RLE_DICTIONARY, &[primo], &[1, 2, 0]);
-        contiene(arrow(&rle), "encoding type for dictionary");
+        contiene(
+            arrow(&rle),
+            "encoding type for dictionary",
+            Categoria::ArrowParquet,
+            Fase::Lettura,
+        );
         // Controfattuali: un dizionario PLAIN, e PLAIN_DICTIONARY (2).
         for codifica in [PLAIN, 2] {
             let uno = con_pagine(&colonna, 1, codifica, &[primo], &[1, 2, 0]);
@@ -3277,7 +3752,7 @@ fn l_oracolo_dei_livelli_copre_v2_blocchi_e_guasti() {
                 (Ok(a), Ok(b)) => assert_eq!(a, b, "v2 {v2}, livelli {stream:02x?}"),
                 (Err(a), Err(b)) => assert_eq!(
                     a.strip_prefix("Parquet argument error: ").unwrap_or(a),
-                    b,
+                    b.as_ref(),
                     "v2 {v2}, livelli {stream:02x?}"
                 ),
                 _ => {
@@ -3296,11 +3771,37 @@ fn l_oracolo_dei_livelli_copre_v2_blocchi_e_guasti() {
             match testo_atteso {
                 None => {
                     assert_eq!(ottimizzato.as_ref(), Ok(&livelli), "v2 {v2}, {stream:02x?}");
+                    assert_eq!(generico.as_ref(), Ok(&livelli), "v2 {v2}, {stream:02x?}");
+                    let mut prossimo = 0;
+                    let valori = livelli
+                        .iter()
+                        .map(|presente| {
+                            if *presente {
+                                prossimo += 1;
+                                Some(prossimo)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    successo_interi(&byte, true, valori);
                     letti += 1;
                 }
                 Some(testo) => {
                     for (decoder, esito) in [("ottimizzato", &ottimizzato), ("generico", &generico)]
                     {
+                        esito.as_ref().expect_err("stream guasto").verifica(
+                            if decoder == "ottimizzato" {
+                                Categoria::ArrowParquet
+                            } else {
+                                Categoria::Generale
+                            },
+                            if decoder == "ottimizzato" {
+                                Fase::Lettura
+                            } else {
+                                Fase::Colonna
+                            },
+                        );
                         match esito {
                             Err(errore) => assert!(
                                 errore.contains(testo),
@@ -3316,7 +3817,7 @@ fn l_oracolo_dei_livelli_copre_v2_blocchi_e_guasti() {
                     };
                     assert_eq!(
                         a.strip_prefix("Parquet argument error: ").unwrap_or(a),
-                        b,
+                        b.as_ref(),
                         "v2 {v2}, {stream:02x?}"
                     );
                     rifiutati += 1;
@@ -3355,10 +3856,17 @@ fn il_blocco_in_v2_a_larghezza_due_e_un_errore() {
         Some((3, &dizionario)),
         None,
     );
-    contiene(arrow(&v2), parquet::basic::PAGE_NOT_AS_DECLARED);
+    contiene(
+        arrow(&v2),
+        parquet::basic::PAGE_NOT_AS_DECLARED,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     contiene(
         colonna_api::<ByteArrayType>(&v2, None),
         parquet::basic::PAGE_NOT_AS_DECLARED,
+        Categoria::Generale,
+        Fase::Colonna,
     );
 }
 
@@ -3434,7 +3942,7 @@ fn con_campi(
 #[test]
 fn le_statistiche_hanno_conteggi_non_negativi_e_la_lunghezza_esatta() {
     let atteso = |byte: &[u8], testo: &str| {
-        contiene(arrow(byte), testo);
+        contiene(arrow(byte), testo, Categoria::Generale, Fase::Apertura);
         rifiutato_dal_confine(byte);
     };
     // Campo 4 `distinct_count` (i64), negativo.
@@ -3491,7 +3999,12 @@ fn i_metadati_negativi_sono_un_errore() {
     for posizione in posizioni {
         let mut rotto = byte.clone();
         rotto[posizione] = 0x07;
-        contiene(arrow(&rotto), "negative offset, size or count");
+        contiene(
+            arrow(&rotto),
+            "negative offset, size or count",
+            Categoria::Generale,
+            Fase::Apertura,
+        );
         rifiutato_dal_confine(&rotto);
     }
     assert_eq!(arrow(&byte), Ok(1));
@@ -3574,7 +4087,12 @@ fn i_campi_negativi_del_footer_sono_un_errore() {
         ("FileMetaData.num_rows", con_campi(|m| m, |g| g, -1)),
     ];
     for (nome, byte) in casi {
-        match arrow(&byte) {
+        let esito = arrow(&byte);
+        esito
+            .as_ref()
+            .expect_err("conteggio negativo")
+            .verifica(Categoria::Generale, Fase::Apertura);
+        match esito {
             Err(errore) => assert!(errore.contains(atteso), "{nome}: {errore}"),
             Ok(righe) => panic!("{nome}: letto ({righe} righe)"),
         }
@@ -3600,7 +4118,7 @@ fn i_campi_negativi_del_footer_sono_un_errore() {
             1,
         ),
     ] {
-        assert_eq!(arrow(&byte), Ok(1));
+        successo_interi(&byte, false, vec![Some(7)]);
     }
 }
 
@@ -3647,28 +4165,40 @@ fn le_statistiche_di_pagina_flba_hanno_la_larghezza_del_tipo() {
                         .build(),
                 )
                 .build();
-            let lettore =
-                SerializedFileReader::new_with_options(file, opzioni).map_err(|e| e.to_string())?;
-            let gruppo = lettore.get_row_group(0).map_err(|e| e.to_string())?;
+            let lettore = SerializedFileReader::new_with_options(file, opzioni)
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Apertura))?;
+            let gruppo = lettore
+                .get_row_group(0)
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Gruppo))?;
             let mut lettore_di_pagine = gruppo
                 .get_column_page_reader(0)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::SelezioneColonna))?;
             let mut lette = 0;
             while let Some(letta) = lettore_di_pagine
                 .get_next_page()
-                .map_err(|e| e.to_string())?
+                .map_err(|e| ErroreDiretto::parquet(&e, Fase::Colonna))?
             {
-                assert!(letta.statistics().is_some());
+                assert_eq!(
+                    letta.statistics(),
+                    Some(&statistiche_flba_attese(b"zz", None))
+                );
                 lette += 1;
             }
-            Ok::<usize, String>(lette)
+            Ok::<usize, ErroreDiretto>(lette)
         })
     };
     for (minimo, massimo) in [(&b"z"[..], &b"zz"[..]), (&b"zzz"[..], &b"zz"[..])] {
-        let errore = leggi(&pagina(minimo, massimo)).unwrap_err();
+        let errore = leggi(&pagina(minimo, massimo))
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
+        errore.verifica(Categoria::Generale, Fase::Colonna);
         assert!(errore.contains("statistic of the wrong width"), "{errore}");
     }
     assert_eq!(leggi(&pagina(b"zz", b"zz")), Ok(1));
+    successo_colonna(
+        &pagina(b"zz", b"zz"),
+        false,
+        Arc::new(FixedSizeBinaryArray::try_from_iter([b"zz"].into_iter()).unwrap()),
+    );
 }
 
 /// Lo scrittore del fork tronca il minimo e il massimo a 64 byte e li marca
@@ -3718,9 +4248,29 @@ fn una_colonna_flba_lunga_scritta_dal_fork_si_rilegge() {
     assert_eq!(tabella.num_rows(), 5);
 }
 
+fn statistiche_flba_attese(
+    valore: &[u8],
+    esatta: Option<bool>,
+) -> parquet::file::statistics::Statistics {
+    use parquet::data_type::{ByteArray, FixedLenByteArray};
+    use parquet::file::statistics::{Statistics, ValueStatistics};
+    let valore = FixedLenByteArray::from(ByteArray::from(valore.to_vec()));
+    Statistics::FixedLenByteArray(
+        ValueStatistics::new(Some(valore.clone()), Some(valore), None, None, false)
+            .with_min_is_exact(esatta.unwrap_or(false))
+            .with_max_is_exact(esatta.unwrap_or(false)),
+    )
+}
+
 /// Le pagine di un Parquet di un row group e una colonna, lette con le
 /// statistiche di pagina esposte (`set_read_page_statistics`).
-fn pagine_con_statistiche(byte: &[u8]) -> Result<usize, String> {
+fn pagine_con_statistiche(byte: &[u8]) -> Result<usize, ErroreDiretto> {
+    statistiche_di_pagina(byte).map(|statistiche| statistiche.len())
+}
+
+fn statistiche_di_pagina(
+    byte: &[u8],
+) -> Result<Vec<parquet::file::statistics::Statistics>, ErroreDiretto> {
     use parquet::file::properties::ReaderProperties;
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::{ReadOptionsBuilder, SerializedFileReader};
@@ -3732,21 +4282,27 @@ fn pagine_con_statistiche(byte: &[u8]) -> Result<usize, String> {
                     .build(),
             )
             .build();
-        let lettore =
-            SerializedFileReader::new_with_options(file, opzioni).map_err(|e| e.to_string())?;
-        let gruppo = lettore.get_row_group(0).map_err(|e| e.to_string())?;
+        let lettore = SerializedFileReader::new_with_options(file, opzioni)
+            .map_err(|e| ErroreDiretto::parquet(&e, Fase::Apertura))?;
+        let gruppo = lettore
+            .get_row_group(0)
+            .map_err(|e| ErroreDiretto::parquet(&e, Fase::Gruppo))?;
         let mut lettore_di_pagine = gruppo
             .get_column_page_reader(0)
-            .map_err(|e| e.to_string())?;
-        let mut lette = 0;
+            .map_err(|e| ErroreDiretto::parquet(&e, Fase::SelezioneColonna))?;
+        let mut lette = Vec::new();
         while let Some(letta) = lettore_di_pagine
             .get_next_page()
-            .map_err(|e| e.to_string())?
+            .map_err(|e| ErroreDiretto::parquet(&e, Fase::Colonna))?
         {
-            assert!(letta.statistics().is_some());
-            lette += 1;
+            lette.push(
+                letta
+                    .statistics()
+                    .expect("statistiche della fixture")
+                    .clone(),
+            );
         }
-        Ok::<usize, String>(lette)
+        Ok::<_, ErroreDiretto>(lette)
     })
 }
 
@@ -3759,6 +4315,7 @@ fn pagine_con_statistiche(byte: &[u8]) -> Result<usize, String> {
 /// si verificano anche con le proprietà di default, che non le espongono:
 /// prima il decoder le saltava senza controllarle.
 #[test]
+#[allow(clippy::too_many_lines)] // Fixture e attesi espliciti tenuti insieme.
 fn la_matrice_delle_statistiche_flba() {
     const LARGHEZZA: usize = 4;
     let flba = Colonna {
@@ -3820,12 +4377,49 @@ fn la_matrice_delle_statistiche_flba() {
                     assert_eq!(esito, Ok(1), "{dove}, {caso}");
                 } else {
                     let errore = esito.expect_err(&format!("{dove}, {caso}: letto"));
+                    errore.verifica(
+                        if dove == "pagina" {
+                            Categoria::ArrowParquet
+                        } else {
+                            Categoria::Generale
+                        },
+                        if dove == "chunk" {
+                            Fase::Apertura
+                        } else if dove == "pagina" {
+                            Fase::Lettura
+                        } else {
+                            Fase::Colonna
+                        },
+                    );
                     assert!(
                         errore.contains("statistic of the wrong width"),
                         "{dove}, {caso}: {errore}"
                     );
                 }
                 verificati += 1;
+            }
+            if ammessa {
+                let attese = statistiche_flba_attese(&vec![7; lunghezza], esatta);
+                assert_eq!(
+                    statistiche_di_pagina(&nella_pagina).unwrap(),
+                    vec![attese.clone()]
+                );
+                su_file(&nel_chunk, |file| {
+                    let lettore = SerializedFileReader::new(file).unwrap();
+                    assert_eq!(
+                        lettore.metadata().row_group(0).column(0).statistics(),
+                        Some(&attese)
+                    );
+                });
+                for byte in [&nel_chunk, &nella_pagina] {
+                    successo_colonna(
+                        byte,
+                        false,
+                        Arc::new(
+                            FixedSizeBinaryArray::try_from_iter([contenuto].into_iter()).unwrap(),
+                        ),
+                    );
+                }
             }
             if !ammessa {
                 rifiutato_dal_confine(&nel_chunk);
@@ -3877,10 +4471,17 @@ fn una_pagina_d_indice_fra_le_pagine_e_rifiutata() {
     };
     for contenuto in [&[][..], &[0xFF, 0xFF, 0xFF][..]] {
         let byte = con_indice(contenuto);
-        contiene(arrow(&byte), parquet::basic::PAGE_TYPE_NOT_QUALIFIED);
+        contiene(
+            arrow(&byte),
+            parquet::basic::PAGE_TYPE_NOT_QUALIFIED,
+            Categoria::ArrowParquet,
+            Fase::Lettura,
+        );
         contiene(
             colonna_api::<Int32Type>(&byte, None),
             parquet::basic::PAGE_TYPE_NOT_QUALIFIED,
+            Categoria::NonImplementato,
+            Fase::Colonna,
         );
         let dir = cartella();
         let percorso = dir.path().join("i.parquet");
@@ -3893,6 +4494,7 @@ fn una_pagina_d_indice_fra_le_pagine_e_rifiutata() {
         )
         .expect_err("pagina d'indice");
         assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+        assert_eq!(errore.phase(), ErrorPhase::Validate);
     }
     // Controfattuale: le due pagine senza la pagina d'indice si leggono.
     let mut dati = 1_i32.to_le_bytes().to_vec();
@@ -3950,13 +4552,27 @@ fn le_statistiche_deprecate_si_verificano_anche_se_non_scelte() {
         )
     };
     let lungo = [1_u8, 0, 0, 0, 0xFF];
-    for byte in [con_statistiche(statistiche(&lungo)), nella_pagina(&lungo)] {
-        contiene(arrow(&byte), "statistic of the wrong width");
+    for (byte, categoria, fase) in [
+        (
+            con_statistiche(statistiche(&lungo)),
+            Categoria::Generale,
+            Fase::Apertura,
+        ),
+        (nella_pagina(&lungo), Categoria::ArrowParquet, Fase::Lettura),
+    ] {
+        contiene(
+            arrow(&byte),
+            "statistic of the wrong width",
+            categoria,
+            fase,
+        );
         rifiutato_dal_confine(&byte);
     }
     contiene(
         pagine_con_statistiche(&nella_pagina(&lungo)),
         "statistic of the wrong width",
+        Categoria::Generale,
+        Fase::Colonna,
     );
     // Controfattuale: un `min` deprecato di 4 byte.
     let giusto = [1_u8, 0, 0, 0];
@@ -3975,6 +4591,7 @@ fn le_statistiche_deprecate_si_verificano_anche_se_non_scelte() {
 /// dizionario in prima pagina senza la dichiarazione si legge: lo scrivono
 /// parquet-mr e Impala nei file storici (7 dei 106 file di prova).
 #[test]
+#[allow(clippy::too_many_lines)] // Fixture e attesi espliciti tenuti insieme.
 fn un_dizionario_dopo_i_dati_e_rifiutato() {
     let dizionario = |valore: &[u8]| {
         let lunghezza = i64::try_from(valore.len()).unwrap();
@@ -4004,10 +4621,17 @@ fn un_dizionario_dopo_i_dati_e_rifiutato() {
         )
     };
     let intero = dopo(&colonna(INT32), &7_i32.to_le_bytes(), &9_i32.to_le_bytes());
-    contiene(arrow(&intero), parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE);
+    contiene(
+        arrow(&intero),
+        parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     contiene(
         colonna_api::<Int32Type>(&intero, None),
         parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+        Categoria::Generale,
+        Fase::Colonna,
     );
     rifiutato_dal_confine(&intero);
     let testo = dopo(
@@ -4015,7 +4639,12 @@ fn un_dizionario_dopo_i_dati_e_rifiutato() {
         &testo_plain(&[b"a"]),
         &testo_plain(&[b"b"]),
     );
-    contiene(arrow(&testo), parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE);
+    contiene(
+        arrow(&testo),
+        parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     for tipo in [
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
         DataType::BinaryView,
@@ -4024,11 +4653,15 @@ fn un_dizionario_dopo_i_dati_e_rifiutato() {
         contiene(
             arrow_con_schema(&testo, schema).map(|batch| batch.len()),
             parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+            Categoria::ArrowParquet,
+            Fase::Lettura,
         );
     }
     contiene(
         colonna_api::<ByteArrayType>(&testo, None),
         parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+        Categoria::Generale,
+        Fase::Colonna,
     );
     let flba = Colonna {
         larghezza: Some(1),
@@ -4037,6 +4670,8 @@ fn un_dizionario_dopo_i_dati_e_rifiutato() {
     contiene(
         arrow(&dopo(&flba, b"a", b"b")),
         parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
     );
     // Il footer dichiara un dizionario all'inizio del chunk, e la prima
     // pagina è di dati.
@@ -4044,6 +4679,8 @@ fn un_dizionario_dopo_i_dati_e_rifiutato() {
     contiene(
         arrow(&dichiarato),
         parquet::basic::DICTIONARY_PAGE_OUT_OF_PLACE,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
     );
     rifiutato_dal_confine(&dichiarato);
     // Controfattuali: senza la dichiarazione la stessa pagina si legge, e un
@@ -4137,7 +4774,12 @@ fn una_pagina_oltre_il_column_chunk_e_rifiutata() {
     };
     // Il chunk dichiarato senza l'header del dizionario, come parquet-mr.
     let troncato = costruisci(pagine - lunghezza_header_dizionario);
-    contiene(arrow(&troncato), "Invalid page header");
+    contiene(
+        arrow(&troncato),
+        "Invalid page header",
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&troncato);
     // Controfattuale: con la dimensione giusta si legge.
     let giusto = costruisci(pagine);
@@ -4171,10 +4813,12 @@ fn un_tipo_logico_non_qualificato_e_rifiutato() {
     let byte = parquet(&ignoto, 1, PLAIN, &testo_plain(&[b"x"]), None, None);
     let errore = leggi(&byte).expect_err("tipo logico non riconosciuto");
     assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+    assert_eq!(errore.phase(), ErrorPhase::Validate);
     // `VARIANT` (16) su un gruppo di due colonne di byte, come lo scrivono
     // le implementazioni (`metadata`, `value`): si leggeva come struct.
     let errore = leggi(&variante(Some(16))).expect_err("VARIANT");
     assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
+    assert_eq!(errore.phase(), ErrorPhase::Validate);
     assert_eq!(leggi(&variante(None)).map(|t| t.num_rows()).ok(), Some(1));
     // Controfattuale: `STRING` (1) e `JSON` (12) si leggono.
     for logico in [1, 12] {
@@ -4208,7 +4852,12 @@ fn un_intervallo_con_parti_perse_e_un_errore() {
         byte
     };
     let con_mesi = parquet(&intervallo, 1, PLAIN, &valore(1, 2, 3), None, None);
-    contiene(arrow(&con_mesi), parquet::basic::INTERVAL_NOT_AS_DECLARED);
+    contiene(
+        arrow(&con_mesi),
+        parquet::basic::INTERVAL_NOT_AS_DECLARED,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&con_mesi);
     for (giorni, millisecondi) in [(1_u32 << 31, 3), (2, u32::MAX)] {
         let oltre = parquet(
@@ -4219,7 +4868,12 @@ fn un_intervallo_con_parti_perse_e_un_errore() {
             None,
             None,
         );
-        contiene(arrow(&oltre), parquet::basic::INTERVAL_OUT_OF_RANGE);
+        contiene(
+            arrow(&oltre),
+            parquet::basic::INTERVAL_OUT_OF_RANGE,
+            Categoria::ArrowParquet,
+            Fase::Lettura,
+        );
         rifiutato_dal_confine(&oltre);
     }
     // Controfattuale: senza mesi, entro `i32::MAX`, si legge.
@@ -4317,7 +4971,12 @@ fn una_colonna_unknown_con_un_valore_e_un_errore() {
         ..colonna(INT32)
     };
     let byte = parquet(&con_valore, 1, PLAIN, &7_i32.to_le_bytes(), None, None);
-    contiene(arrow(&byte), parquet::basic::UNKNOWN_WITH_VALUES);
+    contiene(
+        arrow(&byte),
+        parquet::basic::UNKNOWN_WITH_VALUES,
+        Categoria::ArrowParquet,
+        Fase::Lettura,
+    );
     rifiutato_dal_confine(&byte);
     // Controfattuale: una colonna opzionale tutta nulla (livello 0).
     let nulla = Colonna {
@@ -4343,20 +5002,24 @@ fn un_gruppo_con_un_annotazione_di_colonna_e_rifiutato() {
         contiene(
             arrow(&byte),
             parquet::basic::GROUP_WITH_PRIMITIVE_ANNOTATION,
+            Categoria::Generale,
+            Fase::Apertura,
         );
-        let dir = cartella();
-        let percorso = dir.path().join("g.parquet");
-        std::fs::write(&percorso, &byte).unwrap();
-        leggi_tabella_con_limiti(
-            &percorso,
-            Some(Formato::Parquet),
-            u64::MAX,
-            &LimitiLettura::default(),
-        )
-        .expect_err("gruppo annotato come una colonna");
+        rifiutato_dal_confine(&byte);
     }
     // Controfattuale: il gruppo senza annotazione si legge.
-    assert_eq!(arrow(&variante(None)), Ok(1));
+    let campi = vec![
+        Field::new("metadata", DataType::Binary, false),
+        Field::new("value", DataType::Binary, false),
+    ];
+    let binario: ArrayRef = Arc::new(BinaryArray::from(vec![b"\x01".as_slice()]));
+    let valori = vec![binario; 2];
+    let struttura = StructArray::new(campi.into(), valori, None);
+    let schema = Schema::new(vec![Field::new("v", struttura.data_type().clone(), false)]);
+    successo_batch(
+        &variante(None),
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(struttura)]).unwrap(),
+    );
 }
 
 /// Lo schema Arrow incorporato può solo scegliere la rappresentazione, non
@@ -4410,7 +5073,12 @@ fn lo_schema_incorporato_non_cambia_il_tipo_parquet() {
         (Arc::clone(&decimale), DataType::Decimal64(10, 4)),
     ] {
         let byte = con_schema(colonna, dichiarato.clone());
-        contiene(arrow(&byte), parquet::basic::ARROW_HINT_CONTRADICTS);
+        contiene(
+            arrow(&byte),
+            parquet::basic::ARROW_HINT_CONTRADICTS,
+            Categoria::Generale,
+            Fase::Apertura,
+        );
         let dir = cartella();
         let percorso = dir.path().join("h.parquet");
         std::fs::write(&percorso, &byte).unwrap();
@@ -4494,9 +5162,15 @@ fn la_radice_parquet_non_ammette_annotazioni() {
             byte.extend_from_slice(&u32::try_from(footer.len()).unwrap().to_le_bytes());
             byte.extend_from_slice(b"PAR1");
             if logico.is_none() && convertito.is_none() {
-                assert_eq!(arrow(&byte), Ok(0));
+                let campi = if figli == Some(1) {
+                    vec![Field::new("x", DataType::Int32, false)]
+                } else {
+                    vec![]
+                };
+                successo_batch(&byte, RecordBatch::new_empty(Arc::new(Schema::new(campi))));
             } else {
                 let errore = arrow(&byte).expect_err("radice annotata");
+                errore.verifica(Categoria::Generale, Fase::Apertura);
                 assert!(!errore.contains("sentinella"));
                 let atteso = if logico == Some(2) && convertito == Some(3) {
                     "LOGICAL_CONVERTED_TYPE_MISMATCH"
@@ -4560,7 +5234,7 @@ fn regressione_integer_malformato_senza_panico() {
                     let esito = std::panic::catch_unwind(|| arrow(&byte));
                     let errore = esito
                         .expect("il footer non deve causare panico")
-                        .unwrap_err();
+                        .expect_err("rifiuto atteso: categoria verificata dalla prova");
                     let atteso = if larghezza == 8 && !firmato && convertito.is_some() {
                         "LOGICAL_CONVERTED_TYPE_MISMATCH"
                     } else if larghezza == 8 {
@@ -4568,6 +5242,7 @@ fn regressione_integer_malformato_senza_panico() {
                     } else {
                         "Bit width must be"
                     };
+                    errore.verifica(Categoria::Generale, Fase::Apertura);
                     assert!(errore.contains(atteso), "{errore}");
                     assert!(!errore.contains("sentinella"));
                     rifiutato_dal_confine(&byte);
@@ -4587,7 +5262,9 @@ fn regressione_integer_malformato_senza_panico() {
                 });
                 let errore = esito
                     .expect("il builder non deve causare panico")
-                    .unwrap_err();
+                    .expect_err("rifiuto atteso: categoria verificata dalla prova");
+                assert!(matches!(&errore, ParquetError::General(_)));
+                assert!(errore.to_string().contains("Bit width must be"));
                 assert!(!errore.to_string().contains("sentinella"));
             }
         }
@@ -4607,21 +5284,44 @@ fn regressione_annotazioni_discordanti() {
             .with_logical_type(Some(logico))
             .with_converted_type(convertito)
             .build()
-            .unwrap_err();
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
+        assert!(matches!(&errore, ParquetError::General(_)));
+        assert!(errore
+            .to_string()
+            .contains("LOGICAL_CONVERTED_TYPE_MISMATCH"));
         assert!(!errore.to_string().contains("sentinella"));
     }
     let errore = Type::primitive_type_builder("sentinella", P::BYTE_ARRAY)
         .with_logical_type(Some(L::String))
         .with_converted_type(C::BSON)
         .build()
-        .unwrap_err();
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
+    assert!(matches!(&errore, ParquetError::General(_)));
+    assert!(errore
+        .to_string()
+        .contains("LOGICAL_CONVERTED_TYPE_MISMATCH"));
     assert!(!errore.to_string().contains("sentinella"));
     for (logico, convertito) in [(L::Map, C::MAP), (L::List, C::LIST), (L::Map, C::NONE)] {
-        assert!(Type::group_type_builder("x")
+        let atteso_logico = logico.clone();
+        let costruito = Type::group_type_builder("x")
             .with_logical_type(Some(logico))
             .with_converted_type(convertito)
             .build()
-            .is_ok());
+            .unwrap();
+        assert_eq!(costruito.name(), "x");
+        assert!(costruito.get_fields().is_empty());
+        assert_eq!(
+            costruito.get_basic_info().logical_type_ref(),
+            Some(&atteso_logico)
+        );
+        assert_eq!(
+            costruito.get_basic_info().converted_type(),
+            if convertito == C::NONE {
+                C::MAP
+            } else {
+                convertito
+            }
+        );
     }
 }
 

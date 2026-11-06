@@ -4,6 +4,10 @@
 
 mod comune;
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use std::fs::File;
 use std::sync::Arc;
 
@@ -151,6 +155,7 @@ fn parquet_deterministico() {
     for nome in ["a.parquet", "b.parquet"] {
         let percorso = dir.path().join(nome);
         scrivi_tabella(&tabella, &percorso, &OpzioniScrittura::default()).unwrap();
+        identiche(&tabella, &leggi_tabella(&percorso, None, u64::MAX).unwrap());
         byte.push(std::fs::read(&percorso).unwrap());
     }
     assert_eq!(byte[0], byte[1]);
@@ -159,6 +164,7 @@ fn parquet_deterministico() {
     for nome in ["a.arrow", "b.arrow"] {
         let percorso = dir.path().join(nome);
         scrivi_tabella(&tabella, &percorso, &OpzioniScrittura::default()).unwrap();
+        identiche(&tabella, &leggi_tabella(&percorso, None, u64::MAX).unwrap());
         ipc.push(std::fs::read(&percorso).unwrap());
     }
     assert_eq!(ipc[0], ipc[1]);
@@ -394,13 +400,27 @@ fn tipi_rari_identici_o_rifiutati() {
         for file in ["r.arrow", "r.parquet"] {
             let dir = cartella();
             let percorso = dir.path().join(file);
-            if scrivi_tabella(&tabella, &percorso, &OpzioniScrittura::default()).is_ok() {
+            let rifiuto = match (nome, file) {
+                (
+                    "intervallo_ym_negativo" | "intervallo_dt_negativo" | "intervallo_mdn",
+                    "r.parquet",
+                ) => Some((ErrorCategory::DataMapping, plenora_core::ErrorPhase::Write)),
+                ("run_end", _) => Some((
+                    ErrorCategory::Unsupported,
+                    plenora_core::ErrorPhase::Validate,
+                )),
+                _ => None,
+            };
+            let risultato = scrivi_tabella(&tabella, &percorso, &OpzioniScrittura::default());
+            if let Some((categoria, fase)) = rifiuto {
+                assert_rifiuto!(risultato, categoria, fase);
+                assert!(!percorso.exists(), "{nome} {file}: file parziale");
+                rifiutati.push(format!("{nome} {file}"));
+            } else {
+                assert_successo!(risultato, ());
                 let letta = leggi_tabella(&percorso, None, u64::MAX)
                     .unwrap_or_else(|errore| panic!("{nome} {file}: {errore}"));
                 identiche(&tabella, &letta);
-            } else {
-                assert!(!percorso.exists(), "{nome} {file}: file parziale");
-                rifiutati.push(format!("{nome} {file}"));
             }
         }
     }

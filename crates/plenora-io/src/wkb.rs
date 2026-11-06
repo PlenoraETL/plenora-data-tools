@@ -330,9 +330,11 @@ pub fn tipo_da_nome(nome: &str) -> Option<(GeometryType, bool)> {
     Some((tipo, z))
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plenora_core::{ErrorCategory, ErrorPhase};
 
     fn punto(x: f64, y: f64) -> Vec<u8> {
         let mut v = vec![1_u8];
@@ -371,31 +373,60 @@ mod tests {
         let mut s = Sommario::default();
         scansiona_cella(&punto(f64::NAN, f64::NAN), &mut s).expect("punto vuoto");
         assert_eq!(s.riquadro, None);
-        assert!(scansiona_cella(&punto(f64::NAN, 1.0), &mut s).is_err());
-        assert!(scansiona_cella(&punto(f64::INFINITY, 1.0), &mut s).is_err());
+        assert_eq!(s.tipi, BTreeSet::from([(GeometryType::Point, false)]));
+        assert_rifiuto!(
+            scansiona_cella(&punto(f64::NAN, 1.0), &mut s),
+            ErrorCategory::DataMapping,
+            ErrorPhase::Write
+        );
+        assert_rifiuto!(
+            scansiona_cella(&punto(f64::INFINITY, 1.0), &mut s),
+            ErrorCategory::DataMapping,
+            ErrorPhase::Write
+        );
     }
 
     #[test]
     fn rifiuti() {
         let mut s = Sommario::default();
         // Troncata, byte in eccesso, byte order, EWKB, M, curva.
-        assert!(scansiona_cella(&punto(1.0, 2.0)[..10], &mut s).is_err());
+        assert_rifiuto!(
+            scansiona_cella(&punto(1.0, 2.0)[..10], &mut s),
+            ErrorCategory::DataMapping,
+            ErrorPhase::Write
+        );
         let mut lungo = punto(1.0, 2.0);
         lungo.push(0);
-        assert!(scansiona_cella(&lungo, &mut s).is_err());
+        assert_rifiuto!(
+            scansiona_cella(&lungo, &mut s),
+            ErrorCategory::DataMapping,
+            ErrorPhase::Write
+        );
         let mut ordine = punto(1.0, 2.0);
         ordine[0] = 2;
-        assert!(scansiona_cella(&ordine, &mut s).is_err());
+        assert_rifiuto!(
+            scansiona_cella(&ordine, &mut s),
+            ErrorCategory::DataMapping,
+            ErrorPhase::Write
+        );
         for codice in [0x2000_0001_u32, 0x8000_0001, 2001, 3001, 8, 1017] {
             let mut cella = punto(1.0, 2.0);
             cella[1..5].copy_from_slice(&codice.to_le_bytes());
-            assert!(scansiona_cella(&cella, &mut s).is_err(), "codice {codice}");
+            assert_rifiuto!(
+                scansiona_cella(&cella, &mut s),
+                ErrorCategory::DataMapping,
+                ErrorPhase::Write
+            );
         }
         // Conteggio enorme: rifiutato senza iterare.
         let mut linea = vec![1_u8];
         linea.extend_from_slice(&2_u32.to_le_bytes());
         linea.extend_from_slice(&u32::MAX.to_le_bytes());
-        assert!(scansiona_cella(&linea, &mut s).is_err());
+        assert_rifiuto!(
+            scansiona_cella(&linea, &mut s),
+            ErrorCategory::DataMapping,
+            ErrorPhase::Write
+        );
         // MultiPoint con un figlio LineString.
         let mut multi = vec![1_u8];
         multi.extend_from_slice(&4_u32.to_le_bytes());
@@ -404,7 +435,11 @@ mod tests {
         figlio.extend_from_slice(&2_u32.to_le_bytes());
         figlio.extend_from_slice(&0_u32.to_le_bytes());
         multi.extend_from_slice(&figlio);
-        assert!(scansiona_cella(&multi, &mut s).is_err());
+        assert_rifiuto!(
+            scansiona_cella(&multi, &mut s),
+            ErrorCategory::DataMapping,
+            ErrorPhase::Write
+        );
         assert!(s.tipi.is_empty());
     }
 
@@ -446,7 +481,11 @@ mod tests {
         incoerente.extend_from_slice(&1007_u32.to_le_bytes());
         incoerente.extend_from_slice(&1_u32.to_le_bytes());
         incoerente.extend_from_slice(&punto(0.0, 0.0));
-        assert!(scansiona_cella(&incoerente, &mut Sommario::default()).is_err());
+        assert_rifiuto!(
+            scansiona_cella(&incoerente, &mut Sommario::default()),
+            ErrorCategory::DataMapping,
+            ErrorPhase::Write
+        );
     }
 
     #[test]
@@ -458,7 +497,11 @@ mod tests {
             cella.extend_from_slice(&1_u32.to_le_bytes());
         }
         cella.extend_from_slice(&punto(0.0, 0.0));
-        assert!(scansiona_cella(&cella, &mut Sommario::default()).is_err());
+        assert_rifiuto!(
+            scansiona_cella(&cella, &mut Sommario::default()),
+            ErrorCategory::DataMapping,
+            ErrorPhase::Write
+        );
     }
 
     #[test]

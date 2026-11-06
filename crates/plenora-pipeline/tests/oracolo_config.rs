@@ -11,123 +11,25 @@
 //!
 //! In esecuzione non sono ammessi errori di config (`InvalidPlan`,
 //! `Unsupported`, `Internal`): sarebbero una regola che manca all'analisi.
-//! Gli errori che dipendono dai valori delle celle sono ammessi solo nelle
-//! classi elencate in [`CAUSE_DEI_DATI`] e [`DIPENDONO_DAI_DATI`], ciascuna
-//! con il motivo.
+//! Categoria e fase attese vengono dal modello di config e fixture in
+//! `comune/config_attesi.rs`, prima di chiamare validazione ed esecuzione.
 
 mod comune;
+#[path = "comune/config_attesi.rs"]
+mod config_attesi;
+#[path = "comune/config_successi.rs"]
+mod config_successi;
 
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::arrow::schema::SchemaRef;
-use plenora_core::PlenoraError;
+use plenora_core::{ErrorCategory, ErrorPhase};
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
 use plenora_pipeline::{Passo, Pipeline};
 use serde_json::{json, Value};
 
 use comune::{chiamata_diretta, nomi_input, tabelle, Fixture, CASI, CHIAVE_HMAC};
-
-/// Regole di analisi che dicono «il kernel rifiuterebbe questa config» (o
-/// la eseguirebbe con un parametro ignorato, che ora rifiuta anche lui):
-/// per una config rifiutata con uno di questi messaggi, la chiamata diretta
-/// del kernel sulle stesse tabelle deve fallire. Altrimenti il rifiuto
-/// sarebbe falso: l'analisi toglierebbe una config che funziona.
-const REGOLE_DEL_KERNEL: &[&str] = &[
-    "nessun confronto ordinato",
-    "confronto numerico con valore non numerico",
-    "confronto ordinato richiede un valore numerico",
-    "estremi between non numerici",
-    "amount fuori scala",
-    "numero di argomenti",
-    "regex non valida",
-    "negativo",
-    "non leggibile come scalare testuale",
-    "ascending senza order_column",
-    "output_column non ammesso",
-    "extract_all non ammesso",
-    "separator ammesso solo",
-    "distinct non ha effetto",
-    "skip_null non ha effetto",
-    "ddof ammesso solo",
-    "quantile ammesso solo",
-    "mask_type=custom",
-    "value ammesso solo",
-    "offset ammesso solo",
-    // Parametri senza effetto (difetti-b): stessa funzione in analisi e nel
-    // kernel.
-    "non ha effetto",
-    "senza effetto",
-    "null_literal ammesso solo",
-    "n e fraction insieme",
-    "nome d'uscita",
-    "statistica ripetuta",
-    "parte ripetuta",
-    "ripetuta in maskings",
-    "non sposta niente",
-    "n 0 da' sempre",
-    "min_rows 0",
-    "width 0",
-    "voce vuota in index_col",
-    "non abbina mai",
-];
-
-/// Regole nuove che l'oracolo deve aver provato almeno una volta contro il
-/// kernel.
-const REGOLE_PROVATE: &[&str] = &[
-    "nessun confronto ordinato",
-    "confronto numerico con valore non numerico",
-    "amount fuori scala",
-    "numero di argomenti",
-    "regex non valida",
-    "negativo",
-    "separator ammesso solo",
-    "ddof ammesso solo",
-    "mask_type=custom",
-    "value ammesso solo",
-    "offset ammesso solo",
-];
-
-/// Errori senza diagnostica per riga che dipendono dai valori delle celle,
-/// non dalla config: `(frammento del messaggio, motivo)`.
-const DIPENDONO_DAI_DATI: &[(&str, &str)] = &[(
-    "valore non convertibile in numero",
-    "testo non numerico in una cella Utf8 letta come numero (confronti      ordinati, aggregazioni, statistiche): dipende dalla cella",
-)];
-
-/// Cause di diagnostica per riga che dipendono dai valori: un valore che
-/// non si converte nel tipo chiesto, un'asserzione violata dai dati.
-/// `conversion.datetime_range` resta fuori: su date del 2024 lo produce
-/// solo un `amount` che nessuna data sopporta, cioe' la config.
-const CAUSE_DEI_DATI: &[&str] = &["conversion.invalid_", "validation.", "evaluation."];
-
-/// Un errore con diagnostica per riga dipende dai dati se ogni sua causa e'
-/// fra [`CAUSE_DEI_DATI`]; senza diagnostica, solo `Schema` e `DataMapping`
-/// possono dipendere dai valori, e solo nelle classi di
-/// [`DIPENDONO_DAI_DATI`]. `InvalidPlan`, `Unsupported` e `Internal` in
-/// esecuzione sono sempre una regola che manca all'analisi.
-fn ammesso(errore: &PlenoraError) -> bool {
-    let mut fondo = errore;
-    loop {
-        match fondo {
-            PlenoraError::RowDiagnostics { diagnostics, .. } => {
-                return !diagnostics.counts.is_empty()
-                    && diagnostics.counts.keys().all(|causa| {
-                        CAUSE_DEI_DATI
-                            .iter()
-                            .any(|prefisso| causa.starts_with(prefisso))
-                    });
-            }
-            PlenoraError::Tagged { source, .. } => fondo = source,
-            _ => break,
-        }
-    }
-    let dati = matches!(
-        fondo,
-        PlenoraError::Schema(_) | PlenoraError::DataMapping(_)
-    );
-    let messaggio = fondo.to_string();
-    dati && DIPENDONO_DAI_DATI
-        .iter()
-        .any(|(frammento, _)| messaggio.contains(frammento))
-}
 
 /// Nomi di colonna di tutte le fixture.
 fn nomi_di_colonna() -> Vec<String> {
@@ -458,9 +360,6 @@ fn le_config_accettate_dall_analisi_non_falliscono_per_la_config() {
     let nomi = nomi_di_colonna();
     let mut accettate = 0_usize;
     let mut rifiutate = 0_usize;
-    let mut lacune = Vec::new();
-    let mut falsi_rifiuti = Vec::new();
-    let mut provate = std::collections::BTreeSet::new();
     for caso in CASI {
         let base: Value = serde_json::from_str(caso.config).expect("config del caso");
         let fixture_da_provare: Vec<Fixture> = match caso.fixture {
@@ -494,34 +393,44 @@ fn le_config_accettate_dall_analisi_non_falliscono_per_la_config() {
                 .zip(tavole.iter().map(RecordBatch::schema))
                 .collect();
             for config in configs {
-                let validata = match piano(caso.op, &riferimenti, config.clone()).validate(&schemi)
-                {
-                    Ok(validata) => validata,
-                    Err(rifiuto) => {
-                        rifiutate += 1;
-                        let messaggio = rifiuto.to_string();
-                        if let Some(regola) = REGOLE_DEL_KERNEL
-                            .iter()
-                            .find(|regola| messaggio.contains(**regola))
-                        {
-                            provate.insert(*regola);
-                            if chiamata_diretta(caso.op, &config, &tavole).is_ok() {
-                                falsi_rifiuti
-                                    .push(format!("{} {fixture:?} {config}: {messaggio}", caso.op));
-                            }
-                        }
-                        continue;
-                    }
+                let atteso = config_attesi::validazione(caso.op, &config, &tavole);
+                let runtime_atteso = if atteso.is_none() {
+                    config_attesi::esecuzione(caso.op, &config, &tavole)
+                } else {
+                    None
                 };
+                let validazione = piano(caso.op, &riferimenti, config.clone()).validate(&schemi);
+                if let Some(categoria) = atteso {
+                    assert_rifiuto!(validazione, categoria, ErrorPhase::Validate);
+                    rifiutate += 1;
+                    continue;
+                }
+                let validata = validazione.expect("config ammessa dal modello indipendente");
                 accettate += 1;
                 let tabelle_run: Vec<(String, RecordBatch)> = ingressi
                     .iter()
                     .cloned()
                     .zip(tavole.iter().cloned())
                     .collect();
-                if let Err(errore) = validata.run(tabelle_run) {
-                    if !ammesso(&errore) {
-                        lacune.push(format!("{} {fixture:?} {config}: {errore:?}", caso.op));
+                let runtime = validata.run(tabelle_run);
+                if let Some(categoria) = runtime_atteso {
+                    let fase = match categoria {
+                        ErrorCategory::DataMapping => ErrorPhase::Write,
+                        ErrorCategory::Schema => ErrorPhase::Validate,
+                        _ => panic!("categoria fuori dal modello di esecuzione"),
+                    };
+                    assert_rifiuto!(runtime, categoria, fase);
+                } else {
+                    let output = runtime.expect("scenario di successo indipendente");
+                    let atteso = config_successi::atteso(caso.op, &config, &tavole);
+                    config_successi::verifica(caso.op, &config, &output.outputs[0].1, &atteso);
+                    let diretto = chiamata_diretta(caso.op, &config, &tavole)
+                        .expect("stesso scenario ammesso nell'API diretta");
+                    assert_eq!(output.outputs.len(), 1);
+                    assert_eq!(output.outputs[0].0, "uscita");
+                    assert_eq!(output.outputs[0].1.num_rows(), diretto.num_rows());
+                    if caso.op != "table.uuid_generator" {
+                        assert_eq!(output.outputs[0].1.columns(), diretto.columns());
                     }
                 }
             }
@@ -531,15 +440,4 @@ fn le_config_accettate_dall_analisi_non_falliscono_per_la_config() {
         accettate > 1_000 && rifiutate > 1_000,
         "l'oracolo deve provare molte config: {accettate} accettate, {rifiutate} rifiutate"
     );
-    assert!(lacune.is_empty(), "{}", lacune.join("\n"));
-    assert!(
-        falsi_rifiuti.is_empty(),
-        "rifiuti che il kernel non darebbe:\n{}",
-        falsi_rifiuti.join("\n")
-    );
-    let mancanti: Vec<&&str> = REGOLE_PROVATE
-        .iter()
-        .filter(|regola| !provate.contains(**regola))
-        .collect();
-    assert!(mancanti.is_empty(), "regole mai provate: {mancanti:?}");
 }

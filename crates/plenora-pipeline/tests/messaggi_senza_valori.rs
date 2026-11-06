@@ -10,6 +10,11 @@
 
 mod comune;
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+use plenora_core::{ErrorCategory as Categoria, ErrorPhase as Fase};
+
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::arrow::schema::SchemaRef;
 use plenora_core::PlenoraError;
@@ -228,7 +233,14 @@ fn i_testi_della_config_non_tornano_nel_messaggio() {
         ] {
             match esito {
                 Err(errore)
-                    if errore.to_string().contains(frammento)
+                    if errore.category()
+                        == (if op == "table.assert_schema" && dove == "kernel" {
+                            Categoria::Schema
+                        } else {
+                            Categoria::InvalidPlan
+                        })
+                        && errore.phase() == Fase::Validate
+                        && errore.to_string().contains(frammento)
                         && !errore.to_string().contains(scritto) => {}
                 altro => difetti.push(format!(
                     "{op}: {dove}, atteso «{frammento}» senza «{scritto}», avuto {altro:?}"
@@ -264,12 +276,19 @@ fn la_versione_scritta_non_entra_nel_messaggio() {
 fn il_fuso_di_type_cast_non_entra_nel_messaggio() {
     let config = json!({"column": "date", "target_type": "timestamp_millis",
                         "timezone": "SEGRETO"});
-    let validazione = valida("table.type_cast", Fixture::Wide, &config);
+    let validazione = assert_rifiuto!(
+        Err::<(), _>(valida("table.type_cast", Fixture::Wide, &config)),
+        Categoria::InvalidPlan,
+        Fase::Validate
+    );
     let testo = validazione.to_string();
     assert!(e_piano(&validazione), "{testo}");
     assert!(testo.contains("timezone non valida"), "{testo}");
     assert!(!testo.contains(SENTINELLA), "{testo}");
-    let kernel = chiamata_diretta("table.type_cast", &config, &tabelle(Fixture::Wide))
-        .expect_err("il fuso non e' valido");
+    let kernel = assert_rifiuto!(
+        chiamata_diretta("table.type_cast", &config, &tabelle(Fixture::Wide)),
+        Categoria::DataMapping,
+        Fase::Write
+    );
     assert!(!format!("{kernel:?}").contains(SENTINELLA), "{kernel:?}");
 }

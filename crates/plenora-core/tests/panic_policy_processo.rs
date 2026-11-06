@@ -45,7 +45,7 @@ fn ramo_figlio(politica: &str) -> ! {
     // Il segnale che il padre cerca: il figlio e' arrivato fin qui con la
     // politica installata, e l'unica istruzione che segue e' il panico.
     println!("{MARCATORE}");
-    panic!("panico simulato con {SEGRETO} nel messaggio");
+    std::panic::panic_any(format!("panico simulato con {SEGRETO} nel messaggio"));
 }
 
 /// Riga che il figlio stampa su stdout subito prima del panico.
@@ -151,7 +151,8 @@ fn la_politica_sanitized_pubblica_la_forma_ma_non_il_contenuto() {
         "il payload non deve comparire su nessun canale; stderr: {stderr}"
     );
     assert!(
-        stderr.contains("payload statico") || stderr.contains("payload dinamico"),
+        stderr.contains("payload dinamico (contenuto non pubblicato)")
+            && !stderr.contains("payload statico"),
         "l'embedder deve pero' sapere che un panico c'e' stato; stderr: {stderr}"
     );
     assert!(

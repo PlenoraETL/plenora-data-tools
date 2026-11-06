@@ -495,6 +495,7 @@ fn oggetto() -> impl Strategy<Value = String> {
 proptest! {
     #![proptest_config(ProptestConfig { cases: 512, ..ProptestConfig::default() })]
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn documenti_generati_come_il_percorso_precedente(
         grezzi in prop::collection::vec(documento(), 1..6),

@@ -879,6 +879,7 @@ mod confronti {
         colonne.iter().map(|nome| (*nome).to_owned()).collect()
     }
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn la_tabella_esadecimale_e_quella_del_core() {
         let tutti = (0..=u8::MAX).collect::<Vec<_>>();
@@ -892,6 +893,7 @@ mod confronti {
         );
     }
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn tutti_i_tipi_su_piu_chunk() {
         // Piu' chunk (percorso rayon), un chunk solo, una riga, nessuna riga.
@@ -924,6 +926,7 @@ mod confronti {
     /// Batch con errori in righe e colonne note: l'errore reso deve essere
     /// quello della prima riga che fallisce (e, nella riga, della prima
     /// colonna), anche quando i chunk successivi falliscono con un altro.
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn primo_errore_come_nella_scansione_sequenziale() {
         let righe = RIGHE_PER_CHUNK * 6 + 3;
@@ -1013,6 +1016,7 @@ mod confronti {
     }
 
     /// Fette con offset diverso da zero, su piu' chunk.
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn fette_del_batch() {
         let batch = batch_tutti_i_tipi(RIGHE_PER_CHUNK * 5 + 9);
@@ -1153,6 +1157,7 @@ mod confronti {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(96))]
 
+        #[deny(clippy::disallowed_methods)]
         #[test]
         fn come_il_riferimento_su_input_casuali(
             righe in righe(),

@@ -528,6 +528,7 @@ impl<'de> Visitor<'de> for UniqueKeysVisitor {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -773,7 +774,11 @@ mod tests {
             r#"[{"a": 1, "a": 2}]"#,
             r#"{"list": [1, {"k": 1, "k": 2}]}"#,
         ] {
-            let error = ensure_no_duplicate_keys(text).expect_err(text);
+            let error = assert_rifiuto!(
+                ensure_no_duplicate_keys(text),
+                crate::ErrorCategory::InvalidPlan,
+                crate::ErrorPhase::Validate
+            );
             assert!(error.to_string().contains("duplicata"), "{text}: {error}");
             // La chiave scritta non entra nel messaggio.
             assert!(!error.to_string().contains('`'), "{text}: {error}");
@@ -793,7 +798,11 @@ mod tests {
             r#"{"esterno": {"$serde_json::private::RawValue": 3}}"#,
             r#"[{"$serde_json::private::RawValue": 3}]"#,
         ] {
-            let errore = ensure_no_duplicate_keys(testo).expect_err(testo);
+            let errore = assert_rifiuto!(
+                ensure_no_duplicate_keys(testo),
+                crate::ErrorCategory::InvalidPlan,
+                crate::ErrorPhase::Validate
+            );
             assert!(
                 errore.to_string().contains("riservata"),
                 "{testo}: {errore}"
@@ -813,7 +822,11 @@ mod tests {
             r#"{"$serde_json::private::\u0052awValue": 3}"#,
             r#"{"\u0024serde_json::private::RawValue": "{\"a\":1,\"a\":2}"}"#,
         ] {
-            let errore = ensure_no_duplicate_keys(testo).expect_err(testo);
+            let errore = assert_rifiuto!(
+                ensure_no_duplicate_keys(testo),
+                crate::ErrorCategory::InvalidPlan,
+                crate::ErrorPhase::Validate
+            );
             assert!(
                 errore.to_string().contains("riservata"),
                 "{testo}: {errore}"
@@ -828,10 +841,13 @@ mod tests {
     /// una riscrittura canonica ne rende uno che nessun lettore sa rileggere.
     #[test]
     fn il_riproduttore_ridotto_del_fuzzer_e_rifiutato() {
-        let errore = ensure_no_duplicate_keys(
-            r#"{"schema_version": 4, "$serde_json::private::RawValue": 3}"#,
-        )
-        .expect_err("il documento non e' rileggibile e va rifiutato");
+        let errore = assert_rifiuto!(
+            ensure_no_duplicate_keys(
+                r#"{"schema_version": 4, "$serde_json::private::RawValue": 3}"#,
+            ),
+            crate::ErrorCategory::InvalidPlan,
+            crate::ErrorPhase::Validate
+        );
         assert!(errore.to_string().contains("riservata"), "{errore}");
     }
 
@@ -855,7 +871,11 @@ mod tests {
         );
 
         // La conclusione: il confine lo ferma prima.
-        let errore = ensure_no_duplicate_keys(contrabbando).expect_err("il confine lo ferma");
+        let errore = assert_rifiuto!(
+            ensure_no_duplicate_keys(contrabbando),
+            crate::ErrorCategory::InvalidPlan,
+            crate::ErrorPhase::Validate
+        );
         assert!(errore.to_string().contains("riservata"), "{errore}");
     }
 
@@ -875,9 +895,9 @@ mod tests {
         // La sintassi la segnala la deserializzazione vera, che la classifica
         // come errore di mappatura dei dati: anticiparla qui cambierebbe la
         // categoria dell'errore visto dal chiamante.
-        assert!(ensure_no_duplicate_keys("{").is_ok());
-        assert!(ensure_no_duplicate_keys("{} {}").is_ok());
-        assert!(ensure_no_duplicate_keys("non json").is_ok());
+        assert_successo!(ensure_no_duplicate_keys("{"), ());
+        assert_successo!(ensure_no_duplicate_keys("{} {}"), ());
+        assert_successo!(ensure_no_duplicate_keys("non json"), ());
     }
 
     /// Regressione: un numero che il double non tiene si
@@ -893,7 +913,7 @@ mod tests {
             "[1100000000000000000000000000000000, 1.1e33, 1.1e+33, 1.1E+33]",
             "[1.1000000000000001e33, 1.1000000000000001E+33]",
         ] {
-            assert!(ensure_numbers_exact(esatto).is_ok(), "{esatto}");
+            assert_successo!(ensure_numbers_exact(esatto), ());
         }
         for inesatto in [
             r#"{"min": 9007199254740993.0}"#,

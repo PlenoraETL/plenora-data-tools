@@ -429,13 +429,15 @@ fn il_piano_si_legge_dal_suo_testo() {
         "\"schema_version\":1",
         "\"schema_version\":1,\"schema_version\":1",
     );
-    let errore = esegui_artefatti(&ripetuta, &risolutore, &Interruzione::default()).unwrap_err();
+    let errore = esegui_artefatti(&ripetuta, &risolutore, &Interruzione::default())
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::InvalidConfiguration);
     let inesatto = testo(&richiesta()).replace(
         "\"value\": 0",
         "\"value\": 0.1000000000000000055511151231257827",
     );
-    let errore = esegui_artefatti(&inesatto, &risolutore, &Interruzione::default()).unwrap_err();
+    let errore = esegui_artefatti(&inesatto, &risolutore, &Interruzione::default())
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{errore}");
     assert!(risolutore.eventi.borrow().is_empty());
 }
@@ -515,7 +517,8 @@ fn un_errore_dell_esecuzione_non_pubblica_nulla() {
     // La colonna non esiste: il piano fallisce dopo la lettura delle
     // sorgenti, prima di ogni pubblicazione.
     let testo = testo(&richiesta()).replace("\"column\": \"valore\"", "\"column\": \"assente\"");
-    let errore = esegui_artefatti(&testo, &risolutore, &Interruzione::default()).unwrap_err();
+    let errore = esegui_artefatti(&testo, &risolutore, &Interruzione::default())
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.remote_effect(), RemoteEffect::None, "{errore}");
     assert!(risolutore
         .eventi
@@ -607,7 +610,8 @@ fn l_annullamento_dopo_l_inizio_della_pubblicazione_e_partial() {
     };
     let mut risolutore = risolutore();
     risolutore.annulla_durante = Some((Arc::clone(&segnale), 0));
-    let errore = esegui_artefatti(&testo(&richiesta()), &risolutore, &interruzione).unwrap_err();
+    let errore = esegui_artefatti(&testo(&richiesta()), &risolutore, &interruzione)
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::Cancelled);
     assert_eq!(errore.remote_effect(), RemoteEffect::Partial);
     assert_eq!(risolutore.pubblicati.borrow().len(), 1);
@@ -617,7 +621,8 @@ fn l_annullamento_dopo_l_inizio_della_pubblicazione_e_partial() {
         annullamento: Some(Arc::new(AtomicBool::new(true))),
     };
     let secondo = self::risolutore();
-    let errore = esegui_artefatti(&testo(&richiesta()), &secondo, &gia_annullato).unwrap_err();
+    let errore = esegui_artefatti(&testo(&richiesta()), &secondo, &gia_annullato)
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::Cancelled);
     assert_eq!(errore.remote_effect(), RemoteEffect::None);
     assert!(secondo.pubblicati.borrow().is_empty());
@@ -639,7 +644,7 @@ fn il_vettore_di_richiesta_dei_contratti_si_legge() {
         &risolutore,
         &Interruzione::default(),
     )
-    .unwrap_err();
+    .expect_err("rifiuto atteso: categoria verificata dalla prova");
     // Arriva alla lettura della sorgente, che qui non esiste.
     assert_eq!(errore.category(), ErrorCategory::NotFound, "{errore}");
     assert_eq!(
@@ -679,7 +684,8 @@ fn l_annullamento_durante_l_ultima_pubblicazione_non_e_un_successo() {
         };
         let mut risolutore = risolutore();
         risolutore.annulla_durante = Some((Arc::clone(&segnale), ultimo));
-        let errore = esegui_artefatti(&testo, &risolutore, &interruzione).unwrap_err();
+        let errore = esegui_artefatti(&testo, &risolutore, &interruzione)
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert_eq!(errore.category(), ErrorCategory::Cancelled);
         assert_eq!(errore.remote_effect(), RemoteEffect::Committed);
         assert_ne!(errore.retry_disposition(), RetryDisposition::Safe);
@@ -791,7 +797,8 @@ fn un_fallimento_della_codifica_non_pubblica_nulla() {
         .unwrap()
         .replace("\"PIANO\"", &piano);
     let risolutore = risolutore();
-    let errore = esegui_artefatti(&testo, &risolutore, &Interruzione::default()).unwrap_err();
+    let errore = esegui_artefatti(&testo, &risolutore, &Interruzione::default())
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
     assert_eq!(errore.remote_effect(), RemoteEffect::None);
     assert!(risolutore.pubblicati.borrow().is_empty());
@@ -838,7 +845,8 @@ fn un_intero_scritto_con_la_frazione_si_rifiuta() {
     ] {
         let testo = testo(&richiesta()).replace(da, a);
         let risolutore = risolutore();
-        let errore = esegui_artefatti(&testo, &risolutore, &Interruzione::default()).unwrap_err();
+        let errore = esegui_artefatti(&testo, &risolutore, &Interruzione::default())
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert_eq!(errore.category(), ErrorCategory::InvalidConfiguration);
         assert!(risolutore.eventi.borrow().is_empty());
     }

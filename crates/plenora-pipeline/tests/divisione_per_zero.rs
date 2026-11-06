@@ -8,7 +8,11 @@ use std::sync::Arc;
 
 use plenora_core::arrow::array::{Array, Float64Array, RecordBatch};
 use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
-use plenora_core::{PlenoraError, Result};
+use plenora_core::{ErrorCategory, ErrorPhase, PlenoraError, Result};
+
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito_atteso;
 use plenora_pipeline::{Esito, Passo, Pipeline};
 use serde_json::{json, Value};
 
@@ -142,11 +146,15 @@ fn le_altre_operazioni_e_le_divisioni_senza_zero_contano_zero() {
         ),
     ]))
     .expect("piano");
-    assert!(esito
-        .report
-        .passi
-        .iter()
-        .all(|passo| passo.righe_divisione_per_zero == 0));
+    assert_eq!(
+        esito
+            .report
+            .passi
+            .iter()
+            .map(|passo| passo.righe_divisione_per_zero)
+            .collect::<Vec<_>>(),
+        [0, 0]
+    );
 }
 
 #[test]
@@ -236,6 +244,8 @@ fn un_overflow_da_operandi_finiti_rifiuta_la_riga_in_formula_ed_expression() {
             .expect("piano valido")
             .run(vec![("t".to_owned(), grandi.clone())])
             .expect_err("overflow");
+        assert_eq!(errore.category(), ErrorCategory::DataMapping);
+        assert_eq!(errore.phase(), ErrorPhase::Write);
         let diagnostica = errore.row_diagnostics().expect("diagnostica per riga");
         assert_eq!(
             diagnostica.counts.get("evaluation.non_finite_result"),
@@ -271,6 +281,8 @@ fn una_regex_calcolata_non_valida_non_porta_il_pattern_nel_messaggio() {
         .expect("piano valido")
         .run(vec![("t".to_owned(), tabella)])
         .expect_err("regex non valida");
+    assert_eq!(errore.category(), ErrorCategory::DataMapping);
+    assert_eq!(errore.phase(), ErrorPhase::Write);
     assert!(!format!("{errore:?}").contains("SEGRETO"), "{errore:?}");
     let diagnostica = errore.row_diagnostics().expect("diagnostica per riga");
     assert_eq!(diagnostica.counts.get("evaluation.invalid_regex"), Some(&1));
@@ -306,12 +318,36 @@ fn window_e_rolling_rifiutano_l_overflow_da_valori_finiti() {
             .expect("piano valido")
             .run(vec![("t".to_owned(), grandi.clone())])
             .expect_err("overflow");
+        assert_eq!(errore.category(), ErrorCategory::DataMapping);
+        assert_eq!(errore.phase(), ErrorPhase::Write);
         assert!(errore.to_string().contains("overflow"), "{op}: {errore}");
-        piano_su("t", vec![("x", op, config)])
+        let esito = piano_su("t", vec![("x", op, config)])
             .validate(&schemi)
             .expect("piano valido")
             .run(vec![("t".to_owned(), con_nan.clone())])
             .expect("NaN dei dati propagato");
+        let uscita = &esito.outputs[0].1;
+        assert_eq!(uscita.num_rows(), 3);
+        assert_eq!(uscita.column(0), con_nan.column(0));
+        let valori = uscita
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("f64");
+        let attesi = if op == "table.window_function" {
+            vec![Some(f64::NAN), Some(f64::NAN), Some(f64::NAN)]
+        } else {
+            vec![Some(f64::NAN), Some(f64::NAN), Some(3.0)]
+        };
+        assert_eq!(valori.len(), attesi.len());
+        for (ottenuto, atteso) in valori.iter().zip(attesi) {
+            match (ottenuto, atteso) {
+                (None, None) => {}
+                (Some(a), Some(b)) if b.is_nan() => assert!(a.is_nan()),
+                (Some(a), Some(b)) => assert_eq!(a.to_bits(), b.to_bits()),
+                _ => panic!("nullability del risultato inattesa"),
+            }
+        }
     }
 }
 

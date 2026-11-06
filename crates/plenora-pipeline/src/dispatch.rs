@@ -359,9 +359,17 @@ impl PassoPreparato {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
+#[cfg(test)]
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::PassoPreparato;
+    use plenora_core::{ErrorCategory, ErrorPhase};
 
     /// **La config riletta dal runner non cita i valori scritti** (errori
     /// senza dati): l'analisi la accetta prima con lo stesso tipo, ma un
@@ -373,9 +381,12 @@ mod tests {
             serde_json::json!({"column": "id", "operator": "VALORE_SEGRETO"}),
             serde_json::json!({"column": 98_765_431, "operator": "=="}),
         ] {
-            let errore = PassoPreparato::prepara("table.filter", &config)
-                .expect_err("config rifiutata")
-                .to_string();
+            let errore = assert_rifiuto!(
+                PassoPreparato::prepara("table.filter", &config),
+                ErrorCategory::InvalidPlan,
+                ErrorPhase::Validate
+            )
+            .to_string();
             assert!(errore.contains("config non valida: "), "{errore}");
             assert!(!errore.contains("SEGRET"), "{config}: {errore}");
             assert!(!errore.contains("98765431"), "{config}: {errore}");

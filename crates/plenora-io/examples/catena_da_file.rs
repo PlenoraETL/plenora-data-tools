@@ -317,9 +317,17 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[deny(clippy::disallowed_methods)]
+#[cfg(test)]
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plenora_core::{ErrorCategory, ErrorPhase};
 
     const PIANO: &str = r#"{"version": 1, "inputs": ["t"], "steps": [
         {"out": "a", "op": "table.limit", "in": ["t"], "config": {"n": 1}},
@@ -372,38 +380,60 @@ mod tests {
             vec!["Com1".to_owned()],
             vec!["lpt9".to_owned()],
         ] {
-            assert!(matches!(
+            assert_rifiuto!(
                 percorsi_uscita(cartella, &nomi, &[]),
-                Err(PlenoraError::InvalidPlan(_))
-            ));
+                ErrorCategory::InvalidPlan,
+                ErrorPhase::Validate
+            );
         }
         // Un ingresso nella cartella d'uscita, anche scritta in un altro
         // modo: rifiuto.
         let ingresso = cartella.join("dati.parquet");
         std::fs::write(&ingresso, b"x").expect("ingresso");
         for uscita in [cartella.to_path_buf(), cartella.join(".")] {
-            assert!(matches!(
+            assert_rifiuto!(
                 percorsi_uscita(&uscita, &["a".to_owned()], &[ingresso.as_path()]),
-                Err(PlenoraError::InvalidPlan(_))
-            ));
+                ErrorCategory::InvalidPlan,
+                ErrorPhase::Validate
+            );
         }
         #[cfg(windows)]
         {
             let maiuscola = std::path::PathBuf::from(cartella.to_string_lossy().to_uppercase());
-            assert!(matches!(
+            assert_rifiuto!(
                 percorsi_uscita(&maiuscola, &["a".to_owned()], &[ingresso.as_path()]),
-                Err(PlenoraError::InvalidPlan(_))
-            ));
+                ErrorCategory::InvalidPlan,
+                ErrorPhase::Validate
+            );
         }
         // Ingresso in un'altra cartella: ammesso.
         let altra = cartella.join("uscite");
         std::fs::create_dir(&altra).expect("cartella d'uscita");
-        assert!(percorsi_uscita(&altra, &["a".to_owned()], &[ingresso.as_path()]).is_ok());
+        assert_successo!(
+            percorsi_uscita(&altra, &["a".to_owned()], &[ingresso.as_path()]),
+            vec![("a".to_owned(), altra.join("a.parquet"))]
+        );
         // Cartella d'uscita o ingresso assenti: errore, non un confronto sul
         // testo.
         let assente = cartella.join("assente");
-        assert!(percorsi_uscita(&assente, &["a".to_owned()], &[]).is_err());
+        let errore = assert_rifiuto!(
+            percorsi_uscita(&assente, &["a".to_owned()], &[]),
+            ErrorCategory::NotFound,
+            ErrorPhase::Write
+        );
+        let PlenoraError::Io(causa) = errore else {
+            panic!("errore filesystem atteso")
+        };
+        assert_eq!(causa.kind(), std::io::ErrorKind::NotFound);
         let ingresso_assente = cartella.join("manca.parquet");
-        assert!(percorsi_uscita(&altra, &["a".to_owned()], &[ingresso_assente.as_path()]).is_err());
+        let errore = assert_rifiuto!(
+            percorsi_uscita(&altra, &["a".to_owned()], &[ingresso_assente.as_path()]),
+            ErrorCategory::NotFound,
+            ErrorPhase::Write
+        );
+        let PlenoraError::Io(causa) = errore else {
+            panic!("errore filesystem atteso")
+        };
+        assert_eq!(causa.kind(), std::io::ErrorKind::NotFound);
     }
 }

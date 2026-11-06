@@ -348,6 +348,7 @@ pub fn byte_vec_cresciuto(lunghezza: usize, elemento: usize) -> u64 {
     byte_vec(lunghezza.saturating_mul(2).max(4), elemento)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,7 +359,7 @@ mod tests {
         assert_eq!(margine.byte_per_risultato(15), 25);
         assert_eq!(margine.risultati_massimi(15), 4);
         assert_eq!(MargineMemoria::byte(7).risultati_massimi(0), u64::MAX);
-        assert!(margine.verifica(100).is_ok());
+        let () = margine.verifica(100).expect("limite incluso");
         assert_eq!(
             margine.verifica(101),
             Err(MargineSuperato {

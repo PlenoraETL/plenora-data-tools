@@ -31,6 +31,7 @@ pub fn motivo_non_eseguibile(op: &str) -> Option<&'static str> {
         .map(|(_, motivo)| *motivo)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

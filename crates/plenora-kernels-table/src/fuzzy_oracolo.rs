@@ -200,6 +200,10 @@ enum FuzzyRowForm<'a> {
 /// - `DataMapping` (`arrow error: …`): errore Arrow nella costruzione del batch.
 // Fasi in sequenza lineare: la lunghezza e' nella pipeline, non nella logica.
 #[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Costruzione indipendente dello schema atteso: ricerca di una colonna, non verifica di un esito del kernel."
+)]
 fn fuzzy_join_riferimento(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -712,7 +716,15 @@ fn oracolo_max_rows_al_bordo_su_molti_chunk() {
                         }
                     }
                 }
-                assert_eq!(riferimento.is_ok(), max_rows == totale, "bordo del limite");
+                if max_rows == totale {
+                    assert_batches_identical(&riferimento.expect("bordo incluso"), &atteso);
+                } else {
+                    assert_rifiuto!(
+                        riferimento,
+                        plenora_core::ErrorCategory::ResourceLimit,
+                        plenora_core::ErrorPhase::Write
+                    );
+                }
             }
         }
     }
@@ -764,6 +776,7 @@ fn soglia() -> impl Strategy<Value = f64> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(casi(128, 512)))]
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn oracolo_casuale(
         sinistra in prop::collection::vec(chiave(), 0..40),
@@ -861,6 +874,7 @@ fn oracolo_levenshtein_entro_casi_avversari() {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1024))]
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn oracolo_levenshtein_entro_casuale(
         coppie in prop::collection::vec(
@@ -942,6 +956,7 @@ fn oracolo_jaro_winkler_sopra_soglia_casi_avversari() {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1024))]
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn oracolo_jaro_winkler_sopra_soglia_casuale(
         coppie in prop::collection::vec(

@@ -457,38 +457,67 @@ proptest! {
             ("b", tabella(righe_b, larghezza / 2 + 1, 12)),
         ];
         let mut nomi: Vec<String> = vec!["a".into(), "b".into()];
+        let mut attese: Vec<RecordBatch> = tabelle.iter().map(|(_,b)| b.clone()).collect();
         let mut steps = Vec::new();
         for (indice, (scelta, sorgente, soglia, n)) in passi.iter().enumerate() {
             let (op, config) = operazione(*scelta, *soglia, *n);
+            let base = &attese[sorgente % nomi.len()];
+            let chiavi = base.column(0).as_any().downcast_ref::<Int64Array>().expect("chiavi");
+            let mut indici: Vec<usize> = (0..base.num_rows()).collect();
+            match scelta % 6 {
+                0 => indici.sort_by_key(|&i| chiavi.value(i)),
+                1 => indici.retain(|&i| chiavi.value(i) > *soglia),
+                2 => {},
+                3 => { let mut viste = std::collections::BTreeSet::new(); indici.retain(|&i| viste.insert(chiavi.value(i))); },
+                4 => indici.truncate(*n),
+                _ => {indici.sort_by_key(|&i| std::cmp::Reverse(chiavi.value(i)));indici.truncate(*n);},
+            }
+            let indici = plenora_core::arrow::array::UInt32Array::from(indici.into_iter().map(|i|u32::try_from(i).expect("indice")).collect::<Vec<_>>());
+            let selezionata = RecordBatch::try_new(base.schema(), base.columns().iter().map(|a|plenora_core::arrow::select::take::take(a.as_ref(), &indici, None).expect("selezione")).collect()).expect("atteso");
+            attese.push(selezionata);
             let ingresso = nomi[sorgente % nomi.len()].clone();
             let out = format!("p{indice}");
             steps.push(passo(&out, op, &[&ingresso], config));
             nomi.push(out);
         }
         let uscite: Vec<&str> = nomi.iter().rev().take(ultimi).map(String::as_str).collect();
-        // Oltre gli input, da uno a sedici MiB: abbastanza vicino da
-        // costringere a rifiuti.
-        let budget = byte_vivi(tabelle.iter().map(|(_, tabella)| tabella)).expect("byte")
-            + budget_mib * 1024 * 1024;
+        // Al massimo nove operazioni non espansive su 39 999 righe di
+        // 199 byte: 512 MiB coprono ingressi, intermedi e ordinamenti.
+        // Ogni scenario deve riuscire; il controfattuale sotto gli input
+        // deve invece rifiutare prima di qualsiasi passo.
+        let budget = BUDGET_AMPIO + budget_mib * 1024 * 1024;
         let pipeline = piano(&["a", "b"], steps, &uscite, budget);
-        match esegui(&pipeline, &tabelle) {
-            Ok(esito) => {
-                for passo in &esito.report.passi {
-                    prop_assert!(passo.byte_vivi_con_uscita <= budget, "{:?}", passo);
-                    prop_assert!(passo.byte_vivi <= budget, "{:?}", passo);
-                    let modello = costo_di(passo.op).expect("modello");
-                    if !modello.dipende_dai_dati {
-                        prop_assert!(
-                            passo.byte_previsti >= passo.byte_output_esclusivi,
-                            "{:?}", passo
-                        );
-                    }
-                }
-                prop_assert_eq!(esito.outputs, riferimento(&pipeline, &tabelle).outputs);
+        let esito = esegui(&pipeline, &tabelle).expect("budget sufficiente per la catena non espansiva");
+        prop_assert_eq!(esito.report.passi.len(), passi.len());
+        for passo in &esito.report.passi {
+            prop_assert!(passo.byte_vivi_con_uscita <= budget);
+            prop_assert!(passo.byte_vivi <= budget);
+            let modello = costo_di(passo.op).expect("modello");
+            if !modello.dipende_dai_dati {
+                prop_assert!(passo.byte_previsti >= passo.byte_output_esclusivi);
             }
-            Err(PlenoraError::ResourceLimit(_)) => {}
-            Err(altro) => prop_assert!(false, "errore inatteso: {altro}"),
         }
+        prop_assert_eq!(esito.outputs.len(), uscite.len());
+        let mut prossimo_id=0_usize;
+        for (indice, ((nome,ottenuta), attesa)) in esito.outputs.iter().zip(attese.iter().rev().take(ultimi)).enumerate() {
+            prop_assert_eq!(nome.as_str(), uscite[indice]);
+            prop_assert_eq!(ottenuta.columns(), attesa.columns());
+            prop_assert_eq!(ottenuta.schema_ref().metadata().get("plenora.contract.version").map(String::as_str),Some("1"));
+            for f in ottenuta.schema().fields() {
+                prop_assert_eq!(f.metadata().get("plenora.field_id"),Some(&prossimo_id.to_string()));
+                prossimo_id+=1;
+            }
+            let campi: Vec<Field> = ottenuta.schema().fields().iter().map(|f| {
+                let mut m=f.metadata().clone();m.remove("plenora.field_id");f.as_ref().clone().with_metadata(m)
+            }).collect();
+            let mut metadati=ottenuta.schema().metadata().clone();metadati.remove("plenora.contract.version");
+            prop_assert_eq!(Schema::new_with_metadata(campi,metadati), attesa.schema().as_ref().clone());
+        }
+        let mut insufficiente = pipeline;
+        insufficiente.limits.as_mut().expect("limiti").max_governed_memory_bytes = Some(1);
+        let Err(errore) = esegui(&insufficiente, &tabelle) else { panic!("un byte non contiene nemmeno una riga utilizzata"); };
+        prop_assert_eq!(errore.category(), plenora_core::ErrorCategory::ResourceLimit);
+        prop_assert_eq!(errore.phase(), plenora_core::ErrorPhase::Write);
     }
 }
 

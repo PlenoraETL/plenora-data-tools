@@ -135,6 +135,7 @@ pub(crate) fn punto_entro_segmento(
     bound.is_finite() && bound <= budget
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,7 +154,10 @@ mod tests {
         assert!((piedi.value() - 0.01 / 0.3048).abs() < 1e-17);
         // Un geografico senza ellissoide (risolto dal chiamante): nessuna
         // precisione, errore esplicito.
-        assert!(Precision::from_crs(&crs(CrsKind::Geographic, None)).is_err());
+        assert!(matches!(
+            Precision::from_crs(&crs(CrsKind::Geographic, None)),
+            Err(RustBackendError::InvalidPrecision)
+        ));
         let wgs84 = plenora_core::crs::resolve_crs("EPSG:4326", "crs").unwrap();
         let gradi = Precision::from_crs(&wgs84).unwrap();
         let polare = 6_378_137.0 / (1.0 - 1.0 / 298.257_223_563);
@@ -185,11 +189,23 @@ mod tests {
 
     #[test]
     fn senza_unita_lineare_o_non_positiva_e_un_errore() {
-        assert!(Precision::from_crs(&crs(CrsKind::Projected, None)).is_err());
-        assert!(Precision::from_crs(&crs(CrsKind::Projected, Some(0.0))).is_err());
-        assert!(Precision::from_crs(&crs(CrsKind::Projected, Some(f64::from_bits(1)))).is_err());
+        assert!(matches!(
+            Precision::from_crs(&crs(CrsKind::Projected, None)),
+            Err(RustBackendError::InvalidPrecision)
+        ));
+        assert!(matches!(
+            Precision::from_crs(&crs(CrsKind::Projected, Some(0.0))),
+            Err(RustBackendError::InvalidPrecision)
+        ));
+        assert!(matches!(
+            Precision::from_crs(&crs(CrsKind::Projected, Some(f64::from_bits(1)))),
+            Err(RustBackendError::InvalidPrecision)
+        ));
         for value in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-            assert!(Precision::new(value).is_err());
+            assert!(matches!(
+                Precision::new(value),
+                Err(RustBackendError::InvalidPrecision)
+            ));
         }
     }
 }

@@ -31,7 +31,6 @@ use plenora_core::arrow::schema::{DataType, Field, Schema};
 use serde_json::{json, Value};
 
 use crate::aggregation::{self, Aggregate};
-use crate::test_support::assert_same_outcome_bits;
 use crate::{governance, joins, quality, reshape, setops, Limits};
 
 /// Valori `Binary` della fixture: WKB di un punto (non UTF-8), byte non
@@ -89,9 +88,14 @@ fn fixture(rows: usize, seed: u64, id_base: i64) -> RecordBatch {
     let id = (0..rows)
         .map(|row| id_base + i64::try_from(row).expect("id"))
         .collect::<Vec<_>>();
+    // Il corpus usa solo interi finiti non negativi: bits e uguaglianza
+    // numerica coincidono, senza NaN o signed zero.
     let v = (0..rows)
         .map(|_| f64::from(u32::try_from(rng.below(5)).expect("v")))
         .collect::<Vec<_>>();
+    assert!(v
+        .iter()
+        .all(|v| v.is_finite() && !v.is_sign_negative() && v.fract() == 0.0));
     RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("g", DataType::Binary, true),
@@ -117,6 +121,10 @@ fn fixture(rows: usize, seed: u64, id_base: i64) -> RecordBatch {
 struct Rimappa(HashMap<Vec<u8>, Vec<u8>>);
 
 impl Rimappa {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Classificazione indipendente dei byte della fixture, non asserzione sul risultato del kernel."
+    )]
     fn new(batches: &[&RecordBatch]) -> Self {
         let mut presenti = BTreeSet::new();
         for batch in batches {
@@ -171,10 +179,6 @@ impl Rimappa {
             .collect::<Vec<_>>();
         crate::batch_with_rows(batch.schema(), columns, batch.num_rows()).expect("batch rimappato")
     }
-
-    fn esito(&self, esito: plenora_core::Result<RecordBatch>) -> plenora_core::Result<RecordBatch> {
-        esito.map(|batch| self.batch(&batch))
-    }
 }
 
 fn config<T: serde::de::DeserializeOwned>(value: Value) -> T {
@@ -182,6 +186,10 @@ fn config<T: serde::de::DeserializeOwned>(value: Value) -> T {
 }
 
 /// Ci sono davvero valori non UTF-8 nell'input: senza, la prova e' vuota.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Classificatore indipendente della fixture: verifica che il corpus contenga byte non UTF-8 tramite std::str::from_utf8. Non e una asserzione sul risultato della produzione; ogni scalar_as_string e controllato separatamente per valore o categoria/fase."
+)]
 fn ha_non_utf8(batch: &RecordBatch) -> bool {
     batch
         .column(0)
@@ -199,16 +207,73 @@ fn prima_erano_errori_ora_sono_chiavi() {
     let batch = fixture(40, 7, 0);
     assert!(ha_non_utf8(&batch));
     // Il testo la rifiuta ancora: e' `scalar_as_string` a non avere un testo.
-    assert!((0..batch.num_rows()).any(|row| crate::scalar_as_string(
-        batch.column(0).as_ref(),
-        row
+    let valori = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .unwrap();
+    for (row, valore) in valori.iter().enumerate() {
+        let atteso = valore.map(std::str::from_utf8).transpose();
+        let risultato = crate::scalar_as_string(batch.column(0).as_ref(), row);
+        match atteso {
+            Ok(testo) => {
+                assert_successo!(risultato, testo.map(str::to_owned));
+            }
+            Err(_) => {
+                assert_rifiuto!(
+                    risultato,
+                    plenora_core::ErrorCategory::Schema,
+                    plenora_core::ErrorPhase::Validate
+                );
+            }
+        }
+    }
+    let mut gruppi: BTreeMap<Vec<u8>, Vec<usize>> = BTreeMap::new();
+    for row in 0..batch.num_rows() {
+        gruppi
+            .entry(chiave_estesa(&batch, &[0], row))
+            .or_default()
+            .push(row);
+    }
+    let mut primi: Vec<_> = gruppi.values().map(|righe| righe[0]).collect();
+    primi.sort_unstable();
+    let atteso = crate::select_rows(&batch, &primi).unwrap();
+    assert_successo!(
+        aggregation::distinct(&batch, &config(json!({"subset": ["g"]}))),
+        atteso
+    );
+    assert_successo!(
+        aggregation::dedup_advanced(&batch, &config(json!({"subset": ["g"]}))),
+        atteso
+    );
+    let ordinati: Vec<_> = gruppi.values().map(|righe| righe[0]).collect();
+    let chiavi = crate::select_rows(&batch, &ordinati)
+        .unwrap()
+        .project(&[0])
+        .unwrap();
+    let conteggi = Int64Array::from(
+        gruppi
+            .values()
+            .map(|righe| i64::try_from(righe.len()).unwrap())
+            .collect::<Vec<_>>(),
+    );
+    let atteso = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("g", DataType::Binary, true),
+            Field::new("count", DataType::Int64, false),
+        ])),
+        vec![chiavi.column(0).clone(), Arc::new(conteggi)],
     )
-    .is_err()));
-    aggregation::distinct(&batch, &config(json!({"subset": ["g"]}))).expect("distinct");
-    aggregation::dedup_advanced(&batch, &config(json!({"subset": ["g"]}))).expect("dedup");
-    aggregation::aggregate(&batch, &config(json!({"group_by": ["g"]}))).expect("aggregate");
+    .unwrap();
+    assert_successo!(
+        aggregation::aggregate(&batch, &config(json!({"group_by": ["g"]}))),
+        atteso
+    );
     let unico = fixture(1, 7, 0);
-    quality::assert_unique(&unico, &config(json!({"columns": ["g"]}))).expect("assert_unique");
+    assert_successo!(
+        quality::assert_unique(&unico, &config(json!({"columns": ["g"]}))),
+        unico
+    );
 }
 
 #[test]
@@ -231,6 +296,7 @@ fn chiave_di_partizione_preserva_uguaglianza_e_ordine_di_ogni_byte() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn partizioni_e_nunique_contro_ranghi_testuali_indipendenti() {
     for righe in [0, 1, 40, 200] {
         let batch = fixture(righe, 7, 0);
@@ -304,189 +370,780 @@ fn partizioni_e_nunique_contro_ranghi_testuali_indipendenti() {
                 "aggregate" => aggregation::aggregate(input, &config(configurazione.clone())),
                 _ => unreachable!(),
             };
-            let attesa = esegui(&riferimento).expect(nome);
-            let effettiva = esegui(&batch).expect(nome);
-            assert_eq!(effettiva.num_rows(), attesa.num_rows(), "{nome}");
-            for campo in effettiva.schema().fields() {
-                if campo.name() != "g" {
-                    assert_eq!(
-                        effettiva.column_by_name(campo.name()),
-                        attesa.column_by_name(campo.name()),
-                        "{nome}"
+            let mut gruppi: BTreeMap<Option<&[u8]>, Vec<usize>> = BTreeMap::new();
+            for (row, key) in binary.iter().enumerate() {
+                gruppi.entry(key).or_default().push(row);
+            }
+            let values = batch
+                .column(3)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap();
+            let mut fields: Vec<Field> = batch
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.as_ref().clone())
+                .collect();
+            let mut columns = batch.columns().to_vec();
+            let expected = match nome {
+                "sample" => {
+                    let mut selected = Vec::new();
+                    for (offset, group) in gruppi.values().enumerate() {
+                        let mut rows = group.clone();
+                        let mut rng = Xorshift(9 + u64::try_from(offset).unwrap());
+                        for i in (1..rows.len()).rev() {
+                            rows.swap(i, rng.below(i + 1));
+                        }
+                        let count = (12 * rows.len() / righe).max(1).min(rows.len());
+                        selected.extend(rows.into_iter().take(count));
+                    }
+                    crate::select_rows(&batch, &selected).unwrap()
+                }
+                "aggregate" => {
+                    let strings = batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .unwrap();
+                    let mut groups: BTreeMap<Option<&str>, BTreeSet<Option<&[u8]>>> =
+                        BTreeMap::new();
+                    for (r, key) in strings.iter().enumerate() {
+                        groups
+                            .entry(key)
+                            .or_default()
+                            .insert(binary.iter().nth(r).unwrap());
+                    }
+                    RecordBatch::try_new(
+                        Arc::new(Schema::new(vec![
+                            Field::new("s", DataType::Utf8, true),
+                            Field::new("numero", DataType::Int64, false),
+                        ])),
+                        vec![
+                            Arc::new(StringArray::from(
+                                groups.keys().copied().collect::<Vec<_>>(),
+                            )),
+                            Arc::new(Int64Array::from(
+                                groups
+                                    .values()
+                                    .map(|g| {
+                                        i64::try_from(g.iter().filter(|v| v.is_some()).count())
+                                            .unwrap()
+                                    })
+                                    .collect::<Vec<_>>(),
+                            )),
+                        ],
+                    )
+                    .unwrap()
+                }
+                _ => {
+                    let mut numbers = vec![0.0; righe];
+                    let mut positions = vec![0_i64; righe];
+                    let mut sums = vec![0.0; righe];
+                    for group in gruppi.values() {
+                        for (position, &row) in group.iter().enumerate() {
+                            positions[row] = i64::try_from(position + 1).unwrap();
+                            numbers[row] = match nome {
+                                "statistics" => f64::from(u32::try_from(group.len()).unwrap()),
+                                "add_row_number" => f64::from(u32::try_from(position + 1).unwrap()),
+                                "window_function" => f64::from(u32::try_from(position).unwrap()),
+                                "rolling_window" => group[position.saturating_sub(2)..=position]
+                                    .iter()
+                                    .map(|&r| values.value(r))
+                                    .sum(),
+                                _ => panic!("scenario non previsto"),
+                            };
+                            sums[row] = group.iter().map(|&r| values.value(r)).sum();
+                        }
+                    }
+                    let name = match nome {
+                        "statistics" => "v_count",
+                        "add_row_number" => "numero",
+                        "window_function" => "v_cumcount",
+                        _ => "finestra",
+                    };
+                    if nome == "add_row_number" {
+                        fields.push(Field::new(name, DataType::Int64, false));
+                        columns.push(Arc::new(Int64Array::from(positions)));
+                    } else {
+                        fields.push(Field::new(name, DataType::Float64, true));
+                        columns.push(Arc::new(Float64Array::from(numbers)));
+                    }
+                    if nome == "statistics" {
+                        fields.push(Field::new("v_sum", DataType::Float64, true));
+                        columns.push(Arc::new(Float64Array::from(sums)));
+                    }
+                    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
+                }
+            };
+            assert_successo!(esegui(&batch), expected);
+            // La rimappatura deve conservare anche chiave, schema e bitmap.
+            let mut fields: Vec<Field> = expected
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.as_ref().clone())
+                .collect();
+            let mut columns = expected.columns().to_vec();
+            if let Some(index) = fields.iter().position(|f| f.name() == "g") {
+                let binary = expected
+                    .column(index)
+                    .as_any()
+                    .downcast_ref::<BinaryArray>()
+                    .unwrap();
+                fields[index] = Field::new("g", DataType::Utf8, true);
+                columns[index] = Arc::new(StringArray::from(
+                    binary
+                        .iter()
+                        .map(|v| v.map(|bytes| ranghi[bytes].clone()))
+                        .collect::<Vec<_>>(),
+                ));
+            }
+            let expected = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+            assert_successo!(esegui(&riferimento), expected);
+        }
+    }
+}
+
+/// Chiave del corpus ricavata direttamente dagli array, senza encoder del kernel.
+fn chiave_fixture(batch: &RecordBatch, columns: &[usize], row: usize) -> Vec<Option<Vec<u8>>> {
+    columns
+        .iter()
+        .map(|&column| {
+            let values = batch.column(column);
+            if values.is_null(row) {
+                return None;
+            }
+            Some(match column {
+                0 => values
+                    .as_any()
+                    .downcast_ref::<BinaryArray>()
+                    .unwrap()
+                    .value(row)
+                    .to_vec(),
+                1 => values
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .value(row)
+                    .as_bytes()
+                    .to_vec(),
+                2 => values
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .value(row)
+                    .to_le_bytes()
+                    .to_vec(),
+                3 => values
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .unwrap()
+                    .value(row)
+                    .to_bits()
+                    .to_le_bytes()
+                    .to_vec(),
+                _ => panic!("colonna fuori fixture"),
+            })
+        })
+        .collect()
+}
+
+fn righe_distinte(
+    batch: &RecordBatch,
+    columns: &[usize],
+    order: &[usize],
+    keep: &str,
+) -> Vec<usize> {
+    order
+        .iter()
+        .copied()
+        .filter(|&row| {
+            let key = chiave_fixture(batch, columns, row);
+            let equal: Vec<_> = order
+                .iter()
+                .copied()
+                .filter(|&r| chiave_fixture(batch, columns, r) == key)
+                .collect();
+            match keep {
+                "first" => equal[0] == row,
+                "last" => equal[equal.len() - 1] == row,
+                "false" => equal.len() == 1,
+                _ => panic!("keep fuori fixture"),
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn distinct_dedup_assert_unique_come_sul_testo_rimappato() {
+    for (rows, seed) in [(0_usize, 1_u64), (1, 2), (13, 3), (200, 4), (1_000, 5)] {
+        let original = fixture(rows, seed, 0);
+        let rimappato = Rimappa::new(&[&original]).batch(&original);
+        for batch in [&original, &rimappato] {
+            for subset in [vec!["g"], vec!["g", "s"], vec!["s", "g"], vec![]] {
+                let columns: Vec<_> = if subset.is_empty() {
+                    vec![0, 1, 2, 3]
+                } else {
+                    subset
+                        .iter()
+                        .map(|name| usize::from(*name != "g"))
+                        .collect()
+                };
+                let order: Vec<_> = (0..rows).collect();
+                for keep in ["first", "last", "false"] {
+                    let expected =
+                        crate::select_rows(batch, &righe_distinte(batch, &columns, &order, keep))
+                            .unwrap();
+                    assert_successo!(
+                        aggregation::distinct(
+                            batch,
+                            &config(json!({"subset": subset, "keep": keep}))
+                        ),
+                        expected
                     );
+                }
+                for cfg in [
+                    json!({"subset": subset, "keep": "first"}),
+                    json!({"subset": subset, "keep": "last", "order_column": "v"}),
+                    json!({"subset": subset, "keep": "first", "order_column": "v", "ascending": false}),
+                ] {
+                    let result = aggregation::dedup_advanced(batch, &config(cfg.clone()));
+                    // Il kernel diretto e' documentato come sort + distinct:
+                    // subset vuoto seleziona tutte le colonne, come distinct.
+                    {
+                        let mut order = order.clone();
+                        if cfg.get("order_column").is_some() {
+                            let values = batch
+                                .column(3)
+                                .as_any()
+                                .downcast_ref::<Float64Array>()
+                                .unwrap();
+                            order.sort_by(|&a, &b| {
+                                let cmp = values.value(a).total_cmp(&values.value(b));
+                                if cfg["ascending"] == false {
+                                    cmp.reverse()
+                                } else {
+                                    cmp
+                                }
+                            });
+                        }
+                        let expected = crate::select_rows(
+                            batch,
+                            &righe_distinte(batch, &columns, &order, cfg["keep"].as_str().unwrap()),
+                        )
+                        .unwrap();
+                        assert_successo!(result, expected);
+                    }
+                }
+            }
+            for columns in [vec![0], vec![0, 1]] {
+                let names: Vec<_> = columns
+                    .iter()
+                    .map(|&i| if i == 0 { "g" } else { "s" })
+                    .collect();
+                for nulls_equal in [true, false] {
+                    let cfg = config(json!({"columns": names, "nulls_equal": nulls_equal}));
+                    let keys: Vec<_> = (0..rows)
+                        .map(|r| chiave_fixture(batch, &columns, r))
+                        .filter(|key| nulls_equal || key.iter().all(Option::is_some))
+                        .collect();
+                    let duplicate = keys.iter().enumerate().any(|(i, k)| keys[..i].contains(k));
+                    let result = quality::assert_unique(batch, &cfg);
+                    if duplicate {
+                        assert_rifiuto!(
+                            result,
+                            plenora_core::ErrorCategory::DataMapping,
+                            plenora_core::ErrorPhase::Write
+                        );
+                    } else {
+                        assert_successo!(result, *batch);
+                    }
+                    let unique = crate::select_rows(
+                        batch,
+                        &righe_distinte(batch, &columns, &(0..rows).collect::<Vec<_>>(), "first"),
+                    )
+                    .unwrap();
+                    assert_successo!(quality::assert_unique(&unique, &cfg), unique);
                 }
             }
         }
     }
 }
 
-#[test]
-fn distinct_dedup_assert_unique_come_sul_testo_rimappato() {
-    for (rows, seed) in [(0_usize, 1_u64), (1, 2), (13, 3), (200, 4), (1_000, 5)] {
-        let batch = fixture(rows, seed, 0);
-        let rimappa = Rimappa::new(&[&batch]);
-        let rimappato = rimappa.batch(&batch);
-        for subset in [
-            json!(["g"]),
-            json!(["g", "s"]),
-            json!(["s", "g"]),
-            json!([]),
-        ] {
-            for keep in ["first", "last", "false"] {
-                let cfg = json!({"subset": subset, "keep": keep});
-                assert_same_outcome_bits(
-                    rimappa.esito(aggregation::distinct(&batch, &config(cfg.clone()))),
-                    aggregation::distinct(&rimappato, &config(cfg)),
-                );
-            }
-            for cfg in [
-                json!({"subset": subset, "keep": "first"}),
-                json!({"subset": subset, "keep": "last", "order_column": "v"}),
-                json!({"subset": subset, "keep": "first", "order_column": "v", "ascending": false}),
-            ] {
-                assert_same_outcome_bits(
-                    rimappa.esito(aggregation::dedup_advanced(&batch, &config(cfg.clone()))),
-                    aggregation::dedup_advanced(&rimappato, &config(cfg)),
-                );
-            }
-        }
-        for columns in [json!(["g"]), json!(["g", "s"])] {
-            for nulls_equal in [true, false] {
-                let cfg = json!({"columns": columns, "nulls_equal": nulls_equal});
-                // Con duplicati: stesso errore e stessa diagnostica di riga.
-                assert_same_outcome_bits(
-                    rimappa.esito(quality::assert_unique(&batch, &config(cfg.clone()))),
-                    quality::assert_unique(&rimappato, &config(cfg.clone())),
-                );
-                // Senza duplicati: il batch passa invariato.
-                let distinti = aggregation::distinct(
-                    &batch,
-                    &config(json!({"subset": columns, "keep": "first"})),
-                )
-                .expect("distinct");
-                let rimappa = Rimappa::new(&[&distinti]);
-                assert_same_outcome_bits(
-                    rimappa.esito(quality::assert_unique(&distinti, &config(cfg.clone()))),
-                    quality::assert_unique(&rimappa.batch(&distinti), &config(cfg)),
-                );
-            }
-        }
+/// Materializza le coppie scelte dall'oracolo con il solo take Arrow.
+fn batch_coppie(
+    left: &RecordBatch,
+    right: &RecordBatch,
+    keys: &[usize],
+    pairs: &[(usize, Option<usize>)],
+    asof: bool,
+) -> RecordBatch {
+    use plenora_core::arrow::array::UInt32Array;
+    assert!(left.schema().metadata().is_empty() && right.schema().metadata().is_empty());
+    assert!(left
+        .schema()
+        .fields()
+        .iter()
+        .chain(right.schema().fields())
+        .all(|f| f.metadata().is_empty()));
+    let li = UInt32Array::from(
+        pairs
+            .iter()
+            .map(|p| u32::try_from(p.0).unwrap())
+            .collect::<Vec<_>>(),
+    );
+    let ri = UInt32Array::from(
+        pairs
+            .iter()
+            .map(|p| p.1.map(|r| u32::try_from(r).unwrap()))
+            .collect::<Vec<_>>(),
+    );
+    let mut fields = Vec::new();
+    let mut columns = Vec::new();
+    for (i, field) in left.schema().fields().iter().enumerate() {
+        let name = if asof || keys.contains(&i) {
+            field.name().clone()
+        } else {
+            format!("{}_L", field.name())
+        };
+        fields.push(field.as_ref().clone().with_name(name).with_nullable(true));
+        columns.push(
+            plenora_core::arrow::select::take::take(left.column(i).as_ref(), &li, None).unwrap(),
+        );
     }
+    for (i, field) in right.schema().fields().iter().enumerate() {
+        if keys.contains(&i) || asof && i == 3 {
+            continue;
+        }
+        fields.push(
+            field
+                .as_ref()
+                .clone()
+                .with_name(format!("{}_R", field.name()))
+                .with_nullable(true),
+        );
+        columns.push(
+            plenora_core::arrow::select::take::take(right.column(i).as_ref(), &ri, None).unwrap(),
+        );
+    }
+    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn join_semi_anti_asof_come_sul_testo_rimappato() {
     let limits = Limits::default();
     for (left_rows, right_rows, seed) in [(0_usize, 5_usize, 1_u64), (17, 0, 2), (60, 45, 3)] {
         let left = fixture(left_rows, seed, 0);
         let right = fixture(right_rows, seed.wrapping_mul(31), 1_000);
         let rimappa = Rimappa::new(&[&left, &right]);
-        let (left_r, right_r) = (rimappa.batch(&left), rimappa.batch(&right));
-        for keys in [json!(["g"]), json!(["g", "s"])] {
-            for how in ["inner", "left", "right", "outer"] {
-                let cfg = json!({"left_keys": keys, "right_keys": keys, "how": how});
-                assert_same_outcome_bits(
-                    rimappa.esito(joins::join(&left, &right, &config(cfg.clone()), &limits)),
-                    joins::join(&left_r, &right_r, &config(cfg), &limits),
+        for (left, right) in [
+            (left.clone(), right.clone()),
+            (rimappa.batch(&left), rimappa.batch(&right)),
+        ] {
+            for keys in [vec![0], vec![0, 1]] {
+                let names: Vec<_> = keys
+                    .iter()
+                    .map(|&i| if i == 0 { "g" } else { "s" })
+                    .collect();
+                let matches: Vec<Vec<usize>> = (0..left_rows)
+                    .map(|l| {
+                        let key = chiave_fixture(&left, &keys, l);
+                        (0..right_rows)
+                            .filter(|&r| {
+                                key.iter().all(Option::is_some)
+                                    && key == chiave_fixture(&right, &keys, r)
+                            })
+                            .collect()
+                    })
+                    .collect();
+                for how in ["inner", "left", "right", "outer"] {
+                    let result = joins::join(
+                        &left,
+                        &right,
+                        &config(json!({"left_keys": names, "right_keys": names, "how": how})),
+                        &limits,
+                    );
+                    if matches!(how, "right" | "outer") {
+                        assert_rifiuto!(
+                            result,
+                            plenora_core::ErrorCategory::Schema,
+                            plenora_core::ErrorPhase::Validate
+                        );
+                    } else {
+                        let pairs: Vec<_> = matches
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(l, rs)| {
+                                if rs.is_empty() && how == "left" {
+                                    vec![(l, None)]
+                                } else {
+                                    rs.iter().map(|&r| (l, Some(r))).collect()
+                                }
+                            })
+                            .collect();
+                        assert_successo!(result, batch_coppie(&left, &right, &keys, &pairs, false));
+                    }
+                }
+                let cfg = config(json!({"left_keys": names, "right_keys": names}));
+                let semi: Vec<_> = matches
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, rs)| !rs.is_empty())
+                    .map(|(l, _)| l)
+                    .collect();
+                let anti: Vec<_> = matches
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, rs)| rs.is_empty())
+                    .map(|(l, _)| l)
+                    .collect();
+                assert_successo!(
+                    joins::semi_join(&left, &right, &cfg),
+                    crate::select_rows(&left, &semi).unwrap()
+                );
+                assert_successo!(
+                    joins::anti_join(&left, &right, &cfg),
+                    crate::select_rows(&left, &anti).unwrap()
+                );
+                let lv = left
+                    .column(3)
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .unwrap();
+                let rv = right
+                    .column(3)
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .unwrap();
+                let pairs: Vec<_> = matches
+                    .iter()
+                    .enumerate()
+                    .map(|(l, rs)| {
+                        let best = rs
+                            .iter()
+                            .copied()
+                            .filter(|&r| rv.value(r) <= lv.value(l))
+                            .max_by(|&a, &b| rv.value(a).total_cmp(&rv.value(b)).then(a.cmp(&b)));
+                        (l, best)
+                    })
+                    .collect();
+                assert_successo!(
+                    joins::asof_join(
+                        &left,
+                        &right,
+                        &config(
+                            json!({"left_on": "v", "right_on": "v", "left_by": names, "right_by": names})
+                        ),
+                        &limits
+                    ),
+                    batch_coppie(&left, &right, &keys, &pairs, true)
                 );
             }
-            let cfg = json!({"left_keys": keys, "right_keys": keys});
-            assert_same_outcome_bits(
-                rimappa.esito(joins::semi_join(&left, &right, &config(cfg.clone()))),
-                joins::semi_join(&left_r, &right_r, &config(cfg.clone())),
-            );
-            assert_same_outcome_bits(
-                rimappa.esito(joins::anti_join(&left, &right, &config(cfg.clone()))),
-                joins::anti_join(&left_r, &right_r, &config(cfg)),
-            );
-            let cfg = json!({"left_on": "v", "right_on": "v", "left_by": keys, "right_by": keys});
-            assert_same_outcome_bits(
-                rimappa.esito(joins::asof_join(
-                    &left,
-                    &right,
-                    &config(cfg.clone()),
-                    &limits,
-                )),
-                joins::asof_join(&left_r, &right_r, &config(cfg), &limits),
-            );
         }
     }
 }
 
+/// Resoconto indipendente, una riga per chiave univoca nell'ordine documentato.
+#[allow(clippy::too_many_lines)]
+fn differenze_attese(
+    left: &RecordBatch,
+    right: &RecordBatch,
+    keys: &[usize],
+    include: bool,
+) -> RecordBatch {
+    let lk: Vec<_> = (0..left.num_rows())
+        .map(|r| chiave_fixture(left, keys, r))
+        .collect();
+    let rk: Vec<_> = (0..right.num_rows())
+        .map(|r| chiave_fixture(right, keys, r))
+        .collect();
+    let lv = left
+        .column(3)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    let rv = right
+        .column(3)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    let mut sources = Vec::new();
+    let mut status = Vec::new();
+    let mut changed = Vec::new();
+    let mut old = Vec::new();
+    for (l, key) in lk.iter().enumerate() {
+        let r = rk.iter().position(|k| k == key);
+        match r {
+            Some(r) if lv.value(l).to_bits() != rv.value(r).to_bits() => {
+                sources.push((right, r));
+                status.push("MODIFIED");
+                changed.push(Some("v"));
+                old.push(Some(lv.value(l).to_string()));
+            }
+            Some(r) if include => {
+                sources.push((right, r));
+                status.push("UNCHANGED");
+                changed.push(None);
+                old.push(None);
+            }
+            Some(_) => {}
+            None => {
+                sources.push((left, l));
+                status.push("DELETED");
+                changed.push(None);
+                old.push(None);
+            }
+        }
+    }
+    for (r, key) in rk.iter().enumerate() {
+        if !lk.contains(key) {
+            sources.push((right, r));
+            status.push("ADDED");
+            changed.push(None);
+            old.push(None);
+        }
+    }
+    let mut fields = Vec::new();
+    let mut columns: Vec<ArrayRef> = Vec::new();
+    for &i in keys {
+        fields.push(Field::new(
+            if i == 0 { "g" } else { "s" },
+            if i == 0 {
+                DataType::Binary
+            } else {
+                DataType::Utf8
+            },
+            true,
+        ));
+        if i == 0 {
+            columns.push(Arc::new(BinaryArray::from(
+                sources
+                    .iter()
+                    .map(|(b, r)| {
+                        let a = b.column(0).as_any().downcast_ref::<BinaryArray>().unwrap();
+                        (!a.is_null(*r)).then(|| a.value(*r))
+                    })
+                    .collect::<Vec<_>>(),
+            )));
+        } else {
+            columns.push(Arc::new(StringArray::from(
+                sources
+                    .iter()
+                    .map(|(b, r)| {
+                        let a = b.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+                        (!a.is_null(*r)).then(|| a.value(*r))
+                    })
+                    .collect::<Vec<_>>(),
+            )));
+        }
+    }
+    fields.extend([
+        Field::new("v", DataType::Float64, true),
+        Field::new("_diff_status", DataType::Utf8, false),
+        Field::new("_diff_columns", DataType::Utf8, true),
+        Field::new("_diff_old_values", DataType::Utf8, true),
+    ]);
+    columns.extend([
+        Arc::new(Float64Array::from(
+            sources
+                .iter()
+                .map(|(b, r)| {
+                    b.column(3)
+                        .as_any()
+                        .downcast_ref::<Float64Array>()
+                        .unwrap()
+                        .value(*r)
+                })
+                .collect::<Vec<_>>(),
+        )) as ArrayRef,
+        Arc::new(StringArray::from(status)),
+        Arc::new(StringArray::from(changed)),
+        Arc::new(StringArray::from(old)),
+    ]);
+    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
+}
+
 #[test]
+#[allow(clippy::too_many_lines)]
 fn reconcile_foreign_key_table_diff_set_operation_come_sul_testo_rimappato() {
+    use plenora_core::arrow::array::UInt64Array;
     let limits = Limits::default();
     for (left_rows, right_rows, seed) in [(0_usize, 6_usize, 11_u64), (9, 0, 12), (50, 70, 13)] {
         let left = fixture(left_rows, seed, 0);
         let right = fixture(right_rows, seed.wrapping_mul(17), 1_000);
         let rimappa = Rimappa::new(&[&left, &right]);
-        let (left_r, right_r) = (rimappa.batch(&left), rimappa.batch(&right));
-        for keys in [json!(["g"]), json!(["g", "s"])] {
-            for nulls_equal in [true, false] {
-                let cfg =
-                    json!({"left_keys": keys, "right_keys": keys, "nulls_equal": nulls_equal});
-                assert_same_outcome_bits(
-                    governance::reconcile(&left, &right, &config(cfg.clone()), &limits),
-                    governance::reconcile(&left_r, &right_r, &config(cfg), &limits),
-                );
-            }
-            for allow_null in [true, false] {
-                let cfg = json!({"left_keys": keys, "right_keys": keys, "allow_null": allow_null});
-                assert_same_outcome_bits(
-                    rimappa.esito(governance::assert_foreign_key(
-                        &left,
-                        &right,
-                        &config(cfg.clone()),
-                        &limits,
-                    )),
-                    governance::assert_foreign_key(&left_r, &right_r, &config(cfg), &limits),
-                );
-                // Lato destro che contiene il sinistro: la chiave c'e'.
-                let cfg = json!({"left_keys": keys, "right_keys": keys, "allow_null": allow_null});
-                assert_same_outcome_bits(
-                    rimappa.esito(governance::assert_foreign_key(
-                        &left,
-                        &left,
-                        &config(cfg.clone()),
-                        &limits,
-                    )),
-                    governance::assert_foreign_key(&left_r, &left_r, &config(cfg), &limits),
-                );
-            }
-            // Chiavi uniche per lato (altrimenti `table_diff` rifiuta, e
-            // anche quel rifiuto deve coincidere).
-            let unici = |batch: &RecordBatch| {
-                aggregation::distinct(batch, &config(json!({"subset": keys}))).expect("distinct")
-            };
-            for (l, r) in [(left.clone(), right.clone()), (unici(&left), unici(&right))] {
-                let (l_r, r_r) = (rimappa.batch(&l), rimappa.batch(&r));
-                for include in ["no", "yes"] {
-                    let cfg = json!({"left_keys": keys, "right_keys": keys,
-                                     "compare_columns": ["v"], "include_unchanged": include});
-                    assert_same_outcome_bits(
-                        rimappa.esito(reshape::table_diff(&l, &r, &config(cfg.clone()), &limits)),
-                        reshape::table_diff(&l_r, &r_r, &config(cfg), &limits),
+        for (left, right) in [
+            (left.clone(), right.clone()),
+            (rimappa.batch(&left), rimappa.batch(&right)),
+        ] {
+            for keys in [vec![0], vec![0, 1]] {
+                let names: Vec<_> = keys
+                    .iter()
+                    .map(|&i| if i == 0 { "g" } else { "s" })
+                    .collect();
+                let lk: Vec<_> = (0..left_rows)
+                    .map(|r| chiave_fixture(&left, &keys, r))
+                    .collect();
+                let rk: Vec<_> = (0..right_rows)
+                    .map(|r| chiave_fixture(&right, &keys, r))
+                    .collect();
+                for nulls_equal in [true, false] {
+                    let counts = |rows: &[Vec<Option<Vec<u8>>>]| {
+                        let mut counts = BTreeMap::new();
+                        for key in rows {
+                            if nulls_equal || key.iter().all(Option::is_some) {
+                                *counts.entry(key.clone()).or_insert(0_u64) += 1;
+                            }
+                        }
+                        counts
+                    };
+                    let lc = counts(&lk);
+                    let rc = counts(&rk);
+                    let matched: u64 = lc
+                        .iter()
+                        .map(|(key, &n)| n.min(*rc.get(key).unwrap_or(&0)))
+                        .sum();
+                    let expected = RecordBatch::try_new(
+                        Arc::new(Schema::new(vec![
+                            Field::new("metric", DataType::Utf8, false),
+                            Field::new("value", DataType::UInt64, false),
+                        ])),
+                        vec![
+                            Arc::new(StringArray::from(vec![
+                                "matched_rows",
+                                "left_only_rows",
+                                "right_only_rows",
+                                "left_duplicate_rows",
+                                "right_duplicate_rows",
+                            ])),
+                            Arc::new(UInt64Array::from(vec![
+                                matched,
+                                u64::try_from(left_rows).unwrap() - matched,
+                                u64::try_from(right_rows).unwrap() - matched,
+                                lc.values().map(|n| n - 1).sum(),
+                                rc.values().map(|n| n - 1).sum(),
+                            ])),
+                        ],
+                    )
+                    .unwrap();
+                    assert_successo!(
+                        governance::reconcile(
+                            &left,
+                            &right,
+                            &config(
+                                json!({"left_keys": names, "right_keys": names, "nulls_equal": nulls_equal})
+                            ),
+                            &limits
+                        ),
+                        expected
                     );
                 }
+                for allow_null in [true, false] {
+                    let cfg = config(
+                        json!({"left_keys": names, "right_keys": names, "allow_null": allow_null}),
+                    );
+                    for (right, right_keys) in [(&right, &rk), (&left, &lk)] {
+                        let fails = lk.iter().any(|key| {
+                            if key.iter().any(Option::is_none) {
+                                !allow_null
+                            } else {
+                                !right_keys.contains(key)
+                            }
+                        });
+                        let result = governance::assert_foreign_key(&left, right, &cfg, &limits);
+                        if fails {
+                            assert_rifiuto!(
+                                result,
+                                plenora_core::ErrorCategory::DataMapping,
+                                plenora_core::ErrorPhase::Write
+                            );
+                        } else {
+                            assert_successo!(result, left);
+                        }
+                    }
+                }
+                let unique = |b: &RecordBatch| {
+                    crate::select_rows(
+                        b,
+                        &righe_distinte(b, &keys, &(0..b.num_rows()).collect::<Vec<_>>(), "first"),
+                    )
+                    .unwrap()
+                };
+                for (l, r) in [
+                    (left.clone(), right.clone()),
+                    (unique(&left), unique(&right)),
+                ] {
+                    let duplicate = [&l, &r].iter().any(|b| {
+                        let keys: Vec<_> = (0..b.num_rows())
+                            .map(|row| chiave_fixture(b, &keys, row))
+                            .collect();
+                        keys.iter()
+                            .enumerate()
+                            .any(|(i, key)| keys[..i].contains(key))
+                    });
+                    for include in ["no", "yes"] {
+                        let cfg = config(
+                            json!({"left_keys": names, "right_keys": names, "compare_columns": ["v"], "include_unchanged": include}),
+                        );
+                        let result = reshape::table_diff(&l, &r, &cfg, &limits);
+                        if duplicate {
+                            assert_rifiuto!(
+                                result,
+                                plenora_core::ErrorCategory::InvalidPlan,
+                                plenora_core::ErrorPhase::Validate
+                            );
+                        } else {
+                            assert_successo!(
+                                result,
+                                differenze_attese(&l, &r, &keys, include == "yes")
+                            );
+                        }
+                    }
+                }
             }
+            let l = left.project(&[0, 1]).unwrap();
+            let r = right.project(&[0, 1]).unwrap();
+            let joined =
+                plenora_core::arrow::select::concat::concat_batches(&l.schema(), [&l, &r]).unwrap();
+            let lk: Vec<_> = (0..l.num_rows())
+                .map(|row| chiave_fixture(&l, &[0, 1], row))
+                .collect();
+            let rk: Vec<_> = (0..r.num_rows())
+                .map(|row| chiave_fixture(&r, &[0, 1], row))
+                .collect();
+            let unique = righe_distinte(
+                &joined,
+                &[0, 1],
+                &(0..joined.num_rows()).collect::<Vec<_>>(),
+                "first",
+            );
+            assert_successo!(
+                setops::union_distinct(&l, &r, &setops::SetOperation {}, &limits),
+                crate::select_rows(&joined, &unique).unwrap()
+            );
+            let unique_left =
+                righe_distinte(&l, &[0, 1], &(0..l.num_rows()).collect::<Vec<_>>(), "first");
+            let intersection: Vec<_> = unique_left
+                .iter()
+                .copied()
+                .filter(|&row| rk.contains(&lk[row]))
+                .collect();
+            let except: Vec<_> = unique_left
+                .iter()
+                .copied()
+                .filter(|&row| !rk.contains(&lk[row]))
+                .collect();
+            assert_successo!(
+                setops::intersect(&l, &r, &setops::SetOperation {}),
+                crate::select_rows(&l, &intersection).unwrap()
+            );
+            assert_successo!(
+                setops::except(&l, &r, &setops::SetOperation {}),
+                crate::select_rows(&l, &except).unwrap()
+            );
         }
-        // Set operation su (g, s): le chiavi compatte erano gia' in byte.
-        let proietta = |batch: &RecordBatch| batch.project(&[0, 1]).expect("proiezione");
-        let (l, r) = (proietta(&left), proietta(&right));
-        let (l_r, r_r) = (rimappa.batch(&l), rimappa.batch(&r));
-        let vuota = setops::SetOperation {};
-        assert_same_outcome_bits(
-            rimappa.esito(setops::union_distinct(&l, &r, &vuota, &limits)),
-            setops::union_distinct(&l_r, &r_r, &vuota, &limits),
-        );
-        assert_same_outcome_bits(
-            rimappa.esito(setops::intersect(&l, &r, &vuota)),
-            setops::intersect(&l_r, &r_r, &vuota),
-        );
-        assert_same_outcome_bits(
-            rimappa.esito(setops::except(&l, &r, &vuota)),
-            setops::except(&l_r, &r_r, &vuota),
-        );
     }
 }
 

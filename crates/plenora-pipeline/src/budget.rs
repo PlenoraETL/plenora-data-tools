@@ -126,6 +126,7 @@ impl Costo {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::{costo_di, Costo, Ingresso};

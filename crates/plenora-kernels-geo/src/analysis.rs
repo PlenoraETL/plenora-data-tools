@@ -656,6 +656,7 @@ impl IndiceVicini {
     /// # Errors
     ///
     /// `CalcoloNonConcluso` se la distanza del primo candidato va in panico.
+    #[deny(clippy::disallowed_methods)]
     #[cfg(test)]
     fn candidati(
         &self,
@@ -907,9 +908,11 @@ pub fn count_points_in_polygons_validated_con_margine(
     Ok(counts)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod nearest_oracolo;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1037,9 +1040,10 @@ mod tests {
             minimum_distances(std::slice::from_ref(&bowtie), &[point(0.0, 0.0)], 10),
             Err(AnalysisError::InvalidGeometry { side: "left", .. })
         ));
-        assert!(
-            minimum_distances_validated(std::slice::from_ref(&bowtie), &[point(0.0, 0.0)], 10)
-                .is_ok()
+        assert_eq!(
+            (minimum_distances_validated(std::slice::from_ref(&bowtie), &[point(0.0, 0.0)], 10))
+                .expect("successo atteso"),
+            vec![Some(0.0)]
         );
     }
 
@@ -1050,21 +1054,32 @@ mod tests {
             Err(AnalysisError::InvalidWorkLimit)
         ));
         assert_eq!(minimum_distances(&[None], &[], 1).unwrap(), vec![None]);
-        assert!(minimum_distances(
-            &[Some(Geometry::Point(Point::new(f64::NAN, 0.0)))],
-            &[point(0.0, 0.0)],
-            10,
-        )
-        .is_err());
-        assert!(nearest_matches(
-            &[point(0.0, 0.0)],
-            &[point(0.0, 0.0)],
-            Some(f64::NAN),
-            10,
-            10,
-        )
-        .is_err());
-        assert!(nearest_matches(&[point(0.0, 0.0)], &[point(0.0, 0.0)], None, 0, 10).is_err());
+        assert!(matches!(
+            minimum_distances(
+                &[Some(Geometry::Point(Point::new(f64::NAN, 0.0)))],
+                &[point(0.0, 0.0)],
+                10,
+            ),
+            Err(AnalysisError::InvalidGeometry {
+                side: "left",
+                index: 0,
+                ..
+            })
+        ));
+        assert!(matches!(
+            nearest_matches(
+                &[point(0.0, 0.0)],
+                &[point(0.0, 0.0)],
+                Some(f64::NAN),
+                10,
+                10,
+            ),
+            Err(AnalysisError::InvalidMaximumDistance)
+        ));
+        assert!(matches!(
+            nearest_matches(&[point(0.0, 0.0)], &[point(0.0, 0.0)], None, 0, 10),
+            Err(AnalysisError::InvalidWorkLimit)
+        ));
         assert!(matches!(
             nearest_matches(
                 &[point(0.0, 0.0)],

@@ -97,3 +97,26 @@ def piano_lungo(passi: int) -> dict[str, Any]:
         )
         precedente = f"s{indice}"
     return {"version": 1, "inputs": ["t"], "steps": lista, "outputs": [precedente]}
+
+
+def assert_successo_tabella(ottenuta: pa.Table, valori: dict[str, list[Any]], primo_id: int = 0) -> None:
+    """Atteso della fixture semplice, inclusi tipi, nullability e metadati."""
+    schema = pa.schema([
+        pa.field(nome, tipo, nullable=True, metadata={"plenora.field_id": str(primo_id + indice)})
+        for indice, (nome, tipo) in enumerate([
+            ("id", pa.int64()), ("nome", pa.string()), ("importo", pa.float64()),
+        ])
+    ], metadata={"plenora.contract.version": "1"})
+    attesa = pa.Table.from_pydict(valori, schema=schema)
+    assert ottenuta.equals(attesa, check_metadata=True)
+
+
+def assert_filtro_e_ordine(tabelle: Any) -> None:
+    """id > 1, poi ordine crescente; ID nuovi distinti fra le uscite."""
+    assert list(tabelle) == ["alti", "ordinati"]
+    assert_successo_tabella(tabelle["alti"], {
+        "id": [3, 2, 5, 4], "nome": ["c", "b", "e", "d"], "importo": [3.5, 2.25, 5.0, 4.75],
+    })
+    assert_successo_tabella(tabelle["ordinati"], {
+        "id": [2, 3, 4, 5], "nome": ["b", "c", "d", "e"], "importo": [2.25, 3.5, 4.75, 5.0],
+    }, primo_id=3)

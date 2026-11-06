@@ -572,6 +572,7 @@ fn distanza_finita(distanza: f64) -> Result<f64, ExtendedError> {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 // Confronti float esatti intenzionali: le fixture sono costruite per
 // produrre valori esatti (coordinate note, round-trip bit-esatti); il
@@ -704,7 +705,10 @@ mod tests {
             hausdorff_distance(&bowtie, &line, 100),
             Err(ExtendedError::InvalidInput(_))
         ));
-        assert!(hausdorff_distance_validated(&bowtie, &line, 100).is_ok());
+        assert_eq!(
+            (hausdorff_distance_validated(&bowtie, &line, 100)).expect("successo atteso"),
+            Some(2.0)
+        );
         assert!(matches!(
             affine_transform(&bowtie, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             Err(ExtendedError::InvalidInput(_))
@@ -725,12 +729,14 @@ mod tests {
             haversine_distance_m(bologna, modena, &crate::geodetica::wgs84_di_prova()).unwrap();
         assert!(geodesic > 35_000.0 && geodesic < 40_000.0);
         assert!((geodesic - haversine).abs() < 200.0);
-        assert!(geodesic_distance_m(
-            Point::new(200.0, 0.0),
-            modena,
-            &crate::geodetica::wgs84_di_prova()
-        )
-        .is_err());
+        assert!(matches!(
+            geodesic_distance_m(
+                Point::new(200.0, 0.0),
+                modena,
+                &crate::geodetica::wgs84_di_prova()
+            ),
+            Err(ExtendedError::InvalidGeographicCoordinate)
+        ));
 
         let equator = line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 0.0)];
         let length = geodesic_line_length_m(&equator, &crate::geodetica::wgs84_di_prova()).unwrap();
@@ -740,36 +746,67 @@ mod tests {
     #[test]
     fn every_invalid_parameter_and_empty_path_is_fail_closed() {
         let line = Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 1.0, y: 1.0)]);
-        assert!(affine_transform(&line, [f64::NAN; 6]).is_err());
-        assert!(affine_transform(
-            &Geometry::Point(Point::new(f64::NAN, 0.0)),
-            [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
-        )
-        .is_err());
-        assert!(rotate_about(&line, f64::INFINITY, Point::new(0.0, 0.0)).is_err());
+        assert!(matches!(
+            affine_transform(&line, [f64::NAN; 6]),
+            Err(ExtendedError::InvalidParameter {
+                name: "coefficients",
+                ..
+            })
+        ));
+        assert!(matches!(
+            affine_transform(
+                &Geometry::Point(Point::new(f64::NAN, 0.0)),
+                [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+            ),
+            Err(ExtendedError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            rotate_about(&line, f64::INFINITY, Point::new(0.0, 0.0)),
+            Err(ExtendedError::InvalidParameter {
+                name: "degrees",
+                ..
+            })
+        ));
         for (concavity, threshold) in [(0.0, 0.0), (f64::NAN, 0.0), (1.0, -1.0), (1.0, f64::NAN)] {
-            assert!(concave_hull(&line, concavity, threshold, 100).is_err());
+            let name = if concavity == 0.0 || concavity.is_nan() {
+                "concavity"
+            } else {
+                "length_threshold"
+            };
+            assert!(
+                matches!(concave_hull(&line, concavity, threshold, 100), Err(ExtendedError::InvalidParameter { name: obtained, .. }) if obtained == name)
+            );
         }
         let empty = Geometry::LineString(geo::LineString::new(Vec::new()));
         assert_eq!(hausdorff_distance(&empty, &line, 100).unwrap(), None);
-        assert!(hausdorff_distance(&line, &line, 1).is_err());
+        assert!(matches!(
+            hausdorff_distance(&line, &line, 1),
+            Err(ExtendedError::WorkLimit {
+                actual: 4,
+                limit: 1
+            })
+        ));
         for point in [
             Point::new(181.0, 0.0),
             Point::new(0.0, 91.0),
             Point::new(f64::NAN, 0.0),
         ] {
-            assert!(haversine_distance_m(
-                point,
-                Point::new(0.0, 0.0),
-                &crate::geodetica::wgs84_di_prova()
-            )
-            .is_err());
-            assert!(geodesic_distance_m(
-                point,
-                Point::new(0.0, 0.0),
-                &crate::geodetica::wgs84_di_prova()
-            )
-            .is_err());
+            assert!(matches!(
+                haversine_distance_m(
+                    point,
+                    Point::new(0.0, 0.0),
+                    &crate::geodetica::wgs84_di_prova()
+                ),
+                Err(ExtendedError::InvalidGeographicCoordinate)
+            ));
+            assert!(matches!(
+                geodesic_distance_m(
+                    point,
+                    Point::new(0.0, 0.0),
+                    &crate::geodetica::wgs84_di_prova()
+                ),
+                Err(ExtendedError::InvalidGeographicCoordinate)
+            ));
         }
     }
 }

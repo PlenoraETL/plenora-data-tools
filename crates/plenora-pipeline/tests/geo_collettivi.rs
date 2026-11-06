@@ -91,7 +91,8 @@ fn multi() -> RecordBatch {
 #[test]
 fn le_espansioni_sono_i_kernel() {
     let ingresso = multi();
-    let uscita = un_passo("geo.explode", json!({}), std::slice::from_ref(&ingresso)).unwrap();
+    let uscita =
+        un_passo_verificato("geo.explode", json!({}), std::slice::from_ref(&ingresso)).unwrap();
     let mut madri = Vec::new();
     let mut parti = Vec::new();
     for (riga, g) in geometrie(&ingresso, "geometry").iter().enumerate() {
@@ -102,6 +103,24 @@ fn le_espansioni_sono_i_kernel() {
             }
         }
     }
+    let attese_indipendenti = [
+        Geometry::Polygon(quadrato(X0, Y0, 10.0)),
+        Geometry::Polygon(quadrato(X0 + 20.0, Y0, 10.0)),
+        Geometry::LineString(LineString::from(vec![(X0, Y0), (X0 + 5.0, Y0 + 5.0)])),
+        Geometry::LineString(LineString::from(vec![(X0 + 9.0, Y0), (X0 + 9.0, Y0 + 5.0)])),
+        Geometry::LineString(LineString::from(vec![
+            (X0 + 12.0, Y0),
+            (X0 + 19.0, Y0 + 5.0),
+        ])),
+    ];
+    assert_eq!(
+        geometrie(&uscita, "geometry"),
+        attese_indipendenti
+            .into_iter()
+            .map(Some)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(madri, [0, 0, 2, 2, 2]);
     assert_eq!(uscita.num_rows(), 5);
     assert_eq!(
         colonna(&uscita, "geometry").as_ref(),
@@ -128,7 +147,8 @@ fn le_espansioni_sono_i_kernel() {
             (X0 + 12.0, Y0 + 12.0),
         ])))],
     );
-    let uscita = un_passo("geo.delaunay", json!({}), std::slice::from_ref(&nuvola)).unwrap();
+    let uscita =
+        un_passo_verificato("geo.delaunay", json!({}), std::slice::from_ref(&nuvola)).unwrap();
     let triangoli: Vec<Option<Vec<u8>>> = extended_algorithms::delaunay(
         geometrie(&nuvola, "geometry")[0].as_ref().unwrap(),
         u64::MAX,
@@ -143,6 +163,36 @@ fn le_espansioni_sono_i_kernel() {
         &binaria(&triangoli) as &dyn Array
     );
 
+    let triangoli_attesi = Geometry::MultiPolygon(MultiPolygon(vec![
+        Polygon::new(
+            LineString::from(vec![
+                (X0, Y0),
+                (X0 + 10.0, Y0),
+                (X0 + 5.0, Y0 + 8.0),
+                (X0, Y0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (X0 + 10.0, Y0),
+                (X0 + 12.0, Y0 + 12.0),
+                (X0 + 5.0, Y0 + 8.0),
+                (X0 + 10.0, Y0),
+            ]),
+            vec![],
+        ),
+    ]));
+    let triangoli_ottenuti = Geometry::MultiPolygon(MultiPolygon(
+        geometrie(&uscita, "geometry")
+            .into_iter()
+            .map(|g| match g.expect("triangolo") {
+                Geometry::Polygon(p) => p,
+                _ => panic!("triangolo poligonale"),
+            })
+            .collect(),
+    ));
+    comune_geo::assert_poligoni(&triangoli_ottenuti, &triangoli_attesi);
     // Subdivide: la riga null resta, con geometria null.
     let denso = Geometry::Polygon(Polygon::new(
         LineString::from(
@@ -160,7 +210,7 @@ fn le_espansioni_sono_i_kernel() {
         vec![],
     ));
     let ingresso = tabella(UTM, &[Some(denso.clone()), None]);
-    let uscita = un_passo(
+    let uscita = un_passo_verificato(
         "geo.subdivide",
         json!({"max_vertices": 8}),
         std::slice::from_ref(&ingresso),
@@ -180,13 +230,29 @@ fn le_espansioni_sono_i_kernel() {
         &binaria(&attese) as &dyn Array
     );
 
+    let suddivise = geometrie(&uscita, "geometry");
+    assert!(suddivise.last().expect("null preservato").is_none());
+    let parti: Vec<Polygon<f64>> = suddivise[..suddivise.len() - 1]
+        .iter()
+        .map(|g| match g.as_ref().expect("parte") {
+            Geometry::Polygon(p) => {
+                assert!(p.exterior().0.len() <= 8);
+                p.clone()
+            }
+            _ => panic!("parte poligonale"),
+        })
+        .collect();
+    let Geometry::Polygon(originale) = &denso else {
+        panic!("fixture poligonale")
+    };
+    comune_geo::assert_partizione(originale, &parti);
     // Split: l'adapter dei kernel, con la lama su ogni riga.
     let lama = Geometry::LineString(LineString::from(vec![
         (X0 + 25.0, Y0 - 10.0),
         (X0 + 25.0, Y0 + 200.0),
     ]));
     let ingresso = poligoni();
-    let uscita = un_passo(
+    let uscita = un_passo_verificato(
         "geo.split",
         json!({"other_wkb": esadecimale_di(&lama)}),
         std::slice::from_ref(&ingresso),
@@ -209,6 +275,30 @@ fn le_espansioni_sono_i_kernel() {
     )
     .unwrap();
     assert_eq!(colonna(&uscita, "geometry"), attese[0].column(2));
+    let rettangolo = |xmin, ymin, xmax, ymax| {
+        Geometry::Polygon(Polygon::new(
+            LineString::from(vec![
+                (xmin, ymin),
+                (xmax, ymin),
+                (xmax, ymax),
+                (xmin, ymax),
+                (xmin, ymin),
+            ]),
+            vec![],
+        ))
+    };
+    let parti = geometrie(&uscita, "geometry");
+    let parti_attese = [
+        rettangolo(X0, Y0, X0 + 25.0, Y0 + 100.0),
+        rettangolo(X0 + 25.0, Y0, X0 + 100.0, Y0 + 100.0),
+        Geometry::Polygon(quadrato(X0 + 50.0, Y0 + 50.0, 100.0)),
+        Geometry::Polygon(quadrato(X0 + 500.0, Y0, 30.0)),
+    ];
+    assert_eq!(parti.len(), parti_attese.len());
+    for (parte, attesa) in parti.iter().zip(&parti_attese) {
+        comune_geo::assert_poligoni(parte.as_ref().expect("parte"), attesa);
+    }
+
     assert_eq!(colonna(&uscita, "__parent_index"), attese[0].column(3));
 }
 
@@ -216,12 +306,32 @@ fn le_espansioni_sono_i_kernel() {
 #[test]
 fn le_aggregazioni_sono_i_kernel() {
     let ingresso = poligoni();
-    let uscita = un_passo("geo.dissolve", json!({}), std::slice::from_ref(&ingresso)).unwrap();
+    let uscita =
+        un_passo_verificato("geo.dissolve", json!({}), std::slice::from_ref(&ingresso)).unwrap();
     let presenti: Vec<Geometry<f64>> = geometrie(&ingresso, "geometry")
         .into_iter()
         .flatten()
         .collect();
     let unione = topology::dissolve(&presenti, centimetro()).unwrap();
+    let unione_attesa = Geometry::MultiPolygon(MultiPolygon(vec![
+        Polygon::new(
+            LineString::from(vec![
+                (X0, Y0),
+                (X0 + 100.0, Y0),
+                (X0 + 100.0, Y0 + 50.0),
+                (X0 + 150.0, Y0 + 50.0),
+                (X0 + 150.0, Y0 + 150.0),
+                (X0 + 50.0, Y0 + 150.0),
+                (X0 + 50.0, Y0 + 100.0),
+                (X0, Y0 + 100.0),
+                (X0, Y0),
+            ]),
+            vec![],
+        ),
+        quadrato(X0 + 500.0, Y0, 30.0),
+    ]));
+    comune_geo::assert_poligoni(&unione, &unione_attesa);
+
     assert_eq!(nomi(&uscita), ["geometry"]);
     assert_eq!(
         colonna(&uscita, "geometry").as_ref(),
@@ -229,7 +339,7 @@ fn le_aggregazioni_sono_i_kernel() {
     );
 
     let ingresso = punti();
-    let uscita = un_passo(
+    let uscita = un_passo_verificato(
         "geo.line_builder",
         json!({}),
         std::slice::from_ref(&ingresso),
@@ -242,7 +352,16 @@ fn le_aggregazioni_sono_i_kernel() {
         colonna(&uscita, "geometry").as_ref(),
         &binaria(&[Some(wkb(&linea))]) as &dyn Array
     );
-    let uscita = un_passo(
+    assert_eq!(
+        linea,
+        Geometry::LineString(LineString::from(vec![
+            (X0, Y0),
+            (X0 + 10.0, Y0 + 3.0),
+            (X0 + 400.0, Y0 - 20.0),
+            (X0 + 405.0, Y0 - 22.0)
+        ]))
+    );
+    let uscita = un_passo_verificato(
         "geo.polygon_builder",
         json!({}),
         std::slice::from_ref(&ingresso),
@@ -255,8 +374,22 @@ fn le_aggregazioni_sono_i_kernel() {
         &binaria(&[poligono.as_ref().map(wkb)]) as &dyn Array
     );
 
+    comune_geo::assert_poligoni(
+        poligono.as_ref().expect("poligono"),
+        &Geometry::Polygon(Polygon::new(
+            LineString::from(vec![
+                (X0, Y0),
+                (X0 + 10.0, Y0 + 3.0),
+                (X0 + 400.0, Y0 - 20.0),
+                (X0 + 405.0, Y0 - 22.0),
+                (X0, Y0),
+            ]),
+            vec![],
+        )),
+    );
     let ingresso = linee();
-    let uscita = un_passo("geo.line_merge", json!({}), std::slice::from_ref(&ingresso)).unwrap();
+    let uscita =
+        un_passo_verificato("geo.line_merge", json!({}), std::slice::from_ref(&ingresso)).unwrap();
     let raccolte: geo::GeometryCollection<f64> = geometrie(&ingresso, "geometry")
         .into_iter()
         .flatten()
@@ -270,6 +403,15 @@ fn le_aggregazioni_sono_i_kernel() {
     .into_iter()
     .map(|l| Some(wkb(&Geometry::LineString(l))))
     .collect();
+    assert_eq!(
+        geometrie(&uscita, "geometry"),
+        vec![Some(Geometry::LineString(LineString::from(vec![
+            (X0, Y0),
+            (X0 + 100.0, Y0 + 7.0),
+            (X0 + 200.0, Y0),
+            (X0 + 300.0, Y0 + 50.0)
+        ])))]
+    );
     assert_eq!(fuse.len(), 1);
     assert_eq!(
         colonna(&uscita, "geometry").as_ref(),
@@ -293,7 +435,8 @@ fn le_aggregazioni_sono_i_kernel() {
             ]))),
         ],
     );
-    let uscita = un_passo("geo.polygonize", json!({}), std::slice::from_ref(&anelli)).unwrap();
+    let uscita =
+        un_passo_verificato("geo.polygonize", json!({}), std::slice::from_ref(&anelli)).unwrap();
     let (_, attese) = polygonize_batches(
         &anelli.schema(),
         std::slice::from_ref(&anelli),
@@ -307,10 +450,31 @@ fn le_aggregazioni_sono_i_kernel() {
     assert_eq!(colonna(&uscita, "geometry"), attese[0].column(0));
     assert_eq!(colonna(&uscita, "__class"), attese[0].column(1));
 
+    let poligonizzate = geometrie(&uscita, "geometry");
+    assert_eq!(poligonizzate.len(), 2);
+    comune_geo::assert_poligoni(
+        poligonizzate[0].as_ref().expect("poligono"),
+        &Geometry::Polygon(quadrato(X0, Y0, 4.0)),
+    );
+    assert_eq!(
+        poligonizzate[1],
+        Some(Geometry::LineString(LineString::from(vec![
+            (X0 + 4.0, Y0 + 4.0),
+            (X0 + 6.0, Y0 + 6.0)
+        ])))
+    );
+    let classi = colonna(&uscita, "__class")
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("classi");
+    assert_eq!(
+        classi.iter().collect::<Vec<_>>(),
+        [Some("polygon"), Some("dangle")]
+    );
     // Collect: un gruppo per valore di `label`, le geometrie in ordine
     // d'ingresso; l'ordine dei gruppi e' deterministico.
     let ingresso = punti();
-    let uscita = un_passo(
+    let uscita = un_passo_verificato(
         "geo.collect",
         json!({"group_by": ["label"]}),
         std::slice::from_ref(&ingresso),
@@ -336,7 +500,24 @@ fn le_aggregazioni_sono_i_kernel() {
             .collect();
         assert_eq!(raccolta, &extensions::collect_geometries(&membri).unwrap());
     }
-    let di_nuovo = un_passo(
+    assert_eq!(
+        etichette.iter().collect::<Vec<_>>(),
+        [Some("dispari"), Some("pari")]
+    );
+    assert_eq!(
+        raccolte,
+        vec![
+            Some(Geometry::MultiPoint(MultiPoint::from(vec![
+                (X0 + 10.0, Y0 + 3.0),
+                (X0 + 400.0, Y0 - 20.0)
+            ]))),
+            Some(Geometry::MultiPoint(MultiPoint::from(vec![
+                (X0, Y0),
+                (X0 + 405.0, Y0 - 22.0)
+            ]))),
+        ]
+    );
+    let di_nuovo = un_passo_verificato(
         "geo.collect",
         json!({"group_by": ["label"]}),
         std::slice::from_ref(&ingresso),
@@ -469,6 +650,7 @@ fn collect_ordina_i_gruppi_per_valore() {
 
 /// Collettive allineate alle righe, coperture, griglia.
 #[test]
+#[allow(clippy::suboptimal_flops)] // Equazioni dei semipiani in forma convenzionale.
 fn le_collettive_e_le_coperture_sono_i_kernel() {
     let ingresso = punti();
     let presenti: Vec<Geometry<f64>> = geometrie(&ingresso, "geometry")
@@ -476,7 +658,8 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
         .flatten()
         .collect();
 
-    let uscita = un_passo("geo.voronoi", json!({}), std::slice::from_ref(&ingresso)).unwrap();
+    let uscita =
+        un_passo_verificato("geo.voronoi", json!({}), std::slice::from_ref(&ingresso)).unwrap();
     let mut celle_attese = advanced::voronoi_cells(&presenti, 100_000, centimetro())
         .unwrap()
         .into_iter()
@@ -490,7 +673,59 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
         &binaria(&attese) as &dyn Array
     );
 
-    let uscita = un_passo(
+    // Intersezione indipendente dei semipiani di bisettrice, in coordinate
+    // locali per evitare cancellazione numerica. Ritaglio Padded: mezzo
+    // lato maggiore (405 / 2), come dichiarato dal contratto.
+    let siti = [
+        (0.0_f64, 0.0_f64),
+        (10.0, 3.0),
+        (400.0, -20.0),
+        (405.0, -22.0),
+    ];
+    let celle_ottenute = geometrie(&uscita, "geometry");
+    for (riga, p) in [0_usize, 1, 3, 4].into_iter().zip(siti) {
+        let mut bordo = vec![
+            (-202.5, -224.5),
+            (607.5, -224.5),
+            (607.5, 205.5),
+            (-202.5, 205.5),
+        ];
+        for q in siti {
+            if p == q {
+                continue;
+            }
+            let segno = |v: (f64, f64)| {
+                2.0 * (q.0 - p.0) * v.0 + 2.0 * (q.1 - p.1) * v.1
+                    - (q.0 * q.0 + q.1 * q.1 - p.0 * p.0 - p.1 * p.1)
+            };
+            let mut nuovo = Vec::new();
+            for i in 0..bordo.len() {
+                let (a, b) = (bordo[i], bordo[(i + 1) % bordo.len()]);
+                let (sa, sb) = (segno(a), segno(b));
+                if sa <= 0.0 {
+                    nuovo.push(a);
+                }
+                if (sa <= 0.0) != (sb <= 0.0) {
+                    let t = sa / (sa - sb);
+                    nuovo.push((a.0 + t * (b.0 - a.0), a.1 + t * (b.1 - a.1)));
+                }
+            }
+            bordo = nuovo;
+        }
+        bordo.push(bordo[0]);
+        let attesa = Geometry::Polygon(Polygon::new(
+            LineString::from(
+                bordo
+                    .into_iter()
+                    .map(|(x, y)| (x + X0, y + Y0))
+                    .collect::<Vec<_>>(),
+            ),
+            vec![],
+        ));
+        comune_geo::assert_poligoni(celle_ottenute[riga].as_ref().expect("cella"), &attesa);
+    }
+    assert!(celle_ottenute[2].is_none());
+    let uscita = un_passo_verificato(
         "geo.cluster_dbscan",
         json!({"eps": 15.0, "min_points": 2}),
         std::slice::from_ref(&ingresso),
@@ -505,10 +740,14 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
         &etichette as &dyn Array
     );
 
+    assert_eq!(
+        etichette.iter().collect::<Vec<_>>(),
+        [Some(0), Some(0), None, Some(1), Some(1)]
+    );
     // Pulizia: la seconda riga sovrapposta perde la parte comune; la
     // geometria dell'uscita e' nullable (righe assorbite).
     let ingresso = poligoni();
-    let uscita = un_passo(
+    let uscita = un_passo_verificato(
         "geo.clean_topology",
         json!({"snap_tolerance": 0.0, "remove_overlaps": true, "fill_gaps": false}),
         std::slice::from_ref(&ingresso),
@@ -546,7 +785,38 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
         .unwrap()
         .is_nullable());
 
-    let uscita = un_passo(
+    let pulite_indipendenti = [
+        Some(Geometry::Polygon(quadrato(X0, Y0, 100.0))),
+        None,
+        Some(Geometry::Polygon(Polygon::new(
+            LineString::from(vec![
+                (X0 + 100.0, Y0 + 50.0),
+                (X0 + 150.0, Y0 + 50.0),
+                (X0 + 150.0, Y0 + 150.0),
+                (X0 + 50.0, Y0 + 150.0),
+                (X0 + 50.0, Y0 + 100.0),
+                (X0 + 100.0, Y0 + 100.0),
+                (X0 + 100.0, Y0 + 50.0),
+            ]),
+            vec![],
+        ))),
+        Some(Geometry::Polygon(quadrato(X0 + 500.0, Y0, 30.0))),
+    ];
+    assert_eq!(
+        geometrie(&uscita, "geometry").len(),
+        pulite_indipendenti.len()
+    );
+    for (g, a) in geometrie(&uscita, "geometry")
+        .iter()
+        .zip(pulite_indipendenti)
+    {
+        match (g, a) {
+            (Some(g), Some(a)) => comune_geo::assert_poligoni(g, &a),
+            (None, None) => {}
+            _ => panic!("null inatteso"),
+        }
+    }
+    let uscita = un_passo_verificato(
         "geo.coverage_validate",
         json!({}),
         std::slice::from_ref(&ingresso),
@@ -555,6 +825,49 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
     let problemi =
         extensions3::coverage_validate_rows(&celle(&ingresso), 0.0, 1000, centimetro()).unwrap();
     assert_eq!(uscita.num_rows(), problemi.len());
+    assert_eq!(problemi.len(), 1);
+    assert_eq!(
+        (
+            problemi[0].issue_type,
+            problemi[0].index_a,
+            problemi[0].index_b,
+            problemi[0].area
+        ),
+        ("overlap", 0, 2, 2500.0)
+    );
+    for (nome, atteso) in [("index_a", 0_u64), ("index_b", 2)] {
+        assert_eq!(
+            colonna(&uscita, nome)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .expect("indice")
+                .iter()
+                .collect::<Vec<_>>(),
+            [Some(atteso)]
+        );
+    }
+    assert_eq!(
+        colonna(&uscita, "issue_type")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("tipo")
+            .iter()
+            .collect::<Vec<_>>(),
+        [Some("overlap")]
+    );
+    assert_eq!(
+        colonna(&uscita, "area")
+            .as_any()
+            .downcast_ref::<plenora_core::arrow::array::Float64Array>()
+            .expect("area")
+            .iter()
+            .collect::<Vec<_>>(),
+        [Some(2500.0)]
+    );
+    comune_geo::assert_poligoni(
+        geometrie(&uscita, "geometry")[0].as_ref().expect("overlap"),
+        &Geometry::Polygon(quadrato(X0 + 50.0, Y0 + 50.0, 50.0)),
+    );
     assert!(!problemi.is_empty());
     let geometrie_problemi: Vec<Option<Vec<u8>>> =
         problemi.iter().map(|p| Some(p.wkb.clone())).collect();
@@ -570,7 +883,7 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
             Some(Geometry::Polygon(quadrato(X0 + 10.0, Y0, 10.0))),
         ],
     );
-    let uscita = un_passo(
+    let uscita = un_passo_verificato(
         "geo.shared_paths",
         json!({}),
         std::slice::from_ref(&adiacenti),
@@ -585,6 +898,48 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
         &binaria(&geometrie_tratti) as &dyn Array
     );
 
+    assert_eq!(
+        (
+            tratti[0].index_a,
+            tratti[0].index_b,
+            tratti[0].shared_length
+        ),
+        (0, 1, 10.0)
+    );
+    for (nome, atteso) in [("index_a", 0_u64), ("index_b", 1)] {
+        assert_eq!(
+            colonna(&uscita, nome)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .expect("indice")
+                .iter()
+                .collect::<Vec<_>>(),
+            [Some(atteso)]
+        );
+    }
+    assert_eq!(
+        colonna(&uscita, "shared_length")
+            .as_any()
+            .downcast_ref::<plenora_core::arrow::array::Float64Array>()
+            .expect("lunghezza")
+            .iter()
+            .collect::<Vec<_>>(),
+        [Some(10.0)]
+    );
+    let condivisa = geometrie(&uscita, "geometry");
+    let attesa = LineString::from(vec![(X0 + 10.0, Y0), (X0 + 10.0, Y0 + 10.0)]);
+    match condivisa[0].as_ref().expect("confine") {
+        Geometry::LineString(l) => {
+            assert!(l == &attesa || l.0.iter().rev().copied().collect::<Vec<_>>() == attesa.0);
+        }
+        Geometry::MultiLineString(l) => {
+            assert_eq!(l.0.len(), 1);
+            assert!(
+                l.0[0] == attesa || l.0[0].0.iter().rev().copied().collect::<Vec<_>>() == attesa.0
+            );
+        }
+        _ => panic!("confine lineare"),
+    }
     // Griglia, dal CRS di piano; l'ingresso fa da innesco.
     let innesco = RecordBatch::try_new(
         Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, false)])),
@@ -593,9 +948,47 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
     .unwrap();
     let config = json!({"extent": {"xmin": X0, "ymin": Y0, "xmax": X0 + 30.0, "ymax": Y0 + 20.0},
                         "cell_size": 10.0, "include_centroid": true});
-    let uscita = un_passo_con_crs("geo.generate_grid", config, innesco, UTM).unwrap();
+    let uscita =
+        un_passo_con_crs("geo.generate_grid", config.clone(), innesco.clone(), UTM).unwrap();
+    assert_eq!(
+        uscita.schema(),
+        comune_geo::schema_geo_indipendente("geo.generate_grid", &innesco, &config, Some(UTM))
+    );
     let estensione = GridExtent::new(X0, Y0, X0 + 30.0, Y0 + 20.0).unwrap();
     let righe = extensions2::generate_grid_rows(&estensione, 10.0, GridShape::Square).unwrap();
+    assert_eq!(righe.len(), 6);
+    let griglia = geometrie(&uscita, "geometry");
+    for (riga, g) in griglia.iter().enumerate() {
+        let i = riga % 3;
+        let j = riga / 3;
+        let x = X0 + 10.0 * f64::from(u32::try_from(i).expect("i"));
+        let y = Y0 + 10.0 * f64::from(u32::try_from(j).expect("j"));
+        comune_geo::assert_poligoni(
+            g.as_ref().expect("cella"),
+            &Geometry::Polygon(quadrato(x, y, 10.0)),
+        );
+        for (nome, valore) in [("cell_i", i), ("cell_j", j)] {
+            assert_eq!(
+                colonna(&uscita, nome)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .expect("indice griglia")
+                    .value(riga),
+                u64::try_from(valore).expect("indice")
+            );
+        }
+        for (nome, valore) in [("centroid_x", x + 5.0), ("centroid_y", y + 5.0)] {
+            assert_eq!(
+                colonna(&uscita, nome)
+                    .as_any()
+                    .downcast_ref::<plenora_core::arrow::array::Float64Array>()
+                    .expect("centro")
+                    .value(riga)
+                    .to_bits(),
+                valore.to_bits()
+            );
+        }
+    }
     assert_eq!(uscita.num_rows(), righe.len());
     let attese: Vec<Option<Vec<u8>>> = righe.iter().map(|r| Some(r.wkb.clone())).collect();
     assert_eq!(
@@ -623,7 +1016,8 @@ fn make_valid_e_l_adapter_dei_kernel() {
         vec![],
     ));
     let ingresso = tabella(UTM, &[Some(farfalla), None]);
-    let uscita = un_passo("geo.make_valid", json!({}), std::slice::from_ref(&ingresso)).unwrap();
+    let uscita =
+        un_passo_verificato("geo.make_valid", json!({}), std::slice::from_ref(&ingresso)).unwrap();
     let attese = make_valid_batches(
         &ingresso.schema(),
         std::slice::from_ref(&ingresso),
@@ -632,9 +1026,34 @@ fn make_valid_e_l_adapter_dei_kernel() {
     )
     .unwrap();
     assert_eq!(colonna(&uscita, "geometry"), attese[0].column(2));
+    let attesa = Geometry::MultiPolygon(MultiPolygon(vec![
+        Polygon::new(
+            LineString::from(vec![
+                (X0, Y0),
+                (X0 + 2.0, Y0 + 2.0),
+                (X0, Y0 + 4.0),
+                (X0, Y0),
+            ]),
+            vec![],
+        ),
+        Polygon::new(
+            LineString::from(vec![
+                (X0 + 4.0, Y0),
+                (X0 + 4.0, Y0 + 4.0),
+                (X0 + 2.0, Y0 + 2.0),
+                (X0 + 4.0, Y0),
+            ]),
+            vec![],
+        ),
+    ]));
+    let riparate = geometrie(&uscita, "geometry");
+    comune_geo::assert_poligoni(riparate[0].as_ref().expect("farfalla riparata"), &attesa);
+    assert!(riparate[1].is_none());
     // La stessa geometria su un'operazione che la valida: rifiutata.
-    let errore = un_passo("geo.area", json!({}), &[ingresso]).unwrap_err();
+    let errore = un_passo_verificato("geo.area", json!({}), &[ingresso])
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{errore}");
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
 }
 
 /// Il CRS attraversa `reproject` → `buffer` → `dissolve`.
@@ -720,7 +1139,8 @@ fn una_griglia_oltre_il_budget_si_rifiuta_prima_di_eseguire() {
         64 * 1024 * 1024,
     );
     pipeline.crs = Some(UTM.to_owned());
-    let errore = esegui(&pipeline, &[("t", innesco)]).unwrap_err();
+    let errore = esegui(&pipeline, &[("t", innesco)])
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     let PlenoraError::ResourceLimit(messaggio) = &errore else {
         panic!("atteso ResourceLimit: {errore}");
     };
@@ -743,7 +1163,8 @@ fn le_espansioni_rispettano_il_limite_dell_arco() {
         max_expansion_factor: Some(100.0),
         ..plenora_pipeline::LimitiParziali::default()
     });
-    let errore = esegui(&pipeline, &[("t", ingresso)]).unwrap_err();
+    let errore = esegui(&pipeline, &[("t", ingresso)])
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::ResourceLimit, "{errore}");
 }
 
@@ -752,6 +1173,7 @@ const fn _punto(_: Point<f64>) {}
 
 #[test]
 fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
+    use ErrorCategory::{Crs, InvalidPlan};
     let innesco = RecordBatch::try_new(
         Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, false)])),
         vec![Arc::new(Int64Array::from(vec![1]))],
@@ -850,7 +1272,29 @@ fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
             Some(UTM),
         ),
     ];
-    comune_geo::stessa_validazione(&casi);
+    comune_geo::stessa_validazione(
+        &casi,
+        &[
+            None,
+            Some(InvalidPlan),
+            Some(InvalidPlan),
+            Some(ErrorCategory::Schema),
+            Some(InvalidPlan),
+            Some(InvalidPlan),
+            Some(InvalidPlan),
+            Some(InvalidPlan),
+            Some(InvalidPlan),
+            Some(InvalidPlan),
+            Some(InvalidPlan),
+            Some(InvalidPlan),
+            Some(InvalidPlan),
+            None,
+            Some(InvalidPlan),
+            Some(Crs),
+            None,
+            None,
+        ],
+    );
 }
 
 /// Le chiavi di `collect` devono avere un ordine naturale: il tipo si decide
@@ -1004,13 +1448,23 @@ fn make_valid_geografico_usa_il_passo_sul_raggio_polare() {
     };
     let accetta = |d: f64, precisione: Precision| {
         let t = tabella_con(d);
-        make_valid_batches(
+        match make_valid_batches(
             &t.schema(),
             std::slice::from_ref(&t),
             "geometry",
             precisione,
-        )
-        .is_ok()
+        ) {
+            Ok(output) => {
+                assert_eq!(output.len(), 1);
+                assert_eq!(output[0].num_rows(), t.num_rows());
+                true
+            }
+            Err(error) => {
+                assert_eq!(error.category(), plenora_core::ErrorCategory::Unsupported);
+                assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
+                false
+            }
+        }
     };
     let soglia = |precisione: Precision| {
         let (mut sotto, mut sopra) = (1e-9, 9e-8);
@@ -1037,5 +1491,57 @@ fn make_valid_geografico_usa_il_passo_sul_raggio_polare() {
     let d = f64::midpoint(soglia_nuova, soglia_vecchia);
     assert!(!accetta(d, vecchia));
     let uscita = un_passo("geo.make_valid", json!({}), &[tabella_con(d)]);
-    assert!(uscita.is_ok(), "{uscita:?}");
+    let uscita = uscita.expect("precisione del CRS");
+    let input = tabella_con(d);
+    let diretto = make_valid_batches(
+        &input.schema(),
+        std::slice::from_ref(&input),
+        "geometry",
+        nuova,
+    )
+    .expect("riferimento diretto");
+    assert_eq!(diretto.len(), 1);
+    assert_eq!(uscita.columns(), diretto[0].columns());
+    assert_eq!(
+        uscita.schema(),
+        comune_geo::schema_geo_indipendente("geo.make_valid", &input, &json!({}), None)
+    );
+}
+
+/// Stesso piano, con schema atteso dichiarato indipendentemente dai kernel.
+fn un_passo_verificato(
+    op: &str,
+    config: serde_json::Value,
+    tabelle: &[RecordBatch],
+) -> plenora_core::Result<RecordBatch> {
+    let atteso = comune_geo::schema_geo_indipendente(op, &tabelle[0], &config, None);
+    let risultato = un_passo(op, config, tabelle);
+    if let Ok(output) = &risultato {
+        assert_eq!(output.schema(), atteso, "schema indipendente {op}");
+        let madri: Option<Vec<u32>> = match op {
+            "geo.explode" => Some(vec![0, 0, 2, 2, 2]),
+            "geo.delaunay" => Some(vec![0, 0]),
+            "geo.split" => Some(vec![0, 0, 2, 3]),
+            // La partizione geometrica controlla tutte le parti, e la riga
+            // null finale deve essere l'unica attribuita alla madre 1.
+            "geo.subdivide" => Some(
+                (0..output.num_rows())
+                    .map(|i| u32::from(i + 1 == output.num_rows()))
+                    .collect(),
+            ),
+            "geo.voronoi" | "geo.cluster_dbscan" | "geo.clean_topology" | "geo.make_valid" => {
+                Some((0..u32::try_from(tabelle[0].num_rows()).expect("righe")).collect())
+            }
+            _ => None,
+        };
+        if let Some(madri) = madri {
+            comune_geo::assert_attributi(output, &tabelle[0], &madri, op == "geo.cluster_dbscan");
+            if let Some(indici) = output.column_by_name("__parent_index") {
+                let attesi =
+                    UInt64Array::from(madri.into_iter().map(u64::from).collect::<Vec<_>>());
+                assert_eq!(indici.as_ref(), &attesi as &dyn Array);
+            }
+        }
+    }
+    risultato
 }

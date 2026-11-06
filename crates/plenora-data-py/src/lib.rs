@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Produzione: divieti degli esiti riattivati agli ingressi delle prove"
+)]
 //! SDK Python `plenora-data`: il modulo nativo `plenora_data._native`.
 //!
 //! Il pacchetto Python (`python/plenora_data`) è la superficie pubblica; questo

@@ -6,6 +6,23 @@
 //! produttore), si risolve dalla tabella e l'analisi arriva in fondo; il
 //! dominio di validita' si applica alle geometrie che la config porta.
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
+fn assert_crs<T: std::fmt::Debug>(result: Result<T, PlenoraError>, expected: &str) -> PlenoraError {
+    let error = assert_rifiuto!(
+        result,
+        plenora_core::ErrorCategory::Crs,
+        plenora_core::ErrorPhase::Validate
+    );
+    let PlenoraError::CrsCoded { code, .. } = &error else {
+        panic!("atteso codice CRS: {error:?}");
+    };
+    assert_eq!(code.as_str(), expected);
+    error
+}
+
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -104,6 +121,7 @@ fn operazioni_con_requisito_proiettato_girano_con_epsg_32632() {
     // errore esplicito, non un'area in gradi quadrati.
     let wgs84 = input("EPSG:4326");
     let errore = analizza("geo.area", &[wgs84], &json!({})).expect_err("area in 4326");
+    let errore = assert_crs::<()>(Err(errore), "PROJECTED_CRS_REQUIRED");
     assert!(
         errore.to_string().contains("PROJECTED_CRS_REQUIRED"),
         "{errore}"
@@ -142,6 +160,7 @@ fn geometria_da_config_nel_dominio_del_crs_dell_input() {
     let fuori = json!({"other_wkb": punto_hex(5_000_000.0, 4_482_531.752)});
     let errore = analizza("geo.distance", std::slice::from_ref(&utm), &fuori)
         .expect_err("fuori dal dominio");
+    let errore = assert_crs::<()>(Err(errore), "COORDINATE_OUT_OF_CRS_DOMAIN");
     let testo = errore.to_string();
     assert!(testo.contains("COORDINATE_OUT_OF_CRS_DOMAIN"), "{testo}");
     assert!(testo.contains("other_wkb"), "{testo}");
@@ -153,6 +172,7 @@ fn geometria_da_config_nel_dominio_del_crs_dell_input() {
     // `haversine_distance` richiede un CRS geografico.
     let errore = analizza("geo.haversine_distance", &[input("OGC:CRS84")], &dentro)
         .expect_err("metri in un CRS geografico");
+    let errore = assert_crs::<()>(Err(errore), "COORDINATE_OUT_OF_CRS_DOMAIN");
     assert!(
         errore.to_string().contains("COORDINATE_OUT_OF_CRS_DOMAIN"),
         "{errore}"
@@ -161,15 +181,15 @@ fn geometria_da_config_nel_dominio_del_crs_dell_input() {
     analizza("geo.haversine_distance", &[input("OGC:CRS84")], &gradi).expect("gradi in CRS84");
     // Stessa regola per `snap` e `line_locate_point`.
     let snap = json!({"reference_wkb": punto_hex(5_000_000.0, 0.0), "tolerance": 1.0});
-    assert!(matches!(
+    assert_crs(
         analizza("geo.snap", std::slice::from_ref(&utm), &snap),
-        Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
-    ));
+        "COORDINATE_OUT_OF_CRS_DOMAIN",
+    );
     let locate = json!({"point_wkb": punto_hex(500_000.0, -1.0)});
-    assert!(matches!(
+    assert_crs(
         analizza("geo.line_locate_point", std::slice::from_ref(&utm), &locate),
-        Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
-    ));
+        "COORDINATE_OUT_OF_CRS_DOMAIN",
+    );
 }
 
 /// La lama di `geo.split` arriva dalla config (`other_wkb`) nel CRS
@@ -184,6 +204,7 @@ fn lama_dello_split_nel_dominio_del_crs_dell_input() {
     let fuori = json!({"other_wkb": punto_hex(5_000_000.0, 4_482_531.752)});
     let errore =
         analizza("geo.split", std::slice::from_ref(&utm), &fuori).expect_err("fuori dal dominio");
+    let errore = assert_crs::<()>(Err(errore), "COORDINATE_OUT_OF_CRS_DOMAIN");
     let testo = errore.to_string();
     assert!(testo.contains("COORDINATE_OUT_OF_CRS_DOMAIN"), "{testo}");
     assert!(testo.contains("other_wkb"), "{testo}");
@@ -227,6 +248,7 @@ fn produttore_con_crs_da_config() {
         &griglia("EPSG:3003", [12.0, 41.0, 13.0, 42.0]),
     )
     .expect_err("gradi in Gauss-Boaga");
+    let errore = assert_crs::<()>(Err(errore), "COORDINATE_OUT_OF_CRS_DOMAIN");
     assert!(errore.to_string().contains("extent"), "{errore}");
     // Un codice fuori tabella resta un errore esplicito.
     let errore = analizza(
@@ -235,5 +257,6 @@ fn produttore_con_crs_da_config() {
         &griglia("EPSG:99999", [0.0, 0.0, 1000.0, 1000.0]),
     )
     .expect_err("codice sconosciuto");
+    let errore = assert_crs::<()>(Err(errore), "CRS_NOT_BUILTIN");
     assert!(errore.to_string().contains("CRS_NOT_BUILTIN"), "{errore}");
 }

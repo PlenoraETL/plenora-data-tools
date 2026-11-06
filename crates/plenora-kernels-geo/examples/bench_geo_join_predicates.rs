@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Benchmark: misura e classifica esiti, non costituisce un oracolo di prova"
+)]
 //! Benchmark mirato sul join spaziale reale — Overlaps/Crosses/Touches,
 //! casi positivi e negativi, due densita' di candidati — separato da
 //! `bench_geo_sweep` apposta: quello rifà tutte le 88 misure a ogni run e

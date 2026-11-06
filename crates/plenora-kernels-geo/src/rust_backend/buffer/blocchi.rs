@@ -293,6 +293,7 @@ pub(super) fn buffer_dei_blocchi(
     Ok(parti.pop().unwrap_or_else(|| MultiPolygon::new(Vec::new())))
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;

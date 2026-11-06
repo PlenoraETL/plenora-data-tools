@@ -1,21 +1,34 @@
 //! Validazione del piano: accettazione allineata all'analisi dei contratti,
 //! rifiuti prima dell'esecuzione.
 
+#[allow(dead_code)] // Questo target usa solo gli schemi dell'oracolo condiviso.
+#[path = "comune/attesi.rs"]
+mod attesi;
 mod comune;
+
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+use plenora_core::{ErrorCategory as Categoria, ErrorPhase as Fase};
 
 use std::collections::BTreeSet;
 
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::arrow::schema::SchemaRef;
+use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::catalog::{Family, ALIASES, CATALOG};
 use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
-use plenora_core::contract::{DataContract, FieldAllocator};
+use plenora_core::contract::{
+    ContractProperty, DataContract, FieldAllocator, FieldId, NullPlacement, PropertyConfidence,
+    PropertyScope, SortDirection, SortOrder,
+};
 use plenora_core::crs::resolve_crs;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::analyze::analyze_geo_contract;
 use plenora_kernels_table::analyze::analyze_table_contract;
 use plenora_pipeline::{BaseIndici, Passo, Pipeline, PipelineValidata};
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 use comune::{nested, nomi_input, tabelle, wide, CASI};
 
@@ -43,8 +56,80 @@ fn schema_wide() -> SchemaRef {
     wide(false).schema()
 }
 
+fn verifica_contratto(actual: &DataContract, expected: &DataContract) {
+    assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+}
+
 fn valida_wide(pipeline: &Pipeline) -> Result<PipelineValidata> {
     pipeline.validate(&[("t", schema_wide())])
+}
+
+/// Contratto scritto per gli scenari wide che conservano colonne e metadati.
+fn atteso_wide() -> DataContract {
+    let mut atteso = DataContract::tabular(schema_wide());
+    for (id, name) in [
+        "id", "name", "value", "flag", "date", "date2", "json", "geom",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        atteso
+            .field_ids
+            .insert(name.into(), FieldId(u32::try_from(id).expect("id fixture")));
+    }
+    atteso
+}
+
+/// Identita' degli scenari CASI: ingressi wide 0..8, destra 8..11,
+/// nested 0..3. Rinomine e selezioni conservano gli ID; i valori derivati
+/// ricevono ID nuovi dopo gli ingressi (contratto `FieldId` e schede Schema).
+/// Nessuna geometria dichiarata: geom e' solo Binary, senza metadati geo.
+fn contratto_catalogo_atteso(op: &str, ingressi: &[RecordBatch]) -> DataContract {
+    let mut atteso = DataContract::tabular(attesi::tabella(op, ingressi).schema());
+    let ids: Vec<u32> = match op {
+        "table.aggregate" => vec![1, 8],
+        "table.align_schema" => vec![0, 8],
+        "table.select_columns" => vec![0, 2],
+        "table.drop_columns" => (0..7).collect(),
+        "table.reorder_columns" => vec![1, 0, 2, 3, 4, 5, 6, 7],
+        "table.replace" | "table.text_normalize" => {
+            vec![0, 8, 2, 3, 4, 5, 6, 7]
+        }
+        "table.type_cast" => vec![8, 1, 2, 3, 4, 5, 6, 7],
+        "table.melt" | "table.pivot" => vec![0, 8, 9],
+        "table.reconcile" => vec![11, 12],
+        "table.table_diff" => vec![11, 12, 13, 14],
+        "table.explode" => vec![0, 3, 2],
+        "table.unnest" => vec![0, 1, 3, 4],
+        "table.join" | "table.asof_join" => vec![0, 1, 2, 3, 4, 5, 6, 7, 9, 10],
+        // Le altre fixture preservano tutte le colonne e aggiungono in coda
+        // solo campi nuovi; cross/fuzzy includono l'intero lato destro.
+        _ => (0..u32::try_from(atteso.schema.fields().len()).expect("fixture")).collect(),
+    };
+    assert_eq!(ids.len(), atteso.schema.fields().len(), "{op}");
+    for (field, id) in atteso.schema.fields().iter().zip(ids) {
+        atteso.field_ids.insert(field.name().clone(), FieldId(id));
+    }
+    // Nessun conteggio noto nello schema di ingresso. Solo sort e top_n
+    // promettono un ordine in queste config: value discendente, null prima.
+    if matches!(op, "table.sort" | "table.top_n") {
+        atteso.properties.sorted_by = Some(ContractProperty::new(
+            PropertyConfidence::Proven(SortOrder {
+                keys: vec![FieldId(2)],
+                direction: SortDirection::Descending,
+                nulls: NullPlacement::First,
+            }),
+            PropertyScope::Stream,
+        ));
+    }
+    // Scheda reconcile: cinque metriche anche da ingressi vuoti.
+    if op == "table.reconcile" {
+        atteso.properties.row_count = Some(ContractProperty::new(
+            PropertyConfidence::Proven(5),
+            PropertyScope::Dataset,
+        ));
+    }
+    atteso
 }
 
 /// Analisi diretta, la stessa sequenza che il runner fa per un passo.
@@ -79,7 +164,6 @@ fn ogni_operazione_tabellare_del_catalogo_ha_un_caso() {
 fn la_validazione_accetta_se_e_solo_se_l_analisi_accetta() {
     // hmac_sha256 controlla in validazione che la chiave sia disponibile.
     std::env::set_var(comune::CHIAVE_HMAC, "chiave-di-test-del-runner");
-    let mut rifiutate = Vec::new();
     for caso in CASI {
         let config: Value = serde_json::from_str(caso.config).expect("config del caso");
         let tavole = tabelle(caso.fixture);
@@ -98,30 +182,28 @@ fn la_validazione_accetta_se_e_solo_se_l_analisi_accetta() {
             .collect();
         let validata = pipeline.validate(&forniti);
         let analisi = analisi_diretta(caso.op, &schemi, &config);
-        assert_eq!(
-            validata.is_ok(),
-            analisi.is_ok(),
-            "{}: validazione {:?}, analisi {:?}",
-            caso.op,
-            validata.as_ref().err(),
-            analisi.as_ref().err()
-        );
-        if let (Ok(validata), Ok(analisi)) = (&validata, &analisi) {
+        if caso.op == "table.transpose" {
+            assert_rifiuto!(validata, Categoria::Unsupported, Fase::Validate);
+            assert_rifiuto!(analisi, Categoria::Unsupported, Fase::Validate);
+        } else {
+            let validata = validata.expect("fixture con schema statico valida");
+            let analisi = analisi.expect("fixture con schema statico analizzabile");
             let contratto = validata.contratto("uscita").expect("contratto dell'uscita");
+            let atteso = contratto_catalogo_atteso(caso.op, &tavole);
             assert_eq!(
                 format!("{contratto:?}"),
+                format!("{atteso:?}"),
+                "runner {}",
+                caso.op
+            );
+            assert_eq!(
                 format!("{analisi:?}"),
-                "{}: contratto diverso dall'analisi diretta",
+                format!("{atteso:?}"),
+                "analisi {}",
                 caso.op
             );
         }
-        if validata.is_err() {
-            rifiutate.push(caso.op);
-        }
     }
-    // La sola operazione con schema d'uscita che dipende dai dati: `pivot`
-    // del caso ha un `mapping`, che fissa le colonne.
-    assert_eq!(rifiutate, ["table.transpose"]);
 }
 
 #[test]
@@ -175,7 +257,13 @@ fn output_inesistenti_ripetuti_o_assenti_si_rifiutano() {
         );
     }
     // Un input restituito cosi' com'e' e' un piano valido.
-    assert!(valida_wide(&piano(&["t"], vec![], &["t"])).is_ok());
+    verifica_contratto(
+        valida_wide(&piano(&["t"], vec![], &["t"]))
+            .expect("identita")
+            .contratto("t")
+            .expect("t"),
+        &DataContract::tabular(schema_wide()),
+    );
 }
 
 #[test]
@@ -231,7 +319,13 @@ fn l_arieta_viene_dal_catalogo() {
         vec![passo("a", "table.concat", &["t", "t"], json!({}))],
         &["a"],
     );
-    assert!(valida_wide(&concat_a_due).is_ok());
+    verifica_contratto(
+        valida_wide(&concat_a_due)
+            .expect("concat")
+            .contratto("a")
+            .expect("a"),
+        &atteso_wide(),
+    );
 }
 
 #[test]
@@ -276,11 +370,22 @@ fn operazioni_sconosciute_e_alias_si_rifiutano_le_geo_come_l_analisi() {
         );
         let mut campi = FieldAllocator::default();
         let ingresso = contract_from_arrow_schema(schema_wide(), resolve_crs).expect("contratto");
-        let atteso =
-            analyze_geo_contract(descrittore.id, &[ingresso], &json!({}), None, &mut campi)
-                .expect_err("l'analisi rifiuta");
-        let ottenuto = valida_wide(&geo).expect_err("la validazione rifiuta");
-        assert_eq!(ottenuto.category(), atteso.category(), "{}", descrittore.id);
+        // Il corpus ha un solo ingresso privo di geometria: le binarie
+        // rifiutano l'arieta', i produttori i campi richiesti mancanti;
+        // from_coords usa x/y predefiniti, assenti nello schema.
+        let categoria = if descrittore.arity == plenora_core::catalog::Arity::BinaryOrdered
+            || matches!(descrittore.id, "geo.from_wkt" | "geo.generate_grid")
+        {
+            Categoria::InvalidPlan
+        } else {
+            Categoria::Schema
+        };
+        assert_rifiuto!(
+            analyze_geo_contract(descrittore.id, &[ingresso], &json!({}), None, &mut campi),
+            categoria,
+            Fase::Validate
+        );
+        assert_rifiuto!(valida_wide(&geo), categoria, Fase::Validate);
     }
 }
 
@@ -320,7 +425,13 @@ fn il_json_rifiuta_campi_sconosciuti_e_chiavi_duplicate() {
     let valido = r#"{"version":1,"inputs":["t"],"steps":[
         {"out":"a","op":"table.limit","in":["t"],"config":{"n":1}}],"outputs":["a"]}"#;
     let pipeline = Pipeline::from_json(valido).expect("piano valido");
-    assert!(valida_wide(&pipeline).is_ok());
+    verifica_contratto(
+        valida_wide(&pipeline)
+            .expect("limit")
+            .contratto("a")
+            .expect("a"),
+        &atteso_wide(),
+    );
     assert_eq!(
         Pipeline::from_json(&serde_json::to_string(&pipeline).expect("serializza"))
             .expect("rilettura"),
@@ -346,15 +457,19 @@ fn il_json_rifiuta_campi_sconosciuti_e_chiavi_duplicate() {
 fn il_crs_di_piano_si_risolve_in_validazione() {
     let mut pipeline = piano(&["t"], vec![], &["t"]);
     pipeline.crs = Some("EPSG:4326".to_owned());
-    assert!(valida_wide(&pipeline)
-        .expect("CRS integrato")
-        .crs_piano()
-        .is_some());
+    let valida = valida_wide(&pipeline).expect("CRS integrato");
+    let crs = valida.crs_piano().expect("CRS del piano");
+    assert_eq!(crs.authority_srid(), Some(4326));
+    assert_eq!(
+        crs.authority_axis_order(),
+        Some(plenora_core::contract::AxisOrder::LatLon)
+    );
+    assert_eq!(
+        crs.normalized_gis_axis_order(),
+        plenora_core::contract::AxisOrder::LonLat
+    );
     pipeline.crs = Some("EPSG:999999".to_owned());
-    assert!(matches!(
-        valida_wide(&pipeline),
-        Err(PlenoraError::Crs(_) | PlenoraError::CrsCoded { .. })
-    ));
+    assert_rifiuto!(valida_wide(&pipeline), Categoria::Crs, Fase::Validate);
 }
 
 #[test]
@@ -400,8 +515,79 @@ fn la_base_degli_indici_per_riga_si_decide_in_validazione() {
     );
 }
 
+/// Colonne, identita' e proprieta' della catena, scritte dalle schede.
+fn contratti_attesi_catena() -> Vec<(&'static str, DataContract)> {
+    let mut attesi = vec![("t", DataContract::tabular(schema_wide()))];
+    let mut p1 = atteso_wide();
+    let mut fields = schema_wide()
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect::<Vec<_>>();
+    fields[1] = Field::new("label", DataType::Utf8, false);
+    let metadata = plenora_core::arrow::Metadata::from([("origine", "test")]);
+    p1.schema = Arc::new(Schema::new_with_metadata(fields.clone(), metadata.clone()));
+    p1.field_ids.remove("name");
+    p1.field_ids.insert("label".into(), FieldId(1));
+    attesi.push(("p1", p1.clone()));
+    fields.push(Field::new("doppio", DataType::Float64, true));
+    let mut p2 = p1;
+    p2.schema = Arc::new(Schema::new_with_metadata(fields, metadata.clone()));
+    p2.field_ids.insert("doppio".into(), FieldId(8));
+    attesi.push(("p2", p2.clone()));
+    let mut p3 = p2;
+    p3.properties.sorted_by = Some(ContractProperty::new(
+        PropertyConfidence::Proven(SortOrder {
+            keys: vec![FieldId(8)],
+            direction: SortDirection::Ascending,
+            nulls: NullPlacement::Last,
+        }),
+        PropertyScope::Stream,
+    ));
+    attesi.push(("p3", p3.clone()));
+    let mut p4 = p3;
+    // La scheda select_columns elimina l'ordine se scarta colonne.
+    p4.properties.sorted_by = None;
+    p4.schema = Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+            Field::new("doppio", DataType::Float64, true),
+        ],
+        metadata.clone(),
+    ));
+    p4.field_ids
+        .retain(|name, _| ["id", "label", "doppio"].contains(&name.as_str()));
+    attesi.push(("p4", p4.clone()));
+    let mut p5 = p4;
+    p5.properties.sorted_by = None;
+    attesi.push(("p5", p5));
+    let mut p6 = DataContract::tabular(Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("label", DataType::Utf8, false),
+            Field::new("doppio", DataType::Float64, true),
+        ],
+        metadata.clone(),
+    )));
+    p6.field_ids.insert("label".into(), FieldId(1));
+    p6.field_ids.insert("doppio".into(), FieldId(9));
+    attesi.push(("p6", p6.clone()));
+    let mut p7 = p6;
+    p7.schema = Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("label", DataType::Utf8, false),
+            Field::new("doppio", DataType::Float64, true),
+            Field::new("lunghezza", DataType::Int64, true),
+        ],
+        metadata,
+    ));
+    p7.field_ids.insert("lunghezza".into(), FieldId(10));
+    attesi.push(("p7", p7));
+    attesi
+}
+
 #[test]
-fn i_contratti_di_una_catena_lunga_sono_quelli_dell_analisi_passo_per_passo() {
+fn i_contratti_di_una_catena_lunga_corrispondono_allo_scenario() {
     let catena = vec![
         passo(
             "p1",
@@ -437,34 +623,12 @@ fn i_contratti_di_una_catena_lunga_sono_quelli_dell_analisi_passo_per_passo() {
             json!({"column": "label", "output_column": "lunghezza"}),
         ),
     ];
-    let pipeline = piano(&["t"], catena.clone(), &["p7"]);
+    let pipeline = piano(&["t"], catena, &["p7"]);
     let validata = valida_wide(&pipeline).expect("catena valida");
 
-    let mut campi = FieldAllocator::default();
-    let mut attesi = std::collections::BTreeMap::new();
-    attesi.insert(
-        "t".to_owned(),
-        contract_from_arrow_schema(schema_wide(), resolve_crs).expect("contratto di input"),
-    );
-    for passo in &catena {
-        let ingressi: Vec<DataContract> = passo
-            .inputs
-            .iter()
-            .map(|nome| attesi[nome].clone())
-            .collect();
-        let uscita = analyze_table_contract(
-            &passo.op,
-            &ingressi,
-            &passo.config,
-            &mut campi,
-            &plenora_kernels_table::Limits::default(),
-        )
-        .expect("analisi del passo");
-        attesi.insert(passo.out.clone(), uscita);
-    }
-    for (nome, atteso) in &attesi {
+    for (nome, atteso) in contratti_attesi_catena() {
         let ottenuto = validata.contratto(nome).expect("contratto del runner");
-        assert_eq!(format!("{ottenuto:?}"), format!("{atteso:?}"), "{nome}");
+        verifica_contratto(ottenuto, &atteso);
     }
 }
 
@@ -528,11 +692,18 @@ fn le_colonne_oltre_il_limite_si_rifiutano_in_validazione() {
         solo_input.validate(&[("t", schema_largo(massimo + 1))]),
         Err(PlenoraError::ResourceLimit(_))
     ));
-    assert!(solo_input.validate(&[("t", schema_largo(massimo))]).is_ok());
+    verifica_contratto(
+        solo_input
+            .validate(&[("t", schema_largo(massimo))])
+            .expect("limite incluso")
+            .contratto("t")
+            .expect("t"),
+        &DataContract::tabular(schema_largo(massimo)),
+    );
 }
 
 #[test]
-fn i_limiti_di_complessita_del_piano_si_applicano() {
+fn il_limite_di_profondita_del_piano_si_applica() {
     let limiti = plenora_core::limits::PlanLimits::default();
     let catena = |lunghezza: usize| {
         let passi: Vec<Passo> = (0..lunghezza)
@@ -553,12 +724,25 @@ fn i_limiti_di_complessita_del_piano_si_applicano() {
         let ultimo = format!("p{}", lunghezza - 1);
         piano(&["t"], passi, &[&ultimo])
     };
-    assert!(valida_wide(&catena(limiti.max_plan_depth)).is_ok());
+    {
+        let validata = valida_wide(&catena(limiti.max_plan_depth)).expect("limite incluso");
+        let atteso = atteso_wide();
+        for i in 0..limiti.max_plan_depth {
+            verifica_contratto(
+                validata.contratto(&format!("p{i}")).expect("passo"),
+                &atteso,
+            );
+        }
+    };
     assert!(matches!(
         valida_wide(&catena(limiti.max_plan_depth + 1)),
         Err(PlenoraError::InvalidPlan(_))
     ));
+}
 
+#[test]
+fn il_limite_di_fan_out_del_piano_si_applica() {
+    let limiti = plenora_core::limits::PlanLimits::default();
     let ventaglio = |consumatori: usize| {
         let passi: Vec<Passo> = (0..consumatori)
             .map(|indice| {
@@ -572,12 +756,35 @@ fn i_limiti_di_complessita_del_piano_si_applicano() {
             .collect();
         piano(&["t"], passi, &["f0"])
     };
-    assert!(valida_wide(&ventaglio(limiti.max_fan_out)).is_ok());
+    {
+        let validata = valida_wide(&ventaglio(limiti.max_fan_out)).expect("limite incluso");
+        let atteso = atteso_wide();
+        for i in 0..limiti.max_fan_out {
+            let mut atteso = atteso.clone();
+            for (position, field) in schema_wide().fields().iter().enumerate() {
+                atteso.field_ids.insert(
+                    field.name().clone(),
+                    plenora_core::contract::FieldId(
+                        u32::try_from(i * schema_wide().fields().len() + position)
+                            .expect("id fixture"),
+                    ),
+                );
+            }
+            verifica_contratto(
+                validata.contratto(&format!("f{i}")).expect("passo"),
+                &atteso,
+            );
+        }
+    };
     assert!(matches!(
         valida_wide(&ventaglio(limiti.max_fan_out + 1)),
         Err(PlenoraError::InvalidPlan(_))
     ));
+}
 
+#[test]
+fn i_limiti_di_dimensione_del_piano_si_applicano() {
+    let limiti = plenora_core::limits::PlanLimits::default();
     let nome_lungo = "n".repeat(limiti.max_identifier_bytes + 1);
     let con_nome_lungo = piano(
         &["t"],
@@ -1062,16 +1269,23 @@ fn cio_che_schemi_e_config_rendono_prevedibile_fallisce_in_validazione() {
             ],
             &["secondo"],
         );
-        let esito = pipeline.validate(&[("t", schema)]);
-        assert!(
-            matches!(
-                &esito,
-                Err(PlenoraError::InvalidPlan(messaggio)
-                    | PlenoraError::ResourceLimit(messaggio))
-                    if messaggio.contains("passo `secondo`") && messaggio.contains(frammento)
-            ),
-            "{op} {config}: atteso `{frammento}`, avuto {esito:?}"
-        );
+        // Solo l'espansione oltre MAX_COLUMNS e' un limite di risorse;
+        // gli altri scenari hanno parametri o schemi incompatibili.
+        let categoria = if op == "table.flatten_json" && schema.fields().len() == massimo {
+            Categoria::ResourceLimit
+        } else {
+            Categoria::InvalidPlan
+        };
+        // ResourceLimit non taggato conserva la fase derivata Write:
+        // il contratto PlenoraError::phase dichiara questa approssimazione.
+        let fase = if categoria == Categoria::ResourceLimit {
+            Fase::Write
+        } else {
+            Fase::Validate
+        };
+        let errore = assert_rifiuto!(pipeline.validate(&[("t", schema)]), categoria, fase);
+        let messaggio = errore.to_string();
+        assert!(messaggio.contains("passo `secondo`") && messaggio.contains(frammento));
     }
 }
 
@@ -1132,7 +1346,10 @@ fn run_end_e_union_si_rifiutano_a_ogni_profondita() {
         Field::new("d", dizionario(DataType::Utf8), true),
         Field::new("l", lista(struttura(DataType::Int64)), true),
     ]));
-    assert!(contract_from_arrow_schema(ammesso, resolve_crs).is_ok());
+    verifica_contratto(
+        &contract_from_arrow_schema(ammesso.clone(), resolve_crs).expect("schema ammesso"),
+        &DataContract::tabular(ammesso),
+    );
 }
 
 /// La chiave HMAC si legge con la stessa funzione nel runner e nel kernel:
@@ -1165,7 +1382,11 @@ fn la_chiave_hmac_non_utf8_si_rifiuta_in_validazione() {
         )],
         &["h"],
     );
-    let errore = valida_wide(&pipeline).expect_err("chiave non UTF-8");
+    let errore = assert_rifiuto!(
+        valida_wide(&pipeline),
+        Categoria::InvalidPlan,
+        Fase::Validate
+    );
     assert!(
         matches!(
             errore,

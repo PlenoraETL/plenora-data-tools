@@ -23,14 +23,38 @@ fn un_campo_facoltativo_null_e_un_piano_malformato() {
         assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{campo}");
     }
     // Omessi, o presenti con un valore, si leggono.
-    for campo in [
-        "",
-        r#""crs": "EPSG:32632","#,
-        r#""limits": {"max_input_rows": 10},"#,
+    for (campo, crs, limits) in [
+        ("", None, None),
+        (
+            r#""crs": "EPSG:32632","#,
+            Some("EPSG:32632".to_owned()),
+            None,
+        ),
+        (
+            r#""limits": {"max_input_rows": 10},"#,
+            None,
+            Some(plenora_pipeline::LimitiParziali {
+                max_input_rows: Some(10),
+                ..Default::default()
+            }),
+        ),
     ] {
-        assert!(
-            Pipeline::from_json(&PIANO.replace("CAMPO", campo)).is_ok(),
-            "{campo}"
+        let atteso = Pipeline {
+            version: 1,
+            inputs: vec!["t".into()],
+            crs,
+            limits,
+            steps: vec![plenora_pipeline::Passo {
+                out: "u".into(),
+                op: "table.limit".into(),
+                inputs: vec!["t".into()],
+                config: serde_json::json!({"n":1}),
+            }],
+            outputs: vec!["u".into()],
+        };
+        assert_eq!(
+            Pipeline::from_json(&PIANO.replace("CAMPO", campo)).expect("piano"),
+            atteso
         );
     }
 }

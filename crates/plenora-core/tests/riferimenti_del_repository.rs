@@ -299,6 +299,10 @@ fn i_riconoscitori_riconoscono() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Metaprova del censimento: estensione sconosciuta deve causare panico, non un rifiuto di produzione."
+)]
 fn un_estensione_non_classificata_fa_fallire() {
     let esito = std::panic::catch_unwind(|| {
         classifica(

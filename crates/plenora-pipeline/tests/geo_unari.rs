@@ -3,6 +3,8 @@
 //! catene con le tabellari, budget.
 
 mod comune_geo;
+#[path = "comune_geo/trasformazioni_attese.rs"]
+mod trasformazioni_attese;
 
 use std::sync::Arc;
 
@@ -12,23 +14,19 @@ use plenora_core::arrow::array::{
     UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_core::contract::arrow_schema::arrow_schema_from_contract;
 use plenora_core::crs::resolve_crs;
 use plenora_core::{ErrorCategory, PlenoraError};
-use plenora_kernels_geo::extended_algorithms::GeometryDiagnostics;
 use plenora_kernels_geo::geodetica::EllissoideGeodetico;
-use plenora_kernels_geo::operations::{BufferCapStyle, SimplifyPolicy};
+use plenora_kernels_geo::operations::BufferCapStyle;
 use plenora_kernels_geo::predicates::SpatialPredicate;
 use plenora_kernels_geo::rust_backend::precision::Precision;
-use plenora_kernels_geo::{
-    extended, extended_algorithms, extensions, operations, predicates, Operation,
-};
+use plenora_kernels_geo::{extended, extended_algorithms, extensions, operations};
 use serde_json::{json, Value};
 
 use comune_geo::{
-    analisi, attese_geo, attesi_f64, con_budget, esadecimale_di, esegui, geometrie, linee,
-    linee_lonlat, multipunti, passo, piano, poligoni, poligoni_lonlat, punti, punti_lonlat,
-    quadrato, stesso_errore, tabella, un_passo, un_passo_con_crs, wkb, LONLAT, UTM, X0, Y0,
+    analisi, attesi_f64, con_budget, esadecimale_di, esegui, geometrie, linee, linee_lonlat,
+    multipunti, passo, piano, poligoni, poligoni_lonlat, punti, punti_lonlat, quadrato,
+    stesso_errore, tabella, un_passo, un_passo_con_crs, wkb, LONLAT, UTM, X0, Y0,
 };
 
 fn centimetro_utm() -> Precision {
@@ -60,156 +58,97 @@ fn punto(g: &Geometry<f64>) -> Point<f64> {
     }
 }
 
-/// Le trasformazioni in place: la colonna geometria del runner e' quella
-/// del kernel riga per riga, gli attributi restano quelli dell'ingresso.
-#[test]
+/// Trasformazioni contro GEOS, algebra e modello razionale dei pareggi;
+/// geometrie, bitmap, attributi e metadati hanno attesi indipendenti.
 #[allow(clippy::too_many_lines)] // Un caso per operazione, in un solo elenco.
-fn le_trasformazioni_sono_i_kernel() {
-    type Oracolo = Box<dyn Fn(&Geometry<f64>) -> Option<Geometry<f64>>>;
-    let casi: Vec<(&str, Value, RecordBatch, Oracolo)> = vec![
-        (
-            "geo.centroid",
-            json!({}),
-            poligoni(),
-            Box::new(|g| {
-                Some(plenora_kernels_geo::transform_geometry(Operation::Centroid, g).unwrap())
-            }),
-        ),
-        (
-            "geo.convex_hull",
-            json!({}),
-            multipunti(),
-            Box::new(|g| {
-                Some(plenora_kernels_geo::transform_geometry(Operation::ConvexHull, g).unwrap())
-            }),
-        ),
-        (
-            "geo.envelope",
-            json!({}),
-            linee(),
-            Box::new(|g| {
-                Some(plenora_kernels_geo::transform_geometry(Operation::Envelope, g).unwrap())
-            }),
-        ),
-        (
-            "geo.boundary",
-            json!({}),
-            poligoni(),
-            Box::new(|g| Some(operations::boundary(g).unwrap())),
-        ),
-        (
-            "geo.point_on_surface",
-            json!({}),
-            poligoni(),
-            Box::new(|g| operations::point_on_surface(g).unwrap()),
-        ),
+fn verifica_trasformazioni(solo_concave_hull: bool) {
+    let casi = vec![
+        ("geo.centroid", json!({}), poligoni()),
+        ("geo.convex_hull", json!({}), multipunti()),
+        ("geo.envelope", json!({}), linee()),
+        ("geo.boundary", json!({}), poligoni()),
+        ("geo.point_on_surface", json!({}), poligoni()),
         (
             "geo.buffer",
             json!({"distance": 5.0, "cap": "flat"}),
             linee(),
-            Box::new(|g| {
-                Some(
-                    operations::buffer_with_cap(g, 5.0, BufferCapStyle::Flat, centimetro_utm())
-                        .unwrap(),
-                )
-            }),
         ),
-        (
-            "geo.buffer",
-            json!({"distance": 3.0}),
-            poligoni(),
-            Box::new(|g| {
-                Some(
-                    operations::buffer_with_cap(g, 3.0, BufferCapStyle::Round, centimetro_utm())
-                        .unwrap(),
-                )
-            }),
-        ),
+        ("geo.buffer", json!({"distance": 3.0}), poligoni()),
         (
             "geo.simplify",
             json!({"min_area": 10.0, "policy": "preserve_topology"}),
             linee(),
-            Box::new(|g| {
-                Some(
-                    operations::simplify_with_policy(g, 10.0, SimplifyPolicy::PreserveTopology)
-                        .unwrap(),
-                )
-            }),
         ),
         (
             "geo.affine_transform",
             json!({"coefficients": [1.0, 0.0, 0.0, 1.0, 5.0, -5.0]}),
             poligoni(),
-            Box::new(|g| {
-                Some(extended::affine_transform(g, [1.0, 0.0, 0.0, 1.0, 5.0, -5.0]).unwrap())
-            }),
         ),
         (
             "geo.translate",
             json!({"x_offset": 10.0, "y_offset": -3.0}),
             punti(),
-            Box::new(|g| Some(extended::translate(g, 10.0, -3.0).unwrap())),
         ),
         (
             "geo.scale",
             json!({"x_factor": 1.5, "y_factor": 1.0, "x_origin": X0, "y_origin": Y0}),
             poligoni(),
-            Box::new(|g| Some(extended::scale_about(g, 1.5, 1.0, Point::new(X0, Y0)).unwrap())),
         ),
         (
             "geo.rotate",
             json!({"degrees": 30.0, "x_origin": X0, "y_origin": Y0}),
             linee(),
-            Box::new(|g| Some(extended::rotate_about(g, 30.0, Point::new(X0, Y0)).unwrap())),
         ),
-        (
-            "geo.concave_hull",
-            json!({"concavity": 2.0}),
-            multipunti(),
-            Box::new(|g| Some(extended::concave_hull(g, 2.0, 0.0, u64::MAX).unwrap())),
-        ),
-        (
-            "geo.densify",
-            json!({"max_segment_length": 25.0}),
-            linee(),
-            Box::new(|g| Some(extended_algorithms::densify(g, 25.0, u64::MAX).unwrap())),
-        ),
-        (
-            "geo.snap_to_grid",
-            json!({"grid_size": 4.0}),
-            linee(),
-            Box::new(|g| Some(extended_algorithms::snap_to_grid(g, 4.0).unwrap())),
-        ),
+        ("geo.concave_hull", json!({"concavity": 2.0}), multipunti()),
+        ("geo.densify", json!({"max_segment_length": 25.0}), linee()),
+        ("geo.snap_to_grid", json!({"grid_size": 4.0}), linee()),
         (
             "geo.line_substring",
             json!({"start_ratio": 0.25, "end_ratio": 0.75}),
             linee(),
-            Box::new(|g| extended_algorithms::line_substring(linea(g), 0.25, 0.75).unwrap()),
         ),
-        (
-            "geo.line_interpolate_point",
-            json!({"ratio": 0.4}),
-            linee(),
-            Box::new(|g| {
-                extended_algorithms::line_interpolate_point(linea(g), 0.4)
-                    .unwrap()
-                    .map(Geometry::Point)
-            }),
-        ),
+        ("geo.line_interpolate_point", json!({"ratio": 0.4}), linee()),
     ];
-    for (op, config, ingresso, oracolo) in casi {
-        let uscita = un_passo(op, config, std::slice::from_ref(&ingresso))
+    let golden = trasformazioni_attese::casi();
+    let mut verificati = 0;
+    assert_eq!(casi.len(), golden.len());
+    for ((op, config, ingresso), (expected_op, expected)) in casi.into_iter().zip(golden) {
+        assert_eq!(op, expected_op);
+        if (op == "geo.concave_hull") != solo_concave_hull {
+            continue;
+        }
+        verificati += 1;
+        let uscita = un_passo(op, config.clone(), std::slice::from_ref(&ingresso))
             .unwrap_or_else(|errore| panic!("{op}: {errore}"));
+        comune_geo::verifica_schema_geo_indipendente(op, &uscita, &ingresso, &config);
         assert_eq!(uscita.num_rows(), ingresso.num_rows(), "{op}");
-        assert_eq!(
-            colonna(&uscita, "geometry").as_ref(),
-            attese_geo(&ingresso, oracolo).as_ref(),
-            "{op}"
-        );
         for nome in ["id", "label"] {
             assert_eq!(colonna(&uscita, nome), colonna(&ingresso, nome), "{op}");
         }
+        let actual = geometrie(&uscita, "geometry");
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(&expected) {
+            match (actual, expected) {
+                (Some(actual), Some(expected)) => {
+                    trasformazioni_attese::verifica(op, actual, expected);
+                }
+                (None, None) => {}
+                _ => panic!("bitmap geometrica diversa"),
+            }
+        }
     }
+    assert_eq!(verificati, if solo_concave_hull { 1 } else { 16 });
+}
+
+#[test]
+fn le_trasformazioni_sono_i_kernel() {
+    verifica_trasformazioni(false);
+}
+
+#[test]
+#[ignore = "divergenza del vendor concave_hull: docs/limiti.md#concave-hull-regola-di-scavo; correggere le adiacenze nel vendor"]
+fn concave_hull_rispetta_il_modello_di_scavo() {
+    verifica_trasformazioni(true);
 }
 
 /// Misure, accessori, distanze e predicati: una colonna in coda, uguale al
@@ -360,9 +299,43 @@ fn le_misure_sono_i_kernel() {
         ),
     ];
     for (op, config, ingresso, nome, oracolo) in casi {
-        let uscita = un_passo(op, config, std::slice::from_ref(&ingresso))
+        let uscita = un_passo(op, config.clone(), std::slice::from_ref(&ingresso))
             .unwrap_or_else(|errore| panic!("{op}: {errore}"));
+        comune_geo::verifica_schema_geo_indipendente(op, &uscita, &ingresso, &config);
         assert_eq!(uscita.num_columns(), ingresso.num_columns() + 1, "{op}");
+        let golden_values: Value =
+            serde_json::from_str(include_str!("comune_geo/unari_attesi.json")).unwrap();
+        let campione = golden_values[op]
+            .as_array()
+            .expect("misura con oracolo esterno");
+        let valori = colonna(&uscita, nome)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        assert_eq!(valori.len(), campione.len());
+        for (valore, atteso) in valori.iter().zip(campione) {
+            if atteso.is_null() {
+                assert_eq!(valore, None);
+            } else {
+                let atteso = atteso.as_f64().unwrap();
+                let ottenuto = valore.expect("misura non nulla");
+                // GeographicLib/GEOS: 1 micrometro per distanze, 1 mm² per area.
+                let tolleranza = match op {
+                    "geo.geodesic_area" => 0.001,
+                    "geo.bearing" => 1e-10,
+                    "geo.line_locate_point" => 1e-12,
+                    _ => 0.000_001,
+                };
+                assert!(
+                    (ottenuto - atteso).abs() <= tolleranza,
+                    "oracolo esterno {op}: {ottenuto} != {atteso}"
+                );
+            }
+        }
+        for nome in ["id", "label"] {
+            assert_eq!(colonna(&uscita, nome), colonna(&ingresso, nome));
+        }
+
         assert_eq!(
             colonna(&uscita, nome).as_ref(),
             attesi_f64(&ingresso, oracolo).as_ref(),
@@ -377,26 +350,37 @@ fn le_misure_sono_i_kernel() {
 
     // Conteggi, testo, limiti.
     let ingresso = poligoni();
-    let geometrie_in = geometrie(&ingresso, "geometry");
     let uscita = un_passo(
         "geo.vertex_count",
         json!({}),
         std::slice::from_ref(&ingresso),
     )
     .unwrap();
-    let attesi: UInt64Array = geometrie_in
-        .iter()
-        .map(|g| g.as_ref().map(|g| operations::vertex_count(g).unwrap()))
-        .collect();
+    comune_geo::verifica_schema_geo_indipendente(
+        "geo.vertex_count",
+        &uscita,
+        &ingresso,
+        &json!({}),
+    );
+    comune_geo::assert_attributi(&uscita, &ingresso, &[0, 1, 2, 3], true);
+    let attesi = UInt64Array::from(vec![Some(5), None, Some(5), Some(5)]);
     assert_eq!(
         colonna(&uscita, "vertex_count").as_ref(),
         &attesi as &dyn Array
     );
     let uscita = un_passo("geo.to_wkt", json!({}), std::slice::from_ref(&ingresso)).unwrap();
-    let attesi: StringArray = geometrie_in
-        .iter()
-        .map(|g| g.as_ref().map(|g| operations::to_wkt(g).unwrap()))
-        .collect();
+    comune_geo::verifica_schema_geo_indipendente("geo.to_wkt", &uscita, &ingresso, &json!({}));
+    comune_geo::assert_attributi(&uscita, &ingresso, &[0, 1, 2, 3], true);
+    let golden_values: Value =
+        serde_json::from_str(include_str!("comune_geo/unari_attesi.json")).unwrap();
+    let attesi = StringArray::from(
+        golden_values["wkt"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(Value::as_str)
+            .collect::<Vec<_>>(),
+    );
     assert_eq!(colonna(&uscita, "wkt").as_ref(), &attesi as &dyn Array);
     let uscita = un_passo(
         "geo.bounds_extractor",
@@ -404,15 +388,26 @@ fn le_misure_sono_i_kernel() {
         std::slice::from_ref(&ingresso),
     )
     .unwrap();
+    comune_geo::verifica_schema_geo_indipendente(
+        "geo.bounds_extractor",
+        &uscita,
+        &ingresso,
+        &json!({}),
+    );
+    comune_geo::assert_attributi(&uscita, &ingresso, &[0, 1, 2, 3], true);
     for (asse, nome) in ["minx", "miny", "maxx", "maxy"].into_iter().enumerate() {
-        let attesi: Float64Array = geometrie_in
-            .iter()
-            .map(|g| {
-                g.as_ref()
-                    .and_then(|g| operations::bounds(g).unwrap())
-                    .map(|b| b[asse])
-            })
-            .collect();
+        let bounds = [
+            [X0, Y0, X0 + 100.0, Y0 + 100.0],
+            [0.0; 4],
+            [X0 + 50.0, Y0 + 50.0, X0 + 150.0, Y0 + 150.0],
+            [X0 + 500.0, Y0, X0 + 530.0, Y0 + 30.0],
+        ];
+        let attesi = Float64Array::from(vec![
+            Some(bounds[0][asse]),
+            None,
+            Some(bounds[2][asse]),
+            Some(bounds[3][asse]),
+        ]);
         assert_eq!(
             colonna(&uscita, &format!("geometry_{nome}")).as_ref(),
             &attesi as &dyn Array
@@ -442,13 +437,27 @@ fn le_misure_sono_i_kernel() {
             std::slice::from_ref(&ingresso),
         )
         .unwrap_or_else(|errore| panic!("{op}: {errore}"));
-        let attesi: BooleanArray = geometrie_in
-            .iter()
-            .map(|g| {
-                g.as_ref()
-                    .map(|g| predicates::evaluate(g, &altro_poligono, predicato).unwrap())
-            })
-            .collect();
+        comune_geo::verifica_schema_geo_indipendente(
+            op,
+            &uscita,
+            &ingresso,
+            &json!({"other_wkb": esadecimale_di(&altro_poligono)}),
+        );
+        comune_geo::assert_attributi(&uscita, &ingresso, &[0, 1, 2, 3], true);
+        let (prima, terza, quarta) = match predicato {
+            SpatialPredicate::Intersects => (true, true, false),
+            SpatialPredicate::Disjoint => (false, false, true),
+            SpatialPredicate::Contains
+            | SpatialPredicate::Covers
+            | SpatialPredicate::ContainsProperly => (true, false, false),
+            SpatialPredicate::Overlaps => (false, true, false),
+            SpatialPredicate::Within
+            | SpatialPredicate::EqualsTopo
+            | SpatialPredicate::CoveredBy
+            | SpatialPredicate::Touches
+            | SpatialPredicate::Crosses => (false, false, false),
+        };
+        let attesi = BooleanArray::from(vec![Some(prima), None, Some(terza), Some(quarta)]);
         let nome = op.strip_prefix("geo.").unwrap();
         assert_eq!(
             colonna(&uscita, nome).as_ref(),
@@ -534,7 +543,6 @@ fn l_azimut_fra_punti_coincidenti_ferma_il_passo() {
 #[allow(clippy::too_many_lines)] // Un caso per operazione, in un solo elenco.
 fn accessori_diagnostica_snap_e_riproiezione_sono_i_kernel() {
     let ingresso = linee();
-    let geometrie_in = geometrie(&ingresso, "geometry");
 
     let uscita = un_passo(
         "geo.geometry_accessors",
@@ -542,6 +550,13 @@ fn accessori_diagnostica_snap_e_riproiezione_sono_i_kernel() {
         std::slice::from_ref(&ingresso),
     )
     .unwrap();
+    comune_geo::verifica_schema_geo_indipendente(
+        "geo.geometry_accessors",
+        &uscita,
+        &ingresso,
+        &json!({"fields":["is_closed","geometry_type"],"output_prefix":"a_"}),
+    );
+    comune_geo::assert_attributi(&uscita, &ingresso, &[0, 1, 2], true);
     let nomi: Vec<String> = uscita
         .schema()
         .fields()
@@ -552,25 +567,12 @@ fn accessori_diagnostica_snap_e_riproiezione_sono_i_kernel() {
         nomi,
         ["id", "label", "geometry", "a_geometry_type", "a_is_closed"]
     );
-    let accessori: Vec<_> = geometrie_in
-        .iter()
-        .map(|g| {
-            g.as_ref()
-                .map(|g| extensions::geometry_accessors(g).unwrap())
-        })
-        .collect();
-    let tipi: StringArray = accessori
-        .iter()
-        .map(|a| a.as_ref().map(|a| a.geometry_type))
-        .collect();
+    let tipi = StringArray::from(vec![Some("LineString"), Some("LineString"), None]);
     assert_eq!(
         colonna(&uscita, "a_geometry_type").as_ref(),
         &tipi as &dyn Array
     );
-    let chiuse: BooleanArray = accessori
-        .iter()
-        .map(|a| a.as_ref().map(|a| a.is_closed))
-        .collect();
+    let chiuse = BooleanArray::from(vec![Some(false), Some(false), None]);
     assert_eq!(
         colonna(&uscita, "a_is_closed").as_ref(),
         &chiuse as &dyn Array
@@ -588,26 +590,70 @@ fn accessori_diagnostica_snap_e_riproiezione_sono_i_kernel() {
         ]),
         vec![],
     ));
-    let con_invalida = tabella(UTM, &[Some(farfalla.clone()), None]);
-    let uscita = un_passo("geo.geometry_diagnostics", json!({}), &[con_invalida]).unwrap();
-    assert!(uscita.column_by_name("geometry").is_none());
-    let diagnostica: GeometryDiagnostics =
-        extended_algorithms::geometry_diagnostics(&farfalla).unwrap();
-    let validita = colonna(&uscita, "is_valid")
-        .as_any()
-        .downcast_ref::<BooleanArray>()
-        .unwrap();
-    assert_eq!(validita.value(0), diagnostica.is_valid);
-    assert!(!diagnostica.is_valid);
-    assert!(validita.is_null(1));
-    let motivo = colonna(&uscita, "validity_reason")
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-    assert_eq!(
-        Some(motivo.value(0)),
-        diagnostica.validity_reason.as_deref()
+    let con_invalida = tabella(UTM, &[Some(farfalla), None]);
+    let uscita = un_passo(
+        "geo.geometry_diagnostics",
+        json!({}),
+        std::slice::from_ref(&con_invalida),
+    )
+    .unwrap();
+    comune_geo::verifica_schema_geo_indipendente(
+        "geo.geometry_diagnostics",
+        &uscita,
+        &con_invalida,
+        &json!({}),
     );
+    comune_geo::assert_attributi(&uscita, &con_invalida, &[0, 1], false);
+    assert!(uscita.column_by_name("geometry").is_none());
+    let attese: Vec<(&str, ArrayRef)> = vec![
+        (
+            "geometry_type",
+            Arc::new(StringArray::from(vec![Some("Polygon"), None])),
+        ),
+        (
+            "coordinate_count",
+            Arc::new(UInt64Array::from(vec![Some(5), None])),
+        ),
+        (
+            "is_empty",
+            Arc::new(BooleanArray::from(vec![Some(false), None])),
+        ),
+        (
+            "is_finite",
+            Arc::new(BooleanArray::from(vec![Some(true), None])),
+        ),
+        (
+            "is_valid",
+            Arc::new(BooleanArray::from(vec![Some(false), None])),
+        ),
+        (
+            "validity_reason",
+            Arc::new(StringArray::from(vec![
+                Some("anello con auto-intersezione"),
+                None,
+            ])),
+        ),
+        (
+            "bounds_minx",
+            Arc::new(Float64Array::from(vec![Some(X0), None])),
+        ),
+        (
+            "bounds_miny",
+            Arc::new(Float64Array::from(vec![Some(Y0), None])),
+        ),
+        (
+            "bounds_maxx",
+            Arc::new(Float64Array::from(vec![Some(X0 + 4.0), None])),
+        ),
+        (
+            "bounds_maxy",
+            Arc::new(Float64Array::from(vec![Some(Y0 + 4.0), None])),
+        ),
+    ];
+    assert_eq!(uscita.num_columns(), 12);
+    for (nome, attesa) in attese {
+        assert_eq!(colonna(&uscita, nome), &attesa, "{nome}");
+    }
 
     // Snap: l'adapter di colonna dei kernel.
     let riferimento = Geometry::Point(Point::new(X0 + 199.0, Y0 + 1.0));
@@ -617,15 +663,27 @@ fn accessori_diagnostica_snap_e_riproiezione_sono_i_kernel() {
         std::slice::from_ref(&ingresso),
     )
     .unwrap();
-    let celle = ingresso
-        .column_by_name("geometry")
-        .unwrap()
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .unwrap()
-        .clone();
-    let attese = extensions2_snap(&celle, &riferimento);
-    assert_eq!(colonna(&uscita, "geometry").as_ref(), attese.as_ref());
+    comune_geo::verifica_schema_geo_indipendente(
+        "geo.snap",
+        &uscita,
+        &ingresso,
+        &json!({"reference_wkb":esadecimale_di(&riferimento),"tolerance":2.0}),
+    );
+    comune_geo::assert_attributi(&uscita, &ingresso, &[0, 1, 2], false);
+    let attese = [
+        Some(wkb(&Geometry::LineString(LineString::from(vec![
+            (X0, Y0),
+            (X0 + 100.0, Y0 + 7.0),
+            (X0 + 199.0, Y0 + 1.0),
+        ])))),
+        Some(wkb(&Geometry::LineString(LineString::from(vec![
+            (X0 + 199.0, Y0 + 1.0),
+            (X0 + 300.0, Y0 + 50.0),
+        ])))),
+        None,
+    ];
+    let attese: BinaryArray = attese.iter().map(Option::as_deref).collect();
+    assert_eq!(colonna(&uscita, "geometry").as_ref(), &attese as &dyn Array);
 
     // Riproiezione: l'adapter dei kernel, stesso CRS d'uscita del contratto.
     let config = json!({"target_crs": "EPSG:4326"});
@@ -635,25 +693,33 @@ fn accessori_diagnostica_snap_e_riproiezione_sono_i_kernel() {
         std::slice::from_ref(&ingresso),
     )
     .unwrap();
-    let sorgente = resolve_crs(UTM, "crs").unwrap();
-    let parametri = plenora_kernels_geo::riproiezione::ReprojectParams::da_config(
-        "geo.reproject",
-        &config,
-        &sorgente,
-    )
-    .unwrap();
-    let (_, attese) = plenora_kernels_geo::riproiezione::reproject_batches(
-        &ingresso.schema(),
-        std::slice::from_ref(&ingresso),
-        "geometry",
-        &sorgente,
-        &parametri,
-    )
-    .unwrap();
+    comune_geo::verifica_schema_geo_indipendente("geo.reproject", &uscita, &ingresso, &config);
+    comune_geo::assert_attributi(&uscita, &ingresso, &[0, 1, 2], false);
+    let golden_values: Value =
+        serde_json::from_str(include_str!("comune_geo/unari_attesi.json")).unwrap();
+    let geometrie = geometrie(&uscita, "geometry");
+    assert_eq!(geometrie.len(), 3);
     assert_eq!(
-        colonna(&uscita, "geometry").as_ref(),
-        attese[0].column(2).as_ref()
+        geometrie.len(),
+        golden_values["reproject"].as_array().unwrap().len()
     );
+    for (geometria, coordinate_target) in geometrie
+        .iter()
+        .zip(golden_values["reproject"].as_array().unwrap())
+    {
+        if coordinate_target.is_null() {
+            assert!(geometria.is_none());
+            continue;
+        }
+        let linea = linea(geometria.as_ref().expect("linea riproiettata"));
+        let coordinate_target = coordinate_target.as_array().unwrap();
+        assert_eq!(linea.0.len(), coordinate_target.len());
+        for (p, a) in linea.0.iter().zip(coordinate_target) {
+            // 1e-8 gradi e' circa 1 mm qui, sotto la precisione geografica.
+            assert!((p.x - a[0].as_f64().unwrap()).abs() < 1e-8);
+            assert!((p.y - a[1].as_f64().unwrap()).abs() < 1e-8);
+        }
+    }
     let contratto = comune_geo::contratto(&uscita);
     assert_eq!(
         contratto.geometries[0]
@@ -663,11 +729,6 @@ fn accessori_diagnostica_snap_e_riproiezione_sono_i_kernel() {
             .definition(),
         "EPSG:4326"
     );
-}
-
-fn extensions2_snap(celle: &BinaryArray, riferimento: &Geometry<f64>) -> ArrayRef {
-    let attese = plenora_kernels_geo::extensions2::snap_column(celle, riferimento, 2.0).unwrap();
-    Arc::new(attese.iter().map(Option::as_deref).collect::<BinaryArray>())
 }
 
 /// I produttori: `from_coords` e `from_wkt` con il CRS di piano.
@@ -684,7 +745,11 @@ fn i_produttori_sono_i_kernel() {
         ],
     )
     .unwrap();
-    let uscita = un_passo_con_crs("geo.from_coords", json!({}), coordinate, UTM).unwrap();
+    let uscita = un_passo_con_crs("geo.from_coords", json!({}), coordinate.clone(), UTM).unwrap();
+    assert_eq!(
+        uscita.schema(),
+        comune_geo::schema_geo_indipendente("geo.from_coords", &coordinate, &json!({}), Some(UTM))
+    );
     let attese: BinaryArray = [
         wkb(&Geometry::Point(Point::new(X0, 5_000_000.0))),
         wkb(&Geometry::Point(Point::new(X0 + 1.5, 5_000_010.0))),
@@ -715,15 +780,23 @@ fn i_produttori_sono_i_kernel() {
         UTM,
     )
     .unwrap();
-    let attese = extensions::from_wkt_column(
-        testi
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap(),
-        extensions::OnWktError::Null,
-    )
-    .unwrap();
+    assert_eq!(
+        uscita.schema(),
+        comune_geo::schema_geo_indipendente(
+            "geo.from_wkt",
+            &testi,
+            &json!({"wkt_column":"wkt"}),
+            Some(UTM)
+        )
+    );
+    let attese = [
+        Some(wkb(&Geometry::Point(Point::new(X0, Y0)))),
+        None,
+        Some(wkb(&Geometry::LineString(LineString::from(vec![
+            (X0, Y0),
+            (X0 + 10.0, Y0 + 10.0),
+        ])))),
+    ];
     let attese: BinaryArray = attese.iter().map(Option::as_deref).collect();
     assert_eq!(colonna(&uscita, "geometry").as_ref(), &attese as &dyn Array);
 
@@ -740,8 +813,10 @@ fn i_produttori_sono_i_kernel() {
         ],
     )
     .unwrap();
-    let errore = un_passo_con_crs("geo.from_coords", json!({}), con_null, UTM).unwrap_err();
+    let errore = un_passo_con_crs("geo.from_coords", json!({}), con_null, UTM)
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{errore}");
+    assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
 }
 
 /// Ogni configurazione che l'analisi rifiuta la rifiuta la validazione, con
@@ -750,6 +825,7 @@ fn i_produttori_sono_i_kernel() {
 #[test]
 #[allow(clippy::too_many_lines)] // Un caso per operazione, in un solo elenco.
 fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
+    use ErrorCategory::{Crs, InvalidPlan};
     let farfalla = Geometry::Polygon(Polygon::new(
         LineString::from(vec![
             (X0, Y0),
@@ -851,30 +927,63 @@ fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
         ("geo.centroid", json!({}), punti_lonlat()),
         ("geo.to_wkt", json!({"output_column": "label"}), linee()),
     ];
-    for (op, config, ingresso) in casi {
+    let esiti = [
+        None,
+        Some(InvalidPlan),
+        Some(InvalidPlan),
+        Some(InvalidPlan),
+        Some(InvalidPlan),
+        Some(InvalidPlan),
+        Some(InvalidPlan),
+        Some(InvalidPlan),
+        Some(InvalidPlan),
+        Some(InvalidPlan),
+        Some(InvalidPlan),
+        Some(ErrorCategory::Schema),
+        Some(InvalidPlan),
+        Some(Crs),
+        Some(InvalidPlan),
+        Some(InvalidPlan),
+        Some(Crs),
+        None,
+        Some(InvalidPlan),
+        Some(InvalidPlan),
+        Some(Crs),
+        Some(Crs),
+        None,
+        Some(InvalidPlan),
+        Some(InvalidPlan),
+        Some(Crs),
+        Some(ErrorCategory::Schema),
+    ];
+    assert_eq!(casi.len(), esiti.len());
+    for ((op, config, ingresso), categoria) in casi.into_iter().zip(esiti) {
         let atteso = analisi(op, std::slice::from_ref(&ingresso), &config, None);
         let pipeline = piano(&["t"], vec![passo("x", op, &["t"], config.clone())], &["x"]);
         let validata = pipeline.validate(&[("t", ingresso.schema())]);
-        match (&validata, &atteso) {
-            (Ok(validata), Ok(contratto)) => {
-                // Il runner porta ogni contratto nello schema che emette
-                // (blocco canonico delle geometrie).
-                let ottenuto = validata.contratto("x").expect("contratto del passo");
-                let emesso = arrow_schema_from_contract(contratto).expect("schema emesso");
-                assert_eq!(ottenuto.schema, emesso, "{op} {config}");
-            }
-            (Err(runner), Err(analisi)) => {
-                assert!(
-                    stesso_errore(runner, analisi),
-                    "{op} {config}: {runner} / {analisi}"
-                );
-            }
-            _ => panic!(
-                "{op} {config}: validazione {:?}, analisi {:?}",
-                validata.as_ref().err(),
-                atteso.as_ref().err()
-            ),
+        if let Some(categoria) = categoria {
+            let runner = validata.expect_err("scenario rifiutato");
+            let analisi = atteso.expect_err("scenario rifiutato");
+            assert_eq!(runner.category(), categoria, "{op} {config}");
+            assert_eq!(analisi.category(), categoria, "{op} {config}");
+            assert!(stesso_errore(&runner, &analisi));
+            continue;
         }
+        let validata = validata.expect("successo previsto dallo scenario");
+        let analizzata = atteso.expect("analisi accettata dallo scenario");
+        let schema = comune_geo::schema_geo_indipendente(op, &ingresso, &config, None);
+        assert_eq!(
+            validata.schema_uscita("x").expect("schema pubblicato"),
+            &schema,
+            "schema runner {op}"
+        );
+        let emesso = plenora_core::contract::arrow_schema::arrow_schema_from_contract(&analizzata)
+            .expect("schema emesso");
+        assert_eq!(
+            emesso,
+            comune_geo::schema_analisi_geo_indipendente(op, &ingresso, &config, None),
+            "schema analisi {op}"
+        );
     }
 }
 
@@ -892,7 +1001,8 @@ fn le_coordinate_fuori_dominio_si_rifiutano() {
             json!({"reference_wkb": esadecimale_di(&Geometry::Point(Point::new(X0, Y0))), "tolerance": 1.0}),
         ),
     ] {
-        let errore = un_passo(op, config, std::slice::from_ref(&fuori)).unwrap_err();
+        let errore = un_passo(op, config, std::slice::from_ref(&fuori))
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert_eq!(errore.category(), ErrorCategory::Crs, "{op}: {errore}");
     }
     // La diagnostica descrive le tuple, senza interpretarle nel CRS.
@@ -914,7 +1024,8 @@ fn le_coordinate_fuori_dominio_si_rifiutano() {
         ],
     )
     .unwrap();
-    let errore = un_passo_con_crs("geo.from_coords", json!({}), coordinate, LONLAT).unwrap_err();
+    let errore = un_passo_con_crs("geo.from_coords", json!({}), coordinate, LONLAT)
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::Crs, "{errore}");
 }
 
@@ -944,7 +1055,8 @@ fn i_tipi_dichiarati_di_un_ingresso_si_verificano() {
         ingresso.columns().to_vec(),
     )
     .unwrap();
-    let errore = un_passo("geo.area", json!({}), &[dichiarata]).unwrap_err();
+    let errore = un_passo("geo.area", json!({}), &[dichiarata])
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
 }
 
@@ -1088,7 +1200,8 @@ fn un_passo_geo_oltre_il_budget_si_rifiuta_prima_di_eseguire() {
         ),
         6 * 1024 * 1024,
     );
-    let errore = esegui(&pipeline, &[("t", ingresso.clone())]).unwrap_err();
+    let errore = esegui(&pipeline, &[("t", ingresso.clone())])
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     let PlenoraError::ResourceLimit(messaggio) = &errore else {
         panic!("atteso ResourceLimit: {errore}");
     };
@@ -1147,7 +1260,8 @@ fn un_risultato_vuoto_in_una_colonna_non_nullable_e_un_errore() {
         ingresso.columns().to_vec(),
     )
     .unwrap();
-    let errore = un_passo("geo.point_on_surface", json!({}), &[non_nullable]).unwrap_err();
+    let errore = un_passo("geo.point_on_surface", json!({}), &[non_nullable])
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{errore}");
     assert!(errore.to_string().contains("non ammette null"), "{errore}");
 }

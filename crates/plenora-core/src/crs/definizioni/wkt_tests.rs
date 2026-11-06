@@ -11,7 +11,8 @@ fn wkt(id: &str) -> String {
 }
 
 fn rifiuto(testo: &str, codice: &str) {
-    let e = resolve_crs(testo, "crs").unwrap_err();
+    let e =
+        resolve_crs(testo, "crs").expect_err("rifiuto: codice CRS atteso verificato dalla prova");
     assert_eq!(e.code().as_str(), codice, "{testo}");
     assert!(!e.to_string().contains("SENTINELLA"));
 }

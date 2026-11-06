@@ -345,6 +345,10 @@ fn nan_e_zeri_con_segno_hanno_l_identita_del_testo() {
 }
 
 /// Stesso esito riga per riga: chiave uguale o stesso messaggio d'errore.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Confronto differenziale dei rifiuti del codificatore e del riferimento testuale, con rappresentazioni di successo diverse. Identita e ordine delle chiavi sono verificati separatamente da assert_same_identity."
+)]
 fn assert_same_errors(column: &ArrayRef) {
     let batch = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
@@ -536,12 +540,12 @@ fn con_due_colonne_in_errore_vince_la_prima_colonna_come_nel_testo() {
         let encoder = BinaryKeyEncoder::new(&batch, &indices);
         for row in 0..batch.num_rows() {
             let mut key = Vec::new();
-            let binary = encoder
-                .encode_into(row, &mut key)
-                .map_err(|e| e.to_string());
-            let text = row_key(&batch, &indices, row).map_err(|e| e.to_string());
-            assert!(binary.is_err(), "la riga {row} deve fallire");
-            assert_eq!(binary.err(), text.err(), "colonne {indices:?}, riga {row}");
+            // Entrambi i difetti appartengono allo schema; l'ordine sceglie il motivo.
+            let categoria = plenora_core::ErrorCategory::Schema;
+            let fase = plenora_core::ErrorPhase::Validate;
+            let binary = assert_rifiuto!(encoder.encode_into(row, &mut key), categoria, fase);
+            let text = assert_rifiuto!(row_key(&batch, &indices, row), categoria, fase);
+            assert_eq!(binary.to_string(), text.to_string());
         }
     }
 }

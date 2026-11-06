@@ -185,9 +185,11 @@ fn decoded_size_geometry(
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use geo::{Coord, GeometryCollection, LineString, MultiPolygon, Point, Polygon};
+    use plenora_core::{ErrorCategory, ErrorPhase};
 
     use super::*;
     use crate::geometry_from_wkb;
@@ -311,7 +313,11 @@ mod tests {
     fn non_finite_coordinates_are_sized_and_left_to_the_decoder() {
         let payload = point_wkb_le(f64::NAN, 0.0);
         assert_eq!(decoded_size_xy(&payload).expect("preflight"), 0);
-        assert!(geometry_from_wkb(&payload).is_err());
+        assert_rifiuto!(
+            geometry_from_wkb(&payload),
+            ErrorCategory::InvalidPlan,
+            ErrorPhase::Validate
+        );
     }
 
     /// Errori strutturali: il preflight fallisce sulle stesse celle del
@@ -341,14 +347,16 @@ mod tests {
                 p
             },
         ];
-        for (index, payload) in cases.iter().enumerate() {
-            assert!(
-                decoded_size_xy(payload).is_err(),
-                "caso {index}: preflight accetta una cella che il decoder rifiuta"
+        for payload in &cases {
+            assert_rifiuto!(
+                decoded_size_xy(payload),
+                ErrorCategory::InvalidPlan,
+                ErrorPhase::Validate
             );
-            assert!(
-                crate::wkb_decoder::decode_validated(payload).is_err(),
-                "caso {index}: decoder"
+            assert_rifiuto!(
+                crate::wkb_decoder::decode_validated(payload),
+                ErrorCategory::InvalidPlan,
+                ErrorPhase::Validate
             );
         }
     }
@@ -361,8 +369,16 @@ mod tests {
             geometry = Geometry::GeometryCollection(GeometryCollection::new_from(vec![geometry]));
         }
         let payload = to_wkb(&geometry);
-        assert!(decoded_size_xy(&payload).is_err());
-        assert!(crate::wkb_decoder::decode_validated(&payload).is_err());
+        assert_rifiuto!(
+            decoded_size_xy(&payload),
+            ErrorCategory::InvalidPlan,
+            ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            crate::wkb_decoder::decode_validated(&payload),
+            ErrorCategory::InvalidPlan,
+            ErrorPhase::Validate
+        );
     }
 
     /// Big-endian: la camminata segue il byte order dichiarato dalla cella.

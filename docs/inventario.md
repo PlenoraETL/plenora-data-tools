@@ -86,8 +86,8 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 | `plenora-io` | 20 | 262 | 282 |
 | `plenora-kernels-geo` | 532 | 111 | 643 |
 | `plenora-kernels-table` | 477 | 138 | 615 |
-| `plenora-pipeline` | 12 | 174 | 186 |
-| **totale** | 1256 | 846 | 2102 |
+| `plenora-pipeline` | 12 | 177 | 189 |
+| **totale** | 1256 | 849 | 2105 |
 
 ### Prove Python dell'SDK
 
@@ -114,11 +114,14 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 | `scripts/test_check_comments.py` | 27 |
 | `scripts/test_check_coverage.py` | 10 |
 | `scripts/test_check_docs.py` | 14 |
+| `scripts/test_check_esito_unico.py` | 23 |
+| `scripts/test_clippy_esito.py` | 1 |
 | `scripts/test_fuzz_crs.py` | 4 |
 | `scripts/test_genera_inventario.py` | 6 |
 | `scripts/test_genera_sbom_rilascio.py` | 5 |
 | `scripts/test_geometry_metadata_guard.py` | 4 |
 | `scripts/test_geometry_text_classification.py` | 1 |
+| `scripts/test_rust_esito_tokens.py` | 11 |
 | `scripts/test_semantica_crs.py` | 2 |
 | `scripts/test_strict_json.py` | 5 |
 | `scripts/test_verifica_adozione.py` | 14 |

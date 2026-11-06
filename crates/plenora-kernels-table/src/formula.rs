@@ -558,6 +558,7 @@ impl<'a> FastProgram<'a> {
     }
 
     /// Come [`Self::run`] col tipo ricavato dallo schema (test-oracolo).
+    #[deny(clippy::disallowed_methods)]
     #[cfg(test)]
     fn run_auto(
         &self,
@@ -1051,6 +1052,7 @@ pub fn formula_con_effetti(
 
 /// Come [`formula_generic`] col tipo ricavato dallo schema: usato dai
 /// test-oracolo, che confrontano fast e generico sulla stessa config.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 fn formula_generic_auto(
     batch: &RecordBatch,
@@ -1246,6 +1248,7 @@ fn infer_expr_type(
 // ---------------------------------------------------------------------------
 // Test-oracolo: fast path compilato vs interprete generico.
 // ---------------------------------------------------------------------------
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::arrow::array::{BooleanArray, Float64Array, Int64Array, StringArray};
@@ -1513,13 +1516,39 @@ mod tests {
         let batch = fixture();
         for text in ["1e999", "1e999 - 1e999", "f / 1e999", "-1e400"] {
             let error = formula(&batch, &config(text)).expect_err(text);
+            assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+            assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
             assert!(
                 matches!(error, PlenoraError::InvalidPlan(_)),
                 "{text}: {error:?}"
             );
-            assert!(validate(&config(text), 1024).is_err(), "{text}");
+            assert_rifiuto!(
+                validate(&config(text), 1024),
+                plenora_core::ErrorCategory::InvalidPlan,
+                plenora_core::ErrorPhase::Validate
+            );
         }
-        assert!(formula(&batch, &config("1e308")).is_ok());
+        let mut campi: Vec<_> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+        campi.push(Field::new("out", DataType::Float64, true));
+        let mut colonne = batch.columns().to_vec();
+        colonne.push(Arc::new(Float64Array::from(vec![
+            Some(1e308);
+            batch.num_rows()
+        ])));
+        let atteso = RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                campi,
+                batch.schema().metadata().clone(),
+            )),
+            colonne,
+        )
+        .expect("fixture costante");
+        assert_successo!(formula(&batch, &config("1e308")), atteso);
     }
 
     #[test]
@@ -1625,15 +1654,24 @@ mod tests {
         ] {
             let cfg = con_politica("f * 2", politica);
             let error = formula(&batch, &cfg).expect_err("senza divisioni");
+            assert_eq!(error.category(), plenora_core::ErrorCategory::InvalidPlan);
+            assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
             assert!(
                 error
                     .to_string()
                     .contains("on_division_by_zero senza effetto"),
                 "{error}"
             );
-            assert!(validate(&cfg, 1024).is_err());
+            assert_rifiuto!(
+                validate(&cfg, 1024),
+                plenora_core::ErrorCategory::InvalidPlan,
+                plenora_core::ErrorPhase::Validate
+            );
         }
-        assert!(validate(&con_politica("f / 2", crate::OnDivisionByZero::Error), 1024).is_ok());
+        assert_successo!(
+            validate(&con_politica("f / 2", crate::OnDivisionByZero::Error), 1024),
+            ()
+        );
     }
 
     #[test]
@@ -1656,7 +1694,7 @@ mod tests {
         let indices: Vec<u64> = report.examples.iter().map(|row| row.source_index).collect();
         assert_eq!(indices, vec![0, 2, 3, 4, 5]);
         assert!(!report.examples_truncated);
-        assert!(report.validate_for_emission().is_ok());
+        assert_successo!(report.validate_for_emission(), ());
         // Parita' fast/generico anche sul payload, non solo sul testo.
         let expression = parse("i / (i * 0)").expect("formula valida");
         let generic =
@@ -1776,6 +1814,8 @@ mod tests {
         let error = program
             .eval_numeric_row(&mut stack, 0)
             .expect_err("operandi residui");
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
+        assert_eq!(error.phase(), plenora_core::ErrorPhase::Write);
         assert!(error.to_string().contains("operandi residui"), "{error}");
 
         // Stesso controllo sul tier generico, che condivide l'invariante.
@@ -1790,6 +1830,8 @@ mod tests {
         let Err(error) = generic.eval_slot_row(&mut slots, 0) else {
             panic!("il tier generico ha accettato operandi residui");
         };
+        assert_eq!(error.category(), plenora_core::ErrorCategory::Internal);
+        assert_eq!(error.phase(), plenora_core::ErrorPhase::Write);
         assert!(error.to_string().contains("operandi residui"), "{error}");
     }
 }

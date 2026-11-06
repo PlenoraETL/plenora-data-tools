@@ -81,9 +81,11 @@ pub struct OpzioniScrittura {
     pub compressione: CompressioneParquet,
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plenora_core::{ErrorCategory, ErrorPhase};
 
     #[test]
     fn estensioni() {
@@ -98,7 +100,11 @@ mod tests {
             assert_eq!(Formato::da_percorso(Path::new(nome)).ok(), Some(atteso));
         }
         for nome in ["a", "a.csv", "a.parquet.tmp", ".parquet"] {
-            assert!(Formato::da_percorso(Path::new(nome)).is_err(), "{nome}");
+            assert_rifiuto!(
+                Formato::da_percorso(Path::new(nome)),
+                ErrorCategory::Unsupported,
+                ErrorPhase::Validate
+            );
         }
         assert_eq!(
             Formato::risolvi(Some(Formato::Parquet), Path::new("a.bin")).ok(),

@@ -316,6 +316,7 @@ fn valore() -> impl Strategy<Value = Option<f64>> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn bin_come_il_riferimento_su_input_casuali(
         valori in prop::collection::vec(valore(), 0..40),

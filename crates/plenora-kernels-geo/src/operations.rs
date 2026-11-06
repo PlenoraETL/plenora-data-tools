@@ -725,6 +725,7 @@ fn line_string_boundary(line: &LineString<f64>) -> Geometry<f64> {
     ]))
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod prove_della_soglia_scalata {
     use super::*;
@@ -777,6 +778,7 @@ mod prove_della_soglia_scalata {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 // Confronti float esatti intenzionali: le fixture sono costruite per
 // produrre valori esatti (coordinate note, round-trip bit-esatti); il
@@ -786,9 +788,21 @@ mod tests {
     #[test]
     fn indici_simplify_rifiutati_prima_del_cast_upstream() {
         let max = usize::try_from(i32::MAX).unwrap();
-        assert!(super::verifica_indici_simplify(max).is_ok());
-        assert!(super::verifica_indici_simplify(max + 1).is_err());
-        assert!(super::verifica_indici_simplify(usize::MAX).is_err());
+        super::verifica_indici_simplify(max).expect("indice i32 massimo ammesso");
+        assert!(matches!(
+            super::verifica_indici_simplify(max + 1),
+            Err(OperationError::InvalidParameter {
+                name: "geometry",
+                ..
+            })
+        ));
+        assert!(matches!(
+            super::verifica_indici_simplify(usize::MAX),
+            Err(OperationError::InvalidParameter {
+                name: "geometry",
+                ..
+            })
+        ));
     }
 
     use super::*;
@@ -877,19 +891,79 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::suboptimal_flops)]
     fn buffer_rejects_non_finite_distance_and_produces_valid_polygon() {
-        assert!(buffer(&rectangle(), f64::NAN, precisione()).is_err());
+        assert!(matches!(
+            buffer(&rectangle(), f64::NAN, precisione()),
+            Err(OperationError::InvalidParameter {
+                name: "distance",
+                ..
+            })
+        ));
         let result = buffer(&Geometry::Point(Point::new(0.0, 0.0)), 2.0, precisione()).unwrap();
-        assert!(result.unsigned_area() > 12.0);
-        assert!(result.unsigned_area() < 13.0);
+        // Limite documentato degli archi: max(p/2, 0.001 * r), piu'
+        // p/2 di griglia. Il cerchio r=2 ha quindi scarto <= 0.002001.
+        let delta = 0.002_001;
+        let pi = std::f64::consts::PI;
+        assert!((result.unsigned_area() - 4.0 * pi).abs() < 4.0 * pi * delta + pi * delta * delta);
+        for (got, expected) in bounds(&result)
+            .unwrap()
+            .unwrap()
+            .iter()
+            .zip([-2.0, -2.0, 2.0, 2.0])
+        {
+            assert!((got - expected).abs() <= delta);
+        }
 
         let line = Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 2.0, y: 0.0)]);
         let flat = buffer_with_cap(&line, 1.0, BufferCapStyle::Flat, precisione()).unwrap();
         let square = buffer_with_cap(&line, 1.0, BufferCapStyle::Square, precisione()).unwrap();
         let round = buffer_with_cap(&line, 1.0, BufferCapStyle::Round, precisione()).unwrap();
         assert!((flat.unsigned_area() - 4.0).abs() < 1e-9);
-        assert!(square.unsigned_area() > flat.unsigned_area());
-        assert!(round.unsigned_area() > flat.unsigned_area());
+        assert!((square.unsigned_area() - 8.0).abs() < 1e-9);
+        for (geometry, expected_bounds) in [
+            (&flat, [0.0, -1.0, 2.0, 1.0]),
+            (&square, [-1.0, -1.0, 3.0, 1.0]),
+        ] {
+            let Geometry::MultiPolygon(polygons) = geometry else {
+                panic!("buffer poligonale");
+            };
+            assert_eq!(polygons.0.len(), 1);
+            let polygon = &polygons.0[0];
+            assert!(polygon.interiors().is_empty());
+            assert_eq!(polygon.exterior().0.len(), 5);
+            let [xmin, ymin, xmax, ymax] = expected_bounds;
+            let mut corners: Vec<_> = polygon.exterior().0[..4]
+                .iter()
+                .map(|c| (c.x, c.y))
+                .collect();
+            assert_eq!(corners.len(), 4);
+            corners.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            for (got, expected) in
+                corners
+                    .iter()
+                    .zip([(xmin, ymin), (xmin, ymax), (xmax, ymin), (xmax, ymax)])
+            {
+                assert!((got.0 - expected.0).abs() <= 1e-6);
+                assert!((got.1 - expected.1).abs() <= 1e-6);
+            }
+        }
+        for (geometry, radius, right_center) in [(&result, 2.0, 0.0), (&round, 1.0, 2.0)] {
+            let Geometry::MultiPolygon(polygons) = geometry else {
+                panic!("buffer poligonale");
+            };
+            assert_eq!(polygons.0.len(), 1);
+            assert!(polygons.0[0].interiors().is_empty());
+            for c in &polygons.0[0].exterior().0 {
+                let x = c.x - c.x.clamp(0.0, right_center);
+                assert!((x.hypot(c.y) - radius).abs() <= radius * 0.001 + 1e-6);
+            }
+        }
+        let delta = 0.001_001;
+        assert!(
+            (round.unsigned_area() - (4.0 + pi)).abs()
+                < (4.0 + 2.0 * pi) * delta + pi * delta * delta
+        );
     }
 
     #[test]
@@ -898,12 +972,21 @@ mod tests {
             (x: 0.0, y: 0.0), (x: 1.0, y: 0.01), (x: 2.0, y: 0.0)
         ]);
         let simplified = simplify(&line, 0.1).unwrap();
-        assert_eq!(vertex_count(&simplified).unwrap(), 2);
-        assert!(simplify(&line, -1.0).is_err());
+        assert_eq!(
+            simplified,
+            Geometry::LineString(line_string![(x: 0.0, y: 0.0), (x: 2.0, y: 0.0)])
+        );
+        assert!(matches!(
+            simplify(&line, -1.0),
+            Err(OperationError::InvalidParameter {
+                name: "tolerance",
+                ..
+            })
+        ));
 
         let preserved =
             simplify_with_policy(&rectangle(), 0.5, SimplifyPolicy::PreserveTopology).unwrap();
-        assert!(preserved.validazione_protetta().is_ok());
+        assert_eq!(preserved, rectangle());
     }
 
     #[test]
@@ -929,7 +1012,7 @@ mod tests {
                     continue;
                 }
                 let output = simplify_with_policy(&line, tolerance, policy).unwrap();
-                assert!(output.validazione_protetta().is_ok());
+                assert_successo!(output.validazione_protetta(), ());
                 assert!(output
                     .coords_iter()
                     .all(|coordinate| coordinate.x.is_finite() && coordinate.y.is_finite()));
@@ -993,16 +1076,18 @@ mod tests {
         ];
         for value in &values {
             assert!(length(value).unwrap().is_finite());
-            assert!(boundary(value).unwrap().validazione_protetta().is_ok());
+            assert_successo!(boundary(value).unwrap().validazione_protetta(), ());
             assert!(!explode(value).unwrap().is_empty());
             for policy in [
                 SimplifyPolicy::DouglasPeucker,
                 SimplifyPolicy::PreserveTopology,
             ] {
-                assert!(simplify_with_policy(value, 0.01, policy)
-                    .unwrap()
-                    .validazione_protetta()
-                    .is_ok());
+                assert_successo!(
+                    simplify_with_policy(value, 0.01, policy)
+                        .unwrap()
+                        .validazione_protetta(),
+                    ()
+                );
             }
         }
 

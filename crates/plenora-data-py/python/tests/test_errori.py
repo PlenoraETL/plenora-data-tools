@@ -151,8 +151,10 @@ def test_i_messaggi_non_portano_dati_ne_percorsi(
         ],
         "outputs": ["u"],
     }
-    with pytest.raises(pd.PlenoraError) as valore:
+    with pytest.raises(pd.PlenoraInvalidPlanError) as valore:
         pd.run(piano, {"t": tabella})
+    assert valore.value.category == "invalid_plan"
+    assert valore.value.phase == "validate"
     verifica(valore.value, valida)
     assert CANARINO not in json.dumps(valore.value.to_dict())
 
@@ -234,7 +236,7 @@ def test_la_preparazione_degli_argomenti_classifica_e_tace(
         ),
     ]
     for caso, classe in casi:
-        with pytest.raises(pd.PlenoraError) as errore:
+        with pytest.raises(classe) as errore:
             caso()
         assert type(errore.value) is classe, repr(errore.value)
         verifica(errore.value, valida)

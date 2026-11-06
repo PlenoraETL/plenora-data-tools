@@ -23,7 +23,7 @@ use plenora_core::diagnostics::{
     RowDiagnosticScope, RowDiagnostics, RowDiagnosticsCompleteness,
     KNOWLEDGE_LIMIT_ROW_ATTRIBUTION_UNAVAILABLE, ROW_DIAGNOSTICS_INDEX_BASIS,
 };
-use plenora_core::{ErrorPhase, PlenoraError, Result};
+use plenora_core::{ErrorCategory, ErrorPhase, PlenoraError, Result};
 use plenora_pipeline::{byte_vivi, BaseIndici, Esito, Passo, Pipeline, PipelineValidata};
 use serde_json::{json, Value};
 
@@ -315,6 +315,11 @@ fn diagnostica(errore: &PlenoraError) -> &RowDiagnostics {
 /// derivata `write` (l'esecuzione), nessun tag, e lo scope `read` del
 /// payload (la riga rifiutata è d'ingresso).
 fn verifica_fase(errore: &PlenoraError, report: &RowDiagnostics) {
+    assert_eq!(
+        errore.category(),
+        ErrorCategory::DataMapping,
+        "categoria del rifiuto per riga"
+    );
     assert_eq!(errore.phase(), ErrorPhase::Write, "{errore}");
     assert_eq!(errore.phase_tag(), None, "{errore}");
     assert_eq!(report.scope, RowDiagnosticScope::Read, "{errore}");
@@ -356,7 +361,7 @@ fn verifica_senza_attribuzione(errore: &PlenoraError, ingresso: &str) -> RowDiag
         "{errore}"
     );
     assert_eq!(report.total, Some(report.observed_total), "{errore}");
-    assert!(report.validate_for_emission().is_ok());
+    assert_eq!(report.validate_for_emission(), Ok(()));
     let testo = errore.to_string();
     assert!(testo.contains("passo `x`"), "{testo}");
     assert!(testo.contains(&format!("ingresso `{ingresso}`")), "{testo}");

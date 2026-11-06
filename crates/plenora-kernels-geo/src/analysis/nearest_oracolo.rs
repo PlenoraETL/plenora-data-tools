@@ -755,6 +755,10 @@ fn coppia_che_fa_panicare_geo() -> (Colonna, Colonna) {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Controprova del panico del percorso generico geo sulla fixture; i percorsi protetti di produzione sono verificati separatamente per variante."
+)]
 fn un_panico_di_geo_diventa_calcolo_non_concluso() {
     let (left, right) = coppia_che_fa_panicare_geo();
     // La forza bruta di prima andava davvero in panico su questo ingresso.

@@ -616,6 +616,7 @@ fn reconcile_e_foreign_key_come_il_riferimento_su_ogni_soglia() {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn reconcile_e_foreign_key_come_il_riferimento_su_input_casuali(
         sinistra in prop::collection::vec((prop::option::of(-3_i64..4), prop::option::of(0_u8..3)), 0..30),

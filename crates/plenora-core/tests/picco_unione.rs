@@ -327,7 +327,7 @@ fn la_stima_non_e_mai_sotto_il_picco_vero() {
 
 fn oracolo(seme: u64) {
     let mut generatore = Generatore(seme);
-    let mut provati = 0;
+
     for caso in 0..1_500 {
         let tipo = caso % (TIPI + 1);
         let numero_blocchi = 2 + generatore.sotto(4);
@@ -364,10 +364,15 @@ fn oracolo(seme: u64) {
             blocchi.push(RecordBatch::try_new(schema, vec![colonna]).expect("blocco"));
         }
         let schema = blocchi[0].schema();
-        let Ok(unita) = concat_batches(&schema, &blocchi) else {
-            continue;
-        };
-        provati += 1;
+        // Tutti i 20 tipi generati sono concatenabili: stesso tipo fra
+        // blocchi, offset piccoli, null e fette ammessi da Arrow. Nessuno
+        // dei 1_500 scenari puo' essere saltato dopo un rifiuto.
+        let unita = concat_batches(&schema, &blocchi).expect("fixture concatenabile");
+        assert_eq!(unita.schema(), schema);
+        assert_eq!(
+            unita.num_rows(),
+            blocchi.iter().map(RecordBatch::num_rows).sum::<usize>()
+        );
         let vero = picco_vero(&blocchi, &unita);
         let stima = picco_unione(&blocchi);
         assert!(
@@ -376,7 +381,6 @@ fn oracolo(seme: u64) {
             schema.field(0).data_type()
         );
     }
-    assert!(provati > 1_400, "casi provati: {provati}");
 }
 
 /// Il caso della verifica del percorso generico: `FixedSizeList<List<Int64>,

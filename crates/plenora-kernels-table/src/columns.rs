@@ -1008,6 +1008,7 @@ pub fn split_column(
     Ok(result)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 // Confronti float esatti intenzionali: i default `Float64` delle fixture
 // sono letterali esatti; il confronto per bit e' il contratto verificato,
@@ -1223,10 +1224,16 @@ mod tests {
             "contract violation: colonna ripetuta nella proiezione: a",
         );
         // Config strict: campo sconosciuto rifiutato, e solo per quello.
-        assert!(serde_json::from_value::<SelectColumns>(json!({"columns": ["a"]})).is_ok());
+        assert_eq!(
+            serde_json::from_value::<SelectColumns>(json!({"columns": ["a"]}))
+                .expect("config valida")
+                .columns,
+            ["a"]
+        );
         let error =
             serde_json::from_value::<SelectColumns>(json!({"columns": ["a"], "surprise": true}))
                 .expect_err("campo sconosciuto accettato");
+        assert_eq!(error.classify(), serde_json::error::Category::Data);
         assert!(
             error.to_string().contains("unknown field `surprise`"),
             "{error}"
@@ -1457,9 +1464,10 @@ mod tests {
     fn align_schema_default_rifiuta_i_segni_ripetuti() {
         for tipo in ["Decimal128", "Int64", "UInt64", "Float64"] {
             for testo in ["--5", "+-5", "-+5", "++5"] {
-                assert!(
-                    check_align_default(&json!(testo), align_type(tipo)).is_err(),
-                    "{tipo}: {testo} accettato"
+                assert_rifiuto!(
+                    check_align_default(&json!(testo), align_type(tipo)),
+                    plenora_core::ErrorCategory::InvalidPlan,
+                    plenora_core::ErrorPhase::Validate
                 );
             }
         }
@@ -1485,9 +1493,10 @@ mod tests {
             "1970-01-01T00:00:00.0005Z",
             "1970-01-01T00:00:00",
         ] {
-            assert!(
-                check_align_default(&json!(testo), align_type("Timestamp")).is_err(),
-                "{testo}"
+            assert_rifiuto!(
+                check_align_default(&json!(testo), align_type("Timestamp")),
+                plenora_core::ErrorCategory::InvalidPlan,
+                plenora_core::ErrorPhase::Validate
             );
         }
         check_align_default(
@@ -1505,53 +1514,81 @@ mod tests {
     fn align_schema_rejects_type_mismatch_and_bad_configs() {
         let input = align_fixture();
         // Tipo diverso dal dichiarato: errore, mai cast implicito.
-        let error = align_schema(
-            &input,
-            &align(json!({"columns": [{"name": "id", "type": "Utf8"}]})),
-        )
-        .expect_err("mismatch");
+        let error = assert_rifiuto!(
+            align_schema(
+                &input,
+                &align(json!({"columns": [{"name": "id", "type": "Utf8"}]})),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         assert!(error.to_string().contains("nessun cast implicito"));
         // Anche un tipo "vicino" ma diverso (Int64 vs Timestamp) e' un errore.
-        assert!(align_schema(
-            &input,
-            &align(json!({"columns": [{"name": "id", "type": "Timestamp"}]})),
-        )
-        .is_err());
+        assert_rifiuto!(
+            align_schema(
+                &input,
+                &align(json!({"columns": [{"name": "id", "type": "Timestamp"}]})),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // Colonne vuote, ripetute, default non convertibile.
-        assert!(align_schema(&input, &align(json!({"columns": []}))).is_err());
-        assert!(align_schema(
-            &input,
-            &align(json!({"columns": [
-                {"name": "id", "type": "Int64"},
-                {"name": "id", "type": "Int64"}
-            ]})),
-        )
-        .is_err());
-        assert!(align_schema(
-            &input,
-            &align(json!({"columns": [{"name": "n", "type": "Int64", "default": "abc"}]})),
-        )
-        .is_err());
+        assert_rifiuto!(
+            align_schema(&input, &align(json!({"columns": []}))),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            align_schema(
+                &input,
+                &align(json!({"columns": [
+                    {"name": "id", "type": "Int64"},
+                    {"name": "id", "type": "Int64"}
+                ]})),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            align_schema(
+                &input,
+                &align(json!({"columns": [{"name": "n", "type": "Int64", "default": "abc"}]})),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // Decimal con piu' cifre della scala: nessun arrotondamento implicito.
-        assert!(align_schema(
-            &input,
-            &align(json!({"columns": [
-                {"name": "dc", "type": "Decimal128", "default": "1.00000000001"}
-            ]})),
-        )
-        .is_err());
+        assert_rifiuto!(
+            align_schema(
+                &input,
+                &align(json!({"columns": [
+                    {"name": "dc", "type": "Decimal128", "default": "1.00000000001"}
+                ]})),
+            ),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         // Config strict: tipo fuori dal set chiuso e campo sconosciuto.
-        assert!(serde_json::from_value::<AlignSchema>(
-            json!({"columns": [{"name": "x", "type": "Int32"}]})
-        )
-        .is_err());
-        assert!(serde_json::from_value::<AlignSchema>(
-            json!({"columns": [{"name": "x", "type": "Utf8", "surprise": 1}]})
-        )
-        .is_err());
+        assert_eq!(
+            serde_json::from_value::<AlignSchema>(
+                json!({"columns": [{"name": "x", "type": "Int32"}]})
+            )
+            .expect_err("config non valida")
+            .classify(),
+            serde_json::error::Category::Data
+        );
+        assert_eq!(
+            serde_json::from_value::<AlignSchema>(
+                json!({"columns": [{"name": "x", "type": "Utf8", "surprise": 1}]})
+            )
+            .expect_err("config non valida")
+            .classify(),
+            serde_json::error::Category::Data
+        );
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[path = "split_oracolo.rs"]
 mod split_oracolo;

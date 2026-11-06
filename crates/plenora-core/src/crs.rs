@@ -969,6 +969,7 @@ pub fn validate_geometry_domain(
     Ok(())
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1063,7 +1064,10 @@ mod tests {
             validate_requirement(CrsRequirement::SameProjected, &[&projected, &different]),
             Err(CrsError::Mismatch)
         ));
-        assert!(validate_requirement(CrsRequirement::Reprojection, &[&geographic]).is_err());
+        assert!(matches!(
+            validate_requirement(CrsRequirement::Reprojection, &[&geographic]),
+            Err(CrsError::InvalidContract(_))
+        ));
 
         assert_eq!(projected.definition(), "EPSG:3857");
         validate_requirement(CrsRequirement::Known, &[&geographic]).unwrap();

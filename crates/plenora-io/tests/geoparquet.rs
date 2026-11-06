@@ -7,6 +7,10 @@
 
 mod comune;
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -138,7 +142,7 @@ fn projjson_non_perde_cifre_e_non_si_fida_del_codice() {
         let wkb = punto(500_123.0, 4_987_654.0);
         let colonne = Arc::new(BinaryArray::from_vec(vec![wkb.as_slice()]));
         let p = file_con_colonna(dir.path(), &geo.replace("500000", numero), colonne, 1);
-        let e = leggi(&p).unwrap_err();
+        let e = leggi(&p).expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert_eq!(e.public_projection().code(), Some(codice));
         assert!(!e.to_string().contains(numero));
     }
@@ -166,7 +170,10 @@ fn crs_di_campo_non_sparisce_durante_la_normalizzazione_geoparquet() {
                 assert_eq!(esito.unwrap().columns(), batch.columns());
             } else {
                 assert_eq!(
-                    esito.unwrap_err().public_projection().code(),
+                    esito
+                        .expect_err("rifiuto atteso: categoria verificata dalla prova")
+                        .public_projection()
+                        .code(),
                     Some("CRS_MISMATCH")
                 );
             }
@@ -414,7 +421,8 @@ fn crs_assente_e_null() {
     let uscita = dir.path().join("null.parquet");
     // Il vocabolario missing non porta axis_order: la scrittura non pu?
     // certificare l'ordine da un CRS assente (migrazione 4.0).
-    let error = scrivi_tabella(&tabella, &uscita, &OpzioniScrittura::default()).unwrap_err();
+    let error = scrivi_tabella(&tabella, &uscita, &OpzioniScrittura::default())
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(error.category(), ErrorCategory::Crs);
     assert!(!uscita.exists());
 }
@@ -659,7 +667,18 @@ fn rifiuti_in_lettura() {
     ];
     for (nome, geo, celle, categoria, frammento) in casi {
         let errore = errore_di(&geo, celle);
-        assert_eq!(errore.category(), categoria, "{nome}: {errore}");
+        let fase = match categoria {
+            ErrorCategory::DataMapping => plenora_core::ErrorPhase::Write,
+            ErrorCategory::Crs | ErrorCategory::InvalidPlan | ErrorCategory::Unsupported => {
+                plenora_core::ErrorPhase::Validate
+            }
+            _ => panic!("categoria non prevista dalla matrice"),
+        };
+        assert_eq!(
+            (errore.category(), errore.phase()),
+            (categoria, fase),
+            "{nome}: {errore}"
+        );
         assert!(errore.to_string().contains(frammento), "{nome}: {errore}");
         // Errori senza dati: il valore letto dal metadato non compare.
         assert!(!errore.to_string().contains("2.0.0"), "{nome}: {errore}");
@@ -670,7 +689,11 @@ fn rifiuti_in_lettura() {
     let wkb = punto(1.0, 2.0);
     let celle = BinaryArray::from(vec![Some(wkb.as_slice())]);
     let percorso = file_con_colonna(dir.path(), testo, Arc::new(celle), 1);
-    let errore = leggi(&percorso).expect_err("duplicate");
+    let errore = assert_rifiuto!(
+        leggi(&percorso),
+        ErrorCategory::InvalidPlan,
+        plenora_core::ErrorPhase::Validate
+    );
     assert!(errore.to_string().contains("duplicate"), "{errore}");
 }
 
@@ -763,6 +786,7 @@ fn con_metadati(campo: Field, coppie: &[(&str, &str)]) -> Field {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Fixture e attesi espliciti tenuti insieme.
 fn rifiuti_in_scrittura() {
     let base = || geometry_output_field("geometry", "EPSG:32632").unwrap();
     let p = || vec![Some(punto(500_000.0, 5_000_000.0))];
@@ -774,11 +798,21 @@ fn rifiuti_in_scrittura() {
         ),
         p(),
     );
-    assert_eq!(errore.category(), ErrorCategory::Crs, "{errore}");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (ErrorCategory::Crs, plenora_core::ErrorPhase::Validate)
+    );
     // Encoding EWKB dichiarato.
     let errore = errore_scrittura(
         con_metadati(base(), &[(PLENORA_GEOMETRY_ENCODING_KEY, "ewkb")]),
         p(),
+    );
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (
+            ErrorCategory::Unsupported,
+            plenora_core::ErrorPhase::Validate
+        )
     );
     assert!(
         errore.to_string().contains("EWKB") || errore.to_string().contains("ewkb"),
@@ -795,14 +829,20 @@ fn rifiuti_in_scrittura() {
         ),
         p(),
     );
-    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (ErrorCategory::DataMapping, plenora_core::ErrorPhase::Write)
+    );
     // Dimensionalita' dichiarata xyz, dati 2D.
     let errore = errore_scrittura(
         geometry_output_field_with_dimensions("geometry", "EPSG:32632", GeometryDimensions::Xyz)
             .unwrap(),
         p(),
     );
-    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (ErrorCategory::DataMapping, plenora_core::ErrorPhase::Write)
+    );
     // CRS dichiarato non risolto.
     let campo = Field::new("geometry", DataType::Binary, true).with_metadata(HashMap::from([
         ("ARROW:extension:name".to_owned(), "geoarrow.wkb".to_owned()),
@@ -836,12 +876,18 @@ fn rifiuti_in_scrittura() {
         &OpzioniScrittura::default(),
     )
     .expect_err("non risolto");
-    assert_eq!(errore.category(), ErrorCategory::Crs, "{errore}");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (ErrorCategory::Crs, plenora_core::ErrorPhase::Validate)
+    );
     // Curva nei dati.
     let mut curva = linea(&[(0.0, 0.0), (1.0, 1.0), (2.0, 0.0)]);
     curva[1..5].copy_from_slice(&8_u32.to_le_bytes());
     let errore = errore_scrittura(base(), vec![Some(curva)]);
-    assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (ErrorCategory::DataMapping, plenora_core::ErrorPhase::Write)
+    );
     // Metadato di schema `geo` senza geometrie.
     let tabella = comune::ordini();
     let elenco = tabella.schema().fields().clone();
@@ -857,7 +903,13 @@ fn rifiuti_in_scrittura() {
         &OpzioniScrittura::default(),
     )
     .expect_err("geo riservato");
-    assert_eq!(errore.category(), ErrorCategory::InvalidPlan);
+    assert_eq!(
+        (errore.category(), errore.phase()),
+        (
+            ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        )
+    );
 }
 
 #[test]
@@ -1059,7 +1111,8 @@ fn scrittura_non_certifica_assi_ambigui_o_incompatibili() {
         .unwrap();
         let dir = cartella();
         let output = dir.path().join("refused.parquet");
-        let error = scrivi_tabella(&table, &output, &OpzioniScrittura::default()).unwrap_err();
+        let error = scrivi_tabella(&table, &output, &OpzioniScrittura::default())
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert_eq!(error.category(), ErrorCategory::Crs);
         assert!(!output.exists());
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
@@ -1089,7 +1142,7 @@ fn provenienza_geoparquet_non_sovrascrive_versioni_non_supportate() {
         .unwrap();
         assert_eq!(
             plenora_io::geoparquet::applica(&batch, &metadata)
-                .unwrap_err()
+                .expect_err("rifiuto atteso: categoria verificata dalla prova")
                 .category(),
             category
         );
@@ -1148,7 +1201,9 @@ fn assi_geoparquet_verificati_in_ogni_ramo_crs() {
                     || (!null && ordine.is_some_and(|o| o != "unknown" && o != atteso));
                 if incompatibile {
                     assert_eq!(
-                        risultato.unwrap_err().category(),
+                        risultato
+                            .expect_err("rifiuto atteso: categoria verificata dalla prova")
+                            .category(),
                         ErrorCategory::Crs,
                         "{id:?} {null} {ordine:?}"
                     );
@@ -1174,7 +1229,8 @@ fn assi_geoparquet_precedono_la_lettura_delle_celle() {
             ordine.to_owned(),
         );
         let batch = tabella_geo(campo.with_metadata(md), vec![Some(vec![1_u8, 2, 3])]);
-        let errore = plenora_io::geoparquet::applica(&batch, &geo).unwrap_err();
+        let errore = plenora_io::geoparquet::applica(&batch, &geo)
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         if ordine == "easting_northing" {
             assert_ne!(errore.category(), ErrorCategory::Crs);
         } else {
@@ -1194,7 +1250,7 @@ fn geoparquet_non_sovrascrive_un_crs_legacy_diverso() {
         for input in [batch.clone(), batch.slice(0, 0)] {
             assert_eq!(
                 plenora_io::geoparquet::applica(&input, &metadata)
-                    .unwrap_err()
+                    .expect_err("rifiuto atteso: categoria verificata dalla prova")
                     .category(),
                 ErrorCategory::Crs
             );
@@ -1221,7 +1277,7 @@ fn geoparquet_non_cancella_dichiarazioni_estensione_contraddittorie() {
         for input in [batch.clone(), batch.slice(0, 0)] {
             assert_eq!(
                 plenora_io::geoparquet::applica(&input, &file)
-                    .unwrap_err()
+                    .expect_err("rifiuto atteso: categoria verificata dalla prova")
                     .category(),
                 categoria
             );
@@ -1292,8 +1348,8 @@ fn projjson_accetta_forme_equivalenti_senza_arrotondare_numeri() {
         assert_eq!(letto.columns(), table.columns());
     }
     let modified = canonical.replace("6378137", "6378137.00000000000000000001");
-    let error =
-        plenora_io::geoparquet::applica(&table, &geo.replace(&canonical, &modified)).unwrap_err();
+    let error = plenora_io::geoparquet::applica(&table, &geo.replace(&canonical, &modified))
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(error.public_projection().code(), Some("CRS_INVALID"));
 }
 
@@ -1344,12 +1400,21 @@ fn wkt_estensione_geoparquet_si_confronta_senza_virgolette_json() {
                     "EPSG:32632"
                 );
             } else {
-                assert_eq!(result.unwrap_err().category(), ErrorCategory::Crs);
+                assert_eq!(
+                    result
+                        .expect_err("rifiuto atteso: categoria verificata dalla prova")
+                        .category(),
+                    ErrorCategory::Crs
+                );
             }
         }
         // Nel metadato di file nessuna stringa WKT diventa PROJJSON.
-        for testo in [wkt1, wkt2] {
-            assert!(resolve_crs(testo, "crs").is_ok());
+        for (testo, identificativo_atteso) in [(wkt1, "EPSG:6707"), (wkt2, "EPSG:32632")] {
+            assert!(resolve_crs(testo, "crs")
+                .expect("WKT integrato")
+                .semantically_equals(
+                    &resolve_crs(identificativo_atteso, "crs").expect("CRS della fixture")
+                ));
             let geo =
                 geo_colonna(json!({"encoding":"WKB", "geometry_types":["Point"], "crs":testo}));
             assert_eq!(

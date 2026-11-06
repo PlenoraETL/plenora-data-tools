@@ -1,0 +1,9 @@
+[
+  {
+    "file": "crates/plenora-data-py/python/tests/test_errori.py",
+    "riga": 51,
+    "regola": "messaggio_python",
+    "testo": "assert str(errore) == errore.message == documento[\"message\"]",
+    "motivo": "Aiuto di coerenza della serializzazione, richiamato dopo pytest.raises con categoria precisa nei singoli scenari: confronta il messaggio integrale con gli attributi e il documento, non decide quale rifiuto accettare."
+  }
+]

@@ -541,6 +541,7 @@ pub fn line_locate_point(
     Ok(fraction)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 // Confronti float esatti intenzionali: le fixture sono costruite per
 // produrre valori esatti (coordinate note, round-trip bit-esatti); il
@@ -613,6 +614,8 @@ mod tests {
         for policy in [OnWktError::Null, OnWktError::Fail] {
             let error = from_wkt_column(&values, policy)
                 .expect_err("WKT invalido trasformato in output accettato");
+            assert_eq!(error.category(), plenora_core::ErrorCategory::DataMapping);
+            assert_eq!(error.phase(), plenora_core::ErrorPhase::Write);
             let report = error
                 .row_diagnostics()
                 .expect("diagnostica row-scoped mancante");

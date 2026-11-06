@@ -4,6 +4,10 @@
 
 mod comune;
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use std::{collections::HashMap, sync::Arc};
 
 use plenora_core::arrow::array::{BinaryArray, RecordBatch};
@@ -187,7 +191,8 @@ fn geoarrow_formato_coerente_e_mutazioni_rifiutate() {
         let f = campo(&t, 2, "easting_northing");
         let mut m = f.metadata().clone();
         m.insert(GEOARROW_EXTENSION_METADATA_KEY, metadati.to_string());
-        let errore = read_geometry_contract_keys(&f.with_metadata(m)).unwrap_err();
+        let errore = read_geometry_contract_keys(&f.with_metadata(m))
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert!(matches!(errore, plenora_core::PlenoraError::Unsupported(_)));
         assert!(!errore.to_string().contains("SENTINELLA"));
     }
@@ -197,7 +202,8 @@ fn geoarrow_formato_coerente_e_mutazioni_rifiutate() {
             forma,
             "easting_northing",
         );
-        let errore = read_geometry_contract_keys(&f).unwrap_err();
+        let errore = read_geometry_contract_keys(&f)
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert_eq!(errore.public_projection().code(), Some("CRS_NOT_BUILTIN"));
         let f = campo(&t, forma, "easting_northing");
         let keys = read_geometry_contract_keys(&f).unwrap();
@@ -221,8 +227,8 @@ fn target_reproject_wkt2_uguale_al_codice_anche_da_geoarrow() {
     let t = wkt("EPSG:4326");
     let mut wkb = vec![1];
     wkb.extend(1_u32.to_le_bytes());
-    wkb.extend(12.5_f64.to_le_bytes());
-    wkb.extend(45.25_f64.to_le_bytes());
+    wkb.extend(9.0_f64.to_le_bytes());
+    wkb.extend(45.0_f64.to_le_bytes());
     let batch = RecordBatch::try_new(
         Arc::new(schema(campo(&t, 2, "lon_lat"))),
         vec![Arc::new(BinaryArray::from_vec(vec![wkb.as_slice()]))],
@@ -255,6 +261,7 @@ fn target_reproject_wkt2_uguale_al_codice_anche_da_geoarrow() {
     let b = esegui(wkt("EPSG:32632")).unwrap();
     assert_eq!(a.outputs[0].1.columns(), b.outputs[0].1.columns());
     for esito in [&a, &b] {
+        verifica_punto_utm(&esito.outputs[0].1, 4_982_950.400_226_515);
         let c = contract_from_arrow_schema(esito.outputs[0].1.schema(), resolve_crs).unwrap();
         assert!(c.geometries[0]
             .crs
@@ -265,14 +272,35 @@ fn target_reproject_wkt2_uguale_al_codice_anche_da_geoarrow() {
     let a = esegui("EPSG:7791".into()).unwrap();
     let b = esegui(wkt_versione("EPSG:7791", "wkt1_assi")).unwrap();
     assert_eq!(a.outputs[0].1.columns(), b.outputs[0].1.columns());
+    for esito in [&a, &b] {
+        verifica_punto_utm(&esito.outputs[0].1, 4_982_950.400_106_823);
+        let c = contract_from_arrow_schema(esito.outputs[0].1.schema(), resolve_crs).unwrap();
+        assert!(c.geometries[0]
+            .crs
+            .as_resolved()
+            .unwrap()
+            .semantically_equals(&resolve_crs("EPSG:7791", "crs").unwrap()));
+    }
     let mutato = wkt_versione("EPSG:7791", "wkt1_assi").replace("500000", "500000.00000000001");
     assert_eq!(
-        esegui(mutato).unwrap_err().public_projection().code(),
+        assert_rifiuto!(
+            esegui(mutato),
+            plenora_core::ErrorCategory::Crs,
+            plenora_core::ErrorPhase::Validate
+        )
+        .public_projection()
+        .code(),
         Some("CRS_NOT_BUILTIN")
     );
     let mutato = wkt("EPSG:32632").replace("500000", "500001");
     assert_eq!(
-        esegui(mutato).unwrap_err().public_projection().code(),
+        assert_rifiuto!(
+            esegui(mutato),
+            plenora_core::ErrorCategory::Crs,
+            plenora_core::ErrorPhase::Validate
+        )
+        .public_projection()
+        .code(),
         Some("CRS_NOT_BUILTIN")
     );
 }
@@ -337,8 +365,56 @@ fn wkt_assi_espliciti_e_coerenza_su_tutti_gli_ingressi_arrow() {
             "easting_northing",
         );
         assert!(matches!(
-            read_geometry_contract_keys(&f).unwrap_err(),
+            read_geometry_contract_keys(&f)
+                .expect_err("rifiuto atteso: categoria verificata dalla prova"),
             plenora_core::PlenoraError::Unsupported(_)
         ));
     }
+}
+
+/// Sul meridiano centrale UTM (9 E) l'est e' 500 km; il nord e' 0.9996
+/// volte l'arco meridiano da 0 a 45 gradi. Riferimento indipendente:
+/// Simpson con 100000 intervalli su a*(1-e2)/(1-e2*sin(phi)^2)^(3/2),
+/// a=6378137, 1/f=298.257223563 (WGS84) oppure 298.257222101 (GRS80).
+fn verifica_punto_utm(batch: &RecordBatch, nord: f64) {
+    assert_eq!((batch.num_rows(), batch.num_columns()), (1, 1));
+    let colonna = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .unwrap();
+    assert_eq!(plenora_core::arrow::array::Array::null_count(colonna), 0);
+    let wkb = colonna.value(0);
+    assert_eq!(wkb.len(), 21);
+    assert_eq!(&wkb[..5], &[1, 1, 0, 0, 0]);
+    let x = f64::from_le_bytes(wkb[5..13].try_into().unwrap());
+    let y = f64::from_le_bytes(wkb[13..21].try_into().unwrap());
+    assert!((x - 500_000.0).abs() <= 0.001);
+    assert!((y - nord).abs() <= 0.001);
+    let schema = batch.schema();
+    assert_eq!(schema.field(0).name(), "geometry");
+    assert!(!schema.field(0).is_nullable());
+    assert_eq!(schema.field(0).data_type(), &DataType::Binary);
+    let c = contract_from_arrow_schema(schema.clone(), resolve_crs).unwrap();
+    assert_eq!(c.geometries.len(), 1);
+    assert_eq!(c.geometries[0].name, "geometry");
+    assert_eq!(
+        c.geometries[0].dimensions,
+        plenora_core::contract::GeometryDimensions::Xy
+    );
+    assert_eq!(
+        c.geometries[0].encoding,
+        Some(plenora_core::contract::GeometryEncoding::Wkb)
+    );
+    assert!(!c.geometries[0].nullable);
+    assert_eq!(
+        c.geometries[0].types,
+        plenora_core::contract::GeometryColumnContract::undeclared_types()
+    );
+    assert_eq!(
+        read_geometry_contract_keys(schema.field(0))
+            .unwrap()
+            .axis_order,
+        Some(AxisOrder::EastingNorthing)
+    );
 }

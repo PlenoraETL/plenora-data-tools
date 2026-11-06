@@ -169,6 +169,7 @@ fn split_come_il_riferimento_su_batch_vuoto_e_tutto_null() {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn split_come_il_riferimento_su_input_casuali(
         valori in prop::collection::vec(

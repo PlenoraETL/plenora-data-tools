@@ -172,6 +172,7 @@ pub fn vertical(
     compose(inputs, fields, &mapping, true, metadata)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,6 +376,7 @@ mod tests {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod column_reference_tests {
     use crate::Limits;
@@ -462,7 +464,13 @@ mod column_reference_tests {
                         &Limits::default(),
                     ),
                 };
-                assert_eq!(result.unwrap_err().category(), ErrorCategory::Crs, "{op}");
+                assert_eq!(
+                    result
+                        .expect_err("rifiuto atteso: categoria verificata dalla prova")
+                        .category(),
+                    ErrorCategory::Crs,
+                    "{op}"
+                );
                 let inputs = [
                     contract_from_arrow_schema(left.schema(), resolve_crs).unwrap(),
                     contract_from_arrow_schema(right.schema(), resolve_crs).unwrap(),
@@ -475,7 +483,7 @@ mod column_reference_tests {
                         &mut FieldAllocator::default(),
                         &Limits::default()
                     )
-                    .unwrap_err()
+                    .expect_err("rifiuto atteso: categoria verificata dalla prova")
                     .category(),
                     ErrorCategory::Crs,
                     "{op}"
@@ -483,9 +491,9 @@ mod column_reference_tests {
             }
             let config =
                 serde_json::from_value(json!({"left_keys":["t"],"right_keys":["t"]})).unwrap();
-            assert!(
-                crate::joins::semi_join(&left, &right, &config).is_ok(),
-                "geometrie passanti indipendenti"
+            assert_eq!(
+                crate::joins::semi_join(&left, &right, &config).expect("chiavi tabellari"),
+                left
             );
         }
     }

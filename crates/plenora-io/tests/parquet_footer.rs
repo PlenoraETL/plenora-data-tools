@@ -20,18 +20,25 @@
 
 mod comune;
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use std::sync::Arc;
 
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Repetition, Type as Fisico};
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataOptions, ParquetMetaDataReader};
+use parquet::errors::ParquetError;
+use parquet::file::metadata::{
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
+};
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::types::Type;
 use plenora_core::arrow::array::{ArrayRef, Int32Array, RecordBatch};
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_core::ErrorCategory;
+use plenora_core::{ErrorCategory, ErrorPhase};
 use plenora_io::parquet_io::{budget_del_footer, MAX_PROFONDITA_SCHEMA};
 use plenora_io::{leggi_tabella_con_limiti, Formato, LimitiLettura};
 
@@ -84,21 +91,23 @@ fn catena(livelli: usize, foglie: usize, nome_gruppo: impl Fn(usize) -> String) 
 }
 
 fn dal_confine(byte: &[u8], limiti: &LimitiLettura) -> plenora_core::Result<usize> {
+    tabella_dal_confine(byte, limiti).map(|tabella| tabella.num_rows())
+}
+
+fn tabella_dal_confine(byte: &[u8], limiti: &LimitiLettura) -> plenora_core::Result<RecordBatch> {
     let dir = cartella();
     let percorso = dir.path().join("f.parquet");
     std::fs::write(&percorso, byte).unwrap();
     leggi_tabella_con_limiti(&percorso, Some(Formato::Parquet), u64::MAX, limiti)
-        .map(|tabella| tabella.num_rows())
 }
 
-fn diretto(byte: &[u8], opzioni: ArrowReaderOptions) -> Result<(), String> {
+fn diretto(byte: &[u8], opzioni: ArrowReaderOptions) -> Result<Arc<Schema>, ParquetError> {
     let dir = cartella();
     let percorso = dir.path().join("d.parquet");
     std::fs::write(&percorso, byte).unwrap();
     let file = std::fs::File::open(&percorso).unwrap();
     ParquetRecordBatchReaderBuilder::try_new_with_options(file, opzioni)
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map(|lettore| lettore.schema().clone())
 }
 
 /// Lo schema profondo: 3000 gruppi annidati, un file valido di qualche
@@ -118,13 +127,15 @@ fn uno_schema_profondo_e_un_errore_e_non_uno_stack_overflow() {
         .join()
         .unwrap();
     assert!(byte.len() < 1024 * 1024, "{} byte", byte.len());
-    let testo = diretto(&byte, ArrowReaderOptions::new()).expect_err("schema profondo");
-    assert!(
-        testo.contains(&format!("deeper than {MAX_PROFONDITA_SCHEMA} levels")),
-        "{testo}"
+    rifiuto_generale(
+        diretto(&byte, ArrowReaderOptions::new()),
+        &format!("Parquet schema deeper than {MAX_PROFONDITA_SCHEMA} levels"),
     );
-    let errore = dal_confine(&byte, &LimitiLettura::default()).expect_err("schema profondo");
-    assert_eq!(errore.category(), ErrorCategory::ResourceLimit, "{errore}");
+    assert_rifiuto!(
+        dal_confine(&byte, &LimitiLettura::default()),
+        ErrorCategory::ResourceLimit,
+        ErrorPhase::Write,
+    );
 }
 
 /// Il confine del limite, esatto: un elemento dello schema può avere al più
@@ -296,66 +307,157 @@ fn footer(foglie: u64, gruppi: u64) -> Vec<u8> {
     out
 }
 
-fn decodifica(byte: &[u8], tetto: u64) -> Result<(), String> {
+const BUDGET_FOOTER: &str = "Parquet footer metadata exceeds the decoding memory budget";
+const COLONNE_ASSENTI: &str = "Required field columns is missing";
+const BUDGET_INDICI: &str = "page index requested with a footer memory budget: the page index decoders are not bounded by it";
+
+/// Le API native Parquet non espongono una fase: questo aiuto si usa al
+/// confine di decodifica/lettura, preservando il discriminante General.
+#[track_caller]
+fn rifiuto_generale<T>(esito: Result<T, ParquetError>, atteso: &str) {
+    let Err(ParquetError::General(messaggio)) = esito else {
+        panic!("atteso rifiuto General del decoder Parquet");
+    };
+    assert_eq!(messaggio, atteso);
+}
+
+#[track_caller]
+fn rifiuto_non_qualificato<T>(esito: Result<T, ParquetError>, atteso: &str) {
+    let Err(ParquetError::NYI(messaggio)) = esito else {
+        panic!("atteso rifiuto NYI della funzionalita non qualificata");
+    };
+    assert_eq!(messaggio, atteso);
+}
+
+fn decodifica(byte: &[u8], tetto: u64) -> Result<ParquetMetaData, ParquetError> {
     let opzioni = ParquetMetaDataOptions::new().with_footer_memory_budget(tetto);
     ParquetMetaDataReader::decode_metadata_with_options(byte, Some(&opzioni))
-        .map(|_| ())
-        .map_err(|e| e.to_string())
 }
 
-/// Il tetto minimo con cui `byte` si decodifica, cercato per bisezione.
-fn tetto_minimo(byte: &[u8]) -> u64 {
-    let (mut basso, mut alto) = (0_u64, 1_u64 << 32);
-    assert!(
-        decodifica(byte, alto).is_ok(),
-        "il footer si decodifica con 4 GiB"
-    );
-    while basso + 1 < alto {
-        let medio = basso + (alto - basso) / 2;
-        if decodifica(byte, medio).is_ok() {
-            alto = medio;
-        } else {
-            basso = medio;
+/// La fixture attesa e' lo schema scritto sopra, non un'altra decodifica.
+fn verifica_metadata(metadata: &ParquetMetaData, colonne: usize, righe: i64, gruppi: usize) {
+    assert_eq!(metadata.num_row_groups(), gruppi);
+    assert_eq!(metadata.file_metadata().num_rows(), righe);
+    let radice = if gruppi == 0 {
+        "schema"
+    } else {
+        "arrow_schema"
+    };
+    let campi = (0..colonne)
+        .map(|i| {
+            Arc::new(
+                Type::primitive_type_builder(&format!("c{i}"), Fisico::INT32)
+                    .with_repetition(Repetition::REQUIRED)
+                    .build()
+                    .unwrap(),
+            )
+        })
+        .collect();
+    let schema = Type::group_type_builder(radice)
+        .with_fields(campi)
+        .build()
+        .unwrap();
+    assert_eq!(metadata.file_metadata().schema(), &schema);
+    for gruppo in metadata.row_groups() {
+        assert_eq!(gruppo.num_columns(), colonne);
+        assert_eq!(gruppo.num_rows(), righe);
+        for colonna in gruppo.columns() {
+            assert_eq!(colonna.num_values(), righe);
         }
     }
-    alto
 }
 
-/// La capacità del row group si addebita prima di essere prenotata.
-///
-/// `RowGroupMetaDataBuilder::new` prenota un `ColumnChunkMetaData` per
-/// foglia prima di leggere un solo chunk. Senza row group lo schema di 512
-/// foglie si decodifica con il tetto `minimo`; un row group senza
-/// `columns` arriva al rifiuto strutturale solo dopo quella prenotazione, e
-/// il tetto per arrivarci deve superare `minimo` di almeno 512 chunk.
+/// Maggiorante indipendente del costo dello schema piatto della fixture.
+/// Il formato Thrift ha dieci campi: tre enum opzionali, cinque i32
+/// opzionali, un nome preso in prestito e il tipo logico opzionale. Per
+/// includere ogni padding si arrotonda ciascun campo all'allineamento massimo.
+/// Non si interroga il decoder per trovare il budget che accetta.
+fn tetto_schema_fixture(byte: &[u8], colonne: usize, radice: &str) -> u64 {
+    use parquet::basic::{ConvertedType, LogicalType};
+    use parquet::schema::types::ColumnDescriptor;
+    use std::mem::{align_of, size_of};
+    let allineamento = [
+        align_of::<Option<LogicalType>>(),
+        align_of::<&str>(),
+        align_of::<Option<i32>>(),
+    ]
+    .into_iter()
+    .max()
+    .unwrap();
+    let campo = |n: usize| n.next_multiple_of(allineamento);
+    let elemento = campo(size_of::<Option<Fisico>>())
+        + campo(size_of::<Option<Repetition>>())
+        + campo(size_of::<Option<ConvertedType>>())
+        + 5 * campo(size_of::<Option<i32>>())
+        + campo(size_of::<&str>())
+        + campo(size_of::<Option<LogicalType>>());
+    // Due copie del footer, un nodo Type e tre puntatori per elemento;
+    // un descrittore, quattro puntatori e il percorso radice/foglia per colonna.
+    let nodi = (colonne + 1) * (elemento + size_of::<Type>() + 3 * size_of::<usize>());
+    let percorsi: usize = (0..colonne)
+        .map(|i| {
+            size_of::<ColumnDescriptor>()
+                + 4 * size_of::<usize>()
+                + 2 * size_of::<String>()
+                + radice.len()
+                + format!("c{i}").len()
+        })
+        .sum();
+    u64::try_from(2 * byte.len() + nodi + percorsi).unwrap()
+}
+
+/// Lo schema fornito dal test isola la prenotazione del row group:
+/// due copie dei byte del footer, un `RowGroupMetaData` e 512 chunk.
+/// Un byte sotto il costo rifiuta il budget; al costo esatto la decodifica
+/// deve raggiungere il campo columns assente, senza accettare altri errori.
 #[test]
 fn la_capacita_del_row_group_si_addebita_prima_del_costruttore() {
-    let minimo = tetto_minimo(&footer(512, 0));
-    let con_gruppo = footer(512, 1);
-    let arriva_al_rifiuto_strutturale = |tetto: u64| match decodifica(&con_gruppo, tetto) {
-        Ok(()) => panic!("un row group senza `columns` si decodifica"),
-        Err(messaggio) => !messaggio.contains("exceeds the decoding memory budget"),
+    use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+    use parquet::schema::types::SchemaDescriptor;
+    use std::mem::size_of;
+    let campi = (0..512)
+        .map(|i| {
+            Arc::new(
+                Type::primitive_type_builder(&format!("c{i}"), Fisico::INT32)
+                    .with_repetition(Repetition::REQUIRED)
+                    .build()
+                    .unwrap(),
+            )
+        })
+        .collect();
+    let schema = Arc::new(SchemaDescriptor::new(Arc::new(
+        Type::group_type_builder("schema")
+            .with_fields(campi)
+            .build()
+            .unwrap(),
+    )));
+    let decodifica_con_schema = |byte: &[u8], tetto| {
+        let opzioni = ParquetMetaDataOptions::new()
+            .with_schema(Arc::clone(&schema))
+            .with_footer_memory_budget(tetto);
+        ParquetMetaDataReader::decode_metadata_with_options(byte, Some(&opzioni))
     };
-    let (mut basso, mut alto) = (minimo, 1_u64 << 32);
-    assert!(arriva_al_rifiuto_strutturale(alto));
-    while basso + 1 < alto {
-        let medio = basso + (alto - basso) / 2;
-        if arriva_al_rifiuto_strutturale(medio) {
-            alto = medio;
-        } else {
-            basso = medio;
-        }
-    }
-    // 64 byte per chunk è un minorante largo: `ColumnChunkMetaData` ne
-    // occupa alcune centinaia.
-    assert!(
-        alto - minimo >= 512 * 64,
-        "il row group arriva al decoder con {} byte di tetto oltre lo schema: la \
-         prenotazione delle 512 colonne non e' stata addebitata",
-        alto - minimo
+    let senza_gruppo = footer(512, 0);
+    let base = u64::try_from(2 * senza_gruppo.len()).unwrap();
+    verifica_metadata(
+        &decodifica_con_schema(&senza_gruppo, base).expect("sole copie del footer"),
+        512,
+        0,
+        0,
     );
-    let messaggio = decodifica(&con_gruppo, alto).expect_err("columns manca");
-    assert!(messaggio.contains("columns"), "{messaggio}");
+    rifiuto_generale(
+        decodifica_con_schema(&senza_gruppo, base - 1),
+        BUDGET_FOOTER,
+    );
+    let con_gruppo = footer(512, 1);
+    let costo = u64::try_from(
+        2 * con_gruppo.len()
+            + size_of::<RowGroupMetaData>()
+            + 512 * size_of::<ColumnChunkMetaData>(),
+    )
+    .unwrap();
+    rifiuto_generale(decodifica_con_schema(&con_gruppo, costo - 1), BUDGET_FOOTER);
+    rifiuto_generale(decodifica_con_schema(&con_gruppo, costo), COLONNE_ASSENTI);
 }
 
 fn scrivi_colonne(colonne: usize, righe: i32) -> Vec<u8> {
@@ -374,17 +476,30 @@ fn scrivi_colonne(colonne: usize, righe: i32) -> Vec<u8> {
     byte
 }
 
-/// Niente doppio conteggio: un file vero con molte colonne si legge con il
-/// tetto minimo che il suo footer richiede, una sola volta per chunk.
+/// Un file largo si decodifica entro un tetto fissato dalla fixture:
+/// schema, una capacita' di chunk e spazio per le statistiche e i metadati.
+/// A zero il rifiuto e' esclusivamente quello del budget del footer.
 #[test]
 fn un_file_vero_largo_si_legge_entro_il_tetto() {
+    use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+    use std::mem::size_of;
     let byte = scrivi_colonne(64, 3);
     let n = byte.len();
-    let lunghezza = u32::from_le_bytes([byte[n - 8], byte[n - 7], byte[n - 6], byte[n - 5]]);
+    let lunghezza = u32::from_le_bytes(byte[n - 8..n - 4].try_into().unwrap());
     let footer = &byte[n - 8 - usize::try_from(lunghezza).unwrap()..n - 8];
-    let minimo = tetto_minimo(footer);
-    assert!(decodifica(footer, minimo).is_ok());
-    assert!(decodifica(footer, minimo - 1).is_err());
+    // Il writer di questa fixture emette una lista di tre encoding per
+    // colonna, statistiche INT32 e il solo metadato ARROW:schema. Quattro
+    // volte i byte del footer ne maggiorano copie e liste accessorie.
+    let tetto = tetto_schema_fixture(footer, 64, "arrow_schema")
+        + u64::try_from(
+            64 * size_of::<ColumnChunkMetaData>()
+                + size_of::<RowGroupMetaData>()
+                + 4 * footer.len(),
+        )
+        .unwrap();
+    let metadata = decodifica(footer, tetto).expect("fixture entro il tetto indipendente");
+    verifica_metadata(&metadata, 64, 3, 1);
+    rifiuto_generale(decodifica(footer, 0), BUDGET_FOOTER);
 }
 
 /// Indici di pagina chiesti con un tetto: un errore esplicito, prima di
@@ -396,35 +511,30 @@ fn gli_indici_di_pagina_con_un_tetto_sono_rifiutati() {
     let byte = scrivi_colonne(1, 100);
     for politica in [PageIndexPolicy::Optional, PageIndexPolicy::Required] {
         let senza_tetto = ArrowReaderOptions::new().with_page_index_policy(politica);
-        let Err(messaggio) = diretto(&byte, senza_tetto) else {
-            panic!("indici di pagina letti ({politica:?})");
-        };
-        assert!(
-            messaggio.contains(parquet::basic::PAGE_INDEX_NOT_QUALIFIED),
-            "{messaggio}"
+        rifiuto_non_qualificato(
+            diretto(&byte, senza_tetto),
+            parquet::basic::PAGE_INDEX_NOT_QUALIFIED,
         );
         let con_tetto = ArrowReaderOptions::new()
             .with_page_index_policy(politica)
             .with_footer_memory_budget(1 << 30);
-        let Err(messaggio) = diretto(&byte, con_tetto) else {
-            panic!("indici di pagina letti con un tetto che non li copre ({politica:?})");
-        };
-        assert!(
-            messaggio.contains("page index requested with a footer memory budget"),
-            "{messaggio}"
-        );
+        rifiuto_generale(diretto(&byte, con_tetto), BUDGET_INDICI);
     }
     let solo_offset = ArrowReaderOptions::new()
         .with_offset_index_policy(PageIndexPolicy::Required)
         .with_footer_memory_budget(1 << 30);
-    assert!(diretto(&byte, solo_offset).is_err());
+    rifiuto_generale(diretto(&byte, solo_offset), BUDGET_INDICI);
     let salta = ArrowReaderOptions::new()
         .with_page_index_policy(PageIndexPolicy::Skip)
         .with_footer_memory_budget(1 << 30);
-    assert_eq!(diretto(&byte, salta), Ok(()));
-    assert_eq!(
-        dal_confine(&byte, &LimitiLettura::default()).map_err(|e| e.to_string()),
-        Ok(100)
+    assert_successo!(
+        diretto(&byte, salta),
+        Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)]))
+    );
+    verifica_valori_diretti(&byte, "c0", 100);
+    assert_successo!(
+        tabella_dal_confine(&byte, &LimitiLettura::default()),
+        batch_interi("c0", 100)
     );
 }
 
@@ -441,25 +551,14 @@ fn anche_il_lettore_seriale_rifiuta_gli_indici_con_un_tetto() {
         .with_page_index()
         .with_footer_memory_budget(1 << 30)
         .build();
-    let Err(errore) = SerializedFileReader::new_with_options(apri(), opzioni).map(|_| ()) else {
-        panic!("indici di pagina letti con un tetto che non li copre");
-    };
-    assert!(
-        errore
-            .to_string()
-            .contains("page index requested with a footer memory budget"),
-        "{errore}"
+    rifiuto_generale(
+        SerializedFileReader::new_with_options(apri(), opzioni),
+        BUDGET_INDICI,
     );
     let senza_tetto = ReadOptionsBuilder::new().with_page_index().build();
-    let Err(errore) = SerializedFileReader::new_with_options(apri(), senza_tetto).map(|_| ())
-    else {
-        panic!("indici di pagina letti dal lettore seriale");
-    };
-    assert!(
-        errore
-            .to_string()
-            .contains(parquet::basic::PAGE_INDEX_NOT_QUALIFIED),
-        "{errore}"
+    rifiuto_non_qualificato(
+        SerializedFileReader::new_with_options(apri(), senza_tetto),
+        parquet::basic::PAGE_INDEX_NOT_QUALIFIED,
     );
 }
 
@@ -511,26 +610,20 @@ fn indici_di_pagina_e_bloom_filter_non_sono_qualificati() {
     // Il lettore Arrow con l'indice, e i lettori dei metadati.
     for politica in [PageIndexPolicy::Optional, PageIndexPolicy::Required] {
         let opzioni = ArrowReaderOptions::new().with_page_index_policy(politica);
-        let Err(errore) = diretto(&byte, opzioni) else {
-            panic!("indice di pagina letto ({politica:?})");
-        };
-        assert!(errore.contains(indice), "{errore}");
+        rifiuto_non_qualificato(diretto(&byte, opzioni), indice);
     }
-    let errore = ParquetMetaDataReader::new()
-        .with_page_index_policy(PageIndexPolicy::Required)
-        .parse_and_finish(&apri())
-        .unwrap_err()
-        .to_string();
-    assert!(errore.contains(indice), "{errore}");
+    rifiuto_non_qualificato(
+        ParquetMetaDataReader::new()
+            .with_page_index_policy(PageIndexPolicy::Required)
+            .parse_and_finish(&apri()),
+        indice,
+    );
     // I decoder pubblici, anche su byte qualunque.
-    let errore = decode_offset_index(&[0x19, 0x1C, 0x00])
-        .unwrap_err()
-        .to_string();
-    assert!(errore.contains(indice), "{errore}");
-    let errore = decode_column_index(&[], parquet::basic::Type::INT32)
-        .unwrap_err()
-        .to_string();
-    assert!(errore.contains(indice), "{errore}");
+    rifiuto_non_qualificato(decode_offset_index(&[0x19, 0x1C, 0x00]), indice);
+    rifiuto_non_qualificato(
+        decode_column_index(&[], parquet::basic::Type::INT32),
+        indice,
+    );
     // Il lettore di pagine sulle posizioni dell'indice.
     let costruttore = ParquetRecordBatchReaderBuilder::try_new(apri()).unwrap();
     let colonna = costruttore.metadata().row_group(0).column(0).clone();
@@ -540,17 +633,16 @@ fn indici_di_pagina_e_bloom_filter_non_sono_qualificati() {
         compressed_page_size: i32::try_from(lunghezza).unwrap(),
         first_row_index: 0,
     }];
-    let errore = SerializedPageReader::new_with_properties(
-        Arc::new(apri()),
-        &colonna,
-        300,
-        Some(posizioni),
-        Arc::new(ReaderProperties::builder().build()),
-    )
-    .err()
-    .unwrap()
-    .to_string();
-    assert!(errore.contains(indice), "{errore}");
+    rifiuto_non_qualificato(
+        SerializedPageReader::new_with_properties(
+            Arc::new(apri()),
+            &colonna,
+            300,
+            Some(posizioni),
+            Arc::new(ReaderProperties::builder().build()),
+        ),
+        indice,
+    );
     // Il bloom filter, chiesto al lettore seriale.
     let opzioni = ReadOptionsBuilder::new()
         .with_reader_properties(
@@ -559,25 +651,21 @@ fn indici_di_pagina_e_bloom_filter_non_sono_qualificati() {
                 .build(),
         )
         .build();
-    let esito = SerializedFileReader::new_with_options(apri(), opzioni).and_then(|lettore| {
-        lettore
-            .get_row_group(0)
-            .map(|g| g.get_column_bloom_filter(0).is_some())
-    });
-    let Err(errore) = esito else {
-        panic!("bloom filter letto");
-    };
-    assert!(
-        errore
-            .to_string()
-            .contains(parquet::basic::BLOOM_FILTER_NOT_QUALIFIED),
-        "{errore}"
+    let lettore = SerializedFileReader::new_with_options(apri(), opzioni)
+        .expect("il footer della fixture con bloom filter e' valido");
+    rifiuto_non_qualificato(
+        lettore.get_row_group(0),
+        parquet::basic::BLOOM_FILTER_NOT_QUALIFIED,
     );
     // Controfattuale: senza indici e bloom filter il file si legge.
-    assert_eq!(diretto(&byte, ArrowReaderOptions::new()), Ok(()));
-    assert_eq!(
-        dal_confine(&byte, &LimitiLettura::default()).map_err(|e| e.to_string()),
-        Ok(300)
+    assert_successo!(
+        diretto(&byte, ArrowReaderOptions::new()),
+        Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, false)]))
+    );
+    verifica_valori_diretti(&byte, "c", 300);
+    assert_successo!(
+        tabella_dal_confine(&byte, &LimitiLettura::default()),
+        batch_interi("c", 300)
     );
 }
 
@@ -598,21 +686,44 @@ fn una_selezione_di_righe_non_e_qualificata() {
                 .with_row_selection(RowSelection::from(selezione))
                 .build()
                 .unwrap();
-        let mut righe = 0;
-        for batch in lettore {
-            righe += batch.map_err(|e| e.to_string())?.num_rows();
-        }
-        Ok::<usize, String>(righe)
+        lettore.collect::<Result<Vec<_>, _>>()
     };
     for selezione in [
         vec![RowSelector::skip(150), RowSelector::select(150)],
         vec![RowSelector::skip(100), RowSelector::select(200)],
     ] {
-        let errore = leggi(selezione).unwrap_err();
-        assert!(
-            errore.contains(parquet::basic::SKIP_NOT_QUALIFIED),
-            "{errore}"
+        let errore = leggi(selezione).expect_err("salto non qualificato");
+        let plenora_core::arrow::ArrowError::ParquetError(messaggio) = errore else {
+            panic!("atteso ArrowError::ParquetError durante la lettura");
+        };
+        assert_eq!(
+            messaggio,
+            format!("NYI: {}", parquet::basic::SKIP_NOT_QUALIFIED)
         );
     }
-    assert_eq!(leggi(vec![RowSelector::select(300)]), Ok(300));
+    let atteso = batch_interi("c", 300);
+    assert_successo!(leggi(vec![RowSelector::select(300)]), vec![atteso]);
+}
+
+fn batch_interi(nome: &str, righe: i32) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new(nome, DataType::Int32, false)]));
+    RecordBatch::try_new(
+        schema,
+        vec![Arc::new(Int32Array::from((0..righe).collect::<Vec<_>>()))],
+    )
+    .unwrap()
+}
+
+fn verifica_valori_diretti(byte: &[u8], nome: &str, righe: i32) {
+    let dir = cartella();
+    let percorso = dir.path().join("valori.parquet");
+    std::fs::write(&percorso, byte).unwrap();
+    let lettore = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(&percorso).unwrap())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_successo!(
+        lettore.collect::<Result<Vec<_>, _>>(),
+        vec![batch_interi(nome, righe)]
+    );
 }

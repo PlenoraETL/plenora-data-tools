@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Produzione: divieti degli esiti riattivati agli ingressi delle prove"
+)]
 //! plenora-core: le fondamenta condivise del workspace.
 //!
 //! Ospita:
@@ -22,6 +26,12 @@
 //! - [`esadecimale`]: esadecimale minuscolo per digest e identificativi;
 //! - [`memoria`]: byte Arrow di tabelle (per allocazione) e colonne (per
 //!   vista), la misura unica di runner e kernel.
+
+#[deny(clippy::disallowed_methods)]
+#[cfg(test)]
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
 
 pub mod catalog;
 pub mod contract;
@@ -180,6 +190,7 @@ pub mod arrow {
     pub const VERSION: &str = "60.1.0";
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -192,7 +203,11 @@ mod tests {
     fn batch_vuoto_rifiuta_uno_schema_senza_array() {
         let mappa = DataType::Map(Arc::new(Field::new("voci", DataType::UInt64, false)), false);
         let schema = Arc::new(Schema::new(vec![Field::new("m", mappa, true)]));
-        let errore = super::batch_vuoto(schema).unwrap_err();
+        let errore = assert_rifiuto!(
+            super::batch_vuoto(schema),
+            super::ErrorCategory::Schema,
+            super::ErrorPhase::Validate
+        );
         assert_eq!(errore.category(), super::ErrorCategory::Schema);
         let valido = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, true)]));
         assert_eq!(super::batch_vuoto(valido).unwrap().num_rows(), 0);
@@ -207,21 +222,45 @@ mod tests {
             crate::arrow::schema::UnionFields::empty(),
             crate::arrow::schema::UnionMode::Dense,
         );
-        assert!(super::array_vuoto(&mappa).is_err());
-        assert!(super::array_null(&mappa, 3).is_err());
-        assert!(super::array_null(&unione, 0).is_err());
+        assert_rifiuto!(
+            super::array_vuoto(&mappa),
+            crate::ErrorCategory::Schema,
+            crate::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            super::array_null(&mappa, 3),
+            crate::ErrorCategory::Schema,
+            crate::ErrorPhase::Validate
+        );
+        assert_rifiuto!(
+            super::array_null(&unione, 0),
+            crate::ErrorCategory::Schema,
+            crate::ErrorPhase::Validate
+        );
         for tipo in [
             unione.clone(),
             DataType::Struct(vec![Field::new("u", unione.clone(), true)].into()),
             DataType::List(Arc::new(Field::new("item", unione.clone(), true))),
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(unione)),
         ] {
-            assert!(super::array_vuoto(&tipo).is_err());
+            assert_rifiuto!(
+                super::array_vuoto(&tipo),
+                crate::ErrorCategory::Schema,
+                crate::ErrorPhase::Validate
+            );
             for righe in [0, 3] {
-                assert!(super::array_null(&tipo, righe).is_err());
+                assert_rifiuto!(
+                    super::array_null(&tipo, righe),
+                    crate::ErrorCategory::Schema,
+                    crate::ErrorPhase::Validate
+                );
             }
             let schema = Arc::new(Schema::new(vec![Field::new("u", tipo, true)]));
-            assert!(super::batch_vuoto(schema).is_err());
+            assert_rifiuto!(
+                super::batch_vuoto(schema),
+                crate::ErrorCategory::Schema,
+                crate::ErrorPhase::Validate
+            );
         }
         let unione_valida = DataType::Union(
             crate::arrow::schema::UnionFields::try_new(
@@ -231,8 +270,13 @@ mod tests {
             .unwrap(),
             crate::arrow::schema::UnionMode::Dense,
         );
-        assert!(super::array_vuoto(&unione_valida).is_ok());
-        assert!(super::array_null(&unione_valida, 3).is_ok());
+        let vuoto = super::array_vuoto(&unione_valida).expect("unione valida: array vuoto atteso");
+        assert_eq!(vuoto.data_type(), &unione_valida);
+        assert_eq!(vuoto.len(), 0);
+        let nulli =
+            super::array_null(&unione_valida, 3).expect("unione valida: array di tre righe atteso");
+        assert_eq!(nulli.data_type(), &unione_valida);
+        assert_eq!(nulli.len(), 3);
         assert_eq!(
             super::array_null(&DataType::Utf8, 2).unwrap().null_count(),
             2

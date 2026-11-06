@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Benchmark: misura e classifica esiti, non costituisce un oracolo di prova"
+)]
 //! Diagnostica isolata (non un gate, non un benchmark applicativo): separa
 //! `buffer`, `simplify` e `centroid` su poligoni a molti vertici, a
 //! dimensioni crescenti, per localizzare dove va il tempo con l'orientamento

@@ -158,6 +158,7 @@ fn testo(documento: &Value) -> String {
     testo
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::ErrorCategory;

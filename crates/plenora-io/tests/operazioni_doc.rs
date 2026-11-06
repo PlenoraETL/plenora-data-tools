@@ -1159,47 +1159,6 @@ fn celle_diverse(una: &Resa, altra: &Resa) -> Vec<(usize, String)> {
     diverse
 }
 
-/// Verifica sul contratto, per le operazioni geo che il runner non esegue:
-/// l'analisi accetta la config e l'uscita ha le colonne e i tipi scritti.
-fn verifica_contratto(scheda: &Scheda, ingressi: &[RecordBatch]) -> Result<(), String> {
-    plenora_core::json::ensure_no_duplicate_keys(scheda.esempio.config.get())
-        .map_err(|e| e.to_string())?;
-    let config: Value = serde_json::from_str(scheda.esempio.config.get()).expect("config JSON");
-    let contratti = ingressi
-        .iter()
-        .map(|batch| contract_from_arrow_schema(batch.schema(), resolve_crs))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("contratto d'ingresso: {e}"))?;
-    let crs_piano = scheda
-        .esempio
-        .crs
-        .as_deref()
-        .map(|crs| resolve_crs(crs, "crs"))
-        .transpose()
-        .map_err(|e| format!("CRS di piano: {e}"))?;
-    let mut campi = FieldAllocator::new(1000);
-    let contratto = plenora_kernels_geo::analyze::analyze_geo_contract(
-        scheda.operazione.id,
-        &contratti,
-        &config,
-        crs_piano.as_ref(),
-        &mut campi,
-    )
-    .map_err(|e| format!("analisi: {e}"))?;
-    let schema = arrow_schema_from_contract(&contratto).map_err(|e| e.to_string())?;
-    let attesa = tabella(&scheda.esempio.uscita.colonne)?;
-    let vuota = RecordBatch::new_empty(schema);
-    let reale = rendi(&vuota);
-    let scritta = rendi(&attesa);
-    if reale.intestazioni != scritta.intestazioni || reale.tipi != scritta.tipi {
-        return Err(format!(
-            "colonne del contratto {:?}, scritte {:?}",
-            reale.intestazioni, scritta.intestazioni
-        ));
-    }
-    Ok(())
-}
-
 fn kernel_diretto(scheda: &Scheda, ingresso: &RecordBatch) -> Result<RecordBatch, String> {
     use plenora_kernels_table::reshape;
     let limiti = plenora_kernels_table::Limits::default();
@@ -1252,11 +1211,25 @@ fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
     // dire il vero in entrambe le direzioni: un'operazione elencata non passa
     // la validazione, e una non elencata che non la passa e' solo `pivot`
     // senza `mapping` (rifiuto che dipende dalla config).
-    let non_eseguibile =
-        plenora_pipeline::disponibilita::motivo_non_eseguibile(scheda.operazione.id).is_some();
+    // Le schede di pivot (senza mapping) e transpose dichiarano schema
+    // dipendente dai dati: Unsupported durante Validate, nessun altro esito.
+    let rifiuto_atteso = matches!(scheda.operazione.id, "table.pivot" | "table.transpose");
+    assert_eq!(
+        plenora_pipeline::disponibilita::motivo_non_eseguibile(scheda.operazione.id).is_some(),
+        scheda.operazione.id == "table.transpose"
+    );
     let validata = piano.validate(&schemi);
-    if non_eseguibile && validata.is_ok() {
-        return Err("dichiarata non eseguibile dal runner, ma la validazione la accetta".into());
+    if rifiuto_atteso {
+        let errore = validata.expect_err("schema dipendente dai dati");
+        verifica_rifiuto(
+            &errore,
+            plenora_core::ErrorCategory::Unsupported,
+            plenora_core::ErrorPhase::Validate,
+        );
+        let uscita = kernel_diretto(scheda, &ingressi[0]).map_err(|e| format!("kernel: {e}"))?;
+        verifica_forma(scheda.operazione, &righe_in, uscita.num_rows(), true)?;
+        confronta(scheda, &uscita, true)?;
+        return Ok(Verifica::Kernel);
     }
     match validata {
         Ok(validata) => {
@@ -1277,20 +1250,6 @@ fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
             } else {
                 Verifica::RunnerSenzaValori
             })
-        }
-        Err(PlenoraError::Unsupported(_)) if scheda.operazione.family == Family::Geo => {
-            verifica_contratto(scheda, &ingressi)?;
-            Ok(Verifica::Contratto)
-        }
-        // Dal kernel solo `pivot` (senza `mapping` nell'esempio) e le
-        // operazioni che il runner non esegue mai: un'altra rifiutata
-        // (`transpose` tolta dall'elenco compresa) e' un errore sotto.
-        Err(errore) if scheda.operazione.id == "table.pivot" || non_eseguibile => {
-            let uscita = kernel_diretto(scheda, &ingressi[0])
-                .map_err(|e| format!("kernel: {e} (il runner: {errore})"))?;
-            verifica_forma(scheda.operazione, &righe_in, uscita.num_rows(), true)?;
-            confronta(scheda, &uscita, true)?;
-            Ok(Verifica::Kernel)
         }
         Err(errore) => Err(format!("validazione: {errore}")),
     }
@@ -1863,14 +1822,29 @@ fn gli_esempi_su_ingressi_vuoti_rispettano_la_forma() {
     let mut errori = Vec::new();
     for scheda in &schede {
         let id = scheda.operazione.id;
-        match (esegui_su_vuoti(scheda), RIFIUTANO_IL_VUOTO.contains(&id)) {
-            (Ok(righe), true) => errori.push(format!(
-                "{id}: in RIFIUTANO_IL_VUOTO, ma gira ({righe} righe)"
-            )),
-            (Err(errore), ammesso) if !ammesso || errore.starts_with("forma:") => {
-                errori.push(format!("{id}: {errore}"));
-            }
-            _ => {}
+        if RIFIUTANO_IL_VUOTO.contains(&id) {
+            let ingressi: Vec<_> = scheda
+                .esempio
+                .ingressi
+                .iter()
+                .map(|spec| {
+                    tabella_con_metadati(&spec.colonne, &spec.metadati)
+                        .expect("fixture della scheda")
+                        .slice(0, 0)
+                })
+                .collect();
+            // Le due schede dichiarano un difetto del piano: min_rows non
+            // rispettato e meno di due punti. La fase canonica di InvalidPlan
+            // resta Validate anche quando il controllo avviene in esecuzione.
+            let errore = esegui_su_tipizzato(scheda, &ingressi)
+                .expect_err("lo scenario vuoto deve essere rifiutato");
+            verifica_rifiuto(
+                &errore,
+                plenora_core::ErrorCategory::InvalidPlan,
+                plenora_core::ErrorPhase::Validate,
+            );
+        } else if let Err(errore) = esegui_su_vuoti(scheda) {
+            errori.push(format!("{id}: {errore}"));
         }
     }
     assert!(errori.is_empty(), "ingressi vuoti:\n{}", errori.join("\n"));
@@ -1883,38 +1857,90 @@ fn gli_esempi_su_ingressi_vuoti_rispettano_la_forma() {
 const RIFIUTANO_IL_VUOTO: &[&str] = &["table.assert_cardinality", "geo.voronoi"];
 
 fn esegui_su_vuoti(scheda: &Scheda) -> Result<usize, String> {
-    let esempio = &scheda.esempio;
-    let ingressi = esempio
+    let ingressi = scheda
+        .esempio
         .ingressi
         .iter()
         .map(|spec| tabella_con_metadati(&spec.colonne, &spec.metadati).map(|t| t.slice(0, 0)))
         .collect::<Result<Vec<_>, _>>()?;
-    let righe_in = vec![0; ingressi.len()];
-    let righe_out = if matches!(scheda.operazione.id, "table.pivot" | "table.transpose") {
-        kernel_diretto(scheda, &ingressi[0])?.num_rows()
+    let attesa = if scheda.operazione.family == Family::Geo {
+        attesa_geo_vuota(scheda, &ingressi, true)
     } else {
-        let piano = Pipeline::from_json(&testo_piano(scheda)).map_err(|e| format!("piano: {e}"))?;
-        let schemi: Vec<(&str, SchemaRef)> = esempio
-            .ingressi
-            .iter()
-            .zip(&ingressi)
-            .map(|(spec, batch)| (spec.nome.as_str(), batch.schema()))
-            .collect();
-        let tabelle = esempio
-            .ingressi
-            .iter()
-            .zip(ingressi)
-            .map(|(spec, batch)| (spec.nome.clone(), batch))
-            .collect();
-        let esito = piano
-            .validate(&schemi)
-            .and_then(|validata| validata.run(tabelle))
-            .map_err(|e| format!("esecuzione: {e}"))?;
-        let (_, uscita) = esito.outputs.into_iter().next().expect("un'uscita");
-        uscita.num_rows()
+        attesa_tabella_vuota(scheda, &ingressi)
     };
-    verifica_forma(scheda.operazione, &righe_in, righe_out, false)?;
+    let uscita = if matches!(scheda.operazione.id, "table.pivot" | "table.transpose") {
+        kernel_diretto(scheda, &ingressi[0])?
+    } else {
+        esegui_su_tipizzato(scheda, &ingressi).map_err(|e| format!("esecuzione: {e}"))?
+    };
+    if attesa.schema() != uscita.schema() {
+        return Err(format!(
+            "schema atteso {:?}, ottenuto {:?}",
+            attesa.schema(),
+            uscita.schema()
+        ));
+    }
+    if !stessi_valori(&attesa, &uscita) {
+        return Err("valori o numero di righe diversi dall'oracolo vuoto".into());
+    }
+    let righe_out = uscita.num_rows();
+    verifica_forma(
+        scheda.operazione,
+        &vec![0; ingressi.len()],
+        righe_out,
+        false,
+    )?;
     Ok(righe_out)
+}
+
+/// Gli esempi tabellari vuoti conservano le colonne scritte nelle schede,
+/// tranne i due reshape dipendenti dai dati. Reconcile emette cinque zeri.
+/// Nullabilita' e metadati seguono le sezioni Schema delle stesse schede;
+/// non vengono interrogati kernel, analisi o risultati dell'esecuzione.
+fn attesa_tabella_vuota(scheda: &Scheda, ingressi: &[RecordBatch]) -> RecordBatch {
+    let op = scheda.operazione.id;
+    if op == "table.transpose" {
+        return ingressi[0].clone();
+    }
+    if op == "table.pivot" {
+        // Nessun valore pivot: resta la sola chiave negozio, senza pubblicazione.
+        return ingressi[0].project(&[0]).unwrap();
+    }
+    let mut colonne = scheda.esempio.uscita.colonne.clone();
+    for colonna in &mut colonne {
+        if op == "table.reconcile" {
+            if colonna.nome == "value" {
+                colonna.valori = (0..5)
+                    .map(|_| RawValue::from_string("0".into()).unwrap())
+                    .collect();
+            }
+        } else {
+            colonna.valori.clear();
+        }
+    }
+    let valori = tabella(&colonne).unwrap();
+    let campi: Vec<_> = valori
+        .schema()
+        .fields()
+        .iter()
+        .map(|campo| {
+            let non_nullable = matches!(
+                (op, campo.name().as_str()),
+                ("table.add_row_number" | "table.aggregate", "n")
+                    | ("table.align_schema", "stato")
+                    | ("table.md5_hash", "md5_hash")
+                    | ("table.sha256_hash", "sha256_hash")
+                    | ("table.stable_fingerprint", "fingerprint")
+                    | ("table.melt", "trimestre")
+                    | ("table.table_diff", "_diff_status")
+                    | ("table.uuid_generator", "chiave")
+                    | ("table.validate_rules", "_valid" | "_errors" | "_warnings")
+            ) || op == "table.reconcile";
+            campo.as_ref().clone().with_nullable(!non_nullable)
+        })
+        .collect();
+    let schema = schema_ruolo_catalogo(op, "", &ingressi[0], campi);
+    RecordBatch::try_new(Arc::new(schema), valori.columns().to_vec()).unwrap()
 }
 
 #[test]
@@ -1979,8 +2005,14 @@ fn il_confronto_distingue_nullo_e_testi_simili() {
 /// Un fuso non ASCII nel tipo è un errore esplicito, non un panico.
 #[test]
 fn il_tipo_rifiuta_un_fuso_non_ascii() {
-    assert!(tipo_arrow("timestamp(ms, è)").is_err());
-    assert!(tipo_arrow("timestamp(ms, UTC").is_err());
+    assert_eq!(
+        tipo_arrow("timestamp(ms, è)"),
+        Err("tipo `timestamp(ms, è)`: fuso vuoto o non ASCII".to_owned())
+    );
+    assert_eq!(
+        tipo_arrow("timestamp(ms, UTC"),
+        Err("tipo `timestamp(ms, UTC`: atteso `)`".to_owned())
+    );
     assert_eq!(
         tipo_arrow("timestamp(ms, Europe/Rome)").map(|(tipo, _)| tipo),
         Ok(DataType::Timestamp(
@@ -2425,6 +2457,10 @@ fn con_una_geometria_vuota(batch: &RecordBatch) -> Option<RecordBatch> {
 /// geometria vuota al posto della prima. Le schede determinano l'unico
 /// esito ammesso; i successi hanno schema, metadati e celle attesi indipendenti.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Aiuto tabellare: confronta categoria e fase con latteso indipendente della scheda, poi verifica i valori dei successi."
+)]
 fn le_geo_rispettano_la_nullabilita_su_ingressi_vuoti_e_geometrie_vuote() {
     prepara_ambiente();
     let (schede, _) = leggi_schede();
@@ -2646,6 +2682,10 @@ fn verifica_campo_geometrico(ingressi: &[RecordBatch], campo: &Field, array: &dy
 
 #[test]
 #[allow(clippy::too_many_lines)] // La matrice e le asserzioni restano visibili nello stesso test.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Aiuto tabellare: confronta categoria e fase con latteso indipendente della scheda, poi verifica i valori dei successi."
+)]
 fn catalogo_conserva_i_riferimenti_dei_byte_geometrici() {
     prepara_ambiente();
     let mut violazioni = Vec::new();
@@ -2950,7 +2990,12 @@ fn catalogo_identita_seguono_la_provenienza() {
                 .collect();
             if let Some((branch, name)) = &variant {
                 let input = &mut inputs[*branch];
-                if input.schema.field_with_name(name).is_err() {
+                if input
+                    .schema
+                    .fields()
+                    .iter()
+                    .all(|campo| campo.name() != name)
+                {
                     let mut fields = input.schema.fields().to_vec();
                     fields.push(Arc::new(Field::new(
                         name,
@@ -3342,7 +3387,7 @@ fn catalogo_colonne_presenti_in_un_solo_ingresso() {
                         NAME.to_owned()
                     };
                     assert_eq!(
-                        output.schema.field_with_name(&name).is_ok(),
+                        output.schema.fields().iter().any(|f| f.name() == &name),
                         retained,
                         "{context}"
                     );
@@ -4028,7 +4073,15 @@ fn catalogo_geo_multigeometria_operandi_e_passanti() {
                 {
                     let index = uscita.schema().index_of(campo.name());
                     if ridotto {
-                        assert!(index.is_err(), "{} schema ridotto", op.id);
+                        assert!(
+                            uscita
+                                .schema()
+                                .fields()
+                                .iter()
+                                .all(|f| f.name() != campo.name()),
+                            "{} schema ridotto",
+                            op.id
+                        );
                         continue;
                     }
                     let index = index.unwrap_or_else(|_| panic!("{}: passante persa", op.id));
@@ -4086,7 +4139,8 @@ fn catalogo_geo_multigeometria_operandi_e_passanti() {
                         .filter(|name| !name.starts_with("__passante_"))
                         .map(|_| "geometry".to_owned())
                 } else {
-                    primaria_ingresso.filter(|name| uscita.schema().index_of(name).is_ok())
+                    primaria_ingresso
+                        .filter(|name| uscita.schema().fields().iter().any(|f| f.name() == name))
                 };
                 let primaria_effettiva = primary_geometry_position(&uscita.schema())
                     .unwrap()
@@ -4204,6 +4258,10 @@ fn ruoli_geometrici(config: &Value, nomi: &BTreeSet<String>) -> Vec<(Value, Stri
     varianti
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Classificazione indipendente dei byte della fixture, non risultato del prodotto."
+)]
 fn geometria_per_ruolo(
     batch: &RecordBatch,
     nome: &str,
@@ -4294,13 +4352,16 @@ fn esito_ruolo_geometrico(
         .collect();
     match validato.run(tabelle) {
         Ok(esito) => {
-            for (_, batch) in esito.outputs {
+            assert_eq!(esito.outputs.len(), 1);
+            for (nome, batch) in esito.outputs {
+                assert_eq!(nome, USCITA);
                 assert_eq!(
                     batch.schema(),
                     atteso,
                     "{}: schema pubblicato",
                     scheda.operazione.id
                 );
+                assert_eq!(batch.num_columns(), contratto.fields().len());
                 for (reale, inferito) in batch.schema().fields().iter().zip(contratto.fields()) {
                     let mut metadata = reale.metadata().clone();
                     metadata.remove("plenora.field_id");
@@ -4332,6 +4393,10 @@ fn esito_ruolo_geometrico(
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Aiuto tabellare: confronta categoria e fase con latteso indipendente della scheda, poi verifica i valori dei successi."
+)]
 fn catalogo_geometria_in_ogni_ruolo_non_legge_wkb_come_testo() {
     prepara_ambiente();
     let mut casi = 0;
@@ -4446,18 +4511,26 @@ fn catalogo_identita_nuove_non_correlano_uscite_diverse() {
             .collect();
         let mut testo: Value = serde_json::from_str(&testo_piano(&scheda)).unwrap();
         let piano = Pipeline::from_json(&testo.to_string()).unwrap();
-        let iniziale = match piano.validate(&schemi) {
-            Ok(v) => v,
-            Err(e) => {
-                assert_eq!(
-                    e.category(),
-                    plenora_core::ErrorCategory::Unsupported,
-                    "{}: esempio non validabile",
-                    operazione.id
-                );
-                continue;
-            }
-        };
+        // Sono i soli esempi con schema dipendente dai dati: transpose
+        // sempre, pivot senza mapping come nella sua scheda. L'elenco e'
+        // indipendente dall'esito della validazione e dal catalogo runtime.
+        if matches!(operazione.id, "table.transpose" | "table.pivot") {
+            let Err(errore) = piano.validate(&schemi) else {
+                panic!("schema dipendente dai dati")
+            };
+            verifica_rifiuto(
+                &errore,
+                plenora_core::ErrorCategory::Unsupported,
+                plenora_core::ErrorPhase::Validate,
+            );
+            continue;
+        }
+        let iniziale = piano.validate(&schemi).unwrap_or_else(|errore| {
+            panic!(
+                "{}: esempio deve essere validabile: {errore}",
+                operazione.id
+            )
+        });
         verifica_origini_catalogo(
             operazione,
             &schemi,
@@ -4529,7 +4602,7 @@ fn catalogo_identita_nuove_non_correlano_uscite_diverse() {
             provate += 1;
         }
     }
-    assert!(provate > CATALOG.len());
+    assert_eq!(provate, 2 * (CATALOG.len() - 2));
 }
 
 #[test]

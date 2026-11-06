@@ -1929,6 +1929,7 @@ fn type_cast_generic(source: &ArrayRef, config: &TypeCast) -> Result<ArrayRef> {
     Ok(array)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::arrow::array::{
@@ -2070,6 +2071,10 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Solo testo diagnostico nel ramo panic di divergenza: il risultato generico indipendente deve coincidere integralmente con quello ottimizzato. Solo stato del riferimento nella diagnostica di un fallimento già obbligatorio; nessun esito accettato da questo booleano."
+    )]
     fn assert_fill_equiv(array: &ArrayRef, method: &FillMethod, value: &Value) {
         let fast = fill_array(array.as_ref(), method, value).map_err(|e| format!("{e:?}"));
         let generic =
@@ -2102,6 +2107,10 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Solo diagnostica nel ramo panic della comparazione differenziale completa."
+    )]
     fn assert_cast_equiv(array: &ArrayRef, config: &TypeCast) {
         let fast = type_cast_fast(array, config).map_err(|e| format!("{e:?}"));
         let generic = type_cast_generic(array, config).map_err(|e| format!("{e:?}"));
@@ -2936,7 +2945,11 @@ mod tests {
         let batch = single_batch(Arc::new(LargeStringArray::from(vec![Some("42"), None])));
         for target in all_targets() {
             let config = cast_config(target, CastErrors::Coerce);
-            assert!(type_cast(&batch, &config).is_err());
+            assert_rifiuto!(
+                type_cast(&batch, &config),
+                plenora_core::ErrorCategory::Schema,
+                plenora_core::ErrorPhase::Validate
+            );
         }
     }
 

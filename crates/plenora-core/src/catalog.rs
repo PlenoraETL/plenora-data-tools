@@ -3438,6 +3438,7 @@ pub fn find_operation(id: &str) -> Option<&'static OperationDescriptor> {
     })
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;

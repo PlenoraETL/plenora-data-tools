@@ -846,6 +846,7 @@ pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBa
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::arrow::array::{
@@ -940,7 +941,11 @@ mod tests {
         assert_equivalent(&batch, Operator::Isnull, json!(null));
         assert_equivalent(&batch, Operator::Notnull, json!(null));
         // Valore non numerico: il generico fallisce sulle righe non nulle.
-        assert!(filter(&batch, &config(Operator::Eq, json!("x"))).is_err());
+        assert_rifiuto!(
+            filter(&batch, &config(Operator::Eq, json!("x"))),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
+        );
         assert_equivalent(&batch, Operator::Eq, json!("x"));
     }
 
@@ -1198,7 +1203,11 @@ mod tests {
         );
         // LargeUtf8 non e' nel profilo scalare: il confronto resta un errore
         // di schema (semantica invariata), isnull/notnull funzionano.
-        assert!(filter(&batch, &config(Operator::Eq, json!("a"))).is_err());
+        assert_rifiuto!(
+            filter(&batch, &config(Operator::Eq, json!("a"))),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
         assert_equivalent(&batch, Operator::Eq, json!("a"));
         let nulls = filter(&batch, &config(Operator::Isnull, json!(null))).expect("isnull");
         assert_eq!(nulls.num_rows(), 1);
@@ -1453,19 +1462,36 @@ mod tests {
             vec![9_007_199_254_740_992.0, 0.0]
         );
         let testo = conditional(&batch, &config(json!("alto"))).expect("testo");
-        assert_eq!(testo.schema().field(1).data_type(), &DataType::Utf8);
+        let atteso = RecordBatch::try_new(
+            Arc::new(plenora_core::arrow::Schema::new(vec![
+                plenora_core::arrow::Field::new("x", DataType::Int64, true),
+                plenora_core::arrow::Field::new("result", DataType::Utf8, false),
+            ])),
+            vec![
+                batch.column(0).clone(),
+                Arc::new(StringArray::from(vec!["alto", "0"])),
+            ],
+        )
+        .expect("fixture testuale");
+        assert_eq!(testo, atteso);
         assert_eq!(
             risultati_numerici(["9007199254740993", "x"].map(Some)).expect("uscita testuale"),
             None
         );
         // Oltre `i128`: 10^40 + 1 non e' un double.
-        assert!(
-            risultati_numerici(["10000000000000000000000000000000000000001"].map(Some)).is_err()
+        assert_rifiuto!(
+            risultati_numerici(["10000000000000000000000000000000000000001"].map(Some)),
+            plenora_core::ErrorCategory::InvalidPlan,
+            plenora_core::ErrorPhase::Validate
         );
         // 2^140 lo e', anche se non sta in `i128`.
-        assert!(
-            risultati_numerici(["1393796574908163946345982392040522594123776"].map(Some)).is_ok()
+        assert_successo!(
+            risultati_numerici(["1393796574908163946345982392040522594123776"].map(Some)),
+            Some(vec![Some(2_f64.powi(140))])
         );
-        assert!(risultati_numerici(["-0007", "0"].map(Some)).is_ok());
+        assert_successo!(
+            risultati_numerici(["-0007", "0"].map(Some)),
+            Some(vec![Some(-7.0), Some(0.0)])
+        );
     }
 }

@@ -20,6 +20,12 @@
 //! oracolo che passa **davvero** dal proprio uso, perche' provare il solo
 //! accessore interno lascerebbe scoperto chi lo chiama.
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
+use plenora_core::{ErrorCategory, ErrorPhase};
+
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{
@@ -212,7 +218,10 @@ fn la_somma_oltre_int64_e_un_errore() {
     // righe; `rolling_window` con finestra 1 no.
     for (indice, esito) in esiti.into_iter().enumerate() {
         if indice == 1 {
-            assert!(esito.is_ok());
+            assert_eq!(
+                (esito).expect("successo atteso"),
+                vec![Some(i64::MAX), Some(1)]
+            );
             continue;
         }
         assert!(
@@ -722,16 +731,30 @@ fn analisi_ed_esecuzione_concordano_sul_dominio() {
             let config = serde_json::from_value(config).expect("config");
             let esecuzione = window_function(&ingresso, &config);
 
-            assert_eq!(
-                analisi.is_ok(),
-                numerico,
-                "{tipo:?}/{funzione}: l'analizzatore non concorda col contratto atteso"
-            );
-            assert_eq!(
-                esecuzione.is_ok(),
-                analisi.is_ok(),
-                "{tipo:?}/{funzione}: analisi ed esecuzione in disaccordo"
-            );
+            if numerico {
+                let uscita = esecuzione.expect("rango numerico");
+                let valori_attesi: ArrayRef = match funzione {
+                    "rank" | "dense_rank" => Arc::new(Float64Array::from(vec![1.0, 2.0])),
+                    "percent_rank" => Arc::new(Float64Array::from(vec![0.0, 1.0])),
+                    "cume_dist" => Arc::new(Float64Array::from(vec![0.5, 1.0])),
+                    _ => unreachable!(),
+                };
+                let mut campi = schema.fields().to_vec();
+                campi.push(Arc::new(Field::new(
+                    "out",
+                    valori_attesi.data_type().clone(),
+                    true,
+                )));
+                let mut colonne = ingresso.columns().to_vec();
+                colonne.push(valori_attesi);
+                let atteso =
+                    RecordBatch::try_new(Arc::new(ArrowSchema::new(campi)), colonne).unwrap();
+                assert_eq!(uscita, atteso);
+                assert_eq!(analisi.expect("analisi numerica").schema, atteso.schema());
+            } else {
+                assert_rifiuto!(analisi, ErrorCategory::InvalidPlan, ErrorPhase::Validate);
+                assert_rifiuto!(esecuzione, ErrorCategory::Schema, ErrorPhase::Validate);
+            }
         }
     }
 }

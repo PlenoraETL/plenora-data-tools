@@ -84,7 +84,7 @@ fn ogni_concatenazione_rifiuta_dichiarazioni_incompatibili() {
                         .contains_key("plenora.geometry.types"));
                     continue;
                 }
-                let error = result.unwrap_err();
+                let error = result.expect_err("rifiuto atteso: categoria verificata dalla prova");
                 assert!(matches!(error, PlenoraError::Schema(_)), "{error}");
                 let analyzed = analyze_table_contract(
                     op,
@@ -96,16 +96,26 @@ fn ogni_concatenazione_rifiuta_dichiarazioni_incompatibili() {
                     &mut FieldAllocator::default(),
                     &limits,
                 )
-                .unwrap_err();
+                .expect_err("rifiuto atteso: categoria verificata dalla prova");
                 assert_eq!(error.to_string(), analyzed.to_string());
             }
         }
-        assert!(joins::concat_by_name(
+        let output = joins::concat_by_name(
             &[&left, &left],
             &joins::ConcatByName { strict: false },
-            &Limits::default()
+            &Limits::default(),
         )
-        .is_ok());
+        .expect("concat identico");
+        assert_eq!(
+            output.columns(),
+            plenora_core::arrow::select::concat::concat_batches(&left.schema(), [&left, &left])
+                .expect("atteso Arrow")
+                .columns()
+        );
+        assert_eq!(
+            output.schema().field(0).metadata()["plenora.geometry.types"],
+            "point"
+        );
     }
 }
 
@@ -113,19 +123,24 @@ fn ogni_concatenazione_rifiuta_dichiarazioni_incompatibili() {
 fn confrontare_tipi_diversi_non_impila_le_dichiarazioni() {
     let left = geometry("point", "wkb", "xy", false);
     let right = geometry("linestring", "wkb", "xy", false);
-    assert!(setops::validate_schema(&left, &right).is_ok());
+    let () = setops::validate_schema(&left, &right).expect("schemi compatibili");
     for op in ["table.intersect", "table.except"] {
-        assert!(analyze_table_contract(
+        let output = analyze_table_contract(
             op,
             &[
                 complete_contract(left.schema()),
-                complete_contract(right.schema())
+                complete_contract(right.schema()),
             ],
             &json!({}),
             &mut FieldAllocator::default(),
-            &Limits::default()
+            &Limits::default(),
         )
-        .is_ok());
+        .expect("confronto tipi diversi");
+        assert_eq!(
+            output.geometries[0].types,
+            complete_contract(left.schema()).geometries[0].types
+        );
+        assert_eq!(output.schema.fields().len(), 1);
     }
 }
 
@@ -230,13 +245,8 @@ fn dichiarazioni_solo_nel_contratto_hanno_lo_stesso_esito_del_kernel() {
                     _ => setops::validate_schema(&left_batch, &right_batch)
                         .map(|()| left_batch.clone()),
                 };
-                let accepts = true;
-                assert_eq!(
-                    analyzed.is_ok(),
-                    accepts,
-                    "{op}: {a:?}, {b:?}: {analyzed:?}"
-                );
-                assert_eq!(kernel.is_ok(), accepts, "{op}: {a:?}, {b:?}: {kernel:?}");
+                analyzed.as_ref().expect("fusione dichiarazioni ammessa");
+                kernel.as_ref().expect("fusione dichiarazioni ammessa");
                 match (analyzed, kernel) {
                     (Err(a), Err(b)) => {
                         assert!(matches!(a, PlenoraError::Schema(_)));
@@ -261,7 +271,18 @@ fn dichiarazioni_solo_nel_contratto_hanno_lo_stesso_esito_del_kernel() {
                         &mut FieldAllocator::default(),
                         &limits,
                     );
-                    assert_eq!(third.is_ok(), accepts);
+                    let third = third.expect("concat ternario");
+                    let expected_types = if a == b {
+                        left.geometries[0].types.clone()
+                    } else {
+                        plenora_core::contract::GeometryColumnContract::undeclared_types()
+                    };
+                    assert_eq!(third.geometries[0].types, expected_types);
+                    let published = arrow_schema_from_contract(&third).expect("schema pubblicato");
+                    let restored =
+                        contract_from_arrow_schema(published, plenora_core::crs::resolve_crs)
+                            .expect("contratto riletto");
+                    assert_eq!(restored.geometries[0].types, expected_types);
                 }
             }
         }

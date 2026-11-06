@@ -17,6 +17,12 @@
 //! testo "null", testi prefissi l'uno dell'altro, Decimal128 negativi,
 //! input vuoti.
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
+use plenora_core::{ErrorCategory, ErrorPhase};
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -393,16 +399,29 @@ proptest! {
             nulls_equal,
         };
         let indici_chiave = indici(&left, &subset);
-        let mut viste = HashSet::new();
-        let unica = (0..left.num_rows())
-            .filter(|row| {
-                nulls_equal
-                    || indici_chiave
-                        .iter()
-                        .all(|indice| !left.column(*indice).is_null(*row))
-            })
-            .all(|row| viste.insert(chiave_testuale(&left, &indici_chiave, row)));
-        prop_assert_eq!(assert_unique(&left, &config).is_ok(), unica);
+        let mut gruppi: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for row in 0..left.num_rows() {
+            if nulls_equal || indici_chiave.iter().all(|indice| !left.column(*indice).is_null(row)) {
+                gruppi.entry(chiave_testuale(&left, &indici_chiave, row)).or_default().push(row);
+            }
+        }
+        let mut duplicate: Vec<_> = gruppi.values().filter(|righe| righe.len() > 1).flatten().copied().collect();
+        duplicate.sort_unstable();
+        if duplicate.is_empty() {
+            assert_successo!(assert_unique(&left, &config), left);
+        } else {
+            let err = assert_rifiuto!(assert_unique(&left, &config), ErrorCategory::DataMapping, ErrorPhase::Write);
+            let report = err.row_diagnostics().expect("diagnostica duplicati");
+            let totale = u64::try_from(duplicate.len()).unwrap();
+            assert_eq!(report.observed_total, totale);
+            assert_eq!(report.total, Some(totale));
+            assert_eq!(report.counts, BTreeMap::from([("validation.duplicate_key".into(), totale)]));
+            assert_eq!(report.examples_limit, 10);
+            assert_eq!(report.examples_truncated, duplicate.len() > 10);
+            assert_eq!(report.examples.iter().map(|e| e.source_index).collect::<Vec<_>>(),
+                duplicate.into_iter().take(10).map(|i| u64::try_from(i).unwrap()).collect::<Vec<_>>());
+            assert!(report.examples.iter().all(|e| e.column.is_none() && e.cause == "validation.duplicate_key"));
+        }
 
         // Chiave su `subset` e, di solito, `id` della riga: con la sola
         // chiave generata i duplicati renderebbero quasi ogni caso un errore
@@ -423,14 +442,52 @@ proptest! {
         let atteso = stati_attesi(&left, &right, &chiave, &confronto);
         let uscita = table_diff(&left, &right, &config, &Limits::default());
         match atteso {
-            None => prop_assert!(uscita.is_err()),
+            None => { assert_rifiuto!(uscita, ErrorCategory::InvalidPlan, ErrorPhase::Validate); },
             Some(stati) => {
                 let uscita = uscita.map_err(errore("table_diff"))?;
                 let stati_uscita = testi(&uscita, "_diff_status")
                     .into_iter()
                     .map(Option::unwrap_or_default)
                     .collect::<Vec<_>>();
-                prop_assert_eq!(stati_uscita, stati);
+                prop_assert_eq!(&stati_uscita, &stati);
+                let chiavi_left = chiavi(&left, &chiave);
+                let chiavi_right = chiavi(&right, &chiave);
+                let destra_per_chiave: HashMap<_, _> = chiavi_right.iter().enumerate().map(|(i, k)| (k, i)).collect();
+                let righe: Vec<_> = chiavi_left.iter().enumerate()
+                    .map(|(i, k)| destra_per_chiave.get(k).map_or((&left, i), |j| (&right, *j)))
+                    .chain(chiavi_right.iter().enumerate().filter(|(_, k)| !chiavi_left.contains(k)).map(|(j, _)| (&right, j)))
+                    .collect();
+                let nomi: Vec<_> = chiave.iter().copied().chain(std::iter::once(confronto.as_str())).collect();
+                let mut campi = Vec::new();
+                let mut colonne: Vec<plenora_core::arrow::array::ArrayRef> = Vec::new();
+                for nome in nomi {
+                    let tipo = left.schema().field_with_name(nome).unwrap().data_type().clone();
+                    campi.push(Field::new(nome, tipo.clone(), true));
+                    let celle: Vec<_> = righe.iter().map(|(b, r)| b.column_by_name(nome).unwrap().slice(*r, 1)).collect();
+                    colonne.push(if celle.is_empty() {
+                        plenora_core::arrow::array::new_empty_array(&tipo)
+                    } else {
+                        let viste: Vec<_> = celle.iter().map(AsRef::as_ref).collect();
+                        plenora_core::arrow::select::concat::concat(&viste).unwrap()
+                    });
+                }
+                campi.extend([
+                    Field::new("_diff_status", DataType::Utf8, false),
+                    Field::new("_diff_columns", DataType::Utf8, true),
+                    Field::new("_diff_old_values", DataType::Utf8, true),
+                ]);
+                let valori_vecchi = testi(&left, &confronto);
+                let modifiche: Vec<_> = stati.iter().map(|stato| (*stato == "MODIFIED").then_some(confronto.as_str())).collect();
+                let precedenti: Vec<_> = stati.iter().enumerate().map(|(i, stato)| {
+                    (*stato == "MODIFIED").then(|| valori_vecchi[i].as_deref().unwrap_or_default())
+                }).collect();
+                colonne.extend([
+                    Arc::new(StringArray::from(stati)) as plenora_core::arrow::array::ArrayRef,
+                    Arc::new(StringArray::from(modifiche)),
+                    Arc::new(StringArray::from(precedenti)),
+                ]);
+                let atteso = RecordBatch::try_new(Arc::new(Schema::new(campi)), colonne).unwrap();
+                prop_assert_eq!(uscita, atteso);
             }
         }
     }

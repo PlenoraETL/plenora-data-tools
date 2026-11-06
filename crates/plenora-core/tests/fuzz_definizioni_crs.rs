@@ -25,7 +25,14 @@ fn corpus_reale_e_troncamenti_con_oracolo_fuzz() {
     assert_eq!(wkt.as_object().unwrap().len(), 169);
     for (id, documento) in proj.as_object().unwrap() {
         let json = documento.to_string();
-        assert!(resolve_crs(&json, "crs").is_ok());
+        let risolto = resolve_crs(&json, "crs").expect("PROJJSON integrato");
+        let atteso = resolve_crs(id, "crs").expect("identificatore della fixture");
+        assert!(risolto.semantically_equals(&atteso));
+        assert_eq!(
+            risolto.authority_identifier(),
+            atteso.authority_identifier()
+        );
+        assert_eq!(risolto.definition(), json);
         crs::verifica(&json);
         crs::verifica(&format!(
             "{{\"name\":\"{}\",{}",
@@ -39,7 +46,26 @@ fn corpus_reale_e_troncamenti_con_oracolo_fuzz() {
             ("wkt1_gdal", "esclusione_wkt1_gdal"),
         ] {
             let testo = wkt[id][forma].as_str().unwrap();
-            assert_eq!(resolve_crs(testo, "crs").is_ok(), wkt[id][motivo].is_null());
+            if wkt[id][motivo].is_null() {
+                let risolto = resolve_crs(testo, "crs").expect("forma ammessa nel corpus");
+                let atteso = if id == "OGC:CRS84" {
+                    None
+                } else {
+                    let (autorita, numero) = id.split_once(':').expect("identificativo corpus");
+                    Some((
+                        autorita,
+                        numero.parse::<u32>().expect("codice numerico corpus"),
+                    ))
+                };
+                assert_eq!(risolto.authority_identifier(), atteso);
+            } else {
+                // Tutte le esclusioni del corpus sono definizioni fuori profilo:
+                // datum 2015, metodo WKT1, ellissoide arrotondato o EXTENSION.
+                assert!(matches!(
+                    resolve_crs(testo, "crs"),
+                    Err(plenora_core::crs::CrsError::NotBuiltin)
+                ));
+            }
             crs::verifica(testo);
             for taglio in [0, 1, testo.len() / 2, testo.len() - 1] {
                 if testo.is_char_boundary(taglio) {
@@ -64,7 +90,10 @@ fn limiti_strutturali_e_testuali_sono_rifiuti_espliciti() {
     ];
     for testo in casi {
         assert_eq!(
-            resolve_crs(&testo, "crs").unwrap_err().code().as_str(),
+            resolve_crs(&testo, "crs")
+                .expect_err("rifiuto: codice CRS atteso verificato dalla prova")
+                .code()
+                .as_str(),
             "CRS_INVALID"
         );
         crs::verifica(&testo);

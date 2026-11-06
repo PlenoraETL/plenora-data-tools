@@ -346,7 +346,7 @@ fn il_filtro_precede_la_lettura_dei_valori_e_srid_malformato_e_schema() {
         }],
         &Interruzione::default(),
     )
-    .unwrap_err();
+    .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(e.category().as_str(), "schema");
     assert_eq!(e.phase().as_str(), "validate");
     assert!(!e.to_string().contains("NON_UN_NUMERO"));
@@ -567,7 +567,7 @@ fn assi_ambigui_rifiutati_prima_dei_valori_su_api_e_cli() {
                     }],
                     &Interruzione::default(),
                 )
-                .unwrap_err();
+                .expect_err("rifiuto atteso: categoria verificata dalla prova");
                 assert_eq!(err.category().as_str(), "crs");
                 assert_eq!(err.phase().as_str(), "validate");
                 assert_eq!(err.remote_effect(), RemoteEffect::None);
@@ -642,7 +642,7 @@ fn sonde_interop_assi_precedenza_e_centroid_geografico() {
             }],
             &Interruzione::default(),
         )
-        .unwrap_err();
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert_eq!(error.category().as_str(), "crs", "{name}");
         assert_eq!(error.phase().as_str(), "validate", "{name}");
         verifica_cli(&input, plan, "crs", "validate", name, true);
@@ -729,7 +729,7 @@ fn fusioni_geometriche_rifiutano_in_validazione_senza_effetti() {
                 ],
                 &Interruzione::default(),
             )
-            .unwrap_err();
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
             assert_eq!(err.category().as_str(), "crs", "{op}");
             assert_eq!(err.phase().as_str(), "validate", "{op}");
             assert_eq!(err.remote_effect(), RemoteEffect::None);
@@ -800,7 +800,7 @@ fn decisione_0022_mixed_omette_elenco_vuoto() {
         typed.schema = input.schema();
         let validation = typed.validate();
         if empty {
-            let error = validation.unwrap_err();
+            let error = validation.expect_err("rifiuto atteso: categoria verificata dalla prova");
             assert_eq!(error.category().as_str(), "schema");
             assert_eq!(error.phase().as_str(), "validate");
         } else {
@@ -815,7 +815,7 @@ fn decisione_0022_mixed_omette_elenco_vuoto() {
             &Interruzione::default(),
         );
         if empty {
-            let error = result.unwrap_err();
+            let error = result.expect_err("rifiuto atteso: categoria verificata dalla prova");
             assert_eq!(error.category().as_str(), "schema");
             assert_eq!(error.phase().as_str(), "validate");
         } else {

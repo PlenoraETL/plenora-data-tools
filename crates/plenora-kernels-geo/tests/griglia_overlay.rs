@@ -128,7 +128,10 @@ fn dissolve_clip_overlay_alle_tre_scale() {
     for scala in [ITALIA, MONDO] {
         let (sinistra, destra) = coppia(scala);
         let righe = [sinistra.clone(), destra.clone()];
-        assert!(dissolve(&righe, centimetro()).is_ok());
+        let unita = dissolve(&righe, centimetro()).expect("dissolve");
+        let lato = scala.1;
+        let attesa = lato * lato * (0.6 + (0.987_654_3 - 0.371_337_1) * 0.2);
+        assert!((unita.unsigned_area() - attesa).abs() <= 4.0 * lato * 0.01);
         let tagliate = clip_to_mask(
             std::slice::from_ref(&sinistra),
             std::slice::from_ref(&destra),
@@ -190,6 +193,7 @@ fn clean_topology_alle_tre_scale() {
         // Morfologia (buffer +-1 m) e rimozione delle sovrapposizioni.
         let pulite = clean_valid_polygon_topology(&righe, 1.0, true, true, 10, 1_000, centimetro())
             .unwrap_or_else(|errore| panic!("clean a {scala:?}: {errore}"));
+        assert_eq!(pulite.len(), righe.len());
         assert!(pulite.iter().all(Option::is_some));
     }
     {
@@ -237,9 +241,37 @@ fn buffer_alle_tre_scale() {
             for stile in stili {
                 for distanza in [1_000.0, -1_000.0, 0.0] {
                     let esito = buffer_with_cap(&geometria, distanza, stile, centimetro());
+                    let output = esito.expect("buffer nella precisione");
+                    let r: f64 = distanza;
+                    let l = scala.1;
+                    let pi = std::f64::consts::PI;
+                    let attesa = match &geometria {
+                        Geometry::Polygon(_) if r >= 0.0 => l * l * 0.6 + 3.2 * l * r + pi * r * r,
+                        Geometry::Polygon(_) => (l + 2.0 * r) * (0.6 * l + 2.0 * r),
+                        _ if r <= 0.0 => 0.0,
+                        Geometry::MultiPoint(_) => match stile {
+                            BufferCapStyle::Round => 2.0 * pi * r * r,
+                            BufferCapStyle::Square => 8.0 * r * r,
+                            BufferCapStyle::Flat => 0.0,
+                        },
+                        Geometry::LineString(_) => {
+                            let lunghezza = l * (0.5_f64.hypot(0.2) + 0.5_f64.hypot(0.8));
+                            let theta = 0.8_f64.atan2(0.5) - 0.2_f64.atan2(0.5);
+                            let estremita = match stile {
+                                BufferCapStyle::Round => pi,
+                                BufferCapStyle::Square => 4.0,
+                                BufferCapStyle::Flat => 0.0,
+                            };
+                            2.0 * r * lunghezza
+                                + r * r * (estremita - (theta / 2.0).tan() + theta / 2.0)
+                        }
+                        _ => unreachable!("fixture"),
+                    };
                     assert!(
-                        esito.is_ok(),
-                        "{stile:?} a {distanza} m su {scala:?}: {esito:?}"
+                        (output.unsigned_area() - attesa).abs()
+                            <= (8.0 * l + 8.0 * pi * r.abs()) * 0.01,
+                        "{stile:?} {r}: {} != {attesa}",
+                        output.unsigned_area()
                     );
                 }
             }
@@ -276,8 +308,20 @@ fn la_griglia_del_buffer_comprende_la_distanza() {
         Point::new(500_000.0, 4_000_000.0),
         Point::new(500_001.0, 4_000_000.0),
     ]));
-    assert!(buffer_with_cap(&punti, 100_000.0, BufferCapStyle::Round, centimetro()).is_ok());
-    assert!(buffer_with_cap(&punti, 5_000_000.0, BufferCapStyle::Round, centimetro()).is_ok());
+    // Gli archi del buffer ammettono una freccia relativa dello 0,1% del raggio.
+    for r in [100_000.0_f64, 5_000_000.0] {
+        let output =
+            buffer_with_cap(&punti, r, BufferCapStyle::Round, centimetro()).expect("due dischi");
+        let attesa = std::f64::consts::PI * r * r
+            + 2.0 * r * r * (1.0 / (2.0 * r)).asin()
+            + 0.5 * (4.0 * r * r - 1.0).sqrt();
+        assert!(
+            (output.unsigned_area() - attesa).abs()
+                <= 4.0 * std::f64::consts::PI * r * (0.001 * r).max(0.01),
+            "r={r}: {} attesa={attesa}",
+            output.unsigned_area()
+        );
+    }
     assert!(matches!(
         buffer_with_cap(&punti, 10_000_000.0, BufferCapStyle::Round, centimetro()),
         Err(OperationError::PrecisionInsufficient)

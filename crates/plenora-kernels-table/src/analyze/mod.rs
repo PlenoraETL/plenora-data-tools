@@ -289,6 +289,7 @@ pub fn analyze_table_contract(
 // Test
 // ---------------------------------------------------------------------------
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -472,14 +473,27 @@ mod tests {
 
     #[allow(clippy::needless_pass_by_value)]
     fn err(op: &str, inputs: &[DataContract], config: Value) -> PlenoraError {
-        analyze_table_contract(
-            op,
-            inputs,
-            &config,
-            &mut FieldAllocator::default(),
-            &crate::Limits::default(),
+        rifiuto(op, inputs, config, plenora_core::ErrorCategory::InvalidPlan)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn rifiuto(
+        op: &str,
+        inputs: &[DataContract],
+        config: Value,
+        categoria: plenora_core::ErrorCategory,
+    ) -> PlenoraError {
+        assert_rifiuto!(
+            analyze_table_contract(
+                op,
+                inputs,
+                &config,
+                &mut FieldAllocator::default(),
+                &crate::Limits::default(),
+            ),
+            categoria,
+            plenora_core::ErrorPhase::Validate
         )
-        .expect_err(&format!("{op} con config invalida deve fallire"))
     }
 
     /// `InvalidPlan` emesso dalla guardia che contiene `fragment`: una
@@ -810,14 +824,30 @@ mod tests {
         // concat N-aria: 3 input ammessi.
         let (a, b) = simple_pair();
         let (_, c) = simple_pair();
-        assert!(analyze_table_contract(
+        let output = analyze_table_contract(
             "table.concat",
             &[a, b, c],
             &json!({}),
             &mut FieldAllocator::default(),
-            &crate::Limits::default()
+            &crate::Limits::default(),
         )
-        .is_ok());
+        .expect("concat ternario");
+        assert_eq!(
+            output
+                .schema
+                .fields()
+                .iter()
+                .map(|f| (f.name().as_str(), f.data_type(), f.is_nullable()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("id", &DataType::Int64, false),
+                ("name", &DataType::Utf8, true)
+            ]
+        );
+        assert_eq!(proven_rows(&output), 200);
+        assert!(output.geometries.is_empty());
+        assert_eq!(output.active_geometry, None);
+        assert_eq!(output.properties.sorted_by, None);
     }
 
     // -- utility / strings / security / dates --------------------------------
@@ -944,6 +974,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Assenza della colonna name_masked nello schema di successo con overwrite; non è un rifiuto del kernel. La colonna name è verificata per tipo e nullabilità."
+    )]
     fn hash_and_mask_ops_append_utf8() {
         let md5 = ok(
             "table.md5_hash",
@@ -1621,10 +1655,11 @@ mod tests {
         assert_field(&output, "name_a", &DataType::Utf8, true);
         assert_field(&output, "name_b", &DataType::Utf8, true);
         assert!(matches!(
-            err(
+            rifiuto(
                 "table.flatten_json",
                 &[tabular_contract()],
-                json!({"column": "name"})
+                json!({"column": "name"}),
+                plenora_core::ErrorCategory::Unsupported
             ),
             PlenoraError::Unsupported(_)
         ));
@@ -1727,29 +1762,24 @@ mod tests {
         op: &str,
         batch: &plenora_core::arrow::array::RecordBatch,
         config: &Value,
-    ) -> Result<()> {
+    ) -> Result<plenora_core::arrow::array::RecordBatch> {
         fn config_di<T: serde::de::DeserializeOwned>(config: &Value) -> T {
             serde_json::from_value(config.clone()).expect("config del kernel")
         }
         match op {
-            "table.sort" => aggregation::sort(batch, &config_di(config)).map(|_| ()),
-            "table.top_n" => aggregation::top_n(batch, &config_di(config)).map(|_| ()),
-            "table.dedup_advanced" => {
-                aggregation::dedup_advanced(batch, &config_di(config)).map(|_| ())
-            }
-            "table.rolling_window" => {
-                aggregation::rolling_window(batch, &config_di(config)).map(|_| ())
-            }
-            "table.window_function" => {
-                aggregation::window_function(batch, &config_di(config)).map(|_| ())
-            }
-            "table.statistics" => analysis::statistics(batch, &config_di(config)).map(|_| ()),
-            "table.aggregate" => aggregation::aggregate(batch, &config_di(config)).map(|_| ()),
+            "table.sort" => aggregation::sort(batch, &config_di(config)),
+            "table.top_n" => aggregation::top_n(batch, &config_di(config)),
+            "table.dedup_advanced" => aggregation::dedup_advanced(batch, &config_di(config)),
+            "table.rolling_window" => aggregation::rolling_window(batch, &config_di(config)),
+            "table.window_function" => aggregation::window_function(batch, &config_di(config)),
+            "table.statistics" => analysis::statistics(batch, &config_di(config)),
+            "table.aggregate" => aggregation::aggregate(batch, &config_di(config)),
             altro => panic!("operazione {altro} fuori dall'oracolo"),
         }
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn l_analisi_rifiuta_le_chiavi_d_ordine_che_il_kernel_rifiuta() {
         // Ogni operazione che ordina per una colonna della config, o che ne
         // legge una come chiave di partizione testuale: l'analisi accetta un
@@ -1783,15 +1813,35 @@ mod tests {
                 "table.window_function",
                 json!({"column": "v", "function": "cumsum", "group_by": "o"}),
             ),
-            ("table.statistics", json!({"column": "v", "group_by": "o"})),
+            (
+                "table.statistics",
+                json!({"column": "v", "group_by": "o", "stats": ["count"]}),
+            ),
             (
                 "table.aggregate",
                 json!({"group_by": ["o"], "aggregations": [{"column": "v", "function": "sum"}]}),
             ),
         ];
-        let mut divergenze = Vec::new();
         for (tipo, batch) in batch_per_tipo() {
             let contratto = DataContract::tabular(batch.schema());
+            // Dominio delle schede sort/distinct; il corpus usa timestamp
+            // rappresentabili e decimali con scala 2.
+            let ammesso = match batch.column(2).data_type() {
+                DataType::Int64
+                | DataType::UInt64
+                | DataType::Float64
+                | DataType::Utf8
+                | DataType::Binary
+                | DataType::Boolean
+                | DataType::Date32
+                | DataType::Date64
+                | DataType::Timestamp(_, _)
+                | DataType::Decimal128(_, _) => true,
+                DataType::Dictionary(key, value) => {
+                    **key == DataType::Int32 && **value == DataType::Utf8
+                }
+                _ => false,
+            };
             for (op, config) in &casi {
                 let analisi = analyze_table_contract(
                     op,
@@ -1801,16 +1851,79 @@ mod tests {
                     &crate::Limits::default(),
                 );
                 let kernel = esegui_kernel(op, &batch, config);
-                if analisi.is_ok() != kernel.is_ok() {
-                    divergenze.push(format!(
-                        "{op} {config} su {tipo}: analisi {}, kernel {}",
-                        analisi.map_or_else(|e| format!("rifiuta ({e})"), |_| "accetta".into()),
-                        kernel.map_or_else(|e| format!("rifiuta ({e})"), |()| "accetta".into()),
-                    ));
+                if !ammesso {
+                    assert_rifiuto!(
+                        analisi,
+                        plenora_core::ErrorCategory::InvalidPlan,
+                        plenora_core::ErrorPhase::Validate
+                    );
+                    assert_rifiuto!(
+                        kernel,
+                        plenora_core::ErrorCategory::Schema,
+                        plenora_core::ErrorPhase::Validate
+                    );
+                    continue;
                 }
+                let ordinato = crate::select_rows(&batch, &[1, 0]).unwrap();
+                let atteso = match *op {
+                    "table.sort" | "table.dedup_advanced" => ordinato,
+                    "table.top_n" => crate::select_rows(&batch, &[1]).unwrap(),
+                    "table.aggregate" => plenora_core::arrow::array::RecordBatch::try_new(
+                        Arc::new(Schema::new(vec![
+                            batch.schema().field(2).clone(),
+                            Field::new("v", DataType::Float64, true),
+                        ])),
+                        if batch.column(2).data_type() == &DataType::Boolean {
+                            vec![batch.column(2).clone(), batch.column(0).clone()]
+                        } else {
+                            vec![
+                                ordinato.column(2).clone(),
+                                Arc::new(plenora_core::arrow::array::Float64Array::from(vec![
+                                    2.0, 1.0,
+                                ])),
+                            ]
+                        },
+                    )
+                    .unwrap(),
+                    _ => {
+                        let (base, name, values) = match *op {
+                            "table.rolling_window" if config.get("order_column").is_some() => {
+                                (ordinato, "r", vec![2.0, 1.5])
+                            }
+                            "table.rolling_window" => (batch.clone(), "r", vec![1.0, 2.0]),
+                            "table.window_function" if config["function"] == "rank" => {
+                                (ordinato, "v_rank", vec![2.0, 1.0])
+                            }
+                            "table.window_function" => (batch.clone(), "v_cumsum", vec![1.0, 2.0]),
+                            "table.statistics" => (batch.clone(), "v_count", vec![1.0, 1.0]),
+                            _ => panic!("scenario senza atteso"),
+                        };
+                        let mut fields: Vec<Field> = base
+                            .schema()
+                            .fields()
+                            .iter()
+                            .map(|f| f.as_ref().clone())
+                            .collect();
+                        fields.push(Field::new(name, DataType::Float64, true));
+                        let mut columns = base.columns().to_vec();
+                        columns.push(Arc::new(plenora_core::arrow::array::Float64Array::from(
+                            values,
+                        )));
+                        plenora_core::arrow::array::RecordBatch::try_new(
+                            Arc::new(Schema::new(fields)),
+                            columns,
+                        )
+                        .unwrap()
+                    }
+                };
+                assert_eq!(
+                    analisi.expect("tipo ammesso").schema,
+                    atteso.schema(),
+                    "{op}: {tipo}"
+                );
+                assert_successo!(kernel, atteso);
             }
         }
-        assert!(divergenze.is_empty(), "{}", divergenze.join("\n"));
     }
 
     #[test]
@@ -2051,6 +2164,10 @@ mod tests {
     // -- columns / cleansing ---------------------------------------------------
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Assenza di geom dopo drop_columns riuscito; si verificano separatamente geometrie e contratto tabellare. field_with_name è una ricerca Arrow, non l’esito del kernel."
+    )]
     fn drop_columns_removes_geometry_and_becomes_tabular() {
         let output = ok(
             "table.drop_columns",
@@ -3371,16 +3488,18 @@ mod tests {
 
     #[test]
     fn pivot_and_transpose_are_explicitly_unsupported() {
-        let pivot = err(
+        let pivot = rifiuto(
             "table.pivot",
             &[tabular_contract()],
             json!({"index_col": "id", "pivot_col": "name", "value_col": "value"}),
+            plenora_core::ErrorCategory::Unsupported,
         );
         assert!(matches!(pivot, PlenoraError::Unsupported(_)), "{pivot}");
-        let transpose = err(
+        let transpose = rifiuto(
             "table.transpose",
             &[tabular_contract()],
             json!({"id_column": "id"}),
+            plenora_core::ErrorCategory::Unsupported,
         );
         assert!(
             matches!(transpose, PlenoraError::Unsupported(_)),
@@ -3565,6 +3684,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Assenza della sorgente st dopo unnest riuscito con drop_source predefinito; i campi espansi sono verificati per tipo e nullabilità."
+    )]
     fn unnest_expands_struct_fields() {
         let output = ok("table.unnest", &[geo_contract()], json!({"column": "st"}));
         assert!(
@@ -3716,6 +3839,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Assenza della chiave destra rid dopo join riuscito; colonne risultanti e geometria sono verificate separatamente, non è un rifiuto di produzione."
+    )]
     fn join_suffixes_columns_and_forces_nullable() {
         let output = ok(
             "table.join",
@@ -3834,6 +3961,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Assenza della chiave rid dopo asof_join riuscito; campi, numero righe e ordinamento del contratto sono verificati separatamente."
+    )]
     fn asof_join_keeps_left_rows_and_appends_right_columns() {
         let output = ok(
             "table.asof_join",
@@ -4045,7 +4176,7 @@ mod tests {
         );
         let kernel =
             crate::metadata_schema_input("table.union_distinct", &[&left.schema, &right.schema])
-                .unwrap_err();
+                .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert!(matches!(analysis, PlenoraError::InvalidPlan(_)));
         assert!(matches!(kernel, PlenoraError::Schema(_)));
         for error in [analysis, kernel] {
@@ -4411,6 +4542,212 @@ mod tests {
             );
         }
 
+        /// Schemi attesi delle fixture, ricavati dalle schede, senza chiamare
+        /// analisi o kernel. Un nuovo scenario richiede un ramo esplicito.
+        #[allow(clippy::too_many_lines)]
+        fn schema_atteso(op: &str, inputs: &[DataContract], config: &Value) -> Schema {
+            let source = &inputs[0].schema;
+            let mut fields: Vec<Field> =
+                source.fields().iter().map(|f| f.as_ref().clone()).collect();
+            let mut metadata = source.metadata().clone();
+            let mut add = Vec::new();
+            match op {
+                "table.sort"
+                | "table.distinct"
+                | "table.dedup_advanced"
+                | "table.filter"
+                | "table.sample"
+                | "table.fill_na"
+                | "table.replace"
+                | "table.assert_schema"
+                | "table.assert_not_null"
+                | "table.assert_unique"
+                | "table.assert_range"
+                | "table.assert_regex"
+                | "table.assert_cardinality"
+                | "table.assert_metadata"
+                | "table.semi_join"
+                | "table.anti_join"
+                | "table.assert_foreign_key"
+                | "table.intersect"
+                | "table.except" => {}
+                "table.add_row_number" => {
+                    add.push(Field::new("row_number", DataType::Int64, false));
+                }
+                "table.rename" => fields[1] = fields[1].clone().with_name("label"),
+                "table.drop_columns" => {
+                    fields.remove(3);
+                }
+                "table.reorder_columns" => {
+                    let name = fields.remove(1);
+                    fields.insert(0, name);
+                }
+                "table.concat_columns" => {
+                    add.push(Field::new("concatenated", DataType::Utf8, true));
+                }
+                "table.split_column" => add.push(Field::new("first", DataType::Utf8, true)),
+                "table.type_cast" => fields[0] = Field::new("id", DataType::Utf8, true),
+                "table.lookup" | "table.string_pad" | "table.text_normalize" => {
+                    fields[1] = Field::new("name", DataType::Utf8, true);
+                }
+                "table.conditional" => {
+                    let numeric = config["conditions"][0]["result"].is_number()
+                        && config["default_value"].is_number();
+                    add.push(Field::new(
+                        "result",
+                        if numeric {
+                            DataType::Float64
+                        } else {
+                            DataType::Utf8
+                        },
+                        numeric
+                            || config["conditions"][0]["result"].is_null()
+                            || config["default_value"].is_null(),
+                    ));
+                }
+                "table.bin" => add.push(Field::new("value_bin", DataType::Utf8, true)),
+                "table.statistics" => {
+                    for suffix in ["count", "min", "max", "mean", "median", "std"] {
+                        add.push(Field::new(
+                            format!("value_{suffix}"),
+                            DataType::Float64,
+                            true,
+                        ));
+                    }
+                }
+                "table.date_extract" => {
+                    for name in ["date_year", "date_month"] {
+                        add.push(Field::new(name, DataType::Int64, true));
+                    }
+                }
+                "table.string_length" => add.push(Field::new("name_length", DataType::Int64, true)),
+                "table.string_extract" => add.push(Field::new("x", DataType::Utf8, true)),
+                "table.md5_hash" => add.push(Field::new("md5_hash", DataType::Utf8, false)),
+                "table.sha256_hash" => add.push(Field::new("sha256_hash", DataType::Utf8, false)),
+                "table.mask_data" => add.push(Field::new("name_masked", DataType::Utf8, true)),
+                "table.uuid_generator" => add.push(Field::new("uuid", DataType::Utf8, false)),
+                "table.date_format" => add.push(Field::new("df", DataType::Utf8, true)),
+                "table.date_add" => add.push(Field::new("da", DataType::Utf8, true)),
+                "table.date_diff" => add.push(Field::new("dd", DataType::Float64, true)),
+                "table.timezone_convert" => add.push(Field::new("tc", DataType::Utf8, true)),
+                "table.aggregate" => {
+                    fields = vec![
+                        fields[1].clone(),
+                        Field::new("value", DataType::Float64, true),
+                        Field::new("id", DataType::Int64, false),
+                    ];
+                }
+                "table.rolling_window" => add.push(Field::new("rw", DataType::Float64, true)),
+                "table.window_function" => {
+                    add.push(Field::new("value_rank", DataType::Float64, true));
+                }
+                "table.coalesce" => add.push(Field::new("c", DataType::Float64, true)),
+                "table.formula" => add.push(Field::new(
+                    "f",
+                    if config["formula"] == "value * 2" {
+                        DataType::Float64
+                    } else {
+                        DataType::Utf8
+                    },
+                    true,
+                )),
+                "table.expression" => add.push(Field::new(
+                    "e",
+                    if config["output_type"] == "text" {
+                        DataType::Utf8
+                    } else {
+                        DataType::Float64
+                    },
+                    true,
+                )),
+                "table.flatten_json" => add.push(Field::new("json_a", DataType::Utf8, true)),
+                "table.melt" => {
+                    fields = vec![
+                        fields[0].clone(),
+                        Field::new("variable", DataType::Utf8, false),
+                        Field::new("value_1", DataType::Float64, true),
+                    ];
+                }
+                "table.explode" => fields[1] = Field::new("lst", DataType::Int64, true),
+                "table.unnest" => {
+                    fields.pop();
+                    add.extend([
+                        Field::new("a", DataType::Int64, true),
+                        Field::new("b", DataType::Utf8, true),
+                    ]);
+                }
+                "table.concat" | "table.union_distinct" | "table.concat_by_name" => {
+                    metadata.extend(inputs[1].schema.metadata().clone());
+                }
+                "table.join" | "table.asof_join" | "table.cross_join" | "table.fuzzy_join" => {
+                    let right = &inputs[1].schema;
+                    metadata.extend(right.metadata().clone());
+                    for field in &mut fields {
+                        let name = field.name();
+                        let rename = match op {
+                            "table.join" => (name != "id").then(|| format!("{name}_L")),
+                            "table.fuzzy_join" => (name != "name").then(|| format!("{name}_L")),
+                            "table.cross_join" => right
+                                .fields()
+                                .iter()
+                                .any(|f| f.name() == name)
+                                .then(|| format!("{name}_x")),
+                            _ => None,
+                        };
+                        *field = field.clone().with_nullable(true);
+                        if let Some(name) = rename {
+                            *field = field.clone().with_name(name);
+                        }
+                    }
+                    for field in right.fields() {
+                        let name = field.name();
+                        if matches!(op, "table.join" | "table.asof_join") && name == "rid" {
+                            continue;
+                        }
+                        let out = match op {
+                            "table.join" | "table.fuzzy_join" => format!("{name}_R"),
+                            "table.cross_join"
+                                if source.fields().iter().any(|f| f.name() == name) =>
+                            {
+                                format!("{name}_y")
+                            }
+                            "table.asof_join"
+                                if source.fields().iter().any(|f| f.name() == name) =>
+                            {
+                                format!("{name}_R")
+                            }
+                            _ => name.clone(),
+                        };
+                        add.push(field.as_ref().clone().with_name(out).with_nullable(true));
+                    }
+                    if op == "table.fuzzy_join" {
+                        add.push(Field::new("score", DataType::Float64, false));
+                    }
+                }
+                "table.table_diff" => {
+                    metadata.extend(inputs[1].schema.metadata().clone());
+                    fields = vec![
+                        Field::new("id", DataType::Int64, true),
+                        Field::new("name", DataType::Utf8, true),
+                        Field::new("value", DataType::Float64, true),
+                        Field::new("_diff_status", DataType::Utf8, false),
+                        Field::new("_diff_columns", DataType::Utf8, true),
+                        Field::new("_diff_old_values", DataType::Utf8, true),
+                    ];
+                }
+                "table.reconcile" => {
+                    metadata.clear();
+                    fields = vec![
+                        Field::new("metric", DataType::Utf8, false),
+                        Field::new("value", DataType::UInt64, false),
+                    ];
+                }
+                _ => panic!("scenario senza schema atteso: {op}"),
+            }
+            fields.extend(add);
+            Schema::new_with_metadata(fields, metadata)
+        }
+
         /// Confronta lo schema dedotto da `analyze_table_contract` sugli
         /// `inputs` con quello prodotto davvero dal kernel.
         fn check_schema(
@@ -4419,7 +4756,9 @@ mod tests {
             config: &Value,
             expected: Result<RecordBatch>,
         ) -> DataContract {
+            let oracle = schema_atteso(op, inputs, config);
             let expected = expected.unwrap_or_else(|e| panic!("kernel {op}: {e}"));
+            assert_eq!(expected.schema().as_ref(), &oracle, "schema kernel {op}");
             let analyzed = analyze_table_contract(
                 op,
                 inputs,
@@ -4428,6 +4767,7 @@ mod tests {
                 &crate::Limits::default(),
             )
             .unwrap_or_else(|e| panic!("analyze {op}: {e}"));
+            assert_eq!(analyzed.schema.as_ref(), &oracle, "schema analisi {op}");
             // Le divergenze si raccolgono tutte e si riportano insieme alla
             // fine del test (`riporta_divergenze`), non alla prima.
             if signature(&analyzed.schema) != signature(&expected.schema()) {
@@ -4493,7 +4833,7 @@ mod tests {
             let expected = kernel(left, right, &config);
             // La fixture senza metadati dichiara `geom` solo nel contratto:
             // anche il secondo ramo che la possiede deve dichiararla.
-            let right_contract = if right.schema().field_with_name("geom").is_ok() {
+            let right_contract = if right.schema().fields().iter().any(|f| f.name() == "geom") {
                 geo_input(right)
             } else {
                 DataContract::tabular(right.schema())
@@ -4876,7 +5216,11 @@ mod tests {
                     &mut FieldAllocator::default(),
                     &crate::Limits::default(),
                 );
-                assert!(analisi.is_err(), "analisi {op}");
+                assert_rifiuto!(
+                    analisi,
+                    plenora_core::ErrorCategory::InvalidPlan,
+                    plenora_core::ErrorPhase::Validate
+                );
                 let kernel = match op {
                     "table.concat" => joins::concat(sinistra, destra, &cfg(&config), &limits),
                     "table.union_distinct" => {

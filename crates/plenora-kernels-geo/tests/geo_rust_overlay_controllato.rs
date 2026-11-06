@@ -277,8 +277,17 @@ fn griglia_oltre_il_centimetro_e_l_unico_rifiuto() {
     let payload = invalido(20_000_000.0)
         .to_wkb(CoordDimensions::xy())
         .expect("wkb");
-    assert!(make_valid_wkb(&payload, MetodoAdapter::Structure, true, precisione()).is_ok());
-    assert!(make_valid_wkb(&payload, MetodoAdapter::Linework, true, precisione()).is_ok());
+    for (adapter, method) in [
+        (MetodoAdapter::Structure, RepairMethod::Structure),
+        (MetodoAdapter::Linework, RepairMethod::Linework),
+    ] {
+        let bytes = make_valid_wkb(&payload, adapter, true, precisione()).expect("adapter");
+        assert_eq!(
+            geometry_from_wkb(&bytes).expect("WKB uscita"),
+            make_valid_geometry_rust(&invalido(20_000_000.0), method, true, CENTIMETRO)
+                .expect("percorso geometria")
+        );
+    }
     let lontano = spostato(10.0, 2_f64.powi(45))
         .to_wkb(CoordDimensions::xy())
         .expect("wkb");

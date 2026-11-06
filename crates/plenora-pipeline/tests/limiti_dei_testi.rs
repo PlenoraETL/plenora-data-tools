@@ -4,6 +4,11 @@
 //! calcolati dalle colonne nel kernel (`ResourceLimit`), prima o durante il
 //! passo, mai un testo oltre il limite nell'uscita.
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+use plenora_core::{ErrorCategory as Categoria, ErrorPhase as Fase};
+
 use std::sync::Arc;
 
 use plenora_core::arrow::array::{Array, RecordBatch, StringArray};
@@ -11,6 +16,23 @@ use plenora_core::arrow::schema::{DataType, Field, Schema, SchemaRef};
 use plenora_core::{PlenoraError, Result};
 use plenora_pipeline::{Esito, LimitiParziali, Passo, Pipeline};
 use serde_json::{json, Value};
+
+/// Atteso indipendente con schema e valori testuali espliciti.
+fn atteso_testuale(campi: &[(&str, bool)], colonne: Vec<Vec<Option<&str>>>) -> RecordBatch {
+    RecordBatch::try_new(
+        Arc::new(Schema::new(
+            campi
+                .iter()
+                .map(|(nome, nullable)| Field::new(*nome, DataType::Utf8, *nullable))
+                .collect::<Vec<_>>(),
+        )),
+        colonne
+            .into_iter()
+            .map(|v| Arc::new(StringArray::from(v)) as plenora_core::arrow::array::ArrayRef)
+            .collect(),
+    )
+    .expect("fixture testuale")
+}
 
 /// Due colonne di testo: `s` (tre righe di 8 byte) e `p` (un pattern).
 fn tabella() -> RecordBatch {
@@ -168,11 +190,15 @@ fn i_testi_e_i_pattern_della_config_si_rifiutano_in_validazione() {
             let tabella = tabella();
             let schemi: Vec<(&str, SchemaRef)> =
                 vec![("t", tabella.schema()), ("u", tabella.schema())];
-            let errore = pipeline.validate(&schemi).expect_err(op);
+            let errore = assert_rifiuto!(
+                pipeline.validate(&schemi),
+                Categoria::InvalidPlan,
+                Fase::Validate
+            );
             assert!(errore.to_string().contains(frammento), "{op}: {errore}");
             continue;
         }
-        let errore = valida(&pipeline).expect_err(op);
+        let errore = assert_rifiuto!(valida(&pipeline), Categoria::InvalidPlan, Fase::Validate);
         assert!(
             matches!(errore, PlenoraError::InvalidPlan(_))
                 && errore.to_string().contains(frammento),
@@ -257,6 +283,7 @@ fn un_pattern_calcolato_dalle_colonne_oltre_il_limite_ferma_il_passo() {
 /// `mapping`, `flatten_json` senza `output_columns`) e `table_diff`: la
 /// chiamata diretta con limiti piccoli.
 #[test]
+#[allow(clippy::too_many_lines)] // Tre operazioni con attesi completi di schema e valori.
 fn pivot_table_diff_e_flatten_json_fermano_i_testi_oltre_il_limite() {
     use plenora_kernels_table::{analysis, reshape, Limits};
     let limiti = Limits {
@@ -273,8 +300,18 @@ fn pivot_table_diff_e_flatten_json_fermano_i_testi_oltre_il_limite() {
         matches!(errore, PlenoraError::ResourceLimit(_)),
         "{errore:?}"
     );
-    assert!(reshape::pivot(&tabella, &pivot, &Limits::default()).is_ok());
-    // `_diff_old_values` unisce `s` e `p` della riga cambiata: 8 + 1 + 14.
+    assert_eq!(
+        reshape::pivot(&tabella, &pivot, &Limits::default()).expect("pivot"),
+        atteso_testuale(
+            &[("k", false), ("a", true), ("b", true)],
+            vec![
+                vec![Some("a"), Some("b")],
+                vec![Some("abcdefgh,ijklmnop"), None],
+                vec![None, Some("qrstuvwx")]
+            ]
+        )
+    );
+    // `_diff_old_values` conserva il vecchio `p` cambiato: 14 byte.
     let diversa = RecordBatch::try_new(
         tabella.schema(),
         vec![
@@ -310,7 +347,27 @@ fn pivot_table_diff_e_flatten_json_fermano_i_testi_oltre_il_limite() {
         matches!(errore, PlenoraError::ResourceLimit(_)),
         "{errore:?}"
     );
-    assert!(reshape::table_diff(&sinistra, &destra, &diff, &Limits::default()).is_ok());
+    assert_eq!(
+        reshape::table_diff(&sinistra, &destra, &diff, &Limits::default()).expect("diff"),
+        atteso_testuale(
+            &[
+                ("s", true),
+                ("k", true),
+                ("p", true),
+                ("_diff_status", false),
+                ("_diff_columns", true),
+                ("_diff_old_values", true)
+            ],
+            vec![
+                vec![Some("abcdefgh"), Some("ijklmnop"), Some("qrstuvwx")],
+                vec![Some("abcdefgh"), Some("ijklmnop"), Some("qrstuvwx")],
+                vec![Some("x"), Some("y"), Some("z")],
+                vec![Some("MODIFIED"); 3],
+                vec![Some("p"); 3],
+                vec![Some("(a|b|c|d|e|f)+"); 3]
+            ]
+        )
+    );
     // Un oggetto annidato si riscrive come testo JSON.
     let json_tabella = RecordBatch::try_new(
         Arc::new(Schema::new(vec![Field::new("j", DataType::Utf8, false)])),
@@ -326,7 +383,16 @@ fn pivot_table_diff_e_flatten_json_fermano_i_testi_oltre_il_limite() {
         matches!(errore, PlenoraError::ResourceLimit(_)),
         "{errore:?}"
     );
-    assert!(analysis::flatten_json(&json_tabella, &flatten, &Limits::default()).is_ok());
+    assert_eq!(
+        analysis::flatten_json(&json_tabella, &flatten, &Limits::default()).expect("flatten"),
+        atteso_testuale(
+            &[("j", false), ("j_a", true)],
+            vec![
+                vec![Some("{\"a\": [1, 2, 3, 4, 5, 6, 7, 8]}")],
+                vec![Some("[1,2,3,4,5,6,7,8]")]
+            ]
+        )
+    );
 }
 
 /// Le etichette automatiche di `bin` scrivono i bordi interi: con bordi
@@ -351,5 +417,22 @@ fn le_etichette_automatiche_di_bin_rispettano_il_limite() {
         matches!(errore, PlenoraError::ResourceLimit(_)),
         "{errore:?}"
     );
-    assert!(analysis::bin(&tabella, &config).is_ok());
+    let etichette = [
+        format!("({}, 0]", -1.002_000_000_000_000_1e300_f64),
+        format!("(0, {}]", 1e300_f64),
+    ];
+    let atteso = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("v", DataType::Float64, false),
+            Field::new("v_bin", DataType::Utf8, true),
+        ])),
+        vec![
+            tabella.column(0).clone(),
+            Arc::new(StringArray::from(
+                etichette.iter().map(String::as_str).collect::<Vec<_>>(),
+            )),
+        ],
+    )
+    .expect("fixture bin");
+    assert_eq!(analysis::bin(&tabella, &config).expect("bin"), atteso);
 }

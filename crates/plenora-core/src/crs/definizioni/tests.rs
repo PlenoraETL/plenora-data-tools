@@ -174,6 +174,7 @@ fn ogni_crs_coincide_con_oracolo_e_tabelle_operative() {
                 crate::crs::CrsKind::Projected => "ProjectedCRS",
             }
         );
+        assert_eq!(attesa.sistema.assi.len(), integrato.assi.len());
         for (a, b) in attesa.sistema.assi.iter().zip(integrato.assi) {
             assert_eq!(
                 a.direzione,

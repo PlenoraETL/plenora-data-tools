@@ -1899,3 +1899,109 @@ altro. Piani indipendenti non condividono il cursore.
 
 **Rientro.** Derivare gli ID pubblici dalla lineage interna, registrando una
 sola volta tutti i campi d'ingresso e allineando `FieldOrigin` e metadati.
+
+## Guardia degli esiti: analisi statica e revisione
+
+**Regola.** Una prova deve fissare il successo atteso oppure la categoria
+del rifiuto e, per gli errori pubblici, la fase. Il messaggio è un controllo
+aggiuntivo. La guardia non certifica da sola la correttezza dell'oracolo.
+
+**Ambito.** Clippy risolve sul codice compilato i metodi `Result::is_err`,
+`is_ok`, `unwrap_err` ed `err`, inclusi alias di tipo e chiamate UFCS.
+Le radici esentano esplicitamente la produzione con un attributo motivato;
+gli ingressi `#[cfg(test)]` e `#[test]` riattivano il lint. La guardia Python
+controlla questa riattivazione. Le crate di integrazione ereditano i divieti
+del workspace. Le eccezioni di prova sono `expect` motivati nei sorgenti.
+`Option::is_none` non distingue un risultato convertito da una proprietà
+opzionale: la conversione che perde l'errore è già vietata tramite `err`.
+L'esenzione di produzione riguarda anche i metodi geozero nella stessa
+configurazione: il divieto dei lettori WKT/CSV resta coperto dal censimento
+dei sorgenti e dalle sonde degli alias in `consumatore_esterno.rs`.
+
+Per `matches!` la guardia usa token Rust, commenti esclusi e letterali
+opachi. Copre le forme dirette elencate nelle prove
+`scripts/test_check_esito_unico.py` e `scripts/test_rust_esito_tokens.py`:
+jolly e alternative di `Err`, import diretti da `std`/`core` (anche
+raggruppati e con `self as`), alias diretti di `matches`, delimitatori
+diversi e moduli di prova esterni, anche inclusi con `#[path]`. Controlla
+anche l'errore immediatamente ignorato con `continue` e il solo messaggio
+nelle forme dirette, come `e.to_string().contains("bad")`: spazi, a capo
+e commenti non cambiano l'esito. Un alias diretto resta sorvegliato
+nell'intero file, anche in un altro scope.
+
+L'AST Python controlla le forme dirette provate di import con alias,
+`pytest.raises`, gestori generici, asserzioni sul testo dell'errore e
+`zip(strict=True)`. Per un gestore generico richiede un rilancio o
+un'asserzione di categoria nel corpo diretto. Non esegue import,
+decoratori, monkey patch o assegnazioni dinamiche di funzioni.
+
+Sono **fuori ambito**, e le prove della guardia ne documentano la mancata
+segnalazione:
+
+- alias concatenati di `Err`: `use std::result::Result::Err as E; use E as F; matches!(r, F(_));`;
+- alias concatenati di `matches`: `use std::matches as E; use E as F; F!(r, Err(_));`;
+- metodi intermedi fra `to_string()` e `contains`, per esempio
+  `assert!(e.to_string().as_str().contains("bad"))` o
+  `assert!(e.to_string().trim().contains("bad"))`;
+- macro che costruiscono forme vietate, per esempio
+  `macro_rules! esito { ($p:pat) => { matches!(r, $p) }; } esito!(Err(_));`:
+  la guardia a token non espande le macro;
+- trait propri che reimplementano `is_err`, per esempio
+  `trait Esito { fn is_err(&self) -> bool; }` con una implementazione
+  `matches!(self, Self::Fallito)` su un enum proprio: Clippy vieta i metodi
+  di `Result`, non quelli di questo trait;
+- casi semantici: per esempio `controlla(&altro); usa(errore);`, dove
+  l'helper controlla un errore diverso, oppure
+  `if condizione { assert_eq!(e.category(), Categoria::Schema); }`, dove
+  l'asserzione potrebbe non essere eseguita. Restano fuori anche re-export
+  fra moduli, `cfg` composte (la CI non compila tutte le configurazioni),
+  codice generato e assegnazioni dinamiche Python come `z = zip; z(a, b)`.
+
+**Hazard (deviazione).** Queste forme possono nascondere un rifiuto non
+tipizzato o un'alternativa fra successo ed errore. Un helper può asserire
+la categoria di un altro errore; un booleano di categoria può essere
+calcolato e scartato; due errori possono avere categorie uguali senza che
+la fixture ne fissi una. La guardia non dimostra flusso dei valori,
+dominanza delle asserzioni o semantica dei chiamati. Un confronto
+differenziale può inoltre condividere un difetto con il riferimento.
+Il passaggio di Clippy e della guardia non rende validi questi oracoli.
+
+**Difesa e rientro.** Usare gli aiuti comuni `assert_rifiuto!` e
+`assert_successo!`, con attesi indipendenti, e rivedere scenario, categoria,
+fase e valori. Le eccezioni dei classificatori di fixture, dei panici
+intenzionali e dei confronti differenziali devono spiegare quale controllo
+completo le affianca. L'aiuto Python che confronta le rappresentazioni
+dello stesso messaggio ha un'eccezione puntuale: i chiamanti fissano la
+classe in `pytest.raises`. Alias concatenati e catene intermedie restano
+limiti dichiarati: non si estende l'inseguimento euristico dei token.
+Il rientro richiede, per esempio, una guardia su un parser Rust completo
+con risoluzione dei nomi ed espansione delle macro; per i casi semantici
+serve anche l'analisi del flusso e dei chiamati, oppure API di prova
+tipizzate che impediscano di scambiare l'errore osservato o omettere
+l'atteso. Fino ad allora la revisione resta obbligatoria per questi casi.
+
+## Concave hull: regola di scavo
+
+**Regola.** `geo.concave_hull` dovrebbe scegliere un candidato più vicino
+al lato scavato che ai lati adiacenti, secondo la regola concaveman della
+[scheda](schede/geo.concave_hull.md). Il vendor attuale diverge dal modello
+razionale indipendente che enumera coda, orientamenti e pareggi.
+
+**Ambito.** Riproduzione nel runner con `concavity = 2`,
+`length_threshold = 0`, EPSG:32632 e dodici punti relativi a
+(500000, 5000000): `(10*i, 10*(i*i mod 7))`, per `i` da 0 a 11.
+La prova `concave_hull_rispetta_il_modello_di_scavo` in
+`crates/plenora-pipeline/tests/geo_unari.rs` è ignorata esplicitamente;
+le altre sedici trasformazioni restano attive con gli stessi oracoli.
+
+**Hazard.** L'operazione riesce con un bordo non raggiungibile secondo
+la regola documentata, senza segnalare errore. Non è una tolleranza di
+1 cm: il bordo può differire a scala metrica. Il modello ammette il bordo
+(indici dei punti, chiusura implicita) `0,1,2,5,9,11,10,8,7,6,4,3`;
+il risultato osservato è `7,8,11,10,9,5,2,1,0,3,4,6`.
+
+**Rientro.** Correggere il vendor in una PR separata, verificando in
+particolare l'aggiornamento delle adiacenze dei lati dopo lo scavo;
+la prova ignorata deve passare senza modificare l'atteso indipendente.
+Rimuovere quindi `ignore` e questa deviazione. I dettagli dell'oracolo
+sono in `crates/plenora-pipeline/tests/comune_geo/genera_trasformazioni.py`.

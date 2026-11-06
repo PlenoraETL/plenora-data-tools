@@ -1117,6 +1117,7 @@ impl<'a> FastProgram<'a> {
 
     /// Come [`Self::run`] con il tipo ricavato dallo schema: usato dai
     /// test-oracolo, che confrontano fast e generico sulla stessa config.
+    #[deny(clippy::disallowed_methods)]
     #[cfg(test)]
     pub fn run_auto(
         &self,
@@ -1129,6 +1130,7 @@ impl<'a> FastProgram<'a> {
     }
 
     /// Come [`Self::run_auto`], con il conteggio delle divisioni per zero.
+    #[deny(clippy::disallowed_methods)]
     #[cfg(test)]
     pub fn run_auto_con_effetti(
         &self,

@@ -3,6 +3,7 @@
 
 use plenora_core::arrow::array::types::Int32Type;
 use plenora_core::arrow::array::{Array, Int32Array, RunArray};
+use plenora_core::arrow::ArrowError;
 
 #[test]
 fn run_end_rifiuta_lunghezza_e_offset_non_coperti() {
@@ -18,6 +19,16 @@ fn run_end_rifiuta_lunghezza_e_offset_non_coperti() {
             .offset(offset)
             .len(len)
             .build();
-        assert_eq!(risultato.is_ok(), valido, "copertura del padre");
+        match (valido, risultato) {
+            (true, Ok(dati)) => {
+                assert_eq!(dati.offset(), offset, "offset del padre");
+                assert_eq!(dati.len(), len, "lunghezza del padre");
+            }
+            (false, Err(ArrowError::InvalidArgumentError(_))) => {}
+            (atteso, ottenuto) => panic!(
+                "copertura del padre: atteso valido={atteso}, ottenuto {}",
+                ottenuto.map_or("un rifiuto di altra variante", |_| "un successo")
+            ),
+        }
     }
 }

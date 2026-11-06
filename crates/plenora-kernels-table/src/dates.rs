@@ -1129,6 +1129,7 @@ pub fn verifica_fuso_sorgente(data_type: &DataType, source_timezone: Tz) -> Resu
     Ok(())
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::arrow::array::{ArrayRef, Int64Array};
@@ -1144,6 +1145,10 @@ mod tests {
     /// per gli specificatori a larghezza fissa il limite e' la larghezza
     /// osservata, non una stima.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Oracolo indipendente: classifica il fallimento di formattazione della fixture, poi confronta il risultato completo."
+    )]
     fn byte_massimi_scritti_e_un_limite_superiore_esatto_per_campo() {
         use std::fmt::Write as _;
         assert_eq!(byte_massimi_scritti("%Y%m"), 9);
@@ -1248,6 +1253,10 @@ mod tests {
     type RowOutcome<'a, T> = std::result::Result<Option<T>, (&'static str, Option<&'a str>)>;
 
     /// Chiude l'oracolo: rifiuti row-scoped se ce ne sono, altrimenti i valori.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Oracolo indipendente: raccoglie tutti i rifiuti per riga prima di restituire valori o diagnostica completa."
+    )]
     fn collect_or_reject<T>(outcomes: Vec<RowOutcome<'_, T>>) -> Result<Vec<Option<T>>> {
         let rejections = outcomes
             .iter()
@@ -1586,12 +1595,16 @@ mod tests {
 
     /// L'analisi rifiuta gli stessi formati del kernel.
     #[test]
+    // Matrice di formati in lettura e scrittura, con attesi per ogni operazione.
+    #[allow(clippy::too_many_lines)]
     fn l_analisi_rifiuta_i_formati_che_il_kernel_rifiuta() {
+        use plenora_core::arrow::array::{ArrayRef, Float64Array, Int64Array};
         use plenora_core::contract::{DataContract, FieldAllocator};
+        use plenora_core::{ErrorCategory, ErrorPhase};
 
         let batch = date_testuali(&["2020-01-01"]);
         let contratto = DataContract::tabular(batch.schema());
-        let casi: Vec<(&str, serde_json::Value)> = ["%Q", "%z", "%Y %Z", "%C", "%Y-%m-%d"]
+        let casi = ["%Q", "%z", "%Y %Z", "%C", "%Y-%m-%d"]
             .into_iter()
             .flat_map(|formato| {
                 [
@@ -1636,9 +1649,8 @@ mod tests {
                         "column": "d", "target_type": "date", "date_format": formato}),
                     ),
                 ]
-            })
-            .collect();
-        for (op, json) in casi {
+            });
+        for (indice, (op, json)) in casi.enumerate() {
             let analisi = crate::analyze::analyze_table_contract(
                 op,
                 std::slice::from_ref(&contratto),
@@ -1654,13 +1666,58 @@ mod tests {
                 "table.date_extract" => crate::utility::date_extract(&batch, &config(json.clone())),
                 _ => crate::cleansing::type_cast(&batch, &config(json.clone())),
             };
-            // Il kernel puo' anche rifiutare le righe (DataMapping): conta solo
-            // l'errore di piano, che l'analisi deve anticipare.
-            let kernel_piano = matches!(kernel, Err(PlenoraError::InvalidPlan(_)));
+            let formato = ["%Q", "%z", "%Y %Z", "%C", "%Y-%m-%d"][indice / 7];
+            let variante = indice % 7;
+            let formato_invalido =
+                formato == "%Q" || (matches!(variante, 0 | 2) && matches!(formato, "%z" | "%Y %Z"));
+            if formato_invalido {
+                assert_rifiuto!(analisi, ErrorCategory::InvalidPlan, ErrorPhase::Validate);
+                assert_rifiuto!(kernel, ErrorCategory::InvalidPlan, ErrorPhase::Validate);
+                continue;
+            }
+            let (nome, tipo) = match variante {
+                3 => ("o", DataType::Float64),
+                5 => ("d_year", DataType::Int64),
+                6 => ("d", DataType::Utf8),
+                _ => ("o", DataType::Utf8),
+            };
+            let mut campi = batch.schema().fields().to_vec();
+            if variante != 6 {
+                campi.push(Arc::new(Field::new(nome, tipo, true)));
+            }
+            let schema_atteso = Arc::new(Schema::new(campi));
             assert_eq!(
-                analisi.is_err(),
-                kernel_piano,
-                "{op} {json}: analisi {analisi:?}, kernel {kernel:?}"
+                analisi.expect("formato staticamente valido").schema,
+                schema_atteso
+            );
+            if matches!(variante, 1 | 3 | 5 | 6) && formato != "%Y-%m-%d" {
+                assert_rifiuto!(kernel, ErrorCategory::DataMapping, ErrorPhase::Write);
+                continue;
+            }
+            let valore: ArrayRef = match variante {
+                3 => Arc::new(Float64Array::from(vec![0.0])),
+                5 => Arc::new(Int64Array::from(vec![2020])),
+                _ => {
+                    let testo = match (variante, formato) {
+                        (0 | 2 | 4, "%C") => "20",
+                        (4, "%z") => "+0000",
+                        (4, "%Y %Z") => "2020 UTC",
+                        (2, "%Y-%m-%d") => "2020-01-02",
+                        (1, "%Y-%m-%d") => "2020-01-01 00:00:00",
+                        (_, "%Y-%m-%d") => "2020-01-01",
+                        _ => panic!("successo senza atteso"),
+                    };
+                    Arc::new(StringArray::from(vec![testo]))
+                }
+            };
+            let colonne = if variante == 6 {
+                vec![valore]
+            } else {
+                vec![batch.column(0).clone(), valore]
+            };
+            assert_successo!(
+                kernel,
+                RecordBatch::try_new(schema_atteso, colonne).unwrap()
             );
         }
     }
@@ -2583,8 +2640,9 @@ mod tests {
             &mut FieldAllocator::default(),
             &crate::Limits::default(),
         );
-        assert!(analisi.is_ok(), "{analisi:?}");
+        let analisi = analisi.expect("analisi valida");
         let output = timezone_convert(&ottocento, &config).expect("offset a ore intere");
+        assert_eq!(analisi.schema, output.schema());
         assert_eq!(
             output
                 .column(1)

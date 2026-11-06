@@ -64,6 +64,7 @@ pub fn descrivi_tipo(tipo: &DataType) -> String {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

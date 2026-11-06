@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Benchmark: misura e classifica esiti, non costituisce un oracolo di prova"
+)]
 //! Validazione OGC delle uscite con molte parti e degli anelli radiali (non
 //! un gate).
 //!

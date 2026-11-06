@@ -17,6 +17,10 @@ fn documento(uscita: &Uscita) -> Value {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "join di un thread che esegue panic_any: atteso un panico, non un errore Plenora. Il contatore e la categoria internal della CLI sono verificati separatamente. Barriera di panico intenzionale: Result contiene un payload Any, senza categoria o fase. Si verifica anche che il contatore resti invariato."
+)]
 fn panico_dopo_la_base_rende_internal_barriera_no() {
     assert!(
         install(PanicPolicy::Silent),

@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Benchmark: misura e classifica esiti, non costituisce un oracolo di prova"
+)]
 //! Scalatura della validazione OGC col numero di parti di un `MultiPolygon`
 //! e di buchi di un `Polygon` (non un gate).
 //!

@@ -311,6 +311,7 @@ fn chiavi_ripetute_nel_piano() {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn come_il_riferimento_su_input_casuali(
         valori in prop::collection::vec(prop::option::weighted(0.85, "[aAΣ ]{0,2}"), 0..120),

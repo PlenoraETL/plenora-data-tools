@@ -1924,6 +1924,7 @@ fn celle_diverse(
 
 /// Chiave composta in forma testuale: e' l'oracolo dei test di equivalenza
 /// di `table_diff` e `pivot`, e non e' il percorso che quei due usano.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 fn composite_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<String> {
     let mut key = String::new();
@@ -2268,6 +2269,7 @@ pub fn table_diff(
     Ok(RecordBatch::try_new(Arc::new(schema), columns)?)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     // -------------------------------------------------------------------
@@ -3575,6 +3577,10 @@ mod tests {
     /// Oracolo indipendente di `table_diff`: stesso contratto, percorso
     /// diverso.
     #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Oracolo nelle prove: selezione delle colonne confrontabili, non asserzione sul risultato del kernel."
+    )]
     fn table_diff_reference(
         left: &RecordBatch,
         right: &RecordBatch,
@@ -3893,9 +3899,11 @@ mod tests {
                 "right_keys": ["id"],
                 "include_unchanged": valore,
             });
-            assert!(
-                serde_json::from_value::<TableDiff>(config).is_err(),
-                "include_unchanged {valore:?} accettato"
+            assert_eq!(
+                (serde_json::from_value::<TableDiff>(config))
+                    .expect_err("configurazione non valida")
+                    .classify(),
+                serde_json::error::Category::Data
             );
         }
         // Solo le due stringhe: niente forma a oggetto di serde, null,
@@ -3913,9 +3921,11 @@ mod tests {
                 "right_keys": ["id"],
                 "include_unchanged": valore,
             });
-            assert!(
-                serde_json::from_value::<TableDiff>(config).is_err(),
-                "include_unchanged {valore} accettato"
+            assert_eq!(
+                (serde_json::from_value::<TableDiff>(config))
+                    .expect_err("configurazione non valida")
+                    .classify(),
+                serde_json::error::Category::Data
             );
         }
         for (valore, atteso) in [("yes", IncludeUnchanged::Yes), ("no", IncludeUnchanged::No)] {
@@ -4381,10 +4391,12 @@ mod tests {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[path = "table_diff_oracolo.rs"]
 mod table_diff_oracolo;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[path = "pivot_oracolo.rs"]
 mod pivot_oracolo;

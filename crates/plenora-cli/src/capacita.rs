@@ -230,6 +230,7 @@ pub fn mappa_python() -> Value {
     })
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use serde_json::Value;

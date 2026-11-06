@@ -411,6 +411,7 @@ pub fn testo_datetime(locale: &NaiveDateTime) -> String {
     locale.format("%Y-%m-%dT%H:%M:%S%.f").to_string()
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -425,6 +426,8 @@ mod tests {
             verifica_tipo_temporale(&tipo, "t").expect_err("fuso non valido"),
             crate::validate_text_convertible(&tipo, "t").expect_err("fuso non valido"),
         ] {
+            assert_eq!(errore.category(), plenora_core::ErrorCategory::Schema);
+            assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
             let testo = errore.to_string();
             assert!(testo.contains("timezone"), "{testo}");
             assert!(!testo.contains("SEGRETO"), "{testo}");
@@ -532,7 +535,11 @@ mod tests {
             .expect("fuso")
             .expect("temporale");
         assert!(matches!(lettore.momento(0), Err(PlenoraError::Schema(_))));
-        assert!(lettore.testo(0).is_err());
+        assert_rifiuto!(
+            lettore.testo(0),
+            plenora_core::ErrorCategory::Schema,
+            plenora_core::ErrorPhase::Validate
+        );
     }
 
     #[test]

@@ -1921,6 +1921,7 @@ pub fn make_valid_geometry_rust_bounded(
     make_valid_geometry_rust_with_limits(geometry, method, keep_collapsed, limits, precision)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2021,6 +2022,7 @@ mod tests {
         }
         for method in [RepairMethod::Structure, RepairMethod::Linework] {
             let first = make_valid_geometry_rust(&input, method, true, PRECISION)?;
+            crate::rust_backend::assert_bowtie_repaired(&first);
             let second = make_valid_geometry_rust(&input, method, true, PRECISION)?;
             if first != second {
                 return Err(MakeValidError::InvalidOutput(
@@ -2057,11 +2059,7 @@ mod tests {
             ]),
             vec![],
         ));
-        if input.check_validation().is_err() {
-            return Err(MakeValidError::InvalidOutput(
-                "fixture non valida".to_owned(),
-            ));
-        }
+        assert_successo!(input.check_validation(), ());
         for method in [RepairMethod::Structure, RepairMethod::Linework] {
             let output = make_valid_geometry_rust(&input, method, false, PRECISION)?;
             if output != input {
@@ -2101,14 +2099,22 @@ mod tests {
             span_x: span,
             span_y: 1.0,
         };
-        assert!(checked_grid(normalizer(0.0, 20_000_000.0), &mut Bilancio::nuovo(0.01)).is_ok());
-        assert!(checked_grid(normalizer(0.0, 1_300_000.0), &mut Bilancio::nuovo(0.01)).is_ok());
+        assert_successo!(
+            checked_grid(normalizer(0.0, 20_000_000.0), &mut Bilancio::nuovo(0.01)),
+            ()
+        );
+        assert_successo!(
+            checked_grid(normalizer(0.0, 1_300_000.0), &mut Bilancio::nuovo(0.01)),
+            ()
+        );
         let modulo = 2_f64.powi(40) - 2_f64.powi(-13);
-        assert!(checked_grid(
-            normalizer(-modulo, 2.0 * modulo),
-            &mut Bilancio::nuovo(2_f64.powi(-6))
-        )
-        .is_ok());
+        assert_successo!(
+            checked_grid(
+                normalizer(-modulo, 2.0 * modulo),
+                &mut Bilancio::nuovo(2_f64.powi(-6))
+            ),
+            ()
+        );
         assert!(matches!(
             checked_grid(
                 normalizer(-modulo, 2.0 * modulo),

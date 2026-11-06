@@ -155,6 +155,7 @@ pub const fn istante(valore: i64, unita: TimeUnit) -> Option<DateTime<Utc>> {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

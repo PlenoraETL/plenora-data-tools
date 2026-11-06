@@ -355,6 +355,7 @@ pub(crate) fn verifica_topologia_geodetica(
 }
 
 /// L'ellissoide WGS 84 della tabella integrata, per i test dei kernel.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub(crate) fn wgs84_di_prova() -> EllissoideGeodetico {
     plenora_core::crs::resolve_crs("EPSG:4326", "crs")
@@ -363,6 +364,7 @@ pub(crate) fn wgs84_di_prova() -> EllissoideGeodetico {
         .unwrap_or_else(|| unreachable!("EPSG:4326 e' nella tabella integrata"))
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,12 +530,22 @@ mod tests {
             );
         }
         // Verso un polo, latitudini opposte ma geodetica unica: definiti.
-        for (da, a) in [
-            (Point::new(12.0, 60.0), Point::new(12.0, 90.0)),
-            (Point::new(10.0, 20.0), Point::new(30.0, -20.0)),
-            (Point::new(0.0, 30.0), Point::new(179.0, -30.0)),
+        // Azimut da inverse Vincenty indipendente (WGS84, delta lambda < 1e-15).
+        for (da, a, atteso) in [
+            (Point::new(12.0, 60.0), Point::new(12.0, 90.0), 0.0),
+            (
+                Point::new(10.0, 20.0),
+                Point::new(30.0, -20.0),
+                152.580_619_405_796_43,
+            ),
+            (
+                Point::new(0.0, 30.0),
+                Point::new(179.0, -30.0),
+                90.119_255_802_567_61,
+            ),
         ] {
-            assert!(geodesic_bearing_degrees(da, a, &e).is_ok(), "{da:?} {a:?}");
+            let ottenuto = geodesic_bearing_degrees(da, a, &e).expect("azimut definito");
+            assert!((ottenuto - atteso).abs() < 1e-8);
         }
     }
 
@@ -684,7 +696,7 @@ mod tests {
     #[test]
     fn il_lato_con_latitudini_arrotondate_si_rifiuta() {
         let e = wgs84_di_prova();
-        assert!(scarto_del_lato(
+        assert_eq!(scarto_del_lato(
             &e,
             Coord { x: 0.0, y: 1e-18 },
             Coord {
@@ -692,7 +704,7 @@ mod tests {
                 y: 1e-18
             }
         )
-        .is_err());
+        , Err("lato troppo lungo (oltre 1000 km) o troppo vicino a un polo per verificare che la topologia delle geodetiche sia quella del piano lon/lat"));
     }
 
     /// Il bordo del dominio: un lato equatoriale est-ovest con lunghezza
@@ -711,11 +723,14 @@ mod tests {
             y: 0.0,
         };
         let origine = Coord { x: 0.0, y: 0.0 };
-        assert!(scarto_del_lato(&e, origine, dentro).is_ok());
-        assert!(scarto_del_lato(&e, origine, fuori).is_err());
+        // Maggiorante analitico per WGS84, lato equatoriale di 999 km.
+        let scarto = scarto_del_lato(&e, origine, dentro).expect("lato nel dominio");
+        assert!((scarto - 0.024_746_387_207_404_45).abs() < 1e-12);
+        assert_eq!(scarto_del_lato(&e, origine, fuori), Err("lato troppo lungo (oltre 1000 km) o troppo vicino a un polo per verificare che la topologia delle geodetiche sia quella del piano lon/lat"));
         // Vicino al polo: la latitudine maggiorata raggiunge 90 gradi.
-        assert!(
-            scarto_del_lato(&e, Coord { x: 0.0, y: 89.999 }, Coord { x: 0.1, y: 89.999 }).is_err()
+        assert_eq!(
+            scarto_del_lato(&e, Coord { x: 0.0, y: 89.999 }, Coord { x: 0.1, y: 89.999 }),
+            Err("lato troppo lungo (oltre 1000 km) o troppo vicino a un polo per verificare che la topologia delle geodetiche sia quella del piano lon/lat")
         );
     }
 

@@ -975,6 +975,7 @@ pub(in crate::aggregation) fn scatter_partitions<T: Copy + Send + Sync>(
     Ok(())
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1001,24 +1002,55 @@ mod tests {
                 .finisci(&permutazione)
                 .expect("ordine valido");
             assert_eq!(ordinati.len(), gruppi);
+            let attesi: Vec<Vec<usize>> = (0..gruppi)
+                .rev()
+                .map(|gruppo| match gruppo {
+                    0 => vec![0, 2],
+                    1 => vec![1],
+                    2 => vec![3],
+                    _ => vec![],
+                })
+                .collect();
+            assert_eq!(
+                ordinati.iter().map(<[usize]>::to_vec).collect::<Vec<_>>(),
+                attesi
+            );
             let mut righe = ordinati.iter().flatten().copied().collect::<Vec<_>>();
             righe.sort_unstable();
             assert_eq!(righe, vec![0, 1, 2, 3], "ogni riga una volta sola");
 
             let mut ripetuto = permutazione.clone();
             ripetuto[0] = ripetuto[1];
-            assert!(accumulo(&assegnazione, gruppi).finisci(&ripetuto).is_err());
-            assert!(accumulo(&assegnazione, gruppi)
-                .finisci(&permutazione[1..])
-                .is_err());
+            assert_rifiuto!(
+                accumulo(&assegnazione, gruppi).finisci(&ripetuto),
+                plenora_core::ErrorCategory::Internal,
+                plenora_core::ErrorPhase::Write
+            );
+            assert_rifiuto!(
+                accumulo(&assegnazione, gruppi).finisci(&permutazione[1..]),
+                plenora_core::ErrorCategory::Internal,
+                plenora_core::ErrorPhase::Write
+            );
             let mut fuori = permutazione.clone();
             fuori[0] = gruppi;
-            assert!(accumulo(&assegnazione, gruppi).finisci(&fuori).is_err());
+            assert_rifiuto!(
+                accumulo(&assegnazione, gruppi).finisci(&fuori),
+                plenora_core::ErrorCategory::Internal,
+                plenora_core::ErrorPhase::Write
+            );
         }
         // Righe non contigue o gruppo inesistente: errore esplicito.
         let mut accumulo = GroupAccumulator::new(4);
         accumulo.nuovo_gruppo();
-        assert!(accumulo.aggiungi(1, 0).is_err());
-        assert!(accumulo.aggiungi(0, 5).is_err());
+        assert_rifiuto!(
+            accumulo.aggiungi(1, 0),
+            plenora_core::ErrorCategory::Internal,
+            plenora_core::ErrorPhase::Write
+        );
+        assert_rifiuto!(
+            accumulo.aggiungi(0, 5),
+            plenora_core::ErrorCategory::Internal,
+            plenora_core::ErrorPhase::Write
+        );
     }
 }

@@ -940,6 +940,7 @@ pub fn errori_del_poligono(poligono: &Polygon<f64>) -> Vec<InvalidPolygon> {
 
 /// Tutti gli errori, come `Validation::validation_errors` di `geo`: serve
 /// all'oracolo per confrontare anche cio' che segue il primo errore.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub fn errori_di_validazione(geometria: &Geometry<f64>) -> Vec<InvalidGeometry> {
     let mut errori = Vec::new();
@@ -953,5 +954,6 @@ pub fn errori_di_validazione(geometria: &Geometry<f64>) -> Vec<InvalidGeometry> 
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests;

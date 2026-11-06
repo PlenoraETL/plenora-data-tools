@@ -199,6 +199,10 @@ fn valido_attraversa_il_confine(nome: &str) -> RecordBatch {
         Some("1"),
         "{nome}: versione del contratto"
     );
+    assert_eq!(
+        vettore["fields"].as_array().unwrap().len(),
+        schema.fields().len()
+    );
     for (campo_atteso, campo) in vettore["fields"]
         .as_array()
         .unwrap()

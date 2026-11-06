@@ -8,6 +8,10 @@
 //! `byte_dati` (il costo di una copia): qui si verifica su batch letti da
 //! IPC e su colonne che sono lo stesso array.
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -105,16 +109,31 @@ fn la_stima_di_un_batch_letto_da_ipc_conta_il_messaggio_una_volta() {
 fn le_stime_per_riga_non_dipendono_da_come_il_batch_e_stato_letto() {
     let originale = tabella_larga();
     let letta = riletta(&originale);
-    for (colonna_originale, colonna_letta) in originale.columns().iter().zip(letta.columns()) {
-        let prima = column_bytes_per_row(colonna_originale.as_ref());
-        let dopo = column_bytes_per_row(colonna_letta.as_ref());
-        // Il padding IPC a 8 byte può aggiungere al più un byte per riga.
-        assert!(dopo <= prima + 1, "{prima} -> {dopo}");
-        assert!(prima <= dopo + 1, "{prima} -> {dopo}");
+    // Sette colonne a 8 byte; tre Utf8 con (n+1) offset i32 e
+    // i byte delle stringhe costruite dalla fixture, senza bitmap null.
+    let byte_testi: usize = (0..RIGHE)
+        .map(|riga| format!("gruppo-{}-0", riga % 97).len())
+        .sum();
+    let testo_per_riga = (4 * (RIGHE + 1) + byte_testi).div_ceil(RIGHE);
+    let attese = [
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        testo_per_riga,
+        testo_per_riga,
+        testo_per_riga,
+    ];
+    for tabella in [&originale, &letta] {
+        assert_eq!(tabella.num_columns(), attese.len());
+        for (colonna, attesa) in tabella.columns().iter().zip(attese) {
+            assert_eq!(column_bytes_per_row(colonna.as_ref()), attesa);
+        }
+        assert_successo!(batch_bytes_per_row(tabella), attese.iter().sum::<usize>());
     }
-    let prima = batch_bytes_per_row(&originale).expect("larghezza");
-    let dopo = batch_bytes_per_row(&letta).expect("larghezza");
-    assert!(dopo <= prima + originale.num_columns(), "{prima} -> {dopo}");
 }
 
 #[test]

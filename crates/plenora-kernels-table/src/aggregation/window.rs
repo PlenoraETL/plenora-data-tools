@@ -927,6 +927,7 @@ fn rolling_esatto(
     Ok(Some(Arc::new(Float64Array::from(output))))
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[path = "window_oracolo.rs"]
 mod oracolo;

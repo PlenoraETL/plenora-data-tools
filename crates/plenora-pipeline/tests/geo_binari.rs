@@ -62,7 +62,7 @@ fn i_join_sono_i_kernel() {
     let sx = geometrie(&sinistra, "geometry");
     let dx = geometrie(&destra, "geometry");
 
-    let uscita = un_passo(
+    let uscita = un_passo_verificato(
         "geo.sjoin",
         json!({"predicate": "intersects"}),
         &[sinistra.clone(), destra.clone()],
@@ -70,7 +70,10 @@ fn i_join_sono_i_kernel() {
     .unwrap();
     let coppie =
         spatial_join::spatial_join_nullable(&sx, &dx, JoinPredicate::Intersects, u64::MAX).unwrap();
-    assert!(!coppie.is_empty());
+    assert_eq!(
+        coppie.iter().map(|c| (c.left, c.right)).collect::<Vec<_>>(),
+        [(0, 0), (0, 1)]
+    );
     let id: Int64Array = coppie
         .iter()
         .map(|c| Some(i64::try_from(c.left).unwrap()))
@@ -82,13 +85,24 @@ fn i_join_sono_i_kernel() {
         &destre as &dyn Array
     );
 
-    let uscita = un_passo(
+    let uscita = un_passo_verificato(
         "geo.nearest",
         json!({"max_distance": 1000.0}),
         &[sinistra.clone(), destra.clone()],
     )
     .unwrap();
     let trovati = analysis::nearest_matches(&sx, &dx, Some(1000.0), u64::MAX, u64::MAX).unwrap();
+    assert_eq!(
+        trovati
+            .iter()
+            .map(|m| (m.left, m.right))
+            .collect::<Vec<_>>(),
+        [(0, 0), (0, 1), (2, 1), (3, 4)]
+    );
+    let attese = [0.0, 0.0, 40.0_f64.hypot(47.0), 95.0_f64.hypot(22.0)];
+    for (m, attesa) in trovati.iter().zip(attese) {
+        assert!((m.distance - attesa).abs() < 1e-9);
+    }
     let distanze: Float64Array = trovati.iter().map(|m| Some(m.distance)).collect();
     assert_eq!(
         colonna(&uscita, "distance").as_ref(),
@@ -101,8 +115,10 @@ fn i_join_sono_i_kernel() {
     );
 
     // Allineate a left: `within` dei punti nei poligoni, conteggi dei punti.
-    let uscita = un_passo("geo.within", json!({}), &[destra.clone(), sinistra.clone()]).unwrap();
+    let uscita =
+        un_passo_verificato("geo.within", json!({}), &[destra.clone(), sinistra.clone()]).unwrap();
     let dentro = analysis::within_indexes(&dx, &sx, u64::MAX).unwrap();
+    assert_eq!(dentro, [1]);
     let attesi: BooleanArray = dx
         .iter()
         .enumerate()
@@ -114,13 +130,14 @@ fn i_join_sono_i_kernel() {
     assert_eq!(colonna(&uscita, "within").as_ref(), &attesi as &dyn Array);
     assert_eq!(uscita.num_rows(), destra.num_rows());
 
-    let uscita = un_passo(
+    let uscita = un_passo_verificato(
         "geo.count_points_in_polygons",
         json!({"output_column": "n"}),
         &[sinistra, destra],
     )
     .unwrap();
     let conteggi = analysis::count_points_in_polygons(&sx, &dx, u64::MAX).unwrap();
+    assert_eq!(conteggi, [1, 0, 0, 0]);
     let attesi: UInt64Array = sx
         .iter()
         .zip(&conteggi)
@@ -137,7 +154,8 @@ fn ritaglio_overlay_e_booleane_sono_i_kernel() {
     let dx = geometrie(&destra, "geometry");
 
     // `clip`: ogni riga di left contro l'unione di tutte le maschere.
-    let uscita = un_passo("geo.clip", json!({}), &[sinistra.clone(), destra.clone()]).unwrap();
+    let uscita =
+        un_passo_verificato("geo.clip", json!({}), &[sinistra.clone(), destra.clone()]).unwrap();
     let presenti: Vec<Geometry<f64>> = sx.iter().flatten().cloned().collect();
     let tutte_le_maschere: Vec<Geometry<f64>> = dx.iter().flatten().cloned().collect();
     let mut ritagliate = topology::clip_to_mask(&presenti, &tutte_le_maschere, centimetro())
@@ -154,6 +172,18 @@ fn ritaglio_overlay_e_booleane_sono_i_kernel() {
         colonna(&uscita, "geometry").as_ref(),
         &binaria(&attese) as &dyn Array
     );
+    let ritagli = geometrie(&uscita, "geometry");
+    for (riga, x, y, lato) in [
+        (0, X0 + 20.0, Y0 + 20.0, 60.0),
+        (2, X0 + 50.0, Y0 + 50.0, 30.0),
+        (3, X0 + 510.0, Y0 + 10.0, 5.0),
+    ] {
+        comune_geo::assert_poligoni(
+            ritagli[riga].as_ref().expect("ritaglio"),
+            &Geometry::Polygon(quadrato(x, y, lato)),
+        );
+    }
+    assert!(ritagli[1].is_none());
     assert_eq!(uscita.num_rows(), sinistra.num_rows());
     assert!(uscita
         .schema()
@@ -162,7 +192,7 @@ fn ritaglio_overlay_e_booleane_sono_i_kernel() {
         .is_nullable());
 
     // `overlay`: i pezzi, con le righe d'origine dei due lati.
-    let uscita = un_passo(
+    let uscita = un_passo_verificato(
         "geo.overlay",
         json!({"mode": "intersection"}),
         &[sinistra.clone(), destra.clone()],
@@ -183,6 +213,17 @@ fn ritaglio_overlay_e_booleane_sono_i_kernel() {
         colonna(&uscita, "geometry").as_ref(),
         &binaria(&geometrie_pezzi) as &dyn Array
     );
+    assert_eq!(
+        pezzi.iter().map(|p| (p.left, p.right)).collect::<Vec<_>>(),
+        [(Some(0), Some(0)), (Some(1), Some(0)), (Some(2), Some(1))]
+    );
+    for (pezzo, (x, y, lato)) in pezzi.iter().zip([
+        (X0 + 20.0, Y0 + 20.0, 60.0),
+        (X0 + 50.0, Y0 + 50.0, 30.0),
+        (X0 + 510.0, Y0 + 10.0, 5.0),
+    ]) {
+        comune_geo::assert_poligoni(&pezzo.geometry, &Geometry::Polygon(quadrato(x, y, lato)));
+    }
     // Le posizioni fra le righe non null riportate alle righe della tabella.
     let righe_sx: Vec<u64> = (0..sx.len())
         .filter(|riga| sx[*riga].is_some())
@@ -220,7 +261,8 @@ fn ritaglio_overlay_e_booleane_sono_i_kernel() {
             BooleanOperation::SymmetricDifference,
         ),
     ] {
-        let uscita = un_passo(op, json!({}), &[sinistra.clone(), destra.clone()]).unwrap();
+        let uscita =
+            un_passo_verificato(op, json!({}), &[sinistra.clone(), destra.clone()]).unwrap();
         let attese: Vec<Option<Vec<u8>>> = sx
             .iter()
             .zip(&dx)
@@ -237,10 +279,37 @@ fn ritaglio_overlay_e_booleane_sono_i_kernel() {
             &binaria(&attese) as &dyn Array,
             "{op}"
         );
+        let obtenues = geometrie(&uscita, "geometry");
+        for riga in [0_usize, 2, 3] {
+            let Geometry::Polygon(a) = sx[riga].as_ref().unwrap() else {
+                panic!("fixture")
+            };
+            let Geometry::Polygon(b) = dx[riga].as_ref().unwrap() else {
+                panic!("fixture")
+            };
+            let attesa = match (op, riga) {
+                ("geo.intersection", 0) => Some(Geometry::Polygon(b.clone())),
+                ("geo.intersection", _) => None,
+                ("geo.union", 0) | ("geo.difference", 2 | 3) => Some(Geometry::Polygon(a.clone())),
+                ("geo.difference" | "geo.symmetric_difference", 0) => Some(Geometry::Polygon(
+                    geo::Polygon::new(a.exterior().clone(), vec![b.exterior().clone()]),
+                )),
+                _ => Some(Geometry::MultiPolygon(geo::MultiPolygon(vec![
+                    a.clone(),
+                    b.clone(),
+                ]))),
+            };
+            match (&obtenues[riga], attesa) {
+                (Some(g), Some(a)) => comune_geo::assert_poligoni(g, &a),
+                (None, None) => {}
+                _ => panic!("null geometrico inatteso"),
+            }
+        }
+        assert!(obtenues[1].is_none());
         assert_eq!(colonna(&uscita, "id"), colonna(&sinistra, "id"), "{op}");
     }
     // Un'intersezione vuota e' null (la geometria dell'uscita e' nullable).
-    let uscita = un_passo("geo.intersection", json!({}), &[sinistra, destra]).unwrap();
+    let uscita = un_passo_verificato("geo.intersection", json!({}), &[sinistra, destra]).unwrap();
     let celle = colonna(&uscita, "geometry");
     assert!(celle.is_null(3), "riga 3: quadrati disgiunti");
 }
@@ -252,13 +321,14 @@ fn le_booleane_chiedono_le_stesse_righe() {
         json!({}),
         &[poligoni(), tabella(UTM, &[None])],
     )
-    .unwrap_err();
+    .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{errore}");
     assert!(errore.to_string().contains("stesse righe"), "{errore}");
 }
 
 #[test]
 fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
+    use ErrorCategory::{Crs, InvalidPlan, Schema};
     let casi = vec![
         (
             "geo.sjoin",
@@ -312,7 +382,21 @@ fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
             None,
         ),
     ];
-    stessa_validazione(&casi);
+    stessa_validazione(
+        &casi,
+        &[
+            None,
+            Some(InvalidPlan),
+            Some(InvalidPlan),
+            Some(InvalidPlan),
+            Some(Schema),
+            Some(InvalidPlan),
+            None,
+            Some(InvalidPlan),
+            Some(Crs),
+            None,
+        ],
+    );
 }
 
 #[test]
@@ -338,4 +422,34 @@ fn un_join_si_concatena_con_le_tabellari() {
     );
     let esito = comune_geo::esegui(&pipeline, &[("t", poligoni()), ("u", punti())]).unwrap();
     assert!(esito.outputs[0].1.num_rows() > 0);
+}
+
+/// Stesso piano, con schema atteso dichiarato indipendentemente dai kernel.
+fn un_passo_verificato(
+    op: &str,
+    config: serde_json::Value,
+    tabelle: &[RecordBatch],
+) -> plenora_core::Result<RecordBatch> {
+    let atteso = comune_geo::schema_geo_indipendente(op, &tabelle[0], &config, None);
+    let risultato = un_passo(op, config, tabelle);
+    if let Ok(output) = &risultato {
+        assert_eq!(output.schema(), atteso, "schema indipendente {op}");
+        let righe: Vec<u32> = match op {
+            "geo.sjoin" => vec![0, 0],
+            "geo.nearest" => vec![0, 0, 2, 3],
+            _ => (0..u32::try_from(tabelle[0].num_rows()).expect("righe")).collect(),
+        };
+        if op != "geo.overlay" {
+            comune_geo::assert_attributi(
+                output,
+                &tabelle[0],
+                &righe,
+                matches!(
+                    op,
+                    "geo.sjoin" | "geo.nearest" | "geo.within" | "geo.count_points_in_polygons"
+                ),
+            );
+        }
+    }
+    risultato
 }

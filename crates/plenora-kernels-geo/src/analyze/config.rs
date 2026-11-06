@@ -572,6 +572,7 @@ pub struct ClusterDbscanConfig {
     pub output_column: Option<String>,
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,10 +582,11 @@ mod tests {
 
     /// I campi di `T` come li elenca serde per un campo sconosciuto.
     fn campi<T: DeserializeOwned>() -> Vec<String> {
-        let errore = serde_json::from_value::<T>(json!({"zz_campo_sconosciuto": 0}))
-            .err()
-            .map(|errore| errore.to_string())
-            .unwrap_or_default();
+        let Err(errore) = serde_json::from_value::<T>(json!({"zz_campo_sconosciuto": 0})) else {
+            panic!("campo sconosciuto accettato");
+        };
+        assert_eq!(errore.classify(), serde_json::error::Category::Data);
+        let errore = errore.to_string();
         errore.split_once(", expected ").map_or_else(
             || {
                 assert!(errore.contains("there are no fields"), "{errore}");
@@ -606,16 +608,19 @@ mod tests {
     /// obbligatori, quindi un `null` rifiutato da' un errore che non e' il
     /// campo mancante.
     fn null_letti_come_assenti<T: DeserializeOwned>(nome: &str) -> Vec<String> {
-        campi::<T>()
-            .into_iter()
-            .filter(|campo| {
-                serde_json::from_value::<T>(json!({ campo.clone(): null })).map_or_else(
-                    |errore| errore.to_string().starts_with("missing field"),
-                    |_| true,
-                )
-            })
-            .map(|campo| format!("{nome}.{campo}"))
-            .collect()
+        for campo in campi::<T>() {
+            let Err(errore) = serde_json::from_value::<T>(json!({ campo.clone(): null })) else {
+                panic!("{nome}.{campo}: null deve essere rifiutato");
+            };
+            assert_eq!(errore.classify(), serde_json::error::Category::Data);
+            let messaggio = errore.to_string();
+            assert!(
+                messaggio == plenora_core::json::MESSAGGIO_NULL_NON_AMMESSO
+                    || messaggio.starts_with("invalid type: null, expected "),
+                "{nome}.{campo}: causa del rifiuto inattesa: {messaggio}"
+            );
+        }
+        Vec::new()
     }
 
     macro_rules! config_geo {
@@ -696,8 +701,9 @@ mod tests {
         let errore = serde_json::from_value::<ScaleConfig>(
             json!({"x_factor": 2.0, "y_factor": 2.0, "x_origin": null}),
         )
-        .expect_err("null non e' l'assenza")
-        .to_string();
+        .expect_err("null non e' l'assenza");
+        assert_eq!(errore.classify(), serde_json::error::Category::Data);
+        let errore = errore.to_string();
         assert!(
             errore.contains(plenora_core::json::MESSAGGIO_NULL_NON_AMMESSO),
             "{errore}"
@@ -708,9 +714,13 @@ mod tests {
             serde_json::from_value(json!({"wkt_column": "w", "on_error": "null"}))
                 .expect("la stringa \"null\" e' un valore");
         assert_eq!(stringa.on_error, Some(crate::extensions::OnWktError::Null));
-        assert!(serde_json::from_value::<FromWktConfig>(
-            json!({"wkt_column": "w", "on_error": null})
-        )
-        .is_err());
+        let errore =
+            serde_json::from_value::<FromWktConfig>(json!({"wkt_column": "w", "on_error": null}))
+                .expect_err("null JSON non ammesso");
+        assert_eq!(errore.classify(), serde_json::error::Category::Data);
+        assert_eq!(
+            errore.to_string(),
+            plenora_core::json::MESSAGGIO_NULL_NON_AMMESSO
+        );
     }
 }

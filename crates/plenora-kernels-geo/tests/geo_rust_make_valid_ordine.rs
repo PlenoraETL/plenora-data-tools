@@ -142,6 +142,7 @@ fn hole_sharing_an_edge_with_the_shell_in_every_order() {
         assert_matches_geos(&format!("buchi {order:?}"), &output, &geos);
         outputs.push(output);
     }
+    assert_eq!(outputs.len(), 2);
     assert!(outputs.windows(2).all(|pair| pair[0] == pair[1]));
 }
 
@@ -179,6 +180,7 @@ fn overlapping_multipolygon_parts_in_every_order() {
             }
             outputs.push(output);
         }
+        assert_eq!(outputs.len(), 6);
         assert!(
             outputs.windows(2).all(|pair| pair[0] == pair[1]),
             "{method:?}: l'ordine delle parti cambia l'esito"
