@@ -10,6 +10,38 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [4.1.1] - non rilasciata
+
+### Sicurezza
+
+- Corretto RUSTSEC-2026-0442 (`arrow-data`, validazione insufficiente della
+  copertura degli array `RunEndEncoded`): tutti i crate Arrow, incluso
+  `arrow-pyarrow`, passano a 60.1.0 con pin esatti e lock aggiornati anche
+  per fuzz. Il Parquet vendorizzato resta a 60.0.0 con le patch qualificate,
+  usando la stessa copia di Arrow 60.1.0 tramite requisiti compatibili.
+- Esposizione stimata della 4.1.0 alla lettura fuori limite: raggiungibile
+  solo dall'API Rust con array costruiti dal chiamante, attraverso Arrow
+  riesportato. IPC file/stream rifiuta il tipo prima dei blocchi; Parquet
+  non decodifica run-end e rifiuta uno schema incorporato non applicabile.
+  Il contratto esclude run-end anche annidati. PyArrow può comunque
+  importare IPC malformato: nell'SDK una concatenazione di più blocchi
+  poteva incontrare un panico prima del controllo del contratto (nessuna
+  lettura fuori limite dimostrata su questo percorso). Il controllo dello
+  schema è ora anticipato prima del primo blocco C Stream: i tipi già
+  vietati falliscono con `unsupported` in fase `read`.
+
+### Cambiamenti osservabili portati da Arrow 60.1.0
+
+- SDK Python: una colonna `Map(keys_sorted=True)` conserva il flag anche in
+  uscita; prima l'esportazione FFI lo perdeva.
+- IPC in scrittura: una colonna senza null è scritta con una bitmap di
+  validità vuota. I valori riletti non cambiano, ma i byte dei file IPC
+  differiscono da quelli della 4.1.0 a parità di ingresso; restano
+  deterministici fra esecuzioni della 4.1.1.
+- IPC malformato in lettura: una bitmap di validità troppo corta produce un
+  errore esplicito di Arrow invece di un panico intercettato. La categoria
+  resta `data_mapping`; cambia solo il messaggio.
+
 ## [4.1.0] - 2026-11-05
 
 La 4.1.0 completa il supporto alle geometrie multiple su API Rust, CLI e SDK

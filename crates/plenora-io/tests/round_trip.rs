@@ -669,3 +669,92 @@ fn ipc_con_run_end_si_rifiuta() {
     let errore = leggi_tabella(&percorso, None, u64::MAX).expect_err("run-end rifiutata");
     assert_eq!(errore.category(), ErrorCategory::Unsupported, "{errore}");
 }
+
+/// Il rifiuto dello schema precede la decodifica anche quando l'ultimo
+/// run-end non copre le righe dichiarate (RUSTSEC-2026-0442).
+#[test]
+fn ipc_run_end_malformato_rifiutato_prima_dei_blocchi() {
+    use plenora_core::arrow::array::types::Int32Type;
+    use plenora_core::arrow::array::{Array, Int32Array, RunArray};
+    use plenora_core::arrow::ipc::writer::FileWriter;
+
+    let run = RunArray::<Int32Type>::try_new(
+        &Int32Array::from(vec![1_000_003, 2_000_007]),
+        &Int32Array::from(vec![7, 9]),
+    )
+    .expect("run-end");
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "r",
+        run.data_type().clone(),
+        true,
+    )]));
+    let tabella = RecordBatch::try_new(schema.clone(), vec![Arc::new(run)]).unwrap();
+    let dir = cartella();
+    for nome in ["r.arrow", "r.arrows"] {
+        let percorso = dir.path().join(nome);
+        let file = File::create(&percorso).unwrap();
+        if nome.ends_with(".arrows") {
+            let mut scrittore = StreamWriter::try_new(file, &schema).unwrap();
+            scrittore.write(&tabella).unwrap();
+            scrittore.finish().unwrap();
+        } else {
+            let mut scrittore = FileWriter::try_new(file, &schema).unwrap();
+            scrittore.write(&tabella).unwrap();
+            scrittore.finish().unwrap();
+        }
+        let mut byte = std::fs::read(&percorso).unwrap();
+        let estremi = [1_000_003_i32.to_le_bytes(), 2_000_007_i32.to_le_bytes()].concat();
+        let posizioni: Vec<_> = byte
+            .windows(8)
+            .enumerate()
+            .filter_map(|(i, finestra)| (finestra == estremi).then_some(i))
+            .collect();
+        assert_eq!(posizioni.len(), 1, "buffer run-end univoco nella fixture");
+        let indice_fine = posizioni[0] + 4;
+        byte[indice_fine..indice_fine + 4].copy_from_slice(&2_000_006_i32.to_le_bytes());
+        std::fs::write(&percorso, byte).unwrap();
+        let errore = leggi_tabella(&percorso, None, u64::MAX).expect_err("schema rifiutato");
+        assert_eq!(errore.category(), ErrorCategory::Unsupported);
+    }
+}
+
+/// Parquet non può introdurre run-end attraverso il suggerimento Arrow:
+/// il confine rifiuta lo schema non applicabile prima di leggere le righe.
+#[test]
+fn parquet_schema_run_end_non_applicabile_rifiutato() {
+    use parquet::arrow::arrow_writer::ArrowWriterOptions;
+    use parquet::arrow::{encode_arrow_schema, ArrowWriter, ARROW_SCHEMA_META_KEY};
+    use parquet::file::metadata::KeyValue;
+    use parquet::file::properties::WriterProperties;
+
+    let schema = Arc::new(Schema::new(vec![Field::new("r", DataType::Int64, true)]));
+    let tabella =
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(vec![7]))]).unwrap();
+    let dichiarato = Schema::new(vec![Field::new(
+        "r",
+        DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int64, true)),
+        ),
+        true,
+    )]);
+    let opzioni = ArrowWriterOptions::new()
+        .with_skip_arrow_metadata(true)
+        .with_properties(
+            WriterProperties::builder()
+                .set_key_value_metadata(Some(vec![KeyValue::new(
+                    ARROW_SCHEMA_META_KEY.to_owned(),
+                    encode_arrow_schema(&dichiarato),
+                )]))
+                .build(),
+        );
+    let dir = cartella();
+    let percorso = dir.path().join("r.parquet");
+    let mut scrittore =
+        ArrowWriter::try_new_with_options(File::create(&percorso).unwrap(), schema, opzioni)
+            .unwrap();
+    scrittore.write(&tabella).unwrap();
+    scrittore.close().unwrap();
+    let errore = leggi_tabella(&percorso, None, u64::MAX).expect_err("schema non applicabile");
+    assert_eq!(errore.category(), ErrorCategory::Schema);
+}

@@ -32,6 +32,23 @@ con la chiave `parquet` (`Cargo.toml`, «Copie vendorizzate»).
 - Licenza: Apache-2.0 (`LICENSE.txt`, `NOTICE.txt` invariati). Il file
   modificato porta i commenti `PLENORA:` sulle righe cambiate.
 
+## Arrow 60.1.0 (5 novembre 2026)
+
+Per RUSTSEC-2026-0442 il workspace e `fuzz/` risolvono tutti i crate
+Arrow a 60.1.0, incluso `arrow-pyarrow` nel workspace. Il pacchetto
+`plenora-parquet` conserva versione, sorgenti e patch di 60.0.0: i suoi
+requisiti `60.0.0` sono intervalli Cargo `^60.0.0`, compatibili con i pin
+esatti `=60.1.0` del manifesto radice. Nessuna modifica manuale al codice
+o ai manifesti del vendor; questa nota è l'unica modifica alla copia.
+
+Scelta (b), mantenere il decoder qualificato con Arrow corretto. La strada
+(a), riapplicare le dieci patch sopra a Parquet 60.1.0, cambierebbe anche
+il decoder Parquet e richiederebbe una nuova qualificazione dei suoi
+rifiuti e delle tolleranze; non è necessaria per l'advisory di
+`arrow-data`. I due lock conservano una sola versione per ogni crate
+Arrow e nessun altro pacchetto cambia versione. La ricetta sopra continua
+a ricostruire i sorgenti byte per byte, escluso questo documento.
+
 ## Che cosa corregge
 
 Il protocollo thrift compact sul lettore `Read`
