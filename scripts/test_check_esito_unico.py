@@ -23,6 +23,24 @@ EXAMPLES = {
 
 
 class EsitoUnicoTests(unittest.TestCase):
+    def test_limiti_dichiarati_non_segnalati(self):
+        # docs/limiti.md: questi casi NON sono forme dirette coperte.
+        # Il verde documenta una lacuna, non autorizza questi oracoli.
+        cases = {
+            "alias Err concatenato": 'use std::result::Result::Err as E; use E as F; matches!(r, F(_));',
+            "alias matches concatenato": 'use std::matches as E; use E as F; F!(r, Err(_));',
+            "as_str intermedio": 'let e = f().expect_err("rifiuto"); assert!(e.to_string().as_str().contains("bad"));',
+            "trim intermedio": 'let e = f().expect_err("rifiuto"); assert!(e.to_string().trim().contains("bad"));',
+            "macro costruisce pattern": 'macro_rules! esito { ($p:pat) => { matches!(r, $p) }; } esito!(Err(_));',
+            "trait proprio": 'enum Stato { Fallito, Riuscito } trait Esito { fn is_err(&self) -> bool; } impl Esito for Stato { fn is_err(&self) -> bool { matches!(self, Self::Fallito) } } assert!(Stato::Fallito.is_err());',
+            "helper su altro errore": 'controlla(&altro); usa(errore);',
+            "categoria condizionale": 'if condizione { assert_eq!(e.category(), Categoria::Schema); }',
+        }
+        for name, source in cases.items():
+            with self.subTest(limite=name):
+                self.assertEqual(findings(source, True), [])
+        self.assertEqual(findings('z = zip; z(a, b)', True, 'python'), [])
+
     def test_alias_err_diretti_raggruppati_e_self(self):
         for imp in [
             "use std::result::Result::Err as E;",

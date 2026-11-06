@@ -80,6 +80,58 @@ fn atteso_wide() -> DataContract {
     atteso
 }
 
+/// Identita' degli scenari CASI: ingressi wide 0..8, destra 8..11,
+/// nested 0..3. Rinomine e selezioni conservano gli ID; i valori derivati
+/// ricevono ID nuovi dopo gli ingressi (contratto `FieldId` e schede Schema).
+/// Nessuna geometria dichiarata: geom e' solo Binary, senza metadati geo.
+fn contratto_catalogo_atteso(op: &str, ingressi: &[RecordBatch]) -> DataContract {
+    let mut atteso = DataContract::tabular(attesi::tabella(op, ingressi).schema());
+    let ids: Vec<u32> = match op {
+        "table.aggregate" => vec![1, 8],
+        "table.align_schema" => vec![0, 8],
+        "table.select_columns" => vec![0, 2],
+        "table.drop_columns" => (0..7).collect(),
+        "table.reorder_columns" => vec![1, 0, 2, 3, 4, 5, 6, 7],
+        "table.replace" | "table.text_normalize" => {
+            vec![0, 8, 2, 3, 4, 5, 6, 7]
+        }
+        "table.type_cast" => vec![8, 1, 2, 3, 4, 5, 6, 7],
+        "table.melt" | "table.pivot" => vec![0, 8, 9],
+        "table.reconcile" => vec![11, 12],
+        "table.table_diff" => vec![11, 12, 13, 14],
+        "table.explode" => vec![0, 3, 2],
+        "table.unnest" => vec![0, 1, 3, 4],
+        "table.join" | "table.asof_join" => vec![0, 1, 2, 3, 4, 5, 6, 7, 9, 10],
+        // Le altre fixture preservano tutte le colonne e aggiungono in coda
+        // solo campi nuovi; cross/fuzzy includono l'intero lato destro.
+        _ => (0..u32::try_from(atteso.schema.fields().len()).expect("fixture")).collect(),
+    };
+    assert_eq!(ids.len(), atteso.schema.fields().len(), "{op}");
+    for (field, id) in atteso.schema.fields().iter().zip(ids) {
+        atteso.field_ids.insert(field.name().clone(), FieldId(id));
+    }
+    // Nessun conteggio noto nello schema di ingresso. Solo sort e top_n
+    // promettono un ordine in queste config: value discendente, null prima.
+    if matches!(op, "table.sort" | "table.top_n") {
+        atteso.properties.sorted_by = Some(ContractProperty::new(
+            PropertyConfidence::Proven(SortOrder {
+                keys: vec![FieldId(2)],
+                direction: SortDirection::Descending,
+                nulls: NullPlacement::First,
+            }),
+            PropertyScope::Stream,
+        ));
+    }
+    // Scheda reconcile: cinque metriche anche da ingressi vuoti.
+    if op == "table.reconcile" {
+        atteso.properties.row_count = Some(ContractProperty::new(
+            PropertyConfidence::Proven(5),
+            PropertyScope::Dataset,
+        ));
+    }
+    atteso
+}
+
 /// Analisi diretta, la stessa sequenza che il runner fa per un passo.
 fn analisi_diretta(op: &str, schemi: &[SchemaRef], config: &Value) -> Result<DataContract> {
     let mut campi = FieldAllocator::default();
@@ -137,17 +189,19 @@ fn la_validazione_accetta_se_e_solo_se_l_analisi_accetta() {
             let validata = validata.expect("fixture con schema statico valida");
             let analisi = analisi.expect("fixture con schema statico analizzabile");
             let contratto = validata.contratto("uscita").expect("contratto dell'uscita");
-            let schema_atteso = attesi::tabella(caso.op, &tavole).schema();
-            assert_eq!(&contratto.schema, &schema_atteso, "schema di {}", caso.op);
+            let atteso = contratto_catalogo_atteso(caso.op, &tavole);
             assert_eq!(
-                &analisi.schema, &schema_atteso,
-                "schema analizzato di {}",
+                format!("{contratto:?}"),
+                format!("{atteso:?}"),
+                "runner {}",
                 caso.op
             );
-            // Entrambi confrontati con lo schema indipendente della fixture;
-            // l'analizzatore non e' l'oracolo del runner.
-            assert!(contratto.geometries.is_empty());
-            assert_eq!(contratto.active_geometry, None);
+            assert_eq!(
+                format!("{analisi:?}"),
+                format!("{atteso:?}"),
+                "analisi {}",
+                caso.op
+            );
         }
     }
 }

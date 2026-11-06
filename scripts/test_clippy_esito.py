@@ -58,6 +58,19 @@ pub fn production(r: Result<(), ()>) -> bool { r.is_ok() }
             for method in ['is_err', 'is_ok', 'unwrap_err', 'err']:
                 self.assertTrue(any(f'::{method}`' in e['message'] for e in errors))
             precise = '#[test] fn precise() { assert_eq!(std::hint::black_box(Ok::<_, ()>(3)).expect("successo"), 3); }'
+            # Limite dichiarato: il nome is_err di un trait proprio non e'
+            # Result::is_err. La sonda compila anche con -D warnings.
+            precise += """
+#[test] fn trait_proprio_fuori_ambito() {
+    enum Stato { Fallito, Riuscito }
+    trait Esito { fn is_err(&self) -> bool; }
+    impl Esito for Stato {
+        fn is_err(&self) -> bool { matches!(self, Self::Fallito) }
+    }
+    assert!(Stato::Fallito.is_err());
+    assert!(!Stato::Riuscito.is_err());
+}
+"""
             (root / 'src/lib.rs').write_text(production + external, encoding='utf-8')
             (root / 'src/esterno.rs').write_text(precise, encoding='utf-8')
             (root / 'tests/prova.rs').write_text(precise, encoding='utf-8')

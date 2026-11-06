@@ -1918,33 +1918,52 @@ configurazione: il divieto dei lettori WKT/CSV resta coperto dal censimento
 dei sorgenti e dalle sonde degli alias in `consumatore_esterno.rs`.
 
 Per `matches!` la guardia usa token Rust, commenti esclusi e letterali
-opachi: controlla jolly e alternative di `Err`, con alias di import
-`std`/`core`, delimitatori diversi e moduli di prova esterni, anche inclusi
-con `#[path]`. Non espande macro definite dall'utente né risolve re-export
-attraverso altri moduli. La risoluzione degli alias è conservativa nel
-file: un nome importato come alias di `matches` o `Err` resta sorvegliato anche
-in un altro scope. Le forme `cfg` composte e il codice generato richiedono
-revisione esplicita; la CI compila le feature previste ma non tutte le
-configurazioni possibili del linguaggio.
+opachi. Copre le forme dirette elencate nelle prove
+`scripts/test_check_esito_unico.py` e `scripts/test_rust_esito_tokens.py`:
+jolly e alternative di `Err`, import diretti da `std`/`core` (anche
+raggruppati e con `self as`), alias diretti di `matches`, delimitatori
+diversi e moduli di prova esterni, anche inclusi con `#[path]`. Controlla
+anche l'errore immediatamente ignorato con `continue` e il solo messaggio
+nelle forme dirette, come `e.to_string().contains("bad")`: spazi, a capo
+e commenti non cambiano l'esito. Un alias diretto resta sorvegliato
+nell'intero file, anche in un altro scope.
 
-L'AST Python controlla import con alias, `pytest.raises`, gestori generici,
-asserzioni sul testo dell'errore e `zip(strict=True)`. Non esegue import,
-decoratori, monkey patch o assegnazioni dinamiche di funzioni. Per un
-gestore generico richiede un rilancio o un'asserzione di categoria nel
-corpo diretto, senza attribuire una prova a un ramo che potrebbe non girare.
-Anche i controlli Rust dell'errore immediatamente ignorato con `continue`
-e del solo messaggio individuano le forme vietate sui token: spazi, a capo
-e commenti non cambiano l'esito. Il riconoscimento della categoria e dei
-relativi helper lavora sulla forma canonica ricostruita dai token e resta
-conservativo: non e' un'analisi semantica del flusso dei valori.
+L'AST Python controlla le forme dirette provate di import con alias,
+`pytest.raises`, gestori generici, asserzioni sul testo dell'errore e
+`zip(strict=True)`. Per un gestore generico richiede un rilancio o
+un'asserzione di categoria nel corpo diretto. Non esegue import,
+decoratori, monkey patch o assegnazioni dinamiche di funzioni.
 
-**Hazard (deviazione).** Un helper può asserire la categoria di un altro
-errore; un booleano di categoria può essere calcolato e scartato; due
-errori possono avere categorie uguali senza che la fixture ne fissi una.
-La guardia non dimostra flusso dei valori, dominanza delle asserzioni o
-semantica dei chiamati. Un confronto differenziale può inoltre condividere
-un difetto con il riferimento. Questi casi non diventano oracoli validi
-per il solo fatto che clippy e la guardia passano.
+Sono **fuori ambito**, e le prove della guardia ne documentano la mancata
+segnalazione:
+
+- alias concatenati di `Err`: `use std::result::Result::Err as E; use E as F; matches!(r, F(_));`;
+- alias concatenati di `matches`: `use std::matches as E; use E as F; F!(r, Err(_));`;
+- metodi intermedi fra `to_string()` e `contains`, per esempio
+  `assert!(e.to_string().as_str().contains("bad"))` o
+  `assert!(e.to_string().trim().contains("bad"))`;
+- macro che costruiscono forme vietate, per esempio
+  `macro_rules! esito { ($p:pat) => { matches!(r, $p) }; } esito!(Err(_));`:
+  la guardia a token non espande le macro;
+- trait propri che reimplementano `is_err`, per esempio
+  `trait Esito { fn is_err(&self) -> bool; }` con una implementazione
+  `matches!(self, Self::Fallito)` su un enum proprio: Clippy vieta i metodi
+  di `Result`, non quelli di questo trait;
+- casi semantici: per esempio `controlla(&altro); usa(errore);`, dove
+  l'helper controlla un errore diverso, oppure
+  `if condizione { assert_eq!(e.category(), Categoria::Schema); }`, dove
+  l'asserzione potrebbe non essere eseguita. Restano fuori anche re-export
+  fra moduli, `cfg` composte (la CI non compila tutte le configurazioni),
+  codice generato e assegnazioni dinamiche Python come `z = zip; z(a, b)`.
+
+**Hazard (deviazione).** Queste forme possono nascondere un rifiuto non
+tipizzato o un'alternativa fra successo ed errore. Un helper può asserire
+la categoria di un altro errore; un booleano di categoria può essere
+calcolato e scartato; due errori possono avere categorie uguali senza che
+la fixture ne fissi una. La guardia non dimostra flusso dei valori,
+dominanza delle asserzioni o semantica dei chiamati. Un confronto
+differenziale può inoltre condividere un difetto con il riferimento.
+Il passaggio di Clippy e della guardia non rende validi questi oracoli.
 
 **Difesa e rientro.** Usare gli aiuti comuni `assert_rifiuto!` e
 `assert_successo!`, con attesi indipendenti, e rivedere scenario, categoria,
@@ -1952,10 +1971,13 @@ fase e valori. Le eccezioni dei classificatori di fixture, dei panici
 intenzionali e dei confronti differenziali devono spiegare quale controllo
 completo le affianca. L'aiuto Python che confronta le rappresentazioni
 dello stesso messaggio ha un'eccezione puntuale: i chiamanti fissano la
-classe in `pytest.raises`. Il rientro richiede un'analisi semantica del
-flusso e dei chiamati oppure API di prova tipizzate che rendano impossibile
-scambiare l'errore osservato con un altro o omettere l'atteso; fino ad
-allora la revisione resta obbligatoria per questi casi.
+classe in `pytest.raises`. Alias concatenati e catene intermedie restano
+limiti dichiarati: non si estende l'inseguimento euristico dei token.
+Il rientro richiede, per esempio, una guardia su un parser Rust completo
+con risoluzione dei nomi ed espansione delle macro; per i casi semantici
+serve anche l'analisi del flusso e dei chiamati, oppure API di prova
+tipizzate che impediscano di scambiare l'errore osservato o omettere
+l'atteso. Fino ad allora la revisione resta obbligatoria per questi casi.
 
 ## Concave hull: regola di scavo
 
