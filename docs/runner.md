@@ -870,20 +870,21 @@ esplicito.
   (`plenora_core::contract::arrow_schema::verifica_tipi_supportati`, in
   `contract_from_arrow_schema`), alla lettura Arrow IPC prima di
   decodificare i blocchi (Parquet non li produce) e in scrittura prima di
-  creare il file. Nessun kernel li vede.
-  *Ambito*: input del runner, `plenora-io`.
-  *Hazard*: in Arrow 60.0.0 `concat` di run-end trabocca sulle fini
+  creare il file. Nell'SDK Python il controllo precede il primo blocco
+  C Stream, con errore in fase `read`. Nessun kernel li vede.
+  *Ambito*: input del runner, `plenora-io`, SDK Python.
+  *Hazard*: in Arrow 60.0.0 `concat` di run-end traboccava sulle fini
   `Int16` (la somma delle lunghezze in `concat_run_arrays` non è
-  controllata: panico con `overflow-checks`) e `logical_nulls` sbaglia
+  controllata: panico con `overflow-checks`) e `logical_nulls` sbagliava
   sulle union dense a un campo con id diverso da 0 (raccoglie i null con
   l'id fisso 0): una cella nulla diventerebbe un valore senza errore.
   `take` su run-end, che in 59.2.0 ignorava gli indici nulli, in 60.0.0 li
-  tratta. Tutti e tre verificati sul sorgente e con una sonda fuori dal
-  workspace, non con l'oracolo del rientro. Chi chiama i kernel
-  direttamente, fuori dal runner, non ha il controllo.
-  *Rientro*: quando Arrow corregge `take`/`concat` sulle run-end e
-  `logical_nulls` delle union a un campo, verificato con un oracolo contro
-  `logical_nulls` e contro la stessa tabella senza codifica.
+  tratta. Arrow 60.1.0 corregge anche `concat` e `logical_nulls`, oltre
+  alla validazione run-end di RUSTSEC-2026-0442. L'aggiornamento non
+  qualifica questi tipi per tutti i kernel e non amplia il contratto.
+  Chi chiama i kernel direttamente, fuori dal runner, non ha il controllo.
+  *Rientro*: qualificazione dei kernel con un oracolo contro `logical_nulls`
+  e contro la stessa tabella senza codifica, prima di ammettere questi tipi.
 
 - **Errori che dipendono dai valori delle celle, in esecuzione.**
   *Regola*: la validazione rifiuta ciò che config, schema e limiti rendono

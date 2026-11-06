@@ -21,38 +21,40 @@ publish = false
 
 # Unico punto di versione delle dipendenze. Pin esatti, identici a
 # plenora-data-tools@190c493 per le dipendenze che i kernel usano, tranne
-# Arrow (60.0.0 qui, 59.2.0 li'); i backend nativi (geos, proj) e le
+# Arrow (60.1.0 qui, 59.2.0 li'); i backend nativi (geos, proj) e le
 # dipendenze di engine/CLI/isolamento non ci sono.
 [workspace.dependencies]
-# Arrow =60.0.0 (59.2.0 in plenora-data-tools@190c493). Rispetto alla 59.2.0
-# il lockfile ha un crate in più, `arrow-cmp` 60.0.0
+# Arrow =60.1.0 (59.2.0 in plenora-data-tools@190c493). Rispetto alla 59.2.0
+# il lockfile ha un crate in più, `arrow-cmp` 60.1.0
 # (comparatori per posizione, dipendenza non opzionale di `arrow-select` 60,
 # che lo usa in `take` sulle run-end; dipende solo da arrow-array,
 # arrow-buffer e arrow-schema), e nessuno in meno. I metadati di schema e di
 # campo sono `arrow_schema::Metadata` (una `BTreeMap`: iterazione in
 # ordine di chiave), non `HashMap<String, String>`.
-arrow-array = "=60.0.0"
+arrow-array = "=60.1.0"
 # Tipi di schema e campo di Arrow, riesportati da plenora-core.
-arrow-schema = "=60.0.0"
+arrow-schema = "=60.1.0"
 # Formato IPC di Arrow (file e stream), riesportato da plenora-core.
-arrow-ipc = "=60.0.0"
+arrow-ipc = "=60.1.0"
 # Kernel di selezione di Arrow (`take`, `filter`, `concat`), riesportati da plenora-core.
-arrow-select = "=60.0.0"
+arrow-select = "=60.1.0"
 # `ArrayData` per visitare i nodi di una colonna (lunghezze dei figli) nella
 # stima del picco di un'unione di blocchi (`plenora_core::memoria`). Non e'
 # una dipendenza nuova: arrow-array la usa gia', stessa release, nessun
 # pacchetto nuovo nel lockfile.
-arrow-data = "=60.0.0"
+arrow-data = "=60.1.0"
 # `Buffer` di Arrow per plenora-io: la lettura IPC legge il file intero in un
 # buffer allineato e lo decodifica con `FileDecoder`/`StreamDecoder` di
 # arrow-ipc sugli stessi byte che il confine ha verificato (docs/file.md, «Confine
 # di lettura»). Non e' una dipendenza nuova: arrow-array e arrow-ipc la usano
 # gia', nel lockfile nessun pacchetto nuovo.
-arrow-buffer = "=60.0.0"
-# Lettura e scrittura Parquet/GeoParquet di plenora-io (i formati di file
-# sono Arrow IPC e Parquet). Stessa
-# release arrow-rs dei crate Arrow sopra (60.0.0), cosi' i tipi Arrow
-# sono gli stessi e il lockfile non porta una seconda copia di Arrow.
+arrow-buffer = "=60.1.0"
+# Arrow 60.1.0 corregge RUSTSEC-2026-0442: validazione della copertura
+# logica degli array RunEndEncoded (offset + lunghezza del padre).
+# Lettura e scrittura Parquet/GeoParquet di plenora-io. Il fork Parquet
+# resta su 60.0.0: i suoi requisiti Arrow ^60.0.0 ammettono i pin 60.1.0
+# sopra, con una sola copia di Arrow nei due lock e tutte le patch del
+# decoder conservate (vendor/parquet-60.0.0-eof/PROVENANCE.md).
 # Feature minime, ognuna voluta:
 # - `arrow`: lettore/scrittore `RecordBatch` e schema Arrow incorporato
 #   (`ARROW:schema`); l'unica API che plenora-io usa;
@@ -183,16 +185,16 @@ ctrlc = { version = "=3.5.2", features = ["termination"] }
 # PyO3». Pacchetti nuovi nel lockfile con `arrow-pyarrow` (9): `pyo3`,
 # `pyo3-ffi`, `pyo3-macros`, `pyo3-macros-backend`, `pyo3-build-config`
 # 0.29.2, `heck` 0.5.0 (nomi delle macro), `target-lexicon` 0.13.5 (build),
-# `portable-atomic` 1.15.0, `arrow-pyarrow` 60.0.0; ognuno in una sola
+# `portable-atomic` 1.15.0, `arrow-pyarrow` 60.1.0; ognuno in una sola
 # versione, nessuno gia' presente in un'altra.
 pyo3 ={ version = "=0.29.2", default-features = false, features = ["macros", "abi3-py310"] }
 # Scambio delle tabelle con PyArrow per l'Arrow C Data/Stream Interface
 # (PyCapsule `__arrow_c_stream__`): le tabelle passano senza copia nei due
-# versi. E' il crate di arrow-rs per pyarrow, alla stessa release 60.0.0
+# versi. E' il crate di arrow-rs per pyarrow, alla stessa release 60.1.0
 # dei crate Arrow sopra (stessi tipi, nessuna seconda copia di Arrow), e
 # chiede `pyo3` `^0.29.0`, compatibile con il pin sopra. Attiva la feature
 # `ffi` di `arrow-array` (l'`unsafe` della C Data Interface sta li').
-arrow-pyarrow = "=60.0.0"
+arrow-pyarrow = "=60.1.0"
 # Dev
 proptest = "=1.11.0"
 # Lexer di Rust dell'inventario dei campi Thrift del fork `parquet`

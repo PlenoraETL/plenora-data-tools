@@ -7,13 +7,13 @@
       "aho-corasick-1.1.4",
       "allocator-api2-0.2.21",
       "approx-0.5.1",
-      "arrow-array-60.0.0",
-      "arrow-buffer-60.0.0",
-      "arrow-cmp-60.0.0",
-      "arrow-data-60.0.0",
-      "arrow-ipc-60.0.0",
-      "arrow-schema-60.0.0",
-      "arrow-select-60.0.0",
+      "arrow-array-60.1.0",
+      "arrow-buffer-60.1.0",
+      "arrow-cmp-60.1.0",
+      "arrow-data-60.1.0",
+      "arrow-ipc-60.1.0",
+      "arrow-schema-60.1.0",
+      "arrow-select-60.1.0",
       "base64-0.23.1",
       "bitflags-2.13.1",
       "block-buffer-0.12.1",
@@ -123,14 +123,14 @@
       "aho-corasick-1.1.4",
       "allocator-api2-0.2.21",
       "approx-0.5.1",
-      "arrow-array-60.0.0",
-      "arrow-buffer-60.0.0",
-      "arrow-cmp-60.0.0",
-      "arrow-data-60.0.0",
-      "arrow-ipc-60.0.0",
-      "arrow-pyarrow-60.0.0",
-      "arrow-schema-60.0.0",
-      "arrow-select-60.0.0",
+      "arrow-array-60.1.0",
+      "arrow-buffer-60.1.0",
+      "arrow-cmp-60.1.0",
+      "arrow-data-60.1.0",
+      "arrow-ipc-60.1.0",
+      "arrow-pyarrow-60.1.0",
+      "arrow-schema-60.1.0",
+      "arrow-select-60.1.0",
       "base64-0.23.1",
       "bitflags-2.13.1",
       "block-buffer-0.12.1",
@@ -243,13 +243,13 @@
       "aho-corasick-1.1.4",
       "allocator-api2-0.2.21",
       "approx-0.5.1",
-      "arrow-array-60.0.0",
-      "arrow-buffer-60.0.0",
-      "arrow-cmp-60.0.0",
-      "arrow-data-60.0.0",
-      "arrow-ipc-60.0.0",
-      "arrow-schema-60.0.0",
-      "arrow-select-60.0.0",
+      "arrow-array-60.1.0",
+      "arrow-buffer-60.1.0",
+      "arrow-cmp-60.1.0",
+      "arrow-data-60.1.0",
+      "arrow-ipc-60.1.0",
+      "arrow-schema-60.1.0",
+      "arrow-select-60.1.0",
       "base64-0.23.1",
       "bitflags-2.13.1",
       "block-buffer-0.12.1",
@@ -356,14 +356,14 @@
       "aho-corasick-1.1.4",
       "allocator-api2-0.2.21",
       "approx-0.5.1",
-      "arrow-array-60.0.0",
-      "arrow-buffer-60.0.0",
-      "arrow-cmp-60.0.0",
-      "arrow-data-60.0.0",
-      "arrow-ipc-60.0.0",
-      "arrow-pyarrow-60.0.0",
-      "arrow-schema-60.0.0",
-      "arrow-select-60.0.0",
+      "arrow-array-60.1.0",
+      "arrow-buffer-60.1.0",
+      "arrow-cmp-60.1.0",
+      "arrow-data-60.1.0",
+      "arrow-ipc-60.1.0",
+      "arrow-pyarrow-60.1.0",
+      "arrow-schema-60.1.0",
+      "arrow-select-60.1.0",
       "base64-0.23.1",
       "bitflags-2.13.1",
       "block-buffer-0.12.1",
@@ -559,9 +559,9 @@
         }
       ]
     },
-    "arrow-array-60.0.0": {
+    "arrow-array-60.1.0": {
       "nome": "arrow-array",
-      "versione": "60.0.0",
+      "versione": "60.1.0",
       "licenza": "Apache-2.0 AND MIT",
       "repository": "https://github.com/apache/arrow-rs",
       "autori": [
@@ -576,7 +576,7 @@
         },
         {
           "file": "LICENSE.txt",
-          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "03548525ec3706de58e48ef6e3c455582557a0ad3b54a2da9a3819add35dfb72",
           "origine": "pacchetto"
         },
         {
@@ -586,9 +586,9 @@
         }
       ]
     },
-    "arrow-buffer-60.0.0": {
+    "arrow-buffer-60.1.0": {
       "nome": "arrow-buffer",
-      "versione": "60.0.0",
+      "versione": "60.1.0",
       "licenza": "Apache-2.0",
       "repository": "https://github.com/apache/arrow-rs",
       "autori": [
@@ -598,7 +598,7 @@
       "avvisi": [
         {
           "file": "LICENSE.txt",
-          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "03548525ec3706de58e48ef6e3c455582557a0ad3b54a2da9a3819add35dfb72",
           "origine": "pacchetto"
         },
         {
@@ -608,9 +608,9 @@
         }
       ]
     },
-    "arrow-cmp-60.0.0": {
+    "arrow-cmp-60.1.0": {
       "nome": "arrow-cmp",
-      "versione": "60.0.0",
+      "versione": "60.1.0",
       "licenza": "Apache-2.0",
       "repository": "https://github.com/apache/arrow-rs",
       "autori": [
@@ -620,7 +620,7 @@
       "avvisi": [
         {
           "file": "LICENSE.txt",
-          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "03548525ec3706de58e48ef6e3c455582557a0ad3b54a2da9a3819add35dfb72",
           "origine": "pacchetto"
         },
         {
@@ -630,9 +630,9 @@
         }
       ]
     },
-    "arrow-data-60.0.0": {
+    "arrow-data-60.1.0": {
       "nome": "arrow-data",
-      "versione": "60.0.0",
+      "versione": "60.1.0",
       "licenza": "Apache-2.0",
       "repository": "https://github.com/apache/arrow-rs",
       "autori": [
@@ -642,7 +642,7 @@
       "avvisi": [
         {
           "file": "LICENSE.txt",
-          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "03548525ec3706de58e48ef6e3c455582557a0ad3b54a2da9a3819add35dfb72",
           "origine": "pacchetto"
         },
         {
@@ -652,9 +652,9 @@
         }
       ]
     },
-    "arrow-ipc-60.0.0": {
+    "arrow-ipc-60.1.0": {
       "nome": "arrow-ipc",
-      "versione": "60.0.0",
+      "versione": "60.1.0",
       "licenza": "Apache-2.0",
       "repository": "https://github.com/apache/arrow-rs",
       "autori": [
@@ -664,7 +664,7 @@
       "avvisi": [
         {
           "file": "LICENSE.txt",
-          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "03548525ec3706de58e48ef6e3c455582557a0ad3b54a2da9a3819add35dfb72",
           "origine": "pacchetto"
         },
         {
@@ -674,9 +674,9 @@
         }
       ]
     },
-    "arrow-pyarrow-60.0.0": {
+    "arrow-pyarrow-60.1.0": {
       "nome": "arrow-pyarrow",
-      "versione": "60.0.0",
+      "versione": "60.1.0",
       "licenza": "Apache-2.0",
       "repository": "https://github.com/apache/arrow-rs",
       "autori": [
@@ -686,7 +686,7 @@
       "avvisi": [
         {
           "file": "LICENSE.txt",
-          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "03548525ec3706de58e48ef6e3c455582557a0ad3b54a2da9a3819add35dfb72",
           "origine": "pacchetto"
         },
         {
@@ -696,9 +696,9 @@
         }
       ]
     },
-    "arrow-schema-60.0.0": {
+    "arrow-schema-60.1.0": {
       "nome": "arrow-schema",
-      "versione": "60.0.0",
+      "versione": "60.1.0",
       "licenza": "Apache-2.0",
       "repository": "https://github.com/apache/arrow-rs",
       "autori": [
@@ -708,7 +708,7 @@
       "avvisi": [
         {
           "file": "LICENSE.txt",
-          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "03548525ec3706de58e48ef6e3c455582557a0ad3b54a2da9a3819add35dfb72",
           "origine": "pacchetto"
         },
         {
@@ -718,9 +718,9 @@
         }
       ]
     },
-    "arrow-select-60.0.0": {
+    "arrow-select-60.1.0": {
       "nome": "arrow-select",
-      "versione": "60.0.0",
+      "versione": "60.1.0",
       "licenza": "Apache-2.0",
       "repository": "https://github.com/apache/arrow-rs",
       "autori": [
@@ -730,7 +730,7 @@
       "avvisi": [
         {
           "file": "LICENSE.txt",
-          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sha256": "03548525ec3706de58e48ef6e3c455582557a0ad3b54a2da9a3819add35dfb72",
           "origine": "pacchetto"
         },
         {

@@ -59,13 +59,11 @@ fn errore_di_contratto(messaggio: impl Into<String>) -> PlenoraError {
 /// e `Union`, a qualunque profondita' (valori di dictionary, figli di
 /// liste, struct e mappe).
 ///
-/// Arrow 60.0.0 li gestisce ancora male in punti su cui i kernel poggiano
-/// (`concat` di run-end trabocca sulle fini `Int16`, `logical_nulls`
-/// sbaglia sulle union dense a un campo con id diverso da 0; `take` su
-/// run-end con indici nulli, sbagliato in 59.2.0, in 60.0.0 e' corretto):
-/// un caso che non si garantisce si rifiuta al confine,
-/// una volta, e nessun kernel li vede. docs/runner.md, «Limiti dichiarati del
-/// runner».
+/// Arrow 60.1.0 corregge i difetti noti di `concat` sulle run-end e di
+/// `logical_nulls` sulle union. L'aggiornamento di sicurezza non amplia il
+/// contratto: questi tipi restano esclusi finché non sono qualificati su
+/// tutti i kernel. Il rifiuto precede lettura e concatenazione dei blocchi.
+/// docs/runner.md, «Limiti dichiarati del runner».
 ///
 /// # Errors
 ///
