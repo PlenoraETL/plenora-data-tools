@@ -10,7 +10,7 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
-## [4.1.1] - non rilasciata
+## [4.1.1] - 2026-11-06
 
 ### Sicurezza
 
@@ -52,6 +52,20 @@ coda ora leggono i lati correnti e l'inserimento collega il successore al
 nuovo predecessore. Versione kernel di `geo.concave_hull` da 1 a 2;
 analisi del contratto invariata. Regressione dei dodici punti, oracolo
 razionale enumerativo e prove deterministiche di semplicita' e copertura.
+
+### Prove
+
+Ogni scenario di prova ha un solo esito atteso, derivato dallo scenario e
+indipendente dalla produzione: i rifiuti si verificano per categoria e fase
+(`assert_rifiuto!`), i successi con valori e metadati attesi
+(`assert_successo!`). Corrette 381 funzioni di prova che accettavano esiti
+alternativi, controllavano solo il testo dell'errore o confrontavano due
+esecuzioni della produzione. La guardia `scripts/check_esito_unico.py`, nella
+CI, copre le forme dirette (clippy sui metodi di `Result`, token Rust per
+`matches!`, albero sintattico per i test Python); i casi fuori ambito sono
+dichiarati in [limiti](docs/limiti.md). L'audit ha portato alla luce il
+difetto di `geo.concave_hull` corretto sopra. Nessuna modifica di
+comportamento della libreria.
 
 ## [4.1.0] - 2026-11-05
 
