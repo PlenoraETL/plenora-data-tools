@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Produzione: divieti degli esiti riattivati agli ingressi delle prove"
+)]
 //! plenora-kernels-table — kernel tabellari puri su Arrow `RecordBatch`.
 //!
 //! Ogni operazione `table.*` del catalogo ha due parti: l'analisi del
@@ -16,6 +20,7 @@
 //! di memoria per il rifiuto preventivo ([`preflight_output_bytes`]) e la
 //! costruzione dei batch d'uscita.
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[macro_use]
 #[path = "../../../tests/comune/esito.rs"]
@@ -127,9 +132,11 @@ pub mod strings;
 mod temporale;
 pub mod utility;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod test_support;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod binari_oracolo;
 
@@ -2209,6 +2216,7 @@ pub(crate) fn require_join_geometry_support(left: &Schema, right: &Schema) -> Re
 
 pub(crate) mod geometry_provenance;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     /// **Il motivo di una regex rifiutata non cita il pattern**: il testo

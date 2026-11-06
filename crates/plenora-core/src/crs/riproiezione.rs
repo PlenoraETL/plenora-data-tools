@@ -691,7 +691,9 @@ pub fn riproiettabile(crs: &ResolvedCrs) -> bool {
     crs.integrato.and_then(tabella::definizione).is_some()
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod oracolo;
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests;

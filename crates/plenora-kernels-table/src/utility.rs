@@ -551,6 +551,7 @@ pub fn uuid_generator(batch: &RecordBatch, config: &UuidGenerator) -> Result<Rec
     )
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::arrow::schema::{Field, Schema};

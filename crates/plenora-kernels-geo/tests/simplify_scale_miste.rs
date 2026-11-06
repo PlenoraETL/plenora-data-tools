@@ -10,9 +10,12 @@ fn linee_a_scale_diverse() -> Geometry<f64> {
     ]))
 }
 
-fn rifiuto_numerico(geometry: &Geometry<f64>, tolerance: f64) {
+fn rifiuto_numerico(geometry: &Geometry<f64>, tolerance: f64, vertici: u64) {
     // Il contatore pubblico esegue ensure_valid prima di contare.
-    assert!(operations::vertex_count(geometry).is_ok());
+    assert_eq!(
+        (operations::vertex_count(geometry)).expect("successo atteso"),
+        vertici
+    );
     assert!(matches!(
         operations::simplify(geometry, tolerance),
         Err(operations::OperationError::Internal(
@@ -23,10 +26,14 @@ fn rifiuto_numerico(geometry: &Geometry<f64>, tolerance: f64) {
 
 #[test]
 fn simplify_segmento_subnormale_con_coordinate_finite() {
-    rifiuto_numerico(&linee_a_scale_diverse(), 1e-220);
+    rifiuto_numerico(&linee_a_scale_diverse(), 1e-220, 5);
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Controprova isolata del vendor: in debug il panico è obbligatorio, in release si confronta il risultato completo. Il prodotto ha prove protette distinte."
+)]
 fn controprova_vendor_non_presidiato_debug_e_release() {
     let Geometry::MultiLineString(lines) = linee_a_scale_diverse() else {
         unreachable!();
@@ -65,13 +72,13 @@ fn simplify_poligoni_a_scale_diverse_con_coordinate_finite() {
             vec![],
         ),
     ]));
-    rifiuto_numerico(&geometry, 1e-220);
+    rifiuto_numerico(&geometry, 1e-220, 9);
 }
 
 #[test]
 fn simplify_wkt_finito_attraversa_parser_e_validazione() {
     let geometry = geometry_from_wkt("MULTILINESTRING((0 0,0 1e-200,1e-200 0),(1 1,2 2))").unwrap();
-    rifiuto_numerico(&geometry, 1.0);
+    rifiuto_numerico(&geometry, 1.0, 5);
 }
 
 #[test]
@@ -80,7 +87,7 @@ fn simplify_collezione_non_restituisce_componenti_parziali() {
         Geometry::LineString(LineString::from(vec![(0.0, 0.0), (1.0, 1.0)])),
         linee_a_scale_diverse(),
     ]));
-    rifiuto_numerico(&geometry, 0.1);
+    rifiuto_numerico(&geometry, 0.1, 7);
 }
 
 #[test]
@@ -96,7 +103,10 @@ fn simplify_componente_minuscola_normalizzata_resta_ammessa() {
         (0.0, 1e-200),
         (1e-200, 0.0),
     ]));
-    assert!(operations::simplify(&geometry, 1e-220).is_ok());
+    assert_eq!(
+        (operations::simplify(&geometry, 1e-220)).expect("successo atteso"),
+        geometry
+    );
 }
 
 #[test]

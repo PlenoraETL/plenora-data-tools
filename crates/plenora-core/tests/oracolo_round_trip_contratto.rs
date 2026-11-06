@@ -369,7 +369,19 @@ fn emissione_rifiuta_crs_legacy_diverso_dal_contratto() {
         ]));
         let result = arrow_schema_from_contract(&input);
         if declared == "EPSG:3857" {
-            assert!(result.is_ok(), "{result:?}");
+            let output =
+                contract_from_arrow_schema(result.expect("emissione coerente"), resolve_crs)
+                    .expect("rilettura");
+            assert_eq!(
+                forma_del_crs(&output.geometries[0].crs),
+                forma_del_crs(&input.geometries[0].crs)
+            );
+            assert_eq!(
+                output.geometries[0].dimensions,
+                input.geometries[0].dimensions
+            );
+            assert_eq!(output.active_geometry, input.active_geometry);
+            assert_eq!(output.properties, input.properties);
         } else {
             assert!(
                 matches!(result, Err(plenora_core::PlenoraError::Crs(_))),

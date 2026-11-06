@@ -289,6 +289,7 @@ pub fn analyze_table_contract(
 // Test
 // ---------------------------------------------------------------------------
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -823,14 +824,30 @@ mod tests {
         // concat N-aria: 3 input ammessi.
         let (a, b) = simple_pair();
         let (_, c) = simple_pair();
-        assert!(analyze_table_contract(
+        let output = analyze_table_contract(
             "table.concat",
             &[a, b, c],
             &json!({}),
             &mut FieldAllocator::default(),
-            &crate::Limits::default()
+            &crate::Limits::default(),
         )
-        .is_ok());
+        .expect("concat ternario");
+        assert_eq!(
+            output
+                .schema
+                .fields()
+                .iter()
+                .map(|f| (f.name().as_str(), f.data_type(), f.is_nullable()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("id", &DataType::Int64, false),
+                ("name", &DataType::Utf8, true)
+            ]
+        );
+        assert_eq!(proven_rows(&output), 200);
+        assert!(output.geometries.is_empty());
+        assert_eq!(output.active_geometry, None);
+        assert_eq!(output.properties.sorted_by, None);
     }
 
     // -- utility / strings / security / dates --------------------------------
@@ -957,6 +974,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Assenza della colonna name_masked nello schema di successo con overwrite; non è un rifiuto del kernel. La colonna name è verificata per tipo e nullabilità."
+    )]
     fn hash_and_mask_ops_append_utf8() {
         let md5 = ok(
             "table.md5_hash",
@@ -2143,6 +2164,10 @@ mod tests {
     // -- columns / cleansing ---------------------------------------------------
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Assenza di geom dopo drop_columns riuscito; si verificano separatamente geometrie e contratto tabellare. field_with_name è una ricerca Arrow, non l’esito del kernel."
+    )]
     fn drop_columns_removes_geometry_and_becomes_tabular() {
         let output = ok(
             "table.drop_columns",
@@ -3659,6 +3684,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Assenza della sorgente st dopo unnest riuscito con drop_source predefinito; i campi espansi sono verificati per tipo e nullabilità."
+    )]
     fn unnest_expands_struct_fields() {
         let output = ok("table.unnest", &[geo_contract()], json!({"column": "st"}));
         assert!(
@@ -3810,6 +3839,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Assenza della chiave destra rid dopo join riuscito; colonne risultanti e geometria sono verificate separatamente, non è un rifiuto di produzione."
+    )]
     fn join_suffixes_columns_and_forces_nullable() {
         let output = ok(
             "table.join",
@@ -3928,6 +3961,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Assenza della chiave rid dopo asof_join riuscito; campi, numero righe e ordinamento del contratto sono verificati separatamente."
+    )]
     fn asof_join_keeps_left_rows_and_appends_right_columns() {
         let output = ok(
             "table.asof_join",
@@ -4139,7 +4176,7 @@ mod tests {
         );
         let kernel =
             crate::metadata_schema_input("table.union_distinct", &[&left.schema, &right.schema])
-                .unwrap_err();
+                .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert!(matches!(analysis, PlenoraError::InvalidPlan(_)));
         assert!(matches!(kernel, PlenoraError::Schema(_)));
         for error in [analysis, kernel] {
@@ -4796,7 +4833,7 @@ mod tests {
             let expected = kernel(left, right, &config);
             // La fixture senza metadati dichiara `geom` solo nel contratto:
             // anche il secondo ramo che la possiede deve dichiararla.
-            let right_contract = if right.schema().field_with_name("geom").is_ok() {
+            let right_contract = if right.schema().fields().iter().any(|f| f.name() == "geom") {
                 geo_input(right)
             } else {
                 DataContract::tabular(right.schema())

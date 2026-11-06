@@ -20,11 +20,8 @@ fn rifiutato_per_auto_intersezione(testo: &str) {
     }
 }
 
-fn accettato(testo: &str) {
-    assert!(
-        geometry_from_wkt(testo).is_ok(),
-        "{testo:?} e' valido e deve restarlo"
-    );
+fn accettato(testo: &str, atteso: &geo::Geometry<f64>) {
+    assert_eq!(geometry_from_wkt(testo).expect("WKT valido"), *atteso);
 }
 
 /// I tre reperti, nella forma normalizzata che ne da' il parser.
@@ -78,15 +75,74 @@ fn una_punta_sul_vertice_di_chiusura_e_rifiutata() {
 /// che ha tre punti allineati e resterebbe verde.
 #[test]
 fn vertici_collineari_nello_stesso_verso_restano_validi() {
-    accettato("POLYGON((0 0,5 0,10 0,10 10,0 10,0 0))");
-    accettato("POLYGON((0 0,10 0,10 5,10 10,0 10,0 5,0 0))");
-    accettato("POLYGON((0 0,10 0,10 10,0 10,0 0),(2 2,4 2,6 2,6 6,2 6,2 2))");
+    accettato(
+        "POLYGON((0 0,5 0,10 0,10 10,0 10,0 0))",
+        &geo::Geometry::Polygon(geo::Polygon::new(
+            geo::LineString::from(vec![
+                (0.0, 0.0),
+                (5.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        )),
+    );
+    accettato(
+        "POLYGON((0 0,10 0,10 5,10 10,0 10,0 5,0 0))",
+        &geo::Geometry::Polygon(geo::Polygon::new(
+            geo::LineString::from(vec![
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 5.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (0.0, 5.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        )),
+    );
+    accettato(
+        "POLYGON((0 0,10 0,10 10,0 10,0 0),(2 2,4 2,6 2,6 6,2 6,2 2))",
+        &geo::Geometry::Polygon(geo::Polygon::new(
+            geo::LineString::from(vec![
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (0.0, 0.0),
+            ]),
+            vec![geo::LineString::from(vec![
+                (2.0, 2.0),
+                (4.0, 2.0),
+                (6.0, 2.0),
+                (6.0, 6.0),
+                (2.0, 6.0),
+                (2.0, 2.0),
+            ])],
+        )),
+    );
 }
 
 /// Controcaso: vertici ripetuti consecutivi non sono una punta.
 #[test]
 fn vertici_ripetuti_non_sono_una_punta() {
-    accettato("POLYGON((0 0,10 0,10 0,10 10,0 10,0 0))");
+    accettato(
+        "POLYGON((0 0,10 0,10 0,10 10,0 10,0 0))",
+        &geo::Geometry::Polygon(geo::Polygon::new(
+            geo::LineString::from(vec![
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        )),
+    );
 }
 
 /// Quasi collineare non e' collineare: il controllo e' esatto, senza
@@ -95,7 +151,19 @@ fn vertici_ripetuti_non_sono_una_punta() {
 /// valido.
 #[test]
 fn un_vertice_quasi_collineare_non_e_una_punta() {
-    accettato("POLYGON((0 0,10 0,5 1e-300,0 10,0 0))");
+    accettato(
+        "POLYGON((0 0,10 0,5 1e-300,0 10,0 0))",
+        &geo::Geometry::Polygon(geo::Polygon::new(
+            geo::LineString::from(vec![
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (5.0, 1e-300),
+                (0.0, 10.0),
+                (0.0, 0.0),
+            ]),
+            vec![],
+        )),
+    );
 }
 
 /// Un `Triangle` coi vertici collineari e' degenere anche a coordinate
@@ -138,5 +206,5 @@ fn un_triangolo_collineare_a_coordinate_estreme_e_rifiutato() {
         Coord { x: lontano, y: 0.0 },
         Coord { x: 0.0, y: lontano },
     ));
-    assert!(evaluate(&vero, &punto, SpatialPredicate::Intersects).is_ok());
+    assert!((evaluate(&vero, &punto, SpatialPredicate::Intersects)).expect("successo atteso"));
 }

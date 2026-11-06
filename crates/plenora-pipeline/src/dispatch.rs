@@ -359,11 +359,13 @@ impl PassoPreparato {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[macro_use]
 #[path = "../../../tests/comune/esito.rs"]
 mod esito;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::PassoPreparato;

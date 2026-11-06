@@ -566,6 +566,7 @@ pub fn valida_valori_numerici(array: &ArrayRef) -> Result<()> {
     Ok(())
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

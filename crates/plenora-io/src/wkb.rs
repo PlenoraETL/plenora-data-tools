@@ -330,6 +330,7 @@ pub fn tipo_da_nome(nome: &str) -> Option<(GeometryType, bool)> {
     Some((tipo, z))
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;

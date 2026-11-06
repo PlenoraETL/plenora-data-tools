@@ -1,4 +1,8 @@
 //! Geometrie multiple e primaria al confine dei file.
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito;
+
 use plenora_core::{
     arrow::{
         array::{BinaryArray, RecordBatch},
@@ -180,9 +184,10 @@ fn ipc_conserva_assenza_primaria_anche_con_una_sola_geometria() {
             assert_eq!(t.columns(), read.columns());
             assert!(contratto(&read).active_geometry.is_none());
         }
-        assert_eq!(
-            prepara(&t).err().unwrap().category(),
-            ErrorCategory::Unsupported
+        assert_rifiuto!(
+            prepara(&t),
+            ErrorCategory::Unsupported,
+            plenora_core::ErrorPhase::Validate
         );
     }
 }
@@ -207,7 +212,8 @@ fn secondaria_invalida_non_pubblica_ne_sostituisce() {
             sovrascrivi: true,
             ..Default::default()
         };
-        let error = plenora_io::scrivi_tabella(&invalid, &path, &options).unwrap_err();
+        let error = plenora_io::scrivi_tabella(&invalid, &path, &options)
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert_eq!(error.category(), ErrorCategory::DataMapping);
         assert!(!error.to_string().contains("segreto"));
         if existing {
@@ -247,7 +253,7 @@ fn io700_crs_ridotto_non_diventa_equivalente_per_solo_id() {
         .join("tests/dati/io700_multigeometria_crs_ridotto.parquet");
     assert_eq!(
         plenora_io::leggi_tabella(&path, None, u64::MAX)
-            .unwrap_err()
+            .expect_err("rifiuto atteso: categoria verificata dalla prova")
             .category(),
         ErrorCategory::Crs
     );
@@ -288,7 +294,9 @@ fn dichiarazioni_secondarie_incoerenti_rifiutate_anche_senza_righe() {
             .unwrap()
             .slice(0, rows);
             assert_eq!(
-                applica(&tab, &prepared.geo).unwrap_err().category(),
+                applica(&tab, &prepared.geo)
+                    .expect_err("rifiuto atteso: categoria verificata dalla prova")
+                    .category(),
                 category
             );
         }
@@ -339,7 +347,7 @@ fn metadati_invariati_conservati_e_riferimenti_pendenti_rifiutati() {
     geo["primary_column"] = serde_json::json!("assente");
     assert_eq!(
         applica(&prepared.tabella, &geo.to_string())
-            .unwrap_err()
+            .expect_err("rifiuto atteso: categoria verificata dalla prova")
             .category(),
         ErrorCategory::InvalidPlan
     );
@@ -347,7 +355,7 @@ fn metadati_invariati_conservati_e_riferimenti_pendenti_rifiutati() {
     geo["columns"]["assente"] = geo["columns"]["traccia"].clone();
     assert_eq!(
         applica(&prepared.tabella, &geo.to_string())
-            .unwrap_err()
+            .expect_err("rifiuto atteso: categoria verificata dalla prova")
             .category(),
         ErrorCategory::InvalidPlan
     );
@@ -406,13 +414,15 @@ fn footer_senza_tipi_non_nasconde_dichiarazioni_secondarie() {
         let mut geo: serde_json::Value = serde_json::from_str(&prepared.geo).unwrap();
         geo["columns"]["traccia"]["geometry_types"] = serde_json::json!([]);
         assert_eq!(
-            applica(&t, &geo.to_string()).unwrap_err().category(),
+            applica(&t, &geo.to_string())
+                .expect_err("rifiuto atteso: categoria verificata dalla prova")
+                .category(),
             category
         );
         if category == ErrorCategory::Unsupported {
             assert_eq!(
                 applica(&t.slice(0, 0), &geo.to_string())
-                    .unwrap_err()
+                    .expect_err("rifiuto atteso: categoria verificata dalla prova")
                     .category(),
                 category
             );
@@ -448,9 +458,10 @@ fn secondaria_senza_crs_rifiuta_scrittura() {
         input.columns().to_vec(),
     )
     .unwrap();
-    assert_eq!(
-        prepara(&input).err().unwrap().category(),
-        ErrorCategory::Crs
+    assert_rifiuto!(
+        prepara(&input),
+        ErrorCategory::Crs,
+        plenora_core::ErrorPhase::Validate
     );
 }
 
@@ -683,7 +694,8 @@ fn fusioni_dirette_multigeometria_senza_bbox_e_crs_discordanti_a_zero_righe() {
         )
         .unwrap();
         for count in [0, left.num_rows()] {
-            let error = run(op, &left.slice(0, count), &wrong.slice(0, count)).unwrap_err();
+            let error = run(op, &left.slice(0, count), &wrong.slice(0, count))
+                .expect_err("rifiuto atteso: categoria verificata dalla prova");
             assert_eq!(error.category(), ErrorCategory::Crs);
         }
     }
@@ -917,14 +929,14 @@ fn primaria_senza_id_composizioni_e_derivate_non_promosse() {
                 &serde_json::from_value(json!({"column":"s"})).unwrap(),
                 &limits
             )
-            .unwrap_err()
+            .expect_err("rifiuto atteso: categoria verificata dalla prova")
             .category(),
             ErrorCategory::Crs
         );
         let plan = plenora_pipeline::Pipeline::from_json(&json!({"version":1,"inputs":["t"],"steps":[{"op":"table.unnest","in":["t"],"out":"o","config":{"column":"s"}}],"outputs":["o"]}).to_string()).unwrap();
         assert_eq!(
             plan.validate(&[("t", nested.schema())])
-                .unwrap_err()
+                .expect_err("rifiuto atteso: categoria verificata dalla prova")
                 .category(),
             ErrorCategory::Crs
         );

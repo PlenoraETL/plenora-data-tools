@@ -814,7 +814,8 @@ fn i_produttori_sono_i_kernel() {
         ],
     )
     .unwrap();
-    let errore = un_passo_con_crs("geo.from_coords", json!({}), con_null, UTM).unwrap_err();
+    let errore = un_passo_con_crs("geo.from_coords", json!({}), con_null, UTM)
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{errore}");
     assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
 }
@@ -824,6 +825,10 @@ fn i_produttori_sono_i_kernel() {
 /// stesso contratto d'uscita.
 #[test]
 #[allow(clippy::too_many_lines)] // Un caso per operazione, in un solo elenco.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Solo diagnostica nel ramo panic: successo e rifiuto attesi sono gia decisi dalla fixture e verificati sopra."
+)]
 fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
     use ErrorCategory::{Crs, InvalidPlan};
     let farfalla = Geometry::Polygon(Polygon::new(
@@ -969,8 +974,12 @@ fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
             assert!(stesso_errore(&runner, &analisi));
             continue;
         }
-        assert!(validata.is_ok(), "scenario valido: {op} {config}");
-        assert!(atteso.is_ok(), "scenario valido: {op} {config}");
+        validata
+            .as_ref()
+            .expect("successo: contratto verificato sotto");
+        atteso
+            .as_ref()
+            .expect("successo: schema indipendente verificato sotto");
         match (&validata, &atteso) {
             (Ok(validata), Ok(contratto)) => {
                 // Il runner porta ogni contratto nello schema che emette
@@ -1013,7 +1022,8 @@ fn le_coordinate_fuori_dominio_si_rifiutano() {
             json!({"reference_wkb": esadecimale_di(&Geometry::Point(Point::new(X0, Y0))), "tolerance": 1.0}),
         ),
     ] {
-        let errore = un_passo(op, config, std::slice::from_ref(&fuori)).unwrap_err();
+        let errore = un_passo(op, config, std::slice::from_ref(&fuori))
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert_eq!(errore.category(), ErrorCategory::Crs, "{op}: {errore}");
     }
     // La diagnostica descrive le tuple, senza interpretarle nel CRS.
@@ -1035,7 +1045,8 @@ fn le_coordinate_fuori_dominio_si_rifiutano() {
         ],
     )
     .unwrap();
-    let errore = un_passo_con_crs("geo.from_coords", json!({}), coordinate, LONLAT).unwrap_err();
+    let errore = un_passo_con_crs("geo.from_coords", json!({}), coordinate, LONLAT)
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::Crs, "{errore}");
 }
 
@@ -1065,7 +1076,8 @@ fn i_tipi_dichiarati_di_un_ingresso_si_verificano() {
         ingresso.columns().to_vec(),
     )
     .unwrap();
-    let errore = un_passo("geo.area", json!({}), &[dichiarata]).unwrap_err();
+    let errore = un_passo("geo.area", json!({}), &[dichiarata])
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::DataMapping, "{errore}");
 }
 
@@ -1209,7 +1221,8 @@ fn un_passo_geo_oltre_il_budget_si_rifiuta_prima_di_eseguire() {
         ),
         6 * 1024 * 1024,
     );
-    let errore = esegui(&pipeline, &[("t", ingresso.clone())]).unwrap_err();
+    let errore = esegui(&pipeline, &[("t", ingresso.clone())])
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     let PlenoraError::ResourceLimit(messaggio) = &errore else {
         panic!("atteso ResourceLimit: {errore}");
     };
@@ -1268,7 +1281,8 @@ fn un_risultato_vuoto_in_una_colonna_non_nullable_e_un_errore() {
         ingresso.columns().to_vec(),
     )
     .unwrap();
-    let errore = un_passo("geo.point_on_surface", json!({}), &[non_nullable]).unwrap_err();
+    let errore = un_passo("geo.point_on_surface", json!({}), &[non_nullable])
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{errore}");
     assert!(errore.to_string().contains("non ammette null"), "{errore}");
 }

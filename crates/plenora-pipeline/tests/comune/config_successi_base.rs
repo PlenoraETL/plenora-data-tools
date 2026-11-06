@@ -241,7 +241,12 @@ pub fn atteso(op: &str, c: &Value, inputs: &[RecordBatch]) -> Option<RecordBatch
             let mut columns = Vec::new();
             for (side, other, suffix) in [(&left, &right, "_x"), (&right, &left, "_y")] {
                 for (i, f) in side.schema().fields().iter().enumerate() {
-                    let name = if other.schema().index_of(f.name()).is_ok() {
+                    let name = if other
+                        .schema()
+                        .fields()
+                        .iter()
+                        .any(|other| other.name() == f.name())
+                    {
                         format!("{}{suffix}", f.name())
                     } else {
                         f.name().clone()

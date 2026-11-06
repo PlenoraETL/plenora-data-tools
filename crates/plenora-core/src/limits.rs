@@ -345,6 +345,7 @@ pub(crate) fn expansion_exceeded_wide(output_rows: u64, base_rows: u128, factor:
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::{expansion_exceeded, Limits, PlanLimits, DEFAULT_MAX_GOVERNED_MEMORY_BYTES};
@@ -405,13 +406,10 @@ mod tests {
             azzerato(|p| p.max_config_bytes_per_node = 0),
         ];
         for limits in ammessi {
-            assert!(
-                limits.validate().is_ok(),
-                "un tetto sui nodi a zero e' rispettabile da un pass-through"
-            );
+            assert_successo!(limits.validate(), ());
         }
         // I default restano validi: la regola nuova non ne rifiuta nessuno.
-        assert!(Limits::default().validate().is_ok());
+        assert_successo!(Limits::default().validate(), ());
     }
 
     #[test]

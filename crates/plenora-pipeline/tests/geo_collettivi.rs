@@ -1050,7 +1050,8 @@ fn make_valid_e_l_adapter_dei_kernel() {
     comune_geo::assert_poligoni(riparate[0].as_ref().expect("farfalla riparata"), &attesa);
     assert!(riparate[1].is_none());
     // La stessa geometria su un'operazione che la valida: rifiutata.
-    let errore = un_passo_verificato("geo.area", json!({}), &[ingresso]).unwrap_err();
+    let errore = un_passo_verificato("geo.area", json!({}), &[ingresso])
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{errore}");
     assert_eq!(errore.phase(), plenora_core::ErrorPhase::Validate);
 }
@@ -1138,7 +1139,8 @@ fn una_griglia_oltre_il_budget_si_rifiuta_prima_di_eseguire() {
         64 * 1024 * 1024,
     );
     pipeline.crs = Some(UTM.to_owned());
-    let errore = esegui(&pipeline, &[("t", innesco)]).unwrap_err();
+    let errore = esegui(&pipeline, &[("t", innesco)])
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     let PlenoraError::ResourceLimit(messaggio) = &errore else {
         panic!("atteso ResourceLimit: {errore}");
     };
@@ -1161,7 +1163,8 @@ fn le_espansioni_rispettano_il_limite_dell_arco() {
         max_expansion_factor: Some(100.0),
         ..plenora_pipeline::LimitiParziali::default()
     });
-    let errore = esegui(&pipeline, &[("t", ingresso)]).unwrap_err();
+    let errore = esegui(&pipeline, &[("t", ingresso)])
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::ResourceLimit, "{errore}");
 }
 
@@ -1445,13 +1448,23 @@ fn make_valid_geografico_usa_il_passo_sul_raggio_polare() {
     };
     let accetta = |d: f64, precisione: Precision| {
         let t = tabella_con(d);
-        make_valid_batches(
+        match make_valid_batches(
             &t.schema(),
             std::slice::from_ref(&t),
             "geometry",
             precisione,
-        )
-        .is_ok()
+        ) {
+            Ok(output) => {
+                assert_eq!(output.len(), 1);
+                assert_eq!(output[0].num_rows(), t.num_rows());
+                true
+            }
+            Err(error) => {
+                assert_eq!(error.category(), plenora_core::ErrorCategory::Unsupported);
+                assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
+                false
+            }
+        }
     };
     let soglia = |precisione: Precision| {
         let (mut sotto, mut sopra) = (1e-9, 9e-8);
@@ -1478,7 +1491,21 @@ fn make_valid_geografico_usa_il_passo_sul_raggio_polare() {
     let d = f64::midpoint(soglia_nuova, soglia_vecchia);
     assert!(!accetta(d, vecchia));
     let uscita = un_passo("geo.make_valid", json!({}), &[tabella_con(d)]);
-    assert!(uscita.is_ok(), "{uscita:?}");
+    let uscita = uscita.expect("precisione del CRS");
+    let input = tabella_con(d);
+    let diretto = make_valid_batches(
+        &input.schema(),
+        std::slice::from_ref(&input),
+        "geometry",
+        nuova,
+    )
+    .expect("riferimento diretto");
+    assert_eq!(diretto.len(), 1);
+    assert_eq!(uscita.columns(), diretto[0].columns());
+    assert_eq!(
+        uscita.schema(),
+        comune_geo::schema_geo_indipendente("geo.make_valid", &input, &json!({}), None)
+    );
 }
 
 /// Stesso piano, con schema atteso dichiarato indipendentemente dai kernel.

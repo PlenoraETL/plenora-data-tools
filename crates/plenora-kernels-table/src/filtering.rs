@@ -846,6 +846,7 @@ pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBa
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::arrow::array::{

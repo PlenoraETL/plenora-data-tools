@@ -202,6 +202,7 @@ pub fn compare_decimal_with_f64(unscaled: i128, scale: i8, expected: f64) -> Opt
     })
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -154,6 +154,7 @@ pub(in crate::analyze) fn analyze_expand(
 
 /// Il contratto con la colonna geometria attiva dichiarata `nullable` (campo
 /// e contratto di colonna), il resto invariato.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub(in crate::analyze) fn with_active_geometry_nullability(
     contract: &DataContract,

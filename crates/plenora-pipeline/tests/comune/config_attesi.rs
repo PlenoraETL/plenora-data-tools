@@ -68,9 +68,17 @@ fn names(t: &RecordBatch, c: &Value, key: &str, scalar: bool) -> Result<(), ()> 
     }
     Ok(())
 }
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Classificatore indipendente della configurazione della fixture: determina latteso prima di eseguire il prodotto."
+)]
 fn number(v: &Value) -> bool {
     v.is_number() || v.as_str().is_some_and(|s| s.parse::<f64>().is_ok())
 }
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Classificatore indipendente della configurazione della fixture: determina latteso prima di eseguire il prodotto."
+)]
 fn filter(t: Tipo, c: &Value) -> Result<(), ()> {
     let op = text(&c["operator"])?;
     let v = &c["value"];
@@ -180,6 +188,10 @@ pub fn validazione(op: &str, c: &Value, inputs: &[RecordBatch]) -> Option<ErrorC
     }
 }
 #[allow(clippy::too_many_lines, clippy::match_same_arms)] // Una regola esplicita per famiglia.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Classificatore indipendente della configurazione della fixture: determina latteso prima di eseguire il prodotto."
+)]
 fn valido(op: &str, c: &Value, inputs: &[RecordBatch]) -> Result<(), ()> {
     let t = &inputs[0];
     let col = |key| column(t, c, key);

@@ -541,6 +541,7 @@ pub fn line_locate_point(
     Ok(fraction)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 // Confronti float esatti intenzionali: le fixture sono costruite per
 // produrre valori esatti (coordinate note, round-trip bit-esatti); il

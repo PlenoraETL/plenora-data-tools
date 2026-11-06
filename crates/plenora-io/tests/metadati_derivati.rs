@@ -245,7 +245,7 @@ fn crs_io_discordante_rifiutato_in_ingresso_senza_dati() {
         ]));
     assert_eq!(
         read_geometry_contract_keys(&missing_with_axes)
-            .unwrap_err()
+            .expect_err("rifiuto atteso: categoria verificata dalla prova")
             .category(),
         ErrorCategory::Crs
     );
@@ -296,7 +296,8 @@ fn crs_io_discordante_rifiutato_in_ingresso_senza_dati() {
         }
         let field =
             Field::new("geometry", plenora_core::arrow::DataType::Binary, true).with_metadata(md);
-        let err = read_geometry_contract_keys(&field).unwrap_err();
+        let err = read_geometry_contract_keys(&field)
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert_eq!(err.category(), ErrorCategory::Crs);
         assert!(!err.to_string().contains("EPSG"));
     }
@@ -442,7 +443,9 @@ fn conflitti_crs_nei_file_rifiutati_prima_del_piano() {
             }
             let error = match leggi_tabella(&path, None, u64::MAX) {
                 Err(error) => error,
-                Ok(batch) => plan.validate(&[("t", batch.schema())]).unwrap_err(),
+                Ok(batch) => plan
+                    .validate(&[("t", batch.schema())])
+                    .expect_err("rifiuto atteso: categoria verificata dalla prova"),
             };
             assert_eq!(error.category(), ErrorCategory::Crs);
             assert!(!error.to_string().contains("EPSG"));
@@ -554,7 +557,7 @@ fn fusione_con_epoche_diverse_rifiutata() {
         .unwrap();
         assert_eq!(
             plan.validate(&[("a", schema.clone()), ("b", right.clone())])
-                .unwrap_err()
+                .expect_err("rifiuto atteso: categoria verificata dalla prova")
                 .category(),
             ErrorCategory::Schema
         );
@@ -700,7 +703,7 @@ fn fusioni_srid_presente_assente_e_uguale() {
         for (left, right) in [(Some("100001"), None), (None, Some("100001"))] {
             let error = plan
                 .validate(&[("a", schema_with(left)), ("b", schema_with(right))])
-                .unwrap_err();
+                .expect_err("rifiuto atteso: categoria verificata dalla prova");
             assert_eq!(error.category(), ErrorCategory::Crs, "{op}");
         }
     }

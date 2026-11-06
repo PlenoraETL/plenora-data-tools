@@ -1001,6 +1001,10 @@ fn merge_rejection(key: &str, site: Site, mode: usize, ext: &str) -> Rejection {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Aiuto della matrice: confronta categoria e fase con latteso indipendente della fixture; i successi sono controllati separatamente."
+)]
 fn check_outcome<T>(
     result: &Result<T, PlenoraError>,
     expected: Rejection,
@@ -1803,6 +1807,10 @@ fn qualification_execute(
 
 /// Qualificazione dei trasporti senza sonde artificiali nei metadati.
 #[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Aiuto della matrice: confronta categoria e fase con latteso indipendente della fixture; i successi sono controllati separatamente."
+)]
 fn qualification_part(operations: &'static [OperationDescriptor]) -> Audit {
     prepara_ambiente();
     let dir = tempfile::tempdir().unwrap();
@@ -1989,7 +1997,11 @@ fn qualification_part(operations: &'static [OperationDescriptor]) -> Audit {
                             );
                             if let Some(category) = rejection {
                                 assert_eq!(
-                                    output.unwrap_err().category(),
+                                    output
+                                        .expect_err(
+                                            "rifiuto atteso: categoria verificata dalla prova"
+                                        )
+                                        .category(),
                                     category,
                                     "{} {ext} rifiuto",
                                     op.id

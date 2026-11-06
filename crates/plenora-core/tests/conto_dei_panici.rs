@@ -10,6 +10,10 @@ use plenora_core::panic_policy::{
 };
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Panico intenzionale nel thread corrente, dentro barriera; esito unwind senza assi Plenora e incremento atteso zero verificato. Panico intenzionale nel thread figlio, dentro barriera; esito unwind senza assi Plenora e incremento atteso zero verificato. join del thread con panic_any intenzionale fuori barriera; incremento esatto uno verificato, nessun errore Plenora. catch_unwind del panico intenzionale fuori barriera; incremento esatto due cumulativo verificato, nessun errore Plenora."
+)]
 fn barriera_piu_zero_altro_thread_piu_uno() {
     assert!(
         install(PanicPolicy::Silent),

@@ -1578,6 +1578,7 @@ pub struct BatchSequence {
     pub sequence_number: u64,
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -2188,7 +2189,14 @@ mod tests {
             GeometryTypesProperty::new(TypesDeclaration::Exact, vec![GeometryType::Point]).unwrap();
         assert_eq!(exact.declaration(), TypesDeclaration::Exact);
         // unresolved senza elenco: ok.
-        assert!(GeometryTypesProperty::new(TypesDeclaration::Unresolved, Vec::new()).is_ok());
+        assert_eq!(
+            GeometryTypesProperty::new(TypesDeclaration::Unresolved, Vec::new())
+                .expect("tipi unresolved"),
+            GeometryTypesProperty {
+                declaration: TypesDeclaration::Unresolved,
+                types: Box::new([])
+            }
+        );
     }
 
     #[test]
@@ -2317,6 +2325,7 @@ mod tests {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod origin_tests {
     use super::*;

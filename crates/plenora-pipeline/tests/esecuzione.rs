@@ -406,7 +406,11 @@ fn i_limiti_sulle_righe_si_applicano_ai_dati() {
             ..LimitiParziali::default()
         },
     );
-    assert!(esegui(&solo_uscita, &tabelle).is_ok());
+    attesi::verifica(
+        "table.cross_join",
+        output(&esegui(&solo_uscita, &tabelle).expect("incrocio"), "x"),
+        &attesi::tabella("table.cross_join", &[wide(false), destra()]),
+    );
 
     let ammessa = con_limiti(
         incrocio(),
@@ -415,7 +419,13 @@ fn i_limiti_sulle_righe_si_applicano_ai_dati() {
             ..LimitiParziali::default()
         },
     );
-    assert!(esegui(&ammessa, &tabelle).is_ok());
+    assert_eq!(
+        output(
+            &esegui(&ammessa, &tabelle).expect("espansione ammessa"),
+            "y"
+        ),
+        output(&esito, "y")
+    );
 }
 
 #[test]

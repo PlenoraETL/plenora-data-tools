@@ -23,7 +23,8 @@ use plenora_io::{leggi_tabella, scrivi_tabella, OpzioniScrittura};
 use serde_json::json;
 
 fn rifiutato(testo: &str, codice: &str) {
-    let e = resolve_crs(testo, "crs").unwrap_err();
+    let e =
+        resolve_crs(testo, "crs").expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(e.code().as_str(), codice);
     assert!(!e.to_string().contains("SENTINELLA"));
 }
@@ -356,7 +357,7 @@ fn geoarrow_verifica_anche_una_dichiarazione_esplicitamente_irrisolta() {
         Arc::new(schema(f.clone().with_metadata(m.clone()))),
         resolve_crs,
     )
-    .unwrap_err();
+    .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(error.category(), plenora_core::ErrorCategory::Crs);
     assert!(!error.to_string().contains("SENTINELLA"));
     // Verificare l'accordo non promuove lo stato irrisolto del produttore.

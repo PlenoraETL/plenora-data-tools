@@ -227,6 +227,7 @@ fn has_null(batch: &RecordBatch, indices: &[usize], row: usize) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Colonna di chiave tipizzata per `RowKeyEncoder`.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 enum KeyValueColumn<'a> {
     Utf8(&'a StringArray),
@@ -237,6 +238,7 @@ enum KeyValueColumn<'a> {
     Generic(&'a ArrayRef),
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 impl<'a> KeyValueColumn<'a> {
     fn new(array: &'a ArrayRef) -> Self {
@@ -319,12 +321,14 @@ impl<'a> KeyValueColumn<'a> {
 ///
 /// Stessi byte di `quality::key_for_row` senza allocare una String per
 /// colonna per riga (`reconcile`, `assert_foreign_key`).
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub(crate) struct RowKeyEncoder<'a> {
     columns: Vec<(Vec<u8>, KeyValueColumn<'a>)>,
     text: String,
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 impl<'a> RowKeyEncoder<'a> {
     pub(crate) fn new(batch: &'a RecordBatch, indices: &[usize]) -> Self {
@@ -1623,6 +1627,7 @@ pub fn validate_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<Rec
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     // -------------------------------------------------------------------
@@ -2075,14 +2080,16 @@ mod tests {
             right_keys: vec!["id".into()],
             allow_null: true,
         };
-        assert!(assert_foreign_key(&left_null, &right, &config_allow, &Limits::default()).is_ok());
-        assert!(assert_foreign_key_reference(
-            &left_null,
-            &right,
-            &config_allow,
-            &Limits::default()
-        )
-        .is_ok());
+        assert_eq!(
+            (assert_foreign_key(&left_null, &right, &config_allow, &Limits::default()))
+                .expect("successo atteso"),
+            left_null
+        );
+        assert_eq!(
+            (assert_foreign_key_reference(&left_null, &right, &config_allow, &Limits::default()))
+                .expect("successo atteso"),
+            left_null
+        );
         // max_governed_memory_bytes: stesso errore (contabilita' basata sui byte chiave).
         let tight = Limits {
             max_governed_memory_bytes: 4,
@@ -2178,7 +2185,13 @@ mod tests {
         for name in ["_valid", "_errors", "_warnings"] {
             assert!(!schema.field_with_name(name).expect(name).is_nullable());
         }
-        assert!(schema.field_with_name("id").is_ok());
+        assert_eq!(
+            (schema.field_with_name("id")).expect("successo atteso"),
+            rules_batch()
+                .schema()
+                .field_with_name("id")
+                .expect("campo della fixture")
+        );
     }
 
     #[test]
@@ -2435,10 +2448,12 @@ mod tests {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[path = "regole_oracolo.rs"]
 mod regole_oracolo;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[path = "chiavi_riga_oracolo.rs"]
 mod chiavi_riga_oracolo;

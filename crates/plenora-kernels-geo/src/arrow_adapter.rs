@@ -205,6 +205,7 @@ pub fn accumulate_decoded_cells_native_bytes(
     Ok(accumulator.total())
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     fn assert_crs<T: std::fmt::Debug>(

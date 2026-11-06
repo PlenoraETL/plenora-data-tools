@@ -218,7 +218,10 @@ fn la_somma_oltre_int64_e_un_errore() {
     // righe; `rolling_window` con finestra 1 no.
     for (indice, esito) in esiti.into_iter().enumerate() {
         if indice == 1 {
-            assert!(esito.is_ok());
+            assert_eq!(
+                (esito).expect("successo atteso"),
+                vec![Some(i64::MAX), Some(1)]
+            );
             continue;
         }
         assert!(

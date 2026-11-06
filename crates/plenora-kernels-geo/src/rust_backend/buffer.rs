@@ -368,6 +368,7 @@ fn unione(
 /// finita;
 /// [`ErroreBuffer::CalcoloNonConcluso`] se `geo` o `i_overlay` vanno in
 /// panico.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub fn buffer_controllato(
     geometry: &Geometry<f64>,
@@ -573,6 +574,7 @@ fn controlla_unioni_dei_blocchi(
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -809,17 +811,17 @@ mod tests {
             buffer_controllato(&linea, 1e8, Estremita::Piatte, centimetro()),
             Err(ErroreBuffer::PrecisioneInsufficiente)
         );
-        let d = 5_000_000.0;
-        let buffer = buffer_controllato(&linea, d, Estremita::Piatte, centimetro()).unwrap();
-        // Ogni vertice sta sulla retta a distanza `d` dalla linea (i due
-        // lati dritti) entro `p / 2`.
-        let radice = std::f64::consts::FRAC_1_SQRT_2;
-        for c in buffer.coords_iter() {
-            let dalla_retta = ((c.x - c.y) * radice).abs();
-            assert!((dalla_retta - d).abs() <= 0.005, "{c:?}: {dalla_retta}");
+        for d in [5_000_000.0, 5_368_000.0] {
+            let buffer = buffer_controllato(&linea, d, Estremita::Piatte, centimetro()).unwrap();
+            // Ogni vertice sta sulla retta a distanza `d` dalla linea (i due
+            // lati dritti) entro `p / 2`.
+            let radice = std::f64::consts::FRAC_1_SQRT_2;
+            for c in buffer.coords_iter() {
+                let dalla_retta = ((c.x - c.y) * radice).abs();
+                assert!((dalla_retta - d).abs() <= 0.005, "{c:?}: {dalla_retta}");
+            }
+            // Il limite con 1 cm: `2^-30 |d| = p / 2` a circa 5.368.709 m.
         }
-        // Il limite con 1 cm: `2^-30 |d| = p / 2` a circa 5.368.709 m.
-        assert!(buffer_controllato(&linea, 5_368_000.0, Estremita::Piatte, centimetro()).is_ok());
         assert_eq!(
             buffer_controllato(&linea, 5_369_000.0, Estremita::Piatte, centimetro()),
             Err(ErroreBuffer::PrecisioneInsufficiente)

@@ -23,8 +23,8 @@ fn colonne_omonime_rifiutate_anche_con_un_solo_batch() {
     )
     .unwrap();
     for strict in [false, true] {
-        let error =
-            concat_by_name(&[&batch], &ConcatByName { strict }, &Limits::default()).unwrap_err();
+        let error = concat_by_name(&[&batch], &ConcatByName { strict }, &Limits::default())
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert!(matches!(error, PlenoraError::Schema(_)));
         assert!(error.to_string().ends_with("nomi di colonna duplicati"));
     }

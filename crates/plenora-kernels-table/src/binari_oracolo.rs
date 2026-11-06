@@ -121,6 +121,10 @@ fn fixture(rows: usize, seed: u64, id_base: i64) -> RecordBatch {
 struct Rimappa(HashMap<Vec<u8>, Vec<u8>>);
 
 impl Rimappa {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Classificazione indipendente dei byte della fixture, non asserzione sul risultato del kernel."
+    )]
     fn new(batches: &[&RecordBatch]) -> Self {
         let mut presenti = BTreeSet::new();
         for batch in batches {
@@ -182,6 +186,10 @@ fn config<T: serde::de::DeserializeOwned>(value: Value) -> T {
 }
 
 /// Ci sono davvero valori non UTF-8 nell'input: senza, la prova e' vuota.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Classificatore indipendente della fixture: verifica che il corpus contenga byte non UTF-8 tramite std::str::from_utf8. Non e una asserzione sul risultato della produzione; ogni scalar_as_string e controllato separatamente per valore o categoria/fase."
+)]
 fn ha_non_utf8(batch: &RecordBatch) -> bool {
     batch
         .column(0)

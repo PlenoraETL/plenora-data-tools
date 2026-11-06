@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Produzione: divieti degli esiti riattivati agli ingressi delle prove"
+)]
 //! plenora-pipeline — runner minimo di pipeline sui kernel tabellari e geo.
 //!
 //! Un piano ([`Pipeline`]) nomina le tabelle in ingresso, una sequenza di

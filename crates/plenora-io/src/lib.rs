@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Produzione: divieti degli esiti riattivati agli ingressi delle prove"
+)]
 //! plenora-io — tabelle da e verso file.
 //!
 //! Formati (docs/file.md, «File»):
@@ -26,6 +30,7 @@
 //! [`esegui_ingressi`], [`valida_ingressi`] ed [`esegui_in_memoria`]
 //! accettano anche tabelle già in memoria ([`Ingresso`]).
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[macro_use]
 #[path = "../../../tests/comune/esito.rs"]

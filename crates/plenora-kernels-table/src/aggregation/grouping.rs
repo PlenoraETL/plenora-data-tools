@@ -975,6 +975,7 @@ pub(in crate::aggregation) fn scatter_partitions<T: Copy + Send + Sync>(
     Ok(())
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;

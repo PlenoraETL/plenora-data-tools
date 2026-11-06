@@ -273,6 +273,7 @@ pub fn rettangolo_multipoligoni<'a>(
         .fold(None, unisci)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -374,17 +375,30 @@ mod tests {
     #[test]
     fn il_controllo_a_priori_segue_l_estensione() {
         let centimetro = Precision::new(0.01).unwrap();
-        assert!(
-            controlla_overlay(Some(rect(0.0, 0.0, 1_300_000.0, 1_000_000.0)), centimetro).is_ok()
+        assert_successo!(
+            controlla_overlay(Some(rect(0.0, 0.0, 1_300_000.0, 1_000_000.0)), centimetro),
+            ()
         );
-        assert!(controlla_overlay(Some(rect(0.0, 0.0, 2_900_000.0, 10.0)), centimetro).is_ok());
-        assert!(controlla_overlay(Some(rect(0.0, 0.0, 5_000_000.0, 10.0)), centimetro).is_ok());
-        assert!(controlla_overlay(Some(rect(0.0, 0.0, 20_000_000.0, 10.0)), centimetro).is_ok());
+        assert_successo!(
+            controlla_overlay(Some(rect(0.0, 0.0, 2_900_000.0, 10.0)), centimetro),
+            ()
+        );
+        assert_successo!(
+            controlla_overlay(Some(rect(0.0, 0.0, 5_000_000.0, 10.0)), centimetro),
+            ()
+        );
+        assert_successo!(
+            controlla_overlay(Some(rect(0.0, 0.0, 20_000_000.0, 10.0)), centimetro),
+            ()
+        );
         assert!(
             spostamento_a_priori(rect(0.0, 0.0, 20_000_000.0, 10.0), FATTORE_OVERLAY).unwrap()
                 < 1e-6
         );
-        assert!(controlla_overlay(Some(rect(0.0, 0.0, 1e12, 10.0)), centimetro).is_ok());
+        assert_successo!(
+            controlla_overlay(Some(rect(0.0, 0.0, 1e12, 10.0)), centimetro),
+            ()
+        );
         assert_eq!(
             controlla_overlay(Some(rect(0.0, 0.0, 2e12, 10.0)), centimetro),
             Err(PrecisioneInsufficiente)
@@ -411,6 +425,6 @@ mod tests {
             ),
             Err(PrecisioneInsufficiente)
         );
-        assert!(controlla_overlay(None, centimetro).is_ok());
+        assert_successo!(controlla_overlay(None, centimetro), ());
     }
 }

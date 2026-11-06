@@ -36,6 +36,11 @@ disallowed-types = [
     { path = "geozero::csv::CsvReader", reason = "legge il WKT con il wkt di crates.io", allow-invalid = true },
 ]
 disallowed-methods = [
+    { path = "core::result::Result::is_err", reason = "nelle prove usa assert_rifiuto!/assert_successo! con un atteso fissato" },
+    { path = "core::result::Result::is_ok", reason = "nelle prove usa assert_rifiuto!/assert_successo! con un atteso fissato" },
+    { path = "core::result::Result::unwrap_err", reason = "nelle prove usa assert_rifiuto!/assert_successo! con un atteso fissato" },
+    { path = "core::result::Result::err", reason = "nelle prove usa assert_rifiuto!/assert_successo! con un atteso fissato" },
+
     { path = "geozero::wkt::read_wkt", reason = "usa il wkt di crates.io: il WKT passa da plenora-wkt" },
     { path = "geozero::csv::process_csv_geom", reason = "legge il WKT con il wkt di crates.io", allow-invalid = true },
     { path = "geozero::csv::process_csv_features", reason = "legge il WKT con il wkt di crates.io", allow-invalid = true },

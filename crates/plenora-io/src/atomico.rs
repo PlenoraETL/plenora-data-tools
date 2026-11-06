@@ -121,6 +121,7 @@ fn scarta(temporaneo: tempfile::NamedTempFile, causa: PlenoraError) -> PlenoraEr
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::{PlenoraError, RemoteEffect, RetryDisposition};

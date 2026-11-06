@@ -7,11 +7,14 @@
 mod confronto;
 mod numeri;
 mod projjson;
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests;
 mod wkt;
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod wkt1_tests;
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod wkt_tests;
 
@@ -131,6 +134,7 @@ pub(super) enum Rifiuto {
 }
 
 impl Rifiuto {
+    #[deny(clippy::disallowed_methods)]
     #[cfg(test)]
     pub const fn codice(self) -> &'static str {
         match self {

@@ -198,6 +198,10 @@ fn il_costruttore_condiviso_conserva_le_righe_senza_colonne() {
         &RecordBatchOptions::new(),
     )
     .expect_err("arrow rifiuta un batch senza colonne e senza row count");
+    assert!(matches!(
+        errore,
+        plenora_core::arrow::schema::ArrowError::InvalidArgumentError(_)
+    ));
     assert!(
         errore
             .to_string()

@@ -572,6 +572,7 @@ fn distanza_finita(distanza: f64) -> Result<f64, ExtendedError> {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 // Confronti float esatti intenzionali: le fixture sono costruite per
 // produrre valori esatti (coordinate note, round-trip bit-esatti); il
@@ -704,7 +705,10 @@ mod tests {
             hausdorff_distance(&bowtie, &line, 100),
             Err(ExtendedError::InvalidInput(_))
         ));
-        assert!(hausdorff_distance_validated(&bowtie, &line, 100).is_ok());
+        assert_eq!(
+            (hausdorff_distance_validated(&bowtie, &line, 100)).expect("successo atteso"),
+            Some(2.0)
+        );
         assert!(matches!(
             affine_transform(&bowtie, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             Err(ExtendedError::InvalidInput(_))

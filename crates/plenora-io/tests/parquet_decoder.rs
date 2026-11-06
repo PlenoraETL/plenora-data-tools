@@ -4188,7 +4188,8 @@ fn le_statistiche_di_pagina_flba_hanno_la_larghezza_del_tipo() {
         })
     };
     for (minimo, massimo) in [(&b"z"[..], &b"zz"[..]), (&b"zzz"[..], &b"zz"[..])] {
-        let errore = leggi(&pagina(minimo, massimo)).unwrap_err();
+        let errore = leggi(&pagina(minimo, massimo))
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         errore.verifica(Categoria::Generale, Fase::Colonna);
         assert!(errore.contains("statistic of the wrong width"), "{errore}");
     }
@@ -5233,7 +5234,7 @@ fn regressione_integer_malformato_senza_panico() {
                     let esito = std::panic::catch_unwind(|| arrow(&byte));
                     let errore = esito
                         .expect("il footer non deve causare panico")
-                        .unwrap_err();
+                        .expect_err("rifiuto atteso: categoria verificata dalla prova");
                     let atteso = if larghezza == 8 && !firmato && convertito.is_some() {
                         "LOGICAL_CONVERTED_TYPE_MISMATCH"
                     } else if larghezza == 8 {
@@ -5261,7 +5262,7 @@ fn regressione_integer_malformato_senza_panico() {
                 });
                 let errore = esito
                     .expect("il builder non deve causare panico")
-                    .unwrap_err();
+                    .expect_err("rifiuto atteso: categoria verificata dalla prova");
                 assert!(matches!(&errore, ParquetError::General(_)));
                 assert!(errore.to_string().contains("Bit width must be"));
                 assert!(!errore.to_string().contains("sentinella"));
@@ -5283,7 +5284,7 @@ fn regressione_annotazioni_discordanti() {
             .with_logical_type(Some(logico))
             .with_converted_type(convertito)
             .build()
-            .unwrap_err();
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert!(matches!(&errore, ParquetError::General(_)));
         assert!(errore
             .to_string()
@@ -5294,7 +5295,7 @@ fn regressione_annotazioni_discordanti() {
         .with_logical_type(Some(L::String))
         .with_converted_type(C::BSON)
         .build()
-        .unwrap_err();
+        .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert!(matches!(&errore, ParquetError::General(_)));
     assert!(errore
         .to_string()

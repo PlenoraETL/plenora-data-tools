@@ -345,6 +345,10 @@ fn nan_e_zeri_con_segno_hanno_l_identita_del_testo() {
 }
 
 /// Stesso esito riga per riga: chiave uguale o stesso messaggio d'errore.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Confronto differenziale dei rifiuti del codificatore e del riferimento testuale, con rappresentazioni di successo diverse. Identita e ordine delle chiavi sono verificati separatamente da assert_same_identity."
+)]
 fn assert_same_errors(column: &ArrayRef) {
     let batch = RecordBatch::try_new(
         Arc::new(Schema::new(vec![

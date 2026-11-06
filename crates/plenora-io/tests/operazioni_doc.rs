@@ -1225,6 +1225,10 @@ fn kernel_diretto(scheda: &Scheda, ingresso: &RecordBatch) -> Result<RecordBatch
 /// che riguarda le righe, non i valori), quindi l'elenco è qui, esplicito.
 const USCITA_CASUALE: [&str; 1] = ["table.uuid_generator"];
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Selezione delle operazioni senza implementazione eseguibile dopo la validazione; i casi eseguibili hanno un atteso indipendente."
+)]
 fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
     let esempio = &scheda.esempio;
     let casuale = USCITA_CASUALE.contains(&scheda.operazione.id);
@@ -2498,6 +2502,10 @@ fn con_una_geometria_vuota(batch: &RecordBatch) -> Option<RecordBatch> {
 /// geometria vuota al posto della prima. Le schede determinano l'unico
 /// esito ammesso; i successi hanno schema, metadati e celle attesi indipendenti.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Aiuto tabellare: confronta categoria e fase con latteso indipendente della scheda, poi verifica i valori dei successi."
+)]
 fn le_geo_rispettano_la_nullabilita_su_ingressi_vuoti_e_geometrie_vuote() {
     prepara_ambiente();
     let (schede, _) = leggi_schede();
@@ -2719,6 +2727,10 @@ fn verifica_campo_geometrico(ingressi: &[RecordBatch], campo: &Field, array: &dy
 
 #[test]
 #[allow(clippy::too_many_lines)] // La matrice e le asserzioni restano visibili nello stesso test.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Aiuto tabellare: confronta categoria e fase con latteso indipendente della scheda, poi verifica i valori dei successi."
+)]
 fn catalogo_conserva_i_riferimenti_dei_byte_geometrici() {
     prepara_ambiente();
     let mut violazioni = Vec::new();
@@ -3420,7 +3432,7 @@ fn catalogo_colonne_presenti_in_un_solo_ingresso() {
                         NAME.to_owned()
                     };
                     assert_eq!(
-                        output.schema.field_with_name(&name).is_ok(),
+                        output.schema.fields().iter().any(|f| f.name() == &name),
                         retained,
                         "{context}"
                     );
@@ -4172,7 +4184,8 @@ fn catalogo_geo_multigeometria_operandi_e_passanti() {
                         .filter(|name| !name.starts_with("__passante_"))
                         .map(|_| "geometry".to_owned())
                 } else {
-                    primaria_ingresso.filter(|name| uscita.schema().index_of(name).is_ok())
+                    primaria_ingresso
+                        .filter(|name| uscita.schema().fields().iter().any(|f| f.name() == name))
                 };
                 let primaria_effettiva = primary_geometry_position(&uscita.schema())
                     .unwrap()
@@ -4290,6 +4303,10 @@ fn ruoli_geometrici(config: &Value, nomi: &BTreeSet<String>) -> Vec<(Value, Stri
     varianti
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Classificazione indipendente dei byte della fixture, non risultato del prodotto."
+)]
 fn geometria_per_ruolo(
     batch: &RecordBatch,
     nome: &str,
@@ -4421,6 +4438,10 @@ fn esito_ruolo_geometrico(
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Aiuto tabellare: confronta categoria e fase con latteso indipendente della scheda, poi verifica i valori dei successi."
+)]
 fn catalogo_geometria_in_ogni_ruolo_non_legge_wkb_come_testo() {
     prepara_ambiente();
     let mut casi = 0;

@@ -645,6 +645,7 @@ fn cella_accetta(cell: &Polygon<f64>, bounds: Option<&Rect<f64>>, point: &Point<
     bounds.is_some_and(|bounds| bounds.intersects(point)) && cell.intersects(point)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -940,7 +941,12 @@ mod tests {
         interrogazioni.push(Point::new(1.0e6, 1.0e6));
         confronta_associazione(&celle, &interrogazioni);
         confronta_associazione(&celle, &interrogazioni[..interrogazioni.len() - 1]);
-        assert!(associa_celle(&celle, &interrogazioni[..interrogazioni.len() - 1]).is_ok());
+        assert_eq!(
+            (associa_celle(&celle, &interrogazioni[..interrogazioni.len() - 1]))
+                .expect("successo atteso"),
+            associa_lineare(&celle, &interrogazioni[..interrogazioni.len() - 1])
+                .expect("riferimento lineare")
+        );
     }
 
     /// Celle sintetiche che si sovrappongono, duplicate, degeneri e vuote:

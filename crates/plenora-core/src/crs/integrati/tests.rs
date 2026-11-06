@@ -24,7 +24,8 @@ fn risolto(definizione: &str) -> ResolvedCrs {
 }
 
 fn dominio_ok(crs: &ResolvedCrs, x: f64, y: f64) -> bool {
-    validate_geometry_domain([(x, y)].into_iter(), crs).is_ok()
+    assert_successo!(validate_geometry_domain([(x, y)].into_iter(), crs), ());
+    true
 }
 
 fn violazione(crs: &ResolvedCrs, x: f64, y: f64) -> Option<CoordinateDomainViolation> {

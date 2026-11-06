@@ -206,7 +206,7 @@ fn byte_corrotti_non_mandano_in_panico() {
             let esito = std::panic::catch_unwind(|| {
                 leggi_tabella_con_limiti(&percorso, Some(formato), u64::MAX, &limiti)
             });
-            assert!(esito.is_ok(), "{formato:?}: panico al byte {posizione}");
+            esito.as_ref().expect("nessun panico su byte corrotti; il risultato e classificato dalle prove di formato");
         }
     }
 }
@@ -317,7 +317,10 @@ fn limiti_di_blocchi_e_metadati() {
             max_blocchi: 3,
             ..LimitiLettura::default()
         };
-        assert!(leggi_byte(&byte, formato, &tre).is_ok());
+        identiche(
+            &piccola(6),
+            &leggi_byte(&byte, formato, &tre).expect("tre blocchi"),
+        );
         let due = LimitiLettura {
             max_blocchi: 2,
             ..LimitiLettura::default()
@@ -375,7 +378,10 @@ fn parquet_row_group_oltre_il_massimo() {
         max_blocchi: massimo,
         ..LimitiLettura::default()
     };
-    assert!(leggi_tabella_con_limiti(&percorso, None, u64::MAX, &limiti(3)).is_ok());
+    identiche(
+        &tabella,
+        &leggi_tabella_con_limiti(&percorso, None, u64::MAX, &limiti(3)).expect("limite ammesso"),
+    );
     assert_eq!(
         leggi_tabella_con_limiti(&percorso, None, u64::MAX, &limiti(2))
             .expect_err("row group oltre il massimo")
@@ -483,7 +489,11 @@ fn parquet_metadati_del_file_contati() {
         max_byte_metadati_custom: massimo,
         ..LimitiLettura::default()
     };
-    assert!(leggi_tabella_con_limiti(&percorso, None, u64::MAX, &limiti(1 << 20)).is_ok());
+    identiche(
+        &tabella,
+        &leggi_tabella_con_limiti(&percorso, None, u64::MAX, &limiti(1 << 20))
+            .expect("limite ammesso"),
+    );
     let errore = leggi_tabella_con_limiti(&percorso, None, u64::MAX, &limiti(0))
         .expect_err("ARROW:schema oltre il limite");
     assert_eq!(errore.category(), ErrorCategory::ResourceLimit, "{errore}");

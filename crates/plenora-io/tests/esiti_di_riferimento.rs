@@ -314,6 +314,10 @@ fn gli_esiti_sui_file_reali_sono_quelli_di_riferimento() {
 /// cifre, esiti nella forma attesa (un `ok` con righe e digest), nessun
 /// panico, e i conteggi esatti degli insiemi (103 + 3 + 367).
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Validatore del formato della fixture di riferimento, non asserzione su un esito del prodotto."
+)]
 fn il_riferimento_e_ben_formato() {
     let testo = std::fs::read_to_string(riferimento()).unwrap();
     let mut per_insieme: BTreeMap<String, usize> = BTreeMap::new();

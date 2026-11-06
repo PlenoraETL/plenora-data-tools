@@ -826,5 +826,6 @@ pub fn reproject_batches(
     Ok((output_schema, output))
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests;

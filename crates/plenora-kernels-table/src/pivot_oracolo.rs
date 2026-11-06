@@ -338,6 +338,7 @@ fn confronta(batch: &RecordBatch, index: &str, pivot_col: &str) {
 proptest! {
     #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn pivot_come_il_riferimento_su_input_generati(
         righe in prop::collection::vec(riga(), 0..40),
@@ -474,13 +475,14 @@ fn l_errore_di_cella_esce_nell_ordine_delle_colonne() {
         mapping: BTreeMap::new(),
     };
     let atteso = pivot_reference(&batch, &config, &Limits::default());
+    let error = assert_rifiuto!(
+        atteso.as_ref(),
+        plenora_core::ErrorCategory::Schema,
+        plenora_core::ErrorPhase::Validate
+    );
     assert_eq!(
-        atteso
-            .as_ref()
-            .map_err(ToString::to_string)
-            .err()
-            .as_deref(),
-        Some("schema violation: binary non contiene UTF-8 valido")
+        error.to_string(),
+        "schema violation: binary non contiene UTF-8 valido"
     );
     assert_same_outcome_bits(pivot(&batch, &config, &Limits::default()), atteso);
 }

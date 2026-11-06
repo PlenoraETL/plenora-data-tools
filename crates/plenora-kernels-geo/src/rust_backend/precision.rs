@@ -135,6 +135,7 @@ pub(crate) fn punto_entro_segmento(
     bound.is_finite() && bound <= budget
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;

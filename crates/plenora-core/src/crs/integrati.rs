@@ -244,5 +244,6 @@ fn canonico(voce: &CrsIntegrato) -> Value {
     })
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests;

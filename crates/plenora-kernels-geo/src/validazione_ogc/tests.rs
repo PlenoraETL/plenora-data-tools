@@ -66,6 +66,10 @@ fn verifica_predicato(anello: &LineString<f64>) -> bool {
 /// Lo stesso metodo sui due percorsi, ciascuno sotto il proprio
 /// `catch_unwind`: valori uguali, o panico su entrambi. Un panico su un
 /// percorso solo e' una divergenza.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Solo diagnostica nel ramo che fallisce già per divergenza fra generico e rapido; non accetta alcun esito. Solo diagnostica del percorso rapido nel ramo panic di divergenza; il confronto completo degli esiti è obbligatorio nel match precedente."
+)]
 fn confronta_metodo<R: PartialEq + std::fmt::Debug>(
     metodo: &str,
     geometria: &Geometry<f64>,
@@ -90,6 +94,10 @@ fn confronta_metodo<R: PartialEq + std::fmt::Debug>(
 /// Gli errori emessi dal visitatore **fino all'eventuale panico**, raccolti
 /// fuori dal `catch_unwind`: il prefisso osservabile resta confrontabile
 /// anche quando `relate` interrompe la visita.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Cattura del panico del visitatore generico: restituisce prefisso completo e stato unwind per il confronto differenziale, non scarta un rifiuto. Cattura dello stato unwind insieme a tutti gli errori del visitatore; entrambi sono confrontati dal chiamante con il percorso generico."
+)]
 fn prefisso_emesso(
     visita: impl FnOnce(&std::cell::RefCell<Vec<InvalidGeometry>>),
 ) -> (Vec<InvalidGeometry>, bool) {
@@ -851,6 +859,7 @@ proptest! {
 
     /// Anelli arbitrari (aperti o chiusi) di coordinate miste: predicato
     /// e validazione completa contro il percorso generico.
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn differenziale_proptest(
         punti in prop::collection::vec((strategia_coordinata(), strategia_coordinata()), 0..60),
@@ -864,6 +873,7 @@ proptest! {
     /// Poligoni con buchi e multipoligoni su griglia: la parte che segue le
     /// auto-intersezioni (contenimento, anelli intersecanti, sovrapposizioni)
     /// e' la stessa sequenza di `geo`.
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn differenziale_anelli_interni_e_multi(
         anelli in prop::collection::vec(
@@ -932,6 +942,10 @@ const PERCORSI: [Percorso; 7] = [
 
 /// Gli errori emessi da una visita fino all'eventuale panico, e se c'e'
 /// stato panico.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Stato di unwind e prefisso completo emesso dal visitatore: entrambi confrontati col riferimento."
+)]
 fn emessi<E>(
     visita: impl FnOnce(&mut dyn FnMut(E) -> Result<(), std::convert::Infallible>),
 ) -> (Vec<E>, bool) {
@@ -1445,6 +1459,10 @@ fn relate_sui_rettangoli_disgiunti_non_produce_errori() {
 /// vicine: tocchi, sovrapposizioni e parti invalide sono frequenti.
 #[test]
 #[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Contatore della distribuzione del corpus dopo che verifica_multi/verifica_buchi hanno confrontato lerrore completo col generico."
+)]
 fn differenziale_di_massa_multipoligoni_e_buchi() {
     let mut rng = Lcg(0x5EED_0000_0000_0004);
     let mut validi = 0_u32;
@@ -1506,6 +1524,7 @@ proptest! {
 
     /// Parti rettangolari o triangolari su una griglia con zeri di segno
     /// opposto, come `MultiPolygon` o come buchi dello stesso guscio.
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn differenziale_proptest_coppie(
         parti in prop::collection::vec(
@@ -1703,6 +1722,10 @@ fn colonne_di_parti_oltre_il_limite_dei_confronti() {
 /// grande con un buco che circonda il reticolo, in testa, in mezzo o in
 /// coda.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Contatore della distribuzione del corpus dopo che verifica_multi/verifica_buchi hanno confrontato lerrore completo col generico."
+)]
 fn reticoli_di_parti_che_si_toccano_con_una_parte_grande() {
     let lato = if test_lunghi() { 20 } else { 10 };
     for scacchiera in [false, true] {

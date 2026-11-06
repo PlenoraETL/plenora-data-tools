@@ -376,7 +376,7 @@ pub fn atteso(op: &str, c: &Value, inputs: &[RecordBatch]) -> RecordBatch {
                 t.schema().field_with_name(id).unwrap().clone(),
                 Field::new("variable", DataType::Utf8, false),
                 Field::new(
-                    if t.schema().field_with_name("value").is_ok() {
+                    if t.schema().fields().iter().any(|f| f.name() == "value") {
                         "value_1"
                     } else {
                         "value"

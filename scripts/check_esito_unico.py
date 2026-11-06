@@ -8,7 +8,7 @@ L'allowlist contiene occorrenze esatte e una motivazione, mai interi file.
 
 from __future__ import annotations
 
-import ast
+from rust_esito_tokens import matches_findings, external_test_modules, unprotected_test_entries, has_method_exemption
 import json
 import re
 from functools import lru_cache
@@ -17,13 +17,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 # Ogni regola ha esempi positivi e negativi enumerati nei test.
 PATTERNS = {
-    "rifiuto_booleano": ("rust", r"\.\s*is_err\s*\(\s*\)"),
     "errore_ignorato": ("rust", r"\bErr\s*\(\s*(?:ref\s+)?\w+\s*\)\s*=>\s*\{?\s*continue\b"),
-    "successo_o_rifiuto": ("rust", r"\.\s*is_ok\s*\(\s*\)\s*\|\|"),
-    "confronto_booleano": ("rust_assert", r"\.\s*is_ok\s*\(\s*\)"),
-    "rifiuto_jolly": ("rust_macro", r"\bErr\s*\(\s*_\s*\)"),
-    "rifiuti_alternativi": ("rust_macro", r"\bErr\s*\([^;]*?(?<!\|)\|(?!\|)"),
-    "solo_messaggio": ("rust_message", r"(?:\b\w+\.to_string\(\)|\b(?:messaggio|message|testo|msg))\s*\.contains\s*\("),
+    "rifiuto_jolly": ("rust_tokens", "pattern Err con jolly"),
+    "rifiuti_alternativi": ("rust_tokens", "alternative nel pattern di Err"),
+    "solo_messaggio": ("rust_message", r"(?:\b\w+\s*\.\s*to_string\s*\(\s*\)|\b(?:messaggio|message|testo|msg))\s*\.contains\s*\("),
     "raises_generico": ("python", "raises senza categoria esatta"),
     "messaggio_python": ("python", "assert frammento in str(errore) senza categoria"),
     "except_ignorato": ("python", "except Exception/BaseException: pass/continue"),
@@ -160,49 +157,7 @@ def test_ranges(code: str, integration: bool) -> list[tuple[int, int]]:
         ranges.extend(added)
 
 
-def python_findings(source: str) -> list[tuple[int, str, str]]:
-    tree = ast.parse(source)
-    found = []
-    def add(node, rule):
-        found.append((node.lineno, rule, source.splitlines()[node.lineno - 1].strip()))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "zip":
-            if not any(k.arg == "strict" and isinstance(k.value, ast.Constant) and k.value.value is True for k in node.keywords):
-                add(node, "zip_python_troncante")
-        if isinstance(node, ast.Call) and ((isinstance(node.func, ast.Attribute) and node.func.attr == "raises") or (isinstance(node.func, ast.Name) and node.func.id == "raises")):
-            category = ast.unparse(node.args[0]) if node.args else ""
-            # Le sottoclassi SDK identificano una categoria; Exception,
-            # PlenoraError e tuple accettano invece esiti differenti.
-            if not category or category.split(".")[-1] in {"Exception", "BaseException", "PlenoraError"} or isinstance(node.args[0], ast.Tuple):
-                add(node, "raises_generico")
-        if isinstance(node, ast.ExceptHandler):
-            if node.type is None or ast.unparse(node.type) in {"Exception", "BaseException"}:
-                if any(isinstance(n, (ast.Pass, ast.Continue)) for n in node.body):
-                    add(node, "except_ignorato")
-        if isinstance(node, ast.Assert) and isinstance(node.test, ast.Compare):
-            if any(isinstance(op, ast.In) for op in node.test.ops) and any(
-                isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "str"
-                for n in ast.walk(node.test)
-            ):
-                # Un controllo sul testo supplementare e' ammesso solo con
-                # un controllo esplicito di categoria nello stesso test.
-                owner = next((n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.lineno <= node.lineno <= n.end_lineno), tree)
-                context = "\n".join(ast.unparse(n.test) for n in ast.walk(owner) if isinstance(n, ast.Assert))
-                values = [ast.unparse(n.args[0]) for n in ast.walk(node.test)
-                          if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "str" and n.args]
-                proven = all(
-                    re.search(re.escape(value) + r"\.category\s*==", context)
-                    or re.search(r"isinstance\(" + re.escape(value) + r", (?:\w+\.)?Plenora(?!Error)\w+", context)
-                    or any(isinstance(w, ast.With) and any(
-                        item.optional_vars is not None and ast.unparse(item.optional_vars) + ".value" == value
-                        and isinstance(item.context_expr, ast.Call) and item.context_expr.args
-                        and re.fullmatch(r"(?:\w+\.)?Plenora(?!Error)\w+", ast.unparse(item.context_expr.args[0]))
-                        for item in w.items) for w in ast.walk(owner))
-                    for value in values
-                )
-                if not proven:
-                    add(node, "messaggio_python")
-    return sorted(found)
+from esito_python_ast import python_findings
 
 
 def split_arguments(text: str) -> list[str]:
@@ -295,20 +250,12 @@ def findings(source: str, integration: bool, language: str = "rust") -> list[tup
         return python_findings(source)
     code = mask(source)
     ranges = test_ranges(code, integration)
-    found = []
+    found = [(source.count("\n", 0, pos) + 1, rule, source.splitlines()[source.count("\n", 0, pos)].strip()) for pos, rule in matches_findings(source, integration)]
     functions = [(a, b) for _, a, b in functions_in(code)]
     for rule, (kind, expression) in PATTERNS.items():
-        if kind == "python":
+        if kind in {"python", "rust_tokens"}:
             continue
-        candidates = []
-        if kind in {"rust_macro", "rust_assert"}:
-            macro_pattern = r"\bmatches!\s*\(" if kind == "rust_macro" else r"\b(?:prop_)?assert_eq!\s*\("
-            for macro in re.finditer(macro_pattern, code):
-                end = closing(code, macro.end() - 1, "(", ")")
-                if len(re.findall(expression, code[macro.end():end], re.S)) >= (2 if kind == "rust_assert" else 1):
-                    candidates.append(macro.start())
-        else:
-            candidates = [m.start() for m in re.finditer(expression, code)]
+        candidates = [m.start() for m in re.finditer(expression, code)]
         for pos in candidates:
             if not any(start <= pos < end for start, end in ranges):
                 continue
@@ -319,6 +266,13 @@ def findings(source: str, integration: bool, language: str = "rust") -> list[tup
                 a, b = max(bodies) if bodies else (0, len(code))
                 context = code[a:b]
                 receiver = re.match(r"\w+", code[pos:])[0]
+                # Una stringa d'ingresso non e' il messaggio di un errore.
+                # I parametri testuali passati da altri helper richiedono
+                # verifica del chiamante, non inferenza dal solo nome.
+                signature = code[max(0, code.rfind('fn ', 0, a)):a]
+                if (re.search(r'\b' + receiver + r'\s*:\s*&\s*str\b', signature)
+                        and not re.search(r'\blet\s+(?:mut\s+)?' + receiver + r'\b', context)):
+                    continue
                 prefix = code[max(a, code.rfind(";", a, pos) + 1):pos]
                 if re.search(r"!\s*$|!matches!\([^;]*$", prefix) or category_proven(code, context, receiver):
                     continue
@@ -330,33 +284,23 @@ def findings(source: str, integration: bool, language: str = "rust") -> list[tup
 
 
 def test_files(root: Path, sources: dict[Path, str]) -> set[Path]:
-    """Propaga cfg(test) attraverso mod esterni, anche con #[path]."""
-    selected = {p for p in sources if "tests" in p.relative_to(root).parts
-                or p.stem.endswith("tests") or "oracolo" in p.stem}
+    """Propaga cfg(test) attraverso mod esterni usando token e attributi."""
+    selected = {p for p in sources if "tests" in p.relative_to(root).parts}
     while True:
         added = set()
-        for path, source in sources.items():
-            code = mask(source)
-            ranges = test_ranges(code, path in selected)
-            for module in re.finditer(r"\bmod\s+(\w+)\s*;", code):
-                prefix = source[max(code.rfind(";", 0, module.start()), code.rfind("}", 0, module.start()), 0):module.start()]
-                if not (any(a <= module.start() < b for a, b in ranges)
-                        or re.search(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]", prefix)):
-                    continue
+        for path, source in list(sources.items()):
+            for name, explicit, inline in external_test_modules(source, path in selected):
                 base = path.parent if path.stem in {"lib", "main", "mod"} else path.with_suffix("")
-                inline = []
-                for parent in re.finditer(r"\bmod\s+(\w+)\s*\{", code[:module.start()]):
-                    if closing(code, parent.end() - 1) > module.start():
-                        inline.append(parent[1])
                 base = base.joinpath(*inline)
-                explicit = re.findall(r'#\s*\[\s*path\s*=\s*"([^"\n]+)"\s*\]', prefix)
                 if explicit:
-                    candidates = [(base if inline else path.parent) / explicit[-1]]
+                    candidates = [(base if inline else path.parent) / explicit]
                 else:
-                    candidates = [base / (module[1] + ".rs"), base / module[1] / "mod.rs"]
+                    candidates = [base / (name + ".rs"), base / name / "mod.rs"]
                 for candidate in candidates:
                     candidate = candidate.resolve()
-                    if candidate in sources:
+                    if candidate.is_relative_to(root) and candidate.is_file():
+                        if candidate not in sources:
+                            sources[candidate] = candidate.read_text(encoding="utf-8")
                         added.add(candidate)
         added -= selected
         if not added:
@@ -379,6 +323,16 @@ def check(root: Path = ROOT) -> list[str]:
     paths = list((root / "crates").rglob("*.rs"))
     sources = {p: p.read_text(encoding="utf-8") for p in paths}
     selected = test_files(root, sources)
+    # Le radici esentano la produzione anche nel test harness. Nessun nuovo
+    # ingresso test puo' ereditare quell'allow senza riattivare il lint.
+    production_exempt = any(has_method_exemption(s) for s in sources.values())
+    if production_exempt:
+        for path, source in sorted(sources.items()):
+            if path not in selected:
+                for pos in unprotected_test_entries(source):
+                    line = source.count('\n', 0, pos) + 1
+                    errors.append(f'{path.relative_to(root).as_posix()}:{line}: prove_senza_lint')
+    paths = list(sources)
     paths.extend((root / "crates/plenora-data-py/python/tests").rglob("*.py"))
     for path in sorted(paths):
         relative = path.relative_to(root).as_posix()

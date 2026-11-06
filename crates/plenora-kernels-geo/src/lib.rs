@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Produzione: divieti degli esiti riattivati agli ingressi delle prove"
+)]
 //! plenora-kernels-geo — kernel geografici su `geo::Geometry<f64>` e adapter
 //! Arrow per il canone GeoArrow-WKB.
 //!
@@ -14,6 +18,7 @@
 //! moduli di kernel hanno anche errori propri
 //! (`operations::OperationError`, `construction::ConstructionError`, ...).
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[macro_use]
 #[path = "../../../tests/comune/esito.rs"]
@@ -42,6 +47,7 @@ pub mod predicates;
 pub mod riproiezione;
 pub mod rust_backend;
 pub mod spatial_join;
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod test_support;
 pub mod topology;
@@ -465,6 +471,7 @@ pub(crate) fn calcolo_protetto<T>(
         .map_err(|payload| plenora_core::panic_policy::forma_payload(&*payload))
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod prove_del_calcolo_protetto {
     use plenora_core::panic_policy::dentro_una_barriera_di_dipendenza;
@@ -1132,6 +1139,7 @@ pub fn check_geometry_valid(geometry: &Geometry<f64>) -> Result<(), PlenoraError
     valida_ogc(geometry)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1303,12 +1311,16 @@ mod tests {
             (-5.486_124_068_793_689e303, 7.064_166_183_585_296e-304),
         ]));
         let hull = transform_geometry(Operation::ConvexHull, &input).unwrap();
-        assert!(hull.validazione_protetta().is_ok());
+        assert_successo!(hull.validazione_protetta(), ());
         assert!(hull
             .coords_iter()
             .all(|coordinate| coordinate.x.is_finite() && coordinate.y.is_finite()));
         let payload = input.to_wkb(CoordDimensions::xy()).unwrap();
-        assert!(transform_wkb(Operation::ConvexHull, &payload).is_ok());
+        assert_eq!(
+            geometry_from_wkb(&transform_wkb(Operation::ConvexHull, &payload).expect("hull WKB"))
+                .expect("geometria"),
+            hull
+        );
     }
 
     #[test]
@@ -1478,15 +1490,18 @@ mod tests {
             )])),
         ]));
         let payload = nested.to_wkb(CoordDimensions::xy()).unwrap();
-        assert!(validate_wkb_contract_with_depth(&payload, MAX_WKB_DEPTH).is_ok());
-        assert!(validate_wkb_contract_with_depth(&payload, 2).is_ok());
+        assert_successo!(
+            validate_wkb_contract_with_depth(&payload, MAX_WKB_DEPTH),
+            ()
+        );
+        assert_successo!(validate_wkb_contract_with_depth(&payload, 2), ());
         assert!(matches!(
             validate_wkb_contract_with_depth(&payload, 1),
             Err(PlenoraError::InvalidPlan(reason))
                 if reason == "struttura WKB non valida: annidamento geometrie oltre il limite"
         ));
         // Il default di validate_wkb_contract e' MAX_WKB_DEPTH.
-        assert!(validate_wkb_contract(&payload).is_ok());
+        assert_successo!(validate_wkb_contract(&payload), ());
     }
 
     // ---- Test stride-aware (fixture in `test_support`) ----
@@ -1508,16 +1523,12 @@ mod tests {
                 let mut payload = Vec::new();
                 push_header(&mut payload, raw_type);
                 push_coordinate(&mut payload, 1.0, 2.0, extra);
-                assert!(
-                    validate_wkb_contract_for_dimensions(&payload, expected).is_ok(),
-                    "type code {raw_type:#x} con {expected}"
-                );
+                assert_successo!(validate_wkb_contract_for_dimensions(&payload, expected), ());
                 // Unknown: byte preservati, dimensionalita' dal type code.
-                assert!(validate_wkb_contract_for_dimensions(
-                    &payload,
-                    GeometryDimensions::Unknown
-                )
-                .is_ok());
+                assert_successo!(
+                    validate_wkb_contract_for_dimensions(&payload, GeometryDimensions::Unknown),
+                    ()
+                );
             }
         }
         // Big-endian ZM: lo stride non dipende dall'endianness.
@@ -1526,8 +1537,9 @@ mod tests {
         for value in [1.0_f64, 2.0, 3.0, 4.0] {
             big_endian.extend_from_slice(&value.to_be_bytes());
         }
-        assert!(
-            validate_wkb_contract_for_dimensions(&big_endian, GeometryDimensions::Xyzm).is_ok()
+        assert_successo!(
+            validate_wkb_contract_for_dimensions(&big_endian, GeometryDimensions::Xyzm),
+            ()
         );
     }
 
@@ -1539,7 +1551,10 @@ mod tests {
         push_count(&mut line, 2);
         push_coordinate(&mut line, 0.0, 0.0, &[5.0, 9.0]);
         push_coordinate(&mut line, 1.0, 1.0, &[6.0, 10.0]);
-        assert!(validate_wkb_contract_for_dimensions(&line, GeometryDimensions::Xyzm).is_ok());
+        assert_successo!(
+            validate_wkb_contract_for_dimensions(&line, GeometryDimensions::Xyzm),
+            ()
+        );
 
         // Poligono Z con anello esterno e un buco.
         let mut polygon = Vec::new();
@@ -1553,7 +1568,10 @@ mod tests {
         for (x, y) in [(1.0, 1.0), (2.0, 1.0), (1.0, 2.0), (1.0, 1.0)] {
             push_coordinate(&mut polygon, x, y, &[2.0]);
         }
-        assert!(validate_wkb_contract_for_dimensions(&polygon, GeometryDimensions::Xyz).is_ok());
+        assert_successo!(
+            validate_wkb_contract_for_dimensions(&polygon, GeometryDimensions::Xyz),
+            ()
+        );
 
         // Collection annidata ZM: GC(MultiPoint ZM, Point ZM).
         let mut collection = Vec::new();
@@ -1565,8 +1583,9 @@ mod tests {
         push_coordinate(&mut collection, 3.0, 4.0, &[5.0, 6.0]);
         push_header(&mut collection, 3001);
         push_coordinate(&mut collection, 7.0, 8.0, &[9.0, 10.0]);
-        assert!(
-            validate_wkb_contract_for_dimensions(&collection, GeometryDimensions::Xyzm).is_ok()
+        assert_successo!(
+            validate_wkb_contract_for_dimensions(&collection, GeometryDimensions::Xyzm),
+            ()
         );
     }
 
@@ -1575,7 +1594,10 @@ mod tests {
         let mut point = Vec::new();
         push_header(&mut point, 3001);
         push_coordinate(&mut point, 1.0, 2.0, &[3.0, 4.0]);
-        assert!(validate_wkb_contract_for_dimensions(&point, GeometryDimensions::Xyzm).is_ok());
+        assert_successo!(
+            validate_wkb_contract_for_dimensions(&point, GeometryDimensions::Xyzm),
+            ()
+        );
         // Troncato a meta' dell'ordinata M (ultimi 4 byte).
         assert_rifiuto!(
             validate_wkb_contract_for_dimensions(
@@ -1704,14 +1726,14 @@ mod tests {
         payload.extend_from_slice(&1.0_f64.to_be_bytes());
         payload.extend_from_slice(&2.0_f64.to_be_bytes());
 
-        assert!(validate_wkb_transport_for_dimensions_with_depth(
+        let () = validate_wkb_transport_for_dimensions_with_depth(
             &payload,
             GeometryDimensions::Xy,
             GeometryEncoding::Ewkb,
             Some(4326),
             MAX_WKB_DEPTH,
         )
-        .is_ok());
+        .expect("trasporto EWKB");
         assert_rifiuto!(
             validate_wkb_transport_for_dimensions_with_depth(
                 &payload,
@@ -1789,7 +1811,10 @@ mod tests {
         let mut payload = Vec::new();
         push_header(&mut payload, 1001);
         push_coordinate(&mut payload, 1.0, 2.0, &[f64::NAN]);
-        assert!(validate_wkb_contract_for_dimensions(&payload, GeometryDimensions::Xyz).is_ok());
+        assert_successo!(
+            validate_wkb_contract_for_dimensions(&payload, GeometryDimensions::Xyz),
+            ()
+        );
     }
 
     #[test]
@@ -1802,19 +1827,20 @@ mod tests {
         push_count(&mut outer, 1);
         push_header(&mut outer, 3001);
         push_coordinate(&mut outer, 1.0, 2.0, &[3.0, 4.0]);
-        assert!(validate_wkb_contract_for_dimensions_with_depth(
-            &outer,
-            GeometryDimensions::Xyzm,
-            2
-        )
-        .is_ok());
+        assert_successo!(
+            validate_wkb_contract_for_dimensions_with_depth(&outer, GeometryDimensions::Xyzm, 2),
+            ()
+        );
         assert!(matches!(
             validate_wkb_contract_for_dimensions_with_depth(&outer, GeometryDimensions::Xyzm, 1),
             Err(PlenoraError::InvalidPlan(message))
                 if message == "struttura WKB non valida: annidamento geometrie oltre il limite"
         ));
         // Default MAX_WKB_DEPTH anche per la variante stride-aware.
-        assert!(validate_wkb_contract_for_dimensions(&outer, GeometryDimensions::Xyzm).is_ok());
+        assert_successo!(
+            validate_wkb_contract_for_dimensions(&outer, GeometryDimensions::Xyzm),
+            ()
+        );
     }
 
     #[test]
@@ -1830,8 +1856,9 @@ mod tests {
         push_coordinate(&mut collection, 3.0, 4.0, &[5.0]);
         push_header(&mut collection, 0xC000_0001);
         push_coordinate(&mut collection, 6.0, 7.0, &[8.0, 9.0]);
-        assert!(
-            validate_wkb_contract_for_dimensions(&collection, GeometryDimensions::Unknown).is_ok()
+        assert_successo!(
+            validate_wkb_contract_for_dimensions(&collection, GeometryDimensions::Unknown),
+            ()
         );
         // Unknown non accetta strutture sbagliate: troncamento rifiutato.
         assert_rifiuto!(
@@ -1865,7 +1892,10 @@ mod tests {
         push_coordinate(&mut polygon, 4.0, 0.0, &[2.0]);
         push_coordinate(&mut polygon, 4.0, 4.0, &[3.0]);
         push_coordinate(&mut polygon, 0.0, 0.0, &[99.0]);
-        assert!(validate_wkb_contract_for_dimensions(&polygon, GeometryDimensions::Xyz).is_ok());
+        assert_successo!(
+            validate_wkb_contract_for_dimensions(&polygon, GeometryDimensions::Xyz),
+            ()
+        );
         // Anello non chiuso in X/Y: rifiutato anche con Z coerenti.
         let mut open = Vec::new();
         push_header(&mut open, 1003);
@@ -2250,6 +2280,10 @@ mod tests {
 
         /// Il ramo figlio: gira solo quando la variabile e' presente.
         #[test]
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Selettore del processo figlio attraverso variabile ambiente: controllo del contesto del test, non asserzione su un esito di produzione."
+        )]
         fn il_ramo_figlio_non_e_un_test_vero() {
             if std::env::var(VARIABILE).is_err() {
                 return;

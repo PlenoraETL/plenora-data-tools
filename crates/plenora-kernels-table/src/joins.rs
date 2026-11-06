@@ -2142,6 +2142,7 @@ pub fn asof_join(
 // (`fast = false`): stesse righe nello stesso ordine, stessi tipi e nomi,
 // stesse null mask, stessi valori (Float64 confrontato sui bit).
 // ---------------------------------------------------------------------------
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2334,6 +2335,10 @@ mod tests {
         assert_eq!(output.num_rows(), 2);
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Solo diagnostica nel ramo panic dopo il confronto completo dei risultati."
+    )]
     fn assert_join_identical(
         left: &RecordBatch,
         right: &RecordBatch,
@@ -2956,6 +2961,7 @@ mod tests {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod geometry_reference_tests {
     use super::*;
@@ -3027,9 +3033,22 @@ mod geometry_reference_tests {
                     crate::setops::intersect(&a, &b, &crate::setops::SetOperation {}),
                     crate::setops::except(&a, &b, &crate::setops::SetOperation {}),
                 ];
-                for result in results {
+                for (index, result) in results.into_iter().enumerate() {
                     if compatible {
-                        assert!(result.is_ok(), "{result:?}");
+                        let output = result.expect("riferimenti compatibili");
+                        let expected = if index < 3 {
+                            plenora_core::arrow::select::concat::concat_batches(
+                                &a.schema(),
+                                [&a, &b],
+                            )
+                            .unwrap()
+                        } else if index == 5 {
+                            a.slice(0, 0)
+                        } else {
+                            a.clone()
+                        };
+                        assert_eq!(output.columns(), expected.columns());
+                        assert_eq!(output.num_rows(), expected.num_rows());
                     } else {
                         assert!(matches!(result, Err(PlenoraError::Crs(_))), "{result:?}");
                     }
@@ -3051,7 +3070,14 @@ mod geometry_reference_tests {
                         &limits,
                     );
                     if compatible {
-                        assert!(result.is_ok(), "{op}: {result:?}");
+                        let output = result.expect("analisi riferimenti compatibili");
+                        assert_eq!(output.geometries.len(), 1);
+                        assert_eq!(
+                            format!("{:?}", output.geometries[0].crs),
+                            format!("{:?}", inputs[0].geometries[0].crs)
+                        );
+                        assert_eq!(output.schema.fields().len(), 1);
+                        assert_eq!(output.schema.field(0).data_type(), &DataType::Binary);
                     } else {
                         assert!(
                             matches!(result, Err(PlenoraError::Crs(_))),
@@ -3118,11 +3144,37 @@ mod geometry_reference_tests {
                         &Limits::default(),
                     );
                     if order == "lon_lat" {
-                        assert!(result.is_ok(), "{op}: {result:?}");
+                        let output = result.expect("derivazione compatibile");
+                        if *op == "table.coalesce" || (*op == "table.transpose" && empty) {
+                            assert_eq!(output.columns(), input.columns());
+                        } else {
+                            let values = plenora_core::arrow::select::concat::concat(&[
+                                input.column(0).as_ref(),
+                                input.column(1).as_ref(),
+                            ])
+                            .unwrap();
+                            let names = if empty { vec![] } else { vec!["g", "h"] };
+                            assert_eq!(output.column(0).as_ref(), &StringArray::from(names));
+                            assert_eq!(output.column(1), &values);
+                        }
                         if *op == "table.transpose" {
                             assert!(matches!(analyzed, Err(PlenoraError::Unsupported(_))));
                         } else {
-                            assert!(analyzed.is_ok(), "{op}: {analyzed:?}");
+                            let analyzed = analyzed.expect("analisi derivazione");
+                            assert_eq!(
+                                analyzed
+                                    .schema
+                                    .fields()
+                                    .iter()
+                                    .map(|f| (f.name(), f.data_type(), f.is_nullable()))
+                                    .collect::<Vec<_>>(),
+                                output
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|f| (f.name(), f.data_type(), f.is_nullable()))
+                                    .collect::<Vec<_>>()
+                            );
                         }
                     } else {
                         assert!(

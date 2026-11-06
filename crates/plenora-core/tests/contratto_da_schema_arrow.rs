@@ -40,6 +40,13 @@ use plenora_core::contract::{
 use plenora_core::crs::{resolve_crs, CrsKind, ResolvedCrs};
 use plenora_core::{ErrorPhase, PlenoraError};
 
+fn verifica_tabellare(schema: SchemaRef) {
+    let expected = plenora_core::contract::DataContract::tabular(schema.clone());
+    let actual =
+        discover_input_contract_from_schema(schema, resolve_crs).expect("contratto tabellare");
+    assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+}
+
 fn projected_crs() -> ResolvedCrs {
     ResolvedCrs::from_resolved_parts(
         "EPSG:32632".to_owned(),
@@ -741,19 +748,12 @@ fn nested_plenora_keys_require_the_contract_version() {
                 matches!(senza, Err(PlenoraError::Schema(_))),
                 "{chiave} in `{nome}`: {senza:?}"
             );
-            assert!(
-                discover_input_contract_from_schema(schema_v1(vec![campo]), resolve_crs).is_ok(),
-                "{chiave} in `{nome}` con versione"
-            );
+            verifica_tabellare(schema_v1(vec![campo]));
         }
     }
     // Una chiave d'altri (non `plenora.`) su un figlio non chiede versione.
     for campo in annidati("pandas.tipo") {
-        assert!(discover_input_contract_from_schema(
-            Arc::new(Schema::new(vec![campo])),
-            resolve_crs
-        )
-        .is_ok());
+        verifica_tabellare(Arc::new(Schema::new(vec![campo])));
     }
 }
 
@@ -782,7 +782,7 @@ fn discovery_rejects_unknown_contract_versions() {
             "{versione}: {result:?}"
         );
     }
-    assert!(discover_input_contract_from_schema(con_versione("1"), resolve_crs).is_ok());
+    verifica_tabellare(con_versione("1"));
 }
 
 #[test]
@@ -795,11 +795,7 @@ fn discovery_reads_and_checks_field_identities() {
             id.to_owned(),
         )]))
     };
-    assert!(discover_input_contract_from_schema(
-        schema_v1(vec![con_id("a", "0"), con_id("b", "7")]),
-        resolve_crs
-    )
-    .is_ok());
+    verifica_tabellare(schema_v1(vec![con_id("a", "0"), con_id("b", "7")]));
     let ripetuto = discover_input_contract_from_schema(
         schema_v1(vec![con_id("a", "3"), con_id("b", "3")]),
         resolve_crs,
@@ -866,7 +862,15 @@ fn discovery_rejects_geography_and_non_planar_extension_metadata() {
         let result =
             discover_input_contract_from_schema(Arc::new(Schema::new(vec![field])), resolve_crs);
         if atteso_ok {
-            assert!(result.is_ok(), "{estensione}: {result:?}");
+            let output = result.expect("estensione planare");
+            assert_eq!(output.geometries.len(), 1);
+            assert!(matches!(output.geometries[0].crs, ContractCrs::Missing));
+            assert_eq!(output.geometries[0].name, "geometry");
+            assert_eq!(output.geometries[0].dimensions, GeometryDimensions::Unknown);
+            assert_eq!(
+                output.properties,
+                plenora_core::contract::ContractProperties::default()
+            );
         } else {
             assert!(
                 matches!(result, Err(PlenoraError::Unsupported(_))),
@@ -1014,7 +1018,8 @@ fn crs_io_non_confrontabile_preserva_errore_del_risolutore() {
         .as_str()
         .unwrap()
         .replace("6378137", "6378136");
-    let expected = resolve_crs(&wkt, "crs").unwrap_err();
+    let expected =
+        resolve_crs(&wkt, "crs").expect_err("rifiuto: codice CRS atteso verificato dalla prova");
     assert!(matches!(expected, plenora_core::crs::CrsError::NotBuiltin));
     let field = canonical_crs_field(&[
         ("crs", "EPSG:32632"),

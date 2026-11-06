@@ -2122,6 +2122,7 @@ pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
     select_rows(batch, &selected)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::arrow::array::{Array, Int64Array};
@@ -2492,6 +2493,10 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Solo diagnostica nel ramo panic della comparazione differenziale completa."
+    )]
     fn assert_statistics_equiv(batch: &RecordBatch, config: &Statistics) {
         let fast = statistics(batch, config).map_err(|err| format!("{err:?}"));
         let oracle = oracle_statistics(batch, config).map_err(|err| format!("{err:?}"));
@@ -3320,14 +3325,17 @@ mod tests {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[path = "bin_oracolo.rs"]
 mod bin_oracolo;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[path = "flatten_json_oracolo.rs"]
 mod flatten_json_oracolo;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[path = "lookup_oracolo.rs"]
 mod lookup_oracolo;

@@ -111,6 +111,10 @@ fn diff_values_precedente(
 }
 
 #[allow(clippy::too_many_lines)] // Le fasi del diff restano vicine per essere verificabili.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Costruzione indipendente delle colonne confrontabili nella fixture, non asserzione su un esito."
+)]
 fn table_diff_precedente(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -718,6 +722,7 @@ fn table_diff_come_il_riferimento_sui_double_abbinati() {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn table_diff_come_il_riferimento_su_input_casuali(
         sinistra in prop::collection::vec((0_i64..12, 0_usize..8), 0..14),

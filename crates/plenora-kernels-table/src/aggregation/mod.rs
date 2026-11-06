@@ -15,6 +15,7 @@
 mod aggregate;
 mod compare;
 mod grouping;
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod oracolo_chiavi;
 mod sort;
@@ -72,6 +73,7 @@ use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::sync::Arc;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;

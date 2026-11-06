@@ -217,6 +217,7 @@ impl ErroreKernel for PredicateError {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::ErrorCategory;

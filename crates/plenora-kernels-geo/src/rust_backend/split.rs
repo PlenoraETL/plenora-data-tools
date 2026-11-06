@@ -616,6 +616,7 @@ thread_local! {
     static GENERIC_COVERAGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 fn generic_coverage_path() -> bool {
     GENERIC_COVERAGE.with(std::cell::Cell::get)
@@ -852,6 +853,7 @@ pub fn split_polygon_by_linework_rust_bounded(
     split_polygon_by_linework_rust(source, splitter, limits, precision)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;

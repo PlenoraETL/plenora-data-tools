@@ -549,6 +549,7 @@ pub fn except(
     select_rows(left, &rows)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;

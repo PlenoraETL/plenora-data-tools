@@ -19,12 +19,8 @@ fn rifiutato(testo: &str) {
     );
 }
 
-fn accettato(testo: &str) {
-    assert!(
-        geometry_from_wkt(testo).is_ok(),
-        "{testo:?} e' WKT valido: {:?}",
-        geometry_from_wkt(testo)
-    );
+fn accettato(testo: &str, atteso: &geo::Geometry<f64>) {
+    assert_eq!(geometry_from_wkt(testo).expect("WKT valido"), *atteso);
 }
 
 #[test]
@@ -54,14 +50,64 @@ fn dopo_empty_non_c_e_altro() {
 /// annidate e le forme vuote restano valide.
 #[test]
 fn il_wkt_valido_resta_valido() {
-    accettato("POINT(1 2)");
-    accettato("POINT (1 2)\n");
-    accettato(" \tPOINT (1 2) \t\r\n");
-    accettato("POINT EMPTY");
-    accettato("point empty ");
-    accettato("GEOMETRYCOLLECTION(POINT EMPTY,POINT(1 2))");
-    accettato("MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((5 5,6 5,6 6,5 5)))");
-    accettato("POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 1))");
+    accettato(
+        "POINT(1 2)",
+        &geo::Geometry::Point(geo::Point::new(1.0, 2.0)),
+    );
+    accettato(
+        "POINT (1 2)\n",
+        &geo::Geometry::Point(geo::Point::new(1.0, 2.0)),
+    );
+    accettato(
+        " \tPOINT (1 2) \t\r\n",
+        &geo::Geometry::Point(geo::Point::new(1.0, 2.0)),
+    );
+    accettato(
+        "POINT EMPTY",
+        &geo::Geometry::MultiPoint(geo::MultiPoint(vec![])),
+    );
+    accettato(
+        "point empty ",
+        &geo::Geometry::MultiPoint(geo::MultiPoint(vec![])),
+    );
+    accettato(
+        "GEOMETRYCOLLECTION(POINT EMPTY,POINT(1 2))",
+        &geo::Geometry::GeometryCollection(geo::GeometryCollection(vec![
+            geo::Geometry::MultiPoint(geo::MultiPoint(vec![])),
+            geo::Geometry::Point(geo::Point::new(1.0, 2.0)),
+        ])),
+    );
+    accettato(
+        "MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((5 5,6 5,6 6,5 5)))",
+        &geo::Geometry::MultiPolygon(geo::MultiPolygon(vec![
+            geo::Polygon::new(
+                geo::LineString::from(vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]),
+                vec![],
+            ),
+            geo::Polygon::new(
+                geo::LineString::from(vec![(5.0, 5.0), (6.0, 5.0), (6.0, 6.0), (5.0, 5.0)]),
+                vec![],
+            ),
+        ])),
+    );
+    accettato(
+        "POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 1))",
+        &geo::Geometry::Polygon(geo::Polygon::new(
+            geo::LineString::from(vec![
+                (0.0, 0.0),
+                (4.0, 0.0),
+                (4.0, 4.0),
+                (0.0, 4.0),
+                (0.0, 0.0),
+            ]),
+            vec![geo::LineString::from(vec![
+                (1.0, 1.0),
+                (2.0, 1.0),
+                (2.0, 2.0),
+                (1.0, 1.0),
+            ])],
+        )),
+    );
 }
 
 /// `EMPTY` seguito da un segno: il tokenizer chiude la parola davanti a `)` e
@@ -93,5 +139,11 @@ fn le_dimensioni_oltre_xy_sono_rifiutate_ovunque() {
             geometry_from_wkt(testo)
         );
     }
-    accettato("GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))");
+    accettato(
+        "GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(0 0,1 1))",
+        &geo::Geometry::GeometryCollection(geo::GeometryCollection(vec![
+            geo::Geometry::Point(geo::Point::new(1.0, 2.0)),
+            geo::Geometry::LineString(geo::LineString::from(vec![(0.0, 0.0), (1.0, 1.0)])),
+        ])),
+    );
 }

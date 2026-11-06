@@ -321,7 +321,7 @@ fn le_booleane_chiedono_le_stesse_righe() {
         json!({}),
         &[poligoni(), tabella(UTM, &[None])],
     )
-    .unwrap_err();
+    .expect_err("rifiuto atteso: categoria verificata dalla prova");
     assert_eq!(errore.category(), ErrorCategory::InvalidPlan, "{errore}");
     assert!(errore.to_string().contains("stesse righe"), "{errore}");
 }

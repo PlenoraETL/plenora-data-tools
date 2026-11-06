@@ -225,6 +225,7 @@ pub fn dentro_una_barriera_di_dipendenza() -> bool {
     BARRIERE_APERTE.with(|aperte| aperte.get() > 0)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::{
@@ -253,6 +254,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Panico intenzionale nella barriera: il payload Any non ha assi Plenora. La prova verifica la chiusura della barriera dopo unwind."
+    )]
     fn la_barriera_si_chiude_anche_dopo_un_panico() {
         let esito = barriera_di_dipendenza(|| -> () { std::panic::panic_any("prova") });
         assert!(esito.is_err());

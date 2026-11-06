@@ -394,6 +394,7 @@ pub fn testo_aiuto() -> String {
     testo
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use serde_json::Value;

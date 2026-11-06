@@ -351,6 +351,7 @@ fn struttura_entro_i_limiti(valore: &Value, profondita: usize, nodi: &mut usize)
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;

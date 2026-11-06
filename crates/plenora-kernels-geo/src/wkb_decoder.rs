@@ -239,6 +239,7 @@ fn decode_geometry(
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use geozero::{wkb::Wkb, ToGeo};

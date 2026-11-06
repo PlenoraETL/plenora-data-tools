@@ -232,6 +232,7 @@ fn check_ring(ring: &LineString<f64>) -> Result<(), PlenoraError> {
     Ok(())
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use geo::{
@@ -529,14 +530,16 @@ mod tests {
             Geometry::Point(Point::new(1.0, 1.0)),
             Geometry::Point(Point::new(2.0, 2.0)),
         ]));
-        assert!(validate_geometry_structural(&geometry, MAX_WKB_DEPTH, 4).is_ok());
+        let () =
+            validate_geometry_structural(&geometry, MAX_WKB_DEPTH, 4).expect("struttura valida");
         assert!(matches!(
             validate_geometry_structural(&geometry, MAX_WKB_DEPTH, 3),
             Err(PlenoraError::InvalidPlan(reason))
                 if reason == "struttura WKB non valida: conteggio componenti oltre il limite"
         ));
         // Il limite di default e' quello del decoder (MAX_WKB_COMPONENTS).
-        assert!(validate_geometry_structural(&geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS).is_ok());
+        let () = validate_geometry_structural(&geometry, MAX_WKB_DEPTH, MAX_WKB_COMPONENTS)
+            .expect("struttura valida");
     }
 
     #[test]

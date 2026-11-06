@@ -262,6 +262,7 @@ pub fn confronta_aree(
 }
 
 // Le attese esatte si confrontano esatte.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {

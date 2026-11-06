@@ -1004,6 +1004,7 @@ fn da_wkt(
     Ok(Arc::new(prodotte))
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;

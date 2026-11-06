@@ -125,7 +125,10 @@ fn cursore_condiviso_non_riusa_identita_e_rifiuta_l_esaurimento() {
         Err(PlenoraError::Unsupported(_))
     ));
     let conservata = Schema::new(vec![campo("tenuta", Some("07"))]);
-    assert!(
-        pubblica_schema_con_cursore(&conservata, None, &osservate, &ambigue, &mut cursore,).is_ok()
-    );
+    let pubblicato =
+        pubblica_schema_con_cursore(&conservata, None, &osservate, &ambigue, &mut cursore)
+            .expect("identita conservata");
+    assert_eq!(pubblicato.fields(), conservata.fields());
+    assert_eq!(identita(&pubblicato), ["07"]);
+    assert_eq!(cursore, u64::from(u32::MAX) + 1);
 }

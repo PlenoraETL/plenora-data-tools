@@ -128,6 +128,7 @@ impl KeyInterner {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -329,6 +329,7 @@ pub fn geo_equals_with_tolerance(
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;

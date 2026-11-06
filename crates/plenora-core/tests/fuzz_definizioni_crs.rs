@@ -25,7 +25,14 @@ fn corpus_reale_e_troncamenti_con_oracolo_fuzz() {
     assert_eq!(wkt.as_object().unwrap().len(), 169);
     for (id, documento) in proj.as_object().unwrap() {
         let json = documento.to_string();
-        assert!(resolve_crs(&json, "crs").is_ok());
+        let risolto = resolve_crs(&json, "crs").expect("PROJJSON integrato");
+        let atteso = resolve_crs(id, "crs").expect("identificatore della fixture");
+        assert!(risolto.semantically_equals(&atteso));
+        assert_eq!(
+            risolto.authority_identifier(),
+            atteso.authority_identifier()
+        );
+        assert_eq!(risolto.definition(), json);
         crs::verifica(&json);
         crs::verifica(&format!(
             "{{\"name\":\"{}\",{}",
@@ -83,7 +90,10 @@ fn limiti_strutturali_e_testuali_sono_rifiuti_espliciti() {
     ];
     for testo in casi {
         assert_eq!(
-            resolve_crs(&testo, "crs").unwrap_err().code().as_str(),
+            resolve_crs(&testo, "crs")
+                .expect_err("rifiuto: codice CRS atteso verificato dalla prova")
+                .code()
+                .as_str(),
             "CRS_INVALID"
         );
         crs::verifica(&testo);

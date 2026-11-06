@@ -12,6 +12,7 @@ use crate::interi_temporali::InteriTemporali;
 #[cfg(test)]
 use crate::scalar_key_string;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)] // Solo i test-oracolo usano il percorso testuale originale.
 pub fn row_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<String> {
     let mut key = String::new();

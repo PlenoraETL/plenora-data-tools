@@ -295,9 +295,13 @@ type Alterazione = Box<dyn Fn(&mut Value)>;
 
 /// Il validatore dei test non è vacuo: inviluppi alterati si rifiutano.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Mutazioni del documento buono sottoposte al validatore JSON Schema di prova indipendente. Si deve rifiutare ciascuna mutazione; non è un esito di produzione Plenora. Mutazione dello status capabilities vietata dallo schema dei contratti: rifiuto del validatore di prova, privo degli assi Plenora."
+)]
 fn il_validatore_rifiuta_inviluppi_alterati() {
     let buono = invoca(&["describe"]).documento;
-    assert!(comune::valida_inviluppo(&buono).is_ok());
+    let () = comune::valida_inviluppo(&buono).expect("inviluppo valido");
     let alterazioni: Vec<Alterazione> = vec![
         Box::new(|d| {
             d.as_object_mut().expect("oggetto").remove("contract");

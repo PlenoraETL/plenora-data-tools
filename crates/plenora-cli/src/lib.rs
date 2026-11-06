@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Produzione: divieti degli esiti riattivati agli ingressi delle prove"
+)]
 //! plenora-cli — la CLI pubblica `plenora-data` e la superficie Rust delle
 //! stesse operazioni.
 //!

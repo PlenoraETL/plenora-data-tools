@@ -669,6 +669,7 @@ pub(super) fn static_output_kind(
 
 /// Percorso generico: interprete ricorsivo sull'AST, usato sui
 /// batch vuoti e come oracolo dei test.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub fn expression_generic(
     batch: &RecordBatch,
@@ -680,6 +681,7 @@ pub fn expression_generic(
 
 /// Come [`expression_generic`], con il conteggio delle divisioni per zero
 /// (oracolo del conteggio del fast path).
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub fn expression_generic_con_effetti(
     batch: &RecordBatch,

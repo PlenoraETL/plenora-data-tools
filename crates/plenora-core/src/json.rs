@@ -528,6 +528,7 @@ impl<'de> Visitor<'de> for UniqueKeysVisitor {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -894,9 +895,9 @@ mod tests {
         // La sintassi la segnala la deserializzazione vera, che la classifica
         // come errore di mappatura dei dati: anticiparla qui cambierebbe la
         // categoria dell'errore visto dal chiamante.
-        assert!(ensure_no_duplicate_keys("{").is_ok());
-        assert!(ensure_no_duplicate_keys("{} {}").is_ok());
-        assert!(ensure_no_duplicate_keys("non json").is_ok());
+        assert_successo!(ensure_no_duplicate_keys("{"), ());
+        assert_successo!(ensure_no_duplicate_keys("{} {}"), ());
+        assert_successo!(ensure_no_duplicate_keys("non json"), ());
     }
 
     /// Regressione: un numero che il double non tiene si
@@ -912,7 +913,7 @@ mod tests {
             "[1100000000000000000000000000000000, 1.1e33, 1.1e+33, 1.1E+33]",
             "[1.1000000000000001e33, 1.1000000000000001E+33]",
         ] {
-            assert!(ensure_numbers_exact(esatto).is_ok(), "{esatto}");
+            assert_successo!(ensure_numbers_exact(esatto), ());
         }
         for inesatto in [
             r#"{"min": 9007199254740993.0}"#,

@@ -411,6 +411,7 @@ pub fn testo_datetime(locale: &NaiveDateTime) -> String {
     locale.format("%Y-%m-%dT%H:%M:%S%.f").to_string()
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

@@ -254,7 +254,15 @@ fn percorsi_controllati_prima_di_leggere() {
         &sovrascrivi,
     )
     .unwrap();
-    assert!(leggi_tabella(&totali, None, u64::MAX).is_ok());
+    let letto = leggi_tabella(&totali, None, u64::MAX).expect("totali pubblicati");
+    let tabella = ordini();
+    let atteso = Pipeline::from_json(PIANO)
+        .unwrap()
+        .validate(&[("ordini", tabella.schema())])
+        .unwrap()
+        .run(vec![("ordini".to_owned(), tabella)])
+        .unwrap();
+    identiche(&atteso.outputs[1].1, &letto);
 }
 
 fn file_nella(dir: &Path) -> Vec<String> {

@@ -190,6 +190,7 @@ fn evaluate_unchecked(
     })
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +331,9 @@ mod tests {
             evaluate(&bowtie, &valid, SpatialPredicate::Intersects),
             Err(PredicateError::InvalidGeometry { side: "left", .. })
         ));
-        assert!(evaluate_validated(&bowtie, &valid, SpatialPredicate::Intersects).is_ok());
+        assert!(
+            (evaluate_validated(&bowtie, &valid, SpatialPredicate::Intersects))
+                .expect("successo atteso")
+        );
     }
 }

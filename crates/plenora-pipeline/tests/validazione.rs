@@ -51,6 +51,10 @@ fn schema_wide() -> SchemaRef {
     wide(false).schema()
 }
 
+fn verifica_contratto(actual: &DataContract, expected: &DataContract) {
+    assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+}
+
 fn valida_wide(pipeline: &Pipeline) -> Result<PipelineValidata> {
     pipeline.validate(&[("t", schema_wide())])
 }
@@ -175,7 +179,13 @@ fn output_inesistenti_ripetuti_o_assenti_si_rifiutano() {
         );
     }
     // Un input restituito cosi' com'e' e' un piano valido.
-    assert!(valida_wide(&piano(&["t"], vec![], &["t"])).is_ok());
+    verifica_contratto(
+        valida_wide(&piano(&["t"], vec![], &["t"]))
+            .expect("identita")
+            .contratto("t")
+            .expect("t"),
+        &DataContract::tabular(schema_wide()),
+    );
 }
 
 #[test]
@@ -231,7 +241,14 @@ fn l_arieta_viene_dal_catalogo() {
         vec![passo("a", "table.concat", &["t", "t"], json!({}))],
         &["a"],
     );
-    assert!(valida_wide(&concat_a_due).is_ok());
+    verifica_contratto(
+        valida_wide(&concat_a_due)
+            .expect("concat")
+            .contratto("a")
+            .expect("a"),
+        &analisi_diretta("table.concat", &[schema_wide(), schema_wide()], &json!({}))
+            .expect("analisi concat"),
+    );
 }
 
 #[test]
@@ -331,7 +348,13 @@ fn il_json_rifiuta_campi_sconosciuti_e_chiavi_duplicate() {
     let valido = r#"{"version":1,"inputs":["t"],"steps":[
         {"out":"a","op":"table.limit","in":["t"],"config":{"n":1}}],"outputs":["a"]}"#;
     let pipeline = Pipeline::from_json(valido).expect("piano valido");
-    assert!(valida_wide(&pipeline).is_ok());
+    verifica_contratto(
+        valida_wide(&pipeline)
+            .expect("limit")
+            .contratto("a")
+            .expect("a"),
+        &analisi_diretta("table.limit", &[schema_wide()], &json!({"n":1})).expect("analisi limit"),
+    );
     assert_eq!(
         Pipeline::from_json(&serde_json::to_string(&pipeline).expect("serializza"))
             .expect("rilettura"),
@@ -543,11 +566,18 @@ fn le_colonne_oltre_il_limite_si_rifiutano_in_validazione() {
         solo_input.validate(&[("t", schema_largo(massimo + 1))]),
         Err(PlenoraError::ResourceLimit(_))
     ));
-    assert!(solo_input.validate(&[("t", schema_largo(massimo))]).is_ok());
+    verifica_contratto(
+        solo_input
+            .validate(&[("t", schema_largo(massimo))])
+            .expect("limite incluso")
+            .contratto("t")
+            .expect("t"),
+        &DataContract::tabular(schema_largo(massimo)),
+    );
 }
 
 #[test]
-fn i_limiti_di_complessita_del_piano_si_applicano() {
+fn il_limite_di_profondita_del_piano_si_applica() {
     let limiti = plenora_core::limits::PlanLimits::default();
     let catena = |lunghezza: usize| {
         let passi: Vec<Passo> = (0..lunghezza)
@@ -568,12 +598,26 @@ fn i_limiti_di_complessita_del_piano_si_applicano() {
         let ultimo = format!("p{}", lunghezza - 1);
         piano(&["t"], passi, &[&ultimo])
     };
-    assert!(valida_wide(&catena(limiti.max_plan_depth)).is_ok());
+    {
+        let validata = valida_wide(&catena(limiti.max_plan_depth)).expect("limite incluso");
+        let atteso = analisi_diretta("table.limit", &[schema_wide()], &json!({"n":1}))
+            .expect("analisi limit");
+        for i in 0..limiti.max_plan_depth {
+            verifica_contratto(
+                validata.contratto(&format!("p{i}")).expect("passo"),
+                &atteso,
+            );
+        }
+    };
     assert!(matches!(
         valida_wide(&catena(limiti.max_plan_depth + 1)),
         Err(PlenoraError::InvalidPlan(_))
     ));
+}
 
+#[test]
+fn il_limite_di_fan_out_del_piano_si_applica() {
+    let limiti = plenora_core::limits::PlanLimits::default();
     let ventaglio = |consumatori: usize| {
         let passi: Vec<Passo> = (0..consumatori)
             .map(|indice| {
@@ -587,12 +631,36 @@ fn i_limiti_di_complessita_del_piano_si_applicano() {
             .collect();
         piano(&["t"], passi, &["f0"])
     };
-    assert!(valida_wide(&ventaglio(limiti.max_fan_out)).is_ok());
+    {
+        let validata = valida_wide(&ventaglio(limiti.max_fan_out)).expect("limite incluso");
+        let atteso = analisi_diretta("table.limit", &[schema_wide()], &json!({"n":1}))
+            .expect("analisi limit");
+        for i in 0..limiti.max_fan_out {
+            let mut atteso = atteso.clone();
+            for (position, field) in schema_wide().fields().iter().enumerate() {
+                atteso.field_ids.insert(
+                    field.name().clone(),
+                    plenora_core::contract::FieldId(
+                        u32::try_from(i * schema_wide().fields().len() + position)
+                            .expect("id fixture"),
+                    ),
+                );
+            }
+            verifica_contratto(
+                validata.contratto(&format!("f{i}")).expect("passo"),
+                &atteso,
+            );
+        }
+    };
     assert!(matches!(
         valida_wide(&ventaglio(limiti.max_fan_out + 1)),
         Err(PlenoraError::InvalidPlan(_))
     ));
+}
 
+#[test]
+fn i_limiti_di_dimensione_del_piano_si_applicano() {
+    let limiti = plenora_core::limits::PlanLimits::default();
     let nome_lungo = "n".repeat(limiti.max_identifier_bytes + 1);
     let con_nome_lungo = piano(
         &["t"],
@@ -1154,7 +1222,10 @@ fn run_end_e_union_si_rifiutano_a_ogni_profondita() {
         Field::new("d", dizionario(DataType::Utf8), true),
         Field::new("l", lista(struttura(DataType::Int64)), true),
     ]));
-    assert!(contract_from_arrow_schema(ammesso, resolve_crs).is_ok());
+    verifica_contratto(
+        &contract_from_arrow_schema(ammesso.clone(), resolve_crs).expect("schema ammesso"),
+        &DataContract::tabular(ammesso),
+    );
 }
 
 /// La chiave HMAC si legge con la stessa funzione nel runner e nel kernel:

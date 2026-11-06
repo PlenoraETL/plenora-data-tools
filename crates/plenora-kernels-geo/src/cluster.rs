@@ -446,6 +446,7 @@ pub fn dbscan_column(
     dbscan_nullable(&geometries, eps, min_points).map_err(|error| cluster_error(&error))
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;

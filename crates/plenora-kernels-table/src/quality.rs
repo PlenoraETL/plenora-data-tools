@@ -778,6 +778,7 @@ pub(crate) fn coalesce_generic(batch: &RecordBatch, indices: &[usize]) -> Result
     )?)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::arrow::array::{Float64Array, Int64Array, StringArray};
@@ -1540,6 +1541,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Confronto differenziale: valori ed errori sono gia confrontati integralmente; qui si confronta anche la diagnostica per riga."
+    )]
     fn assert_unique_ha_le_diagnostiche_del_percorso_testuale() {
         use plenora_core::arrow::array::{types::Int32Type, DictionaryArray, Int32Array};
 

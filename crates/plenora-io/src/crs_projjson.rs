@@ -98,6 +98,7 @@ pub fn identificativo_da_projjson(documento: &Value) -> Result<String> {
     identificativo_di(&risolto)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::{ErrorCategory, ErrorPhase};

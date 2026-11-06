@@ -220,6 +220,7 @@ pub(crate) fn soundex(text: &str) -> String {
     out
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 fn jaro_similarity(left: &[char], right: &[char]) -> f64 {
     let mut left_matched = vec![false; left.len()];
@@ -283,6 +284,7 @@ fn jaro_similarity_scratch(
 
 /// Jaro-Winkler: Jaro + boost di prefisso comune (p = 0.1, massimo 4
 /// caratteri). Nessuna soglia minima di attivazione del boost.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub(crate) fn jaro_winkler(left: &str, right: &str) -> f64 {
     let left: Vec<char> = left.chars().collect();
@@ -300,6 +302,7 @@ pub(crate) fn jaro_winkler(left: &str, right: &str) -> f64 {
 }
 
 /// Distanza di Levenshtein su caratteri Unicode (DP a due righe).
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 fn levenshtein_distance(left: &[char], right: &[char]) -> usize {
     let mut previous: Vec<usize> = Vec::new();
@@ -311,6 +314,7 @@ fn levenshtein_distance(left: &[char], right: &[char]) -> usize {
 /// probe di `fuzzy_join`, hot path minimale): stesso ordine di calcolo, risultato identico.
 /// Il probe usa `levenshtein_entro`; questa DP completa resta il confronto
 /// dei test.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 fn levenshtein_distance_scratch(
     left: &[char],
@@ -342,6 +346,7 @@ fn levenshtein_distance_scratch(
 }
 
 /// Levenshtein normalizzato: `1 - dist/max_len`; due stringhe vuote -> 1.0.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub(crate) fn levenshtein_normalized(left: &str, right: &str) -> f64 {
     let left: Vec<char> = left.chars().collect();
@@ -357,6 +362,7 @@ pub(crate) fn levenshtein_normalized(left: &str, right: &str) -> f64 {
 
 /// Jaccard sui token (split whitespace, insiemi); due stringhe senza token
 /// -> 1.0.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub(crate) fn jaccard_tokens(left: &str, right: &str) -> f64 {
     let left_tokens: std::collections::HashSet<&str> = left.split_whitespace().collect();
@@ -1044,10 +1050,12 @@ fn fuzzy_join_con_chunk(
     Ok(output)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[path = "fuzzy_oracolo.rs"]
 mod oracolo;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1198,7 +1206,7 @@ mod tests {
         );
         let mut one = base_config();
         one["threshold"] = serde_json::json!(1.0);
-        assert!(validate_config(&config(one)).is_ok());
+        assert_successo!(validate_config(&config(one)), ());
         // blocking_param solo con prefix, e >= 1.
         let mut cfg = base_config();
         cfg["blocking_param"] = serde_json::json!(0);

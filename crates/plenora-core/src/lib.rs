@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Produzione: divieti degli esiti riattivati agli ingressi delle prove"
+)]
 //! plenora-core: le fondamenta condivise del workspace.
 //!
 //! Ospita:
@@ -23,6 +27,7 @@
 //! - [`memoria`]: byte Arrow di tabelle (per allocazione) e colonne (per
 //!   vista), la misura unica di runner e kernel.
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[macro_use]
 #[path = "../../../tests/comune/esito.rs"]
@@ -148,6 +153,7 @@ pub mod arrow {
     pub const VERSION: &str = "60.0.0";
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -160,7 +166,11 @@ mod tests {
     fn batch_vuoto_rifiuta_uno_schema_senza_array() {
         let mappa = DataType::Map(Arc::new(Field::new("voci", DataType::UInt64, false)), false);
         let schema = Arc::new(Schema::new(vec![Field::new("m", mappa, true)]));
-        let errore = super::batch_vuoto(schema).unwrap_err();
+        let errore = assert_rifiuto!(
+            super::batch_vuoto(schema),
+            super::ErrorCategory::Schema,
+            super::ErrorPhase::Validate
+        );
         assert_eq!(errore.category(), super::ErrorCategory::Schema);
         let valido = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, true)]));
         assert_eq!(super::batch_vuoto(valido).unwrap().num_rows(), 0);

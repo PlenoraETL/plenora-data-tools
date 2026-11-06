@@ -337,6 +337,10 @@ pub fn stesso_errore(runner: &PlenoraError, analisi: &PlenoraError) -> bool {
 /// Per ogni caso la validazione del runner rifiuta esattamente cio' che
 /// l'analisi rifiuta, con lo stesso errore, e accetta con lo stesso
 /// contratto (nello schema emesso).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Solo diagnostica nel ramo panic: successo e rifiuto attesi sono gia decisi dalla fixture e verificati sopra."
+)]
 pub fn stessa_validazione(
     casi: &[(&str, Value, Vec<RecordBatch>, Option<&str>)],
     esiti: &[Option<plenora_core::ErrorCategory>],
@@ -361,8 +365,12 @@ pub fn stessa_validazione(
             assert!(stesso_errore(&runner, &analisi));
             continue;
         }
-        assert!(validata.is_ok(), "scenario valido: {op} {config}");
-        assert!(atteso.is_ok(), "scenario valido: {op} {config}");
+        validata
+            .as_ref()
+            .expect("successo: contratto verificato sotto");
+        atteso
+            .as_ref()
+            .expect("successo: schema indipendente verificato sotto");
         match (&validata, &atteso) {
             (Ok(validata), Ok(contratto)) => {
                 assert_eq!(

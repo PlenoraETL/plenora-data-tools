@@ -167,6 +167,7 @@ fn figli<'a>(tipo: &'a DataType, uscita: &mut Vec<&'a Field>) {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::{ErrorCategory, ErrorPhase};

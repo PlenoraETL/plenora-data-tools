@@ -788,6 +788,7 @@ impl PipelineValidata {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     //! Rifiuto prima di eseguire e conformità al contratto.
@@ -896,7 +897,10 @@ mod tests {
             conforma(&batch, &contratto),
             Err(PlenoraError::Internal(_))
         ));
-        assert!(conforma(&batch, &DataContract::tabular(batch.schema())).is_ok());
+        assert_eq!(
+            conforma(&batch, &DataContract::tabular(batch.schema())).expect("conformita"),
+            batch
+        );
     }
 
     /// Scadenza passata o annullamento alzato: nessun kernel gira, e

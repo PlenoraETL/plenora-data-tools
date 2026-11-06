@@ -75,7 +75,9 @@ fn la_sonda_passa_fra_i_passi_e_fra_le_scritture() {
     })));
     let cartella = tempfile::tempdir().unwrap();
     assert!(matches!(
-        esegui(cartella.path()).unwrap_err().untag(),
+        esegui(cartella.path())
+            .expect_err("rifiuto atteso: categoria verificata dalla prova")
+            .untag(),
         PlenoraError::Internal(_)
     ));
 

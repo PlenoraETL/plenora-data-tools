@@ -656,6 +656,7 @@ impl IndiceVicini {
     /// # Errors
     ///
     /// `CalcoloNonConcluso` se la distanza del primo candidato va in panico.
+    #[deny(clippy::disallowed_methods)]
     #[cfg(test)]
     fn candidati(
         &self,
@@ -907,9 +908,11 @@ pub fn count_points_in_polygons_validated_con_margine(
     Ok(counts)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod nearest_oracolo;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1037,9 +1040,10 @@ mod tests {
             minimum_distances(std::slice::from_ref(&bowtie), &[point(0.0, 0.0)], 10),
             Err(AnalysisError::InvalidGeometry { side: "left", .. })
         ));
-        assert!(
-            minimum_distances_validated(std::slice::from_ref(&bowtie), &[point(0.0, 0.0)], 10)
-                .is_ok()
+        assert_eq!(
+            (minimum_distances_validated(std::slice::from_ref(&bowtie), &[point(0.0, 0.0)], 10))
+                .expect("successo atteso"),
+            vec![Some(0.0)]
         );
     }
 

@@ -125,8 +125,11 @@ fn proprieta_crs_native_verificate_anche_senza_geoparquet() {
         "geo",
         r#"{"crs":"EPSG:32632","dimensions":"xy","epoch":2024.5}"#,
     );
-    let error = read_geometry_contract_keys(&field.with_metadata(metadata)).unwrap_err();
+    let error = read_geometry_contract_keys(&field.with_metadata(metadata))
+        .expect_err("rifiuto con variante attesa verificata sotto");
     assert!(matches!(error, plenora_core::PlenoraError::Crs(_)));
+    assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
+    assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
     assert!(!error.to_string().contains("2023"));
     assert!(!error.to_string().contains("2024"));
 }
@@ -142,7 +145,10 @@ fn geometria_nuova_accetta_estensione_crs_vuota() {
         metadata.insert("ARROW:extension:metadata", raw);
         let source = field.clone().with_metadata(metadata);
         let inherited = policy::inherit_crs(&field, &source).unwrap();
-        assert!(read_geometry_contract_keys(&inherited).is_ok());
+        assert_eq!(
+            read_geometry_contract_keys(&inherited).expect("geometria ereditata"),
+            read_geometry_contract_keys(&field).expect("fixture")
+        );
     }
 }
 
@@ -385,8 +391,11 @@ fn effetti_operandi_multipli_e_ruoli_assenti() {
     }
     let absent = Schema::new(vec![fields[0].clone()]);
     for selected in [vec![], vec![None], vec![Some(operands[0])]] {
-        let error = policy::column_effects(op, &absent, &selected).unwrap_err();
+        let error = policy::column_effects(op, &absent, &selected)
+            .expect_err("rifiuto con variante attesa verificata sotto");
         assert!(matches!(error, plenora_core::PlenoraError::Internal(_)));
+        assert_eq!(error.phase(), plenora_core::ErrorPhase::Write);
+        assert_eq!(error.phase(), plenora_core::ErrorPhase::Write);
         assert_eq!(error.to_string(),
             "internal error: politica metadati: operando assente dall'uscita con righe non conservate");
     }

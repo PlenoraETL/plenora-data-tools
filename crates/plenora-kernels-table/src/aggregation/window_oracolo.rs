@@ -555,6 +555,7 @@ fn double_piccolo() -> impl Strategy<Value = Option<f64>> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn ranghi_come_il_riferimento_su_input_casuali(
         valori in prop::collection::vec(double_piccolo(), 0..60),

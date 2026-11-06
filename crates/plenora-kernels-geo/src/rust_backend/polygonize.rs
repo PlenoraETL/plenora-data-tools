@@ -743,6 +743,7 @@ thread_local! {
 }
 
 /// Se si segue il percorso generico (solo nei test, vedi `GENERIC_PATH`).
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 fn generic_path() -> bool {
     GENERIC_PATH.with(std::cell::Cell::get)
@@ -2280,6 +2281,7 @@ pub fn polygonize_linework_rust_bounded(
     polygonize_linework_rust(linework, options)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;

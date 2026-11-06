@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Benchmark: misura e classifica esiti, non costituisce un oracolo di prova"
+)]
 //! Scalatura della validazione OGC col numero di vertici (non un gate).
 //!
 //! Due percorsi sulla stessa geometria, mediana di `RUNS` corse:

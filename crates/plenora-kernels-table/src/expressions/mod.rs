@@ -510,6 +510,7 @@ use std::sync::Arc;
 // ---------------------------------------------------------------------------
 // Test-oracolo: fast path compilato vs interprete generico.
 // ---------------------------------------------------------------------------
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::arrow::array::{
@@ -1093,7 +1094,7 @@ mod tests {
         let indices: Vec<u64> = report.examples.iter().map(|row| row.source_index).collect();
         assert_eq!(indices, vec![0, 2, 3, 4, 5]);
         assert!(!report.examples_truncated);
-        assert!(report.validate_for_emission().is_ok());
+        assert_successo!(report.validate_for_emission(), ());
         // Parita' fast/generico anche sul payload, non solo sul testo.
         let generic = expression_generic(&batch, &cfg).expect_err("divisione per zero");
         assert_eq!(error.row_diagnostics(), generic.row_diagnostics());

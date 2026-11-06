@@ -521,6 +521,7 @@ fn senza_precisione_ereditata(
     Ok(output)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     fn assert_crs<T: std::fmt::Debug>(
@@ -747,8 +748,8 @@ mod tests {
             "geo.geometry_diagnostics",
             "geo.vertex_count",
         ] {
-            let error =
-                analyze_one(op, std::slice::from_ref(&input), &json!({}), None).unwrap_err();
+            let error = analyze_one(op, std::slice::from_ref(&input), &json!({}), None)
+                .expect_err("rifiuto atteso: categoria verificata dalla prova");
             assert_eq!(error.category(), ErrorCategory::Crs, "{op}: {error}");
         }
     }
@@ -782,7 +783,8 @@ mod tests {
                                 );
                             }
                         });
-                    let error = analyze_one(descriptor.id, &inputs, &json!({}), None).unwrap_err();
+                    let error = analyze_one(descriptor.id, &inputs, &json!({}), None)
+                        .expect_err("rifiuto atteso: categoria verificata dalla prova");
                     assert_eq!(error.category(), ErrorCategory::Crs, "{}", descriptor.id);
                     assert!(
                         error.to_string().contains("AXIS_ORDER_REQUIRED"),
@@ -3030,7 +3032,14 @@ mod tests {
         .expect("rinomina geometria");
         assert_eq!(output.geometries[0].name, "parts");
         assert_eq!(output.geometries[0].field_id, FieldId(2));
-        assert!(output.schema.field_with_name("parts").is_ok());
+        assert_eq!(
+            output
+                .schema
+                .field_with_name("parts")
+                .expect("campo parts")
+                .data_type(),
+            &DataType::Binary
+        );
         assert_rifiuto!(
             analyze_one(
                 "geo.subdivide",

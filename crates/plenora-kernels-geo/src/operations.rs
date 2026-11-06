@@ -725,6 +725,7 @@ fn line_string_boundary(line: &LineString<f64>) -> Geometry<f64> {
     ]))
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod prove_della_soglia_scalata {
     use super::*;
@@ -777,6 +778,7 @@ mod prove_della_soglia_scalata {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 // Confronti float esatti intenzionali: le fixture sono costruite per
 // produrre valori esatti (coordinate note, round-trip bit-esatti); il
@@ -1010,7 +1012,7 @@ mod tests {
                     continue;
                 }
                 let output = simplify_with_policy(&line, tolerance, policy).unwrap();
-                assert!(output.validazione_protetta().is_ok());
+                assert_successo!(output.validazione_protetta(), ());
                 assert!(output
                     .coords_iter()
                     .all(|coordinate| coordinate.x.is_finite() && coordinate.y.is_finite()));
@@ -1074,16 +1076,18 @@ mod tests {
         ];
         for value in &values {
             assert!(length(value).unwrap().is_finite());
-            assert!(boundary(value).unwrap().validazione_protetta().is_ok());
+            assert_successo!(boundary(value).unwrap().validazione_protetta(), ());
             assert!(!explode(value).unwrap().is_empty());
             for policy in [
                 SimplifyPolicy::DouglasPeucker,
                 SimplifyPolicy::PreserveTopology,
             ] {
-                assert!(simplify_with_policy(value, 0.01, policy)
-                    .unwrap()
-                    .validazione_protetta()
-                    .is_ok());
+                assert_successo!(
+                    simplify_with_policy(value, 0.01, policy)
+                        .unwrap()
+                        .validazione_protetta(),
+                    ()
+                );
             }
         }
 

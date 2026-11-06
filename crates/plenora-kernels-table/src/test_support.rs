@@ -140,6 +140,10 @@ fn assert_values<A: Array + 'static, T: PartialEq + Debug>(
 
 /// Equivalenza fast/generico su qualunque esito: stessi batch, oppure
 /// stessa categoria, stesso messaggio e stessa diagnostica row-scoped.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Solo diagnostica nel ramo panic dopo il confronto completo dei risultati."
+)]
 pub fn assert_same_outcome(fast: Result<RecordBatch>, generic: Result<RecordBatch>) {
     match (fast, generic) {
         (Ok(fast), Ok(generic)) => assert_eq!(fast, generic),
@@ -159,6 +163,10 @@ pub fn assert_same_outcome(fast: Result<RecordBatch>, generic: Result<RecordBatc
 /// Come [`assert_same_outcome`], con il confronto dei batch di
 /// [`assert_batches_identical`]: i `Float64` si confrontano per bit, quindi
 /// un NaN nell'output non rende diversi due batch identici.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Solo diagnostica nel ramo panic dopo il confronto completo dei risultati."
+)]
 pub fn assert_same_outcome_bits(fast: Result<RecordBatch>, reference: Result<RecordBatch>) {
     match (fast, reference) {
         (Ok(fast), Ok(reference)) => assert_batches_identical(&fast, &reference),

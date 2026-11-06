@@ -591,6 +591,7 @@ pub fn text_normalize(
     Ok(result)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -807,12 +808,12 @@ mod tests {
         let reference = reference_string_extract(&batch, config, limits);
         match (fast, reference) {
             (Ok(fast), Ok(reference)) => assert_eq!(fast, reference),
-            (fast, reference) => {
-                assert_eq!(
-                    fast.err().map(|error| error.to_string()),
-                    reference.err().map(|error| error.to_string()),
-                );
+            (Err(fast), Err(reference)) => {
+                assert_eq!(fast.category(), reference.category());
+                assert_eq!(fast.phase(), reference.phase());
+                assert_eq!(fast.to_string(), reference.to_string());
             }
+            _ => panic!("esiti divergenti"),
         }
     }
 

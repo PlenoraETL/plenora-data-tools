@@ -851,6 +851,7 @@ pub fn residual_classes(result: &PolygonizeResult) -> [(&'static str, &[LineStri
 // I test di `geos_backend` di `plenora-data-tools@190c493` e la parte GEOS di
 // `plenora-cli/tests/geo_adversarial.rs`, sullo stesso contratto: le attese
 // (conteggi, aree, varianti d'errore) sono quelle che GEOS soddisfaceva.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub(crate) fn assert_bowtie_repaired(geometry: &Geometry<f64>) {
     use geo::{polygon, MultiPolygon, Relate};
@@ -865,6 +866,7 @@ pub(crate) fn assert_bowtie_repaired(geometry: &Geometry<f64>) {
     );
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1189,7 +1191,7 @@ mod tests {
             )
             .unwrap();
             let repaired = geometry_from_wkb(&output).unwrap();
-            assert!(repaired.validazione_protetta().is_ok());
+            assert_successo!(repaired.validazione_protetta(), ());
         }
     }
 
@@ -1323,16 +1325,16 @@ mod tests {
         ]);
         let errors: Vec<PlenoraError> = vec![
             split_polygon_by_linework(&source, &splitter, 100, 1, 10, 100, precisione())
-                .unwrap_err()
+                .expect_err("rifiuto atteso: categoria verificata dalla prova")
                 .into(),
             split_polygon_by_linework(&source, &splitter, 100, 10_000, 1, 100, precisione())
-                .unwrap_err()
+                .expect_err("rifiuto atteso: categoria verificata dalla prova")
                 .into(),
             polygonize_linework(&splitter, true, true, 100, 10_000, 100, 100, precisione())
-                .unwrap_err()
+                .expect_err("rifiuto atteso: categoria verificata dalla prova")
                 .into(),
             polygonize_linework(&source, true, true, 100, 10_000, 100, 100, precisione())
-                .unwrap_err()
+                .expect_err("rifiuto atteso: categoria verificata dalla prova")
                 .into(),
         ];
         for (error, categoria, fase) in errors

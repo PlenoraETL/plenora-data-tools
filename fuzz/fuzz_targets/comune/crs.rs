@@ -49,7 +49,10 @@ pub fn verifica(testo: &str) {
     if !testo.trim().is_empty() && (testo.len() > MAX_CRS_DEFINITION_BYTES || testo.contains('\0'))
     {
         assert_eq!(
-            resolve_crs(testo, "crs").unwrap_err().code().as_str(),
+            resolve_crs(testo, "crs")
+                .expect_err("rifiuto: codice CRS atteso verificato dalla prova")
+                .code()
+                .as_str(),
             "CRS_INVALID"
         );
     }

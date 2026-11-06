@@ -132,7 +132,9 @@ fn tutte_le_geo_del_catalogo_risolvono_operandi_senza_eleggere_primarie() {
             }
             if primary.is_none() {
                 assert_eq!(
-                    implicit.unwrap_err().category(),
+                    implicit
+                        .expect_err("rifiuto atteso: categoria verificata dalla prova")
+                        .category(),
                     ErrorCategory::Schema,
                     "{}",
                     operation.id

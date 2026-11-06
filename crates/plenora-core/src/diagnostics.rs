@@ -617,6 +617,7 @@ fn valid_code(value: &str) -> bool {
         })
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

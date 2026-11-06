@@ -1008,6 +1008,7 @@ pub fn split_column(
     Ok(result)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 // Confronti float esatti intenzionali: i default `Float64` delle fixture
 // sono letterali esatti; il confronto per bit e' il contratto verificato,
@@ -1223,7 +1224,12 @@ mod tests {
             "contract violation: colonna ripetuta nella proiezione: a",
         );
         // Config strict: campo sconosciuto rifiutato, e solo per quello.
-        assert!(serde_json::from_value::<SelectColumns>(json!({"columns": ["a"]})).is_ok());
+        assert_eq!(
+            serde_json::from_value::<SelectColumns>(json!({"columns": ["a"]}))
+                .expect("config valida")
+                .columns,
+            ["a"]
+        );
         let error =
             serde_json::from_value::<SelectColumns>(json!({"columns": ["a"], "surprise": true}))
                 .expect_err("campo sconosciuto accettato");
@@ -1582,6 +1588,7 @@ mod tests {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[path = "split_oracolo.rs"]
 mod split_oracolo;

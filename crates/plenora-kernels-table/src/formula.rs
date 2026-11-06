@@ -558,6 +558,7 @@ impl<'a> FastProgram<'a> {
     }
 
     /// Come [`Self::run`] col tipo ricavato dallo schema (test-oracolo).
+    #[deny(clippy::disallowed_methods)]
     #[cfg(test)]
     fn run_auto(
         &self,
@@ -1051,6 +1052,7 @@ pub fn formula_con_effetti(
 
 /// Come [`formula_generic`] col tipo ricavato dallo schema: usato dai
 /// test-oracolo, che confrontano fast e generico sulla stessa config.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 fn formula_generic_auto(
     batch: &RecordBatch,
@@ -1246,6 +1248,7 @@ fn infer_expr_type(
 // ---------------------------------------------------------------------------
 // Test-oracolo: fast path compilato vs interprete generico.
 // ---------------------------------------------------------------------------
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::arrow::array::{BooleanArray, Float64Array, Int64Array, StringArray};
@@ -1665,7 +1668,10 @@ mod tests {
                 plenora_core::ErrorPhase::Validate
             );
         }
-        assert!(validate(&con_politica("f / 2", crate::OnDivisionByZero::Error), 1024).is_ok());
+        assert_successo!(
+            validate(&con_politica("f / 2", crate::OnDivisionByZero::Error), 1024),
+            ()
+        );
     }
 
     #[test]
@@ -1688,7 +1694,7 @@ mod tests {
         let indices: Vec<u64> = report.examples.iter().map(|row| row.source_index).collect();
         assert_eq!(indices, vec![0, 2, 3, 4, 5]);
         assert!(!report.examples_truncated);
-        assert!(report.validate_for_emission().is_ok());
+        assert_successo!(report.validate_for_emission(), ());
         // Parita' fast/generico anche sul payload, non solo sul testo.
         let expression = parse("i / (i * 0)").expect("formula valida");
         let generic =

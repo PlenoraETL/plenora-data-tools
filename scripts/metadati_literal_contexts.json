@@ -1359,7 +1359,7 @@
     "[[\"token\",\")\"],[\"token\",\"{\"],[\"token\",\"vec\"],[\"token\",\"!\"],[\"token\",\"[\"],[\"string\",\"count\"],[\"token\",\".\"],[\"token\",\"to_owned\"],[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\"]\"]]"
   ],
   "crates/plenora-kernels-table/src/aggregation/oracolo_chiavi.rs": [
-    "[[\"token\",\"&\"],[\"token\",\"batch\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"[\"],[\"string\",\"f\"],[\"token\",\"]\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\"fn\"]]",
+    "[[\"token\",\"&\"],[\"token\",\"batch\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"[\"],[\"string\",\"f\"],[\"token\",\"]\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\"#\"]]",
     "[[\"token\",\"1\"],[\"token\",\"0\"],[\"token\",\"]\"],[\"token\",\"=\"],[\"token\",\"[\"],[\"string\",\"i\"],[\"token\",\",\"],[\"string\",\"u\"],[\"token\",\",\"],[\"string\",\"f\"],[\"token\",\",\"]]",
     "[[\"token\",\"]\"],[\"token\",\",\"],[\"token\",\"vec\"],[\"token\",\"!\"],[\"token\",\"[\"],[\"string\",\"dict\"],[\"token\",\",\"],[\"string\",\"s\"],[\"token\",\"]\"],[\"token\",\",\"],[\"token\",\"]\"]]",
     "[[\"token\",\"]\"],[\"token\",\",\"],[\"token\",\"vec\"],[\"token\",\"!\"],[\"token\",\"[\"],[\"string\",\"f\"],[\"token\",\"]\"],[\"token\",\",\"],[\"token\",\"vec\"],[\"token\",\"!\"],[\"token\",\"[\"]]",

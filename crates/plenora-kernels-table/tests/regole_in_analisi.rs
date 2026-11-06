@@ -619,7 +619,21 @@ fn i_kernel_rifiutano_i_nomi_d_uscita_ripetuti() {
     let config: Transpose =
         serde_json::from_value(json!({"output_columns": ["x", "y"], "type_policy": "string"}))
             .expect("config");
-    assert!(transpose(&batch, &config, &limiti).is_ok());
+    let output = transpose(&batch, &config, &limiti).expect("trasposizione");
+    let expected = RecordBatch::try_new(
+        schema(vec![
+            Field::new("col_0", DataType::Utf8, false),
+            Field::new("x", DataType::Utf8, true),
+            Field::new("y", DataType::Utf8, true),
+        ]),
+        vec![
+            Arc::new(StringArray::from(vec!["k", "v"])),
+            Arc::new(StringArray::from(vec!["a", "1"])),
+            Arc::new(StringArray::from(vec!["a", "2"])),
+        ],
+    )
+    .expect("atteso");
+    assert_eq!(output, expected);
 }
 
 #[test]
@@ -763,14 +777,23 @@ fn i_limiti_sono_quelli_del_chiamante() {
         max_regex_bytes: 8,
         ..Limits::default()
     };
-    assert!(analyze_table_contract(
+    let output = analyze_table_contract(
         "table.string_extract",
         &ingresso,
         &config,
         &mut FieldAllocator::default(),
         &Limits::default(),
     )
-    .is_ok());
+    .expect("pattern ammesso");
+    let mut fields = largo()
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect::<Vec<_>>();
+    fields.push(Field::new("name_extracted", DataType::Utf8, true));
+    assert_eq!(output.schema, schema(fields));
+    assert!(output.geometries.is_empty());
+    assert_eq!(output.active_geometry, None);
     assert!(matches!(
         analyze_table_contract(
             "table.string_extract",
@@ -1178,7 +1201,15 @@ fn i_kernel_rifiutano_i_parametri_che_non_usano() {
     // Parametri assenti: i default, nessun errore.
     let riempi: FillNa =
         serde_json::from_value(json!({"column": "value", "method": "ffill"})).expect("config");
-    assert!(fill_na(&batch, &riempi).is_ok());
+    let expected = RecordBatch::try_new(
+        batch.schema(),
+        vec![
+            batch.column(0).clone(),
+            Arc::new(Float64Array::from(vec![Some(1.0), Some(1.0)])),
+        ],
+    )
+    .expect("atteso fill_na");
+    assert_eq!(fill_na(&batch, &riempi).expect("successo atteso"), expected);
 }
 
 #[test]

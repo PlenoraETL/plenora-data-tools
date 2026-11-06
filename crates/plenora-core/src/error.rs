@@ -482,6 +482,7 @@ macro_rules! asse_canonico {
             ///
             /// Privato e sotto `cfg(test)`: serve agli oracoli per pretendere
             /// che le proprie tabelle nominino ogni variante.
+            #[deny(clippy::disallowed_methods)]
             #[cfg(test)]
             const $elenco: &'static [Self] = &[
                 $(asse_canonico!(@valore Self::$variante $(, $rappresentante)?)),+
@@ -1233,6 +1234,7 @@ pub const fn assi_io(kind: std::io::ErrorKind) -> (ErrorCategory, RetryDispositi
 
 pub type Result<T> = std::result::Result<T, PlenoraError>;
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;

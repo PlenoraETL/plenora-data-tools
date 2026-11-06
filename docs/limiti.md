@@ -1899,6 +1899,62 @@ altro. Piani indipendenti non condividono il cursore.
 **Rientro.** Derivare gli ID pubblici dalla lineage interna, registrando una
 sola volta tutti i campi d'ingresso e allineando `FieldOrigin` e metadati.
 
+## Guardia degli esiti: analisi statica e revisione
+
+**Regola.** Una prova deve fissare il successo atteso oppure la categoria
+del rifiuto e, per gli errori pubblici, la fase. Il messaggio è un controllo
+aggiuntivo. La guardia non certifica da sola la correttezza dell'oracolo.
+
+**Ambito.** Clippy risolve sul codice compilato i metodi `Result::is_err`,
+`is_ok`, `unwrap_err` ed `err`, inclusi alias di tipo e chiamate UFCS.
+Le radici esentano esplicitamente la produzione con un attributo motivato;
+gli ingressi `#[cfg(test)]` e `#[test]` riattivano il lint. La guardia Python
+controlla questa riattivazione. Le crate di integrazione ereditano i divieti
+del workspace. Le eccezioni di prova sono `expect` motivati nei sorgenti.
+`Option::is_none` non distingue un risultato convertito da una proprietà
+opzionale: la conversione che perde l'errore è già vietata tramite `err`.
+L'esenzione di produzione riguarda anche i metodi geozero nella stessa
+configurazione: il divieto dei lettori WKT/CSV resta coperto dal censimento
+dei sorgenti e dalle sonde degli alias in `consumatore_esterno.rs`.
+
+Per `matches!` la guardia usa token Rust, commenti esclusi e letterali
+opachi: controlla jolly e alternative di `Err`, con alias di import
+`std`/`core`, delimitatori diversi e moduli di prova esterni, anche inclusi
+con `#[path]`. Non espande macro definite dall'utente né risolve re-export
+attraverso altri moduli. La risoluzione degli alias è conservativa nel
+file: un nome importato come alias di `matches` resta sorvegliato anche
+in un altro scope. Le forme `cfg` composte e il codice generato richiedono
+revisione esplicita; la CI compila le feature previste ma non tutte le
+configurazioni possibili del linguaggio.
+
+L'AST Python controlla import con alias, `pytest.raises`, gestori generici,
+asserzioni sul testo dell'errore e `zip(strict=True)`. Non esegue import,
+decoratori, monkey patch o assegnazioni dinamiche di funzioni. Per un
+gestore generico richiede un rilancio o un'asserzione di categoria nel
+corpo diretto, senza attribuire una prova a un ramo che potrebbe non girare.
+Restano testuali soltanto i controlli Rust dell'errore immediatamente
+ignorato con `continue` e del solo messaggio; il riconoscimento della
+categoria e dei relativi helper resta necessariamente conservativo.
+
+**Hazard (deviazione).** Un helper può asserire la categoria di un altro
+errore; un booleano di categoria può essere calcolato e scartato; due
+errori possono avere categorie uguali senza che la fixture ne fissi una.
+La guardia non dimostra flusso dei valori, dominanza delle asserzioni o
+semantica dei chiamati. Un confronto differenziale può inoltre condividere
+un difetto con il riferimento. Questi casi non diventano oracoli validi
+per il solo fatto che clippy e la guardia passano.
+
+**Difesa e rientro.** Usare gli aiuti comuni `assert_rifiuto!` e
+`assert_successo!`, con attesi indipendenti, e rivedere scenario, categoria,
+fase e valori. Le eccezioni dei classificatori di fixture, dei panici
+intenzionali e dei confronti differenziali devono spiegare quale controllo
+completo le affianca. L'aiuto Python che confronta le rappresentazioni
+dello stesso messaggio ha un'eccezione puntuale: i chiamanti fissano la
+classe in `pytest.raises`. Il rientro richiede un'analisi semantica del
+flusso e dei chiamati oppure API di prova tipizzate che rendano impossibile
+scambiare l'errore osservato con un altro o omettere l'atteso; fino ad
+allora la revisione resta obbligatoria per questi casi.
+
 ## Concave hull: regola di scavo
 
 **Regola.** `geo.concave_hull` dovrebbe scegliere un candidato più vicino

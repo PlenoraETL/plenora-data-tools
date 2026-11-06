@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "Produzione: divieti degli esiti riattivati agli ingressi delle prove"
+)]
 //! `plenora-data`: il binario della CLI. Tutta la logica è nella libreria
 //! (`plenora_cli`); qui solo ciò che è stato del processo.
 

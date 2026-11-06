@@ -4,6 +4,10 @@
 //! contratti deve scrivere, e l'equivalenza fra le forme in memoria
 //! dell'API (quelle che l'SDK chiama) e le forme da file (quelle della CLI).
 
+#[macro_use]
+#[path = "../../../tests/comune/esito.rs"]
+mod esito_unico;
+
 mod comune;
 
 use std::collections::BTreeSet;
@@ -306,7 +310,10 @@ fn le_tabelle_in_memoria_si_riservano_prima_di_leggere_i_file() {
 #[test]
 fn i_nomi_dati_dal_chiamante_si_verificano_senza_ripeterli() {
     let dichiarati = vec!["a".to_owned(), "b".to_owned()];
-    assert!(api::verifica_nomi(&dichiarati, ["b", "a"].into_iter(), "inputs").is_ok());
+    assert_successo!(
+        api::verifica_nomi(&dichiarati, ["b", "a"].into_iter(), "inputs"),
+        ()
+    );
     for dati in [vec!["a"], vec!["a", "a", "b"], vec!["a", "b", "SEGRETO"]] {
         let errore = api::verifica_nomi(&dichiarati, dati.into_iter(), "inputs")
             .expect_err("nomi sbagliati");

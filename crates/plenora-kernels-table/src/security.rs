@@ -1245,6 +1245,7 @@ pub fn mask_data_con_limiti(
     Ok(result)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     // -------------------------------------------------------------------
@@ -2598,6 +2599,7 @@ mod tests {
     }
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[path = "security_hash_oracolo.rs"]
 mod hash_oracolo;

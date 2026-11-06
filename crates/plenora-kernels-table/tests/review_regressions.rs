@@ -412,9 +412,9 @@ fn una_soglia_decimale_non_viene_arrotondata_per_confrontarla_con_un_double() {
 
 #[test]
 fn il_filtro_su_float64_rispetta_la_soglia_decimale_esatta() {
-    // Percorso generico E fast path del filtro: la riga a `1e-1` deve
-    // superare la soglia `0.100000000000000001`. Con la conversione
-    // arrotondata il confronto darebbe «uguale» e `>` la escluderebbe.
+    // Il double 0.1 vale 0.10000000000000000555...: supera il decimale
+    // esatto 0.1 ricavato dal testo del numero JSON. Arrotondando la soglia
+    // a double, il confronto darebbe «uguale» e `>` perderebbe la riga.
     let colonna = Arc::new(Float64Array::from(vec![Some(0.1), Some(0.05)])) as ArrayRef;
     let input = batch(
         vec![Field::new("valore", DataType::Float64, true)],
@@ -426,17 +426,12 @@ fn il_filtro_su_float64_rispetta_la_soglia_decimale_esatta() {
             &serde_json::from_value(json!({
                 "column": "valore",
                 "operator": operatore,
-                // Il letterale JSON e' gia' un double: questo caso verifica
-                // che il percorso non fallisca, non l'esattezza (che vive nel
-                // test sul comparatore, dove la soglia arriva come testo).
+                // json_text rende "0.1", poi NumericBound lo legge esatto.
                 "value": 0.1_f64,
             }))
             .expect("config"),
         );
-        // Il letterale JSON e' gia' un double: qui si verifica solo che il
-        // percorso non fallisca. Il caso esatto vive sul confronto sopra,
-        // dove la soglia arriva come testo decimale.
-        assert!(filtrato.is_ok(), "{operatore}: {filtrato:?}");
+        assert_eq!(filtrato.expect("successo atteso"), input.slice(0, 1));
     }
 }
 
@@ -3838,7 +3833,7 @@ fn celle_geometriche_non_diventano_binary_anonimo() {
             let config = json!({"column":"g", "target_type":"binary_utf8"});
             let kernel =
                 cleansing::type_cast(&input, &serde_json::from_value(config.clone()).unwrap())
-                    .unwrap_err();
+                    .expect_err("rifiuto atteso: categoria verificata dalla prova");
             let analysis = analyze_table_contract(
                 "table.type_cast",
                 &[complete_contract(input.schema())],
@@ -3846,7 +3841,7 @@ fn celle_geometriche_non_diventano_binary_anonimo() {
                 &mut FieldAllocator::default(),
                 &Limits::default(),
             )
-            .unwrap_err();
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
             assert!(matches!(kernel, PlenoraError::Crs(_)));
             assert_eq!(kernel.to_string(), analysis.to_string());
         }
@@ -3903,7 +3898,7 @@ fn campi_geometrici_annidati_non_perdono_il_contratto() {
                     &Limits::default(),
                 )
             }
-            .unwrap_err();
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
             let analysis = analyze_table_contract(
                 op,
                 &[complete_contract(input.schema())],
@@ -3911,7 +3906,7 @@ fn campi_geometrici_annidati_non_perdono_il_contratto() {
                 &mut FieldAllocator::default(),
                 &Limits::default(),
             )
-            .unwrap_err();
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
             assert!(matches!(error, PlenoraError::Crs(_)));
             assert_eq!(error.to_string(), analysis.to_string());
         }
@@ -3995,7 +3990,7 @@ fn diff_e_operazioni_binarie_rifiutano_geometrie_incoerenti_prima_delle_celle() 
                         &limits,
                     ),
                 }
-                .unwrap_err();
+                .expect_err("rifiuto atteso: categoria verificata dalla prova");
                 let analisi = analyze_table_contract(
                     op,
                     &[
@@ -4006,7 +4001,7 @@ fn diff_e_operazioni_binarie_rifiutano_geometrie_incoerenti_prima_delle_celle() 
                     &mut FieldAllocator::default(),
                     &limits,
                 )
-                .unwrap_err();
+                .expect_err("rifiuto atteso: categoria verificata dalla prova");
                 assert!(matches!(kernel, PlenoraError::Crs(_)), "{op}");
                 assert_eq!(kernel.to_string(), analisi.to_string(), "{op}");
             }

@@ -482,6 +482,7 @@ fn regole_come_il_riferimento_con_piu_regole_e_gravita_miste() {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
+    #[deny(clippy::disallowed_methods)]
     #[test]
     fn regole_come_il_riferimento_su_insiemi_casuali(
         scelte in prop::collection::vec(

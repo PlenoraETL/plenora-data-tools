@@ -29,7 +29,8 @@ fn numeri_json_inesatti_rifiutati_in_ogni_percorso() {
         for outputs in [json!([]), json!(["doc_n"]), json!(["doc_missing"])] {
             let config: FlattenJson =
                 serde_json::from_value(json!({"column":"doc", "output_columns": outputs})).unwrap();
-            let error = flatten_json(&batch, &config, &Limits::default()).unwrap_err();
+            let error = flatten_json(&batch, &config, &Limits::default())
+                .expect_err("rifiuto atteso: categoria verificata dalla prova");
             assert!(matches!(error, PlenoraError::DataMapping(_)));
             assert!(!error.to_string().contains("9007199254740993"));
             assert!(!error.to_string().contains("0.30000000000000001"));

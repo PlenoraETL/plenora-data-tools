@@ -501,6 +501,7 @@ fn split_output(
 // I test del trasporto Arrow di `plenora-data-tools@190c493`
 // (`plenora-engine/src/geo_transport/transport.rs`) per le tre operazioni,
 // senza envelope: stesse fixture, stesse attese.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,7 +562,8 @@ mod tests {
                     ];
                     for risultato in risultati {
                         if ordine != Some("easting_northing") {
-                            let errore = risultato.unwrap_err();
+                            let errore = risultato
+                                .expect_err("rifiuto atteso: categoria verificata dalla prova");
                             assert!(
                                 matches!(errore, PlenoraError::Crs(_)),
                                 "{ordine:?}: {errore:?}"

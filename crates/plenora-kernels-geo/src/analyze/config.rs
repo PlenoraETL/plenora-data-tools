@@ -572,6 +572,7 @@ pub struct ClusterDbscanConfig {
     pub output_column: Option<String>,
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,10 +582,11 @@ mod tests {
 
     /// I campi di `T` come li elenca serde per un campo sconosciuto.
     fn campi<T: DeserializeOwned>() -> Vec<String> {
-        let errore = serde_json::from_value::<T>(json!({"zz_campo_sconosciuto": 0}))
-            .err()
-            .map(|errore| errore.to_string())
-            .unwrap_or_default();
+        let Err(errore) = serde_json::from_value::<T>(json!({"zz_campo_sconosciuto": 0})) else {
+            panic!("campo sconosciuto accettato");
+        };
+        assert_eq!(errore.classify(), serde_json::error::Category::Data);
+        let errore = errore.to_string();
         errore.split_once(", expected ").map_or_else(
             || {
                 assert!(errore.contains("there are no fields"), "{errore}");

@@ -1129,6 +1129,7 @@ pub fn verifica_fuso_sorgente(data_type: &DataType, source_timezone: Tz) -> Resu
     Ok(())
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use plenora_core::arrow::array::{ArrayRef, Int64Array};
@@ -1144,6 +1145,10 @@ mod tests {
     /// per gli specificatori a larghezza fissa il limite e' la larghezza
     /// osservata, non una stima.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Oracolo indipendente: classifica il fallimento di formattazione della fixture, poi confronta il risultato completo."
+    )]
     fn byte_massimi_scritti_e_un_limite_superiore_esatto_per_campo() {
         use std::fmt::Write as _;
         assert_eq!(byte_massimi_scritti("%Y%m"), 9);
@@ -1248,6 +1253,10 @@ mod tests {
     type RowOutcome<'a, T> = std::result::Result<Option<T>, (&'static str, Option<&'a str>)>;
 
     /// Chiude l'oracolo: rifiuti row-scoped se ce ne sono, altrimenti i valori.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Oracolo indipendente: raccoglie tutti i rifiuti per riga prima di restituire valori o diagnostica completa."
+    )]
     fn collect_or_reject<T>(outcomes: Vec<RowOutcome<'_, T>>) -> Result<Vec<Option<T>>> {
         let rejections = outcomes
             .iter()
@@ -2631,8 +2640,9 @@ mod tests {
             &mut FieldAllocator::default(),
             &crate::Limits::default(),
         );
-        assert!(analisi.is_ok(), "{analisi:?}");
+        let analisi = analisi.expect("analisi valida");
         let output = timezone_convert(&ottocento, &config).expect("offset a ore intere");
+        assert_eq!(analisi.schema, output.schema());
         assert_eq!(
             output
                 .column(1)

@@ -109,14 +109,20 @@ fn join_within_e_conteggi_si_fermano_al_margine() {
         ),
         Err(SpatialJoinError::MargineMemoria(_))
     ));
-    assert!(spatial_join_nullable_validated_con_margine(
-        &punti[..5],
-        &dischi,
-        JoinPredicate::Intersects,
-        u64::MAX,
-        PICCOLO,
-    )
-    .is_ok());
+    assert_eq!(
+        (spatial_join_nullable_validated_con_margine(
+            &punti[..5],
+            &dischi,
+            JoinPredicate::Intersects,
+            u64::MAX,
+            PICCOLO,
+        ))
+        .expect("successo atteso"),
+        (0..5)
+            .flat_map(|left| (0..200)
+                .map(move |right| plenora_kernels_geo::spatial_join::JoinPair { left, right }))
+            .collect::<Vec<_>>()
+    );
     // Il limite di conteggio, se scatta prima, resta il suo errore.
     assert!(matches!(
         spatial_join_nullable_validated_con_margine(

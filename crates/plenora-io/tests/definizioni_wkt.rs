@@ -191,7 +191,8 @@ fn geoarrow_formato_coerente_e_mutazioni_rifiutate() {
         let f = campo(&t, 2, "easting_northing");
         let mut m = f.metadata().clone();
         m.insert(GEOARROW_EXTENSION_METADATA_KEY, metadati.to_string());
-        let errore = read_geometry_contract_keys(&f.with_metadata(m)).unwrap_err();
+        let errore = read_geometry_contract_keys(&f.with_metadata(m))
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert!(matches!(errore, plenora_core::PlenoraError::Unsupported(_)));
         assert!(!errore.to_string().contains("SENTINELLA"));
     }
@@ -201,7 +202,8 @@ fn geoarrow_formato_coerente_e_mutazioni_rifiutate() {
             forma,
             "easting_northing",
         );
-        let errore = read_geometry_contract_keys(&f).unwrap_err();
+        let errore = read_geometry_contract_keys(&f)
+            .expect_err("rifiuto atteso: categoria verificata dalla prova");
         assert_eq!(errore.public_projection().code(), Some("CRS_NOT_BUILTIN"));
         let f = campo(&t, forma, "easting_northing");
         let keys = read_geometry_contract_keys(&f).unwrap();
@@ -363,7 +365,8 @@ fn wkt_assi_espliciti_e_coerenza_su_tutti_gli_ingressi_arrow() {
             "easting_northing",
         );
         assert!(matches!(
-            read_geometry_contract_keys(&f).unwrap_err(),
+            read_geometry_contract_keys(&f)
+                .expect_err("rifiuto atteso: categoria verificata dalla prova"),
             plenora_core::PlenoraError::Unsupported(_)
         ));
     }

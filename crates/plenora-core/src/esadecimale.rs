@@ -24,6 +24,7 @@ pub fn esadecimale(byte: &[u8]) -> String {
     testo
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::{aggiungi_esadecimale, esadecimale};

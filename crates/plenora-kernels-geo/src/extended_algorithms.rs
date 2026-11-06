@@ -1575,6 +1575,7 @@ pub fn split_line(
     Ok(output)
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 // Confronti float esatti intenzionali: le fixture sono costruite per
 // produrre valori esatti (coordinate note, round-trip bit-esatti); il
@@ -2174,6 +2175,7 @@ mod tests {
 
 /// Oracolo di [`delaunay`] con il caricamento in blocco di `spade`: la
 /// funzione di prima, ricopiata alla lettera, e' il riferimento.
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod oracolo_delaunay {
     use super::*;

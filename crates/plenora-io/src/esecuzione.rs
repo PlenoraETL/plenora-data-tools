@@ -562,6 +562,7 @@ fn scrivi_uscite(
     Ok(())
 }
 
+#[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     //! Effetto di un errore a metà della scrittura degli output.
@@ -690,6 +691,6 @@ mod tests {
             let senza_output = verifica_finale(interruzione, &[]).expect_err("interrotta");
             assert_eq!(senza_output.remote_effect(), RemoteEffect::None);
         }
-        assert!(verifica_finale(&Interruzione::default(), &[scritta]).is_ok());
+        assert_successo!(verifica_finale(&Interruzione::default(), &[scritta]), ());
     }
 }
