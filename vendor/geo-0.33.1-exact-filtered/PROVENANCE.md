@@ -29,6 +29,11 @@ la chiave `geo` (`Cargo.toml`, «Copie vendorizzate»), con il filtro veloce di 
      libreria resta `geo`): una `[patch.crates-io]` vale solo nel workspace
      radice, e un consumatore dei crate di data-tools riceveva il `geo` di
      crates.io con `i_overlay` 4.5.2.
+  5. `geo-concave-adiacenze.patch` — lo scavo accoda indici stabili e legge
+     i lati correnti; ogni inserimento aggiorna il predecessore del
+     successore. Corregge i confronti con adiacenze obsolete di geo 0.33.1.
+     Prove indipendenti: `crates/plenora-kernels-geo/tests/concave_scavo.rs`
+     e oracolo razionale in `tests/fixtures/concave_oracolo.py`.
 - Digest dell'albero risultante: non fissato qui (cambierebbe a ogni
   rigenerazione delle patch); la radice di fiducia e' il checksum del
   pacchetto sopra.

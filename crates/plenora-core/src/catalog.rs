@@ -2649,7 +2649,8 @@ pub static CATALOG: &[OperationDescriptor] = &[
         geo_fusion = TransformInPlace,
         semantic_version = 3,
         config_schema_version = 2,
-        contract_analysis_version = 4
+        contract_analysis_version = 4,
+        kernel_version = 2
     ),
     op!(
         "geo.hausdorff_distance",
@@ -4439,7 +4440,8 @@ mod tests {
             ("geo.clip", (2, 1, 2, 1), ANALISI),
             ("geo.cluster_dbscan", (1, 1, 1, 1), ANALISI),
             ("geo.collect", (3, 1, 3, 3), ANALISI),
-            ("geo.concave_hull", (3, 1, 1, 1), ANALISI),
+            // Scavo: kernel +1 nella 4.1.1; analisi del contratto invariata.
+            ("geo.concave_hull", (3, 1, 1, 1), (0, 0, 2, 1)),
             ("geo.convex_hull", (2, 1, 1, 1), ANALISI),
             ("geo.count_points_in_polygons", (2, 1, 3, 1), ANALISI),
             ("geo.coverage_validate", (2, 1, 1, 1), ANALISI),

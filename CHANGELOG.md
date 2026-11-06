@@ -42,6 +42,17 @@ la cui versione non ha qui una voce datata.
   errore esplicito di Arrow invece di un panico intercettato. La categoria
   resta `data_mapping`; cambia solo il messaggio.
 
+### Correzioni
+
+Corretto `geo.concave_hull`: dopo uno scavo il porting di `concaveman`
+confrontava i candidati con adiacenze obsolete, anche nelle copie dei lati
+in coda. Il difetto e' presente dalla 1.0.0 alla 4.1.0 (geo 0.33.1): il
+bordo poteva differire dalla regola di scavo documentata. Gli indici in
+coda ora leggono i lati correnti e l'inserimento collega il successore al
+nuovo predecessore. Versione kernel di `geo.concave_hull` da 1 a 2;
+analisi del contratto invariata. Regressione dei dodici punti, oracolo
+razionale enumerativo e prove deterministiche di semplicita' e copertura.
+
 ## [4.1.0] - 2026-11-05
 
 La 4.1.0 completa il supporto alle geometrie multiple su API Rust, CLI e SDK
