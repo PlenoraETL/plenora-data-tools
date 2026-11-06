@@ -15,15 +15,20 @@ use std::collections::BTreeSet;
 
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::arrow::schema::SchemaRef;
+use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::catalog::{Family, ALIASES, CATALOG};
 use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
-use plenora_core::contract::{DataContract, FieldAllocator};
+use plenora_core::contract::{
+    ContractProperty, DataContract, FieldAllocator, FieldId, NullPlacement, PropertyConfidence,
+    PropertyScope, SortDirection, SortOrder,
+};
 use plenora_core::crs::resolve_crs;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::analyze::analyze_geo_contract;
 use plenora_kernels_table::analyze::analyze_table_contract;
 use plenora_pipeline::{BaseIndici, Passo, Pipeline, PipelineValidata};
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 use comune::{nested, nomi_input, tabelle, wide, CASI};
 
@@ -57,6 +62,22 @@ fn verifica_contratto(actual: &DataContract, expected: &DataContract) {
 
 fn valida_wide(pipeline: &Pipeline) -> Result<PipelineValidata> {
     pipeline.validate(&[("t", schema_wide())])
+}
+
+/// Contratto scritto per gli scenari wide che conservano colonne e metadati.
+fn atteso_wide() -> DataContract {
+    let mut atteso = DataContract::tabular(schema_wide());
+    for (id, name) in [
+        "id", "name", "value", "flag", "date", "date2", "json", "geom",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        atteso
+            .field_ids
+            .insert(name.into(), FieldId(u32::try_from(id).expect("id fixture")));
+    }
+    atteso
 }
 
 /// Analisi diretta, la stessa sequenza che il runner fa per un passo.
@@ -123,7 +144,10 @@ fn la_validazione_accetta_se_e_solo_se_l_analisi_accetta() {
                 "schema analizzato di {}",
                 caso.op
             );
-            assert_eq!(format!("{contratto:?}"), format!("{analisi:?}"));
+            // Entrambi confrontati con lo schema indipendente della fixture;
+            // l'analizzatore non e' l'oracolo del runner.
+            assert!(contratto.geometries.is_empty());
+            assert_eq!(contratto.active_geometry, None);
         }
     }
 }
@@ -246,8 +270,7 @@ fn l_arieta_viene_dal_catalogo() {
             .expect("concat")
             .contratto("a")
             .expect("a"),
-        &analisi_diretta("table.concat", &[schema_wide(), schema_wide()], &json!({}))
-            .expect("analisi concat"),
+        &atteso_wide(),
     );
 }
 
@@ -353,7 +376,7 @@ fn il_json_rifiuta_campi_sconosciuti_e_chiavi_duplicate() {
             .expect("limit")
             .contratto("a")
             .expect("a"),
-        &analisi_diretta("table.limit", &[schema_wide()], &json!({"n":1})).expect("analisi limit"),
+        &atteso_wide(),
     );
     assert_eq!(
         Pipeline::from_json(&serde_json::to_string(&pipeline).expect("serializza"))
@@ -438,8 +461,79 @@ fn la_base_degli_indici_per_riga_si_decide_in_validazione() {
     );
 }
 
+/// Colonne, identita' e proprieta' della catena, scritte dalle schede.
+fn contratti_attesi_catena() -> Vec<(&'static str, DataContract)> {
+    let mut attesi = vec![("t", DataContract::tabular(schema_wide()))];
+    let mut p1 = atteso_wide();
+    let mut fields = schema_wide()
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect::<Vec<_>>();
+    fields[1] = Field::new("label", DataType::Utf8, false);
+    let metadata = plenora_core::arrow::Metadata::from([("origine", "test")]);
+    p1.schema = Arc::new(Schema::new_with_metadata(fields.clone(), metadata.clone()));
+    p1.field_ids.remove("name");
+    p1.field_ids.insert("label".into(), FieldId(1));
+    attesi.push(("p1", p1.clone()));
+    fields.push(Field::new("doppio", DataType::Float64, true));
+    let mut p2 = p1;
+    p2.schema = Arc::new(Schema::new_with_metadata(fields, metadata.clone()));
+    p2.field_ids.insert("doppio".into(), FieldId(8));
+    attesi.push(("p2", p2.clone()));
+    let mut p3 = p2;
+    p3.properties.sorted_by = Some(ContractProperty::new(
+        PropertyConfidence::Proven(SortOrder {
+            keys: vec![FieldId(8)],
+            direction: SortDirection::Ascending,
+            nulls: NullPlacement::Last,
+        }),
+        PropertyScope::Stream,
+    ));
+    attesi.push(("p3", p3.clone()));
+    let mut p4 = p3;
+    // La scheda select_columns elimina l'ordine se scarta colonne.
+    p4.properties.sorted_by = None;
+    p4.schema = Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("label", DataType::Utf8, false),
+            Field::new("doppio", DataType::Float64, true),
+        ],
+        metadata.clone(),
+    ));
+    p4.field_ids
+        .retain(|name, _| ["id", "label", "doppio"].contains(&name.as_str()));
+    attesi.push(("p4", p4.clone()));
+    let mut p5 = p4;
+    p5.properties.sorted_by = None;
+    attesi.push(("p5", p5));
+    let mut p6 = DataContract::tabular(Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("label", DataType::Utf8, false),
+            Field::new("doppio", DataType::Float64, true),
+        ],
+        metadata.clone(),
+    )));
+    p6.field_ids.insert("label".into(), FieldId(1));
+    p6.field_ids.insert("doppio".into(), FieldId(9));
+    attesi.push(("p6", p6.clone()));
+    let mut p7 = p6;
+    p7.schema = Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("label", DataType::Utf8, false),
+            Field::new("doppio", DataType::Float64, true),
+            Field::new("lunghezza", DataType::Int64, true),
+        ],
+        metadata,
+    ));
+    p7.field_ids.insert("lunghezza".into(), FieldId(10));
+    attesi.push(("p7", p7));
+    attesi
+}
+
 #[test]
-fn i_contratti_di_una_catena_lunga_sono_quelli_dell_analisi_passo_per_passo() {
+fn i_contratti_di_una_catena_lunga_corrispondono_allo_scenario() {
     let catena = vec![
         passo(
             "p1",
@@ -475,34 +569,12 @@ fn i_contratti_di_una_catena_lunga_sono_quelli_dell_analisi_passo_per_passo() {
             json!({"column": "label", "output_column": "lunghezza"}),
         ),
     ];
-    let pipeline = piano(&["t"], catena.clone(), &["p7"]);
+    let pipeline = piano(&["t"], catena, &["p7"]);
     let validata = valida_wide(&pipeline).expect("catena valida");
 
-    let mut campi = FieldAllocator::default();
-    let mut attesi = std::collections::BTreeMap::new();
-    attesi.insert(
-        "t".to_owned(),
-        contract_from_arrow_schema(schema_wide(), resolve_crs).expect("contratto di input"),
-    );
-    for passo in &catena {
-        let ingressi: Vec<DataContract> = passo
-            .inputs
-            .iter()
-            .map(|nome| attesi[nome].clone())
-            .collect();
-        let uscita = analyze_table_contract(
-            &passo.op,
-            &ingressi,
-            &passo.config,
-            &mut campi,
-            &plenora_kernels_table::Limits::default(),
-        )
-        .expect("analisi del passo");
-        attesi.insert(passo.out.clone(), uscita);
-    }
-    for (nome, atteso) in &attesi {
+    for (nome, atteso) in contratti_attesi_catena() {
         let ottenuto = validata.contratto(nome).expect("contratto del runner");
-        assert_eq!(format!("{ottenuto:?}"), format!("{atteso:?}"), "{nome}");
+        verifica_contratto(ottenuto, &atteso);
     }
 }
 
@@ -600,8 +672,7 @@ fn il_limite_di_profondita_del_piano_si_applica() {
     };
     {
         let validata = valida_wide(&catena(limiti.max_plan_depth)).expect("limite incluso");
-        let atteso = analisi_diretta("table.limit", &[schema_wide()], &json!({"n":1}))
-            .expect("analisi limit");
+        let atteso = atteso_wide();
         for i in 0..limiti.max_plan_depth {
             verifica_contratto(
                 validata.contratto(&format!("p{i}")).expect("passo"),
@@ -633,8 +704,7 @@ fn il_limite_di_fan_out_del_piano_si_applica() {
     };
     {
         let validata = valida_wide(&ventaglio(limiti.max_fan_out)).expect("limite incluso");
-        let atteso = analisi_diretta("table.limit", &[schema_wide()], &json!({"n":1}))
-            .expect("analisi limit");
+        let atteso = atteso_wide();
         for i in 0..limiti.max_fan_out {
             let mut atteso = atteso.clone();
             for (position, field) in schema_wide().fields().iter().enumerate() {

@@ -23,6 +23,49 @@ EXAMPLES = {
 
 
 class EsitoUnicoTests(unittest.TestCase):
+    def test_alias_err_diretti_raggruppati_e_self(self):
+        for imp in [
+            "use std::result::Result::Err as E;",
+            "use core::{result::{Result::{Err as E}}};",
+            "use std::result::Result::Err::{self as E};",
+            "use core::{matches as m, result::Result::{Err as E}};",
+        ]:
+            for macro in ['matches', 'm' if 'matches as m' in imp else 'matches']:
+                for pattern, rules in [
+                    ('E(_)', {'rifiuto_jolly'}),
+                    ('E(A | B)', {'rifiuti_alternativi'}),
+                    ('E(A) | E(B)', {'rifiuti_alternativi'}),
+                    ('E(A)', set()),
+                ]:
+                    with self.subTest(imp=imp, pattern=pattern):
+                        source = imp + f' assert!({macro}!(r, {pattern}));'
+                        self.assertEqual({r for _, r, _ in findings(source, True)}, rules)
+        self.assertEqual(findings('use other::Err as E; matches!(r, E(_));', True), [])
+
+    def test_regole_residue_indipendenti_dalla_formattazione(self):
+        from rust_esito_tokens import tokenize
+        for separator in [' ', '\n', ' /* commento /* annidato */ */ ', ' // commento\n']:
+            for bad, good, rule in [
+                ('let e = f().unwrap_err(); assert!(e.to_string().contains("bad"));',
+                 'let e = f().unwrap_err(); assert!(matches!(e, PlenoraError::Schema(_))); assert!(e.to_string().contains("bad"));', 'solo_messaggio'),
+                ('let message = f().unwrap_err(); assert!(message.contains("bad"));',
+                 'let message = assert_rifiuto!(f(), Categoria::Schema, Fase::Validate); assert!(message.contains("bad"));', 'solo_messaggio'),
+                ('match f() { Err(ref e) => { continue; }, Ok(x) => x }',
+                 'match f() { Err(ref e) => { panic!(); }, Ok(x) => x }', 'errore_ignorato'),
+                ('use std::result::Result::Err as E; match f() { E(e) => continue, Ok(x) => x }',
+                 'use std::result::Result::Err as E; match f() { E(e) => return, Ok(x) => x }', 'errore_ignorato'),
+            ]:
+                for source, expected in [(bad, [rule]), (good, [])]:
+                    formatted = separator.join(t.value for t in tokenize(source))
+                    # I token composti di Rust restano congiunti: le varianti
+                    # devono essere sorgenti validi, anche con commenti.
+                    for left, right in [(':', ':'), ('=', '>')]:
+                        formatted = formatted.replace(left + separator + right, left + right)
+                    with self.subTest(separator=separator, source=source):
+                        self.assertEqual([r for _, r, _ in findings(formatted, True)], expected)
+        self.assertEqual(findings('let e = f().unwrap_err(); assert!(!e . to_string() . contains("secret"));', True), [])
+        self.assertEqual(findings('let s = r#"Err(e) => continue; e.to_string().contains("bad")"#;', True), [])
+
     def test_python_espressioni_e_import_non_retroattivi(self):
         for source, rule in [
             ('f = lambda a, b: zip(a, b)', 'zip_python_troncante'),

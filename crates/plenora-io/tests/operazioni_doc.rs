@@ -1159,47 +1159,6 @@ fn celle_diverse(una: &Resa, altra: &Resa) -> Vec<(usize, String)> {
     diverse
 }
 
-/// Verifica sul contratto, per le operazioni geo che il runner non esegue:
-/// l'analisi accetta la config e l'uscita ha le colonne e i tipi scritti.
-fn verifica_contratto(scheda: &Scheda, ingressi: &[RecordBatch]) -> Result<(), String> {
-    plenora_core::json::ensure_no_duplicate_keys(scheda.esempio.config.get())
-        .map_err(|e| e.to_string())?;
-    let config: Value = serde_json::from_str(scheda.esempio.config.get()).expect("config JSON");
-    let contratti = ingressi
-        .iter()
-        .map(|batch| contract_from_arrow_schema(batch.schema(), resolve_crs))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("contratto d'ingresso: {e}"))?;
-    let crs_piano = scheda
-        .esempio
-        .crs
-        .as_deref()
-        .map(|crs| resolve_crs(crs, "crs"))
-        .transpose()
-        .map_err(|e| format!("CRS di piano: {e}"))?;
-    let mut campi = FieldAllocator::new(1000);
-    let contratto = plenora_kernels_geo::analyze::analyze_geo_contract(
-        scheda.operazione.id,
-        &contratti,
-        &config,
-        crs_piano.as_ref(),
-        &mut campi,
-    )
-    .map_err(|e| format!("analisi: {e}"))?;
-    let schema = arrow_schema_from_contract(&contratto).map_err(|e| e.to_string())?;
-    let attesa = tabella(&scheda.esempio.uscita.colonne)?;
-    let vuota = RecordBatch::new_empty(schema);
-    let reale = rendi(&vuota);
-    let scritta = rendi(&attesa);
-    if reale.intestazioni != scritta.intestazioni || reale.tipi != scritta.tipi {
-        return Err(format!(
-            "colonne del contratto {:?}, scritte {:?}",
-            reale.intestazioni, scritta.intestazioni
-        ));
-    }
-    Ok(())
-}
-
 fn kernel_diretto(scheda: &Scheda, ingresso: &RecordBatch) -> Result<RecordBatch, String> {
     use plenora_kernels_table::reshape;
     let limiti = plenora_kernels_table::Limits::default();
@@ -1225,10 +1184,6 @@ fn kernel_diretto(scheda: &Scheda, ingresso: &RecordBatch) -> Result<RecordBatch
 /// che riguarda le righe, non i valori), quindi l'elenco è qui, esplicito.
 const USCITA_CASUALE: [&str; 1] = ["table.uuid_generator"];
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "Selezione delle operazioni senza implementazione eseguibile dopo la validazione; i casi eseguibili hanno un atteso indipendente."
-)]
 fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
     let esempio = &scheda.esempio;
     let casuale = USCITA_CASUALE.contains(&scheda.operazione.id);
@@ -1256,11 +1211,25 @@ fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
     // dire il vero in entrambe le direzioni: un'operazione elencata non passa
     // la validazione, e una non elencata che non la passa e' solo `pivot`
     // senza `mapping` (rifiuto che dipende dalla config).
-    let non_eseguibile =
-        plenora_pipeline::disponibilita::motivo_non_eseguibile(scheda.operazione.id).is_some();
+    // Le schede di pivot (senza mapping) e transpose dichiarano schema
+    // dipendente dai dati: Unsupported durante Validate, nessun altro esito.
+    let rifiuto_atteso = matches!(scheda.operazione.id, "table.pivot" | "table.transpose");
+    assert_eq!(
+        plenora_pipeline::disponibilita::motivo_non_eseguibile(scheda.operazione.id).is_some(),
+        scheda.operazione.id == "table.transpose"
+    );
     let validata = piano.validate(&schemi);
-    if non_eseguibile && validata.is_ok() {
-        return Err("dichiarata non eseguibile dal runner, ma la validazione la accetta".into());
+    if rifiuto_atteso {
+        let errore = validata.expect_err("schema dipendente dai dati");
+        verifica_rifiuto(
+            &errore,
+            plenora_core::ErrorCategory::Unsupported,
+            plenora_core::ErrorPhase::Validate,
+        );
+        let uscita = kernel_diretto(scheda, &ingressi[0]).map_err(|e| format!("kernel: {e}"))?;
+        verifica_forma(scheda.operazione, &righe_in, uscita.num_rows(), true)?;
+        confronta(scheda, &uscita, true)?;
+        return Ok(Verifica::Kernel);
     }
     match validata {
         Ok(validata) => {
@@ -1281,20 +1250,6 @@ fn esegui_esempio(scheda: &Scheda) -> Result<Verifica, String> {
             } else {
                 Verifica::RunnerSenzaValori
             })
-        }
-        Err(PlenoraError::Unsupported(_)) if scheda.operazione.family == Family::Geo => {
-            verifica_contratto(scheda, &ingressi)?;
-            Ok(Verifica::Contratto)
-        }
-        // Dal kernel solo `pivot` (senza `mapping` nell'esempio) e le
-        // operazioni che il runner non esegue mai: un'altra rifiutata
-        // (`transpose` tolta dall'elenco compresa) e' un errore sotto.
-        Err(errore) if scheda.operazione.id == "table.pivot" || non_eseguibile => {
-            let uscita = kernel_diretto(scheda, &ingressi[0])
-                .map_err(|e| format!("kernel: {e} (il runner: {errore})"))?;
-            verifica_forma(scheda.operazione, &righe_in, uscita.num_rows(), true)?;
-            confronta(scheda, &uscita, true)?;
-            Ok(Verifica::Kernel)
         }
         Err(errore) => Err(format!("validazione: {errore}")),
     }

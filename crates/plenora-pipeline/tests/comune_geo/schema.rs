@@ -342,3 +342,24 @@ pub fn schema_geo_indipendente(
     metadata.remove("plenora.primary_geometry");
     Arc::new(Schema::new_with_metadata(fields, metadata))
 }
+
+/// L'API di analisi non pubblica gli ID di campo nei metadati Arrow;
+/// il runner li aggiunge al confine di uscita.
+pub fn schema_analisi_geo_indipendente(
+    op: &str,
+    input: &RecordBatch,
+    config: &Value,
+    crs_piano: Option<&str>,
+) -> SchemaRef {
+    let schema = schema_geo_indipendente(op, input, config, crs_piano);
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let mut metadata = field.metadata().clone();
+            metadata.remove("plenora.field_id");
+            field.as_ref().clone().with_metadata(metadata)
+        })
+        .collect();
+    Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}

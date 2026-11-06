@@ -107,10 +107,12 @@ def pairs(tokens):
     return result
 
 
-def aliases(tokens):
+def aliases(tokens, symbol="matches"):
     """Espande gli alberi use di std/core, compresi gruppi annidati."""
     values = [t.value for t in tokens]
-    names = {'matches'}
+    names = {symbol}
+    targets = ([root, 'matches'] for root in ('std', 'core')) if symbol == 'matches' else ([root, 'result', 'Result', 'Err'] for root in ('std', 'core'))
+    targets = list(targets)
 
     def walk(start, end, prefix):
         path = list(prefix)
@@ -126,7 +128,7 @@ def aliases(tokens):
                 i += 1
             elif v == 'as':
                 target = path[:-1] if path[-1:] == ['self'] else path
-                if target in (['std', 'matches'], ['core', 'matches']):
+                if target in targets:
                     names.add(values[i + 1])
                 i += 2
             elif v == ':':
@@ -172,6 +174,7 @@ def matches_findings(source, integration):
     tokens = tokenize(source)
     brackets = pairs(tokens)
     names = aliases(tokens)
+    errors = aliases(tokens, "Err")
     ranges = test_ranges(tokens, integration)
     values = [t.value for t in tokens]
     result = []
@@ -198,7 +201,7 @@ def matches_findings(source, integration):
             pattern.append(values[k])
         arguments = []
         for k, value in enumerate(pattern):
-            if value != 'Err':
+            if value not in errors:
                 continue
             start = k + 1
             # Anche il costruttore nel pattern ammette il turbofish.
@@ -312,3 +315,33 @@ def has_method_exemption(source):
             if attr[:2] == ['allow', '('] and 'disallowed_methods' in attr:
                 return True
     return False
+
+
+def residual_candidates(source):
+    """Regole residue sui token: nessuna dipendenza dalla formattazione."""
+    tokens = tokenize(source)
+    values = [t.value for t in tokens]
+    brackets = pairs(tokens)
+    errors = aliases(tokens, 'Err')
+    found = []
+    for i, value in enumerate(values):
+        if value in errors and values[i + 1:i + 2] == ['(']:
+            end = brackets[i + 1]
+            binding = values[i + 2:end]
+            if binding[:1] == ['ref']:
+                binding = binding[1:]
+            tail = values[end + 1:end + 5]
+            if (len(binding) == 1 and binding[0].isidentifier()
+                    and tail[:2] == ['=', '>']
+                    and (tail[2:3] == ['continue'] or tail[2:] == ['{', 'continue'])):
+                found.append((tokens[i].offset, 'errore_ignorato'))
+        if not value.isidentifier():
+            continue
+        end = i + 1
+        if values[end:end + 4] == ['.', 'to_string', '(', ')']:
+            end += 4
+        elif value not in {'messaggio', 'message', 'testo', 'msg'}:
+            continue
+        if values[end:end + 3] == ['.', 'contains', '(']:
+            found.append((tokens[i].offset, 'solo_messaggio'))
+    return found

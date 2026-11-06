@@ -1922,7 +1922,7 @@ opachi: controlla jolly e alternative di `Err`, con alias di import
 `std`/`core`, delimitatori diversi e moduli di prova esterni, anche inclusi
 con `#[path]`. Non espande macro definite dall'utente né risolve re-export
 attraverso altri moduli. La risoluzione degli alias è conservativa nel
-file: un nome importato come alias di `matches` resta sorvegliato anche
+file: un nome importato come alias di `matches` o `Err` resta sorvegliato anche
 in un altro scope. Le forme `cfg` composte e il codice generato richiedono
 revisione esplicita; la CI compila le feature previste ma non tutte le
 configurazioni possibili del linguaggio.
@@ -1932,9 +1932,11 @@ asserzioni sul testo dell'errore e `zip(strict=True)`. Non esegue import,
 decoratori, monkey patch o assegnazioni dinamiche di funzioni. Per un
 gestore generico richiede un rilancio o un'asserzione di categoria nel
 corpo diretto, senza attribuire una prova a un ramo che potrebbe non girare.
-Restano testuali soltanto i controlli Rust dell'errore immediatamente
-ignorato con `continue` e del solo messaggio; il riconoscimento della
-categoria e dei relativi helper resta necessariamente conservativo.
+Anche i controlli Rust dell'errore immediatamente ignorato con `continue`
+e del solo messaggio individuano le forme vietate sui token: spazi, a capo
+e commenti non cambiano l'esito. Il riconoscimento della categoria e dei
+relativi helper lavora sulla forma canonica ricostruita dai token e resta
+conservativo: non e' un'analisi semantica del flusso dei valori.
 
 **Hazard (deviazione).** Un helper può asserire la categoria di un altro
 errore; un booleano di categoria può essere calcolato e scartato; due

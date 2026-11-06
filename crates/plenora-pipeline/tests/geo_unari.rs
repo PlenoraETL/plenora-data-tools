@@ -14,7 +14,6 @@ use plenora_core::arrow::array::{
     UInt64Array,
 };
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_core::contract::arrow_schema::arrow_schema_from_contract;
 use plenora_core::crs::resolve_crs;
 use plenora_core::{ErrorCategory, PlenoraError};
 use plenora_kernels_geo::geodetica::EllissoideGeodetico;
@@ -825,10 +824,6 @@ fn i_produttori_sono_i_kernel() {
 /// stesso contratto d'uscita.
 #[test]
 #[allow(clippy::too_many_lines)] // Un caso per operazione, in un solo elenco.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "Solo diagnostica nel ramo panic: successo e rifiuto attesi sono gia decisi dalla fixture e verificati sopra."
-)]
 fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
     use ErrorCategory::{Crs, InvalidPlan};
     let farfalla = Geometry::Polygon(Polygon::new(
@@ -974,37 +969,21 @@ fn la_validazione_rifiuta_esattamente_cio_che_l_analisi_rifiuta() {
             assert!(stesso_errore(&runner, &analisi));
             continue;
         }
-        validata
-            .as_ref()
-            .expect("successo: contratto verificato sotto");
-        atteso
-            .as_ref()
-            .expect("successo: schema indipendente verificato sotto");
-        match (&validata, &atteso) {
-            (Ok(validata), Ok(contratto)) => {
-                // Il runner porta ogni contratto nello schema che emette
-                // (blocco canonico delle geometrie).
-                assert_eq!(
-                    validata.schema_uscita("x").expect("schema pubblicato"),
-                    &comune_geo::schema_geo_indipendente(op, &ingresso, &config, None),
-                    "schema indipendente {op}"
-                );
-                let ottenuto = validata.contratto("x").expect("contratto del passo");
-                let emesso = arrow_schema_from_contract(contratto).expect("schema emesso");
-                assert_eq!(ottenuto.schema, emesso, "{op} {config}");
-            }
-            (Err(runner), Err(analisi)) => {
-                assert!(
-                    stesso_errore(runner, analisi),
-                    "{op} {config}: {runner} / {analisi}"
-                );
-            }
-            _ => panic!(
-                "{op} {config}: validazione {:?}, analisi {:?}",
-                validata.as_ref().err(),
-                atteso.as_ref().err()
-            ),
-        }
+        let validata = validata.expect("successo previsto dallo scenario");
+        let analizzata = atteso.expect("analisi accettata dallo scenario");
+        let schema = comune_geo::schema_geo_indipendente(op, &ingresso, &config, None);
+        assert_eq!(
+            validata.schema_uscita("x").expect("schema pubblicato"),
+            &schema,
+            "schema runner {op}"
+        );
+        let emesso = plenora_core::contract::arrow_schema::arrow_schema_from_contract(&analizzata)
+            .expect("schema emesso");
+        assert_eq!(
+            emesso,
+            comune_geo::schema_analisi_geo_indipendente(op, &ingresso, &config, None),
+            "schema analisi {op}"
+        );
     }
 }
 

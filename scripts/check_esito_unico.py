@@ -8,7 +8,7 @@ L'allowlist contiene occorrenze esatte e una motivazione, mai interi file.
 
 from __future__ import annotations
 
-from rust_esito_tokens import matches_findings, external_test_modules, unprotected_test_entries, has_method_exemption
+from rust_esito_tokens import matches_findings, external_test_modules, unprotected_test_entries, has_method_exemption, residual_candidates, tokenize
 import json
 import re
 from functools import lru_cache
@@ -17,10 +17,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 # Ogni regola ha esempi positivi e negativi enumerati nei test.
 PATTERNS = {
-    "errore_ignorato": ("rust", r"\bErr\s*\(\s*(?:ref\s+)?\w+\s*\)\s*=>\s*\{?\s*continue\b"),
+    "errore_ignorato": ("rust_tokens", "Err seguito da continue"),
     "rifiuto_jolly": ("rust_tokens", "pattern Err con jolly"),
     "rifiuti_alternativi": ("rust_tokens", "alternative nel pattern di Err"),
-    "solo_messaggio": ("rust_message", r"(?:\b\w+\s*\.\s*to_string\s*\(\s*\)|\b(?:messaggio|message|testo|msg))\s*\.contains\s*\("),
+    "solo_messaggio": ("rust_tokens", "contains sul messaggio senza categoria"),
     "raises_generico": ("python", "raises senza categoria esatta"),
     "messaggio_python": ("python", "assert frammento in str(errore) senza categoria"),
     "except_ignorato": ("python", "except Exception/BaseException: pass/continue"),
@@ -132,10 +132,11 @@ def test_ranges(code: str, integration: bool) -> list[tuple[int, int]]:
         if opening >= 0:
             ranges.append((opening, closing(code, opening)))
     functions = functions_in(code)
+    ignored = [pos for pos, rule in residual_candidates(code) if rule == "errore_ignorato"]
     # Gli helper con asserzioni sono prove anche fuori da cfg(test), e
     # trascinano gli helper chiamati: non dipende dal nome del modulo.
     for _, start, end in functions:
-        if re.search(r"\b(?:assert\w*|prop_assert\w*)!", code[start:end]) or re.search(PATTERNS["errore_ignorato"][1], code[start:end]):
+        if re.search(r"\b(?:assert\w*|prop_assert\w*)!", code[start:end]) or any(start <= pos < end for pos in ignored):
             ranges.append((start, end))
     # Anche un helper senza assert (per esempio Err(e) => continue) entra
     # se tutti i suoi chiamanti locali sono prove. I corpi di produzione
@@ -248,38 +249,49 @@ def category_proven(code: str, context: str, receiver: str, seen=None) -> bool:
 def findings(source: str, integration: bool, language: str = "rust") -> list[tuple[int, str, str]]:
     if language == "python":
         return python_findings(source)
-    code = mask(source)
+    # Forma canonica ottenuta dai token per gli helper di contesto: anche
+    # la prova della categoria e la negazione ignorano spazi e commenti.
+    chunks, offsets, length, previous = [], {}, 0, ""
+    for token in tokenize(source):
+        value = token.value
+        separator = " " if previous and (previous[-1].isalnum() or previous[-1] == "_") and (value[0].isalnum() or value[0] == "_") else ""
+        if previous == "/" and value in {"/", "*"}:
+            separator = " "
+        chunks.append(separator)
+        length += len(separator)
+        offsets[token.offset] = length
+        chunks.append(value)
+        length += len(value)
+        previous = value
+    code = mask("".join(chunks))
     ranges = test_ranges(code, integration)
     found = [(source.count("\n", 0, pos) + 1, rule, source.splitlines()[source.count("\n", 0, pos)].strip()) for pos, rule in matches_findings(source, integration)]
     functions = [(a, b) for _, a, b in functions_in(code)]
-    for rule, (kind, expression) in PATTERNS.items():
-        if kind in {"python", "rust_tokens"}:
+    for original_pos, rule in residual_candidates(source):
+        pos = offsets[original_pos]
+        if not any(start <= pos < end for start, end in ranges):
             continue
-        candidates = [m.start() for m in re.finditer(expression, code)]
-        for pos in candidates:
-            if not any(start <= pos < end for start, end in ranges):
+        if rule == "solo_messaggio":
+            # Categoria tipizzata o asserzione categoria/fase nel corpo
+            # piu' interno: il testo non e' l'unico controllo dell'esito.
+            bodies = [(a, b) for a, b in functions if a <= pos < b]
+            a, b = max(bodies) if bodies else (0, len(code))
+            context = code[a:b]
+            receiver = re.match(r"\w+", code[pos:])[0]
+            # Una stringa d'ingresso non e' il messaggio di un errore.
+            # I parametri testuali passati da altri helper richiedono
+            # verifica del chiamante, non inferenza dal solo nome.
+            signature = code[max(0, code.rfind('fn ', 0, a)):a]
+            if (re.search(r'\b' + receiver + r'\s*:\s*&\s*str\b', signature)
+                    and not re.search(r'\blet\s+(?:mut\s+)?' + receiver + r'\b', context)):
                 continue
-            if kind == "rust_message":
-                # Categoria tipizzata o asserzione categoria/fase nel corpo
-                # piu' interno: il testo non e' l'unico controllo dell'esito.
-                bodies = [(a, b) for a, b in functions if a <= pos < b]
-                a, b = max(bodies) if bodies else (0, len(code))
-                context = code[a:b]
-                receiver = re.match(r"\w+", code[pos:])[0]
-                # Una stringa d'ingresso non e' il messaggio di un errore.
-                # I parametri testuali passati da altri helper richiedono
-                # verifica del chiamante, non inferenza dal solo nome.
-                signature = code[max(0, code.rfind('fn ', 0, a)):a]
-                if (re.search(r'\b' + receiver + r'\s*:\s*&\s*str\b', signature)
-                        and not re.search(r'\blet\s+(?:mut\s+)?' + receiver + r'\b', context)):
-                    continue
-                prefix = code[max(a, code.rfind(";", a, pos) + 1):pos]
-                if re.search(r"!\s*$|!matches!\([^;]*$", prefix) or category_proven(code, context, receiver):
-                    continue
-                if not re.search(r"expect_err|unwrap_err|\bErr\s*\(|\b(?:errore|error|messaggio|message)\b", context):
-                    continue
-            line = source.count("\n", 0, pos) + 1
-            found.append((line, rule, source.splitlines()[line - 1].strip()))
+            prefix = code[max(a, code.rfind(";", a, pos) + 1):pos]
+            if re.search(r"!\s*$|!matches!\([^;]*$", prefix) or category_proven(code, context, receiver):
+                continue
+            if not re.search(r"expect_err|unwrap_err|\bErr\s*\(|\b(?:errore|error|messaggio|message)\b", context):
+                continue
+        line = source.count("\n", 0, original_pos) + 1
+        found.append((line, rule, source.splitlines()[line - 1].strip()))
     return sorted(found)
 
 
