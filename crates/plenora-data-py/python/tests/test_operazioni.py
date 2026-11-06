@@ -226,6 +226,59 @@ def test_tipi_che_il_runner_non_supporta_si_rifiutano() -> None:
             pd.validate(piano_identita(), {"t": pa.table({"c": colonna})})
 
 
+@pytest.mark.parametrize("annidato", [False, True])
+@pytest.mark.parametrize("operazione", ["describe", "validate", "run"])
+def test_schema_run_end_rifiutato_prima_del_primo_blocco(
+    annidato: bool, operazione: str,
+) -> None:
+    tipo = pa.run_end_encoded(pa.int32(), pa.int32())
+    if annidato:
+        tipo = pa.struct([pa.field("interno", tipo)])
+    schema = pa.schema([pa.field("c", tipo)])
+    richiesti: list[bool] = []
+
+    def blocchi() -> Any:
+        richiesti.append(True)
+        raise AssertionError("il produttore non deve essere interrogato")
+        yield  # rende il produttore un iteratore senza eseguirlo
+
+    lettore = pa.RecordBatchReader.from_batches(schema, blocchi())
+    with pytest.raises(pd.PlenoraUnsupportedError) as errore:
+        if operazione == "describe":
+            pd.describe(lettore)
+        elif operazione == "validate":
+            pd.validate(piano_identita(), {"t": lettore})
+        else:
+            pd.run(piano_identita(), {"t": lettore})
+    assert errore.value.phase == "read"
+    assert not richiesti
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_sdk_rifiuta_run_end_malformato_letto_da_ipc(stream: bool) -> None:
+    colonna = pa.RunEndEncodedArray.from_arrays(
+        pa.array([1_000_003, 2_000_007], pa.int32()), pa.array([7, 9], pa.int32()),
+    )
+    tabella = pa.table({"c": colonna})
+    destinazione = pa.BufferOutputStream()
+    scrivi = ipc.new_stream if stream else ipc.new_file
+    with scrivi(destinazione, tabella.schema) as scrittore:
+        scrittore.write_table(tabella)
+        scrittore.write_table(tabella)
+    byte = destinazione.getvalue().to_pybytes()
+    estremi = (1_000_003).to_bytes(4, "little") + (2_000_007).to_bytes(4, "little")
+    assert byte.count(estremi) == 2
+    byte = byte.replace(estremi, estremi[:4] + (2_000_006).to_bytes(4, "little"))
+    leggi = ipc.open_stream if stream else ipc.open_file
+    # PyArrow legge i blocchi senza validate(full=True): non leggere celle.
+    ingresso = leggi(pa.BufferReader(byte)).read_all()
+    with pytest.raises(pa.ArrowInvalid):
+        ingresso.validate(full=True)
+    with pytest.raises(pd.PlenoraUnsupportedError) as errore:
+        pd.run(piano_identita(), {"t": ingresso})
+    assert errore.value.phase == "read"
+
+
 def test_determinismo() -> None:
     tabella = tabella_semplice()
     primo = pd.run(piano_filtro_e_ordine(), {"t": tabella})

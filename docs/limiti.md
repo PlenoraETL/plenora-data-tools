@@ -1125,10 +1125,11 @@ vendorizzate di `geo`, `wkt` e `parquet` invece arrivano al consumatore
 
 **Hazard.** In una build di release con il profilo di default di Cargo
 (`overflow-checks = false`) l'aritmetica intera non controllata avvolge.
-Dove questo workspace conta sul panico, per esempio la somma non
-controllata di `concat_run_arrays` di Arrow 60.0.0 su fini `Int16`
-([«Runner»](runner.md#runner)), il consumatore avrebbe un valore sbagliato
-invece di un errore. Nessuna prova lo rileva dal consumatore.
+Dove questo workspace conta sul panico, il consumatore avrebbe un valore
+sbagliato invece di un errore. Nessuna prova lo rileva dal consumatore.
+Il caso noto di `concat_run_arrays` su fini `Int16` in Arrow 60.0.0 è
+corretto in 60.1.0 con un errore esplicito; il requisito sul profilo del
+consumatore resta invariato.
 
 **Condizione di rientro.** Il consumatore dichiara `overflow-checks = true`
 nel proprio `[profile.release]`, oppure una guardia a runtime che rifiuta
