@@ -52,8 +52,8 @@ arrow-buffer = "=60.1.0"
 # Arrow 60.1.0 corregge RUSTSEC-2026-0442: validazione della copertura
 # logica degli array RunEndEncoded (offset + lunghezza del padre).
 # Lettura e scrittura Parquet/GeoParquet di plenora-io. Il fork Parquet
-# resta su 60.0.0: i suoi requisiti Arrow ^60.0.0 ammettono i pin 60.1.0
-# sopra, con una sola copia di Arrow nei due lock e tutte le patch del
+# resta su 60.0.0: i suoi requisiti Arrow >=60.1.0,<61 ammettono i pin 60.1.0
+# sopra, con una sola copia di Arrow nei tre lock e tutte le patch del
 # decoder conservate (vendor/parquet-60.0.0-eof/PROVENANCE.md).
 # Feature minime, ognuna voluta:
 # - `arrow`: lettore/scrittore `RecordBatch` e schema Arrow incorporato
@@ -135,7 +135,7 @@ log = "=0.4.33"
 serde = { version = "=1.0.229", features = ["derive"] }
 # JSON di piani, config, metadati e inviluppi; `raw_value` per il piano grezzo della CLI.
 # float_roundtrip: la forma breve dei double deve rileggersi identica nei piani.
-serde_json = { version = "=1.0.151", features = ["raw_value", "float_roundtrip"] }
+serde_json = { version = "=1.0.154", features = ["raw_value", "float_roundtrip"] }
 # Derivazione di `Error` per gli errori pubblici di plenora-core e plenora-kernels-geo.
 thiserror = "=2.0.21"
 # Date e orari delle operazioni tabellari e della scadenza della CLI (RFC 3339).
@@ -185,7 +185,7 @@ ctrlc = { version = "=3.5.2", features = ["termination"] }
 # PyO3». Pacchetti nuovi nel lockfile con `arrow-pyarrow` (9): `pyo3`,
 # `pyo3-ffi`, `pyo3-macros`, `pyo3-macros-backend`, `pyo3-build-config`
 # 0.29.2, `heck` 0.5.0 (nomi delle macro), `target-lexicon` 0.13.5 (build),
-# `portable-atomic` 1.15.0, `arrow-pyarrow` 60.1.0; ognuno in una sola
+# `portable-atomic` 1.16.0, `arrow-pyarrow` 60.1.0; ognuno in una sola
 # versione, nessuno gia' presente in un'altra.
 pyo3 ={ version = "=0.29.2", default-features = false, features = ["macros", "abi3-py310"] }
 # Scambio delle tabelle con PyArrow per l'Arrow C Data/Stream Interface

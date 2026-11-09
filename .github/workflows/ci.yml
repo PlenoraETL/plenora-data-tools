@@ -69,10 +69,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # La versione esatta la fissa `rust-toolchain.toml`; qui si installano
       # solo i componenti.
-      - name: Rust 1.98.0 + rustfmt + clippy
+      - name: Rust 1.98.1 + rustfmt + clippy
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
         with:
-          toolchain: '1.98.0'
+          toolchain: '1.98.1'
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -149,10 +149,10 @@ jobs:
         run: python -m pip install -r .plenora-contracts/requirements-validation.txt
       - name: adozione, vettori, messaggi e oracolo della cache al pin
         run: python scripts/verifica_adozione.py --contratti .plenora-contracts
-      - name: Rust 1.98.0
+      - name: Rust 1.98.1
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
         with:
-          toolchain: '1.98.0'
+          toolchain: '1.98.1'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: costruisce la CLI
         run: cargo build --locked -p plenora-cli

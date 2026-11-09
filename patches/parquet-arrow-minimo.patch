@@ -1,0 +1,59 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -379,31 +379,31 @@
+ required-features = ["arrow"]
+ 
+ [dependencies.arrow-array]
+-version = "60.0.0"
++version = ">=60.1.0, <61"
+ optional = true
+ 
+ [dependencies.arrow-buffer]
+-version = "60.0.0"
++version = ">=60.1.0, <61"
+ optional = true
+ 
+ [dependencies.arrow-csv]
+-version = "60.0.0"
++version = ">=60.1.0, <61"
+ optional = true
+ 
+ [dependencies.arrow-data]
+-version = "60.0.0"
++version = ">=60.1.0, <61"
+ optional = true
+ 
+ [dependencies.arrow-ipc]
+-version = "60.0.0"
++version = ">=60.1.0, <61"
+ optional = true
+ 
+ [dependencies.arrow-schema]
+-version = "60.0.0"
++version = ">=60.1.0, <61"
+ optional = true
+ 
+ [dependencies.arrow-select]
+-version = "60.0.0"
++version = ">=60.1.0, <61"
+ optional = true
+ 
+ [dependencies.base64]
+@@ -560,7 +560,7 @@
+ default-features = false
+ 
+ [dev-dependencies.arrow]
+-version = "60.0.0"
++version = ">=60.1.0, <61"
+ features = [
+     "ipc",
+     "test_utils",
+@@ -570,7 +570,7 @@
+ default-features = false
+ 
+ [dev-dependencies.arrow-cast]
+-version = "60.0.0"
++version = ">=60.1.0, <61"
+ 
+ [dev-dependencies.base64]
+ version = "0.23"

@@ -10,6 +10,28 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [4.1.2] - non rilasciata
+
+### Dipendenze e costruzione
+
+- Rust 1.98.1 in toolchain, CI e container cargo-deny; maturin 1.16.0
+  con lo stesso pin esatto nelle build isolate, requirements e packaging.
+- serde_json 1.0.154, mantenendo `raw_value` e `float_roundtrip`, e
+  geo-types 0.7.20. Aggiornati i tre lock, incluso quello autonomo del
+  vendor (thiserror 2.0.21 e tokio 1.53.3); resta thiserror 1.0.69 dove
+  richiesto. Arrow resta 60.1.0, PyO3 0.29.2 e PyArrow 25 nelle prove.
+- Il fork Parquet 60.0.0 richiede ora Arrow `>=60.1.0,<61` anche fuori
+  dal workspace: un lock autonomo con Arrow 60.0.0 deve aggiornarsi.
+  Manifesto, patch riproducibile e provenienza allineati, senza modifiche
+  al decoder. Prova: `scripts/test_allineamento_dipendenze.py`.
+
+### Cambiamenti osservabili
+
+I tipi geometrici di geo-types accettati dall'API Rust offrono ora
+`Geometry::static_name()` e l'inserimento di `Rect` nell'indice rstar
+0.12 gia' usato dal prodotto, con distanza dal rettangolo. Prova:
+`crates/plenora-kernels-geo/tests/dipendenze_allineate.rs`.
+
 ## [4.1.1] - 2026-11-06
 
 ### Sicurezza

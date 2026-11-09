@@ -160,7 +160,7 @@ chiama `PyErr_CheckSignals`:
 ## Scelte rispetto a plenora-database-tools
 
 Adottate: PyO3 0.29.2 con ABI stabile `abi3-py310` (un wheel per
-piattaforma), maturin 1.15.0 fissata, `extension-module` solo nella build del
+piattaforma), maturin 1.16.0 fissata, `extension-module` solo nella build del
 wheel (`pyproject.toml`), modulo nativo privato `_native` con i wrapper
 Python sopra, gerarchia `PlenoraError` sotto `RuntimeError` con una classe
 per categoria, PEP 561 (`py.typed`, stub del modulo nativo), consumatore

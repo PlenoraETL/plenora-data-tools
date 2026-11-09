@@ -47,7 +47,7 @@ jobs:
       - name: build del wheel delle prove (maturin, sonde-di-prova)
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
-          maturin-version: '1.15.0'
+          maturin-version: '1.16.0'
           command: build
           args: >-
             --release
@@ -60,11 +60,11 @@ jobs:
           # tag `latest` cambierebbe la toolchain C del wheel Linux fra due
           # build dello stesso commit. Su Windows l'input non si usa.
           container: 'quay.io/pypa/manylinux_2_34_x86_64@sha256:e4ca528d41ab66b3654110295d7a2c7bfa599ddbb6efb269ec21f7f73b88f1b6'
-          rust-toolchain: '1.98.0'
+          rust-toolchain: '1.98.1'
       - name: build del wheel di rilascio (maturin, senza feature)
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
-          maturin-version: '1.15.0'
+          maturin-version: '1.16.0'
           command: build
           args: >-
             --release
@@ -76,14 +76,14 @@ jobs:
           # tag `latest` cambierebbe la toolchain C del wheel Linux fra due
           # build dello stesso commit. Su Windows l'input non si usa.
           container: 'quay.io/pypa/manylinux_2_34_x86_64@sha256:e4ca528d41ab66b3654110295d7a2c7bfa599ddbb6efb269ec21f7f73b88f1b6'
-          rust-toolchain: '1.98.0'
+          rust-toolchain: '1.98.1'
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - name: Rust per il gate dei grafi offline
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
         with:
-          toolchain: '1.98.0'
+          toolchain: '1.98.1'
       - name: avvisi nelle wheel caricate
         shell: bash
         run: |

@@ -39,7 +39,7 @@
       "float_next_after-2.0.0",
       "foldhash-0.2.0",
       "geo-traits-0.3.0",
-      "geo-types-0.7.19",
+      "geo-types-0.7.20",
       "geographiclib-rs-0.2.7",
       "geozero-0.15.1",
       "getrandom-0.3.4",
@@ -94,7 +94,7 @@
       "scroll-0.13.0",
       "serde-1.0.229",
       "serde_core-1.0.229",
-      "serde_json-1.0.151",
+      "serde_json-1.0.154",
       "sha2-0.11.0",
       "sif-itree-0.4.1",
       "siphasher-1.0.3",
@@ -156,7 +156,7 @@
       "float_next_after-2.0.0",
       "foldhash-0.2.0",
       "geo-traits-0.3.0",
-      "geo-types-0.7.19",
+      "geo-types-0.7.20",
       "geographiclib-rs-0.2.7",
       "geozero-0.15.1",
       "getrandom-0.3.4",
@@ -214,7 +214,7 @@
       "scroll-0.13.0",
       "serde-1.0.229",
       "serde_core-1.0.229",
-      "serde_json-1.0.151",
+      "serde_json-1.0.154",
       "sha2-0.11.0",
       "sif-itree-0.4.1",
       "siphasher-1.0.3",
@@ -275,7 +275,7 @@
       "float_next_after-2.0.0",
       "foldhash-0.2.0",
       "geo-traits-0.3.0",
-      "geo-types-0.7.19",
+      "geo-types-0.7.20",
       "geographiclib-rs-0.2.7",
       "geozero-0.15.1",
       "getrandom-0.3.4",
@@ -325,7 +325,7 @@
       "scroll-0.13.0",
       "serde-1.0.229",
       "serde_core-1.0.229",
-      "serde_json-1.0.151",
+      "serde_json-1.0.154",
       "sha2-0.11.0",
       "sif-itree-0.4.1",
       "siphasher-1.0.3",
@@ -389,7 +389,7 @@
       "float_next_after-2.0.0",
       "foldhash-0.2.0",
       "geo-traits-0.3.0",
-      "geo-types-0.7.19",
+      "geo-types-0.7.20",
       "geographiclib-rs-0.2.7",
       "geozero-0.15.1",
       "getrandom-0.3.4",
@@ -443,7 +443,7 @@
       "scroll-0.13.0",
       "serde-1.0.229",
       "serde_core-1.0.229",
-      "serde_json-1.0.151",
+      "serde_json-1.0.154",
       "sha2-0.11.0",
       "sif-itree-0.4.1",
       "siphasher-1.0.3",
@@ -1261,9 +1261,9 @@
         }
       ]
     },
-    "geo-types-0.7.19": {
+    "geo-types-0.7.20": {
       "nome": "geo-types",
-      "versione": "0.7.19",
+      "versione": "0.7.20",
       "licenza": "MIT OR Apache-2.0",
       "repository": "https://github.com/georust/geo",
       "autori": [],
@@ -1272,14 +1272,12 @@
         {
           "file": "LICENSE-APACHE",
           "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
-          "origine": "https://github.com/georust/geo/blob/981be9feea12cdede572fb252064536cb8b287b1/LICENSE-APACHE",
-          "git_blob": "16fe87b06e802f094b3fbb0894b137bca2b16ef1"
+          "origine": "pacchetto"
         },
         {
           "file": "LICENSE-MIT",
           "sha256": "2f8267b247fd81e9555a2e196e119a5b341bcae21011cd93985c312f1312f727",
-          "origine": "https://github.com/georust/geo/blob/981be9feea12cdede572fb252064536cb8b287b1/LICENSE-MIT",
-          "git_blob": "c26fb0916ab1404eb31ed9f88293ef730be30b55"
+          "origine": "pacchetto"
         }
       ]
     },
@@ -2505,15 +2503,12 @@
         }
       ]
     },
-    "serde_json-1.0.151": {
+    "serde_json-1.0.154": {
       "nome": "serde_json",
-      "versione": "1.0.151",
+      "versione": "1.0.154",
       "licenza": "MIT OR Apache-2.0",
       "repository": "https://github.com/serde-rs/json",
-      "autori": [
-        "Erick Tryzelaar <erick.tryzelaar@gmail.com>",
-        "David Tolnay <dtolnay@gmail.com>"
-      ],
+      "autori": [],
       "nostro": false,
       "avvisi": [
         {
