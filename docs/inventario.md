@@ -12,13 +12,13 @@ esegue.
 
 | crate | versione | descrizione |
 | --- | --- | --- |
-| `plenora-cli` | 4.1.1 | CLI pubblica `plenora-data` di plenora-data-tools2 (CLI 2.0 di plenora-contracts) e la sua superficie Rust |
-| `plenora-core` | 4.1.1 | Fondamenta condivise di plenora-data-tools2: re-export Arrow, errori, limiti, catalogo, CRS |
-| `plenora-data-py` | 4.1.1 | SDK Python `plenora-data` di plenora-data-tools2: il modulo nativo PyO3 `plenora_data._native` |
-| `plenora-io` | 4.1.1 | Ingresso e uscita su file: Arrow IPC (file e stream), Parquet e GeoParquet 1.1, scrittura atomica, esecuzione di un piano da file a file |
-| `plenora-kernels-geo` | 4.1.1 | Kernel geografici su geo::Geometry e adapter Arrow GeoArrow-WKB |
-| `plenora-kernels-table` | 4.1.1 | Kernel tabellari puri su RecordBatch |
-| `plenora-pipeline` | 4.1.1 | Runner minimo di pipeline: piano SSA di kernel tabellari e geografici su RecordBatch interi in memoria |
+| `plenora-cli` | 4.1.2 | CLI pubblica `plenora-data` di plenora-data-tools2 (CLI 2.0 di plenora-contracts) e la sua superficie Rust |
+| `plenora-core` | 4.1.2 | Fondamenta condivise di plenora-data-tools2: re-export Arrow, errori, limiti, catalogo, CRS |
+| `plenora-data-py` | 4.1.2 | SDK Python `plenora-data` di plenora-data-tools2: il modulo nativo PyO3 `plenora_data._native` |
+| `plenora-io` | 4.1.2 | Ingresso e uscita su file: Arrow IPC (file e stream), Parquet e GeoParquet 1.1, scrittura atomica, esecuzione di un piano da file a file |
+| `plenora-kernels-geo` | 4.1.2 | Kernel geografici su geo::Geometry e adapter Arrow GeoArrow-WKB |
+| `plenora-kernels-table` | 4.1.2 | Kernel tabellari puri su RecordBatch |
+| `plenora-pipeline` | 4.1.2 | Runner minimo di pipeline: piano SSA di kernel tabellari e geografici su RecordBatch interi in memoria |
 
 ## Catalogo delle operazioni
 
