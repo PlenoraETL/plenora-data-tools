@@ -49,6 +49,24 @@ rifiuti e delle tolleranze; non è necessaria per l'advisory di
 Arrow e nessun altro pacchetto cambia versione. La ricetta sopra continua
 a ricostruire i sorgenti byte per byte, escluso questo documento.
 
+## Minimo Arrow autonomo (9 novembre 2026)
+
+Decisione 12 dell'inventario delle dipendenze: il manifesto normalizzato
+`Cargo.toml` richiede `>=60.1.0, <61` per tutte le dipendenze Arrow, incluse
+quelle opzionali e di sviluppo. Anche un consumatore autonomo con un lock
+precedente deve risolvere Arrow corretto. Il workspace conserva i pin
+esatti `=60.1.0`; questo intervallo e' il requisito del fork riutilizzabile,
+non una nuova dipendenza del prodotto.
+
+Alla ricetta storica sopra si aggiunge `patches/parquet-arrow-minimo.patch`
+(`patch -p1`): cambia soltanto `Cargo.toml`. `Cargo.toml.orig` resta il
+manifesto originale upstream con ereditarieta' dal suo workspace, non un
+manifesto autonomo usabile. Il lock autonomo viene aggiornato con Cargo;
+quindi la ricostruzione byte per byte esclude ora anche `Cargo.lock`.
+Versione 60.0.0, sorgenti Rust, codec e delta del decoder restano invariati.
+Il controllo `scripts/test_allineamento_dipendenze.py` verifica il minimo
+su ogni dipendenza Arrow e le versioni risolte nei tre lock.
+
 ## Che cosa corregge
 
 Il protocollo thrift compact sul lettore `Read`

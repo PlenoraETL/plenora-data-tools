@@ -27,7 +27,7 @@ plenora-cli = { path = "../crates/plenora-cli" }
 # Cargo.toml radice, «Copie vendorizzate»), con la chiave d'uso `geo`.
 geo = { package = "plenora-geo", path = "../vendor/geo-0.33.1-exact-filtered", version = "=0.33.1" }
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = { version = "=1.0.151", features = ["raw_value"] }
+serde_json = { version = "=1.0.154", features = ["raw_value"] }
 tempfile = "=3.27.0"
 
 # Niente [patch.crates-io]: `geo`, `wkt` e `parquet` vendorizzati hanno un

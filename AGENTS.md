@@ -58,4 +58,4 @@ La suite lunga ([`README.md`, «Suite lunga»](README.md#suite-lunga)) è
 obbligatoria prima del merge: la suite di default ne gira un sottoinsieme
 deterministico.
 
-Toolchain fissata in `rust-toolchain.toml` (1.98.0).
+Toolchain fissata in `rust-toolchain.toml` (1.98.1).

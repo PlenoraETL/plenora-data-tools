@@ -17,6 +17,10 @@ class CargoDenyContainerTests(unittest.TestCase):
         self.assertRegex(dockerfile.splitlines()[0], r"^FROM rust@sha256:[0-9a-f]{64}$")
         self.assertIn("CARGO_DENY_VERSION=0.20.2", dockerfile)
         self.assertIn("cargo install --locked", dockerfile)
+        toolchain = tomllib.loads(
+            (check_cargo_deny.ROOT / "rust-toolchain.toml").read_text("utf-8")
+        )["toolchain"]["channel"]
+        self.assertIn(f'test "$RUST_VERSION" = "{toolchain}"', dockerfile)
 
     def test_repository_in_sola_lettura_e_container_effimero(self) -> None:
         _, workspace, fuzz = check_cargo_deny.commands()

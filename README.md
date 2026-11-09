@@ -102,7 +102,7 @@ scadenza e annullamento, contratti adottati e limiti dichiarati sono nel
 
 ## Costruire e provare
 
-Serve `rustup`: la toolchain (1.98.0) è fissata in `rust-toolchain.toml`.
+Serve `rustup`: la toolchain (1.98.1) è fissata in `rust-toolchain.toml`.
 Il workspace comprende il modulo nativo dell'SDK Python (PyO3), che si
 collega a libpython: `cargo build` e `cargo test` vogliono un Python >= 3.10
 nel `PATH` (o in `PYO3_PYTHON`).

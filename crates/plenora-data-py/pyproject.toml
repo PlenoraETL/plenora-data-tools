@@ -1,8 +1,6 @@
 [build-system]
-# Il pin esatto della build sta in requirements-sdk-build.txt (maturin
-# 1.15.0, la versione di plenora-database-tools); qui il vincolo che il
-# pin deve rispettare.
-requires = ["maturin>=1.15,<2.0"]
+# Stesso pin in build isolata, requirements-sdk-build.txt e CI.
+requires = ["maturin==1.16.0"]
 build-backend = "maturin"
 
 [project]
