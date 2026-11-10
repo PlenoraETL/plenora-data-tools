@@ -9,14 +9,23 @@ import json
 import os
 from pathlib import Path
 import re
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10: solo le guardie (>=3.11) leggono i manifest
+    tomllib = None
+
+
+def _toml():
+    if tomllib is None:
+        raise RuntimeError('lettura dei manifest Cargo: serve Python >= 3.11 (tomllib)')
+    return tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / 'scripts/arrow_items.json'
 
 
 def packages():
-    lock = tomllib.loads((ROOT / 'Cargo.lock').read_text(encoding='utf-8'))
+    lock = _toml().loads((ROOT / 'Cargo.lock').read_text(encoding='utf-8'))
     return sorted((p['name'], p['version']) for p in lock['package']
                   if p['name'].startswith('arrow') or p['name'] in {'parquet', 'plenora-parquet'})
 
@@ -28,12 +37,12 @@ def generate():
     for name, version in packages():
         candidates = list(cache.glob(f'*/{name}-{version}'))
         if name == 'plenora-parquet':
-            workspace = tomllib.loads((ROOT / 'Cargo.toml').read_text(encoding='utf-8'))
+            workspace = _toml().loads((ROOT / 'Cargo.toml').read_text(encoding='utf-8'))
             candidates = [ROOT / workspace['workspace']['dependencies']['parquet']['path']]
         assert candidates, f'sorgenti Cargo mancanti: {name} {version}; eseguire cargo fetch --locked'
         variants = []
         for base in candidates:
-            manifest = tomllib.loads((base / 'Cargo.toml').read_text(encoding='utf-8'))
+            manifest = _toml().loads((base / 'Cargo.toml').read_text(encoding='utf-8'))
             assert (manifest['package']['name'], manifest['package']['version']) == (name, version)
             items = set()
             for path in sorted((base / 'src').rglob('*.rs')):
