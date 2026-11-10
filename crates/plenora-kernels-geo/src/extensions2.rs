@@ -747,6 +747,7 @@ pub fn snap_column(
     reference: &Geometry<f64>,
     tolerance: f64,
 ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
+    plenora_core::valida_arrow::array(cells)?;
     ensure_valid(reference).map_err(|error| snap_error(&error))?;
     check_tolerance(tolerance).map_err(|error| snap_error(&error))?;
     // L'R-tree del riferimento e' costruito una volta per colonna, non per

@@ -464,6 +464,7 @@ fn righe_per_blocco(tabella: &RecordBatch) -> usize {
 ///
 /// `DataMapping` (Arrow) e `Io` dalla codifica e dalla scrittura.
 pub fn scrivi(tabella: &RecordBatch, uscita: impl Write) -> Result<()> {
+    plenora_core::valida_arrow::batch(tabella)?;
     let mut scrittore = FileWriter::try_new(uscita, &tabella.schema())?;
     per_blocchi(tabella, |blocco| Ok(scrittore.write(blocco)?))?;
     scrittore.finish()?;
@@ -479,6 +480,7 @@ pub fn scrivi(tabella: &RecordBatch, uscita: impl Write) -> Result<()> {
 ///
 /// `DataMapping` (Arrow) e `Io` dalla codifica e dalla scrittura.
 pub fn scrivi_stream(tabella: &RecordBatch, uscita: impl Write) -> Result<()> {
+    plenora_core::valida_arrow::batch(tabella)?;
     let mut scrittore = StreamWriter::try_new(uscita, &tabella.schema())?;
     per_blocchi(tabella, |blocco| Ok(scrittore.write(blocco)?))?;
     scrittore.finish()?;
@@ -512,6 +514,10 @@ fn per_blocchi(
 /// (il vettore di codifica cresce per raddoppi), misurato sui blocchi veri
 /// con i valori dei dizionari interi, più un margine.
 #[must_use]
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn transitorio_scrittura(tabella: &RecordBatch) -> u64 {
     crate::memoria::fetta_massima(tabella, righe_per_blocco(tabella))
         .saturating_mul(2)

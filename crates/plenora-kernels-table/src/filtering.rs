@@ -624,6 +624,7 @@ fn fast_rows(
 /// - `DataMapping`: errore Arrow nella selezione delle righe;
 /// - `Internal`: invariante interna violata.
 pub fn filter(batch: &RecordBatch, config: &Filter) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     verifica_valore(&config.operator, config.value.as_ref())?;
     let index = column_index(batch, &config.column)?;
@@ -760,6 +761,7 @@ fn intero_scritto(testo: &str) -> Option<String> {
 ///   attesa);
 /// - `Internal`: invariante interna violata.
 pub fn conditional(batch: &RecordBatch, config: &Conditional) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     for condition in &config.conditions {
         verifica_valore(&condition.operator, condition.value.as_ref())?;

@@ -652,6 +652,7 @@ fn riga_estremo(
 ///   Arrow (`arrow error: …`) di `select_rows`, `take` e `replace_or_append`;
 /// - `Internal`: invarianti interne del raggruppamento.
 pub fn aggregate(batch: &RecordBatch, config: &Aggregate) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     aggregate_con_limiti(batch, config, &crate::Limits::default())
 }
@@ -672,6 +673,7 @@ pub fn aggregate_con_limiti(
     config: &Aggregate,
     limits: &crate::Limits,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     let group_indices = config
         .group_by

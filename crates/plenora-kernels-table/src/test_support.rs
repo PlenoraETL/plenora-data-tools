@@ -13,6 +13,10 @@ use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::Result;
 
 /// Batch con un campo nullable per colonna, del tipo della colonna.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn nullable_batch(pairs: Vec<(&str, ArrayRef)>) -> RecordBatch {
     let fields = pairs
         .iter()
@@ -23,11 +27,19 @@ pub fn nullable_batch(pairs: Vec<(&str, ArrayRef)>) -> RecordBatch {
 }
 
 /// Batch da campi e colonne dichiarati dal test.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn batch_from_fields(fields: Vec<Field>, columns: Vec<ArrayRef>) -> RecordBatch {
     RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).expect("fixture")
 }
 
 /// Batch di una sola colonna, con nome, tipo e nullabilita' espliciti.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn single_column_batch(
     name: &str,
     column: ArrayRef,
@@ -57,6 +69,10 @@ pub fn single_column_batch(
 /// nei test di setops); in cambio i messaggi di errore non indicano la riga.
 /// Rientro: un tipo che serva diagnosticare riga per riga si aggiunge al
 /// `match` con il suo confronto tipizzato.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn assert_batches_identical(fast: &RecordBatch, reference: &RecordBatch) {
     assert_eq!(fast.num_rows(), reference.num_rows(), "righe");
     assert_eq!(fast.num_columns(), reference.num_columns(), "colonne");
@@ -144,6 +160,10 @@ fn assert_values<A: Array + 'static, T: PartialEq + Debug>(
     clippy::disallowed_methods,
     reason = "Solo diagnostica nel ramo panic dopo il confronto completo dei risultati."
 )]
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn assert_same_outcome(fast: Result<RecordBatch>, generic: Result<RecordBatch>) {
     match (fast, generic) {
         (Ok(fast), Ok(generic)) => assert_eq!(fast, generic),
@@ -167,6 +187,10 @@ pub fn assert_same_outcome(fast: Result<RecordBatch>, generic: Result<RecordBatc
     clippy::disallowed_methods,
     reason = "Solo diagnostica nel ramo panic dopo il confronto completo dei risultati."
 )]
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn assert_same_outcome_bits(fast: Result<RecordBatch>, reference: Result<RecordBatch>) {
     match (fast, reference) {
         (Ok(fast), Ok(reference)) => assert_batches_identical(&fast, &reference),

@@ -189,6 +189,10 @@ impl<'a> CompactRowEncoder<'a> {
     ///
     /// - `Schema`: array incoerente col tipo dichiarato nello schema,
     ///   dictionary non Utf8 o tipo non supportato dalle set operation.
+    ///
+    /// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+    /// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+    /// operativi validano i dati prima di chiamare questo helper.
     pub fn try_new(batch: &'a RecordBatch) -> Result<Self> {
         let columns = batch
             .columns()
@@ -295,6 +299,8 @@ impl<'a> CompactRowEncoder<'a> {
 ///
 /// - `Schema`: numero di colonne, nomi o tipi diversi fra i due batch.
 pub fn validate_schema(left: &RecordBatch, right: &RecordBatch) -> Result<()> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     if left.num_columns() != right.num_columns()
         || left
             .schema()
@@ -338,6 +344,8 @@ pub fn concat_compatible(
     right: &RecordBatch,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     validate_schema(left, right)?;
@@ -428,6 +436,8 @@ pub fn union_distinct(
     _config: &SetOperation,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     // Equivale a concat + dedup senza copiare gli input: le chiavi si
@@ -501,6 +511,8 @@ pub fn intersect(
     right: &RecordBatch,
     _config: &SetOperation,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     validate_schema(left, right)?;
@@ -541,6 +553,8 @@ pub fn except(
     right: &RecordBatch,
     _config: &SetOperation,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     validate_schema(left, right)?;

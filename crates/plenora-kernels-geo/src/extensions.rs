@@ -251,6 +251,7 @@ pub fn from_wkt_column(
     values: &StringArray,
     on_error: OnWktError,
 ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
+    plenora_core::valida_arrow::array(values)?;
     from_wkt_column_named(values, on_error, None)
 }
 
@@ -262,11 +263,16 @@ pub fn from_wkt_column(
 /// Come [`from_wkt_column`]: `DataMapping` con la diagnostica per riga
 /// (conteggi completi per causa, al piu' 10 esempi, nessun valore),
 /// `Internal` per una validazione che non conclude.
+#[allow(
+    clippy::items_after_statements,
+    reason = "La guardia Arrow precede gli item locali e ogni uso dei dati"
+)]
 pub fn from_wkt_column_named(
     values: &StringArray,
     _on_error: OnWktError,
     column: Option<&str>,
 ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
+    plenora_core::valida_arrow::array(values)?;
     const EXAMPLES_LIMIT: u64 = 10;
     let cells: Vec<Option<&str>> = values.iter().collect();
     // Come `map_nullable`: il primo errore IN ORDINE DI RIGA e'

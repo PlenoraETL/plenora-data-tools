@@ -225,6 +225,7 @@ impl PassoPreparato {
         batch: &RecordBatch,
         limits: &Limits,
     ) -> Result<(RecordBatch, EffettiKernel)> {
+        plenora_core::valida_arrow::batch(batch)?;
         match self {
             Self::Formula(config) => formula::formula_con_effetti(batch, config, limits),
             Self::Expression(config) => expressions::expression_con_effetti(batch, config, limits),
@@ -242,6 +243,7 @@ impl PassoPreparato {
     /// validazione lo esclude).
     #[allow(clippy::too_many_lines)] // Un braccio per operazione, in un solo match verificabile.
     pub fn esegui_unario(&self, batch: &RecordBatch, limits: &Limits) -> Result<RecordBatch> {
+        plenora_core::valida_arrow::batch(batch)?;
         match self {
             Self::DropColumns(config) => columns::drop_columns(batch, config),
             Self::Rename(config) => columns::rename(batch, config),
@@ -335,6 +337,8 @@ impl PassoPreparato {
         right: &RecordBatch,
         limits: &Limits,
     ) -> Result<RecordBatch> {
+        plenora_core::valida_arrow::batch(left)?;
+        plenora_core::valida_arrow::batch(right)?;
         match self {
             Self::Join(config) => joins::join(left, right, config, limits),
             Self::Concat(config) => joins::concat(left, right, config, limits),

@@ -152,6 +152,7 @@ fn comparator_after_prevalidation() -> PlenoraError {
 /// - `Internal`: un confronto fallito dopo la prevalidazione (invariante
 ///   nostra).
 pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     select_rows(batch, &sort_permutation(batch, config)?)
 }
@@ -162,7 +163,12 @@ pub fn sort(batch: &RecordBatch, config: &Sort) -> Result<RecordBatch> {
 /// # Errors
 ///
 /// Come [`sort`], esclusi quelli di `select_rows`.
+#[allow(
+    clippy::items_after_statements,
+    reason = "La guardia Arrow precede gli item locali e ogni uso dei dati"
+)]
 pub fn sort_permutation(batch: &RecordBatch, config: &Sort) -> Result<Vec<usize>> {
+    plenora_core::valida_arrow::batch(batch)?;
     // Sotto soglia il merge sort parallelo di rayon non ripaga l'overhead;
     // entrambi i percorsi sono stabili, quindi la permutazione e' identica.
     const PARALLEL_THRESHOLD: usize = 32_768;
@@ -268,6 +274,7 @@ impl TopN {
 /// - `ResourceLimit`: indice di riga oltre `u32::MAX` (`select_rows`);
 /// - `Internal`: un confronto fallito dopo la prevalidazione.
 pub fn top_n(batch: &RecordBatch, config: &TopN) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     let indices = config
@@ -371,7 +378,12 @@ pub struct Distinct {
 /// - `DataMapping` (`arrow error: …`): errore Arrow in `select_rows`;
 /// - `ResourceLimit`: indice di riga oltre `u32::MAX` (`select_rows`);
 /// - `Internal`: statistiche senza la chiave (invariante nostra).
+#[allow(
+    clippy::items_after_statements,
+    reason = "La guardia Arrow precede gli item locali e ogni uso dei dati"
+)]
 pub fn distinct(batch: &RecordBatch, config: &Distinct) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     struct KeyStats {
         first: usize,
         last: usize,
@@ -471,6 +483,7 @@ pub fn verifica_verso_dedup(config: &DedupAdvanced) -> Result<()> {
 ///   ([`verifica_verso_dedup`]); `keep` e' [`Keep::False`];
 /// - gli errori di [`sort`] (se c'e' `order_column`) e di [`distinct`].
 pub fn dedup_advanced(batch: &RecordBatch, config: &DedupAdvanced) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     verifica_verso_dedup(config)?;
     let ordered = if let Some(column) = &config.order_column {

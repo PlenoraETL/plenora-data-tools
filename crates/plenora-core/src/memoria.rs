@@ -95,6 +95,10 @@ impl Allocazioni {
     }
 
     /// Aggiunge le allocazioni di una colonna, figli compresi.
+    ///
+    /// Precondizione Arrow: dati gia' validati con `crate::valida_arrow`.
+    /// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+    /// operativi validano i dati prima di chiamare questo helper.
     pub fn aggiungi_colonna(&mut self, colonna: &dyn Array) {
         per_ogni_buffer(colonna, |buffer| {
             self.registra(buffer.allocazione, buffer.capacita);
@@ -102,6 +106,10 @@ impl Allocazioni {
     }
 
     /// Aggiunge le allocazioni di tutte le colonne di una tabella.
+    ///
+    /// Precondizione Arrow: dati gia' validati con `crate::valida_arrow`.
+    /// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+    /// operativi validano i dati prima di chiamare questo helper.
     pub fn aggiungi_tabella(&mut self, tabella: &RecordBatch) {
         for colonna in tabella.columns() {
             self.aggiungi_colonna(colonna.as_ref());
@@ -132,6 +140,8 @@ impl Allocazioni {
 /// # Errors
 ///
 /// `Internal` se la somma non sta in `u64`.
+///
+/// Precondizione Arrow: dati gia' validati con `crate::valida_arrow`.
 pub fn byte_vivi<'a>(tabelle: impl IntoIterator<Item = &'a RecordBatch>) -> Result<u64> {
     let mut allocazioni = Allocazioni::default();
     for tabella in tabelle {
@@ -150,6 +160,10 @@ pub fn byte_vivi<'a>(tabelle: impl IntoIterator<Item = &'a RecordBatch>) -> Resu
 /// la lunghezza non conta. Satura a `usize::MAX`, che per una stima vale
 /// «oltre qualunque budget».
 #[must_use]
+///
+/// Precondizione Arrow: dati gia' validati con `crate::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn byte_viste(colonna: &dyn Array) -> usize {
     let mut totale = 0_usize;
     per_ogni_buffer(colonna, |buffer| {
@@ -161,6 +175,10 @@ pub fn byte_viste(colonna: &dyn Array) -> usize {
 /// Byte di dati di una tabella: [`byte_viste`] di ogni colonna, anche di
 /// colonne che sono lo stesso array (una copia le duplica).
 #[must_use]
+///
+/// Precondizione Arrow: dati gia' validati con `crate::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn byte_dati(tabella: &RecordBatch) -> usize {
     tabella.columns().iter().fold(0_usize, |totale, colonna| {
         totale.saturating_add(byte_viste(colonna.as_ref()))
@@ -232,6 +250,10 @@ fn validita_piena(dati: &ArrayData) -> u64 {
 /// `concat` (la fusione dei dizionari) non ci sono. Lo prova un oracolo
 /// (`tests/picco_unione.rs`) contro l'unione vera.
 #[must_use]
+///
+/// Precondizione Arrow: dati gia' validati con `crate::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn picco_unione(blocchi: &[RecordBatch]) -> u64 {
     let mut originali = 0_u64;
     let mut copia = 0_u64;

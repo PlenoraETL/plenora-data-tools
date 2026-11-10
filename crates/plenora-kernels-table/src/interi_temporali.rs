@@ -47,6 +47,10 @@ impl<'a> InteriTemporali<'a> {
     /// quello che il suo tipo dichiara (il chiamante ricade sul proprio
     /// errore di tipo).
     #[must_use]
+    ///
+    /// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+    /// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+    /// operativi validano i dati prima di chiamare questo helper.
     pub fn new(array: &'a dyn Array) -> Option<Self> {
         let any = array.as_any();
         match array.data_type() {

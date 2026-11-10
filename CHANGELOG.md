@@ -10,6 +10,35 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [4.1.3] - non rilasciata
+
+### Correzioni
+
+- Corretto un difetto silenzioso dell'import Arrow Python presente da
+  v1.1.0 a v4.1.2: dati malformati potevano essere letti, trasformati,
+  scritti o riserializzati, e il passaggio C nascondeva buffer e bitmap
+  troppo corti. Binding e SDK validano integralmente gli oggetti PyArrow
+  originali prima del passaggio C, anche ogni batch dei reader lazy;
+  Rust valida gli array importati prima di contarli o concatenarli.
+  I rifiuti sono `data_mapping` in fase `read`, senza dati nel messaggio.
+- C Stream usa ora l'import fallibile: `ArrayData::validate_full` precede
+  la costruzione degli array Rust tipati. Figli Struct con lunghezze diverse
+  sono rifiutati esplicitamente senza panico.
+- Gli ingressi operativi Rust validano tramite `plenora_core::valida_arrow`
+  prima di normalizzazione, conteggio, kernel o scrittura. Un registro unico
+  delle firme e prove di enumerazione coprono Rust, SDK sync/async e binding.
+- Restano accettati i produttori solo capsule C: anche un wrapper non PyArrow
+  che restituisce la capsule di un batch PyArrow e' un produttore terzo.
+  ?Anche passati tramite la loro capsule? vale soltanto quando l'oggetto
+  passato e' esso stesso PyArrow. Capacita' e durata dei buffer restano
+  garantite dal produttore; non e' un difetto da correggere. Vedere il
+  [registro dei limiti](docs/limiti.md#buffer-dei-produttori-arrow-c).
+- Gli helper pubblici di accesso e stima, inclusi quelli non fallibili come
+  `ipc::transitorio_scrittura`, richiedono dati gia' validati; i rispettivi
+  ingressi operativi sono protetti. Il limite, presente in v1.1.0-v4.1.2,
+  resta dichiarato nei doc comment e nel
+  [registro dei limiti](docs/limiti.md#helper-arrow-con-precondizione).
+
 ## [4.1.2] - 2026-11-09
 
 ### Dipendenze e costruzione

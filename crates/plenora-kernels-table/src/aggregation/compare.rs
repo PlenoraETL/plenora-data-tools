@@ -14,6 +14,10 @@ use crate::scalar_key_string;
 
 #[deny(clippy::disallowed_methods)]
 #[cfg(test)] // Solo i test-oracolo usano il percorso testuale originale.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn row_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<String> {
     let mut key = String::new();
     for index in indices {
@@ -62,6 +66,10 @@ pub fn row_key(batch: &RecordBatch, indices: &[usize], row: usize) -> Result<Str
 // Dispatch lineare per tipo Arrow: spezzarlo renderebbe piu' difficile
 // verificare che ogni tipo sia trattato una volta sola.
 #[allow(clippy::too_many_lines)]
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn compare_cells_typed(
     left: &ArrayRef,
     left_row: usize,
@@ -347,6 +355,7 @@ pub const fn is_sortable(data_type: &DataType) -> bool {
 /// incoerente con il proprio schema o se una chiave dictionary non e'
 /// risolvibile.
 pub fn validate_sortable(array: &ArrayRef, rows: usize) -> Result<()> {
+    plenora_core::valida_arrow::array(array.as_ref())?;
     // Stessa tabella del comparatore.
     let Some(family) = comparison_family(array.data_type()) else {
         return Err(PlenoraError::Schema(format!(

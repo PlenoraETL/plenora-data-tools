@@ -73,6 +73,7 @@ pub fn batch_geometry_cells<'a>(
     geometry_index: usize,
     geometry_column: &str,
 ) -> Result<&'a BinaryArray, PlenoraError> {
+    plenora_core::valida_arrow::batch(batch)?;
     batch
         .column(geometry_index)
         .as_any()
@@ -138,6 +139,7 @@ pub fn map_nullable<T: Send>(
     cells: &BinaryArray,
     f: impl Fn(&[u8]) -> Result<Option<T>, PlenoraError> + Sync,
 ) -> Result<Vec<Option<T>>, PlenoraError> {
+    plenora_core::valida_arrow::array(cells)?;
     // Determinismo: il collect parallelo di `Result` sceglie
     // l'errore in modo non deterministico. Qui i `Result` sono raccolti per
     // riga e il collect sequenziale seleziona il primo errore in ordine di
@@ -172,6 +174,7 @@ pub fn map_nullable<T: Send>(
 /// Come [`decode_geometry_cell`], propagato via [`map_nullable`]
 /// ([`MAX_CELL_BYTES`] e contratto WKB strutturale del kernel).
 pub fn estimate_decoded_cells_native_bytes(cells: &BinaryArray) -> Result<u64, PlenoraError> {
+    plenora_core::valida_arrow::array(cells)?;
     let estimates = map_nullable(cells, |payload| {
         decode_geometry_cell(payload)
             .map(|geometry| Some(estimate_geometry_native_bytes(&geometry)))
@@ -196,6 +199,7 @@ pub fn accumulate_decoded_cells_native_bytes(
     cells: &BinaryArray,
     accumulator: &DecodedNativeBytesEstimate,
 ) -> Result<u64, PlenoraError> {
+    plenora_core::valida_arrow::array(cells)?;
     map_nullable(cells, |payload| {
         decode_geometry_cell(payload).map(|geometry| {
             accumulator.record(&geometry);

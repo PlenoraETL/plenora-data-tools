@@ -738,6 +738,40 @@ fn ipc_run_end_malformato_rifiutato_prima_dei_blocchi() {
     }
 }
 
+/// La bitmap corta appartiene al padre Struct; il figlio e il framing
+/// sono validi. Il decoder deve restituire un errore, non un panico poi
+/// mascherato dalla barriera di plenora-io.
+#[test]
+fn ipc_struct_bitmap_padre_corta() {
+    use plenora_core::arrow::ipc::reader::{FileReader, StreamReader};
+    use plenora_core::arrow::schema::ArrowError;
+    use plenora_core::ErrorPhase;
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../plenora-data-py/python/tests/fixtures");
+    for suffix in ["arrow", "arrows"] {
+        let path = root.join(format!("struct-short-bitmap.{suffix}"));
+        let file = File::open(&path).unwrap();
+        let mut reader: Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>>> =
+            if suffix == "arrow" {
+                Box::new(FileReader::try_new(file, None).expect("framing valido"))
+            } else {
+                Box::new(StreamReader::try_new(file, None).expect("framing valido"))
+            };
+        let error = reader
+            .next()
+            .expect("primo batch")
+            .expect_err("bitmap corta");
+        assert!(matches!(error, ArrowError::InvalidArgumentError(_)));
+        let error = leggi_tabella(&path, None, u64::MAX).expect_err("nessun batch consegnato");
+        assert_eq!(error.category(), ErrorCategory::DataMapping);
+        // L'API IO grezza non assegna Read: usa la fase canonica del tipo.
+        assert_eq!(error.phase(), ErrorPhase::Write);
+        assert_eq!(error.to_string(), "arrow error: invalid_argument");
+        assert!(!error.to_string().contains("PAYLOAD_MUST_NOT_LEAK"));
+    }
+}
+
 /// Parquet non può introdurre run-end attraverso il suggerimento Arrow:
 /// il confine rifiuta lo schema non applicabile prima di leggere le righe.
 #[test]

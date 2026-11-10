@@ -293,6 +293,10 @@ fn regex_letterale_non_valida(name: Function, pattern: Option<String>) -> Option
     })
 }
 
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn evaluate(
     expression: &Expression,
     batch: &RecordBatch,
@@ -596,6 +600,7 @@ fn scalar_timestamp_ms(value: &Scalar, context: &str) -> Result<Option<i64>> {
 /// - `ResourceLimit`: `length` oltre `u32::MAX` caratteri;
 /// - `Internal`: invarianti interne violate.
 pub fn expression(batch: &RecordBatch, config: &ExpressionTransform) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     expression_con_effetti(batch, config, &crate::Limits::default()).map(|(uscita, _)| uscita)
 }
@@ -624,6 +629,7 @@ pub fn expression_con_effetti(
     config: &ExpressionTransform,
     limits: &crate::Limits,
 ) -> Result<(RecordBatch, crate::EffettiKernel)> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri(limits)?;
     // Tipo dallo SCHEMA, mai dai valori (vedi il doc sopra).
@@ -675,6 +681,7 @@ pub fn expression_generic(
     batch: &RecordBatch,
     config: &ExpressionTransform,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     expression_generic_con_effetti(batch, config).map(|(uscita, _)| uscita)
 }
@@ -687,6 +694,7 @@ pub fn expression_generic_con_effetti(
     batch: &RecordBatch,
     config: &ExpressionTransform,
 ) -> Result<(RecordBatch, crate::EffettiKernel)> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     let limits = crate::Limits::default();
     config.verifica_parametri(&limits)?;

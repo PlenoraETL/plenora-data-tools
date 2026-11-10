@@ -373,6 +373,8 @@ pub fn join(
     config: &Join,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     crate::require_join_geometry_support(&left.schema(), &right.schema())?;
@@ -1100,6 +1102,8 @@ pub fn concat(
     config: &Concat,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     config.verifica_parametri()?;
@@ -1299,6 +1303,9 @@ pub fn concat_by_name(
     config: &ConcatByName,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    for batch_arrow in inputs {
+        plenora_core::valida_arrow::batch(batch_arrow)?;
+    }
     for input in inputs {
         crate::require_geometry_support(&input.schema())?;
     }
@@ -1428,6 +1435,8 @@ pub fn cross_join(
     _config: &CrossJoin,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     crate::require_join_geometry_support(&left.schema(), &right.schema())?;
@@ -1659,6 +1668,8 @@ pub fn semi_join(
     right: &RecordBatch,
     config: &MembershipJoin,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     membership_join(left, right, config, true)
@@ -1676,6 +1687,8 @@ pub fn anti_join(
     right: &RecordBatch,
     config: &MembershipJoin,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     membership_join(left, right, config, false)
@@ -2048,6 +2061,8 @@ pub fn asof_join(
     config: &AsOfJoin,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     crate::require_join_geometry_support(&left.schema(), &right.schema())?;

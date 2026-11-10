@@ -755,6 +755,10 @@ pub fn riproietta_geometria(
 /// decode (`ResourceLimit` oltre [`MAX_CELL_BYTES`](plenora_core::contract::arrow_metadata::MAX_CELL_BYTES),
 /// `InvalidPlan` per WKB o geometria non validi, `Unsupported` per Z/M), di
 /// [`riproietta_geometria`] e di codifica.
+#[allow(
+    clippy::items_after_statements,
+    reason = "La guardia Arrow precede gli item locali e ogni uso dei dati"
+)]
 pub fn reproject_batches(
     schema: &SchemaRef,
     batches: &[RecordBatch],
@@ -762,6 +766,9 @@ pub fn reproject_batches(
     sorgente: &ResolvedCrs,
     params: &ReprojectParams,
 ) -> Result<(SchemaRef, Vec<RecordBatch>), PlenoraError> {
+    for batch_arrow in batches {
+        plenora_core::valida_arrow::batch(batch_arrow)?;
+    }
     const OP: &str = "geo.reproject";
     crate::arrow_adapter::verifica_schemi_batch(schema, batches)?;
     let geometry_index = geometry_column_index(schema, geometry_column)?;

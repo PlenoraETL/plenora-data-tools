@@ -502,6 +502,10 @@ pub struct BinaryKeyEncoder<'a> {
 }
 
 impl<'a> BinaryKeyEncoder<'a> {
+    ///
+    /// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+    /// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+    /// operativi validano i dati prima di chiamare questo helper.
     pub fn new(batch: &'a RecordBatch, indices: &[usize]) -> Self {
         Self {
             columns: indices
@@ -548,6 +552,7 @@ pub fn visit_key_ids(
     indices: &[usize],
     visita: impl FnMut(usize, usize, bool) -> Result<()>,
 ) -> Result<()> {
+    plenora_core::valida_arrow::batch(batch)?;
     visit_key_ids_where(batch, indices, |_| true, visita)
 }
 
@@ -564,6 +569,7 @@ pub fn visit_key_ids_where(
     include: impl Fn(usize) -> bool,
     mut visita: impl FnMut(usize, usize, bool) -> Result<()>,
 ) -> Result<()> {
+    plenora_core::valida_arrow::batch(batch)?;
     if let [index] = indices {
         let array = batch.column(*index);
         if let Some(values) = array.as_any().downcast_ref::<Int64Array>() {
@@ -824,6 +830,7 @@ pub fn canonical_key_order(
     indices: &[usize],
     representatives: &[usize],
 ) -> Result<Vec<usize>> {
+    plenora_core::valida_arrow::batch(batch)?;
     let order_columns = indices
         .iter()
         .map(|index| OrderColumn::new(batch.column(*index), representatives))

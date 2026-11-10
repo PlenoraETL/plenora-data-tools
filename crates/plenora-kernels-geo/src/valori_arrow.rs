@@ -379,6 +379,7 @@ impl Header {
 /// # Errors
 /// `DataMapping` per byte, tipi o dimensioni; `Crs` per SRID incoerenti.
 pub fn verifica_tabella(tabella: &RecordBatch) -> Result<()> {
+    plenora_core::valida_arrow::batch(tabella)?;
     let schema = tabella.schema();
     let mut colonne = Vec::new();
     for (i, field) in schema.fields().iter().enumerate() {

@@ -193,6 +193,10 @@ impl<'a> ColonnaTemporale<'a> {
     /// # Errors
     ///
     /// `Schema` per un fuso Arrow non valido.
+    ///
+    /// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+    /// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+    /// operativi validano i dati prima di chiamare questo helper.
     pub fn new(array: &'a ArrayRef) -> Result<Option<Self>> {
         let fuso = match array.data_type() {
             DataType::Timestamp(_, Some(fuso)) => Some(

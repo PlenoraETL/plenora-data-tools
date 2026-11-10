@@ -320,6 +320,11 @@ pub fn esegui_ingressi(
     opzioni: &OpzioniScrittura,
     interruzione: &Interruzione,
 ) -> Result<EsitoFile> {
+    for ingresso_arrow in &ingressi {
+        if let Ingresso::Tabella { tabella, .. } = ingresso_arrow {
+            plenora_core::valida_arrow::batch(tabella)?;
+        }
+    }
     verifica_percorsi(piano, &ingressi, uscite, *opzioni)?;
     let budget = budget_del_piano(piano)?;
     let esito = carica_e_esegui(piano, ingressi, budget, interruzione)?;
@@ -360,6 +365,11 @@ pub fn esegui_in_memoria(
     ingressi: Vec<Ingresso>,
     interruzione: &Interruzione,
 ) -> Result<Esito> {
+    for ingresso_arrow in &ingressi {
+        if let Ingresso::Tabella { tabella, .. } = ingresso_arrow {
+            plenora_core::valida_arrow::batch(tabella)?;
+        }
+    }
     let budget = budget_del_piano(piano)?;
     carica_e_esegui(piano, ingressi, budget, interruzione)
 }
@@ -414,6 +424,11 @@ pub fn valida_ingressi(
     ingressi: Vec<Ingresso>,
     interruzione: &Interruzione,
 ) -> Result<PipelineValidata> {
+    for ingresso_arrow in &ingressi {
+        if let Ingresso::Tabella { tabella, .. } = ingresso_arrow {
+            plenora_core::valida_arrow::batch(tabella)?;
+        }
+    }
     let budget = budget_del_piano(piano)?;
     let caricate = carica_ingressi(ingressi, budget, interruzione)?;
     let schemi: Vec<(&str, _)> = caricate
@@ -441,6 +456,7 @@ fn carica_ingressi(
     let mut residenti: Vec<RecordBatch> = Vec::new();
     for ingresso in &ingressi {
         if let Ingresso::Tabella { nome, tabella } = ingresso {
+            plenora_core::valida_arrow::batch(tabella)?;
             residenti.push(tabella.clone());
             let riservati = byte_vivi(&residenti)?;
             if riservati > budget {

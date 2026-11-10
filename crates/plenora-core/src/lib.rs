@@ -50,6 +50,7 @@ pub mod memoria;
 pub use limits::DEFAULT_MAX_GOVERNED_MEMORY_BYTES;
 pub mod panic_policy;
 pub mod tipo_arrow;
+pub mod valida_arrow;
 
 pub use error::{ErrorCategory, ErrorPhase, PlenoraError, RemoteEffect, Result, RetryDisposition};
 
@@ -77,6 +78,9 @@ pub fn batch_with_rows(
     columns: Vec<arrow::array::ArrayRef>,
     rows_if_empty: usize,
 ) -> Result<arrow::array::RecordBatch> {
+    for array_arrow in &columns {
+        crate::valida_arrow::array(array_arrow.as_ref())?;
+    }
     let rows = columns
         .first()
         .map_or(rows_if_empty, arrow::array::Array::len);

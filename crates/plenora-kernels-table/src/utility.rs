@@ -96,6 +96,7 @@ fn numero_di_riga(start: i64, position: usize) -> Result<i64> {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn add_row_number(batch: &RecordBatch, config: &AddRowNumber) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     validate_output_name(&config.output_column)?;
     if config.order_column.is_some() {
@@ -332,6 +333,7 @@ pub fn verifica_date_extract_temporale(config: &DateExtract) -> Result<()> {
 // bracci del parser sono blocchi completi, troppo grandi per `map_or_else`.
 #[allow(clippy::too_many_lines, clippy::option_if_let_else)]
 pub fn date_extract(batch: &RecordBatch, config: &DateExtract) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     crate::dates::verifica_politiche(config.invalid.as_ref(), None)?;
     config.verifica_parti()?;
@@ -488,6 +490,7 @@ impl Limit {
 /// - `ResourceLimit`: numero di righe non rappresentabile come `u64`,
 ///   `offset` o `n` non rappresentabili come `usize`.
 pub fn limit(batch: &RecordBatch, config: &Limit) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     let rows = u64::try_from(batch.num_rows())
@@ -537,6 +540,7 @@ fn default_uuid_name() -> String {
 /// - `DataMapping`: errore Arrow nella costruzione del batch (guardia
 ///   interna, non attesa).
 pub fn uuid_generator(batch: &RecordBatch, config: &UuidGenerator) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     validate_output_name(&config.output_column)?;
     let values = (0..batch.num_rows())

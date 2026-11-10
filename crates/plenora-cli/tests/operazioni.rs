@@ -136,6 +136,44 @@ fn describe_legge_file_stream_e_parquet() {
 }
 
 #[test]
+fn ipc_struct_bitmap_padre_corta() {
+    let cartella = Cartella::nuova();
+    let piano = cartella.con_piano(
+        "identita.json",
+        r#"{"version":1,"inputs":["t"],"steps":[],"outputs":["t"]}"#,
+    );
+    let root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../plenora-data-py/python/tests/fixtures");
+    for suffix in ["arrow", "arrows"] {
+        let input = root.join(format!("struct-short-bitmap.{suffix}"));
+        let input = input.to_str().unwrap();
+        for command in ["describe", "validate", "run"] {
+            let output = cartella.percorso("non-consegnato.arrow");
+            let binding = format!("t={input}");
+            let args = match command {
+                "describe" => vec![command, "--input", input],
+                "validate" => vec![command, "--plan", &piano, "--input", &binding],
+                _ => vec![
+                    command, "--plan", &piano, "--input", &binding, "--output", &output,
+                ],
+            };
+            let esito = invoca(&args);
+            errore(&esito, "data_mapping", 3);
+            assert_eq!(esito.documento["error"]["phase"], "read");
+            let message = if command == "describe" {
+                "arrow error: invalid_argument"
+            } else {
+                "input `t`: arrow error: invalid_argument"
+            };
+            assert_eq!(esito.documento["error"]["message"], message);
+            assert!(esito.documento["result"].is_null());
+            assert!(!esito.stdout.contains("PAYLOAD_MUST_NOT_LEAK"));
+            assert!(!Path::new(&output).exists());
+        }
+    }
+}
+
+#[test]
 fn il_formato_stream_si_scrive_stream_e_il_file_si_scrive_file() {
     let cartella = Cartella::nuova();
     let ingresso = cartella.con_tabella("t.arrow");

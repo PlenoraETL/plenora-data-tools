@@ -166,6 +166,10 @@ pub fn millisecondi_per_difetto(valore: i64, unita: TimeUnit) -> Result<i64> {
 
 /// Valutazione di `date_trunc(unit, value)`: null propagato (tri-state), il
 /// valore e' letto nativamente da `eval_temporal`.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn date_trunc_generic(args: &[Expression], batch: &RecordBatch, row: usize) -> Result<Scalar> {
     if args.len() != 2 {
         return Err(PlenoraError::InvalidPlan(
@@ -191,6 +195,10 @@ pub fn date_trunc_generic(args: &[Expression], batch: &RecordBatch, row: usize) 
 /// timezone-aware rifiutati (la semantica tz del troncamento non e'
 /// definibile in modo sicuro, quindi l'output Timestamp e' sempre senza
 /// timezone, in millisecondi).
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn eval_temporal(expression: &Expression, batch: &RecordBatch, row: usize) -> Result<Scalar> {
     match expression {
         Expression::Column { name } => {
@@ -245,6 +253,10 @@ pub fn eval_temporal(expression: &Expression, batch: &RecordBatch, row: usize) -
 /// Null propagato; confronti con la stessa semantica dei `BinaryOperator`
 /// (tipi incompatibili -> errore, elementi null mai uguali). Lista vuota
 /// ammessa: sempre `false`.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn in_generic(
     args: &[Expression],
     batch: &RecordBatch,

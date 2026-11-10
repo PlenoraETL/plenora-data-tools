@@ -185,6 +185,8 @@ python scripts/genera_costi_operazioni.py --verifica  # modello di costo tabella
 python scripts/genera_costi_geo.py --verifica         # modello di costo geo
 python scripts/genera_inventario.py --check           # docs/inventario.md aggiornato
 python scripts/check_docs.py                          # link, ancore, comandi, generati
+python scripts/check_arrow_ingressi.py                    # registro delle firme Arrow
+python scripts/genera_arrow_items.py --check           # catalogo upstream (dopo cargo fetch --locked)
 python scripts/check_comments.py                      # regole oggettive dei commenti
 python scripts/check_esito_unico.py                    # rifiuti non tipizzati nelle prove
 python -m unittest discover -s scripts -p "test_*.py" # prove delle guardie

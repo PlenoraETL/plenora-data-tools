@@ -119,6 +119,7 @@ pub fn descrivi(ingresso: &Path, interruzione: &Interruzione) -> Result<Value> {
 /// prendere la tabella (fase `read`) o prima di descriverla (fase
 /// `finalize`).
 pub fn descrivi_tabella(tabella: &RecordBatch, interruzione: &Interruzione) -> Result<Value> {
+    plenora_core::valida_arrow::batch(tabella)?;
     interruzione
         .verifica("prima di leggere l'input")
         .map_err(|errore| errore.with_phase(ErrorPhase::Read))?;
@@ -195,6 +196,11 @@ pub fn valida_ingressi(
     ingressi: Vec<Ingresso>,
     interruzione: &Interruzione,
 ) -> Result<Value> {
+    for ingresso_arrow in &ingressi {
+        if let Ingresso::Tabella { tabella, .. } = ingresso_arrow {
+            plenora_core::valida_arrow::batch(tabella)?;
+        }
+    }
     let validata = plenora_io::valida_ingressi(piano, ingressi, interruzione)?;
     interruzione
         .verifica("prima di consegnare la validazione")
@@ -263,6 +269,11 @@ pub fn esegui_ingressi(
     opzioni: &OpzioniScrittura,
     interruzione: &Interruzione,
 ) -> Result<Value> {
+    for ingresso_arrow in &ingressi {
+        if let Ingresso::Tabella { tabella, .. } = ingresso_arrow {
+            plenora_core::valida_arrow::batch(tabella)?;
+        }
+    }
     let esito = plenora_io::esegui_ingressi(piano, ingressi, uscite, opzioni, interruzione)?;
     let uscite = esito
         .uscite
@@ -293,6 +304,11 @@ pub fn esegui_in_memoria(
     ingressi: Vec<Ingresso>,
     interruzione: &Interruzione,
 ) -> Result<(Value, Vec<(String, RecordBatch)>)> {
+    for ingresso_arrow in &ingressi {
+        if let Ingresso::Tabella { tabella, .. } = ingresso_arrow {
+            plenora_core::valida_arrow::batch(tabella)?;
+        }
+    }
     let esito = plenora_io::esegui_in_memoria(piano, ingressi, interruzione)?;
     let conta = |n: usize, cosa: &str| {
         u64::try_from(n).map_err(|_| PlenoraError::Internal(format!("{cosa} non rappresentabile")))

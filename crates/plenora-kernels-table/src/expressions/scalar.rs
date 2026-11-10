@@ -110,6 +110,10 @@ pub fn confronta_numeri(left: Numero, right: Numero) -> Result<Ordering> {
 /// # Errors
 ///
 /// Come `scalar_as_numero`; `Schema` per un double non finito.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn numero_della_cella(array: &dyn Array, row: usize) -> Result<Option<Numero>> {
     let Some((valore, esatto)) = scalar_as_numero(array, row)? else {
         return Ok(None);
@@ -167,6 +171,10 @@ pub fn literal(value: &Value) -> Result<Scalar> {
     }
 }
 
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn column(batch: &RecordBatch, name: &str, row: usize) -> Result<Scalar> {
     let index = column_index(batch, name)?;
     let value = batch.column(index);

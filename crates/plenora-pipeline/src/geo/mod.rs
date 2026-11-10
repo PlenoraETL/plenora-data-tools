@@ -375,6 +375,9 @@ impl PassoGeo {
         uscita: &DataContract,
         margine: usize,
     ) -> Result<RecordBatch> {
+        for batch_arrow in ingressi {
+            plenora_core::valida_arrow::batch(batch_arrow)?;
+        }
         let margine = MargineMemoria::byte(u64::try_from(margine).unwrap_or(u64::MAX));
         if ingressi.len() != self.lati.len() {
             return Err(PlenoraError::Internal(format!(

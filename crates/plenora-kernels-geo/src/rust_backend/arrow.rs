@@ -71,6 +71,9 @@ pub fn make_valid_batches(
     geometry_column: &str,
     precision: Precision,
 ) -> Result<Vec<RecordBatch>, PlenoraError> {
+    for batch_arrow in batches {
+        plenora_core::valida_arrow::batch(batch_arrow)?;
+    }
     crate::arrow_adapter::verifica_schemi_batch(schema, batches)?;
     let geometry_index =
         crate::analyze::richiedi_ordine_assi_schema("geo.make_valid", schema, geometry_column)?;
@@ -141,6 +144,9 @@ pub fn polygonize_batches(
     max_output_rows: u64,
     precision: Precision,
 ) -> Result<(SchemaRef, Vec<RecordBatch>), PlenoraError> {
+    for batch_arrow in batches {
+        plenora_core::valida_arrow::batch(batch_arrow)?;
+    }
     crate::arrow_adapter::verifica_schemi_batch(schema, batches)?;
     let geometry_index =
         crate::analyze::richiedi_ordine_assi_schema("geo.polygonize", schema, geometry_column)?;
@@ -284,6 +290,10 @@ pub fn split_batches(
     max_output_rows: u64,
     precision: Precision,
 ) -> Result<(SchemaRef, Vec<RecordBatch>), PlenoraError> {
+    for batch_arrow in left_batches {
+        plenora_core::valida_arrow::batch(batch_arrow)?;
+    }
+    plenora_core::valida_arrow::array(splitters)?;
     crate::arrow_adapter::verifica_schemi_batch(left_schema, left_batches)?;
     let geometry_index =
         crate::analyze::richiedi_ordine_assi_schema("geo.split", left_schema, geometry_column)?;

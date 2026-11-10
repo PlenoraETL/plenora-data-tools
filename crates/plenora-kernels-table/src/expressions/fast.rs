@@ -1109,6 +1109,10 @@ pub struct FastProgram<'a> {
 }
 
 impl<'a> FastProgram<'a> {
+    ///
+    /// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+    /// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+    /// operativi validano i dati prima di chiamare questo helper.
     pub fn compile(expression: &'a Expression, batch: &'a RecordBatch) -> Self {
         Self {
             root: compile_expression(expression, batch),
@@ -1124,6 +1128,7 @@ impl<'a> FastProgram<'a> {
         batch: &RecordBatch,
         config: &ExpressionTransform,
     ) -> Result<RecordBatch> {
+        plenora_core::valida_arrow::batch(batch)?;
         crate::require_geometry_support(&batch.schema())?;
         self.run_auto_con_effetti(batch, config)
             .map(|(uscita, _)| uscita)
@@ -1137,6 +1142,7 @@ impl<'a> FastProgram<'a> {
         batch: &RecordBatch,
         config: &ExpressionTransform,
     ) -> Result<(RecordBatch, crate::EffettiKernel)> {
+        plenora_core::valida_arrow::batch(batch)?;
         crate::require_geometry_support(&batch.schema())?;
         let limits = crate::Limits::default();
         config.verifica_parametri(&limits)?;
@@ -1155,6 +1161,7 @@ impl<'a> FastProgram<'a> {
         ctx: &Contesto<'_>,
         effetti: &mut crate::EffettiKernel,
     ) -> Result<RecordBatch> {
+        plenora_core::valida_arrow::batch(batch)?;
         crate::require_geometry_support(&batch.schema())?;
         let mut values = Vec::with_capacity(batch.num_rows());
         let mut rejections = Vec::new();
