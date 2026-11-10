@@ -245,6 +245,7 @@ impl Melt {
 // leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub fn melt(batch: &RecordBatch, config: &Melt, limits: &Limits) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     let id_indices = config
         .id_columns
@@ -937,6 +938,7 @@ fn colonna_pivot(
 // leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub fn pivot(batch: &RecordBatch, config: &Pivot, limits: &Limits) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     let index_names = config.nomi_indice();
     let index_indices = index_names
@@ -1232,6 +1234,7 @@ impl Transpose {
 // leggibilita'.
 #[allow(clippy::too_many_lines)]
 pub fn transpose(batch: &RecordBatch, config: &Transpose, limits: &Limits) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     config.verifica_nomi()?;
     let id_index = config
@@ -1471,6 +1474,7 @@ fn select_rows_except(
 ///   riga oltre `u32`;
 /// - `InvalidPlan`: nome di output non valido, `empty_policy=drop`.
 pub fn explode(batch: &RecordBatch, config: &Explode, limits: &Limits) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     if matches!(config.empty_policy, EmptyListPolicy::Drop) {
         return Err(PlenoraError::InvalidPlan(
@@ -1563,6 +1567,7 @@ const fn default_true() -> bool {
 ///   `u32::MAX`;
 /// - `InvalidPlan`: nome di colonna figlia non valido.
 pub fn unnest(batch: &RecordBatch, config: &Unnest, limits: &Limits) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     let index = column_index(batch, &config.column)?;
     crate::require_non_geometry(batch.schema().field(index))?;
@@ -2003,6 +2008,8 @@ pub fn table_diff(
     config: &TableDiff,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     if config.left_keys.is_empty() || config.left_keys.len() != config.right_keys.len() {

@@ -274,7 +274,7 @@ def test_sdk_rifiuta_run_end_malformato_letto_da_ipc(stream: bool) -> None:
     ingresso = leggi(pa.BufferReader(byte)).read_all()
     with pytest.raises(pa.ArrowInvalid):
         ingresso.validate(full=True)
-    with pytest.raises(pd.PlenoraUnsupportedError) as errore:
+    with pytest.raises(pd.PlenoraDataMappingError) as errore:
         pd.run(piano_identita(), {"t": ingresso})
     assert errore.value.phase == "read"
 

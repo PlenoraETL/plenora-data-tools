@@ -388,3 +388,31 @@ Le tabelle PyArrow possono contenere più geometrie, ciascuna con CRS e assi
 propri. Primaria, selettori `input_geometry`/`left_geometry`/`right_geometry`
 e GeoParquet seguono gli stessi [esempi eseguiti](../../docs/geometrie-multiple.md)
 della CLI e dell'API Rust.
+
+### Validazione degli ingressi Arrow
+
+Binding e SDK usano `arrow_py::importa`, che chiama
+`plenora_data._arrow.prepara` anche per le invocazioni native dirette.
+Gli originali PyArrow (Table, RecordBatch, RecordBatchReader, ChunkedArray,
+Array) sono validati integralmente prima del passaggio C. I reader restano
+lazy: ogni batch supera `validate(full=True)` prima dell'esportazione.
+L'import fallibile Rust valida `ArrayData` prima di costruire gli array
+tipati, anche da C Stream. Un input malformato verificabile fallisce con
+`data_mapping/read`, senza valori nel messaggio o output scritto.
+Lo schema di un reader non supportato viene rifiutato prima dei batch.
+
+?Anche passati tramite la loro capsule? vale solo se l'oggetto passato e'
+esso stesso PyArrow. Un oggetto non riconoscibile come PyArrow che espone
+`__arrow_c_stream__` o `__arrow_c_array__` e' un produttore terzo, anche se
+internamente restituisce la capsule di un batch PyArrow. Questa provenienza
+non e' distinguibile dal consumatore e ricade nel limite approvato:
+capacita' fisiche e durata dei buffer sono garantite dal produttore.
+Le strutture si verificano rispetto alle lunghezze dichiarate; una
+violazione delle capacita' puo' causare letture fuori limite o corruzione.
+Il limite rientra passando direttamente l'originale PyArrow; vedere il
+[registro dei limiti](../../docs/limiti.md#buffer-dei-produttori-arrow-c).
+
+Il [registro delle funzioni](../../scripts/arrow_ingressi.json) censisce
+SDK sync/async, binding e firme Rust Arrow. Gli ingressi operativi Rust
+usano la guardia comune `plenora_core::valida_arrow`; gli helper di accesso
+e stima hanno la [precondizione dichiarata](../../docs/limiti.md#helper-arrow-con-precondizione).

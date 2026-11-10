@@ -46,6 +46,8 @@ jobs:
           python-version: '3.12'
       - name: scripts/check_docs.py
         run: python scripts/check_docs.py
+      - name: scripts/check_arrow_ingressi.py
+        run: python scripts/check_arrow_ingressi.py
       - name: scripts/check_comments.py
         run: python scripts/check_comments.py
       - name: scripts/check_esito_unico.py
@@ -83,6 +85,8 @@ jobs:
       # controllo copre tutti i membri del workspace.
       - name: cache Cargo per gli avvisi dei target distribuiti
         run: cargo fetch --locked
+      - name: catalogo degli item pubblici Arrow e Parquet al lock
+        run: python scripts/genera_arrow_items.py --check
       - name: avvisi dei crate (quattro grafi release, offline)
         run: python scripts/avvisi_crate.py
       - name: cargo fmt

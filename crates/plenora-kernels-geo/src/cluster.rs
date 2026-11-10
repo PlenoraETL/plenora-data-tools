@@ -440,6 +440,7 @@ pub fn dbscan_column(
     eps: f64,
     min_points: usize,
 ) -> Result<Vec<Option<u64>>, PlenoraError> {
+    plenora_core::valida_arrow::array(cells)?;
     check_eps(eps).map_err(|error| cluster_error(&error))?;
     check_min_points(min_points).map_err(|error| cluster_error(&error))?;
     let geometries = map_nullable(cells, |payload| decode_geometry_cell(payload).map(Some))?;

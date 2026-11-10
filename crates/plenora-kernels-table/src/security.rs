@@ -141,6 +141,7 @@ fn reject_null_hash_rows(batch: &RecordBatch, columns: &[String], indices: &[usi
 ///   testo o tipo non coperto dal profilo scalare (gli errori di
 ///   `scalar_as_string`).
 pub fn md5_hash(batch: &RecordBatch, config: &Md5Hash) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     validate_output_name(&config.output_column)?;
     verifica_null_literal(&config.null_policy, config.null_literal.as_ref())?;
@@ -256,6 +257,7 @@ fn default_sha256_name() -> String {
 ///   testo o tipo non coperto dal profilo scalare (gli errori di
 ///   `scalar_as_string`).
 pub fn sha256_hash(batch: &RecordBatch, config: &Sha256Hash) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     validate_output_name(&config.output_column)?;
     verifica_null_literal(&config.null_policy, config.null_literal.as_ref())?;
@@ -673,6 +675,7 @@ fn fingerprint_rows<D: Digest + Clone + Sync>(
 ///   testo o tipo non coperto dal profilo scalare (gli errori di
 ///   `scalar_as_string`).
 pub fn stable_fingerprint(batch: &RecordBatch, config: &StableFingerprint) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     validate_output_name(&config.output_column)?;
     let names: Vec<String> = if config.columns.is_empty() {
@@ -859,6 +862,7 @@ fn load_hmac_key(key_env: &str) -> Result<Vec<u8>> {
 ///   `scalar_as_string`, per le colonne lette: con `null` quelle dopo la
 ///   prima nulla di una riga non si leggono).
 pub fn hmac_sha256(batch: &RecordBatch, config: &HmacSha256) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     validate_output_name(&config.output_column)?;
     if config.key_env.trim().is_empty() {
@@ -1161,6 +1165,7 @@ fn mask(value: &str, config: &Masking) -> Result<String> {
 ///
 /// Come [`mask_data_con_limiti`].
 pub fn mask_data(batch: &RecordBatch, config: &MaskData) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     mask_data_con_limiti(batch, config, &crate::Limits::default())
 }
@@ -1186,6 +1191,7 @@ pub fn mask_data_con_limiti(
     config: &MaskData,
     limits: &crate::Limits,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     let mascherato = |value: &str, masking: &Masking| -> Result<String> {
         let testo = mask(value, masking)?;

@@ -49,6 +49,10 @@ pub enum Float64Source<'a> {
 
 impl<'a> Float64Source<'a> {
     /// Sceglie il percorso una volta sola, invece che riga per riga.
+    ///
+    /// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+    /// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+    /// operativi validano i dati prima di chiamare questo helper.
     pub fn new(array: &'a ArrayRef) -> Self {
         if let Some(values) = array.as_any().downcast_ref::<Float64Array>() {
             return Self::Float64(values);
@@ -216,6 +220,10 @@ pub enum ColonnaIntera<'a> {
 impl<'a> ColonnaIntera<'a> {
     /// `None` se la colonna non e' del dominio intero.
     #[must_use]
+    ///
+    /// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+    /// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+    /// operativi validano i dati prima di chiamare questo helper.
     pub fn new(array: &'a ArrayRef) -> Option<Self> {
         let any = array.as_any();
         if let Some(values) = any.downcast_ref::<Int64Array>() {
@@ -366,6 +374,10 @@ pub enum ColonnaEsatta<'a> {
 impl<'a> ColonnaEsatta<'a> {
     /// `None` se gli estremi del tipo non sono esatti.
     #[must_use]
+    ///
+    /// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+    /// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+    /// operativi validano i dati prima di chiamare questo helper.
     pub fn new(array: &'a ArrayRef) -> Option<Self> {
         ColonnaIntera::new(array).map(Self::Intera).or_else(|| {
             array
@@ -416,6 +428,7 @@ impl<'a> ColonnaEsatta<'a> {
 ///
 /// `ResourceLimit` per un indice oltre `u32`; gli errori Arrow di `take`.
 pub fn prendi_righe(array: &ArrayRef, righe: &[Option<usize>]) -> Result<ArrayRef> {
+    plenora_core::valida_arrow::array(array.as_ref())?;
     let indici = righe
         .iter()
         .map(|riga| {
@@ -486,6 +499,10 @@ impl<'a> OrdineNumerico<'a> {
     ///
     /// `PlenoraError::Schema` se il tipo e' fuori dal dominio numerico o se
     /// e' `Utf8`, che il rango non ordina.
+    ///
+    /// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+    /// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+    /// operativi validano i dati prima di chiamare questo helper.
     pub fn new(array: &'a ArrayRef) -> Result<Self> {
         if !dominio_numerico(array.data_type()) {
             return Err(PlenoraError::Schema(format!(
@@ -551,6 +568,10 @@ impl<'a> OrdineNumerico<'a> {
 ///
 /// `PlenoraError::Schema` se il tipo e' fuori dal dominio o se una cella di
 /// testo non e' interpretabile come numero.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn valida_valori_numerici(array: &ArrayRef) -> Result<()> {
     if !dominio_numerico(array.data_type()) {
         return Err(PlenoraError::Schema(format!(

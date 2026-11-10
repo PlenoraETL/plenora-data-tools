@@ -184,9 +184,8 @@ def _sorgente(valore: object, voce: str) -> tuple[str, object]:
         return ("path", valore)
     try:
         if isinstance(valore, pa.RecordBatch):
-            # Senza copia: la tabella condivide i buffer del blocco.
-            return ("arrow", pa.Table.from_batches([valore]))
-        arrow = hasattr(valore, "__arrow_c_stream__")
+            return ("arrow", valore)
+        arrow = hasattr(valore, "__arrow_c_stream__") or hasattr(valore, "__arrow_c_array__")
     except PlenoraError:
         # Già pubblica e classificata (per esempio un annullamento): resta
         # quella.

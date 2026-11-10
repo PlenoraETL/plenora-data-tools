@@ -847,6 +847,8 @@ pub fn fuzzy_join(
     config: &FuzzyJoin,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     crate::require_join_geometry_support(&left.schema(), &right.schema())?;

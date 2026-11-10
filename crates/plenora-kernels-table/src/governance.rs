@@ -88,6 +88,7 @@ impl AssertCardinality {
 ///   righe diverse da `exact_rows`, oppure fuori dall'intervallo
 ///   `min_rows`/`max_rows`.
 pub fn assert_cardinality(batch: &RecordBatch, config: &AssertCardinality) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     let valid = config.exact_rows.map_or_else(
@@ -137,6 +138,7 @@ const fn default_true() -> bool {
 /// - `Schema`: chiave attesa assente o con valore diverso; con
 ///   `allow_extra = false`, anche numero di metadati diverso da `expected`.
 pub fn assert_metadata(batch: &RecordBatch, config: &AssertMetadata) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     let schema = batch.schema();
     let metadata = schema.metadata();
@@ -650,6 +652,8 @@ pub fn assert_foreign_key(
     config: &ForeignKey,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     let left_indices = key_indices(left, &config.left_keys)?;
@@ -814,6 +818,8 @@ pub fn reconcile(
     config: &Reconcile,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(left)?;
+    plenora_core::valida_arrow::batch(right)?;
     crate::require_geometry_support(&left.schema())?;
     crate::require_geometry_support(&right.schema())?;
     let left_indices = key_indices(left, &config.left_keys)?;
@@ -1532,6 +1538,7 @@ fn aggiungi_nome(elenco: &mut String, vuoto: &mut bool, nome: &str) {
 /// - `DataMapping` (`arrow error`): errore Arrow nella costruzione
 ///   dell'output.
 pub fn validate_rules(batch: &RecordBatch, config: &ValidateRules) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     let rules = compile_rules(batch, config)?;
     let colonne = rules

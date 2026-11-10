@@ -161,6 +161,7 @@ const RIGHE_PER_CHUNK_LOOKUP: usize = if cfg!(test) { 16 } else { 65_536 };
 ///   convertibile in testo (gli errori di `scalar_as_string`); gli errori
 ///   di `replace_or_append`.
 pub fn lookup(batch: &RecordBatch, config: &Lookup) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     let index = crate::text_column_index(batch, &config.column)?;
     let source = batch.column(index);
@@ -353,6 +354,7 @@ fn equal_width_edges(numeric: &[Option<f64>], count: usize) -> Result<Vec<f64>> 
 ///   null); valore non convertibile in numero (gli errori di
 ///   `scalar_as_numero`); gli errori di `replace_or_append`.
 pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     bin_con_limiti(batch, config, &Limits::default())
 }
@@ -368,6 +370,7 @@ pub fn bin(batch: &RecordBatch, config: &Bin) -> Result<RecordBatch> {
 /// Come [`bin`], piu' `ResourceLimit` per un'etichetta oltre
 /// `limits.max_string_bytes`.
 pub fn bin_con_limiti(batch: &RecordBatch, config: &Bin, limits: &Limits) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     let index = column_index(batch, &config.column)?;
     let source = batch.column(index);
@@ -1425,6 +1428,7 @@ pub fn flatten_json(
     config: &FlattenJson,
     limits: &Limits,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     if config.max_level > 5 {
         return Err(PlenoraError::InvalidPlan("max_level oltre 5".into()));
@@ -1811,6 +1815,7 @@ fn group_statistics(values: &[f64], stats: &[Stat], media_esatta: Option<f64>) -
 // lineare, lunga per costruzione.
 #[allow(clippy::too_many_lines)]
 pub fn statistics(batch: &RecordBatch, config: &Statistics) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     let nomi = config.nomi_uscita()?;
@@ -2058,6 +2063,7 @@ fn stratified_count(requested: usize, group: usize, total: usize) -> Result<usiz
 ///   di `scalar_as_string`;
 /// - `DataMapping` (`arrow error: …`): errore Arrow della `take` in `select_rows`.
 pub fn sample(batch: &RecordBatch, config: &Sample) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     config.verifica_parametri()?;
     if config.fraction.is_some() && (batch.num_rows() as u128) > (1_u128 << 53) {

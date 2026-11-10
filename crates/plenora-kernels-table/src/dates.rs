@@ -527,6 +527,7 @@ pub fn verifica_politiche(
 ///   convertibile in testo (come `scalar_as_string`); gli errori di
 ///   `replace_or_append`.
 pub fn date_format(batch: &RecordBatch, config: &DateFormat) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     verifica_politiche(config.invalid.as_ref(), None)?;
     let uscita = FormatoUscita::senza_fuso(&config.output_format)?;
@@ -694,6 +695,7 @@ pub fn verifica_amount(amount: i64, unit: &DateUnit) -> Result<()> {
 ///   convertibile in testo (come `scalar_as_string`); gli errori di
 ///   `replace_or_append`.
 pub fn date_add(batch: &RecordBatch, config: &DateAdd) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     verifica_politiche(config.invalid.as_ref(), None)?;
     let uscita = FormatoUscita::senza_fuso(&config.output_format)?;
@@ -844,6 +846,7 @@ fn diff_value(delta: TimeDelta, divisor: f64, _row: usize) -> Result<f64> {
 ///   convertibile in testo (come `scalar_as_string`); gli errori di
 ///   `replace_or_append`.
 pub fn date_diff(batch: &RecordBatch, config: &DateDiff) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     verifica_politiche(config.invalid.as_ref(), None)?;
     let start_index = text_column_index(batch, &config.start_column)?;
@@ -1031,6 +1034,7 @@ pub struct TimezoneConvert {
 ///   convertibile in testo (come `scalar_as_string`); gli errori di
 ///   `replace_or_append`.
 pub fn timezone_convert(batch: &RecordBatch, config: &TimezoneConvert) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     crate::require_geometry_support(&batch.schema())?;
     verifica_politiche(config.invalid.as_ref(), config.ambiguous.as_ref())?;
     let index = text_column_index(batch, &config.column)?;

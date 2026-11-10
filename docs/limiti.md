@@ -2005,3 +2005,113 @@ particolare l'aggiornamento delle adiacenze dei lati dopo lo scavo;
 la prova ignorata deve passare senza modificare l'atteso indipendente.
 Rimuovere quindi `ignore` e questa deviazione. I dettagli dell'oracolo
 sono in `crates/plenora-pipeline/tests/comune_geo/genera_trasformazioni.py`.
+
+## Buffer dei produttori Arrow C
+
+**Regola.** Gli oggetti PyArrow riconoscibili (Table, RecordBatch,
+RecordBatchReader, ChunkedArray e Array) sono validati con
+`validate(full=True)` prima della conversione C; ogni batch lazy viene
+validato prima della sua esportazione. L'import fallibile Rust valida
+`ArrayData` prima di costruire gli array tipati, anche per C Stream.
+
+**Ambito.** Binding e SDK Python, sync e async. La formula ?anche passati
+tramite la loro capsule? vale solo se l'oggetto passato e' esso stesso
+PyArrow. Un oggetto non riconoscibile come PyArrow che espone
+`__arrow_c_stream__` o `__arrow_c_array__` e' un produttore terzo anche
+quando restituisce internamente la capsule di un batch PyArrow: il
+consumatore non puo' distinguere questa provenienza. Non e' un difetto.
+
+**Hazard.** C Data e C Stream espongono puntatori e lunghezze logiche,
+non le capacita' effettive delle allocazioni. Un produttore terzo che
+viola il contratto puo' causare letture fuori limite o risultati corrotti
+senza un errore rilevabile. La validazione controlla le malformazioni
+verificabili rispetto alle lunghezze dichiarate; capacita' e durata reali
+dei buffer restano responsabilita' del produttore.
+
+**Rientro.** Il chiamante passa direttamente l'oggetto PyArrow originale,
+oppure un protocollo futuro espone capacita' e durata verificabili.
+
+## Helper Arrow con precondizione
+
+**Regola.** Gli ingressi operativi pubblici Rust validano completamente i
+dati prima di normalizzazione, conteggio, kernel e scrittura, tramite
+`plenora_core::valida_arrow`. Il registro dichiarativo unico
+[`scripts/arrow_ingressi.json`](../scripts/arrow_ingressi.json) classifica
+le firme Rust Arrow e le routine pubbliche Python/native: ingresso guardato,
+helper con precondizione dichiarata, oppure non riceve dati esterni con
+motivazione. Gli schemi senza buffer e i risultati sono censiti anch'essi.
+Le prove confrontano il codice col registro e verificano le guardie prima
+dell'uso; una nuova funzione pubblica non classificata fa fallire il gate.
+
+**Ambito.** Helper di accesso per cella, costruzione e stima, inclusi quelli
+non fallibili come `ipc::transitorio_scrittura`,
+`parquet_io::transitorio_scrittura` e i contatori di memoria. I doc comment
+richiedono dati gia' validati dal punto comune. I loro chiamanti operativi
+(scrittura IPC/file/stream/Parquet, caricamento, descrizione, validazione,
+esecuzione in memoria e runner) hanno ingressi protetti. Le API di controllo,
+i protocolli e i contenitori d'uscita Python non elaborano buffer esterni.
+
+**Hazard.** Chiamare direttamente un helper con dati Arrow malformati viola
+la precondizione e puo' produrre panico, stime errate o risultati corrotti;
+non promette il rifiuto fallibile degli ingressi operativi. Il limite riguarda
+le versioni v1.1.0-v4.1.2 e resta esplicito in 4.1.3 per questi helper.
+
+**Rientro.** Usare l'ingresso operativo oppure chiamare prima
+`valida_arrow::batch` o `valida_arrow::array`; solo dopo il successo usare
+l'helper. La rimozione del limite richiede API fallibili o tipi che attestino
+la validazione, con revisione delle compatibilita'.
+
+## Enumerazione statica degli ingressi Arrow
+
+**Regola.** `scripts/check_arrow_ingressi.py` enumera tutte le firme pubbliche
+dirette nei sorgenti dei crate, anche senza tipi Arrow espliciti: funzioni
+e metodi `pub`, metodi dei trait pubblici (con o senza corpo) e metodi
+delle impl di trait, inclusi conservativamente quelli di trait privati.
+I nomi Arrow/Parquet vengono dal catalogo generato
+`scripts/arrow_items.json`: dichiarazioni pubbliche nei sorgenti di tutte
+le crate `arrow*` e Parquet presenti nel lock, compreso il fork vendorizzato.
+`python scripts/genera_arrow_items.py` lo rigenera dalla cache Cargo offline;
+`--check` lo confronta in CI con i sorgenti dopo `cargo fetch --locked`.
+La guardia verifica anche l'allineamento delle versioni al lock senza cache.
+Il catalogo e' un sovrainsieme nominale, indipendente dalle feature: gli
+omonimi locali richiedono eccezioni puntuali motivate, non esclusioni globali.
+Nei file Rust dei membri del workspace rifiuta alias `use ... as` e `type`
+Arrow/Parquet e vincoli generici Arrow, inclusi quelli degli `impl` e
+`impl Trait`, in ogni posizione dei bound e nelle clausole `where`.
+Sono compresi gli alias di tipi associati nelle impl e nei trait.
+Il divieto e' conservativo anche sugli helper privati.
+Le sole eccezioni sono dichiarazioni esatte, legate al file e motivate in
+`rust_variants` nel registro; una modifica richiede una nuova classificazione.
+Test, moduli inline `cfg(test)` e `vendor/` sono esclusi dal divieto.
+La prova Python affianca `inspect` sul pacchetto installato all'estrazione
+statica di tutte le definizioni pubbliche di funzioni, metodi e coroutine
+(anche nei moduli interni e negli stub), e delle `pyfunction`/`pymethods`
+del binding. Non seleziona gli ingressi per nome di parametro o firma:
+ogni nuova definizione richiede una classificazione esplicita e motivata.
+
+**Ambito.** Enumerazione testuale delle forme dirette Rust e inventari
+Python runtime e statici; non e' risoluzione semantica del compilatore.
+Gli esempi eseguibili sono soggetti al divieto delle varianti, mentre il
+registro delle firme pubbliche Rust riguarda i sorgenti `src/` dei crate.
+
+**Hazard.** Macro Rust che generano item pubblici e re-export (`pub use`,
+anche glob) non generano nuove voci nell'enumerazione delle firme: possono
+esporre ingressi non visibili al controllo testuale. Gli alias nei re-export
+Arrow sono comunque vietati salvo eccezione puntuale. Un re-export senza
+alias non e' una prova di validazione dell'API che espone. Il codice generato
+durante la build, gli `include!` e le espansioni di macro non vengono
+enumerati; lo stesso limite vale per i nomi upstream generati o riesportati.
+Il catalogo copre le dichiarazioni testuali pubbliche dei sorgenti `src/`,
+non l'API espansa dal compilatore. Anche l'espansione
+di macro PyO3 resta fuori dall'estrazione statica; il controllo runtime
+copre la superficie effettivamente installata nella configurazione provata.
+I re-export esistenti `plenora_core::arrow::{array, ipc, schema, select}`
+sono eccezioni nominali nel registro: espongono i moduli upstream e
+richiedono buffer e strutture validi secondo i loro contratti; non sono
+ingressi operativi Plenora che validano dati esterni.
+
+**Rientro.** Esporre ingressi tramite funzioni dirette censite e guardate;
+prima di introdurre macro o re-export che espongano nuovi ingressi,
+aggiungere una classificazione manuale motivata e una prova sulla superficie
+espansa/esportata. La rimozione generale del limite richiede un inventario
+ottenuto dal compilatore per tutte le configurazioni supportate.

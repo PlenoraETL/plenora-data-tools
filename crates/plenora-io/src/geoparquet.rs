@@ -377,6 +377,7 @@ fn geo_di_campo(crs: &CrsColonna, dimensioni: GeometryDimensions) -> Result<Stri
 /// non dichiarati.
 #[allow(clippy::too_many_lines)] // Sequenza dei controlli di lettura e ricostruzione del contratto.
 pub fn applica(tabella: &RecordBatch, testo_geo: &str) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(tabella)?;
     let geo = analizza(testo_geo)?;
     let schema = tabella.schema();
     if let Some(primary) = schema
@@ -648,6 +649,7 @@ pub struct Preparata {
 /// o dichiarato ma non risolto; `DataMapping` per celle non ammesse o tipi
 /// fuori dalla dichiarazione del contratto.
 pub fn prepara(tabella: &RecordBatch) -> Result<Option<Preparata>> {
+    plenora_core::valida_arrow::batch(tabella)?;
     let schema = tabella.schema();
     let geometrica = schema.fields().iter().any(|campo| {
         field_declares_wkb_geometry(campo) || campo.metadata().contains_key(GEO_METADATA_KEY)

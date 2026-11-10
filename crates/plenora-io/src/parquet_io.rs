@@ -828,6 +828,7 @@ pub fn scrivi(
     uscita: impl Write + Send,
     compressione: CompressioneParquet,
 ) -> Result<SchemaRef> {
+    plenora_core::valida_arrow::batch(tabella)?;
     if tabella
         .schema()
         .fields()
@@ -906,6 +907,10 @@ pub fn verifica_schema(percorso: &Path, scritto: &Schema) -> Result<()> {
 /// [`MARGINE_SCRITTURA`] per i buffer fissi di pagina e dei codec (docs/file.md,
 /// «File», per le misure).
 #[must_use]
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn transitorio_scrittura(tabella: &RecordBatch) -> u64 {
     crate::memoria::fetta_massima(tabella, RIGHE_PER_ROW_GROUP)
         .saturating_mul(FATTORE_SCRITTURA)

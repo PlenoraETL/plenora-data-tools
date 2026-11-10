@@ -2,8 +2,8 @@
 //!
 //! In ingresso qualunque oggetto con `__arrow_c_stream__` (l'interfaccia
 //! `PyCapsule` di Arrow: `pyarrow.Table`, `pyarrow.RecordBatchReader`, e le
-//! tabelle di altre librerie Arrow); il pacchetto Python porta un
-//! `pyarrow.RecordBatch` in una `pyarrow.Table` senza copia. I buffer si
+//! tabelle di altre librerie Arrow) o `__arrow_c_array__`. Gli originali
+//! `PyArrow` sono validati prima del passaggio C, anche nei reader lazy. I buffer si
 //! importano senza copia; lo schema arriva con i metadati di schema e di
 //! campo intatti (`plenora.*`, `ARROW:extension:name` di `GeoArrow`). Un
 //! buffer che non rispetta l'allineamento di Arrow si riallinea con una
@@ -16,10 +16,9 @@
 //! copia (`arrow_pyarrow::Table`).
 
 use arrow_pyarrow::{FromPyArrow, IntoPyArrow, Table};
-use plenora_core::arrow::array::ffi_stream::RecordBatchStreamReader;
-use plenora_core::arrow::array::{RecordBatch, RecordBatchReader};
+use plenora_core::arrow::array::RecordBatch;
+use plenora_core::arrow::schema::Schema;
 use plenora_core::arrow::select::concat::concat_batches;
-use plenora_core::arrow::ArrowError;
 use plenora_core::memoria::{byte_dati, picco_unione};
 use plenora_core::{ErrorPhase, PlenoraError};
 use pyo3::exceptions::PyException;
@@ -34,21 +33,6 @@ fn illeggibile(contesto: &str, cosa: &str) -> Errore {
     Errore::Plenora(
         PlenoraError::DataMapping(format!("{contesto}: {cosa}")).with_phase(ErrorPhase::Read),
     )
-}
-
-/// L'errore di Arrow sullo stream: un tipo che l'import non conosce è
-/// `unsupported`, il resto `data_mapping`. Mai il testo di Arrow, che può
-/// riportare il messaggio del produttore.
-fn errore_arrow(contesto: &str, errore: &ArrowError) -> Errore {
-    match errore {
-        ArrowError::NotYetImplemented(_) => Errore::Plenora(
-            PlenoraError::Unsupported(format!(
-                "{contesto}: tipo Arrow non supportato dall'import (C Data Interface)"
-            ))
-            .with_phase(ErrorPhase::Read),
-        ),
-        _ => illeggibile(contesto, "stream Arrow non leggibile (C Data Interface)"),
-    }
 }
 
 /// L'eccezione Python sollevata dal produttore dello stream. Un'eccezione
@@ -107,9 +91,24 @@ pub fn importa(
         &format!("prima di leggere l'{contesto}"),
         ErrorPhase::Read,
     )?;
-    let lettore = RecordBatchStreamReader::from_pyarrow_bound(oggetto)
+    let preparato = py
+        .import("plenora_data._arrow")
+        .and_then(|modulo| modulo.getattr("prepara"))
+        .and_then(|prepara| prepara.call1((oggetto,)))
         .map_err(|errore| errore_del_produttore(py, errore, contesto))?;
-    let schema = lettore.schema();
+    // PyArrow mantiene lo stream lazy; ogni batch passa poi dall'import
+    // fallibile di arrow-pyarrow, che valida ArrayData PRIMA di StructArray.
+    let lettore = py
+        .import("plenora_data._arrow")
+        .and_then(|modulo| modulo.getattr("lettore"))
+        .and_then(|funzione| funzione.call1((&preparato,)))
+        .map_err(|errore| errore_del_produttore(py, errore, contesto))?;
+    let schema = std::sync::Arc::new(
+        lettore
+            .getattr("schema")
+            .and_then(|schema| Schema::from_pyarrow_bound(&schema))
+            .map_err(|errore| errore_del_produttore(py, errore, contesto))?,
+    );
     // L'import C Stream si fida dei buffer del produttore. Il contratto
     // esclude run-end e union: rifiutarli prima di importare o concatenare
     // blocchi impedisce che dati malformati arrivino ai kernel Arrow.
@@ -117,8 +116,20 @@ pub fn importa(
         .map_err(|errore| Errore::Plenora(errore.with_phase(ErrorPhase::Read)))?;
     let mut blocchi = Vec::new();
     let mut letti = 0_u64;
-    for blocco in lettore {
-        let blocco = blocco.map_err(|errore| errore_arrow(contesto, &errore))?;
+    for blocco in lettore
+        .try_iter()
+        .map_err(|errore| errore_del_produttore(py, errore, contesto))?
+    {
+        let blocco = blocco
+            .and_then(|blocco| RecordBatch::from_pyarrow_bound(&blocco))
+            .map_err(|errore| {
+                if errore.is_instance_of::<PyException>(py) && !e_pubblica(py, &errore) {
+                    illeggibile(contesto, "stream Arrow non leggibile (C Data Interface)")
+                } else {
+                    Errore::Python(errore)
+                }
+            })?;
+        plenora_core::valida_arrow::batch(&blocco).map_err(Errore::Plenora)?;
         letti = letti.saturating_add(u64::try_from(byte_dati(&blocco)).unwrap_or(u64::MAX));
         if letti > residuo {
             return Err(oltre_il_budget(contesto, letti, residuo));
@@ -155,6 +166,7 @@ pub fn importa(
 ///
 /// `internal` (fase `finalize`) se pyarrow non la riceve.
 pub fn esporta(py: Python<'_>, tabella: RecordBatch, nome: &str) -> Result<Py<PyAny>, Errore> {
+    plenora_core::valida_arrow::batch(&tabella).map_err(Errore::Plenora)?;
     let consegna = || {
         Errore::Plenora(
             PlenoraError::Internal(format!("output `{nome}`: consegna a pyarrow non riuscita"))

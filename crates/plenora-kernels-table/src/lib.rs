@@ -380,6 +380,10 @@ pub(crate) fn require_unique_names(schema: &Schema) -> Result<()> {
 /// # Errors
 ///
 /// - `Schema`: colonna assente o nomi duplicati nello schema.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn column_index(batch: &RecordBatch, name: &str) -> Result<usize> {
     require_unique_names(&batch.schema())?;
     batch
@@ -393,6 +397,10 @@ pub fn column_index(batch: &RecordBatch, name: &str) -> Result<usize> {
 /// # Errors
 ///
 /// - `Schema`: colonna assente o non di tipo Utf8.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn utf8_column<'a>(
     batch: &'a RecordBatch,
     name: &str,
@@ -464,6 +472,8 @@ pub fn replace_keeping_field_metadata(
     nullable: bool,
     array: ArrayRef,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
+    plenora_core::valida_arrow::array(array.as_ref())?;
     let metadata = batch
         .schema()
         .field_with_name(name)
@@ -514,6 +524,8 @@ pub fn replace_or_append(
     nullable: bool,
     array: ArrayRef,
 ) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
+    plenora_core::valida_arrow::array(array.as_ref())?;
     require_unique_names(&batch.schema())?;
     if array.len() != batch.num_rows() {
         return Err(PlenoraError::Schema(format!(
@@ -555,6 +567,10 @@ pub fn replace_or_append(
 /// ancora da costruire, che non eredita la capacita' inutilizzata
 /// dell'input.
 #[must_use]
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn column_bytes_per_row(array: &dyn Array) -> usize {
     let rows = array.len();
     if rows == 0 {
@@ -622,6 +638,10 @@ pub fn text_bytes_floor(data_type: &DataType) -> usize {
 /// Il limite superiore esatto e' la voce piu' lunga del dizionario; si
 /// scorre una volta per colonna, non per riga.
 #[must_use]
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn text_bytes_per_row(array: &dyn Array) -> usize {
     if let Some(values) = array.as_any().downcast_ref::<DictionaryArray<Int32Type>>() {
         let piu_lunga = values
@@ -690,6 +710,10 @@ pub fn text_convertible(data_type: &DataType) -> bool {
 /// L'aritmetica e' controllata, non saturante: con
 /// `max_governed_memory_bytes` a fondo scala una somma saturata passerebbe il
 /// confronto.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn batch_bytes_per_row(batch: &RecordBatch) -> Result<usize> {
     batch.columns().iter().try_fold(0_usize, |totale, column| {
         totale
@@ -762,6 +786,9 @@ pub fn batch_with_rows(
     columns: Vec<ArrayRef>,
     rows_if_empty: usize,
 ) -> Result<RecordBatch> {
+    for array_arrow in &columns {
+        plenora_core::valida_arrow::array(array_arrow.as_ref())?;
+    }
     plenora_core::batch_with_rows(schema, columns, rows_if_empty)
 }
 
@@ -972,6 +999,10 @@ pub fn verifica_nomi_distinti<'a>(
 ///
 /// `Schema` se il dizionario non contiene `Utf8`, se la chiave e' negativa o
 /// se punta oltre la fine del dizionario.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn dictionary_utf8_value(
     values: &DictionaryArray<Int32Type>,
     row: usize,
@@ -1015,6 +1046,10 @@ pub fn dictionary_utf8_value(
 /// risponde `false`, e l'errore lo da' chi legge il valore
 /// ([`dictionary_utf8_value`]).
 #[must_use]
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn is_logically_null(array: &dyn Array, row: usize) -> bool {
     use num_traits::ToPrimitive;
     use plenora_core::arrow::array::cast::AsArray as _;
@@ -1079,6 +1114,10 @@ pub fn is_logically_null(array: &dyn Array, row: usize) -> bool {
 ///
 /// Come [`scalar_as_string`]; per un `Timestamp`, `Schema` per un fuso
 /// Arrow non valido o un array incoerente col suo tipo.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn scalar_key_string(array: &dyn Array, row: usize) -> Result<Option<String>> {
     if let DataType::Timestamp(_, fuso) = array.data_type() {
         if let Some(fuso) = fuso {
@@ -1124,6 +1163,10 @@ pub(crate) fn scalar_partition_key(array: &dyn Array, row: usize) -> Result<Opti
 ///   timezone Arrow non valida, decimal128 incoerente o con scala non supportata, binary non
 ///   UTF-8, dictionary non Utf8 o con chiave fuori dal dizionario, tipo non
 ///   supportato dal profilo scalare.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn scalar_as_string(array: &dyn Array, row: usize) -> Result<Option<String>> {
     if array.is_null(row) {
         return Ok(None);
@@ -1349,6 +1392,10 @@ pub fn exact_f64_from_decimal128(unscaled: i128, scale: i8) -> Option<f64> {
 /// - `Schema`: intero/timestamp/decimal128 non rappresentabile come f64,
 ///   decimal128 incoerente, testo non convertibile in numero, tipo non
 ///   convertibile in numero.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn scalar_as_f64(array: &dyn Array, row: usize) -> Result<Option<f64>> {
     if array.is_null(row) {
         return Ok(None);
@@ -1416,6 +1463,10 @@ pub fn scalar_as_f64(array: &dyn Array, row: usize) -> Result<Option<f64>> {
 /// - `Schema`: testo non convertibile in numero, tipo non convertibile in
 ///   numero, decimal128 incoerente con il proprio schema.
 #[allow(clippy::cast_precision_loss)] // Arrotondamento voluto: vedi doc.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn scalar_as_f64_rounded(array: &dyn Array, row: usize) -> Result<Option<f64>> {
     if array.is_null(row) {
         return Ok(None);
@@ -1456,6 +1507,10 @@ pub fn scalar_as_f64_rounded(array: &dyn Array, row: usize) -> Result<Option<f64
 ///
 /// Come [`scalar_as_f64_rounded`]; `Internal` per un tipo che quella
 /// conversione accetta e qui non ha un valore esatto.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn scalar_as_numero(array: &dyn Array, row: usize) -> Result<Option<(f64, NumericBound)>> {
     let Some(valore) = scalar_as_f64_rounded(array, row)? else {
         return Ok(None);
@@ -2117,6 +2172,10 @@ pub const fn scalar_compare_supported(data_type: &DataType) -> bool {
 /// `Schema` se il tipo non e' confrontabile numericamente (vedi
 /// [`scalar_compare_supported`]), se il testo di una colonna Utf8 non e' un
 /// numero o se una colonna Decimal128 e' incoerente con il proprio tipo.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn scalar_compare(
     array: &dyn Array,
     row: usize,
@@ -2174,6 +2233,7 @@ pub fn scalar_compare(
 /// Precondizione: gli indici stanno dentro il batch. La `take` e' chiamata
 /// senza controllo dei limiti, quindi a garantirlo e' il chiamante.
 pub fn select_rows(batch: &RecordBatch, rows: &[usize]) -> Result<RecordBatch> {
+    plenora_core::valida_arrow::batch(batch)?;
     let indices: UInt32Array = rows
         .iter()
         .map(|row| {

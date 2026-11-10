@@ -482,6 +482,7 @@ pub fn coverage_validate_rows(
     max_issues: usize,
     precision: Precision,
 ) -> Result<Vec<CoverageIssueRow>, PlenoraError> {
+    plenora_core::valida_arrow::array(cells)?;
     coverage_validate_rows_con_margine(
         cells,
         tolerance,
@@ -505,6 +506,7 @@ pub fn coverage_validate_rows_con_margine(
     precision: Precision,
     margine: MargineMemoria,
 ) -> Result<Vec<CoverageIssueRow>, PlenoraError> {
+    plenora_core::valida_arrow::array(cells)?;
     let geometries = map_nullable(cells, |payload| decode_geometry_cell(payload).map(Some))?;
     // Le geometrie decodificate restano vive per tutto il kernel.
     let decodificate = geometries.iter().fold(
@@ -749,6 +751,7 @@ pub fn shared_paths_rows(
     tolerance: f64,
     min_length: f64,
 ) -> Result<Vec<SharedPathRow>, PlenoraError> {
+    plenora_core::valida_arrow::array(cells)?;
     let geometries = map_nullable(cells, |payload| decode_geometry_cell(payload).map(Some))?;
     let paths = shared_paths_nullable(&geometries, tolerance, min_length)
         .map_err(|error| shared_paths_error(&error))?;

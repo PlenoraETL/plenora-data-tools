@@ -109,6 +109,7 @@ pub fn scrivi_tabella(
     percorso: &Path,
     opzioni: &OpzioniScrittura,
 ) -> Result<()> {
+    plenora_core::valida_arrow::batch(tabella)?;
     // Run-end e union non si scrivono: la rilettura li rifiuterebbe
     // (docs/runner.md, «Run-end e union rifiutati al confine»).
     plenora_core::contract::arrow_schema::verifica_tipi_supportati(&tabella.schema())?;

@@ -529,6 +529,9 @@ impl PipelineValidata {
     /// - gli errori dei kernel, con il nome del passo dove la variante porta
     ///   un messaggio.
     pub fn run(self, tables: Vec<(String, RecordBatch)>) -> Result<Esito> {
+        for (_, batch_arrow) in &tables {
+            plenora_core::valida_arrow::batch(batch_arrow)?;
+        }
         self.run_interrompibile(tables, &Interruzione::default())
     }
 
@@ -549,6 +552,9 @@ impl PipelineValidata {
         tables: Vec<(String, RecordBatch)>,
         interruzione: &Interruzione,
     ) -> Result<Esito> {
+        for (_, batch_arrow) in &tables {
+            plenora_core::valida_arrow::batch(batch_arrow)?;
+        }
         let budget = self.limiti.max_governed_memory_bytes;
         // Input: esattamente quelli dichiarati, con lo schema validato.
         let mut vivi: BTreeMap<String, RecordBatch> = BTreeMap::new();

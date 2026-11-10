@@ -15,6 +15,10 @@ pub fn oltre_il_budget(servono: u64, residuo: u64) -> PlenoraError {
 
 /// Byte di una copia dei batch (`plenora_core::memoria::byte_dati`), la
 /// stima di ciò che `concat_batches` alloca.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn stima_byte(blocchi: &[RecordBatch]) -> u64 {
     blocchi.iter().fold(0_u64, |totale, blocco| {
         totale.saturating_add(
@@ -28,6 +32,10 @@ pub fn stima_byte(blocchi: &[RecordBatch]) -> u64 {
 /// eccesso: valori dei dizionari e figli delle liste interi), o le viste
 /// intere per un tipo che Arrow non sa misurare. Misura le fette vere, così
 /// una riga molto più grande della media non sfugge alla stima.
+///
+/// Precondizione Arrow: dati gia' validati con `plenora_core::valida_arrow`.
+/// Limite: `docs/limiti.md#helper-arrow-con-precondizione`; gli ingressi
+/// operativi validano i dati prima di chiamare questo helper.
 pub fn fetta_massima(tabella: &RecordBatch, righe_per_fetta: usize) -> u64 {
     let righe = tabella.num_rows();
     let passo = righe_per_fetta.max(1);
