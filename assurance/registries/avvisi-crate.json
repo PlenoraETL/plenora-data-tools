@@ -90,7 +90,7 @@
       "regex-syntax-0.8.11",
       "robust-1.2.0",
       "rstar-0.12.2",
-      "rustix-1.1.4",
+      "rustix-1.1.6",
       "scroll-0.13.0",
       "serde-1.0.229",
       "serde_core-1.0.229",
@@ -210,7 +210,7 @@
       "regex-syntax-0.8.11",
       "robust-1.2.0",
       "rstar-0.12.2",
-      "rustix-1.1.4",
+      "rustix-1.1.6",
       "scroll-0.13.0",
       "serde-1.0.229",
       "serde_core-1.0.229",
@@ -2406,9 +2406,9 @@
         }
       ]
     },
-    "rustix-1.1.4": {
+    "rustix-1.1.6": {
       "nome": "rustix",
-      "versione": "1.1.4",
+      "versione": "1.1.6",
       "licenza": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
       "repository": "https://github.com/bytecodealliance/rustix",
       "autori": [

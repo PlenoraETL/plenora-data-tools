@@ -10,6 +10,14 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [4.1.4] - non rilasciata
+
+### Sicurezza
+
+- `rustix` 1.1.4 -> 1.1.6 per RUSTSEC-2026-0486 (funzioni xattr unsound con
+  buffer vuoto). Nessun crate del grafo ne' il codice di data chiama le
+  funzioni colpite: le release pubblicate non sono esposte.
+
 ## [4.1.3] - 2026-11-10
 
 ### Correzioni
