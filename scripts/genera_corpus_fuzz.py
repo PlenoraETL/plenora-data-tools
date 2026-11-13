@@ -24,6 +24,7 @@ import json
 import re
 import struct
 from pathlib import Path
+from fonti_prove import target_fuzz
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -43,13 +44,14 @@ SENTINELLA = "SENTINELLA-7f3a9c"
 class Corpus:
     def __init__(self, cartella: Path) -> None:
         self.cartella = cartella
-        self.conteggi: dict[str, int] = {}
+        self.semi: dict[str, set[str]] = {}
 
     def salva(self, target: str, dati: bytes) -> None:
         destinazione = self.cartella / target
         destinazione.mkdir(parents=True, exist_ok=True)
-        (destinazione / hashlib.sha1(dati).hexdigest()).write_bytes(dati)
-        self.conteggi[target] = self.conteggi.get(target, 0) + 1
+        digest = hashlib.sha1(dati).hexdigest()
+        (destinazione / digest).write_bytes(dati)
+        self.semi.setdefault(target, set()).add(digest)
 
 
 def casi_del_catalogo() -> list[tuple[str, str, object]]:
@@ -198,8 +200,10 @@ def main(argv: list[str] | None = None) -> int:
     ordinamento(corpus)
     argomenti_cli(corpus)
     corpus_definizioni_crs.genera(corpus)
-    for target, numero in sorted(corpus.conteggi.items()):
-        print(f"{target}: {numero}")
+    if set(corpus.semi) != set(target_fuzz()):
+        raise ValueError("corpus incompleto o target non dichiarato")
+    for target, semi in sorted(corpus.semi.items()):
+        print(f"{target}: {len(semi)} semi unici generati")
     return 0
 
 

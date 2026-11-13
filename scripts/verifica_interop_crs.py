@@ -57,8 +57,7 @@ def sha256(percorso):
 def esegui(argomenti):
     esito = subprocess.run([str(a) for a in argomenti], capture_output=True, timeout=120)
     if esito.returncode:
-        raise RuntimeError(f"comando fallito ({esito.returncode}): {argomenti[0]}: "
-                           + (esito.stderr + esito.stdout).decode("utf-8", errors="replace"))
+        raise RuntimeError(f"comando fallito ({esito.returncode})")
     return json.loads(esito.stdout)
 
 
@@ -140,66 +139,73 @@ def sorgente(percorso, testo, formato, assi, punti):
         writer.write_table(pa.Table.from_arrays([pa.array(valori, pa.binary())], schema=schema))
 
 
+def matrice():
+    return [(codice, formato, ingresso, uscita)
+            for codice in sorted(CASI)
+            for formato in ("projjson", "wkt2")
+            for ingresso in (("arrow", "parquet") if formato == "projjson" else ("arrow",))
+            for uscita in ("arrow", "parquet")]
+
+
+def catena(caso, args, proj, proj_esatto, wkt):
+    codice, formato, estensione, uscita_ext = caso
+    assi, punti = CASI[codice]
+    testo = json.dumps(proj[codice]) if formato == "projjson" else wkt[codice]["wkt2_2019"]
+    nome = "-".join(caso).replace(":", "-")
+    ingresso = args.lavoro / (nome + ".arrow")
+    sorgente(ingresso, testo, formato, assi, punti)
+    prodotto = args.lavoro / (nome + "-io." + estensione)
+    esegui([args.io_tools, "convert", ingresso, prodotto, "--from", "ipc", "--to",
+            "ipc" if estensione == "arrow" else "geoparquet"])
+    definizione_io = verifica(prodotto, punti, testo, formato, assi, proj_esatto[codice],
+                              covering=estensione == "parquet")
+    if estensione == "arrow" and definizione_io != testo.encode():
+        raise ValueError("IO non conserva la definizione Arrow originale")
+    piano = args.lavoro / (nome + "-piano.json")
+    piano.write_text(json.dumps({"version": 1, "inputs": ["t"], "steps": [
+        {"out": "u", "op": "table.select_columns", "in": ["t"],
+         "config": {"columns": ["geometry"]}}], "outputs": ["u"]}), encoding="utf-8")
+    uscita = args.lavoro / (nome + "-data." + uscita_ext)
+    esegui([args.data_tools, "run", "--plan", piano, "--input", f"t={prodotto}",
+            "--output", f"u={uscita}", "--format", "json"])
+    definizione_data = verifica(uscita, punti, testo, formato, assi, proj_esatto[codice])
+    if estensione == uscita_ext == "arrow" and definizione_data != definizione_io:
+        raise ValueError("data non conserva la definizione Arrow originale")
+    return {"sha256_io": sha256(prodotto), "sha256_data": sha256(uscita),
+            "sha256_definizione_io": hashlib.sha256(definizione_io).hexdigest(),
+            "coordinate_verificate": len(punti)}
+
+
 def main():
     import pyarrow as pa
+    from campagna import raccogli, fallita
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--io-tools", type=Path, required=True)
     parser.add_argument("--data-tools", type=Path, required=True)
     parser.add_argument("--lavoro", type=Path, required=True)
     args = parser.parse_args()
-    # Una cartella nuova impedisce di scambiare risultati vecchi per prove riuscite.
     args.lavoro.mkdir(parents=True, exist_ok=False)
     rapporto = {"cella": "data-crs-definizione", "stato": "fallito", "casi": [],
-                "pyarrow": pa.__version__,
-                "sorgenti": {p: sha256(RADICE / p) for p in (
-                    "scripts/verifica_interop_crs.py",
-                    "crates/plenora-io/data/projjson_integrati.json",
-                    "crates/plenora-core/src/crs/definizioni/wkt_corpus.json")},
-                "binari": {nome: {"sha256": sha256(p), "versione": esegui([p, "--version"])}
-                           for nome, p in (("io", args.io_tools), ("data", args.data_tools))}}
+                "pyarrow": pa.__version__}
     try:
-        proj = json.loads((RADICE / "crates/plenora-io/data/projjson_integrati.json").read_text(encoding="utf-8"))
-        proj_esatto = json_esatto((RADICE / "crates/plenora-io/data/projjson_integrati.json").read_bytes())
-        wkt = json.loads((RADICE / "crates/plenora-core/src/crs/definizioni/wkt_corpus.json").read_text(encoding="utf-8"))
-        for codice, (assi, punti) in CASI.items():
-            for formato in ("projjson", "wkt2"):
-                testo = json.dumps(proj[codice]) if formato == "projjson" else wkt[codice]["wkt2_2019"]
-                nome = codice.replace(":", "-") + "-" + formato
-                ingresso = args.lavoro / (nome + ".arrow")
-                sorgente(ingresso, testo, formato, assi, punti)
-                # Il writer IO GeoParquet dichiara solo PROJJSON come preservato.
-                for estensione in (("arrow", "parquet") if formato == "projjson" else ("arrow",)):
-                    prodotto = args.lavoro / (nome + "-io." + estensione)
-                    esegui([args.io_tools, "convert", ingresso, prodotto, "--from", "ipc", "--to",
-                            "ipc" if estensione == "arrow" else "geoparquet"])
-                    definizione_io = verifica(prodotto, punti, testo, formato, assi, proj_esatto[codice],
-                                              covering=estensione == "parquet")
-                    if estensione == "arrow" and definizione_io != testo.encode():
-                        raise ValueError("IO non conserva la definizione Arrow originale")
-                    piano = args.lavoro / (nome + "-piano.json")
-                    piano.write_text(json.dumps({"version": 1, "inputs": ["t"], "steps": [
-                        {"out": "u", "op": "table.select_columns", "in": ["t"],
-                         "config": {"columns": ["geometry"]}}], "outputs": ["u"]}), encoding="utf-8")
-                    for uscita_ext in ("arrow", "parquet"):
-                        uscita = args.lavoro / (nome + "-da-" + estensione + "-data." + uscita_ext)
-                        esegui([args.data_tools, "run", "--plan", piano, "--input", f"t={prodotto}",
-                                "--output", f"u={uscita}", "--format", "json"])
-                        definizione_data = verifica(uscita, punti, testo, formato, assi, proj_esatto[codice])
-                        if estensione == uscita_ext == "arrow" and definizione_data != definizione_io:
-                            raise ValueError("data non conserva la definizione Arrow originale")
-                        rapporto["casi"].append({"crs": codice, "formato": formato,
-                            "ingresso_data": estensione, "uscita_data": uscita_ext,
-                            "sha256_io": sha256(prodotto), "sha256_data": sha256(uscita),
-                            "sha256_definizione_io": hashlib.sha256(definizione_io).hexdigest(),
-                            "coordinate_verificate": len(punti)})
-        if len(rapporto["casi"]) != 18:
-            raise ValueError("matrice locale incompleta")
-        rapporto["stato"] = "superato"
+        rapporto["binari"] = {nome: {"sha256": sha256(p), "versione": esegui([p, "--version"])}
+                              for nome, p in (("io", args.io_tools), ("data", args.data_tools))}
+        paths = ("scripts/verifica_interop_crs.py", "scripts/campagna.py",
+                 "crates/plenora-io/data/projjson_integrati.json",
+                 "crates/plenora-core/src/crs/definizioni/wkt_corpus.json")
+        rapporto["sorgenti"] = {p: sha256(RADICE / p) for p in paths}
+        proj = json.loads((RADICE / paths[2]).read_text(encoding="utf-8"))
+        proj_esatto = json_esatto((RADICE / paths[2]).read_bytes())
+        wkt = json.loads((RADICE / paths[3]).read_text(encoding="utf-8"))
+        rapporto["casi"] = raccogli(matrice(), lambda caso: catena(caso, args, proj, proj_esatto, wkt))
+        rapporto["stato"] = "fallito" if fallita(rapporto["casi"]) else "superato"
+    except Exception as error:
+        rapporto["preparazione"] = type(error).__name__
     finally:
         (args.lavoro / "rapporto.json").write_text(json.dumps(rapporto, indent=2) + "\n", encoding="utf-8")
-    print("data-crs-definizione: 18 catene superate; matrice proprietaria non modificata")
+    print(f"data-crs-definizione: {len(rapporto['casi'])} catene raccolte; {rapporto['stato']}")
+    return int(rapporto["stato"] != "superato")
 
 
 if __name__ == "__main__":
-    main()
-
+    raise SystemExit(main())

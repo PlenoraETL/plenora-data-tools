@@ -126,6 +126,7 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 | `scripts/test_genera_sbom_rilascio.py` | 5 |
 | `scripts/test_geometry_metadata_guard.py` | 4 |
 | `scripts/test_geometry_text_classification.py` | 1 |
+| `scripts/test_prove_fonti.py` | 11 |
 | `scripts/test_rust_esito_tokens.py` | 11 |
 | `scripts/test_semantica_crs.py` | 2 |
 | `scripts/test_strict_json.py` | 5 |

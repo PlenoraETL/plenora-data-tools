@@ -45,6 +45,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
+from fonti_prove import sonde_sdk
 
 RADICE = Path(__file__).resolve().parents[1]
 PROVE = RADICE / "crates" / "plenora-data-py" / "python" / "tests"
@@ -55,7 +56,7 @@ NOME_WHEEL = re.compile(
 NATIVO = re.compile(r"^plenora_data/_native(\.[A-Za-z0-9_-]+)*\.(pyd|so)$")
 # Le sonde delle prove: nomi nel modulo nativo e testi che solo il loro
 # codice porta. Nessuno deve stare nel binario di un wheel di rilascio.
-SONDE = ("_sonda_consegna", "_sonda_lavoro", "_sonda_scadenza")
+SONDE = tuple(sonde_sdk())
 TRACCE_DELLE_SONDE = (*(nome.encode() for nome in SONDE), b"sonda del lavoro")
 
 
@@ -118,11 +119,12 @@ print(json.dumps({
     "tipi": (radice / "py.typed").is_file() and (radice / "_native.pyi").is_file(),
     "sonde": sorted(
         nome
-        for nome in ("_sonda_consegna", "_sonda_lavoro", "_sonda_scadenza")
+        for nome in __SONDE__
         if hasattr(_native, nome)
     ),
 }))
 """
+SONDA = SONDA.replace("__SONDE__", repr(SONDE))
 
 
 def sonda(

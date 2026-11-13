@@ -22,7 +22,8 @@ class FuzzCrs(unittest.TestCase):
         self.assertGreater(len(set(a)), 5000)
         self.assertTrue(any(len(x) == 65537 for x in a))
         self.assertTrue(any(b'SENTINELLA-7f3a9c' in x for x in a))
-        self.assertEqual(len({x for x in a if x.startswith(b'EPSG:') or x == b'OGC:CRS84'}), 169)
+        self.assertEqual({x.decode() for x in a if x.startswith(b'EPSG:') or x == b'OGC:CRS84'},
+                         set(corpus.crs_integrati()))
         self.assertEqual([hashlib.sha1(x).hexdigest() for x in a],
                          [hashlib.sha1(x).hexdigest() for x in b])
 

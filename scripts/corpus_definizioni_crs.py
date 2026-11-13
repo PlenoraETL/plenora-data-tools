@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+from fonti_prove import crs_integrati
+
 RADICE = Path(__file__).resolve().parents[1]
 SENTINELLA = "SENTINELLA-7f3a9c"
 
@@ -11,7 +13,7 @@ def semi():
     yield (RADICE / "crates/plenora-io/tests/dati/io_tools_3003.json").read_bytes()
     proj = json.loads((RADICE / "crates/plenora-io/data/projjson_integrati.json").read_text(encoding="utf-8"))
     wkt = json.loads((RADICE / "crates/plenora-core/src/crs/definizioni/wkt_corpus.json").read_text(encoding="utf-8"))
-    if set(proj) != set(wkt) or len(proj) != 169:
+    if set(proj) != set(wkt) or set(proj) != set(crs_integrati()):
         raise ValueError("corpus CRS incompleto")
     # Mutazioni mirate dell'equivalenza WKT1, oltre agli export GDAL interi.
     for codice in ("EPSG:4326", "EPSG:32632"):

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -22,21 +23,38 @@ except ImportError:
 RADICE = Path(__file__).resolve().parents[1]
 
 
+def nomi_prove_contratti() -> list[str]:
+    source = strict_json.loads((RADICE / "crates/plenora-cli/adozione.json").read_text("utf-8"))
+    names = set()
+    for req in source["requirements"]:
+        evidence = req.get("verification", [])
+        for text in ([evidence] if isinstance(evidence, str) else evidence):
+            names.update(re.findall(r'tools/([\w_]+\.py)', text))
+    if not names:
+        raise ValueError("adozione senza prove esterne")
+    return sorted(names)
+
+
 def prove_contratti(contratti: Path) -> None:
     """Esegue anche le prove del gate esterno dichiarate nell'adozione."""
-    for nome in (
-        "validate_specs.py", "test_messages.py", "test_gate_fuzz.py",
-        "test_message_sentinels.py",
-    ):
-        esito = subprocess.run(
-            [sys.executable, "-B", str(contratti.resolve() / "tools" / nome)],
-            capture_output=True, check=False,
-        )
+    fallite = []
+    for nome in nomi_prove_contratti():
+        try:
+            esito = subprocess.run(
+                [sys.executable, "-B", str(contratti.resolve() / "tools" / nome)],
+                capture_output=True, check=False,
+            )
+            codice = esito.returncode
+        except OSError:
+            codice = -1
         # I test esterni possono includere dati nelle assertion: non ristamparli.
-        if esito.returncode != 0:
+        if codice != 0:
             print(f"contratti: {nome} fallita", flush=True)
-            raise ValueError("prova dei contratti fallita")
-        print(f"contratti: {nome} ok", flush=True)
+            fallite.append(nome)
+        else:
+            print(f"contratti: {nome} ok", flush=True)
+    if fallite:
+        raise ValueError("prove dei contratti fallite")
 
 
 def verifica_regole_geometriche(sorgente: dict) -> None:

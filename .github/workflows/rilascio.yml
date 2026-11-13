@@ -58,10 +58,13 @@ jobs:
         with:
           python-version: '3.12'
       - name: cargo fmt
+        if: ${{ !cancelled() }}
         run: cargo fmt --check
       - name: cargo clippy
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: cargo clippy anti-panic (librerie)
+        if: ${{ !cancelled() }}
         run: >-
           cargo clippy --workspace --lib --locked --
           -D unsafe-code
@@ -70,9 +73,10 @@ jobs:
       # La suite lunga comprende tests/superficie_rust.rs, la mappa degli
       # export Rust compilata da consumatore.
       - name: cargo test (suite lunga)
+        if: ${{ !cancelled() }}
         env:
           PLENORA_TEST_LUNGHI: '1'
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
 
   costruzione:
     name: costruzione (${{ matrix.os }})
@@ -369,7 +373,7 @@ jobs:
             "${artefatti[@]}" \
             --verifica "rilascio.yml costruzione: scripts/verifica_cli_contratti.py sulla CLI di ogni sistema (Linux, Windows)" \
             --verifica "rilascio.yml abi3: scripts/verifica_sdk_python.py sul wheel installato (Python 3.10-3.14, Linux e Windows)" \
-            --verifica "rilascio.yml gate: fmt, clippy, PLENORA_TEST_LUNGHI=1 cargo test --workspace --locked, superficie Rust compresa (Linux, Windows)" \
+            --verifica "rilascio.yml gate: fmt, clippy, PLENORA_TEST_LUNGHI=1 cargo test --workspace --locked --no-fail-fast, superficie Rust compresa (Linux, Windows)" \
             --uscita "dist/plenora-data-tools-${versione}.adoption-manifest.json"
       - name: SBOM verificato prima dell'attestazione
         run: python3 scripts/genera_sbom_rilascio.py --check "dist/plenora-data-tools-${VERSIONE}.sbom.cdx.json" --dist dist
