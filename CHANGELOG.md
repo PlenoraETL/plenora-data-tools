@@ -10,7 +10,7 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
-## [4.1.4] - non rilasciata
+## [4.1.4] - 2026-11-13
 
 ### Sicurezza
 
