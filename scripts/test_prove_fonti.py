@@ -3,8 +3,10 @@
 import contextlib
 import io
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
+import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -20,6 +22,75 @@ import verifica_sdk_python
 
 
 class FontiTests(unittest.TestCase):
+    def test_sdk_importabile_senza_tomllib(self):
+        # Sottoprocesso pulito: non puo' riusare un import gia' in cache.
+        code = """
+import builtins, sys
+sys.path.insert(0, sys.argv[1])
+original = builtins.__import__
+def guarded(name, *args, **kwargs):
+    if name == 'tomllib':
+        raise ModuleNotFoundError('tomllib non disponibile')
+    return original(name, *args, **kwargs)
+builtins.__import__ = guarded
+import verifica_sdk_python as sdk
+assert sdk.SONDE
+assert repr(sdk.SONDE) in sdk.SONDA
+"""
+        result = subprocess.run([sys.executable, "-I", "-c", code, str(fonti_prove.ROOT / "scripts")],
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_censimento_identico_con_separatori_e_ordinamenti_diversi(self):
+        names = guard.file_tracciati(fonti_prove.ROOT)
+        documents = []
+        for kind in (PurePosixPath, PureWindowsPath):
+            paths = sorted(map(kind, names))
+            raw = ("\0".join(map(str, paths)) + "\0").encode("utf-8")
+            with patch.object(guard.subprocess, "check_output", return_value=raw):
+                documents.append(json.dumps(guard.inventario(), ensure_ascii=False, indent=2))
+        self.assertEqual(documents[0], documents[1])
+
+    def test_censimento_ignora_non_tracciati_e_file_ignorati(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            def write(path, content):
+                path = root / path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content.encode("utf-8"))
+            write("fuzz/Cargo.toml", '[[bin]]\nname = "piano"\npath = "fuzz_targets/piano.rs"\n')
+            write("fuzz/fuzz_targets/piano.rs", "")
+            write("crates/plenora-data-py/src/sonde.rs", '#[pyo3(name = "_sonda_prova")]\n')
+            script = Path("scripts") / "sample.py"
+            fixture = Path("crates/example/tests")
+            write(script, "def test_sample():\n    pass\n")
+            write(fixture / "PROVENANCE.md", "fixture\n")
+            write(fixture / "epoch.arrow", "fixture\n")
+            write(".gitignore", "ignored.py\n")
+            for command in (["git", "init", "-q"], ["git", "add", "."]):
+                subprocess.run(command, cwd=root, check=True, capture_output=True)
+            before = guard.inventario(root)
+            self.assertEqual(before["fixtures"], [(fixture / n).as_posix()
+                                                for n in ("PROVENANCE.md", "epoch.arrow")])
+            write(Path("scripts") / "ignored.py", "not valid Python!")
+            write(Path("scripts") / "untracked.py", "not valid Python!")
+            write(fixture / "extra.arrow", "extra")
+            write("fuzz/fuzz_targets/untracked.rs", "")
+            self.assertEqual(guard.inventario(root), before)
+            write(script, "def test_sample():\r\n    pass\r\n")
+            self.assertEqual(guard.inventario(root), before)
+            (root / script).unlink()
+            with self.assertRaises(FileNotFoundError):
+                guard.inventario(root)
+
+    def test_git_fallito_o_percorsi_ambigui_non_diventano_inventario(self):
+        for names in (["../outside"], ["/absolute"], ["a//b"], ["a/b", "a\\b"]):
+            with self.subTest(names=names), self.assertRaises(ValueError):
+                guard.normalizza_percorsi(names)
+        with patch.object(guard.subprocess, "check_output", side_effect=subprocess.CalledProcessError(1, "git")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                guard.inventario()
+
     def test_inventario_riproducibile(self):
         self.assertEqual(guard.inventario(), guard.inventario())
         self.assertEqual(guard.check(), [])
@@ -79,11 +150,12 @@ class FontiTests(unittest.TestCase):
             root = Path(temp)
             (root / "scripts").mkdir()
             (root / ".github/workflows").mkdir(parents=True)
-            (root / "scripts/verifica_nuova.py").write_text("", encoding="utf-8")
+            example = Path("scripts") / "verifica_nuova.py"
+            (root / example).write_text("", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "verifica_nuova"):
                 guard.verifica_collegamenti(root)
             (root / ".github/workflows/finto.yml").write_text(
-                "# python scripts/verifica_nuova.py\n", encoding="utf-8")
+                f"# python {example.as_posix()}\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "verifica_nuova"):
                 guard.verifica_collegamenti(root)
 

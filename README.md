@@ -197,7 +197,10 @@ python -m unittest discover -s scripts -p "test_*.py" # prove delle guardie
 Il job `guardie` esegue il runner unico su ogni PR, senza filtri di ramo o
 percorso. Un errore non interrompe le altre guardie. Il censimento
 [`docs/prove-fonti.json`](docs/prove-fonti.json) deriva dai sorgenti Python,
-Rust, dalle fixture e dai workflow; si rigenera con
+Rust, dalle fixture e dai workflow tracciati (`git ls-files`), con percorsi
+POSIX e ordinamento testuale indipendente dal sistema. I file nuovi vanno
+aggiunti all'indice Git prima di rigenerare; i file locali non tracciati e
+ignorati non entrano nel censimento. Si rigenera con
 `python scripts/check_prove_fonti.py --scrivi`. Non e' un verbale di
 esecuzione: enumera dichiarazioni e file, senza attestare che siano passati.
 Il controllo verifica anche la matrice fuzz (compresi i semi), i corpus

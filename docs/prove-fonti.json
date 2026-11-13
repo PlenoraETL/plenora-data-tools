@@ -1,5 +1,107 @@
 {
   "python": {
+    "crates/plenora-data-py/python/plenora_data/__init__.py": [],
+    "crates/plenora-data-py/python/plenora_data/_api.py": [],
+    "crates/plenora-data-py/python/plenora_data/_arrow.py": [],
+    "crates/plenora-data-py/python/plenora_data/errors.py": [],
+    "crates/plenora-data-py/python/tests/aiuti.py": [],
+    "crates/plenora-data-py/python/tests/conftest.py": [],
+    "crates/plenora-data-py/python/tests/fixtures/arrow_import/genera.py": [],
+    "crates/plenora-data-py/python/tests/fixtures/genera_struct_bitmap.py": [],
+    "crates/plenora-data-py/python/tests/json_fixture.py": [],
+    "crates/plenora-data-py/python/tests/test_arrow_import.py": [
+      "test_batch_validi_invariati",
+      "test_capsula_terza_validazione_rust",
+      "test_enumerazione_ingressi_pubblici",
+      "test_ingest_non_classificato_fallisce",
+      "test_metodo_non_classificato_fallisce",
+      "test_originale_rifiutato",
+      "test_ree_malformato",
+      "test_riclassificazione_in_controllo_fallisce",
+      "test_secondo_batch_corrotto_non_consegnato"
+    ],
+    "crates/plenora-data-py/python/tests/test_controlli.py": [
+      "test_annullamento_in_corsa_con_la_fine_non_e_mai_un_successo_taciuto",
+      "test_annullare_il_task_ferma_il_lavoro",
+      "test_controlli_non_validi",
+      "test_ctrl_c_annulla_e_propaga_keyboard_interrupt",
+      "test_ctrl_c_durante_la_scrittura_dice_l_effetto",
+      "test_ctrl_c_fra_la_fine_e_la_consegna",
+      "test_gettone_alzato_da_un_altro_thread",
+      "test_gettone_alzato_fra_la_fine_e_la_consegna",
+      "test_gettone_gia_alzato",
+      "test_gettone_gia_alzato_non_legge_ne_scrive",
+      "test_la_forma_asincrona_non_blocca_il_loop",
+      "test_la_scadenza_asincrona_arriva_scaduta_al_confine_nativo",
+      "test_la_scadenza_asincrona_conta_dall_ingresso",
+      "test_la_scadenza_ferma_il_lavoro_in_corso",
+      "test_la_sonda_del_lavoro_passa_dai_suoi_punti",
+      "test_le_forme_asincrone_hanno_gli_stessi_errori",
+      "test_scadenza_futura_lascia_finire",
+      "test_scadenza_passata_e_timeout_zero",
+      "test_sostituire_la_sonda_non_si_blocca_sul_suo_del",
+      "test_un_task_annullato_mentre_il_lavoro_finisce_dice_l_esito",
+      "test_una_sonda_del_lavoro_che_fallisce_non_passa_in_silenzio"
+    ],
+    "crates/plenora-data-py/python/tests/test_errori.py": [
+      "test_argomenti_non_validi",
+      "test_i_messaggi_non_portano_dati_ne_percorsi",
+      "test_il_budget_del_piano_vale_anche_per_le_tabelle_in_memoria",
+      "test_l_unione_dei_blocchi_conta_l_arrotondamento_dei_buffer",
+      "test_la_diagnostica_per_riga_e_strutturata_e_senza_valori",
+      "test_la_gerarchia_ha_una_classe_per_categoria",
+      "test_la_preparazione_degli_argomenti_classifica_e_tace",
+      "test_le_eccezioni_dei_produttori_non_attraversano_il_confine",
+      "test_le_eccezioni_si_ricostruiscono_con_pickle",
+      "test_un_piano_non_valido",
+      "test_una_plenora_error_del_produttore_resta_quella",
+      "test_uno_stream_oltre_il_budget_si_ferma_al_primo_blocco_di_troppo"
+    ],
+    "crates/plenora-data-py/python/tests/test_operazioni.py": [
+      "test_catalog",
+      "test_describe_di_ogni_forma_della_stessa_tabella",
+      "test_describe_di_una_tabella_vuota",
+      "test_determinismo",
+      "test_i_nomi_degli_input_e_degli_output_si_verificano_senza_ripeterli",
+      "test_identita_e_tipi_di_colonna",
+      "test_il_risultato_non_si_modifica",
+      "test_multigeometria_arrow_ipc_geoparquet",
+      "test_run_da_input_su_file_e_in_memoria_insieme",
+      "test_run_in_memoria_rende_le_tabelle_nell_ordine_del_piano",
+      "test_run_su_file_scrive_cio_che_rende_in_memoria",
+      "test_schema_run_end_rifiutato_prima_del_primo_blocco",
+      "test_sdk_rifiuta_run_end_malformato_letto_da_ipc",
+      "test_tipi_che_il_runner_non_supporta_si_rifiutano",
+      "test_validate_con_il_piano_in_ogni_forma"
+    ],
+    "crates/plenora-data-py/python/tests/test_qualifica_415.py": [
+      "test_conflict_and_cancellation_publish_nothing",
+      "test_extension_shapes_on_published_rows",
+      "test_parity"
+    ],
+    "crates/plenora-data-py/python/tests/test_struct_bitmap.py": [
+      "test_fixture_struct_riproducibile",
+      "test_reader_validante_non_esporta_bitmap_corta",
+      "test_struct_bitmap_padre_corta"
+    ],
+    "crates/plenora-data-py/python/tests/test_superficie.py": [
+      "test_i_controlli_dichiarati_sono_parametri",
+      "test_i_nomi_pubblici_sono_esattamente_quelli_dichiarati",
+      "test_il_gettone_di_annullamento",
+      "test_il_pacchetto_viene_dal_wheel_installato",
+      "test_la_sezione_dei_binding_e_quella_esposta",
+      "test_le_capacita_sono_un_documento_capabilities_v2",
+      "test_le_operazioni_sono_quelle_del_catalogo_pubblico",
+      "test_ogni_operazione_ha_una_forma_sincrona_e_una_asincrona_equivalenti",
+      "test_versione_uguale_ai_metadati_e_al_componente"
+    ],
+    "crates/plenora-data-py/typing/sdk_contract.py": [],
+    "crates/plenora-io/tests/riferimenti/scrittori/genera.py": [],
+    "crates/plenora-kernels-geo/tests/fixtures/concave_oracolo.py": [],
+    "crates/plenora-pipeline/tests/comune/genera_config_md5.py": [],
+    "crates/plenora-pipeline/tests/comune/genera_hash_attesi.py": [],
+    "crates/plenora-pipeline/tests/comune_geo/genera_trasformazioni.py": [],
+    "crates/plenora-pipeline/tests/comune_geo/genera_unari_attesi.py": [],
     "scripts/aggiorna_esclusioni_wkt1.py": [],
     "scripts/avvisi_crate.py": [],
     "scripts/campagna.py": [],
@@ -207,13 +309,17 @@
     ],
     "scripts/test_prove_fonti.py": [
       "test_blocco_eventi_non_riconosciuto_rifiutato",
+      "test_censimento_identico_con_separatori_e_ordinamenti_diversi",
+      "test_censimento_ignora_non_tracciati_e_file_ignorati",
       "test_cli_documento_rotto_non_nasconde_gli_altri_passaggi",
       "test_discovery_copre_ogni_metodo",
       "test_fixture_alterata_e_copia_non_censita",
+      "test_git_fallito_o_percorsi_ambigui_non_diventano_inventario",
       "test_guardie_proseguono_e_escono_rosse",
       "test_inventario_riproducibile",
       "test_prova_nuova_non_collegata_rifiutata",
       "test_prove_contratti_non_si_fermano",
+      "test_sdk_importabile_senza_tomllib",
       "test_sonde_del_sottoprocesso_generate",
       "test_target_aggiunto_tolto_duplicato",
       "test_tutti_i_casi_dopo_errore_e_diagnostica_senza_dati"
@@ -266,109 +372,7 @@
     "scripts/verifica_cli_contratti.py": [],
     "scripts/verifica_interop_crs.py": [],
     "scripts/verifica_multigeometria_io700.py": [],
-    "scripts/verifica_sdk_python.py": [],
-    "crates/plenora-data-py/python/plenora_data/__init__.py": [],
-    "crates/plenora-data-py/python/plenora_data/_api.py": [],
-    "crates/plenora-data-py/python/plenora_data/_arrow.py": [],
-    "crates/plenora-data-py/python/plenora_data/errors.py": [],
-    "crates/plenora-data-py/python/tests/aiuti.py": [],
-    "crates/plenora-data-py/python/tests/conftest.py": [],
-    "crates/plenora-data-py/python/tests/fixtures/arrow_import/genera.py": [],
-    "crates/plenora-data-py/python/tests/fixtures/genera_struct_bitmap.py": [],
-    "crates/plenora-data-py/python/tests/json_fixture.py": [],
-    "crates/plenora-data-py/python/tests/test_arrow_import.py": [
-      "test_batch_validi_invariati",
-      "test_capsula_terza_validazione_rust",
-      "test_enumerazione_ingressi_pubblici",
-      "test_ingest_non_classificato_fallisce",
-      "test_metodo_non_classificato_fallisce",
-      "test_originale_rifiutato",
-      "test_ree_malformato",
-      "test_riclassificazione_in_controllo_fallisce",
-      "test_secondo_batch_corrotto_non_consegnato"
-    ],
-    "crates/plenora-data-py/python/tests/test_controlli.py": [
-      "test_annullamento_in_corsa_con_la_fine_non_e_mai_un_successo_taciuto",
-      "test_annullare_il_task_ferma_il_lavoro",
-      "test_controlli_non_validi",
-      "test_ctrl_c_annulla_e_propaga_keyboard_interrupt",
-      "test_ctrl_c_durante_la_scrittura_dice_l_effetto",
-      "test_ctrl_c_fra_la_fine_e_la_consegna",
-      "test_gettone_alzato_da_un_altro_thread",
-      "test_gettone_alzato_fra_la_fine_e_la_consegna",
-      "test_gettone_gia_alzato",
-      "test_gettone_gia_alzato_non_legge_ne_scrive",
-      "test_la_forma_asincrona_non_blocca_il_loop",
-      "test_la_scadenza_asincrona_arriva_scaduta_al_confine_nativo",
-      "test_la_scadenza_asincrona_conta_dall_ingresso",
-      "test_la_scadenza_ferma_il_lavoro_in_corso",
-      "test_la_sonda_del_lavoro_passa_dai_suoi_punti",
-      "test_le_forme_asincrone_hanno_gli_stessi_errori",
-      "test_scadenza_futura_lascia_finire",
-      "test_scadenza_passata_e_timeout_zero",
-      "test_sostituire_la_sonda_non_si_blocca_sul_suo_del",
-      "test_un_task_annullato_mentre_il_lavoro_finisce_dice_l_esito",
-      "test_una_sonda_del_lavoro_che_fallisce_non_passa_in_silenzio"
-    ],
-    "crates/plenora-data-py/python/tests/test_errori.py": [
-      "test_argomenti_non_validi",
-      "test_i_messaggi_non_portano_dati_ne_percorsi",
-      "test_il_budget_del_piano_vale_anche_per_le_tabelle_in_memoria",
-      "test_l_unione_dei_blocchi_conta_l_arrotondamento_dei_buffer",
-      "test_la_diagnostica_per_riga_e_strutturata_e_senza_valori",
-      "test_la_gerarchia_ha_una_classe_per_categoria",
-      "test_la_preparazione_degli_argomenti_classifica_e_tace",
-      "test_le_eccezioni_dei_produttori_non_attraversano_il_confine",
-      "test_le_eccezioni_si_ricostruiscono_con_pickle",
-      "test_un_piano_non_valido",
-      "test_una_plenora_error_del_produttore_resta_quella",
-      "test_uno_stream_oltre_il_budget_si_ferma_al_primo_blocco_di_troppo"
-    ],
-    "crates/plenora-data-py/python/tests/test_operazioni.py": [
-      "test_catalog",
-      "test_describe_di_ogni_forma_della_stessa_tabella",
-      "test_describe_di_una_tabella_vuota",
-      "test_determinismo",
-      "test_i_nomi_degli_input_e_degli_output_si_verificano_senza_ripeterli",
-      "test_identita_e_tipi_di_colonna",
-      "test_il_risultato_non_si_modifica",
-      "test_multigeometria_arrow_ipc_geoparquet",
-      "test_run_da_input_su_file_e_in_memoria_insieme",
-      "test_run_in_memoria_rende_le_tabelle_nell_ordine_del_piano",
-      "test_run_su_file_scrive_cio_che_rende_in_memoria",
-      "test_schema_run_end_rifiutato_prima_del_primo_blocco",
-      "test_sdk_rifiuta_run_end_malformato_letto_da_ipc",
-      "test_tipi_che_il_runner_non_supporta_si_rifiutano",
-      "test_validate_con_il_piano_in_ogni_forma"
-    ],
-    "crates/plenora-data-py/python/tests/test_qualifica_415.py": [
-      "test_conflict_and_cancellation_publish_nothing",
-      "test_extension_shapes_on_published_rows",
-      "test_parity"
-    ],
-    "crates/plenora-data-py/python/tests/test_struct_bitmap.py": [
-      "test_fixture_struct_riproducibile",
-      "test_reader_validante_non_esporta_bitmap_corta",
-      "test_struct_bitmap_padre_corta"
-    ],
-    "crates/plenora-data-py/python/tests/test_superficie.py": [
-      "test_i_controlli_dichiarati_sono_parametri",
-      "test_i_nomi_pubblici_sono_esattamente_quelli_dichiarati",
-      "test_il_gettone_di_annullamento",
-      "test_il_pacchetto_viene_dal_wheel_installato",
-      "test_la_sezione_dei_binding_e_quella_esposta",
-      "test_le_capacita_sono_un_documento_capabilities_v2",
-      "test_le_operazioni_sono_quelle_del_catalogo_pubblico",
-      "test_ogni_operazione_ha_una_forma_sincrona_e_una_asincrona_equivalenti",
-      "test_versione_uguale_ai_metadati_e_al_componente"
-    ],
-    "crates/plenora-data-py/typing/sdk_contract.py": [],
-    "crates/plenora-io/tests/riferimenti/scrittori/genera.py": [],
-    "crates/plenora-kernels-geo/tests/fixtures/concave_oracolo.py": [],
-    "crates/plenora-pipeline/tests/comune/genera_config_md5.py": [],
-    "crates/plenora-pipeline/tests/comune/genera_hash_attesi.py": [],
-    "crates/plenora-pipeline/tests/comune_geo/genera_trasformazioni.py": [],
-    "crates/plenora-pipeline/tests/comune_geo/genera_unari_attesi.py": []
+    "scripts/verifica_sdk_python.py": []
   },
   "rust_tests": {
     "crates/plenora-cli/src/artefatti.rs": [
@@ -524,6 +528,23 @@
       "batch_sequence_carries_logical_order",
       "rebuild_richiede_origini_complete_e_non_ricicla_omonimi"
     ],
+    "crates/plenora-core/src/crs.rs": [
+      "missing_empty_nul_and_oversized_definitions_fail_closed",
+      "missing_backend_never_trusts_an_unverified_declaration",
+      "requirements_and_semantic_crs_equality_are_fail_closed",
+      "geographic_domain_checks_normalized_longitude_latitude",
+      "il_messaggio_di_dominio_non_riporta_la_coordinata",
+      "crs_error_maps_into_plenora_error_crs_coded_variant",
+      "authority_axis_order_and_srid_from_realistic_epsg_4326",
+      "authority_axis_order_lon_lat_and_no_srid_for_ogc_crs84",
+      "authority_axis_order_and_srid_from_realistic_epsg_32632",
+      "authority_deduction_without_id_keeps_axes_and_drops_srid",
+      "authority_deduction_distinguishes_missing_and_other_axis_order",
+      "authority_code_srid_parses_only_numeric_authority_code",
+      "definition_form_recognizes_parenthesized_wkt",
+      "definition_form_recognizes_all_supported_wkt_root_aliases_and_delimiters",
+      "definition_form_classifies_authority_code_projjson_wkt_and_other"
+    ],
     "crates/plenora-core/src/crs/definizioni/tests.rs": [
       "ogni_campo_semantico_mutato_e_rifiutato",
       "identita_assi_alias_e_insiemi",
@@ -594,23 +615,6 @@
       "griglia_ntv2_difettosa_si_rifiuta_senza_valori",
       "la_sottogriglia_piu_fine_vince"
     ],
-    "crates/plenora-core/src/crs.rs": [
-      "missing_empty_nul_and_oversized_definitions_fail_closed",
-      "missing_backend_never_trusts_an_unverified_declaration",
-      "requirements_and_semantic_crs_equality_are_fail_closed",
-      "geographic_domain_checks_normalized_longitude_latitude",
-      "il_messaggio_di_dominio_non_riporta_la_coordinata",
-      "crs_error_maps_into_plenora_error_crs_coded_variant",
-      "authority_axis_order_and_srid_from_realistic_epsg_4326",
-      "authority_axis_order_lon_lat_and_no_srid_for_ogc_crs84",
-      "authority_axis_order_and_srid_from_realistic_epsg_32632",
-      "authority_deduction_without_id_keeps_axes_and_drops_srid",
-      "authority_deduction_distinguishes_missing_and_other_axis_order",
-      "authority_code_srid_parses_only_numeric_authority_code",
-      "definition_form_recognizes_parenthesized_wkt",
-      "definition_form_recognizes_all_supported_wkt_root_aliases_and_delimiters",
-      "definition_form_classifies_authority_code_projjson_wkt_and_other"
-    ],
     "crates/plenora-core/src/diagnostics.rs": [
       "rc17_rejects_examples_exceeding_observed_or_cause_count",
       "rc17_rejects_false_truncation_and_read_input_total",
@@ -626,16 +630,6 @@
       "un_campo_facoltativo_null_si_rifiuta_omesso_si_legge",
       "serde_refuses_a_directly_constructed_invalid_report",
       "serde_refuses_rc17_invalid_json_before_constructing_public_type"
-    ],
-    "crates/plenora-core/src/error/pubblico.rs": [
-      "ogni_crs_error_ha_il_suo_codice_in_testa_al_messaggio",
-      "la_proiezione_porta_gli_assi_e_il_codice",
-      "il_messaggio_e_limitato_e_mai_vuoto",
-      "retry_kind_e_delay_ms",
-      "la_diagnostica_va_in_details_row_diagnostics",
-      "details_oltre_i_limiti_diventa_un_errore_interno_esplicito",
-      "i_limiti_strutturali_di_details",
-      "effetto_ignoto_non_ammette_ritentativo_automatico"
     ],
     "crates/plenora-core/src/error.rs": [
       "category_mapping_is_declared_per_variant",
@@ -667,6 +661,16 @@
       "gli_errori_di_io_si_classificano_per_tipo",
       "il_messaggio_pubblico_di_io_non_porta_il_testo_del_sistema",
       "l_override_sostituisce_l_effetto_sotto_ogni_wrapper"
+    ],
+    "crates/plenora-core/src/error/pubblico.rs": [
+      "ogni_crs_error_ha_il_suo_codice_in_testa_al_messaggio",
+      "la_proiezione_porta_gli_assi_e_il_codice",
+      "il_messaggio_e_limitato_e_mai_vuoto",
+      "retry_kind_e_delay_ms",
+      "la_diagnostica_va_in_details_row_diagnostics",
+      "details_oltre_i_limiti_diventa_un_errore_interno_esplicito",
+      "i_limiti_strutturali_di_details",
+      "effetto_ignoto_non_ammette_ritentativo_automatico"
     ],
     "crates/plenora-core/src/esadecimale.rs": [
       "coincide_con_la_formattazione_di_std"
@@ -1174,6 +1178,15 @@
       "coordinate_troppo_grandi_per_la_precisione_si_rifiutano",
       "dominio_utm_realistico_non_si_rifiuta"
     ],
+    "crates/plenora-kernels-geo/src/analysis.rs": [
+      "distances_preserve_null_rows_and_reject_unbounded_work",
+      "invalid_topology_is_rejected_on_both_sides_before_distance_work",
+      "nearest_emits_stable_ties_and_honours_max_distance",
+      "within_and_point_counts_use_strict_boundary_semantics",
+      "validated_variants_match_the_gated_path_on_valid_inputs",
+      "validated_variants_document_the_caller_precondition",
+      "adversarial_limits_empty_inputs_and_invalid_coordinates"
+    ],
     "crates/plenora-kernels-geo/src/analysis/nearest_oracolo.rs": [
       "griglia_di_pari_equidistanti",
       "bersagli_duplicati_intercalati_a_nulli_e_vuoti",
@@ -1187,15 +1200,6 @@
       "l_indice_scarta_davvero_e_tiene_i_pari",
       "tolleranza_di_geo_fuori_dal_rettangolo_d_ingombro",
       "il_calcolo_non_concluso_vince_sul_limite_dei_risultati"
-    ],
-    "crates/plenora-kernels-geo/src/analysis.rs": [
-      "distances_preserve_null_rows_and_reject_unbounded_work",
-      "invalid_topology_is_rejected_on_both_sides_before_distance_work",
-      "nearest_emits_stable_ties_and_honours_max_distance",
-      "within_and_point_counts_use_strict_boundary_semantics",
-      "validated_variants_match_the_gated_path_on_valid_inputs",
-      "validated_variants_document_the_caller_precondition",
-      "adversarial_limits_empty_inputs_and_invalid_coordinates"
     ],
     "crates/plenora-kernels-geo/src/analyze/config.rs": [
       "nessun_campo_geo_legge_null_come_assente",
@@ -1584,14 +1588,6 @@
       "split_validates_both_sides_even_when_the_pair_is_skipped",
       "split_enforces_max_output_rows_across_rows"
     ],
-    "crates/plenora-kernels-geo/src/rust_backend/buffer/blocchi.rs": [
-      "i_blocchi_coprono_ogni_segmento_e_ogni_vertice_interno",
-      "i_punti_ripetuti_consecutivi_si_tolgono",
-      "la_previsione_separa_zig_zag_e_linee_lisce",
-      "livelli",
-      "oracolo_a_blocchi_contro_tratto_unico_e_definizione",
-      "il_segmento_condiviso_non_degenera_sulla_griglia"
-    ],
     "crates/plenora-kernels-geo/src/rust_backend/buffer.rs": [
       "la_freccia_e_mezzo_centimetro_o_lo_zero_virgola_uno_per_cento",
       "gli_archi_di_i_overlay_hanno_il_passo_chiesto",
@@ -1604,6 +1600,14 @@
       "erosione_di_parti_sovrapposte",
       "il_rientro_delle_normali_intere_e_nel_bilancio",
       "la_giunzione_miter_tiene_la_punta_sotto_i_5_gradi"
+    ],
+    "crates/plenora-kernels-geo/src/rust_backend/buffer/blocchi.rs": [
+      "i_blocchi_coprono_ogni_segmento_e_ogni_vertice_interno",
+      "i_punti_ripetuti_consecutivi_si_tolgono",
+      "la_previsione_separa_zig_zag_e_linee_lisce",
+      "livelli",
+      "oracolo_a_blocchi_contro_tratto_unico_e_definizione",
+      "il_segmento_condiviso_non_degenera_sulla_griglia"
     ],
     "crates/plenora-kernels-geo/src/rust_backend/exact.rs": [
       "i_limiti_del_dominio_sono_le_potenze_dichiarate",
@@ -3007,8 +3011,8 @@
     "crates/plenora-io/tests/fixtures/contratti/arrow-v1/provenienza.json",
     "crates/plenora-io/tests/fixtures/contratti/arrow-v1/resolved-point.json",
     "crates/plenora-io/tests/riferimenti/identita_catalogo.json",
-    "crates/plenora-io/tests/riferimenti/io700/epoch-covering.arrow",
     "crates/plenora-io/tests/riferimenti/io700/PROVENANCE.md",
+    "crates/plenora-io/tests/riferimenti/io700/epoch-covering.arrow",
     "crates/plenora-io/tests/riferimenti/operazioni_metadati.txt",
     "crates/plenora-io/tests/riferimenti/parquet_esiti.tsv",
     "crates/plenora-io/tests/riferimenti/scrittori/requisiti-principale-diretti.txt",

@@ -2,7 +2,6 @@
 
 from pathlib import Path
 import re
-import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -14,13 +13,22 @@ def unici(values, label):
     return sorted(values)
 
 
-def target_fuzz(root=ROOT):
+def target_fuzz(root=ROOT, paths=None):
+    # TOML serve solo agli strumenti (Python >= 3.11), non al verificatore
+    # del wheel che importa sonde_sdk anche con Python 3.10.
+    import tomllib
+
     manifest = tomllib.loads((root / "fuzz/Cargo.toml").read_text("utf-8"))
     names = unici((item["name"] for item in manifest["bin"]), "target fuzz")
-    paths = {item["path"] for item in manifest["bin"]}
-    actual = {p.relative_to(root / "fuzz").as_posix()
-              for p in (root / "fuzz/fuzz_targets").glob("*.rs")}
-    if paths != actual:
+    declared = {item["path"] for item in manifest["bin"]}
+    if paths is None:
+        actual = {p.relative_to(root / "fuzz").as_posix()
+                  for p in (root / "fuzz/fuzz_targets").glob("*.rs")}
+    else:
+        actual = {p.removeprefix("fuzz/") for p in paths
+                  if p.startswith("fuzz/fuzz_targets/") and p.endswith(".rs")
+                  and len(p.split("/")) == 3}
+    if declared != actual:
         raise ValueError("target fuzz: manifest e sorgenti discordanti")
     return names
 

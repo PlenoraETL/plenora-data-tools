@@ -8,8 +8,9 @@ import argparse
 import ast
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
+import subprocess
 import sys
 import tomllib
 
@@ -35,32 +36,55 @@ def workflow_events(source):
     return unici(re.findall(r'^  ([a-z_]+):', match[1], re.M), "eventi workflow")
 
 
+def normalizza_percorsi(names):
+    result = []
+    for name in names:
+        name = str(name).replace("\\", "/")
+        path = PurePosixPath(name)
+        if not name or path.is_absolute() or ".." in path.parts or ":" in name or str(path) != name:
+            raise ValueError("percorso del censimento non relativo o non canonico")
+        result.append(name)
+    return unici(result, "file tracciati")
+
+
+def file_tracciati(root):
+    raw = subprocess.check_output(
+        ["git", "ls-files", "--cached", "--full-name", "-z"], cwd=root,
+    )
+    if not raw.endswith(b"\0"):
+        raise ValueError("elenco Git vuoto o non terminato")
+    return normalizza_percorsi(raw[:-1].decode("utf-8").split("\0"))
+
+
 def inventario(root=ROOT):
     scripts, tests, fixtures, workflows = {}, {}, [], {}
-    for folder in ("scripts", "crates", "fuzz"):
-        for path in sorted((root / folder).rglob("*")):
-            rel = path.relative_to(root).as_posix()
-            if not path.is_file() or "__pycache__" in path.parts:
-                continue
+    paths = file_tracciati(root)
+    required = {"fuzz/Cargo.toml", "crates/plenora-data-py/src/sonde.rs"}
+    if not required <= set(paths):
+        raise ValueError("sorgenti degli inventari non tracciate")
+    for rel in paths:
+        relative = PurePosixPath(rel)
+        path = root / relative
+        if relative.parts[0] in {"scripts", "crates", "fuzz"}:
             if path.suffix == ".py":
                 source = path.read_text("utf-8")
                 names = python_tests(source)
                 scripts[rel] = names
-            if path.suffix == ".rs" and ("tests" in path.parts or "src" in path.parts):
+            if path.suffix == ".rs" and ("tests" in relative.parts or "src" in relative.parts):
                 names = re.findall(r'#\[test\]\s*(?:#\[[^\n]+\]\s*)*(?:pub\s+)?fn\s+(\w+)', path.read_text("utf-8"))
                 if names:
                     tests[rel] = names
-            if "tests" in path.parts and path.suffix not in {".rs", ".py", ".pyc"}:
+            if "tests" in relative.parts and path.suffix not in {".rs", ".py", ".pyc"}:
                 fixtures.append(rel)
-    for path in sorted((root / ".github/workflows").glob("*.yml")):
-        source = path.read_text("utf-8")
-        workflows[path.name] = {
-            "events": workflow_events(source),
-            "jobs": re.findall(r'^  ([\w-]+):\s*$', source.split("\njobs:\n", 1)[1], re.M),
-            "python_scripts": sorted(set(re.findall(r'\b(?:python|python3)\s+(scripts/[\w.-]+\.py)', source))),
-        }
+        if relative.parent == PurePosixPath(".github/workflows") and relative.suffix == ".yml":
+            source = path.read_text("utf-8")
+            workflows[path.name] = {
+                "events": workflow_events(source),
+                "jobs": re.findall(r'^  ([\w-]+):\s*$', source.split("\njobs:\n", 1)[1], re.M),
+                "python_scripts": sorted(set(re.findall(r'\b(?:python|python3)\s+(scripts/[\w.-]+\.py)', source))),
+            }
     return {"python": scripts, "rust_tests": tests, "fixtures": fixtures,
-            "workflows": workflows, "fuzz": target_fuzz(root), "sonde_sdk": sonde_sdk(root)}
+            "workflows": workflows, "fuzz": target_fuzz(root, paths), "sonde_sdk": sonde_sdk(root)}
 
 
 def verifica_fuzz(root):
@@ -92,7 +116,8 @@ def verifica_crs(root):
 
 def verifica_copie(root):
     errors = []
-    for path in sorted((root / "crates").rglob("*provenienza.json")):
+    for path in sorted((root / "crates").rglob("*provenienza.json"),
+                       key=lambda p: p.relative_to(root).as_posix()):
         doc = strict_json.loads(path.read_text("utf-8"))
         entries = doc.get("file", doc.get("files"))
         if entries is None:
@@ -138,7 +163,7 @@ def verifica_ci(root):
     block = ci.split("  guardie:\n", 1)[1].split("\n  gate:", 1)[0]
     if not re.search(r'^        run: python scripts/esegui_guardie.py$', block, re.M) or re.search(r'^\s+if:', block, re.M):
         raise ValueError("runner guardie non incondizionato")
-    for path in (root / ".github/workflows").glob("*.yml"):
+    for path in sorted((root / ".github/workflows").glob("*.yml"), key=lambda p: p.name):
         text = path.read_text("utf-8")
         workflow_events(text)
         for script in re.findall(r'\b(?:python|python3)\s+(scripts/[\w.-]+\.py)', text):
@@ -151,7 +176,7 @@ def verifica_ci(root):
 def verifica_collegamenti(root):
     scripts = {p.stem: p for p in (root / "scripts").glob("*.py")}
     roots = set()
-    for path in (root / ".github/workflows").glob("*.yml"):
+    for path in sorted((root / ".github/workflows").glob("*.yml"), key=lambda p: p.name):
         source = path.read_text("utf-8")
         roots.update(re.findall(r'^(?:        run: |          )(?:python|python3)\s+scripts/([\w.-]+)\.py', source, re.M))
     # La discovery del runner esegue tutti i test_*.py: il suo comando
@@ -173,7 +198,7 @@ def verifica_conteggi_rust(root):
     import genera_inventario
     expected_crs = len(crs_integrati(root))
     expected_catalog = len(genera_inventario.voci_catalogo())
-    for path in (root / "crates").rglob("*.rs"):
+    for path in sorted((root / "crates").rglob("*.rs"), key=lambda p: p.relative_to(root).as_posix()):
         source = path.read_text("utf-8")
         counts = re.findall(r'assert_eq!\(CATALOG\.len\(\),\s*(\d+)\)', source)
         if any(int(n) != expected_catalog for n in counts):
@@ -221,7 +246,7 @@ def check(root=ROOT, write=False):
             (root / DEST).write_text(rendered, encoding="utf-8", newline="\n")
         elif not (root / DEST).is_file() or (root / DEST).read_text("utf-8") != rendered:
             errors.append("censimento non aggiornato: python scripts/check_prove_fonti.py --scrivi")
-    except (ValueError, KeyError, IndexError, OSError, SyntaxError) as error:
+    except (ValueError, KeyError, IndexError, OSError, SyntaxError, subprocess.CalledProcessError) as error:
         errors.append(f"censimento: {error}")
     return errors
 

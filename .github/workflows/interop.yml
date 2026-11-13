@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_BUILD_JOBS: '2'
+      # Toolchain privata del job: non eredita componenti preinstallati.
+      RUSTUP_HOME: ${{ runner.temp }}/rustup-interop
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -30,6 +32,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
         with:
           toolchain: '1.98.1'
+          components: rustfmt, clippy
       - run: python -m pip install -r requirements-sdk-tests.txt
       - run: python scripts/genera_corpus_fuzz.py target/prove-fonti-corpus
       - run: cargo build --locked -p plenora-cli
