@@ -18,6 +18,7 @@ fn ogni_chiave_per_ogni_operazione_e_fusione() {
                     Class::Crs => effect != Effect::Crs,
                     Class::Derived => {
                         effect == Effect::Unchanged
+                            || (key.starts_with("plenora.postgres.") && effect == Effect::Rows)
                             || (effect == Effect::Rows
                                 && matches!(
                                     key,
@@ -115,8 +116,10 @@ fn proprieta_crs_native_verificate_anche_senza_geoparquet() {
     let field = geometry_output_field("geometry", "EPSG:32632").unwrap();
     let mut metadata = field.metadata().clone();
     metadata.insert("plenora.geometry.native.geoparquet.edges", "spherical");
+    let spherical = field.clone().with_metadata(metadata);
+    read_geometry_contract_keys(&spherical).expect("trasporto sferico");
     assert!(matches!(
-        read_geometry_contract_keys(&field.clone().with_metadata(metadata)),
+        policy::require_planar(&spherical),
         Err(plenora_core::PlenoraError::Unsupported(_))
     ));
     let mut metadata = field.metadata().clone();
@@ -132,6 +135,139 @@ fn proprieta_crs_native_verificate_anche_senza_geoparquet() {
     assert_eq!(error.phase(), plenora_core::ErrorPhase::Validate);
     assert!(!error.to_string().contains("2023"));
     assert!(!error.to_string().contains("2024"));
+}
+
+#[test]
+fn catalogo_e_ruoli_sono_enumerati_senza_default() {
+    use plenora_core::catalog::{Arity, Family};
+    use policy::{OperandUse, OPERATION_POLICY};
+    let mut seen = std::collections::BTreeSet::new();
+    for &(id, _, roles) in OPERATION_POLICY {
+        assert!(seen.insert(id));
+        let op = CATALOG
+            .iter()
+            .find(|op| op.id == id)
+            .expect("operazione censita");
+        assert_eq!(
+            roles.len(),
+            if op.arity == Arity::BinaryOrdered {
+                2
+            } else {
+                1
+            }
+        );
+        assert_eq!(roles, policy::operand_uses(id).unwrap());
+        for role in roles {
+            assert_eq!(
+                matches!(role, OperandUse::Read | OperandUse::Produce),
+                op.family == Family::Geo
+            );
+        }
+    }
+    assert_eq!(seen, CATALOG.iter().map(|op| op.id).collect());
+    assert!(matches!(
+        policy::operand_uses("future.operation"),
+        Err(plenora_core::PlenoraError::Internal(_))
+    ));
+}
+
+#[test]
+fn namespace_postgres_chiuso_per_tutti_gli_effetti() {
+    use plenora_core::arrow::Metadata;
+    let keys = KEYS
+        .iter()
+        .filter(|(key, _)| key.starts_with("plenora.postgres."))
+        .map(|(key, _)| *key)
+        .chain(["plenora.postgres.future"]);
+    for key in keys {
+        for effect in [
+            Effect::Unchanged,
+            Effect::Rows,
+            Effect::Values,
+            Effect::Types,
+            Effect::Crs,
+            Effect::Merge,
+        ] {
+            let mut md = Metadata::new();
+            md.insert(key, "SENTINEL_NATIVE");
+            md.insert("source.provenance", "origin");
+            policy::apply(&mut md, effect);
+            assert_eq!(
+                md.contains_key(key),
+                matches!(effect, Effect::Unchanged | Effect::Rows)
+            );
+            assert_eq!(
+                md.get("source.provenance").map(String::as_str),
+                Some("origin")
+            );
+            assert_eq!(policy::class(key), Class::Derived);
+            assert!(policy::governed(key));
+        }
+    }
+}
+
+#[test]
+fn postgres_per_lineage_geometria_attributo_e_primaria() {
+    use plenora_core::arrow::{DataType, Field, Metadata, Schema};
+    use plenora_core::contract::arrow_metadata::geometry_output_field;
+    use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
+    let keys: Vec<_> = KEYS
+        .iter()
+        .filter(|(key, _)| key.starts_with("plenora.postgres."))
+        .map(|(key, _)| *key)
+        .chain(["plenora.postgres.future"])
+        .collect();
+    for key in keys {
+        for primary in [0, 1] {
+            for selected in [0, 1] {
+                let mut fields: Vec<_> = ["a", "b"]
+                    .map(|name| geometry_output_field(name, "EPSG:32632").unwrap())
+                    .to_vec();
+                fields.push(Field::new("attribute", DataType::Int64, true));
+                for field in &mut fields {
+                    let mut md = field.metadata().clone();
+                    md.insert(key, "SENTINEL");
+                    *field = field.clone().with_metadata(md);
+                }
+                let mut md = Metadata::new();
+                md.insert("plenora.contract.version", "1");
+                let mut input = contract_from_arrow_schema(
+                    std::sync::Arc::new(Schema::new_with_metadata(fields, md)),
+                    plenora_core::crs::resolve_crs,
+                )
+                .unwrap();
+                input.active_geometry = Some(input.geometries[primary].field_id);
+                for (op, effect) in [
+                    ("geo.area", Effect::Unchanged),
+                    ("geo.sjoin", Effect::Rows),
+                    ("geo.translate", Effect::Values),
+                    ("geo.centroid", Effect::Types),
+                    ("geo.reproject", Effect::Crs),
+                    ("table.concat", Effect::Merge),
+                ] {
+                    let descriptor = CATALOG.iter().find(|d| d.id == op).unwrap();
+                    let effects = policy::column_effects(
+                        descriptor,
+                        &input.schema,
+                        &[Some(&input.geometries[selected])],
+                    )
+                    .unwrap();
+                    assert_eq!(effects[selected].1, effect);
+                    for (position, column_effect) in effects {
+                        let mut md = input.schema.field(position).metadata().clone();
+                        policy::apply(&mut md, column_effect);
+                        assert_eq!(
+                            md.contains_key(key),
+                            matches!(column_effect, Effect::Unchanged | Effect::Rows),
+                            "{op}/{primary}/{selected}/{position}/{key}"
+                        );
+                    }
+                    // La lineage non applica l'effetto geometrico agli attributi.
+                    assert!(input.schema.field(2).metadata().contains_key(key));
+                }
+            }
+        }
+    }
 }
 
 #[test]

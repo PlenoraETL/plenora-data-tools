@@ -9,6 +9,85 @@
 
 mod comune;
 
+#[path = "comune/qualifica_415.rs"]
+mod qualifica_415;
+
+#[test]
+fn qualifica_415_runtime_v3_contro_v2() {
+    for extension in [false, true] {
+        for semantics in ["geometry", "geography"] {
+            for conflict in [false, true] {
+                if conflict && !extension {
+                    continue;
+                }
+                for compute in [false, true] {
+                    let input = qualifica_415::batch(
+                        extension,
+                        semantics,
+                        if conflict { "EPSG:4326" } else { "EPSG:32632" },
+                    );
+                    let mut bytes = Vec::new();
+                    plenora_io::ipc::scrivi(&input, &mut bytes).unwrap();
+                    let resolver = Strumentato {
+                        sorgenti: BTreeMap::from([("artifact://input/t".into(), bytes)]),
+                        ..Strumentato::default()
+                    };
+                    let plan: Value = serde_json::from_str(&qualifica_415::plan(compute)).unwrap();
+                    let name = if compute { "o" } else { "t" };
+                    let request = json!({"schema_version":1,"plan":plan,"inputs":{"t":{"reference":"artifact://input/t","content_type":"application/vnd.apache.arrow.file"}},"outputs":{name:{"reference":SEGRETO,"content_type":"application/vnd.apache.arrow.file","overwrite":false}}});
+                    let result =
+                        esegui_artefatti(&request.to_string(), &resolver, &Interruzione::default());
+                    let category = if conflict {
+                        Some("crs")
+                    } else if compute && semantics == "geography" {
+                        Some("unsupported")
+                    } else {
+                        None
+                    };
+                    if let Some(category) = category {
+                        let error = result.expect_err("rifiuto");
+                        assert_eq!(error.category().as_str(), category);
+                        assert_eq!(error.phase().as_str(), "validate");
+                        assert_eq!(error.remote_effect(), RemoteEffect::None);
+                        assert_eq!(error.retry_disposition(), RetryDisposition::Never);
+                        senza_posizioni(&error);
+                        assert!(!format!("{error:?}").contains("SENTINEL_415"));
+                        assert!(resolver.pubblicati.borrow().is_empty());
+                    } else {
+                        let manifest = result.unwrap();
+                        registro()
+                            .valida("data-execution-result-v3.schema.json", &manifest)
+                            .unwrap();
+                        let published = resolver.pubblicati.borrow();
+                        assert_eq!(published.len(), 1);
+                        assert_eq!(
+                            manifest["outputs"][0]["artifact"]["sha256"],
+                            sha256(&published[0].2)
+                        );
+                        assert_eq!(manifest["outputs"][0]["reference"], SEGRETO);
+                        let dir = tempfile::tempdir().unwrap();
+                        let path = dir.path().join("out.arrow");
+                        std::fs::write(&path, &published[0].2).unwrap();
+                        let output =
+                            leggi_tabella(&path, Some(Formato::ArrowIpc), u64::MAX).unwrap();
+                        qualifica_415::check(&input, &output, compute);
+                        let (_, v2) = esegui_in_memoria(
+                            &Pipeline::from_json(&plan.to_string()).unwrap(),
+                            vec![Ingresso::Tabella {
+                                nome: "t".into(),
+                                tabella: input,
+                            }],
+                            &Interruzione::default(),
+                        )
+                        .unwrap();
+                        assert_eq!(output, v2[0].1);
+                    }
+                }
+            }
+        }
+    }
+}
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};

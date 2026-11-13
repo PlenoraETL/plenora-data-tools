@@ -108,6 +108,9 @@ impl Lato {
     /// Dominio di validita' e tipi dichiarati di ogni cella non-null, dopo la
     /// sola decodifica strutturale (la validazione OGC resta ai kernel).
     fn verifica(&self, op: &str, batch: &RecordBatch) -> Result<()> {
+        plenora_core::contract::geometry_metadata_policy::require_planar(
+            batch.schema().field(self.indice),
+        )?;
         let celle = self.celle(batch)?;
         verifica_tipi_dichiarati(celle, self.tipi.as_deref()).map_err(|()| {
             PlenoraError::Schema(format!(

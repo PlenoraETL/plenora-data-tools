@@ -10,6 +10,22 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [4.1.5] - Non rilasciata
+
+### Correzioni
+
+- B-08: GeoArrow `authority_code` concorde accettato dal lettore comune;
+  rappresentazione e stato CRS conservati, conflitti rifiutati anche sui
+  piani vuoti. La verifica degli identificatori non risolve un CRS irrisolto.
+- B-09: geography e lati non planari passano invariati nelle operazioni
+  tabellari; un calcolo sul campo li rifiuta prima del kernel. Le geometrie
+  non usate continuano a passare, anche accanto a un operando planare.
+- B-10: politica per campo estesa a tutto `plenora.postgres.*`, incluse
+  chiavi future. I derivati invalidano le dichiarazioni native obsolete;
+  gli attributi passanti le conservano. Nessuna nuova API di rapporto.
+- Tabelle dichiarative e prove di enumerazione per operazioni, forme CRS
+  e metadati, con vettori condivisi Rust/CLI/runtime e SDK sync/async.
+
 ## [4.1.4] - 2026-11-13
 
 ### Sicurezza

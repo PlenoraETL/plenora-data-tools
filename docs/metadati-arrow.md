@@ -34,7 +34,7 @@ file di `esegui_da_file`:
 | --- | --- |
 | `encoding` | quello del contratto; non dichiarato: `wkb`, come la lettura lo completa dal nome d'estensione. Una colonna `ewkb` d'ingresso esce `ewkb`, anche dopo un'operazione geo che la riscrive al suo posto: le celle che un kernel scrive sono WKB ISO senza SRID incorporato, EWKB valido. Una colonna geometrica nuova non eredita l'encoding ed esce `wkb` (i produttori `geo.from_coords`, `geo.from_wkt`, `geo.generate_grid`, e le tabelle di `geo.coverage_validate` e `geo.shared_paths`). Un EWKB con SRID incorporato attraversa intatto le operazioni tabellari e un'operazione geo lo rifiuta (`unsupported`). Prove: `crates/plenora-io/tests/contratti_arrow.rs` |
 | `dimensions` | quella del contratto, anche `unknown` |
-| `spatial_semantics` | `geometry`: i kernel sono planari, e `geography` si rifiuta in ingresso |
+| `spatial_semantics` | `geometry` o `geography`: trasporto invariato, calcolo solo planare |
 | `precision` | quella ereditata, che attraversa intatta le operazioni tabellari; dopo un'operazione geo, o se nessuno la dichiara, `float64` (ogni kernel geo ricodifica le coordinate in `f64`, e ogni coordinata WKB è un double) |
 | `types_declaration`, `types` | la dichiarazione del contratto; non dichiarata: `unresolved` senza elenco |
 | `crs_resolution` | `resolved`, `declared_unresolved` o `missing`, dallo stato del CRS |
@@ -111,15 +111,14 @@ Stesso piano e stessi schemi d'ingresso, stesse identità
   converte in `Binary` all'ingresso, come `LargeUtf8` in `Utf8` (oltre i
   2 GiB di un `Binary`, `ResourceLimit`), e l'uscita è `Binary`. Lo
   ammette il vocabolario per entrambi i lati;
-- `spatial_semantics = geography`, un `edges` non planare in
-  `ARROW:extension:metadata` si rifiutano (`Unsupported`): i kernel sono
-  planari. Il `crs` PROJJSON o WKT2 passa dal confronto semantico completo;
-  se coesiste con altre dichiarazioni devono risolversi allo stesso CRS.
-  Una dichiarazione canonica esplicitamente `declared_unresolved` resta
-  irrisolta, conservata nella lineage. `crs_type`, se presente, deve essere
-  `projjson` con un oggetto oppure `wkt2:2019` con una stringa WKT2.
-  Senza `crs_type` entrambe le forme sono riconosciute; tipi dichiarati
-  discordanti e stringhe di altri formati sono rifiutati;
+- `spatial_semantics = geography` e `edges` non planari attraversano i passi
+  passanti senza cambiare celle o dichiarazioni. Un calcolo sul campo li
+  rifiuta con `Unsupported` prima del kernel; le altre colonne passano.
+  Il CRS GeoArrow ammette `authority_code` con stringa identificatore,
+  `projjson` con oggetto e `wkt2:2019` con stringa WKT2, oltre a null e
+  assenza. La verifica distingue dichiarazione e risoluzione: uno stato
+  `declared_unresolved` resta irrisolto. Contraddizioni fra rappresentazioni
+  e identificatori radice sono rifiutate, anche nei piani vuoti;
 - metadati contraddittori falliscono con categoria `crs` se riguardano il
   CRS (stato, identificatore, definizione e formato, ordine degli assi,
   divergenza dal `geo`), `schema` altrimenti (vocabolario,
@@ -588,3 +587,24 @@ I test diretti `is_null` e `is_not_null` di `table.expression` leggono solo
 la bitmap e sono ammessi anche sulle geometrie. Gli usi testuali annidati
 restano rifiutati. Le chiavi native restano ammesse. Ambito, hazard e rientro sono nel
 [registro dei limiti](limiti.md#geometrie-lette-come-testo).
+
+## Dichiarazioni PostgreSQL sui derivati
+
+La politica per campo governa l'intero namespace `plenora.postgres.*`.
+Le dichiarazioni native (tipo, typmod, enum, domain, vincoli, collation e
+chiavi future) restano su celle invariate, anche selezionate o riordinate.
+Le trasformazioni di valori, tipi, CRS e le fusioni le invalidano sul campo
+interessato; gli attributi passanti mantengono i propri metadati.
+Un centroide emette il contratto geometrico Point e non eredita una
+`native_declaration` Polygon. Non viene inventata una dichiarazione di
+scrittura PostgreSQL o una nuova API pubblica di rapporto delle perdite.
+
+| Chiave PostgreSQL | Politica sul campo |
+| --- | --- |
+| `plenora.postgres.collation` | Conservata su Unchanged/Rows; invalidata su Values/Types/Crs/Merge |
+| `plenora.postgres.domain_base_type` | Conservata su Unchanged/Rows; invalidata su Values/Types/Crs/Merge |
+| `plenora.postgres.domain_constraints` | Conservata su Unchanged/Rows; invalidata su Values/Types/Crs/Merge |
+| `plenora.postgres.enum_labels` | Conservata su Unchanged/Rows; invalidata su Values/Types/Crs/Merge |
+| `plenora.postgres.native_declaration` | Conservata su Unchanged/Rows; invalidata su Values/Types/Crs/Merge |
+| `plenora.postgres.native_type` | Conservata su Unchanged/Rows; invalidata su Values/Types/Crs/Merge |
+| `plenora.postgres.type_kind` | Conservata su Unchanged/Rows; invalidata su Values/Types/Crs/Merge |

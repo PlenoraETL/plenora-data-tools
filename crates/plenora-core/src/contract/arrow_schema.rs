@@ -30,7 +30,7 @@ use crate::contract::arrow_metadata::{
 use crate::contract::{
     ContractCrs, ContractProperties, ContractProperty, CrsDefinitionFormat, CrsResolution,
     DataContract, FieldId, GeometryColumnContract, GeometryDimensions, PropertyConfidence,
-    PropertyScope, SpatialSemantics,
+    PropertyScope,
 };
 use crate::crs::ResolvedCrs;
 use crate::PlenoraError;
@@ -153,10 +153,9 @@ pub fn crs_definition_from_metadata(
 ///
 /// Si leggono e si verificano anche le identità dei campi
 /// ([`verifica_identita_campi`]) e il metadato d'estensione `GeoArrow`
-/// ([`verifica_metadato_estensione`]). La semantica `geography` e lo
-/// storage `LargeBinary` non arrivano qui: la prima si rifiuta (i kernel sono
-/// planari), il secondo lo converte in `Binary` chi riceve la tabella
-/// (runner, lettore `GeoParquet`), perché la conversione tocca i dati.
+/// ([`verifica_metadato_estensione`]). Geography e lati non planari sono
+/// dichiarazioni trasportabili; la guardia di calcolo verifica il solo operando.
+/// Lo storage `LargeBinary` viene convertito da chi riceve i valori.
 ///
 /// # Errors
 ///
@@ -166,7 +165,7 @@ pub fn crs_definition_from_metadata(
 /// canoniche si contraddicono; [`PlenoraError::Crs`] se si contraddicono le
 /// chiavi del CRS o il risolutore non risolve un CRS dichiarato;
 /// [`PlenoraError::Unsupported`] per una versione di contratto successiva a
-/// quella supportata, la semantica `geography`, un `edges` non planare o un
+/// quella supportata o un
 /// formato CRS non supportato nel metadato d'estensione `GeoArrow`; [`PlenoraError::Schema`] anche
 /// se il contratto che ne risulta non supera [`DataContract::validate`]
 /// (per esempio nomi duplicati).
@@ -239,11 +238,6 @@ pub fn contract_from_arrow_schema(
     for (position, field, keys) in geometry_fields {
         let keys = keys?;
         verifica_metadato_estensione(field)?;
-        if canonical_geometry_spatial_semantics(field)? == Some(SpatialSemantics::Geography) {
-            return Err(PlenoraError::Unsupported(
-                "semantica geography non supportata".into(),
-            ));
-        }
         let crs = contract_crs_from_keys(
             field.name(),
             field.metadata().get(GEO_METADATA_KEY),
@@ -744,75 +738,12 @@ pub fn pubblica_schema_con_cursore(
 /// Chiave del metadato d'estensione `GeoArrow` (JSON con `crs` ed `edges`).
 pub const GEOARROW_EXTENSION_METADATA_KEY: &str = "ARROW:extension:metadata";
 
-/// Il metadato d'estensione `GeoArrow` di una colonna `geoarrow.wkb` non dice
-/// nulla che i kernel ignorerebbero in silenzio.
-///
-/// Assente, vuoto o `{}`: niente da dire. `edges` diverso da `planar`
-/// (archi geodetici, `spherical` e simili) si rifiuta come la semantica
-/// `geography`: i kernel sono planari. Il `crs` PROJJSON o WKT2 passa dalla
-/// risoluzione semantica comune; la lettura delle chiavi lo conserva e
-/// verifica anche la coerenza con le altre rappresentazioni.
+/// Verifica `GeoArrow` con l'interprete comune, senza risolvere il CRS.
 ///
 /// # Errors
-///
-/// `PlenoraError::Schema` per un metadato che non è un oggetto JSON senza
-/// chiavi ripetute; `PlenoraError::Unsupported` per `edges` non planare o
-/// un formato CRS non supportato; errori CRS per una definizione rifiutata.
+/// Gli errori del lettore delle dichiarazioni.
 pub fn verifica_metadato_estensione(field: &Field) -> Result<(), PlenoraError> {
-    let Some(raw) = field.metadata().get(GEOARROW_EXTENSION_METADATA_KEY) else {
-        return Ok(());
-    };
-    if raw.trim().is_empty() {
-        return Ok(());
-    }
-    let illeggibile = || {
-        errore_di_contratto(format!(
-            "colonna geometria `{}`: `{GEOARROW_EXTENSION_METADATA_KEY}` non e' un oggetto \
-             JSON leggibile",
-            field.name()
-        ))
-    };
-    crate::json::ensure_no_duplicate_keys(raw).map_err(|_| illeggibile())?;
-    super::arrow_metadata::verifica_numeri_crs(raw)?;
-    let value: serde_json::Value = serde_json::from_str(raw).map_err(|_| illeggibile())?;
-    let oggetto = value.as_object().ok_or_else(illeggibile)?;
-    match oggetto.get("edges") {
-        None => {}
-        Some(serde_json::Value::String(edges)) if edges == "planar" => {}
-        Some(_) => {
-            return Err(PlenoraError::Unsupported(format!(
-                "colonna geometria `{}`: `edges` non planare nel metadato d'estensione: i \
-                 kernel sono planari",
-                field.name()
-            )));
-        }
-    }
-    let tipo = oggetto.get("crs_type");
-    if let Some(tipo) = tipo {
-        if !matches!(tipo.as_str(), Some("projjson" | "wkt2:2019")) {
-            return Err(PlenoraError::Unsupported(
-                "formato CRS GeoArrow non supportato".into(),
-            ));
-        }
-    }
-    if let Some(v) = oggetto.get("crs").filter(|v| !v.is_null()) {
-        let testo = match v {
-            serde_json::Value::Object(_) if tipo.is_none_or(|t| t == "projjson") => v.to_string(),
-            serde_json::Value::String(t)
-                if tipo.is_none_or(|t| t == "wkt2:2019")
-                    && crate::crs::definition_form(t) == crate::crs::DefinitionForm::Wkt2 =>
-            {
-                t.clone()
-            }
-            _ => {
-                return Err(PlenoraError::Unsupported(
-                    "CRS GeoArrow: formato e valore non supportati o discordanti".into(),
-                ));
-            }
-        };
-        crate::crs::resolve_crs(&testo, "crs")?;
-    }
-    Ok(())
+    super::arrow_metadata::read_geometry_contract_keys(field).map(|_| ())
 }
 
 /// Versione e identità dei campi di uno schema da scrivere, verificate.
@@ -843,7 +774,11 @@ pub fn canonical_geometry_field(
     field: &Field,
     geometry: &GeometryColumnContract,
 ) -> Result<Field, PlenoraError> {
-    let canonical = canonical_geometry_metadata(geometry, &GeometryMetadataDetails::default());
+    let details = GeometryMetadataDetails {
+        spatial_semantics: canonical_geometry_spatial_semantics(field)?,
+        ..GeometryMetadataDetails::default()
+    };
+    let canonical = canonical_geometry_metadata(geometry, &details);
     let mut metadata = field.metadata().clone();
     // Con un CRS deciso dal piano (`ResolvedByDecision`) le
     // dichiarazioni della sorgente sono SOSTITUITE, non fuse: il

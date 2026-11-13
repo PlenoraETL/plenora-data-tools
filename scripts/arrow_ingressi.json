@@ -7611,6 +7611,20 @@
       "arrow_arguments": [
         "SchemaRef"
       ]
+    },
+    "crates/plenora-core/src/contract/geometry_metadata_policy.rs::operand_uses": {
+      "signature": "pub fn operand_uses(id: &str) -> Result<&'static [OperandUse], PlenoraError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Elabora dichiarazioni di catalogo o metadati, senza buffer Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/contract/geometry_metadata_policy.rs::require_planar": {
+      "signature": "pub fn require_planar(field: &crate::arrow::Field) -> Result<(), PlenoraError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Elabora dichiarazioni di catalogo o metadati, senza buffer Arrow.",
+      "arrow_arguments": [
+        "Field"
+      ]
     }
   },
   "python": {

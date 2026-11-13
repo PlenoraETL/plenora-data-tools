@@ -265,6 +265,7 @@ pub fn richiedi_assi_normalizzati(
     campo: &Field,
     sorgente: &ResolvedCrs,
 ) -> Result<(), PlenoraError> {
+    plenora_core::contract::geometry_metadata_policy::require_planar(campo)?;
     plenora_core::contract::arrow_metadata::require_geometry_source_crs(campo, sorgente)?;
     let dichiarato = canonical_geometry_axis_order(campo)?;
     let normalizzato = sorgente.normalized_gis_axis_order();

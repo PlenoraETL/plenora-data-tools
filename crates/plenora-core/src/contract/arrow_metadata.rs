@@ -68,8 +68,7 @@ pub const PLENORA_GEOMETRY_CRS_DEFINITION_FORMAT_KEY: &str =
 /// obbligatoria se `crs_id` o `crs_definition` è presente).
 pub const PLENORA_GEOMETRY_AXIS_ORDER_KEY: &str = "plenora.geometry.axis_order";
 /// Chiave canonica della semantica spaziale (`geometry` | `geography`).
-/// Sempre emessa (`geometry`: i kernel sono planari); in lettura
-/// `geography` si rifiuta.
+/// Il trasporto conserva la dichiarazione; i kernel richiedono geometry.
 pub const PLENORA_GEOMETRY_SPATIAL_SEMANTICS_KEY: &str = "plenora.geometry.spatial_semantics";
 /// Chiave canonica della precisione delle coordinate.
 ///
@@ -1830,17 +1829,22 @@ pub fn read_geometry_contract_keys(field: &Field) -> Result<CanonicalGeometryKey
 }
 
 fn verifica_coerenza_crs_completato(keys: &CanonicalGeometryKeys) -> Result<(), PlenoraError> {
+    if let Some(definition) = keys.crs_definition.as_deref() {
+        crate::crs::verify_declared_definition(keys.crs_id.as_deref(), definition)?;
+    }
     // Un conflitto decidibile e' un errore, non una precedenza implicita
     // e nemmeno una dichiarazione irrisolta che un consumatore puo' ignorare.
-    if let (Some(id), Some(definition)) = (&keys.crs_id, &keys.crs_definition) {
-        if let (Ok(a), Ok(b)) = (
-            crate::crs::resolve_crs(id, "crs"),
-            crate::crs::resolve_crs(definition, "crs"),
-        ) {
-            if !a.semantically_equals(&b) {
-                return Err(PlenoraError::Crs(
-                    "identificatore e definizione CRS discordanti".into(),
-                ));
+    if keys.crs_resolution != Some(CrsResolution::DeclaredUnresolved) {
+        if let (Some(id), Some(definition)) = (&keys.crs_id, &keys.crs_definition) {
+            if let (Ok(a), Ok(b)) = (
+                crate::crs::resolve_crs(id, "crs"),
+                crate::crs::resolve_crs(definition, "crs"),
+            ) {
+                if !a.semantically_equals(&b) {
+                    return Err(PlenoraError::Crs(
+                        "identificatore e definizione CRS discordanti".into(),
+                    ));
+                }
             }
         }
     }
@@ -1891,9 +1895,7 @@ fn completa_crs_estensione(
         .get(super::arrow_schema::GEOARROW_EXTENSION_METADATA_KEY)
         .filter(|s| !s.trim().is_empty())
     {
-        super::arrow_schema::verifica_metadato_estensione(field)?;
-        let value: serde_json::Value =
-            serde_json::from_str(raw).map_err(|_| divergent_geometry_keys("crs"))?;
+        let value = read_extension_declaration(raw)?;
         if value.get("crs").is_some_and(serde_json::Value::is_null) {
             if keys.crs_id.is_some()
                 || keys.crs_definition.is_some()
@@ -1907,21 +1909,71 @@ fn completa_crs_estensione(
             keys.crs_resolution = Some(CrsResolution::Missing);
         }
         if let Some(v) = value.get("crs").filter(|v| !v.is_null()) {
+            if value.get("crs_type").and_then(serde_json::Value::as_str) == Some("authority_code") {
+                let id = v.as_str().ok_or_else(|| divergent_geometry_keys("crs"))?;
+                if keys.crs_resolution == Some(CrsResolution::Missing) {
+                    return Err(divergent_geometry_keys("crs"));
+                }
+                if keys.crs_id.is_none() && keys.crs_definition.is_none() {
+                    keys.crs_id = Some(id.to_owned());
+                } else {
+                    let coherent = if let Some(canonical) = keys.crs_id.as_deref() {
+                        crate::crs::same_declared_identifier(canonical, id)
+                    } else if let Some(definition) = keys.crs_definition.as_deref() {
+                        crate::crs::definition_declares_id(definition, id)?
+                            || (keys.crs_resolution != Some(CrsResolution::DeclaredUnresolved)
+                                && legacy_crs_is_coherent(keys, &LegacyCrs::Id(id.to_owned())))
+                    } else {
+                        false
+                    };
+                    if !coherent {
+                        return Err(divergent_geometry_keys("crs"));
+                    }
+                }
+                return Ok(());
+            }
             let (definition, format) = match v {
                 serde_json::Value::String(t) => (t.clone(), CrsDefinitionFormat::Wkt2),
                 _ => (v.to_string(), CrsDefinitionFormat::Projjson),
             };
-            let standard = crate::crs::resolve_crs(&definition, "crs")?;
             if keys.crs_resolution == Some(CrsResolution::Missing) {
                 return Err(divergent_geometry_keys("crs"));
             }
-            for text in [keys.crs_id.as_deref(), keys.crs_definition.as_deref()]
-                .into_iter()
-                .flatten()
-            {
-                let altro = crate::crs::resolve_crs(text, "crs")?;
-                if !standard.semantically_equals(&altro) {
-                    return Err(divergent_geometry_keys("crs"));
+            // La dichiarazione esplicitamente irrisolta non richiede un resolver;
+            // negli altri stati resta la verifica semantica delle definizioni.
+            if keys.crs_resolution != Some(CrsResolution::DeclaredUnresolved) {
+                crate::crs::resolve_crs(&definition, "crs")?;
+            }
+            let identical = keys.crs_definition.as_deref() == Some(definition.as_str())
+                || (format == CrsDefinitionFormat::Projjson
+                    && keys
+                        .crs_definition
+                        .as_deref()
+                        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                        .as_ref()
+                        == Some(v));
+            if !identical && (keys.crs_id.is_some() || keys.crs_definition.is_some()) {
+                let declared_agreement = keys
+                    .crs_id
+                    .as_deref()
+                    .map(|id| crate::crs::definition_declares_id(&definition, id))
+                    .transpose()?
+                    .unwrap_or(false);
+                if keys.crs_resolution == Some(CrsResolution::DeclaredUnresolved) {
+                    if !declared_agreement || keys.crs_definition.is_some() {
+                        return Err(divergent_geometry_keys("crs"));
+                    }
+                    return Ok(());
+                }
+                let standard = crate::crs::resolve_crs(&definition, "crs")?;
+                for text in [keys.crs_id.as_deref(), keys.crs_definition.as_deref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    let altro = crate::crs::resolve_crs(text, "crs")?;
+                    if !standard.semantically_equals(&altro) {
+                        return Err(divergent_geometry_keys("crs"));
+                    }
                 }
             }
             if keys.crs_id.is_none() && keys.crs_definition.is_none() {
@@ -1932,6 +1984,89 @@ fn completa_crs_estensione(
     }
 
     Ok(())
+}
+
+/// Forma dichiarata del CRS: null e assenza sono stati distinti.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeoArrowCrsShape {
+    /// Nessuna dichiarazione.
+    Absent,
+    /// CRS esplicitamente mancante.
+    Null,
+    /// Stringa autorita:codice con tipo esplicito.
+    AuthorityCode,
+    /// Oggetto PROJJSON.
+    Projjson,
+    /// Stringa WKT2.
+    Wkt2,
+}
+
+/// Tabella unica delle forme, inclusi assenza e null. I vincoli di tipo
+/// si applicano prima del confronto fra dichiarazioni e della risoluzione.
+pub const GEOARROW_CRS_FORMS: &[(&str, GeoArrowCrsShape)] = &[
+    ("absent", GeoArrowCrsShape::Absent),
+    ("null", GeoArrowCrsShape::Null),
+    ("authority_code", GeoArrowCrsShape::AuthorityCode),
+    ("projjson", GeoArrowCrsShape::Projjson),
+    ("wkt2:2019", GeoArrowCrsShape::Wkt2),
+];
+
+impl GeoArrowCrsShape {
+    fn accepts(self, value: Option<&serde_json::Value>, explicit: bool) -> bool {
+        match (self, value) {
+            (Self::Absent, None)
+            | (Self::Null, Some(serde_json::Value::Null))
+            | (Self::Projjson, Some(serde_json::Value::Object(_))) => true,
+            (Self::AuthorityCode, Some(serde_json::Value::String(text))) => {
+                explicit
+                    && definition_form(text) == DefinitionForm::AuthorityCode
+                    && text.len() <= MAX_CRS_ID_BYTES
+                    && text.trim() == text
+            }
+            (Self::Wkt2, Some(serde_json::Value::String(text))) => {
+                definition_form(text) == DefinitionForm::Wkt2
+                    && text.len() <= MAX_CRS_DEFINITION_BYTES
+            }
+            _ => false,
+        }
+    }
+}
+
+fn read_extension_declaration(raw: &str) -> Result<serde_json::Value, PlenoraError> {
+    let malformed = || PlenoraError::Schema("metadato GeoArrow non oggetto JSON univoco".into());
+    crate::json::ensure_no_duplicate_keys(raw).map_err(|_| malformed())?;
+    verifica_numeri_crs(raw)?;
+    let value: serde_json::Value = serde_json::from_str(raw).map_err(|_| malformed())?;
+    let object = value.as_object().ok_or_else(malformed)?;
+    let explicit = object
+        .get("crs_type")
+        .map(|kind| {
+            let name = kind
+                .as_str()
+                .ok_or_else(|| PlenoraError::Crs("tipo CRS non testuale".into()))?;
+            GEOARROW_CRS_FORMS
+                .iter()
+                .find(|(key, shape)| {
+                    *key == name
+                        && !matches!(shape, GeoArrowCrsShape::Absent | GeoArrowCrsShape::Null)
+                })
+                .map(|(_, shape)| *shape)
+                .ok_or_else(|| {
+                    PlenoraError::Unsupported("formato CRS GeoArrow non supportato".into())
+                })
+        })
+        .transpose()?;
+    let crs = object.get("crs");
+    if !GEOARROW_CRS_FORMS.iter().any(|(_, shape)| {
+        (matches!(shape, GeoArrowCrsShape::Absent | GeoArrowCrsShape::Null)
+            || explicit.is_none_or(|declared| declared == *shape))
+            && shape.accepts(crs, explicit.is_some())
+    }) {
+        return Err(PlenoraError::Crs(
+            "CRS GeoArrow: formato e valore discordanti".into(),
+        ));
+    }
+    Ok(value)
 }
 
 /// Guardie prima del Value: lo stesso codice del parser pubblico.
