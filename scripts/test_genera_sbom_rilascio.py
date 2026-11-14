@@ -18,7 +18,7 @@ NATIVO = {"bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1, "compone
 
 
 def wheel(cartella: Path, nome: str = "plenora-data", versione: str = VERSIONE, requisiti=None) -> Path:
-    percorso = cartella / f"plenora_data-{versione}-cp310-abi3-linux_x86_64.whl"
+    percorso = cartella / f"plenora_data-{versione}-cp314-abi3-linux_x86_64.whl"
     righe = [f"Name: {nome}", f"Version: {versione}"]
     righe += [f"Requires-Dist: {r}" for r in (sorted(sbom.DIPENDENZE_RUNTIME) if requisiti is None else requisiti)]
     with zipfile.ZipFile(percorso, "w") as archivio:

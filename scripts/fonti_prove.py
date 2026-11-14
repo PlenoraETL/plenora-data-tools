@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import re
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -14,10 +15,6 @@ def unici(values, label):
 
 
 def target_fuzz(root=ROOT, paths=None):
-    # TOML serve solo agli strumenti (Python >= 3.11), non al verificatore
-    # del wheel che importa sonde_sdk anche con Python 3.10.
-    import tomllib
-
     manifest = tomllib.loads((root / "fuzz/Cargo.toml").read_text("utf-8"))
     names = unici((item["name"] for item in manifest["bin"]), "target fuzz")
     declared = {item["path"] for item in manifest["bin"]}

@@ -1,0 +1,8 @@
+{
+  "CHANGELOG.md": "115f3f695b2f8bcc6ee367db304456a6eba5dde3c23ad7713d941db2523b8239",
+  "docs/crs.md": "f986252dcdaea2d2d11fc77972aaae00c3ec14958e856a9ce11793d907d84264",
+  "scripts/genera_crs_integrati.py": "6e8760bb05e061aefbaa9a9a2f80cd1f83f0b4f2ef266252e11379ab5134599d",
+  "crates/plenora-io/tests/riferimenti/scrittori/requisiti-pyarrow25.txt": "5fe47a2ff5566a7fa5e26c444c36258777789cc19c45900fd21824f6a045f7f6",
+  "crates/plenora-io/tests/riferimenti/scrittori/requisiti-pyarrow25-diretti.txt": "49c7f8569cb429a8a40809bc0ad5442f26012a8ecc08b9486cde687576412c93",
+  "crates/plenora-io/tests/riferimenti/scrittori/genera.py": "b4f57e2bc2b9418953e3b316b9a46ff13b3561aa3fea7888928c919fbb449d6a"
+}

@@ -10,6 +10,22 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [5.0.0] - non rilasciata
+
+### Cambiamenti incompatibili
+
+- Python minimo 3.14 per SDK, strumenti, CI e rilascio; ABI stabile cp314.
+  Python precedenti non sono piu' supportati: il requisito richiede la major
+  5.0.0. `.python-version` e' la fonte unica, verificata in CI.
+- Rimossi i fallback per interpreti precedenti e i backport non necessari.
+
+### Dipendenze
+
+- Prima ondata della politica comune: log =0.4.34, proptest =1.12.0 e
+  allineamento delle transitive compatibili nei lock, compresi quelli separati.
+- Snapshot approvato del manifesto e checker in `.ci/plenora-dependencies`,
+  con verifica Linux in CI; nessuna nuova eccezione locale.
+
 ## [4.1.5] - 2026-11-13
 
 ### Correzioni

@@ -116,6 +116,7 @@
       "test_ranges"
     ],
     "scripts/check_prove_fonti.py": [],
+    "scripts/check_python_version.py": [],
     "scripts/corpus_definizioni_crs.py": [],
     "scripts/esegui_guardie.py": [],
     "scripts/esito_python_ast.py": [],
@@ -319,10 +320,15 @@
       "test_inventario_riproducibile",
       "test_prova_nuova_non_collegata_rifiutata",
       "test_prove_contratti_non_si_fermano",
-      "test_sdk_importabile_senza_tomllib",
       "test_sonde_del_sottoprocesso_generate",
       "test_target_aggiunto_tolto_duplicato",
       "test_tutti_i_casi_dopo_errore_e_diagnostica_senza_dati"
+    ],
+    "scripts/test_python_version.py": [
+      "test_repository_coerente",
+      "test_riferimento_divergente",
+      "test_setup_e_matrice_non_duplicano_la_fonte",
+      "test_wheel_e_interprete_devono_concordare"
     ],
     "scripts/test_rust_esito_tokens.py": [
       "test_alternative_solo_nel_pattern",
@@ -3055,7 +3061,8 @@
       "jobs": [
         "guardie",
         "gate",
-        "contratti"
+        "contratti",
+        "dipendenze"
       ],
       "python_scripts": [
         "scripts/avvisi_crate.py",
@@ -3122,6 +3129,7 @@
       "python_scripts": [
         "scripts/avvisi_crate.py",
         "scripts/check-licenze-artefatto.py",
+        "scripts/check_python_version.py",
         "scripts/genera_manifesto_adozione.py",
         "scripts/genera_sbom_rilascio.py",
         "scripts/licenze_artefatto.py",

@@ -92,6 +92,10 @@ modificano a mano: cambia la sorgente e si rigenera.
 
 ## SDK Python
 
+Python minimo 3.14: `.python-version` e' la fonte unica per SDK, CI e
+rilascio, verificata da `scripts/check_python_version.py --runtime`.
+La major 5.0.0 rimuove il supporto agli interpreti precedenti.
+
 `crates/plenora-data-py` è l'SDK Python del componente (*Python SDK 1.0*):
 distribuzione `plenora-data`, pacchetto `plenora_data`, le quattro
 operazioni della CLI in forma sincrona e asincrona su tabelle PyArrow o
@@ -104,7 +108,7 @@ scadenza e annullamento, contratti adottati e limiti dichiarati sono nel
 
 Serve `rustup`: la toolchain (1.98.1) è fissata in `rust-toolchain.toml`.
 Il workspace comprende il modulo nativo dell'SDK Python (PyO3), che si
-collega a libpython: `cargo build` e `cargo test` vogliono un Python >= 3.10
+collega a libpython: `cargo build` e `cargo test` vogliono un Python >= 3.14
 nel `PATH` (o in `PYO3_PYTHON`).
 L'unico codice nativo è libzstd, che `zstd-sys` compila con `cc` (niente
 cmake): basta il compilatore C che il linker del target già richiede
@@ -177,7 +181,7 @@ dichiarati con gli hash (`requisiti-pyarrow25.txt`,
 `requisiti-principale.txt`). `PLENORA_PARQUET_ESITI_INSIEMI=parquet-testing,arrow-testing`
 limita la prova ai corpus Apache e dichiara la matrice non verificata.
 
-Modelli di costo, documentazione e commenti hanno guardie Python (3.11 o
+Modelli di costo, documentazione e commenti hanno guardie Python (3.14 o
 successivo, solo libreria standard):
 
 ```sh
@@ -276,6 +280,18 @@ fuori da Git.
 
 ### Catena delle dipendenze
 
+La politica comune approvata e il checker sono copiati senza modifiche in
+`.ci/plenora-dependencies/`. Il job Linux `dipendenze` di `ci.yml` verifica
+il digest dello snapshot e tutti i lock, inclusi fuzz e Parquet vendorizzato:
+
+```sh
+python .ci/plenora-dependencies/controlla_dipendenze.py --repo . --nome plenora-data-tools2
+```
+
+Le eccezioni sono solo quelle dello snapshot: nuovi archi o versioni dei
+genitori richiedono revisione della politica comune, non una deroga locale.
+
+
 `deny.toml` è la policy di cargo-deny: advisory rifiutate senza eccezioni,
 licenze permissive in allowlist, solo crates.io o i crate di `vendor/`. Si
 applica al grafo del workspace e a quello di `fuzz/`:
@@ -317,13 +333,13 @@ alla release:
 | artefatto | superficie |
 | --- | --- |
 | `plenora-data-linux-x86_64.zip`, `plenora-data-windows-x86_64.exe.zip` | CLI con avvisi di licenza |
-| `plenora_data-<versione>-cp310-abi3-*.whl` (manylinux 2_34, Windows) | SDK Python |
+| `plenora_data-<versione>-cp314-abi3-*.whl` (manylinux 2_34, Windows) | SDK Python |
 | `plenora-data-tools-<versione>-source.tar.gz` | Rust (crate dal sorgente) |
 | `plenora-data-tools-<versione>.sbom.cdx.json` | SBOM CycloneDX (`scripts/genera_sbom_rilascio.py`) |
 | `plenora-data-tools-<versione>.adoption-manifest.json` | manifesto di adozione v4 |
 
 Prima degli allegati: ogni wheel installato con la suite Python completa su
-Python 3.10–3.14, Linux e Windows; la CLI Linux contro `plenora-contracts` al
+Python 3.14, Linux e Windows; la CLI Linux contro `plenora-contracts` al
 commit adottato (`scripts/verifica_cli_contratti.py`); il manifesto generato
 dagli artefatti veri e validato da schema e controlli dei contratti; lo SBOM
 verificato contro i lock; poi le attestazioni di provenienza. Lanciato a mano

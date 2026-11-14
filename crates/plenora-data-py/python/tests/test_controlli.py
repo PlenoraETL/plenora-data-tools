@@ -458,10 +458,8 @@ def test_annullare_il_task_ferma_il_lavoro() -> None:
         raise AssertionError("il task doveva essere annullato")
 
     annullamento = asyncio.run(principale())
-    # Da Python 3.11 chi aspetta il task riceve il `CancelledError` sollevato
-    # dentro il task; in 3.10 ne riceve uno nuovo, con quello come
-    # `__context__`. In entrambi i casi l'esito del lavoro è la sua causa.
-    sollevato = annullamento if annullamento.__cause__ is not None else annullamento.__context__
+    # Il task propaga la causa dell'annullamento.
+    sollevato = annullamento
     assert sollevato is not None
     assert isinstance(sollevato.__cause__, pd.PlenoraCancelledError)
     assert sollevato.__cause__.phase == FASE_FRA_PASSI
@@ -487,12 +485,8 @@ def test_le_forme_asincrone_hanno_gli_stessi_errori() -> None:
 
 
 def _causa_dell_annullamento(annullamento: BaseException) -> BaseException | None:
-    """La causa del `CancelledError` sollevato dentro il task (in 3.10 chi
-    aspetta ne riceve uno nuovo, con quello come `__context__`)."""
-    if annullamento.__cause__ is not None:
-        return annullamento.__cause__
-    contesto = annullamento.__context__
-    return None if contesto is None else contesto.__cause__
+    """La causa del `CancelledError` sollevato dentro il task."""
+    return annullamento.__cause__
 
 
 def test_un_task_annullato_mentre_il_lavoro_finisce_dice_l_esito() -> None:

@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def comandi():
     # Ogni guardia resta un eseguibile autonomo; la CI richiama questo runner.
     return [
+        ["scripts/check_python_version.py", "--runtime"],
         ["scripts/check_prove_fonti.py"],
         ["scripts/check_docs.py"],
         ["scripts/check_arrow_ingressi.py"],

@@ -1,5 +1,5 @@
 """Consumatore statico dell'SDK: deve passare mypy --strict su ogni Python
-supportato (3.10-3.14). Prova i tipi pubblici che un'applicazione usa, non
+supportato (3.14). Prova i tipi pubblici che un'applicazione usa, non
 il comportamento (quello sta in python/tests)."""
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ import pathlib
 from datetime import datetime, timezone
 from typing import Any
 
-from typing_extensions import assert_type
+from typing import assert_type
 
 import plenora_data as pd
 

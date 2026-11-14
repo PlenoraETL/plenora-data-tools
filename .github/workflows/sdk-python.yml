@@ -2,12 +2,11 @@ name: sdk-python
 
 # L'SDK Python `plenora-data` (crates/plenora-data-py): un wheel abi3 per
 # Linux (manylinux 2_34) e per Windows, costruito con maturin, poi installato
-# e provato su ogni piattaforma con il Python minimo e il piu' recente
-# dichiarati (Python SDK 1.0, sezione 10: il wheel si prova installato, fuori
-# dal checkout). La suite gira sul wheel delle prove, con le sonde (feature
+# e provato su ogni piattaforma con il Python dichiarato (Python SDK 1.0,
+# sezione 10: il wheel si prova installato, fuori dal checkout). La suite gira sul wheel delle prove, con le sonde (feature
 # `sonde-di-prova`); il wheel di rilascio, senza, si verifica senza sonde.
-# I tipi PEP 561 si controllano con mypy --strict sugli
-# stessi due Python. Niente pubblicazione: i wheel restano artefatti della
+# I tipi PEP 561 si controllano con mypy --strict sullo
+# stesso Python. Niente pubblicazione: i wheel restano artefatti della
 # run.
 
 on:
@@ -44,6 +43,12 @@ jobs:
       # Il wheel delle prove ha le sonde (feature `sonde-di-prova`): la
       # suite intera le usa. Il wheel di rilascio e' costruito come in
       # rilascio.yml, senza feature, e si verifica che non le abbia.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: '.python-version'
+      - name: interprete wheel dalla fonte unica
+        shell: bash
+        run: echo "PYTHON_WHEEL=$(cat .python-version)" >> "$GITHUB_ENV"
       - name: build del wheel delle prove (maturin, sonde-di-prova)
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
@@ -51,6 +56,7 @@ jobs:
           command: build
           args: >-
             --release
+            --interpreter ${{ runner.os == 'Windows' && 'python' || format('python{0}', env.PYTHON_WHEEL) }}
             --locked
             --features sonde-di-prova
             --out dist
@@ -68,6 +74,7 @@ jobs:
           command: build
           args: >-
             --release
+            --interpreter ${{ runner.os == 'Windows' && 'python' || format('python{0}', env.PYTHON_WHEEL) }}
             --locked
             --out dist-rilascio
             --manifest-path crates/plenora-data-py/Cargo.toml
@@ -77,9 +84,6 @@ jobs:
           # build dello stesso commit. Su Windows l'input non si usa.
           container: 'quay.io/pypa/manylinux_2_34_x86_64@sha256:e4ca528d41ab66b3654110295d7a2c7bfa599ddbb6efb269ec21f7f73b88f1b6'
           rust-toolchain: '1.98.1'
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
       - name: Rust per il gate dei grafi offline
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
         with:
@@ -105,14 +109,13 @@ jobs:
           if-no-files-found: error
 
   prove:
-    name: prove (${{ matrix.os }}, Python ${{ matrix.python }})
+    name: prove (${{ matrix.os }})
     needs: [wheel]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ['3.10', '3.14']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -121,7 +124,7 @@ jobs:
           path: dist
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python }}
+          python-version-file: '.python-version'
       - name: ambiente della suite (versioni fissate)
         run: python -m pip install -r requirements-sdk-tests.txt
       # Senza dipendenze: quelle della suite sono gia' fissate sopra, e il
@@ -151,17 +154,13 @@ jobs:
             --rilascio
 
   tipi:
-    name: tipi PEP 561 (Python ${{ matrix.python }})
+    name: tipi PEP 561 (Python da .python-version)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ['3.10', '3.14']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python }}
+          python-version-file: '.python-version'
       - name: mypy (versione fissata)
         run: python -m pip install -r requirements-sdk-typing.txt
       - name: mypy --strict sul pacchetto e sul consumatore di prova
