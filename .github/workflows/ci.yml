@@ -171,9 +171,8 @@ jobs:
           PLENORA_REPO: plenora-data-tools2
         run: |
           cd .ci/plenora-dependencies
-          echo '53683259c2acddc06245bf197abbdb4e9a4389f3ab2e550bebd89481d70f17ae  plenora-dependencies.toml' | sha256sum -c -
-          # I checksum originali hanno CRLF: normalizzare solo lo stream dei nomi.
-          tr -d '\r' < snapshot.sha256 | sha256sum -c -
+          echo '8830816f9fe15e0e11c08668cb6c4a788b19318de57b2377cc18b09af840298f  plenora-dependencies.toml' | sha256sum -c -
+          sha256sum -c snapshot.sha256
           python3 controlla_dipendenze.py \
             --repo ../.. --nome "$PLENORA_REPO" \
             --json ../../dipendenze-report.json

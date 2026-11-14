@@ -19,6 +19,5 @@ crates/plenora-io/tests/fixtures/contratti/**/*.json -text
 crates/plenora-core/tests/fixtures/contratti/*.json -text
 crates/plenora-cli/tests/fixtures/contratti/*.json -text
 
-# Snapshot della politica: byte approvati, inclusi i sidecar CRLF.
 # Snapshot della politica serializzato con terminatori LF, digest sui byte.
 .ci/plenora-dependencies/* text eol=lf

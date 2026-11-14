@@ -84,7 +84,9 @@ def collect(policy, roots):
     references = {(r['crate'], r['line']): r for r in policy['references']}
     preferred = policy['preferred']
     interfaces = {i['crate']: i for i in policy['interfaces']}
-    for repo, root in roots.items():
+    for sample, root in roots.items():
+        repo = sample.split('@', 1)[0]
+        start = len(findings)
         docs = dict(documents(root))
         for fork in policy.get('forks', []):
             if fork['repo'] != repo:
@@ -100,7 +102,7 @@ def collect(policy, roots):
         locks = {f: d for f, d in docs.items() if f.endswith('Cargo.lock')}
         if not locks or 'Cargo.toml' not in docs:
             raise ValueError('manifesto o lock radice assente')
-        inventory[repo] = sorted(locks)
+        inventory[sample] = sorted(locks)
         for file, doc in locks.items():
             packages = doc.get('package', [])
             parents = graph(packages)
@@ -168,18 +170,20 @@ def collect(policy, roots):
                         findings.append(finding(repo, file, 'manifest_pin',
                             dict(name=name, version=requirement, source=REGISTRY),
                             detail=section + '|' + target))
+        for f in findings[start:]:
+            f['sample'] = sample
     # Duplicati nuovi che esistono soltanto fra repository: non sfuggono al gate.
     global_packages = defaultdict(list)
-    for repo, root in roots.items():
+    for sample, root in roots.items():
         for file, doc in documents(root):
             if file.endswith('Cargo.lock'):
                 for p in doc.get('package', []):
                     if p.get('source'):
-                        global_packages[p['name']].append((repo, file, p))
+                        global_packages[p['name']].append((sample, file, p))
     for name, occurrences in global_packages.items():
         if name not in preferred and len({line(p['version']) for _, _, p in occurrences}) > 1:
-            for repo, file, p in occurrences:
-                findings.append(finding(repo, file, 'family_duplicate', p,
+            for sample, file, p in occurrences:
+                findings.append(finding(sample.split('@', 1)[0], file, 'family_duplicate', p, sample=sample,
                                         detail='nuove linee incompatibili fra lock'))
     return findings, inventory
 
@@ -194,7 +198,7 @@ def evaluate(policy, roots, today=None):
         e = exceptions.get(f['key'])
         # Interfacce e digest non derogabili. Scadenza inclusiva.
         if e and f['rule'] not in ('interface', 'manifest_interface', 'checksum', 'source'):
-            used.add(e['key'])
+            used.add((f['sample'], e['key']))
             if dt.date.fromisoformat(e['review_by']) < today:
                 errors.append(dict(f, status='SORPRESA', error='eccezione_scaduta'))
             else:
@@ -203,11 +207,12 @@ def evaluate(policy, roots, today=None):
             a = pending.get(f['key'])
             errors.append(dict(f, status='DA_ALLINEARE' if a else 'SORPRESA',
                                release=a['release'] if a else '', error=f['rule']))
-    for e in exceptions.values():
-        if e['repo'] in roots and e['key'] not in used:
-            errors.append(dict(repo=e['repo'], file=e['file'], crate=e['crate'],
-                               version=e['version'], rule='stale_exception',
-                               status='SORPRESA', error='eccezione_non_piu_necessaria', key=e['key']))
+    for sample in roots:
+        for e in exceptions.values():
+            if e['repo'] == sample.split('@', 1)[0] and (sample, e['key']) not in used:
+                errors.append(dict(repo=e['repo'], file=e['file'], crate=e['crate'],
+                                   version=e['version'], rule='stale_exception',
+                                   status='SORPRESA', error='eccezione_non_piu_necessaria', key=e['key'], sample=sample))
     return dict(schema_version=SCHEMA, baseline=policy['baseline'],
                 result='FALLITO' if errors else 'SUPERATO', inventory=inventory,
                 errors=errors, exceptions=accepted,
@@ -260,6 +265,8 @@ def main(argv=None):
     parser.add_argument('--repo', type=pathlib.Path)
     parser.add_argument('--nome', help='identificativo repository nel manifesto')
     parser.add_argument('--famiglia', type=pathlib.Path, help='directory contenente i sei checkout/snapshot')
+    parser.add_argument('--candidato', action='append', default=[], metavar='NOME=PERCORSO',
+                        help='aggiunge un candidato alla famiglia senza sostituire origin/main')
     parser.add_argument('--json', type=pathlib.Path, dest='json_path')
     args = parser.parse_args(argv)
     try:
@@ -268,7 +275,14 @@ def main(argv=None):
             raise ValueError('specificare --repo oppure --famiglia')
         if args.famiglia:
             roots = {r['name']: args.famiglia / r['name'] for r in policy['repositories']}
+            for value in args.candidato:
+                name, sep, path = value.partition('=')
+                if not sep or not path or name not in roots or name + '@candidato' in roots:
+                    raise ValueError('candidato non valido o duplicato')
+                roots[name + '@candidato'] = pathlib.Path(path)
         else:
+            if args.candidato:
+                raise ValueError('candidato richiede famiglia')
             name = args.nome or args.repo.resolve().name
             if name not in {r['name'] for r in policy['repositories']}:
                 raise ValueError('repository non dichiarato')
@@ -282,13 +296,13 @@ def main(argv=None):
     safe = dict(report)
     for group in ('errors', 'exceptions'):
         safe[group] = [{k: v for k, v in f.items() if k in
-                       ('repo', 'file', 'rule', 'crate', 'version', 'key', 'status', 'error', 'release', 'exception')}
+                       ('repo', 'sample', 'file', 'rule', 'crate', 'version', 'key', 'status', 'error', 'release', 'exception')}
                       for f in report.get(group, [])]
     if args.json_path:
         args.json_path.write_text(json.dumps(safe, ensure_ascii=False, indent=2) + '\n', encoding='utf8')
     print(report['result'], json.dumps(report['counts']))
     for f in safe['errors']:
-        print(f"{f['status']}: {f['repo']} / {f['file']} / {f['crate']} {f['version']}: {f['error']}")
+        print(f"{f['status']}: {f.get('sample', f['repo'])} / {f['file']} / {f['crate']} {f['version']}: {f['error']}")
     if 'error' in report:
         print(report['error'])
     return 1 if report['result'] == 'FALLITO' else 0

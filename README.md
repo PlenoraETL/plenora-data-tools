@@ -303,6 +303,10 @@ il digest dello snapshot e tutti i lock, inclusi fuzz e Parquet vendorizzato:
 python .ci/plenora-dependencies/controlla_dipendenze.py --repo . --nome plenora-data-tools2
 ```
 
+`--nome plenora-data-tools2` e' necessario anche nei worktree con un altro
+nome di cartella: senza, il checker usa il nome della directory e rifiuta
+un repository non censito con `input_schema_o_digest_non_valido`.
+
 Le eccezioni sono solo quelle dello snapshot: nuovi archi o versioni dei
 genitori richiedono revisione della politica comune, non una deroga locale.
 
