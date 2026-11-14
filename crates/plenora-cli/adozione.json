@@ -1,5 +1,5 @@
 {
-  "nota": "Sorgente del manifesto v4: versione e digest dagli artefatti di rilascio. Geometry Semantics 1.0 adottato con le deviazioni per regola sotto elencate: una deviazione non conta come conformita. Profilo data-tools v3; runtime e catene intercomponente non rivendicati.",
+  "nota": "Sorgente del manifesto v4: versione e digest dagli artefatti di rilascio. Geometry Semantics 1.0 adottato con le deviazioni per regola sotto elencate: una deviazione non conta come conformita. Profilo data-tools v3; binding runtime transport-neutral implementato; catene intercomponente non rivendicate.",
   "component": "plenora-data-tools",
   "contracts_source": {
     "repository": "https://github.com/PlenoraETL/plenora-contracts.git",
@@ -20,10 +20,10 @@
     "plenora-composition-v1",
     "plenora-public-catalog-v2",
     "plenora-arrow-geometry-semantics-v1",
-    "plenora-arrow-primary-geometry-v1"
+    "plenora-arrow-primary-geometry-v1",
+    "plenora-runtime-binding-v2"
   ],
   "not_applicable": [
-    "plenora-runtime-binding-v2",
     "plenora-interop-vectors-v1",
     "plenora-rest-arrow-adapter-v1",
     "plenora-plan-budget-v1"
@@ -34,7 +34,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "Il passaggio rifiuta con crs i CRS resolved fuori tabella o con definizione; geography passa invariata. Hazard: Input conformi non attraversano il componente.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -45,7 +46,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "Un crs_id con definizione resolved viene risolto dalla definizione e rifiutato anche nel passaggio. Hazard: Rifiuto di input conforme; nessun calcolo sostitutivo silenzioso.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -56,7 +58,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "Declared_unresolved conserva lo stato; grammatica lessicale e identificatori radice sono verificati senza promozione. Resta limitata la verifica semantica completa delle definizioni esterne. Hazard: La struttura semantica completa di una definizione esterna non viene attestata dal trasporto.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -67,7 +70,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "Una definizione senza identificatore, dichiarata resolved, viene rifiutata anche nel passaggio. Hazard: Rifiuto di input conforme.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -78,7 +82,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "Le operazioni geo rifiutano ancora EWKB valido con SRID incorporato; le tabellari lo preservano. Hazard: Interoperabilita del calcolo ridotta; nessuna perdita silenziosa dello SRID.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -89,7 +94,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "Le identita nuove partono oltre il massimo osservato, per non riusare identita perse dalla lineage. Hazard: Identificatori diversi dal minimo libero richiesto dal contratto.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -100,7 +106,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "Il cambio di precisione e visibile nello schema; manca un evento dedicato di normalizzazione nel risultato. Hazard: Il consumatore che non confronta gli schemi non vede la normalizzazione.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -111,7 +118,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "Le definizioni resolved vengono rifiutate dal risolutore integrato, anche quando verificabili. Hazard: Calcoli conformi rifiutati; nessun ripiego sulla definizione.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -122,7 +130,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "Il lettore non applica tutta la grammatica chiusa di crs_id e delle chiavi geometry, e ammette liste types vuote in alcuni stati. Hazard: Metadati non conformi possono attraversare il confine.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -133,7 +142,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "Non esiste il confronto delle definizioni nel sottoinsieme conservativo a decimali esatti. Hazard: Definizioni verificabili rifiutate, senza approssimazioni numeriche.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -144,7 +154,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "Non esiste il verificatore completo della grammatica chiusa di definizioni e datum ensemble. Hazard: Definizioni verificabili rifiutate; declared_unresolved passa opaco.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -155,7 +166,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "Le autorita locali restano unresolved ma il piano puo sostituire il CRS per decisione esplicita. Hazard: Una decisione del chiamante puo rendere calcolabile un CRS locale che il contratto vuole indecidibile.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -166,7 +178,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "La lettura dei metadati non ha passate globali separate per vocabolario, CRS e supporto. Hazard: Con piu difetti la prima categoria puo divergere dall ordine normativo.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -177,7 +190,8 @@
       "surfaces": [
         "rust",
         "cli",
-        "python_sdk"
+        "python_sdk",
+        "runtime"
       ],
       "observed_behavior": "Gli assi assenti restano unknown; i calcoli dipendenti dagli assi rifiutano unknown per la policy safety-critical 4.0. Hazard: Il calcolo con unknown e rifiutato anche dove GEO-002 lo permetterebbe.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
@@ -193,7 +207,7 @@
         "CAT-002"
       ],
       "status": "implemented",
-      "reason": "Capabilities CLI e Python elencano solo la superficie che risponde; runtime conditional omesso, pianificato senza deviazione. Mappa Rust pubblicata separatamente.",
+      "reason": "Discovery distinta per CLI, Python e runtime, dalla stessa tabella di operazioni. Mappa Rust separata.",
       "verification": "tests/scoperta.rs; tests/superficie_python.rs; tests/superficie_rust.rs"
     },
     {
@@ -203,7 +217,7 @@
         "DT-ABS-002"
       ],
       "status": "implemented",
-      "reason": "data.run 3 solo Rust: CLI e Python non hanno risolutore di artefatti. data.run 2 senza runtime: output multipli, contro un payload per risposta.",
+      "reason": "data.run 3 Rust e runtime; CLI e Python espongono la versione 2. Nessuna capability vietata annunciata.",
       "verification": "scripts/verifica_adozione.py; tests/superficie_python.rs; tests/superficie_rust.rs"
     },
     {
@@ -218,14 +232,12 @@
     },
     {
       "rules": [
-        "RT-016..023",
-        "RT-024",
-        "RT-025",
-        "RT-026",
-        "RT-027"
+        "RT-001",
+        "RT-003..025"
       ],
-      "status": "not_applicable",
-      "reason": "Nessuna interfaccia runtime, selezione di destinazioni runtime o trasporto. Un futuro binding deve adottare 2.0: resource_limit senza troncamento, wire 1, contratto 2, downgrade esplicito e contesto persistente per identita."
+      "status": "implemented",
+      "reason": "Binding transport-neutral: ammissione, identita, wire 1/spec 2, limiti senza troncamento, assi di errore e resolver comuni.",
+      "verification": "tests/run_artefatti.rs; src/runtime_binding.rs; scripts/verifica_parita_superfici.py"
     },
     {
       "rules": [
@@ -266,7 +278,7 @@
       "status": "deviation",
       "reason": "Il passaggio rifiuta con crs i CRS resolved fuori tabella o con definizione; geography passa invariata.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python e runtime",
       "hazard": "Input conformi non attraversano il componente.",
       "reentry": "Separare conformita, supporto del calcolo e trasporto dei metadati."
     },
@@ -304,7 +316,7 @@
       "status": "deviation",
       "reason": "Un crs_id con definizione resolved viene risolto dalla definizione e rifiutato anche nel passaggio.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python e runtime",
       "hazard": "Rifiuto di input conforme; nessun calcolo sostitutivo silenzioso.",
       "reentry": "Leggere identita e definizione separatamente, preservandole nel passaggio."
     },
@@ -315,7 +327,7 @@
       "status": "deviation",
       "reason": "Declared_unresolved conserva lo stato; grammatica lessicale e identificatori radice sono verificati senza promozione. Resta limitata la verifica semantica completa delle definizioni esterne.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python e runtime",
       "hazard": "La struttura semantica completa di una definizione esterna non viene attestata dal trasporto.",
       "reentry": "Verificare grammatica e identificatori anche senza risoluzione."
     },
@@ -326,7 +338,7 @@
       "status": "deviation",
       "reason": "Una definizione senza identificatore, dichiarata resolved, viene rifiutata anche nel passaggio.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python e runtime",
       "hazard": "Rifiuto di input conforme.",
       "reentry": "Trasportare la definizione opaca senza chiamare il risolutore."
     },
@@ -337,7 +349,7 @@
       "status": "deviation",
       "reason": "Le operazioni geo rifiutano ancora EWKB valido con SRID incorporato; le tabellari lo preservano.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python e runtime",
       "hazard": "Interoperabilita del calcolo ridotta; nessuna perdita silenziosa dello SRID.",
       "reentry": "Conversione EWKB senza perdita dopo la verifica del campo."
     },
@@ -388,7 +400,7 @@
       "status": "deviation",
       "reason": "Le identita nuove partono oltre il massimo osservato, per non riusare identita perse dalla lineage.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python e runtime",
       "hazard": "Identificatori diversi dal minimo libero richiesto dal contratto.",
       "reentry": "Distinguere assegnazione iniziale e identita derivate senza reintrodurre alias."
     },
@@ -399,7 +411,7 @@
       "status": "deviation",
       "reason": "Il cambio di precisione e visibile nello schema; manca un evento dedicato di normalizzazione nel risultato.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python e runtime",
       "hazard": "Il consumatore che non confronta gli schemi non vede la normalizzazione.",
       "reentry": "Esporre e verificare un avviso di normalizzazione sulle superfici pubbliche."
     },
@@ -410,7 +422,7 @@
       "status": "deviation",
       "reason": "Le definizioni resolved vengono rifiutate dal risolutore integrato, anche quando verificabili.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python e runtime",
       "hazard": "Calcoli conformi rifiutati; nessun ripiego sulla definizione.",
       "reentry": "Implementare il verificatore conservativo prima del calcolo."
     },
@@ -421,7 +433,7 @@
       "status": "deviation",
       "reason": "Il lettore non applica tutta la grammatica chiusa di crs_id e delle chiavi geometry, e ammette liste types vuote in alcuni stati.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python e runtime",
       "hazard": "Metadati non conformi possono attraversare il confine.",
       "reentry": "Chiudere le grammatiche con prove negative per ogni chiave."
     },
@@ -432,7 +444,7 @@
       "status": "deviation",
       "reason": "Non esiste il confronto delle definizioni nel sottoinsieme conservativo a decimali esatti.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python e runtime",
       "hazard": "Definizioni verificabili rifiutate, senza approssimazioni numeriche.",
       "reentry": "Implementare il confronto esatto con oracolo differenziale."
     },
@@ -451,7 +463,7 @@
       "status": "deviation",
       "reason": "Non esiste il verificatore completo della grammatica chiusa di definizioni e datum ensemble.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python e runtime",
       "hazard": "Definizioni verificabili rifiutate; declared_unresolved passa opaco.",
       "reentry": "Implementare grammatica chiusa e vettori negativi per nodi aggiuntivi."
     },
@@ -462,7 +474,7 @@
       "status": "deviation",
       "reason": "Le autorita locali restano unresolved ma il piano puo sostituire il CRS per decisione esplicita.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python e runtime",
       "hazard": "Una decisione del chiamante puo rendere calcolabile un CRS locale che il contratto vuole indecidibile.",
       "reentry": "Separare decisione di riparazione e identita locale non confrontabile."
     },
@@ -481,7 +493,7 @@
       "status": "deviation",
       "reason": "La lettura dei metadati non ha passate globali separate per vocabolario, CRS e supporto.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
-      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
+      "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python e runtime",
       "hazard": "Con piu difetti la prima categoria puo divergere dall ordine normativo.",
       "reentry": "Validare ciascuna classe sull intero schema prima della successiva."
     },
@@ -520,6 +532,14 @@
         "cargo test -p plenora-io --test integrazione_primary_composition",
         "cargo test -p plenora-io --test operazioni_doc"
       ]
+    },
+    {
+      "rules": [
+        "RT-026",
+        "RT-027"
+      ],
+      "status": "not_applicable",
+      "reason": "Negoziazione, downgrade e persistenza del contesto per identita competono al trasporto host prima di invocare il binding; nessun broker o client di trasporto in questo componente."
     }
   ],
   "contract_delta": {
@@ -548,7 +568,7 @@
       },
       "file": {
         "status": "non applicabile",
-        "scope": "File Interchange 1.0: catene io.write/storage.put e storage.get/io.read, formati e digest degli oggetti; data non espone queste operazioni ne runtime/storage.",
+        "scope": "File Interchange 1.0: catene io.write/storage.put e storage.get/io.read, formati e digest degli oggetti; data non espone queste operazioni ne storage.",
         "evidence": "crates/plenora-cli/adozione.json profile, not_applicable; crates/plenora-cli/tests/fixtures/contratti/data-tools-v3.json"
       },
       "interop": {

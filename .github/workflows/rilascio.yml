@@ -12,7 +12,7 @@ name: rilascio
 # - le attestazioni di provenienza.
 #
 # Ogni artefatto si prova prima dell'upload: il wheel installato con la suite
-# completa su ogni Python dichiarato (3.10-3.14), la CLI di ogni sistema
+# completa su ogni Python dichiarato (3.14), la CLI di ogni sistema
 # contro i contratti; i gate di ci.yml girano sul commit rilasciato.
 # L'immagine manylinux è fissata per digest (`container` di maturin-action).
 # GitHub Releases è l'unica superficie di distribuzione: niente package
@@ -56,7 +56,9 @@ jobs:
           components: rustfmt, clippy
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version-file: '.python-version'
+      - name: policy Python dalla fonte unica
+        run: python scripts/check_python_version.py --runtime
       - name: cargo fmt
         if: ${{ !cancelled() }}
         run: cargo fmt --check
@@ -91,6 +93,12 @@ jobs:
             cli: plenora-data-windows-x86_64.exe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: '.python-version'
+      - name: interprete wheel dalla fonte unica
+        shell: bash
+        run: echo "PYTHON_WHEEL=$(cat .python-version)" >> "$GITHUB_ENV"
       - name: wheel (maturin)
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
@@ -98,6 +106,7 @@ jobs:
           command: build
           args: >-
             --release
+            --interpreter ${{ runner.os == 'Windows' && 'python' || format('python{0}', env.PYTHON_WHEEL) }}
             --locked
             --out dist
             --manifest-path crates/plenora-data-py/Cargo.toml
@@ -116,6 +125,7 @@ jobs:
           command: build
           args: >-
             --release
+            --interpreter ${{ runner.os == 'Windows' && 'python' || format('python{0}', env.PYTHON_WHEEL) }}
             --locked
             --features sonde-di-prova
             --out prove
@@ -130,9 +140,6 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
         with:
           toolchain: '1.98.1'
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
       - name: cache Cargo dei target distribuiti
         run: cargo fetch --locked
       - name: avvisi dei quattro grafi release
@@ -206,6 +213,14 @@ jobs:
             --wheel "${wheel[0]}" \
             --cartella "$RUNNER_TEMP/sdk-python" \
             --rilascio
+      - name: parita del catalogo sulle cinque superfici
+        shell: bash
+        run: |
+          cargo run --locked -p plenora-io --example esporta_parita -- target/parita
+          cargo build --locked -p plenora-cli --bin plenora-data --example parita_superfici
+          suffix=""; if [[ "$RUNNER_OS" == "Windows" ]]; then suffix=".exe"; fi
+          target/debug/examples/parita_superfici${suffix} target/parita "$(pwd)/target/debug/plenora-data${suffix}"
+          python scripts/verifica_parita_superfici.py target/parita
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rilascio-${{ matrix.os }}
@@ -215,14 +230,13 @@ jobs:
   # Il modulo nativo si carica davvero su ogni Python dichiarato: lo stesso
   # wheel scaricato, installato e provato con la suite completa.
   abi3:
-    name: abi3 (${{ matrix.os }}, Python ${{ matrix.python }})
+    name: abi3 (${{ matrix.os }})
     needs: [costruzione]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -231,7 +245,7 @@ jobs:
           path: dist
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python }}
+          python-version-file: '.python-version'
       - name: wheel scaricato e suite Python
         shell: bash
         env:
@@ -260,7 +274,7 @@ jobs:
           merge-multiple: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version-file: '.python-version'
       - name: scoperta dei componenti degli artefatti
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
@@ -304,13 +318,13 @@ jobs:
           pattern: rilascio-*
           path: dist
           merge-multiple: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: '.python-version'
       - name: artefatti raccolti e versione
         run: |
           ls -la dist/
           echo "VERSIONE=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["version"])')" >> "$GITHUB_ENV"
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
       - name: dipendenze della verifica
         run: python -m pip install -r requirements-verifica-contratti.txt
       - name: la sorgente del manifesto fissa lo stesso commit
@@ -367,12 +381,13 @@ jobs:
           artefatti+=(--artefatto "plenora-data-windows-x86_64.exe.zip|cli|dist/plenora-data-windows-x86_64.exe.zip")
           sorgente="dist/plenora-data-tools-${versione}-source.tar.gz"
           artefatti+=(--artefatto "$(basename "$sorgente")|rust|$sorgente")
+          artefatti+=(--artefatto "plenora.data-tools|runtime|$sorgente")
           python3 scripts/genera_manifesto_adozione.py \
             --contratti .plenora-contracts \
             --versione "$versione" \
             "${artefatti[@]}" \
             --verifica "rilascio.yml costruzione: scripts/verifica_cli_contratti.py sulla CLI di ogni sistema (Linux, Windows)" \
-            --verifica "rilascio.yml abi3: scripts/verifica_sdk_python.py sul wheel installato (Python 3.10-3.14, Linux e Windows)" \
+            --verifica "rilascio.yml abi3: scripts/verifica_sdk_python.py sul wheel installato (Python 3.14, Linux e Windows)" \
             --verifica "rilascio.yml gate: fmt, clippy, PLENORA_TEST_LUNGHI=1 cargo test --workspace --locked --no-fail-fast, superficie Rust compresa (Linux, Windows)" \
             --uscita "dist/plenora-data-tools-${versione}.adoption-manifest.json"
       - name: SBOM verificato prima dell'attestazione

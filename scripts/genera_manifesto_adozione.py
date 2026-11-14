@@ -23,7 +23,7 @@ workflow di rilascio produce con `git archive`). Un wheel dell'SDK Python
 (`crates/plenora-data-py`) si passa con la superficie `python_sdk` e i suoi
 modi d'API (adoption manifest v4, `api_modes`):
 
-    --artefatto "plenora_data-0.1.0-cp310-abi3-win_amd64.whl|python_sdk|dist/plenora_data-0.1.0-cp310-abi3-win_amd64.whl|sync,async"
+    --artefatto "plenora_data-0.1.0-cp314-abi3-win_amd64.whl|python_sdk|dist/plenora_data-0.1.0-cp314-abi3-win_amd64.whl|sync,async"
 
 Il nome del wheel deve portare `--versione`. La sorgente dichiara
 `plenora-python-sdk-v1` conforme: senza almeno un wheel il manifesto non si

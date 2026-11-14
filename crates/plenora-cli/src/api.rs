@@ -339,6 +339,7 @@ struct UscitaDescritta<'a> {
 
 fn documento_esecuzione(uscite: &[UscitaDescritta<'_>], report: &Report) -> Value {
     json!({
+        "effects_contract": plenora_core::contract::geometry_metadata_policy::report::CONTRACT,
         "outputs": uscite
             .iter()
             .map(|uscita| json!({
@@ -357,6 +358,7 @@ fn documento_esecuzione(uscite: &[UscitaDescritta<'_>], report: &Report) -> Valu
                 "rows_in": passo.righe_in,
                 "rows_out": passo.righe_out,
                 "division_by_zero_rows": passo.righe_divisione_per_zero,
+                "effects": passo.effetti_localizzati,
             }))
             .collect::<Vec<_>>(),
     })

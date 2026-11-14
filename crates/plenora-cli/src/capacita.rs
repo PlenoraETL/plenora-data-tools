@@ -41,6 +41,8 @@ pub enum Superficie {
     Cli,
     /// Il pacchetto Python `plenora-data` (`plenora_data`).
     Python,
+    /// Capability neutrale rispetto al trasporto.
+    Runtime,
 }
 
 impl Superficie {
@@ -50,6 +52,7 @@ impl Superficie {
         match self {
             Self::Cli => "cli",
             Self::Python => "python_sdk",
+            Self::Runtime => "runtime",
         }
     }
 }
@@ -145,6 +148,10 @@ fn descrittore(operazione: &OperazionePubblica, superficie: Superficie) -> Value
 #[must_use]
 pub fn documento_della(superficie: Superficie) -> Value {
     let interfaccia = match superficie {
+        Superficie::Runtime => json!({
+            "kind": "runtime", "contract": "plenora-runtime-binding-v2",
+            "version": 2, "artifact": crate::runtime_binding::CAPABILITY_NAME,
+        }),
         Superficie::Cli => json!({
             "kind": superficie.come_testo(),
             "contract": CONTRATTO_CLI,
@@ -165,7 +172,10 @@ pub fn documento_della(superficie: Superficie) -> Value {
         "interfaces": [interfaccia],
         "operations": OPERAZIONI
             .iter()
-            .filter(|operazione| !operazione.solo_rust)
+            .filter(|operazione| match superficie {
+                Superficie::Runtime => operazione.id != "data.run" || operazione.versione == 3,
+                _ => !operazione.solo_rust,
+            })
             .map(|operazione| descrittore(operazione, superficie))
             .collect::<Vec<_>>(),
     })
@@ -182,7 +192,7 @@ pub fn documento() -> Value {
 /// (Surface Bindings 1.0, sezione 2), dalla stessa tabella delle capacità:
 /// un'operazione nuova non si pubblica senza il suo export.
 ///
-/// Comprende `data.run` 3, che sta solo sulla superficie Rust.
+/// Comprende `data.run` 3, su Rust e runtime.
 #[must_use]
 pub fn mappa_rust() -> Value {
     json!({

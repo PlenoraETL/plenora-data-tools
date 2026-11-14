@@ -14,7 +14,7 @@ members = [
 exclude = ["vendor"]
 
 [workspace.package]
-version = "4.1.5"
+version = "5.0.0"
 edition = "2021"
 rust-version = "1.98"
 publish = false
@@ -129,7 +129,7 @@ geographiclib-rs = { version = "=0.2.7", default-features = false }
 # Dev-dependency di plenora-kernels-geo (probe privacy sul logging di
 # `relate`): transitiva di `geo`/`geozero`, pinnata perche' il test la usa
 # direttamente.
-log = "=0.4.33"
+log = "=0.4.34"
 # Comuni
 # Deserializzazione dei piani, delle config e dei contratti.
 serde = { version = "=1.0.229", features = ["derive"] }
@@ -176,8 +176,8 @@ ctrlc = { version = "=3.5.2", features = ["termination"] }
 # scritta qui (`unsafe`, vietato nel workspace) o un sottoprocesso della CLI
 # (una copia delle tabelle per ogni passaggio, niente Arrow in memoria).
 # `pyo3` 0.29.2 e' la versione di plenora-database-tools (stesso binding,
-# stessa ABI stabile `abi3-py310`: un wheel per piattaforma per Python
-# >= 3.10). Senza `extension-module` qui: la build di maturin la aggiunge
+# stessa ABI stabile `abi3-py314`: un wheel per piattaforma per Python
+# >= 3.14). Senza `extension-module` qui: la build di maturin la aggiunge
 # (pyproject.toml), cosi' `cargo test --workspace` collega libpython invece
 # di lasciare simboli indefiniti. `unsafe` sta dentro `pyo3` e nelle sue
 # espansioni (macro esterne, che il lint `unsafe_code` del workspace non
@@ -187,7 +187,7 @@ ctrlc = { version = "=3.5.2", features = ["termination"] }
 # 0.29.2, `heck` 0.5.0 (nomi delle macro), `target-lexicon` 0.13.5 (build),
 # `portable-atomic` 1.16.0, `arrow-pyarrow` 60.1.0; ognuno in una sola
 # versione, nessuno gia' presente in un'altra.
-pyo3 ={ version = "=0.29.2", default-features = false, features = ["macros", "abi3-py310"] }
+pyo3 ={ version = "=0.29.2", default-features = false, features = ["macros", "abi3-py314"] }
 # Scambio delle tabelle con PyArrow per l'Arrow C Data/Stream Interface
 # (PyCapsule `__arrow_c_stream__`): le tabelle passano senza copia nei due
 # versi. E' il crate di arrow-rs per pyarrow, alla stessa release 60.1.0
@@ -196,7 +196,7 @@ pyo3 ={ version = "=0.29.2", default-features = false, features = ["macros", "ab
 # `ffi` di `arrow-array` (l'`unsafe` della C Data Interface sta li').
 arrow-pyarrow = "=60.1.0"
 # Dev
-proptest = "=1.11.0"
+proptest = "=1.12.0"
 # Lexer di Rust dell'inventario dei campi Thrift del fork `parquet`
 # (crates/plenora-io/tests/parquet_campi_thrift.rs): stringhe, raw string e
 # commenti annidati letti come il compilatore, al posto di un lexer scritto a

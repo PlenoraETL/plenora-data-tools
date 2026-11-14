@@ -3,7 +3,7 @@
 Python SDK 1.0, sezione 10: il wheel si prova dopo l'installazione, in un
 ambiente che non importa il checkout per sbaglio. Lo script:
 
-1. legge il wheel: nome (`plenora_data-<versione>-cp310-abi3-<piattaforma>`),
+1. legge il wheel: nome (`plenora_data-<versione>-cp314-abi3-<piattaforma>`),
    versione dei metadati, marcatore PEP 561 (`py.typed`), stub del modulo
    nativo (`_native.pyi`), modulo nativo;
 2. confronta la versione con quella del workspace (`Cargo.toml`, la fonte
@@ -46,12 +46,15 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 from fonti_prove import sonde_sdk
+from check_python_version import declared, wheel_errors
 
 RADICE = Path(__file__).resolve().parents[1]
 PROVE = RADICE / "crates" / "plenora-data-py" / "python" / "tests"
 CONTRATTI = RADICE / "crates" / "plenora-cli" / "tests" / "fixtures" / "contratti"
 NOME_WHEEL = re.compile(
-    r"^plenora_data-(?P<versione>[0-9][0-9A-Za-z.+-]*)-cp310-abi3-(?P<piattaforma>[A-Za-z0-9_.]+)\.whl$"
+    r"^plenora_data-(?P<versione>[0-9][0-9A-Za-z.+-]*)-cp"
+    + re.escape(declared().replace(".", ""))
+    + r"-abi3-(?P<piattaforma>[A-Za-z0-9_.]+)\.whl$"
 )
 NATIVO = re.compile(r"^plenora_data/_native(\.[A-Za-z0-9_-]+)*\.(pyd|so)$")
 # Le sonde delle prove: nomi nel modulo nativo e testi che solo il loro
@@ -96,11 +99,15 @@ def leggi_wheel(wheel: Path, fallite: list[str]) -> tuple[str, str, list[str]]:
         binario = archivio.read(nativi[0])
         impronta = hashlib.sha256(binario).hexdigest()
         tracce = [traccia.decode() for traccia in TRACCE_DELLE_SONDE if traccia in binario]
+        tags = [line.removeprefix("Tag: ") for line in archivio.read(
+            f"plenora_data-{versione}.dist-info/WHEEL").decode("utf-8").splitlines()
+            if line.startswith("Tag: ")]
         metadati = archivio.read(f"plenora_data-{versione}.dist-info/METADATA").decode("utf-8")
     if f"\nVersion: {versione}\n" not in metadati:
         fallite.append("METADATA del wheel con un'altra versione")
-    if "\nRequires-Python: >=3.10\n" not in metadati:
-        fallite.append("METADATA del wheel senza Requires-Python >=3.10")
+    requires = next((line.removeprefix("Requires-Python: ") for line in metadati.splitlines()
+                     if line.startswith("Requires-Python: ")), None)
+    fallite.extend(wheel_errors(declared(), requires, tags, sys.version_info))
     return versione, impronta, tracce
 
 
@@ -108,12 +115,17 @@ SONDA = """
 import hashlib, importlib.metadata, json, pathlib, sys
 import plenora_data
 from plenora_data import _native
+distribuzione = importlib.metadata.distribution("plenora-data")
 radice = pathlib.Path(plenora_data.__file__).resolve().parent
 nativo = [p for p in radice.iterdir() if p.name.startswith("_native.") and p.suffix in (".pyd", ".so")]
 print(json.dumps({
     "origine": str(radice),
     "versione": plenora_data.version(),
-    "metadati": importlib.metadata.version("plenora-data"),
+    "metadati": distribuzione.version,
+    "requires_python": distribuzione.metadata.get("Requires-Python"),
+    "tags": [line.removeprefix("Tag: ") for line in
+             (distribuzione.read_text("WHEEL") or "").splitlines() if line.startswith("Tag: ")],
+    "interprete": list(sys.version_info[:2]),
     "componente": plenora_data.capabilities()["component_version"],
     "nativo": [hashlib.sha256(p.read_bytes()).hexdigest() for p in nativo],
     "tipi": (radice / "py.typed").is_file() and (radice / "_native.pyi").is_file(),
@@ -141,6 +153,8 @@ def sonda(
         fallite.append(f"import del pacchetto installato non riuscito: {esito.stderr.strip()}")
         return
     trovato = json.loads(esito.stdout)
+    fallite.extend(wheel_errors(declared(), trovato["requires_python"],
+                               trovato["tags"], trovato["interprete"]))
     origine = Path(trovato["origine"])
     if "site-packages" not in origine.parts or origine.is_relative_to(RADICE):
         fallite.append(f"pacchetto importato da {origine}, non dal wheel installato")

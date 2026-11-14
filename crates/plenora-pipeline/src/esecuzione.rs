@@ -72,6 +72,9 @@ pub struct Report {
 /// Resoconto di un passo.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReportPasso {
+    /// Effetti localizzati sui campi e sulle chiavi, senza valori.
+    pub effetti_localizzati:
+        Vec<plenora_core::contract::geometry_metadata_policy::report::LocalizedEffect>,
     /// Nome della tabella prodotta.
     pub out: String,
     /// Id canonico dell'operazione.
@@ -725,6 +728,7 @@ impl PipelineValidata {
                 vivi.remove(nome);
             }
             passi.push(ReportPasso {
+                effetti_localizzati: passo.effetti_localizzati.clone(),
                 out: passo.out.clone(),
                 op,
                 righe_in,
