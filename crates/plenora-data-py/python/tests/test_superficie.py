@@ -70,7 +70,7 @@ def test_versione_uguale_ai_metadati_e_al_componente() -> None:
     # distribuzione).
     distribuzione = importlib.metadata.distribution("plenora-data")
     assert distribuzione.metadata["Name"] == "plenora-data"
-    assert distribuzione.metadata["Requires-Python"] == ">=3.10"
+    assert distribuzione.metadata["Requires-Python"] == ">=3.14"
 
 
 def test_i_nomi_pubblici_sono_esattamente_quelli_dichiarati() -> None:

@@ -4,7 +4,7 @@
   "grafi": {
     "cli/x86_64-unknown-linux-gnu": [
       "ahash-0.8.12",
-      "aho-corasick-1.1.4",
+      "aho-corasick-1.1.5",
       "allocator-api2-0.2.21",
       "approx-0.5.1",
       "arrow-array-60.1.0",
@@ -15,24 +15,24 @@
       "arrow-schema-60.1.0",
       "arrow-select-60.1.0",
       "base64-0.23.1",
-      "bitflags-2.13.1",
+      "bitflags-2.13.2",
       "block-buffer-0.12.1",
       "byteorder-1.5.0",
       "bytes-1.12.1",
-      "cfg-if-1.0.4",
+      "cfg-if-1.0.5",
       "chrono-0.4.45",
       "chrono-tz-0.10.4",
       "const-oid-0.10.2",
-      "cpufeatures-0.3.0",
+      "cpufeatures-0.3.1",
       "crc32fast-1.5.2",
       "crossbeam-deque-0.8.7",
       "crossbeam-epoch-0.9.20",
-      "crossbeam-utils-0.8.22",
+      "crossbeam-utils-0.8.23",
       "crypto-common-0.2.2",
       "ctrlc-3.5.2",
       "digest-0.11.3",
       "earcut-0.4.5",
-      "either-1.16.0",
+      "either-1.18.0",
       "equivalent-1.0.2",
       "fastrand-2.5.0",
       "flatbuffers-25.12.19",
@@ -49,7 +49,7 @@
       "hashbrown-0.16.1",
       "hashbrown-0.17.1",
       "heapless-0.8.0",
-      "hybrid-array-0.4.14",
+      "hybrid-array-0.4.15",
       "i_float-5.0.0",
       "i_key_sort-0.11.0",
       "i_overlay-9.0.0",
@@ -60,25 +60,25 @@
       "libc-0.2.189",
       "libm-0.2.16",
       "linux-raw-sys-0.12.1",
-      "log-0.4.33",
+      "log-0.4.34",
       "md-5-0.11.0",
       "memchr-2.8.3",
       "nix-0.31.3",
       "num-bigint-0.5.1",
       "num-complex-0.4.6",
-      "num-integer-0.1.46",
+      "num-integer-0.1.47",
       "num-traits-0.2.19",
       "once_cell-1.21.4",
       "phf-0.12.1",
       "phf_shared-0.12.1",
-      "plenora-cli-4.1.5",
-      "plenora-core-4.1.5",
+      "plenora-cli-5.0.0",
+      "plenora-core-5.0.0",
       "plenora-geo-0.33.1",
-      "plenora-io-4.1.5",
-      "plenora-kernels-geo-4.1.5",
-      "plenora-kernels-table-4.1.5",
+      "plenora-io-5.0.0",
+      "plenora-kernels-geo-5.0.0",
+      "plenora-kernels-table-5.0.0",
       "plenora-parquet-60.0.0",
-      "plenora-pipeline-4.1.5",
+      "plenora-pipeline-5.0.0",
       "plenora-wkt-0.14.0",
       "rand-0.10.2",
       "rand_core-0.10.1",
@@ -86,7 +86,7 @@
       "rayon-1.12.0",
       "rayon-core-1.13.0",
       "regex-1.13.1",
-      "regex-automata-0.4.16",
+      "regex-automata-0.4.18",
       "regex-syntax-0.8.11",
       "robust-1.2.0",
       "rstar-0.12.2",
@@ -98,21 +98,20 @@
       "sha2-0.11.0",
       "sif-itree-0.4.1",
       "siphasher-1.0.3",
-      "smallvec-1.15.2",
+      "smallvec-1.16.1",
       "snap-1.1.2",
       "spade-2.15.1",
       "stable_deref_trait-1.2.1",
       "tempfile-3.27.0",
       "thiserror-1.0.69",
       "thiserror-2.0.21",
-      "tinyvec-1.12.0",
-      "tinyvec_macros-0.1.1",
+      "tinyvec-1.13.3",
       "twox-hash-2.1.4",
       "typenum-1.20.1",
       "unicode-normalization-0.1.25",
       "uuid-1.26.1",
       "wkt-0.14.0",
-      "zerocopy-0.8.55",
+      "zerocopy-0.8.59",
       "zmij-1.0.23",
       "zstd-0.14.3",
       "zstd-safe-8.2.0",
@@ -120,7 +119,7 @@
     ],
     "wheel/x86_64-unknown-linux-gnu": [
       "ahash-0.8.12",
-      "aho-corasick-1.1.4",
+      "aho-corasick-1.1.5",
       "allocator-api2-0.2.21",
       "approx-0.5.1",
       "arrow-array-60.1.0",
@@ -132,24 +131,24 @@
       "arrow-schema-60.1.0",
       "arrow-select-60.1.0",
       "base64-0.23.1",
-      "bitflags-2.13.1",
+      "bitflags-2.13.2",
       "block-buffer-0.12.1",
       "byteorder-1.5.0",
       "bytes-1.12.1",
-      "cfg-if-1.0.4",
+      "cfg-if-1.0.5",
       "chrono-0.4.45",
       "chrono-tz-0.10.4",
       "const-oid-0.10.2",
-      "cpufeatures-0.3.0",
+      "cpufeatures-0.3.1",
       "crc32fast-1.5.2",
       "crossbeam-deque-0.8.7",
       "crossbeam-epoch-0.9.20",
-      "crossbeam-utils-0.8.22",
+      "crossbeam-utils-0.8.23",
       "crypto-common-0.2.2",
       "ctrlc-3.5.2",
       "digest-0.11.3",
       "earcut-0.4.5",
-      "either-1.16.0",
+      "either-1.18.0",
       "equivalent-1.0.2",
       "fastrand-2.5.0",
       "flatbuffers-25.12.19",
@@ -166,7 +165,7 @@
       "hashbrown-0.16.1",
       "hashbrown-0.17.1",
       "heapless-0.8.0",
-      "hybrid-array-0.4.14",
+      "hybrid-array-0.4.15",
       "i_float-5.0.0",
       "i_key_sort-0.11.0",
       "i_overlay-9.0.0",
@@ -177,26 +176,26 @@
       "libc-0.2.189",
       "libm-0.2.16",
       "linux-raw-sys-0.12.1",
-      "log-0.4.33",
+      "log-0.4.34",
       "md-5-0.11.0",
       "memchr-2.8.3",
       "nix-0.31.3",
       "num-bigint-0.5.1",
       "num-complex-0.4.6",
-      "num-integer-0.1.46",
+      "num-integer-0.1.47",
       "num-traits-0.2.19",
       "once_cell-1.21.4",
       "phf-0.12.1",
       "phf_shared-0.12.1",
-      "plenora-cli-4.1.5",
-      "plenora-core-4.1.5",
-      "plenora-data-py-4.1.5",
+      "plenora-cli-5.0.0",
+      "plenora-core-5.0.0",
+      "plenora-data-py-5.0.0",
       "plenora-geo-0.33.1",
-      "plenora-io-4.1.5",
-      "plenora-kernels-geo-4.1.5",
-      "plenora-kernels-table-4.1.5",
+      "plenora-io-5.0.0",
+      "plenora-kernels-geo-5.0.0",
+      "plenora-kernels-table-5.0.0",
       "plenora-parquet-60.0.0",
-      "plenora-pipeline-4.1.5",
+      "plenora-pipeline-5.0.0",
       "plenora-wkt-0.14.0",
       "pyo3-0.29.2",
       "pyo3-ffi-0.29.2",
@@ -206,7 +205,7 @@
       "rayon-1.12.0",
       "rayon-core-1.13.0",
       "regex-1.13.1",
-      "regex-automata-0.4.16",
+      "regex-automata-0.4.18",
       "regex-syntax-0.8.11",
       "robust-1.2.0",
       "rstar-0.12.2",
@@ -218,21 +217,20 @@
       "sha2-0.11.0",
       "sif-itree-0.4.1",
       "siphasher-1.0.3",
-      "smallvec-1.15.2",
+      "smallvec-1.16.1",
       "snap-1.1.2",
       "spade-2.15.1",
       "stable_deref_trait-1.2.1",
       "tempfile-3.27.0",
       "thiserror-1.0.69",
       "thiserror-2.0.21",
-      "tinyvec-1.12.0",
-      "tinyvec_macros-0.1.1",
+      "tinyvec-1.13.3",
       "twox-hash-2.1.4",
       "typenum-1.20.1",
       "unicode-normalization-0.1.25",
       "uuid-1.26.1",
       "wkt-0.14.0",
-      "zerocopy-0.8.55",
+      "zerocopy-0.8.59",
       "zmij-1.0.23",
       "zstd-0.14.3",
       "zstd-safe-8.2.0",
@@ -240,7 +238,7 @@
     ],
     "cli/x86_64-pc-windows-msvc": [
       "ahash-0.8.12",
-      "aho-corasick-1.1.4",
+      "aho-corasick-1.1.5",
       "allocator-api2-0.2.21",
       "approx-0.5.1",
       "arrow-array-60.1.0",
@@ -251,24 +249,24 @@
       "arrow-schema-60.1.0",
       "arrow-select-60.1.0",
       "base64-0.23.1",
-      "bitflags-2.13.1",
+      "bitflags-2.13.2",
       "block-buffer-0.12.1",
       "byteorder-1.5.0",
       "bytes-1.12.1",
-      "cfg-if-1.0.4",
+      "cfg-if-1.0.5",
       "chrono-0.4.45",
       "chrono-tz-0.10.4",
       "const-oid-0.10.2",
-      "cpufeatures-0.3.0",
+      "cpufeatures-0.3.1",
       "crc32fast-1.5.2",
       "crossbeam-deque-0.8.7",
       "crossbeam-epoch-0.9.20",
-      "crossbeam-utils-0.8.22",
+      "crossbeam-utils-0.8.23",
       "crypto-common-0.2.2",
       "ctrlc-3.5.2",
       "digest-0.11.3",
       "earcut-0.4.5",
-      "either-1.16.0",
+      "either-1.18.0",
       "equivalent-1.0.2",
       "fastrand-2.5.0",
       "flatbuffers-25.12.19",
@@ -285,7 +283,7 @@
       "hashbrown-0.16.1",
       "hashbrown-0.17.1",
       "heapless-0.8.0",
-      "hybrid-array-0.4.14",
+      "hybrid-array-0.4.15",
       "i_float-5.0.0",
       "i_key_sort-0.11.0",
       "i_overlay-9.0.0",
@@ -293,24 +291,24 @@
       "i_tree-0.19.0",
       "itoa-1.0.18",
       "libm-0.2.16",
-      "log-0.4.33",
+      "log-0.4.34",
       "md-5-0.11.0",
       "memchr-2.8.3",
       "num-bigint-0.5.1",
       "num-complex-0.4.6",
-      "num-integer-0.1.46",
+      "num-integer-0.1.47",
       "num-traits-0.2.19",
       "once_cell-1.21.4",
       "phf-0.12.1",
       "phf_shared-0.12.1",
-      "plenora-cli-4.1.5",
-      "plenora-core-4.1.5",
+      "plenora-cli-5.0.0",
+      "plenora-core-5.0.0",
       "plenora-geo-0.33.1",
-      "plenora-io-4.1.5",
-      "plenora-kernels-geo-4.1.5",
-      "plenora-kernels-table-4.1.5",
+      "plenora-io-5.0.0",
+      "plenora-kernels-geo-5.0.0",
+      "plenora-kernels-table-5.0.0",
       "plenora-parquet-60.0.0",
-      "plenora-pipeline-4.1.5",
+      "plenora-pipeline-5.0.0",
       "plenora-wkt-0.14.0",
       "rand-0.10.2",
       "rand_core-0.10.1",
@@ -318,7 +316,7 @@
       "rayon-1.12.0",
       "rayon-core-1.13.0",
       "regex-1.13.1",
-      "regex-automata-0.4.16",
+      "regex-automata-0.4.18",
       "regex-syntax-0.8.11",
       "robust-1.2.0",
       "rstar-0.12.2",
@@ -329,15 +327,14 @@
       "sha2-0.11.0",
       "sif-itree-0.4.1",
       "siphasher-1.0.3",
-      "smallvec-1.15.2",
+      "smallvec-1.16.1",
       "snap-1.1.2",
       "spade-2.15.1",
       "stable_deref_trait-1.2.1",
       "tempfile-3.27.0",
       "thiserror-1.0.69",
       "thiserror-2.0.21",
-      "tinyvec-1.12.0",
-      "tinyvec_macros-0.1.1",
+      "tinyvec-1.13.3",
       "twox-hash-2.1.4",
       "typenum-1.20.1",
       "unicode-normalization-0.1.25",
@@ -345,7 +342,7 @@
       "windows-link-0.2.1",
       "windows-sys-0.61.2",
       "wkt-0.14.0",
-      "zerocopy-0.8.55",
+      "zerocopy-0.8.59",
       "zmij-1.0.23",
       "zstd-0.14.3",
       "zstd-safe-8.2.0",
@@ -353,7 +350,7 @@
     ],
     "wheel/x86_64-pc-windows-msvc": [
       "ahash-0.8.12",
-      "aho-corasick-1.1.4",
+      "aho-corasick-1.1.5",
       "allocator-api2-0.2.21",
       "approx-0.5.1",
       "arrow-array-60.1.0",
@@ -365,24 +362,24 @@
       "arrow-schema-60.1.0",
       "arrow-select-60.1.0",
       "base64-0.23.1",
-      "bitflags-2.13.1",
+      "bitflags-2.13.2",
       "block-buffer-0.12.1",
       "byteorder-1.5.0",
       "bytes-1.12.1",
-      "cfg-if-1.0.4",
+      "cfg-if-1.0.5",
       "chrono-0.4.45",
       "chrono-tz-0.10.4",
       "const-oid-0.10.2",
-      "cpufeatures-0.3.0",
+      "cpufeatures-0.3.1",
       "crc32fast-1.5.2",
       "crossbeam-deque-0.8.7",
       "crossbeam-epoch-0.9.20",
-      "crossbeam-utils-0.8.22",
+      "crossbeam-utils-0.8.23",
       "crypto-common-0.2.2",
       "ctrlc-3.5.2",
       "digest-0.11.3",
       "earcut-0.4.5",
-      "either-1.16.0",
+      "either-1.18.0",
       "equivalent-1.0.2",
       "fastrand-2.5.0",
       "flatbuffers-25.12.19",
@@ -399,7 +396,7 @@
       "hashbrown-0.16.1",
       "hashbrown-0.17.1",
       "heapless-0.8.0",
-      "hybrid-array-0.4.14",
+      "hybrid-array-0.4.15",
       "i_float-5.0.0",
       "i_key_sort-0.11.0",
       "i_overlay-9.0.0",
@@ -408,25 +405,25 @@
       "itoa-1.0.18",
       "libc-0.2.189",
       "libm-0.2.16",
-      "log-0.4.33",
+      "log-0.4.34",
       "md-5-0.11.0",
       "memchr-2.8.3",
       "num-bigint-0.5.1",
       "num-complex-0.4.6",
-      "num-integer-0.1.46",
+      "num-integer-0.1.47",
       "num-traits-0.2.19",
       "once_cell-1.21.4",
       "phf-0.12.1",
       "phf_shared-0.12.1",
-      "plenora-cli-4.1.5",
-      "plenora-core-4.1.5",
-      "plenora-data-py-4.1.5",
+      "plenora-cli-5.0.0",
+      "plenora-core-5.0.0",
+      "plenora-data-py-5.0.0",
       "plenora-geo-0.33.1",
-      "plenora-io-4.1.5",
-      "plenora-kernels-geo-4.1.5",
-      "plenora-kernels-table-4.1.5",
+      "plenora-io-5.0.0",
+      "plenora-kernels-geo-5.0.0",
+      "plenora-kernels-table-5.0.0",
       "plenora-parquet-60.0.0",
-      "plenora-pipeline-4.1.5",
+      "plenora-pipeline-5.0.0",
       "plenora-wkt-0.14.0",
       "pyo3-0.29.2",
       "pyo3-ffi-0.29.2",
@@ -436,7 +433,7 @@
       "rayon-1.12.0",
       "rayon-core-1.13.0",
       "regex-1.13.1",
-      "regex-automata-0.4.16",
+      "regex-automata-0.4.18",
       "regex-syntax-0.8.11",
       "robust-1.2.0",
       "rstar-0.12.2",
@@ -447,15 +444,14 @@
       "sha2-0.11.0",
       "sif-itree-0.4.1",
       "siphasher-1.0.3",
-      "smallvec-1.15.2",
+      "smallvec-1.16.1",
       "snap-1.1.2",
       "spade-2.15.1",
       "stable_deref_trait-1.2.1",
       "tempfile-3.27.0",
       "thiserror-1.0.69",
       "thiserror-2.0.21",
-      "tinyvec-1.12.0",
-      "tinyvec_macros-0.1.1",
+      "tinyvec-1.13.3",
       "twox-hash-2.1.4",
       "typenum-1.20.1",
       "unicode-normalization-0.1.25",
@@ -463,7 +459,7 @@
       "windows-link-0.2.1",
       "windows-sys-0.61.2",
       "wkt-0.14.0",
-      "zerocopy-0.8.55",
+      "zerocopy-0.8.59",
       "zmij-1.0.23",
       "zstd-0.14.3",
       "zstd-safe-8.2.0",
@@ -493,9 +489,9 @@
         }
       ]
     },
-    "aho-corasick-1.1.4": {
+    "aho-corasick-1.1.5": {
       "nome": "aho-corasick",
-      "versione": "1.1.4",
+      "versione": "1.1.5",
       "licenza": "Unlicense OR MIT",
       "repository": "https://github.com/BurntSushi/aho-corasick",
       "autori": [
@@ -762,9 +758,9 @@
         }
       ]
     },
-    "bitflags-2.13.1": {
+    "bitflags-2.13.2": {
       "nome": "bitflags",
-      "versione": "2.13.1",
+      "versione": "2.13.2",
       "licenza": "MIT OR Apache-2.0",
       "repository": "https://github.com/bitflags/bitflags",
       "autori": [
@@ -851,9 +847,9 @@
         }
       ]
     },
-    "cfg-if-1.0.4": {
+    "cfg-if-1.0.5": {
       "nome": "cfg-if",
-      "versione": "1.0.4",
+      "versione": "1.0.5",
       "licenza": "MIT OR Apache-2.0",
       "repository": "https://github.com/rust-lang/cfg-if",
       "autori": [
@@ -930,9 +926,9 @@
         }
       ]
     },
-    "cpufeatures-0.3.0": {
+    "cpufeatures-0.3.1": {
       "nome": "cpufeatures",
-      "versione": "0.3.0",
+      "versione": "0.3.1",
       "licenza": "MIT OR Apache-2.0",
       "repository": "https://github.com/RustCrypto/utils",
       "autori": [
@@ -947,7 +943,7 @@
         },
         {
           "file": "LICENSE-MIT",
-          "sha256": "ae9baa7beea910273c2f384c2a6b721fb7bd02bda3436074a1072e4ee689f985",
+          "sha256": "73b9dc2e79c7308998dd30296e073aefaefb944a68fb89aa412c23c0edcabcaa",
           "origine": "pacchetto"
         }
       ]
@@ -1015,9 +1011,9 @@
         }
       ]
     },
-    "crossbeam-utils-0.8.22": {
+    "crossbeam-utils-0.8.23": {
       "nome": "crossbeam-utils",
-      "versione": "0.8.22",
+      "versione": "0.8.23",
       "licenza": "MIT OR Apache-2.0",
       "repository": "https://github.com/crossbeam-rs/crossbeam",
       "autori": [],
@@ -1118,9 +1114,9 @@
         }
       ]
     },
-    "either-1.16.0": {
+    "either-1.18.0": {
       "nome": "either",
-      "versione": "1.16.0",
+      "versione": "1.18.0",
       "licenza": "MIT OR Apache-2.0",
       "repository": "https://github.com/rayon-rs/either",
       "autori": [],
@@ -1475,9 +1471,9 @@
         }
       ]
     },
-    "hybrid-array-0.4.14": {
+    "hybrid-array-0.4.15": {
       "nome": "hybrid-array",
-      "versione": "0.4.14",
+      "versione": "0.4.15",
       "licenza": "MIT OR Apache-2.0",
       "repository": "https://github.com/RustCrypto/hybrid-array",
       "autori": [
@@ -1708,9 +1704,9 @@
         }
       ]
     },
-    "log-0.4.33": {
+    "log-0.4.34": {
       "nome": "log",
-      "versione": "0.4.33",
+      "versione": "0.4.34",
       "licenza": "MIT OR Apache-2.0",
       "repository": "https://github.com/rust-lang/log",
       "autori": [
@@ -1837,9 +1833,9 @@
         }
       ]
     },
-    "num-integer-0.1.46": {
+    "num-integer-0.1.47": {
       "nome": "num-integer",
-      "versione": "0.1.46",
+      "versione": "0.1.47",
       "licenza": "MIT OR Apache-2.0",
       "repository": "https://github.com/rust-num/num-integer",
       "autori": [
@@ -1937,9 +1933,9 @@
         }
       ]
     },
-    "plenora-cli-4.1.5": {
+    "plenora-cli-5.0.0": {
       "nome": "plenora-cli",
-      "versione": "4.1.5",
+      "versione": "5.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -1952,9 +1948,9 @@
         }
       ]
     },
-    "plenora-core-4.1.5": {
+    "plenora-core-5.0.0": {
       "nome": "plenora-core",
-      "versione": "4.1.5",
+      "versione": "5.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -1967,9 +1963,9 @@
         }
       ]
     },
-    "plenora-data-py-4.1.5": {
+    "plenora-data-py-5.0.0": {
       "nome": "plenora-data-py",
-      "versione": "4.1.5",
+      "versione": "5.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -2002,9 +1998,9 @@
         }
       ]
     },
-    "plenora-io-4.1.5": {
+    "plenora-io-5.0.0": {
       "nome": "plenora-io",
-      "versione": "4.1.5",
+      "versione": "5.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -2017,9 +2013,9 @@
         }
       ]
     },
-    "plenora-kernels-geo-4.1.5": {
+    "plenora-kernels-geo-5.0.0": {
       "nome": "plenora-kernels-geo",
-      "versione": "4.1.5",
+      "versione": "5.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -2032,9 +2028,9 @@
         }
       ]
     },
-    "plenora-kernels-table-4.1.5": {
+    "plenora-kernels-table-5.0.0": {
       "nome": "plenora-kernels-table",
-      "versione": "4.1.5",
+      "versione": "5.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -2069,9 +2065,9 @@
         }
       ]
     },
-    "plenora-pipeline-4.1.5": {
+    "plenora-pipeline-5.0.0": {
       "nome": "plenora-pipeline",
-      "versione": "4.1.5",
+      "versione": "5.0.0",
       "licenza": null,
       "repository": null,
       "autori": [],
@@ -2303,9 +2299,9 @@
         }
       ]
     },
-    "regex-automata-0.4.16": {
+    "regex-automata-0.4.18": {
       "nome": "regex-automata",
-      "versione": "0.4.16",
+      "versione": "0.4.18",
       "licenza": "MIT OR Apache-2.0",
       "repository": "https://github.com/rust-lang/regex",
       "autori": [
@@ -2596,9 +2592,9 @@
         }
       ]
     },
-    "smallvec-1.15.2": {
+    "smallvec-1.16.1": {
       "nome": "smallvec",
-      "versione": "1.15.2",
+      "versione": "1.16.1",
       "licenza": "MIT OR Apache-2.0",
       "repository": "https://github.com/servo/rust-smallvec",
       "autori": [
@@ -2748,9 +2744,9 @@
         }
       ]
     },
-    "tinyvec-1.12.0": {
+    "tinyvec-1.13.3": {
       "nome": "tinyvec",
-      "versione": "1.12.0",
+      "versione": "1.13.3",
       "licenza": "Zlib OR Apache-2.0 OR MIT",
       "repository": "https://github.com/Lokathor/tinyvec",
       "autori": [
@@ -2771,33 +2767,6 @@
         {
           "file": "LICENSE-ZLIB.md",
           "sha256": "84b34dd7608f7fb9b17bd588a6bf392bf7de504e2716f024a77d89f1b145a151",
-          "origine": "pacchetto"
-        }
-      ]
-    },
-    "tinyvec_macros-0.1.1": {
-      "nome": "tinyvec_macros",
-      "versione": "0.1.1",
-      "licenza": "MIT OR Apache-2.0 OR Zlib",
-      "repository": "https://github.com/Soveu/tinyvec_macros",
-      "autori": [
-        "Soveu <marx.tomasz@gmail.com>"
-      ],
-      "nostro": false,
-      "avvisi": [
-        {
-          "file": "LICENSE-APACHE.md",
-          "sha256": "4f44572785f35152c1fd2eadf565b7e079c0f300b4324f0af653419f9d76b735",
-          "origine": "pacchetto"
-        },
-        {
-          "file": "LICENSE-MIT.md",
-          "sha256": "1dd8eca0f83669e75fa119e34fb9e1be9d16e3e9b6368962b8019db6e8ae5f7b",
-          "origine": "pacchetto"
-        },
-        {
-          "file": "LICENSE-ZLIB.md",
-          "sha256": "41ace205715d9f19a3214218cc1c01d57c533e02cd0fef7c8e51a49a7fce5ac5",
           "origine": "pacchetto"
         }
       ]
@@ -2956,15 +2925,12 @@
         }
       ]
     },
-    "zerocopy-0.8.55": {
+    "zerocopy-0.8.59": {
       "nome": "zerocopy",
-      "versione": "0.8.55",
+      "versione": "0.8.59",
       "licenza": "BSD-2-Clause OR Apache-2.0 OR MIT",
       "repository": "https://github.com/google/zerocopy",
-      "autori": [
-        "Joshua Liebow-Feeser <joshlf@google.com>",
-        "Jack Wrenn <jswrenn@amazon.com>"
-      ],
+      "autori": [],
       "nostro": false,
       "avvisi": [
         {

@@ -468,24 +468,9 @@ fn senza_precisione_ereditata(
     operands: &[Option<&plenora_core::contract::GeometryColumnContract>],
 ) -> Result<DataContract> {
     use plenora_core::contract::geometry_metadata_policy::{
-        apply, column_effects, operation_effect, Effect,
+        apply, contract_column_effects, operation_effect, Effect,
     };
-    // Gli ID interni del contratto non sono gli ID pubblici dei metadati Arrow.
-    // Le binarie geo ereditano solo la sinistra (analyze_binary): il destro
-    // e' letto, non trasformato nell'uscita, anche se condivide gli ID.
-    let resolved = operands
-        .iter()
-        .take(1)
-        .map(|operand| {
-            operand.and_then(|operand| {
-                output
-                    .geometries
-                    .iter()
-                    .find(|geometry| geometry.field_id == operand.field_id)
-            })
-        })
-        .collect::<Vec<_>>();
-    let effects = column_effects(descriptor, &output.schema, &resolved)?;
+    let effects = contract_column_effects(descriptor, &output, operands)?;
     let fields: Vec<Field> = output
         .schema
         .fields()

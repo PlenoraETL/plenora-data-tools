@@ -7625,6 +7625,54 @@
       "arrow_arguments": [
         "Field"
       ]
+    },
+    "crates/plenora-core/src/contract/geometry_metadata_policy.rs::contract_column_effects": {
+      "signature": "pub fn contract_column_effects( descriptor: &crate::catalog::OperationDescriptor, output: &super::DataContract, operands: &[Option<&super::GeometryColumnContract>], ) -> Result<Vec<(usize, Effect)>, PlenoraError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Solo contratti e metadati validati, nessun buffer o cella Arrow in ingresso.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/contract/geometry_metadata_policy/report.rs::localized_effects": {
+      "signature": "pub fn localized_effects( descriptor: &crate::catalog::OperationDescriptor, inputs: &[&DataContract], output: &DataContract, effects: &[(usize, Effect)], ) -> Result<Vec<LocalizedEffect>>",
+      "classification": "non riceve dati esterni",
+      "reason": "Solo contratti e metadati validati, nessun buffer o cella Arrow in ingresso.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-cli/src/runtime_binding.rs::runtime_capabilities": {
+      "signature": "pub fn runtime_capabilities() -> Value",
+      "classification": "non riceve dati esterni",
+      "reason": "Nessun buffer Arrow Rust esterno: il wire binario attraversa leggi_tabella e le guardie comuni; discovery e entrypoint non ricevono tabelle.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-cli/src/runtime_binding.rs::entrypoint": {
+      "signature": "pub fn entrypoint(operation: &str, version: u32) -> String",
+      "classification": "non riceve dati esterni",
+      "reason": "Nessun buffer Arrow Rust esterno: il wire binario attraversa leggi_tabella e le guardie comuni; discovery e entrypoint non ricevono tabelle.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-cli/src/runtime_binding.rs::invoke": {
+      "signature": "pub fn invoke(&self, invocation: &RuntimeInvocation, context: &Interruzione) -> RuntimeResult",
+      "classification": "non riceve dati esterni",
+      "reason": "Nessun buffer Arrow Rust esterno: il wire binario attraversa leggi_tabella e le guardie comuni; discovery e entrypoint non ricevono tabelle.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-cli/src/artefatti.rs::firma_coerente": {
+      "signature": "pub fn firma_coerente(formato: Formato, inizio: &[u8]) -> bool",
+      "classification": "non riceve dati esterni",
+      "reason": "Helper del modulo privato artefatti: JSON e byte di firma, nessun buffer Arrow Rust esterno; lettura e validazione passano dai confini comuni.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-cli/src/artefatti.rs::esegui_artefatti_con_report": {
+      "signature": "pub fn esegui_artefatti_con_report( richiesta: &str, risolutore: &dyn RisolutoreArtefatti, interruzione: &Interruzione, ) -> Result<(Value, plenora_pipeline::Report)>",
+      "classification": "non riceve dati esterni",
+      "reason": "Helper del modulo privato artefatti: JSON e byte di firma, nessun buffer Arrow Rust esterno; lettura e validazione passano dai confini comuni.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-cli/src/artefatti.rs::valida_artefatti": {
+      "signature": "pub fn valida_artefatti( richiesta: &str, risolutore: &dyn RisolutoreArtefatti, interruzione: &Interruzione, ) -> Result<Value>",
+      "classification": "non riceve dati esterni",
+      "reason": "Helper del modulo privato artefatti: JSON e byte di firma, nessun buffer Arrow Rust esterno; lettura e validazione passano dai confini comuni.",
+      "arrow_arguments": []
     }
   },
   "python": {

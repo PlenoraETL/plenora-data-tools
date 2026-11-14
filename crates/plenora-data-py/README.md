@@ -154,12 +154,11 @@ chiama `PyErr_CheckSignals`:
   lavoro si fermi (nessun lavoro continua dopo l'annullamento) e propaga
   `asyncio.CancelledError` con l'esito come causa, anche quando il lavoro
   era già finito con successo (annullamento alla consegna, con l'effetto
-  vero). In Python 3.10 chi aspetta il task riceve un `CancelledError`
-  nuovo, con quello sollevato dentro il task come `__context__`.
+  vero).
 
 ## Scelte rispetto a plenora-database-tools
 
-Adottate: PyO3 0.29.2 con ABI stabile `abi3-py310` (un wheel per
+Adottate: PyO3 0.29.2 con ABI stabile `abi3-py314` (un wheel per
 piattaforma), maturin 1.16.0 fissata, `extension-module` solo nella build del
 wheel (`pyproject.toml`), modulo nativo privato `_native` con i wrapper
 Python sopra, gerarchia `PlenoraError` sotto `RuntimeError` con una classe
@@ -210,10 +209,9 @@ lint, `--workspace --lib`) passa sul crate.
 ## Verifica
 
 - `.github/workflows/sdk-python.yml`: wheel con maturin su Linux
-  (manylinux 2_34) e Windows; ogni wheel installato e provato con Python 3.10
-  e 3.14 da `scripts/verifica_sdk_python.py` (nome, metadati, PEP 561,
+  (manylinux 2_34) e Windows; ogni wheel installato e provato con Python 3.14 da `scripts/verifica_sdk_python.py` (nome, metadati, PEP 561,
   import da `site-packages`, versioni, modulo nativo byte per byte, suite
-  pytest intera senza test saltati); mypy `--strict` su 3.10 e 3.14
+  pytest intera senza test saltati); mypy `--strict` su 3.14
   (`typing/mypy.ini`, `typing/sdk_contract.py`). Due wheel per sistema:
   quello delle prove, con le sonde (feature Cargo `sonde-di-prova`), su cui
   gira la suite intera, e quello di rilascio, senza feature, verificato con
@@ -251,7 +249,7 @@ lint, `--workspace --lib`) passa sul crate.
   con `jsonschema` contro le copie degli schemi dei contratti
   (`crates/plenora-cli/tests/fixtures/contratti`, SHA-256 verificato).
 
-Costruire e provare in locale (Python >= 3.10 nel `PATH` anche per
+Costruire e provare in locale (Python >= 3.14 nel `PATH` anche per
 `cargo build --workspace`, che collega libpython):
 
 ```sh
@@ -271,7 +269,7 @@ python scripts/verifica_sdk_python.py --wheel dist-rilascio/plenora_data-<versio
 
 | sezione | dove |
 | --- | --- |
-| 2, identità | `pyproject.toml` (`plenora-data`, `requires-python >=3.10`, versione dal crate), `version()` in `src/lib.rs`, prova in `scripts/verifica_sdk_python.py` |
+| 2, identità | `pyproject.toml` (`plenora-data`, `requires-python >=3.14`, versione dal crate), `version()` in `src/lib.rs`, prova in `scripts/verifica_sdk_python.py` |
 | 3, tipi e superficie | `py.typed`, `_native.pyi`, annotazioni in `_api.py` ed `errors.py`, `__all__` in `__init__.py`; risultati `dict` e `RunResult`, tabelle PyArrow |
 | 4, sync e async | `_api.py` (`_prepara_*` comuni, `_in_thread`); prova in `tests/test_superficie.py` (firme uguali) e `tests/test_controlli.py` |
 | 5, ciclo di vita | senza oggetto (nessuna risorsa a lunga vita) |

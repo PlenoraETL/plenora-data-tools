@@ -58,8 +58,10 @@ use plenora_core::arrow::array::types::{
 use plenora_core::arrow::array::{Array, ArrayRef, RecordBatch};
 use plenora_core::arrow::schema::{Fields, TimeUnit};
 use plenora_core::arrow::{DataType, Field, Schema, SchemaRef};
+#[cfg(test)]
+use plenora_core::catalog::find_operation;
 use plenora_core::catalog::{
-    find_operation, Arity, CancellationBehavior, CrsRequirement, DeterminismPolicy, ExecutionClass,
+    Arity, CancellationBehavior, CrsRequirement, DeterminismPolicy, ExecutionClass,
     ExpansionConstraint, Family, GeoFusion, Maturity, OperationDescriptor, Origin, ResultShape,
     SourceRowProvenance, ALIASES, CATALOG,
 };
@@ -5942,4 +5944,37 @@ fn schema_ruolo_catalogo(
         *f = f.clone().with_metadata(md);
     }
     Schema::new_with_metadata(campi, metadata)
+}
+
+/// Esporta le stesse fixture delle schede per le prove sulle cinque superfici.
+/// Nessun secondo parser e nessuna seconda implementazione dei kernel.
+///
+/// # Panics
+/// Una scheda non valida o un errore di I/O interrompono questa prova.
+pub fn esporta_casi_superfici(directory: &Path) {
+    prepara_ambiente();
+    std::fs::create_dir_all(directory).unwrap();
+    let (schede, errors) = leggi_schede();
+    assert!(errors.is_empty(), "{errors:?}");
+    let mut cases = Vec::new();
+    for scheda in schede {
+        let folder = directory.join(scheda.operazione.id);
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut inputs = serde_json::Map::new();
+        for (index, spec) in scheda.esempio.ingressi.iter().enumerate() {
+            let batch = tabella_con_metadati(&spec.colonne, &spec.metadati).unwrap();
+            let name = format!("input-{index}.arrow");
+            let mut file = std::fs::File::create(folder.join(&name)).unwrap();
+            plenora_io::ipc::scrivi(&batch, &mut file).unwrap();
+            inputs.insert(spec.nome.clone(), Value::String(name));
+        }
+        let plan: Value = serde_json::from_str(&testo_piano(&scheda)).unwrap();
+        cases.push(serde_json::json!({"operation":scheda.operazione.id,
+            "plan":plan,"inputs":inputs,"compare_values":scheda.esempio.valori_confrontati}));
+    }
+    std::fs::write(
+        directory.join("cases.json"),
+        serde_json::to_vec_pretty(&cases).unwrap(),
+    )
+    .unwrap();
 }

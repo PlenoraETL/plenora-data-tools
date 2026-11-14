@@ -80,7 +80,10 @@ class RunResult:
     """Il risultato di `run` e `arun`.
 
     `result` è il documento `plenora-data-execution-result-v2` (output e
-    passi, mai percorsi). `tables` ha le tabelle d'uscita, nell'ordine degli
+    passi, mai percorsi), esteso da `effects_contract`
+    `plenora-data-localized-effects-v1` e dagli `effects` di ogni passo.
+    Gli indici di campo sono zero-based nello schema del passo; nessun valore
+    dei metadati viene incluso. `tables` ha le tabelle d'uscita, nell'ordine degli
     output del piano, quando non sono state scritte su file (`outputs`
     assente); altrimenti è vuoto.
     """

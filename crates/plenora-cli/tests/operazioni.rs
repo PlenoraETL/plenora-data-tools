@@ -526,13 +526,14 @@ fn stesso_ingresso_stessi_byte() {
         assert_eq!(
             esito.documento["result"],
             serde_json::json!({
+                "effects_contract": "plenora-data-localized-effects-v1",
                 "outputs": [
                     {"name":"a", "content_type":"application/vnd.apache.arrow.file", "rows":2, "columns":3},
                     {"name":"b", "content_type":"application/vnd.apache.parquet", "rows":1, "columns":3},
                 ],
                 "steps": [
-                    {"out":"a", "op":"table.filter", "rows_in":[4], "rows_out":2, "division_by_zero_rows":0},
-                    {"out":"b", "op":"table.limit", "rows_in":[4], "rows_out":1, "division_by_zero_rows":0},
+                    {"out":"a", "op":"table.filter", "rows_in":[4], "rows_out":2, "division_by_zero_rows":0, "effects":[]},
+                    {"out":"b", "op":"table.limit", "rows_in":[4], "rows_out":1, "division_by_zero_rows":0, "effects":[]},
                 ],
             })
         );

@@ -82,6 +82,26 @@
     "surface-bindings-v1.schema.json": [
       "schemas/surface-bindings-v1.schema.json",
       "187f41f51d1b9042f15c2348ff352f1a204c96db2ea49397952baf01919b2827"
+    ],
+    "runtime-v1.json": [
+      "bindings/runtime-v1.json",
+      "3c2cf9d0a32e8bb5ba348cc42fc8daabedf5974d355ab0f7037dba6c1a39e685"
+    ],
+    "runtime-vector-v1.schema.json": [
+      "schemas/runtime-vector-v1.schema.json",
+      "3ec6148b8fb3db111ca0d1ff29283c3f8a46a7727c3051a777a123c102ca1f9e"
+    ],
+    "data-run-input-contract-malformed.json": [
+      "vectors/runtime-probes-v1/data-run-input-contract-malformed.json",
+      "67723dae7b7e3306354a9db7548b8ec282d47524a9683632f81a93cd1f5e9115"
+    ],
+    "data-run-input-contract-mismatch.json": [
+      "vectors/runtime-probes-v1/data-run-input-contract-mismatch.json",
+      "6df1dd05888fd98e73ee41620089e2df380c4e79fa072193823cbdd3127731a2"
+    ],
+    "data-validate-request-v2.json": [
+      "vectors/runtime-v1/data-validate-request-v2.json",
+      "da88462b0d850fcc9edb18c9854eeef26ff2f67452442e9c6730c21ed62e6923"
     ]
   }
 }

@@ -11,7 +11,7 @@ name = "plenora-data"
 dynamic = ["version"]
 description = "SDK Python di plenora-data-tools: catalogo, descrizione, validazione ed esecuzione di piani su tabelle Arrow"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 # PyArrow e' il confine delle tabelle (Python SDK 1.0, sezione 3). La serie
 # qualificata dalla suite e' la 25 (requirements-sdk-tests.txt): un'altra
 # serie si dichiara dopo averla provata, non prima.
@@ -19,10 +19,6 @@ dependencies = ["pyarrow>=25,<26"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
     "Typing :: Typed",

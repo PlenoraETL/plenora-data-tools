@@ -22,25 +22,6 @@ import verifica_sdk_python
 
 
 class FontiTests(unittest.TestCase):
-    def test_sdk_importabile_senza_tomllib(self):
-        # Sottoprocesso pulito: non puo' riusare un import gia' in cache.
-        code = """
-import builtins, sys
-sys.path.insert(0, sys.argv[1])
-original = builtins.__import__
-def guarded(name, *args, **kwargs):
-    if name == 'tomllib':
-        raise ModuleNotFoundError('tomllib non disponibile')
-    return original(name, *args, **kwargs)
-builtins.__import__ = guarded
-import verifica_sdk_python as sdk
-assert sdk.SONDE
-assert repr(sdk.SONDE) in sdk.SONDA
-"""
-        result = subprocess.run([sys.executable, "-I", "-c", code, str(fonti_prove.ROOT / "scripts")],
-                                capture_output=True, text=True, check=False)
-        self.assertEqual(result.returncode, 0, result.stderr)
-
     def test_censimento_identico_con_separatori_e_ordinamenti_diversi(self):
         names = guard.file_tracciati(fonti_prove.ROOT)
         documents = []

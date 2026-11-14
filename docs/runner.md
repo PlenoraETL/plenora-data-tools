@@ -977,3 +977,40 @@ Le operazioni che rimuovono o sostituiscono colonne eliminano le prove
 d'ordinamento coinvolte. L'analisi geo elimina conservativamente gli
 ordinamenti sulla geometria, anche nelle operazioni che la lasciano
 invariata; conserva quelli sulle colonne tabellari propagate.
+
+
+## Effetti localizzati dell'esecuzione
+
+Data 5.0.0 corregge C-01: `ReportPasso.effetti_localizzati` e' la proiezione
+localizzata della politica `geometry_metadata_policy` e dei contratti del passo.
+`OPERATION_POLICY` resta l'unica classificazione delle operazioni; la stessa
+risoluzione dei ruoli usata dall'analisi alimenta il rapporto. Il rapporto viene
+consegnato solo per passi riusciti, dopo che il kernel ha rispettato il contratto.
+
+Il risultato `plenora-data-execution-result-v2` di CLI, Rust `esegui_in_memoria`
+e SDK `run`/`arun` aggiunge `effects_contract` con valore
+`plenora-data-localized-effects-v1` e un array `effects` per passo. E' un'estensione
+component-owned versionata: al pin dei contratti il documento v2 non e' uno
+schema JSON chiuso. I conteggi e gli output esistenti mantengono il significato;
+non si riutilizza v3, che identifica il manifesto chiuso degli artefatti.
+
+Ogni effetto ha `field_index` (posizione zero-based nello schema d'uscita del
+passo), `input_index` (posizione nell'elenco `in`), `source_field_index` (posizione
+nello schema dell'ingresso), `key` (JSON Pointer della chiave, con escape RFC 6901)
+e `action`. Una posizione non applicabile e' null: entrambi gli indici di campo
+null identificano i metadati di schema, un campo sorgente senza campo d'uscita
+identifica una rimozione. Le posizioni sono riferite al passo, non agli output
+finali o alle righe. Nessun valore di cella o metadato viene riportato.
+
+Le azioni sono `derived` (campo prodotto/trasformato), `removed` (campo eliminato),
+`metadata_invalidated` (chiave rimossa) e `metadata_reconstructed` (chiave nuova,
+modificata o riscritta dalla politica, anche con valore identico). Il rapporto
+comprende chiavi future `plenora.postgres.*` e membri dei contenitori geometrici;
+non contiene una lista separata delle chiavi da invalidare. L'ordine segue lo
+schema d'uscita, gli ingressi e le chiavi ordinate, quindi e' deterministico.
+
+Un contenitore interamente eliminato si localizza con la sua chiave (per esempio
+`/geo`), senza interpretarne il contenuto. Anche un contenitore opaco passato
+byte per byte con effetto `Unchanged` resta opaco: il rapporto non introduce
+rifiuti che la politica non richiede. Le chiavi realmente interpretate o
+ricostruite mantengono i controlli JSON esatti.

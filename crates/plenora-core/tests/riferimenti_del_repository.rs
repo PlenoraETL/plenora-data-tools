@@ -41,9 +41,15 @@ const VIETATI: &[&str] = &[
 /// gli esiti di riferimento della lettura Parquet (`plenora-io`).
 const TESTO: &[&str] = &[
     "rs", "toml", "md", "py", "pyi", "typed", "ini", "txt", "json", "csv", "tsv", "lock", "yml",
+    "sha256",
 ];
 /// Nomi di file di testo senza estensione.
-const TESTO_PER_NOME: &[&str] = &[".gitignore", ".gitattributes", "Dockerfile"];
+const TESTO_PER_NOME: &[&str] = &[
+    ".gitignore",
+    ".gitattributes",
+    ".python-version",
+    "Dockerfile",
+];
 /// Prefissi dei testi di licenza, speculari al riconoscitore `NOMI` di
 /// `scripts/avvisi_crate.py`: la LICENSE del prodotto e i testi versionati
 /// in `assurance/licenze-crate` (LICENSE-APACHE, COPYING, UNLICENSE, ...)
@@ -249,6 +255,11 @@ fn nessun_riferimento_obsoleto_nel_repository() {
     let mut difetti = Vec::new();
     let mut scanditi = 0;
     for percorso in &scansione.testi {
+        // Lo snapshot comune cita anche percorsi degli altri repository.
+        // I suoi byte sono verificati dai digest del job CI dipendenze.
+        if percorso.starts_with(radice.join(".ci/plenora-dependencies")) {
+            continue;
+        }
         if nome_di(percorso) == questo {
             continue;
         }

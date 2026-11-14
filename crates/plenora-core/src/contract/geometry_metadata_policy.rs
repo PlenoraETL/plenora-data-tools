@@ -1,4 +1,5 @@
 //! Politica unica delle dichiarazioni geometriche, indipendente dal trasporto.
+pub mod report;
 pub mod types;
 
 use crate::arrow::Metadata;
@@ -1299,4 +1300,29 @@ pub fn require_same_reference_metadata(
         metadata
     };
     merge(&native(left), &native(right)).map(|_| ())
+}
+
+/// Effetti delle colonne dopo la rimappatura delle identita' dell'analisi.
+/// Le binarie geometriche trasformano la sinistra; la destra e' letta.
+///
+/// # Errors
+/// Gli errori di coerenza di [`column_effects`].
+pub fn contract_column_effects(
+    descriptor: &crate::catalog::OperationDescriptor,
+    output: &super::DataContract,
+    operands: &[Option<&super::GeometryColumnContract>],
+) -> Result<Vec<(usize, Effect)>, PlenoraError> {
+    let resolved = operands
+        .iter()
+        .take(1)
+        .map(|operand| {
+            operand.and_then(|operand| {
+                output
+                    .geometries
+                    .iter()
+                    .find(|geometry| geometry.field_id == operand.field_id)
+            })
+        })
+        .collect::<Vec<_>>();
+    column_effects(descriptor, &output.schema, &resolved)
 }

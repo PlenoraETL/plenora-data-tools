@@ -5,8 +5,8 @@
 //! Le operazioni sono le cinque del catalogo pubblico di `plenora-contracts`
 //! (`catalogs/data-tools-v3.json`, profilo `plenora-data-tools-profile-v3`):
 //! `data.catalog` 2, `data.describe` 1, `data.validate` 2, `data.run` 2 e
-//! `data.run` 3. Quest'ultima sta solo sulla superficie Rust (e sul runtime,
-//! che l'applicazione costruisce sopra): niente comando CLI, niente simbolo
+//! `data.run` 3. Quest'ultima sta sulle superfici Rust e runtime
+//! (`crate::runtime_binding`): niente comando CLI, niente simbolo
 //! Python, niente voce nei documenti delle capacità della CLI e dell'SDK.
 //! Identificatori, versioni, contratti e tipi di contenuto vengono da lì; gli
 //! attributi dicono ciò che i campi comuni non dicono.
@@ -244,7 +244,7 @@ pub fn per_comando(comando: &str) -> Option<&'static OperazionePubblica> {
 }
 
 /// L'operazione dal suo identificatore, sulle superfici CLI e Python
-/// (`data.run` 2: la 3 è solo Rust).
+/// (`data.run` 2: la 3 è Rust e runtime).
 #[must_use]
 pub fn per_id(id: &str) -> Option<&'static OperazionePubblica> {
     OPERAZIONI

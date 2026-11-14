@@ -54,7 +54,8 @@ fn qualifica_415_rust_e_cli() {
                         assert!(!format!("{error:?}").contains("SENTINEL_415"));
                         verifica_cli(&input, &plan, category, "validate", "415", compute);
                     } else {
-                        let (_, output) = result.unwrap();
+                        let (report, output) = result.unwrap();
+                        verifica_effetti_localizzati(&report, compute);
                         qualifica_415::check(&input, &output[0].1, compute);
                         let dir = tempfile::tempdir().unwrap();
                         let source = dir.path().join("input.arrow");
@@ -81,6 +82,12 @@ fn qualifica_415_rust_e_cli() {
                             String::from_utf8_lossy(&run.stdout)
                         );
                         assert!(run.stderr.is_empty());
+                        let wire: Value = serde_json::from_slice(&run.stdout).unwrap();
+                        assert_eq!(wire["result"]["steps"], report["steps"]);
+                        assert_eq!(
+                            wire["result"]["effects_contract"],
+                            report["effects_contract"]
+                        );
                         qualifica_415::check(
                             &input,
                             &plenora_io::leggi_tabella(&target, None, u64::MAX).unwrap(),
@@ -133,7 +140,7 @@ fn qualifica_415_geography_secondaria_e_operazioni_di_righe() {
         ] {
             let plan =
                 serde_json::json!({"version":1,"inputs":["t"],"steps":[step],"outputs":["o"]});
-            let (_, output) = plenora_cli::api::esegui_in_memoria(
+            let (report, output) = plenora_cli::api::esegui_in_memoria(
                 &Pipeline::from_json(&plan.to_string()).unwrap(),
                 vec![Ingresso::Tabella {
                     nome: "t".into(),
@@ -142,6 +149,11 @@ fn qualifica_415_geography_secondaria_e_operazioni_di_righe() {
                 &Interruzione::default(),
             )
             .unwrap();
+            assert!(!report["steps"][0]["effects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["field_index"] == 2));
             assert_eq!(
                 output[0].1.schema().field(2).metadata(),
                 secondary.metadata()
@@ -1045,4 +1057,81 @@ fn decisione_0022_mixed_omette_elenco_vuoto() {
             false,
         );
     }
+}
+
+/// C-01: attesa indipendente dalle funzioni che producono il rapporto.
+fn verifica_effetti_localizzati(report: &Value, compute: bool) {
+    assert_eq!(
+        report["effects_contract"],
+        "plenora-data-localized-effects-v1"
+    );
+    assert!(!report.to_string().contains("SENTINEL_415"));
+    if !compute {
+        assert_eq!(report["steps"], serde_json::json!([]));
+        return;
+    }
+    let effects = report["steps"][0]["effects"].as_array().unwrap();
+    for key in [
+        "/plenora.postgres.native_declaration",
+        "/plenora.postgres.future",
+    ] {
+        assert!(effects.iter().any(|e| e["field_index"] == 1
+            && e["input_index"] == 0
+            && e["source_field_index"] == 1
+            && e["key"] == key
+            && e["action"] == "metadata_invalidated"));
+    }
+    assert!(effects
+        .iter()
+        .any(|e| e["field_index"] == 1 && e["action"] == "derived"));
+    assert!(effects.iter().any(|e| e["field_index"] == 1
+        && e["key"] == "/plenora.geometry.types"
+        && e["action"] == "metadata_reconstructed"));
+    assert!(!effects.iter().any(|e| e["field_index"] == 0));
+}
+
+#[test]
+fn localized_join_omitted_right_key_is_removed_not_changed_left() {
+    let batch = |id: &str, value: &str| {
+        let mut md = plenora_core::arrow::Metadata::new();
+        md.insert("plenora.field_id", id);
+        md.insert("custom.provenance", value);
+        let mut schema_md = plenora_core::arrow::Metadata::new();
+        schema_md.insert("plenora.contract.version", "1");
+        RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                vec![Field::new("k", DataType::Int64, false).with_metadata(md)],
+                schema_md,
+            )),
+            vec![Arc::new(Int64Array::from(vec![1]))],
+        )
+        .unwrap()
+    };
+    let plan = Pipeline::from_json(r#"{"version":1,"inputs":["l","r"],"steps":[
+        {"out":"o","op":"table.join","in":["l","r"],"config":{"left_keys":["k"],"right_keys":["k"],"how":"inner"}}
+    ],"outputs":["o"]}"#).unwrap();
+    let (report, _) = plenora_cli::api::esegui_in_memoria(
+        &plan,
+        vec![
+            Ingresso::Tabella {
+                nome: "l".into(),
+                tabella: batch("1", "left"),
+            },
+            Ingresso::Tabella {
+                nome: "r".into(),
+                tabella: batch("2", "SENTINEL_RIGHT"),
+            },
+        ],
+        &Interruzione::default(),
+    )
+    .unwrap();
+    let effects = report["steps"][0]["effects"].as_array().unwrap();
+    assert!(effects.iter().any(|e| e["input_index"] == 1
+        && e["source_field_index"] == 0
+        && e["field_index"].is_null()
+        && e["action"] == "removed"));
+    assert!(!effects
+        .iter()
+        .any(|e| e["input_index"] == 1 && e["field_index"] == 0));
+    assert!(!report.to_string().contains("SENTINEL_RIGHT"));
 }

@@ -329,7 +329,8 @@ fn formato_del_tipo(tipo: &str) -> Option<Formato> {
 /// La firma dei primi byte contro il formato dichiarato (DT-RUN-003): la
 /// lettura di `plenora-io` riconosce file e stream Arrow dal contenuto, e
 /// una sorgente si legge come il tipo che dichiara.
-fn firma_coerente(formato: Formato, inizio: &[u8]) -> bool {
+#[must_use]
+pub fn firma_coerente(formato: Formato, inizio: &[u8]) -> bool {
     let arrow_file = inizio.starts_with(b"ARROW1");
     let parquet = inizio.starts_with(b"PAR1");
     match formato {
@@ -454,29 +455,7 @@ fn leggi_richiesta(richiesta: &str) -> Result<(Richiesta<'_>, Pipeline)> {
     if letta.schema_version != 1 {
         return Err(configurazione("schema_version diversa da 1"));
     }
-    for sorgente in letta.inputs.values() {
-        if !riferimento_valido(&sorgente.reference) {
-            return Err(configurazione("riferimento di una sorgente non opaco"));
-        }
-        if formato_del_tipo(&sorgente.content_type).is_none() {
-            return Err(configurazione(
-                "tipo di contenuto di una sorgente non accettato",
-            ));
-        }
-        if let Some(attesa) = &sorgente.expected {
-            if attesa.size.is_none() && attesa.sha256.is_none() {
-                return Err(configurazione("`expected` vuoto"));
-            }
-            if attesa.sha256.as_ref().is_some_and(|digest| {
-                digest.len() != 64
-                    || !digest
-                        .bytes()
-                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            }) {
-                return Err(configurazione("SHA-256 atteso non valido"));
-            }
-        }
-    }
+    verifica_sorgenti(&letta.inputs)?;
     for uscita in letta.outputs.values() {
         if !riferimento_valido(&uscita.reference) {
             return Err(configurazione("riferimento di una destinazione non opaco"));
@@ -510,10 +489,37 @@ fn leggi_richiesta(richiesta: &str) -> Result<(Richiesta<'_>, Pipeline)> {
     Ok((letta, piano))
 }
 
+fn verifica_sorgenti(inputs: &BTreeMap<String, Sorgente>) -> Result<()> {
+    for sorgente in inputs.values() {
+        if !riferimento_valido(&sorgente.reference) {
+            return Err(configurazione("riferimento di una sorgente non opaco"));
+        }
+        if formato_del_tipo(&sorgente.content_type).is_none() {
+            return Err(configurazione(
+                "tipo di contenuto di una sorgente non accettato",
+            ));
+        }
+        if let Some(attesa) = &sorgente.expected {
+            if attesa.size.is_none() && attesa.sha256.is_none() {
+                return Err(configurazione("`expected` vuoto"));
+            }
+            if attesa.sha256.as_ref().is_some_and(|digest| {
+                digest.len() != 64
+                    || !digest
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            }) {
+                return Err(configurazione("SHA-256 atteso non valido"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Le sorgenti nei file temporanei di `cartella`, nell'ordine degli input
 /// del piano (DT-RUN-003).
 fn leggi_sorgenti(
-    letta: &Richiesta<'_>,
+    inputs: &BTreeMap<String, Sorgente>,
     piano: &Pipeline,
     risolutore: &dyn RisolutoreArtefatti,
     interruzione: &Interruzione,
@@ -521,8 +527,7 @@ fn leggi_sorgenti(
 ) -> Result<Vec<Ingresso>> {
     let mut ingressi = Vec::with_capacity(piano.inputs.len());
     for (indice, nome) in piano.inputs.iter().enumerate() {
-        let sorgente = letta
-            .inputs
+        let sorgente = inputs
             .get(nome)
             .ok_or_else(|| configurazione("input del piano senza sorgente"))?;
         let formato = formato_del_tipo(&sorgente.content_type)
@@ -635,6 +640,28 @@ fn esegui_artefatti_in(
     interruzione: &Interruzione,
     crea_cartella: impl FnOnce() -> std::io::Result<tempfile::TempDir>,
 ) -> Result<Value> {
+    esegui_artefatti_con_report_in(richiesta, risolutore, interruzione, crea_cartella)
+        .map(|(documento, _)| documento)
+}
+
+/// Esecuzione comune con rapporto interno per il binding runtime.
+///
+/// # Errors
+/// Gli stessi errori di [`esegui_artefatti`].
+pub fn esegui_artefatti_con_report(
+    richiesta: &str,
+    risolutore: &dyn RisolutoreArtefatti,
+    interruzione: &Interruzione,
+) -> Result<(Value, plenora_pipeline::Report)> {
+    esegui_artefatti_con_report_in(richiesta, risolutore, interruzione, tempfile::tempdir)
+}
+
+fn esegui_artefatti_con_report_in(
+    richiesta: &str,
+    risolutore: &dyn RisolutoreArtefatti,
+    interruzione: &Interruzione,
+    crea_cartella: impl FnOnce() -> std::io::Result<tempfile::TempDir>,
+) -> Result<(Value, plenora_pipeline::Report)> {
     let (letta, piano) = leggi_richiesta(richiesta)?;
     // Le destinazioni nell'ordine del piano: l'ordine di pubblicazione.
     let destinazioni: Vec<Destinazione<'_>> = piano
@@ -655,7 +682,13 @@ fn esegui_artefatti_in(
 
     let cartella = crea_cartella()
         .map_err(|errore| PlenoraError::io_con_contesto("cartella temporanea", errore))?;
-    let ingressi = leggi_sorgenti(&letta, &piano, risolutore, interruzione, cartella.path())?;
+    let ingressi = leggi_sorgenti(
+        &letta.inputs,
+        &piano,
+        risolutore,
+        interruzione,
+        cartella.path(),
+    )?;
     let uscite: Vec<FileUscita> = destinazioni
         .iter()
         .enumerate()
@@ -709,6 +742,10 @@ fn esegui_artefatti_in(
         .close()
         .map_err(|errore| pulizia_fallita(errore.kind()))?;
 
+    Ok((documento_artefatti(&pronti, &esito.report), esito.report))
+}
+
+fn documento_artefatti(pronti: &[Pronto<'_>], report: &plenora_pipeline::Report) -> Value {
     let outputs: Vec<Value> = pronti
         .iter()
         .map(|pronto| {
@@ -725,8 +762,7 @@ fn esegui_artefatti_in(
             })
         })
         .collect();
-    let steps: Vec<Value> = esito
-        .report
+    let steps: Vec<Value> = report
         .passi
         .iter()
         .map(|passo| {
@@ -739,11 +775,7 @@ fn esegui_artefatti_in(
             })
         })
         .collect();
-    Ok(json!({
-        "schema_version": 1,
-        "outputs": outputs,
-        "steps": steps,
-    }))
+    json!({"schema_version": 1, "outputs": outputs, "steps": steps})
 }
 
 #[deny(clippy::disallowed_methods)]
@@ -934,4 +966,48 @@ mod tests {
             assert_eq!(pubblico.retry(), RetryDisposition::Never, "{tipo:?}");
         }
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RichiestaValidazione<'a> {
+    #[serde(borrow)]
+    plan: &'a RawValue,
+    inputs: BTreeMap<String, Sorgente>,
+}
+
+/// Valida sorgenti opache con lo stesso lettore e analizzatore del runner.
+///
+/// # Errors
+/// Richiesta malformata, integrita delle sorgenti e analisi del piano.
+pub fn valida_artefatti(
+    richiesta: &str,
+    risolutore: &dyn RisolutoreArtefatti,
+    interruzione: &Interruzione,
+) -> Result<Value> {
+    plenora_core::json::ensure_no_duplicate_keys(richiesta)?;
+    plenora_core::json::ensure_numbers_exact(richiesta)?;
+    let letta: RichiestaValidazione<'_> = serde_json::from_str(richiesta)
+        .map_err(|_| configurazione("richiesta di validazione non valida"))?;
+    let piano = Pipeline::from_json(letta.plan.get())?;
+    verifica_nomi(
+        &piano.inputs,
+        letta.inputs.keys().map(String::as_str),
+        "input",
+    )?;
+    verifica_sorgenti(&letta.inputs)?;
+    let cartella =
+        tempfile::tempdir().map_err(|e| PlenoraError::io_con_contesto("cartella temporanea", e))?;
+    let ingressi = leggi_sorgenti(
+        &letta.inputs,
+        &piano,
+        risolutore,
+        interruzione,
+        cartella.path(),
+    )?;
+    let result = crate::api::valida_ingressi(&piano, ingressi, interruzione)?;
+    cartella
+        .close()
+        .map_err(|e| solo_tipo("cartella temporanea", e.kind()).with_phase(ErrorPhase::Cleanup))?;
+    Ok(result)
 }
