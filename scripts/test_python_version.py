@@ -7,6 +7,16 @@ class PythonPolicyTests(unittest.TestCase):
     def test_repository_coerente(self):
         self.assertEqual(guard.check(), [])
 
+    def test_changelog_datare_la_voce_corrente_non_tocca_la_storia(self):
+        storia = '## [1.0.0] - 2026-01-01\n\nvoce rilasciata\n'
+        aperta = '# Changelog\n\n## [2.0.0] - non rilasciata\n\nnuovo\n\n' + storia
+        datata = aperta.replace('non rilasciata', '2026-02-02')
+        self.assertEqual(guard.changelog_split(aperta, '2.0.0')[1], storia)
+        self.assertEqual(guard.changelog_split(datata, '2.0.0')[1], storia)
+        riscritta = datata.replace('voce rilasciata', 'voce riscritta')
+        self.assertNotEqual(guard.changelog_split(riscritta, '2.0.0')[1], storia)
+        self.assertTrue(guard.changelog_split(aperta, '1.0.0')[1].startswith('## [2.0.0]'))
+
     def test_riferimento_divergente(self):
         old = '3.' + '13'
         self.assertTrue(guard.reference_errors('fixture', 'Python >= ' + old, guard.declared()))

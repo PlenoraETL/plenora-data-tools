@@ -326,6 +326,7 @@
       "test_tutti_i_casi_dopo_errore_e_diagnostica_senza_dati"
     ],
     "scripts/test_python_version.py": [
+      "test_changelog_datare_la_voce_corrente_non_tocca_la_storia",
       "test_repository_coerente",
       "test_riferimento_divergente",
       "test_setup_e_matrice_non_duplicano_la_fonte",

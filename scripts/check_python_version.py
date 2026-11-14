@@ -36,6 +36,21 @@ def reference_errors(path, source, version):
     return errors
 
 
+def changelog_split(source, current):
+    """Separa la voce della versione corrente dalla storia gia rilasciata.
+
+    L'evidenza storica fissa solo le sezioni di versioni diverse da quella
+    del workspace: datare la voce corrente al rilascio non tocca la storia,
+    mentre la voce corrente resta soggetta ai controlli sui riferimenti.
+    All'apertura della versione successiva l'hash va aggiornato nello stesso
+    cambio, perche la voce appena rilasciata entra nella storia.
+    """
+    match = re.search(r'^## \[(?!' + re.escape(current) + r'\])', source, re.M)
+    if match is None:
+        return source, ''
+    return source[:match.start()], source[match.start():]
+
+
 def wheel_errors(version, requires_python, tags, interpreter):
     errors = []
     if requires_python != '>=' + version:
@@ -92,6 +107,12 @@ def check(root=ROOT, runtime=False):
         if path.suffix not in {'.py', '.pyi', '.rs', '.md', '.toml', '.yml', '.yaml', '.txt', '.sh'}:
             continue
         source = path.read_text('utf-8')
+        if name == 'CHANGELOG.md':
+            source, released = changelog_split(source, cargo['workspace']['package']['version'])
+            if hashlib.sha256(released.encode()).hexdigest() != history[name]:
+                errors.append(f'{name}: evidenza storica modificata')
+            errors.extend(reference_errors(name, source, version))
+            continue
         if name in history:
             if hashlib.sha256(source.encode()).hexdigest() != history[name]:
                 errors.append(f'{name}: evidenza storica modificata')
