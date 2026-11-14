@@ -304,7 +304,7 @@ fn valida(
                         }
                         match valore {
                             Value::Bool(false) => {
-                                return errore(&format!("proprieta' non ammessa `{nome}`"))
+                                return errore(&format!("proprieta' non ammessa `{nome}`"));
                             }
                             Value::Bool(true) => {}
                             sotto => {
@@ -436,7 +436,7 @@ fn valida(
             sconosciuta => {
                 return Err(strutturale(&format!(
                     "parola chiave non supportata `{sconosciuta}`"
-                )))
+                )));
             }
         }
     }

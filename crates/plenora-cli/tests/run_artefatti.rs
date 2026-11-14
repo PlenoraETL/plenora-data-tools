@@ -13,6 +13,8 @@ mod comune;
 mod qualifica_415;
 
 #[test]
+// Unica matrice C-01 con attese condivise tra API e binding.
+#[allow(clippy::too_many_lines)]
 fn qualifica_415_runtime_v3_contro_v2() {
     for extension in [false, true] {
         for semantics in ["geometry", "geography"] {
@@ -37,6 +39,15 @@ fn qualifica_415_runtime_v3_contro_v2() {
                     let request = json!({"schema_version":1,"plan":plan,"inputs":{"t":{"reference":"artifact://input/t","content_type":"application/vnd.apache.arrow.file"}},"outputs":{name:{"reference":SEGRETO,"content_type":"application/vnd.apache.arrow.file","overwrite":false}}});
                     let result =
                         esegui_artefatti(&request.to_string(), &resolver, &Interruzione::default());
+                    let host = Strumentato {
+                        sorgenti: resolver.sorgenti.clone(),
+                        ..Strumentato::default()
+                    };
+                    let mut wire = invocazione_runtime();
+                    wire.payload = request.to_string().into_bytes();
+                    let runtime = plenora_cli::runtime_binding::RuntimeBinding { resolver: &host }
+                        .invoke(&wire, &Interruzione::default());
+                    let runtime_doc: Value = serde_json::from_slice(&runtime.payload).unwrap();
                     let category = if conflict {
                         Some("crs")
                     } else if compute && semantics == "geography" {
@@ -51,6 +62,9 @@ fn qualifica_415_runtime_v3_contro_v2() {
                         assert_eq!(error.remote_effect(), RemoteEffect::None);
                         assert_eq!(error.retry_disposition(), RetryDisposition::Never);
                         senza_posizioni(&error);
+                        assert_eq!(runtime_doc["category"], category);
+                        assert_eq!(runtime_doc["phase"], "validate");
+                        assert!(host.pubblicati.borrow().is_empty());
                         assert!(!format!("{error:?}").contains("SENTINEL_415"));
                         assert!(resolver.pubblicati.borrow().is_empty());
                     } else {
@@ -71,7 +85,9 @@ fn qualifica_415_runtime_v3_contro_v2() {
                         let output =
                             leggi_tabella(&path, Some(Formato::ArrowIpc), u64::MAX).unwrap();
                         qualifica_415::check(&input, &output, compute);
-                        let (_, v2) = esegui_in_memoria(
+                        assert_eq!(runtime_doc, manifest);
+                        assert_eq!(host.pubblicati.borrow()[0].2, published[0].2);
+                        let (report_v2, v2) = esegui_in_memoria(
                             &Pipeline::from_json(&plan.to_string()).unwrap(),
                             vec![Ingresso::Tabella {
                                 nome: "t".into(),
@@ -81,6 +97,24 @@ fn qualifica_415_runtime_v3_contro_v2() {
                         )
                         .unwrap();
                         assert_eq!(output, v2[0].1);
+                        let effects: Value = serde_json::from_str(
+                            &runtime.metadata["plenora.data.localized_effects"],
+                        )
+                        .unwrap();
+                        assert_eq!(
+                            effects["steps"].as_array().unwrap().len(),
+                            report_v2["steps"].as_array().unwrap().len()
+                        );
+                        for (actual, expected) in effects["steps"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .zip(report_v2["steps"].as_array().unwrap())
+                        {
+                            assert_eq!(actual["effects"], expected["effects"]);
+                        }
+                        assert!(!runtime.metadata["plenora.data.localized_effects"]
+                            .contains("SENTINEL_415"));
                     }
                 }
             }
@@ -391,8 +425,16 @@ fn il_manifesto_e_quello_del_contratto_e_le_tabelle_quelle_di_data_run_2() {
         assert_eq!(uscita["rows"], da_oracolo.num_rows());
         assert_eq!(uscita["columns"], da_oracolo.num_columns());
     }
-    // I conteggi per passo sono quelli di data.run 2.
-    assert_eq!(manifesto["steps"], oracolo.0["steps"]);
+    // Il manifesto v3 chiuso conserva i conteggi v2; gli effetti localizzati
+    // sono un'estensione del rapporto v2 e dei metadati runtime, non del v3.
+    let mut passi = oracolo.0["steps"].clone();
+    for passo in passi.as_array_mut().unwrap() {
+        assert_eq!(
+            passo.as_object_mut().unwrap().remove("effects"),
+            Some(json!([]))
+        );
+    }
+    assert_eq!(manifesto["steps"], passi);
 }
 
 #[test]
@@ -929,4 +971,331 @@ fn un_intero_scritto_con_la_frazione_si_rifiuta() {
         assert_eq!(errore.category(), ErrorCategory::InvalidConfiguration);
         assert!(risolutore.eventi.borrow().is_empty());
     }
+}
+
+fn invocazione_runtime() -> plenora_cli::runtime_binding::RuntimeInvocation {
+    let vector = contratto("data-run-request-v3.json");
+    plenora_cli::runtime_binding::RuntimeInvocation {
+        content_type: vector["content_type"].as_str().unwrap().into(),
+        metadata: serde_json::from_value(vector["metadata"].clone()).unwrap(),
+        payload: testo(&richiesta()).into_bytes(),
+    }
+}
+#[test]
+// Matrice normativa letta insieme alle asserzioni di assenza di effetti.
+#[allow(clippy::too_many_lines)]
+fn runtime_vettori_rifiuto_e_identita_senza_resolver() {
+    use plenora_cli::runtime_binding::RuntimeBinding;
+    for name in [
+        "data-run-input-contract-malformed.json",
+        "data-run-input-contract-mismatch.json",
+    ] {
+        let probe = contratto(name);
+        let mut request = invocazione_runtime();
+        for (key, value) in probe["mutation"]["set"].as_object().unwrap() {
+            request.metadata.insert(key.clone(), value.clone());
+        }
+        let resolver = risolutore();
+        let result = RuntimeBinding {
+            resolver: &resolver,
+        }
+        .invoke(&request, &Interruzione::default());
+        let doc: Value = serde_json::from_slice(&result.payload).unwrap();
+        for key in ["category", "phase", "remote_effect", "retry"] {
+            assert_eq!(doc[key], probe["expected"]["error"][key], "{name} {key}");
+        }
+        for (key, value) in probe["expected"]["metadata"].as_object().unwrap() {
+            assert_eq!(&result.metadata[key], value.as_str().unwrap());
+        }
+        assert!(resolver.eventi.borrow().is_empty());
+        assert_eq!(
+            result.metadata["plenora.message.causation_id"],
+            request.metadata["plenora.message.id"]
+        );
+        assert_ne!(
+            result.metadata["plenora.message.id"],
+            request.metadata["plenora.message.id"]
+        );
+    }
+    for (key, value, category, reflected) in [
+        ("plenora.operation.version", json!("2"), "unsupported", true),
+        (
+            "plenora.operation.version",
+            json!("999"),
+            "unsupported",
+            true,
+        ),
+        ("plenora.operation.version", json!(2), "protocol", false),
+        ("plenora.operation.version", json!("03"), "protocol", false),
+        (
+            "plenora.capability.operation",
+            json!("data.unknown"),
+            "unsupported",
+            true,
+        ),
+        (
+            "plenora.capability.operation",
+            json!("DATA.RUN"),
+            "protocol",
+            false,
+        ),
+        (
+            "plenora.execution.deadline",
+            json!("2000-01-01T00:00:00Z"),
+            "timeout",
+            false,
+        ),
+        (
+            "plenora.execution.deadline",
+            json!("2030-01-01T00:00:00-00:00"),
+            "protocol",
+            false,
+        ),
+        (
+            "plenora.execution.idempotency_key",
+            json!("key"),
+            "unsupported",
+            false,
+        ),
+        (
+            "plenora.execution.idempotency_key",
+            Value::Null,
+            "protocol",
+            false,
+        ),
+        ("plenora.message.id", json!("invalid"), "protocol", false),
+        (
+            "plenora.trace.correlation_id",
+            json!("INVALID"),
+            "protocol",
+            false,
+        ),
+    ] {
+        let resolver = risolutore();
+        let mut request = invocazione_runtime();
+        request.metadata.insert(key.into(), value.clone());
+        let result = RuntimeBinding {
+            resolver: &resolver,
+        }
+        .invoke(&request, &Interruzione::default());
+        let doc: Value = serde_json::from_slice(&result.payload).unwrap();
+        assert_eq!(doc["category"], category, "{key}");
+        assert_eq!(doc["phase"], "validate");
+        assert_eq!(doc["remote_effect"], "none");
+        assert_eq!(doc["retry"], json!({"kind":"never"}));
+        assert!(resolver.eventi.borrow().is_empty());
+        if reflected {
+            assert_eq!(result.metadata[key], value);
+        } else if key == "plenora.message.id" {
+            assert_ne!(result.metadata[key], value);
+            assert!(!result.metadata.contains_key("plenora.message.causation_id"));
+        } else {
+            assert!(!result.metadata.contains_key(key));
+        }
+    }
+    // Parquet e' un'estensione delle sorgenti @3, non del payload JSON.
+    let mut wrong_type = invocazione_runtime();
+    wrong_type.content_type = "application/vnd.apache.parquet".into();
+    let host = risolutore();
+    let refusal = RuntimeBinding { resolver: &host }.invoke(&wrong_type, &Interruzione::default());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&refusal.payload).unwrap()["category"],
+        "unsupported"
+    );
+    assert!(host.eventi.borrow().is_empty());
+    let mut request = invocazione_runtime();
+    request
+        .metadata
+        .insert("plenora.operation.version".into(), json!("2"));
+    request.metadata.insert(
+        "plenora.execution.deadline".into(),
+        json!("2000-01-01T00:00:00Z"),
+    );
+    let resolver = risolutore();
+    let result = RuntimeBinding {
+        resolver: &resolver,
+    }
+    .invoke(&request, &Interruzione::default());
+    let doc: Value = serde_json::from_slice(&result.payload).unwrap();
+    assert_eq!(doc["category"], "unsupported");
+}
+#[test]
+fn runtime_vettori_pubblicazione_e_manifesto_chiuso() {
+    use plenora_cli::runtime_binding::{runtime_capabilities, RuntimeBinding};
+    let caps = runtime_capabilities();
+    Registro::con(&["capabilities-v2.schema.json"])
+        .valida("capabilities-v2.schema.json", &caps)
+        .unwrap();
+    let operations = caps["operations"].as_array().unwrap();
+    assert_eq!(operations.len(), 4);
+    let bindings = contratto("runtime-v1.json");
+    let component = bindings["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["component"] == "plenora-data-tools")
+        .unwrap();
+    assert_eq!(
+        component["discovery"][0],
+        plenora_cli::runtime_binding::DISCOVERY_ENTRYPOINT
+    );
+    for operation in operations {
+        let pinned = component["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["operation"] == operation["id"] && b["version"] == operation["version"])
+            .unwrap();
+        assert_eq!(
+            pinned["entrypoints"][0],
+            plenora_cli::runtime_binding::entrypoint(
+                operation["id"].as_str().unwrap(),
+                u32::try_from(operation["version"].as_u64().unwrap()).unwrap()
+            )
+        );
+    }
+
+    assert!(operations
+        .iter()
+        .any(|o| o["id"] == "data.run" && o["version"] == 3));
+    assert!(!operations
+        .iter()
+        .any(|o| o["id"] == "data.run" && o["version"] == 2));
+    for (fault, vector) in [
+        (None, "data-run-success-v3.json"),
+        (Some(Guasto::Parziale), "data-run-partial-error-v3.json"),
+        (
+            Some(Guasto::ScadenzaIgnota),
+            "data-run-unknown-error-v3.json",
+        ),
+    ] {
+        let mut resolver = risolutore();
+        if let Some(fault) = fault {
+            resolver.guasti.insert(1, fault);
+        }
+        let result = RuntimeBinding {
+            resolver: &resolver,
+        }
+        .invoke(&invocazione_runtime(), &Interruzione::default());
+        let doc: Value = serde_json::from_slice(&result.payload).unwrap();
+        let expected = contratto(vector);
+        assert_eq!(result.content_type, expected["content_type"]);
+        let envelope = json!({"schema_version":1,"contract":"plenora-runtime-vector-v1",
+            "kind":expected["kind"],"content_type":result.content_type,"metadata":result.metadata,"payload":doc});
+        Registro::con(&["runtime-vector-v1.schema.json"])
+            .valida("runtime-vector-v1.schema.json", &envelope)
+            .unwrap();
+
+        if vector == "data-run-success-v3.json" {
+            registro()
+                .valida("data-execution-result-v3.schema.json", &doc)
+                .unwrap();
+            assert!(result
+                .metadata
+                .contains_key("plenora.data.localized_effects"));
+            assert_eq!(resolver.pubblicati.borrow().len(), 2);
+        } else {
+            for key in ["category", "phase", "remote_effect", "retry"] {
+                assert_eq!(doc[key], expected["payload"][key], "{vector} {key}");
+            }
+            assert!(!result
+                .metadata
+                .contains_key("plenora.data.localized_effects"));
+        }
+        assert!(!String::from_utf8(result.payload).unwrap().contains(RISOLTO));
+    }
+}
+#[test]
+fn runtime_catalog_describe_validate_api_comuni() {
+    use plenora_cli::runtime_binding::RuntimeBinding;
+    let resolver = risolutore();
+    let binding = RuntimeBinding {
+        resolver: &resolver,
+    };
+    let mut request = invocazione_runtime();
+    request.metadata.remove("plenora.execution.deadline");
+    request
+        .metadata
+        .insert("plenora.capability.operation".into(), json!("data.catalog"));
+    request
+        .metadata
+        .insert("plenora.operation.version".into(), json!("2"));
+    request.metadata.insert(
+        "plenora.input.contract".into(),
+        json!("plenora-data-catalog-query-v1"),
+    );
+    request.payload = b"{}".to_vec();
+    let result = binding.invoke(&request, &Interruzione::default());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&result.payload).unwrap(),
+        plenora_cli::api::catalogo()
+    );
+    for (kind, format) in [
+        ("application/vnd.apache.arrow.file", Formato::ArrowIpc),
+        (
+            "application/vnd.apache.arrow.stream",
+            Formato::ArrowIpcStream,
+        ),
+        ("application/vnd.apache.parquet", Formato::Parquet),
+    ] {
+        request.content_type = kind.into();
+        request.payload = byte_di(&tabella(), format);
+        request.metadata.insert(
+            "plenora.capability.operation".into(),
+            json!("data.describe"),
+        );
+        request
+            .metadata
+            .insert("plenora.operation.version".into(), json!("1"));
+        request.metadata.insert(
+            "plenora.input.contract".into(),
+            json!("plenora-data-describe-input-v1"),
+        );
+        let result = binding.invoke(&request, &Interruzione::default());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&result.payload).unwrap(),
+            plenora_cli::api::descrivi_tabella(&tabella(), &Interruzione::default()).unwrap(),
+            "{kind}"
+        );
+        request.metadata.insert(
+            "plenora.capability.operation".into(),
+            json!("data.validate"),
+        );
+        request
+            .metadata
+            .insert("plenora.operation.version".into(), json!("2"));
+        request.metadata.insert(
+            "plenora.input.contract".into(),
+            json!("plenora-data-plan-validation-input-v2"),
+        );
+        request
+            .metadata
+            .insert("plenora.data.plan".into(), json!(PIANO));
+        let result = binding.invoke(&request, &Interruzione::default());
+        let expected = plenora_cli::api::valida_ingressi(
+            &Pipeline::from_json(PIANO).unwrap(),
+            vec![Ingresso::Tabella {
+                nome: "t".into(),
+                tabella: tabella(),
+            }],
+            &Interruzione::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&result.payload).unwrap(),
+            expected,
+            "{kind}"
+        );
+    }
+    request.content_type = "application/json".into();
+    request.metadata =
+        serde_json::from_value(contratto("data-validate-request-v2.json")["metadata"].clone())
+            .unwrap();
+
+    request.payload=json!({"plan":serde_json::from_str::<Value>(PIANO).unwrap(),"inputs":richiesta()["inputs"]}).to_string().into_bytes();
+    let result = binding.invoke(&request, &Interruzione::default());
+    assert_eq!(
+        result.metadata["plenora.output.contract"],
+        "plenora-data-plan-validation-result-v1"
+    );
 }

@@ -213,6 +213,14 @@ jobs:
             --wheel "${wheel[0]}" \
             --cartella "$RUNNER_TEMP/sdk-python" \
             --rilascio
+      - name: parita del catalogo sulle cinque superfici
+        shell: bash
+        run: |
+          cargo run --locked -p plenora-io --example esporta_parita -- target/parita
+          cargo build --locked -p plenora-cli --bin plenora-data --example parita_superfici
+          suffix=""; if [[ "$RUNNER_OS" == "Windows" ]]; then suffix=".exe"; fi
+          target/debug/examples/parita_superfici${suffix} target/parita "$(pwd)/target/debug/plenora-data${suffix}"
+          python scripts/verifica_parita_superfici.py target/parita
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rilascio-${{ matrix.os }}
@@ -373,6 +381,7 @@ jobs:
           artefatti+=(--artefatto "plenora-data-windows-x86_64.exe.zip|cli|dist/plenora-data-windows-x86_64.exe.zip")
           sorgente="dist/plenora-data-tools-${versione}-source.tar.gz"
           artefatti+=(--artefatto "$(basename "$sorgente")|rust|$sorgente")
+          artefatti+=(--artefatto "plenora.data-tools|runtime|$sorgente")
           python3 scripts/genera_manifesto_adozione.py \
             --contratti .plenora-contracts \
             --versione "$versione" \

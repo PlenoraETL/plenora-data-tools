@@ -18,6 +18,7 @@
 //! isolamento, capability, profilo di publish, `plan_hash` e
 //! `catalog_fingerprint`.
 
+use plenora_core::contract::geometry_metadata_policy as policy;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -83,6 +84,9 @@ pub struct PassoValidato {
     pub descrittore: &'static OperationDescriptor,
     pub inputs: Vec<String>,
     pub kernel: KernelPasso,
+    /// Effetti decisi dalla stessa politica che costruisce il contratto.
+    pub effetti_localizzati:
+        Vec<plenora_core::contract::geometry_metadata_policy::report::LocalizedEffect>,
     /// Modello di costo dell'operazione, per il budget.
     pub costo: &'static CostoOperazione,
     /// Righe dell'uscita note a secco (le celle di `geo.generate_grid`):
@@ -595,6 +599,13 @@ impl Pipeline {
                     .field_ids
                     .insert(geometria.name.clone(), geometria.field_id);
             }
+            // Identita' logica anche per gli attributi: un passthrough non e'
+            // una derivazione nuova solo perche' il campo non e' geometrico.
+            for field in letto.schema.fields() {
+                if !letto.field_ids.contains_key(field.name()) {
+                    letto.field_ids.insert(field.name().clone(), campi.alloc()?);
+                }
+            }
             verifica_colonne(&letto, limiti_kernel.max_columns)
                 .map_err(|errore| nel_passo_o_input(&format!("input `{nome}`"), errore))?;
             letto = canonico(letto, &mut campi)
@@ -714,6 +725,22 @@ impl Pipeline {
                 .map_err(|errore| nel_passo(&passo.out, errore))?;
             let uscita =
                 canonico(uscita, &mut campi).map_err(|errore| nel_passo(&passo.out, errore))?;
+            let effects = if geo {
+                let (operands, _) = plenora_kernels_geo::analyze::resolve_operands(
+                    descrittore,
+                    &ingressi,
+                    &passo.config,
+                )?;
+                policy::contract_column_effects(descrittore, &uscita, &operands)?
+            } else {
+                policy::column_effects(descrittore, &uscita.schema, &[])?
+            };
+            let effetti_localizzati = policy::report::localized_effects(
+                descrittore,
+                &ingressi.iter().collect::<Vec<_>>(),
+                &uscita,
+                &effects,
+            )?;
             let colonne_uscita = u64::try_from(uscita.schema.fields().len()).unwrap_or(u64::MAX);
             contratti.insert(passo.out.clone(), uscita);
             // Un'operazione che conserva le righe conserva quelle del primo
@@ -733,6 +760,7 @@ impl Pipeline {
                 base_indici,
                 colonne_uscita,
                 moltiplicatore_dichiarato,
+                effetti_localizzati,
             });
         }
 

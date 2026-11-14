@@ -262,7 +262,7 @@ fn output_inesistenti_ripetuti_o_assenti_si_rifiutano() {
             .expect("identita")
             .contratto("t")
             .expect("t"),
-        &DataContract::tabular(schema_wide()),
+        &atteso_wide(),
     );
 }
 
@@ -517,7 +517,7 @@ fn la_base_degli_indici_per_riga_si_decide_in_validazione() {
 
 /// Colonne, identita' e proprieta' della catena, scritte dalle schede.
 fn contratti_attesi_catena() -> Vec<(&'static str, DataContract)> {
-    let mut attesi = vec![("t", DataContract::tabular(schema_wide()))];
+    let mut attesi = vec![("t", atteso_wide())];
     let mut p1 = atteso_wide();
     let mut fields = schema_wide()
         .fields()
@@ -698,7 +698,16 @@ fn le_colonne_oltre_il_limite_si_rifiutano_in_validazione() {
             .expect("limite incluso")
             .contratto("t")
             .expect("t"),
-        &DataContract::tabular(schema_largo(massimo)),
+        &{
+            let mut expected = DataContract::tabular(schema_largo(massimo));
+            for i in 0..massimo {
+                expected.field_ids.insert(
+                    format!("c{i}"),
+                    FieldId(u32::try_from(i).expect("id fixture")),
+                );
+            }
+            expected
+        },
     );
 }
 
@@ -760,16 +769,7 @@ fn il_limite_di_fan_out_del_piano_si_applica() {
         let validata = valida_wide(&ventaglio(limiti.max_fan_out)).expect("limite incluso");
         let atteso = atteso_wide();
         for i in 0..limiti.max_fan_out {
-            let mut atteso = atteso.clone();
-            for (position, field) in schema_wide().fields().iter().enumerate() {
-                atteso.field_ids.insert(
-                    field.name().clone(),
-                    plenora_core::contract::FieldId(
-                        u32::try_from(i * schema_wide().fields().len() + position)
-                            .expect("id fixture"),
-                    ),
-                );
-            }
+            // I consumatori conservano le identita' della stessa sorgente.
             verifica_contratto(
                 validata.contratto(&format!("f{i}")).expect("passo"),
                 &atteso,

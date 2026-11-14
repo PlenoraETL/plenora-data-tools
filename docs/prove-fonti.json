@@ -77,6 +77,7 @@
     "crates/plenora-data-py/python/tests/test_qualifica_415.py": [
       "test_conflict_and_cancellation_publish_nothing",
       "test_extension_shapes_on_published_rows",
+      "test_localized_effects_c01",
       "test_parity"
     ],
     "crates/plenora-data-py/python/tests/test_struct_bitmap.py": [
@@ -378,6 +379,7 @@
     "scripts/verifica_cli_contratti.py": [],
     "scripts/verifica_interop_crs.py": [],
     "scripts/verifica_multigeometria_io700.py": [],
+    "scripts/verifica_parita_superfici.py": [],
     "scripts/verifica_sdk_python.py": []
   },
   "rust_tests": {
@@ -394,6 +396,9 @@
     ],
     "crates/plenora-cli/src/inviluppo.rs": [
       "codici_d_uscita_della_sezione_8"
+    ],
+    "crates/plenora-cli/src/runtime_binding.rs": [
+      "result_limit_counts_metadata_and_preserves_committed"
     ],
     "crates/plenora-cli/tests/annullamento.rs": [
       "segnale_alzato_annulla_senza_output"
@@ -422,7 +427,8 @@
       "operazioni_strutturali_non_interpretano_il_dominio_geografico",
       "fusioni_geometriche_rifiutano_in_validazione_senza_effetti",
       "ipc_wkt1_gdal_identita_conserva_metadati",
-      "decisione_0022_mixed_omette_elenco_vuoto"
+      "decisione_0022_mixed_omette_elenco_vuoto",
+      "localized_join_omitted_right_key_is_removed_not_changed_left"
     ],
     "crates/plenora-cli/tests/operazioni.rs": [
       "describe_legge_file_stream_e_parquet",
@@ -440,7 +446,6 @@
       "multigeometria_geoparquet_ipc_cli"
     ],
     "crates/plenora-cli/tests/run_artefatti.rs": [
-      "qualifica_415_runtime_v3_contro_v2",
       "il_manifesto_e_quello_del_contratto_e_le_tabelle_quelle_di_data_run_2",
       "si_legge_tutto_e_si_codifica_tutto_prima_di_pubblicare",
       "nomi_e_riferimenti_si_rifiutano_prima_di_leggere",
@@ -459,7 +464,9 @@
       "i_riferimenti_seguono_il_pattern_dello_schema",
       "un_fallimento_della_codifica_non_pubblica_nulla",
       "si_pubblica_nell_ordine_del_piano",
-      "un_intero_scritto_con_la_frazione_si_rifiuta"
+      "un_intero_scritto_con_la_frazione_si_rifiuta",
+      "runtime_vettori_pubblicazione_e_manifesto_chiuso",
+      "runtime_catalog_describe_validate_api_comuni"
     ],
     "crates/plenora-cli/tests/scoperta.rs": [
       "i_file_dei_contratti_sono_quelli_del_commit_fissato",
@@ -533,6 +540,14 @@
       "geometry_column_types_default_is_undeclared_not_unresolved",
       "batch_sequence_carries_logical_order",
       "rebuild_richiede_origini_complete_e_non_ricicla_omonimi"
+    ],
+    "crates/plenora-core/src/contract/geometry_metadata_policy/report.rs": [
+      "discarded_container_is_reported_without_interpreting_its_value",
+      "unchanged_opaque_container_does_not_hide_other_metadata_changes",
+      "nested_crs_is_preserved_and_unknown_pointer_is_localized",
+      "merge_reports_metadata_from_every_input",
+      "same_name_is_not_same_identity",
+      "union_distinct_combines_both_origins_but_intersection_does_not"
     ],
     "crates/plenora-core/src/crs.rs": [
       "missing_empty_nul_and_oversized_definitions_fail_closed",
@@ -2939,6 +2954,8 @@
     "crates/plenora-cli/tests/fixtures/contratti/data-execution-result-v3.schema.json",
     "crates/plenora-cli/tests/fixtures/contratti/data-kernels-v2.json",
     "crates/plenora-cli/tests/fixtures/contratti/data-plan-v1.schema.json",
+    "crates/plenora-cli/tests/fixtures/contratti/data-run-input-contract-malformed.json",
+    "crates/plenora-cli/tests/fixtures/contratti/data-run-input-contract-mismatch.json",
     "crates/plenora-cli/tests/fixtures/contratti/data-run-partial-error-v3.json",
     "crates/plenora-cli/tests/fixtures/contratti/data-run-request-v3.json",
     "crates/plenora-cli/tests/fixtures/contratti/data-run-success-v3.json",
@@ -2946,12 +2963,15 @@
     "crates/plenora-cli/tests/fixtures/contratti/data-tools-v2.json",
     "crates/plenora-cli/tests/fixtures/contratti/data-tools-v3.json",
     "crates/plenora-cli/tests/fixtures/contratti/data-tools-v3.md.txt",
+    "crates/plenora-cli/tests/fixtures/contratti/data-validate-request-v2.json",
     "crates/plenora-cli/tests/fixtures/contratti/error-v1.schema.json",
     "crates/plenora-cli/tests/fixtures/contratti/operation-registry-v1.schema.json",
     "crates/plenora-cli/tests/fixtures/contratti/provenienza.json",
     "crates/plenora-cli/tests/fixtures/contratti/public-catalog-v2.schema.json",
     "crates/plenora-cli/tests/fixtures/contratti/python-sdk-v1.json",
     "crates/plenora-cli/tests/fixtures/contratti/row-diagnostics-v1.schema.json",
+    "crates/plenora-cli/tests/fixtures/contratti/runtime-v1.json",
+    "crates/plenora-cli/tests/fixtures/contratti/runtime-vector-v1.schema.json",
     "crates/plenora-cli/tests/fixtures/contratti/surface-bindings-v1.schema.json",
     "crates/plenora-core/tests/fixtures/contratti/error-v1.schema.json",
     "crates/plenora-core/tests/fixtures/contratti/row-diagnostics-v1.schema.json",
@@ -3134,6 +3154,7 @@
         "scripts/genera_sbom_rilascio.py",
         "scripts/licenze_artefatto.py",
         "scripts/verifica_cli_contratti.py",
+        "scripts/verifica_parita_superfici.py",
         "scripts/verifica_sdk_python.py"
       ]
     },
@@ -3151,6 +3172,7 @@
         "scripts/avvisi_crate.py",
         "scripts/check-licenze-artefatto.py",
         "scripts/licenze_artefatto.py",
+        "scripts/verifica_parita_superfici.py",
         "scripts/verifica_sdk_python.py"
       ]
     },

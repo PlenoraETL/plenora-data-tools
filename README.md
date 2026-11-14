@@ -278,6 +278,21 @@ ogni altro panico sì, anche se una rete di sicurezza lo intercetta
 (`fuzz/fuzz_targets/comune/aggancio.rs`). Corpus, crash e build restano
 fuori da Git.
 
+### Parita delle cinque superfici
+
+Gli esempi delle schede enumerano ogni kernel e attraversano Rust, CLI,
+runtime e SDK sincrono/asincrono sul wheel installato. Nessuna operazione
+viene saltata: si confrontano risultati e rifiuti dichiarati. La CI SDK e
+il rilascio eseguono gli stessi comandi su Linux e Windows (suffisso `.exe`
+per i due eseguibili su Windows):
+
+```sh
+cargo run --locked -p plenora-io --example esporta_parita -- target/parita
+cargo build --locked -p plenora-cli --bin plenora-data --example parita_superfici
+target/debug/examples/parita_superfici target/parita target/debug/plenora-data
+python scripts/verifica_parita_superfici.py target/parita
+```
+
 ### Catena delle dipendenze
 
 La politica comune approvata e il checker sono copiati senza modifiche in

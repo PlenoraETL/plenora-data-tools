@@ -1,3 +1,4 @@
+import json
 """B-08..10: gli stessi vettori attraversano run e arun, senza normalizzare metadata."""
 import asyncio
 import struct
@@ -125,3 +126,22 @@ def test_conflict_and_cancellation_publish_nothing(async_mode, tmp_path):
             pd.run(plan(False), {"t": table(True, True)}, outputs={"t": destination}, cancel=token)
     assert caught.value.code == "EXECUTION_CANCELLED"
     assert not destination.exists()
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("extension", [False, True])
+def test_localized_effects_c01(async_mode, extension):
+    source = table(extension, False)
+    result = asyncio.run(pd.arun(plan(True), {"t": source})) if async_mode else pd.run(plan(True), {"t": source})
+    report = result.result
+    assert report["effects_contract"] == "plenora-data-localized-effects-v1"
+    effects = report["steps"][0]["effects"]
+    for key in ["/plenora.postgres.native_declaration", "/plenora.postgres.future"]:
+        assert any(e["field_index"] == 1 and e["input_index"] == 0
+                   and e["source_field_index"] == 1 and e["key"] == key
+                   and e["action"] == "metadata_invalidated" for e in effects)
+    assert any(e["field_index"] == 1 and e["action"] == "derived" for e in effects)
+    assert any(e["field_index"] == 1 and e["key"] == "/plenora.geometry.types"
+               and e["action"] == "metadata_reconstructed" for e in effects)
+    assert not any(e["field_index"] == 0 for e in effects)
+    assert "SENTINEL_415" not in json.dumps(report)

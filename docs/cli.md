@@ -4,7 +4,7 @@
 `plenora-data-tools` secondo il profilo data-tools di `plenora-contracts`,
 versione 3, fissato al commit `38d68b402389855edbcecb7ce57c31e91282cb4e`: il binario
 `plenora-data` (CLI 2.0) e le stesse quattro operazioni come funzioni Rust
-(`plenora_cli::api`), più `data.run` 3, che sta solo su Rust
+(`plenora_cli::api`), più `data.run` 3, su Rust e runtime
 ([«`data.run` 3 sul runtime»](#datarun-3-sul-runtime)). Una sola tabella (`plenora_cli::operazioni::OPERAZIONI`)
 dà comandi, aiuto, Capability Discovery 2.0 e la mappa degli export Rust; il
 registro dei kernel di `data.catalog` deriva dal catalogo di `plenora-core`.
@@ -119,7 +119,7 @@ dei segnali non si installa, `describe`, `validate` e `run` non partono
 
 `capabilities` descrive il binario che risponde: un'interfaccia (`cli`,
 `plenora-cli-v2`, artefatto `plenora-data`) e le quattro operazioni che il
-catalogo pubblico mette sulla CLI (non `data.run` 3, che sta solo su Rust e
+catalogo pubblico mette sulla CLI (non `data.run` 3, su Rust e runtime e
 runtime) con i suoi contratti, tipi di contenuto e controlli. Gli
 `attributes` seguono il contratto `plenora-data-capability-attributes-v1`
 (di questo componente; CAP-013):
@@ -168,8 +168,9 @@ riferimento opaco ad artefatto) e un `RisolutoreArtefatti` dell'applicazione,
 che legge le sorgenti, prepara e pubblica le destinazioni (RT-015);
 restituisce il manifesto `plenora-data-execution-result-v3`. Non ha comando
 CLI né simbolo Python, e i documenti `capabilities` della CLI e dell'SDK non
-la elencano; il trasporto runtime (messaggi, autorizzazione, risoluzione dei
-riferimenti) lo costruisce l'applicazione sopra questa funzione.
+la elencano. Il binding reale `plenora_cli::runtime_binding::RuntimeBinding`
+la espone come `plenora.data-tools#data.run@3`; trasporto, autorizzazione e
+risoluzione dei riferimenti restano all'applicazione.
 
 Il percorso, in ordine: richiesta chiusa (chiavi ripetute, campi sconosciuti,
 riferimenti con la forma di un percorso e tipi fuori elenco sono
@@ -236,22 +237,39 @@ manifesto (`crates/plenora-cli/adozione.json`) registra requisiti, stati e
 motivazioni. Identita delle operazioni e registro `data-kernels-v2` invariati.
 
 CAT-001 e CAT-002 distinguono il catalogo obiettivo dalla disponibilita:
-le capabilities pubblicano solo CLI o Python dell'artefatto che risponde.
-Il runtime e' condizionale, omesso dalle capabilities e quindi pianificato,
-senza deviazione. Il contratto del catalogo e' dichiarato nel manifesto;
-non si aggiunge un'interfaccia fittizia alle capabilities.
+ciascuna discovery annuncia soltanto la superficie che risponde. La discovery
+`runtime_capabilities()` risponde all'entrypoint
+`plenora.data-tools#capabilities@1`: contratto `plenora-runtime-binding-v2`,
+versione 2, wire 1. Espone `data.catalog@2`, `data.describe@1`,
+`data.validate@2` e `data.run@3`, dalla stessa tabella di routing.
 
-CAT-003 e DT-ABS-001 vietano `data.run` 3 su CLI e Python: manca un
-risolutore di artefatti per quelle superfici, mentre la versione 2 serve
-il caso locale. DT-ABS-002 vieta `data.run` 2 sul runtime: il risultato ha
-output multipli, il trasporto un solo payload. La versione 3 resta Rust.
+CAT-003 e DT-ABS-001 vietano `data.run@3` su CLI e Python; li' resta `@2`.
+DT-ABS-002 vieta `@2` sul runtime. I cinque percorsi usano gli stessi algoritmi:
+le versioni distinguono la rappresentazione locale da quella ad artefatti.
 
-Runtime Binding 2.0 e' non applicabile finche' il componente non espone un
-binding runtime. Un futuro binding dovra' applicare RT-024 (risultato intero
-o `resource_limit`, con effetto provato anche dopo pubblicazione), RT-025
-(wire 1, interfaccia contratto 2), RT-026 (negoziazione e downgrade esplicito)
-e RT-027 (contesto esterno all'inviluppo e registro per identita, anche nei
-retry). Non si dichiara implementata nessuna di queste garanzie di trasporto.
+Il binding verifica grammatica, selettori e controlli prima di chiamare il
+resolver. Le reiezioni hanno fase `validate`, effetto `none`, retry `never`;
+quelle d'esecuzione conservano gli assi della causa. Nessun risultato viene
+troncato: il limite di 8 MiB comprende payload e metadati JSON compatti; un
+superamento dopo pubblicazione e' `resource_limit/finalize/committed/never`.
+L'host gestisce negoziazione/downgrade e registro del contesto per identita
+(RT-026/027), esterni all'inviluppo, prima di chiamare il binding; questa
+libreria non e' un broker o un'implementazione del trasporto.
+
+Forme component-owned del payload: catalog riceve `{}`; describe riceve byte
+Arrow file/stream o Parquet; validate riceve JSON con `plan` e `inputs`
+(mappa dei riferimenti, stessa forma delle sorgenti run@3), oppure una tabella
+binaria con il piano JSON nel metadato `plenora.data.plan` e un solo input.
+run@3 riceve il documento chiuso del pin. Il suo payload risultato resta
+chiuso e invariato; il metadato opzionale `plenora.data.localized_effects`
+contiene JSON con `contract: plenora-data-localized-effects-v1` e gli effetti
+per passo (`out`, `op`, `effects`), dalla stessa politica di CLI/SDK.
+
+La parita del catalogo completo si esegue con `esporta_parita` (esempio IO),
+`parita_superfici` (esempio CLI) e `scripts/verifica_parita_superfici.py` sul
+wheel installato, anche nella CI SDK Linux/Windows. I casi sono le schede:
+nessuna operazione esclusa; pivot senza mapping e transpose verificano il
+medesimo rifiuto, UUID casuali schema/cardinalita e validita degli UUID.
 
 ERR-016 e' implementato: l'esito ignoto di una pubblicazione non cambia la
 categoria della causa (`io` o `timeout`), con `never` per I/O non transitorio e `requires_recovery` per timeout
@@ -280,7 +298,7 @@ non modificano le campagne Rust di questo repository.
 - **`data.run`**: la versione 2 ha `side_effect: local`, output nominati
   (`--output NAME=OUTPUT.arrow`, o `--output OUTPUT.arrow` per un piano con
   un solo output) e non è legata al runtime; la versione 3
-  (`side_effect: remote`, solo superficie Rust) ne è la rappresentazione
+  (`side_effect: remote`, superfici Rust e runtime) ne è la rappresentazione
   runtime ([«`data.run` 3»](#datarun-3-sul-runtime)).
 - **Parquet**: estensione dichiarata negli attributi
   (`extension_content_types`), fuori da `content_types`.
@@ -300,9 +318,8 @@ non modificano le campagne Rust di questo repository.
   hanno `plenora.surface_side_effects` né altre chiavi `plenora.`
   (CAP-013).
 - **Sonde runtime** (`vectors/runtime-probes-v1`, RT-016..RT-023,
-  decisione 0010): non si applicano. Le sonde di `data.run` 3 mutano i
-  metadati del trasporto runtime, che resta all'applicazione; nessuna
-  superficie di questo componente annuncia la loro richiesta di base.
+  decisione 0010): eseguite da `tests/run_artefatti.rs` sul binding reale,
+  insieme a identita, rifiuti senza resolver, pubblicazioni parziali e ignote.
 - **Pulizia dopo la pubblicazione** (ERR-015): la rimozione fallita della
   cartella temporanea di `data.run` 3 è un errore in fase `cleanup`,
   `committed`, ritentativo `never`.
@@ -434,7 +451,7 @@ Ogni percorso rinvia a una classificazione con ambito e prova; il gate
 | Decisione 0023, specifica primaria, vettori arrow-primary, geoparquet-primary, primary-composition e interop-primary | Adottata per il ruolo data: PRIM-001..009, identità e provenienza, selettori e GeoParquet. Prove di composizione primaria e matrice metadati; non si rivendica l'esecuzione di altri componenti. |
 | Oracolo CRS con maiuscole solo ASCII | Adottata nel sottoinsieme supportato dal risolutore, che usa confronti ASCII. Restano le deviazioni GEO già dichiarate in [Geometry Semantics](geometry-semantics.md). |
 | Profilo IO v3, IO-PY-001, IO-ARROW-001 e binding IO | Non applicabili al profilo data-tools v3. Data mantiene DT-ARROW-001..004 e le relative deviazioni; IO-ARROW-001 non sostituisce le sue regole di completamento. |
-| File Interchange, catene io/storage | Non applicabili: data non espone queste operazioni né runtime/storage. |
+| File Interchange, catene io/storage | Non applicabili: data non espone queste operazioni né storage. |
 | Harness intercomponente, vettori interop-v1 e interop-assignment field-id | Catene non applicabili al componente isolato; la regola locale della decisione 0022 è adottata e provata separatamente. |
 | Validatore e gate dei contratti | Adottati come strumenti esterni da `verifica_adozione.py` e `verifica_cli_contratti.py`. |
 | CI, dipendenze, guardie e documentazione informativa dei contratti | Non applicabili come requisiti data; le specifiche normative collegate sono censite separatamente. |

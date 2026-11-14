@@ -36,6 +36,7 @@ pub mod catalogo;
 mod cli;
 pub mod inviluppo;
 pub mod operazioni;
+pub mod runtime_binding;
 
 pub use cli::{
     consegna, esegui_invocazione, esegui_invocazione_dal, esegui_invocazione_os, testo_aiuto,
