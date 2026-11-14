@@ -831,11 +831,8 @@ fn discovery_reads_and_checks_field_identities() {
 }
 
 #[test]
-fn discovery_rejects_geography_and_non_planar_extension_metadata() {
-    // I kernel sono planari: `geography` e `edges` non planari si
-    // rifiutano invece di essere letti come `geometry`; un CRS nel metadato
-    // d'estensione GeoArrow, che questo componente non interpreta, si
-    // rifiuta invece di passare per assente.
+fn discovery_preserves_geography_and_non_planar_extension_metadata() {
+    // La lettura trasporta; il calcolo verifica le capacita del campo.
     let geography = canonical_field(
         DataType::Binary,
         &[
@@ -843,16 +840,15 @@ fn discovery_rejects_geography_and_non_planar_extension_metadata() {
             (PLENORA_GEOMETRY_CRS_RESOLUTION_KEY, "missing"),
         ],
     );
-    let result = discover_input_contract_from_schema(schema_v1(vec![geography]), resolve_crs);
-    assert!(
-        matches!(result, Err(PlenoraError::Unsupported(_))),
-        "{result:?}"
-    );
+    let result =
+        discover_input_contract_from_schema(schema_v1(vec![geography.clone()]), resolve_crs)
+            .expect("geography trasportabile");
+    assert_eq!(result.schema.field(0).metadata(), geography.metadata());
     for (estensione, atteso_ok) in [
         ("", true),
         ("{}", true),
         (r#"{"edges":"planar"}"#, true),
-        (r#"{"edges":"spherical"}"#, false),
+        (r#"{"edges":"spherical"}"#, true),
         (r#"{"crs":"EPSG:4326"}"#, false),
         (r#"{"crs":null}"#, true),
     ] {
@@ -873,7 +869,7 @@ fn discovery_rejects_geography_and_non_planar_extension_metadata() {
             );
         } else {
             assert!(
-                matches!(result, Err(PlenoraError::Unsupported(_))),
+                matches!(result, Err(PlenoraError::Crs(_))),
                 "{estensione}: {result:?}"
             );
         }

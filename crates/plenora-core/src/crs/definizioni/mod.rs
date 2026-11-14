@@ -22,6 +22,49 @@ use serde::{Deserialize, Serialize};
 
 use super::integrati::Identificativo;
 
+pub(super) fn identificatori_dichiarati(
+    text: &str,
+) -> Result<Vec<(String, String)>, super::CrsError> {
+    let invalid = || super::CrsError::InvalidDefinition {
+        name: "crs",
+        reason: "dichiarazione CRS malformata".into(),
+    };
+    if matches!(
+        super::definition_form(text),
+        super::DefinitionForm::Wkt | super::DefinitionForm::Wkt2
+    ) {
+        return wkt::dichiarati(text).map_err(|_| invalid());
+    }
+    crate::json::ensure_no_duplicate_keys(text).map_err(|_| invalid())?;
+    crate::json::ensure_numbers_exact(text).map_err(|_| invalid())?;
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|_| invalid())?;
+    let object = value.as_object().ok_or_else(invalid)?;
+    if !object.get("type").is_some_and(serde_json::Value::is_string) {
+        return Err(invalid());
+    }
+    let mut ids = Vec::new();
+    let mut declared = Vec::new();
+    if let Some(id) = object.get("id") {
+        declared.push(id);
+    }
+    if let Some(many) = object.get("ids") {
+        declared.extend(many.as_array().ok_or_else(invalid)?);
+    }
+    for id in declared {
+        let authority = id
+            .get("authority")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(invalid)?;
+        let code = match id.get("code") {
+            Some(serde_json::Value::String(code)) => code.clone(),
+            Some(serde_json::Value::Number(code)) if code.is_u64() => code.to_string(),
+            _ => return Err(invalid()),
+        };
+        ids.push((authority.to_owned(), code));
+    }
+    Ok(ids)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Id {

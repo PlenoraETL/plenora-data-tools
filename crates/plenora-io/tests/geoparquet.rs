@@ -530,13 +530,6 @@ fn rifiuti_in_lettura() {
             "PROJJSON",
         ),
         (
-            "edges spherical",
-            colonna(json!({"edges": "spherical"})),
-            p(),
-            ErrorCategory::Unsupported,
-            "spherical",
-        ),
-        (
             "edges sconosciuto",
             colonna(json!({"edges": "curvi"})),
             p(),
@@ -1260,13 +1253,10 @@ fn geoparquet_non_sovrascrive_un_crs_legacy_diverso() {
 
 #[test]
 fn geoparquet_non_cancella_dichiarazioni_estensione_contraddittorie() {
-    for (extension, categoria) in [
-        (
-            json!({"crs":projjson_di("EPSG:4326").unwrap()}),
-            ErrorCategory::Crs,
-        ),
-        (json!({"edges":"spherical"}), ErrorCategory::Unsupported),
-    ] {
+    for (extension, categoria) in [(
+        json!({"crs":projjson_di("EPSG:4326").unwrap()}),
+        ErrorCategory::Crs,
+    )] {
         let campo =
             Field::new("geometry", DataType::Binary, true).with_metadata(HashMap::from([(
                 "ARROW:extension:metadata".to_owned(),
@@ -1281,6 +1271,53 @@ fn geoparquet_non_cancella_dichiarazioni_estensione_contraddittorie() {
                     .category(),
                 categoria
             );
+        }
+    }
+}
+
+#[test]
+fn spherical_si_trasporta_ma_non_si_calcola() {
+    for extension in [false, true] {
+        let mut campo = Field::new("geometry", DataType::Binary, true);
+        if extension {
+            campo = campo.with_metadata(HashMap::from([(
+                "ARROW:extension:metadata".to_owned(),
+                r#"{ "edges" : "spherical" }"#.to_owned(),
+            )]));
+        }
+        let batch = tabella_geo_con_assi_dichiarati(campo, vec![Some(punto(12.0, 45.0))]);
+        let file = geo_colonna(json!({"encoding":"WKB","geometry_types":["Point"],"crs":projjson_di("EPSG:4326").unwrap(),"edges":"spherical"})).to_string();
+        for source in [batch.clone(), batch.slice(0, 0)] {
+            let output = plenora_io::geoparquet::applica(&source, &file).unwrap();
+            assert_eq!(source.column(1).to_data(), output.column(1).to_data());
+            assert_eq!(
+                output
+                    .schema()
+                    .field(1)
+                    .metadata()
+                    .get("plenora.geometry.native.geoparquet.edges")
+                    .map(String::as_str),
+                Some("spherical")
+            );
+            if extension {
+                assert_eq!(
+                    output
+                        .schema()
+                        .field(1)
+                        .metadata()
+                        .get("ARROW:extension:metadata"),
+                    source
+                        .schema()
+                        .field(1)
+                        .metadata()
+                        .get("ARROW:extension:metadata")
+                );
+            }
+            let error = plenora_core::contract::geometry_metadata_policy::require_planar(
+                output.schema().field(1),
+            )
+            .expect_err("calcolo non planare");
+            assert_eq!(error.category(), ErrorCategory::Unsupported);
         }
     }
 }

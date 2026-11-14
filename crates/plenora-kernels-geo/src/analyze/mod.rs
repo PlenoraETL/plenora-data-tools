@@ -159,10 +159,8 @@ pub fn resolve_operands<'a>(
     Vec<Option<&'a plenora_core::contract::GeometryColumnContract>>,
     Value,
 )> {
-    let producer = matches!(
-        descriptor.id,
-        "geo.from_coords" | "geo.from_wkt" | "geo.generate_grid"
-    );
+    use plenora_core::contract::geometry_metadata_policy::{operand_uses, OperandUse};
+    let producer = operand_uses(descriptor.id)? == [OperandUse::Produce];
     let keys: &[&str] = if producer {
         &[]
     } else if descriptor.arity == Arity::BinaryOrdered {
@@ -277,6 +275,7 @@ fn richiedi_assi_operando(
         .schema
         .field_with_name(&geometry.name)
         .map_err(|_| PlenoraError::Schema("campo geometria assente dallo schema".to_owned()))?;
+    plenora_core::contract::geometry_metadata_policy::require_planar(field)?;
     if richiede_ordine_assi(op) {
         let crs = dispatch::require_resolved_crs(op, geometry)?;
         crate::riproiezione::richiedi_assi_normalizzati(op, field, crs)?;
@@ -751,6 +750,35 @@ mod tests {
             let error = analyze_one(op, std::slice::from_ref(&input), &json!({}), None)
                 .expect_err("rifiuto atteso: categoria verificata dalla prova");
             assert_eq!(error.category(), ErrorCategory::Crs, "{op}: {error}");
+        }
+    }
+
+    #[test]
+    fn ogni_operando_del_catalogo_rifiuta_semantica_non_planare() {
+        use plenora_core::contract::geometry_metadata_policy::{OperandUse, OPERATION_POLICY};
+        for &(op, _, roles) in OPERATION_POLICY {
+            for (position, role) in roles.iter().enumerate() {
+                if *role != OperandUse::Read {
+                    continue;
+                }
+                for (key, value) in [
+                    ("plenora.geometry.spatial_semantics", "geography"),
+                    ("plenora.geometry.native.geoparquet.edges", "spherical"),
+                ] {
+                    let mut inputs = vec![geo_contract(input_crs_for(op)); roles.len()];
+                    inputs[position] =
+                        with_geometry_field_metadata(inputs[position].clone(), true, |md| {
+                            md.insert(key, value);
+                        });
+                    let error =
+                        analyze_one(op, &inputs, &json!({}), None).expect_err("rifiuto operativo");
+                    assert_eq!(
+                        error.category(),
+                        ErrorCategory::Unsupported,
+                        "{op}/{position}"
+                    );
+                }
+            }
         }
     }
 

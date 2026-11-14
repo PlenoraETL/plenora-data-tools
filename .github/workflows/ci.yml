@@ -2,15 +2,13 @@ name: ci
 
 # I gate di AGENTS.md, «Prima del commit», eseguiti su Linux e Windows a ogni
 # push su main e a ogni pull request. I target di fuzz qui si compilano
-# soltanto: le campagne girano fuori dalla CI (README, «Fuzz»); la catena
-# delle dipendenze sta in supply-chain.yml. La copertura non c'è ancora
-# (README, «Che cosa non c'è ancora»).
+# soltanto: le campagne sono in fuzz.yml; la catena delle dipendenze sta
+# in supply-chain.yml e la copertura in coverage.yml.
 
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 # Sola lettura: nessun job scrive sul repository, pubblica o commenta.
 permissions:
@@ -44,20 +42,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-      - name: scripts/check_docs.py
-        run: python scripts/check_docs.py
-      - name: scripts/check_arrow_ingressi.py
-        run: python scripts/check_arrow_ingressi.py
-      - name: scripts/check_comments.py
-        run: python scripts/check_comments.py
-      - name: scripts/check_esito_unico.py
-        run: python scripts/check_esito_unico.py
-      # `docs/inventario.md` è generato: se resta indietro rispetto ai
-      # sorgenti, è un documento che ha l'aria di essere sempre vero.
-      - name: scripts/genera_inventario.py --check
-        run: python scripts/genera_inventario.py --check
-      - name: prove delle guardie
-        run: python -m unittest discover -s scripts -p "test_*.py"
+      - name: tutte le guardie e i self-test
+        run: python scripts/esegui_guardie.py
 
   gate:
     name: gate (${{ matrix.os }})
@@ -90,10 +76,13 @@ jobs:
       - name: avvisi dei crate (quattro grafi release, offline)
         run: python scripts/avvisi_crate.py
       - name: cargo fmt
+        if: ${{ !cancelled() }}
         run: cargo fmt --check
       - name: cargo fmt (target di fuzz)
+        if: ${{ !cancelled() }}
         run: cargo fmt --manifest-path fuzz/Cargo.toml --check
       - name: cargo clippy
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: prova compilata dei divieti degli esiti
         env:
@@ -103,35 +92,36 @@ jobs:
       # fuori dalla toolchain fissata: senza un comando dedicato potrebbe
       # smettere di compilare lasciando verde tutto il resto.
       - name: cargo check (target di fuzz)
+        if: ${{ !cancelled() }}
         run: cargo check --manifest-path fuzz/Cargo.toml --all-targets --locked
       - name: cargo clippy anti-panic (librerie)
+        if: ${{ !cancelled() }}
         run: >-
           cargo clippy --workspace --lib --locked --
           -D unsafe-code
           -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
           -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
       - name: cargo test (suite lunga)
+        if: ${{ !cancelled() }}
         env:
           PLENORA_TEST_LUNGHI: '1'
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
       # Le sonde delle prove (feature `sonde-di-prova`, disattivata per
       # default e assente dalle build di rilascio) si compilano solo con la
       # feature: lint, anti-panic e la prova dei loro punti a parte.
       - name: cargo clippy (sonde-di-prova)
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: cargo clippy anti-panic (sonde-di-prova)
+        if: ${{ !cancelled() }}
         run: >-
           cargo clippy --workspace --lib --all-features --locked --
           -D unsafe-code
           -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
           -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
       - name: cargo test (punti delle sonde)
+        if: ${{ !cancelled() }}
         run: cargo test -p plenora-io --features sonde-di-prova --test sonda_dei_controlli --locked
-      - name: modello dei costi
-        run: |
-          python scripts/genera_costi_operazioni.py --verifica
-          python scripts/genera_costi_geo.py --verifica
-
   contratti:
     name: CLI contro plenora-contracts
     runs-on: ubuntu-latest

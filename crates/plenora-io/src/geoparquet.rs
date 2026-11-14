@@ -5,8 +5,7 @@
 //!
 //! - `encoding` deve essere `WKB` (le codifiche `GeoArrow` native si
 //!   rifiutano, `Unsupported`);
-//! - `edges` assente o `planar` (`spherical` si rifiuta: i kernel sono
-//!   planari); `epoch` si trasporta senza applicare trasformazioni temporali;
+//! - `edges` assente, `planar` o `spherical`, conservato nel trasporto; `epoch` si trasporta senza applicare trasformazioni temporali;
 //!   `orientation` può valere solo `counterclockwise`, `bbox` deve avere 4 o
 //!   6 numeri finiti e `covering` deve essere un oggetto: sono dichiarazioni
 //!   che il contratto non porta e si lasciano cadere;
@@ -249,14 +248,7 @@ fn analizza_colonna(valore: &Value) -> Result<ColonnaGeo> {
     }
     match colonna.get("edges") {
         None => {}
-        Some(Value::String(edges)) if edges == "planar" => {}
-        Some(Value::String(edges)) if edges == "spherical" => {
-            return Err(PlenoraError::Unsupported(
-                "`edges` spherical: i kernel sono planari, i lati geodetici non si \
-                 rappresentano"
-                    .to_owned(),
-            ))
-        }
+        Some(Value::String(edges)) if matches!(edges.as_str(), "planar" | "spherical") => {}
         Some(_) => return Err(invalido("`edges` non riconosciuto")),
     }
     if colonna

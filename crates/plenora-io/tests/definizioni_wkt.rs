@@ -193,7 +193,14 @@ fn geoarrow_formato_coerente_e_mutazioni_rifiutate() {
         m.insert(GEOARROW_EXTENSION_METADATA_KEY, metadati.to_string());
         let errore = read_geometry_contract_keys(&f.with_metadata(m))
             .expect_err("rifiuto atteso: categoria verificata dalla prova");
-        assert!(matches!(errore, plenora_core::PlenoraError::Unsupported(_)));
+        assert_eq!(
+            errore.category(),
+            if metadati["crs_type"] == "SENTINELLA" {
+                plenora_core::ErrorCategory::Unsupported
+            } else {
+                plenora_core::ErrorCategory::Crs
+            }
+        );
         assert!(!errore.to_string().contains("SENTINELLA"));
     }
     for forma in [2, 3] {
@@ -367,7 +374,7 @@ fn wkt_assi_espliciti_e_coerenza_su_tutti_gli_ingressi_arrow() {
         assert!(matches!(
             read_geometry_contract_keys(&f)
                 .expect_err("rifiuto atteso: categoria verificata dalla prova"),
-            plenora_core::PlenoraError::Unsupported(_)
+            plenora_core::PlenoraError::Crs(_)
         ));
     }
 }

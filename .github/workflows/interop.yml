@@ -1,0 +1,61 @@
+name: interop
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  catene:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: '2'
+      # Toolchain privata del job: non eredita componenti preinstallati.
+      RUSTUP_HOME: ${{ runner.temp }}/rustup-interop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      # Il produttore storico della fixture resta fissato alla provenienza:
+      # questa prova attesta la compatibilita' di data corrente con IO 7.0.0.
+      - name: revisione del produttore della fixture
+        id: fonte
+        run: python scripts/interop_pin.py >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: PlenoraETL/plenora-IO-tools
+          ref: ${{ steps.fonte.outputs.revision }}
+          path: target/io-source
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
+        with:
+          toolchain: '1.98.1'
+          components: rustfmt, clippy
+      - run: python -m pip install -r requirements-sdk-tests.txt
+      - run: python scripts/genera_corpus_fuzz.py target/prove-fonti-corpus
+      - run: cargo build --locked -p plenora-cli
+      - run: cargo +1.98.1 build --locked --manifest-path target/io-source/Cargo.toml -p plenora-io-tools
+      - name: catene CRS
+        id: crs
+        run: >-
+          python scripts/verifica_interop_crs.py
+          --io-tools target/io-source/target/debug/plenora-io
+          --data-tools target/debug/plenora-data
+          --lavoro target/interop-crs
+      - name: catena multigeometria
+        if: ${{ !cancelled() && steps.crs.outcome != 'skipped' }}
+        run: >-
+          python scripts/verifica_multigeometria_io700.py
+          --io target/io-source/target/debug/plenora-io
+          --data target/debug/plenora-data
+          --work target/interop-multigeometria
+      - name: rapporti anche in caso di errore
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: interop
+          path: |
+            target/interop-crs/rapporto.json
+            target/interop-multigeometria/report.json

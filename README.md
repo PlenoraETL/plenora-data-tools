@@ -181,6 +181,8 @@ Modelli di costo, documentazione e commenti hanno guardie Python (3.11 o
 successivo, solo libreria standard):
 
 ```sh
+python scripts/esegui_guardie.py                      # tutti i gate offline, esito rosso finale
+python scripts/check_prove_fonti.py                   # inventari e collegamenti delle prove
 python scripts/genera_costi_operazioni.py --verifica  # modello di costo tabellare
 python scripts/genera_costi_geo.py --verifica         # modello di costo geo
 python scripts/genera_inventario.py --check           # docs/inventario.md aggiornato
@@ -191,6 +193,27 @@ python scripts/check_comments.py                      # regole oggettive dei com
 python scripts/check_esito_unico.py                    # rifiuti non tipizzati nelle prove
 python -m unittest discover -s scripts -p "test_*.py" # prove delle guardie
 ```
+
+Il job `guardie` esegue il runner unico su ogni PR, senza filtri di ramo o
+percorso. Un errore non interrompe le altre guardie. Il censimento
+[`docs/prove-fonti.json`](docs/prove-fonti.json) deriva dai sorgenti Python,
+Rust, dalle fixture e dai workflow tracciati (`git ls-files`), con percorsi
+POSIX e ordinamento testuale indipendente dal sistema. I file nuovi vanno
+aggiunti all'indice Git prima di rigenerare; i file locali non tracciati e
+ignorati non entrano nel censimento. Si rigenera con
+`python scripts/check_prove_fonti.py --scrivi`. Non e' un verbale di
+esecuzione: enumera dichiarazioni e file, senza attestare che siano passati.
+Il controllo verifica anche la matrice fuzz (compresi i semi), i corpus
+CRS, i digest delle copie, le sorgenti delle soglie di copertura e i
+collegamenti dei runner. Soglie, pin storici e oracoli indipendenti non si
+rigenerano dall'output del prodotto.
+
+`interop.yml` esegue su PR le sonde CRS e multigeometria contro il
+produttore IO storico fissato nella provenienza della fixture: verifica
+la compatibilita' con quel produttore, non con tutte le release IO.
+I rapporti restano artefatti anche in caso di fallimento; ogni catena CRS
+indipendente viene tentata, mentre un passo dipendente senza ingresso e'
+dichiarato bloccato.
 
 Con il checkout di `plenora-contracts` al commit adottato e i pacchetti del
 suo `requirements-validation.txt`, il gate locale usato anche dalla CI esegue

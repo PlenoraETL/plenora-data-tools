@@ -20,6 +20,7 @@ esce con 1.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import importlib.util
 import json
 import subprocess
@@ -75,6 +76,13 @@ class Verifica:
         self.semantica = importlib.util.module_from_spec(specifica)
         specifica.loader.exec_module(self.semantica)
 
+    @contextmanager
+    def passaggio(self, nome):
+        try:
+            yield
+        except Exception:
+            self.fallite.append(nome + ": esecuzione o documento non valido")
+
     def controlla(self, condizione: bool, cosa: str) -> None:
         if not condizione:
             self.fallite.append(cosa)
@@ -85,7 +93,7 @@ class Verifica:
 
     def invoca(self, *argomenti: str) -> tuple[int, dict]:
         esito = subprocess.run(
-            [str(self.binario), *argomenti], capture_output=True, check=False
+            [str(self.binario), *argomenti], capture_output=True, check=False, timeout=120
         )
         cosa = " ".join(argomenti) or "(nessun argomento)"
         self.controlla(esito.stderr == b"", f"{cosa}: stderr non vuoto")
@@ -113,53 +121,62 @@ class Verifica:
 
 def verifica(contratti: Path, binario: Path) -> list[str]:
     v = Verifica(contratti, binario)
-    codice, documento = v.invoca("--version", "--format", "json")
-    v.controlla(codice == 0 and documento["result"]["protocol_version"] == 2, "version")
+    with v.passaggio("version"):
+        codice, documento = v.invoca("--version", "--format", "json")
+        v.controlla(codice == 0 and documento["result"]["protocol_version"] == 2, "version")
 
-    codice, documento = v.invoca("capabilities", "--format", "json")
-    capacita = documento["result"]
-    v.valido("capabilities-v2", capacita, "capabilities")
-    v.controlla(not v.semantica.capability_errors(capacita), "capabilities: CAP-005/CAP-007")
-    catalogo = strict_json.loads((contratti / "catalogs" / "data-tools-v3.json").read_text("utf-8"))
-    pubbliche = {
-        (op["id"], op["version"], op["input"]["contract"], op["output"]["contract"], op["side_effect"])
-        for op in catalogo["operations"]
-        if "cli" in op["surfaces"]
-    }
-    nostre = {
-        (op["id"], op["version"], op["input"]["contract"], op["output"]["contract"], op["side_effect"])
-        for op in capacita["operations"]
-    }
-    v.controlla(pubbliche == nostre, "capabilities: operazioni CLI, contratti ed effetti del catalogo v3")
+    with v.passaggio("capabilities"):
+        codice, documento = v.invoca("capabilities", "--format", "json")
+        capacita = documento["result"]
+        v.valido("capabilities-v2", capacita, "capabilities")
+        v.controlla(not v.semantica.capability_errors(capacita), "capabilities: CAP-005/CAP-007")
+        catalogo = strict_json.loads((contratti / "catalogs" / "data-tools-v3.json").read_text("utf-8"))
+        pubbliche = {
+            (op["id"], op["version"], op["input"]["contract"], op["output"]["contract"], op["side_effect"])
+            for op in catalogo["operations"]
+            if "cli" in op["surfaces"]
+        }
+        nostre = {
+            (op["id"], op["version"], op["input"]["contract"], op["output"]["contract"], op["side_effect"])
+            for op in capacita["operations"]
+        }
+        v.controlla(pubbliche == nostre, "capabilities: operazioni CLI, contratti ed effetti del catalogo v3")
 
-    codice, documento = v.invoca("catalog", "--format", "json")
-    v.controlla(documento["contract"] == "plenora-data-catalog-result-v2", "catalog: contratto del risultato")
-    v.valido("operation-registry-v1", documento["result"]["registry"], "catalog: registry")
-    registro = strict_json.loads((contratti / "catalogs" / "data-kernels-v2.json").read_text("utf-8"))
-    comuni = {(op["id"], op["version"], op["family"]) for op in registro["operations"]}
-    kernel = documento["result"]["kernels"]
-    nostri = {(k["id"], k["version"], k["family"]) for k in kernel}
-    v.controlla(comuni == nostri, "catalog: id, versioni e famiglie del registro v2 (DT-001)")
-    disponibili = {(k["id"], k["version"], k["family"]) for k in kernel if k["status"] == "available"}
-    nel_registro = {(op["id"], op["version"], op["family"]) for op in documento["result"]["registry"]["operations"]}
-    v.controlla(disponibili == nel_registro, "catalog: registry = kernel disponibili (DT-001)")
-    v.controlla(
-        all(k.get("reason") for k in kernel if k["status"] != "available"),
-        "catalog: motivo dei kernel non disponibili (DT-001)",
-    )
+    with v.passaggio("catalog"):
+        codice, documento = v.invoca("catalog", "--format", "json")
+        v.controlla(documento["contract"] == "plenora-data-catalog-result-v2", "catalog: contratto del risultato")
+        v.valido("operation-registry-v1", documento["result"]["registry"], "catalog: registry")
+        registro = strict_json.loads((contratti / "catalogs" / "data-kernels-v2.json").read_text("utf-8"))
+        comuni = {(op["id"], op["version"], op["family"]) for op in registro["operations"]}
+        kernel = documento["result"]["kernels"]
+        nostri = {(k["id"], k["version"], k["family"]) for k in kernel}
+        v.controlla(comuni == nostri, "catalog: id, versioni e famiglie del registro v2 (DT-001)")
+        disponibili = {(k["id"], k["version"], k["family"]) for k in kernel if k["status"] == "available"}
+        nel_registro = {(op["id"], op["version"], op["family"]) for op in documento["result"]["registry"]["operations"]}
+        v.controlla(disponibili == nel_registro, "catalog: registry = kernel disponibili (DT-001)")
+        v.controlla(
+            all(k.get("reason") for k in kernel if k["status"] != "available"),
+            "catalog: motivo dei kernel non disponibili (DT-001)",
+        )
 
-    codice, _ = v.invoca("--help", "--format", "json")
-    v.controlla(codice == 0, "help json")
-    codice, documento = v.invoca("frobnicate")
-    v.controlla(
-        codice == 2 and documento["error"]["category"] == "invalid_configuration",
-        "comando sconosciuto",
-    )
-    with tempfile.TemporaryDirectory() as cartella:
-        mancante = str(Path(cartella) / "manca.arrow")
-        codice, documento = v.invoca("describe", "--input", mancante, "--format", "json")
-        v.controlla(codice == 5 and documento["error"]["category"] == "not_found", "describe")
-        v.controlla(cartella not in json.dumps(documento), "describe: percorso nel messaggio")
+    with v.passaggio("help"):
+        codice, _ = v.invoca("--help", "--format", "json")
+        v.controlla(codice == 0, "help json")
+
+    with v.passaggio("comando-sconosciuto"):
+        codice, documento = v.invoca("frobnicate")
+        v.controlla(
+            codice == 2 and documento["error"]["category"] == "invalid_configuration",
+            "comando sconosciuto",
+        )
+
+    with v.passaggio("describe"):
+        with tempfile.TemporaryDirectory() as cartella:
+            mancante = str(Path(cartella) / "manca.arrow")
+            codice, documento = v.invoca("describe", "--input", mancante, "--format", "json")
+            v.controlla(codice == 5 and documento["error"]["category"] == "not_found", "describe")
+            v.controlla(cartella not in json.dumps(documento), "describe: percorso nel messaggio")
+
     return v.fallite
 
 

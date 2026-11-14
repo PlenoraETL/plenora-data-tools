@@ -28,6 +28,35 @@ struct Lexer<'a> {
     nodi: usize,
 }
 
+/// Identificatori radice: verifica lessicale senza risoluzione o inferenza.
+pub(super) fn dichiarati(testo: &str) -> Esito<Vec<(String, String)>> {
+    let mut lexer = Lexer {
+        resto: testo,
+        nodi: 0,
+    };
+    let Valore::Nodo(root) = lexer.valore(0)? else {
+        return Err(Rifiuto::NumeroInvalido);
+    };
+    lexer.spazio();
+    if !lexer.resto.is_empty() {
+        return Err(Rifiuto::NumeroInvalido);
+    }
+    let mut ids = Vec::new();
+    for value in root.valori {
+        if let Valore::Nodo(node) = value {
+            if matches!(node.nome.as_str(), "ID" | "AUTHORITY") {
+                match node.valori.as_slice() {
+                    [Valore::Testo(authority), Valore::Numero(code) | Valore::Testo(code), ..] => {
+                        ids.push((authority.clone(), code.clone()));
+                    }
+                    _ => return Err(Rifiuto::NumeroInvalido),
+                }
+            }
+        }
+    }
+    Ok(ids)
+}
+
 impl Lexer<'_> {
     fn spazio(&mut self) {
         self.resto = self

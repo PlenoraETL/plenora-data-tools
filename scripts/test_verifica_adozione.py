@@ -118,21 +118,21 @@ class ProveContrattiTests(unittest.TestCase):
                 verifica_adozione.prove_contratti(Path("contratti"))
         self.assertEqual(
             [Path(call.args[0][-1]).name for call in run.call_args_list],
-            ["validate_specs.py", "test_messages.py", "test_gate_fuzz.py",
-             "test_message_sentinels.py"],
+            verifica_adozione.nomi_prove_contratti(),
         )
 
-    def test_ogni_fallimento_ferma_il_gate_senza_dati(self):
-        for posizione in range(4):
+    def test_ogni_fallimento_arrossa_il_gate_dopo_tutte_le_prove_senza_dati(self):
+        nomi = verifica_adozione.nomi_prove_contratti()
+        for posizione in range(len(nomi)):
             with self.subTest(posizione=posizione):
-                risultati = [subprocess.CompletedProcess([], 0)] * posizione
-                risultati.append(subprocess.CompletedProcess([], 1, b"SEGRETO", b"SEGRETO"))
+                risultati = [subprocess.CompletedProcess([], 0)] * len(nomi)
+                risultati[posizione] = subprocess.CompletedProcess([], 1, b"SEGRETO", b"SEGRETO")
                 output = io.StringIO()
                 with patch.object(verifica_adozione.subprocess, "run", side_effect=risultati) as run:
                     with contextlib.redirect_stdout(output):
-                        with self.assertRaisesRegex(ValueError, "^prova dei contratti fallita$"):
+                        with self.assertRaisesRegex(ValueError, "^prove dei contratti fallite$"):
                             verifica_adozione.prove_contratti(Path("contratti"))
-                self.assertEqual(run.call_count, posizione + 1)
+                self.assertEqual(run.call_count, len(nomi))
                 self.assertNotIn("SEGRETO", output.getvalue())
 
 

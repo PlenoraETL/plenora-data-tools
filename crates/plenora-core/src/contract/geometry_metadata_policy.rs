@@ -34,6 +34,13 @@ pub enum Effect {
 }
 /// Elenco esaustivo delle chiavi conosciute; gli altri membri geometrici sono derivati.
 pub const KEYS: &[(&str, Class)] = &[
+    ("plenora.postgres.native_type", Class::Derived),
+    ("plenora.postgres.native_declaration", Class::Derived),
+    ("plenora.postgres.type_kind", Class::Derived),
+    ("plenora.postgres.enum_labels", Class::Derived),
+    ("plenora.postgres.domain_base_type", Class::Derived),
+    ("plenora.postgres.domain_constraints", Class::Derived),
+    ("plenora.postgres.collation", Class::Derived),
     ("crs", Class::Crs),
     ("epoch", Class::Crs),
     ("edges", Class::Crs),
@@ -146,11 +153,18 @@ pub fn class(key: &str) -> Class {
 /// Chiavi di primo livello governate da questa politica.
 #[must_use]
 pub fn governed(key: &str) -> bool {
-    key.starts_with("plenora.geometry.") || KEYS.iter().any(|(name, _)| *name == key)
+    key.starts_with("plenora.geometry.")
+        || key.starts_with("plenora.postgres.")
+        || KEYS.iter().any(|(name, _)| *name == key)
 }
 /// Decisione unica per classe ed effetto; bbox e' un contenitore dei valori superstiti.
 #[must_use]
 pub fn keep(key: &str, effect: Effect, equal: bool) -> bool {
+    // Dichiarazioni sul valore corrente, anche future: nessuna provenienza
+    // nota in questo namespace. Non estende l'enum pubblico Class della 4.1.
+    if key.starts_with("plenora.postgres.") {
+        return matches!(effect, Effect::Unchanged | Effect::Rows);
+    }
     match (class(key), effect) {
         (_, Effect::Unchanged)
         | (Class::Crs | Class::Representation | Class::Types, Effect::Rows)
@@ -205,6 +219,7 @@ pub fn apply(metadata: &mut Metadata, effect: Effect) {
             continue;
         }
         if let Ok(serde_json::Value::Object(mut object)) = serde_json::from_str(raw) {
+            let original = object.clone();
             if object
                 .get("crs")
                 .and_then(serde_json::Value::as_str)
@@ -216,6 +231,9 @@ pub fn apply(metadata: &mut Metadata, effect: Effect) {
                 keep_member(key, effect, true)
                     && (effect != Effect::Rows || key != "bbox" || valid_bbox(&value.to_string()))
             });
+            if object == original {
+                continue;
+            }
             if object.is_empty() {
                 metadata.remove(container);
             } else {
@@ -298,90 +316,496 @@ pub fn merge(left: &Metadata, right: &Metadata) -> Result<Metadata, PlenoraError
     Ok(result)
 }
 
-/// Effetto di catalogo sulla geometria ereditata. Le colonne prodotte hanno
-/// dichiarazioni nuove; le trasformazioni tabellari di colonne specifiche
-/// applicano inoltre `Values` alla sola colonna sostituita.
+/// Uso geometrico di ciascun ingresso; per N-aria il ruolo si ripete.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OperandUse {
+    /// Trasporto senza interpretare coordinate.
+    Transport,
+    /// Selezione o riordino delle celle.
+    Rows,
+    /// Lettura della geometria per calcolare, anche quando viene conservata.
+    Read,
+    /// Produzione da attributi o configurazione, senza operando geometrico.
+    Produce,
+}
+
+/// Inventario chiuso: il gate confronta tutte le righe con il catalogo.
+pub const OPERATION_POLICY: &[(&str, Effect, &[OperandUse])] = &[
+    (
+        "table.add_row_number",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    ("table.aggregate", Effect::Rows, &[OperandUse::Rows]),
+    ("table.bin", Effect::Unchanged, &[OperandUse::Transport]),
+    ("table.concat", Effect::Merge, &[OperandUse::Rows]),
+    (
+        "table.concat_columns",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.conditional",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.cross_join",
+        Effect::Rows,
+        &[OperandUse::Rows, OperandUse::Rows],
+    ),
+    (
+        "table.date_extract",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    ("table.dedup_advanced", Effect::Rows, &[OperandUse::Rows]),
+    ("table.distinct", Effect::Rows, &[OperandUse::Rows]),
+    (
+        "table.drop_columns",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    ("table.fill_na", Effect::Unchanged, &[OperandUse::Transport]),
+    ("table.filter", Effect::Rows, &[OperandUse::Rows]),
+    (
+        "table.flatten_json",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    ("table.formula", Effect::Unchanged, &[OperandUse::Transport]),
+    (
+        "table.join",
+        Effect::Rows,
+        &[OperandUse::Rows, OperandUse::Rows],
+    ),
+    ("table.lookup", Effect::Unchanged, &[OperandUse::Transport]),
+    ("table.melt", Effect::Rows, &[OperandUse::Rows]),
+    ("table.pivot", Effect::Rows, &[OperandUse::Rows]),
+    ("table.rename", Effect::Unchanged, &[OperandUse::Transport]),
+    (
+        "table.reorder_columns",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    ("table.replace", Effect::Unchanged, &[OperandUse::Transport]),
+    ("table.sample", Effect::Rows, &[OperandUse::Rows]),
+    ("table.sort", Effect::Rows, &[OperandUse::Rows]),
+    (
+        "table.split_column",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    ("table.statistics", Effect::Rows, &[OperandUse::Rows]),
+    (
+        "table.string_extract",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.string_length",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.string_pad",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.table_diff",
+        Effect::Rows,
+        &[OperandUse::Rows, OperandUse::Rows],
+    ),
+    (
+        "table.text_normalize",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    ("table.transpose", Effect::Rows, &[OperandUse::Rows]),
+    (
+        "table.type_cast",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.uuid_generator",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    ("table.window_function", Effect::Rows, &[OperandUse::Rows]),
+    (
+        "table.mask_data",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.md5_hash",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.anti_join",
+        Effect::Rows,
+        &[OperandUse::Rows, OperandUse::Rows],
+    ),
+    (
+        "table.asof_join",
+        Effect::Rows,
+        &[OperandUse::Rows, OperandUse::Rows],
+    ),
+    (
+        "table.assert_not_null",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.assert_range",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.assert_regex",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.assert_schema",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.assert_unique",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.coalesce",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.date_add",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.date_diff",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.date_format",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.except",
+        Effect::Rows,
+        &[OperandUse::Rows, OperandUse::Rows],
+    ),
+    ("table.explode", Effect::Rows, &[OperandUse::Rows]),
+    (
+        "table.intersect",
+        Effect::Rows,
+        &[OperandUse::Rows, OperandUse::Rows],
+    ),
+    ("table.rolling_window", Effect::Rows, &[OperandUse::Rows]),
+    (
+        "table.semi_join",
+        Effect::Rows,
+        &[OperandUse::Rows, OperandUse::Rows],
+    ),
+    (
+        "table.sha256_hash",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.timezone_convert",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.union_distinct",
+        Effect::Merge,
+        &[OperandUse::Rows, OperandUse::Rows],
+    ),
+    ("table.unnest", Effect::Rows, &[OperandUse::Rows]),
+    (
+        "table.expression",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.assert_cardinality",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.assert_metadata",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.assert_foreign_key",
+        Effect::Unchanged,
+        &[OperandUse::Transport, OperandUse::Transport],
+    ),
+    (
+        "table.reconcile",
+        Effect::Rows,
+        &[OperandUse::Rows, OperandUse::Rows],
+    ),
+    ("geo.centroid", Effect::Types, &[OperandUse::Read]),
+    ("geo.convex_hull", Effect::Types, &[OperandUse::Read]),
+    ("geo.envelope", Effect::Types, &[OperandUse::Read]),
+    (
+        "geo.sjoin",
+        Effect::Rows,
+        &[OperandUse::Read, OperandUse::Read],
+    ),
+    ("geo.area", Effect::Unchanged, &[OperandUse::Read]),
+    ("geo.boundary", Effect::Types, &[OperandUse::Read]),
+    (
+        "geo.bounds_extractor",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    ("geo.buffer", Effect::Types, &[OperandUse::Read]),
+    ("geo.clean_topology", Effect::Types, &[OperandUse::Read]),
+    (
+        "geo.clip",
+        Effect::Types,
+        &[OperandUse::Read, OperandUse::Read],
+    ),
+    (
+        "geo.count_points_in_polygons",
+        Effect::Unchanged,
+        &[OperandUse::Read, OperandUse::Read],
+    ),
+    (
+        "geo.difference",
+        Effect::Types,
+        &[OperandUse::Read, OperandUse::Read],
+    ),
+    ("geo.dissolve", Effect::Types, &[OperandUse::Read]),
+    ("geo.distance", Effect::Unchanged, &[OperandUse::Read]),
+    ("geo.explode", Effect::Types, &[OperandUse::Read]),
+    ("geo.from_coords", Effect::Values, &[OperandUse::Produce]),
+    (
+        "geo.intersection",
+        Effect::Types,
+        &[OperandUse::Read, OperandUse::Read],
+    ),
+    ("geo.length", Effect::Unchanged, &[OperandUse::Read]),
+    ("geo.line_builder", Effect::Types, &[OperandUse::Read]),
+    (
+        "geo.nearest",
+        Effect::Rows,
+        &[OperandUse::Read, OperandUse::Read],
+    ),
+    (
+        "geo.overlay",
+        Effect::Types,
+        &[OperandUse::Read, OperandUse::Read],
+    ),
+    ("geo.perimeter", Effect::Unchanged, &[OperandUse::Read]),
+    ("geo.point_on_surface", Effect::Types, &[OperandUse::Read]),
+    ("geo.polygon_builder", Effect::Types, &[OperandUse::Read]),
+    ("geo.simplify", Effect::Values, &[OperandUse::Read]),
+    (
+        "geo.symmetric_difference",
+        Effect::Types,
+        &[OperandUse::Read, OperandUse::Read],
+    ),
+    ("geo.to_wkt", Effect::Unchanged, &[OperandUse::Read]),
+    (
+        "geo.union",
+        Effect::Types,
+        &[OperandUse::Read, OperandUse::Read],
+    ),
+    ("geo.vertex_count", Effect::Unchanged, &[OperandUse::Read]),
+    ("geo.voronoi", Effect::Types, &[OperandUse::Read]),
+    (
+        "geo.within",
+        Effect::Unchanged,
+        &[OperandUse::Read, OperandUse::Read],
+    ),
+    ("geo.make_valid", Effect::Types, &[OperandUse::Read]),
+    ("geo.reproject", Effect::Crs, &[OperandUse::Read]),
+    (
+        "geo.predicate_intersects",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.predicate_disjoint",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.predicate_contains",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.predicate_within",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.predicate_equals_topo",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.predicate_covers",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.predicate_covered_by",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.predicate_contains_properly",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.predicate_touches",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.predicate_crosses",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.predicate_overlaps",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    ("geo.affine_transform", Effect::Values, &[OperandUse::Read]),
+    ("geo.translate", Effect::Values, &[OperandUse::Read]),
+    ("geo.scale", Effect::Values, &[OperandUse::Read]),
+    ("geo.rotate", Effect::Values, &[OperandUse::Read]),
+    ("geo.concave_hull", Effect::Types, &[OperandUse::Read]),
+    (
+        "geo.hausdorff_distance",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.haversine_distance",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.geodesic_distance",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.geodesic_line_length",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    ("geo.densify", Effect::Values, &[OperandUse::Read]),
+    ("geo.snap_to_grid", Effect::Values, &[OperandUse::Read]),
+    ("geo.delaunay", Effect::Types, &[OperandUse::Read]),
+    ("geo.polygonize", Effect::Types, &[OperandUse::Read]),
+    ("geo.line_merge", Effect::Types, &[OperandUse::Read]),
+    ("geo.split", Effect::Types, &[OperandUse::Read]),
+    ("geo.line_substring", Effect::Types, &[OperandUse::Read]),
+    (
+        "geo.line_interpolate_point",
+        Effect::Types,
+        &[OperandUse::Read],
+    ),
+    (
+        "geo.frechet_distance",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    ("geo.bearing", Effect::Unchanged, &[OperandUse::Read]),
+    ("geo.geodesic_area", Effect::Unchanged, &[OperandUse::Read]),
+    (
+        "geo.geometry_diagnostics",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    ("geo.from_wkt", Effect::Values, &[OperandUse::Produce]),
+    (
+        "geo.geometry_accessors",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    ("geo.collect", Effect::Types, &[OperandUse::Read]),
+    (
+        "geo.line_locate_point",
+        Effect::Unchanged,
+        &[OperandUse::Read],
+    ),
+    ("geo.generate_grid", Effect::Values, &[OperandUse::Produce]),
+    ("geo.subdivide", Effect::Types, &[OperandUse::Read]),
+    ("geo.snap", Effect::Values, &[OperandUse::Read]),
+    ("geo.coverage_validate", Effect::Types, &[OperandUse::Read]),
+    ("geo.shared_paths", Effect::Types, &[OperandUse::Read]),
+    ("geo.cluster_dbscan", Effect::Unchanged, &[OperandUse::Read]),
+    ("table.limit", Effect::Rows, &[OperandUse::Rows]),
+    (
+        "table.select_columns",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    (
+        "table.stable_fingerprint",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    ("table.top_n", Effect::Rows, &[OperandUse::Rows]),
+    (
+        "table.align_schema",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    ("table.concat_by_name", Effect::Merge, &[OperandUse::Rows]),
+    (
+        "table.hmac_sha256",
+        Effect::Unchanged,
+        &[OperandUse::Transport],
+    ),
+    ("table.validate_rules", Effect::Rows, &[OperandUse::Rows]),
+    (
+        "table.fuzzy_join",
+        Effect::Rows,
+        &[OperandUse::Rows, OperandUse::Rows],
+    ),
+];
+
+/// Ruoli degli ingressi dichiarati, senza default per operazioni sconosciute.
+///
+/// # Errors
+/// Internal se il catalogo non ha una classificazione.
+pub fn operand_uses(id: &str) -> Result<&'static [OperandUse], PlenoraError> {
+    OPERATION_POLICY
+        .iter()
+        .find(|row| row.0 == id)
+        .map(|row| row.2)
+        .ok_or_else(|| PlenoraError::Internal("operazione senza politica geometrica".into()))
+}
+
+/// Effetto sul campo geometrico ereditato. Il gate vieta voci senza politica.
 #[must_use]
 pub fn operation_effect(op: &crate::catalog::OperationDescriptor) -> Effect {
-    use crate::catalog::{Family, GeoFusion, SourceRowProvenance};
-    if op.id == "geo.reproject" {
-        return Effect::Crs;
-    }
-    if matches!(
-        op.id,
-        "table.concat" | "table.concat_by_name" | "table.union_distinct"
-    ) {
-        return Effect::Merge;
-    }
-    if matches!(
-        op.id,
-        "geo.boundary"
-            | "geo.buffer"
-            | "geo.centroid"
-            | "geo.clean_topology"
-            | "geo.clip"
-            | "geo.collect"
-            | "geo.concave_hull"
-            | "geo.convex_hull"
-            | "geo.delaunay"
-            | "geo.difference"
-            | "geo.dissolve"
-            | "geo.envelope"
-            | "geo.explode"
-            | "geo.intersection"
-            | "geo.line_builder"
-            | "geo.line_interpolate_point"
-            | "geo.line_merge"
-            | "geo.line_substring"
-            | "geo.make_valid"
-            | "geo.overlay"
-            | "geo.point_on_surface"
-            | "geo.polygon_builder"
-            | "geo.polygonize"
-            | "geo.split"
-            | "geo.subdivide"
-            | "geo.symmetric_difference"
-            | "geo.union"
-            | "geo.voronoi"
-            | "geo.coverage_validate"
-            | "geo.shared_paths"
-    ) {
-        return Effect::Types;
-    }
-    if op.family == Family::Geo {
-        if op.geo_fusion == GeoFusion::TerminalMeasure
-            || op.id.starts_with("geo.predicate_")
-            || matches!(
-                op.id,
-                "geo.bounds_extractor"
-                    | "geo.geometry_diagnostics"
-                    | "geo.geometry_accessors"
-                    | "geo.line_locate_point"
-                    | "geo.cluster_dbscan"
-                    | "geo.distance"
-                    | "geo.hausdorff_distance"
-                    | "geo.frechet_distance"
-                    | "geo.haversine_distance"
-                    | "geo.geodesic_distance"
-                    | "geo.bearing"
-                    | "geo.geodesic_area"
-                    | "geo.geodesic_line_length"
-                    | "geo.within"
-                    | "geo.count_points_in_polygons"
-            )
-        {
-            return Effect::Unchanged;
-        }
-        if matches!(op.id, "geo.sjoin" | "geo.nearest") {
-            return Effect::Rows;
-        }
-        return Effect::Values;
-    }
-    if op.source_row_provenance() == SourceRowProvenance::Preserved {
-        Effect::Unchanged
-    } else {
-        Effect::Rows
-    }
+    OPERATION_POLICY
+        .iter()
+        .find(|row| row.0 == op.id)
+        .map_or(Effect::Merge, |row| row.1)
 }
 /// Effetto per ruolo sulle geometrie d'uscita, senza consultare la primaria.
 ///
@@ -669,7 +1093,7 @@ pub fn merge_schema(sources: &[&Metadata]) -> Result<Metadata, PlenoraError> {
 /// Proprieta' CRS opache, coerenti fra le rappresentazioni e trasportabili.
 ///
 /// # Errors
-/// CRS per epoca non numerica o dichiarazioni discordanti; Unsupported per lati sferici.
+/// CRS per epoca non numerica, lati non riconosciuti o dichiarazioni discordanti.
 pub fn crs_properties(
     campo: &crate::arrow::Field,
 ) -> Result<serde_json::Map<String, serde_json::Value>, PlenoraError> {
@@ -718,13 +1142,36 @@ pub fn crs_properties(
             if member == "epoch" && !value.as_f64().is_some_and(f64::is_finite) {
                 return Err(invalido("epoch non numerica"));
             }
-            if member == "edges" && value.as_str() != Some("planar") {
-                return Err(PlenoraError::Unsupported("edges non planare".into()));
+            if member == "edges"
+                && !matches!(
+                    value.as_str(),
+                    Some("planar" | "spherical" | "vincenty" | "thomas" | "andoyer" | "karney")
+                )
+            {
+                return Err(invalido("edges non riconosciuto"));
             }
             output.insert(member.into(), value.clone());
         }
     }
     Ok(output)
+}
+
+/// Capacita' del calcolo sul solo campo usato; il trasporto non la richiede.
+///
+/// # Errors
+/// Unsupported per geography o lati non planari, CRS per dichiarazioni incoerenti.
+pub fn require_planar(field: &crate::arrow::Field) -> Result<(), PlenoraError> {
+    if super::arrow_metadata::canonical_geometry_spatial_semantics(field)?
+        == Some(super::SpatialSemantics::Geography)
+        || crs_properties(field)?
+            .get("edges")
+            .is_some_and(|value| value != "planar")
+    {
+        return Err(PlenoraError::Unsupported(
+            "calcolo su semantica non planare non supportato".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Prepara il campo per una dichiarazione dei tipi prodotta dal codec.

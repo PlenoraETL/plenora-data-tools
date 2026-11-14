@@ -939,10 +939,7 @@ fn invalid_probe(key: &str, site: Site, mode: usize) -> Rejection {
             _,
         )
         | ("dimensions", Site::Geo) => Some(Schema),
-        ("crs_type", Site::Extension)
-        | ("edges", Site::Extension | Site::Geo)
-        | ("encoding", Site::Geo)
-        | ("plenora.geometry.native.geoparquet.edges", _) => Some(Unsupported),
+        ("crs_type", Site::Extension) | ("encoding", Site::Geo) => Some(Unsupported),
         _ => None,
     }
 }
@@ -960,7 +957,6 @@ fn input_rejection(key: &str, site: Site, mode: usize, ext: &str, no_primary: bo
             "orientation" => Some(InvalidPlan), // Sentinella fuori vocabolario.
             "encoding" | "geometry_types" if mode != 0 => Some(InvalidPlan),
             "crs" if mode != 0 => Some(Crs),
-            "edges" if mode == 2 => Some(Unsupported),
             "encoding" | "geometry_types" | "crs" | "epoch" | "edges" | "bbox" | "covering" => None,
             _ => Some(Unsupported), // Membri fuori dal formato GeoParquet 1.1.
         };

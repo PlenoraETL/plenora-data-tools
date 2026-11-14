@@ -70,7 +70,7 @@ In lettura il metadato di file `geo` è l'autorità:
 | `encoding` | solo `WKB`; le codifiche GeoArrow native (`point`, …) sono `Unsupported` |
 | `geometry_types` | tipi dichiarati (`exact`) e dimensionalità: tutti ` Z` → `xyz`, nessuno → `xy`, misti o elenco vuoto → `unknown`; ogni cella si verifica, un tipo non dichiarato è `DataMapping` |
 | `crs` | assente → `OGC:CRS84`; `null` → CRS mancante; PROJJSON → confronto semantico completo con la tabella (sotto) |
-| `edges` | assente o `planar`; `spherical` è `Unsupported` |
+| `edges` | assente, `planar` o `spherical`: conservato; il calcolo non planare si rifiuta |
 | `epoch` | numero finito conservato come proprieta' CRS nativa e nel file riscritto; nessuna trasformazione temporale |
 | `orientation`, `bbox`, `covering` | validati nella forma e lasciati cadere |
 | altre chiavi di colonna | `Unsupported` |
@@ -394,7 +394,7 @@ limite della tabella.
   `plenora_core::panic_policy::install` (limite già dichiarato lì).
 - **GeoParquet, ciò che il contratto non porta**: `orientation`, `bbox` e
   `covering` seguono la politica; `epoch` si conserva per colonna, mentre
-  `edges: spherical` si rifiuta. Tutte le geometrie sono lette e scritte con CRS, encoding,
+  `edges: spherical` passa invariato; il calcolo sul campo lo rifiuta. Tutte le geometrie sono lette e scritte con CRS, encoding,
   tipi e coordinate verificati per colonna.
   La scrittura senza primaria si rifiuta (`Unsupported`). Il PROJJSON
   letto deve coincidere semanticamente con una voce integrata; un ID EPSG

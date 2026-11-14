@@ -36,7 +36,7 @@
         "cli",
         "python_sdk"
       ],
-      "observed_behavior": "Il passaggio rifiuta con crs i CRS resolved fuori tabella o con definizione, e geography con unsupported. Hazard: Input conformi non attraversano il componente.",
+      "observed_behavior": "Il passaggio rifiuta con crs i CRS resolved fuori tabella o con definizione; geography passa invariata. Hazard: Input conformi non attraversano il componente.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
       "detectable_before_invocation": false
     },
@@ -58,7 +58,7 @@
         "cli",
         "python_sdk"
       ],
-      "observed_behavior": "Declared_unresolved conserva la definizione senza verificarne grammatica e identificatori di primo livello. Hazard: Una dichiarazione contraddittoria puo attraversare un piano tabellare.",
+      "observed_behavior": "Declared_unresolved conserva lo stato; grammatica lessicale e identificatori radice sono verificati senza promozione. Resta limitata la verifica semantica completa delle definizioni esterne. Hazard: La struttura semantica completa di una definizione esterna non viene attestata dal trasporto.",
       "tracking": "docs/geometry-semantics.md#deviazioni-e-rientro",
       "detectable_before_invocation": false
     },
@@ -264,7 +264,7 @@
         "GEO-000"
       ],
       "status": "deviation",
-      "reason": "Il passaggio rifiuta con crs i CRS resolved fuori tabella o con definizione, e geography con unsupported.",
+      "reason": "Il passaggio rifiuta con crs i CRS resolved fuori tabella o con definizione; geography passa invariata.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
       "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
       "hazard": "Input conformi non attraversano il componente.",
@@ -313,10 +313,10 @@
         "GEO-005"
       ],
       "status": "deviation",
-      "reason": "Declared_unresolved conserva la definizione senza verificarne grammatica e identificatori di primo livello.",
+      "reason": "Declared_unresolved conserva lo stato; grammatica lessicale e identificatori radice sono verificati senza promozione. Resta limitata la verifica semantica completa delle definizioni esterne.",
       "verification": "cargo test -p plenora-cli --test geometry_semantics --locked; docs/geometry-semantics.md",
       "scope": "Operazioni pubbliche data-tools: Rust, CLI, SDK Python",
-      "hazard": "Una dichiarazione contraddittoria puo attraversare un piano tabellare.",
+      "hazard": "La struttura semantica completa di una definizione esterna non viene attestata dal trasporto.",
       "reentry": "Verificare grammatica e identificatori anche senza risoluzione."
     },
     {

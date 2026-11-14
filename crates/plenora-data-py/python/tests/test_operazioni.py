@@ -30,10 +30,15 @@ def scrivi_stream(tabella: pa.Table, percorso: pathlib.Path) -> None:
         scrittore.write_table(tabella)
 
 
-def test_catalog() -> None:
+def test_catalog(contratti: pathlib.Path) -> None:
     documento = pd.catalog()
     assert documento["plan_format"] == "plenora-data-plan-v1"
-    assert len(documento["kernels"]) == 146
+    from json_fixture import loads
+    catalogo = loads((contratti / "data-kernels-v2.json").read_text(encoding="utf-8"))
+    attesi = [(op["id"], op["version"], op["family"]) for op in catalogo["operations"]]
+    trovati = [(op["id"], op["version"], op["family"]) for op in documento["kernels"]]
+    assert len(trovati) == len(set(trovati))
+    assert set(trovati) == set(attesi)
     assert documento["registry"]["operations"]
     # Stesso documento a ogni chiamata e dalla forma asincrona.
     assert pd.catalog() == documento

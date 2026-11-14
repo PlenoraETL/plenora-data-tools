@@ -840,6 +840,48 @@ pub fn resolve_crs(definition: &str, name: &'static str) -> Result<ResolvedCrs, 
     integrati::risolvi(definition).ok_or(CrsError::NotBuiltin)
 }
 
+/// GEO-005: verifica gli identificatori radice senza risolvere il CRS.
+///
+/// # Errors
+/// Definizione malformata o contraddittoria con l'autorita' dichiarata.
+pub(crate) fn verify_declared_definition(
+    id: Option<&str>,
+    definition: &str,
+) -> Result<(), CrsError> {
+    validate_definition_text(definition, "crs")?;
+    let ids = definizioni::identificatori_dichiarati(definition)?;
+    if let Some((authority, code)) = id.and_then(|id| id.split_once(':')) {
+        let same: Vec<_> = ids
+            .iter()
+            .filter(|(a, _)| a.eq_ignore_ascii_case(authority))
+            .collect();
+        if !same.is_empty() && !same.iter().any(|(_, c)| c == code) {
+            return Err(CrsError::InvalidDefinition {
+                name: "crs",
+                reason: "identificatore e definizione CRS discordanti".into(),
+            });
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn same_declared_identifier(left: &str, right: &str) -> bool {
+    match (left.split_once(':'), right.split_once(':')) {
+        (Some((a, code)), Some((b, other))) => a.eq_ignore_ascii_case(b) && code == other,
+        _ => left == right,
+    }
+}
+
+pub(crate) fn definition_declares_id(definition: &str, id: &str) -> Result<bool, CrsError> {
+    verify_declared_definition(Some(id), definition)?;
+    let Some((authority, code)) = id.split_once(':') else {
+        return Ok(false);
+    };
+    Ok(definizioni::identificatori_dichiarati(definition)?
+        .iter()
+        .any(|(a, c)| a.eq_ignore_ascii_case(authority) && c == code))
+}
+
 /// Gli identificatori canonici (`OGC:CRS84`, `EPSG:<codice>`) di tutti i CRS
 /// della tabella integrata: `OGC:CRS84` per primo, poi i codici EPSG in
 /// ordine crescente.

@@ -9,6 +9,208 @@ use plenora_pipeline::{Interruzione, Pipeline};
 use serde_json::Value;
 use std::{collections::HashMap, path::Path, sync::Arc};
 
+#[path = "comune/qualifica_415.rs"]
+mod qualifica_415;
+
+#[test]
+fn qualifica_415_rust_e_cli() {
+    for extension in [false, true] {
+        for semantics in ["geometry", "geography"] {
+            for conflict in [false, true] {
+                if conflict && !extension {
+                    continue;
+                }
+                for compute in [false, true] {
+                    let input = qualifica_415::batch(
+                        extension,
+                        semantics,
+                        if conflict { "EPSG:4326" } else { "EPSG:32632" },
+                    );
+                    let plan = qualifica_415::plan(compute);
+                    let result = plenora_cli::api::esegui_in_memoria(
+                        &Pipeline::from_json(&plan).unwrap(),
+                        vec![Ingresso::Tabella {
+                            nome: "t".into(),
+                            tabella: input.clone(),
+                        }],
+                        &Interruzione::default(),
+                    );
+                    let category = if conflict {
+                        Some("crs")
+                    } else if compute && semantics == "geography" {
+                        Some("unsupported")
+                    } else {
+                        None
+                    };
+                    if let Some(category) = category {
+                        let error = result.expect_err("rifiuto");
+                        assert_eq!(error.category().as_str(), category);
+                        assert_eq!(error.phase().as_str(), "validate");
+                        assert_eq!(error.remote_effect(), plenora_core::RemoteEffect::None);
+                        assert_eq!(
+                            error.retry_disposition(),
+                            plenora_core::RetryDisposition::Never
+                        );
+                        assert!(!format!("{error:?}").contains("SENTINEL_415"));
+                        verifica_cli(&input, &plan, category, "validate", "415", compute);
+                    } else {
+                        let (_, output) = result.unwrap();
+                        qualifica_415::check(&input, &output[0].1, compute);
+                        let dir = tempfile::tempdir().unwrap();
+                        let source = dir.path().join("input.arrow");
+                        let target = dir.path().join("output.arrow");
+                        let p = dir.path().join("plan.json");
+                        plenora_io::ipc::scrivi(&input, std::fs::File::create(&source).unwrap())
+                            .unwrap();
+                        std::fs::write(&p, &plan).unwrap();
+                        let run = std::process::Command::new(env!("CARGO_BIN_EXE_plenora-data"))
+                            .args([
+                                "run",
+                                "--plan",
+                                p.to_str().unwrap(),
+                                "--input",
+                                &format!("t={}", source.display()),
+                                "--output",
+                                target.to_str().unwrap(),
+                            ])
+                            .output()
+                            .unwrap();
+                        assert!(
+                            run.status.success(),
+                            "{}",
+                            String::from_utf8_lossy(&run.stdout)
+                        );
+                        assert!(run.stderr.is_empty());
+                        qualifica_415::check(
+                            &input,
+                            &plenora_io::leggi_tabella(&target, None, u64::MAX).unwrap(),
+                            compute,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn qualifica_415_geography_secondaria_e_operazioni_di_righe() {
+    let base = qualifica_415::batch(true, "geometry", "EPSG:32632");
+    let geography = qualifica_415::batch(true, "geography", "EPSG:32632");
+    let mut secondary = geography.schema().field(1).metadata().clone();
+    secondary.insert("plenora.field_id", "4");
+    let secondary = geography
+        .schema()
+        .field(1)
+        .clone()
+        .with_name("s")
+        .with_metadata(secondary);
+    for primary in [true, false] {
+        let mut sm = base.schema().metadata().clone();
+        if primary {
+            sm.insert("plenora.primary_geometry", "3");
+        }
+        let source = RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                vec![
+                    base.schema().field(0).clone(),
+                    base.schema().field(1).clone(),
+                    secondary.clone(),
+                ],
+                sm,
+            )),
+            vec![
+                base.column(0).clone(),
+                base.column(1).clone(),
+                geography.column(1).clone(),
+            ],
+        )
+        .unwrap();
+        for step in [
+            serde_json::json!({"out":"o","op":"geo.centroid","in":["t"],"config":{"input_geometry":"g"}}),
+            serde_json::json!({"out":"o","op":"table.limit","in":["t"],"config":{"n":1}}),
+            serde_json::json!({"out":"o","op":"table.sort","in":["t"],"config":{"columns":["id"]}}),
+        ] {
+            let plan =
+                serde_json::json!({"version":1,"inputs":["t"],"steps":[step],"outputs":["o"]});
+            let (_, output) = plenora_cli::api::esegui_in_memoria(
+                &Pipeline::from_json(&plan.to_string()).unwrap(),
+                vec![Ingresso::Tabella {
+                    nome: "t".into(),
+                    tabella: source.clone(),
+                }],
+                &Interruzione::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                output[0].1.schema().field(2).metadata(),
+                secondary.metadata()
+            );
+            assert_eq!(
+                output[0].1.column(2).to_data(),
+                source.column(2).slice(0, output[0].1.num_rows()).to_data()
+            );
+            assert_eq!(
+                output[0].1.schema().field(0).metadata(),
+                source.schema().field(0).metadata()
+            );
+        }
+    }
+}
+
+#[test]
+fn qualifica_415_documenti_vuoti_e_malformati_sull_uscita_pubblica() {
+    for raw in [
+        "",
+        "{}",
+        " { } ",
+        r#"{"crs_type":"authority_code","crs":"epsg:32632"}"#,
+        r#"{"crs_type":"authority_code","crs":42}"#,
+    ] {
+        let source = qualifica_415::batch(false, "geometry", "EPSG:32632");
+        let mut fields = source
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect::<Vec<_>>();
+        let mut md = fields[1].metadata().clone();
+        md.insert("ARROW:extension:metadata", raw);
+        fields[1] = fields[1].clone().with_metadata(md);
+        let source = RecordBatch::try_new(
+            Arc::new(Schema::new_with_metadata(
+                fields,
+                source.schema().metadata().clone(),
+            )),
+            source.columns().to_vec(),
+        )
+        .unwrap();
+        for steps in [
+            serde_json::json!([]),
+            serde_json::json!([{"out":"t2","op":"table.limit","in":["t"],"config":{"n":3}}]),
+            serde_json::json!([{"out":"t2","op":"table.sort","in":["t"],"config":{"columns":["id"]}}]),
+        ] {
+            let output = if steps.as_array().unwrap().is_empty() {
+                "t"
+            } else {
+                "t2"
+            };
+            let plan =
+                serde_json::json!({"version":1,"inputs":["t"],"steps":steps,"outputs":[output]})
+                    .to_string();
+            let category = if raw.contains("42") { "crs" } else { "ok" };
+            verifica_cli(
+                &source,
+                &plan,
+                category,
+                "validate",
+                "documento GeoArrow",
+                false,
+            );
+        }
+    }
+}
+
 fn mappa(v: &Value) -> HashMap<String, String> {
     v.as_object()
         .unwrap()
@@ -134,8 +336,12 @@ fn expected<'a>(v: &'a Value, name: &str, compute: bool) -> (&'a str, &'static s
         .iter()
         .any(|f| f["metadata"]["plenora.geometry.spatial_semantics"] == "geography")
     {
-        // Il profilo permette il passaggio; il componente lo rifiuta ancora.
-        return ("unsupported", "validate", !compute);
+        // DT-ARROW-004: trasporto invariato, calcolo rifiutato.
+        return if compute {
+            ("unsupported", "validate", false)
+        } else {
+            ("ok", "", false)
+        };
     }
     if name == "invalid-unknown-crs-and-truncated.json" {
         return ("crs", "validate", !compute);
@@ -381,6 +587,8 @@ fn verifica_cli(
         .output()
         .unwrap();
     assert!(run.stderr.is_empty());
+    assert!(!String::from_utf8_lossy(&run.stdout).contains("SENTINEL_415"));
+    assert!(!String::from_utf8_lossy(&run.stderr).contains("SENTINEL_415"));
     let doc: Value = serde_json::from_slice(&run.stdout).unwrap();
     if category == "ok" {
         assert_eq!(run.status.code(), Some(0), "{name}, calcolo={compute}");

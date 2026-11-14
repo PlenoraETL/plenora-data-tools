@@ -30,12 +30,12 @@ non si cambia quel requisito per farli passare.
 
 | Regola | Stato | Evidenza o comportamento |
 | --- | --- | --- |
-| GEO-000 | deviazione | Il passaggio rifiuta con crs i CRS resolved fuori tabella o con definizione non risolvibile dal profilo integrato, e geography con unsupported. |
+| GEO-000 | deviazione | Il passaggio rifiuta con crs i CRS resolved fuori tabella o con definizione non risolvibile dal profilo integrato; geography passa invariata. |
 | GEO-001 | conforme | Il vocabolario canonico conserva gli assi e completa l assenza a unknown; anche il legacy senza prova conserva unknown (correzione 4.0). |
 | GEO-002 | deviazione | Tutti gli ingressi senza prova escono unknown; il calcolo dipendente dagli assi lo rifiuta esplicitamente per la policy safety-critical 4.0. |
 | GEO-003 | conforme | Vettori con ordinate asimmetriche e confronto byte per byte al confine API e CLI. |
 | GEO-004 | deviazione | Un crs_id con definizione resolved non supportata viene rifiutato anche nel passaggio; PROJJSON equivalente alla tabella viene verificato. |
-| GEO-005 | deviazione | Declared_unresolved conserva la definizione senza verificarne grammatica e identificatori di primo livello. |
+| GEO-005 | deviazione | Declared_unresolved conserva lo stato; grammatica lessicale e identificatori radice sono verificati senza promozione. Resta limitata la verifica semantica completa delle definizioni esterne. |
 | GEO-006 | deviazione | Una definizione senza identificatore, dichiarata resolved, viene rifiutata anche nel passaggio. |
 | GEO-007 | deviazione | Le operazioni geo rifiutano ancora EWKB valido con SRID incorporato; le tabellari lo preservano. |
 | GEO-008 | conforme | Flag SRID sotto wkb rifiutato data_mapping/read prima del kernel; il passaggio non decodifica. |
@@ -66,7 +66,7 @@ v4 espande ogni deviazione sulle tre superfici; non dichiara artefatti runtime.
 | GEO-000 | Input conformi non attraversano il componente. | Separare conformita, supporto del calcolo e trasporto dei metadati. |
 | GEO-002 | Il calcolo con unknown viene rifiutato anche quando GEO-002 lo permetterebbe. | La policy locale richiede evidenza degli assi: dichiarazione esplicita o provenienza certa, senza scambi impliciti. |
 | GEO-004 | Rifiuto di input conforme; nessun calcolo sostitutivo silenzioso. | Leggere identita e definizione separatamente, preservandole nel passaggio. |
-| GEO-005 | Una dichiarazione contraddittoria puo attraversare un piano tabellare. | Verificare grammatica e identificatori anche senza risoluzione. |
+| GEO-005 | Il trasporto non attesta la struttura semantica completa delle definizioni esterne. | Estendere la verifica semantica senza risolvere lo stato dichiarato. |
 | GEO-006 | Rifiuto di input conforme. | Trasportare la definizione opaca senza chiamare il risolutore. |
 | GEO-007 | Interoperabilita del calcolo ridotta; nessuna perdita silenziosa dello SRID. | Conversione EWKB senza perdita dopo la verifica del campo. |
 | GEO-013 | Identificatori diversi dal minimo libero richiesto dal contratto. | Distinguere assegnazione iniziale e identita derivate senza reintrodurre alias. |
