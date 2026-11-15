@@ -2009,7 +2009,6 @@
     "[[\"token\",\"METADATI_PANDAS\"],[\"token\",\":\"],[\"token\",\"&\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"pandas\"],[\"token\",\";\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"derive\"],[\"token\",\"(\"]]",
     "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"`{sorgente}`: max_fan_out\"],[\"token\",\")\"]]",
     "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"`{}` e' gia' definito: ogni nome si definisce una volta sola\"],[\"token\",\",\"],[\"token\",\"passo\"],[\"token\",\".\"],[\"token\",\"out\"],[\"token\",\")\"]]",
-    "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"`{}` e' un alias legacy: il piano usa l'id canonico `{}`\"],[\"token\",\",\"],[\"token\",\"passo\"],[\"token\",\".\"],[\"token\",\"op\"],[\"token\",\",\"],[\"token\",\"descrittore\"],[\"token\",\".\"],[\"token\",\"id\"],[\"token\",\")\"]]",
     "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"contratto dell'output `{nome}` assente\"],[\"token\",\")\"]]",
     "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"contratto di `{sorgente}` non risolto dalla validazione\"],[\"token\",\")\"]]",
     "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"input `{nome}` dichiarato due volte\"],[\"token\",\")\"]]",

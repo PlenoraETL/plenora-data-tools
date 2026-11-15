@@ -326,7 +326,6 @@
       "test_tutti_i_casi_dopo_errore_e_diagnostica_senza_dati"
     ],
     "scripts/test_python_version.py": [
-      "test_changelog_datare_la_voce_corrente_non_tocca_la_storia",
       "test_repository_coerente",
       "test_riferimento_divergente",
       "test_setup_e_matrice_non_duplicano_la_fonte",
@@ -369,6 +368,7 @@
       "test_lo_stato_si_chiede_a_git_senza_sconti",
       "test_ogni_fallimento_arrossa_il_gate_dopo_tutte_le_prove_senza_dati",
       "test_regola_mancante_o_ripetuta",
+      "test_un_secondo_manifesto_non_puo_adottare_un_altro_pin",
       "test_un_worktree_pulito_passa",
       "test_un_worktree_sporco_ferma_il_gate"
     ],
@@ -491,10 +491,8 @@
     ],
     "crates/plenora-core/src/catalog.rs": [
       "catalog_has_146_unique_ids",
-      "every_alias_resolves_to_an_existing_catalog_id",
-      "no_alias_collides_with_a_canonical_id_of_a_different_family",
       "crs_requirement_implies_geo_family",
-      "find_operation_accepts_canonical_ids_and_aliases",
+      "lookup_accepts_only_catalog_ids",
       "versions_default_to_one_and_expression_versions_are_explicit",
       "backend_pending_ops_declare_their_capability",
       "expansion_constraint_defaults_to_sum_relative",

@@ -436,7 +436,7 @@ non modificano le campagne Rust di questo repository.
   (`plenora-data-*-v1`) sono descritti qui, non da uno schema JSON
   pubblicato; i test ne verificano la forma campo per campo.
 
-Geometrie multiple complete dalla 4.1.0: [primaria, selettori ed esempi eseguiti](geometrie-multiple.md).
+Geometrie multiple: [primaria, selettori ed esempi eseguiti](geometrie-multiple.md).
 
 ## Delta dei contratti al pin 38d68b4
 
@@ -458,3 +458,14 @@ Ogni percorso rinvia a una classificazione con ambito e prova; il gate
 
 Non si introducono nuove deviazioni: ambito, hazard e rientro delle deviazioni
 GEO e DT-ARROW restano nel manifesto e nelle guide collegate.
+
+
+La pulizia della compatibilita verifica tutti i manifesti JSON tracciati:
+`contracts_source.revision` deve coincidere con il pin di adozione, anche
+quando viene aggiunto un secondo manifesto. `contract_delta.from` resta
+il riferimento di confronto, non una seconda adozione. Al checkout
+`0afbcf0035cd1528769c7772842374be82e65f90` il manifesto era gia allineato;
+i riferimenti descrittivi CLI/SDK sono ora coerenti. La rimozione del
+lookup degli id storici non cambia il catalogo canonico del pin e non
+introduce deviazioni di contratto. Le deviazioni gia dichiarate restano
+esplicite nel registro.

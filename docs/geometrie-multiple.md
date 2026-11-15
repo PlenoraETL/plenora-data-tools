@@ -1,6 +1,6 @@
 # Geometrie multiple
 
-Dalla 4.1.0 ogni tabella può portare più geometrie indipendenti: CRS, assi,
+Ogni tabella può portare più geometrie indipendenti: CRS, assi,
 encoding e null appartengono alla singola colonna. Non esiste un CRS globale
 che rietichetti le passanti. Il limite `data-una-geometria` è rimosso.
 

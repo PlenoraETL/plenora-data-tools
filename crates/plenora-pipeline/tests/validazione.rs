@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use plenora_core::arrow::array::RecordBatch;
 use plenora_core::arrow::schema::SchemaRef;
 use plenora_core::arrow::schema::{DataType, Field, Schema};
-use plenora_core::catalog::{Family, ALIASES, CATALOG};
+use plenora_core::catalog::{Family, CATALOG};
 use plenora_core::contract::arrow_schema::contract_from_arrow_schema;
 use plenora_core::contract::{
     ContractProperty, DataContract, FieldAllocator, FieldId, NullPlacement, PropertyConfidence,
@@ -349,16 +349,15 @@ fn operazioni_sconosciute_e_alias_si_rifiutano_le_geo_come_l_analisi() {
         Err(PlenoraError::Unsupported(_))
     ));
 
-    let (_, alias, canonico) = ALIASES
-        .iter()
-        .find(|(_, _, canonico)| *canonico == "table.add_row_number")
-        .expect("alias legacy di table.add_row_number");
-    assert_ne!(alias, canonico);
-    let con_alias = piano(&["t"], vec![passo("a", alias, &["t"], json!({}))], &["a"]);
-    let Err(PlenoraError::InvalidPlan(messaggio)) = valida_wide(&con_alias) else {
-        panic!("un alias legacy si rifiuta come errore di piano");
-    };
-    assert!(messaggio.contains(canonico), "{messaggio}");
+    let con_alias = piano(
+        &["t"],
+        vec![passo("a", "add_row_number", &["t"], json!({}))],
+        &["a"],
+    );
+    assert!(matches!(
+        valida_wide(&con_alias),
+        Err(PlenoraError::Unsupported(_))
+    ));
 
     // Le geo passano dall'analisi dei kernel: su una tabella senza
     // geometria e con la config vuota la validazione rifiuta come l'analisi.

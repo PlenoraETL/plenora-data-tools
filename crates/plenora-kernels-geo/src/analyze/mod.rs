@@ -421,7 +421,7 @@ pub fn analyze_geo_contract(
     // quindi qui l'arieta' e' solo 1 o 2.
     let output = match (descriptor.id, expected_arity) {
         ("geo.from_coords", _) => {
-            // Il messaggio nomina l'op come richiesta (anche un alias).
+            // Il messaggio nomina l'operazione richiesta.
             let requirement = crs_requirement(op, descriptor)?;
             analyze_from_coords(
                 descriptor.id,

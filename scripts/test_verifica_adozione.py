@@ -210,3 +210,21 @@ class PrimariaTests(unittest.TestCase):
         req["rules"].remove("PRIM-006")
         with self.assertRaisesRegex(ValueError, "regole primaria"):
             verifica_adozione.verifica_primaria(Path("non-letto"), source)
+
+
+class PinManifestiTests(unittest.TestCase):
+    def test_un_secondo_manifesto_non_puo_adottare_un_altro_pin(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for revision in ("famiglia", "altro"):
+                for name, pin in (("adozione.json", "famiglia"), ("manifesto.json", revision)):
+                    (root / name).write_text(json.dumps({"contracts_source": {"revision": pin}}), "utf-8")
+                with patch.object(verifica_adozione.subprocess, "run", return_value=
+                                  subprocess.CompletedProcess([], 0, "adozione.json\nmanifesto.json\n")):
+                    if revision == "famiglia":
+                        verifica_adozione.verifica_pin_manifesti(root, "famiglia")
+                    else:
+                        with self.assertRaisesRegex(ValueError, "pin dei manifesti incoerente"):
+                            verifica_adozione.verifica_pin_manifesti(root, "famiglia")

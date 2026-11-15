@@ -63,7 +63,7 @@ use plenora_core::catalog::find_operation;
 use plenora_core::catalog::{
     Arity, CancellationBehavior, CrsRequirement, DeterminismPolicy, ExecutionClass,
     ExpansionConstraint, Family, GeoFusion, Maturity, OperationDescriptor, Origin, ResultShape,
-    SourceRowProvenance, ALIASES, CATALOG,
+    SourceRowProvenance, CATALOG,
 };
 use plenora_core::contract::arrow_metadata::{
     geometry_output_field, GEOARROW_EXTENSION_KEY, GEOARROW_WKB_EXTENSION,
@@ -1424,11 +1424,6 @@ const fn fusione(geo_fusion: GeoFusion) -> &'static str {
 
 fn scheda_catalogo(operazione: &OperationDescriptor) -> String {
     let mut uscita = String::new();
-    let alias: Vec<String> = ALIASES
-        .iter()
-        .filter(|(_, _, canonico)| *canonico == operazione.id)
-        .map(|(versione, alias, _)| format!("`{alias}` (schema {versione})"))
-        .collect();
     let provenienza = match operazione.source_row_provenance() {
         SourceRowProvenance::Preserved => "conservata",
         SourceRowProvenance::Unavailable => "non disponibile",
@@ -1453,17 +1448,6 @@ fn scheda_catalogo(operazione: &OperationDescriptor) -> String {
                 "rifiutate: limite transitorio"
             }
             .into(),
-        ),
-        (
-            "alias legacy",
-            if alias.is_empty() {
-                "nessuno".into()
-            } else {
-                format!(
-                    "{} (risolti da `find_operation`; il runner li rifiuta)",
-                    alias.join(", ")
-                )
-            },
         ),
         ("arietà", arieta(operazione.arity).into()),
         (
@@ -1633,7 +1617,7 @@ docs/schede/ e dal catalogo: non si modifica a mano. Rigenerare con
 PLENORA_RIGENERA_DOC=1 cargo test -p plenora-io --test operazioni_doc -->
 
 Una scheda per operazione del catalogo. La tabella «dal catalogo» di ogni
-scheda è letta da `plenora_core::catalog` (`CATALOG`, `ALIASES`), il resto
+scheda è letta da `plenora_core::catalog` (`CATALOG`), il resto
 dalla scheda in `docs/schede/<id>.md`; un test confronta questo documento con
 quello che schede e catalogo generano, e un esempio che non gira o la cui
 uscita non è quella scritta fa fallire lo stesso test.

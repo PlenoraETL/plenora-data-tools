@@ -436,7 +436,7 @@ impl Pipeline {
     ///   `PlanLimits::default()` (passi, input, archi, fan-out, profondità,
     ///   byte di config, lunghezza dei nomi), nomi non
     ///   SSA (ridefiniti, usati prima della definizione, output inesistenti o
-    ///   ripetuti), alias legacy al posto dell'id canonico, arietà errata,
+    ///   ripetuti), arietà errata,
     ///   config non valida, `sorted_by` su un input;
     /// - `Unsupported`: operazione sconosciuta o senza dispatch nel runner,
     ///   `table.concat` con più di due input, schema di output non
@@ -625,15 +625,6 @@ impl Pipeline {
                     PlenoraError::Unsupported(format!("{}: operazione sconosciuta", passo.op)),
                 )
             })?;
-            if descrittore.id != passo.op {
-                return Err(nel_passo(
-                    &passo.out,
-                    PlenoraError::InvalidPlan(format!(
-                        "`{}` e' un alias legacy: il piano usa l'id canonico `{}`",
-                        passo.op, descrittore.id
-                    )),
-                ));
-            }
             let geo = descrittore.family == Family::Geo;
             verifica_arieta(descrittore, passo.inputs.len())
                 .map_err(|errore| nel_passo(&passo.out, errore))?;
