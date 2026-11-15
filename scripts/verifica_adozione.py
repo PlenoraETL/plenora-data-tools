@@ -129,9 +129,26 @@ def verifica_delta(contratti: Path, sorgente: dict) -> None:
             raise ValueError("classificazione del delta senza motivazione")
 
 
+def verifica_pin_manifesti(radice: Path, revisione: str) -> None:
+    """Ogni manifesto tracciato adotta lo stesso pin della famiglia."""
+    nomi = subprocess.run(
+        ["git", "ls-files", "--", "*.json"], cwd=radice,
+        capture_output=True, check=True, text=True,
+    ).stdout.splitlines()
+    for nome in nomi:
+        testo = (radice / nome).read_text("utf-8")
+        if '"contracts_source"' not in testo:
+            continue
+        documento = strict_json.loads(testo)
+        if isinstance(documento, dict) and "contracts_source" in documento:
+            if documento["contracts_source"].get("revision") != revisione:
+                raise ValueError("pin dei manifesti incoerente")
+
+
 def verifica(contratti: Path) -> None:
     sorgente = strict_json.loads((RADICE / "crates/plenora-cli/adozione.json").read_text("utf-8"))
     revisione = sorgente["contracts_source"]["revision"]
+    verifica_pin_manifesti(RADICE, revisione)
     verifica_checkout(contratti, revisione)
     verifica_delta(contratti, sorgente)
     cartella = RADICE / "crates/plenora-cli/tests/fixtures/contratti"

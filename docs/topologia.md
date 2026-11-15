@@ -2,7 +2,7 @@
 
 `geo.make_valid`, `geo.polygonize` e `geo.split` sono tornate nel catalogo
 (146 operazioni, 75 geo) con lo stesso contratto pubblico di
-`plenora-data-tools@190c493`: id, alias legacy, parametri, schema di output,
+`plenora-data-tools@190c493`: id canonici, parametri, schema di output,
 colonna `__class` (`polygon`, `cut_edge`, `dangle`, `invalid_ring`),
 `__parent_index` di `split`, nomi delle varianti d'errore e attribuzione del
 passo (`InvalidPlan`, `Internal` per ciò che è interno; dal ciclo dei

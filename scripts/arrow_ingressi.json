@@ -302,12 +302,6 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
     },
-    "crates/plenora-core/src/catalog.rs::resolve_alias": {
-      "signature": "pub fn resolve_alias(schema_version: u16, alias: &str) -> Option<&'static str>",
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
     "crates/plenora-core/src/catalog.rs::find_operation": {
       "signature": "pub fn find_operation(id: &str) -> Option<&'static OperationDescriptor>",
       "classification": "non riceve dati esterni",

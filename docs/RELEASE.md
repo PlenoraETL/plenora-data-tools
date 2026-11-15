@@ -104,9 +104,3 @@ avvisi. L'inventario non pretende di coprire runtime del sistema operativo o
 librerie native aggiunte da strumenti esterni; copre i crate e i testi nativi
 presenti nei loro pacchetti. Le dipendenze build/dev non sono distribuite come
 codice compilato da questo rilascio; lo SBOM continua a inventariarle a parte.
-
-## Migrazione alla 4.0
-
-La 4.0 rifiuta i calcoli con assi ignoti o incompatibili; il legacy EPSG
-senza prova resta `unknown`. Prima di migrare verificare la provenienza e
-dichiarare l'ordine fisico: [procedura e limiti](limiti.md).

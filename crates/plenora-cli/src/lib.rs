@@ -6,11 +6,11 @@
 //! stesse operazioni.
 //!
 //! Adotta il profilo data-tools versione 3 di `plenora-contracts` (commit
-//! `3aec9f724f5a0ad21366f293895b4d0dbcd0aad1`): CLI 2.0 (un documento JSON
+//! `38d68b402389855edbcecb7ce57c31e91282cb4e`): CLI 2.0 (un documento JSON
 //! su stdout, niente su stderr, codici d'uscita per categoria), Typed Errors
 //! 1.0 (la proiezione pubblica di `PlenoraError`), Capability Discovery 2.0,
 //! Surface Bindings 1.0 (comandi `catalog`, `describe`, `validate`, `run`).
-//! Nessuna deviazione: i contratti adottati sono in docs/cli.md, «CLI
+//! Contratti adottati e deviazioni esplicite sono in docs/cli.md, «CLI
 //! `plenora-data`».
 //!
 //! Struttura:

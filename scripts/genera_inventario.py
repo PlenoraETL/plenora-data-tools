@@ -138,16 +138,6 @@ def voci_catalogo() -> list[dict[str, str]]:
     return voci
 
 
-def numero_alias() -> int:
-    testo = senza_commenti(CATALOGO.read_text(encoding="utf-8"))
-    marcatore = "pub static ALIASES: &[(u16, &str, &str)] = &"
-    inizio = testo.find(marcatore)
-    if inizio < 0:
-        raise ErroreInventario("ALIASES non trovato")
-    corpo, _ = corpo_tra(testo, testo.index("[", inizio + len(marcatore)), "[", "]")
-    return len(re.findall(r"\(\s*\d+\s*,", corpo))
-
-
 def operazioni_cli() -> list[dict[str, str]]:
     """Le voci di `OPERAZIONI` della CLI, con i campi letterali."""
     testo = senza_commenti(OPERAZIONI_CLI.read_text(encoding="utf-8"))
@@ -261,7 +251,7 @@ def render() -> str:
         "",
         f"`plenora_core::catalog::CATALOG` ha {len(voci)} operazioni "
         f"({famiglie.get('Table', 0)} tabellari, {famiglie.get('Geo', 0)} geografiche) "
-        f"e `ALIASES` {numero_alias()} alias. Le schede sono in",
+        "con id univoci. Le schede sono in",
         "[`operazioni.md`](operazioni.md).",
         "",
         "### Per famiglia e provenienza",

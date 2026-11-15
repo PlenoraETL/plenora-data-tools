@@ -663,8 +663,7 @@ impl OperationDescriptor {
 // Il catalogo.
 //
 // Le voci sono raggruppate per famiglia e versione di estensione; i
-// separatori dentro `CATALOG` sono l'unico indice. Gli alias legacy stanno
-// in `ALIASES`.
+// separatori dentro `CATALOG` sono l'unico indice.
 //
 // Criteri dei metadati geo, scelti conservativi:
 // - `arity`: `BinaryOrdered` solo per le operazioni su due ingressi; due
@@ -3265,177 +3264,10 @@ pub static CATALOG: &[OperationDescriptor] = &[
     ),
 ];
 
-/// Alias legacy degli id, dai piani e dal protocollo del progetto d'origine.
-///
-/// Forma: `(schema_version, legacy_alias, canonical_id)`. Un alias
-/// introdotto non si riassegna mai a un altro id. `schema_version` 3 copre
-/// sia i piani tabellari legacy sia gli id storici del protocollo geo
-/// (v2/v3, `TransformArrowSchema`). [`find_operation`] li risolve; il
-/// runner li rifiuta e vuole l'id canonico.
-pub static ALIASES: &[(u16, &str, &str)] = &[
-    // --- Piani nogeo legacy: id storico -> table.<id> -----------------
-    (3, "add_row_number", "table.add_row_number"),
-    (3, "aggregate", "table.aggregate"),
-    (3, "bin", "table.bin"),
-    (3, "concat", "table.concat"),
-    (3, "concat_columns", "table.concat_columns"),
-    (3, "conditional", "table.conditional"),
-    (3, "cross_join", "table.cross_join"),
-    (3, "date_extract", "table.date_extract"),
-    (3, "dedup_advanced", "table.dedup_advanced"),
-    (3, "distinct", "table.distinct"),
-    (3, "drop_columns", "table.drop_columns"),
-    (3, "fill_na", "table.fill_na"),
-    (3, "filter", "table.filter"),
-    (3, "flatten_json", "table.flatten_json"),
-    (3, "formula", "table.formula"),
-    (3, "join", "table.join"),
-    (3, "lookup", "table.lookup"),
-    (3, "melt", "table.melt"),
-    (3, "pivot", "table.pivot"),
-    (3, "rename", "table.rename"),
-    (3, "reorder_columns", "table.reorder_columns"),
-    (3, "replace", "table.replace"),
-    (3, "sample", "table.sample"),
-    (3, "sort", "table.sort"),
-    (3, "split_column", "table.split_column"),
-    (3, "statistics", "table.statistics"),
-    (3, "string_extract", "table.string_extract"),
-    (3, "string_length", "table.string_length"),
-    (3, "string_pad", "table.string_pad"),
-    (3, "table_diff", "table.table_diff"),
-    (3, "text_normalize", "table.text_normalize"),
-    (3, "transpose", "table.transpose"),
-    (3, "type_cast", "table.type_cast"),
-    (3, "uuid_generator", "table.uuid_generator"),
-    (3, "window_function", "table.window_function"),
-    (3, "mask_data", "table.mask_data"),
-    (3, "md5_hash", "table.md5_hash"),
-    (3, "anti_join", "table.anti_join"),
-    (3, "asof_join", "table.asof_join"),
-    (3, "assert_not_null", "table.assert_not_null"),
-    (3, "assert_range", "table.assert_range"),
-    (3, "assert_regex", "table.assert_regex"),
-    (3, "assert_schema", "table.assert_schema"),
-    (3, "assert_unique", "table.assert_unique"),
-    (3, "coalesce", "table.coalesce"),
-    (3, "date_add", "table.date_add"),
-    (3, "date_diff", "table.date_diff"),
-    (3, "date_format", "table.date_format"),
-    (3, "except", "table.except"),
-    (3, "explode", "table.explode"),
-    (3, "intersect", "table.intersect"),
-    (3, "rolling_window", "table.rolling_window"),
-    (3, "semi_join", "table.semi_join"),
-    (3, "sha256_hash", "table.sha256_hash"),
-    (3, "timezone_convert", "table.timezone_convert"),
-    (3, "union_distinct", "table.union_distinct"),
-    (3, "unnest", "table.unnest"),
-    (3, "expression", "table.expression"),
-    (3, "assert_cardinality", "table.assert_cardinality"),
-    (3, "assert_metadata", "table.assert_metadata"),
-    (3, "assert_foreign_key", "table.assert_foreign_key"),
-    (3, "reconcile", "table.reconcile"),
-    // --- Id geo storici: geo_* -> geo.<id senza prefisso> -------------
-    (3, "geo_centroid", "geo.centroid"),
-    (3, "geo_convex_hull", "geo.convex_hull"),
-    (3, "geo_envelope", "geo.envelope"),
-    (3, "geo_area", "geo.area"),
-    (3, "geo_boundary", "geo.boundary"),
-    (3, "geo_bounds_extractor", "geo.bounds_extractor"),
-    (3, "geo_buffer", "geo.buffer"),
-    (3, "geo_clean_topology", "geo.clean_topology"),
-    (3, "geo_clip", "geo.clip"),
-    (
-        3,
-        "geo_count_points_in_polygons",
-        "geo.count_points_in_polygons",
-    ),
-    (3, "geo_difference", "geo.difference"),
-    (3, "geo_dissolve", "geo.dissolve"),
-    (3, "geo_distance", "geo.distance"),
-    (3, "geo_explode", "geo.explode"),
-    (3, "geo_from_coords", "geo.from_coords"),
-    (3, "geo_intersection", "geo.intersection"),
-    (3, "geo_length", "geo.length"),
-    (3, "geo_line_builder", "geo.line_builder"),
-    (3, "geo_nearest", "geo.nearest"),
-    (3, "geo_overlay", "geo.overlay"),
-    (3, "geo_perimeter", "geo.perimeter"),
-    (3, "geo_point_on_surface", "geo.point_on_surface"),
-    (3, "geo_polygon_builder", "geo.polygon_builder"),
-    (3, "geo_simplify", "geo.simplify"),
-    (3, "geo_symmetric_difference", "geo.symmetric_difference"),
-    (3, "geo_to_wkt", "geo.to_wkt"),
-    (3, "geo_union", "geo.union"),
-    (3, "geo_vertex_count", "geo.vertex_count"),
-    (3, "geo_voronoi", "geo.voronoi"),
-    (3, "geo_within", "geo.within"),
-    (3, "geo_make_valid", "geo.make_valid"),
-    (3, "geo_reproject", "geo.reproject"),
-    // --- Predicati DE-9IM: id invariato sotto geo. --------------------
-    (3, "predicate_intersects", "geo.predicate_intersects"),
-    (3, "predicate_disjoint", "geo.predicate_disjoint"),
-    (3, "predicate_contains", "geo.predicate_contains"),
-    (3, "predicate_within", "geo.predicate_within"),
-    (3, "predicate_equals_topo", "geo.predicate_equals_topo"),
-    (3, "predicate_covers", "geo.predicate_covers"),
-    (3, "predicate_covered_by", "geo.predicate_covered_by"),
-    (
-        3,
-        "predicate_contains_properly",
-        "geo.predicate_contains_properly",
-    ),
-    (3, "predicate_touches", "geo.predicate_touches"),
-    (3, "predicate_crosses", "geo.predicate_crosses"),
-    (3, "predicate_overlaps", "geo.predicate_overlaps"),
-    // --- Estensioni geo nude: <id> -> geo.<id> ------------------------
-    (3, "sjoin", "geo.sjoin"),
-    (3, "affine_transform", "geo.affine_transform"),
-    (3, "translate", "geo.translate"),
-    (3, "scale", "geo.scale"),
-    (3, "rotate", "geo.rotate"),
-    (3, "concave_hull", "geo.concave_hull"),
-    (3, "hausdorff_distance", "geo.hausdorff_distance"),
-    (3, "haversine_distance", "geo.haversine_distance"),
-    (3, "geodesic_distance", "geo.geodesic_distance"),
-    (3, "geodesic_line_length", "geo.geodesic_line_length"),
-    (3, "densify", "geo.densify"),
-    (3, "snap_to_grid", "geo.snap_to_grid"),
-    (3, "delaunay", "geo.delaunay"),
-    (3, "polygonize", "geo.polygonize"),
-    (3, "line_merge", "geo.line_merge"),
-    (3, "split", "geo.split"),
-    (3, "line_substring", "geo.line_substring"),
-    (3, "line_interpolate_point", "geo.line_interpolate_point"),
-    (3, "frechet_distance", "geo.frechet_distance"),
-    (3, "bearing", "geo.bearing"),
-    (3, "geodesic_area", "geo.geodesic_area"),
-    (3, "geometry_diagnostics", "geo.geometry_diagnostics"),
-];
-
-/// Risolve un alias legacy per una data `schema_version` verso l'id
-/// canonico; `None` se l'alias non esiste per quella versione.
-#[must_use]
-pub fn resolve_alias(schema_version: u16, alias: &str) -> Option<&'static str> {
-    ALIASES
-        .iter()
-        .find(|(version, a, _)| *version == schema_version && *a == alias)
-        .map(|(_, _, canonical)| *canonical)
-}
-
-/// Cerca un'operazione per id canonico o alias legacy.
-///
-/// Per un alias la `schema_version` non è nota al chiamante e si usa la
-/// prima voce di tabella corrispondente. `None` se l'id è sconosciuto.
+/// Cerca esclusivamente un id del catalogo corrente.
 #[must_use]
 pub fn find_operation(id: &str) -> Option<&'static OperationDescriptor> {
-    CATALOG.iter().find(|op| op.id == id).or_else(|| {
-        ALIASES
-            .iter()
-            .find(|(_, alias, _)| *alias == id)
-            .and_then(|(_, _, canonical)| CATALOG.iter().find(|op| op.id == *canonical))
-    })
+    CATALOG.iter().find(|op| op.id == id)
 }
 
 #[deny(clippy::disallowed_methods)]
@@ -3481,38 +3313,6 @@ mod tests {
     }
 
     #[test]
-    fn every_alias_resolves_to_an_existing_catalog_id() {
-        assert_eq!(ALIASES.len(), 127);
-        for (schema_version, alias, canonical) in ALIASES {
-            assert!(
-                CATALOG.iter().any(|op| op.id == *canonical),
-                "alias {alias} punta a un id assente: {canonical}"
-            );
-            assert_eq!(
-                resolve_alias(*schema_version, alias),
-                Some(*canonical),
-                "resolve_alias fallisce per {alias}"
-            );
-        }
-    }
-
-    #[test]
-    fn no_alias_collides_with_a_canonical_id_of_a_different_family() {
-        for (_, alias, canonical) in ALIASES {
-            let target = CATALOG
-                .iter()
-                .find(|op| op.id == *canonical)
-                .expect("alias risolto nel test precedente");
-            if let Some(conflicting) = CATALOG.iter().find(|op| op.id == *alias) {
-                assert_eq!(
-                    conflicting.family, target.family,
-                    "alias {alias} collide con id canonico di altra famiglia"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn crs_requirement_implies_geo_family() {
         for op in CATALOG {
             if op.crs_requirement.is_some() {
@@ -3530,23 +3330,13 @@ mod tests {
     }
 
     #[test]
-    fn find_operation_accepts_canonical_ids_and_aliases() {
-        assert_eq!(
-            find_operation("table.filter").map(|op| op.id),
-            Some("table.filter")
-        );
-        assert_eq!(
-            find_operation("filter").map(|op| op.id),
-            Some("table.filter")
-        );
-        assert_eq!(
-            find_operation("geo_buffer").map(|op| op.id),
-            Some("geo.buffer")
-        );
-        assert_eq!(
-            find_operation("translate").map(|op| op.id),
-            Some("geo.translate")
-        );
+    fn lookup_accepts_only_catalog_ids() {
+        for op in CATALOG {
+            assert_eq!(find_operation(op.id).map(|d| d.id), Some(op.id));
+            let (_, short) = op.id.split_once('.').expect("id qualificato");
+            assert!(find_operation(short).is_none());
+            assert!(find_operation(&op.id.replace('.', "_")).is_none());
+        }
         assert!(find_operation("nonexistent_op").is_none());
     }
 

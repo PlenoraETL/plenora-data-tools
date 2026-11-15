@@ -369,4 +369,4 @@ rilascio sono descritti in [docs/RELEASE.md](docs/RELEASE.md). CLI, wheel e
 sorgente vengono confezionati e verificati da `scripts/licenze_artefatto.py`;
 `python scripts/avvisi_crate.py` controlla offline i quattro grafi release.
 
-Geometrie multiple complete dalla 4.1.0: [primaria, selettori ed esempi eseguiti](docs/geometrie-multiple.md).
+Geometrie multiple: [primaria, selettori ed esempi eseguiti](docs/geometrie-multiple.md).

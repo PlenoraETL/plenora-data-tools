@@ -96,7 +96,7 @@ use self::strings::{
 /// Inferisce il `DataContract` di output di un'operazione `table.*` a secco,
 /// senza dati: e' la validazione di un passo del piano.
 ///
-/// `op` accetta id canonici e alias legacy (risolti via catalogo);
+/// `op` accetta esclusivamente gli id del catalogo corrente;
 /// `inputs` deve rispettare l'arieta' dichiarata dal catalogo (unaria,
 /// binaria ordinata, N-aria per `table.concat`); `limits` sono quelli con cui
 /// il chiamante eseguira' i kernel: le config che li superano (nomi, testi,

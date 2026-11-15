@@ -5,7 +5,7 @@ docs/schede/ e dal catalogo: non si modifica a mano. Rigenerare con
 PLENORA_RIGENERA_DOC=1 cargo test -p plenora-io --test operazioni_doc -->
 
 Una scheda per operazione del catalogo. La tabella «dal catalogo» di ogni
-scheda è letta da `plenora_core::catalog` (`CATALOG`, `ALIASES`), il resto
+scheda è letta da `plenora_core::catalog` (`CATALOG`), il resto
 dalla scheda in `docs/schede/<id>.md`; un test confronta questo documento con
 quello che schede e catalogo generano, e un esempio che non gira o la cui
 uscita non è quella scritta fa fallire lo stesso test.
@@ -50,7 +50,6 @@ Esempi: 146 eseguiti con l'uscita confrontata, 0 verificati solo sul contratto.
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `add_row_number` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -175,7 +174,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `aggregate` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -401,7 +399,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -547,7 +544,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `anti_join` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -673,7 +669,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `asof_join` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -836,7 +831,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `assert_cardinality` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -951,7 +945,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `assert_foreign_key` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -1099,7 +1092,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `assert_metadata` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -1204,7 +1196,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `assert_not_null` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -1310,7 +1301,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `assert_range` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -1444,7 +1434,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `assert_regex` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -1554,7 +1543,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `assert_schema` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -1685,7 +1673,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `assert_unique` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -1813,7 +1800,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `bin` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -1955,7 +1941,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `coalesce` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -2082,7 +2067,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `concat` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | N-aria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -2212,7 +2196,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | N-aria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -2350,7 +2333,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `concat_columns` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -2461,7 +2443,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `conditional` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -2626,7 +2607,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `cross_join` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -2743,7 +2723,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `date_add` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -2895,7 +2874,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `date_diff` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -3035,7 +3013,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `date_extract` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -3179,7 +3156,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `date_format` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -3322,7 +3298,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `dedup_advanced` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -3442,7 +3417,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `distinct` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -3568,7 +3542,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `drop_columns` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -3671,7 +3644,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `except` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -3792,7 +3764,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `explode` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -3908,7 +3879,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `expression` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -4144,7 +4114,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `fill_na` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -4273,7 +4242,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `filter` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -4423,7 +4391,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `flatten_json` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -4568,7 +4535,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `formula` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -4734,7 +4700,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -4905,7 +4870,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -5048,7 +5012,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `intersect` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -5168,7 +5131,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `join` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -5345,7 +5307,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -5449,7 +5410,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `lookup` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -5581,7 +5541,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `mask_data` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -5729,7 +5688,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `md5_hash` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -5869,7 +5827,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `melt` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -6023,7 +5980,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `pivot` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -6213,7 +6169,6 @@ Verifica: eseguito dal kernel (il runner rifiuta questa config in validazione, p
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `reconcile` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -6369,7 +6324,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `rename` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -6486,7 +6440,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `reorder_columns` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -6593,7 +6546,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `replace` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -6709,7 +6661,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `rolling_window` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -6858,7 +6809,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `sample` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -6990,7 +6940,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -7088,7 +7037,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `semi_join` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -7216,7 +7164,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `sha256_hash` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -7364,7 +7311,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `sort` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -7490,7 +7436,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `split_column` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -7608,7 +7553,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -7742,7 +7686,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `statistics` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -7889,7 +7832,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `string_extract` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -8012,7 +7954,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `string_length` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -8114,7 +8055,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `string_pad` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -8227,7 +8167,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `table_diff` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -8387,7 +8326,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `text_normalize` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -8512,7 +8450,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `timezone_convert` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -8684,7 +8621,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -8797,7 +8733,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `transpose` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -8939,7 +8874,6 @@ Verifica: eseguito dal kernel (il runner rifiuta questa config in validazione, p
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `type_cast` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -9166,7 +9100,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `union_distinct` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -9297,7 +9230,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `unnest` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -9401,7 +9333,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `uuid_generator` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -9498,7 +9429,6 @@ Verifica: eseguito dal runner come passo unico; schema e numero di righe confron
 | --- | --- |
 | famiglia | tabellare, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | non dichiarata (tabellare) |
@@ -9657,7 +9587,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | tabellare, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `window_function` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | non dichiarata (tabellare) |
@@ -9836,7 +9765,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `affine_transform` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -9991,7 +9919,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_area` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -10133,7 +10060,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `bearing` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -10315,7 +10241,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_boundary` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -10468,7 +10393,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_bounds_extractor` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -10600,7 +10524,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_buffer` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -10789,7 +10712,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_centroid` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -10931,7 +10853,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_clean_topology` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | 1:1 |
@@ -11135,7 +11056,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_clip` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | 1:1 |
@@ -11317,7 +11237,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | 1:1 |
@@ -11469,7 +11388,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | N:1 |
@@ -11634,7 +11552,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `concave_hull` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -11805,7 +11722,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_convex_hull` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -11956,7 +11872,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_count_points_in_polygons` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | 1:1 |
@@ -12139,7 +12054,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | da tutto l'ingresso a molte righe |
@@ -12320,7 +12234,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `delaunay` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | 1:N |
@@ -12492,7 +12405,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `densify` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -12655,7 +12567,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_difference` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | 1:1 |
@@ -12832,7 +12743,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_dissolve` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | N:1 |
@@ -12988,7 +12898,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_distance` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -13155,7 +13064,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_envelope` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -13297,7 +13205,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_explode` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:N |
@@ -13441,7 +13348,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `frechet_distance` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -13621,7 +13527,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_from_coords` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | produttore 1:1 |
@@ -13764,7 +13669,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | produttore 1:1 |
@@ -13911,7 +13815,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | da tutto l'ingresso a molte righe |
@@ -14066,7 +13969,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geodesic_area` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -14261,7 +14163,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geodesic_distance` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -14423,7 +14324,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geodesic_line_length` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -14575,7 +14475,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -14729,7 +14628,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geometry_diagnostics` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | diagnostica |
@@ -14894,7 +14792,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `hausdorff_distance` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -15058,7 +14955,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `haversine_distance` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -15230,7 +15126,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_intersection` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | 1:1 |
@@ -15409,7 +15304,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_length` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -15552,7 +15446,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_line_builder` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | N:1 |
@@ -15695,7 +15588,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `line_interpolate_point` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -15847,7 +15739,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -16003,7 +15894,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `line_merge` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | da tutto l'ingresso a molte righe |
@@ -16169,7 +16059,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `line_substring` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -16333,7 +16222,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_make_valid` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione non interrompibile |
 | forma del risultato | 1:1 |
@@ -16534,7 +16422,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_nearest` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | 1:N |
@@ -16736,7 +16623,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_overlay` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | 1:N |
@@ -16948,7 +16834,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_perimeter` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -17090,7 +16975,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_point_on_surface` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -17249,7 +17133,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_polygon_builder` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | N:1 |
@@ -17396,7 +17279,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `polygonize` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione non interrompibile |
 | forma del risultato | da tutto l'ingresso a molte righe |
@@ -17603,7 +17485,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `predicate_contains` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -17791,7 +17672,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `predicate_contains_properly` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -17979,7 +17859,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `predicate_covered_by` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -18167,7 +18046,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `predicate_covers` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -18355,7 +18233,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `predicate_crosses` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -18543,7 +18420,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `predicate_disjoint` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -18731,7 +18607,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `predicate_equals_topo` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -18919,7 +18794,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `predicate_intersects` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -19107,7 +18981,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `predicate_overlaps` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -19295,7 +19168,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `predicate_touches` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -19483,7 +19355,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `predicate_within` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -19671,7 +19542,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_reproject` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione non interrompibile |
 | forma del risultato | 1:1 |
@@ -19883,7 +19753,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `rotate` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -20041,7 +19910,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `scale` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -20196,7 +20064,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | da tutto l'ingresso a molte righe |
@@ -20366,7 +20233,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_simplify` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -20552,7 +20418,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `sjoin` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | 1:N |
@@ -20754,7 +20619,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -20911,7 +20775,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `snap_to_grid` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -21072,7 +20935,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `split` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione non interrompibile |
 | forma del risultato | 1:N |
@@ -21279,7 +21141,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | nessuno |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:N |
@@ -21460,7 +21321,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_symmetric_difference` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | 1:1 |
@@ -21636,7 +21496,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_to_wkt` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -21776,7 +21635,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, estensione |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `translate` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -21921,7 +21779,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_union` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | 1:1 |
@@ -22099,7 +21956,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_vertex_count` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | streaming (1:1, batch per batch); cancellazione cooperativa |
 | forma del risultato | 1:1 |
@@ -22236,7 +22092,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_voronoi` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | unaria |
 | esecuzione | bloccante (tutto l'ingresso); cancellazione solo ai confini |
 | forma del risultato | 1:1 |
@@ -22421,7 +22276,6 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | --- | --- |
 | famiglia | geo, compatibile Manipola |
 | geometrie multiple | supportate per colonna |
-| alias legacy | `geo_within` (schema 3) (risolti da `find_operation`; il runner li rifiuta) |
 | arietà | binaria ordinata (sinistra, destra) |
 | esecuzione | bloccante su due ingressi; cancellazione solo ai confini |
 | forma del risultato | 1:1 |

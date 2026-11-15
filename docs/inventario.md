@@ -12,17 +12,17 @@ esegue.
 
 | crate | versione | descrizione |
 | --- | --- | --- |
-| `plenora-cli` | 5.0.0 | CLI pubblica `plenora-data` di plenora-data-tools2 (CLI 2.0 di plenora-contracts) e la sua superficie Rust |
-| `plenora-core` | 5.0.0 | Fondamenta condivise di plenora-data-tools2: re-export Arrow, errori, limiti, catalogo, CRS |
-| `plenora-data-py` | 5.0.0 | SDK Python `plenora-data` di plenora-data-tools2: il modulo nativo PyO3 `plenora_data._native` |
-| `plenora-io` | 5.0.0 | Ingresso e uscita su file: Arrow IPC (file e stream), Parquet e GeoParquet 1.1, scrittura atomica, esecuzione di un piano da file a file |
-| `plenora-kernels-geo` | 5.0.0 | Kernel geografici su geo::Geometry e adapter Arrow GeoArrow-WKB |
-| `plenora-kernels-table` | 5.0.0 | Kernel tabellari puri su RecordBatch |
-| `plenora-pipeline` | 5.0.0 | Runner minimo di pipeline: piano SSA di kernel tabellari e geografici su RecordBatch interi in memoria |
+| `plenora-cli` | 6.0.0 | CLI pubblica `plenora-data` di plenora-data-tools2 (CLI 2.0 di plenora-contracts) e la sua superficie Rust |
+| `plenora-core` | 6.0.0 | Fondamenta condivise di plenora-data-tools2: re-export Arrow, errori, limiti, catalogo, CRS |
+| `plenora-data-py` | 6.0.0 | SDK Python `plenora-data` di plenora-data-tools2: il modulo nativo PyO3 `plenora_data._native` |
+| `plenora-io` | 6.0.0 | Ingresso e uscita su file: Arrow IPC (file e stream), Parquet e GeoParquet 1.1, scrittura atomica, esecuzione di un piano da file a file |
+| `plenora-kernels-geo` | 6.0.0 | Kernel geografici su geo::Geometry e adapter Arrow GeoArrow-WKB |
+| `plenora-kernels-table` | 6.0.0 | Kernel tabellari puri su RecordBatch |
+| `plenora-pipeline` | 6.0.0 | Runner minimo di pipeline: piano SSA di kernel tabellari e geografici su RecordBatch interi in memoria |
 
 ## Catalogo delle operazioni
 
-`plenora_core::catalog::CATALOG` ha 146 operazioni (71 tabellari, 75 geografiche) e `ALIASES` 127 alias. Le schede sono in
+`plenora_core::catalog::CATALOG` ha 146 operazioni (71 tabellari, 75 geografiche) con id univoci. Le schede sono in
 [`operazioni.md`](operazioni.md).
 
 ### Per famiglia e provenienza
@@ -81,13 +81,13 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 | crate | unitari | integrazione | totale |
 | --- | --- | --- | --- |
 | `plenora-cli` | 7 | 74 | 81 |
-| `plenora-core` | 215 | 103 | 318 |
+| `plenora-core` | 213 | 103 | 316 |
 | `plenora-data-py` | 0 | 0 | 0 |
 | `plenora-io` | 20 | 264 | 284 |
 | `plenora-kernels-geo` | 533 | 113 | 646 |
 | `plenora-kernels-table` | 477 | 138 | 615 |
 | `plenora-pipeline` | 12 | 177 | 189 |
-| **totale** | 1264 | 869 | 2133 |
+| **totale** | 1262 | 869 | 2131 |
 
 ### Prove Python dell'SDK
 
@@ -127,9 +127,9 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 | `scripts/test_geometry_metadata_guard.py` | 4 |
 | `scripts/test_geometry_text_classification.py` | 1 |
 | `scripts/test_prove_fonti.py` | 14 |
-| `scripts/test_python_version.py` | 5 |
+| `scripts/test_python_version.py` | 4 |
 | `scripts/test_rust_esito_tokens.py` | 11 |
 | `scripts/test_semantica_crs.py` | 2 |
 | `scripts/test_strict_json.py` | 5 |
-| `scripts/test_verifica_adozione.py` | 14 |
+| `scripts/test_verifica_adozione.py` | 15 |
 | `scripts/test_verifica_sdk_python.py` | 2 |

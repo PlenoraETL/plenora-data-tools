@@ -429,4 +429,4 @@ limite della tabella.
   nei messaggi (può contenere valori), solo la variante (`parquet error:
   general`, …), come per Arrow.
 
-Geometrie multiple complete dalla 4.1.0: [primaria, selettori ed esempi eseguiti](geometrie-multiple.md).
+Geometrie multiple: [primaria, selettori ed esempi eseguiti](geometrie-multiple.md).
