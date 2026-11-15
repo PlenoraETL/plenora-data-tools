@@ -130,6 +130,14 @@ l'altro), prima di ogni passo, prima di consegnare gli output, prima di
 scrivere ognuno e dopo l'ultimo, e di nuovo alla consegna del risultato.
 `catalog` non ha controlli, come sulla CLI.
 
+Il confine Python trasmette secondi IEEE754 (`datetime.timestamp()` per
+la deadline): la precisione del float dipende dalla distanza dall'epoca.
+La conversione Rust arrotonda al nanosecondo secondo
+`Duration::try_from_secs_f64`; valori non finiti o fuori dominio sono
+`InvalidConfiguration`. Il confronto della deadline avviene in `i128`,
+senza passare dal calendario nativo di `SystemTime`. Una somma sul clock
+monotono non rappresentabile esattamente viene rifiutata, mai saturata.
+
 `timeout` vale dall'ingresso della chiamata pubblica: il pacchetto fissa
 l'istante sul clock monotono prima di mettere in coda una chiamata
 asincrona, e una scadenza passata mentre la chiamata aspettava un thread

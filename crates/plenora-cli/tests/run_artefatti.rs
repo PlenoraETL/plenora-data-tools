@@ -1047,6 +1047,24 @@ fn runtime_vettori_rifiuto_e_identita_senza_resolver() {
         ),
         (
             "plenora.execution.deadline",
+            json!("0001-01-01T00:00:00Z"),
+            "timeout",
+            false,
+        ),
+        (
+            "plenora.execution.deadline",
+            json!("2000-01-01T00:00:00.0000000001Z"),
+            "protocol",
+            false,
+        ),
+        (
+            "plenora.execution.deadline",
+            json!("2016-12-31T23:59:60Z"),
+            "protocol",
+            false,
+        ),
+        (
+            "plenora.execution.deadline",
             json!("2030-01-01T00:00:00-00:00"),
             "protocol",
             false,

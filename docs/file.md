@@ -430,3 +430,20 @@ limite della tabella.
   general`, …), come per Arrow.
 
 Geometrie multiple: [primaria, selettori ed esempi eseguiti](geometrie-multiple.md).
+
+### Dominio temporale Parquet
+
+Il lettore rifiuta `INT96` dallo schema del footer prima della conversione
+Arrow, anche senza row group e indipendentemente da statistiche e dati.
+Non espone proiezioni che possano saltare questa verifica. La verifica del
+file appena scritto legge solo metadati e non decodifica timestamp.
+
+Le API record del vendor non sono usate dal percorso data. I loro formatter
+DATE e timestamp millis/micros accettano il dominio calendariale chrono;
+TIME_MILLIS e TIME_MICROS accettano solo un orario nel giorno, da zero
+incluso a 24 ore escluse. JSON restituisce `ParquetError::General` per un
+valore temporale fuori dominio, anche annidato; `Display` emette il
+marcatore esplicito `<invalid temporal value>`, senza il valore ricevuto.
+Le conversioni legacy `Int96::to_*` del vendor restano fuori dal perimetro
+abilitato: non costituiscono un supporto INT96 e non vanno chiamate dal
+codice applicativo.

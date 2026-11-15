@@ -16,6 +16,7 @@ def comandi():
         ["scripts/check_arrow_ingressi.py"],
         ["scripts/check_comments.py"],
         ["scripts/check_esito_unico.py"],
+        ["scripts/check_tempo.py"],
         ["scripts/genera_inventario.py", "--check"],
         ["scripts/genera_costi_operazioni.py", "--verifica"],
         ["scripts/genera_costi_geo.py", "--verifica"],

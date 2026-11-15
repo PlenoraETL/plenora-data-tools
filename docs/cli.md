@@ -469,3 +469,16 @@ i riferimenti descrittivi CLI/SDK sono ora coerenti. La rimozione del
 lookup degli id storici non cambia il catalogo canonico del pin e non
 introduce deviazioni di contratto. Le deviazioni gia dichiarate restano
 esplicite nel registro.
+
+## Precisione delle scadenze
+
+Le deadline RFC3339 usano secondi firmati e nanosecondi, confrontati con il
+clock civile in `i128` nel modulo `plenora_core::tempo`. Una scadenza
+passata scade al primo controllo anche prima dell'epoca nativa Windows;
+non si converte chrono in `SystemTime`. Una frazione oltre nove cifre con
+cifre ulteriori non nulle e un secondo intercalare si rifiutano. Se la
+somma sul clock monotono perde precisione o supera il suo dominio, la CLI
+restituisce `InvalidConfiguration`, il binding runtime `Protocol` in fase
+`validate`. Il runtime rifiuta le scadenze passate con `Timeout`.
+La grammatica RFC3339 mantiene gli anni a quattro cifre; gli offset sono
+applicati senza restringere l'istante UTC risultante a quel calendario.

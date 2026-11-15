@@ -18,6 +18,7 @@
 //! Contains record-based API for reading Parquet files.
 
 mod api;
+mod tempo;
 pub mod reader;
 mod record_reader;
 mod record_writer;

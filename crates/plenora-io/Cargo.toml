@@ -21,6 +21,8 @@ serde_json.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
+# Esercita anche il formatter JSON del vendor nelle regressioni temporali.
+parquet = { workspace = true, features = ["json"] }
 # Oracolo del riquadro e dei tipi letti dal WKB: codifica di riferimento
 # (`encode_geometry`) e `geo::BoundingRect` (tests/wkb_oracolo.rs).
 plenora-kernels-geo.workspace = true

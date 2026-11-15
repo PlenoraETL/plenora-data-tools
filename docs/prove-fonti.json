@@ -27,6 +27,8 @@
       "test_ctrl_c_annulla_e_propaga_keyboard_interrupt",
       "test_ctrl_c_durante_la_scrittura_dice_l_effetto",
       "test_ctrl_c_fra_la_fine_e_la_consegna",
+      "test_deadline_anni_remoti_passati",
+      "test_deadline_anno_9999",
       "test_gettone_alzato_da_un_altro_thread",
       "test_gettone_alzato_fra_la_fine_e_la_consegna",
       "test_gettone_gia_alzato",
@@ -118,6 +120,7 @@
     ],
     "scripts/check_prove_fonti.py": [],
     "scripts/check_python_version.py": [],
+    "scripts/check_tempo.py": [],
     "scripts/corpus_definizioni_crs.py": [],
     "scripts/esegui_guardie.py": [],
     "scripts/esito_python_ast.py": [],
@@ -275,6 +278,13 @@
       "test_tabella_ed_esempi_coincidono",
       "test_test_diretto_e_modulo_esterno",
       "test_varianti_deboli"
+    ],
+    "scripts/test_check_tempo.py": [
+      "test_barriera_prima_di_arrow_e_senza_gruppi",
+      "test_commenti_letterali_e_test_esclusi",
+      "test_conversione_checked",
+      "test_conversioni_infallibili_e_alias",
+      "test_frazione_assente_non_e_fallback_di_data"
     ],
     "scripts/test_clippy_esito.py": [
       "test_metodi_risolti_e_produzione_esente"
@@ -859,6 +869,12 @@
     "crates/plenora-core/tests/run_end_validation.rs": [
       "run_end_rifiuta_lunghezza_e_offset_non_coperti"
     ],
+    "crates/plenora-core/tests/tempo.rs": [
+      "deadline_unix_limiti_e_precisione",
+      "systemtime_oltre_rfc3339_e_pre_epoca",
+      "precisione_frazioni_e_float_sdk",
+      "systemtime_oltre_chrono_su_unix"
+    ],
     "crates/plenora-io/src/atomico.rs": [
       "un_temporaneo_cancellato_lascia_l_errore_com_e",
       "un_temporaneo_non_cancellabile_rende_l_effetto_ignoto",
@@ -1169,6 +1185,12 @@
     ],
     "crates/plenora-io/tests/sonda_dei_controlli.rs": [
       "la_sonda_passa_fra_i_passi_e_fra_le_scritture"
+    ],
+    "crates/plenora-io/tests/tempo_parquet.rs": [
+      "record_calendario_e_orari_fuori_dominio",
+      "record_limiti_chrono_e_un_tick_oltre",
+      "int96_estremi_statistiche_e_gruppi_sono_rifiutati",
+      "arrow_estremi_conservano_unita_e_valore_nel_file"
     ],
     "crates/plenora-io/tests/wkb_oracolo.rs": [
       "tipo_e_riquadro_come_il_riferimento",
@@ -2280,6 +2302,7 @@
       "hash_chiave_separa_i_blocchi_iniziali_di_zeri"
     ],
     "crates/plenora-kernels-table/src/interi_temporali.rs": [
+      "estremi_arrow_non_si_restringono_a_nanosecondi_i64",
       "ogni_unita_si_legge_col_suo_valore_e_il_confronto_e_esatto"
     ],
     "crates/plenora-kernels-table/src/interning.rs": [

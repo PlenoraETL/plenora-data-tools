@@ -52,16 +52,6 @@ fn configurazione(motivo: &str) -> PlenoraError {
     PlenoraError::InvalidConfiguration(motivo.to_owned())
 }
 
-/// Una durata in secondi da un `float` di Python: finita e non negativa.
-fn durata(secondi: f64, nome: &str) -> Result<Duration, PlenoraError> {
-    Duration::try_from_secs_f64(secondi).map_err(|_| {
-        configurazione(&format!(
-            "`{nome}`: atteso un numero finito di secondi, non negativo e \
-             rappresentabile"
-        ))
-    })
-}
-
 impl Controlli {
     /// I controlli di una chiamata. `scadenza` è un istante in secondi
     /// dall'epoca Unix (`datetime.timestamp()`), `timeout` i secondi che
@@ -82,44 +72,19 @@ impl Controlli {
         gettoni: Vec<Arc<AtomicBool>>,
     ) -> Result<Self, PlenoraError> {
         let adesso = Instant::now();
-        let fuori_scala = |nome: &str| {
-            configurazione(&format!(
-                "`{nome}`: oltre quanto il clock monotono rappresenta"
-            ))
-        };
         let scadenza = match (scadenza, timeout) {
             (Some(_), Some(_)) => {
                 return Err(configurazione("una sola fra `deadline` e `timeout`"));
             }
             (None, None) => None,
-            (None, Some(secondi)) => Some(
-                adesso
-                    .checked_add(durata(secondi, "timeout")?)
-                    .ok_or_else(|| fuori_scala("timeout"))?,
-            ),
-            (Some(epoca), None) => {
-                if !epoca.is_finite() {
-                    return Err(configurazione(
-                        "`deadline`: atteso un istante finito (datetime con fuso)",
-                    ));
-                }
-                let istante = if epoca >= 0.0 {
-                    SystemTime::UNIX_EPOCH.checked_add(durata(epoca, "deadline")?)
-                } else {
-                    SystemTime::UNIX_EPOCH.checked_sub(durata(-epoca, "deadline")?)
-                }
-                .ok_or_else(|| fuori_scala("deadline"))?;
-                // Già passata: scade al primo controllo, senza aritmetica
-                // all'indietro sull'`Instant`.
-                let restante = istante
-                    .duration_since(SystemTime::now())
-                    .unwrap_or(Duration::ZERO);
-                Some(
-                    adesso
-                        .checked_add(restante)
-                        .ok_or_else(|| fuori_scala("deadline"))?,
-                )
+            (None, Some(secondi)) => {
+                Some(plenora_core::tempo::timeout_secondi_f64(adesso, secondi)?)
             }
+            (Some(epoca), None) => Some(plenora_core::tempo::deadline_secondi_f64(
+                epoca,
+                SystemTime::now(),
+                adesso,
+            )?),
         };
         let segnale = Arc::new(AtomicBool::new(false));
         Ok(Self {

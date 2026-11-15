@@ -58,7 +58,7 @@ struct Args {
     json: bool,
 }
 
-fn main() {
+fn main() -> parquet::errors::Result<()> {
     let args = Args::parse();
 
     let filename = args.file_name;
@@ -90,17 +90,19 @@ fn main() {
 
     while all_records || start < end {
         match iter.next() {
-            Some(row) => print_row(&row.unwrap(), json),
+            Some(row) => print_row(&row?, json)?,
             None => break,
         }
         start += 1;
     }
+    Ok(())
 }
 
-fn print_row(row: &Row, json: bool) {
+fn print_row(row: &Row, json: bool) -> parquet::errors::Result<()> {
     if json {
-        println!("{}", row.to_json_value())
+        println!("{}", row.to_json_value()?)
     } else {
         println!("{row}");
     }
+    Ok(())
 }

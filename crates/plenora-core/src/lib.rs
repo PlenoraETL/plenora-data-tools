@@ -49,6 +49,7 @@ pub mod memoria;
 // sarebbe una rottura.
 pub use limits::DEFAULT_MAX_GOVERNED_MEMORY_BYTES;
 pub mod panic_policy;
+pub mod tempo;
 pub mod tipo_arrow;
 pub mod valida_arrow;
 

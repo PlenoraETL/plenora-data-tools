@@ -22,6 +22,7 @@ con la chiave `parquet` (`Cargo.toml`, «Copie vendorizzate»).
   patch -p1 < patches/parquet-livelli-dizionari-indici.patch  # BIT_PACKED, dizionari, pagine v2, offset index
   patch -p1 < patches/parquet-salti-e-fine-pagina.patch  # salti non qualificati, fine pagina esatta
   patch -p1 < patches/parquet-annotazioni-coerenti.patch  # annotazioni concordi, hint testuali qualificati
+  patch -p1 < patches/parquet-tempo-checked.patch # formatter temporali fallibili
   ```
 
   Il risultato è questa cartella byte per byte, tolto questo file
@@ -979,3 +980,14 @@ seconda lettura nella PR che le introduce.
 Il difetto è anche su `main` di arrow-rs (2 ottobre 2026): la segnalazione
 upstream è da fare; quando una release lo corregge, il vendor si toglie e
 `parquet` torna dal registro.
+
+## Formatter temporali checked
+
+`patches/parquet-tempo-checked.patch` aggiunge `record/tempo.rs`, autorita'
+unica per DATE, timestamp millis/micros e orari nel giorno. JSON restituisce
+un `Result<Value>` anche per righe e collezioni annidate; il binario
+`parquet-read` propaga il rifiuto. Display usa un marcatore diagnostico
+esplicito, mai una data inventata. E' una modifica dell'API del fork;
+i chiamanti JSON devono gestire il risultato. Le API legacy INT96 restano
+invariate e non sono abilitate dal prodotto. Le prove mirate sono in
+`crates/plenora-io/tests/tempo_parquet.rs`.

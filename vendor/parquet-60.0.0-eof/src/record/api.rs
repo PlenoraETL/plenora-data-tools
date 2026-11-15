@@ -19,6 +19,8 @@
 
 use std::fmt;
 
+use super::tempo;
+#[cfg(test)]
 use chrono::{TimeZone, Utc};
 use half::f16;
 use num_bigint::{BigInt, Sign};
@@ -106,15 +108,15 @@ impl Row {
         }
     }
 
-    /// Converts the row into a JSON object.
+    /// Converts the row into a JSON object. Rejects out-of-domain temporal fields.
     #[cfg(any(feature = "json", test))]
-    pub fn to_json_value(&self) -> Value {
-        Value::Object(
+    pub fn to_json_value(&self) -> Result<Value> {
+        Ok(Value::Object(
             self.fields
                 .iter()
-                .map(|(key, field)| (key.to_owned(), field.to_json_value()))
-                .collect(),
-        )
+                .map(|(key, field)| Ok((key.to_owned(), field.to_json_value()?)))
+                .collect::<Result<_>>()?,
+        ))
     }
 }
 
@@ -792,12 +794,13 @@ impl Field {
     }
 
     /// Converts the Parquet field into a JSON [`Value`].
+    /// Returns an error for an out-of-domain temporal value, including nested fields.
     #[cfg(any(feature = "json", test))]
-    pub fn to_json_value(&self) -> Value {
+    pub fn to_json_value(&self) -> Result<Value> {
         use base64::Engine;
         use base64::prelude::BASE64_STANDARD;
 
-        match &self {
+        Ok(match &self {
             Field::Null => Value::Null,
             Field::Bool(b) => Value::Bool(*b),
             Field::Byte(n) => Value::Number(serde_json::Number::from(*n)),
@@ -820,29 +823,33 @@ impl Field {
             Field::Decimal(n) => Value::String(convert_decimal_to_string(n)),
             Field::Str(s) => Value::String(s.to_owned()),
             Field::Bytes(b) => Value::String(BASE64_STANDARD.encode(b.data())),
-            Field::Date(d) => Value::String(convert_date_to_string(*d)),
-            Field::TimeMillis(t) => Value::String(convert_time_millis_to_string(*t)),
-            Field::TimeMicros(t) => Value::String(convert_time_micros_to_string(*t)),
-            Field::TimestampMillis(ts) => Value::String(convert_timestamp_millis_to_string(*ts)),
-            Field::TimestampMicros(ts) => Value::String(convert_timestamp_micros_to_string(*ts)),
-            Field::Group(row) => row.to_json_value(),
-            Field::ListInternal(fields) => {
-                Value::Array(fields.elements.iter().map(|f| f.to_json_value()).collect())
-            }
+            Field::Date(d) => Value::String(tempo::date(*d)?),
+            Field::TimeMillis(t) => Value::String(tempo::time_millis(*t)?),
+            Field::TimeMicros(t) => Value::String(tempo::time_micros(*t)?),
+            Field::TimestampMillis(ts) => Value::String(tempo::timestamp_millis(*ts)?),
+            Field::TimestampMicros(ts) => Value::String(tempo::timestamp_micros(*ts)?),
+            Field::Group(row) => row.to_json_value()?,
+            Field::ListInternal(fields) => Value::Array(
+                fields
+                    .elements
+                    .iter()
+                    .map(|f| f.to_json_value())
+                    .collect::<Result<_>>()?,
+            ),
             Field::MapInternal(map) => Value::Object(
                 map.entries
                     .iter()
                     .map(|(key_field, value_field)| {
-                        let key_val = key_field.to_json_value();
+                        let key_val = key_field.to_json_value()?;
                         let key_str = key_val
                             .as_str()
                             .map(|s| s.to_owned())
                             .unwrap_or_else(|| key_val.to_string());
-                        (key_str, value_field.to_json_value())
+                        Ok((key_str, value_field.to_json_value()?))
                     })
-                    .collect(),
+                    .collect::<Result<_>>()?,
             ),
-        }
+        })
     }
 }
 
@@ -938,11 +945,10 @@ impl fmt::Display for Field {
 /// Date is displayed in local timezone.
 #[inline]
 fn convert_date_to_string(value: i32) -> String {
-    static NUM_SECONDS_IN_DAY: i64 = 60 * 60 * 24;
-    let dt = Utc
-        .timestamp_opt(value as i64 * NUM_SECONDS_IN_DAY, 0)
-        .unwrap();
-    format!("{}", dt.format("%Y-%m-%d"))
+    match tempo::date(value) {
+        Ok(text) => text,
+        Err(_) => "<invalid temporal value>".to_owned(),
+    }
 }
 
 /// Helper method to convert Parquet timestamp into a string.
@@ -950,8 +956,10 @@ fn convert_date_to_string(value: i32) -> String {
 /// Datetime is displayed in UTC timezone.
 #[inline]
 fn convert_timestamp_millis_to_string(value: i64) -> String {
-    let dt = Utc.timestamp_millis_opt(value).unwrap();
-    format!("{}", dt.format("%Y-%m-%d %H:%M:%S%.3f %:z"))
+    match tempo::timestamp_millis(value) {
+        Ok(text) => text,
+        Err(_) => "<invalid temporal value>".to_owned(),
+    }
 }
 
 /// Helper method to convert Parquet timestamp into a string.
@@ -959,8 +967,10 @@ fn convert_timestamp_millis_to_string(value: i64) -> String {
 /// Datetime is displayed in UTC timezone.
 #[inline]
 fn convert_timestamp_micros_to_string(value: i64) -> String {
-    let dt = Utc.timestamp_micros(value).unwrap();
-    format!("{}", dt.format("%Y-%m-%d %H:%M:%S%.6f %:z"))
+    match tempo::timestamp_micros(value) {
+        Ok(text) => text,
+        Err(_) => "<invalid temporal value>".to_owned(),
+    }
 }
 
 /// Helper method to convert Parquet time (milliseconds since midnight) into a string.
@@ -968,12 +978,10 @@ fn convert_timestamp_micros_to_string(value: i64) -> String {
 /// Time is displayed in HH:MM:SS.sss format.
 #[inline]
 fn convert_time_millis_to_string(value: i32) -> String {
-    let total_ms = value as u64;
-    let hours = total_ms / (60 * 60 * 1000);
-    let minutes = (total_ms % (60 * 60 * 1000)) / (60 * 1000);
-    let seconds = (total_ms % (60 * 1000)) / 1000;
-    let millis = total_ms % 1000;
-    format!("{hours:02}:{minutes:02}:{seconds:02}.{millis:03}")
+    match tempo::time_millis(value) {
+        Ok(text) => text,
+        Err(_) => "<invalid temporal value>".to_owned(),
+    }
 }
 
 /// Helper method to convert Parquet time (microseconds since midnight) into a string.
@@ -981,12 +989,10 @@ fn convert_time_millis_to_string(value: i32) -> String {
 /// Time is displayed in HH:MM:SS.ssssss format.
 #[inline]
 fn convert_time_micros_to_string(value: i64) -> String {
-    let total_us = value as u64;
-    let hours = total_us / (60 * 60 * 1000 * 1000);
-    let minutes = (total_us % (60 * 60 * 1000 * 1000)) / (60 * 1000 * 1000);
-    let seconds = (total_us % (60 * 1000 * 1000)) / (1000 * 1000);
-    let micros = total_us % (1000 * 1000);
-    format!("{hours:02}:{minutes:02}:{seconds:02}.{micros:06}")
+    match tempo::time_micros(value) {
+        Ok(text) => text,
+        Err(_) => "<invalid temporal value>".to_owned(),
+    }
 }
 
 /// Helper method to convert Parquet decimal into a string.
@@ -2055,87 +2061,97 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_to_json_value() {
-        assert_eq!(Field::Null.to_json_value(), Value::Null);
-        assert_eq!(Field::Bool(true).to_json_value(), Value::Bool(true));
-        assert_eq!(Field::Bool(false).to_json_value(), Value::Bool(false));
+        assert_eq!(Field::Null.to_json_value().unwrap(), Value::Null);
         assert_eq!(
-            Field::Byte(1).to_json_value(),
+            Field::Bool(true).to_json_value().unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            Field::Bool(false).to_json_value().unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            Field::Byte(1).to_json_value().unwrap(),
             Value::Number(serde_json::Number::from(1))
         );
         assert_eq!(
-            Field::Short(2).to_json_value(),
+            Field::Short(2).to_json_value().unwrap(),
             Value::Number(serde_json::Number::from(2))
         );
         assert_eq!(
-            Field::Int(3).to_json_value(),
+            Field::Int(3).to_json_value().unwrap(),
             Value::Number(serde_json::Number::from(3))
         );
         assert_eq!(
-            Field::Long(4).to_json_value(),
+            Field::Long(4).to_json_value().unwrap(),
             Value::Number(serde_json::Number::from(4))
         );
         assert_eq!(
-            Field::UByte(1).to_json_value(),
+            Field::UByte(1).to_json_value().unwrap(),
             Value::Number(serde_json::Number::from(1))
         );
         assert_eq!(
-            Field::UShort(2).to_json_value(),
+            Field::UShort(2).to_json_value().unwrap(),
             Value::Number(serde_json::Number::from(2))
         );
         assert_eq!(
-            Field::UInt(3).to_json_value(),
+            Field::UInt(3).to_json_value().unwrap(),
             Value::Number(serde_json::Number::from(3))
         );
         assert_eq!(
-            Field::ULong(4).to_json_value(),
+            Field::ULong(4).to_json_value().unwrap(),
             Value::Number(serde_json::Number::from(4))
         );
         assert_eq!(
-            Field::Float16(f16::from_f32(5.0)).to_json_value(),
+            Field::Float16(f16::from_f32(5.0)).to_json_value().unwrap(),
             Value::Number(serde_json::Number::from_f64(5.0).unwrap())
         );
         assert_eq!(
-            Field::Float(5.0).to_json_value(),
+            Field::Float(5.0).to_json_value().unwrap(),
             Value::Number(serde_json::Number::from_f64(5.0).unwrap())
         );
         assert_eq!(
-            Field::Float(5.1234).to_json_value(),
+            Field::Float(5.1234).to_json_value().unwrap(),
             Value::Number(serde_json::Number::from_f64(5.1234_f32 as f64).unwrap())
         );
         assert_eq!(
-            Field::Double(6.0).to_json_value(),
+            Field::Double(6.0).to_json_value().unwrap(),
             Value::Number(serde_json::Number::from_f64(6.0).unwrap())
         );
         assert_eq!(
-            Field::Double(6.1234).to_json_value(),
+            Field::Double(6.1234).to_json_value().unwrap(),
             Value::Number(serde_json::Number::from_f64(6.1234).unwrap())
         );
         assert_eq!(
-            Field::Str("abc".to_string()).to_json_value(),
+            Field::Str("abc".to_string()).to_json_value().unwrap(),
             Value::String(String::from("abc"))
         );
         assert_eq!(
-            Field::Decimal(Decimal::from_i32(4, 8, 2)).to_json_value(),
+            Field::Decimal(Decimal::from_i32(4, 8, 2))
+                .to_json_value()
+                .unwrap(),
             Value::String(String::from("0.04"))
         );
         assert_eq!(
-            Field::Bytes(ByteArray::from(vec![1, 2, 3])).to_json_value(),
+            Field::Bytes(ByteArray::from(vec![1, 2, 3]))
+                .to_json_value()
+                .unwrap(),
             Value::String(String::from("AQID"))
         );
         assert_eq!(
-            Field::TimestampMillis(12345678).to_json_value(),
+            Field::TimestampMillis(12345678).to_json_value().unwrap(),
             Value::String("1970-01-01 03:25:45.678 +00:00".to_string())
         );
         assert_eq!(
-            Field::TimestampMicros(12345678901).to_json_value(),
+            Field::TimestampMicros(12345678901).to_json_value().unwrap(),
             Value::String("1970-01-01 03:25:45.678901 +00:00".to_string())
         );
         assert_eq!(
-            Field::TimeMillis(47445123).to_json_value(),
+            Field::TimeMillis(47445123).to_json_value().unwrap(),
             Value::String(String::from("13:10:45.123"))
         );
         assert_eq!(
-            Field::TimeMicros(47445123456).to_json_value(),
+            Field::TimeMicros(47445123456).to_json_value().unwrap(),
             Value::String(String::from("13:10:45.123456"))
         );
 
@@ -2146,7 +2162,7 @@ mod tests {
         ];
         let row = Field::Group(Row::new(fields));
         assert_eq!(
-            row.to_json_value(),
+            row.to_json_value().unwrap(),
             serde_json::json!({"X": 1, "Y": 2.2, "Z": "abc"})
         );
 
@@ -2156,7 +2172,7 @@ mod tests {
             Value::Number(serde_json::Number::from(12)),
             Value::Null,
         ];
-        assert_eq!(row.to_json_value(), Value::Array(array));
+        assert_eq!(row.to_json_value().unwrap(), Value::Array(array));
 
         let row = Field::MapInternal(make_map(vec![
             (Field::Str("k1".to_string()), Field::Double(1.2)),
@@ -2164,7 +2180,7 @@ mod tests {
             (Field::Str("k3".to_string()), Field::Double(4.5)),
         ]));
         assert_eq!(
-            row.to_json_value(),
+            row.to_json_value().unwrap(),
             serde_json::json!({"k1": 1.2, "k2": 3.4, "k3": 4.5})
         );
     }
