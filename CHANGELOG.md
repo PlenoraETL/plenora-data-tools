@@ -10,7 +10,7 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
-## [6.0.0] - non rilasciata
+## [6.0.0] - 2026-11-15
 
 ### Cambiamenti incompatibili
 
@@ -20,6 +20,17 @@ la cui versione non ha qui una voce datata.
 - Riferimenti CLI/SDK allineati al pin contratti
   `38d68b402389855edbcecb7ce57c31e91282cb4e`; delta e deviazioni adottati
   restano nel registro di adozione.
+
+### Sicurezza
+
+- Date e orari da file esterni senza panic ne' valori sbagliati: la CLI
+  converte le scadenze chrono in `SystemTime` con confronto esatto e rifiuta
+  i valori fuori dominio (`InvalidConfiguration`); il formatter record
+  Parquet gestisce DATE e timestamp millis/micros nel dominio chrono e
+  restituisce un errore senza valori invece di andare in panic; il rifiuto
+  di INT96 avviene sullo schema del footer, prima della conversione Arrow e
+  anche senza row group; TIME_MILLIS/TIME_MICROS negativi o oltre il giorno
+  sono rifiutati invece di essere convertiti.
 
 ## [5.0.0] - 2026-11-14
 
