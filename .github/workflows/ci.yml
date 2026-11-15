@@ -171,7 +171,7 @@ jobs:
           PLENORA_REPO: plenora-data-tools2
         run: |
           cd .ci/plenora-dependencies
-          echo '8830816f9fe15e0e11c08668cb6c4a788b19318de57b2377cc18b09af840298f  plenora-dependencies.toml' | sha256sum -c -
+          echo 'e8bfb2c9830a293444deb199ef9a2995091ce144a74fcb5640d2cf51795173e4  plenora-dependencies.toml' | sha256sum -c -
           sha256sum -c snapshot.sha256
           python3 controlla_dipendenze.py \
             --repo ../.. --nome "$PLENORA_REPO" \
