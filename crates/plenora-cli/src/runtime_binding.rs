@@ -4,7 +4,7 @@
 //! Il risultato @3 resta chiuso: gli effetti C-01 sono un metadato opzionale
 //! component-owned, separato dal payload del manifesto artefatti.
 use std::collections::BTreeMap;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Instant, SystemTime};
 
 use crate::api::RisolutoreArtefatti;
 use crate::operazioni::{OperazionePubblica, ARROW_FILE, ARROW_STREAM, JSON, OPERAZIONI, PARQUET};
@@ -427,24 +427,26 @@ fn utc_deadline(text: &str) -> bool {
             .is_ok_and(|v| v.offset().local_minus_utc() == 0)
 }
 fn deadline_instant(text: &str) -> Result<Instant> {
+    plenora_core::tempo::frazione_rfc3339_esatta(text)
+        .map_err(|_| protocol("deadline fuori precisione"))?;
     let expired = || {
         PlenoraError::Timeout("deadline runtime gia trascorsa".into())
             .with_phase(ErrorPhase::Validate)
     };
     let parsed =
         chrono::DateTime::parse_from_rfc3339(text).map_err(|_| protocol("deadline non valida"))?;
-    let seconds = u64::try_from(parsed.timestamp()).map_err(|_| expired())?;
-    let absolute = SystemTime::UNIX_EPOCH
-        .checked_add(Duration::new(seconds, parsed.timestamp_subsec_nanos()))
-        .ok_or_else(|| protocol("deadline fuori intervallo"))?;
-    let remaining = absolute
-        .duration_since(SystemTime::now())
-        .ok()
-        .filter(|d| !d.is_zero())
-        .ok_or_else(expired)?;
-    Instant::now()
-        .checked_add(remaining)
-        .ok_or_else(|| protocol("deadline non rappresentabile"))
+    let now = Instant::now();
+    let deadline = plenora_core::tempo::deadline_unix(
+        parsed.timestamp(),
+        parsed.timestamp_subsec_nanos(),
+        SystemTime::now(),
+        now,
+    )
+    .map_err(|_| protocol("deadline fuori intervallo"))?;
+    if deadline <= now {
+        return Err(expired());
+    }
+    Ok(deadline)
 }
 
 fn canonical_version(value: &str) -> bool {

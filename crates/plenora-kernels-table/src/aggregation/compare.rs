@@ -181,9 +181,9 @@ pub fn compare_cells_typed(
             };
             Ok(crate::interi_temporali::confronta(
                 sinistra.value(left_row),
-                sinistra.nanosecondi_per_unita(),
+                sinistra.unita(),
                 destra.value(right_row),
-                destra.nanosecondi_per_unita(),
+                destra.unita(),
             ))
         }
         ComparisonFamily::Decimal128 => {

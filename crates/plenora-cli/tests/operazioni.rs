@@ -416,6 +416,11 @@ fn scadenza_passata_e_timeout_zero() {
     let uscita = cartella.percorso("o.arrow");
     for controllo in [
         ["--deadline", "2000-01-01T00:00:00Z"],
+        ["--deadline", "0001-01-01T00:00:00Z"],
+        ["--deadline", "1600-12-31T23:59:59Z"],
+        ["--deadline", "1601-01-01T00:00:00Z"],
+        ["--deadline", "1969-12-31T23:59:59.999999999Z"],
+        ["--deadline", "0001-01-01T00:00:00+23:59"],
         ["--timeout-ms", "0"],
     ] {
         let esito = invoca(&[
@@ -450,9 +455,17 @@ fn scadenza_passata_e_timeout_zero() {
         "--output",
         &uscita,
         "--deadline",
-        "2999-01-01T00:00:00+01:00",
+        "9999-12-31T23:59:59.999999900-23:59",
     ]);
     assert_eq!(esito.codice, 0, "{}", esito.stdout);
+    for deadline in [
+        "+10000-01-01T00:00:00Z",
+        "2016-12-31T23:59:60Z",
+        "2000-01-01T00:00:00.0000000001Z",
+    ] {
+        let esito = invoca(&["describe", "--input", &ingresso, "--deadline", deadline]);
+        errore(&esito, "invalid_configuration", 2);
+    }
     let esito = invoca(&["describe", "--input", &ingresso, "--deadline", "domani"]);
     errore(&esito, "invalid_configuration", 2);
 }

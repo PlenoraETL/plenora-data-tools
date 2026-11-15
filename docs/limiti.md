@@ -2115,3 +2115,21 @@ prima di introdurre macro o re-export che espongano nuovi ingressi,
 aggiungere una classificazione manuale motivata e una prova sulla superficie
 espansa/esportata. La rimozione generale del limite richiede un inventario
 ottenuto dal compilatore per tutte le configurazioni supportate.
+
+## Dominio e precisione temporale
+
+Le deadline e i timeout usano l'aritmetica checked di `plenora_core::tempo`:
+fuori dominio e perdita nella somma sul clock sono rifiuti espliciti.
+La precisione float dell'SDK e' dichiarata nel suo
+[README](../crates/plenora-data-py/README.md); le frazioni RFC3339 non
+rappresentabili si rifiutano ([CLI](cli.md#precisione-delle-scadenze)).
+Il calendario dei record e il rifiuto preventivo INT96 sono descritti in
+[File](file.md#dominio-temporale-parquet). I confronti fra unita' Arrow
+usano `TimeUnit` e nanosecondi `i128`: gli estremi `i64` in millisecondi non
+vengono ristretti a nanosecondi `i64`.
+
+La guardia `scripts/check_tempo.py`, nel runner offline, intercetta le
+forme di conversione infallibile censite e nuovi ingressi Parquet fuori
+dal modulo qualificato. E' una guardia sintattica con mutazioni sentinella,
+non un'analisi completa del flusso Rust; la completano lint anti-panic,
+prove limite e revisione della logica critica.

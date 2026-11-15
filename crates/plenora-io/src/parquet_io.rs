@@ -361,15 +361,19 @@ fn da_parquet_valore(errore: ParquetError) -> PlenoraError {
 /// aritmetica che avvolge, e le date oltre ±292 anni dal 1970 diventano
 /// altre date senza errore.
 fn verifica_colonne(metadati: &ParquetMetaData) -> Result<()> {
+    if metadati
+        .file_metadata()
+        .schema_descr()
+        .columns()
+        .iter()
+        .any(|colonna| colonna.physical_type() == TipoFisico::INT96)
+    {
+        return Err(PlenoraError::Unsupported(
+            "INT96 (timestamp legacy): conversione non supportata".into(),
+        ));
+    }
     for gruppo in metadati.row_groups() {
         for chunk in gruppo.columns() {
-            if chunk.column_descr().physical_type() == TipoFisico::INT96 {
-                return Err(PlenoraError::Unsupported(format!(
-                    "colonna `{}` INT96 (timestamp legacy): la conversione di parquet-rs \
-                     avvolge in silenzio le date fuori da ±292 anni",
-                    chunk.column_descr().path()
-                )));
-            }
             let codec = chunk.compression();
             if !matches!(
                 codec,
@@ -679,6 +683,7 @@ pub fn leggi(percorso: &Path, residuo: u64, limiti: &LimitiLettura) -> Result<Re
             .map_err(da_parquet_valore)
     })?;
     verifica_tipi_logici(&letti)?;
+    verifica_colonne(&letti)?;
     let opzioni = opzioni_di_lettura(budget_footer);
     let costruttore = barriera("parquet", || {
         let arrow =
@@ -696,7 +701,6 @@ pub fn leggi(percorso: &Path, residuo: u64, limiti: &LimitiLettura) -> Result<Re
             limiti.max_blocchi,
         ));
     }
-    verifica_colonne(&metadati)?;
     let righe = verifica_righe(&metadati)?;
     let previsto = picco_previsto(&metadati);
     if previsto > residuo {

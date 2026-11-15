@@ -56,6 +56,19 @@ def test_scadenza_passata_e_timeout_zero() -> None:
             assert errore.value.remote_effect == "none"
 
 
+@pytest.mark.parametrize("year", [1, 1600, 1601, 1969])
+def test_deadline_anni_remoti_passati(year: int) -> None:
+    with pytest.raises(pd.PlenoraTimeoutError) as errore:
+        pd.describe(tabella_semplice(), deadline=datetime(year, 1, 1, tzinfo=timezone.utc))
+    assert errore.value.category == "timeout"
+    assert errore.value.phase == "prepare"
+    assert errore.value.remote_effect == "none"
+
+
+def test_deadline_anno_9999() -> None:
+    assert pd.describe(tabella_semplice(), deadline=datetime(9999, 12, 31, tzinfo=timezone.utc))["rows"] == 5
+
+
 def test_scadenza_futura_lascia_finire() -> None:
     futura = datetime.now(timezone.utc) + timedelta(hours=1)
     risultato = pd.run(piano_identita(), {"t": tabella_semplice()}, deadline=futura)

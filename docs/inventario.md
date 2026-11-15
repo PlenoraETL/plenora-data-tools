@@ -81,13 +81,13 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 | crate | unitari | integrazione | totale |
 | --- | --- | --- | --- |
 | `plenora-cli` | 7 | 74 | 81 |
-| `plenora-core` | 213 | 103 | 316 |
+| `plenora-core` | 213 | 107 | 320 |
 | `plenora-data-py` | 0 | 0 | 0 |
-| `plenora-io` | 20 | 264 | 284 |
+| `plenora-io` | 20 | 268 | 288 |
 | `plenora-kernels-geo` | 533 | 113 | 646 |
-| `plenora-kernels-table` | 477 | 138 | 615 |
+| `plenora-kernels-table` | 478 | 138 | 616 |
 | `plenora-pipeline` | 12 | 177 | 189 |
-| **totale** | 1262 | 869 | 2131 |
+| **totale** | 1263 | 877 | 2140 |
 
 ### Prove Python dell'SDK
 
@@ -98,13 +98,13 @@ che gira sul wheel installato (`scripts/verifica_sdk_python.py`): il
 | file | prove |
 | --- | --- |
 | `crates/plenora-data-py/python/tests/test_arrow_import.py` | 9 |
-| `crates/plenora-data-py/python/tests/test_controlli.py` | 21 |
+| `crates/plenora-data-py/python/tests/test_controlli.py` | 23 |
 | `crates/plenora-data-py/python/tests/test_errori.py` | 12 |
 | `crates/plenora-data-py/python/tests/test_operazioni.py` | 15 |
 | `crates/plenora-data-py/python/tests/test_qualifica_415.py` | 4 |
 | `crates/plenora-data-py/python/tests/test_struct_bitmap.py` | 3 |
 | `crates/plenora-data-py/python/tests/test_superficie.py` | 9 |
-| **totale** | 73 |
+| **totale** | 75 |
 
 ### Prove delle guardie
 
@@ -120,6 +120,7 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 | `scripts/test_check_coverage.py` | 10 |
 | `scripts/test_check_docs.py` | 14 |
 | `scripts/test_check_esito_unico.py` | 23 |
+| `scripts/test_check_tempo.py` | 5 |
 | `scripts/test_clippy_esito.py` | 1 |
 | `scripts/test_fuzz_crs.py` | 4 |
 | `scripts/test_genera_inventario.py` | 6 |

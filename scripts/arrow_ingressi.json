@@ -6097,10 +6097,12 @@
       "arrow_arguments": []
     },
     "crates/plenora-kernels-table/src/interi_temporali.rs::confronta": {
-      "signature": "pub fn confronta(sinistra: i64, unita_sinistra: i128, destra: i64, unita_destra: i128) -> Ordering",
+      "signature": "pub fn confronta( sinistra: i64, unita_sinistra: TimeUnit, destra: i64, unita_destra: TimeUnit, ) -> Ordering",
       "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
+      "reason": "Nessun buffer Arrow: clock e valori scalari validati; le scale temporali sono limitate a TimeUnit.",
+      "arrow_arguments": [
+        "TimeUnit"
+      ]
     },
     "crates/plenora-kernels-table/src/interi_temporali.rs::frammento_chiave": {
       "signature": "pub fn frammento_chiave(nanosecondi: i128) -> String",
@@ -7666,6 +7668,50 @@
       "signature": "pub fn valida_artefatti( richiesta: &str, risolutore: &dyn RisolutoreArtefatti, interruzione: &Interruzione, ) -> Result<Value>",
       "classification": "non riceve dati esterni",
       "reason": "Helper del modulo privato artefatti: JSON e byte di firma, nessun buffer Arrow Rust esterno; lettura e validazione passano dai confini comuni.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/tempo.rs::timeout": {
+      "signature": "pub fn timeout(adesso: Instant, durata: Duration) -> Result<Instant>",
+      "classification": "non riceve dati esterni",
+      "reason": "Nessun buffer Arrow: clock e valori scalari validati; le scale temporali sono limitate a TimeUnit.",
+      "arrow_arguments": [
+        "Duration"
+      ]
+    },
+    "crates/plenora-core/src/tempo.rs::deadline_unix": {
+      "signature": "pub fn deadline_unix( secondi: i64, nanos: u32, civile: SystemTime, monotono: Instant, ) -> Result<Instant>",
+      "classification": "non riceve dati esterni",
+      "reason": "Nessun buffer Arrow: clock e valori scalari validati; le scale temporali sono limitate a TimeUnit.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/tempo.rs::deadline_systemtime": {
+      "signature": "pub fn deadline_systemtime( istante: SystemTime, civile: SystemTime, monotono: Instant, ) -> Result<Instant>",
+      "classification": "non riceve dati esterni",
+      "reason": "Nessun buffer Arrow: clock e valori scalari validati; le scale temporali sono limitate a TimeUnit.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/tempo.rs::deadline_secondi_f64": {
+      "signature": "pub fn deadline_secondi_f64(epoca: f64, civile: SystemTime, monotono: Instant) -> Result<Instant>",
+      "classification": "non riceve dati esterni",
+      "reason": "Nessun buffer Arrow: clock e valori scalari validati; le scale temporali sono limitate a TimeUnit.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/tempo.rs::frazione_rfc3339_esatta": {
+      "signature": "pub fn frazione_rfc3339_esatta(testo: &str) -> Result<()>",
+      "classification": "non riceve dati esterni",
+      "reason": "Nessun buffer Arrow: clock e valori scalari validati; le scale temporali sono limitate a TimeUnit.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-table/src/interi_temporali.rs::unita": {
+      "signature": "pub const fn unita(&self) -> TimeUnit",
+      "classification": "non riceve dati esterni",
+      "reason": "Nessun buffer Arrow: clock e valori scalari validati; le scale temporali sono limitate a TimeUnit.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/tempo.rs::timeout_secondi_f64": {
+      "signature": "pub fn timeout_secondi_f64(adesso: Instant, secondi: f64) -> Result<Instant>",
+      "classification": "non riceve dati esterni",
+      "reason": "Nessun buffer Arrow: timeout float validato nel modulo temporale checked.",
       "arrow_arguments": []
     }
   },

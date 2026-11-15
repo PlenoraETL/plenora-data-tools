@@ -313,40 +313,29 @@ fn interruzione(scadenza: Option<&Scadenza>, segnale: &Segnale) -> Result<Interr
     let adesso = Instant::now();
     let scadenza = match scadenza {
         None => None,
-        Some(Scadenza::Relativa(millisecondi)) => Some(
-            adesso
-                .checked_add(Duration::from_millis(*millisecondi))
-                .ok_or_else(|| fuori_scala("--timeout-ms"))?,
-        ),
+        Some(Scadenza::Relativa(millisecondi)) => Some(plenora_core::tempo::timeout(
+            adesso,
+            Duration::from_millis(*millisecondi),
+        )?),
         Some(Scadenza::Assoluta(testo)) => {
+            plenora_core::tempo::frazione_rfc3339_esatta(testo)?;
             let istante = chrono::DateTime::parse_from_rfc3339(testo).map_err(|_| {
                 PlenoraError::InvalidConfiguration(
                     "`--deadline`: atteso un istante RFC 3339 (2030-01-01T00:00:00Z)".to_owned(),
                 )
             })?;
-            let istante = SystemTime::from(istante);
-            // Già passata: scade al primo controllo, senza aritmetica
-            // all'indietro sull'`Instant`.
-            let restante = istante
-                .duration_since(SystemTime::now())
-                .unwrap_or(Duration::ZERO);
-            Some(
-                adesso
-                    .checked_add(restante)
-                    .ok_or_else(|| fuori_scala("--deadline"))?,
-            )
+            Some(plenora_core::tempo::deadline_unix(
+                istante.timestamp(),
+                istante.timestamp_subsec_nanos(),
+                SystemTime::now(),
+                adesso,
+            )?)
         }
     };
     Ok(Interruzione {
         scadenza,
         annullamento: Some(segnale),
     })
-}
-
-fn fuori_scala(flag: &str) -> PlenoraError {
-    PlenoraError::InvalidConfiguration(format!(
-        "`{flag}`: scadenza oltre quanto il clock monotono rappresenta"
-    ))
 }
 
 /// I comandi di questo binario, nell'ordine dell'aiuto: scoperta, poi le

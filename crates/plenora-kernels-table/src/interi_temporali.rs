@@ -110,27 +110,47 @@ impl<'a> InteriTemporali<'a> {
             .map(|valore| i128::from(valore) * self.nanosecondi_per_unita())
     }
 
+    /// Unita' della colonna; `Date64` usa millisecondi.
+    #[must_use]
+    pub const fn unita(&self) -> TimeUnit {
+        match self {
+            Self::Secondi(_) => TimeUnit::Second,
+            Self::Millisecondi(_) | Self::Date64(_) => TimeUnit::Millisecond,
+            Self::Microsecondi(_) => TimeUnit::Microsecond,
+            Self::Nanosecondi(_) => TimeUnit::Nanosecond,
+        }
+    }
+
     /// Nanosecondi in un'unita' della colonna (`Date64`: millisecondi).
     #[must_use]
     pub const fn nanosecondi_per_unita(&self) -> i128 {
-        match self {
-            Self::Secondi(_) => 1_000_000_000,
-            Self::Millisecondi(_) | Self::Date64(_) => 1_000_000,
-            Self::Microsecondi(_) => 1_000,
-            Self::Nanosecondi(_) => 1,
-        }
+        scala(self.unita())
     }
 }
 
 /// Ordine di due valori nativi di unita' anche diverse
-/// (`nanosecondi_per_unita` di ciascuno): esatto, in nanosecondi `i128`.
+/// (solo le quattro unita' Arrow): esatto, in nanosecondi `i128`.
 #[must_use]
-pub fn confronta(sinistra: i64, unita_sinistra: i128, destra: i64, unita_destra: i128) -> Ordering {
+pub fn confronta(
+    sinistra: i64,
+    unita_sinistra: TimeUnit,
+    destra: i64,
+    unita_destra: TimeUnit,
+) -> Ordering {
     if unita_sinistra == unita_destra {
         return sinistra.cmp(&destra);
     }
     // |i64| * 10^9 < 2^63 * 2^30 = 2^93: nessun trabocco in `i128`.
-    (i128::from(sinistra) * unita_sinistra).cmp(&(i128::from(destra) * unita_destra))
+    (i128::from(sinistra) * scala(unita_sinistra)).cmp(&(i128::from(destra) * scala(unita_destra)))
+}
+
+const fn scala(unita: TimeUnit) -> i128 {
+    match unita {
+        TimeUnit::Second => 1_000_000_000,
+        TimeUnit::Millisecond => 1_000_000,
+        TimeUnit::Microsecond => 1_000,
+        TimeUnit::Nanosecond => 1,
+    }
 }
 
 /// Frammento di chiave di un istante, in nanosecondi dall'epoca: 32 cifre
@@ -169,6 +189,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn estremi_arrow_non_si_restringono_a_nanosecondi_i64() {
+        for value in [i64::MIN, i64::MAX, -9_223_372_036_855, 9_223_372_036_855] {
+            let array = TimestampMillisecondArray::from(vec![value]);
+            let values = InteriTemporali::new(&array).unwrap();
+            assert_eq!(values.nanosecondi(0), Some(i128::from(value) * 1_000_000));
+        }
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+        ] {
+            assert_eq!(istante(i64::MIN, unit), None);
+            assert_eq!(istante(i64::MAX, unit), None);
+        }
+        for value in [i64::MIN, i64::MAX] {
+            assert_eq!(
+                istante(value, TimeUnit::Nanosecond)
+                    .unwrap()
+                    .timestamp_nanos_opt(),
+                Some(value)
+            );
+        }
+        assert_eq!(
+            confronta(
+                i64::MAX,
+                TimeUnit::Millisecond,
+                i64::MAX,
+                TimeUnit::Nanosecond
+            ),
+            Ordering::Greater
+        );
+        assert_eq!(
+            confronta(
+                i64::MIN,
+                TimeUnit::Millisecond,
+                i64::MIN,
+                TimeUnit::Nanosecond
+            ),
+            Ordering::Less
+        );
+    }
+
+    #[test]
     fn ogni_unita_si_legge_col_suo_valore_e_il_confronto_e_esatto() {
         let colonne: Vec<ArrayRef> = vec![
             Arc::new(TimestampSecondArray::from(vec![Some(1), None])),
@@ -193,23 +256,33 @@ mod tests {
         }
         // Distinti in microsecondi, uguali in millisecondi: restano distinti.
         assert_eq!(
-            confronta(1_000_001, 1_000, 1_000_000, 1_000),
+            confronta(
+                1_000_001,
+                TimeUnit::Microsecond,
+                1_000_000,
+                TimeUnit::Microsecond
+            ),
             Ordering::Greater
         );
         assert_eq!(
-            confronta(1_000, 1_000_000, 1_000_001, 1_000),
+            confronta(
+                1_000,
+                TimeUnit::Millisecond,
+                1_000_001,
+                TimeUnit::Microsecond
+            ),
             Ordering::Less
         );
         assert_eq!(
-            confronta(1, 1_000_000_000, 1_000, 1_000_000),
+            confronta(1, TimeUnit::Second, 1_000, TimeUnit::Millisecond),
             Ordering::Equal
         );
         assert_eq!(
-            confronta(i64::MAX, 1_000_000_000, i64::MIN, 1),
+            confronta(i64::MAX, TimeUnit::Second, i64::MIN, TimeUnit::Nanosecond),
             Ordering::Greater
         );
         assert_eq!(
-            confronta(i64::MIN, 1_000_000_000, i64::MAX, 1),
+            confronta(i64::MIN, TimeUnit::Second, i64::MAX, TimeUnit::Nanosecond),
             Ordering::Less
         );
         // Il frammento di chiave: iniettivo, a larghezza fissa, in ordine.
