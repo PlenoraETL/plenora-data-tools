@@ -25,6 +25,64 @@ dipendenza nuova: `geo`, `geozero`, `thiserror` erano già nel lock.
 
 ## Che cosa è provato qui
 
+### API diretta DE-9IM
+
+`plenora_kernels_geo::predicates` espone la matrice generale esatta:
+
+| API | Contratto |
+| --- | --- |
+| `relate_matrix(left, right)` | Matrice con limiti predefiniti dichiarati |
+| `relate_matrix_with_limits(left, right, limits, cancelled)` | Limiti espliciti e flag `AtomicBool` opzionale |
+| `De9imMatrix::cells()` | Nove byte `F012`, ordine `II IB IE BI BB BE EI EB EE` |
+| `De9imMatrix::matches(pattern)` | Confronto con pattern gia' interamente validato |
+| `De9imMatrix::evaluate(predicate)` | Predicato nominato senza ripetere il calcolo |
+| `Display` di `De9imMatrix` | Nove caratteri senza separatori |
+| `FromStr` di `De9imPattern` | Esattamente nove byte ASCII `TF*012`; errore senza testo ricevuto |
+
+Coordinate XY planari, stesso CRS e ordine degli assi a carico del chiamante.
+La decomposizione verticale usa razionali esatti, anche agli esponenti
+estremi di `f64`: non sposta vertici o intersezioni e non richiede griglia.
+Si visitano celle di dimensione zero, uno e due. I membri poligonali sono
+uniti come insiemi: lati condivisi interni e sovrapposizioni non restano
+confini. Le collezioni annidate vengono appiattite.
+
+Per le collezioni miste si dichiara la seguente scelta dimensionale:
+precedenza alla posizione rispetto all'unione delle aree; fuori dalle aree,
+alle linee; fuori da entrambe, ai punti residui. Un punto o una linea sul
+bordo di un'area non ne cambia la classificazione. Le componenti lineari
+seguono Mod-2 degli estremi dei membri. Questa parita' dipende dalla
+rappresentazione: [0,2] e [1,3] hanno estremi dispari anche in 1 e 2,
+mentre la singola linea [0,3] no. Le linee chiuse hanno confine vuoto.
+
+La fonte e' [OGC SFA 1.2.1, 06-103r4](https://docs.ogc.org/is/06-103r4/06-103r4.pdf):
+6.1.3.1 per le collezioni, 6.1.6.1 e 6.1.8.1 per le curve, 6.1.11.1
+per i poligoni, 6.1.15.2 per celle e pattern. Le prove C1 riportano
+sezione e costruzione razionale delle attese: contatti, sovrapposizioni,
+buchi riempiti, settori incidenti, incroci a 1/3 e coordinate estreme.
+Tutto il corpus analitico confronta anche gli undici predicati nominati,
+in entrambi i percorsi validato e con gate. Il matcher rifiuta matrici
+sbagliate e controlla anche simboli invalidi dopo celle non corrispondenti.
+
+**Limiti:** default di 10 milioni di coppie effettivamente esaminate,
+100 milioni di passi di visita/classificazione/ordinamento e 256 MiB di
+byte aggiuntivi richiesti dalle prenotazioni strutturali cumulative.
+Queste ultime contano le richieste dei vettori, non i buffer aritmetici
+interni di `BigInt`: non costituiscono un tetto all'heap totale.
+Nessun maggiorante anticipato decide il rifiuto. Validazione e calcolo
+condividono i contatori; cancellazione, lavoro esaurito e prenotazione
+esaurita producono varianti tipizzate di `PredicateError`.
+La decomposizione privilegia l'esattezza: nel caso peggiore il numero di
+celle e di classificazioni cresce polinomialmente fino al limite esplicito.
+La validazione rifiuta anche interni poligonali disconnessi; sovrapposizioni
+fra membri di una GeometryCollection sono ammesse, quelle di MultiPolygon no.
+
+Tutti i predicati nominati condividono questo motore: anche sugli incroci
+subnormali non divergono piu' dalla matrice. `evaluate` mantiene prima il
+gate OGC preesistente; `evaluate_validated` omette i controlli di validita'. Le operazioni booleane non
+cambiano. Questa API Rust non aggiunge adapter Arrow, catalogo, CLI o SDK.
+
+### Prove dei kernel topologici
+
 - i 18 test unitari dei tre kernel (uno con l'attesa aggiornata ai segni
   esatti, vedi sotto), fra cui il caso che perdeva una faccia di
   area 3,5 (`seed=2147483647`, indice 227): `tests/geo_rust_regressioni.rs` lo

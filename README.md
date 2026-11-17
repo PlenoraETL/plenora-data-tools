@@ -43,7 +43,7 @@ pull request, con la suite lunga, e verifica la CLI contro
 `scripts/coverage_budget.json` ([«Fuzz»](#fuzz), [«Catena delle dipendenze»](#catena-delle-dipendenze),
 [«Copertura»](#copertura)). Non c'è ancora, e si dichiara assente, il
 mutation testing del codice Rust. Non sono in programma l'identità del piano (`plan_hash`,
-fingerprint del catalogo) e l'interruzione di un kernel a metà: scadenza e
+fingerprint del catalogo) e, nel runner, l'interruzione di un kernel a metà: scadenza e
 annullamento si controllano solo fra i passi
 ([«Scadenza e annullamento»](docs/runner.md#scadenza-e-annullamento)).
 

@@ -33,6 +33,8 @@ pub enum Classe {
     Precisione,
     /// Un limite di lavoro, d'uscita o di coppie superato.
     Limite,
+    /// Calcolo annullato dal chiamante.
+    Annullata,
     /// Ingresso o parametri rifiutati dal kernel.
     Piano,
 }
@@ -49,6 +51,7 @@ pub fn del_kernel(op: &str, errore: &impl ErroreKernel) -> PlenoraError {
         Classe::Interna => PlenoraError::Internal(format!("{op}: {errore}")),
         Classe::Precisione => PlenoraError::Unsupported(format!("{op}: {errore}")),
         Classe::Limite => PlenoraError::ResourceLimit(format!("{op}: {errore}")),
+        Classe::Annullata => PlenoraError::Cancelled(format!("{op}: {errore}")),
         Classe::Piano => PlenoraError::InvalidPlan(format!("{op}: {errore}")),
     }
 }
@@ -211,6 +214,8 @@ impl ErroreKernel for ConstructionError {
 impl ErroreKernel for PredicateError {
     fn classe(&self) -> Classe {
         match self {
+            Self::WorkLimit | Self::ReservationLimit | Self::AllocationFailed => Classe::Limite,
+            Self::Cancelled => Classe::Annullata,
             Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Classe::Interna,
             Self::NonFiniteCoordinate { .. } | Self::InvalidGeometry { .. } => Classe::Piano,
         }
@@ -223,6 +228,25 @@ mod tests {
     use plenora_core::ErrorCategory;
 
     use super::*;
+
+    /// I rifiuti di risorse e l'annullamento DE-9IM mantengono la categoria.
+    #[test]
+    fn de9im_resource_and_cancellation_categories() {
+        for error in [
+            PredicateError::WorkLimit,
+            PredicateError::ReservationLimit,
+            PredicateError::AllocationFailed,
+        ] {
+            assert_eq!(
+                del_kernel("op", &error).category(),
+                ErrorCategory::ResourceLimit
+            );
+        }
+        assert_eq!(
+            del_kernel("op", &PredicateError::Cancelled).category(),
+            ErrorCategory::Cancelled
+        );
+    }
 
     /// Cio' che non conclude e' interno, anche annidato; la precisione e'
     /// `Unsupported`; il resto e' del piano.

@@ -17584,21 +17584,21 @@ voce «Errori»):
   della riga non valida per l'OGC; `other_wkb` l'ha già esclusa
   l'analisi);
 - `Internal`: `ValidazioneNonConclusa` se la validazione non conclude,
-  `CalcoloNonConcluso` se `relate` di `geo` va in panico su due geometrie
-  valide (per esempio una `GeometryCollection` con membri poligonali che
-  si sovrappongono).
+  `CalcoloNonConcluso` se la costruzione della matrice non conclude;
+- `ResourceLimit`: sui percorsi della matrice generale, limite effettivo
+  di coppie, passi o prenotazioni strutturali superato, oppure prenotazione
+  fallita. I valori predefiniti sono dichiarati nella guida DE-9IM.
 
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
   seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
-- La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
-  segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
-  linee di una `MultiLineString` è interno, una linea chiusa non ha
-  confine. Le collezioni non si uniscono prima del confronto: il lato
-  condiviso da due membri poligonali adiacenti di una `GeometryCollection`
-  resta confine, e membri poligonali che si sovrappongono possono far
-  fallire il calcolo.
+- Tutti i predicati usano il percorso razionale esatto di
+  [API diretta DE-9IM](topologia.md#api-diretta-de-9im): unione delle aree,
+  precedenza dimensionale dichiarata e Mod-2 degli estremi lineari.
+  I lati condivisi interni scompaiono dal confine e le sovrapposizioni fra
+  membri poligonali di una collezione sono ammesse. Una linea chiusa
+  non ha confine.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
   ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
@@ -17613,21 +17613,18 @@ voce «Errori»):
 
 #### Precisione
 
-Nessuna tolleranza e nessun rifiuto `PrecisionInsufficient`: il verdetto
-viene dalla matrice DE-9IM calcolata sulle coordinate `f64` così come
-sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
-toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
-in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
-un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
-delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La matrice usa razionali esatti derivati dai bit delle coordinate `f64`:
+anche le intersezioni non rappresentabili in `f64` restano esatte.
+Nessuna griglia, tolleranza o spostamento entro 1 cm e' necessario.
 
 #### Complessità
 
-Per riga, con `n` e `m` i vertici della riga e di `other_wkb`: `relate`
-indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
-caso peggiore (molti lati che si incrociano); in più la validazione OGC di
-entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
+La decomposizione verticale esatta ha costo polinomiale, con contatori
+espliciti di coppie, passi e prenotazioni strutturali. La validazione OGC
+preesistente precede il calcolo e resta O(n² + m²) nel caso peggiore.
+Il modello di memoria misurato sul precedente percorso `geo::Relate`
+non e' un limite superiore per il motore razionale. Il limite delle
+prenotazioni strutturali esclude i buffer aritmetici interni di `BigInt`.
 
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi
@@ -17771,21 +17768,21 @@ voce «Errori»):
   della riga non valida per l'OGC; `other_wkb` l'ha già esclusa
   l'analisi);
 - `Internal`: `ValidazioneNonConclusa` se la validazione non conclude,
-  `CalcoloNonConcluso` se `relate` di `geo` va in panico su due geometrie
-  valide (per esempio una `GeometryCollection` con membri poligonali che
-  si sovrappongono).
+  `CalcoloNonConcluso` se la costruzione della matrice non conclude;
+- `ResourceLimit`: sui percorsi della matrice generale, limite effettivo
+  di coppie, passi o prenotazioni strutturali superato, oppure prenotazione
+  fallita. I valori predefiniti sono dichiarati nella guida DE-9IM.
 
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
   seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
-- La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
-  segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
-  linee di una `MultiLineString` è interno, una linea chiusa non ha
-  confine. Le collezioni non si uniscono prima del confronto: il lato
-  condiviso da due membri poligonali adiacenti di una `GeometryCollection`
-  resta confine, e membri poligonali che si sovrappongono possono far
-  fallire il calcolo.
+- Tutti i predicati usano il percorso razionale esatto di
+  [API diretta DE-9IM](topologia.md#api-diretta-de-9im): unione delle aree,
+  precedenza dimensionale dichiarata e Mod-2 degli estremi lineari.
+  I lati condivisi interni scompaiono dal confine e le sovrapposizioni fra
+  membri poligonali di una collezione sono ammesse. Una linea chiusa
+  non ha confine.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
   ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
@@ -17800,21 +17797,18 @@ voce «Errori»):
 
 #### Precisione
 
-Nessuna tolleranza e nessun rifiuto `PrecisionInsufficient`: il verdetto
-viene dalla matrice DE-9IM calcolata sulle coordinate `f64` così come
-sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
-toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
-in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
-un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
-delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La matrice usa razionali esatti derivati dai bit delle coordinate `f64`:
+anche le intersezioni non rappresentabili in `f64` restano esatte.
+Nessuna griglia, tolleranza o spostamento entro 1 cm e' necessario.
 
 #### Complessità
 
-Per riga, con `n` e `m` i vertici della riga e di `other_wkb`: `relate`
-indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
-caso peggiore (molti lati che si incrociano); in più la validazione OGC di
-entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
+La decomposizione verticale esatta ha costo polinomiale, con contatori
+espliciti di coppie, passi e prenotazioni strutturali. La validazione OGC
+preesistente precede il calcolo e resta O(n² + m²) nel caso peggiore.
+Il modello di memoria misurato sul precedente percorso `geo::Relate`
+non e' un limite superiore per il motore razionale. Il limite delle
+prenotazioni strutturali esclude i buffer aritmetici interni di `BigInt`.
 
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi
@@ -17958,21 +17952,21 @@ voce «Errori»):
   della riga non valida per l'OGC; `other_wkb` l'ha già esclusa
   l'analisi);
 - `Internal`: `ValidazioneNonConclusa` se la validazione non conclude,
-  `CalcoloNonConcluso` se `relate` di `geo` va in panico su due geometrie
-  valide (per esempio una `GeometryCollection` con membri poligonali che
-  si sovrappongono).
+  `CalcoloNonConcluso` se la costruzione della matrice non conclude;
+- `ResourceLimit`: sui percorsi della matrice generale, limite effettivo
+  di coppie, passi o prenotazioni strutturali superato, oppure prenotazione
+  fallita. I valori predefiniti sono dichiarati nella guida DE-9IM.
 
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
   seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
-- La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
-  segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
-  linee di una `MultiLineString` è interno, una linea chiusa non ha
-  confine. Le collezioni non si uniscono prima del confronto: il lato
-  condiviso da due membri poligonali adiacenti di una `GeometryCollection`
-  resta confine, e membri poligonali che si sovrappongono possono far
-  fallire il calcolo.
+- Tutti i predicati usano il percorso razionale esatto di
+  [API diretta DE-9IM](topologia.md#api-diretta-de-9im): unione delle aree,
+  precedenza dimensionale dichiarata e Mod-2 degli estremi lineari.
+  I lati condivisi interni scompaiono dal confine e le sovrapposizioni fra
+  membri poligonali di una collezione sono ammesse. Una linea chiusa
+  non ha confine.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
   ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
@@ -17987,21 +17981,18 @@ voce «Errori»):
 
 #### Precisione
 
-Nessuna tolleranza e nessun rifiuto `PrecisionInsufficient`: il verdetto
-viene dalla matrice DE-9IM calcolata sulle coordinate `f64` così come
-sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
-toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
-in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
-un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
-delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La matrice usa razionali esatti derivati dai bit delle coordinate `f64`:
+anche le intersezioni non rappresentabili in `f64` restano esatte.
+Nessuna griglia, tolleranza o spostamento entro 1 cm e' necessario.
 
 #### Complessità
 
-Per riga, con `n` e `m` i vertici della riga e di `other_wkb`: `relate`
-indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
-caso peggiore (molti lati che si incrociano); in più la validazione OGC di
-entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
+La decomposizione verticale esatta ha costo polinomiale, con contatori
+espliciti di coppie, passi e prenotazioni strutturali. La validazione OGC
+preesistente precede il calcolo e resta O(n² + m²) nel caso peggiore.
+Il modello di memoria misurato sul precedente percorso `geo::Relate`
+non e' un limite superiore per il motore razionale. Il limite delle
+prenotazioni strutturali esclude i buffer aritmetici interni di `BigInt`.
 
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi
@@ -18145,21 +18136,21 @@ voce «Errori»):
   della riga non valida per l'OGC; `other_wkb` l'ha già esclusa
   l'analisi);
 - `Internal`: `ValidazioneNonConclusa` se la validazione non conclude,
-  `CalcoloNonConcluso` se `relate` di `geo` va in panico su due geometrie
-  valide (per esempio una `GeometryCollection` con membri poligonali che
-  si sovrappongono).
+  `CalcoloNonConcluso` se la costruzione della matrice non conclude;
+- `ResourceLimit`: sui percorsi della matrice generale, limite effettivo
+  di coppie, passi o prenotazioni strutturali superato, oppure prenotazione
+  fallita. I valori predefiniti sono dichiarati nella guida DE-9IM.
 
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
   seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
-- La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
-  segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
-  linee di una `MultiLineString` è interno, una linea chiusa non ha
-  confine. Le collezioni non si uniscono prima del confronto: il lato
-  condiviso da due membri poligonali adiacenti di una `GeometryCollection`
-  resta confine, e membri poligonali che si sovrappongono possono far
-  fallire il calcolo.
+- Tutti i predicati usano il percorso razionale esatto di
+  [API diretta DE-9IM](topologia.md#api-diretta-de-9im): unione delle aree,
+  precedenza dimensionale dichiarata e Mod-2 degli estremi lineari.
+  I lati condivisi interni scompaiono dal confine e le sovrapposizioni fra
+  membri poligonali di una collezione sono ammesse. Una linea chiusa
+  non ha confine.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
   ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
@@ -18174,21 +18165,18 @@ voce «Errori»):
 
 #### Precisione
 
-Nessuna tolleranza e nessun rifiuto `PrecisionInsufficient`: il verdetto
-viene dalla matrice DE-9IM calcolata sulle coordinate `f64` così come
-sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
-toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
-in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
-un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
-delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La matrice usa razionali esatti derivati dai bit delle coordinate `f64`:
+anche le intersezioni non rappresentabili in `f64` restano esatte.
+Nessuna griglia, tolleranza o spostamento entro 1 cm e' necessario.
 
 #### Complessità
 
-Per riga, con `n` e `m` i vertici della riga e di `other_wkb`: `relate`
-indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
-caso peggiore (molti lati che si incrociano); in più la validazione OGC di
-entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
+La decomposizione verticale esatta ha costo polinomiale, con contatori
+espliciti di coppie, passi e prenotazioni strutturali. La validazione OGC
+preesistente precede il calcolo e resta O(n² + m²) nel caso peggiore.
+Il modello di memoria misurato sul precedente percorso `geo::Relate`
+non e' un limite superiore per il motore razionale. Il limite delle
+prenotazioni strutturali esclude i buffer aritmetici interni di `BigInt`.
 
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi
@@ -18332,21 +18320,21 @@ voce «Errori»):
   della riga non valida per l'OGC; `other_wkb` l'ha già esclusa
   l'analisi);
 - `Internal`: `ValidazioneNonConclusa` se la validazione non conclude,
-  `CalcoloNonConcluso` se `relate` di `geo` va in panico su due geometrie
-  valide (per esempio una `GeometryCollection` con membri poligonali che
-  si sovrappongono).
+  `CalcoloNonConcluso` se la costruzione della matrice non conclude;
+- `ResourceLimit`: sui percorsi della matrice generale, limite effettivo
+  di coppie, passi o prenotazioni strutturali superato, oppure prenotazione
+  fallita. I valori predefiniti sono dichiarati nella guida DE-9IM.
 
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
   seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
-- La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
-  segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
-  linee di una `MultiLineString` è interno, una linea chiusa non ha
-  confine. Le collezioni non si uniscono prima del confronto: il lato
-  condiviso da due membri poligonali adiacenti di una `GeometryCollection`
-  resta confine, e membri poligonali che si sovrappongono possono far
-  fallire il calcolo.
+- Tutti i predicati usano il percorso razionale esatto di
+  [API diretta DE-9IM](topologia.md#api-diretta-de-9im): unione delle aree,
+  precedenza dimensionale dichiarata e Mod-2 degli estremi lineari.
+  I lati condivisi interni scompaiono dal confine e le sovrapposizioni fra
+  membri poligonali di una collezione sono ammesse. Una linea chiusa
+  non ha confine.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
   ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
@@ -18361,21 +18349,18 @@ voce «Errori»):
 
 #### Precisione
 
-Nessuna tolleranza e nessun rifiuto `PrecisionInsufficient`: il verdetto
-viene dalla matrice DE-9IM calcolata sulle coordinate `f64` così come
-sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
-toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
-in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
-un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
-delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La matrice usa razionali esatti derivati dai bit delle coordinate `f64`:
+anche le intersezioni non rappresentabili in `f64` restano esatte.
+Nessuna griglia, tolleranza o spostamento entro 1 cm e' necessario.
 
 #### Complessità
 
-Per riga, con `n` e `m` i vertici della riga e di `other_wkb`: `relate`
-indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
-caso peggiore (molti lati che si incrociano); in più la validazione OGC di
-entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
+La decomposizione verticale esatta ha costo polinomiale, con contatori
+espliciti di coppie, passi e prenotazioni strutturali. La validazione OGC
+preesistente precede il calcolo e resta O(n² + m²) nel caso peggiore.
+Il modello di memoria misurato sul precedente percorso `geo::Relate`
+non e' un limite superiore per il motore razionale. Il limite delle
+prenotazioni strutturali esclude i buffer aritmetici interni di `BigInt`.
 
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi
@@ -18519,21 +18504,21 @@ voce «Errori»):
   della riga non valida per l'OGC; `other_wkb` l'ha già esclusa
   l'analisi);
 - `Internal`: `ValidazioneNonConclusa` se la validazione non conclude,
-  `CalcoloNonConcluso` se `relate` di `geo` va in panico su due geometrie
-  valide (per esempio una `GeometryCollection` con membri poligonali che
-  si sovrappongono).
+  `CalcoloNonConcluso` se la costruzione della matrice non conclude;
+- `ResourceLimit`: sui percorsi della matrice generale, limite effettivo
+  di coppie, passi o prenotazioni strutturali superato, oppure prenotazione
+  fallita. I valori predefiniti sono dichiarati nella guida DE-9IM.
 
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
   seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
-- La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
-  segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
-  linee di una `MultiLineString` è interno, una linea chiusa non ha
-  confine. Le collezioni non si uniscono prima del confronto: il lato
-  condiviso da due membri poligonali adiacenti di una `GeometryCollection`
-  resta confine, e membri poligonali che si sovrappongono possono far
-  fallire il calcolo.
+- Tutti i predicati usano il percorso razionale esatto di
+  [API diretta DE-9IM](topologia.md#api-diretta-de-9im): unione delle aree,
+  precedenza dimensionale dichiarata e Mod-2 degli estremi lineari.
+  I lati condivisi interni scompaiono dal confine e le sovrapposizioni fra
+  membri poligonali di una collezione sono ammesse. Una linea chiusa
+  non ha confine.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
   ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
@@ -18548,21 +18533,18 @@ voce «Errori»):
 
 #### Precisione
 
-Nessuna tolleranza e nessun rifiuto `PrecisionInsufficient`: il verdetto
-viene dalla matrice DE-9IM calcolata sulle coordinate `f64` così come
-sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
-toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
-in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
-un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
-delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La matrice usa razionali esatti derivati dai bit delle coordinate `f64`:
+anche le intersezioni non rappresentabili in `f64` restano esatte.
+Nessuna griglia, tolleranza o spostamento entro 1 cm e' necessario.
 
 #### Complessità
 
-Per riga, con `n` e `m` i vertici della riga e di `other_wkb`: `relate`
-indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
-caso peggiore (molti lati che si incrociano); in più la validazione OGC di
-entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
+La decomposizione verticale esatta ha costo polinomiale, con contatori
+espliciti di coppie, passi e prenotazioni strutturali. La validazione OGC
+preesistente precede il calcolo e resta O(n² + m²) nel caso peggiore.
+Il modello di memoria misurato sul precedente percorso `geo::Relate`
+non e' un limite superiore per il motore razionale. Il limite delle
+prenotazioni strutturali esclude i buffer aritmetici interni di `BigInt`.
 
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi
@@ -18706,21 +18688,21 @@ voce «Errori»):
   della riga non valida per l'OGC; `other_wkb` l'ha già esclusa
   l'analisi);
 - `Internal`: `ValidazioneNonConclusa` se la validazione non conclude,
-  `CalcoloNonConcluso` se `relate` di `geo` va in panico su due geometrie
-  valide (per esempio una `GeometryCollection` con membri poligonali che
-  si sovrappongono).
+  `CalcoloNonConcluso` se la costruzione della matrice non conclude;
+- `ResourceLimit`: sui percorsi della matrice generale, limite effettivo
+  di coppie, passi o prenotazioni strutturali superato, oppure prenotazione
+  fallita. I valori predefiniti sono dichiarati nella guida DE-9IM.
 
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
   seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
-- La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
-  segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
-  linee di una `MultiLineString` è interno, una linea chiusa non ha
-  confine. Le collezioni non si uniscono prima del confronto: il lato
-  condiviso da due membri poligonali adiacenti di una `GeometryCollection`
-  resta confine, e membri poligonali che si sovrappongono possono far
-  fallire il calcolo.
+- Tutti i predicati usano il percorso razionale esatto di
+  [API diretta DE-9IM](topologia.md#api-diretta-de-9im): unione delle aree,
+  precedenza dimensionale dichiarata e Mod-2 degli estremi lineari.
+  I lati condivisi interni scompaiono dal confine e le sovrapposizioni fra
+  membri poligonali di una collezione sono ammesse. Una linea chiusa
+  non ha confine.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
   ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
@@ -18735,21 +18717,18 @@ voce «Errori»):
 
 #### Precisione
 
-Nessuna tolleranza e nessun rifiuto `PrecisionInsufficient`: il verdetto
-viene dalla matrice DE-9IM calcolata sulle coordinate `f64` così come
-sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
-toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
-in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
-un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
-delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La matrice usa razionali esatti derivati dai bit delle coordinate `f64`:
+anche le intersezioni non rappresentabili in `f64` restano esatte.
+Nessuna griglia, tolleranza o spostamento entro 1 cm e' necessario.
 
 #### Complessità
 
-Per riga, con `n` e `m` i vertici della riga e di `other_wkb`: `relate`
-indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
-caso peggiore (molti lati che si incrociano); in più la validazione OGC di
-entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
+La decomposizione verticale esatta ha costo polinomiale, con contatori
+espliciti di coppie, passi e prenotazioni strutturali. La validazione OGC
+preesistente precede il calcolo e resta O(n² + m²) nel caso peggiore.
+Il modello di memoria misurato sul precedente percorso `geo::Relate`
+non e' un limite superiore per il motore razionale. Il limite delle
+prenotazioni strutturali esclude i buffer aritmetici interni di `BigInt`.
 
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi
@@ -18893,21 +18872,21 @@ voce «Errori»):
   della riga non valida per l'OGC; `other_wkb` l'ha già esclusa
   l'analisi);
 - `Internal`: `ValidazioneNonConclusa` se la validazione non conclude,
-  `CalcoloNonConcluso` se `relate` di `geo` va in panico su due geometrie
-  valide (per esempio una `GeometryCollection` con membri poligonali che
-  si sovrappongono).
+  `CalcoloNonConcluso` se la costruzione della matrice non conclude;
+- `ResourceLimit`: sui percorsi della matrice generale, limite effettivo
+  di coppie, passi o prenotazioni strutturali superato, oppure prenotazione
+  fallita. I valori predefiniti sono dichiarati nella guida DE-9IM.
 
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
   seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
-- La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
-  segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
-  linee di una `MultiLineString` è interno, una linea chiusa non ha
-  confine. Le collezioni non si uniscono prima del confronto: il lato
-  condiviso da due membri poligonali adiacenti di una `GeometryCollection`
-  resta confine, e membri poligonali che si sovrappongono possono far
-  fallire il calcolo.
+- Tutti i predicati usano il percorso razionale esatto di
+  [API diretta DE-9IM](topologia.md#api-diretta-de-9im): unione delle aree,
+  precedenza dimensionale dichiarata e Mod-2 degli estremi lineari.
+  I lati condivisi interni scompaiono dal confine e le sovrapposizioni fra
+  membri poligonali di una collezione sono ammesse. Una linea chiusa
+  non ha confine.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
   ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
@@ -18922,21 +18901,18 @@ voce «Errori»):
 
 #### Precisione
 
-Nessuna tolleranza e nessun rifiuto `PrecisionInsufficient`: il verdetto
-viene dalla matrice DE-9IM calcolata sulle coordinate `f64` così come
-sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
-toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
-in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
-un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
-delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La matrice usa razionali esatti derivati dai bit delle coordinate `f64`:
+anche le intersezioni non rappresentabili in `f64` restano esatte.
+Nessuna griglia, tolleranza o spostamento entro 1 cm e' necessario.
 
 #### Complessità
 
-Per riga, con `n` e `m` i vertici della riga e di `other_wkb`: `relate`
-indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
-caso peggiore (molti lati che si incrociano); in più la validazione OGC di
-entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
+La decomposizione verticale esatta ha costo polinomiale, con contatori
+espliciti di coppie, passi e prenotazioni strutturali. La validazione OGC
+preesistente precede il calcolo e resta O(n² + m²) nel caso peggiore.
+Il modello di memoria misurato sul precedente percorso `geo::Relate`
+non e' un limite superiore per il motore razionale. Il limite delle
+prenotazioni strutturali esclude i buffer aritmetici interni di `BigInt`.
 
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi
@@ -19080,21 +19056,21 @@ voce «Errori»):
   della riga non valida per l'OGC; `other_wkb` l'ha già esclusa
   l'analisi);
 - `Internal`: `ValidazioneNonConclusa` se la validazione non conclude,
-  `CalcoloNonConcluso` se `relate` di `geo` va in panico su due geometrie
-  valide (per esempio una `GeometryCollection` con membri poligonali che
-  si sovrappongono).
+  `CalcoloNonConcluso` se la costruzione della matrice non conclude;
+- `ResourceLimit`: sui percorsi della matrice generale, limite effettivo
+  di coppie, passi o prenotazioni strutturali superato, oppure prenotazione
+  fallita. I valori predefiniti sono dichiarati nella guida DE-9IM.
 
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
   seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
-- La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
-  segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
-  linee di una `MultiLineString` è interno, una linea chiusa non ha
-  confine. Le collezioni non si uniscono prima del confronto: il lato
-  condiviso da due membri poligonali adiacenti di una `GeometryCollection`
-  resta confine, e membri poligonali che si sovrappongono possono far
-  fallire il calcolo.
+- Tutti i predicati usano il percorso razionale esatto di
+  [API diretta DE-9IM](topologia.md#api-diretta-de-9im): unione delle aree,
+  precedenza dimensionale dichiarata e Mod-2 degli estremi lineari.
+  I lati condivisi interni scompaiono dal confine e le sovrapposizioni fra
+  membri poligonali di una collezione sono ammesse. Una linea chiusa
+  non ha confine.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
   ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
@@ -19109,21 +19085,18 @@ voce «Errori»):
 
 #### Precisione
 
-Nessuna tolleranza e nessun rifiuto `PrecisionInsufficient`: il verdetto
-viene dalla matrice DE-9IM calcolata sulle coordinate `f64` così come
-sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
-toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
-in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
-un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
-delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La matrice usa razionali esatti derivati dai bit delle coordinate `f64`:
+anche le intersezioni non rappresentabili in `f64` restano esatte.
+Nessuna griglia, tolleranza o spostamento entro 1 cm e' necessario.
 
 #### Complessità
 
-Per riga, con `n` e `m` i vertici della riga e di `other_wkb`: `relate`
-indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
-caso peggiore (molti lati che si incrociano); in più la validazione OGC di
-entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
+La decomposizione verticale esatta ha costo polinomiale, con contatori
+espliciti di coppie, passi e prenotazioni strutturali. La validazione OGC
+preesistente precede il calcolo e resta O(n² + m²) nel caso peggiore.
+Il modello di memoria misurato sul precedente percorso `geo::Relate`
+non e' un limite superiore per il motore razionale. Il limite delle
+prenotazioni strutturali esclude i buffer aritmetici interni di `BigInt`.
 
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi
@@ -19267,21 +19240,21 @@ voce «Errori»):
   della riga non valida per l'OGC; `other_wkb` l'ha già esclusa
   l'analisi);
 - `Internal`: `ValidazioneNonConclusa` se la validazione non conclude,
-  `CalcoloNonConcluso` se `relate` di `geo` va in panico su due geometrie
-  valide (per esempio una `GeometryCollection` con membri poligonali che
-  si sovrappongono).
+  `CalcoloNonConcluso` se la costruzione della matrice non conclude;
+- `ResourceLimit`: sui percorsi della matrice generale, limite effettivo
+  di coppie, passi o prenotazioni strutturali superato, oppure prenotazione
+  fallita. I valori predefiniti sono dichiarati nella guida DE-9IM.
 
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
   seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
-- La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
-  segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
-  linee di una `MultiLineString` è interno, una linea chiusa non ha
-  confine. Le collezioni non si uniscono prima del confronto: il lato
-  condiviso da due membri poligonali adiacenti di una `GeometryCollection`
-  resta confine, e membri poligonali che si sovrappongono possono far
-  fallire il calcolo.
+- Tutti i predicati usano il percorso razionale esatto di
+  [API diretta DE-9IM](topologia.md#api-diretta-de-9im): unione delle aree,
+  precedenza dimensionale dichiarata e Mod-2 degli estremi lineari.
+  I lati condivisi interni scompaiono dal confine e le sovrapposizioni fra
+  membri poligonali di una collezione sono ammesse. Una linea chiusa
+  non ha confine.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
   ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
@@ -19296,21 +19269,18 @@ voce «Errori»):
 
 #### Precisione
 
-Nessuna tolleranza e nessun rifiuto `PrecisionInsufficient`: il verdetto
-viene dalla matrice DE-9IM calcolata sulle coordinate `f64` così come
-sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
-toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
-in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
-un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
-delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La matrice usa razionali esatti derivati dai bit delle coordinate `f64`:
+anche le intersezioni non rappresentabili in `f64` restano esatte.
+Nessuna griglia, tolleranza o spostamento entro 1 cm e' necessario.
 
 #### Complessità
 
-Per riga, con `n` e `m` i vertici della riga e di `other_wkb`: `relate`
-indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
-caso peggiore (molti lati che si incrociano); in più la validazione OGC di
-entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
+La decomposizione verticale esatta ha costo polinomiale, con contatori
+espliciti di coppie, passi e prenotazioni strutturali. La validazione OGC
+preesistente precede il calcolo e resta O(n² + m²) nel caso peggiore.
+Il modello di memoria misurato sul precedente percorso `geo::Relate`
+non e' un limite superiore per il motore razionale. Il limite delle
+prenotazioni strutturali esclude i buffer aritmetici interni di `BigInt`.
 
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi
@@ -19454,21 +19424,21 @@ voce «Errori»):
   della riga non valida per l'OGC; `other_wkb` l'ha già esclusa
   l'analisi);
 - `Internal`: `ValidazioneNonConclusa` se la validazione non conclude,
-  `CalcoloNonConcluso` se `relate` di `geo` va in panico su due geometrie
-  valide (per esempio una `GeometryCollection` con membri poligonali che
-  si sovrappongono).
+  `CalcoloNonConcluso` se la costruzione della matrice non conclude;
+- `ResourceLimit`: sui percorsi della matrice generale, limite effettivo
+  di coppie, passi o prenotazioni strutturali superato, oppure prenotazione
+  fallita. I valori predefiniti sono dichiarati nella guida DE-9IM.
 
 #### Limiti e deviazioni
 
 - Il secondo operando è una geometria costante della config, non una
   seconda colonna: il secondo operando resta letterale anche con ingressi multigeometria.
-- La matrice è quella di `relate` di `geo` 0.33.1, non di GEOS. Il confine
-  segue la regola mod-2 dell'OGC: l'estremo condiviso da un numero pari di
-  linee di una `MultiLineString` è interno, una linea chiusa non ha
-  confine. Le collezioni non si uniscono prima del confronto: il lato
-  condiviso da due membri poligonali adiacenti di una `GeometryCollection`
-  resta confine, e membri poligonali che si sovrappongono possono far
-  fallire il calcolo.
+- Tutti i predicati usano il percorso razionale esatto di
+  [API diretta DE-9IM](topologia.md#api-diretta-de-9im): unione delle aree,
+  precedenza dimensionale dichiarata e Mod-2 degli estremi lineari.
+  I lati condivisi interni scompaiono dal confine e le sovrapposizioni fra
+  membri poligonali di una collezione sono ammesse. Una linea chiusa
+  non ha confine.
 - Le due geometrie devono essere valide per l'OGC: una geometria non
   valida è un errore, non un verdetto. La validazione di entrambe si
   ripete a ogni valutazione ([Limiti dichiarati, «Validazione OGC: la ricerca delle
@@ -19483,21 +19453,18 @@ voce «Errori»):
 
 #### Precisione
 
-Nessuna tolleranza e nessun rifiuto `PrecisionInsufficient`: il verdetto
-viene dalla matrice DE-9IM calcolata sulle coordinate `f64` così come
-sono, con orientazioni esatte. Due geometrie distanti meno di 1 cm non si
-toccano. I punti d'incrocio fra lati che `relate` calcola sono arrotondati
-in `f64`: su lati distinti più vicini della precisione (quasi coincidenti,
-un vertice a pochi ulp da un lato) il verdetto può dipendere da
-quell'arrotondamento, fuori dalla garanzia di 1 cm ([Limiti dichiarati, «Precisione
-delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La matrice usa razionali esatti derivati dai bit delle coordinate `f64`:
+anche le intersezioni non rappresentabili in `f64` restano esatte.
+Nessuna griglia, tolleranza o spostamento entro 1 cm e' necessario.
 
 #### Complessità
 
-Per riga, con `n` e `m` i vertici della riga e di `other_wkb`: `relate`
-indicizza i lati con un R-tree, O((n + m) log(n + m)) tipico e O(n·m) nel
-caso peggiore (molti lati che si incrociano); in più la validazione OGC di
-entrambe, O(n²) e O(m²) nel caso peggiore. Memoria O(n + m).
+La decomposizione verticale esatta ha costo polinomiale, con contatori
+espliciti di coppie, passi e prenotazioni strutturali. La validazione OGC
+preesistente precede il calcolo e resta O(n² + m²) nel caso peggiore.
+Il modello di memoria misurato sul precedente percorso `geo::Relate`
+non e' un limite superiore per il motore razionale. Il limite delle
+prenotazioni strutturali esclude i buffer aritmetici interni di `BigInt`.
 
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi

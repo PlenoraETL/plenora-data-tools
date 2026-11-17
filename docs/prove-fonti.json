@@ -154,6 +154,7 @@
       "test_versioni_comuni_nei_tre_lock"
     ],
     "scripts/test_arrow_ingressi.py": [
+      "test_array_return_signature_is_not_truncated",
       "test_bound_arrow_in_ogni_posizione",
       "test_catalogo_lock_e_nuovi_tipi",
       "test_field_importato_scenario_coordinatore",
@@ -1592,6 +1593,9 @@
       "rectangle_measurements_hold_for_generated_inputs"
     ],
     "crates/plenora-kernels-geo/src/predicates.rs": [
+      "de9im_analytic_cells_transpose_patterns_and_named_predicates",
+      "de9im_rejects_the_entire_invalid_pattern_without_echoing_input",
+      "de9im_matrix_rejects_invalid_operands",
       "classifica_lato_non_appiattisce_l_interruzione",
       "classifica_lato_su_esito_concluso_resta_invalidgeometry",
       "de9im_predicates_distinguish_boundary_and_interior",
@@ -1599,6 +1603,15 @@
       "invalid_left_and_right_inputs_are_rejected_before_relate",
       "evaluate_validated_matches_the_gated_path_on_valid_inputs",
       "evaluate_validated_documents_the_caller_precondition"
+    ],
+    "crates/plenora-kernels-geo/src/predicates/arrangement.rs": [
+      "rational_intersection_and_full_finite_exponent_range",
+      "actual_work_and_reservation_thresholds",
+      "cancellation_after_progress_and_at_public_entry",
+      "empty_members_cannot_bypass_the_work_limit",
+      "invalid_polygon_topology_is_not_silently_classified",
+      "every_named_predicate_on_the_cartesian_corpus",
+      "nested_members_and_permutations_preserve_cells"
     ],
     "crates/plenora-kernels-geo/src/riproiezione/tests.rs": [
       "tipi_e_struttura_si_conservano",
@@ -2652,6 +2665,7 @@
       "un_interruzione_prima_del_primo_passo_non_chiama_kernel"
     ],
     "crates/plenora-pipeline/src/geo/errori.rs": [
+      "de9im_resource_and_cancellation_categories",
       "le_categorie_seguono_la_regola_dei_kernel"
     ],
     "crates/plenora-pipeline/src/geo/mod.rs": [

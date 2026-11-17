@@ -10,6 +10,19 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [6.1.0] - non rilasciata
+
+### Aggiunte
+
+- API Rust `predicates::relate_matrix`, `De9imMatrix` e `De9imPattern`:
+  accesso alle nove celle, confronto di pattern OGC `TF*012` validati per
+  intero e valutazione dei predicati nominati sulla stessa matrice.
+  Matrice razionale esatta anche per unioni di collezioni, con precedenza
+  dimensionale dichiarata e confine lineare Mod-2. Variante con limiti
+  effettivi, prenotazioni strutturali e cancellazione cooperativa.
+  Tutti i predicati condividono la matrice corretta, anche sui subnormali.
+  Nessuna modifica alle booleane o alle operazioni del piano.
+
 ## [6.0.0] - 2026-11-15
 
 ### Cambiamenti incompatibili

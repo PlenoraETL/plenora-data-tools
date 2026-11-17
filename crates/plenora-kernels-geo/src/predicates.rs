@@ -1,19 +1,177 @@
 //! Predicati spaziali OGC/DE-9IM fra due geometrie: i kernel di
 //! `geo.predicate_*`.
 //!
-//! Ogni predicato legge la matrice d'intersezione DE-9IM che `relate` di
-//! `geo` 0.33.1 calcola sulle geometrie `f64` cosi' come sono, con predicati
-//! d'orientazione esatti: nessuna tolleranza, nessuna griglia. Il confine
-//! segue la regola mod-2 dell'OGC (l'estremo condiviso da un numero pari di
-//! linee e' interno; una linea chiusa non ha confine). Le collezioni non si
-//! uniscono prima del confronto: il lato condiviso da due membri poligonali
-//! adiacenti resta confine, e membri poligonali che si sovrappongono
-//! possono far fallire `relate` (`CalcoloNonConcluso`).
+//! La matrice usa un arrangiamento razionale esatto degli ingressi `f64`,
+//! senza tolleranze o griglie. Tutti i predicati nominati usano lo stesso
+//! percorso; la variante validata omette solo la validazione d'ingresso.
+//! Le regole per le collezioni miste sono dichiarate in [`relate_matrix`].
 
 use crate::ValidazioneProtetta as _;
-use geo::{CoordsIter, Geometry, Relate};
+use geo::{CoordsIter, Geometry};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+mod arrangement;
+
+/// Limiti del calcolo della matrice; conteggi cumulativi, non stime iniziali.
+#[derive(Clone, Copy, Debug)]
+pub struct RelateLimits {
+    /// Coppie effettivamente esaminate nella validazione degli anelli e
+    /// nella costruzione delle ascisse critiche.
+    pub max_segment_pairs: u64,
+    /// Passi di visita delle celle e classificazione dei segmenti.
+    pub max_steps: u64,
+    /// Byte aggiuntivi richiesti dalle prenotazioni dei vettori strutturali,
+    /// cumulativi anche dopo il rilascio. Esclude i buffer aritmetici `BigInt`:
+    /// non e' un limite all'heap totale del processo.
+    pub max_reserved_bytes: u64,
+}
+
+impl Default for RelateLimits {
+    fn default() -> Self {
+        Self {
+            max_segment_pairs: 10_000_000,
+            max_steps: 100_000_000,
+            max_reserved_bytes: 268_435_456,
+        }
+    }
+}
+
+/// Calcola la matrice con limiti espliciti e annullamento cooperativo.
+///
+/// Il flag viene letto con ordinamento `Relaxed`: non pubblica altri dati.
+/// Le prenotazioni sono cumulative, incluse quelle dei vettori temporanei.
+///
+/// # Errors
+/// Gli errori di [`relate_matrix`], piu' limite di lavoro/prenotazioni,
+/// allocazione fallita e annullamento.
+pub fn relate_matrix_with_limits(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+    limits: RelateLimits,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<De9imMatrix, PredicateError> {
+    let mut work = arrangement::Work::new(limits, cancelled);
+    work.step()?;
+    arrangement::relate(left, right, &mut work)
+}
+
+/// Pattern DE-9IM OGC: esattamente nove byte ASCII in `TF*012`.
+///
+/// Il parsing controlla tutta la grammatica prima di confrontare una cella.
+/// Non ammette spazi, minuscole o espressioni di linguaggi del consumatore.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct De9imPattern([u8; 9]);
+
+/// Pattern malformato; il testo ricevuto non viene pubblicato.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("pattern DE-9IM non valido: richiesti nove caratteri ASCII TF*012")]
+pub struct InvalidDe9imPattern;
+
+impl std::str::FromStr for De9imPattern {
+    type Err = InvalidDe9imPattern;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let bytes: [u8; 9] = value
+            .as_bytes()
+            .try_into()
+            .map_err(|_| InvalidDe9imPattern)?;
+        if bytes
+            .iter()
+            .all(|b| matches!(b, b'T' | b'F' | b'*' | b'0' | b'1' | b'2'))
+        {
+            Ok(Self(bytes))
+        } else {
+            Err(InvalidDe9imPattern)
+        }
+    }
+}
+
+/// Matrice dimensionale nell'ordine `II IB IE BI BB BE EI EB EE`.
+///
+/// Ogni cella e' `F`, `0`, `1` o `2`. Il costruttore resta privato: una
+/// stringa arbitraria non e' attestata come risultato geometrico.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct De9imMatrix(geo::relate::IntersectionMatrix);
+
+impl De9imMatrix {
+    /// Le nove celle in ordine OGC SFA 1.2.1, sezione 6.1.15.2.
+    #[must_use]
+    pub fn cells(&self) -> [u8; 9] {
+        use geo::{coordinate_position::CoordPos, dimensions::Dimensions};
+        let positions = [CoordPos::Inside, CoordPos::OnBoundary, CoordPos::Outside];
+        std::array::from_fn(
+            |index| match self.0.get(positions[index / 3], positions[index % 3]) {
+                Dimensions::Empty => b'F',
+                Dimensions::ZeroDimensional => b'0',
+                Dimensions::OneDimensional => b'1',
+                Dimensions::TwoDimensional => b'2',
+            },
+        )
+    }
+
+    /// Confronto senza allocazioni con un pattern gia' interamente validato.
+    #[must_use]
+    pub fn matches(&self, pattern: De9imPattern) -> bool {
+        self.cells()
+            .into_iter()
+            .zip(pattern.0)
+            .all(|(cell, expected)| {
+                expected == b'*' || expected == cell || (expected == b'T' && cell != b'F')
+            })
+    }
+
+    /// Valuta sulla matrice uno dei predicati esistenti, senza ricalcolare
+    /// le intersezioni. Conserva anche la convenzione sui due vuoti.
+    #[must_use]
+    pub fn evaluate(&self, predicate: SpatialPredicate) -> bool {
+        evaluate_matrix(&self.0, predicate)
+    }
+}
+
+impl std::fmt::Display for De9imMatrix {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for cell in self.cells() {
+            write!(formatter, "{}", char::from(cell))?;
+        }
+        Ok(())
+    }
+}
+
+/// Calcola la matrice completa sull'unione dei membri, con aritmetica
+/// razionale esatta (anche sugli incroci non rappresentabili in `f64`).
+///
+/// OGC SFA 1.2.1, 6.1.15.2. Per le collezioni miste (6.1.3.1) si adotta
+/// questa regola dimensionale: prima si classifica l'unione delle aree;
+/// fuori dalle aree si classificano le linee, poi i punti residui. Un punto
+/// o una linea aggiunti sul bordo di un'area non ne cambiano il confine.
+/// I lati interni all'unione delle aree sono interni, anche nei vertici
+/// con piu' membri incidenti. Sovrapposizioni fra membri di una collezione
+/// sono ammesse; quelle fra membri di un `MultiPolygon` sono invalide.
+///
+/// Il confine lineare e' Mod-2 degli estremi dei membri (6.1.8.1), dopo
+/// aver appiattito le collezioni annidate. La parita' dipende dai membri:
+/// due linee sovrapposte [0,2] e [1,3] hanno confine anche in 1 e 2;
+/// non sono una riscrittura del confine della singola linea [0,3].
+///
+/// Coordinate XY planari: il chiamante assicura lo stesso CRS e ordine
+/// degli assi per i due lati.
+///
+/// Default: 10 milioni di coppie effettive, 100 milioni di passi,
+/// 256 MiB di prenotazioni strutturali cumulative ([`RelateLimits`]).
+/// Nessuna stima quadratica rifiuta l'ingresso prima del lavoro.
+///
+/// # Errors
+///
+/// Operandi non finiti o invalidi, limiti superati e prenotazione fallita;
+/// nessun messaggio contiene coordinate. La validazione include anelli
+/// semplici, contenimento dei buchi e connessione dell'interno poligonale.
+pub fn relate_matrix(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+) -> Result<De9imMatrix, PredicateError> {
+    relate_matrix_with_limits(left, right, RelateLimits::default(), None)
+}
 
 /// Il predicato da valutare fra `left` (A) e `right` (B).
 ///
@@ -72,6 +230,18 @@ pub enum SpatialPredicate {
 /// `"right"`; nessun messaggio riporta coordinate.
 #[derive(Debug, Error)]
 pub enum PredicateError {
+    /// Il calcolo ha consumato il numero consentito di coppie o passi.
+    #[error("limite di lavoro DE-9IM superato")]
+    WorkLimit,
+    /// La prossima prenotazione supererebbe il limite cumulativo.
+    #[error("limite di prenotazione DE-9IM superato")]
+    ReservationLimit,
+    /// Una prenotazione fallibile non e' riuscita.
+    #[error("prenotazione DE-9IM fallita")]
+    AllocationFailed,
+    /// Il chiamante ha annullato il calcolo.
+    #[error("calcolo DE-9IM annullato")]
+    Cancelled,
     /// La geometria `side` ha una coordinata NaN o infinita.
     #[error("geometria {side} contiene coordinate NaN o infinite")]
     NonFiniteCoordinate { side: &'static str },
@@ -133,9 +303,11 @@ fn validate(geometry: &Geometry<f64>, side: &'static str) -> Result<(), Predicat
 ///   validazione OGC (es. anello auto-intersecato);
 /// - `PredicateError::ValidazioneNonConclusa`: la validazione OGC non
 ///   conclude;
-/// - `PredicateError::CalcoloNonConcluso`: `relate` si interrompe su due
-///   geometrie valide (per esempio una `GeometryCollection` con membri
-///   poligonali sovrapposti).
+/// - `PredicateError::CalcoloNonConcluso`: la costruzione della matrice
+///   non conclude.
+///
+/// Il calcolo usa [`relate_matrix`], compresi i suoi errori di lavoro e
+/// prenotazione. Il gate OGC preesistente viene eseguito prima della matrice.
 pub fn evaluate(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -143,7 +315,7 @@ pub fn evaluate(
 ) -> Result<bool, PredicateError> {
     validate(left, "left")?;
     validate(right, "right")?;
-    evaluate_unchecked(left, right, predicate)
+    relate_matrix(left, right).map(|matrix| matrix.evaluate(predicate))
 }
 
 /// Variante di [`evaluate`] SENZA il gate di ingresso (scansione di
@@ -158,8 +330,9 @@ pub fn evaluate(
 ///
 /// # Errors
 ///
-/// `PredicateError::CalcoloNonConcluso` quando `relate` si interrompe: la
-/// validazione non basta a escluderlo (`crate::calcolo_protetto`).
+/// Gli errori di lavoro, prenotazione e costruzione della matrice, con i
+/// limiti predefiniti di [`RelateLimits`]. La decomposizione e' la stessa
+/// di [`relate_matrix`]; vengono omessi solo i controlli di validita'.
 pub fn evaluate_validated(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -173,9 +346,12 @@ fn evaluate_unchecked(
     right: &Geometry<f64>,
     predicate: SpatialPredicate,
 ) -> Result<bool, PredicateError> {
-    let matrix = crate::calcolo_protetto(|| left.relate(right))
-        .map_err(PredicateError::CalcoloNonConcluso)?;
-    Ok(match predicate {
+    let mut work = arrangement::Work::new(RelateLimits::default(), None);
+    arrangement::relate_validated(left, right, &mut work).map(|matrix| matrix.evaluate(predicate))
+}
+
+fn evaluate_matrix(matrix: &geo::relate::IntersectionMatrix, predicate: SpatialPredicate) -> bool {
+    match predicate {
         SpatialPredicate::Intersects => matrix.is_intersects(),
         SpatialPredicate::Disjoint => matrix.is_disjoint(),
         SpatialPredicate::Contains => matrix.is_contains(),
@@ -187,7 +363,7 @@ fn evaluate_unchecked(
         SpatialPredicate::Touches => matrix.is_touches(),
         SpatialPredicate::Crosses => matrix.is_crosses(),
         SpatialPredicate::Overlaps => matrix.is_overlaps(),
-    })
+    }
 }
 
 #[deny(clippy::disallowed_methods)]
@@ -196,6 +372,240 @@ mod tests {
     use super::*;
     use crate::test_support::{bowtie, rect};
     use geo::{line_string, Point};
+
+    /// OGC SFA 1.2.1 (06-103r4), 6.1.15.2: partizione I/B/E e
+    /// dimensione delle nove intersezioni. Coordinate intere, attese
+    /// analitiche: siti, intervalli sugli assi e quadrati di lato due.
+    /// Confine curve e Mod-2: 6.1.6.1 e 6.1.8.1; poligoni: 6.1.11.1.
+    /// Nessuna attesa e' generata dal backend sotto prova.
+    const ANALYTIC_MATRICES: &[(&str, &str, &str)] = &[
+        // SFA 1.2.1, 6.1.3.1 e 6.1.11.1: unione di rettangoli
+        // razionali; il lato interno condiviso scompare dal confine.
+        (
+            "GEOMETRYCOLLECTION(POLYGON((0 0,2 0,2 2,0 2,0 0)),POLYGON((2 0,4 0,4 2,2 2,2 0)))",
+            "POINT(2 1)", "0F2FF1FF2",
+        ),
+        // SFA 6.1.3.1, 6.1.15.2: sovrapposizione e insieme unito.
+        (
+            "GEOMETRYCOLLECTION(POLYGON((0 0,2 0,2 2,0 2,0 0)),POLYGON((1 0,3 0,3 2,1 2,1 0)))",
+            "POLYGON((0 0,3 0,3 2,0 2,0 0))", "2FFF1FFF2",
+        ),
+        // Stessa costruzione: linea interna con estremi sul confine.
+        (
+            "GEOMETRYCOLLECTION(POLYGON((0 0,2 0,2 2,0 2,0 0)),POLYGON((1 0,3 0,3 2,1 2,1 0)))",
+            "LINESTRING(1 0,1 2)", "1F2F01FF2",
+        ),
+        // SFA 6.1.11.1: due settori soltanto, il contatto resta confine.
+        (
+            "GEOMETRYCOLLECTION(POLYGON((0 0,1 0,1 1,0 1,0 0)),POLYGON((1 1,2 1,2 2,1 2,1 1)))",
+            "POINT(1 1)", "FF20F1FF2",
+        ),
+        // SFA 6.1.11.1: quattro settori coprono un intorno completo.
+        (
+            "GEOMETRYCOLLECTION(POLYGON((0 0,1 0,1 1,0 1,0 0)),POLYGON((0 0,0 1,-1 1,-1 0,0 0)),POLYGON((0 0,-1 0,-1 -1,0 -1,0 0)),POLYGON((0 0,0 -1,1 -1,1 0,0 0)))",
+            "POINT(0 0)", "0F2FF1FF2",
+        ),
+        // SFA 6.1.11.1: riempimento esatto del buco [1,3]^2.
+        (
+            "GEOMETRYCOLLECTION(POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,1 3,3 3,3 1,1 1)),POLYGON((1 1,3 1,3 3,1 3,1 1)))",
+            "POINT(1 2)", "0F2FF1FF2",
+        ),
+        // SFA 6.1.8.1: parita' degli estremi, anche su tratti sovrapposti.
+        (
+            "GEOMETRYCOLLECTION(LINESTRING(0 0,2 0),LINESTRING(1 0,3 0))",
+            "POINT(1 0)", "FF10F0FF2",
+        ),
+        // SFA 6.1.3.1: convenzione dimensionale dichiarata; un punto
+        // aggiunto sul confine poligonale non ne cambia la classificazione.
+        (
+            "GEOMETRYCOLLECTION(POINT(0 1),POLYGON((0 0,2 0,2 2,0 2,0 0)))",
+            "POINT(0 1)", "FF20F1FF2",
+        ),
+        // SFA 6.1.4.1, 6.1.15.2: punto coincidente, confini vuoti.
+        ("POINT(0 0)", "POINT(0 0)", "0FFFFFFF2"),
+        // SFA 6.1.4.1, 6.1.15.2: due singleton disgiunti.
+        ("POINT(0 0)", "POINT(1 0)", "FF0FFF0F2"),
+        // SFA 6.1.5: due insiemi finiti con un punto in comune.
+        (
+            "MULTIPOINT((0 0),(1 0))",
+            "MULTIPOINT((1 0),(2 0))",
+            "0F0FFF0F2",
+        ),
+        // SFA 6.1.14: punto interno a uno dei quadrati disgiunti.
+        (
+            "POINT(1 1)",
+            "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
+            "0FFFFF212",
+        ),
+        // SFA 6.1.3.1: punto interno alla componente lineare residua.
+        (
+            "POINT(1 0)",
+            "GEOMETRYCOLLECTION(POINT(5 5),LINESTRING(0 0,2 0))",
+            "0FFFFF102",
+        ),
+        // SFA 6.1.6.1: punto interno all'intervallo aperto (0,2).
+        ("POINT(1 0)", "LINESTRING(0 0,2 0)", "0FFFFF102"),
+        // SFA 6.1.6.1: estremo del medesimo intervallo.
+        ("POINT(0 0)", "LINESTRING(0 0,2 0)", "F0FFFF102"),
+        // SFA 6.1.11.1: punto interno al quadrato [0,2]^2.
+        ("POINT(1 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", "0FFFFF212"),
+        // SFA 6.1.11.1: punto sul lato del quadrato.
+        ("POINT(0 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", "F0FFFF212"),
+        // SFA 6.1.11.1: punto esterno al quadrato.
+        ("POINT(3 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", "FF0FFF212"),
+        // SFA 6.1.15.2: solo l'intersezione dei due esterni e' non vuota.
+        (
+            "GEOMETRYCOLLECTION EMPTY",
+            "GEOMETRYCOLLECTION EMPTY",
+            "FFFFFFFF2",
+        ),
+        // SFA 6.1.15.2: tutta la linea giace nell'esterno del vuoto.
+        ("MULTIPOINT EMPTY", "LINESTRING(0 0,2 0)", "FFFFFF102"),
+        // SFA 6.1.15.3, Crosses: assi con incrocio interno nell'origine.
+        ("LINESTRING(-1 0,1 0)", "LINESTRING(0 -1,0 1)", "0F1FF0102"),
+        // SFA 6.1.15.3, Touches: solo gli estremi in 1 coincidono.
+        ("LINESTRING(0 0,1 0)", "LINESTRING(1 0,2 0)", "FF1F00102"),
+        // SFA 6.1.15.3, Overlaps: intersezione [1,2], residui non vuoti.
+        ("LINESTRING(0 0,2 0)", "LINESTRING(1 0,3 0)", "1010F0102"),
+        // SFA 6.1.6.1, 6.1.15.2: stesso interno e stessi due estremi.
+        ("LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)", "1FFF0FFF2"),
+        // SFA 6.1.6.1: linea chiusa, confine vuoto.
+        (
+            "LINESTRING(0 0,2 0,1 1,0 0)",
+            "LINESTRING(0 0,2 0,1 1,0 0)",
+            "1FFFFFFF2",
+        ),
+        // SFA 6.1.6.1: anche il vertice iniziale e' interno se chiusa.
+        ("POINT(0 0)", "LINESTRING(0 0,2 0,1 1,0 0)", "0FFFFF1F2"),
+        // SFA 6.1.8.1, 6.1.9 figura 9(a): estremo condiviso pari.
+        (
+            "POINT(1 0)",
+            "MULTILINESTRING((0 0,1 0),(1 0,2 0))",
+            "0FFFFF102",
+        ),
+        // SFA 6.1.15.3, Touches: quadrati con un lato comune di dimensione 1.
+        (
+            "POLYGON((0 0,2 0,2 2,0 2,0 0))",
+            "POLYGON((2 0,4 0,4 2,2 2,2 0))",
+            "FF2F11212",
+        ),
+        // SFA 6.1.15.3, Touches: quadrati con un solo vertice comune.
+        (
+            "POLYGON((0 0,2 0,2 2,0 2,0 0))",
+            "POLYGON((2 2,4 2,4 4,2 4,2 2))",
+            "FF2F01212",
+        ),
+        // SFA 6.1.15.2, figura 19: realizzazione razionale di due aree
+        // sovrapposte, con interni residui e confini che si incrociano.
+        (
+            "POLYGON((0 0,2 0,2 2,0 2,0 0))",
+            "POLYGON((1 1,3 1,3 3,1 3,1 1))",
+            "212101212",
+        ),
+    ];
+
+    #[test]
+    fn de9im_analytic_cells_transpose_patterns_and_named_predicates() {
+        use wkt::TryFromWkt as _;
+        for &(left, right, expected) in ANALYTIC_MATRICES {
+            let left = Geometry::<f64>::try_from_wkt_str(left).expect("WKT analitico");
+            let right = Geometry::<f64>::try_from_wkt_str(right).expect("WKT analitico");
+            let matrix = relate_matrix(&left, &right).expect("matrice analitica");
+            assert_eq!(matrix.to_string(), expected);
+            assert!(matrix.matches(expected.parse().expect("pattern esatto")));
+            let transpose = relate_matrix(&right, &left)
+                .expect("matrice trasposta")
+                .cells();
+            for (index, cell) in matrix.cells().into_iter().enumerate() {
+                assert_eq!(cell, transpose[(index % 3) * 3 + index / 3]);
+                for token in *b"TF*012" {
+                    let mut pattern = [b'*'; 9];
+                    pattern[index] = token;
+                    let text = std::str::from_utf8(&pattern).expect("ASCII");
+                    let expected = match token {
+                        b'*' => true,
+                        b'T' => cell != b'F',
+                        _ => token == cell,
+                    };
+                    assert_eq!(
+                        matrix.matches(text.parse().expect("pattern valido")),
+                        expected
+                    );
+                }
+            }
+            for predicate in [
+                SpatialPredicate::Intersects,
+                SpatialPredicate::Disjoint,
+                SpatialPredicate::Contains,
+                SpatialPredicate::Within,
+                SpatialPredicate::EqualsTopo,
+                SpatialPredicate::Covers,
+                SpatialPredicate::CoveredBy,
+                SpatialPredicate::ContainsProperly,
+                SpatialPredicate::Touches,
+                SpatialPredicate::Crosses,
+                SpatialPredicate::Overlaps,
+            ] {
+                assert_eq!(
+                    matrix.evaluate(predicate),
+                    evaluate(&left, &right, predicate).expect("predicato")
+                );
+                assert_eq!(
+                    matrix.evaluate(predicate),
+                    evaluate_validated(&left, &right, predicate).expect("predicato validato")
+                );
+            }
+        }
+    }
+
+    /// Grammatica OGC 6.1.15.2: solo nove simboli TF*012. La controprova
+    /// colloca il simbolo errato DOPO una cella che darebbe gia' false;
+    /// il parsing non deve dipendere dal contenuto della matrice.
+    #[test]
+    fn de9im_rejects_the_entire_invalid_pattern_without_echoing_input() {
+        for invalid in [
+            "",
+            "********",
+            "**********",
+            "********X",
+            "F*******X",
+            "t********",
+            "f********",
+            "é*******",
+            " ******* ",
+            "RELATE(G1,G2,\"*********\")",
+        ] {
+            assert_eq!(invalid.parse::<De9imPattern>(), Err(InvalidDe9imPattern));
+        }
+        assert_eq!(
+            InvalidDe9imPattern.to_string(),
+            "pattern DE-9IM non valido: richiesti nove caratteri ASCII TF*012"
+        );
+    }
+
+    /// Contratto di ingresso del kernel: stessi errori tipizzati dei
+    /// predicati, senza sostituire invalidita' con una matrice plausibile.
+    #[test]
+    fn de9im_matrix_rejects_invalid_operands() {
+        let point = Geometry::Point(Point::new(0.0, 0.0));
+        let non_finite = Geometry::Point(Point::new(f64::INFINITY, 0.0));
+        assert!(matches!(
+            relate_matrix(&non_finite, &point),
+            Err(PredicateError::NonFiniteCoordinate { side: "left" })
+        ));
+        assert!(matches!(
+            relate_matrix(&point, &non_finite),
+            Err(PredicateError::NonFiniteCoordinate { side: "right" })
+        ));
+        assert!(matches!(
+            relate_matrix(&bowtie(), &point),
+            Err(PredicateError::InvalidGeometry { side: "left", .. })
+        ));
+        assert!(matches!(
+            relate_matrix(&point, &bowtie()),
+            Err(PredicateError::InvalidGeometry { side: "right", .. })
+        ));
+    }
 
     /// **Sintetico attraverso la conversione reale**: `classifica_lato` e' la
     /// stessa funzione che `validate` chiama davvero, non una copia.
