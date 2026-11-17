@@ -4,10 +4,12 @@ use crate::predicates::PredicateError;
 use std::cell::Cell;
 use std::rc::Rc;
 
+#[derive(Debug)]
 pub(super) struct Budget {
     limit: u64,
     live: Cell<u64>,
     peak: Cell<u64>,
+    attempted_peak: Cell<u64>,
 }
 
 impl Budget {
@@ -16,6 +18,7 @@ impl Budget {
             limit,
             live: Cell::new(0),
             peak: Cell::new(0),
+            attempted_peak: Cell::new(0),
         }
     }
 
@@ -32,14 +35,52 @@ impl Budget {
     }
 
     #[cfg(test)]
+    #[deny(clippy::disallowed_methods)]
     pub(super) const fn peak(&self) -> u64 {
         self.peak.get()
     }
+
+    #[cfg(test)]
+    #[deny(clippy::disallowed_methods)]
+    pub(super) const fn live(&self) -> u64 {
+        self.live.get()
+    }
+
+    #[cfg(test)]
+    #[deny(clippy::disallowed_methods)]
+    pub(super) const fn attempted_peak(&self) -> u64 {
+        self.attempted_peak.get()
+    }
 }
 
-struct Lease {
+#[derive(Debug)]
+pub(super) struct Lease {
     budget: Rc<Budget>,
     bytes: u64,
+}
+
+impl Lease {
+    /// Addebito immediatamente successivo alla creazione di un valore.
+    /// Un rifiuto registra anche il picco tentato, senza lasciare ricevute.
+    pub(super) fn created(budget: &Rc<Budget>, bytes: u64) -> Result<Self, PredicateError> {
+        let attempted = budget
+            .live
+            .get()
+            .checked_add(bytes)
+            .ok_or(PredicateError::ReservationLimit)?;
+        budget
+            .attempted_peak
+            .set(budget.attempted_peak.get().max(attempted));
+        budget.reserve(bytes)?;
+        Ok(Self {
+            budget: Rc::clone(budget),
+            bytes,
+        })
+    }
+
+    pub(super) const fn budget(&self) -> &Rc<Budget> {
+        &self.budget
+    }
 }
 
 impl Drop for Lease {
@@ -94,9 +135,22 @@ impl<T> CountedVec<T> {
                 budget: Rc::clone(budget),
                 bytes,
             };
+            // GlobalAlloc::realloc puo' allocare il nuovo buffer prima di
+            // liberare quello vecchio. Prenota anche la vecchia capacita'
+            // durante la crescita: il rifiuto avviene PRIMA di allocare.
+            let overlap_bytes = u64::try_from(self.values.capacity())
+                .map_err(|_| PredicateError::ReservationLimit)?
+                .checked_mul(bytes)
+                .ok_or(PredicateError::ReservationLimit)?;
+            budget.reserve(overlap_bytes)?;
+            let overlap = Lease {
+                budget: Rc::clone(budget),
+                bytes: overlap_bytes,
+            };
             self.values
                 .try_reserve_exact(1)
                 .map_err(|_| PredicateError::AllocationFailed)?;
+            drop(overlap);
             // Il contratto portabile di Vec consente sovraprenotazioni.
             // Rifiutare esplicitamente un backend che le applicasse: non
             // restituire mai successo con capacita' non contabilizzata.
@@ -120,19 +174,33 @@ impl<T> CountedVec<T> {
         Ok(())
     }
 
+    // Trasferisce il buffer all'output mantenendo la ricevuta fino al ritorno.
+    pub fn export(self, work: &mut super::Work<'_>) -> Result<Vec<T>, PredicateError> {
+        if let Some(lease) = self.lease {
+            if !Rc::ptr_eq(lease.budget(), &work.budget) {
+                return Err(PredicateError::CalcoloNonConcluso(
+                    "proprietario del budget",
+                ));
+            }
+            work.step()?;
+            work.exports.push(lease, &work.budget)?;
+        }
+        Ok(self.values)
+    }
+
     pub fn pop(&mut self) -> Option<T> {
         self.values.pop()
     }
 
     pub fn dedup_by(
         &mut self,
-        mut equal: impl FnMut(&T, &T) -> bool,
+        mut equal: impl FnMut(&T, &T) -> Result<bool, PredicateError>,
         work: &mut super::Work<'_>,
     ) -> Result<(), PredicateError> {
         let mut kept = 0;
         for read in 0..self.len() {
             work.step()?;
-            if kept == 0 || !equal(&self[read], &self[kept - 1]) {
+            if kept == 0 || !equal(&self[read], &self[kept - 1])? {
                 self.values.swap(kept, read);
                 kept += 1;
             }
@@ -234,12 +302,35 @@ mod tests {
     /// non e' una prova del picco interno dell'allocatore di sistema.
     #[test]
     fn requested_capacity_matches_the_pinned_vector_backend() {
-        let budget = Rc::new(Budget::new(8192));
+        let count = 1024_u64;
+        let width = std::mem::size_of::<u64>() as u64;
+        let peak = (2 * count - 1) * width;
+        let budget = Rc::new(Budget::new(peak));
         let mut values = CountedVec::new();
-        for i in 0..1024_u64 {
+        for i in 0..count {
             values.push(i, &budget).expect("capacita' richiesta");
-            assert_eq!(budget.live.get(), (i + 1) * 8);
+            assert_eq!(budget.live.get(), (i + 1) * width);
         }
         assert_eq!(values.values.capacity(), 1024);
+        assert_eq!(budget.peak(), peak);
+    }
+
+    /// La crescita fallisce prima di allocare se manca il solo vecchio
+    /// buffer transitorio; la capacita' e la ricevuta originali sopravvivono.
+    #[test]
+    fn growth_overlap_is_reserved_before_allocation() {
+        let width = std::mem::size_of::<u64>() as u64;
+        let budget = Rc::new(Budget::new(3 * width - 1));
+        let mut values = CountedVec::new();
+        values.push(1_u64, &budget).expect("primo elemento");
+        assert!(matches!(
+            values.push(2, &budget),
+            Err(PredicateError::ReservationLimit)
+        ));
+        assert_eq!(values.values.capacity(), 1);
+        assert_eq!(&*values, &[1]);
+        assert_eq!(budget.live(), width);
+        drop(values);
+        assert_eq!(budget.live(), 0);
     }
 }
