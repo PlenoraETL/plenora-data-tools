@@ -11,6 +11,7 @@ use std::cmp::Ordering;
 use std::rc::Rc;
 
 #[cfg(test)]
+#[deny(clippy::disallowed_methods)]
 mod bounds;
 mod storage;
 pub use storage::CountedVec;
@@ -74,6 +75,7 @@ impl<'a> Work<'a> {
         Ok(())
     }
     #[cfg(test)]
+    #[deny(clippy::disallowed_methods)]
     pub fn peak_bytes(&self) -> u64 {
         self.budget.peak()
     }
@@ -386,6 +388,7 @@ pub fn visit(
 /// Vertici ordinati lungo ciascun segmento, duplicati rimossi esattamente.
 /// Gli id dei segmenti mantengono la provenienza anche per lati coincidenti.
 #[cfg(test)]
+#[deny(clippy::disallowed_methods)]
 pub fn node(
     edges: &[&Edge],
     work: &mut Work<'_>,

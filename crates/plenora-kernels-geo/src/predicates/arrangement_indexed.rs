@@ -621,6 +621,7 @@ pub(super) fn relate(
 }
 
 #[cfg(test)]
+#[deny(clippy::disallowed_methods)]
 pub(super) fn relate_validated(
     left: &Geometry<f64>,
     right: &Geometry<f64>,

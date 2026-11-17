@@ -32,6 +32,7 @@ impl Budget {
     }
 
     #[cfg(test)]
+    #[deny(clippy::disallowed_methods)]
     pub(super) const fn peak(&self) -> u64 {
         self.peak.get()
     }
