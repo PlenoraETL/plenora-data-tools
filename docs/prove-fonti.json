@@ -194,9 +194,9 @@
     ],
     "scripts/test_check_cargo_deny.py": [
       "test_immagine_e_strumento_sono_fissati",
-      "test_nessuna_advisory_ignorata",
       "test_repository_in_sola_lettura_e_container_effimero",
-      "test_solo_i_crate_privati_escono_dalla_verifica_delle_licenze"
+      "test_solo_i_crate_privati_escono_dalla_verifica_delle_licenze",
+      "test_solo_le_advisory_unmaintained_senza_rimedio_sono_ignorate"
     ],
     "scripts/test_check_comments.py": [
       "test_a_contract_revision_by_commit_is_provenance",

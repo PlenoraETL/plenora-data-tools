@@ -415,6 +415,7 @@ fn evaluate_matrix(matrix: &geo::relate::IntersectionMatrix, predicate: SpatialP
 
 // Il corpus 1a qualifica i predicati della nuova matrice, non le API 6.0.0.
 #[cfg(test)]
+#[deny(clippy::disallowed_methods)]
 fn exact_predicate(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -424,6 +425,7 @@ fn exact_predicate(
 }
 
 #[cfg(test)]
+#[deny(clippy::disallowed_methods)]
 fn exact_predicate_validated(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -435,6 +437,7 @@ fn exact_predicate_validated(
 }
 
 #[cfg(test)]
+#[deny(clippy::disallowed_methods)]
 mod baseline_600;
 
 #[deny(clippy::disallowed_methods)]
