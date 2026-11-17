@@ -970,7 +970,7 @@ mod tests {
     }
 
     fn assert_named(a: &Geometry<f64>, b: &Geometry<f64>, matrix: &De9imMatrix) {
-        use super::super::{evaluate, evaluate_validated, SpatialPredicate as S};
+        use super::super::{exact_predicate, exact_predicate_validated, SpatialPredicate as S};
         for predicate in [
             S::Intersects,
             S::Disjoint,
@@ -986,11 +986,11 @@ mod tests {
         ] {
             assert_eq!(
                 matrix.evaluate(predicate),
-                evaluate(a, b, predicate).expect("predicato del corpus")
+                exact_predicate(a, b, predicate).expect("predicato del corpus")
             );
             assert_eq!(
                 matrix.evaluate(predicate),
-                evaluate_validated(a, b, predicate).expect("predicato validato del corpus")
+                exact_predicate_validated(a, b, predicate).expect("predicato validato del corpus")
             );
         }
     }
@@ -1029,7 +1029,7 @@ mod tests {
                 "0F1FF0102"
             );
             assert!(
-                super::super::evaluate(&a, &b, super::super::SpatialPredicate::Crosses)
+                super::super::exact_predicate(&a, &b, super::super::SpatialPredicate::Crosses)
                     .expect("predicato estremo")
             );
         }
@@ -1048,6 +1048,7 @@ mod tests {
             max_segment_pairs: work.pairs,
             max_steps: work.steps,
             max_reserved_bytes: work.bytes,
+            ..RelateLimits::default()
         };
         assert_eq!(
             relate(&a, &b, &mut Work::new(exact, None)).expect("limite esatto"),
@@ -1175,7 +1176,9 @@ mod tests {
     /// corpus, non usata per produrre le attese analitiche C1 separate.
     #[test]
     fn every_named_predicate_on_the_cartesian_corpus() {
-        use super::super::{evaluate, evaluate_validated, relate_matrix, SpatialPredicate as S};
+        use super::super::{
+            exact_predicate, exact_predicate_validated, relate_matrix, SpatialPredicate as S,
+        };
         let mut corpus: Vec<_> = [
             "POINT(0 0)",
             "POINT(1 1)",
@@ -1221,12 +1224,13 @@ mod tests {
                 ] {
                     assert_eq!(
                         matrix.evaluate(predicate),
-                        evaluate(a, b, predicate).expect("predicato del corpus"),
+                        exact_predicate(a, b, predicate).expect("predicato del corpus"),
                         "{a:?} {b:?} {predicate:?}"
                     );
                     assert_eq!(
                         matrix.evaluate(predicate),
-                        evaluate_validated(a, b, predicate).expect("predicato validato del corpus")
+                        exact_predicate_validated(a, b, predicate)
+                            .expect("predicato validato del corpus")
                     );
                 }
             }

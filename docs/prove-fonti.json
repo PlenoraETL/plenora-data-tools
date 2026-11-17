@@ -1563,6 +1563,24 @@
       "aggregate_estimate_sums_per_geometry_estimates",
       "accumulator_tracks_the_running_estimate"
     ],
+    "crates/plenora-kernels-geo/src/noding.rs": [
+      "rational_crossing_and_collinear_endpoints",
+      "grids_count_exact_pairs_and_segment_node_incidences",
+      "combs_and_stripes_have_analytic_counts",
+      "large_sparse_case_has_no_product_admission",
+      "work_limit_and_cancellation_follow_actual_progress",
+      "duplicate_nodes_are_limited_before_emission",
+      "deadline_is_checked_next_to_cancellation",
+      "indexed_intersections_match_exhaustive_pairs"
+    ],
+    "crates/plenora-kernels-geo/src/noding/bounds.rs": [
+      "normalized_intersections_fit_the_per_object_bound"
+    ],
+    "crates/plenora-kernels-geo/src/noding/storage.rs": [
+      "capacity_lifetime_and_failed_growth",
+      "changing_budget_is_rejected_before_growth",
+      "requested_capacity_matches_the_pinned_vector_backend"
+    ],
     "crates/plenora-kernels-geo/src/operations.rs": [
       "l_area_si_scala_con_il_quadrato",
       "un_area_che_si_annulla_nella_scala_si_rifiuta",
@@ -1593,6 +1611,7 @@
       "rectangle_measurements_hold_for_generated_inputs"
     ],
     "crates/plenora-kernels-geo/src/predicates.rs": [
+      "published_predicates_match_600_on_the_analytic_corpus",
       "de9im_analytic_cells_transpose_patterns_and_named_predicates",
       "de9im_rejects_the_entire_invalid_pattern_without_echoing_input",
       "de9im_matrix_rejects_invalid_operands",
@@ -1608,6 +1627,17 @@
       "rational_intersection_and_full_finite_exponent_range",
       "actual_work_and_reservation_thresholds",
       "cancellation_after_progress_and_at_public_entry",
+      "empty_members_cannot_bypass_the_work_limit",
+      "invalid_polygon_topology_is_not_silently_classified",
+      "every_named_predicate_on_the_cartesian_corpus",
+      "nested_members_and_permutations_preserve_cells"
+    ],
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed.rs": [
+      "unreleased_limits_may_change_without_changing_the_matrix",
+      "rational_intersection_and_full_finite_exponent_range",
+      "actual_work_and_reservation_thresholds",
+      "cancellation_after_progress_and_at_public_entry",
+      "node_limit_and_deadline_at_public_entry",
       "empty_members_cannot_bypass_the_work_limit",
       "invalid_polygon_topology_is_not_silently_classified",
       "every_named_predicate_on_the_cartesian_corpus",

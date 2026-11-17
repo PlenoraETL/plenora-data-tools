@@ -2,29 +2,39 @@
 //! `geo.predicate_*`.
 //!
 //! La matrice usa un arrangiamento razionale esatto degli ingressi `f64`,
-//! senza tolleranze o griglie. Tutti i predicati nominati usano lo stesso
-//! percorso; la variante validata omette solo la validazione d'ingresso.
+//! senza tolleranze o griglie. I predicati su `De9imMatrix` leggono quelle
+//! celle. `evaluate` ed `evaluate_validated` conservano il backend 6.0.0.
 //! Le regole per le collezioni miste sono dichiarate in [`relate_matrix`].
 
 use crate::ValidazioneProtetta as _;
-use geo::{CoordsIter, Geometry};
+use geo::{CoordsIter, Geometry, Relate};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[cfg(test)]
 mod arrangement;
+mod arrangement_indexed;
 
-/// Limiti del calcolo della matrice; conteggi cumulativi, non stime iniziali.
+/// Limiti della matrice sul noder comune (API 6.1.0 non rilasciata).
+/// Lavoro e nodi sono cumulativi; le prenotazioni strutturali sono vive.
 #[derive(Clone, Copy, Debug)]
 pub struct RelateLimits {
-    /// Coppie effettivamente esaminate nella validazione degli anelli e
-    /// nella costruzione delle ascisse critiche.
+    /// Test esatti dopo entrambi i filtri inclusivi X/Y, anche ripetuti
+    /// nella validazione degli anelli. Le sole visite bbox consumano passi.
     pub max_segment_pairs: u64,
     /// Passi di visita delle celle e classificazione dei segmenti.
     pub max_steps: u64,
-    /// Byte aggiuntivi richiesti dalle prenotazioni dei vettori strutturali,
-    /// cumulativi anche dopo il rilascio. Esclude i buffer aritmetici `BigInt`:
-    /// non e' un limite all'heap totale del processo.
+    /// Byte richiesti per le capacita' dei vettori strutturali ancora vivi;
+    /// pop/dedup non rilasciano capacita', il drop la rilascia (anche dopo
+    /// conversione in iteratore). Esclude tuttora i buffer `BigInt` e
+    /// l'overhead dell'allocatore: non certifica GOP-027 o l'heap totale.
     pub max_reserved_bytes: u64,
+    /// Punti d'ingresso costruiti (copie incluse) e incidenze degli eventi:
+    /// due per incrocio, quattro per overlap non puntuale. Ripetizioni
+    /// durante la validazione incluse; controllo prima della costruzione.
+    pub max_nodes: u64,
+    /// Scadenza monotona, verificata insieme all'annullamento.
+    pub deadline: Option<std::time::Instant>,
 }
 
 impl Default for RelateLimits {
@@ -33,6 +43,8 @@ impl Default for RelateLimits {
             max_segment_pairs: 10_000_000,
             max_steps: 100_000_000,
             max_reserved_bytes: 268_435_456,
+            max_nodes: 10_000_000,
+            deadline: None,
         }
     }
 }
@@ -40,20 +52,23 @@ impl Default for RelateLimits {
 /// Calcola la matrice con limiti espliciti e annullamento cooperativo.
 ///
 /// Il flag viene letto con ordinamento `Relaxed`: non pubblica altri dati.
-/// Le prenotazioni sono cumulative, incluse quelle dei vettori temporanei.
+/// Nessun prodotto del numero dei segmenti decide l'ammissione. Il noder
+/// emette ascisse critiche senza materializzare il grafo; lavoro, nodi e
+/// scadenza includono la validazione. Le prenotazioni seguono la durata
+/// dei vettori temporanei. Il flag ha precedenza sulla scadenza.
 ///
 /// # Errors
 /// Gli errori di [`relate_matrix`], piu' limite di lavoro/prenotazioni,
-/// allocazione fallita e annullamento.
+/// allocazione fallita, annullamento e [`PredicateError::DeadlineExceeded`].
 pub fn relate_matrix_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     limits: RelateLimits,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<De9imMatrix, PredicateError> {
-    let mut work = arrangement::Work::new(limits, cancelled);
+    let mut work = arrangement_indexed::Work::new(limits, cancelled);
     work.step()?;
-    arrangement::relate(left, right, &mut work)
+    arrangement_indexed::relate(left, right, &mut work)
 }
 
 /// Pattern DE-9IM OGC: esattamente nove byte ASCII in `TF*012`.
@@ -158,7 +173,8 @@ impl std::fmt::Display for De9imMatrix {
 /// degli assi per i due lati.
 ///
 /// Default: 10 milioni di coppie effettive, 100 milioni di passi,
-/// 256 MiB di prenotazioni strutturali cumulative ([`RelateLimits`]).
+/// 10 milioni di nodi, 256 MiB di prenotazioni strutturali vive, nessuna
+/// deadline ([`RelateLimits`]).
 /// Nessuna stima quadratica rifiuta l'ingresso prima del lavoro.
 ///
 /// # Errors
@@ -233,7 +249,7 @@ pub enum PredicateError {
     /// Il calcolo ha consumato il numero consentito di coppie o passi.
     #[error("limite di lavoro DE-9IM superato")]
     WorkLimit,
-    /// La prossima prenotazione supererebbe il limite cumulativo.
+    /// La prossima prenotazione supererebbe il limite dei byte vivi.
     #[error("limite di prenotazione DE-9IM superato")]
     ReservationLimit,
     /// Una prenotazione fallibile non e' riuscita.
@@ -242,6 +258,9 @@ pub enum PredicateError {
     /// Il chiamante ha annullato il calcolo.
     #[error("calcolo DE-9IM annullato")]
     Cancelled,
+    /// La scadenza monotona e' stata raggiunta.
+    #[error("scadenza del calcolo DE-9IM raggiunta")]
+    DeadlineExceeded,
     /// La geometria `side` ha una coordinata NaN o infinita.
     #[error("geometria {side} contiene coordinate NaN o infinite")]
     NonFiniteCoordinate { side: &'static str },
@@ -306,8 +325,10 @@ fn validate(geometry: &Geometry<f64>, side: &'static str) -> Result<(), Predicat
 /// - `PredicateError::CalcoloNonConcluso`: la costruzione della matrice
 ///   non conclude.
 ///
-/// Il calcolo usa [`relate_matrix`], compresi i suoi errori di lavoro e
-/// prenotazione. Il gate OGC preesistente viene eseguito prima della matrice.
+/// Compatibilita' 6.0.0: conserva `geo::Relate` e il gate OGC preesistente.
+/// Per la matrice razionale nuova usare [`relate_matrix`] e poi
+/// [`De9imMatrix::evaluate`]. I due percorsi possono differire su collezioni
+/// unite e intersezioni non rappresentabili esattamente in `f64`.
 pub fn evaluate(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -315,7 +336,7 @@ pub fn evaluate(
 ) -> Result<bool, PredicateError> {
     validate(left, "left")?;
     validate(right, "right")?;
-    relate_matrix(left, right).map(|matrix| matrix.evaluate(predicate))
+    evaluate_unchecked(left, right, predicate)
 }
 
 /// Variante di [`evaluate`] SENZA il gate di ingresso (scansione di
@@ -330,9 +351,8 @@ pub fn evaluate(
 ///
 /// # Errors
 ///
-/// Gli errori di lavoro, prenotazione e costruzione della matrice, con i
-/// limiti predefiniti di [`RelateLimits`]. La decomposizione e' la stessa
-/// di [`relate_matrix`]; vengono omessi solo i controlli di validita'.
+/// `PredicateError::CalcoloNonConcluso` quando `geo::Relate` si interrompe.
+/// Backend, risultati e default sono quelli pubblicati nella 6.0.0.
 pub fn evaluate_validated(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
@@ -346,8 +366,9 @@ fn evaluate_unchecked(
     right: &Geometry<f64>,
     predicate: SpatialPredicate,
 ) -> Result<bool, PredicateError> {
-    let mut work = arrangement::Work::new(RelateLimits::default(), None);
-    arrangement::relate_validated(left, right, &mut work).map(|matrix| matrix.evaluate(predicate))
+    let matrix = crate::calcolo_protetto(|| left.relate(right))
+        .map_err(PredicateError::CalcoloNonConcluso)?;
+    Ok(evaluate_matrix(&matrix, predicate))
 }
 
 fn evaluate_matrix(matrix: &geo::relate::IntersectionMatrix, predicate: SpatialPredicate) -> bool {
@@ -366,12 +387,87 @@ fn evaluate_matrix(matrix: &geo::relate::IntersectionMatrix, predicate: SpatialP
     }
 }
 
+// Il corpus 1a qualifica i predicati della nuova matrice, non le API 6.0.0.
+#[cfg(test)]
+fn exact_predicate(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+    predicate: SpatialPredicate,
+) -> Result<bool, PredicateError> {
+    relate_matrix(left, right).map(|matrix| matrix.evaluate(predicate))
+}
+
+#[cfg(test)]
+fn exact_predicate_validated(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+    predicate: SpatialPredicate,
+) -> Result<bool, PredicateError> {
+    let mut work = arrangement_indexed::Work::new(RelateLimits::default(), None);
+    arrangement_indexed::relate_validated(left, right, &mut work)
+        .map(|matrix| matrix.evaluate(predicate))
+}
+
+#[cfg(test)]
+mod baseline_600;
+
 #[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::{bowtie, rect};
     use geo::{line_string, Point};
+
+    /// O-M4/D-a: confronto input per input con il sorgente pubblicato
+    /// v6.0.0 (snapshot `baseline_600`). Risultati ed errori, non solo firme.
+    #[test]
+    fn published_predicates_match_600_on_the_analytic_corpus() {
+        use wkt::TryFromWkt as _;
+        let predicates = [
+            SpatialPredicate::Intersects,
+            SpatialPredicate::Disjoint,
+            SpatialPredicate::Contains,
+            SpatialPredicate::Within,
+            SpatialPredicate::EqualsTopo,
+            SpatialPredicate::Covers,
+            SpatialPredicate::CoveredBy,
+            SpatialPredicate::ContainsProperly,
+            SpatialPredicate::Touches,
+            SpatialPredicate::Crosses,
+            SpatialPredicate::Overlaps,
+        ];
+        let mut pairs: Vec<_> = ANALYTIC_MATRICES
+            .iter()
+            .map(|(a, b, _)| {
+                (
+                    Geometry::try_from_wkt_str(a).expect("fixture"),
+                    Geometry::try_from_wkt_str(b).expect("fixture"),
+                )
+            })
+            .collect();
+        for scale in [f64::from_bits(1), f64::MAX] {
+            pairs.push((
+                Geometry::Line(geo::Line::new((0., 0.), (scale, scale))),
+                Geometry::Line(geo::Line::new((0., scale), (scale, -scale))),
+            ));
+        }
+        for (a, b) in pairs {
+            for predicate in predicates {
+                let old = serde_json::from_value(serde_json::to_value(predicate).expect("nome"))
+                    .expect("nome pubblicato");
+                assert_eq!(
+                    evaluate(&a, &b, predicate).map_err(|e| e.to_string()),
+                    baseline_600::evaluate(&a, &b, old).map_err(|e| e.to_string()),
+                );
+                let old = serde_json::from_value(serde_json::to_value(predicate).expect("nome"))
+                    .expect("nome pubblicato");
+                assert_eq!(
+                    evaluate_validated(&a, &b, predicate).map_err(|e| e.to_string()),
+                    baseline_600::evaluate_validated(&a, &b, old).map_err(|e| e.to_string()),
+                );
+            }
+        }
+    }
 
     /// OGC SFA 1.2.1 (06-103r4), 6.1.15.2: partizione I/B/E e
     /// dimensione delle nove intersezioni. Coordinate intere, attese
@@ -548,11 +644,12 @@ mod tests {
             ] {
                 assert_eq!(
                     matrix.evaluate(predicate),
-                    evaluate(&left, &right, predicate).expect("predicato")
+                    exact_predicate(&left, &right, predicate).expect("predicato")
                 );
                 assert_eq!(
                     matrix.evaluate(predicate),
-                    evaluate_validated(&left, &right, predicate).expect("predicato validato")
+                    exact_predicate_validated(&left, &right, predicate)
+                        .expect("predicato validato")
                 );
             }
         }

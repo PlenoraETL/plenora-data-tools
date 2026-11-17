@@ -25,6 +25,37 @@ dipendenza nuova: `geo`, `geozero`, `thiserror` erano già nel lock.
 
 ## Che cosa è provato qui
 
+### Noding comune: migrazione DE-9IM, tranche 1b incompleta
+
+`relate_matrix` e la variante con limiti usano ora
+`noding.rs` attraverso `predicates/arrangement_indexed.rs`. Il motore
+consuma eventi senza costruire il grafo dei segmenti: gli estremi e le
+intersezioni esatte forniscono tutte le ascisse critiche. L'arrangement
+esaustivo della 1a resta compilato nei test come oracolo differenziale.
+
+La 6.1.0 non e' rilasciata: i limiti della 1a non sono una compatibilita'
+storica. Il nuovo conteggio distingue visite bbox e test esatti dopo i
+filtri inclusivi X/Y. I limiti sui nodi precedono la costruzione, includono
+copie e incidenze duplicate prima di dedup. La deadline monotona viene
+controllata accanto alla cancellazione e prima di pubblicare la matrice.
+
+Le prenotazioni dei vettori seguono ora le capacita' vive, anche durante
+l'iterazione che consuma il contenitore. Restano esclusi i buffer BigInt:
+la prova algebrica per oggetto (6299 bit di numeratore e 5273 bit di
+denominatore per una coordinata d'intersezione ridotta) e il corpus estremo
+sono in `noding/bounds.rs`, ma non sono ancora ricevute di prenotazione
+per tutti gli intermedi aritmetici. Non e' dichiarata conformita' GOP-027.
+Anche la possibile sovraprenotazione interna dell'allocatore resta fuori
+dal bilancio; una capacita' Vec diversa dalla richiesta e' un errore esplicito.
+
+Mancano ancora i nuovi ingressi controllati `split_line` e `polygonize`,
+e la loro qualifica C1. Per O-M4, `evaluate` ed `evaluate_validated`
+conservano `geo::Relate` della 6.0.0: il test differenziale usa uno snapshot
+del sorgente pubblicato, compresi errori e casi estremi. I sorgenti storici
+di split_line e polygonize sono identici al tag locale `v6.0.0`.
+I reticoli, pettini, strisce e il caso sparso da 20.002 segmenti provano
+il noder comune; non sostituiscono prove sui nuovi ingressi mancanti.
+
 ### API diretta DE-9IM
 
 `plenora_kernels_geo::predicates` espone la matrice generale esatta:
@@ -59,27 +90,32 @@ La fonte e' [OGC SFA 1.2.1, 06-103r4](https://docs.ogc.org/is/06-103r4/06-103r4.
 per i poligoni, 6.1.15.2 per celle e pattern. Le prove C1 riportano
 sezione e costruzione razionale delle attese: contatti, sovrapposizioni,
 buchi riempiti, settori incidenti, incroci a 1/3 e coordinate estreme.
-Tutto il corpus analitico confronta anche gli undici predicati nominati,
-in entrambi i percorsi validato e con gate. Il matcher rifiuta matrici
+Il corpus analitico confronta anche gli undici predicati sulla nuova matrice,
+in entrambi i percorsi validato e con gate del motore esatto. Il matcher rifiuta matrici
 sbagliate e controlla anche simboli invalidi dopo celle non corrispondenti.
 
 **Limiti:** default di 10 milioni di coppie effettivamente esaminate,
-100 milioni di passi di visita/classificazione/ordinamento e 256 MiB di
-byte aggiuntivi richiesti dalle prenotazioni strutturali cumulative.
-Queste ultime contano le richieste dei vettori, non i buffer aritmetici
-interni di `BigInt`: non costituiscono un tetto all'heap totale.
+100 milioni di passi di visita/classificazione/ordinamento, 10 milioni di
+nodi e 256 MiB di richieste di capacita' strutturale ancora vive. Il drop
+rilascia il budget; pop e dedup mantengono la capacita'. Le richieste non
+includono i buffer aritmetici interni di `BigInt` ne' l'overhead allocatore:
+non costituiscono un tetto all'heap totale. `RelateLimits::deadline` e'
+opzionale (default `None`) e produce `PredicateError::DeadlineExceeded`;
+se anche il token e' alzato prevale `Cancelled`.
 Nessun maggiorante anticipato decide il rifiuto. Validazione e calcolo
-condividono i contatori; cancellazione, lavoro esaurito e prenotazione
+condividono i contatori; cancellazione, scadenza, lavoro esaurito e prenotazione
 esaurita producono varianti tipizzate di `PredicateError`.
 La decomposizione privilegia l'esattezza: nel caso peggiore il numero di
 celle e di classificazioni cresce polinomialmente fino al limite esplicito.
 La validazione rifiuta anche interni poligonali disconnessi; sovrapposizioni
 fra membri di una GeometryCollection sono ammesse, quelle di MultiPolygon no.
 
-Tutti i predicati nominati condividono questo motore: anche sugli incroci
-subnormali non divergono piu' dalla matrice. `evaluate` mantiene prima il
-gate OGC preesistente; `evaluate_validated` omette i controlli di validita'. Le operazioni booleane non
-cambiano. Questa API Rust non aggiunge adapter Arrow, catalogo, CLI o SDK.
+I predicati di `De9imMatrix::evaluate` leggono il nuovo motore esatto.
+Le API pubblicate `evaluate` ed `evaluate_validated` mantengono invece
+il backend `geo::Relate` della 6.0.0, rispettivamente con e senza gate OGC.
+Su collezioni unite e incroci estremi i risultati possono differire: la
+nuova matrice non modifica implicitamente il comportamento pubblicato.
+Questa API Rust non aggiunge adapter Arrow, catalogo, CLI o SDK.
 
 ### Prove dei kernel topologici
 

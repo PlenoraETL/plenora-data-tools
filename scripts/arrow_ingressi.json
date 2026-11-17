@@ -7773,6 +7773,242 @@
       "classification": "non riceve dati esterni",
       "reason": "API geometrica o confronto razionale interno: nessun dato Arrow ricevuto.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::add": {
+      "signature": "pub fn add(&self, b: &Self) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::add#2": {
+      "signature": "pub fn add(&self, b: &Self) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::at_x": {
+      "signature": "pub fn at_x(&self, x: &Q) -> Q",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::between": {
+      "signature": "pub fn between(x: &Q, a: &Q, b: &Q) -> bool",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::cmp": {
+      "signature": "fn cmp(&self, b: &Self) -> Ordering",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::contains": {
+      "signature": "pub fn contains(&self, p: &P) -> bool",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::cross": {
+      "signature": "pub fn cross(&self, b: &Self) -> Q",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::div": {
+      "signature": "pub fn div(&self, b: &Self) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::float": {
+      "signature": "pub fn float(x: f64) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::int": {
+      "signature": "pub fn int(n: i32) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::midpoint": {
+      "signature": "pub fn midpoint(&self, b: &Self) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::mul": {
+      "signature": "pub fn mul(&self, b: &Self) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::new": {
+      "signature": "pub fn new(limits: RelateLimits, cancelled: Option<&'a std::sync::atomic::AtomicBool>) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::new#2": {
+      "signature": "pub fn new(mut n: BigInt, mut d: BigInt) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::node": {
+      "signature": "pub fn node( edges: &[&Edge], work: &mut Work<'_>, ) -> Result<CountedVec<CountedVec<P>>, PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::nodes": {
+      "signature": "pub fn nodes(&mut self, count: u64) -> Result<(), PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::of": {
+      "signature": "pub fn of(p: Coord<f64>) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::pair": {
+      "signature": "pub fn pair(&mut self) -> Result<(), PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::partial_cmp": {
+      "signature": "fn partial_cmp(&self, b: &Self) -> Option<Ordering>",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::peak_bytes": {
+      "signature": "pub fn peak_bytes(&self) -> u64",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::push": {
+      "signature": "pub fn push<T>(&mut self, vector: &mut CountedVec<T>, value: T) -> Result<(), PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::sign": {
+      "signature": "pub fn sign(&self) -> Ordering",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::sorted": {
+      "signature": "pub fn sorted<T>( values: &mut [T], compare: impl Fn(&T, &T) -> Ordering, work: &mut Work<'_>, ) -> Result<(), PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::step": {
+      "signature": "pub fn step(&mut self) -> Result<(), PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::sub": {
+      "signature": "pub fn sub(&self, b: &Self) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::sub#2": {
+      "signature": "pub fn sub(&self, b: &Self) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::visit": {
+      "signature": "pub fn visit( edges: &[&Edge], work: &mut Work<'_>, mut emit: impl FnMut(usize, usize, [Option<P>; 2], &mut Work<'_>) -> Result<(), PredicateError>, ) -> Result<(), PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": [
+        "Result"
+      ]
+    },
+    "crates/plenora-kernels-geo/src/noding/storage.rs::dedup_by": {
+      "signature": "pub fn dedup_by( &mut self, mut equal: impl FnMut(&T, &T) -> bool, work: &mut super::Work<'_>, ) -> Result<(), PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding/storage.rs::default": {
+      "signature": "fn default() -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding/storage.rs::deref": {
+      "signature": "fn deref(&self) -> &[T]",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding/storage.rs::deref_mut": {
+      "signature": "fn deref_mut(&mut self) -> &mut [T]",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding/storage.rs::drop": {
+      "signature": "fn drop(&mut self)",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding/storage.rs::into_iter": {
+      "signature": "fn into_iter(self) -> Self::IntoIter",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding/storage.rs::into_iter#2": {
+      "signature": "fn into_iter(self) -> Self::IntoIter",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding/storage.rs::new": {
+      "signature": "pub const fn new() -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding/storage.rs::next": {
+      "signature": "fn next(&mut self) -> Option<T>",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding/storage.rs::pop": {
+      "signature": "pub fn pop(&mut self) -> Option<T>",
+      "classification": "non riceve dati esterni",
+      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/baseline_600.rs::evaluate": {
+      "signature": "pub fn evaluate( left: &Geometry<f64>, right: &Geometry<f64>, predicate: SpatialPredicate, ) -> Result<bool, PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Copia letterale delle API predicati pubblicate nella 6.0.0, usata come riferimento: nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/baseline_600.rs::evaluate_validated": {
+      "signature": "pub fn evaluate_validated( left: &Geometry<f64>, right: &Geometry<f64>, predicate: SpatialPredicate, ) -> Result<bool, PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Copia letterale delle API predicati pubblicate nella 6.0.0, usata come riferimento: nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
     }
   },
   "python": {
