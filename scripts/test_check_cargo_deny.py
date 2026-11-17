@@ -40,9 +40,17 @@ class CargoDenyContainerTests(unittest.TestCase):
         self.assertFalse(workspace["workspace"]["package"]["publish"])
         self.assertTrue(policy["licenses"]["allow"])
 
-    def test_nessuna_advisory_ignorata(self) -> None:
+    def test_solo_le_advisory_unmaintained_senza_rimedio_sono_ignorate(self) -> None:
+        # Decisione del titolare (17/11/2026): elenco chiuso di crate non
+        # mantenuti senza alcuna versione sicura, che arrivano anche da Arrow.
+        # Mai una vulnerabilita'; ogni voce motivata; un'aggiunta richiede una
+        # nuova decisione esplicita.
         policy = tomllib.loads((check_cargo_deny.ROOT / "deny.toml").read_text(encoding="utf-8"))
-        self.assertEqual(policy["advisories"]["ignore"], [])
+        ignore = policy["advisories"]["ignore"]
+        self.assertEqual({entry["id"] for entry in ignore}, {"RUSTSEC-2026-0543", "RUSTSEC-2026-0555"})
+        for entry in ignore:
+            self.assertIn("unmaintained", entry["reason"])
+            self.assertIn("nessuna versione sicura", entry["reason"])
         self.assertEqual(policy["advisories"]["yanked"], "deny")
 
 
