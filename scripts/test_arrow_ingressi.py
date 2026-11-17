@@ -5,6 +5,15 @@ import check_arrow_ingressi as guard
 
 
 class ArrowIngressiTests(unittest.TestCase):
+    def test_array_return_signature_is_not_truncated(self):
+        for result in ('[u8; 9]', '[[u8; 3]; 3]', '[u8; { 3 * 3 }]'):
+            signature = f'pub fn cells(&self) -> {result}'
+            actual = guard.rust_functions(signature + ' { output }')['cells']
+            self.assertEqual(actual['signature'], signature)
+            self.assertEqual(actual['body'].strip(), 'output')
+        actual = guard.rust_functions('pub trait Matrix { fn cells(&self) -> [u8; 9]; }')
+        self.assertEqual(actual['cells']['signature'], 'fn cells(&self) -> [u8; 9]')
+
     def test_field_importato_scenario_coordinatore(self):
         source = 'use arrow_schema::Field; pub fn ingest(x: &Field) {}'
         self.assertIn('Field', guard.type_names())

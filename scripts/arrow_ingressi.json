@@ -3548,7 +3548,7 @@
       "arrow_arguments": []
     },
     "crates/plenora-kernels-geo/src/operations.rs::bounds": {
-      "signature": "pub fn bounds(geometry: &Geometry<f64>) -> Result<Option<[f64",
+      "signature": "pub fn bounds(geometry: &Geometry<f64>) -> Result<Option<[f64; 4]>, OperationError>",
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
@@ -3620,15 +3620,15 @@
       "arrow_arguments": []
     },
     "crates/plenora-kernels-geo/src/predicates.rs::evaluate": {
-      "signature": "pub fn evaluate( left: &Geometry<f64>, right: &Geometry<f64>, predicate: SpatialPredicate, ) -> Result<bool, PredicateError>",
+      "signature": "pub fn evaluate(&self, predicate: SpatialPredicate) -> bool",
       "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "reason": "API su geometrie Rust, matrici DE-9IM, pattern ASCII o formatter; non riceve buffer o celle Arrow.",
       "arrow_arguments": []
     },
     "crates/plenora-kernels-geo/src/predicates.rs::evaluate_validated": {
       "signature": "pub fn evaluate_validated( left: &Geometry<f64>, right: &Geometry<f64>, predicate: SpatialPredicate, ) -> Result<bool, PredicateError>",
       "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "reason": "API su geometrie Rust, matrici DE-9IM, pattern ASCII o formatter; non riceve buffer o celle Arrow.",
       "arrow_arguments": []
     },
     "crates/plenora-kernels-geo/src/riproiezione.rs::da_config": {
@@ -3966,7 +3966,7 @@
       ]
     },
     "crates/plenora-kernels-geo/src/rust_backend/mod.rs::residual_classes": {
-      "signature": "pub fn residual_classes(result: &PolygonizeResult) -> [(&'static str, &[LineString<f64>])",
+      "signature": "pub fn residual_classes(result: &PolygonizeResult) -> [(&'static str, &[LineString<f64>]); 3]",
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
@@ -6706,7 +6706,7 @@
       "arrow_arguments": []
     },
     "crates/plenora-kernels-table/src/reshape.rs::resolve_melt_names": {
-      "signature": "pub fn resolve_melt_names<'a>( occupati: impl IntoIterator<Item = &'a str>, config: &Melt, ) -> Result<[String",
+      "signature": "pub fn resolve_melt_names<'a>( occupati: impl IntoIterator<Item = &'a str>, config: &Melt, ) -> Result<[String; 2]>",
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
@@ -7712,6 +7712,66 @@
       "signature": "pub fn timeout_secondi_f64(adesso: Instant, secondi: f64) -> Result<Instant>",
       "classification": "non riceve dati esterni",
       "reason": "Nessun buffer Arrow: timeout float validato nel modulo temporale checked.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates.rs::cells": {
+      "signature": "pub fn cells(&self) -> [u8; 9]",
+      "classification": "non riceve dati esterni",
+      "reason": "API su geometrie Rust, matrici DE-9IM, pattern ASCII o formatter; non riceve buffer o celle Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates.rs::evaluate#2": {
+      "signature": "pub fn evaluate( left: &Geometry<f64>, right: &Geometry<f64>, predicate: SpatialPredicate, ) -> Result<bool, PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "API su geometrie Rust, matrici DE-9IM, pattern ASCII o formatter; non riceve buffer o celle Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates.rs::fmt": {
+      "signature": "fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result",
+      "classification": "non riceve dati esterni",
+      "reason": "API su geometrie Rust, matrici DE-9IM, pattern ASCII o formatter; non riceve buffer o celle Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates.rs::from_str": {
+      "signature": "fn from_str(value: &str) -> Result<Self, Self::Err>",
+      "classification": "non riceve dati esterni",
+      "reason": "API su geometrie Rust, matrici DE-9IM, pattern ASCII o formatter; non riceve buffer o celle Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates.rs::matches": {
+      "signature": "pub fn matches(&self, pattern: De9imPattern) -> bool",
+      "classification": "non riceve dati esterni",
+      "reason": "API su geometrie Rust, matrici DE-9IM, pattern ASCII o formatter; non riceve buffer o celle Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates.rs::relate_matrix": {
+      "signature": "pub fn relate_matrix( left: &Geometry<f64>, right: &Geometry<f64>, ) -> Result<De9imMatrix, PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "API su geometrie Rust, matrici DE-9IM, pattern ASCII o formatter; non riceve buffer o celle Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement.rs::cmp": {
+      "signature": "fn cmp(&self, b: &Self) -> Ordering",
+      "classification": "non riceve dati esterni",
+      "reason": "API geometrica o confronto razionale interno: nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement.rs::partial_cmp": {
+      "signature": "fn partial_cmp(&self, b: &Self) -> Option<Ordering>",
+      "classification": "non riceve dati esterni",
+      "reason": "API geometrica o confronto razionale interno: nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates.rs::default": {
+      "signature": "fn default() -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "API geometrica o confronto razionale interno: nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates.rs::relate_matrix_with_limits": {
+      "signature": "pub fn relate_matrix_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<De9imMatrix, PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "API geometrica o confronto razionale interno: nessun dato Arrow ricevuto.",
       "arrow_arguments": []
     }
   },

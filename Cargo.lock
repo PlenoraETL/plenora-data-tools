@@ -1019,6 +1019,7 @@ dependencies = [
  "geographiclib-rs",
  "geozero",
  "log",
+ "num-bigint",
  "plenora-core",
  "plenora-geo",
  "plenora-kernels-table",

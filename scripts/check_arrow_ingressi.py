@@ -228,9 +228,20 @@ def rust_functions(source):
         while depth:
             depth += (clean[end] == '(') - (clean[end] == ')')
             end += 1
-        body_match = re.search(r'[;{]', clean[end:])
-        assert body_match is not None, 'firma Rust senza terminatore'
-        body = end + body_match.start()
+        # Il punto e virgola di un tipo array non termina la firma.
+        # Anche le espressioni const annidate nell'array appartengono al tipo.
+        brackets = 0
+        body = None
+        for position in range(end, len(clean)):
+            char = clean[position]
+            if char == '[':
+                brackets += 1
+            elif char == ']':
+                brackets -= 1
+            elif char in ';{' and brackets == 0:
+                body = position
+                break
+        assert body is not None, 'firma Rust senza terminatore'
         signature = source[match.start():body].strip()
         depth, close = int(clean[body] == '{'), body + 1
         while depth:

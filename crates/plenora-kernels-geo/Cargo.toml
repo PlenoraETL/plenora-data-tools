@@ -26,6 +26,9 @@ spade.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Coordinate razionali esatte dell'arrangiamento DE-9IM, anche per tutti
+# gli esponenti f64 finiti; riusa la versione gia' presente nel lock.
+num-bigint = "=0.5.1"
 
 [dev-dependencies]
 proptest.workspace = true

@@ -927,6 +927,7 @@ version = "6.0.0"
 dependencies = [
  "geographiclib-rs",
  "geozero",
+ "num-bigint",
  "plenora-core",
  "plenora-geo",
  "plenora-kernels-table",
