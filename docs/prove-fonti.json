@@ -1604,6 +1604,15 @@
       "evaluate_validated_matches_the_gated_path_on_valid_inputs",
       "evaluate_validated_documents_the_caller_precondition"
     ],
+    "crates/plenora-kernels-geo/src/predicates/arrangement.rs": [
+      "rational_intersection_and_full_finite_exponent_range",
+      "actual_work_and_reservation_thresholds",
+      "cancellation_after_progress_and_at_public_entry",
+      "empty_members_cannot_bypass_the_work_limit",
+      "invalid_polygon_topology_is_not_silently_classified",
+      "every_named_predicate_on_the_cartesian_corpus",
+      "nested_members_and_permutations_preserve_cells"
+    ],
     "crates/plenora-kernels-geo/src/riproiezione/tests.rs": [
       "tipi_e_struttura_si_conservano",
       "i_lati_lunghi_si_densificano_entro_la_precisione",
