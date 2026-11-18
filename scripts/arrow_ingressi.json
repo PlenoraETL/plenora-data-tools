@@ -8907,6 +8907,36 @@
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
+    },
+    "crates/plenora-core/src/crs/riproiezione/locale.rs::new": {
+      "signature": "pub fn new(crs: &ResolvedCrs, longitude: f64) -> Result<Self, CrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/crs/riproiezione/locale.rs::inverse_shape_bounds": {
+      "signature": "pub const fn inverse_shape_bounds(&self) -> TransverseShapeBounds",
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/crs/riproiezione/locale.rs::forward": {
+      "signature": "pub fn forward(&self, longitude: f64, latitude: f64) -> Result<(f64, f64), CrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/crs/riproiezione/locale.rs::inverse": {
+      "signature": "pub fn inverse(&self, x: f64, y: f64) -> Result<(f64, f64), CrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_buffer/projected.rs::geodesic_line_buffer_with_limits": {
+      "signature": "pub fn geodesic_line_buffer_with_limits<'a>( inputs: &[Geometry], crs: &'a ResolvedCrs, radii_m: &[f64], tolerance_m: f64, union_per_distance: bool, limits: UnionBufferLimits, cancelled: Option<&AtomicBool>, ) -> Result<ProjectedBufferResult<'a>, UnionBufferError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
+      "arrow_arguments": []
     }
   },
   "rust_variants": {

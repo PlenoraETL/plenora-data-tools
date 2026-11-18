@@ -217,6 +217,33 @@ pub struct TransverseCertificate {
 }
 
 impl TransverseCertificate {
+    /// Fattori terreno/piano sulla striscia locale normalizzata.
+    /// Derivazione quadratica di log b in docs/buffer-proiezione.md.
+    pub(crate) fn local_metric_bounds(
+        &self,
+        lower: (f64, f64),
+        upper: (f64, f64),
+    ) -> Result<(f64, f64), ShapeMeasureError> {
+        if self.parameters.central_scale != 1.0
+            || self.parameters.latitude_origin != 0.0
+            || self.parameters.false_easting != 0.0
+            || self.parameters.false_northing != 0.0
+            || lower.0 > upper.0
+            || lower.1 > upper.1
+        {
+            return Err(ShapeMeasureError::AccuracyUnproven);
+        }
+        let first = self.target(lower.0, lower.1)?;
+        let last = self.target(upper.0, upper.1)?;
+        let horizontal = first.imag.max_abs().max(last.imag.max_abs());
+        if first.real.max_abs().max(last.real.max_abs()) >= 0.9 || horizontal >= 0.01 {
+            return Err(ShapeMeasureError::AccuracyUnproven);
+        }
+        let deviation = ((64.0 * horizontal).next_up() * horizontal).next_up();
+        let minimum = (1.0 - deviation).next_down();
+        Ok((minimum, (1.0 / minimum).next_up()))
+    }
+
     pub(crate) fn new(
         parameters: TransverseShapeBounds,
         inverse_flattening: f64,

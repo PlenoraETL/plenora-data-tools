@@ -27,6 +27,7 @@ mod datum;
 mod epsg;
 mod forma;
 mod latitudine;
+mod locale;
 mod ntv2;
 mod percorsi;
 mod proiezioni;
@@ -39,6 +40,7 @@ pub use forma::{
     SeparableShapeBounds, StereographicShapeBounds, TransverseShapeBounds,
 };
 
+pub use locale::LocalTransverseMercator;
 pub use ntv2::{GrigliaNtv2, MAX_BYTE_GRIGLIA};
 
 use super::{

@@ -17,6 +17,7 @@ use thiserror::Error;
 use crate::geodetica::EllissoideGeodetico;
 
 pub mod point;
+pub mod projected;
 
 /// Budget cumulativi finiti; zero consente zero lavoro o zero output.
 #[derive(Clone, Copy, Debug)]
