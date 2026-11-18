@@ -59,3 +59,6 @@ obbligatoria prima del merge: la suite di default ne gira un sottoinsieme
 deterministico.
 
 Toolchain fissata in `rust-toolchain.toml` (1.98.1).
+
+Il piano e le ricevute dell'esecutore locale sono descritti in
+[README, CI locale derivata dai workflow](README.md#ci-locale-derivata-dai-workflow).
