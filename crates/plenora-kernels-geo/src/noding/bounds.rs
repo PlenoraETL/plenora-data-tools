@@ -71,6 +71,12 @@
 //! rinodarli: sub(C,C)=(11573,10546), cross(sub(C,C),sub(C,C))=(44239,42184).
 //! Questi intermedi sono inclusi nel massimo globale; i loro punti medi
 //! sono nel dominio X, incluso nel dominio uniforme P della classificazione.
+//! Le frontiere poligonali usano midpoint(C,C), normali ottenute da
+//! sub(C,C) e orientamenti cross(sub(C,C),sub(C,C)). Per assegnare i buchi,
+//! `ring_contains` riceve lati C, punto X e direzione nulla: sub(X,C) =
+//! (16848,15821), cross(sub(C,C),sub(X,C)) = (54789,52734).
+//! Nessuna area viene accumulata: il verso si decide al minimo lessicografico.
+//! Tutti questi intermedi restano sotto il massimo globale indipendente da n.
 //! Questa proprieta' e' indispensabile: rinodare segmenti con estremi
 //! razionali richiederebbe un'altra derivazione, non la stessa costante.
 //!
@@ -161,6 +167,8 @@ mod tests {
             (c.add(c), Envelope(11573, 10546)),
             (c.add(c).cross(c.add(c)), Envelope(44239, 42184)),
             (x, Envelope(11574, 10548)),
+            (x.add(c), Envelope(16848, 15821)),
+            (c.add(c).cross(x.add(c)), Envelope(54789, 52734)),
             (offset, Envelope(12650, 11623)),
             (scaled, Envelope(14750, 13773)),
             (quotient, Envelope(16900, 15873)),

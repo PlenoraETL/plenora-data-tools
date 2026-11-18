@@ -528,7 +528,7 @@ fn publication_rejects_manually_altered_graphs() {
         b: P::of_in((1., 1.).into(), &work).unwrap(),
     };
     let valid = PublishedEdge::new(&edge, [(0., 0.).into(), (1., 1.).into()], &mut work).unwrap();
-    verify_publication(&[valid], &originals, &mut work).unwrap();
+    verify_publication(&[valid], &originals, None, &mut work).unwrap();
     for coords in [
         [(0., 0.), (2., 1.)],
         [(0., 0.), (0., 0.)],
@@ -536,7 +536,7 @@ fn publication_rejects_manually_altered_graphs() {
     ] {
         let altered = PublishedEdge::new(&edge, coords.map(Into::into), &mut work).unwrap();
         assert!(matches!(
-            verify_publication(&[altered], &originals, &mut work),
+            verify_publication(&[altered], &originals, None, &mut work),
             Err(LineBooleanError::InvalidRoundedTopology)
         ));
     }
@@ -571,7 +571,7 @@ fn rounded_new_contact_and_unpublished_boundary_nodes() {
     ];
     // GOP-015A: rounding corretto, ma crea un contatto nell'interno di a.
     assert!(matches!(
-        verify_publication(&publications, &originals, &mut work),
+        verify_publication(&publications, &originals, None, &mut work),
         Err(LineBooleanError::InvalidRoundedTopology)
     ));
     let polygon = g("POLYGON((0 1,1 -1,1 1,0 1))");
@@ -640,7 +640,7 @@ fn published_order_matches_generic_sort_and_signed_zero_mutation_fails() {
     let p = P::of_in((-0., 0.).into(), &work).unwrap();
     let altered = PublishedEdge::point(&p, (0., 0.).into(), &mut work).unwrap();
     assert!(matches!(
-        verify_publication(&[altered], &originals, &mut work),
+        verify_publication(&[altered], &originals, None, &mut work),
         Err(LineBooleanError::InvalidRoundedTopology)
     ));
 }

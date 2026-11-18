@@ -108,12 +108,7 @@ fn compare(a: &P, b: &P) -> Result<Ordering, PredicateError> {
     }
 }
 
-struct ArcSide {
-    from: usize,
-    to: usize,
-    next: usize,
-    seen: bool,
-}
+use crate::noding::faces::ArcSide;
 struct FaceRing {
     vertices: CountedVec<usize>,
     area: Q,
@@ -203,52 +198,26 @@ fn rings(
     work: &mut Work<'_>,
 ) -> Result<CountedVec<FaceRing>, PredicateError> {
     let mut result = CountedVec::new();
-    let mut positions = CountedVec::new();
-    for _ in points {
-        work.push(&mut positions, None)?;
-    }
-    for start in 0..arcs.len() {
-        work.step()?;
-        if arcs[start].seen {
-            continue;
-        }
-        let mut path = CountedVec::new();
-        let mut current = start;
-        loop {
-            work.step()?;
-            let v = arcs[current].from;
-            if let Some(pos) = positions[v] {
-                let mut vertices = CountedVec::new();
-                let mut area = work.integer(0)?;
-                for i in pos..path.len() {
-                    work.step()?;
-                    let a = path[i];
-                    let b = if i + 1 == path.len() { v } else { path[i + 1] };
-                    area = area.try_add(&points[a].try_cross(&points[b])?)?;
-                    work.push(&mut vertices, a)?;
-                }
-                while path.len() > pos {
-                    work.step()?;
-                    if let Some(a) = path.pop() {
-                        positions[a] = None;
-                    }
-                }
-                if !area.sign().is_eq() {
-                    work.push(&mut result, FaceRing { vertices, area })?;
-                }
+    crate::noding::faces::walk(
+        arcs,
+        points.len(),
+        work,
+        |_| Ok(()),
+        |path, arcs, work| {
+            let mut vertices = CountedVec::new();
+            let mut area = work.integer(0)?;
+            for &id in path {
+                work.step()?;
+                let arc = &arcs[id];
+                area = area.try_add(&points[arc.from].try_cross(&points[arc.to])?)?;
+                work.push(&mut vertices, arc.from)?;
             }
-            if arcs[current].seen {
-                break;
+            if !area.sign().is_eq() {
+                work.push(&mut result, FaceRing { vertices, area })?;
             }
-            positions[v] = Some(path.len());
-            work.push(&mut path, v)?;
-            arcs[current].seen = true;
-            current = arcs[current].next;
-        }
-        if !path.is_empty() {
-            return Err(PredicateError::CalcoloNonConcluso("cammino non chiuso"));
-        }
-    }
+            Ok(())
+        },
+    )?;
     Ok(result)
 }
 

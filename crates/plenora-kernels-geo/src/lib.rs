@@ -44,7 +44,7 @@ pub mod margine;
 pub mod memory_estimate;
 pub mod operations;
 pub mod predicates;
-pub use predicates::arrangement_indexed::{line_boolean, point_boolean};
+pub use predicates::arrangement_indexed::{line_boolean, point_boolean, polygon_boolean};
 pub mod riproiezione;
 pub mod rust_backend;
 pub mod spatial_join;

@@ -100,7 +100,7 @@ const fn selected(op: LineBooleanOp, left: bool, right: bool) -> bool {
     }
 }
 
-fn point_cmp(a: &P, b: &P) -> Result<Ordering, PredicateError> {
+pub(super) fn point_cmp(a: &P, b: &P) -> Result<Ordering, PredicateError> {
     let x = a.x.try_cmp(&b.x)?;
     if x.is_eq() {
         a.y.try_cmp(&b.y)
@@ -109,7 +109,7 @@ fn point_cmp(a: &P, b: &P) -> Result<Ordering, PredicateError> {
     }
 }
 
-fn edge_cmp(a: &Edge, b: &Edge) -> Result<Ordering, PredicateError> {
+pub(super) fn edge_cmp(a: &Edge, b: &Edge) -> Result<Ordering, PredicateError> {
     let first = point_cmp(&a.a, &b.a)?;
     if first.is_eq() {
         point_cmp(&a.b, &b.b)
@@ -118,7 +118,7 @@ fn edge_cmp(a: &Edge, b: &Edge) -> Result<Ordering, PredicateError> {
     }
 }
 
-fn ordered_ids<T>(
+pub(super) fn ordered_ids<T>(
     values: &[T],
     cmp: impl Fn(&T, &T) -> Result<Ordering, PredicateError>,
     work: &mut Work<'_>,
@@ -368,11 +368,11 @@ fn execute(
         publication.support = Some(support);
         work.push(&mut published, publication)?;
     }
-    verify_publication(&published, &originals, work)?;
+    verify_publication(&published, &originals, None, work)?;
     finish(components, filter, work)
 }
 
-fn finish(
+pub(super) fn finish(
     mut components: CountedVec<Geometry<f64>>,
     filter: Option<u8>,
     work: &mut Work<'_>,
@@ -471,14 +471,14 @@ fn coordinate(p: &P, work: &mut Work<'_>) -> Result<Coord<f64>, LineBooleanError
 }
 
 // Ordine numerico finito; i due zeri rappresentano lo stesso sito.
-fn coordinate_cmp(a: Coord<f64>, b: Coord<f64>) -> Ordering {
+pub(super) fn coordinate_cmp(a: Coord<f64>, b: Coord<f64>) -> Ordering {
     let canonical = |v: f64| if v.to_bits() << 1 == 0 { 0.0 } else { v };
     canonical(a.x)
         .total_cmp(&canonical(b.x))
         .then_with(|| canonical(a.y).total_cmp(&canonical(b.y)))
 }
 
-fn sort_output<T>(
+pub(super) fn sort_output<T>(
     values: &mut [T],
     cmp: impl Fn(&T, &T) -> Ordering,
     work: &mut Work<'_>,
@@ -538,7 +538,11 @@ impl Originals {
         ids.dedup_by(|a, b| Ok(values[*a].0 == values[*b].0), work)?;
         Ok(Self { values, ids })
     }
-    fn coordinate(&self, p: &P, work: &mut Work<'_>) -> Result<Coord<f64>, LineBooleanError> {
+    pub(super) fn coordinate(
+        &self,
+        p: &P,
+        work: &mut Work<'_>,
+    ) -> Result<Coord<f64>, LineBooleanError> {
         let (mut low, mut high) = (0, self.ids.len());
         while low < high {
             work.step()?;
@@ -562,6 +566,7 @@ pub(crate) struct PublishedEdge<'a> {
     coords: [Coord<f64>; 2],
     // Lato immutato cui il segmento pubblicato deve restare aderente.
     pub(crate) support: Option<&'a Edge>,
+    pub(crate) surface: bool,
 }
 impl<'a> PublishedEdge<'a> {
     pub(crate) fn new(
@@ -573,6 +578,7 @@ impl<'a> PublishedEdge<'a> {
         Ok(Self {
             exact: [&edge.a, &edge.b],
             support: None,
+            surface: false,
             coords,
             rounded: Edge {
                 a: P::of_in(coords[0], work)?,
@@ -589,6 +595,7 @@ impl<'a> PublishedEdge<'a> {
         Ok(Self {
             exact: [p, p],
             support: None,
+            surface: false,
             coords: [coord, coord],
             rounded: Edge {
                 a: P::of_in(coord, work)?,
@@ -598,15 +605,65 @@ impl<'a> PublishedEdge<'a> {
     }
 }
 
+// Ogni lato serializzato deve consumare esattamente un lato del certificato
+// superficiale, nello stesso verso e con gli stessi bit delle coordinate.
+fn verify_surface_edges(
+    geometry: &Geometry<f64>,
+    edges: &[PublishedEdge<'_>],
+    work: &mut Work<'_>,
+) -> Result<(), LineBooleanError> {
+    let Geometry::MultiPolygon(polygons) = geometry else {
+        return Err(LineBooleanError::InvalidRoundedTopology);
+    };
+    let mut consumed = CountedVec::new();
+    for edge in edges {
+        work.push(&mut consumed, !edge.surface)?;
+    }
+    for polygon in &polygons.0 {
+        for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+            work.step()?;
+            for pair in ring.0.windows(2) {
+                work.step()?;
+                let mut found = false;
+                for (id, edge) in edges.iter().enumerate() {
+                    work.step()?;
+                    if consumed[id] {
+                        continue;
+                    }
+                    if pair.iter().zip(edge.coords).all(|(a, b)| {
+                        a.x.to_bits() == b.x.to_bits() && a.y.to_bits() == b.y.to_bits()
+                    }) {
+                        consumed[id] = true;
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(LineBooleanError::InvalidRoundedTopology);
+                }
+            }
+        }
+    }
+    for used in consumed {
+        work.step()?;
+        if !used {
+            return Err(LineBooleanError::InvalidRoundedTopology);
+        }
+    }
+    Ok(())
+}
+
 /// Verifica unica della pubblicazione di un grafo atomico: conversione corretta,
 /// iniettivita' dei siti, assenza di nuovi contatti/overlap e ordine dei raggi.
 /// Gli anelli semplici del grafo non possono collassare o invertirsi: nessuna
 /// fusione, nessun nuovo incrocio e nessun cambio di verso dei settori non nulli.
-/// I poligoni di questa API sono inoltre copie bit per bit, gia' validate.
+/// Gli anelli costruiti richiedono inoltre orientamento canonico e validazione
+/// OGC: semplicita', buchi nel guscio, interno connesso e interni disgiunti.
 /// Non rinoda razionali costruiti; il visitatore riceve solo binary64 riletti.
 pub(crate) fn verify_publication(
     edges: &[PublishedEdge<'_>],
     originals: &Originals,
+    polygons: Option<&Geometry<f64>>,
     work: &mut Work<'_>,
 ) -> Result<(), LineBooleanError> {
     let mut vertices = CountedVec::new();
@@ -684,6 +741,19 @@ pub(crate) fn verify_publication(
         Ok(())
     })?;
     work.step()?;
+    if let Some(polygons) = polygons {
+        verify_surface_edges(polygons, edges, work)?;
+        super::polygon_boolean::verify_rings(polygons, work)?;
+        let empty = Geometry::MultiPoint(MultiPoint::new(Vec::new()));
+        match super::relate(polygons, &empty, work) {
+            Err(PredicateError::InvalidGeometry { .. }) => {
+                return Err(LineBooleanError::InvalidRoundedTopology);
+            }
+            result => {
+                result?;
+            }
+        }
+    }
     if invalid {
         Err(LineBooleanError::InvalidRoundedTopology)
     } else {

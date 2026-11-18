@@ -8201,6 +8201,56 @@
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding/faces.rs::walk": {
+      "signature": "pub fn walk( arcs: &mut [ArcSide], vertex_count: usize, work: &mut Work<'_>, mut face: impl FnMut(&mut Work<'_>) -> Result<(), PredicateError>, mut ring: impl FnMut(&[usize], &[ArcSide], &mut Work<'_>) -> Result<(), PredicateError>, ) -> Result<(), PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Grafo e callback interni su valori Rust; Result nei callback e il tipo standard, non un risultato Arrow.",
+      "arrow_arguments": [
+        "Result"
+      ]
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::with_deadline_precedence": {
+      "signature": "pub const fn with_deadline_precedence(mut self) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean.rs::default": {
+      "signature": "fn default() -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean.rs::from": {
+      "signature": "fn from(error: line_boolean::LineBooleanError) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean.rs::boolean_with_limits": {
+      "signature": "pub fn boolean_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, operation: PolygonBooleanOp, output_dimension: Option<u8>, limits: PolygonBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PolygonBooleanError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean.rs::union_with_limits": {
+      "signature": "pub fn union_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, limits: PolygonBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PolygonBooleanError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean.rs::intersection_with_limits": {
+      "signature": "pub fn intersection_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, limits: PolygonBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PolygonBooleanError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean.rs::difference_with_limits": {
+      "signature": "pub fn difference_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, limits: PolygonBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PolygonBooleanError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
+      "arrow_arguments": []
     }
   },
   "python": {

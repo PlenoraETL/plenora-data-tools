@@ -1235,3 +1235,4 @@ mod tests {
 pub mod point_boolean;
 
 pub mod line_boolean;
+pub mod polygon_boolean;

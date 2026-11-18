@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 pub mod bounds;
 mod exact;
+pub mod faces;
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod oracle;
@@ -25,6 +26,9 @@ pub struct Work<'a> {
     budget: Rc<storage::Budget>,
     pub nodes: u64,
     exports: CountedVec<storage::Lease>,
+    deadline_first: bool,
+    #[cfg(test)]
+    pub interrupt_at: Option<(u64, bool)>,
 }
 impl<'a> Work<'a> {
     pub fn new(limits: RelateLimits, cancelled: Option<&'a std::sync::atomic::AtomicBool>) -> Self {
@@ -36,13 +40,39 @@ impl<'a> Work<'a> {
             budget: Rc::new(storage::Budget::new(limits.max_reserved_bytes)),
             nodes: 0,
             exports: CountedVec::new(),
+            deadline_first: false,
+            #[cfg(test)]
+            interrupt_at: None,
         }
+    }
+    /// Politica GOP-028 opt-in; i chiamanti preesistenti conservano la precedenza.
+    pub const fn with_deadline_precedence(mut self) -> Self {
+        self.deadline_first = true;
+        self
     }
     pub fn integer(&self, value: i32) -> Result<Q, PredicateError> {
         Q::int_in(value, &self.budget)
     }
 
     pub fn step(&mut self) -> Result<(), PredicateError> {
+        #[cfg(test)]
+        if let Some((at, deadline)) = self.interrupt_at {
+            if self.steps == at {
+                if deadline {
+                    self.limits.deadline = Some(std::time::Instant::now());
+                } else if let Some(flag) = self.cancelled {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+        if self.deadline_first
+            && self
+                .limits
+                .deadline
+                .is_some_and(|d| std::time::Instant::now() >= d)
+        {
+            return Err(PredicateError::DeadlineExceeded);
+        }
         if self
             .cancelled
             .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))

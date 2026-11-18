@@ -322,3 +322,53 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
   simmetrica di GEOS.
 - **Fuori perimetro come per le altre operazioni**: diagnostica per riga,
   envelope e fusione dei segmenti vivevano nell'engine, che non è portato.
+
+## Booleane poligonali Rust con limiti
+
+`plenora_kernels_geo::polygon_boolean` espone `boolean_with_limits` e le
+scorciatoie `union_with_limits`, `intersection_with_limits`,
+`difference_with_limits`. Accetta due Polygon/MultiPolygon validi, XY planari
+finiti nello stesso CRS e ordine degli assi. Le parti di ciascun MultiPolygon
+sono disgiunte anche sul confine; contatti che richiedono normalizzazione,
+GeometryCollection in ingresso, array, molti-a-uno, clip e dissolve sono esclusi.
+Non modifica `topology::boolean_operation` e non introduce semantica Esri.
+
+Il filtro `output_dimension` di `boolean_with_limits` conserva soltanto le
+componenti richieste (0/1/2), senza estrarre confini. Intersezioni di soli lati
+o punti restano esplicite. Risultati omogenei multi; misti GeometryCollection
+con componenti in dimensione crescente. Vuoto generale GeometryCollection;
+vuoto filtrato multi tipizzato. Differenza con chiusura del residuo.
+
+Noding e appartenenza ai settori incidenti sono razionali esatti. L'enumeratore
+dei cicli e' condiviso con polygonize; i contatti ripetuti separano anelli
+semplici. Gusci antiorari e buchi orari, a partire dal minimo XY pubblicato;
+gusci e buchi ordinati per minimo e vertice successivo. Tratti collineari
+nodati conservati. Le componenti lineari sono segmenti atomici ordinati per
+estremi XY; i punti isolati sono unici e ordinati XY.
+
+GOP-015A: nodi costruiti al binary64 piu' vicino, meta' al pari, errore massimo
+1/2 ulp per ordinata nelle unita' delle coordinate. Nessuno snap metrico.
+Vertici originali conservati bit per bit; per siti coincidenti con zeri di
+segno diverso prevale il primo nell'ordine degli operandi. Un solo arrotondatore
+e un solo verificatore della pubblicazione: incidenze, assenza di nuovi
+incroci, orientamento, corrispondenza dei lati serializzati, semplicita' degli
+anelli, buchi nel guscio, interno connesso e interni disgiunti. Collassi e
+inversioni falliscono con `InvalidRoundedTopology`, senza risultato parziale.
+Le componenti escluse dal filtro non sono pubblicate o certificate.
+
+`PolygonBooleanLimits.work` adotta i contatori e le esclusioni di
+`RelateLimits`, inclusa l'aritmetica GOP-027 (massimo per intero 145173 bit
+arrotondati ai limb piu' header). `max_edges` conta le incidenze atomiche prima
+della deduplicazione; `max_faces` conta i cammini chiusi della frontiera
+selezionata, inclusi quelli esterni dei buchi; `max_rings` conta gli anelli
+semplici separati da questi cammini. Non sono stime n*m ne' un tetto RSS.
+Ogni crescita e' prenotata; l'aritmetica addebita il valore appena creato.
+Per decidere il verso non si accumulano aree con denominatori crescenti.
+
+Ogni ciclo controlla lavoro, deadline e cancellazione; una primitiva razionale
+ha dimensione massima finita indipendente dal numero di elementi. Nei confronti
+si elaborano al massimo due punti o raggi fra checkpoint. GOP-028: deadline
+scaduta prima del token; la politica delle API precedenti non cambia. Il limite
+non promette una latenza a tempo reale. Ricostruzione dei successori e verifica
+della corrispondenza dei lati possono richiedere lavoro quadratico, interrotto
+dai contatori reali; non viene promesso un algoritmo subquadratico.
