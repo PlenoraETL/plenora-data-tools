@@ -8159,6 +8159,42 @@
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_text.rs::format_coordinate": {
+      "signature": "pub fn format_coordinate( degrees: f64, axis: GeographicAxis, notation: AngularNotation, decimals: u8, ) -> Result<String, CoordinateTextError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_text.rs::parse_coordinate": {
+      "signature": "pub fn parse_coordinate( text: &str, axis: GeographicAxis, notation: AngularNotation, ) -> Result<f64, CoordinateTextError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/grid_text.rs::format_gars": {
+      "signature": "pub fn format_gars( latitude: f64, longitude: f64, resolution: GarsResolution, ) -> Result<String, GridTextError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/grid_text.rs::format_georef": {
+      "signature": "pub fn format_georef( latitude: f64, longitude: f64, precision: u8, ) -> Result<String, GridTextError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/grid_text.rs::parse_gars": {
+      "signature": "pub fn parse_gars( text: &str, resolution: GarsResolution, representative: CellRepresentative, ) -> Result<DecodedGridCell, GridTextError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/grid_text.rs::parse_georef": {
+      "signature": "pub fn parse_georef( text: &str, precision: u8, representative: CellRepresentative, ) -> Result<DecodedGridCell, GridTextError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
     }
   },
   "python": {

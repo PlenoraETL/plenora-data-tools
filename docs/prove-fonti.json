@@ -1929,6 +1929,13 @@
       "oracolo_razionale_enumerativo",
       "bordi_semplici_e_copertura_deterministici"
     ],
+    "crates/plenora-kernels-geo/tests/coordinate_text.rs": [
+      "analytic_written_expectations",
+      "parsing_written_expectations",
+      "grammar_rejections",
+      "domain_and_precision_rejections",
+      "deterministic_round_trip_bound"
+    ],
     "crates/plenora-kernels-geo/tests/crs_integrati_analisi.rs": [
       "operazioni_con_requisito_proiettato_girano_con_epsg_32632",
       "le_binarie_richiedono_dichiarazioni_identiche_anche_per_alias_crs",
@@ -2014,6 +2021,12 @@
       "distanze_azimut_e_sfera_contro_geographiclib",
       "aree_e_lunghezze_contro_geographiclib",
       "ed50_e_wgs84_non_danno_la_stessa_distanza"
+    ],
+    "crates/plenora-kernels-geo/tests/grid_text.rs": [
+      "standard_examples_and_edges",
+      "quadrant_keypad_and_exact_boundary_ownership",
+      "closed_grammar_and_typed_errors",
+      "cells_and_canonical_roundtrips"
     ],
     "crates/plenora-kernels-geo/tests/griglia_overlay.rs": [
       "booleane_alle_tre_scale",
