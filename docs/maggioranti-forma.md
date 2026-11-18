@@ -20,7 +20,7 @@ rispetto alla coordinata normalizzata psi. La longitudine e' affine.
 | Mercator A (9804) | 1/(a k0) | 1/(1-e^2) | (1+2e^2)/(1-e^2)^2 | Certificato sullo stesso ramo, controllo del residuo isometrico |
 | Transverse Mercator (9807) | 1/(a k0) | phi: 4; lambda: 3 | phi: 20; lambda: 9 | Non separabile; certificato esatto sul rettangolo z sotto definito, resto di Krueger incluso nel residuo a intervalli |
 | Lambert Conic Conformal 2SP (9802) | 1/a | phi: 4; lambda: 3 | phi: 20; lambda: 9 | Composizione polare e inversa isometrica separabile; certificato sul rettangolo LCC sotto definito |
-| Lambert Azimuthal Equal Area (9820) | - | - | - | AccuracyUnproven: non maggiorate le derivate al bordo del disco e dell'inversa autalica |
+| Lambert Azimuthal Equal Area (9820) | 2/a | phi: 4; lambda: 3 | phi: 20; lambda: 9 | Composizione sferica e inversa autalica separabile; rettangolo LAEA sotto definito, bordo del disco escluso |
 | Oblique Stereographic (9809) | - | - | - | AccuracyUnproven: non maggiorata la composizione della rotazione con l'inversa conforme |
 | Hotine Oblique Mercator B (9815) | - | - | - | AccuracyUnproven: non maggiorata la rotazione obliqua con i suoi tagli; il core implementa solo il caso svizzero, angoli 90 gradi |
 
@@ -140,7 +140,7 @@ poligono obliqui. Il pacchetto e' confinato in target/preserve-oracle;
 pyproj non e' disponibile offline. Le fixture a 16384 e 32768 suddivisioni
 sono controlli indipendenti, non una dimostrazione del bound. Le prove C1
 confrontano direttamente la differenza con il bound restituito, senza
-aggiungervi una tolleranza campionaria. I tre metodi non certificati
+aggiungervi una tolleranza campionaria. I due metodi non certificati
 hanno prove del rifiuto; le loro prove numeriche C1 restano da realizzare
 insieme ai maggioranti mancanti.
 
@@ -455,3 +455,139 @@ Una WKT arbitraria non fornisce quindi un secondo CRS riproiettabile.
 Il registro EPSG non e' stato ampliato. Le prove locali dei due segni del
 cono qualificano il certificato numerico, non sostituiscono quella prova
 end-to-end mancante.
+
+## Lambert Azimuthal Equal Area EPSG 9820
+
+Fonti delle formule: [Snyder 1987, capitolo 24, pp. 182-190](https://pubs.usgs.gov/publication/pp1395),
+in particolare equazioni 24-17--24-29 per l'aspetto ellissoidico;
+[EPSG GN 7-2, settembre 2019, capitolo 3.3.2, pp. 78-80](https://www.iogp.org/wp-content/uploads/2019/09/373-07-02.pdf)
+per il metodo del motore. I maggioranti qui sotto sono derivati dalle
+formule, non attribuiti alle fonti. L'inversa autalica viene risolta
+esattamente mediante residuo; non si certifica una serie troncata in beta.
+
+### Disco del motore e dominio qualificato
+
+Con q=e^2, s=sin(phi), si definiscono:
+
+```text
+A(s)=(1-q)[s/(1-q s^2)+atanh(e s)/e]
+Ap=A(1); sin(beta)=A(s)/Ap
+Rq=a sqrt(Ap/2); m0=cos(phi0)/sqrt(1-q sin(phi0)^2)
+s0=sin(beta0); c0=cos(beta0); D=a m0/(Rq c0)
+u=(x-FE)/(Rq D); v=D(y-FN)/Rq; r^2=u^2+v^2
+T=1-r^2/2; W=sqrt(1-r^2/4)
+X=u W; Y=c0 T-s0 v W; Z=s0 T+c0 v W
+lambda=lambda0+atan2(X,Y); A(sin(phi))=Ap Z
+```
+
+La forma X,Y,Z elimina la divisione per rho e vale anche all'origine.
+Il core ammette r<=2, salvo ulteriori limiti del CRS. Al bordo r=2,
+W=0: tutte le direzioni convergono all'antipodo e W' diverge. Non esiste
+un maggiorante finito uniforme delle derivate su quel disco chiuso.
+Il certificato preserveShape lo restringe intenzionalmente al rettangolo
+aperto |u|<0.1, |v|<0.1. Bordo, esterno e appartenenza stretta non provata
+sono AccuracyUnproven, prima dell'inversa del core, anche sul bordo r=2.
+Il dominio ordinario di riproiezione non viene modificato.
+
+Parametri qualificati: 6000000<=a<=7000000 m, 0<=q<=0.008,
+|phi0|<0.92, |beta0|<0.92, c0>0.605, |lambda0|<2 radianti;
+false origini finite di modulo <=20000000 m. Entrambi i divisori
+Rq D e Rq/D devono essere strettamente tra a/2 e 2a. Tutte queste
+condizioni sono controllate con intervalli, inclusa beta0 tramite seno.
+La scala comune 2/a maggiora entrambe le scale cartesiane: per ogni
+retta h=|(u',v')| <= 2(|x'|+|y'|)/a.
+
+Il rettangolo e' convesso, u e v affini: il controllo degli estremi prova
+l'intero segmento e gli interni degli anelli, non solo i campioni.
+Qui r<sqrt(0.02), W>sqrt(0.995), T>0.99, Y>0.605*0.99-0.8*0.1>0.51.
+La longitudine resta a distanza dal taglio: |lambda-lambda0|<atan(0.1/0.51)<0.194,
+dunque |lambda|<2.194<pi e l'ampiezza della striscia e' <pi.
+La mappa sferica del disco aperto e' iniettiva (inversa della LAEA
+sferica), la rotazione conserva l'iniettivita' e A e' strettamente
+crescente. Nessun polo o taglio entra nel rettangolo qualificato.
+
+### Derivate e componente separabile autalica
+
+Per una retta, usando la norma euclidea e h=|(u',v')|:
+
+```text
+|W'| <= r h/(4W) < 0.036 h
+|W''| <= h^2/(4W)+r^2 h^2/(16W^3) < 0.253 h^2
+|T'| <= r h; |T''|=h^2
+|(X,Y,Z)'| <= sqrt((1+r*0.036)^2+r^2) h < 1.02 h
+|(X,Y,Z)''| <= sqrt((2*0.036+r*0.253)^2+1) h^2 < 1.2 h^2
+```
+
+La rotazione (vW,T) in (Y,Z) conserva queste norme. Per atan2,
+la norma del gradiente e' 1/H e quella della Hessiana e' 1/H^2,
+H=sqrt(X^2+Y^2)>0.51. Quindi:
+
+```text
+|lambda'| < 1.02/0.51 h < 3h
+|lambda''| < [1.2/0.51+1.02^2/0.51^2] h^2 < 9h^2
+```
+
+La distanza angolare dal centro e' c=2 asin(r/2)<0.142;
+|beta|<1.062. Perche' la stima autalica non sia circolare, si usa
+A_s=2(1-q)/(1-q s^2)^2 e Ap<=2/(1-q), da cui
+A(s)/Ap >= (1-q)^2 s per s>=0. Pertanto
+A(sin(1.1))/Ap >=0.992^2 sin(1.1)>0.877,
+mentre |Z|<=sin(1.062)<0.874: per monotonia |phi|<1.1.
+Sul dominio cos(phi)>0.453 e l'inversa separabile phi=F(Z) ha:
+
+```text
+F_Z=Ap (1-q sin(phi)^2)^2/[2(1-q)cos(phi)]
+|F_Z| <= 1/[0.992^2 cos(1.1)] < 2.25
+|d F_Z/d phi| <= 2.25 [tan(1.1)+4*0.008/0.992] < 4.51
+|F_ZZ| < 4.51*2.25 < 10.15
+|phi'| < 2.25*1.02 h < 4h
+|phi''| < [10.15*1.02^2+2.25*1.2]h^2 < 20h^2
+```
+
+Si riusano dunque i maggioranti comuni lambda 3/9, phi 4/20,
+il resto ECEF 1.1a78h^2 e quello area 8.25a^2h^3. La mappa XY
+non e' separabile: solo l'ultimo passaggio autalico lo e'.
+
+### Certificato numerico e margini
+
+[azimuthal.rs](../crates/plenora-kernels-geo/src/preserve_shape_measure/certificate/azimuthal.rs)
+ricostruisce q, Ap, s0, c0 e i divisori dai parametri del registro con
+ShapeInterval, seno/coseno a serie e radice IEEE 754. Non usa le
+costanti libm memorizzate dal core. Per evitare divisioni per e e
+cancellazioni logaritmiche, valuta:
+
+```text
+atanh(e s)/e = sum(k=0..12) q^k s^(2k+1)/(2k+1) + resto
+|resto| <= 0.008^13/[27*(1-0.008)] < 1e-28
+```
+
+Vale anche per q=0, |s|<=1; ogni operazione e il resto sono ampliati
+verso l'esterno. Le altre serie sono quelle gia' documentate per TM.
+Si confrontano atan(X/Y)+lambda0 con lambda_core e A(sin(phi_core))
+con Ap Z. Si richiede anche |phi_core|<1.1. Poiche'
+d A(sin(phi))/d phi >=2*0.992*cos(1.1)>1/1.13,
+il residuo autalico moltiplicato verso l'alto per 1.13 maggiora
+l'errore in phi, con entrambi gli estremi nel dominio dimostrato.
+Ogni errore angolare deve essere <=2048epsilon radianti; un intervallo
+piu' largo o non finito rifiuta. Non si presume precisione da libm,
+dalla convergenza del Newton o da un confronto fra raffinamenti.
+
+Si riusano i margini comuni TM/LCC: 30 micrometri per sottosegmento e
+16384epsilon a^2 per l'area. Qui |x|,|y|<21400000 m e i divisori>a/2:
+l'errore normalizzato delle interpolazioni e' inferiore a 64epsilon,
+come nel dominio LCC; le stesse costanti 3/9/4/20 lasciano margine nei
+budget comuni. La disponibilita' numerica puo' restringere ulteriormente
+il rettangolo; tolleranze o budget insufficienti restano errori espliciti.
+
+### Prove C1 indipendenti
+
+[laea.py](../crates/plenora-kernels-geo/tests/fixtures/preserve_shape/laea.py)
+implementa la formula con c=2 asin(rho/(2Rq)), bisezione autalica e
+GeographicLib Python 2.1. La copia eseguita e il pacchetto sono sotto
+target/preserve-oracle; nessun import del kernel Rust. Linea e poligono
+EPSG:3035, unico CRS LAEA del registro, sono misurati a 16384 e 32768
+suddivisioni. La differenza dal riferimento a 32768 deve stare nel bound
+restituito senza tolleranza aggiuntiva. Il riferimento campionario e'
+un controllo indipendente, non la dimostrazione del bound.
+Sono inoltre provati i quattro bordi del rettangolo, il bordo e l'esterno
+del disco, residui alterati, non finiti e l'origine nei due emisferi.

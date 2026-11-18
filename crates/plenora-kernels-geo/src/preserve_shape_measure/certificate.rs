@@ -3,6 +3,8 @@
 
 use super::ShapeMeasureError;
 
+mod azimuthal;
+pub(super) use azimuthal::AzimuthalCertificate;
 mod lambert;
 pub(super) use lambert::LambertCertificate;
 mod transverse;

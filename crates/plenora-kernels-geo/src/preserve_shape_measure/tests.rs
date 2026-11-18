@@ -258,8 +258,8 @@ fn typed_domain_and_topology_errors_without_data() {
             Err(ShapeMeasureError::InvalidTolerance)
         );
     }
-    // GOP-006: LAEA rimane priva di maggiorante qualificato.
-    let unproven = resolve_crs("EPSG:3035", "crs").unwrap();
+    // GOP-006: stereografica obliqua priva di maggiorante qualificato.
+    let unproven = resolve_crs("EPSG:28992", "crs").unwrap();
     assert_eq!(
         preserve_shape_length_with_limits(&[], &unproven, tolerance(1.0), limits(), None),
         Err(ShapeMeasureError::AccuracyUnproven)
@@ -436,7 +436,7 @@ fn projected_domain_edges_and_unproven_methods_are_rejected() {
             );
         }
     }
-    for code in ["EPSG:3035", "EPSG:28992", "EPSG:2056"] {
+    for code in ["EPSG:28992", "EPSG:2056"] {
         let crs = resolve_crs(code, "crs").unwrap();
         assert_eq!(
             preserve_shape_length_with_limits(&[], &crs, tolerance(1.0), limits(), None),
@@ -588,6 +588,92 @@ fn lambert_proof_domain_boundary_is_rejected() {
             Err(ShapeMeasureError::AccuracyUnproven)
         );
         let polygon = Polygon::new(rectangle(690_000.0, 6_500_000.0, x, y), vec![]);
+        assert_eq!(
+            preserve_shape_area_with_limits(
+                &[polygon],
+                &crs,
+                tolerance(1_000_000.0),
+                limits(),
+                None
+            ),
+            Err(ShapeMeasureError::AccuracyUnproven)
+        );
+    }
+}
+
+// C1: Snyder 1987 cap. 24; EPSG GN 7-2 3.3.2; driver laea.py e GeographicLib Python 2.1.
+// La fixture usa bisezione della latitudine autalica e nessun import Rust.
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn azimuthal_line_and_polygon_against_independent_reference() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/preserve_shape/laea.json"
+    ))
+    .unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let code = format!("EPSG:{}", case["epsg"].as_u64().unwrap());
+        let crs = resolve_crs(&code, "crs").unwrap();
+        let coordinates = |name: &str| {
+            LineString::from(
+                case[name]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|point| (point[0].as_f64().unwrap(), point[1].as_f64().unwrap()))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let measured = preserve_shape_length_with_limits(
+            &[coordinates("line_xy")],
+            &crs,
+            tolerance(2.0),
+            limits(),
+            None,
+        )
+        .unwrap();
+        let expected = case["measurements"]["32768"]["length_m"].as_f64().unwrap();
+        assert!((measured.value - expected).abs() <= measured.absolute_error_bound);
+        let measured = preserve_shape_area_with_limits(
+            &[Polygon::new(coordinates("ring_xy"), vec![])],
+            &crs,
+            tolerance(10_000_000.0),
+            limits(),
+            None,
+        )
+        .unwrap();
+        let expected = case["measurements"]["32768"]["area_m2"].as_f64().unwrap();
+        assert!((measured.value - expected).abs() <= measured.absolute_error_bound);
+    }
+}
+
+// C1: Snyder cap. 24, disco rho<=2 Rq; rettangolo qualificato e bordo del disco rifiutati.
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn azimuthal_proof_domain_and_disk_boundary_are_rejected() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/preserve_shape/laea.json"
+    ))
+    .unwrap();
+    let crs = resolve_crs("EPSG:3035", "crs").unwrap();
+    let dx = fixture["x_divisor"].as_f64().unwrap();
+    let dy = fixture["y_divisor"].as_f64().unwrap();
+    for (u, v) in [
+        (0.1, 0.0),
+        (-0.1, 0.0),
+        (0.0, 0.1),
+        (0.0, -0.1),
+        (2.0, 0.0),
+        (0.0, -2.0),
+        (2.1, 0.0),
+    ] {
+        let x = 4_321_000.0 + u * dx;
+        let y = 3_210_000.0 + v * dy;
+        let line = LineString::from(vec![(4_321_000.0, 3_210_000.0), (x, y)]);
+        assert_eq!(
+            preserve_shape_length_with_limits(&[line], &crs, tolerance(2.0), limits(), None),
+            Err(ShapeMeasureError::AccuracyUnproven)
+        );
+        let polygon = Polygon::new(rectangle(4_311_000.0, 3_200_000.0, x, y), vec![]);
         assert_eq!(
             preserve_shape_area_with_limits(
                 &[polygon],

@@ -129,10 +129,7 @@ impl Proiezione {
             }
             Self::Tm(p) => InverseShapeCertificate::TransverseMercator(p.shape_parameters),
             Self::Lcc(p) => InverseShapeCertificate::LambertConicConformal(p.shape_parameters),
-            Self::Laea(_) => InverseShapeCertificate::Unproven {
-                method: 9820,
-                reason: "derivate presso il bordo del disco e inversa autalica non maggiorate",
-            },
+            Self::Laea(p) => InverseShapeCertificate::LambertAzimuthalEqualArea(p.shape_parameters),
             Self::Stereo(_) => InverseShapeCertificate::Unproven {
                 method: 9809,
                 reason: "derivate della rotazione e inversa conforme non maggiorate",
@@ -584,6 +581,7 @@ impl Lcc {
 
 #[derive(Clone, Debug)]
 pub(in crate::crs) struct Laea {
+    shape_parameters: super::AzimuthalShapeBounds,
     e: f64,
     lon0: f64,
     qp: f64,
@@ -617,6 +615,13 @@ impl Laea {
             qp,
             rq,
             d,
+            shape_parameters: super::AzimuthalShapeBounds {
+                semi_major_axis: a,
+                latitude_origin: lat0,
+                longitude_origin: lon0,
+                false_easting: falsa_est,
+                false_northing: falsa_nord,
+            },
             seno_beta0: beta0.sin(),
             coseno_beta0: beta0.cos(),
             falsa_est,

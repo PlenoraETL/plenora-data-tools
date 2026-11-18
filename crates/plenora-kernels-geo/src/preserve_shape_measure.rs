@@ -163,6 +163,7 @@ enum ShapeDerivatives {
     Separable(SeparableShapeBounds),
     Transverse(certificate::TransverseCertificate),
     Lambert(certificate::LambertCertificate),
+    Azimuthal(certificate::AzimuthalCertificate),
 }
 
 struct ShapeContext {
@@ -203,6 +204,12 @@ impl ShapeContext {
             InverseShapeCertificate::LambertConicConformal(bounds) => ShapeDerivatives::Lambert(
                 certificate::LambertCertificate::new(bounds, parameters.inverse_flattening)?,
             ),
+            InverseShapeCertificate::LambertAzimuthalEqualArea(bounds) => {
+                ShapeDerivatives::Azimuthal(certificate::AzimuthalCertificate::new(
+                    bounds,
+                    parameters.inverse_flattening,
+                )?)
+            }
             InverseShapeCertificate::Unproven { .. } => {
                 return Err(ShapeMeasureError::AccuracyUnproven)
             }
@@ -227,6 +234,9 @@ impl ShapeContext {
         if let ShapeDerivatives::Lambert(certificate) = &self.derivatives {
             certificate.check_domain(point.x, point.y)?;
         }
+        if let ShapeDerivatives::Azimuthal(certificate) = &self.derivatives {
+            certificate.check_domain(point.x, point.y)?;
+        }
         let (x, y) = self
             .projection
             .geografiche_sorgente(point.x, point.y)
@@ -236,6 +246,9 @@ impl ShapeContext {
                 certificate.certify(point.x, point.y, x, y)?;
             }
             if let ShapeDerivatives::Lambert(certificate) = &self.derivatives {
+                certificate.certify(point.x, point.y, x, y)?;
+            }
+            if let ShapeDerivatives::Azimuthal(certificate) = &self.derivatives {
                 certificate.certify(point.x, point.y, x, y)?;
             }
             return Ok(Coord { x, y });
@@ -273,6 +286,7 @@ impl ShapeContext {
             ShapeDerivatives::Separable(bounds) => bounds.angular_scale,
             ShapeDerivatives::Transverse(certificate) => certificate.scale(),
             ShapeDerivatives::Lambert(certificate) => certificate.scale(),
+            ShapeDerivatives::Azimuthal(certificate) => certificate.scale(),
         };
         let dx = (end.x - start.x) * scale / f64::from(divisions);
         let dy = (end.y - start.y) * scale / f64::from(divisions);
@@ -327,7 +341,7 @@ fn result(
 /// Parti vuote e coordinate ripetute contribuiscono zero. Il campionamento
 /// raddoppia adattivamente finche' il bound analitico soddisfa la tolleranza.
 /// Memoria ausiliaria costante, nessun vettore di punti campionati.
-/// Dominio certificato: geografici, i due Mercator, TM e LCC sui rettangoli qualificati.
+/// Dominio certificato: geografici, i due Mercator, TM, LCC e LAEA nei domini qualificati.
 ///
 /// # Errors
 /// [`ShapeMeasureError`], nessun risultato parziale. Gli altri CRS
@@ -395,7 +409,9 @@ fn length_edge(
                 1e-6,
             )
         }
-        ShapeDerivatives::Transverse(_) | ShapeDerivatives::Lambert(_) => {
+        ShapeDerivatives::Transverse(_)
+        | ShapeDerivatives::Lambert(_)
+        | ShapeDerivatives::Azimuthal(_) => {
             let delta = dx.abs() + dy.abs();
             (7.0 * delta, 1.1 * a * 78.0 * delta.powi(2), 3e-5)
         }
@@ -537,7 +553,9 @@ fn ring_area(
                             * (derivative_bound * dy * dy / 24.0 + 512.0 * f64::EPSILON),
                     );
                 }
-                ShapeDerivatives::Transverse(_) | ShapeDerivatives::Lambert(_) => {
+                ShapeDerivatives::Transverse(_)
+                | ShapeDerivatives::Lambert(_)
+                | ShapeDerivatives::Azimuthal(_) => {
                     let end = context.convert(
                         interpolated(pair[0], pair[1], f64::from(i + 1) / f64::from(divisions)),
                         work,
