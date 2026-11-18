@@ -1624,7 +1624,18 @@
       "clone_drop_and_arithmetic_share_the_live_budget",
       "exact_threshold_and_single_value_overshoot",
       "failed_clone_releases_partial_receipts_and_rejects_foreign_budgets",
+      "accumulator_rejects_before_oversized_integer_creation",
       "counted_arithmetic_matches_the_generic_oracle"
+    ],
+    "crates/plenora-kernels-geo/src/noding/faces/tests.rs": [
+      "exhaustive_rational_faces",
+      "provenance_survives_overlaps_reversal_and_point_contacts",
+      "residual_edges_are_not_ring_edges",
+      "provenance_growth_has_exact_resource_thresholds",
+      "nested_components_keep_hole_provenance",
+      "interruption_between_noding_and_face_enumeration",
+      "public_completion_against_independent_cycles_with_rational_noding",
+      "public_completion_oracle_nested_component_and_dangle"
     ],
     "crates/plenora-kernels-geo/src/noding/storage.rs": [
       "capacity_lifetime_and_failed_growth",
@@ -1719,6 +1730,23 @@
       "polygon_union_filters_and_typed_errors",
       "point_sets_against_generic_matrix",
       "polygon_pair_budget_exact_threshold"
+    ],
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_completion/tests.rs": [
+      "one_and_two_faces_canonical_and_valid",
+      "point_contacts_residuals_and_line_only_faces",
+      "occupied_empty_and_preexisting_holes",
+      "holes_are_clockwise_sorted_and_input_permutation_invariant",
+      "unsupported_provenance_overlap_and_nonsimple_lines",
+      "invalid_inputs_are_typed_and_without_data",
+      "rational_constructed_coordinates_and_original_bits",
+      "exact_resource_thresholds",
+      "deadline_precedence_is_local_to_completion",
+      "cancellation_and_deadline_after_work_started",
+      "unpublished_intersections_do_not_force_rounding",
+      "rounded_boundary_node_outside_original_support_is_rejected",
+      "canonical_area_and_sequence_ties",
+      "existing_role_on_hole_and_subnormal_collapse",
+      "open_input_rings_are_not_implicitly_closed"
     ],
     "crates/plenora-kernels-geo/src/predicates/interval_index.rs": [
       "sparse_queries_have_analytic_work",
