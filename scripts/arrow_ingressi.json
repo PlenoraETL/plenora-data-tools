@@ -8039,6 +8039,30 @@
       "classification": "non riceve dati esterni",
       "reason": "Kernel su geometrie Rust e CRS risolto, oppure ordinamento interno delle celle metriche; nessun dato Arrow ricevuto.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_buffer.rs::len": {
+      "signature": "pub const fn len(&self) -> usize",
+      "classification": "non riceve dati esterni",
+      "reason": "API geo XY e sequenza di poligoni vuoti; nessun ingresso di buffer o celle Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_buffer.rs::is_empty": {
+      "signature": "pub const fn is_empty(&self) -> bool",
+      "classification": "non riceve dati esterni",
+      "reason": "API geo XY e sequenza di poligoni vuoti; nessun ingresso di buffer o celle Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_buffer.rs::iter": {
+      "signature": "pub fn iter(&self) -> impl ExactSizeIterator<Item = Polygon> + '_",
+      "classification": "non riceve dati esterni",
+      "reason": "API geo XY e sequenza di poligoni vuoti; nessun ingresso di buffer o celle Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_buffer.rs::geodesic_empty_buffer_with_limits": {
+      "signature": "pub fn geodesic_empty_buffer_with_limits<'a>( inputs: &[Geometry], crs: &'a ResolvedCrs, radii_m: &[f64], union_results: bool, limits: DegenerateBufferLimits, cancelled: Option<&AtomicBool>, ) -> Result<DegenerateBufferResult<'a>, DegenerateBufferError>",
+      "classification": "non riceve dati esterni",
+      "reason": "API geo XY e sequenza di poligoni vuoti; nessun ingresso di buffer o celle Arrow.",
+      "arrow_arguments": []
     }
   },
   "python": {

@@ -2313,5 +2313,10 @@
     "[[\"token\",\"let\"],[\"token\",\"crs\"],[\"token\",\"=\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
     "[[\"token\",\"b\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:3857\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
     "[[\"token\",\"crossed\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/geodesic_buffer.rs": [
+    "[[\"token\",\"&\"],[\"token\",\"'\"],[\"token\",\"static\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"shortest_geodesic\"],[\"token\",\";\"],[\"token\",\"pub\"],[\"token\",\"const\"],[\"token\",\"UNIT\"],[\"token\",\":\"]]",
+    "[[\"token\",\"&\"],[\"token\",\"'\"],[\"token\",\"static\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"metre\"],[\"token\",\";\"],[\"token\",\"pub\"],[\"token\",\"const\"],[\"token\",\"ABSOLUTE_M\"],[\"token\",\":\"]]",
+    "[[\"token\",\",\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"error\"],[\"token\",\"(\"],[\"string\",\"GEOMETRY_ACCURACY_UNPROVEN\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"AccuracyUnproven\"],[\"token\",\",\"],[\"token\",\"#\"]]"
   ]
 }

@@ -38,6 +38,7 @@ pub mod extended_algorithms;
 pub mod extensions;
 pub mod extensions2;
 pub mod extensions3;
+pub mod geodesic_buffer;
 pub mod geodesic_densify;
 pub mod geodesic_distance;
 pub mod geodetica;
