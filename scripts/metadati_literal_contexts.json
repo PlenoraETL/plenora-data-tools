@@ -2366,9 +2366,6 @@
     "[[\"token\",\"{\"],[\"token\",\"a\"],[\"token\",\".\"],[\"token\",\"validate_rings\"],[\"token\",\"(\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
     "[[\"token\",\"{\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]"
   ],
-  "crates/plenora-kernels-geo/src/grid_text.rs": [
-    "[[\"token\",\";\"],[\"token\",\"2\"],[\"token\",\"4\"],[\"token\",\"]\"],[\"token\",\"=\"],[\"string\",\"ABCDEFGHJKLMNPQRSTUVWXYZ\"],[\"token\",\";\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"derive\"],[\"token\",\"(\"]]"
-  ],
   "crates/plenora-kernels-geo/src/coordinate_mgrs.rs": [
     "[[\"token\",\"&\"],[\"token\",\"[\"],[\"token\",\"u8\"],[\"token\",\"]\"],[\"token\",\"=\"],[\"string\",\"ABCDEFGHJKLMNPQRSTUV\"],[\"token\",\";\"],[\"token\",\"const\"],[\"token\",\"COLUMNS\"],[\"token\",\":\"],[\"token\",\"[\"]]",
     "[[\"token\",\"&\"],[\"token\",\"[\"],[\"token\",\"u8\"],[\"token\",\"]\"],[\"token\",\"=\"],[\"string\",\"CDEFGHJKLMNPQRSTUVWX\"],[\"token\",\";\"],[\"token\",\"const\"],[\"token\",\"ROWS\"],[\"token\",\":\"],[\"token\",\"&\"]]",
@@ -2380,5 +2377,8 @@
   ],
   "crates/plenora-kernels-geo/src/coordinate_api.rs": [
     "[[\"token\",\"STANDARD_V1\"],[\"token\",\":\"],[\"token\",\"&\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"standard_v1\"],[\"token\",\";\"],[\"token\",\"pub\"],[\"token\",\"const\"],[\"token\",\"MAX_TEXT_BYTES\"],[\"token\",\":\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/grid_text.rs": [
+    "[[\"token\",\";\"],[\"token\",\"2\"],[\"token\",\"4\"],[\"token\",\"]\"],[\"token\",\"=\"],[\"string\",\"ABCDEFGHJKLMNPQRSTUVWXYZ\"],[\"token\",\";\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"derive\"],[\"token\",\"(\"]]"
   ]
 }

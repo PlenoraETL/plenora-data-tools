@@ -1532,6 +1532,15 @@
       "shared_paths_rejects_non_polygonal_inputs_and_encodes_rows",
       "coppie_candidate_a_capacita_esatta"
     ],
+    "crates/plenora-kernels-geo/src/geodesic_densify/tests.rs": [
+      "equator_analytic_and_exact_budget",
+      "meridian_and_pole_from_metric_integral",
+      "published_long_oblique_and_unique_near_antipodes",
+      "ambiguities_domains_and_controls",
+      "multipart_empty_closure_seam_and_duplicates",
+      "rounding_cannot_choose_an_antipodal_branch_or_hide_a_short_edge",
+      "exact_seam_identity_and_numeric_length_threshold"
+    ],
     "crates/plenora-kernels-geo/src/geodetica.rs": [
       "i_parametri_fuori_dominio_non_danno_un_ellissoide",
       "un_crs_senza_ellissoide_si_rifiuta",
@@ -1928,15 +1937,6 @@
       "oracolo_razionale_enumerativo",
       "bordi_semplici_e_copertura_deterministici"
     ],
-    "crates/plenora-kernels-geo/tests/coordinate_api.rs": [
-      "normative_vectors_both_directions",
-      "enumeration_and_every_inapplicable_option",
-      "datums_profiles_and_option_values_are_closed",
-      "atomic_limits_and_private_errors",
-      "cell_extents_representatives_and_nad27",
-      "angular_pair_grammar_and_rounding",
-      "geographic_cells_and_batch_order"
-    ],
     "crates/plenora-kernels-geo/tests/coordinate_mgrs.rs": [
       "independent_numeric_oracle",
       "source_worked_examples_and_representatives",
@@ -2047,12 +2047,6 @@
       "distanze_azimut_e_sfera_contro_geographiclib",
       "aree_e_lunghezze_contro_geographiclib",
       "ed50_e_wgs84_non_danno_la_stessa_distanza"
-    ],
-    "crates/plenora-kernels-geo/tests/grid_text.rs": [
-      "standard_examples_and_edges",
-      "quadrant_keypad_and_exact_boundary_ownership",
-      "closed_grammar_and_typed_errors",
-      "cells_and_canonical_roundtrips"
     ],
     "crates/plenora-kernels-geo/tests/griglia_overlay.rs": [
       "booleane_alle_tre_scale",

@@ -8154,6 +8154,54 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
     },
+    "crates/plenora-kernels-geo/src/geodesic_densify.rs::geodesic_densify_with_limits": {
+      "signature": "pub fn geodesic_densify_with_limits( parts: &[LineString<f64>], crs: &ResolvedCrs, maximum_m: f64, limits: GeodesicDensifyLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<LineString<f64>>, GeodesicDensifyError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/crs/riproiezione/ups.rs::project_ups_wgs84": {
+      "signature": "pub fn project_ups_wgs84( north: bool, inverse: bool, x: f64, y: f64, ) -> Result<(f64, f64), CrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/crs/riproiezione/utm.rs::inverse_utm_cell": {
+      "signature": "pub fn inverse_utm_cell( ellipsoid: GridEllipsoid, zone: u8, north: bool, x: f64, y: f64, ) -> Result<(f64, f64), CrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/crs/riproiezione/utm.rs::inverse_utm_cell_wgs84": {
+      "signature": "pub fn inverse_utm_cell_wgs84( zone: u8, north: bool, x: f64, y: f64, ) -> Result<(f64, f64), CrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/crs/riproiezione/utm.rs::project_utm": {
+      "signature": "pub fn project_utm( ellipsoid: GridEllipsoid, zone: u8, north: bool, inverse: bool, x: f64, y: f64, ) -> Result<(f64, f64), CrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/crs/riproiezione/utm.rs::project_utm_wgs84": {
+      "signature": "pub fn project_utm_wgs84( zone: u8, north: bool, inverse: bool, x: f64, y: f64, ) -> Result<(f64, f64), CrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_mgrs.rs::format_mgrs": {
+      "signature": "pub fn format_mgrs(longitude: f64, latitude: f64, digits: u8) -> Result<String, MgrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_mgrs.rs::parse_mgrs": {
+      "signature": "pub fn parse_mgrs( text: &str, representative: CellRepresentative, ) -> Result<DecodedMgrs, MgrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
     "crates/plenora-kernels-geo/src/coordinate_text.rs::format_coordinate": {
       "signature": "pub fn format_coordinate( degrees: f64, axis: GeographicAxis, notation: AngularNotation, decimals: u8, ) -> Result<String, CoordinateTextError>",
       "classification": "non riceve dati esterni",
@@ -8162,6 +8210,138 @@
     },
     "crates/plenora-kernels-geo/src/coordinate_text.rs::parse_coordinate": {
       "signature": "pub fn parse_coordinate( text: &str, axis: GeographicAxis, notation: AngularNotation, ) -> Result<f64, CoordinateTextError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_usng.rs::format_usng": {
+      "signature": "pub fn format_usng( longitude: f64, latitude: f64, digits: u8, datum: UsngDatum, ) -> Result<String, UsngError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_usng.rs::from": {
+      "signature": "fn from(error: MgrsError) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_usng.rs::parse_usng": {
+      "signature": "pub fn parse_usng( text: &str, datum: UsngDatum, representative: CellRepresentative, ) -> Result<DecodedUsng, UsngError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_utm.rs::format_utm": {
+      "signature": "pub fn format_utm(lon: f64, lat: f64, resolution_m: u8) -> Result<String, UtmError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_utm.rs::from_utm": {
+      "signature": "pub fn from_utm(value: UtmCoordinate) -> Result<(f64, f64), UtmError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_utm.rs::parse_utm": {
+      "signature": "pub fn parse_utm(text: &str) -> Result<(f64, f64), UtmError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_utm.rs::to_utm": {
+      "signature": "pub fn to_utm(lon: f64, lat: f64) -> Result<UtmCoordinate, UtmError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::decode_coordinate": {
+      "signature": "pub fn decode_coordinate( request: CoordinateRequest<'_>, text: &str, ) -> Result<DecodedCoordinate, CoordinateApiError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::decode_coordinates": {
+      "signature": "pub fn decode_coordinates( request: CoordinateRequest<'_>, texts: &[&str], ) -> Result<Vec<DecodedCoordinate>, CoordinateApiError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::encode_coordinate": {
+      "signature": "pub fn encode_coordinate( request: CoordinateRequest<'_>, point: CoordinatePoint, ) -> Result<String, CoordinateApiError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::encode_coordinates": {
+      "signature": "pub fn encode_coordinates( request: CoordinateRequest<'_>, points: &[CoordinatePoint], ) -> Result<Vec<String>, CoordinateApiError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::from": {
+      "signature": "fn from(kind: CoordinateErrorKind) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::from#2": {
+      "signature": "fn from(value: CoordinateTextError) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::from#3": {
+      "signature": "fn from(value: UtmError) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::from#4": {
+      "signature": "fn from(value: MgrsError) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::from#5": {
+      "signature": "fn from(value: UsngError) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::from#6": {
+      "signature": "fn from(value: GridTextError) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::from_str": {
+      "signature": "fn from_str(value: &str) -> Result<Self, Self::Err>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::from_str#2": {
+      "signature": "fn from_str(value: &str) -> Result<Self, Self::Err>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::from_str#3": {
+      "signature": "fn from_str(value: &str) -> Result<Self, Self::Err>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::kind": {
+      "signature": "pub const fn kind(self) -> CoordinateOptionKind",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::rule": {
+      "signature": "pub const fn rule(self) -> CoordinateFormatRule",
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
@@ -8188,180 +8368,6 @@
       "signature": "pub fn parse_georef( text: &str, precision: u8, representative: CellRepresentative, ) -> Result<DecodedGridCell, GridTextError>",
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-core/src/crs/riproiezione/utm.rs::project_utm_wgs84": {
-      "signature": "pub fn project_utm_wgs84( zone: u8, north: bool, inverse: bool, x: f64, y: f64, ) -> Result<(f64, f64), CrsError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate numeriche scalari WGS84 e testo ASCII; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_utm.rs::to_utm": {
-      "signature": "pub fn to_utm(lon: f64, lat: f64) -> Result<UtmCoordinate, UtmError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate numeriche scalari WGS84 e testo ASCII; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_utm.rs::from_utm": {
-      "signature": "pub fn from_utm(value: UtmCoordinate) -> Result<(f64, f64), UtmError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate numeriche scalari WGS84 e testo ASCII; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_utm.rs::format_utm": {
-      "signature": "pub fn format_utm(lon: f64, lat: f64, resolution_m: u8) -> Result<String, UtmError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate numeriche scalari WGS84 e testo ASCII; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_utm.rs::parse_utm": {
-      "signature": "pub fn parse_utm(text: &str) -> Result<(f64, f64), UtmError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate numeriche scalari WGS84 e testo ASCII; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-core/src/crs/riproiezione/ups.rs::project_ups_wgs84": {
-      "signature": "pub fn project_ups_wgs84( north: bool, inverse: bool, x: f64, y: f64, ) -> Result<(f64, f64), CrsError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari WGS84 e testo ASCII limitato; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-core/src/crs/riproiezione/utm.rs::inverse_utm_cell_wgs84": {
-      "signature": "pub fn inverse_utm_cell_wgs84( zone: u8, north: bool, x: f64, y: f64, ) -> Result<(f64, f64), CrsError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari WGS84 e testo ASCII limitato; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_mgrs.rs::format_mgrs": {
-      "signature": "pub fn format_mgrs(longitude: f64, latitude: f64, digits: u8) -> Result<String, MgrsError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari WGS84 e testo ASCII limitato; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_mgrs.rs::parse_mgrs": {
-      "signature": "pub fn parse_mgrs( text: &str, representative: CellRepresentative, ) -> Result<DecodedMgrs, MgrsError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari WGS84 e testo ASCII limitato; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-core/src/crs/riproiezione/utm.rs::inverse_utm_cell": {
-      "signature": "pub fn inverse_utm_cell( ellipsoid: GridEllipsoid, zone: u8, north: bool, x: f64, y: f64, ) -> Result<(f64, f64), CrsError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari su ellissoide esplicito e testo ASCII limitato; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-core/src/crs/riproiezione/utm.rs::project_utm": {
-      "signature": "pub fn project_utm( ellipsoid: GridEllipsoid, zone: u8, north: bool, inverse: bool, x: f64, y: f64, ) -> Result<(f64, f64), CrsError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari su ellissoide esplicito e testo ASCII limitato; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_usng.rs::from": {
-      "signature": "fn from(error: MgrsError) -> Self",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari su ellissoide esplicito e testo ASCII limitato; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_usng.rs::format_usng": {
-      "signature": "pub fn format_usng( longitude: f64, latitude: f64, digits: u8, datum: UsngDatum, ) -> Result<String, UsngError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari su ellissoide esplicito e testo ASCII limitato; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_usng.rs::parse_usng": {
-      "signature": "pub fn parse_usng( text: &str, datum: UsngDatum, representative: CellRepresentative, ) -> Result<DecodedUsng, UsngError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari su ellissoide esplicito e testo ASCII limitato; nessun ingresso Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::from": {
-      "signature": "fn from(kind: CoordinateErrorKind) -> Self",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::from_str": {
-      "signature": "fn from_str(value: &str) -> Result<Self, Self::Err>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::from_str#2": {
-      "signature": "fn from_str(value: &str) -> Result<Self, Self::Err>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::kind": {
-      "signature": "pub const fn kind(self) -> CoordinateOptionKind",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::rule": {
-      "signature": "pub const fn rule(self) -> CoordinateFormatRule",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::from_str#3": {
-      "signature": "fn from_str(value: &str) -> Result<Self, Self::Err>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::encode_coordinate": {
-      "signature": "pub fn encode_coordinate( request: CoordinateRequest<'_>, point: CoordinatePoint, ) -> Result<String, CoordinateApiError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::decode_coordinate": {
-      "signature": "pub fn decode_coordinate( request: CoordinateRequest<'_>, text: &str, ) -> Result<DecodedCoordinate, CoordinateApiError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::encode_coordinates": {
-      "signature": "pub fn encode_coordinates( request: CoordinateRequest<'_>, points: &[CoordinatePoint], ) -> Result<Vec<String>, CoordinateApiError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::decode_coordinates": {
-      "signature": "pub fn decode_coordinates( request: CoordinateRequest<'_>, texts: &[&str], ) -> Result<Vec<DecodedCoordinate>, CoordinateApiError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::from#2": {
-      "signature": "fn from(value: CoordinateTextError) -> Self",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::from#3": {
-      "signature": "fn from(value: UtmError) -> Self",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::from#4": {
-      "signature": "fn from(value: MgrsError) -> Self",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::from#5": {
-      "signature": "fn from(value: UsngError) -> Self",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::from#6": {
-      "signature": "fn from(value: GridTextError) -> Self",
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate e testo Rust scalari o batch di valori Rust; nessun buffer o cella Arrow.",
       "arrow_arguments": []
     }
   },
