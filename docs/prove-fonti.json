@@ -1937,6 +1937,15 @@
       "oracolo_razionale_enumerativo",
       "bordi_semplici_e_copertura_deterministici"
     ],
+    "crates/plenora-kernels-geo/tests/coordinate_api.rs": [
+      "normative_vectors_both_directions",
+      "enumeration_and_every_inapplicable_option",
+      "datums_profiles_and_option_values_are_closed",
+      "atomic_limits_and_private_errors",
+      "cell_extents_representatives_and_nad27",
+      "angular_pair_grammar_and_rounding",
+      "geographic_cells_and_batch_order"
+    ],
     "crates/plenora-kernels-geo/tests/coordinate_mgrs.rs": [
       "independent_numeric_oracle",
       "source_worked_examples_and_representatives",
@@ -2047,6 +2056,12 @@
       "distanze_azimut_e_sfera_contro_geographiclib",
       "aree_e_lunghezze_contro_geographiclib",
       "ed50_e_wgs84_non_danno_la_stessa_distanza"
+    ],
+    "crates/plenora-kernels-geo/tests/grid_text.rs": [
+      "standard_examples_and_edges",
+      "quadrant_keypad_and_exact_boundary_ownership",
+      "closed_grammar_and_typed_errors",
+      "cells_and_canonical_roundtrips"
     ],
     "crates/plenora-kernels-geo/tests/griglia_overlay.rs": [
       "booleane_alle_tre_scale",
