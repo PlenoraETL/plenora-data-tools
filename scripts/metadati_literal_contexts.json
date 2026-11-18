@@ -2367,9 +2367,20 @@
     "[[\"token\",\"{\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]"
   ],
   "crates/plenora-kernels-geo/src/geodesic_distance/tests.rs": [
+    "[[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"match\"],[\"token\",\"value\"],[\"token\",\"[\"],[\"string\",\"kind\"],[\"token\",\"]\"],[\"token\",\".\"],[\"token\",\"as_str\"],[\"token\",\"(\"],[\"token\",\")\"]]",
+    "[[\"token\",\".\"],[\"token\",\"into\"],[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\",\"],[\"string\",\"line\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"parts\"],[\"token\",\"[\"],[\"token\",\"0\"]]",
+    "[[\"token\",\".\"],[\"token\",\"into\"],[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\",\"],[\"string\",\"multi_polygon\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"MultiPolygon\"],[\"token\",\":\"],[\"token\",\":\"]]",
+    "[[\"token\",\".\"],[\"token\",\"into\"],[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\",\"],[\"string\",\"polygon\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"Polygon\"],[\"token\",\":\"],[\"token\",\":\"]]",
+    "[[\"token\",\".\"],[\"token\",\"unwrap\"],[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\"{\"],[\"string\",\"point\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"Point\"],[\"token\",\"(\"],[\"token\",\"parts\"]]",
+    "[[\"token\",\"LineString\"],[\"token\",\">\"],[\"token\",\"=\"],[\"token\",\"value\"],[\"token\",\"[\"],[\"string\",\"parts\"],[\"token\",\"]\"],[\"token\",\".\"],[\"token\",\"as_array\"],[\"token\",\"(\"],[\"token\",\")\"]]",
     "[[\"token\",\"b\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:3857\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
     "[[\"token\",\"b\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
     "[[\"token\",\"crossed\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
-    "[[\"token\",\"let\"],[\"token\",\"crs\"],[\"token\",\"=\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]"
+    "[[\"token\",\"fixture_geometry\"],[\"token\",\"(\"],[\"token\",\"&\"],[\"token\",\"fixture\"],[\"token\",\"[\"],[\"string\",\"a\"],[\"token\",\"]\"],[\"token\",\",\"],[\"token\",\"reverse\"],[\"token\",\")\"],[\"token\",\";\"]]",
+    "[[\"token\",\"fixture_geometry\"],[\"token\",\"(\"],[\"token\",\"&\"],[\"token\",\"fixture\"],[\"token\",\"[\"],[\"string\",\"b\"],[\"token\",\"]\"],[\"token\",\",\"],[\"token\",\"reverse\"],[\"token\",\")\"],[\"token\",\";\"]]",
+    "[[\"token\",\"from_str\"],[\"token\",\"(\"],[\"token\",\"include_str\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"reference_cases.json\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"],[\"token\",\"(\"]]",
+    "[[\"token\",\"let\"],[\"token\",\"crs\"],[\"token\",\"=\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
+    "[[\"token\",\"let\"],[\"token\",\"lower\"],[\"token\",\"=\"],[\"token\",\"fixture\"],[\"token\",\"[\"],[\"string\",\"bracket\"],[\"token\",\"]\"],[\"token\",\"[\"],[\"token\",\"0\"],[\"token\",\"]\"],[\"token\",\".\"]]",
+    "[[\"token\",\"let\"],[\"token\",\"upper\"],[\"token\",\"=\"],[\"token\",\"fixture\"],[\"token\",\"[\"],[\"string\",\"bracket\"],[\"token\",\"]\"],[\"token\",\"[\"],[\"token\",\"1\"],[\"token\",\"]\"],[\"token\",\".\"]]"
   ]
 }

@@ -1548,7 +1548,12 @@
       "taylor_matches_metric_oracle",
       "interruption_during_indexing_and_no_product_admission",
       "surface_orientation_and_complement",
-      "refinement_limits_and_interruptions"
+      "refinement_limits_and_interruptions",
+      "independent_surface_and_long_arc_fixtures",
+      "repeated_surface_vertices_and_seam_aliases",
+      "surface_tree_prunes_large_ring",
+      "conjugate_path_guard_preserves_point_distance",
+      "direct_failure_is_accuracy_and_tiny_area_is_explicit"
     ],
     "crates/plenora-kernels-geo/src/geodetica.rs": [
       "i_parametri_fuori_dominio_non_danno_un_ellissoide",
