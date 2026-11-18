@@ -36,6 +36,9 @@ la cui versione non ha qui una voce datata.
   con eccezioni Norvegia/Svalbard; fuori dominio errore tipizzato.
   Il prototipo non rilasciato con banda e UPS e' sostituito: nessun
   ingresso con banda, formato UPS pubblico o riconoscimento implicito.
+- `extended_algorithms::polygonize_with_limits`: facce del linework sul noder comune con `RelateLimits` e `PredicateError`; polygonize 6.0.0 invariata.
+
+- `extended_algorithms::split_line_with_limits`: split sul noder comune con `RelateLimits` e `PredicateError`; `split_line` 6.0.0 invariata.
 
 - Migrazione DE-9IM al noder razionale comune: eventi senza grafo,
   sweep con filtri inclusivi X/Y e oracolo esaustivo della 1a nei test.
