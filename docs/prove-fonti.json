@@ -121,6 +121,8 @@
     "scripts/check_prove_fonti.py": [],
     "scripts/check_python_version.py": [],
     "scripts/check_tempo.py": [],
+    "scripts/ci_locale.py": [],
+    "scripts/ci_locale_expr.py": [],
     "scripts/corpus_definizioni_crs.py": [],
     "scripts/esegui_guardie.py": [],
     "scripts/esito_python_ast.py": [],
@@ -286,6 +288,24 @@
       "test_conversione_checked",
       "test_conversioni_infallibili_e_alias",
       "test_frazione_assente_non_e_fallback_di_data"
+    ],
+    "scripts/test_ci_locale.py": [
+      "test_all_profiles_present_release_never_executes",
+      "test_checkout_source_pin_and_sha_mismatch",
+      "test_condition_uses_current_step_environment",
+      "test_conditions_services_platform_and_unknown_action",
+      "test_defaults_and_working_directory",
+      "test_empty_job_is_not_pass",
+      "test_exported_environment_and_step_precedence",
+      "test_expression_types_are_not_silently_coerced",
+      "test_false_step_does_not_prevent_next_step",
+      "test_matrix_needs_env_defaults_and_filters",
+      "test_missing_step_blocks_following_and_never_green",
+      "test_process_failure_and_default_condition",
+      "test_repository_covers_every_job_and_step",
+      "test_runtime_temp_directory",
+      "test_status_conditions_are_evaluated_at_runtime",
+      "test_status_function_in_literal_is_not_a_function"
     ],
     "scripts/test_clippy_esito.py": [
       "test_metodi_risolti_e_produzione_esente"
@@ -1503,6 +1523,15 @@
       "shared_paths_merges_collinear_chains_into_a_multilinestring",
       "shared_paths_rejects_non_polygonal_inputs_and_encodes_rows",
       "coppie_candidate_a_capacita_esatta"
+    ],
+    "crates/plenora-kernels-geo/src/geodesic_densify/tests.rs": [
+      "equator_analytic_and_exact_budget",
+      "meridian_and_pole_from_metric_integral",
+      "published_long_oblique_and_unique_near_antipodes",
+      "ambiguities_domains_and_controls",
+      "multipart_empty_closure_seam_and_duplicates",
+      "rounding_cannot_choose_an_antipodal_branch_or_hide_a_short_edge",
+      "exact_seam_identity_and_numeric_length_threshold"
     ],
     "crates/plenora-kernels-geo/src/geodetica.rs": [
       "i_parametri_fuori_dominio_non_danno_un_ellissoide",
