@@ -128,9 +128,9 @@ fn exact_thresholds_and_interruptions() {
     let source = line_string![(x:0.,y:0.),(x:2.,y:0.)];
     let cutter = transverse(1);
     let mut measured = Work::new(RelateLimits::default(), None);
-    let expected = split(&source, &cutter, &mut measured).expect("misura");
-    // Fonte contabile: 2 estremi sorgente + 2 lama + 2 incidenze; una coppia.
-    assert_eq!((measured.pairs, measured.nodes), (1, 6));
+    let expected = split(&source, &cutter, &mut measured).expect("misura del consumo");
+    // Fonte: noding e certificato condividono il consumo misurato.
+    assert!(measured.pairs > 1 && measured.nodes > 6);
     // Fonte memoria/passi: picco delle ricevute vive e checkpoint del percorso
     // completo, non stima n*m; soglia misurata rieseguita senza strumentazione.
     let exact = RelateLimits {
@@ -194,7 +194,7 @@ fn exact_thresholds_and_interruptions() {
 }
 
 #[test]
-fn explicit_invalid_and_precision_errors() {
+fn explicit_invalid_coordinates() {
     let source = line_string![(x:0.,y:0.),(x:1.,y:0.)];
     // Fonte: contratto di finitezza, nessun dato nei messaggi.
     assert!(matches!(
@@ -205,29 +205,6 @@ fn explicit_invalid_and_precision_errors() {
             None
         ),
         Err(PredicateError::NonFiniteCoordinate { side: "right" })
-    ));
-    let mut work = Work::new(RelateLimits::default(), None);
-    let huge = P::of_in(
-        Coord {
-            x: 2_f64.powi(50),
-            y: 0.,
-        },
-        &work,
-    )
-    .expect("razionale");
-    let offset = work
-        .integer(1)
-        .expect("uno")
-        .try_div(&work.integer(10).expect("dieci"))
-        .expect("decimo");
-    let point = P {
-        x: huge.x.try_add(&offset).expect("somma"),
-        y: huge.y,
-    };
-    // Fonte: ULP(2^50)=1/4; 2^50+1/10 dista 10 cm dal f64 piu' vicino.
-    assert!(matches!(
-        coordinate(&point, &mut work),
-        Err(PredicateError::CalcoloNonConcluso("precisione del nodo"))
     ));
 }
 
@@ -274,4 +251,102 @@ fn polygon_boundary_and_invalid_polygon() {
         split_line_with_limits(&source, &bow, RelateLimits::default(), None),
         Err(PredicateError::InvalidGeometry { .. })
     ));
+}
+
+#[test]
+fn gop015a_nondyadic_nodes_have_half_ulp_certificate() {
+    // Fonte GOP-015A: a 2^50 la ulp e' 1/4; X+1/10 arrotonda X.
+    let x = 2_f64.powi(50);
+    let source = line_string![(x:x-1.,y:0.),(x:x+2.,y:0.)];
+    let cutter = Geometry::LineString(line_string![(x:x,y:-1.),(x:x+1.,y:9.)]);
+    assert_eq!(run(&source, &cutter)[0].0[1].x, x);
+    // Fonte: GOP-015A; x=1/d, confrontato con i punti medi binary64 esatti.
+    for d in [3, 5, 7] {
+        let source = line_string![(x:0.,y:0.),(x:1.,y:0.)];
+        let cutter = Geometry::LineString(line_string![(x:0.,y:-1.),(x:1.,y:f64::from(d-1))]);
+        let result = run(&source, &cutter);
+        let x = result[0].0[1].x;
+        let work = Work::new(RelateLimits::default(), None);
+        let exact = work
+            .integer(1)
+            .unwrap()
+            .try_div(&work.integer(d).unwrap())
+            .unwrap();
+        let at = |v| P::of_in(Coord { x: v, y: 0. }, &work).unwrap().x;
+        let rounded = at(x);
+        assert!(!exact
+            .try_cmp(
+                &at(f64::from_bits(x.to_bits() - 1))
+                    .try_midpoint(&rounded)
+                    .unwrap()
+            )
+            .unwrap()
+            .is_lt());
+        assert!(!exact
+            .try_cmp(
+                &rounded
+                    .try_midpoint(&at(f64::from_bits(x.to_bits() + 1)))
+                    .unwrap()
+            )
+            .unwrap()
+            .is_gt());
+    }
+}
+
+#[test]
+fn gop015a_ties_subnormals_and_collapse() {
+    // Fonte: GOP-015A; la parita' e' il bit basso della significand.
+    for bits in [1.0_f64.to_bits(), 1.0_f64.to_bits() + 1, 1] {
+        for sign in [1.0, -1.0] {
+            let a = sign * f64::from_bits(bits);
+            let b = sign * f64::from_bits(bits + 1);
+            let source = line_string![(x:-2.,y:0.),(x:2.,y:0.)];
+            let cutter = Geometry::LineString(line_string![(x:a,y:-1.),(x:b,y:1.)]);
+            let expected = sign * f64::from_bits(if bits & 1 == 0 { bits } else { bits + 1 });
+            assert_eq!(
+                run(&source, &cutter)[0].0[1].x.to_bits(),
+                expected.to_bits()
+            );
+        }
+    }
+    // Fonte: mezzo subnormale arrotonda a zero, fondendo il nodo con l'estremo.
+    let tiny = f64::from_bits(1);
+    let source = line_string![(x:0.,y:0.),(x:tiny,y:0.)];
+    let cutter = Geometry::LineString(line_string![(x:0.,y:-1.),(x:tiny,y:1.)]);
+    assert!(matches!(
+        split_line_with_limits(&source, &cutter, RelateLimits::default(), None),
+        Err(PredicateError::InvalidRoundedTopology)
+    ));
+}
+
+#[test]
+fn source_crossings_overlaps_and_original_bits_are_preserved() {
+    // Fonte: GOP-015A, vertici riportati invariati; noding del certificato solo.
+    let empty = Geometry::MultiLineString(MultiLineString(vec![]));
+    for source in [
+        line_string![(x:0.,y:0.),(x:1.,y:1.),(x:0.,y:1.),(x:1.,y:-1.)],
+        line_string![(x:0.,y:-0.),(x:3.,y:0.),(x:1.,y:0.),(x:0.,y:0.)],
+    ] {
+        let result = run(&source, &empty);
+        assert_eq!(result.len(), 1);
+        for (a, b) in source.0.iter().zip(&result[0].0) {
+            assert_eq!(
+                (a.x.to_bits(), a.y.to_bits()),
+                (b.x.to_bits(), b.y.to_bits())
+            );
+        }
+    }
+}
+
+#[test]
+fn splitter_vertex_preserves_signed_zero() {
+    // Fonte GOP-015A: vertice riportato della lama, bit dello zero invariati.
+    let source = line_string![(x:0.,y:-1.),(x:0.,y:1.)];
+    let cutter = Geometry::Point(Point::new(-0., -0.));
+    let result = run(&source, &cutter);
+    let c = result[0].0[1];
+    assert_eq!(
+        (c.x.to_bits(), c.y.to_bits()),
+        ((-0.0_f64).to_bits(), (-0.0_f64).to_bits())
+    );
 }

@@ -167,9 +167,9 @@ fn exact_limits_and_interruptions() {
     let g = input(vec![square(0., 2.)]);
     let mut work = Work::new(RelateLimits::default(), None);
     let expected = polygonize(&g, &mut work).expect("misura");
-    // Fonte: 8 estremi + 8 copie noder + 8 incidenze; verifica f64:
-    // 4 vertici + 8 incidenze. Quattro coppie per ciascuno dei due sweep.
-    assert_eq!((work.pairs, work.nodes), (8, 36));
+    // Fonte: quattro coppie per sweep; nodi includono provenienza e certificato.
+    assert_eq!(work.pairs, 8);
+    assert!(work.nodes > 36);
     // Fonte contabile: checkpoint e picco ricevute del percorso completo.
     let exact = RelateLimits {
         max_segment_pairs: work.pairs,
@@ -230,7 +230,7 @@ fn exact_limits_and_interruptions() {
     ));
 }
 #[test]
-fn invalid_and_unrepresentable_nodes_are_explicit() {
+fn invalid_coordinates_are_explicit() {
     // Fonte: contratto finitezza dell'ingresso.
     assert!(matches!(
         polygonize_with_limits(
@@ -240,23 +240,13 @@ fn invalid_and_unrepresentable_nodes_are_explicit() {
         ),
         Err(PredicateError::NonFiniteCoordinate { .. })
     ));
-    // Fonte: 2^50 + 1/10, ulp=1/4: errore minimo 10 cm > 1 cm.
-    let x = 2_f64.powi(50);
-    let g = input(vec![
-        line(&[(x, 0.), (x + 1., 0.)]),
-        line(&[(x, -1.), (x + 1., 9.)]),
-    ]);
-    assert!(matches!(
-        polygonize_with_limits(&g, RelateLimits::default(), None),
-        Err(PredicateError::CalcoloNonConcluso(_))
-    ));
 }
 
 #[test]
 fn rounded_triangle_cannot_silently_become_collinear() {
     // Fonte: equazioni y=x-X e y=1-(1.999/2)*(x-X+1).
     // Apice x=X+circa 0.00025006, ULP(X)=0.0078125: arrotonda X.
-    // Tre vertici distinti diventano collineari, entro 1 cm ma non validi.
+    // Fonte GOP-015A: tre vertici distinti diventano collineari dopo rounding.
     let x = 2_f64.powi(45);
     let g = input(vec![
         line(&[(x, -2.), (x, 2.)]),
@@ -265,6 +255,64 @@ fn rounded_triangle_cannot_silently_become_collinear() {
     ]);
     assert!(matches!(
         polygonize_with_limits(&g, RelateLimits::default(), None),
-        Err(PredicateError::CalcoloNonConcluso(_))
+        Err(PredicateError::InvalidRoundedTopology)
     ));
+}
+
+#[test]
+fn gop015a_face_nodes_ties_and_subnormals() {
+    // Fonte: GOP-015A; incrocio a meta' delle ascisse, pareggio al pari.
+    for bits in [1.0_f64.to_bits(), 1.0_f64.to_bits() + 1, 1] {
+        let a = f64::from_bits(bits);
+        let b = f64::from_bits(bits + 1);
+        let g = input(vec![
+            line(&[(0., -1.), (2., -1.), (2., 1.), (0., 1.), (0., -1.)]),
+            line(&[(0., 0.), (2., 0.)]),
+            line(&[(a, -1.), (b, 1.)]),
+        ]);
+        let result = run(&g);
+        let expected = f64::from_bits(if bits & 1 == 0 { bits } else { bits + 1 });
+        assert_eq!(result.len(), 4);
+        assert!(result
+            .iter()
+            .flat_map(geo::CoordsIter::coords_iter)
+            .any(|c| c.x.to_bits() == expected.to_bits() && c.y == 0.));
+    }
+}
+
+#[test]
+fn gop015a_nondyadic_faces_and_discarded_dangles() {
+    // Fonte: y=-1+d*x, incrocio con y=0 in x=1/d; GOP-015A.
+    for d in [3, 5, 7] {
+        let g = input(vec![
+            square(0., 1.),
+            line(&[(0., 0.), (1., 0.)]),
+            line(&[(0., -1.), (1., f64::from(d - 1))]),
+        ]);
+        let result = run(&g);
+        assert!(result
+            .iter()
+            .flat_map(geo::CoordsIter::coords_iter)
+            .any(|c| c.x == 1. / f64::from(d) && c.y == 0.));
+    }
+    // Fonte GOP-015A: X+1/10 si pubblica X; facce valide anche con ulp=1/4.
+    let x = 2_f64.powi(50);
+    let faces = input(vec![
+        line(&[
+            (x - 1., 0.),
+            (x + 2., 0.),
+            (x + 2., 1.),
+            (x - 1., 1.),
+            (x - 1., 0.),
+        ]),
+        line(&[(x, -1.), (x + 1., 9.)]),
+    ]);
+    assert_eq!(run(&faces).len(), 2);
+    // Fonte: nessuna faccia, quindi il nodo costruito non viene pubblicato.
+    let x = 2_f64.powi(50);
+    let g = input(vec![
+        line(&[(x, 0.), (x + 1., 0.)]),
+        line(&[(x, -1.), (x + 1., 9.)]),
+    ]);
+    assert!(run(&g).is_empty());
 }

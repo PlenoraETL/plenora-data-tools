@@ -25,6 +25,13 @@ la cui versione non ha qui una voce datata.
 
 - `extended_algorithms::split_line_with_limits`: split sul noder comune con `RelateLimits` e `PredicateError`; `split_line` 6.0.0 invariata.
 
+- `split_line_with_limits` e `polygonize_with_limits` adottano GOP-015A:
+  nodi costruiti al binary64 piu' vicino, meta' al pari, errore massimo
+  di mezza ulp per ordinata nelle unita' del CRS, senza soglia metrica.
+  Riutilizzano arrotondatore e verificatore delle booleane lineari;
+  `PredicateError::InvalidRoundedTopology` rifiuta collassi, nuovi contatti
+  e inversioni dopo arrotondamento. Le due API 6.0.0 restano invariate.
+
 - Migrazione DE-9IM al noder razionale comune: eventi senza grafo,
   sweep con filtri inclusivi X/Y e oracolo esaustivo della 1a nei test.
   La 6.1.0 non e' rilasciata: `RelateLimits` conta ora i test esatti dopo
@@ -32,8 +39,9 @@ la cui versione non ha qui una voce datata.
   (duplicati intermedi inclusi, default 10 milioni) e `deadline` (default
   nessuna). Errore distinto `DeadlineExceeded`, categoria ResourceLimit
   nella pipeline. La semantica precedente dei limiti 1a non e' mantenuta.
-  La tranche 1b resta incompleta: buffer BigInt ancora fuori dal bilancio,
-  nuovi ingressi controllati split_line/polygonize mancanti.
+  Gli ingressi controllati split_line/polygonize sono disponibili; i valori
+  BigInt sono addebitati sul bilancio vivo, con le esclusioni documentate
+  per scratch privati e capacita' non esposta dal backend.
   Le API pubblicate `evaluate`/`evaluate_validated` conservano backend,
   risultati e default 6.0.0; differenziale con snapshot del tag locale.
 - API Rust `predicates::relate_matrix`, `De9imMatrix` e `De9imPattern`:

@@ -1,6 +1,10 @@
 //! Facce razionali del grafo planare del linework.
 #![allow(clippy::float_cmp)]
+use super::split_limited::publication_error;
 use crate::noding::{sorted, CountedVec, Edge, Work, P, Q};
+use crate::predicates::arrangement_indexed::line_boolean::{
+    verify_publication, Originals, PublishedEdge,
+};
 use crate::predicates::{PredicateError, RelateLimits};
 use geo::{Geometry, LineString, Polygon};
 use std::cmp::Ordering;
@@ -19,16 +23,18 @@ use std::cmp::Ordering;
 /// [`RelateLimits`], inclusi grafo, facce e output. Valgono le limitazioni
 /// contabili di quel tipo (non e' una certificazione dell'heap fisico).
 /// Cancellazione cooperativa con precedenza sulla deadline.
-/// XY planari in metri: topologia razionale esatta, conversione finale con
-/// errore euclideo verificato <= 1 cm. Collassi, nuovi incroci/overlap e
+/// XY planari nelle unita' del CRS: topologia razionale esatta, pubblicazione
+/// GOP-015A al binary64 piu' vicino, meta' al pari, <= mezza ulp per ordinata.
+/// Vertici originali invariati; per siti con zeri di segno diverso prevale
+/// il primo in ingresso. Collassi, nuovi incroci/overlap e
 /// inversioni di orientamento dopo la conversione sono rifiutati. Anche
 /// la verifica del grafo convertito consuma coppie, nodi, passi e memoria.
 /// La polygonize pubblicata in 6.0.0 conserva il proprio contratto.
 ///
 /// # Errors
 /// [`PredicateError`] per coordinate non finite, struttura o tipi non
-/// supportati, limiti, allocazione, cancellazione, deadline; `CalcoloNonConcluso`
-/// per conversioni oltre 1 cm o collassi nell'output.
+/// supportati, limiti, allocazione, cancellazione, deadline;
+/// `InvalidRoundedTopology` se la pubblicazione altera la topologia.
 pub fn polygonize_with_limits(
     linework: &Geometry<f64>,
     limits: RelateLimits,
@@ -294,60 +300,58 @@ fn output_ring(
     Ok(LineString(out.export(work)?))
 }
 
-// Verifica anche interazioni tra facce: validare un poligono alla volta
-// non rileverebbe un nuovo incrocio fra due componenti arrotondate.
-fn verify_output(
-    arcs: &[ArcSide],
+fn publish_faces(
+    linework: &Geometry<f64>,
+    points: &[P],
     rings: &[FaceRing],
-    coords: &[geo::Coord<f64>],
+    holes: &[CountedVec<usize>],
     work: &mut Work<'_>,
-) -> Result<(), PredicateError> {
-    let mut points = CountedVec::new();
-    for &c in coords {
-        work.nodes(1)?;
-        work.push(&mut points, P::of_in(c, work)?)?;
-    }
-    let mut edges = CountedVec::new();
-    for arc in arcs.iter().step_by(2) {
+) -> Result<CountedVec<geo::Coord<f64>>, PredicateError> {
+    let originals = Originals::for_editing(std::iter::empty(), linework, work)?;
+    let mut selected = CountedVec::new();
+    for (i, ring) in rings.iter().enumerate() {
         work.step()?;
-        let edge = Edge {
-            a: points[arc.from].try_clone()?,
-            b: points[arc.to].try_clone()?,
-        };
-        work.push(&mut edges, edge)?;
-    }
-    let mut refs = CountedVec::new();
-    for edge in &edges {
-        work.push(&mut refs, edge)?;
-    }
-    crate::noding::visit(&refs, work, |i, j, hits, _work| {
-        if hits[1].is_some()
-            || hits[0].as_ref().is_some_and(|p| {
-                (p != &edges[i].a && p != &edges[i].b) || (p != &edges[j].a && p != &edges[j].b)
-            })
-        {
-            return Err(PredicateError::CalcoloNonConcluso(
-                "topologia del grafo convertito",
-            ));
+        if ring.area.sign().is_gt() {
+            work.push(&mut selected, i)?;
+            for &h in &holes[i] {
+                work.push(&mut selected, h)?;
+            }
         }
-        Ok(())
-    })?;
-    for ring in rings {
-        let mut area = work.integer(0)?;
-        for i in 0..ring.vertices.len() {
+    }
+    let mut boundary = CountedVec::new();
+    let mut coords = CountedVec::new();
+    for _ in points {
+        work.push(&mut coords, geo::Coord { x: 0.0, y: 0.0 })?;
+    }
+    for &i in &selected {
+        let vertices = &rings[i].vertices;
+        for j in 0..vertices.len() {
             work.step()?;
-            area = area.try_add(
-                &points[ring.vertices[i]]
-                    .try_cross(&points[ring.vertices[(i + 1) % ring.vertices.len()]])?,
+            let (a, b) = (vertices[j], vertices[(j + 1) % vertices.len()]);
+            coords[a] = originals
+                .coordinate(&points[a], work)
+                .map_err(publication_error)?;
+            work.nodes(2)?;
+            work.push(
+                &mut boundary,
+                (
+                    Edge {
+                        a: points[a].try_clone()?,
+                        b: points[b].try_clone()?,
+                    },
+                    a,
+                    b,
+                ),
             )?;
         }
-        if area.sign() != ring.area.sign() {
-            return Err(PredicateError::CalcoloNonConcluso(
-                "orientamento convertito",
-            ));
-        }
     }
-    Ok(())
+    let mut published = CountedVec::new();
+    for (edge, a, b) in &boundary {
+        let certificate = PublishedEdge::new(edge, [coords[*a], coords[*b]], work)?;
+        work.push(&mut published, certificate)?;
+    }
+    verify_publication(&published, &originals, work).map_err(publication_error)?;
+    Ok(coords)
 }
 
 fn polygonize(
@@ -408,19 +412,7 @@ fn polygonize(
             work.push(&mut holes[i], h)?;
         }
     }
-    let mut coords = CountedVec::new();
-    for p in &points {
-        let c = super::split_limited::coordinate(p, work)?;
-        // Controllo globale: anche vertici non adiacenti non possono fondersi.
-        for old in &coords {
-            work.step()?;
-            if *old == c {
-                return Err(PredicateError::CalcoloNonConcluso("collasso del nodo"));
-            }
-        }
-        work.push(&mut coords, c)?;
-    }
-    verify_output(&arcs, &rings, &coords, work)?;
+    let coords = publish_faces(linework, &points, &rings, &holes, work)?;
     let mut output = CountedVec::new();
     for (i, ring) in rings.iter().enumerate() {
         work.step()?;
