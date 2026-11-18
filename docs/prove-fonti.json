@@ -1695,6 +1695,16 @@
       "every_named_predicate_on_the_cartesian_corpus",
       "nested_members_and_permutations_preserve_cells"
     ],
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/general_boolean/tests.rs": [
+      "every_dimension_pair_and_filter",
+      "point_midpoint_and_crossing_lines",
+      "multipolygon_contacts_and_invalid_overlaps",
+      "nested_mixed_collection_and_grid_union",
+      "arrays_atomic_order_and_cumulative_limits",
+      "entry_deadline_cancellation_and_filter",
+      "measured_limits_and_interruptions",
+      "many_overlapping_rectangles_combinatorial_grid"
+    ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/line_boolean/tests.rs": [
       "overlaps_crossings_and_direction",
       "polygon_hole_boundary_touch_and_mixed_union",
@@ -1719,6 +1729,24 @@
       "polygon_union_filters_and_typed_errors",
       "point_sets_against_generic_matrix",
       "polygon_pair_budget_exact_threshold"
+    ],
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean/tests.rs": [
+      "rectangles_and_directional_difference",
+      "edge_and_point_contacts",
+      "holes_nesting_and_identity",
+      "stripes_combinatorial_components",
+      "non_dyadic_nodes_and_collapsed_ring_rejection",
+      "tangent_hole_and_disconnected_shells",
+      "exact_resource_thresholds",
+      "deadline_precedes_cancellation_and_invalid_inputs_are_typed",
+      "independent_rational_cell_oracle_area_and_de9im",
+      "independent_fraction_certificate_for_constructed_triangle",
+      "cancellation_and_deadline_during_work",
+      "canonical_shared_minimum_and_reversed_inputs",
+      "deterministic_interruptions_across_the_call",
+      "mixed_dimensions_empty_and_filter_before_publication",
+      "serialized_surface_is_bound_to_the_certificate",
+      "polygon_combs_have_independent_combinatorial_counts"
     ],
     "crates/plenora-kernels-geo/src/predicates/interval_index.rs": [
       "sparse_queries_have_analytic_work",
