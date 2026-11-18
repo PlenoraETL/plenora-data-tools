@@ -31,6 +31,7 @@ pub mod arrow_adapter;
 pub mod cluster;
 pub mod construction;
 pub mod coordinate_text;
+pub mod coordinate_utm;
 pub mod crs;
 pub mod decoded_size;
 pub mod equality;

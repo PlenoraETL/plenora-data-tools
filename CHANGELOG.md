@@ -14,6 +14,14 @@ la cui versione non ha qui una voce datata.
 
 ### Aggiunte
 
+- API scalare `coordinate_utm` WGS84 conforme a GOP-023: `to_utm`,
+  `from_utm`, `format_utm`, `parse_utm`, `UtmCoordinate` e `UtmError`.
+  Testo canonico `zone hemisphere easting northing`, emisfero N/S,
+  risoluzione esplicita 1 m e arrotondamento half-even. Dominio 80S..84N
+  con eccezioni Norvegia/Svalbard; fuori dominio errore tipizzato.
+  Il prototipo non rilasciato con banda e UPS e' sostituito: nessun
+  ingresso con banda, formato UPS pubblico o riconoscimento implicito.
+
 - Migrazione DE-9IM al noder razionale comune: eventi senza grafo,
   sweep con filtri inclusivi X/Y e oracolo esaustivo della 1a nei test.
   La 6.1.0 non e' rilasciata: `RelateLimits` conta ora i test esatti dopo
