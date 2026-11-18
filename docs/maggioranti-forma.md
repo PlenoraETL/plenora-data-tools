@@ -10,7 +10,7 @@ variante invertibile senza classificarla causa anche un errore di compilazione.
 
 ## Tabella di qualificazione
 
-B1 e B2 sono maggioranti delle derivate prima e seconda della latitudine
+Per le righe separabili B1 e B2 sono maggioranti delle derivate prima e seconda della latitudine
 rispetto alla coordinata normalizzata psi. La longitudine e' affine.
 
 | Metodo | Scala s | B1 | B2 | Stato e limite |
@@ -18,7 +18,7 @@ rispetto alla coordinata normalizzata psi. La longitudine e' affine.
 | Geografico (0) | pi/180 | 1 | 0 | Certificato nel dominio geografico integrato |
 | Pseudo Mercator (1024) | 1/a | 1 | 1 | Certificato sul ramo aperto, latitudine <85.06 gradi in modulo |
 | Mercator A (9804) | 1/(a k0) | 1/(1-e^2) | (1+2e^2)/(1-e^2)^2 | Certificato sullo stesso ramo, controllo del residuo isometrico |
-| Transverse Mercator (9807) | - | - | - | AccuracyUnproven: mancano maggioranti delle derivate e del resto della serie inversa di ordine 6 sul dominio dichiarato |
+| Transverse Mercator (9807) | 1/(a k0) | phi: 4; lambda: 3 | phi: 20; lambda: 9 | Non separabile; certificato esatto sul rettangolo z sotto definito, resto di Krueger incluso nel residuo a intervalli |
 | Lambert Conic Conformal 2SP (9802) | - | - | - | AccuracyUnproven: non certificata la distanza continua dall'apice e dal taglio angolare |
 | Lambert Azimuthal Equal Area (9820) | - | - | - | AccuracyUnproven: non maggiorate le derivate al bordo del disco e dell'inversa autalica |
 | Oblique Stereographic (9809) | - | - | - | AccuracyUnproven: non maggiorata la composizione della rotazione con l'inversa conforme |
@@ -77,7 +77,7 @@ numerici del kernel coprono le operazioni di composizione.
 ## Dominio e numerica
 
 Il dominio del core e' controllato prima di ogni conversione. Per le
-inverse proiettate certificate il profilo richiede inoltre |lambda|<pi
+inverse proiettate separabili certificate il profilo richiede inoltre |lambda|<pi
 prima di qualsiasi riduzione modulo 2pi, e |phi|<85.06 gradi. I bordi
 sono rifiutati con CrsDomain. Monotonia separata e affinita' implicano che
 il rettangolo determinato dagli estremi contiene l'intero segmento inverso;
@@ -140,6 +140,179 @@ poligono obliqui. Il pacchetto e' confinato in target/preserve-oracle;
 pyproj non e' disponibile offline. Le fixture a 16384 e 32768 suddivisioni
 sono controlli indipendenti, non una dimostrazione del bound. Le prove C1
 confrontano direttamente la differenza con il bound restituito, senza
-aggiungervi una tolleranza campionaria. I cinque metodi non certificati
+aggiungervi una tolleranza campionaria. I quattro metodi non certificati
 hanno prove del rifiuto; le loro prove numeriche C1 restano da realizzare
 insieme ai maggioranti mancanti.
+
+## Transverse Mercator EPSG 9807
+
+Fonti: [Karney 2011, Transverse Mercator with an accuracy of a few nanometers](https://arxiv.org/pdf/1002.1417),
+equazioni 14, 16, 18, 35 e 36 per la serie di Krueger del motore;
+[EPSG Guidance Note 7-2, settembre 2019](https://www.iogp.org/wp-content/uploads/2019/09/373-07-02.pdf),
+capitolo 3.2.3.1, per metodo, scala e false origini. Il motore usa
+l'estensione di Karney al sesto ordine. Il dato numerico di Karney
+sull'errore non viene assunto come dimostrazione delle derivate della coda.
+La costruzione seguente e' una derivazione: confronta la serie finita con
+la TM esatta mediante la continuazione analitica dell'arco meridiano.
+
+### Dominio continuo e derivate esatte
+
+Siano q=e^2, m(w)=M(w)/a e psi la latitudine isometrica, prolungati
+analiticamente dalla latitudine reale. Si lavora sul ramo contenente zero:
+
+```text
+m(0)=0
+m'(w)=(1-q)/(1-q sin(w)^2)^(3/2)
+psi(w)=atanh(sin(w))-e atanh(e sin(w))
+z=(y-FN)/(a k0)+m(phi0) + i (x-FE)/(a k0)
+w=m^-1(z)
+chi(z)=psi(w)=psi(phi)+i(lambda-lambda0)
+```
+
+L'identita' sull'asse reale esprime la scala costante del meridiano
+centrale; il proseguimento conforme definisce la TM esatta. Il certificato
+usa i parametri originali del registro: non i coefficienti arrotondati del
+core, ne' il suo raggio rettificante o la sua origine approssimata.
+
+Il dominio qualificato e' |Re z|<1.1, |Im z|<0.1,
+|phi0|<1.1 e |lambda0|<2.5 radianti, 0<=q<=0.008, oltre ai limiti
+terrestri comuni. E' intenzionalmente piu' stretto del dominio CRS e
+non copre tutte le zone UTM, le latitudini elevate o tutte le origini
+nazionali. Il controllo intervallare rifiuta con AccuracyUnproven anche
+un bordo la cui appartenenza stretta non e' dimostrata. I segmenti sono
+contenuti nel dominio per affinita' di z e convessita' del rettangolo;
+non si deduce questa proprieta' dai campioni interni.
+
+Per includere anche gli arrotondamenti del box iniziale, si usa il
+rettangolo esterno |Re w|<=U=1.21, |Im w|<=V=0.21, |w|<1.23.
+Posti rho=q cosh(V)^2 e d=q+(1-q)((1-rho)^(-3/2)-1):
+
+```text
+|m'-1| <= d < 0.022
+|m(w2)-m(w1)| >= (1-d)|w2-w1|
+```
+
+La seconda disuguaglianza segue integrando m'-1 sul segmento. La mappa
+w -> z-(m(w)-w) e' una contrazione e manda il box di semilato 0.1
+centrato in z in se': |m(w)-w|<=d|w|<0.028<0.1.
+Esistenza e unicita' seguono dal teorema della contrazione. L'intersezione
+delle immagini intervallari conserva quindi sempre la radice.
+
+Maggioranti ottenuti per differenziazione, con denominatori positivi:
+
+```text
+M2 = 3q(1-q)cosh(V)^2/(1-rho)^(5/2)
+P1 = (1-q)/(cos(U)(1-rho))
+P2 = P1 [cosh(V)/cos(U) + 2q cosh(V)^2/(1-rho)]
+|chi'| <= P1/(1-d) < 3
+|chi''| <= P2/(1-d)^2 + P1 M2/(1-d)^3 < 9
+```
+
+Le costanti larghe 3 e 9 si verificano anche sostituendo tutti i fattori
+numeratori 1-q con 1 e q con 0.008; non richiedono una ricerca numerica
+del massimo. La composizione con l'inversa isometrica reale gia'
+dimostrata, B1<1.01 e B2<1.033, da' per una retta z(t),
+v=|z'(t)| (si puo' maggiorare con la norma 1):
+
+```text
+|lambda'| <= 3v; |lambda''| <= 9v^2
+|phi'| <= 4v;    |phi''| <= 20v^2
+|r''| <= 1.1 a [(7v)^2+29v^2] = 1.1 a 78v^2
+```
+
+Sono le costanti pubbliche di TransverseShapeBounds. Non sono B1/B2
+separabili: entrambe le coordinate dipendono da x e y.
+La topologia e' conservata: m e' univalente; per cos(w)=A+iB,
+Re[cos(w)(1-q sin(w)^2)]=A[(1-q)+q(A^2-3B^2)]>0 sul rettangolo.
+Segue Re psi'>0 e quindi univalenza di psi per integrazione sul segmento.
+La successiva inversa isometrica reale e' monotona. Inoltre
+|Im chi|<=3|Im z|<0.3, partendo dall'asse reale: la longitudine resta
+in una striscia di ampiezza <0.6 radianti, senza seam o poli.
+
+### Resto di Krueger e certificato numerico
+
+Per la sola serie finita F6(zeta)=zeta-sum(beta_j sin(2j zeta)),
+sul dominio |Im zeta|<=H, la disuguaglianza triangolare darebbe
+|F6'|<=1+sum(2j|beta_j|cosh(2jH)) e
+|F6''|<=sum((2j)^2|beta_j|cosh(2jH)). Questi maggioranti da soli
+non includono il resto infinito. Il certificato implementato evita questa
+lacuna: confronta direttamente l'uscita di Krueger con chi esatta.
+Comprende cosi' troncamento di ordine 6, origine, raggio rettificante,
+coefficienti e arrotondamenti del core nello stesso residuo verificato.
+Le derivate sono quelle esatte sopra dimostrate, non derivate numeriche
+della serie troncata.
+
+[transverse.rs](../crates/plenora-kernels-geo/src/preserve_shape_measure/certificate/transverse.rs)
+riusa ShapeInterval di Mercator A. L'arco meridiano si valuta attraverso
+una serie convergente con resto esplicito, senza funzioni ellittiche:
+
+```text
+c_k=(3/2)_k/k!; J_0(w)=w
+J_k(w)=((2k-1)J_(k-1)(w)-sin(w)^(2k-1)cos(w))/(2k)
+m(w)-w=-qw+(1-q)sum(k=1..12) c_k q^k J_k(w)
+|coda_N| <= (1-q)|w| c_(N+1) rho^(N+1)
+             / [1-rho(1+1/(2N+4))]
+```
+
+Infatti |J_k(w)|<=|w|cosh(V)^(2k) lungo il segmento da zero a w;
+il rapporto dei termini maggioranti dopo N+1 e' al piu'
+rho(1+1/(2N+4)). Per N=12 sul rettangolo esterno la coda e'
+<1e-24. Ogni componente complessa viene ampliata di questo valore.
+L'iterazione intervallare valuta m-w nella forma esplicita, evitando
+la cancellazione dipendente fra due intervalli che contengono w.
+Il numero di iterazioni non prova la precisione: decide il residuo finale.
+
+Seno, coseno, sinh e cosh complessi sono composti dalle identita' reali.
+Il seno usa il resto Mercator; il coseno fino al grado 24 ha resto
+<1e-21 per |Re w|<1.5; sinh/cosh fino ai gradi 25/24 hanno resto
+<1e-30 per |Im w|<=0.21. Il logaritmo complesso, sul semipiano destro,
+usa ln(re^2+im^2)/2 e atan(im/re). Per atan, due dimezzamenti con
+x/(1+sqrt(1+x^2)) riducono |x|<=8 a |x|<0.4; la serie alternata
+fino al grado 81 ha resto <1e-32 prima della moltiplicazione per 4.
+Logaritmo reale e radice riusano le garanzie IEEE 754 del certificato
+Mercator. Nessuna trascendente libm certifica il risultato.
+
+L'intervallo chi viene confrontato con psi(phi_core)+i(lambda_core-lambda0).
+La stabilita' B1<1.01 trasforma il residuo reale in errore di latitudine.
+Ogni errore angolare deve essere <=2048 epsilon; altrimenti si restituisce
+AccuracyUnproven. E' un bound puntuale verificato sulla TM esatta,
+comprensivo del resto di Krueger, non una stima sperimentale del resto.
+Le conversioni dei gradi e i parametri sono anch'essi intervallari.
+
+### Lunghezza e area non separabili
+
+Per la lunghezza si usa il maggiorante ECEF 1.1a78v^2 nella regola
+comune di varianza della velocita'. Il margine di 30 micrometri per
+sottosegmento copre due errori ECEF <=1.1a*4096epsilon, la primitiva
+geodetica e le conversioni/interpolazioni sul dominio limitato.
+
+Per l'area, posto g(t)=Q(phi(t)), si integra
+-g(1/2)(lambda(1)-lambda(0)). Espandendo g attorno al centro, il termine
+lineare integrato contro lambda'(1/2) si annulla. Rimangono:
+
+```text
+|g'| <= 4.4 a^2 v
+|g''| <= 39.6 a^2 v^2
+resto <= |g''| |lambda'|/24 + |g'| |lambda''|/12
+       <= 8.25 a^2 v^3
+```
+
+Si aggiungono 16384epsilon a^2 per sottosegmento: comprendono gli errori
+angolari di entrambi gli estremi e del centro, Q e le operazioni
+aritmetiche. Il confronto finale con PolygonArea resta quello comune.
+Questo margine e' conservativo e cresce col numero di sottosegmenti:
+non si promette di soddisfare ogni tolleranza, anche entro il rettangolo.
+Un budget o una precisione insufficienti producono un errore esplicito.
+
+### Prove TM indipendenti
+
+[tm.py](../crates/plenora-kernels-geo/tests/fixtures/preserve_shape/tm.py)
+implementa autonomamente Krueger di ordine 6 con bisezione isometrica;
+GeographicLib Python 2.1, confinata in target/preserve-oracle, misura le
+linee e i poligoni densificati. EPSG:32632 usa WGS84, EPSG:27700 usa
+Airy 1830 e latitudine d'origine non nulla, senza cambio di datum.
+La fixture contiene i risultati a 16384 e 32768 divisioni. Il confronto
+C1 usa direttamente il bound restituito: nessuna tolleranza aggiuntiva
+di convergenza. Questo oracolo controlla l'implementazione e non sostituisce
+la prova del resto esatto. Sono verificati anche i bordi rifiutati del
+rettangolo normalizzato per lunghezza e area.

@@ -159,11 +159,16 @@ impl MeasureSum {
     }
 }
 
+enum ShapeDerivatives {
+    Separable(SeparableShapeBounds),
+    Transverse(certificate::TransverseCertificate),
+}
+
 struct ShapeContext {
     projection: Riproiettore,
     ellipsoid: EllissoideGeodetico,
     geographic: bool,
-    derivatives: SeparableShapeBounds,
+    derivatives: ShapeDerivatives,
 }
 
 impl ShapeContext {
@@ -189,10 +194,14 @@ impl ShapeContext {
             return Err(ShapeMeasureError::UnsupportedEllipsoid);
         }
         let geographic = crs.kind() == CrsKind::Geographic;
-        let InverseShapeCertificate::Separable(derivatives) =
-            projection.inverse_shape_certificate()
-        else {
-            return Err(ShapeMeasureError::AccuracyUnproven);
+        let derivatives = match projection.inverse_shape_certificate() {
+            InverseShapeCertificate::Separable(bounds) => ShapeDerivatives::Separable(bounds),
+            InverseShapeCertificate::TransverseMercator(bounds) => ShapeDerivatives::Transverse(
+                certificate::TransverseCertificate::new(bounds, parameters.inverse_flattening)?,
+            ),
+            InverseShapeCertificate::Unproven { .. } => {
+                return Err(ShapeMeasureError::AccuracyUnproven)
+            }
         };
         Ok(Self {
             projection,
@@ -208,29 +217,37 @@ impl ShapeContext {
         work: &mut MeasureWork<'_>,
     ) -> Result<Coord<f64>, ShapeMeasureError> {
         work.charge()?;
+        if let ShapeDerivatives::Transverse(certificate) = &self.derivatives {
+            certificate.check_domain(point.x, point.y)?;
+        }
         let (x, y) = self
             .projection
             .geografiche_sorgente(point.x, point.y)
             .map_err(|_| ShapeMeasureError::CrsDomain)?;
+        let ShapeDerivatives::Separable(derivatives) = &self.derivatives else {
+            if let ShapeDerivatives::Transverse(certificate) = &self.derivatives {
+                certificate.certify(point.x, point.y, x, y)?;
+            }
+            return Ok(Coord { x, y });
+        };
         if !self.geographic {
-            let raw_longitude = self
-                .derivatives
+            let raw_longitude = derivatives
                 .angular_scale
-                .mul_add(point.x, self.derivatives.longitude_offset);
+                .mul_add(point.x, derivatives.longitude_offset);
             // Il certificato usa un solo ramo continuo, mai la riduzione modulo 2pi.
             if raw_longitude.abs() >= std::f64::consts::PI || y.abs() >= 85.06 {
                 return Err(ShapeMeasureError::CrsDomain);
             }
         }
-        if self.derivatives.method == 9804 {
+        if derivatives.method == 9804 {
             let parameters = self.ellipsoid.parametri();
             certificate::mercator_residual(
                 y,
                 point.y,
-                self.derivatives.projected_divisor,
-                self.derivatives.false_northing,
+                derivatives.projected_divisor,
+                derivatives.false_northing,
                 parameters.inverse_flattening,
-                self.derivatives.latitude_first,
+                derivatives.latitude_first,
             )?;
         }
         Ok(Coord { x, y })
@@ -242,7 +259,10 @@ impl ShapeContext {
         end: Coord<f64>,
         divisions: u32,
     ) -> Result<(f64, f64), ShapeMeasureError> {
-        let scale = self.derivatives.angular_scale;
+        let scale = match &self.derivatives {
+            ShapeDerivatives::Separable(bounds) => bounds.angular_scale,
+            ShapeDerivatives::Transverse(certificate) => certificate.scale(),
+        };
         let dx = (end.x - start.x) * scale / f64::from(divisions);
         let dy = (end.y - start.y) * scale / f64::from(divisions);
         if (start.x != end.x && !dx.is_normal()) || (start.y != end.y && !dy.is_normal()) {
@@ -296,7 +316,7 @@ fn result(
 /// Parti vuote e coordinate ripetute contribuiscono zero. Il campionamento
 /// raddoppia adattivamente finche' il bound analitico soddisfa la tolleranza.
 /// Memoria ausiliaria costante, nessun vettore di punti campionati.
-/// Dominio certificato: CRS geografici integrati, Pseudo Mercator e Mercator A.
+/// Dominio certificato: geografici, i due Mercator e TM sul rettangolo qualificato.
 ///
 /// # Errors
 /// [`ShapeMeasureError`], nessun risultato parziale. Gli altri CRS
@@ -355,10 +375,20 @@ fn length_edge(
     }
     let a = context.ellipsoid.parametri().semi_major_axis_metre;
     let (dx, dy) = context.deltas(start, end, divisions)?;
-    let first = context.derivatives.latitude_first;
-    let second = context.derivatives.latitude_second;
-    let speed = dx.abs() + first * dy.abs();
-    let acceleration = 1.1 * a * (speed.powi(2) + second * dy * dy);
+    let (speed, acceleration, numerical) = match &context.derivatives {
+        ShapeDerivatives::Separable(bounds) => {
+            let speed = dx.abs() + bounds.latitude_first * dy.abs();
+            (
+                speed,
+                1.1 * a * (speed.powi(2) + bounds.latitude_second * dy * dy),
+                1e-6,
+            )
+        }
+        ShapeDerivatives::Transverse(_) => {
+            let delta = dx.abs() + dy.abs();
+            (7.0 * delta, 1.1 * a * 78.0 * delta.powi(2), 3e-5)
+        }
+    };
     let mut previous = context.convert(start, work)?;
     for i in 1..=divisions {
         let point = context.convert(
@@ -374,13 +404,13 @@ fn length_edge(
             return Err(ShapeMeasureError::AccuracyUnproven);
         }
         // G1/G2: 15 nm per inverse; 1 micrometro include conversione e interpolazione.
-        let lower = distance - 1e-6;
+        let lower = distance - numerical;
         if lower <= 0.0 {
             // Il maggiorante della velocita' resta valido anche ai poli o ai coincidenti.
-            error.add(1.1 * a * speed + 1e-6);
+            error.add(1.1 * a * speed + numerical);
         } else {
             // Varianza della velocita' ECEF: L-d <= A^2/(12d), senza test di convergenza.
-            error.add(acceleration.powi(2) / (12.0 * lower) + 1e-6);
+            error.add(acceleration.powi(2) / (12.0 * lower) + numerical);
         }
         value.add(distance);
         previous = point;
@@ -485,15 +515,32 @@ fn ring_area(
             )?;
             work.charge()?;
             polygon.add_point(point.y, point.x);
-            integral.add(-area_primitive(midpoint.y, parameters) * dx);
-            let derivative_bound = 1.1
-                * (context.derivatives.latitude_first.powi(2)
-                    + context.derivatives.latitude_second);
-            error.add(
-                dx.abs()
-                    * parameters.semi_major_axis_metre.powi(2)
-                    * (derivative_bound * dy * dy / 24.0 + 512.0 * f64::EPSILON),
-            );
+            match &context.derivatives {
+                ShapeDerivatives::Separable(bounds) => {
+                    integral.add(-area_primitive(midpoint.y, parameters) * dx);
+                    let derivative_bound =
+                        1.1 * (bounds.latitude_first.powi(2) + bounds.latitude_second);
+                    error.add(
+                        dx.abs()
+                            * parameters.semi_major_axis_metre.powi(2)
+                            * (derivative_bound * dy * dy / 24.0 + 512.0 * f64::EPSILON),
+                    );
+                }
+                ShapeDerivatives::Transverse(_) => {
+                    let end = context.convert(
+                        interpolated(pair[0], pair[1], f64::from(i + 1) / f64::from(divisions)),
+                        work,
+                    )?;
+                    let longitude_delta = (end.x - point.x).to_radians();
+                    integral.add(-area_primitive(midpoint.y, parameters) * longitude_delta);
+                    // Taylor di Q(phi) attorno al centro; lambda' non e' costante.
+                    let delta = dx.abs() + dy.abs();
+                    error.add(
+                        parameters.semi_major_axis_metre.powi(2)
+                            * (8.25 * delta.powi(3) + 16384.0 * f64::EPSILON),
+                    );
+                }
+            }
         }
     }
     work.charge()?;

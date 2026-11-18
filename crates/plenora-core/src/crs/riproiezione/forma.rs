@@ -25,6 +25,8 @@ pub struct SeparableShapeBounds {
 pub enum InverseShapeCertificate {
     /// Maggioranti per la regola comune di composizione della catena.
     Separable(SeparableShapeBounds),
+    /// TM esatta sul rettangolo normalizzato dichiarato in maggioranti-forma.
+    TransverseMercator(TransverseShapeBounds),
     /// Nessun certificato: il consumatore deve rifiutare la misura.
     Unproven {
         /// Codice EPSG del metodo.
@@ -32,6 +34,34 @@ pub enum InverseShapeCertificate {
         /// Motivo statico, senza dati dell'ingresso.
         reason: &'static str,
     },
+}
+
+/// Parametri esatti del registro per il certificato residuale TM EPSG 9807.
+#[derive(Clone, Copy, Debug)]
+pub struct TransverseShapeBounds {
+    /// Semiasse maggiore in metri.
+    pub semi_major_axis: f64,
+    /// Scala al meridiano centrale.
+    pub central_scale: f64,
+    /// Latitudine dell'origine in gradi.
+    pub latitude_origin: f64,
+    /// Longitudine del meridiano centrale in gradi.
+    pub longitude_origin: f64,
+    /// Falsa ascissa in metri.
+    pub false_easting: f64,
+    /// Falsa ordinata in metri.
+    pub false_northing: f64,
+}
+
+impl TransverseShapeBounds {
+    /// |d lambda/dt| <= 3 |dz/dt|, z normalizzato da a*k0.
+    pub const LONGITUDE_FIRST: f64 = 3.0;
+    /// |d2 lambda/dt2| <= 9 |dz/dt|^2 lungo una retta.
+    pub const LONGITUDE_SECOND: f64 = 9.0;
+    /// |d phi/dt| <= 4 |dz/dt|.
+    pub const LATITUDE_FIRST: f64 = 4.0;
+    /// |d2 phi/dt2| <= 20 |dz/dt|^2 lungo una retta.
+    pub const LATITUDE_SECOND: f64 = 20.0;
 }
 
 #[cfg(test)]
@@ -58,6 +88,10 @@ mod tests {
                 InverseShapeCertificate::Unproven { method, reason } => {
                     assert!(!reason.is_empty());
                     method
+                }
+                InverseShapeCertificate::TransverseMercator(bounds) => {
+                    assert!(bounds.central_scale > 0.0);
+                    9807
                 }
             };
             found.insert(method);

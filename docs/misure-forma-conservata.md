@@ -26,12 +26,13 @@ esattamente l'argomento della chiamata; il modello e' `preserve_shape`, le
 unita' sono fissate dalla funzione. Nessun cambio di datum: le conversioni
 riusano `Riproiettore::geografiche_sorgente` con piano identita'.
 
-Il dominio certificato comprende i CRS geografici integrati, EPSG:3857 e Mercator A (EPSG:3395),
+Il dominio certificato comprende i CRS geografici integrati, EPSG:3857, Mercator A (EPSG:3395)
+e Transverse Mercator EPSG 9807 nel rettangolo qualificato in [maggioranti-forma](maggioranti-forma.md),
 con ellissoide terrestre `6e6 <= a <= 7e6` metri e `250 <= 1/f <= 350`.
 **Il supporto a qualunque CRS riproiettabile non e' completo:** gli altri
-CRS integrati, inclusi gli UTM, restituiscono `AccuracyUnproven`. Le inverse
-esistenti calcolano punti, ma non espongono maggioranti delle derivate
-necessari al certificato della curva. Una convergenza campionaria non li
+quattro metodi integrati restituiscono `AccuracyUnproven`. Anche TM rifiuta
+fuori dal suo dominio qualificato o quando il residuo a intervalli non
+dimostra la precisione numerica richiesta. Una convergenza campionaria non li
 sostituisce. CRS senza inversa integrata e punti fuori dominio danno
 `CrsDomain`. Non si ripiega su WGS 84.
 
@@ -47,7 +48,7 @@ usa i predicati esatti del kernel geometrico, anche per i test di
 contenimento. Tutti gli anelli di un poligono devono stare in una striscia
 aperta di longitudine larga meno di 180 gradi, senza poli. Per geografico
 e per i due metodi Mercator la trasformazione e' iniettiva in questa striscia e conserva
-la topologia. La superficie e' strettamente minore di mezzo ellissoide;
+la topologia. Anche TM e' iniettiva sul suo rettangolo qualificato. La superficie e' strettamente minore di mezzo ellissoide;
 complementi, cappe polari e regioni piu' larghe sono `UnsupportedSurface`.
 Z, M e curve non appartengono a questa API XY.
 

@@ -127,10 +127,7 @@ impl Proiezione {
                     .next_up(),
                 })
             }
-            Self::Tm(_) => InverseShapeCertificate::Unproven {
-                method: 9807,
-                reason: "resto della serie inversa e derivate sul dominio non maggiorati",
-            },
+            Self::Tm(p) => InverseShapeCertificate::TransverseMercator(p.shape_parameters),
             Self::Lcc(_) => InverseShapeCertificate::Unproven {
                 method: 9802,
                 reason: "distanza continua dall'apice e dal taglio angolare non certificata",
@@ -294,6 +291,7 @@ impl Proiezione {
 
 #[derive(Clone, Debug)]
 pub(in crate::crs) struct Tm {
+    shape_parameters: super::TransverseShapeBounds,
     e: f64,
     lon0: f64,
     /// `k0 * A`, il raggio rettificante scalato.
@@ -350,6 +348,14 @@ impl Tm {
             20_648_693.0 * n6 / 638_668_800.0,
         ];
         let mut tm = Self {
+            shape_parameters: super::TransverseShapeBounds {
+                semi_major_axis: a,
+                central_scale: k0,
+                latitude_origin: lat0,
+                longitude_origin: lon0,
+                false_easting: falsa_est,
+                false_northing: falsa_nord,
+            },
             e,
             lon0: lon0.to_radians(),
             k0a: k0 * raggio,

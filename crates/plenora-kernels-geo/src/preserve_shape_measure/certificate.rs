@@ -3,6 +3,9 @@
 
 use super::ShapeMeasureError;
 
+mod transverse;
+pub(super) use transverse::TransverseCertificate;
+
 #[derive(Clone, Copy)]
 struct ShapeInterval {
     lo: f64,

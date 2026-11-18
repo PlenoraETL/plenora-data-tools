@@ -34,7 +34,7 @@ pub(super) mod tabella;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-pub use forma::{InverseShapeCertificate, SeparableShapeBounds};
+pub use forma::{InverseShapeCertificate, SeparableShapeBounds, TransverseShapeBounds};
 
 pub use ntv2::{GrigliaNtv2, MAX_BYTE_GRIGLIA};
 
