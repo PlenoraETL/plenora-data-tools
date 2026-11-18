@@ -586,7 +586,7 @@ fn rational_disjoint_edges_fraction_oracle() {
 #[test]
 #[deny(clippy::disallowed_methods)]
 fn rounded_lenses_preserve_short_edges_and_true_crossings() {
-    // GOP-017, raccolta D2: due quarti di cerchio disgiunti e un incrocio
+    // GOP-017, archi esterni con lati corti: due quarti di cerchio disgiunti e un incrocio
     // trasverso dell'ansa aperta, senza semplificare l'uscita.
     for (coords, distance, expected) in [
         (
