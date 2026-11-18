@@ -1524,6 +1524,14 @@
       "shared_paths_rejects_non_polygonal_inputs_and_encodes_rows",
       "coppie_candidate_a_capacita_esatta"
     ],
+    "crates/plenora-kernels-geo/src/geodesic_densify/geometry_tests.rs": [
+      "polygon_holes_and_multipart_keep_roles_and_order",
+      "seam_polar_caps_and_traversal_select_the_minor_region",
+      "ambiguous_hemisphere_crossings_and_invalid_holes_are_typed",
+      "geometry_empty_linear_and_unsupported_domains",
+      "geometry_limits_and_interruption_precedence",
+      "black_box_interrupts_during_large_emission"
+    ],
     "crates/plenora-kernels-geo/src/geodesic_densify/tests.rs": [
       "equator_analytic_and_exact_budget",
       "meridian_and_pole_from_metric_integral",
@@ -1532,6 +1540,9 @@
       "multipart_empty_closure_seam_and_duplicates",
       "rounding_cannot_choose_an_antipodal_branch_or_hide_a_short_edge",
       "exact_seam_identity_and_numeric_length_threshold"
+    ],
+    "crates/plenora-kernels-geo/src/geodesic_densify/validation.rs": [
+      "exact_live_memory_and_cumulative_validation_work"
     ],
     "crates/plenora-kernels-geo/src/geodetica.rs": [
       "i_parametri_fuori_dominio_non_danno_un_ellissoide",
