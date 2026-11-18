@@ -87,6 +87,16 @@
 //! di rappresentazione: memorizzare ogni estremo con tale larghezza sarebbe
 //! molto costoso. La prova dei valori non sostituisce quella delle allocazioni.
 
+// Accumulatori di area: la profondita' della somma non e' un DAG fisso.
+// CountedInt controlla prima di ogni creazione add/sub <= max(bits)+1,
+// mul <= bits(a)+bits(b), shift <= bits(a)+k. Divisione, resto, negazione
+// e copia non crescono; gcd usa resti decrescenti. Per induzione nessun
+// valore, compreso un temporaneo prima del rifiuto, supera INTERMEDIATE_BITS.
+// Il dominio e' fisso e indipendente dal numero di lati. Una somma che
+// richieda di superarlo fallisce con ReservationLimit, mai con approssimazione.
+// I controlli usano limiti superiori per singola primitiva: possono rifiutare
+// una cancellazione il cui risultato ridotto sarebbe piccolo. Non sono una
+// stima di ammissione dell'operazione o una prenotazione per vertice.
 pub const INTERMEDIATE_BITS: u64 = 145_173;
 /// Massimo addebito post-creazione di un intero (non scratch del backend).
 pub const MAX_VALUE_BYTES: u64 = INTERMEDIATE_BITS.div_ceil(usize::BITS as u64)

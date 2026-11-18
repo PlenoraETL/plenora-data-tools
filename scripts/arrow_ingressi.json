@@ -8207,6 +8207,18 @@
       "classification": "non riceve dati esterni",
       "reason": "Enumerazione interna su percorsi razionali del noder comune; nessun ingresso Arrow.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_completion.rs::from": {
+      "signature": "fn from(error: LineBooleanError) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "API Rust XY su geometrie tipizzate; nessun buffer o cella Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_completion.rs::polygon_completion_with_limits": {
+      "signature": "pub fn polygon_completion_with_limits( polygons: &[Polygon<f64>], linework: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<Polygon<f64>>, PolygonCompletionError>",
+      "classification": "non riceve dati esterni",
+      "reason": "API Rust XY su geometrie tipizzate; nessun buffer o cella Arrow.",
+      "arrow_arguments": []
     }
   },
   "python": {

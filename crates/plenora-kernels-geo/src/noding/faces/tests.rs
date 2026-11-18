@@ -51,8 +51,8 @@ fn strictly_inside(p: &OracleSite, cycle: &[usize], sites: &[OracleSite]) -> boo
     crossings % 2 == 1
 }
 
-// Oracolo sui grafi connessi senza ponti delle fixture: un ciclo positivo
-// delimita una faccia se nessun altro lato ha il punto medio al suo interno.
+// Oracolo delle fixture: elimina i lati non ciclici e distingue componenti
+// disconnesse; un ciclo minimo non contiene lati ciclici della sua componente.
 // Enumera tutti i cammini semplici, senza ordinamento angolare o half-edge.
 fn oracle_cycles(sites: &[OracleSite], edges: &[(usize, usize)]) -> Vec<Vec<usize>> {
     let mut found = Vec::new();
@@ -74,11 +74,7 @@ fn oracle_cycles(sites: &[OracleSite], edges: &[(usize, usize)]) -> Vec<Vec<usiz
                         area =
                             area.add(&cross(&sites[path[i]], &sites[path[(i + 1) % path.len()]]));
                     }
-                    if area.sign().is_gt()
-                        && !edges.iter().any(|&(u, v)| {
-                            strictly_inside(&midpoint(&sites[u], &sites[v]), &path, sites)
-                        })
-                    {
+                    if area.sign().is_gt() {
                         found.push(path.clone());
                     }
                 } else if next > start && !path.contains(&next) {
@@ -91,7 +87,40 @@ fn oracle_cycles(sites: &[OracleSite], edges: &[(usize, usize)]) -> Vec<Vec<usiz
     }
     found.sort();
     found.dedup();
+    let cyclic: Vec<_> = edges
+        .iter()
+        .copied()
+        .filter(|&(a, b)| {
+            found.iter().any(|cycle| {
+                (0..cycle.len()).any(|i| {
+                    let (u, v) = (cycle[i], cycle[(i + 1) % cycle.len()]);
+                    (a, b) == (u, v) || (a, b) == (v, u)
+                })
+            })
+        })
+        .collect();
     found
+        .into_iter()
+        .filter(|cycle| {
+            let mut component = cycle.clone();
+            let mut at = 0;
+            while at < component.len() {
+                for &(a, b) in &cyclic {
+                    if a == component[at] && !component.contains(&b) {
+                        component.push(b);
+                    }
+                    if b == component[at] && !component.contains(&a) {
+                        component.push(a);
+                    }
+                }
+                at += 1;
+            }
+            !cyclic.iter().any(|&(u, v)| {
+                component.contains(&u)
+                    && strictly_inside(&midpoint(&sites[u], &sites[v]), cycle, sites)
+            })
+        })
+        .collect()
 }
 
 fn input(
@@ -123,14 +152,14 @@ fn exact(value: &oracle::Q, work: &Work<'_>) -> Q {
     let n = value.n.to_string().parse::<i32>().expect("fixture piccola");
     let d = value.d.to_string().parse::<i32>().expect("fixture piccola");
     work.integer(n)
-        .expect("numeratore")
-        .try_div(&work.integer(d).expect("denominatore"))
-        .expect("razionale")
+        .expect("fixture numeratore")
+        .try_div(&work.integer(d).expect("fixture denominatore"))
+        .expect("fixture razionale")
 }
 
 fn compare_oracle(lines: &[[(f64, f64); 2]], sites: &[OracleSite], edges: &[(usize, usize)]) {
     let mut work = Work::new(RelateLimits::default(), None);
-    let actual = run(lines, &mut work).expect("facce");
+    let actual = run(lines, &mut work).expect("fixture facce");
     let expected_sites: Vec<_> = sites
         .iter()
         .map(|p| P {
@@ -161,7 +190,7 @@ fn compare_oracle(lines: &[[(f64, f64); 2]], sites: &[OracleSite], edges: &[(usi
                 .iter()
                 .enumerate()
                 .min_by_key(|(_, v)| *v)
-                .expect("ciclo")
+                .expect("fixture ciclo")
                 .0;
             cycle.rotate_left(minimum);
             actual_cycles.push(cycle);
@@ -216,7 +245,7 @@ fn provenance_survives_overlaps_reversal_and_point_contacts() {
         [(1., 0.), (1., 1.)],
     ];
     let mut work = Work::new(RelateLimits::default(), None);
-    let graph = run(&lines, &mut work).expect("provenienza");
+    let graph = run(&lines, &mut work).expect("fixture provenienza");
     let provenance: Vec<_> = graph
         .atoms
         .iter()
@@ -247,7 +276,7 @@ fn residual_edges_are_not_ring_edges() {
         [(2., 2.), (3., 3.)],
     ];
     let mut work = Work::new(RelateLimits::default(), None);
-    let graph = run(&lines, &mut work).expect("residui");
+    let graph = run(&lines, &mut work).expect("fixture residui");
     // Fonte GOP-020: i due alberi non delimitano facce; entrambi i versi
     // del bordo quadrato conservano solo le quattro sorgenti del quadrato.
     assert_eq!(graph.rings.len(), 2);
@@ -270,7 +299,7 @@ fn provenance_growth_has_exact_resource_thresholds() {
         ],
     ] {
         let mut measured = Work::new(RelateLimits::default(), None);
-        drop(run(&lines, &mut measured).expect("misura"));
+        drop(run(&lines, &mut measured).expect("fixture misura"));
         let exact = RelateLimits {
             max_steps: measured.steps,
             max_nodes: measured.nodes,
@@ -370,7 +399,7 @@ fn interruption_between_noding_and_face_enumeration() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let flag = AtomicBool::new(false);
     let mut work = Work::new(RelateLimits::default(), Some(&flag));
-    let edges = input(&[[(0., 0.), (1., 1.)]], &mut work).expect("ingresso");
+    let edges = input(&[[(0., 0.), (1., 1.)]], &mut work).expect("fixture ingresso");
     let nodes = crate::noding::node(&[&edges[0]], &mut work).expect("noding completato");
     flag.store(true, Ordering::Relaxed);
     // Fonte GOP-028: interruzione osservata dopo lavoro gia' completato,
@@ -391,4 +420,143 @@ fn interruption_between_noding_and_face_enumeration() {
         enumerate(&nodes, &mut Work::new(limits, None)),
         Err(PredicateError::DeadlineExceeded)
     ));
+}
+
+fn oracle_ring(cycle: &[usize], sites: &[OracleSite], clockwise: bool) -> geo::LineString<f64> {
+    let mut cycle = cycle.to_vec();
+    if clockwise {
+        cycle.reverse();
+    }
+    let minimum = cycle
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, v)| &sites[**v])
+        .expect("fixture minimo")
+        .0;
+    cycle.rotate_left(minimum);
+    let coords: Vec<_> = cycle
+        .iter()
+        .chain(cycle.first())
+        .map(|&id| {
+            let convert = |q: &oracle::Q| {
+                q.n.to_string().parse::<f64>().expect("fixture numeratore")
+                    / q.d
+                        .to_string()
+                        .parse::<f64>()
+                        .expect("fixture denominatore")
+            };
+            (convert(&sites[id].x), convert(&sites[id].y))
+        })
+        .collect();
+    geo::LineString::from(coords)
+}
+
+#[test]
+fn public_completion_against_independent_cycles_with_rational_noding() {
+    use geo::{Geometry, LineString, Polygon};
+    // Fonte GOP-020: grafo nodato analiticamente, senza chiamare node/enumerate.
+    // y=x/3 incontra x=1 in 1/3; le altre due facce sono occupate.
+    let sites = [
+        site(0, 0, 1),
+        site(1, 0, 1),
+        site(3, 1, 3),
+        site(1, 2, 1),
+        site(0, 2, 1),
+        site(3, 1, 1),
+        site(3, 2, 1),
+    ];
+    let edges = [
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (3, 4),
+        (4, 0),
+        (0, 2),
+        (2, 5),
+        (5, 6),
+        (6, 3),
+    ];
+    let cycles = oracle_cycles(&sites, &edges);
+    let expected: Vec<_> = cycles
+        .iter()
+        .filter(|cycle| cycle.contains(&5))
+        .map(|cycle| Polygon::new(oracle_ring(cycle, &sites, false), vec![]))
+        .collect();
+    let occupied = Polygon::new(
+        LineString::from(vec![(0., 0.), (1., 0.), (1., 2.), (0., 2.), (0., 0.)]),
+        vec![],
+    );
+    let lines = Geometry::LineString(LineString::from(vec![
+        (0., 0.),
+        (3., 1.),
+        (3., 2.),
+        (1., 2.),
+    ]));
+    let actual =
+        crate::polygon_completion_with_limits(&[occupied], &lines, RelateLimits::default(), None)
+            .expect("facce pubbliche");
+    assert_eq!(cycles.len(), 3);
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn public_completion_oracle_nested_component_and_dangle() {
+    use geo::{Geometry, LineString, MultiLineString, Polygon};
+    // Fonte GOP-020: quadrato occupato sinistro, faccia destra e isola occupata;
+    // il lato 1-10 e' un residuo aperto e non appartiene ad alcun ciclo.
+    let sites = [
+        site(0, 0, 1),
+        site(2, 0, 1),
+        site(2, 4, 1),
+        site(0, 4, 1),
+        site(6, 0, 1),
+        site(6, 4, 1),
+        site(3, 1, 1),
+        site(4, 1, 1),
+        site(4, 2, 1),
+        site(3, 2, 1),
+        site(2, -1, 1),
+    ];
+    let edges = [
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (3, 0),
+        (1, 4),
+        (4, 5),
+        (5, 2),
+        (6, 7),
+        (7, 8),
+        (8, 9),
+        (9, 6),
+        (1, 10),
+    ];
+    let cycles = oracle_cycles(&sites, &edges);
+    let shell = cycles
+        .iter()
+        .find(|c| c.contains(&4))
+        .expect("faccia destra");
+    let holes: Vec<_> = cycles
+        .iter()
+        .filter(|cycle| strictly_inside(&sites[cycle[0]], shell, &sites))
+        .map(|cycle| oracle_ring(cycle, &sites, true))
+        .collect();
+    let expected = Polygon::new(oracle_ring(shell, &sites, false), holes);
+    let left = Polygon::new(
+        LineString::from(vec![(0., 0.), (2., 0.), (2., 4.), (0., 4.), (0., 0.)]),
+        vec![],
+    );
+    let island = Polygon::new(oracle_ring(&[6, 7, 8, 9], &sites, false), vec![]);
+    let lines = Geometry::MultiLineString(MultiLineString::new(vec![
+        LineString::from(vec![(2., 0.), (6., 0.), (6., 4.), (2., 4.)]),
+        LineString::from(vec![(2., 0.), (2., -1.)]),
+    ]));
+    let actual = crate::polygon_completion_with_limits(
+        &[left, island],
+        &lines,
+        RelateLimits::default(),
+        None,
+    )
+    .expect("faccia con buco");
+    assert_eq!(actual, vec![expected]);
 }

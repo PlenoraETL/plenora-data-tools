@@ -1235,3 +1235,6 @@ mod tests {
 pub mod point_boolean;
 
 pub mod line_boolean;
+
+/// Completamento planare delle facce con provenienza dei lati.
+pub mod polygon_completion;

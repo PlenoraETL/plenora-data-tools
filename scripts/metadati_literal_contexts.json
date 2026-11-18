@@ -2382,5 +2382,9 @@
     "[[\"token\",\"else\"],[\"token\",\"{\"],[\"token\",\"panic\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"linee\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"assert_eq\"]]",
     "[[\"token\",\"else\"],[\"token\",\"{\"],[\"token\",\"panic\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"poligono\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"let\"]]",
     "[[\"token\",\"else\"],[\"token\",\"{\"],[\"token\",\"panic\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"punti\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"assert_eq\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_completion/tests.rs": [
+    "[[\"token\",\"{\"],[\"token\",\"for\"],[\"token\",\"lines\"],[\"token\",\"in\"],[\"token\",\"[\"],[\"string\",\"LINESTRING(0 0,2 0)\"],[\"token\",\",\"],[\"string\",\"MULTILINESTRING((2 0,4 0),(4 0,2 0))\"],[\"token\",\",\"],[\"token\",\"]\"],[\"token\",\"{\"]]",
+    "[[\"token\",\"{\"],[\"token\",\"for\"],[\"token\",\"lines\"],[\"token\",\"in\"],[\"token\",\"[\"],[\"string\",\"LINESTRING(2 2,4 2,4 4,2 2)\"],[\"token\",\",\"],[\"string\",\"LINESTRING(2 1,5 1)\"],[\"token\",\",\"],[\"string\",\"LINESTRING(5 5,7 5,7 7,5 5)\"],[\"token\",\",\"]]"
   ]
 }

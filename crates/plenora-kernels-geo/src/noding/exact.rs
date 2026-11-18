@@ -119,6 +119,46 @@ mod tests {
         assert_eq!(budget.live(), 0);
     }
 
+    /// GOP-027: somma a profondita' variabile, rifiuto prima del valore
+    /// oltre il dominio fisso; nessun temporaneo eccede `MAX_VALUE_BYTES`.
+    #[test]
+    fn accumulator_rejects_before_oversized_integer_creation() {
+        let budget = Rc::new(Budget::new(u64::MAX));
+        let mut value = Q::int_in(1, &budget).expect("uno");
+        let mut count = 0;
+        loop {
+            match value.try_add(&value) {
+                Ok(next) => {
+                    value = next;
+                    count += 1;
+                }
+                Err(PredicateError::ReservationLimit) => break,
+                Err(error) => panic!("errore inatteso: {error}"),
+            }
+        }
+        assert!(count > 100_000);
+        assert!(value.n.value.bits() <= MAX_BITS);
+        let before = budget.attempted_peak();
+        assert!(matches!(
+            value.try_add(&value),
+            Err(PredicateError::ReservationLimit)
+        ));
+        assert_eq!(before, budget.attempted_peak());
+        drop(value);
+        assert_eq!(budget.live(), 0);
+        let largest =
+            CountedInt::created(BigInt::from(1) << (MAX_BITS - 1), &budget).expect("massimo");
+        let two = CountedInt::int(2, &budget).expect("due");
+        assert!(matches!(
+            largest.mul(&two),
+            Err(PredicateError::ReservationLimit)
+        ));
+        assert!(matches!(
+            largest.shift(1),
+            Err(PredicateError::ReservationLimit)
+        ));
+    }
+
     fn same(actual: &Q, expected: &oracle::Q) {
         assert_eq!(actual.n.value, expected.n);
         assert_eq!(actual.d.value, expected.d);
@@ -209,18 +249,31 @@ impl CountedInt {
         Self::created(-&self.value, self.lease.budget())
     }
 
+    // Ogni primitiva rifiuta prima di creare un intero oltre MAX_BITS.
+    // Vale anche per accumulatori con profondita' dipendente dall'ingresso.
+    const fn bounded(bits: u64) -> Result<(), PredicateError> {
+        if bits > MAX_BITS {
+            Err(PredicateError::ReservationLimit)
+        } else {
+            Ok(())
+        }
+    }
+
     fn add(&self, b: &Self) -> Result<Self, PredicateError> {
         self.same_budget(b)?;
+        Self::bounded(self.value.bits().max(b.value.bits()) + 1)?;
         Self::created(&self.value + &b.value, self.lease.budget())
     }
 
     fn sub(&self, b: &Self) -> Result<Self, PredicateError> {
         self.same_budget(b)?;
+        Self::bounded(self.value.bits().max(b.value.bits()) + 1)?;
         Self::created(&self.value - &b.value, self.lease.budget())
     }
 
     fn mul(&self, b: &Self) -> Result<Self, PredicateError> {
         self.same_budget(b)?;
+        Self::bounded(self.value.bits() + b.value.bits())?;
         Self::created(&self.value * &b.value, self.lease.budget())
     }
 
@@ -241,6 +294,7 @@ impl CountedInt {
     }
 
     fn shift(&self, bits: u32) -> Result<Self, PredicateError> {
+        Self::bounded(self.value.bits() + u64::from(bits))?;
         Self::created(&self.value << bits, self.lease.budget())
     }
 }
