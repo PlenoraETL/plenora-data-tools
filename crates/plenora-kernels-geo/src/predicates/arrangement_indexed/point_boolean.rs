@@ -230,7 +230,7 @@ fn canonical(c: geo::Coord<f64>) -> Point<f64> {
     )
 }
 
-fn copy_line(
+pub(super) fn copy_line(
     line: &LineString<f64>,
     work: &mut Work<'_>,
 ) -> Result<LineString<f64>, PredicateError> {

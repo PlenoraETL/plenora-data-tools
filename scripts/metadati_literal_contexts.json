@@ -1491,6 +1491,10 @@
     "[[\"token\",\";\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"right\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
     "[[\"token\",\"}\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]"
   ],
+  "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_completion/tests.rs": [
+    "[[\"token\",\"{\"],[\"token\",\"for\"],[\"token\",\"lines\"],[\"token\",\"in\"],[\"token\",\"[\"],[\"string\",\"LINESTRING(0 0,2 0)\"],[\"token\",\",\"],[\"string\",\"MULTILINESTRING((2 0,4 0),(4 0,2 0))\"],[\"token\",\",\"],[\"token\",\"]\"],[\"token\",\"{\"]]",
+    "[[\"token\",\"{\"],[\"token\",\"for\"],[\"token\",\"lines\"],[\"token\",\"in\"],[\"token\",\"[\"],[\"string\",\"LINESTRING(2 2,4 2,4 4,2 2)\"],[\"token\",\",\"],[\"string\",\"LINESTRING(2 1,5 1)\"],[\"token\",\",\"],[\"string\",\"LINESTRING(5 5,7 5,7 7,5 5)\"],[\"token\",\",\"]]"
+  ],
   "crates/plenora-kernels-geo/src/predicates/baseline_600.rs": [
     "[[\"token\",\";\"],[\"token\",\"validate\"],[\"token\",\"(\"],[\"token\",\"right\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"],[\"token\",\"evaluate_unchecked\"],[\"token\",\"(\"]]",
     "[[\"token\",\"[\"],[\"token\",\"serde\"],[\"token\",\"(\"],[\"token\",\"rename_all\"],[\"token\",\"=\"],[\"string\",\"snake_case\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"pub\"],[\"token\",\"enum\"],[\"token\",\"SpatialPredicate\"]]",

@@ -54,6 +54,8 @@ pub mod operations;
 pub mod predicates;
 pub mod preserve_shape_measure;
 pub mod reshape;
+pub use polygon_completion::polygon_completion_with_limits;
+pub use predicates::arrangement_indexed::{line_boolean, point_boolean, polygon_completion};
 pub use predicates::arrangement_indexed::{line_boolean, point_boolean};
 pub mod riproiezione;
 pub mod rust_backend;

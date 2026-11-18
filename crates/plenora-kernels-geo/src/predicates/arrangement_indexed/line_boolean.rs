@@ -521,8 +521,14 @@ impl Originals {
         b: &Geometry<f64>,
         work: &mut Work<'_>,
     ) -> Result<Self, PredicateError> {
+        Self::from_coords(a.coords_iter().chain(b.coords_iter()), work)
+    }
+    pub(crate) fn from_coords(
+        coords: impl Iterator<Item = Coord<f64>>,
+        work: &mut Work<'_>,
+    ) -> Result<Self, PredicateError> {
         let mut values = CountedVec::new();
-        for c in a.coords_iter().chain(b.coords_iter()) {
+        for c in coords {
             work.nodes(1)?;
             work.push(&mut values, (P::of_in(c, work)?, c))?;
         }

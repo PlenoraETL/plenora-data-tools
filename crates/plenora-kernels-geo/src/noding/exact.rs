@@ -1,5 +1,20 @@
 //! Aritmetica fallibile: ogni intero, compresi gcd e prodotti dei confronti,
 //! possiede una ricevuta sul bilancio vivo dei contenitori.
+//!
+//! GOP-027: `check_bits` e' l'unica regola del dominio fisso. Prima della
+//! creazione, un limite superiore oltre `MAX_BITS` e' `ReservationLimit`
+//! (Limite nella pipeline), anche se una cancellazione darebbe un valore
+//! piccolo. L'accumulatore d'area dipende dal numero di lati/buchi; gli
+//! editor riusano Q con DAG e raffinazioni non coperti dalla dimostrazione
+//! del noder in bounds.rs. Per entrambi il tetto e' una risorsa imposta,
+//! non una prova che ogni calcolo sull'ingresso debba starci.
+//! Dopo la creazione, invece, `MAX_BITS` e' un'invariante dimostrata dai
+//! precontrolli di add/sub/mul/shift e dalla non crescita delle altre
+//! primitive (sqrt inclusa): violarla e' `CalcoloNonConcluso` (Interna).
+//! Il DAG del noder dimostrato in bounds.rs non raggiunge il rifiuto
+//! preventivo. Nessun chiamante sceglie una politica diversa per Q.
+//! L'addebito effettivo resta dopo la creazione; lo sforamento contabile
+//! e' al massimo `MAX_VALUE_BYTES`, esclusi gli scratch privati del backend.
 
 use super::storage::{Budget, Lease};
 use crate::predicates::PredicateError;
@@ -7,7 +22,7 @@ use num_bigint::{BigInt, Sign};
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-/// Limite del DAG dimostrato in `bounds.rs`, non una prenotazione anticipata.
+/// Tetto per valore, derivato dal DAG del noder in `bounds.rs`.
 pub(super) const MAX_BITS: u64 = super::bounds::INTERMEDIATE_BITS;
 const LIMB_BITS: u64 = usize::BITS as u64;
 pub(super) const MAX_VALUE_BYTES: u64 = super::bounds::MAX_VALUE_BYTES;
@@ -140,19 +155,77 @@ mod tests {
         let large = CountedInt::created(BigInt::from(1) << (MAX_BITS - 1), &budget).unwrap();
         let two = CountedInt::int(2, &budget).unwrap();
         let live = budget.live();
+        let attempted = budget.attempted_peak();
+        assert!(matches!(
+            large.sub(&large),
+            Err(PredicateError::ReservationLimit)
+        ));
         assert!(matches!(
             large.mul(&two),
-            Err(PredicateError::CalcoloNonConcluso("dominio aritmetico"))
+            Err(PredicateError::ReservationLimit)
         ));
         assert!(matches!(
             large.add(&large),
-            Err(PredicateError::CalcoloNonConcluso("dominio aritmetico"))
+            Err(PredicateError::ReservationLimit)
         ));
         assert!(matches!(
             large.shift(1),
-            Err(PredicateError::CalcoloNonConcluso("dominio aritmetico"))
+            Err(PredicateError::ReservationLimit)
         ));
         assert_eq!(budget.live(), live);
+        assert_eq!(budget.attempted_peak(), attempted);
+    }
+
+    /// GOP-027: una creazione oltre tetto viola la prova dei precontrolli.
+    #[test]
+    fn oversized_created_value_is_an_invariant_violation() {
+        let budget = Rc::new(Budget::new(0));
+        assert!(matches!(
+            CountedInt::created(BigInt::from(1) << MAX_BITS, &budget),
+            Err(PredicateError::CalcoloNonConcluso("dominio aritmetico"))
+        ));
+        assert_eq!(budget.live(), 0);
+        assert_eq!(budget.attempted_peak(), 0);
+    }
+
+    /// GOP-027: somma a profondita' variabile, rifiuto prima del valore
+    /// oltre il dominio fisso; nessun temporaneo eccede `MAX_VALUE_BYTES`.
+    #[test]
+    fn accumulator_rejects_before_oversized_integer_creation() {
+        let budget = Rc::new(Budget::new(u64::MAX));
+        let mut value = Q::int_in(1, &budget).expect("uno");
+        let mut count = 0;
+        loop {
+            match value.try_add(&value) {
+                Ok(next) => {
+                    value = next;
+                    count += 1;
+                }
+                Err(PredicateError::ReservationLimit) => break,
+                Err(error) => panic!("errore inatteso: {error}"),
+            }
+        }
+        assert!(count > 100_000);
+        assert!(value.n.value.bits() <= MAX_BITS);
+        let before = budget.attempted_peak();
+        assert!(matches!(
+            value.try_add(&value),
+            Err(PredicateError::ReservationLimit)
+        ));
+        assert_eq!(before, budget.attempted_peak());
+        drop(value);
+        assert_eq!(budget.live(), 0);
+        let largest =
+            CountedInt::created(BigInt::from(1) << (MAX_BITS - 1), &budget).expect("massimo");
+        let two = CountedInt::int(2, &budget).expect("due");
+        assert!(matches!(
+            largest.mul(&two),
+            Err(PredicateError::ReservationLimit)
+        ));
+        assert!(matches!(
+            largest.shift(1),
+            Err(PredicateError::ReservationLimit)
+        ));
     }
 
     fn same(actual: &Q, expected: &oracle::Q) {
@@ -212,16 +285,13 @@ impl PartialEq for CountedInt {
 }
 impl Eq for CountedInt {}
 
+#[derive(Clone, Copy)]
+enum BitCheck {
+    BeforeCreation,
+    Created,
+}
+
 impl CountedInt {
-    // Il DAG degli editor puo' essere piu' profondo del noder. Controllare
-    // prima dell'operatore mantiene il massimo per valore anche in quel caso.
-    const fn admit_bits(bits: u64) -> Result<(), PredicateError> {
-        if bits > MAX_BITS {
-            Err(PredicateError::CalcoloNonConcluso("dominio aritmetico"))
-        } else {
-            Ok(())
-        }
-    }
     fn same_budget(&self, b: &Self) -> Result<(), PredicateError> {
         if Rc::ptr_eq(self.lease.budget(), b.lease.budget()) {
             Ok(())
@@ -232,9 +302,7 @@ impl CountedInt {
         }
     }
     fn created(value: BigInt, budget: &Rc<Budget>) -> Result<Self, PredicateError> {
-        if value.bits() > MAX_BITS {
-            return Err(PredicateError::CalcoloNonConcluso("dominio aritmetico"));
-        }
+        Self::check_bits(value.bits(), BitCheck::Created)?;
         let bytes = value.bits().div_ceil(LIMB_BITS) * (LIMB_BITS / 8)
             + std::mem::size_of::<BigInt>() as u64;
         debug_assert!(bytes <= MAX_VALUE_BYTES);
@@ -254,21 +322,38 @@ impl CountedInt {
         Self::created(-&self.value, self.lease.budget())
     }
 
+    // Unica regola di dominio; la fase distingue limite e invariante.
+    const fn check_bits(bits: u64, phase: BitCheck) -> Result<(), PredicateError> {
+        if bits <= MAX_BITS {
+            return Ok(());
+        }
+        Err(match phase {
+            BitCheck::BeforeCreation => PredicateError::ReservationLimit,
+            BitCheck::Created => PredicateError::CalcoloNonConcluso("dominio aritmetico"),
+        })
+    }
+
     fn add(&self, b: &Self) -> Result<Self, PredicateError> {
         self.same_budget(b)?;
-        Self::admit_bits(self.value.bits().max(b.value.bits()) + 1)?;
+        Self::check_bits(
+            self.value.bits().max(b.value.bits()) + 1,
+            BitCheck::BeforeCreation,
+        )?;
         Self::created(&self.value + &b.value, self.lease.budget())
     }
 
     fn sub(&self, b: &Self) -> Result<Self, PredicateError> {
         self.same_budget(b)?;
-        Self::admit_bits(self.value.bits().max(b.value.bits()) + 1)?;
+        Self::check_bits(
+            self.value.bits().max(b.value.bits()) + 1,
+            BitCheck::BeforeCreation,
+        )?;
         Self::created(&self.value - &b.value, self.lease.budget())
     }
 
     fn mul(&self, b: &Self) -> Result<Self, PredicateError> {
         self.same_budget(b)?;
-        Self::admit_bits(self.value.bits() + b.value.bits())?;
+        Self::check_bits(self.value.bits() + b.value.bits(), BitCheck::BeforeCreation)?;
         Self::created(&self.value * &b.value, self.lease.budget())
     }
 
@@ -289,7 +374,10 @@ impl CountedInt {
     }
 
     fn shift(&self, bits: u32) -> Result<Self, PredicateError> {
-        Self::admit_bits(self.value.bits() + u64::from(bits))?;
+        Self::check_bits(
+            self.value.bits() + u64::from(bits),
+            BitCheck::BeforeCreation,
+        )?;
         Self::created(&self.value << bits, self.lease.budget())
     }
 }

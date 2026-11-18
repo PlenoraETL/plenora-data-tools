@@ -57,6 +57,10 @@ la cui versione non ha qui una voce datata.
   Costruzioni razionali e radici certificate, pubblicazione GOP-015A condivisa,
   preservazione degli incroci, limiti cumulativi e interruzione cooperativa.
   Certificati di precisione e rifiuti conservativi descritti in `docs/offset.md`.
+- API Rust `polygon_completion_with_limits`: facce non occupate con provenienza
+  nuova/esistente, noding comune e pubblicazione nearest-even verificata.
+  Errori tipizzati, ordine canonico e deadline prioritaria opt-in; dominio
+  e limiti di qualifica in [completamento](docs/polygon-completion.md).
 
 - API Rust `line_boolean` per booleane XY punto/linea e linea/poligono:
   noding razionale e pubblicazione GOP-015A al binary64 piu' vicino,
