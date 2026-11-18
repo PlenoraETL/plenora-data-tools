@@ -276,6 +276,9 @@ pub enum SpatialPredicate {
 /// `"right"`; nessun messaggio riporta coordinate.
 #[derive(Debug, Error)]
 pub enum PredicateError {
+    /// La pubblicazione binary64 altererebbe la topologia esatta.
+    #[error("topologia non conservata dalla pubblicazione binary64")]
+    InvalidRoundedTopology,
     /// Il calcolo ha consumato il numero consentito di coppie o passi.
     #[error("limite di lavoro DE-9IM superato")]
     WorkLimit,

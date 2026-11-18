@@ -690,3 +690,105 @@ fn constructed_faces_share_edges_but_not_interiors() {
         Err(LineBooleanError::InvalidRoundedTopology)
     ));
 }
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn noded_publication_rejects_split_sites_and_mixed_certificates() {
+    // Fonte GOP-015A: un sito comune resta comune; nessun contatto nuovo.
+    let mut work = Work::new(RelateLimits::default(), None);
+    let points =
+        [(0., 0.), (1., 0.), (2., 0.), (1., 1.)].map(|c| P::of_in(c.into(), &work).unwrap());
+    let originals = Originals::from_coords(std::iter::empty(), &mut work).unwrap();
+    let first = PublishedEdge::noded(
+        [&points[0], &points[1]],
+        [&points[0], &points[1]],
+        &mut work,
+    )
+    .unwrap();
+    let second = PublishedEdge::noded(
+        [&points[1], &points[2]],
+        [&points[1], &points[2]],
+        &mut work,
+    )
+    .unwrap();
+    verify_publication(&[first, second], &originals, false, None, &mut work).unwrap();
+    for changed in [0, 3] {
+        let first = PublishedEdge::noded(
+            [&points[0], &points[1]],
+            [&points[0], &points[1]],
+            &mut work,
+        )
+        .unwrap();
+        let second = PublishedEdge::noded(
+            [&points[1], &points[2]],
+            [&points[changed], &points[2]],
+            &mut work,
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_publication(&[first, second], &originals, false, None, &mut work),
+            Err(LineBooleanError::InvalidRoundedTopology)
+        ));
+    }
+    // Fonte: precondizione del certificato; omogeneita' anche se disconnessi.
+    let first = PublishedEdge::noded(
+        [&points[0], &points[1]],
+        [&points[0], &points[1]],
+        &mut work,
+    )
+    .unwrap();
+    let isolated = PublishedEdge::point(&points[3], (1., 1.).into(), &mut work).unwrap();
+    assert!(matches!(
+        verify_publication(&[first, isolated], &originals, false, None, &mut work),
+        Err(LineBooleanError::InvalidRoundedTopology)
+    ));
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn editing_provenance_counts_empty_parts_and_nested_collections() {
+    // Fonte: GOP-026/028, anche una collezione senza coordinate consuma passi.
+    let mut geometry = Geometry::MultiLineString(MultiLineString(vec![LineString(vec![]); 128]));
+    for _ in 0..128 {
+        geometry = Geometry::GeometryCollection(GeometryCollection(vec![geometry]));
+    }
+    let mut work = Work::new(RelateLimits::default(), None);
+    let originals = Originals::for_editing(std::iter::empty(), &geometry, &mut work).unwrap();
+    assert!(originals.values.is_empty());
+    assert!(work.steps >= 256);
+    let limits = RelateLimits {
+        max_steps: work.steps - 1,
+        ..RelateLimits::default()
+    };
+    assert!(matches!(
+        Originals::for_editing(std::iter::empty(), &geometry, &mut Work::new(limits, None)),
+        Err(PredicateError::WorkLimit)
+    ));
+}
+
+#[test]
+fn noded_certificates_cannot_bypass_surface_or_path_verification() {
+    // Fonte: contratto del verificatore unico; i siti virtuali di split non
+    // sono ricevute di coordinate serializzate, ne' testimoni di offset.
+    let mut work = Work::new(RelateLimits::default(), None);
+    let points = [(0., 0.), (1., 0.)].map(|c| P::of_in(c.into(), &work).unwrap());
+    let originals = Originals::from_coords(std::iter::empty(), &mut work).unwrap();
+    let empty = Geometry::GeometryCollection(GeometryCollection::empty());
+    for (surface, directed, polygons) in [
+        (true, false, None),
+        (false, true, None),
+        (false, false, Some(&empty)),
+    ] {
+        let mut certificate = PublishedEdge::noded(
+            [&points[0], &points[1]],
+            [&points[0], &points[1]],
+            &mut work,
+        )
+        .unwrap();
+        certificate.surface = surface;
+        assert!(matches!(
+            verify_publication(&[certificate], &originals, directed, polygons, &mut work),
+            Err(LineBooleanError::InvalidRoundedTopology)
+        ));
+    }
+}

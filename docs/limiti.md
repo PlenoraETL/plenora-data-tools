@@ -226,7 +226,11 @@ precedenti che la toccano, prese dagli ingressi.
 sceglie la regola di riempimento dal verso del primo anello: un poligono
 valido di verso opposto spariva dall'unione.
 
-**Ambito.** Tutte le operazioni geografiche. `geo.polygonize` e
+**Ambito.** Operazioni geografiche con precisione metrica. Le API Rust
+`split_line_with_limits`, `polygonize_with_limits` e `line_boolean` seguono
+GOP-015A per le coordinate costruite: mezza ulp per ordinata, meta' al pari,
+con verifica topologica dopo arrotondamento, senza soglia metrica
+([guida](topologia.md#split-e-polygonize-con-limiti-pubblicazione-gop-015a)). `geo.polygonize` e
 `geo.split` con i controlli di spaziatura e noding; ogni operazione che
 passa da `i_overlay` con la griglia a priori (e le catene di overlay):
 `topology.rs` (`boolean_operation` e la variante `_validated`:

@@ -25,6 +25,32 @@ dipendenza nuova: `geo`, `geozero`, `thiserror` erano già nel lock.
 
 ## Che cosa è provato qui
 
+### Split e polygonize con limiti: pubblicazione GOP-015A
+
+Le API Rust `extended_algorithms::split_line_with_limits` e
+`extended_algorithms::polygonize_with_limits`, additive nella 6.1.0,
+usano noding razionale esatto e `RelateLimits`. Le coordinate costruite
+sono pubblicate al binary64 piu' vicino, meta' al pari: errore massimo
+mezza ulp per ordinata, nelle unita' del CRS planare dichiarato.
+Non si applica una soglia in centimetri. Le API `split_line` e `polygonize`
+della 6.0.0 conservano firme e comportamento.
+
+Arrotondatore e verificatore sono quelli condivisi con `line_boolean`.
+`PredicateError::InvalidRoundedTopology` segnala collassi, nuovi contatti,
+incroci o inversioni; nessun risultato parziale. Risorse, cancellazione e
+deadline mantengono errori distinti e condividono lo stesso bilancio.
+Split conserva ordine, verso e bit dei vertici sorgente, anche gli zeri con
+segno per occorrenza. Il certificato segue anche gli autoincroci e i tratti
+ripercorsi senza aggiungere vertici all'output. Polygonize verifica i bordi
+delle facce emesse, esclusi dangles e ponti scartati. Per siti d'ingresso
+coincidenti deduplicati prevale il primo, con priorita' della sorgente nello
+split; i nodi interni al certificato non sono coordinate pubblicate.
+
+Le prove dedicate coprono 1/3, 1/5, 1/7, pareggi pari/dispari, segni,
+subnormali, collassi, facce collineari dopo rounding e limiti inclusivi.
+Questa garanzia riguarda le due API dirette: non modifica la precisione
+metrica degli adapter e dei kernel 6.0.0 descritti sotto.
+
 ### Noding comune: migrazione DE-9IM, tranche 1b incompleta
 
 `relate_matrix` e la variante con limiti usano ora
