@@ -14,6 +14,36 @@ la cui versione non ha qui una voce datata.
 
 ### Aggiunte
 
+- API comune `coordinate_api`, profilo esplicito `standard_v1`: DD, DMS,
+  DDM, UTM, MGRS, USNG, GARS e GeoRef sopra i codec esistenti. Datum
+  obbligatorio, tabella dichiarativa delle opzioni senza default, coppia
+  angolare latitudine/longitudine, estensione e rappresentante delle celle.
+  Conversioni scalari e batch atomici, errori tipizzati senza dati con indice
+  opzionale, massimo 256 byte per testo e 65.536 elementi per batch.
+
+- API scalare `coordinate_usng`: `format_usng`, `parse_usng`, `UsngDatum`,
+  `DecodedUsng` e `UsngError`. NAD83/GRS80 o NAD27/Clarke 1866 espliciti,
+  senza trasformazioni; lettere e celle MGRS condivise. Grammatica ASCII
+  completa con spazi singoli e suffisso NAD27 obbligatorio; 0..5 cifre,
+  troncamento, rappresentante obbligatorio e massimo 27 byte. Dominio UTM,
+  regioni polari `unsupported`. TM parametrizzata sugli ellissoidi ammessi.
+
+- API scalare `coordinate_mgrs` WGS84: `format_mgrs`, `parse_mgrs`,
+  `MgrsCell`, `DecodedMgrs` e `MgrsError`. Riferimenti completi UTM/UPS,
+  precisione esplicita 0..5, troncamento, rappresentante obbligatorio
+  `grid_text::CellRepresentative` e limiti interi della cella sorgente.
+  UPS ellissoidale nel core; selezione UTM e TM riusate. Grammatica ASCII
+  maiuscola senza spazi, zona UTM a due cifre, limite 15 byte.
+  USNG e trasformazioni di datum non sono esposti da questa API.
+
+- API scalare `coordinate_utm` WGS84 conforme a GOP-023: `to_utm`,
+  `from_utm`, `format_utm`, `parse_utm`, `UtmCoordinate` e `UtmError`.
+  Testo canonico `zone hemisphere easting northing`, emisfero N/S,
+  risoluzione esplicita 1 m e arrotondamento half-even. Dominio 80S..84N
+  con eccezioni Norvegia/Svalbard; fuori dominio errore tipizzato.
+  Il prototipo non rilasciato con banda e UPS e' sostituito: nessun
+  ingresso con banda, formato UPS pubblico o riconoscimento implicito.
+
 - `extended_algorithms::polygonize_with_limits`: facce del linework sul noder comune con `RelateLimits` e `PredicateError`; polygonize 6.0.0 invariata.
 
 - `extended_algorithms::split_line_with_limits`: split sul noder comune con `RelateLimits` e `PredicateError`; `split_line` 6.0.0 invariata.
