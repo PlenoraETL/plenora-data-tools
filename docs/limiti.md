@@ -376,6 +376,24 @@ geografico della tabella (`scripts/genera_riferimenti_geodetici.py`), entro
 un micrometro e 1e-3 m²; con WGS 84 i kernel coincidono al bit con quelli
 di `geo`.
 
+**Distanza minima fra geometrie geodetiche.** L'API additiva
+`geodesic_distance::geodesic_distance_with_limits` ha un certificato
+assoluto di 1 cm, senza trasformazione CRS. Gli anelli scelgono la regione
+minore di mezzo ellissoide e saltano i lati di lunghezza zero. La soglia
+conservativa d'area rifiuta anche anelli validi con area non superiore a
+un metro quadrato per coordinata (chiusura inclusa), più perimetro per
+margine numerico di posizione. Sui lati oltre 1000 km richiede lunghezza
+ridotta `m12 >= 1024 m`: altrimenti restituisce `AccuracyUnproven` per la
+sensibilità delle posizioni intermedie vicino ai punti coniugati. La
+distanza fra soli punti non ha questa restrizione. Il margine di posizione
+cresce da 1 micrometro in funzione di `1/m12` e resta sotto 0.5 mm.
+Per bordi quasi paralleli distanti meno di un metro il bound di Taylor
+non interviene: la ricerca metrica conserva il certificato, ma può
+esaurire il budget con `WorkLimit`. Il budget di memoria copre le capacità
+stabili di indice, rappresentanti delle componenti, anelli e coda; esclude
+input, stack, overhead dell'allocatore e coesistenza transitoria del buffer
+vecchio e nuovo durante una riallocazione.
+
 **Area: topologia delle geodetiche.** La validazione OGC guarda il piano
 lon/lat, ma i lati dell'area sono geodetiche: un lato lungo può passare
 dall'altra parte di un buco o di un'altra parte, e l'area sottrarrebbe o

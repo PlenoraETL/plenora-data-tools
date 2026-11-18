@@ -215,7 +215,7 @@ fn exact_work_memory_cancel_deadline_and_crs() {
         Err(GeodesicDistanceError::MemoryLimit)
     ));
     let cancelled = AtomicBool::new(true);
-    // GOP-028: deadline prevale al checkpoint condiviso.
+    // GOP-028: cancellazione al checkpoint di ingresso senza deadline.
     assert!(matches!(
         geodesic_distance_with_limits(&a, &b, &crs, limits(), Some(&cancelled)),
         Err(GeodesicDistanceError::Cancelled)
@@ -341,6 +341,7 @@ fn taylor_matches_metric_oracle() {
                 peak: 0,
                 ellipsoid: EllissoideGeodetico::da_crs(&crs).unwrap(),
                 taylor: false,
+                position_margin: ROUND_M,
             };
             let left = GeometryIndex::new(&a, &mut work).unwrap();
             let right = GeometryIndex::new(&b, &mut work).unwrap();
@@ -460,5 +461,181 @@ fn refinement_limits_and_interruptions() {
     assert!(matches!(
         geodesic_distance_with_limits(&far, &long, &crs, budget, None),
         Err(GeodesicDistanceError::DeadlineExceeded)
+    ));
+}
+
+// G2 Python 2.1, reference.py: coordinate e bracket metrici generati
+// indipendentemente; winding locale solo per le fixture con anelli convessi.
+fn fixture_geometry(value: &serde_json::Value, reverse: bool) -> Geometry {
+    let parts: Vec<LineString> = value["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|part| {
+            let mut coords: Vec<Coord> = part
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| Coord {
+                    x: p[0].as_f64().unwrap(),
+                    y: p[1].as_f64().unwrap(),
+                })
+                .collect();
+            if reverse {
+                coords.reverse();
+            }
+            LineString::new(coords)
+        })
+        .collect();
+    match value["kind"].as_str().unwrap() {
+        "point" => Point(parts[0].0[0]).into(),
+        "line" => parts[0].clone().into(),
+        "polygon" => Polygon::new(parts[0].clone(), parts[1..].to_vec()).into(),
+        "multi_polygon" => MultiPolygon::new(
+            parts
+                .into_iter()
+                .map(|ring| Polygon::new(ring, vec![]))
+                .collect(),
+        )
+        .into(),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn independent_surface_and_long_arc_fixtures() {
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("reference_cases.json")).unwrap();
+    for fixture in fixtures.as_array().unwrap() {
+        let lower = fixture["bracket"][0].as_f64().unwrap();
+        let upper = fixture["bracket"][1].as_f64().unwrap();
+        for reverse in [false, true] {
+            let a = fixture_geometry(&fixture["a"], reverse);
+            let b = fixture_geometry(&fixture["b"], reverse);
+            for actual in [distance(&a, &b).metres, distance(&b, &a).metres] {
+                assert!(
+                    actual >= lower - ABSOLUTE_ERROR_M && actual <= upper + ABSOLUTE_ERROR_M,
+                    "independent bracket violated"
+                );
+                if upper == 0.0 {
+                    assert_eq!(actual, 0.0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn repeated_surface_vertices_and_seam_aliases() {
+    // GOP-004/005: lati nulli non cambiano l'insieme; il punto e' interno
+    // al rettangolo convesso anche con duplicati e alias del seam.
+    let repeated: Geometry = Polygon::new(
+        LineString::from(vec![
+            (0., 0.),
+            (0., 0.),
+            (0.001, 0.),
+            (0.001, 0.001),
+            (0.001, 0.001),
+            (0., 0.001),
+            (0., 0.),
+        ]),
+        vec![],
+    )
+    .into();
+    assert_eq!(distance(&point(0.0005, 0.0005), &repeated).metres, 0.0);
+    let seam: Geometry = Polygon::new(
+        LineString::from(vec![
+            (180., 0.),
+            (-180., 0.),
+            (-179.999, 0.),
+            (-179.999, 0.001),
+            (180., 0.001),
+            (-180., 0.001),
+            (180., 0.),
+        ]),
+        vec![],
+    )
+    .into();
+    assert_eq!(distance(&point(-179.9995, 0.0005), &seam).metres, 0.0);
+}
+
+#[test]
+fn surface_tree_prunes_large_ring() {
+    let mut coords = Vec::new();
+    for side in 0..4 {
+        for i in 0..2500 {
+            let t = f64::from(i) / 2500.0;
+            coords.push(match side {
+                0 => (0.1 * t, 0.0),
+                1 => (0.1, 0.1 * t),
+                2 => (0.1 * (1.0 - t), 0.1),
+                _ => (0.0, 0.1 * (1.0 - t)),
+            });
+        }
+    }
+    coords.push((0.0, 0.0));
+    let polygon = Polygon::new(LineString::from(coords), vec![]).into();
+    let result = distance(&point(0.05, 0.05), &polygon);
+    // GOP-005: interno al rettangolo convesso; GOP-026: la visita a palle
+    // separa sottoalberi senza enumerare cinquanta milioni di coppie.
+    assert_eq!(result.metres, 0.0);
+    assert!(result.work < 2_000_000);
+}
+
+#[test]
+fn conjugate_path_guard_preserves_point_distance() {
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    // G2 Python 2.1 inverse ALL: m12=55.00077246674549 m; il ramo
+    // equatoriale unico e' troppo sensibile per le posizioni intermedie.
+    assert!(matches!(
+        geodesic_distance_with_limits(
+            &point(0., 0.),
+            &line(&[(0., 0.), (179.396, 0.)]),
+            &crs,
+            limits(),
+            None
+        ),
+        Err(GeodesicDistanceError::AccuracyUnproven)
+    ));
+    // G1: distanza equatoriale scalare a*lambda, senza scelta del percorso.
+    close(
+        distance(&point(0., 0.), &point(179.396, 0.)).metres,
+        6_378_137.0 * 179.396_f64.to_radians(),
+    );
+}
+
+#[test]
+fn direct_failure_is_accuracy_and_tiny_area_is_explicit() {
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let mut work = Work {
+        limits: limits(),
+        cancel: None,
+        count: 0,
+        bytes: 0,
+        peak: 0,
+        ellipsoid: EllissoideGeodetico::da_crs(&crs).unwrap(),
+        taylor: true,
+        position_margin: ROUND_M,
+    };
+    let arc = ArcPiece {
+        origin: Coord { x: 0., y: 0. },
+        azimuth: f64::NAN,
+        lo: 0.,
+        hi: 1.,
+    };
+    // GOP-006: un fallimento numerico di direct non invalida l'input.
+    assert!(matches!(
+        work.at(arc, 0.5),
+        Err(GeodesicDistanceError::AccuracyUnproven)
+    ));
+    assert!(matches!(
+        MetricBall::piece(arc, &mut work),
+        Err(GeodesicDistanceError::AccuracyUnproven)
+    ));
+    let tiny: Geometry = Polygon::new(rectangle(0., 0.000_001), vec![]).into();
+    // G2: la soglia conservativa d'area rifiuta un quadrato di circa 0.01 m2.
+    assert!(matches!(
+        geodesic_distance_with_limits(&point(1., 1.), &tiny, &crs, limits(), None),
+        Err(GeodesicDistanceError::UnsupportedSurface)
     ));
 }

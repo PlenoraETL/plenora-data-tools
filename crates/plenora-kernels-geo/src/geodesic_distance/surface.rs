@@ -1,10 +1,16 @@
 //! Topologia degli anelli geodetici, indipendente dal piano lon/lat.
+//!
+//! Area non certificabile: si rifiutano anelli con area assoluta non
+//! superiore a n coordinate m2 + perimetro per margine di posizione,
+//! inclusa la chiusura.
+//! La somma d'area senza compensazione impone questo limite anche ad
+//! anelli OGC validi molto piccoli; non e' un controllo di semplicita'.
 
 #![allow(
     clippy::suboptimal_flops,
     reason = "Ordine esplicito delle operazioni nelle maggiorazioni numeriche"
 )]
-use super::{minimum, GeodesicDistanceError, GeometryIndex, MetricBall, Work, GAP_M, ROUND_M};
+use super::{minimum, GeodesicDistanceError, GeometryIndex, MetricBall, Work, GAP_M};
 use geo::{Coord, LineString};
 use geographiclib_rs::{PolygonArea, Winding};
 
@@ -26,7 +32,7 @@ pub(super) fn append_short_pieces(
 ) -> Result<(), GeodesicDistanceError> {
     work.step()?;
     if ball.arc.hi == ball.arc.lo {
-        return Err(GeodesicDistanceError::UnsupportedSurface);
+        return Ok(());
     }
     if depth > 32 {
         return Err(GeodesicDistanceError::AccuracyUnproven);
@@ -64,7 +70,7 @@ pub(super) fn ring_area(
     }
     work.step()?;
     let (perimeter, area, _) = polygon.compute(true);
-    margin += perimeter * ROUND_M;
+    margin += perimeter * work.position_margin;
     if !area.is_finite()
         || area.abs() <= margin
         || ellipsoid.geodetica().area() * 0.5 - area.abs() <= margin
@@ -85,7 +91,8 @@ fn adjacent(
     let (back_length, backwards, _, _) = work.inverse(join, before)?;
     let (forward_length, forwards, _, _) = work.inverse(join, after)?;
     let gap = (backwards - forwards).abs();
-    let angle_error = (8.0 * ROUND_M / back_length.min(forward_length)).to_degrees() + 1e-8;
+    let angle_error =
+        (8.0 * work.position_margin / back_length.min(forward_length)).to_degrees() + 1e-8;
     if gap.min(360.0 - gap) <= angle_error {
         return Err(GeodesicDistanceError::UnsupportedSurface);
     }
@@ -96,28 +103,13 @@ pub(super) fn validate(
     index: &GeometryIndex,
     work: &mut Work<'_>,
 ) -> Result<(), GeodesicDistanceError> {
+    if !index.rings.is_empty() {
+        separate(index.root, index.root, index, work)?;
+    }
     for (ri, ring) in index.rings.iter().enumerate() {
         for i in ring.begin..ring.end {
             let next = if i + 1 == ring.end { ring.begin } else { i + 1 };
             adjacent(index.nodes[i], index.nodes[next], work)?;
-            for (rj, other) in index.rings.iter().enumerate().skip(ri) {
-                for j in other.begin..other.end {
-                    work.step()?;
-                    if ri == rj && (j <= i || j == next || (i == ring.begin && j + 1 == ring.end)) {
-                        continue;
-                    }
-                    let a = index.nodes[i];
-                    let b = index.nodes[j];
-                    let lower =
-                        work.inverse(a.centre, b.centre)?.0 - a.radius - b.radius - 4.0 * ROUND_M;
-                    if lower > GAP_M {
-                        continue;
-                    }
-                    if minimum(a, b, &[], &[], true, work)? <= GAP_M {
-                        return Err(GeodesicDistanceError::UnsupportedSurface);
-                    }
-                }
-            }
         }
         if ring.shell != ri {
             let point = index.nodes[ring.begin].centre;
@@ -152,22 +144,69 @@ pub(super) fn validate(
     Ok(())
 }
 
-fn normal(point: Coord) -> [f64; 3] {
-    let (sin_lat, cos_lat) = point.y.to_radians().sin_cos();
-    let (sin_lon, cos_lon) = point.x.to_radians().sin_cos();
-    [cos_lat * cos_lon, cos_lat * sin_lon, sin_lat]
+// Visita duale della gerarchia: le coppie di sottoalberi separati si
+// scartano in blocco. Solo le foglie adiacenti condividono un estremo.
+fn separate(
+    left: usize,
+    right: usize,
+    index: &GeometryIndex,
+    work: &mut Work<'_>,
+) -> Result<(), GeodesicDistanceError> {
+    work.step()?;
+    let a = index.nodes[left];
+    let b = index.nodes[right];
+    if left == right {
+        if let Some((one, two)) = a.children {
+            separate(one, one, index, work)?;
+            separate(one, two, index, work)?;
+            separate(two, two, index, work)?;
+        }
+        return Ok(());
+    }
+    if work.inverse(a.centre, b.centre)?.0 - a.radius - b.radius - 4.0 * work.position_margin
+        > GAP_M
+    {
+        return Ok(());
+    }
+    if let Some((one, two)) = a
+        .children
+        .filter(|_| b.children.is_none() || a.radius >= b.radius)
+    {
+        separate(one, right, index, work)?;
+        return separate(two, right, index, work);
+    }
+    if let Some((one, two)) = b.children {
+        separate(left, one, index, work)?;
+        return separate(left, two, index, work);
+    }
+    let lo = left.min(right);
+    let hi = left.max(right);
+    let ri = index.rings.partition_point(|ring| ring.end <= lo);
+    let ring = &index.rings[ri];
+    if hi < ring.end && (hi == lo + 1 || (lo == ring.begin && hi + 1 == ring.end)) {
+        return Ok(());
+    }
+    if minimum(a, b, &[], &[], true, work)? <= GAP_M {
+        return Err(GeodesicDistanceError::UnsupportedSurface);
+    }
+    Ok(())
 }
 
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0].mul_add(b[0], a[1].mul_add(b[1], a[2] * b[2]))
-}
-
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1].mul_add(b[2], -a[2] * b[1]),
-        a[2].mul_add(b[0], -a[0] * b[2]),
-        a[0].mul_add(b[1], -a[1] * b[0]),
-    ]
+// (n(vertex)-n(point)) nel riferimento est/nord/normale di point.
+// Le identita' a mezzo angolo evitano la sottrazione di vettori unitari
+// quasi uguali. La normalizzazione elimina il fattore distanza al quadrato
+// dall'atan2 del triangolo con apice -n(point).
+fn local_chord(point: Coord, vertex: Coord) -> [f64; 3] {
+    let latitude = point.y.to_radians();
+    let other = vertex.y.to_radians();
+    let delta = (vertex.y - point.y).to_radians();
+    let longitude = (vertex.x - point.x).to_radians();
+    let half_lon = (longitude * 0.5).sin().powi(2);
+    let east = other.cos() * longitude.sin();
+    let north = delta.sin() + 2.0 * other.cos() * latitude.sin() * half_lon;
+    let radial = -2.0 * ((delta * 0.5).sin().powi(2) + other.cos() * latitude.cos() * half_lon);
+    let length = east.hypot(north).hypot(radial);
+    [east / length, north / length, radial / length]
 }
 
 struct FanSum {
@@ -182,7 +221,6 @@ struct FanSum {
 fn fan_piece(
     point: Coord,
     ball: MetricBall,
-    maximum: f64,
     sum: &mut FanSum,
     work: &mut Work<'_>,
     depth: u32,
@@ -194,28 +232,26 @@ fn fan_piece(
     let distance = work.inverse(point, ball.centre)?.0;
     // Raggi principali compresi fra 5.9e6 e 7.1e6 m nel dominio pubblico.
     // La palla immagine non contiene q; arco e corda sono omotopi senza q.
-    if ball.radius > maximum || distance <= 8.0 * ball.radius + 16.0 * ROUND_M {
+    if distance <= 4.0 * (ball.arc.hi - ball.arc.lo) + 16.0 * work.position_margin {
         let (a, b) = ball.split(&[], work)?;
-        fan_piece(point, a, maximum, sum, work, depth + 1)?;
-        return fan_piece(point, b, maximum, sum, work, depth + 1);
+        fan_piece(point, a, sum, work, depth + 1)?;
+        return fan_piece(point, b, sum, work, depth + 1);
     }
-    let q = normal(point).map(|v| -v);
-    let a = normal(work.at(ball.arc, ball.arc.lo)?);
-    let b = normal(work.at(ball.arc, ball.arc.hi)?);
-    let numerator = dot(q, cross(a, b));
-    let denominator = 1.0 + dot(q, a) + dot(a, b) + dot(b, q);
+    let a = local_chord(point, work.at(ball.arc, ball.arc.lo)?);
+    let b = local_chord(point, work.at(ball.arc, ball.arc.hi)?);
+    let numerator = a[1].mul_add(b[0], -a[0] * b[1]);
+    let denominator = a[0].mul_add(b[0], a[1].mul_add(b[1], a[2] * b[2]));
     let condition = numerator.hypot(denominator);
-    if condition <= 1e-12 {
+    if !condition.is_finite() || condition < 0.5 {
         return Err(GeodesicDistanceError::AccuracyUnproven);
     }
-    let angle = 2.0 * numerator.atan2(denominator);
-    sum.angle += angle;
-    // Limite conservativo della striscia tra arco normale e corda:
-    // |n''(s)|<4/Rmin^2, lunghezza<2L/Rmin, area<16(L/Rmin)^3.
-    // Il termine condizionato copre coordinate direct, trigonometria,
-    // prodotti scalari, atan2 e accumulazione in binary64.
+    sum.angle += 2.0 * numerator.atan2(denominator);
+    // Striscia arco normale/corda: |n''|<4/Rmin^2 e area<16(L/Rmin)^3.
+    // Il condizionamento locale e' limitato; l'errore angolare include
+    // la perturbazione delle posizioni, senza dividere per l'area dell'anello.
     sum.error += 16.0 * ((ball.arc.hi - ball.arc.lo) / 5.9e6).powi(3)
-        + 2e-12 / condition
+        + 64.0 * work.position_margin / (distance - ball.radius)
+        + 2e-12
         + sum.angle.abs() * 1e-15;
     Ok(())
 }
@@ -226,21 +262,27 @@ fn in_ring(
     nodes: &[MetricBall],
     work: &mut Work<'_>,
 ) -> Result<bool, GeodesicDistanceError> {
-    let mut maximum = 250_000.0;
-    for _ in 0..32 {
-        let mut sum = FanSum {
-            angle: 0.0,
-            error: 0.0,
-        };
-        for &ball in &nodes[ring.begin..ring.end] {
-            fan_piece(point, ball, maximum, &mut sum, work, 0)?;
-        }
-        if sum.angle.abs() > sum.error {
-            return Ok(sum.angle.is_sign_positive() != ring.area.is_sign_positive());
-        }
-        maximum *= 0.5;
+    let mut sum = FanSum {
+        angle: 0.0,
+        error: 0.0,
+    };
+    for &ball in &nodes[ring.begin..ring.end] {
+        fan_piece(point, ball, &mut sum, work, 0)?;
     }
-    Err(GeodesicDistanceError::AccuracyUnproven)
+    // K<=1/(a^2*(1-f)^2), area totale<=4pi*a^2: la regione minore
+    // ha area normale A<2pi/(1-f)^2<6.34 nel dominio f<=1/250.
+    // Con il verso positivo Sigma=A fuori e A-4pi<-6.22 dentro.
+    // La soglia -pi separa i due intervalli anche per A arbitrariamente
+    // piccola e quando punto e antipode appartengono entrambi alla regione.
+    let oriented = sum.angle * ring.area.signum();
+    let threshold = -std::f64::consts::PI;
+    if oriented + sum.error < threshold {
+        Ok(true)
+    } else if oriented - sum.error > threshold {
+        Ok(false)
+    } else {
+        Err(GeodesicDistanceError::AccuracyUnproven)
+    }
 }
 
 fn in_polygon(
@@ -274,9 +316,9 @@ pub(super) fn contains_any(
         if ring.shell != i {
             continue;
         }
-        for node in &other.nodes {
+        for &point in &other.representatives {
             work.step()?;
-            if node.children.is_none() && in_polygon(node.centre, i, surface, work)? {
+            if in_polygon(point, i, surface, work)? {
                 return Ok(true);
             }
         }

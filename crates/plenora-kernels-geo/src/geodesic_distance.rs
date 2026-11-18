@@ -34,7 +34,8 @@ pub struct GeodesicDistanceLimits {
     /// aree di lati, visite dell'indice e iterazioni di raffinamento.
     pub max_work: u64,
     /// Capacita' dei vettori e della coda. Esclusi input preso in prestito,
-    /// stack (profondita' limitata) e overhead dell'allocatore.
+    /// stack (profondita' limitata), overhead dell'allocatore e buffer
+    /// transitori durante la riallocazione (vecchio e nuovo coesistenti).
     pub max_reserved_bytes: u64,
     /// Scadenza monotona; prevale sull'annullamento allo stesso checkpoint.
     pub deadline: Option<Instant>,
@@ -54,8 +55,13 @@ pub struct GeodesicDistanceResult {
 /// Errore assoluto in metri; errore relativo zero, nessuna trasformazione CRS.
 pub const ABSOLUTE_ERROR_M: f64 = 0.01;
 const GAP_M: f64 = 0.004;
-// G2 Background: <15 nm per primitiva terrestre. Il margine di 1 micrometro
-// copre anche composizione direct/inverse e arrotondamenti dei bounds.
+// G2, Additional properties e Background:
+// https://geographiclib.sourceforge.io/html/python/geodesics.html
+// La perturbazione trasversa e' m12*dazi. Un residuo agli estremi di
+// 32 nm amplificato di al piu' 7.1e6/1024 resta sotto 0.25 mm lungo
+// l'arco. edge rifiuta m12<1024 m sui lati lunghi; 0.5 mm copre anche
+// direct e aritmetica; il margine effettivo cresce da ROUND_M con 1/m12.
+// Le inverse fra soli punti non richiedono un ramo.
 const ROUND_M: f64 = 1e-6;
 
 /// Errori bounded senza valori delle geometrie.
@@ -110,6 +116,7 @@ struct Work<'a> {
     peak: u64,
     ellipsoid: EllissoideGeodetico,
     taylor: bool,
+    position_margin: f64,
 }
 
 impl Work<'_> {
@@ -199,7 +206,7 @@ impl Work<'_> {
             self.ellipsoid
                 .geodetica()
                 .direct(arc.origin.y, arc.origin.x, arc.azimuth, offset);
-        coordinate(Coord { x: lon, y: lat })
+        coordinate(Coord { x: lon, y: lat }).map_err(|_| GeodesicDistanceError::AccuracyUnproven)
     }
 }
 
@@ -254,9 +261,10 @@ impl MetricBall {
             return Err(GeodesicDistanceError::AccuracyUnproven);
         }
         Ok(Self {
-            centre: coordinate(Coord { x: lon, y: lat })?,
+            centre: coordinate(Coord { x: lon, y: lat })
+                .map_err(|_| GeodesicDistanceError::AccuracyUnproven)?,
             tangent,
-            radius: (arc.hi - arc.lo) * 0.5 + ROUND_M,
+            radius: (arc.hi - arc.lo) * 0.5 + work.position_margin,
             arc,
             children: None,
         })
@@ -311,6 +319,15 @@ fn edge(a: Coord, b: Coord, work: &mut Work<'_>) -> Result<MetricBall, GeodesicD
     {
         return Err(GeodesicDistanceError::AccuracyUnproven);
     }
+    if length > 1_000_000.0 {
+        work.step()?;
+        let (_, _, _, reduced, _, _, _, _): (f64, f64, f64, f64, f64, f64, f64, f64) =
+            work.ellipsoid.geodetica().inverse(a.y, a.x, b.y, b.x);
+        if !reduced.is_finite() || reduced < 1024.0 {
+            return Err(GeodesicDistanceError::AccuracyUnproven);
+        }
+        work.position_margin = work.position_margin.max(32e-9 * 7.1e6 / reduced + ROUND_M);
+    }
     MetricBall::piece(
         ArcPiece {
             origin: a,
@@ -325,6 +342,7 @@ fn edge(a: Coord, b: Coord, work: &mut Work<'_>) -> Result<MetricBall, GeodesicD
 struct GeometryIndex {
     nodes: Vec<MetricBall>,
     rings: Vec<surface::SurfaceRing>,
+    representatives: Vec<Coord>,
     root: usize,
 }
 
@@ -342,6 +360,7 @@ impl GeometryIndex {
             work.step()?;
             coordinate(point)?;
         }
+        work.push(&mut self.representatives, line.0[0])?;
         for pair in line.0.windows(2) {
             let ball = edge(pair[0], pair[1], work)?;
             if ring {
@@ -362,6 +381,9 @@ impl GeometryIndex {
         for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
             let begin = self.nodes.len();
             self.line(ring, true, work)?;
+            if self.nodes.len() - begin < 3 {
+                return Err(GeodesicDistanceError::UnsupportedSurface);
+            }
             let area = surface::ring_area(ring, work)?;
             work.push(
                 &mut self.rings,
@@ -380,17 +402,20 @@ impl GeometryIndex {
         let mut index = Self {
             nodes: Vec::new(),
             rings: Vec::new(),
+            representatives: Vec::new(),
             root: 0,
         };
         match geometry {
             Geometry::Point(point) => {
                 work.step()?;
                 work.push(&mut index.nodes, MetricBall::point(coordinate(point.0)?))?;
+                work.push(&mut index.representatives, point.0)?;
             }
             Geometry::MultiPoint(points) => {
                 for point in points {
                     work.step()?;
                     work.push(&mut index.nodes, MetricBall::point(coordinate(point.0)?))?;
+                    work.push(&mut index.representatives, point.0)?;
                 }
             }
             Geometry::LineString(line) => index.line(line, false, work)?,
@@ -410,8 +435,8 @@ impl GeometryIndex {
         if index.nodes.is_empty() {
             return Err(GeodesicDistanceError::EmptyGeometry);
         }
-        surface::validate(&index, work)?;
         index.root = index.branch(0, index.nodes.len(), work)?;
+        surface::validate(&index, work)?;
         Ok(index)
     }
 
@@ -432,7 +457,7 @@ impl GeometryIndex {
         let b = self.nodes[right];
         let radius = a
             .radius
-            .max(work.inverse(a.centre, b.centre)?.0 + b.radius + ROUND_M);
+            .max(work.inverse(a.centre, b.centre)?.0 + b.radius + work.position_margin);
         let position = self.nodes.len();
         work.push(
             &mut self.nodes,
@@ -495,15 +520,16 @@ fn taylor_lower(
     azi1: f64,
     azi2: f64,
     lower: f64,
+    margin: f64,
 ) -> f64 {
-    let derivative_error = 16.0 * ROUND_M / lower + 1e-9;
+    let derivative_error = 16.0 * margin / lower + 1e-9;
     let da = (a.tangent - azi1).to_radians().cos().abs() + derivative_error;
     let db = (b.tangent - azi2).to_radians().cos().abs() + derivative_error;
     distance
         - da * a.radius
         - db * b.radius
         - 2.0 * (a.radius + b.radius).powi(2) / lower
-        - 8.0 * ROUND_M
+        - 8.0 * margin
 }
 
 impl SearchQueue {
@@ -514,15 +540,23 @@ impl SearchQueue {
         work: &mut Work<'_>,
     ) -> Result<(), GeodesicDistanceError> {
         let (distance, azi1, azi2, _) = work.inverse(a.centre, b.centre)?;
-        self.best = self.best.min(distance + 4.0 * ROUND_M);
-        let mut lower = (distance - a.radius - b.radius - 4.0 * ROUND_M).max(0.0);
+        self.best = self.best.min(distance + 4.0 * work.position_margin);
+        let mut lower = (distance - a.radius - b.radius - 4.0 * work.position_margin).max(0.0);
         if work.taylor
             && a.children.is_none()
             && b.children.is_none()
             && lower > 1.0
             && distance + a.radius + b.radius < 1_000_000.0
         {
-            lower = lower.max(taylor_lower(a, b, distance, azi1, azi2, lower));
+            lower = lower.max(taylor_lower(
+                a,
+                b,
+                distance,
+                azi1,
+                azi2,
+                lower,
+                work.position_margin,
+            ));
         }
         if if self.separation_only {
             lower > GAP_M
@@ -619,10 +653,11 @@ fn minimum(
 /// inferiore e' max(0,d(c1,c2)-r1-r2), con margini numerici. L'indice unisce
 /// palle per disuguaglianza triangolare. Sotto 1000 km usa anche il bound
 /// di Taylor della distanza, con Hessiana maggiorata tramite m12 e M12
-/// (G1, campi di Jacobi); il percorso metrico generico resta l'oracolo.
+/// (G1, campi di Jacobi); prove differenziali e fixture Python indipendenti
+/// controllano separatamente ottimizzazioni e risultati.
 /// Raffina finche' upper-lower <=4 mm.
-/// I risultati entro 4 mm sono zero, inclusi incroci e contatti. Il margine
-/// numerico delle primitive direct/inverse e' 1 micrometro; non c'e' errore
+/// Un upper bound entro 1 cm restituisce zero, inclusi incroci e contatti. Il margine
+/// numerico, inclusa la sensibilita' del ramo inverso, e' 0.5 mm; non c'e' errore
 /// di trasformazione. Dominio qualificato: 6e6<=a<=7e6 m, 250<=1/f<=350.
 ///
 /// I lati non unici G2 falliscono, mentre la distanza fra punti antipodali
@@ -630,6 +665,10 @@ fn minimum(
 /// 0<abs(lat1+lat2)<1e-12 gradi con azimut estremi diversi non e' certificata.
 /// Le superfici con bordi non adiacenti entro 8 mm possono essere rifiutate;
 /// orientamento/area o classificazione non certificabili falliscono.
+/// Sui lati oltre 1000 km si richiede m12>=1024 m per limitare
+/// l'amplificazione numerica vicino ai punti coniugati.
+/// Per bordi quasi paralleli distanti meno di un metro Taylor non si
+/// applica: la ricerca metrica puo' esaurire `max_work` (`WorkLimit`).
 ///
 /// Nessun prodotto di cardinalita' decide l'ammissione. Ogni primitiva,
 /// lettura di coordinate, visita e raffinamento controlla deadline e cancel;
@@ -672,6 +711,7 @@ pub fn geodesic_distance_with_limits(
         peak: 0,
         ellipsoid,
         taylor: true,
+        position_margin: ROUND_M,
     };
     let left = GeometryIndex::new(a, &mut work)?;
     let right = GeometryIndex::new(b, &mut work)?;
@@ -683,6 +723,9 @@ pub fn geodesic_distance_with_limits(
         false,
         &mut work,
     )?;
+    if metres <= ABSOLUTE_ERROR_M {
+        metres = 0.0;
+    }
     if metres > 0.0
         && (surface::contains_any(&left, &right, &mut work)?
             || surface::contains_any(&right, &left, &mut work)?)
