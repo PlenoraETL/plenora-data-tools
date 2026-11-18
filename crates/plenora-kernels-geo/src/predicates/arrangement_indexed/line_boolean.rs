@@ -368,7 +368,7 @@ fn execute(
         publication.support = Some(support);
         work.push(&mut published, publication)?;
     }
-    verify_publication(&published, &originals, work)?;
+    verify_publication(&published, &originals, false, work)?;
     finish(components, filter, work)
 }
 
@@ -554,8 +554,9 @@ impl Originals {
     }
 }
 
-/// Certificato di un lato atomico gia' nodato; un sito isolato ha estremi uguali.
-/// Riutilizzabile dagli editor dopo la costruzione esatta del loro grafo.
+/// Certificato di un lato; un sito isolato ha estremi uguali.
+/// La modalita' atomica richiede lati gia' nodati, quella percorso li certifica
+/// anche in presenza di incroci interni non pubblicati come vertici.
 pub(crate) struct PublishedEdge<'a> {
     exact: [&'a P; 2],
     rounded: Edge,
@@ -603,10 +604,13 @@ impl<'a> PublishedEdge<'a> {
 /// Gli anelli semplici del grafo non possono collassare o invertirsi: nessuna
 /// fusione, nessun nuovo incrocio e nessun cambio di verso dei settori non nulli.
 /// I poligoni di questa API sono inoltre copie bit per bit, gia' validate.
-/// Non rinoda razionali costruiti; il visitatore riceve solo binary64 riletti.
+/// In modalita' atomica non rinoda razionali costruiti. Con `directed_path`
+/// conserva anche gli incroci interni: noda testimone e uscita, confronta
+/// ordine lungo i lati e identita' dei siti, senza pubblicare i nodi ausiliari.
 pub(crate) fn verify_publication(
     edges: &[PublishedEdge<'_>],
     originals: &Originals,
+    directed_path: bool,
     work: &mut Work<'_>,
 ) -> Result<(), LineBooleanError> {
     let mut vertices = CountedVec::new();
@@ -652,6 +656,10 @@ pub(crate) fn verify_publication(
             return Err(LineBooleanError::InvalidRoundedTopology);
         }
     }
+    if directed_path {
+        verify_path_pairs(edges, work)?;
+        return Ok(());
+    }
     let mut invalid = false;
     crate::noding::visit(&refs, work, |i, j, hits, work| {
         let (a, b) = (&edges[i], &edges[j]);
@@ -689,6 +697,85 @@ pub(crate) fn verify_publication(
     } else {
         Ok(())
     }
+}
+
+// Il percorso puo' contenere incroci: conserva i segni delle quattro
+// orientazioni e, nei casi collineari, l'ordine degli estremi. Non richiede
+// che un incrocio gia' presente diventi un vertice della polilinea.
+fn verify_path_pairs(
+    edges: &[PublishedEdge<'_>],
+    work: &mut Work<'_>,
+) -> Result<(), LineBooleanError> {
+    for (i, a) in edges.iter().enumerate() {
+        for b in &edges[i + 1..] {
+            work.pair()?;
+            let exact = [a.exact[0], a.exact[1], b.exact[0], b.exact[1]];
+            let rounded = [&a.rounded.a, &a.rounded.b, &b.rounded.a, &b.rounded.b];
+            for [p, q, r] in [[0, 1, 2], [0, 1, 3], [2, 3, 0], [2, 3, 1]] {
+                work.step()?;
+                let before = exact[q]
+                    .try_sub(exact[p])?
+                    .try_cross(&exact[r].try_sub(exact[p])?)?
+                    .sign();
+                let after = rounded[q]
+                    .try_sub(rounded[p])?
+                    .try_cross(&rounded[r].try_sub(rounded[p])?)?
+                    .sign();
+                if before != after {
+                    return Err(LineBooleanError::InvalidRoundedTopology);
+                }
+                if before.is_eq() {
+                    for [u, v] in [[p, r], [q, r]] {
+                        work.step()?;
+                        if point_cmp(exact[u], exact[v])? != point_cmp(rounded[u], rounded[v])? {
+                            return Err(LineBooleanError::InvalidRoundedTopology);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut exact_edges = CountedVec::new();
+    let mut rounded_refs = CountedVec::new();
+    for edge in edges {
+        work.nodes(2)?;
+        work.push(
+            &mut exact_edges,
+            Edge {
+                a: edge.exact[0].try_clone()?,
+                b: edge.exact[1].try_clone()?,
+            },
+        )?;
+        work.push(&mut rounded_refs, &edge.rounded)?;
+    }
+    let mut exact_refs = CountedVec::new();
+    for edge in &exact_edges {
+        work.push(&mut exact_refs, edge)?;
+    }
+    let exact_nodes = crate::noding::node(&exact_refs, work)?;
+    let rounded_nodes = crate::noding::node(&rounded_refs, work)?;
+    let mut sites = CountedVec::new();
+    for (before, after) in exact_nodes.iter().zip(&rounded_nodes) {
+        work.step()?;
+        if before.len() != after.len() {
+            return Err(LineBooleanError::InvalidRoundedTopology);
+        }
+        for (before, after) in before.iter().zip(after.iter()) {
+            work.push(&mut sites, (before, after))?;
+        }
+    }
+    // La corrispondenza ordinata deve conservare anche concorrenze e identita'
+    // fra lati diversi: sole orientazioni pairwise non rilevano un triplo nodo.
+    for (i, (before, after)) in sites.iter().enumerate() {
+        for (other_before, other_after) in &sites[i + 1..] {
+            work.pair()?;
+            if (before == other_before) != (after == other_after) {
+                return Err(LineBooleanError::InvalidRoundedTopology);
+            }
+        }
+    }
+    work.step()?;
+    Ok(())
 }
 
 #[cfg(test)]

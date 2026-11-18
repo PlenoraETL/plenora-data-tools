@@ -42,6 +42,7 @@ pub mod geodetica;
 pub mod geometry_contract;
 pub mod margine;
 pub mod memory_estimate;
+pub mod offset;
 pub mod operations;
 pub mod predicates;
 pub use predicates::arrangement_indexed::{line_boolean, point_boolean};

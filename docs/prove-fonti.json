@@ -1604,6 +1604,7 @@
       "clone_drop_and_arithmetic_share_the_live_budget",
       "exact_threshold_and_single_value_overshoot",
       "failed_clone_releases_partial_receipts_and_rejects_foreign_budgets",
+      "square_roots_and_preallocation_bit_ceiling",
       "counted_arithmetic_matches_the_generic_oracle"
     ],
     "crates/plenora-kernels-geo/src/noding/storage.rs": [
@@ -1674,6 +1675,21 @@
       "invalid_polygon_topology_is_not_silently_classified",
       "every_named_predicate_on_the_cartesian_corpus",
       "nested_members_and_permutations_preserve_cells"
+    ],
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/line_boolean/tests.rs": [
+      "overlaps_crossings_and_direction",
+      "polygon_hole_boundary_touch_and_mixed_union",
+      "grids_and_large_sparse_default_limits",
+      "points_empty_filters_and_validation",
+      "exact_thresholds_cancellation_and_deadline",
+      "exact_conversion_and_rounded_node",
+      "interval_oracle_and_indexed_classification_against_generic",
+      "isolated_contact_beside_overlap_and_retraced_parts",
+      "nearest_even_rational_certificate_and_ties",
+      "input_bits_and_rounding_collapse",
+      "publication_rejects_manually_altered_graphs",
+      "rounded_new_contact_and_unpublished_boundary_nodes",
+      "published_order_matches_generic_sort_and_signed_zero_mutation_fails"
     ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean/tests.rs": [
       "c1_sets_boundaries_holes_and_closure",

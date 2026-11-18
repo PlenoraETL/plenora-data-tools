@@ -11,6 +11,7 @@ cronologia delle modifiche si consulta in Git.
 | [`inventario.md`](inventario.md) | stato generato: crate, operazioni del catalogo, operazioni pubbliche della CLI, numero dei test |
 | [`operazioni.md`](operazioni.md) | riferimento generato delle operazioni, una scheda ciascuna (sorgenti in [`schede/`](schede/)) |
 | [`limiti.md`](limiti.md) | registro dei limiti dichiarati: precisione geografica di 1 cm, misure geodetiche, validazione OGC, hash e memoria delle chiavi, tipi e formati |
+| [`offset.md`](offset.md) | Offset planare orientato GOP-017: API, precisione, prove e limiti |
 | [`topologia.md`](topologia.md) | `geo.make_valid`, `geo.polygonize` e `geo.split` in Rust puro; API diretta DE-9IM, prove e limiti |
 | [`errori.md`](errori.md) | categorie d'errore ed effetto di un errore a metà della scrittura |
 | [`runner.md`](runner.md) | il piano, validazione, esecuzione, scadenza, diagnostica, operazioni geo, budget di memoria e limiti del runner |

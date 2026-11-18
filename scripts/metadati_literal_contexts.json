@@ -2382,5 +2382,11 @@
     "[[\"token\",\"else\"],[\"token\",\"{\"],[\"token\",\"panic\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"linee\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"assert_eq\"]]",
     "[[\"token\",\"else\"],[\"token\",\"{\"],[\"token\",\"panic\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"poligono\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"let\"]]",
     "[[\"token\",\"else\"],[\"token\",\"{\"],[\"token\",\"panic\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"punti\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"assert_eq\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/offset.rs": [
+    "[[\"token\",\",\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"error\"],[\"token\",\"(\"],[\"string\",\"GEOMETRY_ACCURACY_UNPROVEN\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"AccuracyUnproven\"],[\"token\",\",\"],[\"token\",\"#\"]]",
+    "[[\"token\",\"0\"],[\"token\",\"|\"],[\"token\",\"|\"],[\"token\",\"matches\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"token\",\"options\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\",\"],[\"token\",\"OffsetJoin\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Mitered\"],[\"token\",\"{\"],[\"token\",\"limit\"],[\"token\",\"}\"]]",
+    "[[\"token\",\"?\"],[\"token\",\";\"],[\"token\",\"if\"],[\"token\",\"matches\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"token\",\"options\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\",\"],[\"token\",\"OffsetJoin\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Rounded\"],[\"token\",\")\"],[\"token\",\"{\"],[\"token\",\"let\"]]",
+    "[[\"token\",\"bevel\"],[\"token\",\"=\"],[\"token\",\"if\"],[\"token\",\"outer\"],[\"token\",\"{\"],[\"token\",\"match\"],[\"token\",\"options\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\"{\"],[\"token\",\"OffsetJoin\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Mitered\"],[\"token\",\"{\"],[\"token\",\"limit\"],[\"token\",\"}\"]]"
   ]
 }

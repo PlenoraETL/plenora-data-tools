@@ -14,6 +14,12 @@ la cui versione non ha qui una voce datata.
 
 ### Aggiunte
 
+- API Rust `offset::offset_with_limits` per offset planare orientato GOP-017:
+  estremi butt, rounded/bevelled/mitered, limite mitre e tolleranza espliciti.
+  Costruzioni razionali e radici certificate, pubblicazione GOP-015A condivisa,
+  preservazione degli incroci, limiti cumulativi e interruzione cooperativa.
+  Certificati di precisione e rifiuti conservativi descritti in `docs/offset.md`.
+
 - API Rust `line_boolean` per booleane XY punto/linea e linea/poligono:
   noding razionale e pubblicazione GOP-015A al binary64 piu' vicino,
   meta' al pari, errore massimo di mezza ulp per ordinata costruita.
