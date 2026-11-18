@@ -24,7 +24,7 @@ pub(super) struct IntervalIndex {
 }
 
 // Heapsort fallibile, senza allocazioni e con ogni confronto contato.
-fn sort_ids(
+pub(super) fn sort_ids(
     ids: &mut [usize],
     cmp: impl Fn(usize, usize) -> Result<Ordering, PredicateError>,
     work: &mut Work<'_>,

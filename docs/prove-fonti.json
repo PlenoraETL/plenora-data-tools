@@ -1704,6 +1704,16 @@
       "every_named_predicate_on_the_cartesian_corpus",
       "nested_members_and_permutations_preserve_cells"
     ],
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean/tests.rs": [
+      "c1_sets_boundaries_holes_and_closure",
+      "exact_extremes_and_differential_oracle",
+      "ten_thousand_and_sort_oracle",
+      "exact_limits_and_interruptions",
+      "vertical_sites_default_limits",
+      "polygon_union_filters_and_typed_errors",
+      "point_sets_against_generic_matrix",
+      "polygon_pair_budget_exact_threshold"
+    ],
     "crates/plenora-kernels-geo/src/predicates/interval_index.rs": [
       "sparse_queries_have_analytic_work",
       "grid_queries_have_analytic_work",
