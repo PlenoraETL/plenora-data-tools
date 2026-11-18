@@ -25,6 +25,7 @@
 
 mod datum;
 mod epsg;
+mod forma;
 mod latitudine;
 mod ntv2;
 mod percorsi;
@@ -32,6 +33,11 @@ mod proiezioni;
 pub(super) mod tabella;
 
 use std::collections::{BTreeMap, BTreeSet};
+
+pub use forma::{
+    AzimuthalShapeBounds, HotineShapeBounds, InverseShapeCertificate, LambertShapeBounds,
+    SeparableShapeBounds, StereographicShapeBounds, TransverseShapeBounds,
+};
 
 pub use ntv2::{GrigliaNtv2, MAX_BYTE_GRIGLIA};
 
@@ -506,6 +512,13 @@ impl Riproiettore {
     #[must_use]
     pub const fn numero_percorsi(&self) -> usize {
         self.operazioni.len()
+    }
+
+    /// Maggioranti analitici dell'inversa sorgente, senza cambio di datum.
+    /// Il dominio e le ipotesi sono in `docs/maggioranti-forma.md`.
+    #[must_use]
+    pub fn inverse_shape_certificate(&self) -> InverseShapeCertificate {
+        self.piano.sorgente.proiezione.shape_certificate()
     }
 
     /// Lon/lat nel datum sorgente di un punto del CRS sorgente, dopo i
