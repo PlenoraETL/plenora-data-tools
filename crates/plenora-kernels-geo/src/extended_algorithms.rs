@@ -2677,3 +2677,17 @@ mod oracolo_delaunay {
         }
     }
 }
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod baseline_600;
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod compatibility_600;
+
+mod split_limited;
+pub use split_limited::split_line_with_limits;
+
+mod polygonize_limited;
+pub use polygonize_limited::polygonize_with_limits;
